@@ -173,6 +173,22 @@ export type DataDeploymentRetryRequested = {
   type: "DeploymentRetryRequested";
 };
 
+export type DataDeploymentAgentUpdate = {
+  /**
+   * ID of the deployment being updated
+   */
+  deploymentId: string;
+  /**
+   * Agent version the deployment was running when the update started, if known
+   */
+  fromAgentVersion?: string | null | undefined;
+  /**
+   * Target agent version the deployment was pinned to
+   */
+  toAgentVersion: string;
+  type: "DeploymentAgentUpdate";
+};
+
 export type DataDeploymentRejoined = {
   /**
    * ID of the deployment group that authorized the rejoin
@@ -407,7 +423,7 @@ export type DataError1 = {
  * `Updating`, `delete-failed` → `Deleting`.
  * `refresh-failed` is modelled separately via `DeploymentDegraded`.
  */
-export const Phase = {
+export const EventPhase = {
   Preflights: "preflights",
   Provisioning: "provisioning",
   Updating: "updating",
@@ -423,7 +439,7 @@ export const Phase = {
  * `Updating`, `delete-failed` → `Deleting`.
  * `refresh-failed` is modelled separately via `DeploymentDegraded`.
  */
-export type Phase = ClosedEnum<typeof Phase>;
+export type EventPhase = ClosedEnum<typeof EventPhase>;
 
 export type DataDeploymentFailed = {
   /**
@@ -456,7 +472,7 @@ export type DataDeploymentFailed = {
    * `Updating`, `delete-failed` → `Deleting`.
    * `refresh-failed` is modelled separately via `DeploymentDegraded`.
    */
-  phase: Phase;
+  phase: EventPhase;
   type: "DeploymentFailed";
 };
 
@@ -1159,6 +1175,7 @@ export type EventDataUnion =
   | DataDeploymentRecovered
   | DataDeploymentDeleted
   | DataDeploymentRejoined
+  | DataDeploymentAgentUpdate
   | DataDeploymentRetryRequested
   | DataDeploymentRedeployRequested
   | DataDeploymentReleasePinned
@@ -1344,6 +1361,7 @@ export type Event = {
     | DataDeploymentRecovered
     | DataDeploymentDeleted
     | DataDeploymentRejoined
+    | DataDeploymentAgentUpdate
     | DataDeploymentRetryRequested
     | DataDeploymentRedeployRequested
     | DataDeploymentReleasePinned
@@ -1528,6 +1546,27 @@ export function dataDeploymentRetryRequestedFromJSON(
 }
 
 /** @internal */
+export const DataDeploymentAgentUpdate$inboundSchema: z.ZodType<
+  DataDeploymentAgentUpdate,
+  unknown
+> = z.object({
+  deploymentId: z.string(),
+  fromAgentVersion: z.nullable(z.string()).optional(),
+  toAgentVersion: z.string(),
+  type: z.literal("DeploymentAgentUpdate"),
+});
+
+export function dataDeploymentAgentUpdateFromJSON(
+  jsonString: string,
+): SafeParseResult<DataDeploymentAgentUpdate, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => DataDeploymentAgentUpdate$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'DataDeploymentAgentUpdate' from JSON`,
+  );
+}
+
+/** @internal */
 export const DataDeploymentRejoined$inboundSchema: z.ZodType<
   DataDeploymentRejoined,
   unknown
@@ -1653,7 +1692,9 @@ export function dataError1FromJSON(
 }
 
 /** @internal */
-export const Phase$inboundSchema: z.ZodEnum<typeof Phase> = z.enum(Phase);
+export const EventPhase$inboundSchema: z.ZodEnum<typeof EventPhase> = z.enum(
+  EventPhase,
+);
 
 /** @internal */
 export const DataDeploymentFailed$inboundSchema: z.ZodType<
@@ -1663,7 +1704,7 @@ export const DataDeploymentFailed$inboundSchema: z.ZodType<
   attemptedReleaseId: z.nullable(z.string()).optional(),
   deploymentId: z.string(),
   error: z.lazy(() => DataError1$inboundSchema),
-  phase: Phase$inboundSchema,
+  phase: EventPhase$inboundSchema,
   type: z.literal("DeploymentFailed"),
 });
 
@@ -2665,6 +2706,7 @@ export const EventDataUnion$inboundSchema: z.ZodType<EventDataUnion, unknown> =
     z.lazy(() => DataDeploymentRecovered$inboundSchema),
     z.lazy(() => DataDeploymentDeleted$inboundSchema),
     z.lazy(() => DataDeploymentRejoined$inboundSchema),
+    z.lazy(() => DataDeploymentAgentUpdate$inboundSchema),
     z.lazy(() => DataDeploymentRetryRequested$inboundSchema),
     z.lazy(() => DataDeploymentRedeployRequested$inboundSchema),
     z.lazy(() => DataDeploymentReleasePinned$inboundSchema),
@@ -2830,6 +2872,7 @@ export const Event$inboundSchema: z.ZodType<Event, unknown> = z.object({
     z.lazy(() => DataDeploymentRecovered$inboundSchema),
     z.lazy(() => DataDeploymentDeleted$inboundSchema),
     z.lazy(() => DataDeploymentRejoined$inboundSchema),
+    z.lazy(() => DataDeploymentAgentUpdate$inboundSchema),
     z.lazy(() => DataDeploymentRetryRequested$inboundSchema),
     z.lazy(() => DataDeploymentRedeployRequested$inboundSchema),
     z.lazy(() => DataDeploymentReleasePinned$inboundSchema),

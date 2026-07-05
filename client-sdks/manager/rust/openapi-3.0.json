@@ -1451,6 +1451,9 @@
             "description": "Agent host OS — `linux` / `macos` / `windows`.",
             "nullable": true
           },
+          "agentUpdate": {
+            "description": "Outcome of the agent's in-flight self-update (structured\n`AgentUpdateReport`). Forwarded verbatim to the platform reconcile so the\ndashboard can show a truthful failed/in-progress state; opaque to the\nstandalone manager. Optional for back-compat."
+          },
           "agentVersion": {
             "type": "string",
             "description": "Agent binary version (from `env!(\"CARGO_PKG_VERSION\")` at build time).\nLets the manager build fleet inventory and decide whether to send an\n`agent_target` in the response.",
@@ -1657,6 +1660,40 @@
           },
           "stale": {
             "type": "boolean"
+          }
+        }
+      },
+      "AuroraPostgresHeartbeatData": {
+        "type": "object",
+        "required": [
+          "status",
+          "clusterIdentifier",
+          "neverPauses"
+        ],
+        "properties": {
+          "clusterIdentifier": {
+            "type": "string"
+          },
+          "endpoint": {
+            "type": "string",
+            "nullable": true
+          },
+          "engineVersion": {
+            "type": "string",
+            "nullable": true
+          },
+          "neverPauses": {
+            "type": "boolean",
+            "description": "True when a `minCapacity: 0` instance has not reached 0 ACU over the observation\nwindow — it is silently paying always-on prices (auto-pause verification)."
+          },
+          "serverlessCapacity": {
+            "type": "number",
+            "format": "double",
+            "description": "Latest sampled `ServerlessDatabaseCapacity` (ACU).",
+            "nullable": true
+          },
+          "status": {
+            "$ref": "#/components/schemas/PostgresHeartbeatStatus"
           }
         }
       },
@@ -3298,6 +3335,29 @@
           }
         }
       },
+      "AzureFlexibleServerPostgresHeartbeatData": {
+        "type": "object",
+        "required": [
+          "status",
+          "serverName"
+        ],
+        "properties": {
+          "serverName": {
+            "type": "string"
+          },
+          "state": {
+            "type": "string",
+            "nullable": true
+          },
+          "status": {
+            "$ref": "#/components/schemas/PostgresHeartbeatStatus"
+          },
+          "version": {
+            "type": "string",
+            "nullable": true
+          }
+        }
+      },
       "AzureKeyVaultHeartbeatData": {
         "type": "object",
         "required": [
@@ -4099,6 +4159,10 @@
             "nullable": true
           },
           "nsgId": {
+            "type": "string",
+            "nullable": true
+          },
+          "privateEndpointSubnetName": {
             "type": "string",
             "nullable": true
           },
@@ -5712,6 +5776,29 @@
             "items": {
               "type": "string"
             }
+          }
+        }
+      },
+      "GcpCloudSqlPostgresHeartbeatData": {
+        "type": "object",
+        "required": [
+          "status",
+          "instanceName"
+        ],
+        "properties": {
+          "databaseVersion": {
+            "type": "string",
+            "nullable": true
+          },
+          "instanceName": {
+            "type": "string"
+          },
+          "state": {
+            "type": "string",
+            "nullable": true
+          },
+          "status": {
+            "$ref": "#/components/schemas/PostgresHeartbeatStatus"
           }
         }
       },
@@ -8379,6 +8466,35 @@
           "delete"
         ]
       },
+      "LocalPostgresHeartbeatData": {
+        "type": "object",
+        "required": [
+          "status",
+          "name",
+          "version",
+          "processRunning"
+        ],
+        "properties": {
+          "name": {
+            "type": "string"
+          },
+          "port": {
+            "type": "integer",
+            "format": "int32",
+            "minimum": 0,
+            "nullable": true
+          },
+          "processRunning": {
+            "type": "boolean"
+          },
+          "status": {
+            "$ref": "#/components/schemas/PostgresHeartbeatStatus"
+          },
+          "version": {
+            "type": "string"
+          }
+        }
+      },
       "LocalQueueHeartbeatData": {
         "type": "object",
         "required": [
@@ -9179,6 +9295,11 @@
                 "description": "Name of the dedicated classic Application Gateway subnet within the VNet.",
                 "nullable": true
               },
+              "private_endpoint_subnet_name": {
+                "type": "string",
+                "description": "Name of the dedicated subnet that hosts Private Endpoints (e.g. for a\nPostgres Flexible Server). A Private Endpoint must not share the private\nsubnet, which is already claimed by the Container Apps environment's\n`infrastructure_subnet_id`. Required only when the stack contains a\nPostgres resource; otherwise unused.",
+                "nullable": true
+              },
               "private_subnet_name": {
                 "type": "string",
                 "description": "Name of the private subnet within the VNet"
@@ -9245,6 +9366,136 @@
           "local",
           "test"
         ]
+      },
+      "PostgresHeartbeatData": {
+        "oneOf": [
+          {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/AuroraPostgresHeartbeatData",
+                "description": "AWS Aurora Serverless v2 backend."
+              },
+              {
+                "type": "object",
+                "required": [
+                  "backend"
+                ],
+                "properties": {
+                  "backend": {
+                    "type": "string",
+                    "enum": [
+                      "aurora"
+                    ]
+                  }
+                }
+              }
+            ],
+            "description": "AWS Aurora Serverless v2 backend."
+          },
+          {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/GcpCloudSqlPostgresHeartbeatData",
+                "description": "GCP Cloud SQL backend."
+              },
+              {
+                "type": "object",
+                "required": [
+                  "backend"
+                ],
+                "properties": {
+                  "backend": {
+                    "type": "string",
+                    "enum": [
+                      "cloudSql"
+                    ]
+                  }
+                }
+              }
+            ],
+            "description": "GCP Cloud SQL backend."
+          },
+          {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/AzureFlexibleServerPostgresHeartbeatData",
+                "description": "Azure Flexible Server backend."
+              },
+              {
+                "type": "object",
+                "required": [
+                  "backend"
+                ],
+                "properties": {
+                  "backend": {
+                    "type": "string",
+                    "enum": [
+                      "flexibleServer"
+                    ]
+                  }
+                }
+              }
+            ],
+            "description": "Azure Flexible Server backend."
+          },
+          {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/LocalPostgresHeartbeatData",
+                "description": "Local embedded Postgres backend."
+              },
+              {
+                "type": "object",
+                "required": [
+                  "backend"
+                ],
+                "properties": {
+                  "backend": {
+                    "type": "string",
+                    "enum": [
+                      "local"
+                    ]
+                  }
+                }
+              }
+            ],
+            "description": "Local embedded Postgres backend."
+          }
+        ]
+      },
+      "PostgresHeartbeatStatus": {
+        "type": "object",
+        "required": [
+          "health",
+          "lifecycle",
+          "stale",
+          "partial",
+          "collectionIssues"
+        ],
+        "properties": {
+          "collectionIssues": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/HeartbeatCollectionIssue"
+            }
+          },
+          "health": {
+            "$ref": "#/components/schemas/ObservedHealth"
+          },
+          "lifecycle": {
+            "$ref": "#/components/schemas/ProviderLifecycleState"
+          },
+          "message": {
+            "type": "string",
+            "nullable": true
+          },
+          "partial": {
+            "type": "boolean"
+          },
+          "stale": {
+            "type": "boolean"
+          }
+        }
       },
       "PresignedOperation": {
         "type": "string",
@@ -9995,6 +10246,24 @@
                 "type": "string",
                 "enum": [
                   "kv"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "required": [
+              "data",
+              "resourceType"
+            ],
+            "properties": {
+              "data": {
+                "$ref": "#/components/schemas/PostgresHeartbeatData"
+              },
+              "resourceType": {
+                "type": "string",
+                "enum": [
+                  "postgres"
                 ]
               }
             }

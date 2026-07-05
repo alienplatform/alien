@@ -385,6 +385,16 @@ const value: models.DataDeploymentRejoined = {
 };
 ```
 
+### `models.DataDeploymentAgentUpdate`
+
+```typescript
+const value: models.DataDeploymentAgentUpdate = {
+  deploymentId: "<id>",
+  toAgentVersion: "<value>",
+  type: "DeploymentAgentUpdate",
+};
+```
+
 ### `models.DataDeploymentRetryRequested`
 
 ```typescript

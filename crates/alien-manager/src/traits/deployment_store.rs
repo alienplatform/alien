@@ -259,6 +259,11 @@ pub struct ReconcileData {
     pub agent_arch: Option<String>,
     pub regime: Option<String>,
     pub agent_image_repository: Option<String>,
+    /// Structured `AgentUpdateReport` the agent attached on this sync, forwarded
+    /// verbatim by multi-tenant embedders into their platform reconcile so the
+    /// dashboard's "Alien Agent Update" event reflects a real failure/progress
+    /// signal instead of a timeout guess. `None` = no update in flight.
+    pub agent_update: Option<serde_json::Value>,
 }
 
 /// Persistence for deployments and deployment groups.

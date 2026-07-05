@@ -88,6 +88,7 @@ impl DeploymentLoopTransport for ManagerTransport {
                     agent_arch: None,
                     regime: None,
                     agent_image_repository: None,
+                    agent_update: None,
                 },
             )
             .await?;

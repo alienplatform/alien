@@ -288,6 +288,44 @@ export type SyncReconcileRequestRegime = ClosedEnum<
   typeof SyncReconcileRequestRegime
 >;
 
+export const StateFailed = {
+  Failed: "failed",
+} as const;
+export type StateFailed = ClosedEnum<typeof StateFailed>;
+
+export const SyncReconcileRequestPhase = {
+  Spawn: "spawn",
+  Pull: "pull",
+  Apply: "apply",
+} as const;
+export type SyncReconcileRequestPhase = ClosedEnum<
+  typeof SyncReconcileRequestPhase
+>;
+
+export type AgentUpdateFailed = {
+  state: StateFailed;
+  targetVersion: string;
+  phase: SyncReconcileRequestPhase;
+  message: string;
+  attempt: number;
+};
+
+export const StateInProgress = {
+  InProgress: "inProgress",
+} as const;
+export type StateInProgress = ClosedEnum<typeof StateInProgress>;
+
+export type AgentUpdateInProgress = {
+  state: StateInProgress;
+  targetVersion: string;
+  attempt: number;
+};
+
+/**
+ * Outcome of the agent's in-flight self-update from the last /v1/sync.
+ */
+export type AgentUpdate = AgentUpdateFailed | AgentUpdateInProgress | any;
+
 /**
  * Request to reconcile deployment state
  */
@@ -336,6 +374,15 @@ export type SyncReconcileRequest = {
    * Container image repository the agent was pulled from (no tag), chart-injected at install time. Surfaced in the dashboard pin-version UI so admins see the registry.
    */
   agentImageRepository?: string | null | undefined;
+  /**
+   * Outcome of the agent's in-flight self-update from the last /v1/sync.
+   */
+  agentUpdate?:
+    | AgentUpdateFailed
+    | AgentUpdateInProgress
+    | any
+    | null
+    | undefined;
 };
 
 /** @internal */
@@ -692,6 +739,94 @@ export const SyncReconcileRequestRegime$outboundSchema: z.ZodEnum<
 > = z.enum(SyncReconcileRequestRegime);
 
 /** @internal */
+export const StateFailed$outboundSchema: z.ZodEnum<typeof StateFailed> = z.enum(
+  StateFailed,
+);
+
+/** @internal */
+export const SyncReconcileRequestPhase$outboundSchema: z.ZodEnum<
+  typeof SyncReconcileRequestPhase
+> = z.enum(SyncReconcileRequestPhase);
+
+/** @internal */
+export type AgentUpdateFailed$Outbound = {
+  state: string;
+  targetVersion: string;
+  phase: string;
+  message: string;
+  attempt: number;
+};
+
+/** @internal */
+export const AgentUpdateFailed$outboundSchema: z.ZodType<
+  AgentUpdateFailed$Outbound,
+  AgentUpdateFailed
+> = z.object({
+  state: StateFailed$outboundSchema,
+  targetVersion: z.string(),
+  phase: SyncReconcileRequestPhase$outboundSchema,
+  message: z.string(),
+  attempt: z.int(),
+});
+
+export function agentUpdateFailedToJSON(
+  agentUpdateFailed: AgentUpdateFailed,
+): string {
+  return JSON.stringify(
+    AgentUpdateFailed$outboundSchema.parse(agentUpdateFailed),
+  );
+}
+
+/** @internal */
+export const StateInProgress$outboundSchema: z.ZodEnum<typeof StateInProgress> =
+  z.enum(StateInProgress);
+
+/** @internal */
+export type AgentUpdateInProgress$Outbound = {
+  state: string;
+  targetVersion: string;
+  attempt: number;
+};
+
+/** @internal */
+export const AgentUpdateInProgress$outboundSchema: z.ZodType<
+  AgentUpdateInProgress$Outbound,
+  AgentUpdateInProgress
+> = z.object({
+  state: StateInProgress$outboundSchema,
+  targetVersion: z.string(),
+  attempt: z.int(),
+});
+
+export function agentUpdateInProgressToJSON(
+  agentUpdateInProgress: AgentUpdateInProgress,
+): string {
+  return JSON.stringify(
+    AgentUpdateInProgress$outboundSchema.parse(agentUpdateInProgress),
+  );
+}
+
+/** @internal */
+export type AgentUpdate$Outbound =
+  | AgentUpdateFailed$Outbound
+  | AgentUpdateInProgress$Outbound
+  | any;
+
+/** @internal */
+export const AgentUpdate$outboundSchema: z.ZodType<
+  AgentUpdate$Outbound,
+  AgentUpdate
+> = z.union([
+  z.lazy(() => AgentUpdateFailed$outboundSchema),
+  z.lazy(() => AgentUpdateInProgress$outboundSchema),
+  z.any(),
+]);
+
+export function agentUpdateToJSON(agentUpdate: AgentUpdate): string {
+  return JSON.stringify(AgentUpdate$outboundSchema.parse(agentUpdate));
+}
+
+/** @internal */
 export type SyncReconcileRequest$Outbound = {
   deploymentId: string;
   session?: string | undefined;
@@ -704,6 +839,12 @@ export type SyncReconcileRequest$Outbound = {
   agentArch?: string | null | undefined;
   regime?: string | null | undefined;
   agentImageRepository?: string | null | undefined;
+  agentUpdate?:
+    | AgentUpdateFailed$Outbound
+    | AgentUpdateInProgress$Outbound
+    | any
+    | null
+    | undefined;
 };
 
 /** @internal */
@@ -723,6 +864,13 @@ export const SyncReconcileRequest$outboundSchema: z.ZodType<
     .optional(),
   regime: z.nullable(SyncReconcileRequestRegime$outboundSchema).optional(),
   agentImageRepository: z.nullable(z.string()).optional(),
+  agentUpdate: z.nullable(
+    z.union([
+      z.lazy(() => AgentUpdateFailed$outboundSchema),
+      z.lazy(() => AgentUpdateInProgress$outboundSchema),
+      z.any(),
+    ]),
+  ).optional(),
 });
 
 export function syncReconcileRequestToJSON(

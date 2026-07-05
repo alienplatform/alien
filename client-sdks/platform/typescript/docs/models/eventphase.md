@@ -1,4 +1,4 @@
-# Phase
+# EventPhase
 
 Phase of a deployment at which a failure occurred.
 
@@ -10,9 +10,9 @@ Derived from the source deployment status: `preflights-failed` →
 ## Example Usage
 
 ```typescript
-import { Phase } from "@alienplatform/platform-api/models";
+import { EventPhase } from "@alienplatform/platform-api/models";
 
-let value: Phase = "provisioning";
+let value: EventPhase = "deleting";
 ```
 
 ## Values

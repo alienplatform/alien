@@ -40,6 +40,12 @@ pub struct SyncRequest {
     /// role with its launcher manifest URL.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub agent_image_repository: Option<String>,
+    /// Outcome of the agent's in-flight self-update for the currently-pinned
+    /// target, if any. Absent when no update is in flight. Lets the manager
+    /// distinguish "still converging" from "the last attempt failed" instead of
+    /// inferring failure from a stalled version. Optional for back-compat.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub agent_update: Option<AgentUpdateReport>,
 }
 
 /// Supervisor regime for an agent. Drives which `agent_target` payload
@@ -52,6 +58,54 @@ pub enum AgentRegime {
     OsService,
     /// Kubernetes pod — agent creates a Helm-runner Job that runs `helm upgrade --atomic`.
     Kubernetes,
+}
+
+/// Agent-reported state of the current self-update attempt.
+///
+/// Success is deliberately not a variant — convergence
+/// (`agent_version == target_agent_version`) is the success signal. This report
+/// only distinguishes "an attempt is running" from "the last attempt failed",
+/// so the manager can surface a truthful failure instead of inferring one from
+/// a stalled version. Internally tagged by `state`.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(tag = "state", rename_all = "camelCase")]
+pub enum AgentUpdateReport {
+    /// A Job for `target_version` is currently running (attempt `attempt`,
+    /// 1-based). Reported so the dashboard can show "running" from the agent's
+    /// own view rather than only "pinned".
+    #[serde(rename_all = "camelCase")]
+    InProgress {
+        target_version: String,
+        attempt: u32,
+    },
+    /// The most recent attempt for `target_version` failed; the agent is still
+    /// on its prior version (rolled back / never swapped) and will back off and
+    /// retry. Whether the *episode* is terminal is decided manager-side.
+    #[serde(rename_all = "camelCase")]
+    Failed {
+        target_version: String,
+        /// Which stage failed — see `AgentUpdatePhase`.
+        phase: AgentUpdatePhase,
+        /// Human-readable detail: helm error, image-pull reason, k8s API error.
+        message: String,
+        attempt: u32,
+    },
+}
+
+/// Which stage of a self-update attempt failed. Maps to the operator's triage:
+/// `Pull` → the image tag/registry; `Apply` → the chart/values/cluster.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum AgentUpdatePhase {
+    /// Creating the Helm-runner Job / staging the binary failed — the agent
+    /// knows directly (the k8s API rejected the create, or a download failed).
+    Spawn,
+    /// The new pod's image could not be pulled (ImagePullBackOff / ErrImagePull
+    /// / not-found). Read from the Job pod's container `waiting.reason`.
+    Pull,
+    /// The image pulled, but `helm upgrade` failed or `--atomic` rolled back
+    /// (or, on os-service, the launcher's health-gated swap rolled back).
+    Apply,
 }
 
 /// Response from the manager to the agent sync request.
@@ -176,6 +230,7 @@ mod tests {
             agent_arch: None,
             regime: None,
             agent_image_repository: None,
+            agent_update: None,
         }
     }
 
@@ -251,6 +306,7 @@ mod tests {
             agent_arch: Some("aarch64".to_string()),
             regime: Some(AgentRegime::Kubernetes),
             agent_image_repository: Some("ghcr.io/alien-dev/alien-agent".to_string()),
+            agent_update: None,
         };
         let json = serde_json::to_value(&req).unwrap();
         assert_eq!(json["agentVersion"], "1.3.5");
@@ -290,6 +346,51 @@ mod tests {
         let resp = empty_sync_response();
         let json = serde_json::to_value(&resp).unwrap();
         assert!(json.get("agentTarget").is_none());
+    }
+
+    /// `AgentUpdateReport` round-trips: internally tagged by `state`
+    /// (camelCase variant), camelCase fields, kebab-case phase.
+    #[test]
+    fn test_agent_update_report_roundtrip() {
+        let in_progress = AgentUpdateReport::InProgress {
+            target_version: "1.4.0".to_string(),
+            attempt: 1,
+        };
+        let json = serde_json::to_value(&in_progress).unwrap();
+        assert_eq!(json["state"], "inProgress");
+        assert_eq!(json["targetVersion"], "1.4.0");
+        assert_eq!(json["attempt"], 1);
+        assert_eq!(
+            serde_json::from_value::<AgentUpdateReport>(json).unwrap(),
+            in_progress
+        );
+
+        let failed = AgentUpdateReport::Failed {
+            target_version: "1.4.0".to_string(),
+            phase: AgentUpdatePhase::Pull,
+            message: "image :1.4.0 not found".to_string(),
+            attempt: 3,
+        };
+        let json = serde_json::to_value(&failed).unwrap();
+        assert_eq!(json["state"], "failed");
+        assert_eq!(json["phase"], "pull"); // kebab-case
+        assert_eq!(json["targetVersion"], "1.4.0");
+        assert_eq!(json["message"], "image :1.4.0 not found");
+        assert_eq!(json["attempt"], 3);
+        assert_eq!(
+            serde_json::from_value::<AgentUpdateReport>(json).unwrap(),
+            failed
+        );
+    }
+
+    /// An old agent omits `agentUpdate`; the new manager defaults it to None.
+    #[test]
+    fn test_sync_request_agent_update_omitted_when_none() {
+        let json = serde_json::to_value(empty_sync_request()).unwrap();
+        assert!(json.get("agentUpdate").is_none());
+        let req: SyncRequest =
+            serde_json::from_str(r#"{"deploymentId": "dep_x"}"#).unwrap();
+        assert!(req.agent_update.is_none());
     }
 
     #[test]

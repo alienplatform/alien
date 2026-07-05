@@ -134,6 +134,12 @@ pub struct AgentSyncRequest {
     /// Kubernetes-only.
     #[serde(default)]
     pub agent_image_repository: Option<String>,
+    /// Outcome of the agent's in-flight self-update (structured
+    /// `AgentUpdateReport`). Forwarded verbatim to the platform reconcile so the
+    /// dashboard can show a truthful failed/in-progress state; opaque to the
+    /// standalone manager. Optional for back-compat.
+    #[serde(default)]
+    pub agent_update: Option<serde_json::Value>,
 }
 
 #[derive(Debug, Serialize)]
@@ -447,6 +453,7 @@ async fn reconcile(
                 agent_arch: None,
                 regime: None,
                 agent_image_repository: None,
+                agent_update: None,
             },
         )
         .await
@@ -1032,6 +1039,7 @@ async fn agent_sync(
                                 agent_arch: req.agent_arch.clone(),
                                 regime: req.regime.clone(),
                                 agent_image_repository: req.agent_image_repository.clone(),
+                                agent_update: req.agent_update.clone(),
                             },
                         )
                         .await

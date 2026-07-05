@@ -139,6 +139,11 @@ async fn sync_with_manager(
         .await?
         .expect("deployment_id must be set in online mode");
 
+    // Report the outcome of any in-flight self-update so the manager can show a
+    // truthful failed/in-progress state instead of inferring from a stalled
+    // version. Kubernetes regime only; None otherwise.
+    let agent_update = crate::loops::agent_upgrade::current_update_report().await;
+
     let sync_request = SyncRequest {
         deployment_id: deployment_id.clone(),
         current_state: Some(deployment_state),
@@ -152,6 +157,7 @@ async fn sync_with_manager(
         agent_image_repository: std::env::var("ALIEN_AGENT_IMAGE_REPOSITORY")
             .ok()
             .filter(|s| !s.is_empty()),
+        agent_update,
     };
 
     // Call manager with deployment_id in request body.
