@@ -207,7 +207,7 @@ struct AlienRuntimeSecretsConfig {
 fn otlp_injection_covers_containers_and_daemons(platform: Platform) -> bool {
     match platform {
         Platform::Aws | Platform::Gcp | Platform::Azure => false,
-        Platform::Kubernetes | Platform::Local | Platform::Test => true,
+        Platform::Kubernetes | Platform::Machines | Platform::Local | Platform::Test => true,
     }
 }
 

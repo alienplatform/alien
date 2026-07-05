@@ -8,9 +8,9 @@
 use crate::error::Result;
 use crate::{CheckResult, DeploymentPrerequisiteCheck};
 use alien_core::{
-    ComputeBackend, ComputeCluster, Container, Daemon, DeploymentConfig, EnvironmentVariable,
-    KubernetesCluster, PermissionSet, Platform, ResourceEntry, ResourceLifecycle, Stack,
-    StackState, Worker,
+    validate_binding_type, ComputeBackend, ComputeCluster, Container, Daemon, DeploymentConfig,
+    EnvironmentVariable, KubernetesCluster, PermissionSet, Platform, ResourceEntry,
+    ResourceLifecycle, Stack, StackState, Worker,
 };
 use alien_permissions::{
     generators::AwsRuntimePermissionsGenerator, BindingTarget, PermissionContext,
@@ -39,6 +39,14 @@ fn resources_requiring_domain_metadata(stack: &Stack) -> Vec<String> {
     }
 
     resources
+}
+
+fn external_binding_required_types(platform: Platform) -> &'static [&'static str] {
+    match platform {
+        Platform::Kubernetes => &["storage", "queue", "kv", "artifact-registry"],
+        Platform::Machines => &["storage", "queue", "kv", "vault", "postgres"],
+        _ => &[],
+    }
 }
 
 /// Validates that cloud container deployments have a managed container backend.
@@ -286,6 +294,73 @@ impl DeploymentPrerequisiteCheck for TargetResourcesResolveCheck {
     }
 }
 
+/// Validates external bindings for platforms that do not provision infrastructure.
+pub struct ExternalInfrastructureBindingsRequiredCheck;
+
+#[async_trait::async_trait]
+impl DeploymentPrerequisiteCheck for ExternalInfrastructureBindingsRequiredCheck {
+    fn description(&self) -> &'static str {
+        "External infrastructure resources require matching bindings"
+    }
+
+    fn should_run(
+        &self,
+        _stack: &Stack,
+        stack_state: &StackState,
+        _config: &DeploymentConfig,
+    ) -> bool {
+        !external_binding_required_types(stack_state.platform).is_empty()
+    }
+
+    async fn check(
+        &self,
+        stack: &Stack,
+        stack_state: &StackState,
+        config: &DeploymentConfig,
+    ) -> Result<CheckResult> {
+        let required_types = external_binding_required_types(stack_state.platform);
+        let mut errors = Vec::new();
+
+        for (resource_id, entry) in stack.resources() {
+            let resource_type_value = entry.config.resource_type();
+            let resource_type = resource_type_value.0.as_ref();
+            if !required_types.contains(&resource_type) {
+                continue;
+            }
+
+            if stack_state.platform == Platform::Machines
+                && entry.lifecycle != ResourceLifecycle::Frozen
+            {
+                errors.push(format!(
+                    "MACHINES_INFRASTRUCTURE_MUST_BE_FROZEN: Resource '{resource_id}' of type '{resource_type}' must use Frozen lifecycle on platform 'machines'. Your machines deployments require setup-owned infrastructure with external bindings."
+                ));
+            }
+
+            match config.external_bindings.get(resource_id) {
+                None => errors.push(format!(
+                    "{}_EXTERNAL_BINDING_REQUIRED: Platform '{}' requires an external binding for infrastructure resource '{resource_id}' of type '{resource_type}'.",
+                    stack_state.platform.as_str().to_ascii_uppercase(),
+                    stack_state.platform.as_str()
+                )),
+                Some(binding) => {
+                    if validate_binding_type(&entry.config, binding).is_err() {
+                        errors.push(format!(
+                            "{}_EXTERNAL_BINDING_TYPE_MISMATCH: External binding for resource '{resource_id}' must match resource type '{resource_type}'.",
+                            stack_state.platform.as_str().to_ascii_uppercase()
+                        ));
+                    }
+                }
+            }
+        }
+
+        if errors.is_empty() {
+            Ok(CheckResult::success())
+        } else {
+            Ok(CheckResult::failed(errors))
+        }
+    }
+}
+
 fn environment_variable_target_resource_ids(stack: &Stack) -> Vec<&str> {
     stack
         .resources()
@@ -365,10 +440,12 @@ mod tests {
     use crate::runner::PreflightRunner;
     use alien_core::permissions::{ManagementPermissions, PermissionProfile};
     use alien_core::{
-        permissions::PermissionsConfig, CertificateStatus, ContainerCode, DnsRecordStatus,
-        DomainMetadata, EnvironmentVariable, EnvironmentVariableType, EnvironmentVariablesSnapshot,
-        ExposeProtocol, PublicEndpoint, Resource, ResourceDomainInfo, ResourceEntry,
-        ResourceLifecycle, ResourceSpec, Storage, Worker, WorkerCode, WorkerPublicEndpoint,
+        bindings::{KvBinding, StorageBinding},
+        permissions::PermissionsConfig,
+        CertificateStatus, ContainerCode, DnsRecordStatus, DomainMetadata, EnvironmentVariable,
+        EnvironmentVariableType, EnvironmentVariablesSnapshot, ExposeProtocol, ExternalBinding,
+        PublicEndpoint, Resource, ResourceDomainInfo, ResourceEntry, ResourceLifecycle,
+        ResourceSpec, Storage, Worker, WorkerCode, WorkerPublicEndpoint,
     };
     use indexmap::IndexMap;
     use std::collections::HashMap;
@@ -742,6 +819,102 @@ mod tests {
             .unwrap();
 
         assert!(result.success);
+    }
+
+    #[tokio::test]
+    async fn machines_infrastructure_requires_external_binding() {
+        let mut resources = IndexMap::new();
+        resources.insert("uploads".to_string(), create_storage_entry("uploads"));
+        let stack = create_stack(resources);
+        let config = deployment_config();
+        let check = ExternalInfrastructureBindingsRequiredCheck;
+
+        assert!(check.should_run(&stack, &stack_state(Platform::Machines), &config));
+        let result = check
+            .check(&stack, &stack_state(Platform::Machines), &config)
+            .await
+            .unwrap();
+
+        assert_eq!(
+            result.errors,
+            vec![
+                "MACHINES_EXTERNAL_BINDING_REQUIRED: Platform 'machines' requires an external binding for infrastructure resource 'uploads' of type 'storage'."
+                    .to_string()
+            ]
+        );
+    }
+
+    #[tokio::test]
+    async fn machines_infrastructure_must_be_frozen() {
+        let mut resources = IndexMap::new();
+        resources.insert("uploads".to_string(), create_live_storage_entry("uploads"));
+        let stack = create_stack(resources);
+        let mut config = deployment_config();
+        config.external_bindings.insert(
+            "uploads",
+            ExternalBinding::Storage(StorageBinding::s3("bucket")),
+        );
+        let check = ExternalInfrastructureBindingsRequiredCheck;
+
+        let result = check
+            .check(&stack, &stack_state(Platform::Machines), &config)
+            .await
+            .unwrap();
+
+        assert_eq!(
+            result.errors,
+            vec![
+                "MACHINES_INFRASTRUCTURE_MUST_BE_FROZEN: Resource 'uploads' of type 'storage' must use Frozen lifecycle on platform 'machines'. Your machines deployments require setup-owned infrastructure with external bindings."
+                    .to_string()
+            ]
+        );
+    }
+
+    #[tokio::test]
+    async fn machines_infrastructure_rejects_binding_type_mismatch() {
+        let mut resources = IndexMap::new();
+        resources.insert("uploads".to_string(), create_storage_entry("uploads"));
+        let stack = create_stack(resources);
+        let mut config = deployment_config();
+        config.external_bindings.insert(
+            "uploads",
+            ExternalBinding::Kv(KvBinding::redis("redis://cache")),
+        );
+        let check = ExternalInfrastructureBindingsRequiredCheck;
+
+        let result = check
+            .check(&stack, &stack_state(Platform::Machines), &config)
+            .await
+            .unwrap();
+
+        assert_eq!(
+            result.errors,
+            vec![
+                "MACHINES_EXTERNAL_BINDING_TYPE_MISMATCH: External binding for resource 'uploads' must match resource type 'storage'."
+                    .to_string()
+            ]
+        );
+    }
+
+    #[tokio::test]
+    async fn machines_infrastructure_passes_with_frozen_matching_binding() {
+        let mut resources = IndexMap::new();
+        resources.insert("uploads".to_string(), create_storage_entry("uploads"));
+        let stack = create_stack(resources);
+        let mut config = deployment_config();
+        config.external_bindings.insert(
+            "uploads",
+            ExternalBinding::Storage(StorageBinding::s3("bucket")),
+        );
+        let check = ExternalInfrastructureBindingsRequiredCheck;
+
+        let result = check
+            .check(&stack, &stack_state(Platform::Machines), &config)
+            .await
+            .unwrap();
+
+        assert!(result.success);
+        assert!(result.errors.is_empty());
     }
 
     #[tokio::test]

@@ -1331,9 +1331,9 @@ fn validate_initialize_base_platform(
 
     match base_platform {
         Platform::Aws | Platform::Gcp | Platform::Azure => Ok(Some(base_platform)),
-        Platform::Kubernetes | Platform::Local | Platform::Test => Err(ErrorData::bad_request(
-            "basePlatform for kubernetes must be one of aws, gcp, or azure",
-        )),
+        Platform::Kubernetes | Platform::Machines | Platform::Local | Platform::Test => Err(
+            ErrorData::bad_request("basePlatform for kubernetes must be one of aws, gcp, or azure"),
+        ),
     }
 }
 
@@ -1550,9 +1550,11 @@ async fn initialize(
             let settings = req.stack_settings.unwrap_or_else(|| {
                 let mut settings = alien_core::StackSettings::default();
                 settings.deployment_model = match platform {
-                    Platform::Aws | Platform::Gcp | Platform::Azure | Platform::Test => {
-                        alien_core::DeploymentModel::Push
-                    }
+                    Platform::Aws
+                    | Platform::Gcp
+                    | Platform::Azure
+                    | Platform::Machines
+                    | Platform::Test => alien_core::DeploymentModel::Push,
                     Platform::Kubernetes | Platform::Local => alien_core::DeploymentModel::Pull,
                 };
                 settings

@@ -652,6 +652,7 @@ async fn initialize_with_manager(
         Platform::Gcp => SdkPlatform::Gcp,
         Platform::Azure => SdkPlatform::Azure,
         Platform::Kubernetes => SdkPlatform::Kubernetes,
+        Platform::Machines => SdkPlatform::Machines,
         Platform::Local => SdkPlatform::Local,
         Platform::Test => SdkPlatform::Test,
     };

@@ -7,11 +7,11 @@ Represents the target cloud platform.
 ```typescript
 import { DeploymentDetailResponseStackStatePlatform } from "@alienplatform/platform-api/models";
 
-let value: DeploymentDetailResponseStackStatePlatform = "test";
+let value: DeploymentDetailResponseStackStatePlatform = "local";
 ```
 
 ## Values
 
 ```typescript
-"aws" | "gcp" | "azure" | "kubernetes" | "local" | "test"
+"aws" | "gcp" | "azure" | "kubernetes" | "machines" | "local" | "test"
 ```

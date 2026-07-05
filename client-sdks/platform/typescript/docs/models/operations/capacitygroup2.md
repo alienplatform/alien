@@ -19,6 +19,7 @@ let value: CapacityGroup2 = {
 | `capacityBlocker`                  | *operations.CapacityBlockerUnion2* | :heavy_minus_sign:                 | N/A                                |
 | `currentMachines`                  | *number*                           | :heavy_check_mark:                 | N/A                                |
 | `desiredMachines`                  | *number*                           | :heavy_check_mark:                 | N/A                                |
+| `drainProgress`                    | *operations.DrainProgressUnion2*   | :heavy_minus_sign:                 | N/A                                |
 | `groupId`                          | *string*                           | :heavy_check_mark:                 | N/A                                |
 | `instanceType`                     | *string*                           | :heavy_minus_sign:                 | N/A                                |
 | `maxMachines`                      | *number*                           | :heavy_minus_sign:                 | N/A                                |

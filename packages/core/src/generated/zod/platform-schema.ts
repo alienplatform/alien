@@ -8,6 +8,6 @@ import * as z from "zod";
 /**
  * @description Represents the target cloud platform.
  */
-export const PlatformSchema = z.enum(["aws", "gcp", "azure", "kubernetes", "local", "test"]).describe("Represents the target cloud platform.")
+export const PlatformSchema = z.enum(["aws", "gcp", "azure", "kubernetes", "machines", "local", "test"]).describe("Represents the target cloud platform.")
 
 export type Platform = z.infer<typeof PlatformSchema>

@@ -203,6 +203,7 @@ fn platform_name(platform: Platform) -> &'static str {
         Platform::Gcp => "gcp",
         Platform::Azure => "azure",
         Platform::Kubernetes => "kubernetes",
+        Platform::Machines => "machines",
         Platform::Local => "local",
         Platform::Test => "test",
     }

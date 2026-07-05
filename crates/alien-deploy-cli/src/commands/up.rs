@@ -84,7 +84,7 @@ pub struct UpArgs {
     #[arg(long, env = "ALIEN_BASE_URL")]
     pub base_url: Option<String>,
 
-    /// Target platform (aws, gcp, azure)
+    /// Target platform (aws, gcp, azure, kubernetes, machines, local)
     #[arg(long)]
     pub platform: Option<String>,
 
@@ -170,7 +170,7 @@ pub struct UpArgs {
 struct DeployConfigFile {
     /// Deployment name.
     name: Option<String>,
-    /// Target platform: aws, gcp, azure, kubernetes, or local.
+    /// Target platform: aws, gcp, azure, kubernetes, machines, or local.
     platform: Option<String>,
     /// Base cloud platform when `platform = "kubernetes"`.
     base_platform: Option<String>,
@@ -284,8 +284,17 @@ mod tests {
     #[test]
     fn pull_model_platforms_do_not_require_install_context() {
         assert!(!requires_install_context(Platform::Kubernetes));
+        assert!(!requires_install_context(Platform::Machines));
         assert!(!requires_install_context(Platform::Local));
         assert!(!requires_install_context(Platform::Test));
+    }
+
+    #[test]
+    fn machines_join_guidance_prints_future_join_command() {
+        assert_eq!(
+            machines_join_command("alien-deploy"),
+            "sudo alien-deploy join --token <join-token>"
+        );
     }
 
     #[test]
@@ -436,6 +445,29 @@ api = "https://old.example.test"
     }
 
     #[test]
+    fn public_endpoint_flag_accepts_machines_platform() {
+        let args = UpArgs::parse_from([
+            "alien-deploy",
+            "--platform",
+            "machines",
+            "--public-endpoint",
+            "gateway.api=https://gateway.example.test",
+        ]);
+
+        let public_endpoints = load_public_endpoints(&args, Platform::Machines, None)
+            .expect("machines should accept external public endpoints")
+            .expect("public endpoints should exist");
+
+        assert_eq!(
+            public_endpoints
+                .get("gateway")
+                .and_then(|endpoints| endpoints.get("api"))
+                .map(String::as_str),
+            Some("https://gateway.example.test")
+        );
+    }
+
+    #[test]
     fn public_endpoint_names_must_be_declared() {
         let daemon = alien_core::Daemon::new("gateway".to_string())
             .code(alien_core::DaemonCode::Image {
@@ -540,6 +572,7 @@ machine = "m8i.xlarge"
             gcp: Some(serde_json::json!({ "id": "gcp-stack" })),
             azure: Some(serde_json::json!({ "id": "azure-stack" })),
             kubernetes: Some(serde_json::json!({ "id": "kubernetes-stack" })),
+            machines: None,
             local: None,
             test: None,
         };
@@ -794,6 +827,7 @@ pub async fn up_command(args: UpArgs, embedded_config: Option<&DeployCliConfig>)
         "gcp" => "Google Cloud",
         "azure" => "Azure",
         "kubernetes" => "Kubernetes",
+        "machines" => "Your machines",
         "local" => "Local",
         other => other,
     };
@@ -966,6 +1000,11 @@ pub async fn up_command(args: UpArgs, embedded_config: Option<&DeployCliConfig>)
             let mut p = progress.lock().unwrap_or_else(|e| e.into_inner());
             p.finish();
         }
+        (Platform::Machines, _) => {
+            output::success("Deployment registered.");
+            output::label_value("Join command", &machines_join_command(banner_title));
+            output::info("Create a join token for this deployment, then run the command on each machine you want to add.");
+        }
         (Platform::Test, _) => {
             output::info("Test platform — no deployment action needed.");
         }
@@ -975,6 +1014,10 @@ pub async fn up_command(args: UpArgs, embedded_config: Option<&DeployCliConfig>)
     output::success(&format!("Deployment '{}' is active.", name));
 
     Ok(())
+}
+
+fn machines_join_command(cli_name: &str) -> String {
+    format!("sudo {cli_name} join --token <join-token>")
 }
 
 /// Resolved deployment info before manager connection.
@@ -1002,6 +1045,7 @@ fn release_stack_value_for_platform(
         Platform::Gcp => stack.gcp,
         Platform::Azure => stack.azure,
         Platform::Kubernetes => stack.kubernetes,
+        Platform::Machines => stack.machines,
         Platform::Local => stack.local,
         Platform::Test => stack.test,
     }
@@ -1126,7 +1170,7 @@ fn parse_base_platform(
 
     match parsed {
         Platform::Aws | Platform::Gcp | Platform::Azure => Ok(Some(parsed)),
-        Platform::Kubernetes | Platform::Local | Platform::Test => {
+        Platform::Kubernetes | Platform::Machines | Platform::Local | Platform::Test => {
             Err(AlienError::new(ErrorData::ValidationError {
                 field: "base-platform".to_string(),
                 message: "--base-platform must be one of: aws, gcp, azure".to_string(),
@@ -1195,12 +1239,16 @@ fn load_public_endpoints(
     }
 
     match platform {
-        Platform::Local => Ok(Some(public_endpoints)),
-        Platform::Aws | Platform::Gcp | Platform::Azure | Platform::Kubernetes | Platform::Test => {
+        Platform::Local | Platform::Machines => Ok(Some(public_endpoints)),
+        Platform::Aws
+        | Platform::Gcp
+        | Platform::Azure
+        | Platform::Kubernetes
+        | Platform::Test => {
             Err(AlienError::new(ErrorData::ValidationError {
                 field: "public-endpoint".to_string(),
                 message: format!(
-                    "--public-endpoint is currently supported only for local pull-model deployments, got '{}'",
+                    "--public-endpoint is currently supported only for local or machines deployments, got '{}'",
                     platform.as_str()
                 ),
             }))
@@ -1262,7 +1310,7 @@ fn resolve_deployment_info(
             AlienError::new(ErrorData::ValidationError {
                 field: "platform".to_string(),
                 message:
-                    "--platform is required for new deployments. Choose from: aws, gcp, azure."
+                    "--platform is required for new deployments. Choose from: aws, gcp, azure, kubernetes, machines, local."
                         .to_string(),
             })
         })?;
@@ -1355,7 +1403,9 @@ fn load_stack_settings(
 ) -> Result<StackSettings> {
     let mut settings = StackSettings::default();
     settings.deployment_model = match platform {
-        Platform::Aws | Platform::Gcp | Platform::Azure | Platform::Test => DeploymentModel::Push,
+        Platform::Aws | Platform::Gcp | Platform::Azure | Platform::Machines | Platform::Test => {
+            DeploymentModel::Push
+        }
         Platform::Kubernetes | Platform::Local => DeploymentModel::Pull,
     };
 
@@ -1959,6 +2009,7 @@ fn sdk_platform(platform: Platform) -> alien_manager_api::types::Platform {
         Platform::Gcp => alien_manager_api::types::Platform::Gcp,
         Platform::Azure => alien_manager_api::types::Platform::Azure,
         Platform::Kubernetes => alien_manager_api::types::Platform::Kubernetes,
+        Platform::Machines => alien_manager_api::types::Platform::Machines,
         Platform::Local => alien_manager_api::types::Platform::Local,
         Platform::Test => alien_manager_api::types::Platform::Test,
     }

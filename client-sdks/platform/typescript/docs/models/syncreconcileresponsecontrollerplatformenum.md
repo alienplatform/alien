@@ -7,11 +7,11 @@ Represents the target cloud platform.
 ```typescript
 import { SyncReconcileResponseControllerPlatformEnum } from "@alienplatform/platform-api/models";
 
-let value: SyncReconcileResponseControllerPlatformEnum = "gcp";
+let value: SyncReconcileResponseControllerPlatformEnum = "azure";
 ```
 
 ## Values
 
 ```typescript
-"aws" | "gcp" | "azure" | "kubernetes" | "local" | "test"
+"aws" | "gcp" | "azure" | "kubernetes" | "machines" | "local" | "test"
 ```

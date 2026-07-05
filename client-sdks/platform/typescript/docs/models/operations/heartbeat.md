@@ -7,7 +7,7 @@ import { Heartbeat } from "@alienplatform/platform-api/models/operations";
 
 let value: Heartbeat = {
   backend: "gcp",
-  controllerPlatform: "kubernetes",
+  controllerPlatform: "machines",
   data: {
     data: {
       assignedMachines: 349166,

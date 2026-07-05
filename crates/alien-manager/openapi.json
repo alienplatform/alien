@@ -11262,6 +11262,7 @@
           "gcp",
           "azure",
           "kubernetes",
+          "machines",
           "local",
           "test"
         ]
@@ -12708,6 +12709,7 @@
           "gcp": {},
           "kubernetes": {},
           "local": {},
+          "machines": {},
           "test": {}
         }
       },

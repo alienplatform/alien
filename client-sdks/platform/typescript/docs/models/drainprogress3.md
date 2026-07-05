@@ -16,14 +16,14 @@ let value: DrainProgress3 = {
 
 ## Fields
 
-| Field              | Type                                                             | Required           | Description |
-| ------------------ | ---------------------------------------------------------------- | ------------------ | ----------- |
-| `blockers`         | [models.Blocker3](../models/blocker3.md)[]                       | :heavy_minus_sign: | N/A         |
-| `drainDeadlineAt`  | _string_                                                         | :heavy_minus_sign: | N/A         |
-| `drainRequestedAt` | _string_                                                         | :heavy_minus_sign: | N/A         |
-| `drainedAt`        | _string_                                                         | :heavy_minus_sign: | N/A         |
-| `force`            | _boolean_                                                        | :heavy_check_mark: | N/A         |
-| `machineId`        | _string_                                                         | :heavy_check_mark: | N/A         |
-| `replicaCount`     | _number_                                                         | :heavy_check_mark: | N/A         |
-| `stalled`          | _boolean_                                                        | :heavy_check_mark: | N/A         |
-| `status`           | [models.DrainProgressStatus3](../models/drainprogressstatus3.md) | :heavy_check_mark: | N/A         |
+| Field                                                            | Type                                                             | Required                                                         | Description                                                      |
+| ---------------------------------------------------------------- | ---------------------------------------------------------------- | ---------------------------------------------------------------- | ---------------------------------------------------------------- |
+| `blockers`                                                       | [models.Blocker3](../models/blocker3.md)[]                       | :heavy_minus_sign:                                               | N/A                                                              |
+| `drainDeadlineAt`                                                | *string*                                                         | :heavy_minus_sign:                                               | N/A                                                              |
+| `drainRequestedAt`                                               | *string*                                                         | :heavy_minus_sign:                                               | N/A                                                              |
+| `drainedAt`                                                      | *string*                                                         | :heavy_minus_sign:                                               | N/A                                                              |
+| `force`                                                          | *boolean*                                                        | :heavy_check_mark:                                               | N/A                                                              |
+| `machineId`                                                      | *string*                                                         | :heavy_check_mark:                                               | N/A                                                              |
+| `replicaCount`                                                   | *number*                                                         | :heavy_check_mark:                                               | N/A                                                              |
+| `stalled`                                                        | *boolean*                                                        | :heavy_check_mark:                                               | N/A                                                              |
+| `status`                                                         | [models.DrainProgressStatus3](../models/drainprogressstatus3.md) | :heavy_check_mark:                                               | N/A                                                              |

@@ -2,11 +2,11 @@
 
 {
   "name": "@alienplatform/platform-api",
-  "version": "1.0.187",
+  "version": "1.0.188",
   "exports": {
-    ".": "./src/index.ts",    
-    "./models/errors": "./src/models/errors/index.ts",    
-    "./models": "./src/models/index.ts",    
+    ".": "./src/index.ts",
+    "./models/errors": "./src/models/errors/index.ts",
+    "./models": "./src/models/index.ts",
     "./models/operations": "./src/models/operations/index.ts",
     "./lib/config": "./src/lib/config.ts",
     "./lib/http": "./src/lib/http.ts",

@@ -16,10 +16,10 @@ let value: Blocker1 = {
 
 ## Fields
 
-| Field            | Type     | Required           | Description |
-| ---------------- | -------- | ------------------ | ----------- |
-| `reason`         | _string_ | :heavy_check_mark: | N/A         |
-| `replicaId`      | _string_ | :heavy_check_mark: | N/A         |
-| `schedulingMode` | _string_ | :heavy_check_mark: | N/A         |
-| `state`          | _string_ | :heavy_check_mark: | N/A         |
-| `workloadName`   | _string_ | :heavy_check_mark: | N/A         |
+| Field              | Type               | Required           | Description        |
+| ------------------ | ------------------ | ------------------ | ------------------ |
+| `reason`           | *string*           | :heavy_check_mark: | N/A                |
+| `replicaId`        | *string*           | :heavy_check_mark: | N/A                |
+| `schedulingMode`   | *string*           | :heavy_check_mark: | N/A                |
+| `state`            | *string*           | :heavy_check_mark: | N/A                |
+| `workloadName`     | *string*           | :heavy_check_mark: | N/A                |
