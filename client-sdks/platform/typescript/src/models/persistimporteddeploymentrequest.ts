@@ -965,6 +965,16 @@ export type PersistImportedDeploymentRequestNetworkByoVnetAzure = {
    */
   applicationGatewaySubnetName?: string | null | undefined;
   /**
+   * Name of the dedicated subnet that hosts Private Endpoints (e.g. for a
+   *
+   * @remarks
+   * Postgres Flexible Server). A Private Endpoint must not share the private
+   * subnet, which is already claimed by the Container Apps environment's
+   * `infrastructure_subnet_id`. Required only when the stack contains a
+   * Postgres resource; otherwise unused.
+   */
+  privateEndpointSubnetName?: string | null | undefined;
+  /**
    * Name of the private subnet within the VNet
    */
   privateSubnetName: string;
@@ -2810,7 +2820,13 @@ export type PersistImportedDeploymentRequestRuntimeMetadata = {
 };
 
 /**
- * Deployment status in the deployment lifecycle
+ * Deployment status in the deployment lifecycle.
+ *
+ * @remarks
+ *
+ * For observe-only deployments with no release or stack state, `Running`
+ * means the Operator is attached. Connectivity comes from `lastHeartbeatAt`;
+ * resource health comes from inventory and resource heartbeat data.
  */
 export const PersistImportedDeploymentRequestStatus = {
   Pending: "pending",
@@ -2833,7 +2849,13 @@ export const PersistImportedDeploymentRequestStatus = {
   Error: "error",
 } as const;
 /**
- * Deployment status in the deployment lifecycle
+ * Deployment status in the deployment lifecycle.
+ *
+ * @remarks
+ *
+ * For observe-only deployments with no release or stack state, `Running`
+ * means the Operator is attached. Connectivity comes from `lastHeartbeatAt`;
+ * resource health comes from inventory and resource heartbeat data.
  */
 export type PersistImportedDeploymentRequestStatus = ClosedEnum<
   typeof PersistImportedDeploymentRequestStatus
@@ -2956,7 +2978,13 @@ export type PersistImportedDeploymentRequest = {
    */
   deploymentProtocolVersion: number;
   /**
-   * Deployment status in the deployment lifecycle
+   * Deployment status in the deployment lifecycle.
+   *
+   * @remarks
+   *
+   * For observe-only deployments with no release or stack state, `Running`
+   * means the Operator is attached. Connectivity comes from `lastHeartbeatAt`;
+   * resource health comes from inventory and resource heartbeat data.
    */
   status?: PersistImportedDeploymentRequestStatus | undefined;
   /**
@@ -5231,6 +5259,7 @@ export const PersistImportedDeploymentRequestTypeByoVnetAzure$outboundSchema:
 /** @internal */
 export type PersistImportedDeploymentRequestNetworkByoVnetAzure$Outbound = {
   application_gateway_subnet_name?: string | null | undefined;
+  private_endpoint_subnet_name?: string | null | undefined;
   private_subnet_name: string;
   public_subnet_name: string;
   type: string;
@@ -5244,6 +5273,7 @@ export const PersistImportedDeploymentRequestNetworkByoVnetAzure$outboundSchema:
     PersistImportedDeploymentRequestNetworkByoVnetAzure
   > = z.object({
     applicationGatewaySubnetName: z.nullable(z.string()).optional(),
+    privateEndpointSubnetName: z.nullable(z.string()).optional(),
     privateSubnetName: z.string(),
     publicSubnetName: z.string(),
     type: PersistImportedDeploymentRequestTypeByoVnetAzure$outboundSchema,
@@ -5251,6 +5281,7 @@ export const PersistImportedDeploymentRequestNetworkByoVnetAzure$outboundSchema:
   }).transform((v) => {
     return remap$(v, {
       applicationGatewaySubnetName: "application_gateway_subnet_name",
+      privateEndpointSubnetName: "private_endpoint_subnet_name",
       privateSubnetName: "private_subnet_name",
       publicSubnetName: "public_subnet_name",
       vnetResourceId: "vnet_resource_id",

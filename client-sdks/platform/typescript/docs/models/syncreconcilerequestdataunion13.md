@@ -3,106 +3,110 @@
 
 ## Supported Types
 
-### `models.DataAwsCodeBuild`
+### `models.DataAwsEcr`
 
 ```typescript
-const value: models.DataAwsCodeBuild = {
-  encryptionKeyPresent: true,
-  environmentVariableCount: 879452,
-  projectName: "<value>",
-  serviceRolePresent: true,
+const value: models.DataAwsEcr = {
+  region: "<value>",
+  registryId: "<id>",
+  registryUri: "https://mindless-bench.com",
+  repositories: [
+    {
+      createdAt: 8040.15,
+      kmsKeyPresent: true,
+      registryId: "<id>",
+      repositoryArn: "<value>",
+      repositoryName: "<value>",
+      repositoryUri: "https://glossy-disclosure.info",
+    },
+  ],
+  repositoriesTruncated: true,
+  repositoryCount: 980949,
+  repositoryPrefix: "<value>",
   status: {
-    collectionIssues: [
-      {
-        message: "<value>",
-        reason: "api-unavailable",
-        severity: "error",
-        source: "<value>",
-      },
-    ],
-    health: "degraded",
-    lifecycle: "unknown",
+    collectionIssues: [],
+    health: "unknown",
+    lifecycle: "stopped",
     partial: false,
-    stale: true,
+    stale: false,
   },
-  backend: "awsCodeBuild",
+  backend: "awsEcr",
 };
 ```
 
-### `models.DataGcpCloudBuild`
+### `models.DataGcpArtifactRegistry`
 
 ```typescript
-const value: models.DataGcpCloudBuild = {
-  buildConfigId: "<id>",
-  environmentVariableCount: 982514,
+const value: models.DataGcpArtifactRegistry = {
+  cleanupPolicyCount: 150101,
+  iamBindingCount: 410292,
+  iamPolicyEtagPresent: true,
+  iamRoles: [],
+  kmsKeyNamePresent: true,
+  labelCount: 560331,
   location: "<value>",
   projectId: "<id>",
+  repositoryId: "<id>",
   status: {
-    collectionIssues: [
-      {
-        message: "<value>",
-        reason: "api-unavailable",
-        severity: "error",
-        source: "<value>",
-      },
-    ],
-    health: "healthy",
-    lifecycle: "scaling",
+    collectionIssues: [],
+    health: "degraded",
+    lifecycle: "stopped",
+    partial: false,
+    stale: false,
+  },
+  backend: "gcpArtifactRegistry",
+};
+```
+
+### `models.DataAzureContainerRegistry`
+
+```typescript
+const value: models.DataAzureContainerRegistry = {
+  adminUserEnabled: false,
+  anonymousPullEnabled: true,
+  dataEndpointHostNames: [
+    "<value 1>",
+    "<value 2>",
+  ],
+  encryptionKeyIdentifierPresent: false,
+  encryptionKeyVaultUriPresent: false,
+  ipRuleCount: 806238,
+  location: "<value>",
+  managedTagCount: 395726,
+  name: "<value>",
+  networkRuleBypassOptions: "<value>",
+  policiesPresent: true,
+  policyCount: 284832,
+  privateEndpointConnectionCount: 849232,
+  publicNetworkAccess: "<value>",
+  resourceGroup: "<value>",
+  skuName: "<value>",
+  status: {
+    collectionIssues: [],
+    health: "unhealthy",
+    lifecycle: "failed",
     partial: true,
     stale: false,
   },
-  backend: "gcpCloudBuild",
+  zoneRedundancy: "<value>",
+  backend: "azureContainerRegistry",
 };
 ```
 
-### `models.DataAzureContainerApps2`
+### `models.DataLocal11`
 
 ```typescript
-const value: models.DataAzureContainerApps2 = {
-  environmentVariableCount: 246098,
-  managedEnvironmentId: "<id>",
-  resourceGroupName: "<value>",
+const value: models.DataLocal11 = {
+  reachable: false,
+  registryUrl: "https://well-documented-remark.biz/",
   status: {
-    collectionIssues: [
-      {
-        message: "<value>",
-        reason: "not-installed",
-        severity: "info",
-        source: "<value>",
-      },
-    ],
-    health: "unhealthy",
-    lifecycle: "deleting",
+    collectionIssues: [],
+    health: "unknown",
+    lifecycle: "creating",
     partial: true,
-    stale: true,
+    stale: false,
   },
-  backend: "azureContainerApps",
-};
-```
-
-### `models.DataKubernetesJob`
-
-```typescript
-const value: models.DataKubernetesJob = {
-  conditionCount: 902553,
-  events: [],
-  jobName: "<value>",
-  namespace: "<value>",
-  status: {
-    collectionIssues: [
-      {
-        message: "<value>",
-        reason: "not-installed",
-        severity: "info",
-        source: "<value>",
-      },
-    ],
-    health: "degraded",
-    lifecycle: "scaling",
-    partial: false,
-    stale: true,
-  },
-  backend: "kubernetesJob",
+  backend: "local",
 };
 ```
 

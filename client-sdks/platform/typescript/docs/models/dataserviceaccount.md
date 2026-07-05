@@ -27,8 +27,8 @@ let value: DataServiceAccount = {
       collectionIssues: [
         {
           message: "<value>",
-          reason: "not-installed",
-          severity: "warning",
+          reason: "api-unavailable",
+          severity: "error",
           source: "<value>",
         },
       ],
@@ -45,7 +45,7 @@ let value: DataServiceAccount = {
 
 ## Fields
 
-| Field                                   | Type                                    | Required                                | Description                             |
-| --------------------------------------- | --------------------------------------- | --------------------------------------- | --------------------------------------- |
-| `data`                                  | *models.SyncReconcileRequestDataUnion9* | :heavy_check_mark:                      | N/A                                     |
-| `resourceType`                          | *"service-account"*                     | :heavy_check_mark:                      | N/A                                     |
+| Field                                    | Type                                     | Required                                 | Description                              |
+| ---------------------------------------- | ---------------------------------------- | ---------------------------------------- | ---------------------------------------- |
+| `data`                                   | *models.SyncReconcileRequestDataUnion10* | :heavy_check_mark:                       | N/A                                      |
+| `resourceType`                           | *"service-account"*                      | :heavy_check_mark:                       | N/A                                      |

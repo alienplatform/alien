@@ -24,7 +24,13 @@ export type GetDeploymentStatsEnvironment = ClosedEnum<
 >;
 
 /**
- * Deployment status in the deployment lifecycle
+ * Deployment status in the deployment lifecycle.
+ *
+ * @remarks
+ *
+ * For observe-only deployments with no release or stack state, `Running`
+ * means the Operator is attached. Connectivity comes from `lastHeartbeatAt`;
+ * resource health comes from inventory and resource heartbeat data.
  */
 export const GetDeploymentStatsStatus = {
   Pending: "pending",
@@ -47,7 +53,13 @@ export const GetDeploymentStatsStatus = {
   Error: "error",
 } as const;
 /**
- * Deployment status in the deployment lifecycle
+ * Deployment status in the deployment lifecycle.
+ *
+ * @remarks
+ *
+ * For observe-only deployments with no release or stack state, `Running`
+ * means the Operator is attached. Connectivity comes from `lastHeartbeatAt`;
+ * resource health comes from inventory and resource heartbeat data.
  */
 export type GetDeploymentStatsStatus = ClosedEnum<
   typeof GetDeploymentStatsStatus

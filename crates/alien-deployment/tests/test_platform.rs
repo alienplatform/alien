@@ -235,6 +235,9 @@ fn create_test_config(env_vars_hash: &str, include_secret: bool) -> DeploymentCo
         environment_variables: create_env_vars_snapshot(env_vars_hash, include_secret),
         external_bindings: alien_core::ExternalBindings::default(),
         base_platform: None,
+        label_domain: None,
+        observe_label_selector: None,
+        observe_all_namespaces: false,
         compute_backend: None,
         allow_frozen_changes: false,
         domain_metadata: None,
@@ -249,7 +252,7 @@ fn create_test_config(env_vars_hash: &str, include_secret: bool) -> DeploymentCo
 /// Create an initial deployment state
 fn create_initial_state(stack: Stack) -> DeploymentState {
     let release = ReleaseInfo {
-        release_id: "rel_v1".to_string(),
+        release_id: Some("rel_v1".to_string()),
         version: Some("1.0.0".to_string()),
         description: None,
         stack,
@@ -654,7 +657,7 @@ async fn test_update_flow_happy_path_promotes_release() {
     // Start update to v2 - use a different function resource ID to avoid conflicts
     let stack_v2 = create_test_stack("test-stack", "test-function"); // Keep same resource for simpler update
     let release_v2 = ReleaseInfo {
-        release_id: "rel_v2".to_string(),
+        release_id: Some("rel_v2".to_string()),
         version: Some("2.0.0".to_string()),
         description: None,
         stack: stack_v2,
@@ -737,7 +740,7 @@ async fn test_update_failed_retry_gate_returns_to_update_pending() {
     };
 
     let release_v2 = ReleaseInfo {
-        release_id: "rel_v2".to_string(),
+        release_id: Some("rel_v2".to_string()),
         version: Some("2.0.0".to_string()),
         description: None,
         stack: stack_v2,
@@ -1158,7 +1161,7 @@ async fn test_deleted_is_noop() {
 
     // Set target_release for the step call (required even for Deleted state)
     state.target_release = Some(ReleaseInfo {
-        release_id: "rel_v1".to_string(),
+        release_id: Some("rel_v1".to_string()),
         version: Some("1.0.0".to_string()),
         description: None,
         stack,

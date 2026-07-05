@@ -893,6 +893,16 @@ export type PrepareDeploymentStackNetworkByoVnetAzure = {
    */
   applicationGatewaySubnetName?: string | null | undefined;
   /**
+   * Name of the dedicated subnet that hosts Private Endpoints (e.g. for a
+   *
+   * @remarks
+   * Postgres Flexible Server). A Private Endpoint must not share the private
+   * subnet, which is already claimed by the Container Apps environment's
+   * `infrastructure_subnet_id`. Required only when the stack contains a
+   * Postgres resource; otherwise unused.
+   */
+  privateEndpointSubnetName?: string | null | undefined;
+  /**
    * Name of the private subnet within the VNet
    */
   privateSubnetName: string;
@@ -3081,6 +3091,7 @@ export const PrepareDeploymentStackTypeByoVnetAzure$outboundSchema: z.ZodEnum<
 /** @internal */
 export type PrepareDeploymentStackNetworkByoVnetAzure$Outbound = {
   application_gateway_subnet_name?: string | null | undefined;
+  private_endpoint_subnet_name?: string | null | undefined;
   private_subnet_name: string;
   public_subnet_name: string;
   type: string;
@@ -3094,6 +3105,7 @@ export const PrepareDeploymentStackNetworkByoVnetAzure$outboundSchema:
     PrepareDeploymentStackNetworkByoVnetAzure
   > = z.object({
     applicationGatewaySubnetName: z.nullable(z.string()).optional(),
+    privateEndpointSubnetName: z.nullable(z.string()).optional(),
     privateSubnetName: z.string(),
     publicSubnetName: z.string(),
     type: PrepareDeploymentStackTypeByoVnetAzure$outboundSchema,
@@ -3101,6 +3113,7 @@ export const PrepareDeploymentStackNetworkByoVnetAzure$outboundSchema:
   }).transform((v) => {
     return remap$(v, {
       applicationGatewaySubnetName: "application_gateway_subnet_name",
+      privateEndpointSubnetName: "private_endpoint_subnet_name",
       privateSubnetName: "private_subnet_name",
       publicSubnetName: "public_subnet_name",
       vnetResourceId: "vnet_resource_id",

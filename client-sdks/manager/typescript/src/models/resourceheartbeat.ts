@@ -29,6 +29,12 @@ export type ResourceHeartbeat = {
   deploymentId?: string | null | undefined;
   observedAt: Date;
   raw: Array<RawHeartbeatSnippet>;
+  /**
+   * Alien resource id, such as the `alien.Container` or `alien.Storage`
+   *
+   * @remarks
+   * resource id from the stack.
+   */
   resourceId: string;
   /**
    * Resource type identifier that determines the specific kind of resource. This field is used for polymorphic deserialization and resource-specific behavior.

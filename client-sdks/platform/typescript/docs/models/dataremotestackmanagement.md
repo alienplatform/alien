@@ -12,15 +12,15 @@ let value: DataRemoteStackManagement = {
       collectionIssues: [
         {
           message: "<value>",
-          reason: "not-installed",
-          severity: "info",
+          reason: "api-unavailable",
+          severity: "warning",
           source: "<value>",
         },
       ],
-      health: "degraded",
+      health: "unknown",
       lifecycle: "stopping",
       partial: true,
-      stale: false,
+      stale: true,
     },
     backend: "awsIamRole",
   },
@@ -32,5 +32,5 @@ let value: DataRemoteStackManagement = {
 
 | Field                                    | Type                                     | Required                                 | Description                              |
 | ---------------------------------------- | ---------------------------------------- | ---------------------------------------- | ---------------------------------------- |
-| `data`                                   | *models.SyncReconcileRequestDataUnion11* | :heavy_check_mark:                       | N/A                                      |
+| `data`                                   | *models.SyncReconcileRequestDataUnion12* | :heavy_check_mark:                       | N/A                                      |
 | `resourceType`                           | *"remote-stack-management"*              | :heavy_check_mark:                       | N/A                                      |

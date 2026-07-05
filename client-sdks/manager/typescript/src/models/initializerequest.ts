@@ -21,7 +21,16 @@ export type InitializeRequest = {
    */
   inputValues?: { [k: string]: any } | undefined;
   name?: string | null | undefined;
+  permission?: string | null | undefined;
   platform?: PlatformEnum | null | undefined;
+  scope?: string | null | undefined;
+  /**
+   * Setup method that is registering this deployment, such as `manual` for
+   *
+   * @remarks
+   * rendered Operator manifests or `helm` for generated Helm installs.
+   */
+  setupMethod?: string | null | undefined;
   stackSettings?: StackSettings | null | undefined;
 };
 
@@ -30,7 +39,10 @@ export type InitializeRequest$Outbound = {
   basePlatform?: string | null | undefined;
   inputValues?: { [k: string]: any } | undefined;
   name?: string | null | undefined;
+  permission?: string | null | undefined;
   platform?: string | null | undefined;
+  scope?: string | null | undefined;
+  setupMethod?: string | null | undefined;
   stackSettings?: StackSettings$Outbound | null | undefined;
 };
 
@@ -42,7 +54,10 @@ export const InitializeRequest$outboundSchema: z.ZodType<
   basePlatform: z.nullable(PlatformEnum$outboundSchema).optional(),
   inputValues: z.record(z.string(), z.any()).optional(),
   name: z.nullable(z.string()).optional(),
+  permission: z.nullable(z.string()).optional(),
   platform: z.nullable(PlatformEnum$outboundSchema).optional(),
+  scope: z.nullable(z.string()).optional(),
+  setupMethod: z.nullable(z.string()).optional(),
   stackSettings: z.nullable(StackSettings$outboundSchema).optional(),
 });
 

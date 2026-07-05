@@ -1,0 +1,29 @@
+---
+source: crates/alien-permissions/tests/gcp_runtime.rs
+expression: result
+---
+{
+  "bindings": [
+    {
+      "role": "projects/my-project/roles/role_my_stack_discover_and_metrics",
+      "members": [
+        "serviceAccount:my-sa@my-project.iam.gserviceaccount.com"
+      ],
+      "target": "project"
+    }
+  ],
+  "customRoles": [
+    {
+      "roleId": "role_my_stack_discover_and_metrics",
+      "name": "projects/my-project/roles/role_my_stack_discover_and_metrics",
+      "title": "Payment Processor: Discover And Metrics",
+      "description": "Used by Payment Processor. Cloud Asset Inventory search + Cloud Monitoring read at project scope. Resource prefix: my-stack.",
+      "includedPermissions": [
+        "cloudasset.assets.searchAllResources",
+        "monitoring.metricDescriptors.list",
+        "monitoring.timeSeries.list"
+      ],
+      "stage": "GA"
+    }
+  ]
+}

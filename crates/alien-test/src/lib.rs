@@ -1,7 +1,7 @@
 //! `alien-test` -- E2E test infrastructure for Alien.
 //!
 //! Provides helpers for spinning up an in-process alien-manager, creating and
-//! managing deployments, running alien-agent containers in pull mode, loading
+//! managing deployments, running alien-operator containers in pull mode, loading
 //! test credentials from `.env.test`, and cleaning up resources after tests.
 //!
 //! ## Quick start
@@ -19,7 +19,6 @@
 //! }
 //! ```
 
-pub mod agent;
 pub mod build_push;
 pub mod cleanup;
 pub mod config;
@@ -30,10 +29,10 @@ pub mod helm_values;
 pub mod managed_secret;
 pub mod manager;
 pub mod ngrok;
+pub mod operator;
 pub mod setup;
 
 // Re-exports for convenience
-pub use agent::TestAlienAgent;
 pub use cleanup::{
     cleanup_agent_containers, cleanup_all, cleanup_deployments, cleanup_helm_release,
 };
@@ -41,4 +40,5 @@ pub use config::TestConfig;
 pub use deployment::TestDeployment;
 pub use e2e::{Binding, DeploymentModel, DistributionFlow, TestApp, TestContext};
 pub use manager::TestManager;
+pub use operator::TestAlienOperator;
 pub use setup::{setup_target, teardown_target};

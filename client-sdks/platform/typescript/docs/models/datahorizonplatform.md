@@ -16,15 +16,15 @@ let value: DataHorizonPlatform = {
     collectionIssues: [
       {
         message: "<value>",
-        reason: "forbidden",
-        severity: "error",
+        reason: "not-installed",
+        severity: "info",
         source: "<value>",
       },
     ],
-    health: "healthy",
-    lifecycle: "creating",
+    health: "degraded",
+    lifecycle: "failed",
     partial: false,
-    stale: false,
+    stale: true,
   },
   backend: "horizonPlatform",
 };
@@ -43,5 +43,5 @@ let value: DataHorizonPlatform = {
 | `replicaUnits`                                                                 | [models.ReplicaUnit](../models/replicaunit.md)[]                               | :heavy_check_mark:                                                             | N/A                                                                            |
 | `replicas`                                                                     | [models.Replicas2](../models/replicas2.md)                                     | :heavy_check_mark:                                                             | N/A                                                                            |
 | `schedulingMode`                                                               | [models.SchedulingMode](../models/schedulingmode.md)                           | :heavy_check_mark:                                                             | N/A                                                                            |
-| `status`                                                                       | [models.HeartbeatStatus10](../models/heartbeatstatus10.md)                     | :heavy_check_mark:                                                             | N/A                                                                            |
+| `status`                                                                       | [models.ResourceHeartbeatStatus10](../models/resourceheartbeatstatus10.md)     | :heavy_check_mark:                                                             | N/A                                                                            |
 | `backend`                                                                      | *"horizonPlatform"*                                                            | :heavy_check_mark:                                                             | N/A                                                                            |

@@ -5605,8 +5605,7 @@ mod tests {
 
     #[test]
     fn psc_address_serializes_as_regional_internal() {
-        let json =
-            serde_json::to_value(psc_consumer_address()).expect("address should serialize");
+        let json = serde_json::to_value(psc_consumer_address()).expect("address should serialize");
 
         assert_eq!(json["name"], "stack-psc-ip");
         // Must be INTERNAL — an external address can't back a PSC endpoint.
@@ -5621,10 +5620,9 @@ mod tests {
     #[test]
     fn forwarding_rule_round_trips_through_get_response() {
         // A GET on the rule returns the same identity fields we sent on insert.
-        let rule: ForwardingRule = serde_json::from_value(
-            serde_json::to_value(psc_consumer_forwarding_rule()).unwrap(),
-        )
-        .expect("forwarding rule should deserialize");
+        let rule: ForwardingRule =
+            serde_json::from_value(serde_json::to_value(psc_consumer_forwarding_rule()).unwrap())
+                .expect("forwarding rule should deserialize");
 
         assert_eq!(rule.name.as_deref(), Some("stack-psc-endpoint"));
         assert_eq!(rule.target.as_deref(), Some(SERVICE_ATTACHMENT));

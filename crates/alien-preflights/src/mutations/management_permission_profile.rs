@@ -11,6 +11,8 @@ use alien_permissions::get_permission_set;
 use indexmap::IndexMap;
 use std::collections::BTreeSet;
 
+const OBSERVE_PERMISSION_SET_ID: &str = "observe/observe";
+
 /// Automatically adds management permission profile with necessary permissions for all resources in the stack.
 ///
 /// This mutation generates management permissions based on resource lifecycles and feature policies:
@@ -37,7 +39,7 @@ impl StackMutation for ManagementPermissionProfileMutation {
         match stack.management() {
             ManagementPermissions::Auto => true,
             ManagementPermissions::Extend(_) => true,
-            ManagementPermissions::Override(_) => false, // Don't modify override settings
+            ManagementPermissions::Override(_) => true,
         }
     }
 
@@ -84,12 +86,24 @@ impl StackMutation for ManagementPermissionProfileMutation {
                     stack.permissions.management = ManagementPermissions::Extend(extend_profile);
                 }
             }
-            ManagementPermissions::Override(_) => {
-                // Don't modify override settings
+            ManagementPermissions::Override(mut override_profile) => {
+                ensure_observe_permission(&mut override_profile);
+                stack.permissions.management = ManagementPermissions::Override(override_profile);
             }
         }
 
         Ok(stack)
+    }
+}
+
+fn ensure_observe_permission(profile: &mut PermissionProfile) {
+    let global_permissions = profile.0.entry("*".to_string()).or_default();
+    let observe_ref = PermissionSetReference::from_name(OBSERVE_PERMISSION_SET_ID);
+    if !global_permissions.contains(&observe_ref) {
+        // TODO: move observe permissions to a dedicated read-only role, or gate
+        // this mandatory management grant once observe-only deployments have
+        // their own role model.
+        global_permissions.push(observe_ref);
     }
 }
 
@@ -100,10 +114,11 @@ fn generate_auto_management_profile(
     stack_state: &StackState,
     config: &DeploymentConfig,
 ) -> Result<Option<PermissionProfile>> {
-    // Generate management permission set IDs based on stack resources
     let mut permission_set_ids = BTreeSet::new();
     let mut resource_permission_set_ids: IndexMap<String, BTreeSet<String>> = IndexMap::new();
     let platform = stack_state.platform;
+
+    permission_set_ids.insert(OBSERVE_PERMISSION_SET_ID.to_string());
 
     // Iterate through all resources in the stack to determine required management permissions
     for (resource_id, resource_entry) in stack.resources() {
@@ -187,7 +202,8 @@ fn generate_auto_management_profile(
         );
     }
 
-    // Only create management permissions if there are resources that need management
+    // Always include the observe grant. It is read-only and lets the management
+    // role populate cloud inventory in Operate mode.
     if permission_set_ids.is_empty() && resource_permission_set_ids.is_empty() {
         return Ok(None);
     }
@@ -493,6 +509,7 @@ mod tests {
                     .collect();
 
                 assert!(permission_names.contains(&"worker/provision".to_string()));
+                assert!(permission_names.contains(&OBSERVE_PERMISSION_SET_ID.to_string()));
                 assert!(!permission_names.contains(&"worker/management".to_string()));
                 assert!(!permission_names.contains(&"storage/management".to_string()));
                 assert!(!permission_names.contains(&"aws/tag-tamper-protection".to_string()));
@@ -624,9 +641,16 @@ mod tests {
         let ManagementPermissions::Extend(profile) = result_stack.management() else {
             panic!("Expected Extend management permissions");
         };
+        let global_permission_names: Vec<String> = profile
+            .0
+            .get("*")
+            .unwrap()
+            .iter()
+            .map(|perm_ref| perm_ref.id().to_string())
+            .collect();
         assert!(
-            !profile.0.contains_key("*"),
-            "KubernetesCluster heartbeat should be resource-scoped because existing clusters do not necessarily use the deployment prefix"
+            global_permission_names == vec![OBSERVE_PERMISSION_SET_ID.to_string()],
+            "Only observe should be global; KubernetesCluster heartbeat should be resource-scoped because existing clusters do not necessarily use the deployment prefix"
         );
         let permission_names: Vec<String> = profile
             .0
@@ -665,9 +689,23 @@ mod tests {
             .await
             .unwrap();
 
+        let ManagementPermissions::Extend(profile) = result_stack.management() else {
+            panic!("Expected Extend management permissions");
+        };
+        let global_permission_names: Vec<String> = profile
+            .0
+            .get("*")
+            .unwrap()
+            .iter()
+            .map(|perm_ref| perm_ref.id().to_string())
+            .collect();
+        assert_eq!(
+            global_permission_names,
+            vec![OBSERVE_PERMISSION_SET_ID.to_string()]
+        );
         assert!(
-            result_stack.management().profile().is_none(),
-            "API-only Kubernetes heartbeat should not author cloud IAM permissions"
+            !profile.0.contains_key("kubernetes"),
+            "API-only Kubernetes heartbeat should not author Kubernetes cloud metadata permissions"
         );
     }
 
@@ -880,6 +918,7 @@ mod tests {
 
                 // Should have auto-generated live provision and extended storage/data-write.
                 assert!(permission_names.contains(&"worker/provision".to_string()));
+                assert!(permission_names.contains(&OBSERVE_PERMISSION_SET_ID.to_string()));
                 assert!(!permission_names.contains(&"worker/management".to_string()));
                 assert!(permission_names.contains(&"storage/data-write".to_string()));
             }
@@ -888,7 +927,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_override_management_profile_unchanged() {
+    async fn test_override_management_profile_keeps_user_grants_and_adds_observe() {
         let worker = Worker::new("test-worker".to_string())
             .code(WorkerCode::Image {
                 image: "test:latest".to_string(),
@@ -932,11 +971,12 @@ mod tests {
         let mutation = ManagementPermissionProfileMutation;
         let result_stack = mutation.mutate(stack, &stack_state, &config).await.unwrap();
 
-        // Check that override profile is unchanged
+        // Check that override profile keeps user grants, gets mandatory observe,
+        // and does not receive other auto-generated permissions.
         match result_stack.management() {
             ManagementPermissions::Override(profile) => {
                 let global_permissions = profile.0.get("*").unwrap();
-                assert_eq!(global_permissions.len(), 2);
+                assert_eq!(global_permissions.len(), 3);
 
                 let permission_names: Vec<String> = global_permissions
                     .iter()
@@ -945,6 +985,7 @@ mod tests {
 
                 assert!(permission_names.contains(&"storage/management".to_string()));
                 assert!(permission_names.contains(&"worker/management".to_string()));
+                assert!(permission_names.contains(&OBSERVE_PERMISSION_SET_ID.to_string()));
                 // Should NOT have auto-generated worker/provision
                 assert!(!permission_names.contains(&"worker/provision".to_string()));
             }

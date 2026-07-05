@@ -10,6 +10,7 @@ mod helpers;
 mod initial_setup;
 pub mod loop_contract;
 pub mod manager_api_transport;
+mod observe;
 mod pending;
 mod provisioning;
 pub mod runner;
@@ -29,6 +30,7 @@ pub use alien_core::{
 pub use helpers::collect_environment_info;
 pub use helpers::create_aggregated_error_from_stack_state;
 pub use helpers::deployment_headline_error_from_state;
+pub use observe::run_observe_pass;
 
 use tracing::{debug, info, warn};
 
@@ -168,6 +170,7 @@ pub async fn step(
                     suggested_delay_ms: None,
                     update_heartbeat: false,
                     heartbeats: vec![],
+                    observed_inventory_batches: vec![],
                 }
             } else {
                 let mut retry_state = current;
@@ -257,6 +260,7 @@ pub async fn step(
                 suggested_delay_ms: None,
                 update_heartbeat: false,
                 heartbeats: vec![],
+                observed_inventory_batches: vec![],
             }
         }
         DeploymentStatus::RefreshFailed => {
@@ -276,6 +280,7 @@ pub async fn step(
                 suggested_delay_ms: None,
                 update_heartbeat: false,
                 heartbeats: vec![],
+                observed_inventory_batches: vec![],
             }
         }
         DeploymentStatus::Error => {
@@ -285,6 +290,7 @@ pub async fn step(
                 suggested_delay_ms: None,
                 update_heartbeat: false,
                 heartbeats: vec![],
+                observed_inventory_batches: vec![],
             }
         }
     };

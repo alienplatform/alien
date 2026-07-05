@@ -7,54 +7,60 @@ import { ReconcileRequest } from "@alienplatform/manager-api/models";
 
 let value: ReconcileRequest = {
   deploymentId: "<id>",
-  heartbeats: [
+  observedInventoryBatches: [
     {
-      backend: "azure",
+      backend: "external",
+      complete: false,
+      controllerPlatform: "test",
+      inventoryScope: "<value>",
+      observedAt: new Date("2026-03-15T15:54:44.264Z"),
+      resources: [
+        {
+          displayName: "Hunter72",
+          health: "unhealthy",
+          lifecycle: "creating",
+          partial: false,
+          providerKind: "<value>",
+          providerStale: true,
+          rawIdentity: "<value>",
+          resourceTypeHint: "worker",
+        },
+      ],
+      sourceKind: "<value>",
+    },
+  ],
+  resourceHeartbeats: [
+    {
+      backend: "external",
       controllerPlatform: "local",
       data: {
         data: {
-          assignedMachines: 656017,
-          capacityGroup: "<value>",
-          commandSupported: false,
-          daemonInstances: [
-            {
-              name: "<value>",
-              ready: true,
-              replicaId: "<id>",
-            },
-          ],
-          daemonName: "<value>",
-          desiredMachines: 8454,
-          events: [
-            {
-              message: "<value>",
-              reason: "<value>",
-            },
-          ],
-          healthyInstances: 215687,
-          horizonClusterId: "<id>",
-          horizonStatus: "<value>",
-          latestUpdateTimestamp: "<value>",
+          name: "<value>",
           status: {
             collectionIssues: [],
-            health: "unknown",
-            lifecycle: "running",
-            partial: false,
-            stale: true,
+            health: "healthy",
+            lifecycle: "scaling",
+            partial: true,
+            stale: false,
           },
-          unavailableInstances: 63902,
-          backend: "aws",
+          workloadProfileCount: 324464,
+          workloadProfiles: [
+            {
+              name: "<value>",
+              workloadProfileType: "<value>",
+            },
+          ],
         },
-        resourceType: "daemon",
+        resourceType: "azure_container_apps_environment",
       },
-      observedAt: new Date("2026-09-19T23:42:23.532Z"),
+      observedAt: new Date("2024-12-01T23:55:46.090Z"),
       raw: [
         {
           body: "<value>",
-          collectedAt: new Date("2024-03-28T05:55:21.668Z"),
-          format: "json",
+          collectedAt: new Date("2026-05-11T10:48:38.268Z"),
+          format: "text",
           source: "<value>",
-          truncated: true,
+          truncated: false,
         },
       ],
       resourceId: "<id>",
@@ -62,17 +68,18 @@ let value: ReconcileRequest = {
     },
   ],
   session: "<value>",
-  state: "South Carolina",
+  state: "Kansas",
 };
 ```
 
 ## Fields
 
-| Field                                                        | Type                                                         | Required                                                     | Description                                                  |
-| ------------------------------------------------------------ | ------------------------------------------------------------ | ------------------------------------------------------------ | ------------------------------------------------------------ |
-| `deploymentId`                                               | *string*                                                     | :heavy_check_mark:                                           | N/A                                                          |
-| `heartbeats`                                                 | [models.ResourceHeartbeat](../models/resourceheartbeat.md)[] | :heavy_minus_sign:                                           | N/A                                                          |
-| `session`                                                    | *string*                                                     | :heavy_check_mark:                                           | N/A                                                          |
-| `state`                                                      | *any*                                                        | :heavy_check_mark:                                           | N/A                                                          |
-| `suggestedDelayMs`                                           | *number*                                                     | :heavy_minus_sign:                                           | N/A                                                          |
-| `updateHeartbeat`                                            | *boolean*                                                    | :heavy_minus_sign:                                           | N/A                                                          |
+| Field                                                                  | Type                                                                   | Required                                                               | Description                                                            |
+| ---------------------------------------------------------------------- | ---------------------------------------------------------------------- | ---------------------------------------------------------------------- | ---------------------------------------------------------------------- |
+| `deploymentId`                                                         | *string*                                                               | :heavy_check_mark:                                                     | N/A                                                                    |
+| `observedInventoryBatches`                                             | [models.ObservedInventoryBatch](../models/observedinventorybatch.md)[] | :heavy_minus_sign:                                                     | N/A                                                                    |
+| `resourceHeartbeats`                                                   | [models.ResourceHeartbeat](../models/resourceheartbeat.md)[]           | :heavy_minus_sign:                                                     | N/A                                                                    |
+| `session`                                                              | *string*                                                               | :heavy_check_mark:                                                     | N/A                                                                    |
+| `state`                                                                | *any*                                                                  | :heavy_check_mark:                                                     | N/A                                                                    |
+| `suggestedDelayMs`                                                     | *number*                                                               | :heavy_minus_sign:                                                     | N/A                                                                    |
+| `updateHeartbeat`                                                      | *boolean*                                                              | :heavy_minus_sign:                                                     | N/A                                                                    |

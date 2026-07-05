@@ -9,8 +9,8 @@ pub mod error;
 pub mod output;
 
 use crate::commands::{
-    agent_command, down_command, list_command, register_command, status_command, up_command,
-    AgentArgs, DownArgs, ListArgs, RegisterArgs, StatusArgs, UpArgs,
+    down_command, list_command, operator_command, register_command, status_command, up_command,
+    DownArgs, ListArgs, OperatorArgs, RegisterArgs, StatusArgs, UpArgs,
 };
 use crate::error::Result;
 use alien_core::embedded_config::{load_embedded_config, DeployCliConfig};
@@ -42,8 +42,8 @@ pub enum Commands {
     Status(StatusArgs),
     /// List tracked deployments
     List(ListArgs),
-    /// Manage the alien-agent background service
-    Agent(AgentArgs),
+    /// Manage the alien-operator background service
+    Operator(OperatorArgs),
     /// Register an externally-provisioned stack (CloudFormation Outputs,
     /// Terraform, …) with a manager.
     Register(RegisterArgs),
@@ -74,7 +74,7 @@ pub async fn run_cli(cli: Cli) -> Result<()> {
         Commands::Destroy(args) => down_command(args, embedded_config.as_ref()).await,
         Commands::Status(args) => status_command(args).await,
         Commands::List(args) => list_command(args).await,
-        Commands::Agent(args) => agent_command(args).await,
+        Commands::Operator(args) => operator_command(args).await,
         Commands::Register(args) => register_command(args).await,
     }
 }
@@ -131,10 +131,10 @@ mod tests {
     }
 
     #[test]
-    fn test_parse_agent_install() {
+    fn test_parse_operator_install() {
         let cli = Cli::try_parse_from([
             "alien-deploy",
-            "agent",
+            "operator",
             "install",
             "--sync-url",
             "https://manager.example.com",
@@ -147,13 +147,13 @@ mod tests {
         ])
         .unwrap();
 
-        assert!(matches!(cli.command, Commands::Agent(_)));
+        assert!(matches!(cli.command, Commands::Operator(_)));
     }
 
     #[test]
-    fn test_parse_agent_status() {
-        let cli = Cli::try_parse_from(["alien-deploy", "agent", "status"]).unwrap();
-        assert!(matches!(cli.command, Commands::Agent(_)));
+    fn test_parse_operator_status() {
+        let cli = Cli::try_parse_from(["alien-deploy", "operator", "status"]).unwrap();
+        assert!(matches!(cli.command, Commands::Operator(_)));
     }
 
     #[test]

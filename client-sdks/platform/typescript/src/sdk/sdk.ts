@@ -15,6 +15,7 @@ import { Deployments } from "./deployments.js";
 import { Domains } from "./domains.js";
 import { Events } from "./events.js";
 import { Managers } from "./managers.js";
+import { OperatorManifests } from "./operatormanifests.js";
 import { Packages } from "./packages.js";
 import { Projects } from "./projects.js";
 import { Releases } from "./releases.js";
@@ -68,6 +69,11 @@ export class Alien extends ClientSDK {
   private _managers?: Managers;
   get managers(): Managers {
     return (this._managers ??= new Managers(this._options));
+  }
+
+  private _operatorManifests?: OperatorManifests;
+  get operatorManifests(): OperatorManifests {
+    return (this._operatorManifests ??= new OperatorManifests(this._options));
   }
 
   private _apiKeys?: ApiKeys;

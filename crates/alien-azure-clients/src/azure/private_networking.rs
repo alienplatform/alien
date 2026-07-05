@@ -138,9 +138,7 @@ impl VirtualNetworkLink {
         Self {
             location: "global".to_string(),
             properties: VirtualNetworkLinkProperties {
-                virtual_network: VirtualNetworkReference {
-                    id: vnet_id.into(),
-                },
+                virtual_network: VirtualNetworkReference { id: vnet_id.into() },
                 registration_enabled,
             },
         }
@@ -270,7 +268,11 @@ impl AzurePrivateNetworkingClient {
     pub fn new(client: Client, token_cache: AzureTokenCache) -> Self {
         let endpoint = token_cache.management_endpoint().to_string();
         Self {
-            base: AzureClientBase::with_client_config(client, endpoint, token_cache.config().clone()),
+            base: AzureClientBase::with_client_config(
+                client,
+                endpoint,
+                token_cache.config().clone(),
+            ),
             token_cache,
         }
     }
@@ -309,7 +311,10 @@ impl PrivateNetworkingApi for AzurePrivateNetworkingClient {
         name: &str,
         private_endpoint: &PrivateEndpoint,
     ) -> Result<PrivateEndpointOperationResult> {
-        let token = self.token_cache.get_bearer_token_with_scope(MANAGEMENT_SCOPE).await?;
+        let token = self
+            .token_cache
+            .get_bearer_token_with_scope(MANAGEMENT_SCOPE)
+            .await?;
         let url = self.base.build_url(
             &self.private_endpoint_path(resource_group, name),
             Some(vec![("api-version", Self::NETWORK_API_VERSION.into())]),
@@ -326,7 +331,11 @@ impl PrivateNetworkingApi for AzurePrivateNetworkingClient {
             .build()?;
         let signed = self.base.sign_request(req, &token).await?;
         self.base
-            .execute_request_with_long_running_support(signed, "CreateOrUpdatePrivateEndpoint", name)
+            .execute_request_with_long_running_support(
+                signed,
+                "CreateOrUpdatePrivateEndpoint",
+                name,
+            )
             .await
     }
 
@@ -335,22 +344,36 @@ impl PrivateNetworkingApi for AzurePrivateNetworkingClient {
         resource_group: &str,
         name: &str,
     ) -> Result<PrivateEndpoint> {
-        let token = self.token_cache.get_bearer_token_with_scope(MANAGEMENT_SCOPE).await?;
+        let token = self
+            .token_cache
+            .get_bearer_token_with_scope(MANAGEMENT_SCOPE)
+            .await?;
         let url = self.base.build_url(
             &self.private_endpoint_path(resource_group, name),
             Some(vec![("api-version", Self::NETWORK_API_VERSION.into())]),
         );
-        let req = AzureRequestBuilder::new(Method::GET, url.clone()).content_length("").build()?;
+        let req = AzureRequestBuilder::new(Method::GET, url.clone())
+            .content_length("")
+            .build()?;
         let signed = self.base.sign_request(req, &token).await?;
-        let resp = self.base.execute_request(signed, "GetPrivateEndpoint", name).await?;
+        let resp = self
+            .base
+            .execute_request(signed, "GetPrivateEndpoint", name)
+            .await?;
         // The response already succeeded (execute_request returns Ok only on 2xx), so a body-read /
         // parse failure is a serialization problem, not an HTTP failure — don't fabricate a 502.
-        let body = resp.text().await.into_alien_error().context(ErrorData::SerializationError {
-            message: format!("Azure GetPrivateEndpoint: failed to read body for {name}"),
-        })?;
-        serde_json::from_str(&body).into_alien_error().context(ErrorData::SerializationError {
-            message: format!("Azure GetPrivateEndpoint: JSON parse error for {name}"),
-        })
+        let body = resp
+            .text()
+            .await
+            .into_alien_error()
+            .context(ErrorData::SerializationError {
+                message: format!("Azure GetPrivateEndpoint: failed to read body for {name}"),
+            })?;
+        serde_json::from_str(&body)
+            .into_alien_error()
+            .context(ErrorData::SerializationError {
+                message: format!("Azure GetPrivateEndpoint: JSON parse error for {name}"),
+            })
     }
 
     async fn delete_private_endpoint(
@@ -358,12 +381,17 @@ impl PrivateNetworkingApi for AzurePrivateNetworkingClient {
         resource_group: &str,
         name: &str,
     ) -> Result<OperationResult<()>> {
-        let token = self.token_cache.get_bearer_token_with_scope(MANAGEMENT_SCOPE).await?;
+        let token = self
+            .token_cache
+            .get_bearer_token_with_scope(MANAGEMENT_SCOPE)
+            .await?;
         let url = self.base.build_url(
             &self.private_endpoint_path(resource_group, name),
             Some(vec![("api-version", Self::NETWORK_API_VERSION.into())]),
         );
-        let req = AzureRequestBuilder::new(Method::DELETE, url).content_length("").build()?;
+        let req = AzureRequestBuilder::new(Method::DELETE, url)
+            .content_length("")
+            .build()?;
         let signed = self.base.sign_request(req, &token).await?;
         self.base
             .execute_request_with_long_running_support(signed, "DeletePrivateEndpoint", name)
@@ -377,17 +405,20 @@ impl PrivateNetworkingApi for AzurePrivateNetworkingClient {
         resource_group: &str,
         zone_name: &str,
     ) -> Result<OperationResult<()>> {
-        let token = self.token_cache.get_bearer_token_with_scope(MANAGEMENT_SCOPE).await?;
+        let token = self
+            .token_cache
+            .get_bearer_token_with_scope(MANAGEMENT_SCOPE)
+            .await?;
         let url = self.base.build_url(
             &self.private_dns_zone_path(resource_group, zone_name),
             Some(vec![("api-version", Self::PRIVATE_DNS_API_VERSION.into())]),
         );
         let zone = PrivateDnsZone::global();
-        let body = serde_json::to_string(&zone)
-            .into_alien_error()
-            .context(ErrorData::SerializationError {
+        let body = serde_json::to_string(&zone).into_alien_error().context(
+            ErrorData::SerializationError {
                 message: format!("Failed to serialize Private DNS Zone: {zone_name}"),
-            })?;
+            },
+        )?;
         let req = AzureRequestBuilder::new(Method::PUT, url)
             .content_type_json()
             .content_length(&body)
@@ -395,7 +426,11 @@ impl PrivateNetworkingApi for AzurePrivateNetworkingClient {
             .build()?;
         let signed = self.base.sign_request(req, &token).await?;
         self.base
-            .execute_request_with_long_running_support(signed, "CreateOrUpdatePrivateDnsZone", zone_name)
+            .execute_request_with_long_running_support(
+                signed,
+                "CreateOrUpdatePrivateDnsZone",
+                zone_name,
+            )
             .await
     }
 
@@ -404,12 +439,17 @@ impl PrivateNetworkingApi for AzurePrivateNetworkingClient {
         resource_group: &str,
         zone_name: &str,
     ) -> Result<OperationResult<()>> {
-        let token = self.token_cache.get_bearer_token_with_scope(MANAGEMENT_SCOPE).await?;
+        let token = self
+            .token_cache
+            .get_bearer_token_with_scope(MANAGEMENT_SCOPE)
+            .await?;
         let url = self.base.build_url(
             &self.private_dns_zone_path(resource_group, zone_name),
             Some(vec![("api-version", Self::PRIVATE_DNS_API_VERSION.into())]),
         );
-        let req = AzureRequestBuilder::new(Method::DELETE, url).content_length("").build()?;
+        let req = AzureRequestBuilder::new(Method::DELETE, url)
+            .content_length("")
+            .build()?;
         let signed = self.base.sign_request(req, &token).await?;
         self.base
             .execute_request_with_long_running_support(signed, "DeletePrivateDnsZone", zone_name)
@@ -426,7 +466,10 @@ impl PrivateNetworkingApi for AzurePrivateNetworkingClient {
         vnet_id: &str,
         registration_enabled: bool,
     ) -> Result<OperationResult<()>> {
-        let token = self.token_cache.get_bearer_token_with_scope(MANAGEMENT_SCOPE).await?;
+        let token = self
+            .token_cache
+            .get_bearer_token_with_scope(MANAGEMENT_SCOPE)
+            .await?;
         let url = self.base.build_url(
             &format!(
                 "{}/virtualNetworkLinks/{}",
@@ -436,11 +479,11 @@ impl PrivateNetworkingApi for AzurePrivateNetworkingClient {
             Some(vec![("api-version", Self::PRIVATE_DNS_API_VERSION.into())]),
         );
         let link = VirtualNetworkLink::new(vnet_id, registration_enabled);
-        let body = serde_json::to_string(&link)
-            .into_alien_error()
-            .context(ErrorData::SerializationError {
+        let body = serde_json::to_string(&link).into_alien_error().context(
+            ErrorData::SerializationError {
                 message: format!("Failed to serialize Virtual Network Link: {link_name}"),
-            })?;
+            },
+        )?;
         let req = AzureRequestBuilder::new(Method::PUT, url)
             .content_type_json()
             .content_length(&body)
@@ -448,7 +491,11 @@ impl PrivateNetworkingApi for AzurePrivateNetworkingClient {
             .build()?;
         let signed = self.base.sign_request(req, &token).await?;
         self.base
-            .execute_request_with_long_running_support(signed, "CreateOrUpdateVirtualNetworkLink", link_name)
+            .execute_request_with_long_running_support(
+                signed,
+                "CreateOrUpdateVirtualNetworkLink",
+                link_name,
+            )
             .await
     }
 
@@ -461,7 +508,10 @@ impl PrivateNetworkingApi for AzurePrivateNetworkingClient {
         group_name: &str,
         private_dns_zone_id: &str,
     ) -> Result<OperationResult<()>> {
-        let token = self.token_cache.get_bearer_token_with_scope(MANAGEMENT_SCOPE).await?;
+        let token = self
+            .token_cache
+            .get_bearer_token_with_scope(MANAGEMENT_SCOPE)
+            .await?;
         let url = self.base.build_url(
             &format!(
                 "{}/privateDnsZoneGroups/{}",
@@ -483,7 +533,11 @@ impl PrivateNetworkingApi for AzurePrivateNetworkingClient {
             .build()?;
         let signed = self.base.sign_request(req, &token).await?;
         self.base
-            .execute_request_with_long_running_support(signed, "CreateOrUpdatePrivateDnsZoneGroup", group_name)
+            .execute_request_with_long_running_support(
+                signed,
+                "CreateOrUpdatePrivateDnsZoneGroup",
+                group_name,
+            )
             .await
     }
 }
@@ -527,7 +581,10 @@ mod tests {
         );
         assert_eq!(connection["properties"]["groupIds"][0], "postgresqlServer");
         assert_eq!(
-            connection["properties"]["groupIds"].as_array().unwrap().len(),
+            connection["properties"]["groupIds"]
+                .as_array()
+                .unwrap()
+                .len(),
             1
         );
         // Request body must not carry response-only fields.
@@ -545,7 +602,10 @@ mod tests {
             "customDnsConfigs":[{"fqdn":"pg.privatelink.postgres.database.azure.com","ipAddresses":["10.0.1.4"]}],
             "provisioningState":"Succeeded"}}"#;
         let endpoint: PrivateEndpoint = serde_json::from_str(body).unwrap();
-        assert_eq!(endpoint.properties.provisioning_state.as_deref(), Some("Succeeded"));
+        assert_eq!(
+            endpoint.properties.provisioning_state.as_deref(),
+            Some("Succeeded")
+        );
         let dns_configs = endpoint
             .properties
             .custom_dns_configs

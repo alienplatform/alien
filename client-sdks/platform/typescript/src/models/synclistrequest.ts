@@ -6,7 +6,13 @@ import * as z from "zod/v4";
 import { ClosedEnum } from "../types/enums.js";
 
 /**
- * Deployment status in the deployment lifecycle
+ * Deployment status in the deployment lifecycle.
+ *
+ * @remarks
+ *
+ * For observe-only deployments with no release or stack state, `Running`
+ * means the Operator is attached. Connectivity comes from `lastHeartbeatAt`;
+ * resource health comes from inventory and resource heartbeat data.
  */
 export const SyncListRequestStatus = {
   Pending: "pending",
@@ -29,7 +35,13 @@ export const SyncListRequestStatus = {
   Error: "error",
 } as const;
 /**
- * Deployment status in the deployment lifecycle
+ * Deployment status in the deployment lifecycle.
+ *
+ * @remarks
+ *
+ * For observe-only deployments with no release or stack state, `Running`
+ * means the Operator is attached. Connectivity comes from `lastHeartbeatAt`;
+ * resource health comes from inventory and resource heartbeat data.
  */
 export type SyncListRequestStatus = ClosedEnum<typeof SyncListRequestStatus>;
 

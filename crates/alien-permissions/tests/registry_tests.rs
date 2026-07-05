@@ -7,6 +7,7 @@ fn test_registry_basic_functionality() {
     assert!(has_permission_set("worker/execute"));
     assert!(has_permission_set("build/provision"));
     assert!(has_permission_set("kubernetes-public-endpoint/management"));
+    assert!(has_permission_set("observe/observe"));
 
     // Test non-existent permission set
     assert!(!has_permission_set("nonexistent/permission"));
@@ -65,6 +66,7 @@ fn test_list_permission_set_ids() {
     assert!(ids.contains(&"worker/management"));
     assert!(ids.contains(&"worker/provision"));
     assert!(ids.contains(&"kubernetes-public-endpoint/management"));
+    assert!(ids.contains(&"observe/observe"));
     assert!(ids.contains(&"build/execute"));
     assert!(ids.contains(&"build/management"));
     assert!(ids.contains(&"build/provision"));

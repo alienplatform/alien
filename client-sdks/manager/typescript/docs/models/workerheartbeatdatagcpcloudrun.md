@@ -8,11 +8,18 @@ import { WorkerHeartbeatDataGcpCloudRun } from "@alienplatform/manager-api/model
 let value: WorkerHeartbeatDataGcpCloudRun = {
   service: "<value>",
   status: {
-    collectionIssues: [],
-    health: "unknown",
-    lifecycle: "running",
+    collectionIssues: [
+      {
+        message: "<value>",
+        reason: "forbidden",
+        severity: "info",
+        source: "<value>",
+      },
+    ],
+    health: "unhealthy",
+    lifecycle: "deleting",
     partial: false,
-    stale: true,
+    stale: false,
   },
   trafficCount: 570634,
   urls: [

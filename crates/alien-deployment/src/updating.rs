@@ -76,6 +76,7 @@ pub async fn handle_update_pending(
         suggested_delay_ms: None,
         update_heartbeat: false,
         heartbeats: vec![],
+        observed_inventory_batches: vec![],
     })
 }
 
@@ -203,6 +204,7 @@ pub async fn handle_updating(
             suggested_delay_ms: None,
             update_heartbeat: false,
             heartbeats: vec![],
+            observed_inventory_batches: vec![],
         }
     } else if stack_status == StackStatus::Failure {
         info!("Update failed");
@@ -241,6 +243,7 @@ pub async fn handle_updating(
             suggested_delay_ms: None,
             update_heartbeat: false,
             heartbeats: vec![],
+            observed_inventory_batches: vec![],
         }
     } else {
         // Still in progress
@@ -252,6 +255,7 @@ pub async fn handle_updating(
             suggested_delay_ms: step_result.suggested_delay_ms,
             update_heartbeat: false,
             heartbeats: step_result.heartbeats,
+            observed_inventory_batches: vec![],
         }
     };
 
@@ -288,6 +292,7 @@ pub async fn handle_update_failed(
             suggested_delay_ms: None,
             update_heartbeat: false,
             heartbeats: vec![],
+            observed_inventory_batches: vec![],
         });
     }
 
@@ -320,5 +325,6 @@ pub async fn handle_update_failed(
         suggested_delay_ms: None,
         update_heartbeat: false,
         heartbeats: vec![],
+        observed_inventory_batches: vec![],
     })
 }
