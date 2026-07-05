@@ -187,6 +187,10 @@ mkdir -p "$INSTALL_DIR"
 mv "$TMPFILE" "$INSTALL_DIR/alien-deploy"
 chmod +x "$INSTALL_DIR/alien-deploy"
 
+if [ "$#" -gt 0 ]; then
+  exec "$INSTALL_DIR/alien-deploy" "$@"
+fi
+
 echo ""
 echo "  alien-deploy installed to $INSTALL_DIR/alien-deploy"
 echo ""
@@ -248,6 +252,11 @@ if (-not $UserPath) {{
 if (((";" + $UserPath + ";").ToLowerInvariant()) -notlike (("*;" + $InstallDir + ";*").ToLowerInvariant())) {{
   $NewUserPath = if ($UserPath.Length -eq 0) {{ $InstallDir }} else {{ "$UserPath;$InstallDir" }}
   [Environment]::SetEnvironmentVariable("Path", $NewUserPath, [EnvironmentVariableTarget]::User)
+}}
+
+if ($args.Count -gt 0) {{
+  & $BinaryPath @args
+  exit $LASTEXITCODE
 }}
 
 Write-Host ""
@@ -328,5 +337,21 @@ mod tests {
         assert!(is_safe_releases_url("https://releases.example.com"));
         assert!(!is_safe_releases_url("https://example.com/`touch nope`"));
         assert!(!is_safe_releases_url("https://example.com/$HOME"));
+    }
+
+    #[test]
+    fn unix_installer_execs_installed_cli_with_arguments() {
+        let script = generate_install_script("https://releases.example.com", "latest");
+
+        assert!(script.contains("if [ \"$#\" -gt 0 ]; then"));
+        assert!(script.contains("exec \"$INSTALL_DIR/alien-deploy\" \"$@\""));
+    }
+
+    #[test]
+    fn powershell_installer_execs_installed_cli_with_arguments() {
+        let script = generate_powershell_install_script("https://releases.example.com", "latest");
+
+        assert!(script.contains("if ($args.Count -gt 0)"));
+        assert!(script.contains("& $BinaryPath @args"));
     }
 }
