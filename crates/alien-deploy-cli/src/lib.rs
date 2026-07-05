@@ -254,6 +254,10 @@ mod tests {
             "rack-1",
             "--bundle-url",
             "https://packages.example.com/machines/manifest.json",
+            "--control-plane-url",
+            "https://control.example.com",
+            "--cluster-id",
+            "cluster-123",
             "--dry-run",
         ])
         .unwrap();
@@ -264,6 +268,11 @@ mod tests {
         assert_eq!(args.token.as_deref(), Some("jt_secret"));
         assert_eq!(args.capacity_group, "gpu");
         assert_eq!(args.zone.as_deref(), Some("rack-1"));
+        assert_eq!(
+            args.control_plane_url.as_deref(),
+            Some("https://control.example.com")
+        );
+        assert_eq!(args.cluster_id.as_deref(), Some("cluster-123"));
         assert!(args.dry_run);
     }
 

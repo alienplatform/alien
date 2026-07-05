@@ -1,16 +1,16 @@
 lockVersion: 2.0.0
 id: bc51eaa5-3f88-4290-b64f-cae16746dd5d
 management:
-  docChecksum: 534ba6f796f932a3b6589372e23ab046
+  docChecksum: f8d9b306007d3fb9caa3372b9f88762d
   docVersion: 1.0.0
   speakeasyVersion: 1.680.11
   generationVersion: 2.788.15
-  releaseVersion: 1.0.194
-  configChecksum: 6a429f4cf4f7272d450b3993a79e4b6e
+  releaseVersion: 1.0.195
+  configChecksum: eef8b599bde1f4ca42ea941a6d95ec19
 persistentEdits:
-  generation_id: 3d2d8b65-e38b-474d-8057-5d43b6f090d5
-  pristine_commit_hash: ce1285be7bb87083c57ddfc14a03a3184d8bff0e
-  pristine_tree_hash: 45600d9989eab21fa0e4a8e514606b508cdd92c6
+  generation_id: b5f72de5-c485-47f4-8b95-7a5a03cfd2c3
+  pristine_commit_hash: d809bde20d44dc17afb92469d468d6db95074ba1
+  pristine_tree_hash: 9a97af1c59aedff05d2c9db81b13440e5902ea96
 features:
   typescript:
     additionalDependencies: 0.1.0
@@ -17012,8 +17012,8 @@ trackedFiles:
     pristine_git_object: a76fd3bfe053e4ad29383da8c6c9367b7b4f39f4
   docs/models/rotatemachinesjointokenresponse.md:
     id: d800ce073c45
-    last_write_checksum: sha1:4fc4515a027a5417ba169837c05f3d204960f680
-    pristine_git_object: 4513b435cf49bae92844e1be1f526642706a56c3
+    last_write_checksum: sha1:c7aef9fbeb069ebba456e8f0cd10c67cdbe90b17
+    pristine_git_object: 39f2024f91336d9ad725c6df1a11a4c5461725d9
   docs/models/scale.md:
     id: 430254591a4c
     last_write_checksum: sha1:e0cf210b5d6017705176a4d96c296df77cc6bd76
@@ -26356,12 +26356,12 @@ trackedFiles:
     pristine_git_object: dc513216f32a6341abe21c560c28d4d70a769203
   jsr.json:
     id: 7f6ab7767282
-    last_write_checksum: sha1:0209afd9aec7e81a9018a311718c51dff07835cc
-    pristine_git_object: 6119ccc512ff20fea4c973d249ee7973c671f8d6
+    last_write_checksum: sha1:7eafa9376fff86811378c1dd6955f33ff3553ba8
+    pristine_git_object: ef0228906a1ef93dd140dcf0d79c5c0244cb1791
   package.json:
     id: 7030d0b2f71b
-    last_write_checksum: sha1:9410a343d5f85e0450aba98e8d5347ab790fd010
-    pristine_git_object: f8fec80c8bf22bf00f30a3dc08a68b9def588745
+    last_write_checksum: sha1:d705a663473465c77e30661b6a8f6577158ee00c
+    pristine_git_object: 65a9771d12f5741e9da5ae13a89934fdb8f92b0c
   src/core.ts:
     id: f431fdbcd144
     last_write_checksum: sha1:c634ddf4882f77c6dba4422d8b4ba7cb5a3a23d4
@@ -26892,8 +26892,8 @@ trackedFiles:
     pristine_git_object: 962ea486e17eabe13bcf068493a556110c944df8
   src/lib/config.ts:
     id: 320761608fb3
-    last_write_checksum: sha1:17a14276c11684c8fe9372767d830e31a5a24945
-    pristine_git_object: 2ea660b01c896168f9c30f12c9b2459b2c4ee9fc
+    last_write_checksum: sha1:14b1dca0a48cbf9c61141129bfddef7661ef1c05
+    pristine_git_object: 026b7e803e18737c42a2450d8d46c11f8eae15cf
   src/lib/dlv.ts:
     id: b1988214835a
     last_write_checksum: sha1:1dd3e3fbb4550c4bf31f5ef997faff355d6f3250
@@ -28032,8 +28032,8 @@ trackedFiles:
     pristine_git_object: 92b81c225452bbae1dea749b1da236b0e4dae295
   src/models/rotatemachinesjointokenresponse.ts:
     id: 5a96f8e91672
-    last_write_checksum: sha1:297fd22fbeaa1fe86b9078b8ef300606d2a3fce4
-    pristine_git_object: 1bc4758c3daafc25f34ae305d4999d14ac798d68
+    last_write_checksum: sha1:9d765c86846cfc994a372508ee59be5dbc7c9f07
+    pristine_git_object: fcdf381380e733c69fce96c8201f26a05ee04b20
   src/models/scope.ts:
     id: caaa5ffa2f58
     last_write_checksum: sha1:592dee68a286a1e4a2beafc275eb178a90b0d2fc
@@ -28280,8 +28280,8 @@ trackedFiles:
     pristine_git_object: 3ab8669e76561c8d1d9879fb83f1e459a98fb979
   src/sdk/resources.ts:
     id: 399cf49baf34
-    last_write_checksum: sha1:04bcfe188707e5c16ebcbbb7703add94c9e6ea1a
-    pristine_git_object: 43533cab5a0c331a69bdffaa934c6211c0c1957e
+    last_write_checksum: sha1:8572d3689b4033de4c5743a9854fcb2ed0cedb4c
+    pristine_git_object: 17427a982186e05d22ab583691eb937006f1b028
   src/sdk/sdk.ts:
     id: 784571af2f69
     last_write_checksum: sha1:87e29c04ca8a57c9e5195104ebaae631910c81ab
@@ -30212,7 +30212,7 @@ examples:
           id: "dep_0c29fq4a2yjb7kx3smwdgxlc"
       responses:
         "200":
-          application/json: {"joinToken": "<value>", "token": {"id": "<id>", "createdAt": "1708263851638", "createdBy": "<value>", "joinCount": 579105}}
+          application/json: {"joinToken": "<value>", "controlPlaneUrl": "https://ornate-quart.com/", "clusterId": "<id>", "token": {"id": "<id>", "createdAt": "1708263851638", "createdBy": "<value>", "joinCount": 579105}}
         "400":
           application/json: {"code": "<value>", "message": "<value>", "retryable": false, "internal": false}
         "500":

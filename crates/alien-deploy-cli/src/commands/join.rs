@@ -11,6 +11,7 @@ use reqwest::Url;
 use serde::{Deserialize, Serialize};
 use service_manager::*;
 use sha2::{Digest, Sha256};
+use std::collections::BTreeMap;
 use std::ffi::OsString;
 use std::fs::File;
 use std::path::{Path, PathBuf};
@@ -44,6 +45,14 @@ pub struct JoinArgs {
     #[arg(long)]
     pub bundle_url: Option<String>,
 
+    /// Control plane API URL for the machine service.
+    #[arg(long)]
+    pub control_plane_url: Option<String>,
+
+    /// Cluster ID the host should join.
+    #[arg(long)]
+    pub cluster_id: Option<String>,
+
     /// Print the resolved join plan without installing anything.
     #[arg(long)]
     pub dry_run: bool,
@@ -75,6 +84,8 @@ struct JoinPlan {
     capacity_group: String,
     zone: Option<String>,
     bundle_url: String,
+    control_plane_url: String,
+    cluster_id: String,
     arch: MachineArch,
 }
 
@@ -112,6 +123,7 @@ impl MachineArch {
 #[serde(rename_all = "camelCase")]
 struct MachineBundleManifest {
     version: String,
+    config: MachineBundleConfig,
     service: MachineBundleService,
     artifacts: Vec<MachineBundleArtifact>,
     #[serde(default)]
@@ -125,6 +137,43 @@ struct MachineBundleService {
     executable: String,
     #[serde(default)]
     args: Vec<String>,
+    #[serde(default)]
+    environment: BTreeMap<String, String>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct MachineBundleConfig {
+    path: String,
+    join_token_file: String,
+    #[serde(default)]
+    machine_id_file: Option<String>,
+    #[serde(default)]
+    machine_token_file: Option<String>,
+    entries: Vec<MachineBundleConfigEntry>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct MachineBundleConfigEntry {
+    key: String,
+    source: MachineBundleConfigSource,
+    #[serde(default)]
+    optional: bool,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+enum MachineBundleConfigSource {
+    Literal(String),
+    ControlPlaneUrl,
+    ClusterId,
+    JoinTokenFile,
+    MachineIdFile,
+    MachineTokenFile,
+    CapacityGroup,
+    Zone,
+    BundleVersion,
 }
 
 #[derive(Debug, Deserialize)]
@@ -150,13 +199,19 @@ struct MachineInstallState {
     service_label: String,
     executable_path: PathBuf,
     config_path: PathBuf,
+    join_token_path: PathBuf,
+    machine_id_path: Option<PathBuf>,
+    machine_token_path: Option<PathBuf>,
+    #[serde(default)]
+    control_plane_url: Option<String>,
+    #[serde(default)]
+    cluster_id: Option<String>,
     machine_id: Option<String>,
 }
 
 #[derive(Debug)]
 struct InstallPaths {
     bundle_dir: PathBuf,
-    config_dir: PathBuf,
     state_dir: PathBuf,
 }
 
@@ -190,7 +245,7 @@ pub async fn leave_command(args: LeaveArgs) -> Result<()> {
         return Ok(());
     }
 
-    uninstall_joined_machine(&args.install_root, args.purge)
+    uninstall_joined_machine(&args.install_root, args.purge).await
 }
 
 #[cfg(test)]
@@ -209,6 +264,8 @@ fn build_join_request(
 ) -> Result<JoinRequest> {
     let (token, token_source) = resolve_join_token(args)?;
     let bundle_url = resolve_bundle_url(args, embedded_config)?;
+    let control_plane_url = resolve_control_plane_url(args)?;
+    let cluster_id = resolve_required_arg("cluster-id", args.cluster_id.as_deref())?;
     let arch = preflight_host(host)?;
 
     Ok(JoinRequest {
@@ -223,6 +280,8 @@ fn build_join_request(
                 .map(|zone| normalize_non_empty("zone", zone))
                 .transpose()?,
             bundle_url,
+            control_plane_url,
+            cluster_id,
             arch,
         },
     })
@@ -256,6 +315,35 @@ fn resolve_bundle_url(
             AlienError::new(ErrorData::ValidationError {
                 field: "bundle-url".to_string(),
                 message: "--bundle-url is required when the CLI was not packaged with a machine bundle URL".to_string(),
+            })
+        })
+}
+
+fn resolve_control_plane_url(args: &JoinArgs) -> Result<String> {
+    let url = resolve_required_arg("control-plane-url", args.control_plane_url.as_deref())?;
+    let parsed = Url::parse(&url).map_err(|e| {
+        AlienError::new(ErrorData::ValidationError {
+            field: "control-plane-url".to_string(),
+            message: format!("invalid URL: {e}"),
+        })
+    })?;
+    match parsed.scheme() {
+        "http" | "https" => Ok(url),
+        scheme => Err(AlienError::new(ErrorData::ValidationError {
+            field: "control-plane-url".to_string(),
+            message: format!("unsupported URL scheme '{scheme}'"),
+        })),
+    }
+}
+
+fn resolve_required_arg(field: &str, value: Option<&str>) -> Result<String> {
+    value
+        .map(|value| normalize_non_empty(field, value))
+        .transpose()?
+        .ok_or_else(|| {
+            AlienError::new(ErrorData::ValidationError {
+                field: field.to_string(),
+                message: format!("--{field} is required"),
             })
         })
 }
@@ -402,11 +490,41 @@ async fn install_join(request: JoinRequest) -> Result<()> {
 
     let config_path = write_machine_config(&paths, &request, &manifest)?;
     configure_ip_forwarding(&request.install_root)?;
+    let join_token_path = rooted_manifest_path(
+        &request.install_root,
+        "bundle.config.joinTokenFile",
+        &manifest.config.join_token_file,
+    )?;
+    let machine_id_path = manifest
+        .config
+        .machine_id_file
+        .as_deref()
+        .map(|path| {
+            rooted_manifest_path(&request.install_root, "bundle.config.machineIdFile", path)
+        })
+        .transpose()?;
+    let machine_token_path = manifest
+        .config
+        .machine_token_file
+        .as_deref()
+        .map(|path| {
+            rooted_manifest_path(
+                &request.install_root,
+                "bundle.config.machineTokenFile",
+                path,
+            )
+        })
+        .transpose()?;
     let mut state = MachineInstallState {
         bundle_version: manifest.version.clone(),
         service_label: manifest.service.label.clone(),
         executable_path: executable_path.clone(),
         config_path: config_path.clone(),
+        join_token_path,
+        machine_id_path,
+        machine_token_path,
+        control_plane_url: Some(request.plan.control_plane_url.clone()),
+        cluster_id: Some(request.plan.cluster_id.clone()),
         machine_id: None,
     };
 
@@ -602,13 +720,6 @@ fn write_machine_config(
     request: &JoinRequest,
     manifest: &MachineBundleManifest,
 ) -> Result<PathBuf> {
-    std::fs::create_dir_all(&paths.config_dir)
-        .into_alien_error()
-        .context(ErrorData::FileOperationFailed {
-            operation: "create".to_string(),
-            file_path: paths.config_dir.display().to_string(),
-            reason: "Failed to create machine config directory".to_string(),
-        })?;
     std::fs::create_dir_all(&paths.state_dir)
         .into_alien_error()
         .context(ErrorData::FileOperationFailed {
@@ -617,28 +728,105 @@ fn write_machine_config(
             reason: "Failed to create machine state directory".to_string(),
         })?;
 
-    let token_path = paths.config_dir.join("join-token");
+    let config_path = rooted_manifest_path(
+        &request.install_root,
+        "bundle.config.path",
+        &manifest.config.path,
+    )?;
+    let config_parent = config_path.parent().ok_or_else(|| {
+        AlienError::new(ErrorData::FileOperationFailed {
+            operation: "resolve".to_string(),
+            file_path: config_path.display().to_string(),
+            reason: "Failed to resolve machine config directory".to_string(),
+        })
+    })?;
+    std::fs::create_dir_all(config_parent)
+        .into_alien_error()
+        .context(ErrorData::FileOperationFailed {
+            operation: "create".to_string(),
+            file_path: config_parent.display().to_string(),
+            reason: "Failed to create machine config directory".to_string(),
+        })?;
+
+    let token_path = rooted_manifest_path(
+        &request.install_root,
+        "bundle.config.joinTokenFile",
+        &manifest.config.join_token_file,
+    )?;
+    let token_parent = token_path.parent().ok_or_else(|| {
+        AlienError::new(ErrorData::FileOperationFailed {
+            operation: "resolve".to_string(),
+            file_path: token_path.display().to_string(),
+            reason: "Failed to resolve join token directory".to_string(),
+        })
+    })?;
+    std::fs::create_dir_all(token_parent)
+        .into_alien_error()
+        .context(ErrorData::FileOperationFailed {
+            operation: "create".to_string(),
+            file_path: token_parent.display().to_string(),
+            reason: "Failed to create join token directory".to_string(),
+        })?;
     write_secret_file(&token_path, &request.token)?;
 
-    let config_path = paths.config_dir.join("machine.toml");
     let mut config = toml::Table::new();
-    config.insert(
-        "join_token_file".to_string(),
-        token_path.display().to_string().into(),
-    );
-    config.insert(
-        "capacity_group".to_string(),
-        request.plan.capacity_group.clone().into(),
-    );
-    if let Some(zone) = &request.plan.zone {
-        config.insert("zone".to_string(), zone.clone().into());
+    for entry in &manifest.config.entries {
+        match resolve_config_entry_value(entry, request, manifest, &token_path)? {
+            Some(value) => {
+                config.insert(entry.key.clone(), value.into());
+            }
+            None if entry.optional => {}
+            None => {
+                return Err(AlienError::new(ErrorData::ValidationError {
+                    field: format!("bundle.config.entries.{}", entry.key),
+                    message: "required value is missing".to_string(),
+                }));
+            }
+        }
     }
-    config.insert(
-        "bundle_version".to_string(),
-        manifest.version.clone().into(),
-    );
     write_secret_file(&config_path, &toml::Value::Table(config).to_string())?;
     Ok(config_path)
+}
+
+fn resolve_config_entry_value(
+    entry: &MachineBundleConfigEntry,
+    request: &JoinRequest,
+    manifest: &MachineBundleManifest,
+    join_token_path: &Path,
+) -> Result<Option<String>> {
+    match &entry.source {
+        MachineBundleConfigSource::Literal(value) => Ok(Some(value.clone())),
+        MachineBundleConfigSource::ControlPlaneUrl => {
+            Ok(Some(request.plan.control_plane_url.clone()))
+        }
+        MachineBundleConfigSource::ClusterId => Ok(Some(request.plan.cluster_id.clone())),
+        MachineBundleConfigSource::JoinTokenFile => Ok(Some(join_token_path.display().to_string())),
+        MachineBundleConfigSource::MachineIdFile => manifest
+            .config
+            .machine_id_file
+            .as_deref()
+            .map(|path| {
+                rooted_manifest_path(&request.install_root, "bundle.config.machineIdFile", path)
+            })
+            .transpose()
+            .map(|path| path.map(|path| path.display().to_string())),
+        MachineBundleConfigSource::MachineTokenFile => manifest
+            .config
+            .machine_token_file
+            .as_deref()
+            .map(|path| {
+                rooted_manifest_path(
+                    &request.install_root,
+                    "bundle.config.machineTokenFile",
+                    path,
+                )
+            })
+            .transpose()
+            .map(|path| path.map(|path| path.display().to_string())),
+        MachineBundleConfigSource::CapacityGroup => Ok(Some(request.plan.capacity_group.clone())),
+        MachineBundleConfigSource::Zone => Ok(request.plan.zone.clone()),
+        MachineBundleConfigSource::BundleVersion => Ok(Some(manifest.version.clone())),
+    }
 }
 
 fn configure_ip_forwarding(install_root: &Path) -> Result<()> {
@@ -809,6 +997,22 @@ fn install_machine_service(
         .iter()
         .map(|arg| OsString::from(arg.replace("{config_path}", &config_path.display().to_string())))
         .collect();
+    let environment = if service.environment.is_empty() {
+        None
+    } else {
+        Some(
+            service
+                .environment
+                .iter()
+                .map(|(key, value)| {
+                    (
+                        key.clone(),
+                        value.replace("{config_path}", &config_path.display().to_string()),
+                    )
+                })
+                .collect(),
+        )
+    };
 
     manager
         .install(ServiceInstallCtx {
@@ -818,7 +1022,7 @@ fn install_machine_service(
             contents: None,
             username: None,
             working_directory: executable_path.parent().map(Path::to_path_buf),
-            environment: None,
+            environment,
             autostart: true,
             restart_policy: RestartPolicy::OnFailure {
                 delay_secs: Some(5),
@@ -843,12 +1047,22 @@ fn install_machine_service(
     Ok(())
 }
 
-fn uninstall_joined_machine(install_root: &Path, purge: bool) -> Result<()> {
+async fn uninstall_joined_machine(install_root: &Path, purge: bool) -> Result<()> {
     let paths = install_paths(install_root);
     let state_path = install_state_path(&paths);
     let state = read_install_state(&state_path)?;
     let manager = native_service_manager()?;
     let label = parse_service_label(&state.service_label)?;
+
+    match request_machine_drain(&state).await {
+        Ok(true) => output::info("Drain requested for machine"),
+        Ok(false) => output::info(
+            "Drain skipped; installed machine state is missing control-plane credentials",
+        ),
+        Err(error) => output::warn(&format!(
+            "Could not request control-plane drain before uninstall: {error}"
+        )),
+    }
 
     let _ = manager.stop(ServiceStopCtx {
         label: label.clone(),
@@ -860,15 +1074,109 @@ fn uninstall_joined_machine(install_root: &Path, purge: bool) -> Result<()> {
             message: "Failed to uninstall machine service".to_string(),
         })?;
 
-    remove_dir_if_exists(&paths.config_dir)?;
+    remove_file_if_exists(&state.join_token_path)?;
+    if let Some(machine_token_path) = &state.machine_token_path {
+        remove_file_if_exists(machine_token_path)?;
+    }
+    remove_file_if_exists(&state.config_path)?;
+    if let Some(config_parent) = state.config_path.parent() {
+        remove_dir_if_empty(config_parent)?;
+    }
     let _ = std::fs::remove_file(&state_path);
     if purge {
+        if let Some(machine_id_path) = &state.machine_id_path {
+            if let Some(machine_state_dir) = machine_id_path.parent() {
+                remove_dir_if_exists(machine_state_dir)?;
+            }
+        }
         remove_dir_if_exists(&paths.state_dir)?;
         remove_dir_if_exists(&paths.bundle_dir)?;
     }
 
     output::success("Machine service uninstalled");
     Ok(())
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct MachineDrainRequest<'a> {
+    cluster_id: &'a str,
+    machine_id: &'a str,
+}
+
+async fn request_machine_drain(state: &MachineInstallState) -> Result<bool> {
+    let (Some(control_plane_url), Some(cluster_id), Some(machine_id), Some(machine_token_path)) = (
+        state.control_plane_url.as_deref(),
+        state.cluster_id.as_deref(),
+        state.machine_id.as_deref(),
+        state.machine_token_path.as_deref(),
+    ) else {
+        return Ok(false);
+    };
+
+    let machine_token = read_secret_string(machine_token_path, "machine token")?;
+    let drain_url = control_plane_endpoint(control_plane_url, "drain")?;
+    let response = reqwest::Client::new()
+        .post(drain_url.clone())
+        .header("Authorization", format!("Machine {machine_token}"))
+        .json(&MachineDrainRequest {
+            cluster_id,
+            machine_id,
+        })
+        .send()
+        .await
+        .into_alien_error()
+        .context(ErrorData::HttpError {
+            operation: "POST".to_string(),
+            url: drain_url.to_string(),
+            reason: "Failed to request machine drain".to_string(),
+        })?;
+
+    if !response.status().is_success() {
+        return Err(AlienError::new(ErrorData::HttpError {
+            operation: "POST".to_string(),
+            url: drain_url.to_string(),
+            reason: format!("server returned {}", response.status()),
+        }));
+    }
+
+    Ok(true)
+}
+
+fn control_plane_endpoint(base_url: &str, relative_path: &str) -> Result<Url> {
+    let mut base = Url::parse(base_url).map_err(|e| {
+        AlienError::new(ErrorData::ValidationError {
+            field: "control-plane-url".to_string(),
+            message: format!("invalid URL: {e}"),
+        })
+    })?;
+    let normalized_path = format!("{}/", base.path().trim_end_matches('/'));
+    base.set_path(&normalized_path);
+    base.join(relative_path.trim_start_matches('/'))
+        .map_err(|e| {
+            AlienError::new(ErrorData::ValidationError {
+                field: "control-plane-url".to_string(),
+                message: format!("invalid drain endpoint: {e}"),
+            })
+        })
+}
+
+fn read_secret_string(path: &Path, label: &str) -> Result<String> {
+    let value = std::fs::read_to_string(path).into_alien_error().context(
+        ErrorData::FileOperationFailed {
+            operation: "read".to_string(),
+            file_path: path.display().to_string(),
+            reason: format!("Failed to read {label}"),
+        },
+    )?;
+    let value = value.trim().to_string();
+    if value.is_empty() {
+        return Err(AlienError::new(ErrorData::ValidationError {
+            field: label.to_string(),
+            message: "value is empty".to_string(),
+        }));
+    }
+    Ok(value)
 }
 
 fn native_service_manager() -> Result<Box<dyn ServiceManager>> {
@@ -935,7 +1243,6 @@ fn install_state_path(paths: &InstallPaths) -> PathBuf {
 fn install_paths(root: &Path) -> InstallPaths {
     InstallPaths {
         bundle_dir: rooted_path(root, "opt/alien/machine-bundle"),
-        config_dir: rooted_path(root, "etc/alien/machine"),
         state_dir: rooted_path(root, "var/lib/alien/machine"),
     }
 }
@@ -952,6 +1259,15 @@ fn safe_join(base: &Path, relative: &str) -> Result<PathBuf> {
     Ok(base.join(safe_relative_path("bundle.service.executable", relative)?))
 }
 
+fn rooted_manifest_path(root: &Path, field: &str, relative: &str) -> Result<PathBuf> {
+    let relative = safe_relative_path(field, &normalize_non_empty(field, relative)?)?;
+    Ok(if root == Path::new("/") {
+        PathBuf::from("/").join(relative)
+    } else {
+        root.join(relative)
+    })
+}
+
 fn safe_relative_path(field: &str, relative: &str) -> Result<PathBuf> {
     let relative_path = Path::new(relative);
     if relative_path.is_absolute()
@@ -965,6 +1281,35 @@ fn safe_relative_path(field: &str, relative: &str) -> Result<PathBuf> {
         }));
     }
     Ok(relative_path.to_path_buf())
+}
+
+fn remove_file_if_exists(path: &Path) -> Result<()> {
+    match std::fs::remove_file(path) {
+        Ok(()) => Ok(()),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Err(e) => Err(AlienError::new(ErrorData::FileOperationFailed {
+            operation: "remove".to_string(),
+            file_path: path.display().to_string(),
+            reason: e.to_string(),
+        })),
+    }
+}
+
+fn remove_dir_if_empty(path: &Path) -> Result<()> {
+    match std::fs::remove_dir(path) {
+        Ok(()) => Ok(()),
+        Err(e)
+            if e.kind() == std::io::ErrorKind::NotFound
+                || e.kind() == std::io::ErrorKind::DirectoryNotEmpty =>
+        {
+            Ok(())
+        }
+        Err(e) => Err(AlienError::new(ErrorData::FileOperationFailed {
+            operation: "remove".to_string(),
+            file_path: path.display().to_string(),
+            reason: e.to_string(),
+        })),
+    }
 }
 
 fn remove_dir_if_exists(path: &Path) -> Result<()> {
@@ -995,17 +1340,97 @@ mod tests {
         }
     }
 
+    fn test_join_args() -> JoinArgs {
+        JoinArgs {
+            token: Some("jt_secret".to_string()),
+            token_file: None,
+            capacity_group: "general".to_string(),
+            zone: None,
+            bundle_url: Some("https://packages.example.com/manifest.json".to_string()),
+            control_plane_url: Some("https://control.example.com".to_string()),
+            cluster_id: Some("cluster-123".to_string()),
+            dry_run: false,
+            install_root: PathBuf::from("/"),
+        }
+    }
+
+    fn test_manifest() -> MachineBundleManifest {
+        MachineBundleManifest {
+            version: "2026-07-05".to_string(),
+            config: MachineBundleConfig {
+                path: "etc/machine-service/machine.toml".to_string(),
+                join_token_file: "var/lib/machine-service/join-token".to_string(),
+                machine_id_file: Some("var/lib/machine-service/machine-id".to_string()),
+                machine_token_file: Some("var/lib/machine-service/machine-token".to_string()),
+                entries: vec![
+                    MachineBundleConfigEntry {
+                        key: "mode".to_string(),
+                        source: MachineBundleConfigSource::Literal("external".to_string()),
+                        optional: false,
+                    },
+                    MachineBundleConfigEntry {
+                        key: "apiUrl".to_string(),
+                        source: MachineBundleConfigSource::ControlPlaneUrl,
+                        optional: false,
+                    },
+                    MachineBundleConfigEntry {
+                        key: "clusterId".to_string(),
+                        source: MachineBundleConfigSource::ClusterId,
+                        optional: false,
+                    },
+                    MachineBundleConfigEntry {
+                        key: "joinTokenFile".to_string(),
+                        source: MachineBundleConfigSource::JoinTokenFile,
+                        optional: false,
+                    },
+                    MachineBundleConfigEntry {
+                        key: "machineIdFile".to_string(),
+                        source: MachineBundleConfigSource::MachineIdFile,
+                        optional: false,
+                    },
+                    MachineBundleConfigEntry {
+                        key: "machineTokenFile".to_string(),
+                        source: MachineBundleConfigSource::MachineTokenFile,
+                        optional: false,
+                    },
+                    MachineBundleConfigEntry {
+                        key: "capacityGroup".to_string(),
+                        source: MachineBundleConfigSource::CapacityGroup,
+                        optional: false,
+                    },
+                    MachineBundleConfigEntry {
+                        key: "zone".to_string(),
+                        source: MachineBundleConfigSource::Zone,
+                        optional: true,
+                    },
+                    MachineBundleConfigEntry {
+                        key: "bundleVersion".to_string(),
+                        source: MachineBundleConfigSource::BundleVersion,
+                        optional: false,
+                    },
+                ],
+            },
+            service: MachineBundleService {
+                label: "dev.alien.machine".to_string(),
+                executable: "bin/machine".to_string(),
+                args: vec![],
+                environment: BTreeMap::new(),
+            },
+            artifacts: vec![],
+            registration: None,
+        }
+    }
+
     #[test]
     fn join_plan_uses_embedded_bundle_url() {
         let dir = tempfile::tempdir().expect("temp dir");
         let args = JoinArgs {
             token: Some(" jt_secret ".to_string()),
-            token_file: None,
             capacity_group: " gpu ".to_string(),
             zone: Some(" rack-1 ".to_string()),
             bundle_url: None,
             dry_run: true,
-            install_root: PathBuf::from("/"),
+            ..test_join_args()
         };
         let embedded = DeployCliConfig {
             token: None,
@@ -1031,6 +1456,8 @@ mod tests {
             plan.bundle_url,
             "https://packages.example.com/machines/manifest.json"
         );
+        assert_eq!(plan.control_plane_url, "https://control.example.com");
+        assert_eq!(plan.cluster_id, "cluster-123");
         assert_eq!(plan.arch, MachineArch::X64);
     }
 
@@ -1038,13 +1465,9 @@ mod tests {
     fn join_plan_prefers_explicit_bundle_url() {
         let dir = tempfile::tempdir().expect("temp dir");
         let args = JoinArgs {
-            token: Some("jt_secret".to_string()),
-            token_file: None,
-            capacity_group: "general".to_string(),
-            zone: None,
             bundle_url: Some("https://override.example.com/manifest.json".to_string()),
             dry_run: true,
-            install_root: PathBuf::from("/"),
+            ..test_join_args()
         };
         let embedded = DeployCliConfig {
             token: None,
@@ -1079,11 +1502,9 @@ mod tests {
         let args = JoinArgs {
             token: None,
             token_file: Some(token_file.path().to_path_buf()),
-            capacity_group: "general".to_string(),
-            zone: None,
             bundle_url: Some("https://packages.example.com/machines/manifest.json".to_string()),
             dry_run: true,
-            install_root: PathBuf::from("/"),
+            ..test_join_args()
         };
 
         let plan = build_join_plan(&args, None, linux_host(dir.path())).expect("join plan");
@@ -1095,13 +1516,9 @@ mod tests {
     fn join_plan_requires_bundle_url() {
         let dir = tempfile::tempdir().expect("temp dir");
         let args = JoinArgs {
-            token: Some("jt_secret".to_string()),
-            token_file: None,
-            capacity_group: "general".to_string(),
-            zone: None,
             bundle_url: None,
             dry_run: true,
-            install_root: PathBuf::from("/"),
+            ..test_join_args()
         };
 
         let error = build_join_plan(&args, None, linux_host(dir.path()))
@@ -1158,29 +1575,22 @@ mod tests {
 
     #[test]
     fn bundle_artifact_selection_uses_linux_arch() {
-        let manifest = MachineBundleManifest {
-            version: "2026-07-05".to_string(),
-            service: MachineBundleService {
-                label: "dev.alien.machine".to_string(),
-                executable: "bin/machine".to_string(),
-                args: vec!["--config".to_string(), "{config_path}".to_string()],
+        let mut manifest = test_manifest();
+        manifest.service.args = vec!["--config".to_string(), "{config_path}".to_string()];
+        manifest.artifacts = vec![
+            MachineBundleArtifact {
+                os: "linux".to_string(),
+                arch: "arm64".to_string(),
+                url: "linux-arm64.tar.gz".to_string(),
+                sha256: "unused".to_string(),
             },
-            artifacts: vec![
-                MachineBundleArtifact {
-                    os: "linux".to_string(),
-                    arch: "arm64".to_string(),
-                    url: "linux-arm64.tar.gz".to_string(),
-                    sha256: "unused".to_string(),
-                },
-                MachineBundleArtifact {
-                    os: "linux".to_string(),
-                    arch: "x64".to_string(),
-                    url: "linux-x64.tar.gz".to_string(),
-                    sha256: "unused".to_string(),
-                },
-            ],
-            registration: None,
-        };
+            MachineBundleArtifact {
+                os: "linux".to_string(),
+                arch: "x64".to_string(),
+                url: "linux-x64.tar.gz".to_string(),
+                sha256: "unused".to_string(),
+            },
+        ];
 
         let artifact = select_bundle_artifact(&manifest, MachineArch::X64).expect("artifact");
 
@@ -1209,37 +1619,72 @@ mod tests {
     }
 
     #[test]
+    fn bundle_manifest_parses_config_sources() {
+        let raw = r#"{
+          "version": "2026-07-05",
+          "config": {
+            "path": "etc/machine-service/machine.toml",
+            "joinTokenFile": "var/lib/machine-service/join-token",
+            "machineIdFile": "var/lib/machine-service/machine-id",
+            "machineTokenFile": "var/lib/machine-service/machine-token",
+            "entries": [
+              { "key": "mode", "source": { "literal": "external" } },
+              { "key": "apiUrl", "source": "controlPlaneUrl" },
+              { "key": "zone", "source": "zone", "optional": true }
+            ]
+          },
+          "service": {
+            "label": "dev.alien.machine",
+            "executable": "bin/machine-entrypoint",
+            "environment": {
+              "MACHINE_CONFIG": "{config_path}"
+            }
+          },
+          "artifacts": [
+            {
+              "os": "linux",
+              "arch": "x64",
+              "url": "machine-bundle.tar.gz",
+              "sha256": "00"
+            }
+          ],
+          "registration": {
+            "machineIdFile": "var/lib/machine-service/machine-id"
+          }
+        }"#;
+
+        let manifest: MachineBundleManifest =
+            serde_json::from_str(raw).expect("manifest should parse");
+
+        assert_eq!(manifest.config.entries.len(), 3);
+        assert_eq!(
+            manifest.service.environment.get("MACHINE_CONFIG"),
+            Some(&"{config_path}".to_string())
+        );
+    }
+
+    #[test]
     fn machine_config_writes_secret_files_under_install_root() {
         let root = tempfile::tempdir().expect("install root");
         let args = JoinArgs {
-            token: Some("jt_secret".to_string()),
-            token_file: None,
-            capacity_group: "general".to_string(),
             zone: Some("rack-1".to_string()),
-            bundle_url: Some("https://packages.example.com/manifest.json".to_string()),
-            dry_run: false,
             install_root: root.path().to_path_buf(),
+            ..test_join_args()
         };
         let request = build_join_request(&args, None, linux_host(root.path())).expect("request");
-        let manifest = MachineBundleManifest {
-            version: "2026-07-05".to_string(),
-            service: MachineBundleService {
-                label: "dev.alien.machine".to_string(),
-                executable: "bin/machine".to_string(),
-                args: vec![],
-            },
-            artifacts: vec![],
-            registration: None,
-        };
+        let manifest = test_manifest();
         let paths = install_paths(root.path());
 
         let config_path = write_machine_config(&paths, &request, &manifest).expect("write config");
 
         let config = std::fs::read_to_string(config_path).expect("config");
-        assert!(config.contains("capacity_group = \"general\""));
+        assert!(config.contains("capacityGroup = \"general\""));
         assert!(config.contains("zone = \"rack-1\""));
+        assert!(config.contains("apiUrl = \"https://control.example.com\""));
+        assert!(config.contains("clusterId = \"cluster-123\""));
+        assert!(config.contains("joinTokenFile = "));
         assert_eq!(
-            std::fs::read_to_string(root.path().join("etc/alien/machine/join-token"))
+            std::fs::read_to_string(root.path().join("var/lib/machine-service/join-token"))
                 .expect("token"),
             "jt_secret"
         );
@@ -1279,31 +1724,25 @@ mod tests {
     fn machine_config_rejoin_overwrites_stale_token_and_zone() {
         let root = tempfile::tempdir().expect("install root");
         let paths = install_paths(root.path());
-        std::fs::create_dir_all(&paths.config_dir).expect("config dir");
-        std::fs::write(paths.config_dir.join("join-token"), "stale").expect("stale token");
+        std::fs::create_dir_all(root.path().join("var/lib/machine-service")).expect("token dir");
+        std::fs::create_dir_all(root.path().join("etc/machine-service")).expect("config dir");
         std::fs::write(
-            paths.config_dir.join("machine.toml"),
-            "capacity_group = \"old\"\nzone = \"old-zone\"\n",
+            root.path().join("var/lib/machine-service/join-token"),
+            "stale",
+        )
+        .expect("stale token");
+        std::fs::write(
+            root.path().join("etc/machine-service/machine.toml"),
+            "capacityGroup = \"old\"\nzone = \"old-zone\"\n",
         )
         .expect("stale config");
-        let manifest = MachineBundleManifest {
-            version: "2026-07-05".to_string(),
-            service: MachineBundleService {
-                label: "dev.alien.machine".to_string(),
-                executable: "bin/machine".to_string(),
-                args: vec![],
-            },
-            artifacts: vec![],
-            registration: None,
-        };
+        let manifest = test_manifest();
         let args = JoinArgs {
             token: Some("jt_new".to_string()),
-            token_file: None,
             capacity_group: "gpu".to_string(),
             zone: Some("rack-2".to_string()),
-            bundle_url: Some("https://packages.example.com/manifest.json".to_string()),
-            dry_run: false,
             install_root: root.path().to_path_buf(),
+            ..test_join_args()
         };
         let request = build_join_request(&args, None, linux_host(root.path())).expect("request");
 
@@ -1311,11 +1750,12 @@ mod tests {
             write_machine_config(&paths, &request, &manifest).expect("rewrite machine config");
 
         assert_eq!(
-            std::fs::read_to_string(paths.config_dir.join("join-token")).expect("token"),
+            std::fs::read_to_string(root.path().join("var/lib/machine-service/join-token"))
+                .expect("token"),
             "jt_new"
         );
         let config = std::fs::read_to_string(config_path).expect("config");
-        assert!(config.contains("capacity_group = \"gpu\""));
+        assert!(config.contains("capacityGroup = \"gpu\""));
         assert!(config.contains("zone = \"rack-2\""));
         assert!(!config.contains("old-zone"));
     }
@@ -1344,6 +1784,11 @@ mod tests {
             service_label: "dev.alien.old".to_string(),
             executable_path: PathBuf::from("/old/bin"),
             config_path: PathBuf::from("/old/config.toml"),
+            join_token_path: PathBuf::from("/old/join-token"),
+            machine_id_path: Some(PathBuf::from("/old/machine-id")),
+            machine_token_path: Some(PathBuf::from("/old/machine-token")),
+            control_plane_url: Some("https://old-control.example.com".to_string()),
+            cluster_id: Some("old-cluster".to_string()),
             machine_id: None,
         };
         let second = MachineInstallState {
@@ -1351,6 +1796,11 @@ mod tests {
             service_label: "dev.alien.new".to_string(),
             executable_path: PathBuf::from("/new/bin"),
             config_path: PathBuf::from("/new/config.toml"),
+            join_token_path: PathBuf::from("/new/join-token"),
+            machine_id_path: Some(PathBuf::from("/new/machine-id")),
+            machine_token_path: Some(PathBuf::from("/new/machine-token")),
+            control_plane_url: Some("https://control.example.com".to_string()),
+            cluster_id: Some("cluster-123".to_string()),
             machine_id: Some("machine-new".to_string()),
         };
 
@@ -1362,7 +1812,24 @@ mod tests {
         assert_eq!(stored.service_label, "dev.alien.new");
         assert_eq!(stored.executable_path, PathBuf::from("/new/bin"));
         assert_eq!(stored.config_path, PathBuf::from("/new/config.toml"));
+        assert_eq!(stored.join_token_path, PathBuf::from("/new/join-token"));
+        assert_eq!(
+            stored.machine_token_path.as_deref(),
+            Some(Path::new("/new/machine-token"))
+        );
+        assert_eq!(
+            stored.control_plane_url.as_deref(),
+            Some("https://control.example.com")
+        );
+        assert_eq!(stored.cluster_id.as_deref(), Some("cluster-123"));
         assert_eq!(stored.machine_id.as_deref(), Some("machine-new"));
+    }
+
+    #[test]
+    fn control_plane_endpoint_preserves_base_path() {
+        let endpoint =
+            control_plane_endpoint("https://control.example.com/api", "drain").expect("endpoint");
+        assert_eq!(endpoint.as_str(), "https://control.example.com/api/drain");
     }
 
     #[tokio::test]

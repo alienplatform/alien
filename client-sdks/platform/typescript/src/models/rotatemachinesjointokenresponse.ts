@@ -13,6 +13,8 @@ import {
 
 export type RotateMachinesJoinTokenResponse = {
   joinToken: string;
+  controlPlaneUrl: string;
+  clusterId: string;
   token: MachinesJoinTokenSummary;
 };
 
@@ -22,6 +24,8 @@ export const RotateMachinesJoinTokenResponse$inboundSchema: z.ZodType<
   unknown
 > = z.object({
   joinToken: z.string(),
+  controlPlaneUrl: z.string(),
+  clusterId: z.string(),
   token: MachinesJoinTokenSummary$inboundSchema,
 });
 
