@@ -242,7 +242,7 @@ fn workload_vault_permissions_render_runtime_secret_rbac() {
         );
     }
 
-    let rendered = test_utils::helm_template(&chart.files, None);
+    let rendered = test_utils::helm_template(&chart.files, Some(MANAGER_FETCH_VALUES));
     match &rendered.status {
         LinterStatus::Passed => {
             assert!(rendered.stdout.contains("kind: RoleBinding"));
@@ -322,9 +322,11 @@ fn aws_base_platform_config_renders_operator_environment() {
     let chart = render(&stack, StackSettings::default());
     let files = chart.files.clone();
     let values = files.get("values.yaml").expect("values.yaml");
-    let aws_values = values
-        .replace("basePlatform: null", "basePlatform: aws")
-        .replace("region: \"\"", "region: us-east-1");
+    let aws_values = patch_values_with_manager_fetch(
+        &values
+            .replace("basePlatform: null", "basePlatform: aws")
+            .replace("region: \"\"", "region: us-east-1"),
+    );
 
     let rendered = test_utils::helm_template(&files, Some(&aws_values));
     match &rendered.status {
@@ -415,7 +417,7 @@ fn uninstall_cleanup_hook_preserves_pvcs_by_default() {
     let chart = render(&stack, StackSettings::default());
     let files = chart.files.clone();
 
-    let rendered = test_utils::helm_template(&files, None);
+    let rendered = test_utils::helm_template(&files, Some(MANAGER_FETCH_VALUES));
     match &rendered.status {
         LinterStatus::Passed => {
             assert!(rendered.stdout.contains("kind: Job"));
