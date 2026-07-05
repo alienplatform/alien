@@ -1,0 +1,1 @@
+{"type":"string","enum":["draining","drained","terminating"],"x-readme-ref-name":"ComputeDrainProgressStatus"}

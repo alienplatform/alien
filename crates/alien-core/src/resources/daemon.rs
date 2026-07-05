@@ -94,6 +94,13 @@ pub struct Daemon {
     /// Command to override the image default.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub command: Option<Vec<String>>,
+    /// Grace period in seconds for stopping daemon instances during updates, drains, and deletes.
+    ///
+    /// When omitted, the runtime backend applies its default. Valid values are
+    /// 1 second through 24 hours.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "openapi", schema(minimum = 1, maximum = 86400))]
+    pub stop_grace_period_seconds: Option<u32>,
     /// Optional backend runtime settings for trusted daemons.
     ///
     /// These settings are intended for daemon-style infrastructure that must
@@ -404,6 +411,33 @@ mod tests {
             Some("public")
         );
         assert!(daemon.public_endpoints[0].wildcard_subdomains);
+    }
+
+    #[test]
+    fn daemon_serializes_stop_grace_period_when_set() {
+        let daemon = Daemon::new("gateway".to_string())
+            .code(DaemonCode::Image {
+                image: "gateway:latest".to_string(),
+            })
+            .permissions("gateway".to_string())
+            .stop_grace_period_seconds(21_600)
+            .build();
+
+        let json = serde_json::to_value(&daemon).expect("daemon should serialize");
+        assert_eq!(json["stopGracePeriodSeconds"], 21_600);
+    }
+
+    #[test]
+    fn daemon_omits_stop_grace_period_when_absent() {
+        let daemon = Daemon::new("gateway".to_string())
+            .code(DaemonCode::Image {
+                image: "gateway:latest".to_string(),
+            })
+            .permissions("gateway".to_string())
+            .build();
+
+        let json = serde_json::to_value(&daemon).expect("daemon should serialize");
+        assert!(json.get("stopGracePeriodSeconds").is_none());
     }
 
     #[test]

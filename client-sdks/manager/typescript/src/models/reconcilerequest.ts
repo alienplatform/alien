@@ -9,14 +9,21 @@ import {
   ObservedInventoryBatch$outboundSchema,
 } from "./observedinventorybatch.js";
 import {
+  OperatorCapabilityReport,
+  OperatorCapabilityReport$Outbound,
+  OperatorCapabilityReport$outboundSchema,
+} from "./operatorcapabilityreport.js";
+import {
   ResourceHeartbeat,
   ResourceHeartbeat$Outbound,
   ResourceHeartbeat$outboundSchema,
 } from "./resourceheartbeat.js";
 
 export type ReconcileRequest = {
+  capabilities?: Array<OperatorCapabilityReport> | undefined;
   deploymentId: string;
   observedInventoryBatches?: Array<ObservedInventoryBatch> | undefined;
+  operatorVersion?: string | null | undefined;
   resourceHeartbeats?: Array<ResourceHeartbeat> | undefined;
   session: string;
   state: any;
@@ -26,8 +33,10 @@ export type ReconcileRequest = {
 
 /** @internal */
 export type ReconcileRequest$Outbound = {
+  capabilities?: Array<OperatorCapabilityReport$Outbound> | undefined;
   deploymentId: string;
   observedInventoryBatches?: Array<ObservedInventoryBatch$Outbound> | undefined;
+  operatorVersion?: string | null | undefined;
   resourceHeartbeats?: Array<ResourceHeartbeat$Outbound> | undefined;
   session: string;
   state: any;
@@ -40,9 +49,11 @@ export const ReconcileRequest$outboundSchema: z.ZodType<
   ReconcileRequest$Outbound,
   ReconcileRequest
 > = z.object({
+  capabilities: z.array(OperatorCapabilityReport$outboundSchema).optional(),
   deploymentId: z.string(),
   observedInventoryBatches: z.array(ObservedInventoryBatch$outboundSchema)
     .optional(),
+  operatorVersion: z.nullable(z.string()).optional(),
   resourceHeartbeats: z.array(ResourceHeartbeat$outboundSchema).optional(),
   session: z.string(),
   state: z.any(),
