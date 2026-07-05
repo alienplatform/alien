@@ -1,65 +1,54 @@
 # SyncAcquireResponseExternalBindingsUnion6
 
-Represents a binding to pre-existing infrastructure.
-
-The binding type must match the resource type it's applied to.
-Validated at runtime by the executor.
+Connection details for a Postgres database, one variant per backend.
 
 
 ## Supported Types
 
-### `models.SyncAcquireResponseExternalBindingsUnion1`
+### `models.SyncAcquireResponseExternalBindingsAurora`
 
 ```typescript
-const value: models.SyncAcquireResponseExternalBindingsUnion1 = {
-  service: "local-storage",
-  type: "storage",
+const value: models.SyncAcquireResponseExternalBindingsAurora = {
+  service: "aurora",
+  type: "postgres",
 };
 ```
 
-### `models.SyncAcquireResponseExternalBindingsUnion2`
+### `models.SyncAcquireResponseExternalBindingsCloudSQL`
 
 ```typescript
-const value: models.SyncAcquireResponseExternalBindingsUnion2 = {
-  service: "servicebus",
-  type: "queue",
+const value: models.SyncAcquireResponseExternalBindingsCloudSQL = {
+  service: "cloud-sql",
+  type: "postgres",
 };
 ```
 
-### `models.SyncAcquireResponseExternalBindingsUnion3`
+### `models.SyncAcquireResponseExternalBindingsFlexibleServer`
 
 ```typescript
-const value: models.SyncAcquireResponseExternalBindingsUnion3 = {
-  service: "dynamodb",
-  type: "kv",
+const value: models.SyncAcquireResponseExternalBindingsFlexibleServer = {
+  service: "flexible-server",
+  type: "postgres",
 };
 ```
 
-### `models.SyncAcquireResponseExternalBindingsUnion4`
+### `models.SyncAcquireResponseExternalBindingsExternal`
 
 ```typescript
-const value: models.SyncAcquireResponseExternalBindingsUnion4 = {
-  service: "local",
-  type: "artifact_registry",
+const value: models.SyncAcquireResponseExternalBindingsExternal = {
+  password: "0GLdEKgLkcUsERg",
+  service: "external",
+  type: "postgres",
 };
 ```
 
-### `models.SyncAcquireResponseExternalBindingsUnion5`
+### `models.SyncAcquireResponseExternalBindingsLocalPostgres`
 
 ```typescript
-const value: models.SyncAcquireResponseExternalBindingsUnion5 = {
-  vaultName: "<value>",
-  service: "local-vault",
-  type: "vault",
+const value: models.SyncAcquireResponseExternalBindingsLocalPostgres = {
+  password: "nBiWyJC0vNY0RXy",
+  service: "local-postgres",
+  type: "postgres",
 };
-```
-
-### `models.SyncAcquireResponseExternalBindingsContainerAppsEnvironment`
-
-```typescript
-const value:
-  models.SyncAcquireResponseExternalBindingsContainerAppsEnvironment = {
-    type: "container_apps_environment",
-  };
 ```
 

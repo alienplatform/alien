@@ -57,3 +57,6 @@ pub use kubernetes_cluster::*;
 
 mod container;
 pub use container::*;
+
+mod postgres;
+pub use postgres::*;

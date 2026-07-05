@@ -1745,10 +1745,26 @@ impl StackExecutor {
                     })?;
             }
 
+            // Only publish binding params into synced control-plane state for `remote_access`
+            // resources — same rule the external-binding path above applies. A binding can carry an
+            // inline secret (e.g. a Local Postgres password), and same-stack workers resolve bindings
+            // via the controller/manager, not this synced field, so a non-remote binding has no
+            // business in `remote_binding_params`.
+            let remote_access = self
+                .desired_stack
+                .resources
+                .get(&resource_id)
+                .map(|entry| entry.remote_access)
+                .unwrap_or(false);
+
             let next_state = next_state.with_updates(|state| {
                 state.status = next_status;
                 state.outputs = next_outputs;
-                state.remote_binding_params = next_binding_params;
+                state.remote_binding_params = if remote_access {
+                    next_binding_params
+                } else {
+                    None
+                };
                 state.config = next_config;
                 state.retry_attempt = next_retry_attempt;
                 state.error = next_error;

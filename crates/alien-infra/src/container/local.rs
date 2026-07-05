@@ -13,7 +13,7 @@ use alien_core::{
     Container, ContainerCode, ContainerHeartbeatData, ContainerOutputs, ContainerStatus,
     EnvironmentVariable, EnvironmentVariableType, HeartbeatBackend, Kv,
     LocalContainerHeartbeatData, LocalRuntimeUnitKind, LocalRuntimeUnitStatus, ObservedHealth,
-    Platform, ProviderLifecycleState, ResourceHeartbeat, ResourceHeartbeatData,
+    Platform, Postgres, ProviderLifecycleState, ResourceHeartbeat, ResourceHeartbeatData,
     ResourceOutputs as CoreResourceOutputs, ResourceStatus, Storage, Vault,
     WorkloadHeartbeatStatus,
 };
@@ -185,6 +185,37 @@ impl LocalContainerController {
             &ctx.deployment_config.environment_variables.variables,
         ) {
             env_vars.insert(var.name.clone(), var.value.clone());
+        }
+
+        // Local Postgres inlines its password in the binding (no secret store) and `get_binding_params`
+        // strips it from the synced copy, so re-resolve the full binding from the manager's 0600
+        // metadata straight into the container env.
+        for link in &config.links {
+            if link.resource_type() != &Postgres::RESOURCE_TYPE {
+                continue;
+            }
+            let manager = ctx
+                .service_provider
+                .get_local_postgres_manager()
+                .ok_or_else(|| {
+                    AlienError::new(ErrorData::LocalServicesNotAvailable {
+                        service_name: "postgres_manager".to_string(),
+                    })
+                })?;
+            let binding = manager.get_binding(link.id()).context(
+                ErrorData::ResourceControllerConfigError {
+                    resource_id: link.id().to_string(),
+                    message: format!("Failed to read binding for local Postgres '{}'", link.id()),
+                },
+            )?;
+            env_vars.extend(
+                alien_core::bindings::serialize_binding_as_env_var(link.id(), &binding).context(
+                    ErrorData::ResourceControllerConfigError {
+                        resource_id: link.id().to_string(),
+                        message: "Failed to serialize Postgres binding".to_string(),
+                    },
+                )?,
+            );
         }
 
         // Rewrite binding env vars to use container paths instead of host paths

@@ -8,7 +8,7 @@
 //! | alien-cli        | `resolve_manager()` (discovers URL via platform)   |
 //! | alien-terraform  | `manager_url` from SyncAcquire response            |
 
-use alien_core::{DeploymentState, ResourceHeartbeat};
+use alien_core::{DeploymentModel, DeploymentState, ResourceHeartbeat};
 use alien_error::{AlienError, Context, IntoAlienError};
 use alien_manager_api::{Client as ManagerClient, SdkResultExt};
 use async_trait::async_trait;
@@ -176,11 +176,13 @@ pub async fn acquire_runtime_delete_deployment(
     client: &ManagerClient,
     deployment_id: &str,
     session: &str,
+    deployment_model: DeploymentModel,
 ) -> Result<(), AlienError> {
     acquire_deployment_with_statuses(
         client,
         deployment_id,
         session,
+        deployment_model,
         Some("runtime".to_string()),
         Some("cli".to_string()),
         Some(vec![
@@ -202,10 +204,19 @@ pub async fn acquire_deployment(
     client: &ManagerClient,
     deployment_id: &str,
     session: &str,
+    deployment_model: DeploymentModel,
 ) -> Result<(), AlienError> {
-    acquire_deployment_with_statuses(client, deployment_id, session, None, None, None)
-        .await
-        .map(|_| ())
+    acquire_deployment_with_statuses(
+        client,
+        deployment_id,
+        session,
+        deployment_model,
+        None,
+        None,
+        None,
+    )
+    .await
+    .map(|_| ())
 }
 
 /// Acquire a deployment lock and return the manager's acquired deployment
@@ -215,8 +226,18 @@ pub async fn acquire_deployment_with_payload(
     client: &ManagerClient,
     deployment_id: &str,
     session: &str,
+    deployment_model: DeploymentModel,
 ) -> Result<serde_json::Value, AlienError> {
-    acquire_deployment_with_statuses(client, deployment_id, session, None, None, None).await
+    acquire_deployment_with_statuses(
+        client,
+        deployment_id,
+        session,
+        deployment_model,
+        None,
+        None,
+        None,
+    )
+    .await
 }
 
 /// Acquire a deployment lock for CLI-owned setup.
@@ -228,11 +249,13 @@ pub async fn acquire_setup_run_deployment(
     client: &ManagerClient,
     deployment_id: &str,
     session: &str,
+    deployment_model: DeploymentModel,
 ) -> Result<serde_json::Value, AlienError> {
     acquire_deployment_with_statuses(
         client,
         deployment_id,
         session,
+        deployment_model,
         Some("setup-run".to_string()),
         Some("cli".to_string()),
         Some(vec![
@@ -253,6 +276,7 @@ pub async fn acquire_setup_delete_deployment(
     client: &ManagerClient,
     deployment_id: &str,
     session: &str,
+    deployment_model: DeploymentModel,
 ) -> Result<SetupDeleteAcquireOutcome, AlienError> {
     let statuses = vec![
         "teardown-required".to_string(),
@@ -269,6 +293,7 @@ pub async fn acquire_setup_delete_deployment(
                 setup_method: Some("cli".to_string()),
                 statuses: Some(statuses.clone()),
                 platforms: None,
+                deployment_model: deployment_model_wire(deployment_model),
                 limit: None,
             })
             .send()
@@ -333,6 +358,7 @@ async fn acquire_deployment_with_statuses(
     client: &ManagerClient,
     deployment_id: &str,
     session: &str,
+    deployment_model: DeploymentModel,
     acquire_mode: Option<String>,
     setup_method: Option<String>,
     statuses: Option<Vec<String>>,
@@ -347,6 +373,7 @@ async fn acquire_deployment_with_statuses(
                 setup_method: setup_method.clone(),
                 statuses: statuses.clone(),
                 platforms: None,
+                deployment_model: deployment_model_wire(deployment_model),
                 limit: None,
             })
             .send()
@@ -406,6 +433,13 @@ pub async fn final_reconcile(
             error = %e,
             "Failed to reconcile final deployment state"
         );
+    }
+}
+
+fn deployment_model_wire(model: DeploymentModel) -> alien_manager_api::types::DeploymentModel {
+    match model {
+        DeploymentModel::Push => alien_manager_api::types::DeploymentModel::Push,
+        DeploymentModel::Pull => alien_manager_api::types::DeploymentModel::Pull,
     }
 }
 

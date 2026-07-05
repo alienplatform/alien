@@ -1,65 +1,54 @@
 # SyncReconcileResponseExternalBindingsUnion6
 
-Represents a binding to pre-existing infrastructure.
-
-The binding type must match the resource type it's applied to.
-Validated at runtime by the executor.
+Connection details for a Postgres database, one variant per backend.
 
 
 ## Supported Types
 
-### `models.SyncReconcileResponseExternalBindingsUnion1`
+### `models.SyncReconcileResponseExternalBindingsAurora`
 
 ```typescript
-const value: models.SyncReconcileResponseExternalBindingsUnion1 = {
-  service: "blob",
-  type: "storage",
+const value: models.SyncReconcileResponseExternalBindingsAurora = {
+  service: "aurora",
+  type: "postgres",
 };
 ```
 
-### `models.SyncReconcileResponseExternalBindingsUnion2`
+### `models.SyncReconcileResponseExternalBindingsCloudSQL`
 
 ```typescript
-const value: models.SyncReconcileResponseExternalBindingsUnion2 = {
-  service: "pubsub",
-  type: "queue",
+const value: models.SyncReconcileResponseExternalBindingsCloudSQL = {
+  service: "cloud-sql",
+  type: "postgres",
 };
 ```
 
-### `models.SyncReconcileResponseExternalBindingsUnion3`
+### `models.SyncReconcileResponseExternalBindingsFlexibleServer`
 
 ```typescript
-const value: models.SyncReconcileResponseExternalBindingsUnion3 = {
-  service: "dynamodb",
-  type: "kv",
+const value: models.SyncReconcileResponseExternalBindingsFlexibleServer = {
+  service: "flexible-server",
+  type: "postgres",
 };
 ```
 
-### `models.SyncReconcileResponseExternalBindingsUnion4`
+### `models.SyncReconcileResponseExternalBindingsExternal`
 
 ```typescript
-const value: models.SyncReconcileResponseExternalBindingsUnion4 = {
-  service: "local",
-  type: "artifact_registry",
+const value: models.SyncReconcileResponseExternalBindingsExternal = {
+  password: "tOdieCJuRagQap1",
+  service: "external",
+  type: "postgres",
 };
 ```
 
-### `models.SyncReconcileResponseExternalBindingsUnion5`
+### `models.SyncReconcileResponseExternalBindingsLocalPostgres`
 
 ```typescript
-const value: models.SyncReconcileResponseExternalBindingsUnion5 = {
-  vaultName: "<value>",
-  service: "local-vault",
-  type: "vault",
+const value: models.SyncReconcileResponseExternalBindingsLocalPostgres = {
+  password: "nLB6wtEVBNxGLk1",
+  service: "local-postgres",
+  type: "postgres",
 };
-```
-
-### `models.SyncReconcileResponseExternalBindingsContainerAppsEnvironment`
-
-```typescript
-const value:
-  models.SyncReconcileResponseExternalBindingsContainerAppsEnvironment = {
-    type: "container_apps_environment",
-  };
 ```
 

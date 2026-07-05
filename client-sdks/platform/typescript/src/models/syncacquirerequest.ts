@@ -71,14 +71,14 @@ export const AcquireMode = {
 export type AcquireMode = ClosedEnum<typeof AcquireMode>;
 
 /**
- * Filter by deployment model from stackSettings.deploymentModel (Manager should use 'push')
+ * Filter by deployment model from stackSettings.deploymentModel.
  */
 export const SyncAcquireRequestDeploymentModel = {
   Push: "push",
   Pull: "pull",
 } as const;
 /**
- * Filter by deployment model from stackSettings.deploymentModel (Manager should use 'push')
+ * Filter by deployment model from stackSettings.deploymentModel.
  */
 export type SyncAcquireRequestDeploymentModel = ClosedEnum<
   typeof SyncAcquireRequestDeploymentModel
@@ -111,9 +111,9 @@ export type SyncAcquireRequest = {
    */
   acquireMode?: AcquireMode | undefined;
   /**
-   * Filter by deployment model from stackSettings.deploymentModel (Manager should use 'push')
+   * Filter by deployment model from stackSettings.deploymentModel.
    */
-  deploymentModel?: SyncAcquireRequestDeploymentModel | undefined;
+  deploymentModel: SyncAcquireRequestDeploymentModel;
   /**
    * Maximum number of deployments to acquire (default: 10)
    */
@@ -149,7 +149,7 @@ export type SyncAcquireRequest$Outbound = {
   platforms?: Array<string> | undefined;
   setupMethod?: string | undefined;
   acquireMode?: string | undefined;
-  deploymentModel?: string | undefined;
+  deploymentModel: string;
   limit?: number | undefined;
 };
 
@@ -165,7 +165,7 @@ export const SyncAcquireRequest$outboundSchema: z.ZodType<
   platforms: z.array(SyncAcquireRequestPlatform$outboundSchema).optional(),
   setupMethod: DeploymentSetupMethod$outboundSchema.optional(),
   acquireMode: AcquireMode$outboundSchema.optional(),
-  deploymentModel: SyncAcquireRequestDeploymentModel$outboundSchema.optional(),
+  deploymentModel: SyncAcquireRequestDeploymentModel$outboundSchema,
   limit: z.int().optional(),
 });
 

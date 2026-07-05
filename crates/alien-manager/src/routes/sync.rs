@@ -15,7 +15,7 @@ fn deserialize_bool_or_null<'de, D: Deserializer<'de>>(deserializer: D) -> Resul
 }
 
 use alien_core::{
-    sync::TargetDeployment, DeploymentConfig, DeploymentState, DeploymentStatus,
+    sync::TargetDeployment, DeploymentConfig, DeploymentModel, DeploymentState, DeploymentStatus,
     EnvironmentVariable, EnvironmentVariablesSnapshot, Platform, ReleaseInfo, ResourceHeartbeat,
 };
 use alien_error::AlienError;
@@ -46,6 +46,7 @@ pub struct AcquireRequest {
     pub setup_method: Option<String>,
     #[serde(default)]
     pub acquire_mode: Option<String>,
+    pub deployment_model: DeploymentModel,
     #[serde(default = "default_limit")]
     pub limit: u32,
 }
@@ -305,6 +306,7 @@ async fn acquire(
         platforms: req.platforms,
         setup_method: req.setup_method,
         acquire_mode,
+        deployment_model: Some(req.deployment_model),
         limit: Some(req.limit),
         ..DeploymentFilter::default()
     };

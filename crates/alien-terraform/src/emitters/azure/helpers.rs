@@ -255,7 +255,18 @@ pub fn emit_role_definition_and_assignments(
     context: &PermissionContext,
     seen_predefined_assignments: &mut HashSet<(String, String)>,
 ) -> Result<()> {
-    if permission_set.platforms.azure.is_none() {
+    // Skip when the set declares no Azure grants — `None` OR an explicit empty list. A set can
+    // intentionally grant nothing on Azure while still granting on other clouds (e.g.
+    // `postgres/data-access`, whose connection secret is read through the shared deployment vault's
+    // `vault/data-read`, so it carries an empty `azure` list by design). An empty list reaching
+    // the generator would otherwise fail-fast with "produced no Azure bindings".
+    if permission_set
+        .platforms
+        .azure
+        .as_ref()
+        .map(|bindings| bindings.is_empty())
+        .unwrap_or(true)
+    {
         return Ok(());
     }
 

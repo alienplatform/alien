@@ -13,6 +13,7 @@ use alien_aws_clients::{
     eventbridge::{EventBridgeApi, EventBridgeClient},
     iam::{IamApi, IamClient},
     lambda::{LambdaApi, LambdaClient},
+    rds::{RdsApi, RdsClient},
     s3::{S3Api, S3Client},
     secrets_manager::{SecretsManagerApi, SecretsManagerClient},
     sqs::{SqsApi, SqsClient},
@@ -27,6 +28,7 @@ use alien_azure_clients::{
     container_apps::{AzureContainerAppsClient, ContainerAppsApi},
     containerregistry::{AzureContainerRegistryClient, ContainerRegistryApi},
     disks::{AzureManagedDisksClient, ManagedDisksApi},
+    flexible_server::{AzureFlexibleServerClient, FlexibleServerApi},
     keyvault::{
         AzureKeyVaultCertificatesClient, AzureKeyVaultManagementClient, AzureKeyVaultSecretsClient,
         KeyVaultCertificatesApi, KeyVaultManagementApi, KeyVaultSecretsApi,
@@ -36,6 +38,7 @@ use alien_azure_clients::{
     managed_clusters::{AzureManagedClustersClient, ManagedClustersApi},
     managed_identity::{AzureManagedIdentityClient, ManagedIdentityApi},
     network::{AzureNetworkClient, NetworkApi as AzureNetworkApi},
+    private_networking::{AzurePrivateNetworkingClient, PrivateNetworkingApi},
     resources::{AzureResourcesClient, ResourcesApi},
     service_bus::{
         AzureServiceBusDataPlaneClient, AzureServiceBusManagementClient, ServiceBusDataPlaneApi,
@@ -50,6 +53,7 @@ use alien_gcp_clients::{
     artifactregistry::{ArtifactRegistryApi, ArtifactRegistryClient},
     cloudbuild::{CloudBuildApi, CloudBuildClient},
     cloudrun::{CloudRunApi, CloudRunClient},
+    cloud_sql::{CloudSqlApi, CloudSqlClient},
     cloudscheduler::{CloudSchedulerApi, CloudSchedulerClient},
     compute::{ComputeApi as GcpComputeApi, ComputeClient as GcpComputeClient},
     container::{ContainerApi as GkeContainerApi, ContainerClient as GkeContainerClient},
@@ -99,6 +103,7 @@ pub trait PlatformServiceProvider: Send + Sync {
         &self,
         config: &AwsClientConfig,
     ) -> Result<Arc<dyn SecretsManagerApi>>;
+    async fn get_aws_rds_client(&self, config: &AwsClientConfig) -> Result<Arc<dyn RdsApi>>;
     async fn get_aws_ssm_client(&self, config: &AwsClientConfig) -> Result<Arc<dyn SsmApi>>;
     async fn get_aws_dynamodb_client(
         &self,
@@ -144,6 +149,7 @@ pub trait PlatformServiceProvider: Send + Sync {
         &self,
         config: &GcpClientConfig,
     ) -> Result<Arc<dyn SecretManagerApi>>;
+    fn get_gcp_cloud_sql_client(&self, config: &GcpClientConfig) -> Result<Arc<dyn CloudSqlApi>>;
     fn get_gcp_firestore_client(&self, config: &GcpClientConfig) -> Result<Arc<dyn FirestoreApi>>;
     fn get_gcp_pubsub_client(&self, config: &GcpClientConfig) -> Result<Arc<dyn PubSubApi>>;
     fn get_gcp_compute_client(&self, config: &GcpClientConfig) -> Result<Arc<dyn GcpComputeApi>>;
@@ -193,6 +199,10 @@ pub trait PlatformServiceProvider: Send + Sync {
         &self,
         config: &AzureClientConfig,
     ) -> Result<Arc<dyn ManagedDisksApi>>;
+    fn get_azure_flexible_server_client(
+        &self,
+        config: &AzureClientConfig,
+    ) -> Result<Arc<dyn FlexibleServerApi>>;
     fn get_azure_managed_identity_client(
         &self,
         config: &AzureClientConfig,
@@ -237,6 +247,10 @@ pub trait PlatformServiceProvider: Send + Sync {
         &self,
         config: &AzureClientConfig,
     ) -> Result<Arc<dyn AzureNetworkApi>>;
+    fn get_azure_private_networking_client(
+        &self,
+        config: &AzureClientConfig,
+    ) -> Result<Arc<dyn PrivateNetworkingApi>>;
 
     /// Resolve the caller's Azure AD principal ID (object ID) from the current credentials.
     ///
@@ -310,6 +324,13 @@ pub trait PlatformServiceProvider: Send + Sync {
     fn get_local_kv_manager(&self) -> Option<Arc<alien_local::LocalKvManager>>;
     #[cfg(not(feature = "local"))]
     fn get_local_kv_manager(&self) -> Option<Arc<()>> {
+        None
+    }
+
+    #[cfg(feature = "local")]
+    fn get_local_postgres_manager(&self) -> Option<Arc<alien_local::LocalPostgresManager>>;
+    #[cfg(not(feature = "local"))]
+    fn get_local_postgres_manager(&self) -> Option<Arc<()>> {
         None
     }
 
@@ -546,6 +567,16 @@ impl PlatformServiceProvider for DefaultPlatformServiceProvider {
         )))
     }
 
+    async fn get_aws_rds_client(&self, config: &AwsClientConfig) -> Result<Arc<dyn RdsApi>> {
+        let credentials = AwsCredentialProvider::from_config(config.clone())
+            .await
+            .context(crate::error::ErrorData::CloudPlatformError {
+                message: "Failed to create AWS credential provider".to_string(),
+                resource_id: None,
+            })?;
+        Ok(Arc::new(RdsClient::new(reqwest::Client::new(), credentials)))
+    }
+
     async fn get_aws_autoscaling_client(
         &self,
         config: &AwsClientConfig,
@@ -726,6 +757,13 @@ impl PlatformServiceProvider for DefaultPlatformServiceProvider {
         )))
     }
 
+    fn get_gcp_cloud_sql_client(&self, config: &GcpClientConfig) -> Result<Arc<dyn CloudSqlApi>> {
+        Ok(Arc::new(CloudSqlClient::new(
+            reqwest::Client::new(),
+            config.clone(),
+        )))
+    }
+
     fn get_gcp_cloud_scheduler_client(
         &self,
         config: &GcpClientConfig,
@@ -837,6 +875,16 @@ impl PlatformServiceProvider for DefaultPlatformServiceProvider {
         )))
     }
 
+    fn get_azure_flexible_server_client(
+        &self,
+        config: &AzureClientConfig,
+    ) -> Result<Arc<dyn FlexibleServerApi>> {
+        Ok(Arc::new(AzureFlexibleServerClient::new(
+            reqwest::Client::new(),
+            AzureTokenCache::new(config.clone()),
+        )))
+    }
+
     fn get_azure_managed_identity_client(
         &self,
         config: &AzureClientConfig,
@@ -942,6 +990,16 @@ impl PlatformServiceProvider for DefaultPlatformServiceProvider {
         config: &AzureClientConfig,
     ) -> Result<Arc<dyn AzureNetworkApi>> {
         Ok(Arc::new(AzureNetworkClient::new(
+            reqwest::Client::new(),
+            AzureTokenCache::new(config.clone()),
+        )))
+    }
+
+    fn get_azure_private_networking_client(
+        &self,
+        config: &AzureClientConfig,
+    ) -> Result<Arc<dyn PrivateNetworkingApi>> {
+        Ok(Arc::new(AzurePrivateNetworkingClient::new(
             reqwest::Client::new(),
             AzureTokenCache::new(config.clone()),
         )))
@@ -1117,6 +1175,13 @@ impl PlatformServiceProvider for DefaultPlatformServiceProvider {
     #[cfg(feature = "local")]
     fn get_local_kv_manager(&self) -> Option<Arc<alien_local::LocalKvManager>> {
         self.local_bindings.as_ref().map(|p| p.kv_manager().clone())
+    }
+
+    #[cfg(feature = "local")]
+    fn get_local_postgres_manager(&self) -> Option<Arc<alien_local::LocalPostgresManager>> {
+        self.local_bindings
+            .as_ref()
+            .map(|p| p.postgres_manager().clone())
     }
 
     #[cfg(feature = "local")]

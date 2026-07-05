@@ -1361,7 +1361,8 @@
       "AcquireRequest": {
         "type": "object",
         "required": [
-          "session"
+          "session",
+          "deploymentModel"
         ],
         "properties": {
           "acquireMode": {
@@ -1374,6 +1375,9 @@
               "type": "string"
             },
             "nullable": true
+          },
+          "deploymentModel": {
+            "$ref": "#/components/schemas/DeploymentModel"
           },
           "limit": {
             "type": "integer",

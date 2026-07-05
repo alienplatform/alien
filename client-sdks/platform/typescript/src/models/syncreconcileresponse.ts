@@ -3,24 +3,1219 @@
  */
 
 import * as z from "zod/v4";
-import { safeParse } from "../lib/schemas.js";
+import {
+  collectExtraKeys as collectExtraKeys$,
+  safeParse,
+} from "../lib/schemas.js";
 import { ClosedEnum } from "../types/enums.js";
 import { Result as SafeParseResult } from "../types/fp.js";
 import { SDKValidationError } from "./errors/sdkvalidationerror.js";
 import {
-  ReleaseInfoInput,
-  ReleaseInfoInput$inboundSchema,
-  ReleaseInfoPermissions,
-  ReleaseInfoPermissions$inboundSchema,
-  ReleaseInfoResources,
-  ReleaseInfoResources$inboundSchema,
-  TargetConfig,
-  TargetConfig$inboundSchema,
-} from "./releaseinforesources.js";
-import {
   SyncReconcileResponseCurrent,
   SyncReconcileResponseCurrent$inboundSchema,
-} from "./syncreconcileresponsekeyprefixsecretref2.js";
+} from "./syncreconcileresponseenvironmentname.js";
+import {
+  ReleaseInfoDefaultUnion,
+  ReleaseInfoDefaultUnion$inboundSchema,
+  ReleaseInfoEnv,
+  ReleaseInfoEnv$inboundSchema,
+  ReleaseInfoKind,
+  ReleaseInfoKind$inboundSchema,
+  ReleaseInfoPlatform,
+  ReleaseInfoPlatform$inboundSchema,
+  ReleaseInfoProvidedBy,
+  ReleaseInfoProvidedBy$inboundSchema,
+  TargetConfig,
+  TargetConfig$inboundSchema,
+  ValidationReleaseInfo,
+  ValidationReleaseInfo$inboundSchema,
+} from "./validationreleaseinfo.js";
+
+export type ReleaseInfoValidationUnion = ValidationReleaseInfo | any;
+
+/**
+ * Stack input definition serialized into a release stack.
+ */
+export type ReleaseInfoInput = {
+  default?: ReleaseInfoDefaultUnion | null | undefined;
+  /**
+   * Human-facing helper text.
+   */
+  description: string;
+  /**
+   * Runtime env-var mappings for v1 input resolution.
+   */
+  env?: Array<ReleaseInfoEnv> | undefined;
+  /**
+   * Stable input ID used by CLI/API calls.
+   */
+  id: string;
+  /**
+   * Primitive stack input kind.
+   */
+  kind: ReleaseInfoKind;
+  /**
+   * Human-facing field label.
+   */
+  label: string;
+  /**
+   * Example placeholder shown in UI.
+   */
+  placeholder?: string | null | undefined;
+  /**
+   * Platforms where this input applies.
+   */
+  platforms?: Array<ReleaseInfoPlatform> | null | undefined;
+  /**
+   * Who can provide this value.
+   */
+  providedBy: Array<ReleaseInfoProvidedBy>;
+  /**
+   * Whether a resolved value is required before deployment can proceed.
+   */
+  required: boolean;
+  validation?: ValidationReleaseInfo | any | null | undefined;
+};
+
+export const ManagementReleaseInfoEnum = {
+  Auto: "auto",
+} as const;
+export type ManagementReleaseInfoEnum = ClosedEnum<
+  typeof ManagementReleaseInfoEnum
+>;
+
+/**
+ * AWS-specific binding specification
+ */
+export type OverrideReleaseInfoAwResource = {
+  /**
+   * Optional condition for additional filtering (rare)
+   */
+  condition?: { [k: string]: { [k: string]: string } } | null | undefined;
+  /**
+   * Resource ARNs to bind to
+   */
+  resources: Array<string>;
+};
+
+/**
+ * AWS-specific binding specification
+ */
+export type OverrideReleaseInfoAwStack = {
+  /**
+   * Optional condition for additional filtering (rare)
+   */
+  condition?: { [k: string]: { [k: string]: string } } | null | undefined;
+  /**
+   * Resource ARNs to bind to
+   */
+  resources: Array<string>;
+};
+
+/**
+ * Generic binding configuration for permissions
+ */
+export type OverrideReleaseInfoAwBinding = {
+  /**
+   * AWS-specific binding specification
+   */
+  resource?: OverrideReleaseInfoAwResource | undefined;
+  /**
+   * AWS-specific binding specification
+   */
+  stack?: OverrideReleaseInfoAwStack | undefined;
+};
+
+/**
+ * IAM effect. Defaults to Allow.
+ */
+export const OverrideReleaseInfoEffect = {
+  Allow: "Allow",
+  Deny: "Deny",
+} as const;
+/**
+ * IAM effect. Defaults to Allow.
+ */
+export type OverrideReleaseInfoEffect = ClosedEnum<
+  typeof OverrideReleaseInfoEffect
+>;
+
+/**
+ * Grant permissions for a specific cloud platform
+ */
+export type OverrideReleaseInfoAwGrant = {
+  /**
+   * AWS IAM actions (only for AWS)
+   */
+  actions?: Array<string> | null | undefined;
+  /**
+   * Azure actions (only for Azure)
+   */
+  dataActions?: Array<string> | null | undefined;
+  /**
+   * GCP permissions that require an exact residual custom role.
+   */
+  permissions?: Array<string> | null | undefined;
+  /**
+   * Provider predefined roles to bind directly.
+   */
+  predefinedRoles?: Array<string> | null | undefined;
+  /**
+   * GCP residual custom permissions to pair with predefined roles.
+   */
+  residualPermissions?: Array<string> | null | undefined;
+};
+
+/**
+ * AWS-specific platform permission configuration
+ */
+export type OverrideReleaseInfoAw = {
+  /**
+   * Generic binding configuration for permissions
+   */
+  binding: OverrideReleaseInfoAwBinding;
+  /**
+   * Short admin-facing description of why this entry exists.
+   */
+  description?: string | null | undefined;
+  /**
+   * IAM effect. Defaults to Allow.
+   */
+  effect?: OverrideReleaseInfoEffect | undefined;
+  /**
+   * Grant permissions for a specific cloud platform
+   */
+  grant: OverrideReleaseInfoAwGrant;
+  /**
+   * Stable admin-facing label for this permission entry.
+   */
+  label?: string | null | undefined;
+};
+
+/**
+ * Azure-specific binding specification
+ */
+export type OverrideReleaseInfoAzureResource = {
+  /**
+   * Scope (subscription/resource group/resource level)
+   */
+  scope: string;
+};
+
+/**
+ * Azure-specific binding specification
+ */
+export type OverrideReleaseInfoAzureStack = {
+  /**
+   * Scope (subscription/resource group/resource level)
+   */
+  scope: string;
+};
+
+/**
+ * Generic binding configuration for permissions
+ */
+export type OverrideReleaseInfoAzureBinding = {
+  /**
+   * Azure-specific binding specification
+   */
+  resource?: OverrideReleaseInfoAzureResource | undefined;
+  /**
+   * Azure-specific binding specification
+   */
+  stack?: OverrideReleaseInfoAzureStack | undefined;
+};
+
+/**
+ * Grant permissions for a specific cloud platform
+ */
+export type OverrideReleaseInfoAzureGrant = {
+  /**
+   * AWS IAM actions (only for AWS)
+   */
+  actions?: Array<string> | null | undefined;
+  /**
+   * Azure actions (only for Azure)
+   */
+  dataActions?: Array<string> | null | undefined;
+  /**
+   * GCP permissions that require an exact residual custom role.
+   */
+  permissions?: Array<string> | null | undefined;
+  /**
+   * Provider predefined roles to bind directly.
+   */
+  predefinedRoles?: Array<string> | null | undefined;
+  /**
+   * GCP residual custom permissions to pair with predefined roles.
+   */
+  residualPermissions?: Array<string> | null | undefined;
+};
+
+/**
+ * Azure-specific platform permission configuration
+ */
+export type OverrideReleaseInfoAzure = {
+  /**
+   * Generic binding configuration for permissions
+   */
+  binding: OverrideReleaseInfoAzureBinding;
+  /**
+   * Short admin-facing description of why this entry exists.
+   */
+  description?: string | null | undefined;
+  /**
+   * Grant permissions for a specific cloud platform
+   */
+  grant: OverrideReleaseInfoAzureGrant;
+  /**
+   * Stable admin-facing label for this permission entry.
+   */
+  label?: string | null | undefined;
+};
+
+/**
+ * GCP IAM condition
+ */
+export type OverrideConditionReleaseInfoResource = {
+  expression: string;
+  title: string;
+};
+
+export type OverrideReleaseInfoResourceConditionUnion =
+  | OverrideConditionReleaseInfoResource
+  | any;
+
+/**
+ * GCP-specific binding specification
+ */
+export type OverrideReleaseInfoGcpResource = {
+  condition?: OverrideConditionReleaseInfoResource | any | null | undefined;
+  /**
+   * Scope (project/resource level)
+   */
+  scope: string;
+};
+
+/**
+ * GCP IAM condition
+ */
+export type OverrideConditionReleaseInfo = {
+  expression: string;
+  title: string;
+};
+
+export type OverrideReleaseInfoConditionUnion =
+  | OverrideConditionReleaseInfo
+  | any;
+
+/**
+ * GCP-specific binding specification
+ */
+export type OverrideReleaseInfoGcpStack = {
+  condition?: OverrideConditionReleaseInfo | any | null | undefined;
+  /**
+   * Scope (project/resource level)
+   */
+  scope: string;
+};
+
+/**
+ * Generic binding configuration for permissions
+ */
+export type OverrideReleaseInfoGcpBinding = {
+  /**
+   * GCP-specific binding specification
+   */
+  resource?: OverrideReleaseInfoGcpResource | undefined;
+  /**
+   * GCP-specific binding specification
+   */
+  stack?: OverrideReleaseInfoGcpStack | undefined;
+};
+
+/**
+ * Grant permissions for a specific cloud platform
+ */
+export type OverrideReleaseInfoGcpGrant = {
+  /**
+   * AWS IAM actions (only for AWS)
+   */
+  actions?: Array<string> | null | undefined;
+  /**
+   * Azure actions (only for Azure)
+   */
+  dataActions?: Array<string> | null | undefined;
+  /**
+   * GCP permissions that require an exact residual custom role.
+   */
+  permissions?: Array<string> | null | undefined;
+  /**
+   * Provider predefined roles to bind directly.
+   */
+  predefinedRoles?: Array<string> | null | undefined;
+  /**
+   * GCP residual custom permissions to pair with predefined roles.
+   */
+  residualPermissions?: Array<string> | null | undefined;
+};
+
+/**
+ * GCP-specific platform permission configuration
+ */
+export type OverrideReleaseInfoGcp = {
+  /**
+   * Generic binding configuration for permissions
+   */
+  binding: OverrideReleaseInfoGcpBinding;
+  /**
+   * Short admin-facing description of why this entry exists.
+   */
+  description?: string | null | undefined;
+  /**
+   * Grant permissions for a specific cloud platform
+   */
+  grant: OverrideReleaseInfoGcpGrant;
+  /**
+   * Stable admin-facing label for this permission entry.
+   */
+  label?: string | null | undefined;
+};
+
+/**
+ * Platform-specific permission configurations
+ */
+export type OverrideReleaseInfoPlatforms = {
+  /**
+   * AWS permission configurations
+   */
+  aws?: Array<OverrideReleaseInfoAw> | null | undefined;
+  /**
+   * Azure permission configurations
+   */
+  azure?: Array<OverrideReleaseInfoAzure> | null | undefined;
+  /**
+   * GCP permission configurations
+   */
+  gcp?: Array<OverrideReleaseInfoGcp> | null | undefined;
+};
+
+/**
+ * A permission set that can be applied across different cloud platforms
+ */
+export type OverrideReleaseInfo = {
+  /**
+   * Human-readable description of what this permission set allows
+   */
+  description: string;
+  /**
+   * Unique identifier for the permission set (e.g., "storage/data-read")
+   */
+  id: string;
+  /**
+   * Platform-specific permission configurations
+   */
+  platforms: OverrideReleaseInfoPlatforms;
+};
+
+/**
+ * Reference to a permission set - either by name or inline definition
+ */
+export type ReleaseInfoOverrideUnion = OverrideReleaseInfo | string;
+
+export type ManagementReleaseInfo2 = {
+  /**
+   * Permission profile that maps resources to permission sets
+   *
+   * @remarks
+   * Key can be "*" for all resources or resource name for specific resource
+   */
+  override: { [k: string]: Array<OverrideReleaseInfo | string> };
+};
+
+/**
+ * AWS-specific binding specification
+ */
+export type ExtendReleaseInfoAwResource = {
+  /**
+   * Optional condition for additional filtering (rare)
+   */
+  condition?: { [k: string]: { [k: string]: string } } | null | undefined;
+  /**
+   * Resource ARNs to bind to
+   */
+  resources: Array<string>;
+};
+
+/**
+ * AWS-specific binding specification
+ */
+export type ExtendReleaseInfoAwStack = {
+  /**
+   * Optional condition for additional filtering (rare)
+   */
+  condition?: { [k: string]: { [k: string]: string } } | null | undefined;
+  /**
+   * Resource ARNs to bind to
+   */
+  resources: Array<string>;
+};
+
+/**
+ * Generic binding configuration for permissions
+ */
+export type ExtendReleaseInfoAwBinding = {
+  /**
+   * AWS-specific binding specification
+   */
+  resource?: ExtendReleaseInfoAwResource | undefined;
+  /**
+   * AWS-specific binding specification
+   */
+  stack?: ExtendReleaseInfoAwStack | undefined;
+};
+
+/**
+ * IAM effect. Defaults to Allow.
+ */
+export const ExtendReleaseInfoEffect = {
+  Allow: "Allow",
+  Deny: "Deny",
+} as const;
+/**
+ * IAM effect. Defaults to Allow.
+ */
+export type ExtendReleaseInfoEffect = ClosedEnum<
+  typeof ExtendReleaseInfoEffect
+>;
+
+/**
+ * Grant permissions for a specific cloud platform
+ */
+export type ExtendReleaseInfoAwGrant = {
+  /**
+   * AWS IAM actions (only for AWS)
+   */
+  actions?: Array<string> | null | undefined;
+  /**
+   * Azure actions (only for Azure)
+   */
+  dataActions?: Array<string> | null | undefined;
+  /**
+   * GCP permissions that require an exact residual custom role.
+   */
+  permissions?: Array<string> | null | undefined;
+  /**
+   * Provider predefined roles to bind directly.
+   */
+  predefinedRoles?: Array<string> | null | undefined;
+  /**
+   * GCP residual custom permissions to pair with predefined roles.
+   */
+  residualPermissions?: Array<string> | null | undefined;
+};
+
+/**
+ * AWS-specific platform permission configuration
+ */
+export type ExtendReleaseInfoAw = {
+  /**
+   * Generic binding configuration for permissions
+   */
+  binding: ExtendReleaseInfoAwBinding;
+  /**
+   * Short admin-facing description of why this entry exists.
+   */
+  description?: string | null | undefined;
+  /**
+   * IAM effect. Defaults to Allow.
+   */
+  effect?: ExtendReleaseInfoEffect | undefined;
+  /**
+   * Grant permissions for a specific cloud platform
+   */
+  grant: ExtendReleaseInfoAwGrant;
+  /**
+   * Stable admin-facing label for this permission entry.
+   */
+  label?: string | null | undefined;
+};
+
+/**
+ * Azure-specific binding specification
+ */
+export type ExtendReleaseInfoAzureResource = {
+  /**
+   * Scope (subscription/resource group/resource level)
+   */
+  scope: string;
+};
+
+/**
+ * Azure-specific binding specification
+ */
+export type ExtendReleaseInfoAzureStack = {
+  /**
+   * Scope (subscription/resource group/resource level)
+   */
+  scope: string;
+};
+
+/**
+ * Generic binding configuration for permissions
+ */
+export type ExtendReleaseInfoAzureBinding = {
+  /**
+   * Azure-specific binding specification
+   */
+  resource?: ExtendReleaseInfoAzureResource | undefined;
+  /**
+   * Azure-specific binding specification
+   */
+  stack?: ExtendReleaseInfoAzureStack | undefined;
+};
+
+/**
+ * Grant permissions for a specific cloud platform
+ */
+export type ExtendReleaseInfoAzureGrant = {
+  /**
+   * AWS IAM actions (only for AWS)
+   */
+  actions?: Array<string> | null | undefined;
+  /**
+   * Azure actions (only for Azure)
+   */
+  dataActions?: Array<string> | null | undefined;
+  /**
+   * GCP permissions that require an exact residual custom role.
+   */
+  permissions?: Array<string> | null | undefined;
+  /**
+   * Provider predefined roles to bind directly.
+   */
+  predefinedRoles?: Array<string> | null | undefined;
+  /**
+   * GCP residual custom permissions to pair with predefined roles.
+   */
+  residualPermissions?: Array<string> | null | undefined;
+};
+
+/**
+ * Azure-specific platform permission configuration
+ */
+export type ExtendReleaseInfoAzure = {
+  /**
+   * Generic binding configuration for permissions
+   */
+  binding: ExtendReleaseInfoAzureBinding;
+  /**
+   * Short admin-facing description of why this entry exists.
+   */
+  description?: string | null | undefined;
+  /**
+   * Grant permissions for a specific cloud platform
+   */
+  grant: ExtendReleaseInfoAzureGrant;
+  /**
+   * Stable admin-facing label for this permission entry.
+   */
+  label?: string | null | undefined;
+};
+
+/**
+ * GCP IAM condition
+ */
+export type ExtendConditionReleaseInfoResource = {
+  expression: string;
+  title: string;
+};
+
+export type ExtendReleaseInfoResourceConditionUnion =
+  | ExtendConditionReleaseInfoResource
+  | any;
+
+/**
+ * GCP-specific binding specification
+ */
+export type ExtendReleaseInfoGcpResource = {
+  condition?: ExtendConditionReleaseInfoResource | any | null | undefined;
+  /**
+   * Scope (project/resource level)
+   */
+  scope: string;
+};
+
+/**
+ * GCP IAM condition
+ */
+export type ExtendConditionReleaseInfo = {
+  expression: string;
+  title: string;
+};
+
+export type ExtendReleaseInfoConditionUnion = ExtendConditionReleaseInfo | any;
+
+/**
+ * GCP-specific binding specification
+ */
+export type ExtendReleaseInfoGcpStack = {
+  condition?: ExtendConditionReleaseInfo | any | null | undefined;
+  /**
+   * Scope (project/resource level)
+   */
+  scope: string;
+};
+
+/**
+ * Generic binding configuration for permissions
+ */
+export type ExtendReleaseInfoGcpBinding = {
+  /**
+   * GCP-specific binding specification
+   */
+  resource?: ExtendReleaseInfoGcpResource | undefined;
+  /**
+   * GCP-specific binding specification
+   */
+  stack?: ExtendReleaseInfoGcpStack | undefined;
+};
+
+/**
+ * Grant permissions for a specific cloud platform
+ */
+export type ExtendReleaseInfoGcpGrant = {
+  /**
+   * AWS IAM actions (only for AWS)
+   */
+  actions?: Array<string> | null | undefined;
+  /**
+   * Azure actions (only for Azure)
+   */
+  dataActions?: Array<string> | null | undefined;
+  /**
+   * GCP permissions that require an exact residual custom role.
+   */
+  permissions?: Array<string> | null | undefined;
+  /**
+   * Provider predefined roles to bind directly.
+   */
+  predefinedRoles?: Array<string> | null | undefined;
+  /**
+   * GCP residual custom permissions to pair with predefined roles.
+   */
+  residualPermissions?: Array<string> | null | undefined;
+};
+
+/**
+ * GCP-specific platform permission configuration
+ */
+export type ExtendReleaseInfoGcp = {
+  /**
+   * Generic binding configuration for permissions
+   */
+  binding: ExtendReleaseInfoGcpBinding;
+  /**
+   * Short admin-facing description of why this entry exists.
+   */
+  description?: string | null | undefined;
+  /**
+   * Grant permissions for a specific cloud platform
+   */
+  grant: ExtendReleaseInfoGcpGrant;
+  /**
+   * Stable admin-facing label for this permission entry.
+   */
+  label?: string | null | undefined;
+};
+
+/**
+ * Platform-specific permission configurations
+ */
+export type ExtendReleaseInfoPlatforms = {
+  /**
+   * AWS permission configurations
+   */
+  aws?: Array<ExtendReleaseInfoAw> | null | undefined;
+  /**
+   * Azure permission configurations
+   */
+  azure?: Array<ExtendReleaseInfoAzure> | null | undefined;
+  /**
+   * GCP permission configurations
+   */
+  gcp?: Array<ExtendReleaseInfoGcp> | null | undefined;
+};
+
+/**
+ * A permission set that can be applied across different cloud platforms
+ */
+export type ExtendReleaseInfo = {
+  /**
+   * Human-readable description of what this permission set allows
+   */
+  description: string;
+  /**
+   * Unique identifier for the permission set (e.g., "storage/data-read")
+   */
+  id: string;
+  /**
+   * Platform-specific permission configurations
+   */
+  platforms: ExtendReleaseInfoPlatforms;
+};
+
+/**
+ * Reference to a permission set - either by name or inline definition
+ */
+export type ReleaseInfoExtendUnion = ExtendReleaseInfo | string;
+
+export type ManagementReleaseInfo1 = {
+  /**
+   * Permission profile that maps resources to permission sets
+   *
+   * @remarks
+   * Key can be "*" for all resources or resource name for specific resource
+   */
+  extend: { [k: string]: Array<ExtendReleaseInfo | string> };
+};
+
+/**
+ * Management permissions configuration for stack management access
+ */
+export type ReleaseInfoManagementUnion =
+  | ManagementReleaseInfo1
+  | ManagementReleaseInfo2
+  | ManagementReleaseInfoEnum;
+
+/**
+ * AWS-specific binding specification
+ */
+export type ProfileReleaseInfoAwResource = {
+  /**
+   * Optional condition for additional filtering (rare)
+   */
+  condition?: { [k: string]: { [k: string]: string } } | null | undefined;
+  /**
+   * Resource ARNs to bind to
+   */
+  resources: Array<string>;
+};
+
+/**
+ * AWS-specific binding specification
+ */
+export type ProfileReleaseInfoAwStack = {
+  /**
+   * Optional condition for additional filtering (rare)
+   */
+  condition?: { [k: string]: { [k: string]: string } } | null | undefined;
+  /**
+   * Resource ARNs to bind to
+   */
+  resources: Array<string>;
+};
+
+/**
+ * Generic binding configuration for permissions
+ */
+export type ProfileReleaseInfoAwBinding = {
+  /**
+   * AWS-specific binding specification
+   */
+  resource?: ProfileReleaseInfoAwResource | undefined;
+  /**
+   * AWS-specific binding specification
+   */
+  stack?: ProfileReleaseInfoAwStack | undefined;
+};
+
+/**
+ * IAM effect. Defaults to Allow.
+ */
+export const ProfileReleaseInfoEffect = {
+  Allow: "Allow",
+  Deny: "Deny",
+} as const;
+/**
+ * IAM effect. Defaults to Allow.
+ */
+export type ProfileReleaseInfoEffect = ClosedEnum<
+  typeof ProfileReleaseInfoEffect
+>;
+
+/**
+ * Grant permissions for a specific cloud platform
+ */
+export type ProfileReleaseInfoAwGrant = {
+  /**
+   * AWS IAM actions (only for AWS)
+   */
+  actions?: Array<string> | null | undefined;
+  /**
+   * Azure actions (only for Azure)
+   */
+  dataActions?: Array<string> | null | undefined;
+  /**
+   * GCP permissions that require an exact residual custom role.
+   */
+  permissions?: Array<string> | null | undefined;
+  /**
+   * Provider predefined roles to bind directly.
+   */
+  predefinedRoles?: Array<string> | null | undefined;
+  /**
+   * GCP residual custom permissions to pair with predefined roles.
+   */
+  residualPermissions?: Array<string> | null | undefined;
+};
+
+/**
+ * AWS-specific platform permission configuration
+ */
+export type ProfileReleaseInfoAw = {
+  /**
+   * Generic binding configuration for permissions
+   */
+  binding: ProfileReleaseInfoAwBinding;
+  /**
+   * Short admin-facing description of why this entry exists.
+   */
+  description?: string | null | undefined;
+  /**
+   * IAM effect. Defaults to Allow.
+   */
+  effect?: ProfileReleaseInfoEffect | undefined;
+  /**
+   * Grant permissions for a specific cloud platform
+   */
+  grant: ProfileReleaseInfoAwGrant;
+  /**
+   * Stable admin-facing label for this permission entry.
+   */
+  label?: string | null | undefined;
+};
+
+/**
+ * Azure-specific binding specification
+ */
+export type ProfileReleaseInfoAzureResource = {
+  /**
+   * Scope (subscription/resource group/resource level)
+   */
+  scope: string;
+};
+
+/**
+ * Azure-specific binding specification
+ */
+export type ProfileReleaseInfoAzureStack = {
+  /**
+   * Scope (subscription/resource group/resource level)
+   */
+  scope: string;
+};
+
+/**
+ * Generic binding configuration for permissions
+ */
+export type ProfileReleaseInfoAzureBinding = {
+  /**
+   * Azure-specific binding specification
+   */
+  resource?: ProfileReleaseInfoAzureResource | undefined;
+  /**
+   * Azure-specific binding specification
+   */
+  stack?: ProfileReleaseInfoAzureStack | undefined;
+};
+
+/**
+ * Grant permissions for a specific cloud platform
+ */
+export type ProfileReleaseInfoAzureGrant = {
+  /**
+   * AWS IAM actions (only for AWS)
+   */
+  actions?: Array<string> | null | undefined;
+  /**
+   * Azure actions (only for Azure)
+   */
+  dataActions?: Array<string> | null | undefined;
+  /**
+   * GCP permissions that require an exact residual custom role.
+   */
+  permissions?: Array<string> | null | undefined;
+  /**
+   * Provider predefined roles to bind directly.
+   */
+  predefinedRoles?: Array<string> | null | undefined;
+  /**
+   * GCP residual custom permissions to pair with predefined roles.
+   */
+  residualPermissions?: Array<string> | null | undefined;
+};
+
+/**
+ * Azure-specific platform permission configuration
+ */
+export type ProfileReleaseInfoAzure = {
+  /**
+   * Generic binding configuration for permissions
+   */
+  binding: ProfileReleaseInfoAzureBinding;
+  /**
+   * Short admin-facing description of why this entry exists.
+   */
+  description?: string | null | undefined;
+  /**
+   * Grant permissions for a specific cloud platform
+   */
+  grant: ProfileReleaseInfoAzureGrant;
+  /**
+   * Stable admin-facing label for this permission entry.
+   */
+  label?: string | null | undefined;
+};
+
+/**
+ * GCP IAM condition
+ */
+export type ProfileConditionReleaseInfoResource = {
+  expression: string;
+  title: string;
+};
+
+export type ProfileReleaseInfoResourceConditionUnion =
+  | ProfileConditionReleaseInfoResource
+  | any;
+
+/**
+ * GCP-specific binding specification
+ */
+export type ProfileReleaseInfoGcpResource = {
+  condition?: ProfileConditionReleaseInfoResource | any | null | undefined;
+  /**
+   * Scope (project/resource level)
+   */
+  scope: string;
+};
+
+/**
+ * GCP IAM condition
+ */
+export type ProfileConditionReleaseInfo = {
+  expression: string;
+  title: string;
+};
+
+export type ProfileReleaseInfoConditionUnion =
+  | ProfileConditionReleaseInfo
+  | any;
+
+/**
+ * GCP-specific binding specification
+ */
+export type ProfileReleaseInfoGcpStack = {
+  condition?: ProfileConditionReleaseInfo | any | null | undefined;
+  /**
+   * Scope (project/resource level)
+   */
+  scope: string;
+};
+
+/**
+ * Generic binding configuration for permissions
+ */
+export type ProfileReleaseInfoGcpBinding = {
+  /**
+   * GCP-specific binding specification
+   */
+  resource?: ProfileReleaseInfoGcpResource | undefined;
+  /**
+   * GCP-specific binding specification
+   */
+  stack?: ProfileReleaseInfoGcpStack | undefined;
+};
+
+/**
+ * Grant permissions for a specific cloud platform
+ */
+export type ProfileReleaseInfoGcpGrant = {
+  /**
+   * AWS IAM actions (only for AWS)
+   */
+  actions?: Array<string> | null | undefined;
+  /**
+   * Azure actions (only for Azure)
+   */
+  dataActions?: Array<string> | null | undefined;
+  /**
+   * GCP permissions that require an exact residual custom role.
+   */
+  permissions?: Array<string> | null | undefined;
+  /**
+   * Provider predefined roles to bind directly.
+   */
+  predefinedRoles?: Array<string> | null | undefined;
+  /**
+   * GCP residual custom permissions to pair with predefined roles.
+   */
+  residualPermissions?: Array<string> | null | undefined;
+};
+
+/**
+ * GCP-specific platform permission configuration
+ */
+export type ProfileReleaseInfoGcp = {
+  /**
+   * Generic binding configuration for permissions
+   */
+  binding: ProfileReleaseInfoGcpBinding;
+  /**
+   * Short admin-facing description of why this entry exists.
+   */
+  description?: string | null | undefined;
+  /**
+   * Grant permissions for a specific cloud platform
+   */
+  grant: ProfileReleaseInfoGcpGrant;
+  /**
+   * Stable admin-facing label for this permission entry.
+   */
+  label?: string | null | undefined;
+};
+
+/**
+ * Platform-specific permission configurations
+ */
+export type ProfileReleaseInfoPlatforms = {
+  /**
+   * AWS permission configurations
+   */
+  aws?: Array<ProfileReleaseInfoAw> | null | undefined;
+  /**
+   * Azure permission configurations
+   */
+  azure?: Array<ProfileReleaseInfoAzure> | null | undefined;
+  /**
+   * GCP permission configurations
+   */
+  gcp?: Array<ProfileReleaseInfoGcp> | null | undefined;
+};
+
+/**
+ * A permission set that can be applied across different cloud platforms
+ */
+export type ProfileReleaseInfo = {
+  /**
+   * Human-readable description of what this permission set allows
+   */
+  description: string;
+  /**
+   * Unique identifier for the permission set (e.g., "storage/data-read")
+   */
+  id: string;
+  /**
+   * Platform-specific permission configurations
+   */
+  platforms: ProfileReleaseInfoPlatforms;
+};
+
+/**
+ * Reference to a permission set - either by name or inline definition
+ */
+export type ReleaseInfoProfileUnion = ProfileReleaseInfo | string;
+
+/**
+ * Combined permissions configuration that contains both profiles and management
+ */
+export type ReleaseInfoPermissions = {
+  /**
+   * Management permissions configuration for stack management access
+   */
+  management?:
+    | ManagementReleaseInfo1
+    | ManagementReleaseInfo2
+    | ManagementReleaseInfoEnum
+    | undefined;
+  /**
+   * Permission profiles that define access control for compute services
+   *
+   * @remarks
+   * Key is the profile name, value is the permission configuration
+   */
+  profiles: {
+    [k: string]: { [k: string]: Array<ProfileReleaseInfo | string> };
+  };
+};
+
+/**
+ * Resource that can hold any resource type in the Alien system. All resources share common 'type' and 'id' fields with additional type-specific properties.
+ */
+export type ReleaseInfoConfig = {
+  /**
+   * The unique identifier for this specific resource instance. Must contain only alphanumeric characters, hyphens, and underscores ([A-Za-z0-9-_]). Maximum 64 characters.
+   */
+  id: string;
+  /**
+   * Resource type identifier that determines the specific kind of resource. This field is used for polymorphic deserialization and resource-specific behavior.
+   */
+  type: string;
+  additionalProperties?: { [k: string]: any | null } | undefined;
+};
+
+/**
+ * New ResourceRef that works with any resource type.
+ *
+ * @remarks
+ * This can eventually replace the enum-based ResourceRef for full extensibility.
+ */
+export type ReleaseInfoDependency = {
+  id: string;
+  /**
+   * Resource type identifier that determines the specific kind of resource. This field is used for polymorphic deserialization and resource-specific behavior.
+   */
+  type: string;
+};
+
+/**
+ * Describes the lifecycle of a resource within a stack, determining how it's managed and deployed.
+ */
+export const ReleaseInfoLifecycle = {
+  Frozen: "frozen",
+  Live: "live",
+} as const;
+/**
+ * Describes the lifecycle of a resource within a stack, determining how it's managed and deployed.
+ */
+export type ReleaseInfoLifecycle = ClosedEnum<typeof ReleaseInfoLifecycle>;
+
+export type ReleaseInfoResources = {
+  /**
+   * Resource that can hold any resource type in the Alien system. All resources share common 'type' and 'id' fields with additional type-specific properties.
+   */
+  config: ReleaseInfoConfig;
+  /**
+   * Additional dependencies for this resource beyond those defined in the resource itself.
+   *
+   * @remarks
+   * The total dependencies are: resource.get_dependencies() + this list
+   */
+  dependencies: Array<ReleaseInfoDependency>;
+  /**
+   * Describes the lifecycle of a resource within a stack, determining how it's managed and deployed.
+   */
+  lifecycle: ReleaseInfoLifecycle;
+  /**
+   * Enable remote bindings for this resource (BYOB use case).
+   *
+   * @remarks
+   * When true, binding params are synced to StackState's `remote_binding_params`.
+   * Default: false (prevents sensitive data in synced state).
+   */
+  remoteAccess?: boolean | undefined;
+};
 
 /**
  * Represents the target cloud platform.
@@ -138,6 +1333,1592 @@ export type SyncReconcileResponse = {
 };
 
 /** @internal */
+export const ReleaseInfoValidationUnion$inboundSchema: z.ZodType<
+  ReleaseInfoValidationUnion,
+  unknown
+> = z.union([ValidationReleaseInfo$inboundSchema, z.any()]);
+
+export function releaseInfoValidationUnionFromJSON(
+  jsonString: string,
+): SafeParseResult<ReleaseInfoValidationUnion, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => ReleaseInfoValidationUnion$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'ReleaseInfoValidationUnion' from JSON`,
+  );
+}
+
+/** @internal */
+export const ReleaseInfoInput$inboundSchema: z.ZodType<
+  ReleaseInfoInput,
+  unknown
+> = z.object({
+  default: z.nullable(ReleaseInfoDefaultUnion$inboundSchema).optional(),
+  description: z.string(),
+  env: z.array(ReleaseInfoEnv$inboundSchema).optional(),
+  id: z.string(),
+  kind: ReleaseInfoKind$inboundSchema,
+  label: z.string(),
+  placeholder: z.nullable(z.string()).optional(),
+  platforms: z.nullable(z.array(ReleaseInfoPlatform$inboundSchema)).optional(),
+  providedBy: z.array(ReleaseInfoProvidedBy$inboundSchema),
+  required: z.boolean(),
+  validation: z.nullable(
+    z.union([ValidationReleaseInfo$inboundSchema, z.any()]),
+  ).optional(),
+});
+
+export function releaseInfoInputFromJSON(
+  jsonString: string,
+): SafeParseResult<ReleaseInfoInput, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => ReleaseInfoInput$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'ReleaseInfoInput' from JSON`,
+  );
+}
+
+/** @internal */
+export const ManagementReleaseInfoEnum$inboundSchema: z.ZodEnum<
+  typeof ManagementReleaseInfoEnum
+> = z.enum(ManagementReleaseInfoEnum);
+
+/** @internal */
+export const OverrideReleaseInfoAwResource$inboundSchema: z.ZodType<
+  OverrideReleaseInfoAwResource,
+  unknown
+> = z.object({
+  condition: z.nullable(z.record(z.string(), z.record(z.string(), z.string())))
+    .optional(),
+  resources: z.array(z.string()),
+});
+
+export function overrideReleaseInfoAwResourceFromJSON(
+  jsonString: string,
+): SafeParseResult<OverrideReleaseInfoAwResource, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => OverrideReleaseInfoAwResource$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'OverrideReleaseInfoAwResource' from JSON`,
+  );
+}
+
+/** @internal */
+export const OverrideReleaseInfoAwStack$inboundSchema: z.ZodType<
+  OverrideReleaseInfoAwStack,
+  unknown
+> = z.object({
+  condition: z.nullable(z.record(z.string(), z.record(z.string(), z.string())))
+    .optional(),
+  resources: z.array(z.string()),
+});
+
+export function overrideReleaseInfoAwStackFromJSON(
+  jsonString: string,
+): SafeParseResult<OverrideReleaseInfoAwStack, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => OverrideReleaseInfoAwStack$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'OverrideReleaseInfoAwStack' from JSON`,
+  );
+}
+
+/** @internal */
+export const OverrideReleaseInfoAwBinding$inboundSchema: z.ZodType<
+  OverrideReleaseInfoAwBinding,
+  unknown
+> = z.object({
+  resource: z.lazy(() => OverrideReleaseInfoAwResource$inboundSchema)
+    .optional(),
+  stack: z.lazy(() => OverrideReleaseInfoAwStack$inboundSchema).optional(),
+});
+
+export function overrideReleaseInfoAwBindingFromJSON(
+  jsonString: string,
+): SafeParseResult<OverrideReleaseInfoAwBinding, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => OverrideReleaseInfoAwBinding$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'OverrideReleaseInfoAwBinding' from JSON`,
+  );
+}
+
+/** @internal */
+export const OverrideReleaseInfoEffect$inboundSchema: z.ZodEnum<
+  typeof OverrideReleaseInfoEffect
+> = z.enum(OverrideReleaseInfoEffect);
+
+/** @internal */
+export const OverrideReleaseInfoAwGrant$inboundSchema: z.ZodType<
+  OverrideReleaseInfoAwGrant,
+  unknown
+> = z.object({
+  actions: z.nullable(z.array(z.string())).optional(),
+  dataActions: z.nullable(z.array(z.string())).optional(),
+  permissions: z.nullable(z.array(z.string())).optional(),
+  predefinedRoles: z.nullable(z.array(z.string())).optional(),
+  residualPermissions: z.nullable(z.array(z.string())).optional(),
+});
+
+export function overrideReleaseInfoAwGrantFromJSON(
+  jsonString: string,
+): SafeParseResult<OverrideReleaseInfoAwGrant, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => OverrideReleaseInfoAwGrant$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'OverrideReleaseInfoAwGrant' from JSON`,
+  );
+}
+
+/** @internal */
+export const OverrideReleaseInfoAw$inboundSchema: z.ZodType<
+  OverrideReleaseInfoAw,
+  unknown
+> = z.object({
+  binding: z.lazy(() => OverrideReleaseInfoAwBinding$inboundSchema),
+  description: z.nullable(z.string()).optional(),
+  effect: OverrideReleaseInfoEffect$inboundSchema.optional(),
+  grant: z.lazy(() => OverrideReleaseInfoAwGrant$inboundSchema),
+  label: z.nullable(z.string()).optional(),
+});
+
+export function overrideReleaseInfoAwFromJSON(
+  jsonString: string,
+): SafeParseResult<OverrideReleaseInfoAw, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => OverrideReleaseInfoAw$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'OverrideReleaseInfoAw' from JSON`,
+  );
+}
+
+/** @internal */
+export const OverrideReleaseInfoAzureResource$inboundSchema: z.ZodType<
+  OverrideReleaseInfoAzureResource,
+  unknown
+> = z.object({
+  scope: z.string(),
+});
+
+export function overrideReleaseInfoAzureResourceFromJSON(
+  jsonString: string,
+): SafeParseResult<OverrideReleaseInfoAzureResource, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => OverrideReleaseInfoAzureResource$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'OverrideReleaseInfoAzureResource' from JSON`,
+  );
+}
+
+/** @internal */
+export const OverrideReleaseInfoAzureStack$inboundSchema: z.ZodType<
+  OverrideReleaseInfoAzureStack,
+  unknown
+> = z.object({
+  scope: z.string(),
+});
+
+export function overrideReleaseInfoAzureStackFromJSON(
+  jsonString: string,
+): SafeParseResult<OverrideReleaseInfoAzureStack, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => OverrideReleaseInfoAzureStack$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'OverrideReleaseInfoAzureStack' from JSON`,
+  );
+}
+
+/** @internal */
+export const OverrideReleaseInfoAzureBinding$inboundSchema: z.ZodType<
+  OverrideReleaseInfoAzureBinding,
+  unknown
+> = z.object({
+  resource: z.lazy(() => OverrideReleaseInfoAzureResource$inboundSchema)
+    .optional(),
+  stack: z.lazy(() => OverrideReleaseInfoAzureStack$inboundSchema).optional(),
+});
+
+export function overrideReleaseInfoAzureBindingFromJSON(
+  jsonString: string,
+): SafeParseResult<OverrideReleaseInfoAzureBinding, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => OverrideReleaseInfoAzureBinding$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'OverrideReleaseInfoAzureBinding' from JSON`,
+  );
+}
+
+/** @internal */
+export const OverrideReleaseInfoAzureGrant$inboundSchema: z.ZodType<
+  OverrideReleaseInfoAzureGrant,
+  unknown
+> = z.object({
+  actions: z.nullable(z.array(z.string())).optional(),
+  dataActions: z.nullable(z.array(z.string())).optional(),
+  permissions: z.nullable(z.array(z.string())).optional(),
+  predefinedRoles: z.nullable(z.array(z.string())).optional(),
+  residualPermissions: z.nullable(z.array(z.string())).optional(),
+});
+
+export function overrideReleaseInfoAzureGrantFromJSON(
+  jsonString: string,
+): SafeParseResult<OverrideReleaseInfoAzureGrant, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => OverrideReleaseInfoAzureGrant$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'OverrideReleaseInfoAzureGrant' from JSON`,
+  );
+}
+
+/** @internal */
+export const OverrideReleaseInfoAzure$inboundSchema: z.ZodType<
+  OverrideReleaseInfoAzure,
+  unknown
+> = z.object({
+  binding: z.lazy(() => OverrideReleaseInfoAzureBinding$inboundSchema),
+  description: z.nullable(z.string()).optional(),
+  grant: z.lazy(() => OverrideReleaseInfoAzureGrant$inboundSchema),
+  label: z.nullable(z.string()).optional(),
+});
+
+export function overrideReleaseInfoAzureFromJSON(
+  jsonString: string,
+): SafeParseResult<OverrideReleaseInfoAzure, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => OverrideReleaseInfoAzure$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'OverrideReleaseInfoAzure' from JSON`,
+  );
+}
+
+/** @internal */
+export const OverrideConditionReleaseInfoResource$inboundSchema: z.ZodType<
+  OverrideConditionReleaseInfoResource,
+  unknown
+> = z.object({
+  expression: z.string(),
+  title: z.string(),
+});
+
+export function overrideConditionReleaseInfoResourceFromJSON(
+  jsonString: string,
+): SafeParseResult<OverrideConditionReleaseInfoResource, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) =>
+      OverrideConditionReleaseInfoResource$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'OverrideConditionReleaseInfoResource' from JSON`,
+  );
+}
+
+/** @internal */
+export const OverrideReleaseInfoResourceConditionUnion$inboundSchema: z.ZodType<
+  OverrideReleaseInfoResourceConditionUnion,
+  unknown
+> = z.union([
+  z.lazy(() => OverrideConditionReleaseInfoResource$inboundSchema),
+  z.any(),
+]);
+
+export function overrideReleaseInfoResourceConditionUnionFromJSON(
+  jsonString: string,
+): SafeParseResult<
+  OverrideReleaseInfoResourceConditionUnion,
+  SDKValidationError
+> {
+  return safeParse(
+    jsonString,
+    (x) =>
+      OverrideReleaseInfoResourceConditionUnion$inboundSchema.parse(
+        JSON.parse(x),
+      ),
+    `Failed to parse 'OverrideReleaseInfoResourceConditionUnion' from JSON`,
+  );
+}
+
+/** @internal */
+export const OverrideReleaseInfoGcpResource$inboundSchema: z.ZodType<
+  OverrideReleaseInfoGcpResource,
+  unknown
+> = z.object({
+  condition: z.nullable(
+    z.union([
+      z.lazy(() => OverrideConditionReleaseInfoResource$inboundSchema),
+      z.any(),
+    ]),
+  ).optional(),
+  scope: z.string(),
+});
+
+export function overrideReleaseInfoGcpResourceFromJSON(
+  jsonString: string,
+): SafeParseResult<OverrideReleaseInfoGcpResource, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => OverrideReleaseInfoGcpResource$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'OverrideReleaseInfoGcpResource' from JSON`,
+  );
+}
+
+/** @internal */
+export const OverrideConditionReleaseInfo$inboundSchema: z.ZodType<
+  OverrideConditionReleaseInfo,
+  unknown
+> = z.object({
+  expression: z.string(),
+  title: z.string(),
+});
+
+export function overrideConditionReleaseInfoFromJSON(
+  jsonString: string,
+): SafeParseResult<OverrideConditionReleaseInfo, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => OverrideConditionReleaseInfo$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'OverrideConditionReleaseInfo' from JSON`,
+  );
+}
+
+/** @internal */
+export const OverrideReleaseInfoConditionUnion$inboundSchema: z.ZodType<
+  OverrideReleaseInfoConditionUnion,
+  unknown
+> = z.union([
+  z.lazy(() => OverrideConditionReleaseInfo$inboundSchema),
+  z.any(),
+]);
+
+export function overrideReleaseInfoConditionUnionFromJSON(
+  jsonString: string,
+): SafeParseResult<OverrideReleaseInfoConditionUnion, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => OverrideReleaseInfoConditionUnion$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'OverrideReleaseInfoConditionUnion' from JSON`,
+  );
+}
+
+/** @internal */
+export const OverrideReleaseInfoGcpStack$inboundSchema: z.ZodType<
+  OverrideReleaseInfoGcpStack,
+  unknown
+> = z.object({
+  condition: z.nullable(
+    z.union([
+      z.lazy(() => OverrideConditionReleaseInfo$inboundSchema),
+      z.any(),
+    ]),
+  ).optional(),
+  scope: z.string(),
+});
+
+export function overrideReleaseInfoGcpStackFromJSON(
+  jsonString: string,
+): SafeParseResult<OverrideReleaseInfoGcpStack, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => OverrideReleaseInfoGcpStack$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'OverrideReleaseInfoGcpStack' from JSON`,
+  );
+}
+
+/** @internal */
+export const OverrideReleaseInfoGcpBinding$inboundSchema: z.ZodType<
+  OverrideReleaseInfoGcpBinding,
+  unknown
+> = z.object({
+  resource: z.lazy(() => OverrideReleaseInfoGcpResource$inboundSchema)
+    .optional(),
+  stack: z.lazy(() => OverrideReleaseInfoGcpStack$inboundSchema).optional(),
+});
+
+export function overrideReleaseInfoGcpBindingFromJSON(
+  jsonString: string,
+): SafeParseResult<OverrideReleaseInfoGcpBinding, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => OverrideReleaseInfoGcpBinding$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'OverrideReleaseInfoGcpBinding' from JSON`,
+  );
+}
+
+/** @internal */
+export const OverrideReleaseInfoGcpGrant$inboundSchema: z.ZodType<
+  OverrideReleaseInfoGcpGrant,
+  unknown
+> = z.object({
+  actions: z.nullable(z.array(z.string())).optional(),
+  dataActions: z.nullable(z.array(z.string())).optional(),
+  permissions: z.nullable(z.array(z.string())).optional(),
+  predefinedRoles: z.nullable(z.array(z.string())).optional(),
+  residualPermissions: z.nullable(z.array(z.string())).optional(),
+});
+
+export function overrideReleaseInfoGcpGrantFromJSON(
+  jsonString: string,
+): SafeParseResult<OverrideReleaseInfoGcpGrant, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => OverrideReleaseInfoGcpGrant$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'OverrideReleaseInfoGcpGrant' from JSON`,
+  );
+}
+
+/** @internal */
+export const OverrideReleaseInfoGcp$inboundSchema: z.ZodType<
+  OverrideReleaseInfoGcp,
+  unknown
+> = z.object({
+  binding: z.lazy(() => OverrideReleaseInfoGcpBinding$inboundSchema),
+  description: z.nullable(z.string()).optional(),
+  grant: z.lazy(() => OverrideReleaseInfoGcpGrant$inboundSchema),
+  label: z.nullable(z.string()).optional(),
+});
+
+export function overrideReleaseInfoGcpFromJSON(
+  jsonString: string,
+): SafeParseResult<OverrideReleaseInfoGcp, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => OverrideReleaseInfoGcp$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'OverrideReleaseInfoGcp' from JSON`,
+  );
+}
+
+/** @internal */
+export const OverrideReleaseInfoPlatforms$inboundSchema: z.ZodType<
+  OverrideReleaseInfoPlatforms,
+  unknown
+> = z.object({
+  aws: z.nullable(z.array(z.lazy(() => OverrideReleaseInfoAw$inboundSchema)))
+    .optional(),
+  azure: z.nullable(
+    z.array(z.lazy(() => OverrideReleaseInfoAzure$inboundSchema)),
+  ).optional(),
+  gcp: z.nullable(z.array(z.lazy(() => OverrideReleaseInfoGcp$inboundSchema)))
+    .optional(),
+});
+
+export function overrideReleaseInfoPlatformsFromJSON(
+  jsonString: string,
+): SafeParseResult<OverrideReleaseInfoPlatforms, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => OverrideReleaseInfoPlatforms$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'OverrideReleaseInfoPlatforms' from JSON`,
+  );
+}
+
+/** @internal */
+export const OverrideReleaseInfo$inboundSchema: z.ZodType<
+  OverrideReleaseInfo,
+  unknown
+> = z.object({
+  description: z.string(),
+  id: z.string(),
+  platforms: z.lazy(() => OverrideReleaseInfoPlatforms$inboundSchema),
+});
+
+export function overrideReleaseInfoFromJSON(
+  jsonString: string,
+): SafeParseResult<OverrideReleaseInfo, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => OverrideReleaseInfo$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'OverrideReleaseInfo' from JSON`,
+  );
+}
+
+/** @internal */
+export const ReleaseInfoOverrideUnion$inboundSchema: z.ZodType<
+  ReleaseInfoOverrideUnion,
+  unknown
+> = z.union([z.lazy(() => OverrideReleaseInfo$inboundSchema), z.string()]);
+
+export function releaseInfoOverrideUnionFromJSON(
+  jsonString: string,
+): SafeParseResult<ReleaseInfoOverrideUnion, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => ReleaseInfoOverrideUnion$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'ReleaseInfoOverrideUnion' from JSON`,
+  );
+}
+
+/** @internal */
+export const ManagementReleaseInfo2$inboundSchema: z.ZodType<
+  ManagementReleaseInfo2,
+  unknown
+> = z.object({
+  override: z.record(
+    z.string(),
+    z.array(
+      z.union([z.lazy(() => OverrideReleaseInfo$inboundSchema), z.string()]),
+    ),
+  ),
+});
+
+export function managementReleaseInfo2FromJSON(
+  jsonString: string,
+): SafeParseResult<ManagementReleaseInfo2, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => ManagementReleaseInfo2$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'ManagementReleaseInfo2' from JSON`,
+  );
+}
+
+/** @internal */
+export const ExtendReleaseInfoAwResource$inboundSchema: z.ZodType<
+  ExtendReleaseInfoAwResource,
+  unknown
+> = z.object({
+  condition: z.nullable(z.record(z.string(), z.record(z.string(), z.string())))
+    .optional(),
+  resources: z.array(z.string()),
+});
+
+export function extendReleaseInfoAwResourceFromJSON(
+  jsonString: string,
+): SafeParseResult<ExtendReleaseInfoAwResource, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => ExtendReleaseInfoAwResource$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'ExtendReleaseInfoAwResource' from JSON`,
+  );
+}
+
+/** @internal */
+export const ExtendReleaseInfoAwStack$inboundSchema: z.ZodType<
+  ExtendReleaseInfoAwStack,
+  unknown
+> = z.object({
+  condition: z.nullable(z.record(z.string(), z.record(z.string(), z.string())))
+    .optional(),
+  resources: z.array(z.string()),
+});
+
+export function extendReleaseInfoAwStackFromJSON(
+  jsonString: string,
+): SafeParseResult<ExtendReleaseInfoAwStack, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => ExtendReleaseInfoAwStack$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'ExtendReleaseInfoAwStack' from JSON`,
+  );
+}
+
+/** @internal */
+export const ExtendReleaseInfoAwBinding$inboundSchema: z.ZodType<
+  ExtendReleaseInfoAwBinding,
+  unknown
+> = z.object({
+  resource: z.lazy(() => ExtendReleaseInfoAwResource$inboundSchema).optional(),
+  stack: z.lazy(() => ExtendReleaseInfoAwStack$inboundSchema).optional(),
+});
+
+export function extendReleaseInfoAwBindingFromJSON(
+  jsonString: string,
+): SafeParseResult<ExtendReleaseInfoAwBinding, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => ExtendReleaseInfoAwBinding$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'ExtendReleaseInfoAwBinding' from JSON`,
+  );
+}
+
+/** @internal */
+export const ExtendReleaseInfoEffect$inboundSchema: z.ZodEnum<
+  typeof ExtendReleaseInfoEffect
+> = z.enum(ExtendReleaseInfoEffect);
+
+/** @internal */
+export const ExtendReleaseInfoAwGrant$inboundSchema: z.ZodType<
+  ExtendReleaseInfoAwGrant,
+  unknown
+> = z.object({
+  actions: z.nullable(z.array(z.string())).optional(),
+  dataActions: z.nullable(z.array(z.string())).optional(),
+  permissions: z.nullable(z.array(z.string())).optional(),
+  predefinedRoles: z.nullable(z.array(z.string())).optional(),
+  residualPermissions: z.nullable(z.array(z.string())).optional(),
+});
+
+export function extendReleaseInfoAwGrantFromJSON(
+  jsonString: string,
+): SafeParseResult<ExtendReleaseInfoAwGrant, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => ExtendReleaseInfoAwGrant$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'ExtendReleaseInfoAwGrant' from JSON`,
+  );
+}
+
+/** @internal */
+export const ExtendReleaseInfoAw$inboundSchema: z.ZodType<
+  ExtendReleaseInfoAw,
+  unknown
+> = z.object({
+  binding: z.lazy(() => ExtendReleaseInfoAwBinding$inboundSchema),
+  description: z.nullable(z.string()).optional(),
+  effect: ExtendReleaseInfoEffect$inboundSchema.optional(),
+  grant: z.lazy(() => ExtendReleaseInfoAwGrant$inboundSchema),
+  label: z.nullable(z.string()).optional(),
+});
+
+export function extendReleaseInfoAwFromJSON(
+  jsonString: string,
+): SafeParseResult<ExtendReleaseInfoAw, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => ExtendReleaseInfoAw$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'ExtendReleaseInfoAw' from JSON`,
+  );
+}
+
+/** @internal */
+export const ExtendReleaseInfoAzureResource$inboundSchema: z.ZodType<
+  ExtendReleaseInfoAzureResource,
+  unknown
+> = z.object({
+  scope: z.string(),
+});
+
+export function extendReleaseInfoAzureResourceFromJSON(
+  jsonString: string,
+): SafeParseResult<ExtendReleaseInfoAzureResource, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => ExtendReleaseInfoAzureResource$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'ExtendReleaseInfoAzureResource' from JSON`,
+  );
+}
+
+/** @internal */
+export const ExtendReleaseInfoAzureStack$inboundSchema: z.ZodType<
+  ExtendReleaseInfoAzureStack,
+  unknown
+> = z.object({
+  scope: z.string(),
+});
+
+export function extendReleaseInfoAzureStackFromJSON(
+  jsonString: string,
+): SafeParseResult<ExtendReleaseInfoAzureStack, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => ExtendReleaseInfoAzureStack$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'ExtendReleaseInfoAzureStack' from JSON`,
+  );
+}
+
+/** @internal */
+export const ExtendReleaseInfoAzureBinding$inboundSchema: z.ZodType<
+  ExtendReleaseInfoAzureBinding,
+  unknown
+> = z.object({
+  resource: z.lazy(() => ExtendReleaseInfoAzureResource$inboundSchema)
+    .optional(),
+  stack: z.lazy(() => ExtendReleaseInfoAzureStack$inboundSchema).optional(),
+});
+
+export function extendReleaseInfoAzureBindingFromJSON(
+  jsonString: string,
+): SafeParseResult<ExtendReleaseInfoAzureBinding, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => ExtendReleaseInfoAzureBinding$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'ExtendReleaseInfoAzureBinding' from JSON`,
+  );
+}
+
+/** @internal */
+export const ExtendReleaseInfoAzureGrant$inboundSchema: z.ZodType<
+  ExtendReleaseInfoAzureGrant,
+  unknown
+> = z.object({
+  actions: z.nullable(z.array(z.string())).optional(),
+  dataActions: z.nullable(z.array(z.string())).optional(),
+  permissions: z.nullable(z.array(z.string())).optional(),
+  predefinedRoles: z.nullable(z.array(z.string())).optional(),
+  residualPermissions: z.nullable(z.array(z.string())).optional(),
+});
+
+export function extendReleaseInfoAzureGrantFromJSON(
+  jsonString: string,
+): SafeParseResult<ExtendReleaseInfoAzureGrant, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => ExtendReleaseInfoAzureGrant$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'ExtendReleaseInfoAzureGrant' from JSON`,
+  );
+}
+
+/** @internal */
+export const ExtendReleaseInfoAzure$inboundSchema: z.ZodType<
+  ExtendReleaseInfoAzure,
+  unknown
+> = z.object({
+  binding: z.lazy(() => ExtendReleaseInfoAzureBinding$inboundSchema),
+  description: z.nullable(z.string()).optional(),
+  grant: z.lazy(() => ExtendReleaseInfoAzureGrant$inboundSchema),
+  label: z.nullable(z.string()).optional(),
+});
+
+export function extendReleaseInfoAzureFromJSON(
+  jsonString: string,
+): SafeParseResult<ExtendReleaseInfoAzure, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => ExtendReleaseInfoAzure$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'ExtendReleaseInfoAzure' from JSON`,
+  );
+}
+
+/** @internal */
+export const ExtendConditionReleaseInfoResource$inboundSchema: z.ZodType<
+  ExtendConditionReleaseInfoResource,
+  unknown
+> = z.object({
+  expression: z.string(),
+  title: z.string(),
+});
+
+export function extendConditionReleaseInfoResourceFromJSON(
+  jsonString: string,
+): SafeParseResult<ExtendConditionReleaseInfoResource, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) =>
+      ExtendConditionReleaseInfoResource$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'ExtendConditionReleaseInfoResource' from JSON`,
+  );
+}
+
+/** @internal */
+export const ExtendReleaseInfoResourceConditionUnion$inboundSchema: z.ZodType<
+  ExtendReleaseInfoResourceConditionUnion,
+  unknown
+> = z.union([
+  z.lazy(() => ExtendConditionReleaseInfoResource$inboundSchema),
+  z.any(),
+]);
+
+export function extendReleaseInfoResourceConditionUnionFromJSON(
+  jsonString: string,
+): SafeParseResult<
+  ExtendReleaseInfoResourceConditionUnion,
+  SDKValidationError
+> {
+  return safeParse(
+    jsonString,
+    (x) =>
+      ExtendReleaseInfoResourceConditionUnion$inboundSchema.parse(
+        JSON.parse(x),
+      ),
+    `Failed to parse 'ExtendReleaseInfoResourceConditionUnion' from JSON`,
+  );
+}
+
+/** @internal */
+export const ExtendReleaseInfoGcpResource$inboundSchema: z.ZodType<
+  ExtendReleaseInfoGcpResource,
+  unknown
+> = z.object({
+  condition: z.nullable(
+    z.union([
+      z.lazy(() => ExtendConditionReleaseInfoResource$inboundSchema),
+      z.any(),
+    ]),
+  ).optional(),
+  scope: z.string(),
+});
+
+export function extendReleaseInfoGcpResourceFromJSON(
+  jsonString: string,
+): SafeParseResult<ExtendReleaseInfoGcpResource, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => ExtendReleaseInfoGcpResource$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'ExtendReleaseInfoGcpResource' from JSON`,
+  );
+}
+
+/** @internal */
+export const ExtendConditionReleaseInfo$inboundSchema: z.ZodType<
+  ExtendConditionReleaseInfo,
+  unknown
+> = z.object({
+  expression: z.string(),
+  title: z.string(),
+});
+
+export function extendConditionReleaseInfoFromJSON(
+  jsonString: string,
+): SafeParseResult<ExtendConditionReleaseInfo, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => ExtendConditionReleaseInfo$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'ExtendConditionReleaseInfo' from JSON`,
+  );
+}
+
+/** @internal */
+export const ExtendReleaseInfoConditionUnion$inboundSchema: z.ZodType<
+  ExtendReleaseInfoConditionUnion,
+  unknown
+> = z.union([z.lazy(() => ExtendConditionReleaseInfo$inboundSchema), z.any()]);
+
+export function extendReleaseInfoConditionUnionFromJSON(
+  jsonString: string,
+): SafeParseResult<ExtendReleaseInfoConditionUnion, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => ExtendReleaseInfoConditionUnion$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'ExtendReleaseInfoConditionUnion' from JSON`,
+  );
+}
+
+/** @internal */
+export const ExtendReleaseInfoGcpStack$inboundSchema: z.ZodType<
+  ExtendReleaseInfoGcpStack,
+  unknown
+> = z.object({
+  condition: z.nullable(
+    z.union([z.lazy(() => ExtendConditionReleaseInfo$inboundSchema), z.any()]),
+  ).optional(),
+  scope: z.string(),
+});
+
+export function extendReleaseInfoGcpStackFromJSON(
+  jsonString: string,
+): SafeParseResult<ExtendReleaseInfoGcpStack, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => ExtendReleaseInfoGcpStack$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'ExtendReleaseInfoGcpStack' from JSON`,
+  );
+}
+
+/** @internal */
+export const ExtendReleaseInfoGcpBinding$inboundSchema: z.ZodType<
+  ExtendReleaseInfoGcpBinding,
+  unknown
+> = z.object({
+  resource: z.lazy(() => ExtendReleaseInfoGcpResource$inboundSchema).optional(),
+  stack: z.lazy(() => ExtendReleaseInfoGcpStack$inboundSchema).optional(),
+});
+
+export function extendReleaseInfoGcpBindingFromJSON(
+  jsonString: string,
+): SafeParseResult<ExtendReleaseInfoGcpBinding, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => ExtendReleaseInfoGcpBinding$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'ExtendReleaseInfoGcpBinding' from JSON`,
+  );
+}
+
+/** @internal */
+export const ExtendReleaseInfoGcpGrant$inboundSchema: z.ZodType<
+  ExtendReleaseInfoGcpGrant,
+  unknown
+> = z.object({
+  actions: z.nullable(z.array(z.string())).optional(),
+  dataActions: z.nullable(z.array(z.string())).optional(),
+  permissions: z.nullable(z.array(z.string())).optional(),
+  predefinedRoles: z.nullable(z.array(z.string())).optional(),
+  residualPermissions: z.nullable(z.array(z.string())).optional(),
+});
+
+export function extendReleaseInfoGcpGrantFromJSON(
+  jsonString: string,
+): SafeParseResult<ExtendReleaseInfoGcpGrant, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => ExtendReleaseInfoGcpGrant$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'ExtendReleaseInfoGcpGrant' from JSON`,
+  );
+}
+
+/** @internal */
+export const ExtendReleaseInfoGcp$inboundSchema: z.ZodType<
+  ExtendReleaseInfoGcp,
+  unknown
+> = z.object({
+  binding: z.lazy(() => ExtendReleaseInfoGcpBinding$inboundSchema),
+  description: z.nullable(z.string()).optional(),
+  grant: z.lazy(() => ExtendReleaseInfoGcpGrant$inboundSchema),
+  label: z.nullable(z.string()).optional(),
+});
+
+export function extendReleaseInfoGcpFromJSON(
+  jsonString: string,
+): SafeParseResult<ExtendReleaseInfoGcp, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => ExtendReleaseInfoGcp$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'ExtendReleaseInfoGcp' from JSON`,
+  );
+}
+
+/** @internal */
+export const ExtendReleaseInfoPlatforms$inboundSchema: z.ZodType<
+  ExtendReleaseInfoPlatforms,
+  unknown
+> = z.object({
+  aws: z.nullable(z.array(z.lazy(() => ExtendReleaseInfoAw$inboundSchema)))
+    .optional(),
+  azure: z.nullable(z.array(z.lazy(() => ExtendReleaseInfoAzure$inboundSchema)))
+    .optional(),
+  gcp: z.nullable(z.array(z.lazy(() => ExtendReleaseInfoGcp$inboundSchema)))
+    .optional(),
+});
+
+export function extendReleaseInfoPlatformsFromJSON(
+  jsonString: string,
+): SafeParseResult<ExtendReleaseInfoPlatforms, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => ExtendReleaseInfoPlatforms$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'ExtendReleaseInfoPlatforms' from JSON`,
+  );
+}
+
+/** @internal */
+export const ExtendReleaseInfo$inboundSchema: z.ZodType<
+  ExtendReleaseInfo,
+  unknown
+> = z.object({
+  description: z.string(),
+  id: z.string(),
+  platforms: z.lazy(() => ExtendReleaseInfoPlatforms$inboundSchema),
+});
+
+export function extendReleaseInfoFromJSON(
+  jsonString: string,
+): SafeParseResult<ExtendReleaseInfo, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => ExtendReleaseInfo$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'ExtendReleaseInfo' from JSON`,
+  );
+}
+
+/** @internal */
+export const ReleaseInfoExtendUnion$inboundSchema: z.ZodType<
+  ReleaseInfoExtendUnion,
+  unknown
+> = z.union([z.lazy(() => ExtendReleaseInfo$inboundSchema), z.string()]);
+
+export function releaseInfoExtendUnionFromJSON(
+  jsonString: string,
+): SafeParseResult<ReleaseInfoExtendUnion, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => ReleaseInfoExtendUnion$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'ReleaseInfoExtendUnion' from JSON`,
+  );
+}
+
+/** @internal */
+export const ManagementReleaseInfo1$inboundSchema: z.ZodType<
+  ManagementReleaseInfo1,
+  unknown
+> = z.object({
+  extend: z.record(
+    z.string(),
+    z.array(
+      z.union([z.lazy(() => ExtendReleaseInfo$inboundSchema), z.string()]),
+    ),
+  ),
+});
+
+export function managementReleaseInfo1FromJSON(
+  jsonString: string,
+): SafeParseResult<ManagementReleaseInfo1, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => ManagementReleaseInfo1$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'ManagementReleaseInfo1' from JSON`,
+  );
+}
+
+/** @internal */
+export const ReleaseInfoManagementUnion$inboundSchema: z.ZodType<
+  ReleaseInfoManagementUnion,
+  unknown
+> = z.union([
+  z.lazy(() => ManagementReleaseInfo1$inboundSchema),
+  z.lazy(() => ManagementReleaseInfo2$inboundSchema),
+  ManagementReleaseInfoEnum$inboundSchema,
+]);
+
+export function releaseInfoManagementUnionFromJSON(
+  jsonString: string,
+): SafeParseResult<ReleaseInfoManagementUnion, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => ReleaseInfoManagementUnion$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'ReleaseInfoManagementUnion' from JSON`,
+  );
+}
+
+/** @internal */
+export const ProfileReleaseInfoAwResource$inboundSchema: z.ZodType<
+  ProfileReleaseInfoAwResource,
+  unknown
+> = z.object({
+  condition: z.nullable(z.record(z.string(), z.record(z.string(), z.string())))
+    .optional(),
+  resources: z.array(z.string()),
+});
+
+export function profileReleaseInfoAwResourceFromJSON(
+  jsonString: string,
+): SafeParseResult<ProfileReleaseInfoAwResource, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => ProfileReleaseInfoAwResource$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'ProfileReleaseInfoAwResource' from JSON`,
+  );
+}
+
+/** @internal */
+export const ProfileReleaseInfoAwStack$inboundSchema: z.ZodType<
+  ProfileReleaseInfoAwStack,
+  unknown
+> = z.object({
+  condition: z.nullable(z.record(z.string(), z.record(z.string(), z.string())))
+    .optional(),
+  resources: z.array(z.string()),
+});
+
+export function profileReleaseInfoAwStackFromJSON(
+  jsonString: string,
+): SafeParseResult<ProfileReleaseInfoAwStack, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => ProfileReleaseInfoAwStack$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'ProfileReleaseInfoAwStack' from JSON`,
+  );
+}
+
+/** @internal */
+export const ProfileReleaseInfoAwBinding$inboundSchema: z.ZodType<
+  ProfileReleaseInfoAwBinding,
+  unknown
+> = z.object({
+  resource: z.lazy(() => ProfileReleaseInfoAwResource$inboundSchema).optional(),
+  stack: z.lazy(() => ProfileReleaseInfoAwStack$inboundSchema).optional(),
+});
+
+export function profileReleaseInfoAwBindingFromJSON(
+  jsonString: string,
+): SafeParseResult<ProfileReleaseInfoAwBinding, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => ProfileReleaseInfoAwBinding$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'ProfileReleaseInfoAwBinding' from JSON`,
+  );
+}
+
+/** @internal */
+export const ProfileReleaseInfoEffect$inboundSchema: z.ZodEnum<
+  typeof ProfileReleaseInfoEffect
+> = z.enum(ProfileReleaseInfoEffect);
+
+/** @internal */
+export const ProfileReleaseInfoAwGrant$inboundSchema: z.ZodType<
+  ProfileReleaseInfoAwGrant,
+  unknown
+> = z.object({
+  actions: z.nullable(z.array(z.string())).optional(),
+  dataActions: z.nullable(z.array(z.string())).optional(),
+  permissions: z.nullable(z.array(z.string())).optional(),
+  predefinedRoles: z.nullable(z.array(z.string())).optional(),
+  residualPermissions: z.nullable(z.array(z.string())).optional(),
+});
+
+export function profileReleaseInfoAwGrantFromJSON(
+  jsonString: string,
+): SafeParseResult<ProfileReleaseInfoAwGrant, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => ProfileReleaseInfoAwGrant$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'ProfileReleaseInfoAwGrant' from JSON`,
+  );
+}
+
+/** @internal */
+export const ProfileReleaseInfoAw$inboundSchema: z.ZodType<
+  ProfileReleaseInfoAw,
+  unknown
+> = z.object({
+  binding: z.lazy(() => ProfileReleaseInfoAwBinding$inboundSchema),
+  description: z.nullable(z.string()).optional(),
+  effect: ProfileReleaseInfoEffect$inboundSchema.optional(),
+  grant: z.lazy(() => ProfileReleaseInfoAwGrant$inboundSchema),
+  label: z.nullable(z.string()).optional(),
+});
+
+export function profileReleaseInfoAwFromJSON(
+  jsonString: string,
+): SafeParseResult<ProfileReleaseInfoAw, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => ProfileReleaseInfoAw$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'ProfileReleaseInfoAw' from JSON`,
+  );
+}
+
+/** @internal */
+export const ProfileReleaseInfoAzureResource$inboundSchema: z.ZodType<
+  ProfileReleaseInfoAzureResource,
+  unknown
+> = z.object({
+  scope: z.string(),
+});
+
+export function profileReleaseInfoAzureResourceFromJSON(
+  jsonString: string,
+): SafeParseResult<ProfileReleaseInfoAzureResource, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => ProfileReleaseInfoAzureResource$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'ProfileReleaseInfoAzureResource' from JSON`,
+  );
+}
+
+/** @internal */
+export const ProfileReleaseInfoAzureStack$inboundSchema: z.ZodType<
+  ProfileReleaseInfoAzureStack,
+  unknown
+> = z.object({
+  scope: z.string(),
+});
+
+export function profileReleaseInfoAzureStackFromJSON(
+  jsonString: string,
+): SafeParseResult<ProfileReleaseInfoAzureStack, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => ProfileReleaseInfoAzureStack$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'ProfileReleaseInfoAzureStack' from JSON`,
+  );
+}
+
+/** @internal */
+export const ProfileReleaseInfoAzureBinding$inboundSchema: z.ZodType<
+  ProfileReleaseInfoAzureBinding,
+  unknown
+> = z.object({
+  resource: z.lazy(() => ProfileReleaseInfoAzureResource$inboundSchema)
+    .optional(),
+  stack: z.lazy(() => ProfileReleaseInfoAzureStack$inboundSchema).optional(),
+});
+
+export function profileReleaseInfoAzureBindingFromJSON(
+  jsonString: string,
+): SafeParseResult<ProfileReleaseInfoAzureBinding, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => ProfileReleaseInfoAzureBinding$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'ProfileReleaseInfoAzureBinding' from JSON`,
+  );
+}
+
+/** @internal */
+export const ProfileReleaseInfoAzureGrant$inboundSchema: z.ZodType<
+  ProfileReleaseInfoAzureGrant,
+  unknown
+> = z.object({
+  actions: z.nullable(z.array(z.string())).optional(),
+  dataActions: z.nullable(z.array(z.string())).optional(),
+  permissions: z.nullable(z.array(z.string())).optional(),
+  predefinedRoles: z.nullable(z.array(z.string())).optional(),
+  residualPermissions: z.nullable(z.array(z.string())).optional(),
+});
+
+export function profileReleaseInfoAzureGrantFromJSON(
+  jsonString: string,
+): SafeParseResult<ProfileReleaseInfoAzureGrant, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => ProfileReleaseInfoAzureGrant$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'ProfileReleaseInfoAzureGrant' from JSON`,
+  );
+}
+
+/** @internal */
+export const ProfileReleaseInfoAzure$inboundSchema: z.ZodType<
+  ProfileReleaseInfoAzure,
+  unknown
+> = z.object({
+  binding: z.lazy(() => ProfileReleaseInfoAzureBinding$inboundSchema),
+  description: z.nullable(z.string()).optional(),
+  grant: z.lazy(() => ProfileReleaseInfoAzureGrant$inboundSchema),
+  label: z.nullable(z.string()).optional(),
+});
+
+export function profileReleaseInfoAzureFromJSON(
+  jsonString: string,
+): SafeParseResult<ProfileReleaseInfoAzure, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => ProfileReleaseInfoAzure$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'ProfileReleaseInfoAzure' from JSON`,
+  );
+}
+
+/** @internal */
+export const ProfileConditionReleaseInfoResource$inboundSchema: z.ZodType<
+  ProfileConditionReleaseInfoResource,
+  unknown
+> = z.object({
+  expression: z.string(),
+  title: z.string(),
+});
+
+export function profileConditionReleaseInfoResourceFromJSON(
+  jsonString: string,
+): SafeParseResult<ProfileConditionReleaseInfoResource, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) =>
+      ProfileConditionReleaseInfoResource$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'ProfileConditionReleaseInfoResource' from JSON`,
+  );
+}
+
+/** @internal */
+export const ProfileReleaseInfoResourceConditionUnion$inboundSchema: z.ZodType<
+  ProfileReleaseInfoResourceConditionUnion,
+  unknown
+> = z.union([
+  z.lazy(() => ProfileConditionReleaseInfoResource$inboundSchema),
+  z.any(),
+]);
+
+export function profileReleaseInfoResourceConditionUnionFromJSON(
+  jsonString: string,
+): SafeParseResult<
+  ProfileReleaseInfoResourceConditionUnion,
+  SDKValidationError
+> {
+  return safeParse(
+    jsonString,
+    (x) =>
+      ProfileReleaseInfoResourceConditionUnion$inboundSchema.parse(
+        JSON.parse(x),
+      ),
+    `Failed to parse 'ProfileReleaseInfoResourceConditionUnion' from JSON`,
+  );
+}
+
+/** @internal */
+export const ProfileReleaseInfoGcpResource$inboundSchema: z.ZodType<
+  ProfileReleaseInfoGcpResource,
+  unknown
+> = z.object({
+  condition: z.nullable(
+    z.union([
+      z.lazy(() => ProfileConditionReleaseInfoResource$inboundSchema),
+      z.any(),
+    ]),
+  ).optional(),
+  scope: z.string(),
+});
+
+export function profileReleaseInfoGcpResourceFromJSON(
+  jsonString: string,
+): SafeParseResult<ProfileReleaseInfoGcpResource, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => ProfileReleaseInfoGcpResource$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'ProfileReleaseInfoGcpResource' from JSON`,
+  );
+}
+
+/** @internal */
+export const ProfileConditionReleaseInfo$inboundSchema: z.ZodType<
+  ProfileConditionReleaseInfo,
+  unknown
+> = z.object({
+  expression: z.string(),
+  title: z.string(),
+});
+
+export function profileConditionReleaseInfoFromJSON(
+  jsonString: string,
+): SafeParseResult<ProfileConditionReleaseInfo, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => ProfileConditionReleaseInfo$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'ProfileConditionReleaseInfo' from JSON`,
+  );
+}
+
+/** @internal */
+export const ProfileReleaseInfoConditionUnion$inboundSchema: z.ZodType<
+  ProfileReleaseInfoConditionUnion,
+  unknown
+> = z.union([z.lazy(() => ProfileConditionReleaseInfo$inboundSchema), z.any()]);
+
+export function profileReleaseInfoConditionUnionFromJSON(
+  jsonString: string,
+): SafeParseResult<ProfileReleaseInfoConditionUnion, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => ProfileReleaseInfoConditionUnion$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'ProfileReleaseInfoConditionUnion' from JSON`,
+  );
+}
+
+/** @internal */
+export const ProfileReleaseInfoGcpStack$inboundSchema: z.ZodType<
+  ProfileReleaseInfoGcpStack,
+  unknown
+> = z.object({
+  condition: z.nullable(
+    z.union([z.lazy(() => ProfileConditionReleaseInfo$inboundSchema), z.any()]),
+  ).optional(),
+  scope: z.string(),
+});
+
+export function profileReleaseInfoGcpStackFromJSON(
+  jsonString: string,
+): SafeParseResult<ProfileReleaseInfoGcpStack, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => ProfileReleaseInfoGcpStack$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'ProfileReleaseInfoGcpStack' from JSON`,
+  );
+}
+
+/** @internal */
+export const ProfileReleaseInfoGcpBinding$inboundSchema: z.ZodType<
+  ProfileReleaseInfoGcpBinding,
+  unknown
+> = z.object({
+  resource: z.lazy(() => ProfileReleaseInfoGcpResource$inboundSchema)
+    .optional(),
+  stack: z.lazy(() => ProfileReleaseInfoGcpStack$inboundSchema).optional(),
+});
+
+export function profileReleaseInfoGcpBindingFromJSON(
+  jsonString: string,
+): SafeParseResult<ProfileReleaseInfoGcpBinding, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => ProfileReleaseInfoGcpBinding$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'ProfileReleaseInfoGcpBinding' from JSON`,
+  );
+}
+
+/** @internal */
+export const ProfileReleaseInfoGcpGrant$inboundSchema: z.ZodType<
+  ProfileReleaseInfoGcpGrant,
+  unknown
+> = z.object({
+  actions: z.nullable(z.array(z.string())).optional(),
+  dataActions: z.nullable(z.array(z.string())).optional(),
+  permissions: z.nullable(z.array(z.string())).optional(),
+  predefinedRoles: z.nullable(z.array(z.string())).optional(),
+  residualPermissions: z.nullable(z.array(z.string())).optional(),
+});
+
+export function profileReleaseInfoGcpGrantFromJSON(
+  jsonString: string,
+): SafeParseResult<ProfileReleaseInfoGcpGrant, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => ProfileReleaseInfoGcpGrant$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'ProfileReleaseInfoGcpGrant' from JSON`,
+  );
+}
+
+/** @internal */
+export const ProfileReleaseInfoGcp$inboundSchema: z.ZodType<
+  ProfileReleaseInfoGcp,
+  unknown
+> = z.object({
+  binding: z.lazy(() => ProfileReleaseInfoGcpBinding$inboundSchema),
+  description: z.nullable(z.string()).optional(),
+  grant: z.lazy(() => ProfileReleaseInfoGcpGrant$inboundSchema),
+  label: z.nullable(z.string()).optional(),
+});
+
+export function profileReleaseInfoGcpFromJSON(
+  jsonString: string,
+): SafeParseResult<ProfileReleaseInfoGcp, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => ProfileReleaseInfoGcp$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'ProfileReleaseInfoGcp' from JSON`,
+  );
+}
+
+/** @internal */
+export const ProfileReleaseInfoPlatforms$inboundSchema: z.ZodType<
+  ProfileReleaseInfoPlatforms,
+  unknown
+> = z.object({
+  aws: z.nullable(z.array(z.lazy(() => ProfileReleaseInfoAw$inboundSchema)))
+    .optional(),
+  azure: z.nullable(
+    z.array(z.lazy(() => ProfileReleaseInfoAzure$inboundSchema)),
+  ).optional(),
+  gcp: z.nullable(z.array(z.lazy(() => ProfileReleaseInfoGcp$inboundSchema)))
+    .optional(),
+});
+
+export function profileReleaseInfoPlatformsFromJSON(
+  jsonString: string,
+): SafeParseResult<ProfileReleaseInfoPlatforms, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => ProfileReleaseInfoPlatforms$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'ProfileReleaseInfoPlatforms' from JSON`,
+  );
+}
+
+/** @internal */
+export const ProfileReleaseInfo$inboundSchema: z.ZodType<
+  ProfileReleaseInfo,
+  unknown
+> = z.object({
+  description: z.string(),
+  id: z.string(),
+  platforms: z.lazy(() => ProfileReleaseInfoPlatforms$inboundSchema),
+});
+
+export function profileReleaseInfoFromJSON(
+  jsonString: string,
+): SafeParseResult<ProfileReleaseInfo, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => ProfileReleaseInfo$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'ProfileReleaseInfo' from JSON`,
+  );
+}
+
+/** @internal */
+export const ReleaseInfoProfileUnion$inboundSchema: z.ZodType<
+  ReleaseInfoProfileUnion,
+  unknown
+> = z.union([z.lazy(() => ProfileReleaseInfo$inboundSchema), z.string()]);
+
+export function releaseInfoProfileUnionFromJSON(
+  jsonString: string,
+): SafeParseResult<ReleaseInfoProfileUnion, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => ReleaseInfoProfileUnion$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'ReleaseInfoProfileUnion' from JSON`,
+  );
+}
+
+/** @internal */
+export const ReleaseInfoPermissions$inboundSchema: z.ZodType<
+  ReleaseInfoPermissions,
+  unknown
+> = z.object({
+  management: z.union([
+    z.lazy(() => ManagementReleaseInfo1$inboundSchema),
+    z.lazy(() => ManagementReleaseInfo2$inboundSchema),
+    ManagementReleaseInfoEnum$inboundSchema,
+  ]).optional(),
+  profiles: z.record(
+    z.string(),
+    z.record(
+      z.string(),
+      z.array(
+        z.union([z.lazy(() => ProfileReleaseInfo$inboundSchema), z.string()]),
+      ),
+    ),
+  ),
+});
+
+export function releaseInfoPermissionsFromJSON(
+  jsonString: string,
+): SafeParseResult<ReleaseInfoPermissions, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => ReleaseInfoPermissions$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'ReleaseInfoPermissions' from JSON`,
+  );
+}
+
+/** @internal */
+export const ReleaseInfoConfig$inboundSchema: z.ZodType<
+  ReleaseInfoConfig,
+  unknown
+> = collectExtraKeys$(
+  z.object({
+    id: z.string(),
+    type: z.string(),
+  }).catchall(z.any()),
+  "additionalProperties",
+  true,
+);
+
+export function releaseInfoConfigFromJSON(
+  jsonString: string,
+): SafeParseResult<ReleaseInfoConfig, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => ReleaseInfoConfig$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'ReleaseInfoConfig' from JSON`,
+  );
+}
+
+/** @internal */
+export const ReleaseInfoDependency$inboundSchema: z.ZodType<
+  ReleaseInfoDependency,
+  unknown
+> = z.object({
+  id: z.string(),
+  type: z.string(),
+});
+
+export function releaseInfoDependencyFromJSON(
+  jsonString: string,
+): SafeParseResult<ReleaseInfoDependency, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => ReleaseInfoDependency$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'ReleaseInfoDependency' from JSON`,
+  );
+}
+
+/** @internal */
+export const ReleaseInfoLifecycle$inboundSchema: z.ZodEnum<
+  typeof ReleaseInfoLifecycle
+> = z.enum(ReleaseInfoLifecycle);
+
+/** @internal */
+export const ReleaseInfoResources$inboundSchema: z.ZodType<
+  ReleaseInfoResources,
+  unknown
+> = z.object({
+  config: z.lazy(() => ReleaseInfoConfig$inboundSchema),
+  dependencies: z.array(z.lazy(() => ReleaseInfoDependency$inboundSchema)),
+  lifecycle: ReleaseInfoLifecycle$inboundSchema,
+  remoteAccess: z.boolean().optional(),
+});
+
+export function releaseInfoResourcesFromJSON(
+  jsonString: string,
+): SafeParseResult<ReleaseInfoResources, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => ReleaseInfoResources$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'ReleaseInfoResources' from JSON`,
+  );
+}
+
+/** @internal */
 export const ReleaseInfoSupportedPlatform$inboundSchema: z.ZodEnum<
   typeof ReleaseInfoSupportedPlatform
 > = z.enum(ReleaseInfoSupportedPlatform);
@@ -148,9 +2929,12 @@ export const ReleaseInfoStack$inboundSchema: z.ZodType<
   unknown
 > = z.object({
   id: z.string(),
-  inputs: z.array(ReleaseInfoInput$inboundSchema).optional(),
-  permissions: ReleaseInfoPermissions$inboundSchema.optional(),
-  resources: z.record(z.string(), ReleaseInfoResources$inboundSchema),
+  inputs: z.array(z.lazy(() => ReleaseInfoInput$inboundSchema)).optional(),
+  permissions: z.lazy(() => ReleaseInfoPermissions$inboundSchema).optional(),
+  resources: z.record(
+    z.string(),
+    z.lazy(() => ReleaseInfoResources$inboundSchema),
+  ),
   supportedPlatforms: z.nullable(
     z.array(ReleaseInfoSupportedPlatform$inboundSchema),
   ).optional(),

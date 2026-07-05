@@ -592,6 +592,9 @@ fn test_control_plane_permission_sets_avoid_sensitive_gcp_content_reads() -> Res
     let kv_management = load_permission_set_by_id("kv/management")?;
     let kv_provision = load_permission_set_by_id("kv/provision")?;
     let vault_provision = load_permission_set_by_id("vault/provision")?;
+    let postgres_heartbeat = load_permission_set_by_id("postgres/heartbeat")?;
+    let postgres_management = load_permission_set_by_id("postgres/management")?;
+    let postgres_provision = load_permission_set_by_id("postgres/provision")?;
 
     for permission_set in [
         &storage_heartbeat,
@@ -602,6 +605,9 @@ fn test_control_plane_permission_sets_avoid_sensitive_gcp_content_reads() -> Res
         &kv_management,
         &kv_provision,
         &vault_provision,
+        &postgres_heartbeat,
+        &postgres_management,
+        &postgres_provision,
     ] {
         let permissions = gcp_permissions(permission_set);
         for forbidden in [
@@ -616,6 +622,96 @@ fn test_control_plane_permission_sets_avoid_sensitive_gcp_content_reads() -> Res
                 "{} unexpectedly grants {}",
                 permission_set.id,
                 forbidden
+            );
+        }
+    }
+
+    Ok(())
+}
+
+fn aws_actions(permission_set: &alien_core::PermissionSet) -> Vec<&str> {
+    permission_set
+        .platforms
+        .aws
+        .as_deref()
+        .unwrap_or_default()
+        .iter()
+        .flat_map(|platform_permission| {
+            platform_permission
+                .grant
+                .actions
+                .as_deref()
+                .unwrap_or_default()
+        })
+        .map(String::as_str)
+        .collect()
+}
+
+fn azure_data_actions_and_roles(permission_set: &alien_core::PermissionSet) -> Vec<&str> {
+    permission_set
+        .platforms
+        .azure
+        .as_deref()
+        .unwrap_or_default()
+        .iter()
+        .flat_map(|platform_permission| {
+            let data_actions = platform_permission
+                .grant
+                .data_actions
+                .as_deref()
+                .unwrap_or_default();
+            let roles = platform_permission
+                .grant
+                .predefined_roles
+                .as_deref()
+                .unwrap_or_default();
+            data_actions.iter().chain(roles.iter())
+        })
+        .map(String::as_str)
+        .collect()
+}
+
+/// The Postgres data plane is gated by SQL credentials, so reading the connection-password
+/// secret VALUE must stay confined to `postgres/data-access`. The GCP guard above already covers
+/// `secretmanager.versions.access`; this pins the AWS Secrets Manager and Azure Key Vault reads
+/// too, so a future edit that leaks the secret value into a control-plane set fails here.
+#[test]
+fn test_postgres_control_plane_sets_avoid_secret_value_reads() -> Result<()> {
+    let heartbeat = load_permission_set_by_id("postgres/heartbeat")?;
+    let management = load_permission_set_by_id("postgres/management")?;
+    let provision = load_permission_set_by_id("postgres/provision")?;
+
+    for permission_set in [&heartbeat, &management, &provision] {
+        // AWS: forbid EVERY secret-value read, not just GetSecretValue — BatchGetSecretValue reads
+        // values too.
+        for value_read in [
+            "secretsmanager:GetSecretValue",
+            "secretsmanager:BatchGetSecretValue",
+        ] {
+            assert!(
+                !aws_actions(permission_set).contains(&value_read),
+                "{} unexpectedly grants {value_read}",
+                permission_set.id
+            );
+        }
+        // GCP: the version payload read.
+        assert!(
+            !gcp_permissions(permission_set).contains(&"secretmanager.versions.access"),
+            "{} unexpectedly grants secretmanager.versions.access",
+            permission_set.id
+        );
+        // Azure: a Key Vault secret VALUE read is the `getSecret` dataAction or the
+        // "Key Vault Secrets User"/"Officer" predefined role.
+        for entry in azure_data_actions_and_roles(permission_set) {
+            let lowered = entry.to_ascii_lowercase();
+            let leaks_secret_value = (lowered.contains("vaults/secrets")
+                && lowered.contains("getsecret"))
+                || lowered.contains("key vault secrets");
+            assert!(
+                !leaks_secret_value,
+                "{} unexpectedly grants a Key Vault secret-value read: {}",
+                permission_set.id,
+                entry
             );
         }
     }

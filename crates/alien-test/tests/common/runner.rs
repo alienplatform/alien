@@ -51,6 +51,7 @@ pub async fn check_all_bindings(
             Binding::Storage => bindings::check_storage(deployment).await?,
             Binding::Kv => bindings::check_kv(deployment).await?,
             Binding::Vault => bindings::check_vault(deployment).await?,
+            Binding::Postgres => bindings::check_postgres(deployment).await?,
             Binding::Queue => bindings::check_queue(deployment).await?,
             Binding::Worker => bindings::check_worker(deployment).await?,
             Binding::Container => bindings::check_container(deployment).await?,

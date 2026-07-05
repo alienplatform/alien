@@ -9,7 +9,8 @@ use crate::error::{ErrorData, Result};
 use alien_core::{
     Daemon, DaemonCode, DaemonHeartbeatData, DaemonOutputs, HeartbeatBackend,
     LocalDaemonHeartbeatData, LocalRuntimeUnitKind, LocalRuntimeUnitStatus, ObservedHealth,
-    Platform, ProviderLifecycleState, ResourceHeartbeat, ResourceHeartbeatData, ResourceOutputs,
+    Platform, Postgres, ProviderLifecycleState, ResourceHeartbeat, ResourceHeartbeatData,
+    ResourceOutputs,
     ResourceStatus, WorkloadHeartbeatStatus,
 };
 use alien_error::{AlienError, Context};
@@ -126,12 +127,22 @@ impl LocalDaemonController {
 
         let env_vars = env_builder.build();
 
-        manager.start_daemon(&config.id, env_vars).await.context(
-            ErrorData::CloudPlatformError {
+        // Linked Postgres resources carry a runtime-only secret (the password). Name them so the
+        // worker manager delivers the binding to the process but never persists it to metadata.
+        let runtime_only_binding_names: Vec<String> = config
+            .links
+            .iter()
+            .filter(|link| link.resource_type() == &Postgres::RESOURCE_TYPE)
+            .map(|link| link.id().to_string())
+            .collect();
+
+        manager
+            .start_daemon(&config.id, env_vars, runtime_only_binding_names)
+            .await
+            .context(ErrorData::CloudPlatformError {
                 message: "Failed to start daemon runtime".to_string(),
                 resource_id: Some(config.id.clone()),
-            },
-        )?;
+            })?;
         self.daemon_name = Some(config.id.clone());
         self.public_url = local_daemon_public_url(ctx, &config);
 

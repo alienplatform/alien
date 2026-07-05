@@ -28,6 +28,16 @@ impl ResourceImporter for GcpNetworkImporter {
         // first entry from the wire payload and stores the rest as
         // metadata-only via the network self-link.
         let subnetwork_self_link = data.subnet_self_links.first().cloned();
+        // Recover the subnet name from its self-link (`.../subnetworks/<name>`) so the imported
+        // Frozen network exposes the same `subnetwork_name` the runtime create path sets. Without
+        // it a live worker's `get_vpc_access` short-circuits on the `subnetwork_name` check and the
+        // Cloud Run service gets no Direct VPC egress — unable to reach a private Cloud SQL PSC
+        // endpoint in this subnet. Mirrors the Azure importer's self-link name parse.
+        let subnetwork_name = subnetwork_self_link
+            .as_deref()
+            .and_then(|link| link.rsplit('/').next())
+            .filter(|name| !name.is_empty())
+            .map(str::to_string);
         let _ = data.project_id;
 
         let controller = GcpNetworkController {
@@ -35,7 +45,7 @@ impl ResourceImporter for GcpNetworkImporter {
             desired_settings: None,
             network_name: data.vpc_name,
             network_self_link: data.vpc_self_link,
-            subnetwork_name: None,
+            subnetwork_name,
             subnetwork_self_link,
             router_name: None,
             cloud_nat_name: data.nat_name,

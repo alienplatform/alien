@@ -1,0 +1,1 @@
+{"oneOf":[{"type":"object","required":["type"],"properties":{"type":{"type":"string","enum":["auroraServerlessV2"]}}}],"description":"Cloud backend for a Postgres resource. Only Aurora Serverless v2 ships in v1;\nthe enum reserves the slot so provisioned RDS is an additive variant later.","x-readme-ref-name":"PostgresBackend"}

@@ -24,35 +24,888 @@ import {
   SyncAcquireResponseDomainMetadataUnion$inboundSchema,
   SyncAcquireResponseEnvironmentVariables,
   SyncAcquireResponseEnvironmentVariables$inboundSchema,
-} from "./syncacquireresponsekeyprefixsecretref2.js";
-import {
-  SyncAcquireResponseCertificateUnion2,
-  SyncAcquireResponseCertificateUnion2$inboundSchema,
-  SyncAcquireResponseClusterUnion,
-  SyncAcquireResponseClusterUnion$inboundSchema,
-  SyncAcquireResponseComputeUnion,
-  SyncAcquireResponseComputeUnion$inboundSchema,
-  SyncAcquireResponseDeploymentModel,
-  SyncAcquireResponseDeploymentModel$inboundSchema,
-  SyncAcquireResponseDomainsUnion,
-  SyncAcquireResponseDomainsUnion$inboundSchema,
   SyncAcquireResponseExternalBindingsUnion6,
   SyncAcquireResponseExternalBindingsUnion6$inboundSchema,
-  SyncAcquireResponseHeartbeats,
-  SyncAcquireResponseHeartbeats$inboundSchema,
-  SyncAcquireResponseManagementConfigUnion,
-  SyncAcquireResponseManagementConfigUnion$inboundSchema,
-  SyncAcquireResponseModeCustom,
-  SyncAcquireResponseModeCustom$inboundSchema,
-  SyncAcquireResponseMonitoringUnion,
-  SyncAcquireResponseMonitoringUnion$inboundSchema,
-  SyncAcquireResponseProviderAzureApplicationGatewayForContainersEnum3,
-  SyncAcquireResponseProviderAzureApplicationGatewayForContainersEnum3$inboundSchema,
-  SyncAcquireResponseRouteGateway2,
-  SyncAcquireResponseRouteGateway2$inboundSchema,
-  SyncAcquireResponseStackSettingsExternalBindings,
-  SyncAcquireResponseStackSettingsExternalBindings$inboundSchema,
-} from "./syncacquireresponseproviderazureapplicationgatewayforcontainersenum3.js";
+} from "./syncacquireresponseenvironmentname.js";
+import {
+  SyncAcquireResponseExternalBindingsContainerAppsEnvironment,
+  SyncAcquireResponseExternalBindingsContainerAppsEnvironment$inboundSchema,
+  SyncAcquireResponseExternalBindingsLocalQueue,
+  SyncAcquireResponseExternalBindingsLocalQueue$inboundSchema,
+  SyncAcquireResponseExternalBindingsPubsub,
+  SyncAcquireResponseExternalBindingsPubsub$inboundSchema,
+  SyncAcquireResponseExternalBindingsServicebus,
+  SyncAcquireResponseExternalBindingsServicebus$inboundSchema,
+  SyncAcquireResponseExternalBindingsUnion3,
+  SyncAcquireResponseExternalBindingsUnion3$inboundSchema,
+  SyncAcquireResponseExternalBindingsUnion4,
+  SyncAcquireResponseExternalBindingsUnion4$inboundSchema,
+  SyncAcquireResponseExternalBindingsUnion5,
+  SyncAcquireResponseExternalBindingsUnion5$inboundSchema,
+  SyncAcquireResponseQueueUrlUnion,
+  SyncAcquireResponseQueueUrlUnion$inboundSchema,
+  SyncAcquireResponseTypeQueue1,
+  SyncAcquireResponseTypeQueue1$inboundSchema,
+} from "./syncacquireresponsetypequeue1.js";
+
+/**
+ * AWS SQS queue parameters
+ */
+export type SyncAcquireResponseExternalBindingsSqs = {
+  /**
+   * Represents a value that can be either a concrete value, a template expression,
+   *
+   * @remarks
+   * or a reference to a Kubernetes Secret
+   */
+  queueUrl?: SyncAcquireResponseQueueUrlUnion | null | undefined;
+  service: "sqs";
+  type: SyncAcquireResponseTypeQueue1;
+};
+
+/**
+ * Binding parameters for Queue at runtime or in templates.
+ */
+export type SyncAcquireResponseExternalBindingsUnion2 =
+  | SyncAcquireResponseExternalBindingsSqs
+  | SyncAcquireResponseExternalBindingsPubsub
+  | SyncAcquireResponseExternalBindingsServicebus
+  | SyncAcquireResponseExternalBindingsLocalQueue;
+
+/**
+ * Reference to a Kubernetes Secret
+ */
+export type SyncAcquireResponseStoragePathSecretRef = {
+  key: string;
+  name: string;
+};
+
+export type SyncAcquireResponseStoragePath = {
+  /**
+   * Reference to a Kubernetes Secret
+   */
+  secretRef: SyncAcquireResponseStoragePathSecretRef;
+};
+
+/**
+ * Represents a value that can be either a concrete value, a template expression,
+ *
+ * @remarks
+ * or a reference to a Kubernetes Secret
+ */
+export type SyncAcquireResponseStoragePathUnion =
+  | SyncAcquireResponseStoragePath
+  | any
+  | string;
+
+export const SyncAcquireResponseTypeStorage4 = {
+  Storage: "storage",
+} as const;
+export type SyncAcquireResponseTypeStorage4 = ClosedEnum<
+  typeof SyncAcquireResponseTypeStorage4
+>;
+
+/**
+ * Local filesystem storage binding configuration
+ */
+export type SyncAcquireResponseExternalBindingsLocalStorage = {
+  /**
+   * Represents a value that can be either a concrete value, a template expression,
+   *
+   * @remarks
+   * or a reference to a Kubernetes Secret
+   */
+  storagePath?:
+    | SyncAcquireResponseStoragePath
+    | any
+    | string
+    | null
+    | undefined;
+  service: "local-storage";
+  type: SyncAcquireResponseTypeStorage4;
+};
+
+/**
+ * Reference to a Kubernetes Secret
+ */
+export type SyncAcquireResponseBucketNameSecretRef2 = {
+  key: string;
+  name: string;
+};
+
+export type SyncAcquireResponseBucketName2 = {
+  /**
+   * Reference to a Kubernetes Secret
+   */
+  secretRef: SyncAcquireResponseBucketNameSecretRef2;
+};
+
+/**
+ * Represents a value that can be either a concrete value, a template expression,
+ *
+ * @remarks
+ * or a reference to a Kubernetes Secret
+ */
+export type SyncAcquireResponseBucketNameUnion2 =
+  | SyncAcquireResponseBucketName2
+  | any
+  | string;
+
+export const SyncAcquireResponseTypeStorage3 = {
+  Storage: "storage",
+} as const;
+export type SyncAcquireResponseTypeStorage3 = ClosedEnum<
+  typeof SyncAcquireResponseTypeStorage3
+>;
+
+/**
+ * Google Cloud Storage binding configuration
+ */
+export type SyncAcquireResponseExternalBindingsGcs = {
+  /**
+   * Represents a value that can be either a concrete value, a template expression,
+   *
+   * @remarks
+   * or a reference to a Kubernetes Secret
+   */
+  bucketName?: SyncAcquireResponseBucketName2 | any | string | null | undefined;
+  service: "gcs";
+  type: SyncAcquireResponseTypeStorage3;
+};
+
+/**
+ * Reference to a Kubernetes Secret
+ */
+export type SyncAcquireResponseAccountNameSecretRef1 = {
+  key: string;
+  name: string;
+};
+
+export type SyncAcquireResponseAccountName1 = {
+  /**
+   * Reference to a Kubernetes Secret
+   */
+  secretRef: SyncAcquireResponseAccountNameSecretRef1;
+};
+
+/**
+ * Represents a value that can be either a concrete value, a template expression,
+ *
+ * @remarks
+ * or a reference to a Kubernetes Secret
+ */
+export type SyncAcquireResponseAccountNameUnion1 =
+  | SyncAcquireResponseAccountName1
+  | any
+  | string;
+
+/**
+ * Reference to a Kubernetes Secret
+ */
+export type SyncAcquireResponseContainerNameSecretRef = {
+  key: string;
+  name: string;
+};
+
+export type SyncAcquireResponseContainerName = {
+  /**
+   * Reference to a Kubernetes Secret
+   */
+  secretRef: SyncAcquireResponseContainerNameSecretRef;
+};
+
+/**
+ * Represents a value that can be either a concrete value, a template expression,
+ *
+ * @remarks
+ * or a reference to a Kubernetes Secret
+ */
+export type SyncAcquireResponseContainerNameUnion =
+  | SyncAcquireResponseContainerName
+  | any
+  | string;
+
+export const SyncAcquireResponseTypeStorage2 = {
+  Storage: "storage",
+} as const;
+export type SyncAcquireResponseTypeStorage2 = ClosedEnum<
+  typeof SyncAcquireResponseTypeStorage2
+>;
+
+/**
+ * Azure Blob Storage binding configuration
+ */
+export type SyncAcquireResponseExternalBindingsBlob = {
+  /**
+   * Represents a value that can be either a concrete value, a template expression,
+   *
+   * @remarks
+   * or a reference to a Kubernetes Secret
+   */
+  accountName?:
+    | SyncAcquireResponseAccountName1
+    | any
+    | string
+    | null
+    | undefined;
+  /**
+   * Represents a value that can be either a concrete value, a template expression,
+   *
+   * @remarks
+   * or a reference to a Kubernetes Secret
+   */
+  containerName?:
+    | SyncAcquireResponseContainerName
+    | any
+    | string
+    | null
+    | undefined;
+  service: "blob";
+  type: SyncAcquireResponseTypeStorage2;
+};
+
+/**
+ * Reference to a Kubernetes Secret
+ */
+export type SyncAcquireResponseBucketNameSecretRef1 = {
+  key: string;
+  name: string;
+};
+
+export type SyncAcquireResponseBucketName1 = {
+  /**
+   * Reference to a Kubernetes Secret
+   */
+  secretRef: SyncAcquireResponseBucketNameSecretRef1;
+};
+
+/**
+ * Represents a value that can be either a concrete value, a template expression,
+ *
+ * @remarks
+ * or a reference to a Kubernetes Secret
+ */
+export type SyncAcquireResponseBucketNameUnion1 =
+  | SyncAcquireResponseBucketName1
+  | any
+  | string;
+
+export const SyncAcquireResponseTypeStorage1 = {
+  Storage: "storage",
+} as const;
+export type SyncAcquireResponseTypeStorage1 = ClosedEnum<
+  typeof SyncAcquireResponseTypeStorage1
+>;
+
+/**
+ * AWS S3 storage binding configuration
+ */
+export type SyncAcquireResponseExternalBindingsS3 = {
+  /**
+   * Represents a value that can be either a concrete value, a template expression,
+   *
+   * @remarks
+   * or a reference to a Kubernetes Secret
+   */
+  bucketName?: SyncAcquireResponseBucketName1 | any | string | null | undefined;
+  service: "s3";
+  type: SyncAcquireResponseTypeStorage1;
+};
+
+/**
+ * Service-type based storage binding that supports multiple storage providers
+ */
+export type SyncAcquireResponseExternalBindingsUnion1 =
+  | SyncAcquireResponseExternalBindingsS3
+  | SyncAcquireResponseExternalBindingsBlob
+  | SyncAcquireResponseExternalBindingsGcs
+  | SyncAcquireResponseExternalBindingsLocalStorage;
+
+/**
+ * Represents a binding to pre-existing infrastructure.
+ *
+ * @remarks
+ *
+ * The binding type must match the resource type it's applied to.
+ * Validated at runtime by the executor.
+ */
+export type SyncAcquireResponseExternalBindingsUnion7 =
+  | SyncAcquireResponseExternalBindingsContainerAppsEnvironment
+  | SyncAcquireResponseExternalBindingsS3
+  | SyncAcquireResponseExternalBindingsBlob
+  | SyncAcquireResponseExternalBindingsGcs
+  | SyncAcquireResponseExternalBindingsLocalStorage
+  | SyncAcquireResponseExternalBindingsSqs
+  | SyncAcquireResponseExternalBindingsPubsub
+  | SyncAcquireResponseExternalBindingsServicebus
+  | SyncAcquireResponseExternalBindingsLocalQueue
+  | SyncAcquireResponseExternalBindingsUnion3
+  | SyncAcquireResponseExternalBindingsUnion4
+  | SyncAcquireResponseExternalBindingsUnion5
+  | SyncAcquireResponseExternalBindingsUnion6;
+
+export const SyncAcquireResponsePlatformKubernetes = {
+  Kubernetes: "kubernetes",
+} as const;
+export type SyncAcquireResponsePlatformKubernetes = ClosedEnum<
+  typeof SyncAcquireResponsePlatformKubernetes
+>;
+
+export type SyncAcquireResponseManagementConfigKubernetes = {
+  platform: SyncAcquireResponsePlatformKubernetes;
+};
+
+export const SyncAcquireResponseConfigPlatformAzure = {
+  Azure: "azure",
+} as const;
+export type SyncAcquireResponseConfigPlatformAzure = ClosedEnum<
+  typeof SyncAcquireResponseConfigPlatformAzure
+>;
+
+/**
+ * Azure management configuration extracted from stack settings
+ */
+export type SyncAcquireResponseManagementConfigAzure = {
+  /**
+   * The managing Azure Tenant ID for cross-tenant access
+   */
+  managingTenantId: string;
+  /**
+   * OIDC issuer URL trusted by the target-side managed identity.
+   */
+  oidcIssuer: string;
+  /**
+   * OIDC subject claim trusted by the target-side managed identity.
+   */
+  oidcSubject: string;
+  platform: SyncAcquireResponseConfigPlatformAzure;
+};
+
+export const SyncAcquireResponseConfigPlatformGcp = {
+  Gcp: "gcp",
+} as const;
+export type SyncAcquireResponseConfigPlatformGcp = ClosedEnum<
+  typeof SyncAcquireResponseConfigPlatformGcp
+>;
+
+/**
+ * GCP management configuration extracted from stack settings
+ */
+export type SyncAcquireResponseManagementConfigGcp = {
+  /**
+   * Service account email for management roles
+   */
+  serviceAccountEmail: string;
+  platform: SyncAcquireResponseConfigPlatformGcp;
+};
+
+export const SyncAcquireResponseConfigPlatformAws = {
+  Aws: "aws",
+} as const;
+export type SyncAcquireResponseConfigPlatformAws = ClosedEnum<
+  typeof SyncAcquireResponseConfigPlatformAws
+>;
+
+/**
+ * AWS management configuration extracted from stack settings
+ */
+export type SyncAcquireResponseManagementConfigAws = {
+  /**
+   * The managing AWS IAM role ARN that can assume cross-account roles
+   */
+  managingRoleArn: string;
+  platform: SyncAcquireResponseConfigPlatformAws;
+};
+
+export type SyncAcquireResponseManagementConfigUnion =
+  | SyncAcquireResponseManagementConfigAzure
+  | SyncAcquireResponseManagementConfigAws
+  | SyncAcquireResponseManagementConfigGcp
+  | SyncAcquireResponseManagementConfigKubernetes
+  | any;
+
+/**
+ * OTLP log export configuration for a deployment.
+ *
+ * @remarks
+ *
+ * When set, injected compute runtimes export captured application logs
+ * through the given endpoint via OTLP/HTTP; which resources are injected
+ * is platform-dependent. Workers and daemons read auth headers from a
+ * runtime-only secret — never from application environment variables.
+ * Containers have no runtime wrapper, so they get the endpoint and auth
+ * header as plain OTEL env vars for the application's own exporter.
+ */
+export type SyncAcquireResponseMonitoring = {
+  /**
+   * Auth header value in "key=value,..." format.
+   *
+   * @remarks
+   * Example: "authorization=Bearer <write-token>"
+   */
+  logsAuthHeader: string;
+  /**
+   * Full OTLP logs endpoint URL.
+   *
+   * @remarks
+   * Example: "https://<manager-host>/v1/logs"
+   */
+  logsEndpoint: string;
+  /**
+   * Auth header value for the metrics endpoint in "key=value,..." format (optional).
+   *
+   * @remarks
+   *
+   * When absent, `logs_auth_header` is reused for metrics -- suitable when the same
+   * credential covers both signals. When present (e.g. Axiom with separate datasets),
+   * this value is used exclusively for metrics.
+   *
+   * Example: "authorization=Bearer <token>,x-axiom-dataset=<metrics-dataset>"
+   */
+  metricsAuthHeader?: string | null | undefined;
+  /**
+   * Full OTLP metrics endpoint URL (optional).
+   *
+   * @remarks
+   * When set, the worker runtime exports its own VM/container orchestration metrics here.
+   * Example: "https://api.axiom.co/v1/metrics"
+   */
+  metricsEndpoint?: string | null | undefined;
+  /**
+   * Resource attributes attached to every OTLP signal emitted for this deployment.
+   *
+   * @remarks
+   *
+   * Platform managers use this for stable identity such as `alien.workspace_id`,
+   * `alien.project_id`, `alien.deployment_group_id`, and `alien.deployment_id`.
+   * Runtime-specific resource attributes such as `service.name` remain owned by
+   * the runtime/exporter.
+   */
+  resourceAttributes?: { [k: string]: string } | undefined;
+};
+
+export type SyncAcquireResponseMonitoringUnion =
+  | SyncAcquireResponseMonitoring
+  | any;
+
+export type SyncAcquireResponsePoolsAutoscale = {
+  /**
+   * Provider machine type selected for this deployment.
+   */
+  machine?: string | null | undefined;
+  /**
+   * Maximum machine count.
+   */
+  max: number;
+  /**
+   * Minimum machine count.
+   */
+  min: number;
+  mode: "autoscale";
+};
+
+export type SyncAcquireResponsePoolsFixed = {
+  /**
+   * Provider machine type selected for this deployment.
+   */
+  machine?: string | null | undefined;
+  /**
+   * Number of machines to run.
+   */
+  machines: number;
+  mode: "fixed";
+};
+
+/**
+ * User-selected deployment settings for one compute pool.
+ */
+export type SyncAcquireResponsePoolsUnion =
+  | SyncAcquireResponsePoolsFixed
+  | SyncAcquireResponsePoolsAutoscale;
+
+/**
+ * Deployment-time compute choices for Alien-managed compute pools.
+ *
+ * @remarks
+ *
+ * Application source declares portable pool requirements. This settings
+ * object stores the concrete choices made for one deployment, such as the
+ * provider machine type and selected machine counts.
+ */
+export type SyncAcquireResponseCompute = {
+  /**
+   * Selected compute choices keyed by pool ID.
+   */
+  pools?: {
+    [k: string]:
+      | SyncAcquireResponsePoolsFixed
+      | SyncAcquireResponsePoolsAutoscale;
+  } | undefined;
+};
+
+export type SyncAcquireResponseComputeUnion = SyncAcquireResponseCompute | any;
+
+/**
+ * Deployment model: how updates are delivered to the remote environment.
+ */
+export const SyncAcquireResponseDeploymentModel = {
+  Push: "push",
+  Pull: "pull",
+} as const;
+/**
+ * Deployment model: how updates are delivered to the remote environment.
+ */
+export type SyncAcquireResponseDeploymentModel = ClosedEnum<
+  typeof SyncAcquireResponseDeploymentModel
+>;
+
+export type SyncAcquireResponseAwsStackSettings = {
+  certificateArn: string;
+};
+
+export type SyncAcquireResponseStackSettingsAwsUnion =
+  | SyncAcquireResponseAwsStackSettings
+  | any;
+
+export type SyncAcquireResponseAzureStackSettings = {
+  keyVaultCertificateId: string;
+  keyVaultResourceId?: string | null | undefined;
+};
+
+export type SyncAcquireResponseStackSettingsAzureUnion =
+  | SyncAcquireResponseAzureStackSettings
+  | any;
+
+export type SyncAcquireResponseGcpStackSettings = {
+  certificateName: string;
+};
+
+export type SyncAcquireResponseStackSettingsGcpUnion =
+  | SyncAcquireResponseGcpStackSettings
+  | any;
+
+/**
+ * Namespace-scoped Kubernetes TLS Secret reference.
+ */
+export type SyncAcquireResponseTlsSecretRef = {
+  /**
+   * Secret namespace. Defaults to the release namespace when omitted.
+   */
+  namespace?: string | null | undefined;
+  /**
+   * Secret name.
+   */
+  secretName: string;
+};
+
+export type SyncAcquireResponseDomainsKubernetes = {
+  /**
+   * Namespace-scoped Kubernetes TLS Secret reference.
+   */
+  tlsSecretRef: SyncAcquireResponseTlsSecretRef;
+};
+
+export type SyncAcquireResponseDomainsKubernetesUnion =
+  | SyncAcquireResponseDomainsKubernetes
+  | any;
+
+/**
+ * Platform-specific certificate references for custom domains.
+ */
+export type SyncAcquireResponseDomainsCertificate = {
+  aws?: SyncAcquireResponseAwsStackSettings | any | null | undefined;
+  azure?: SyncAcquireResponseAzureStackSettings | any | null | undefined;
+  gcp?: SyncAcquireResponseGcpStackSettings | any | null | undefined;
+  kubernetes?: SyncAcquireResponseDomainsKubernetes | any | null | undefined;
+};
+
+/**
+ * Custom domain configuration for a single resource.
+ */
+export type SyncAcquireResponseCustomDomains = {
+  /**
+   * Platform-specific certificate references for custom domains.
+   */
+  certificate: SyncAcquireResponseDomainsCertificate;
+  /**
+   * Fully qualified domain name to use.
+   */
+  domain: string;
+};
+
+/**
+ * Domain configuration for the stack.
+ *
+ * @remarks
+ *
+ * When `custom_domains` is set, the specified resources use customer-provided
+ * domains and certificates. Otherwise, Alien auto-generates domains.
+ */
+export type SyncAcquireResponseDomains = {
+  /**
+   * Custom domain configuration per resource ID.
+   */
+  customDomains?:
+    | { [k: string]: SyncAcquireResponseCustomDomains }
+    | null
+    | undefined;
+};
+
+export type SyncAcquireResponseDomainsUnion = SyncAcquireResponseDomains | any;
+
+/**
+ * External bindings for pre-existing infrastructure.
+ *
+ * @remarks
+ * Allows using existing resources (MinIO, Redis, shared Container Apps
+ * Environment, etc.) instead of having Alien provision them.
+ * Required for Kubernetes platform, optional for cloud platforms.
+ */
+export type SyncAcquireResponseStackSettingsExternalBindings = {};
+
+/**
+ * How heartbeat health checks are handled.
+ */
+export const SyncAcquireResponseHeartbeats = {
+  Off: "off",
+  On: "on",
+} as const;
+/**
+ * How heartbeat health checks are handled.
+ */
+export type SyncAcquireResponseHeartbeats = ClosedEnum<
+  typeof SyncAcquireResponseHeartbeats
+>;
+
+/**
+ * Optional provider-specific identity for a cloud-backed Kubernetes cluster.
+ */
+export type SyncAcquireResponseCloud = {
+  accountId?: string | null | undefined;
+  clusterId?: string | null | undefined;
+  clusterName?: string | null | undefined;
+  projectId?: string | null | undefined;
+  region?: string | null | undefined;
+  resourceGroup?: string | null | undefined;
+  subscriptionId?: string | null | undefined;
+};
+
+export type SyncAcquireResponseCloudUnion = SyncAcquireResponseCloud | any;
+
+/**
+ * Ownership model for the Kubernetes cluster.
+ */
+export const SyncAcquireResponseOwnership = {
+  Managed: "managed",
+  Existing: "existing",
+  External: "external",
+} as const;
+/**
+ * Ownership model for the Kubernetes cluster.
+ */
+export type SyncAcquireResponseOwnership = ClosedEnum<
+  typeof SyncAcquireResponseOwnership
+>;
+
+/**
+ * Kubernetes cluster setup settings.
+ */
+export type SyncAcquireResponseCluster = {
+  cloud?: SyncAcquireResponseCloud | any | null | undefined;
+  /**
+   * Namespace where the Alien chart and application resources run.
+   */
+  namespace?: string | null | undefined;
+  /**
+   * Ownership model for the Kubernetes cluster.
+   */
+  ownership: SyncAcquireResponseOwnership;
+};
+
+export type SyncAcquireResponseClusterUnion = SyncAcquireResponseCluster | any;
+
+export type SyncAcquireResponseCertificateNone2 = {
+  mode: "none";
+};
+
+export type SyncAcquireResponseCertificateManagedTLSSecret2 = {
+  mode: "managedTlsSecret";
+  /**
+   * Secret name template. Runtime may substitute resource/deployment tokens.
+   */
+  secretNameTemplate: string;
+};
+
+export type SyncAcquireResponseCertificateAwsAcmArn2 = {
+  /**
+   * Existing ACM certificate ARN.
+   */
+  certificateArn: string;
+  mode: "awsAcmArn";
+};
+
+export type SyncAcquireResponseCertificateManagedAcmImport2 = {
+  mode: "managedAcmImport";
+  /**
+   * ACM region. Defaults to the deployment region when omitted.
+   */
+  region?: string | null | undefined;
+  /**
+   * Tags applied to runtime-imported ACM certificates.
+   */
+  tags?: { [k: string]: string } | undefined;
+};
+
+/**
+ * Namespace-scoped Kubernetes TLS Secret reference.
+ */
+export type SyncAcquireResponseCertificateTLSSecretRef2 = {
+  /**
+   * Secret namespace. Defaults to the release namespace when omitted.
+   */
+  namespace?: string | null | undefined;
+  /**
+   * Secret name.
+   */
+  secretName: string;
+  mode: "tlsSecretRef";
+};
+
+/**
+ * Certificate publication or reference mode for Kubernetes public endpoints.
+ */
+export type SyncAcquireResponseCertificateUnion2 =
+  | SyncAcquireResponseCertificateTLSSecretRef2
+  | SyncAcquireResponseCertificateManagedAcmImport2
+  | SyncAcquireResponseCertificateAwsAcmArn2
+  | SyncAcquireResponseCertificateManagedTLSSecret2
+  | SyncAcquireResponseCertificateNone2;
+
+export const SyncAcquireResponseModeCustom = {
+  Custom: "custom",
+} as const;
+export type SyncAcquireResponseModeCustom = ClosedEnum<
+  typeof SyncAcquireResponseModeCustom
+>;
+
+export const SyncAcquireResponseProviderAzureApplicationGatewayForContainersEnum4 =
+  {
+    AzureApplicationGatewayForContainers:
+      "azureApplicationGatewayForContainers",
+  } as const;
+export type SyncAcquireResponseProviderAzureApplicationGatewayForContainersEnum4 =
+  ClosedEnum<
+    typeof SyncAcquireResponseProviderAzureApplicationGatewayForContainersEnum4
+  >;
+
+export type SyncAcquireResponseProviderAzureApplicationGatewayForContainers4 = {
+  /**
+   * Optional ALB name when using BYO Application Gateway resources.
+   */
+  albName?: string | null | undefined;
+  /**
+   * Optional ALB namespace when using BYO Application Gateway resources.
+   */
+  albNamespace?: string | null | undefined;
+  /**
+   * Public or internal frontend exposure.
+   */
+  frontend: string;
+  provider:
+    SyncAcquireResponseProviderAzureApplicationGatewayForContainersEnum4;
+};
+
+export const SyncAcquireResponseProviderGkeGatewayEnum4 = {
+  GkeGateway: "gkeGateway",
+} as const;
+export type SyncAcquireResponseProviderGkeGatewayEnum4 = ClosedEnum<
+  typeof SyncAcquireResponseProviderGkeGatewayEnum4
+>;
+
+export type SyncAcquireResponseProviderGkeGateway4 = {
+  provider: SyncAcquireResponseProviderGkeGatewayEnum4;
+  /**
+   * Optional static address name for the Gateway frontend.
+   */
+  staticAddressName?: string | null | undefined;
+};
+
+export const SyncAcquireResponseProviderAwsAlbEnum4 = {
+  AwsAlb: "awsAlb",
+} as const;
+export type SyncAcquireResponseProviderAwsAlbEnum4 = ClosedEnum<
+  typeof SyncAcquireResponseProviderAwsAlbEnum4
+>;
+
+export type SyncAcquireResponseProviderAwsAlb4 = {
+  /**
+   * Optional ALB IP address type, such as `dualstack`.
+   */
+  ipAddressType?: string | null | undefined;
+  provider: SyncAcquireResponseProviderAwsAlbEnum4;
+  /**
+   * Internet-facing or internal ALB scheme.
+   */
+  scheme: string;
+  /**
+   * Explicit subnet IDs when the profile cannot rely on controller discovery.
+   */
+  subnetIds?: Array<string> | undefined;
+  /**
+   * ALB target type, usually `ip`.
+   */
+  targetType: string;
+};
+
+export type SyncAcquireResponseProviderUnion4 =
+  | SyncAcquireResponseProviderAwsAlb4
+  | SyncAcquireResponseProviderAzureApplicationGatewayForContainers4
+  | SyncAcquireResponseProviderGkeGateway4
+  | any;
+
+/**
+ * Shared Gateway API route profile values.
+ */
+export type SyncAcquireResponseRouteGateway2 = {
+  /**
+   * Annotations applied to route objects.
+   */
+  annotations?: { [k: string]: string } | undefined;
+  /**
+   * Route controller identifier, for example a cloud Gateway controller.
+   */
+  controller?: string | null | undefined;
+  /**
+   * GatewayClass selected for generated Gateways.
+   */
+  gatewayClassName: string;
+  /**
+   * Labels applied to route objects.
+   */
+  labels?: { [k: string]: string } | undefined;
+  /**
+   * Listener port, usually 443.
+   */
+  listenerPort: number;
+  provider?:
+    | SyncAcquireResponseProviderAwsAlb4
+    | SyncAcquireResponseProviderAzureApplicationGatewayForContainers4
+    | SyncAcquireResponseProviderGkeGateway4
+    | any
+    | null
+    | undefined;
+  routeApi: "gateway";
+};
+
+export const SyncAcquireResponseProviderAzureApplicationGatewayForContainersEnum3 =
+  {
+    AzureApplicationGatewayForContainers:
+      "azureApplicationGatewayForContainers",
+  } as const;
+export type SyncAcquireResponseProviderAzureApplicationGatewayForContainersEnum3 =
+  ClosedEnum<
+    typeof SyncAcquireResponseProviderAzureApplicationGatewayForContainersEnum3
+  >;
 
 export type SyncAcquireResponseProviderAzureApplicationGatewayForContainers3 = {
   /**
@@ -160,7 +1013,12 @@ export type SyncAcquireResponseExposureCustom = {
   /**
    * Certificate publication or reference mode for Kubernetes public endpoints.
    */
-  certificate: SyncAcquireResponseCertificateUnion2;
+  certificate:
+    | SyncAcquireResponseCertificateTLSSecretRef2
+    | SyncAcquireResponseCertificateManagedAcmImport2
+    | SyncAcquireResponseCertificateAwsAcmArn2
+    | SyncAcquireResponseCertificateManagedTLSSecret2
+    | SyncAcquireResponseCertificateNone2;
   /**
    * Hostname routed by the Kubernetes public endpoint.
    */
@@ -502,7 +1360,7 @@ export type SyncAcquireResponseExposureUnion =
  * cluster.
  */
 export type SyncAcquireResponseKubernetes = {
-  cluster?: SyncAcquireResponseClusterUnion | null | undefined;
+  cluster?: SyncAcquireResponseCluster | any | null | undefined;
   exposure?:
     | SyncAcquireResponseExposureCustom
     | SyncAcquireResponseExposureGenerated
@@ -528,6 +1386,16 @@ export type SyncAcquireResponseNetworkByoVnetAzure = {
    * Name of the dedicated classic Application Gateway subnet within the VNet.
    */
   applicationGatewaySubnetName?: string | null | undefined;
+  /**
+   * Name of the dedicated subnet that hosts Private Endpoints (e.g. for a
+   *
+   * @remarks
+   * Postgres Flexible Server). A Private Endpoint must not share the private
+   * subnet, which is already claimed by the Container Apps environment's
+   * `infrastructure_subnet_id`. Required only when the stack contains a
+   * Postgres resource; otherwise unused.
+   */
+  privateEndpointSubnetName?: string | null | undefined;
   /**
    * Name of the private subnet within the VNet
    */
@@ -676,12 +1544,12 @@ export type SyncAcquireResponseUpdates = ClosedEnum<
  * is platform-derived (from the Manager's ServiceAccount).
  */
 export type SyncAcquireResponseStackSettings = {
-  compute?: SyncAcquireResponseComputeUnion | null | undefined;
+  compute?: SyncAcquireResponseCompute | any | null | undefined;
   /**
    * Deployment model: how updates are delivered to the remote environment.
    */
   deploymentModel?: SyncAcquireResponseDeploymentModel | undefined;
-  domains?: SyncAcquireResponseDomainsUnion | null | undefined;
+  domains?: SyncAcquireResponseDomains | any | null | undefined;
   /**
    * External bindings for pre-existing infrastructure.
    *
@@ -763,11 +1631,28 @@ export type SyncAcquireResponseConfig = {
    *
    * Validated at runtime: binding type must match resource type.
    */
-  externalBindings?:
-    | { [k: string]: SyncAcquireResponseExternalBindingsUnion6 }
-    | undefined;
+  externalBindings?: {
+    [k: string]:
+      | SyncAcquireResponseExternalBindingsContainerAppsEnvironment
+      | SyncAcquireResponseExternalBindingsS3
+      | SyncAcquireResponseExternalBindingsBlob
+      | SyncAcquireResponseExternalBindingsGcs
+      | SyncAcquireResponseExternalBindingsLocalStorage
+      | SyncAcquireResponseExternalBindingsSqs
+      | SyncAcquireResponseExternalBindingsPubsub
+      | SyncAcquireResponseExternalBindingsServicebus
+      | SyncAcquireResponseExternalBindingsLocalQueue
+      | SyncAcquireResponseExternalBindingsUnion3
+      | SyncAcquireResponseExternalBindingsUnion4
+      | SyncAcquireResponseExternalBindingsUnion5
+      | SyncAcquireResponseExternalBindingsUnion6;
+  } | undefined;
   managementConfig?:
-    | SyncAcquireResponseManagementConfigUnion
+    | SyncAcquireResponseManagementConfigAzure
+    | SyncAcquireResponseManagementConfigAws
+    | SyncAcquireResponseManagementConfigGcp
+    | SyncAcquireResponseManagementConfigKubernetes
+    | any
     | null
     | undefined;
   /**
@@ -782,7 +1667,7 @@ export type SyncAcquireResponseConfig = {
    * When None (e.g., `alien dev`), controllers use image URIs as-is.
    */
   managerUrl?: string | null | undefined;
-  monitoring?: SyncAcquireResponseMonitoringUnion | null | undefined;
+  monitoring?: SyncAcquireResponseMonitoring | any | null | undefined;
   /**
    * Native image registry host+prefix for platforms that require it.
    *
@@ -883,6 +1768,1584 @@ export type SyncAcquireResponse = {
    */
   failures: Array<Failure>;
 };
+
+/** @internal */
+export const SyncAcquireResponseExternalBindingsSqs$inboundSchema: z.ZodType<
+  SyncAcquireResponseExternalBindingsSqs,
+  unknown
+> = z.object({
+  queueUrl: z.nullable(SyncAcquireResponseQueueUrlUnion$inboundSchema)
+    .optional(),
+  service: z.literal("sqs"),
+  type: SyncAcquireResponseTypeQueue1$inboundSchema,
+});
+
+export function syncAcquireResponseExternalBindingsSqsFromJSON(
+  jsonString: string,
+): SafeParseResult<SyncAcquireResponseExternalBindingsSqs, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) =>
+      SyncAcquireResponseExternalBindingsSqs$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'SyncAcquireResponseExternalBindingsSqs' from JSON`,
+  );
+}
+
+/** @internal */
+export const SyncAcquireResponseExternalBindingsUnion2$inboundSchema: z.ZodType<
+  SyncAcquireResponseExternalBindingsUnion2,
+  unknown
+> = z.union([
+  z.lazy(() => SyncAcquireResponseExternalBindingsSqs$inboundSchema),
+  SyncAcquireResponseExternalBindingsPubsub$inboundSchema,
+  SyncAcquireResponseExternalBindingsServicebus$inboundSchema,
+  SyncAcquireResponseExternalBindingsLocalQueue$inboundSchema,
+]);
+
+export function syncAcquireResponseExternalBindingsUnion2FromJSON(
+  jsonString: string,
+): SafeParseResult<
+  SyncAcquireResponseExternalBindingsUnion2,
+  SDKValidationError
+> {
+  return safeParse(
+    jsonString,
+    (x) =>
+      SyncAcquireResponseExternalBindingsUnion2$inboundSchema.parse(
+        JSON.parse(x),
+      ),
+    `Failed to parse 'SyncAcquireResponseExternalBindingsUnion2' from JSON`,
+  );
+}
+
+/** @internal */
+export const SyncAcquireResponseStoragePathSecretRef$inboundSchema: z.ZodType<
+  SyncAcquireResponseStoragePathSecretRef,
+  unknown
+> = z.object({
+  key: z.string(),
+  name: z.string(),
+});
+
+export function syncAcquireResponseStoragePathSecretRefFromJSON(
+  jsonString: string,
+): SafeParseResult<
+  SyncAcquireResponseStoragePathSecretRef,
+  SDKValidationError
+> {
+  return safeParse(
+    jsonString,
+    (x) =>
+      SyncAcquireResponseStoragePathSecretRef$inboundSchema.parse(
+        JSON.parse(x),
+      ),
+    `Failed to parse 'SyncAcquireResponseStoragePathSecretRef' from JSON`,
+  );
+}
+
+/** @internal */
+export const SyncAcquireResponseStoragePath$inboundSchema: z.ZodType<
+  SyncAcquireResponseStoragePath,
+  unknown
+> = z.object({
+  secretRef: z.lazy(() =>
+    SyncAcquireResponseStoragePathSecretRef$inboundSchema
+  ),
+});
+
+export function syncAcquireResponseStoragePathFromJSON(
+  jsonString: string,
+): SafeParseResult<SyncAcquireResponseStoragePath, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => SyncAcquireResponseStoragePath$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'SyncAcquireResponseStoragePath' from JSON`,
+  );
+}
+
+/** @internal */
+export const SyncAcquireResponseStoragePathUnion$inboundSchema: z.ZodType<
+  SyncAcquireResponseStoragePathUnion,
+  unknown
+> = z.union([
+  z.lazy(() => SyncAcquireResponseStoragePath$inboundSchema),
+  z.any(),
+  z.string(),
+]);
+
+export function syncAcquireResponseStoragePathUnionFromJSON(
+  jsonString: string,
+): SafeParseResult<SyncAcquireResponseStoragePathUnion, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) =>
+      SyncAcquireResponseStoragePathUnion$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'SyncAcquireResponseStoragePathUnion' from JSON`,
+  );
+}
+
+/** @internal */
+export const SyncAcquireResponseTypeStorage4$inboundSchema: z.ZodEnum<
+  typeof SyncAcquireResponseTypeStorage4
+> = z.enum(SyncAcquireResponseTypeStorage4);
+
+/** @internal */
+export const SyncAcquireResponseExternalBindingsLocalStorage$inboundSchema:
+  z.ZodType<SyncAcquireResponseExternalBindingsLocalStorage, unknown> = z
+    .object({
+      storagePath: z.nullable(
+        z.union([
+          z.lazy(() => SyncAcquireResponseStoragePath$inboundSchema),
+          z.any(),
+          z.string(),
+        ]),
+      ).optional(),
+      service: z.literal("local-storage"),
+      type: SyncAcquireResponseTypeStorage4$inboundSchema,
+    });
+
+export function syncAcquireResponseExternalBindingsLocalStorageFromJSON(
+  jsonString: string,
+): SafeParseResult<
+  SyncAcquireResponseExternalBindingsLocalStorage,
+  SDKValidationError
+> {
+  return safeParse(
+    jsonString,
+    (x) =>
+      SyncAcquireResponseExternalBindingsLocalStorage$inboundSchema.parse(
+        JSON.parse(x),
+      ),
+    `Failed to parse 'SyncAcquireResponseExternalBindingsLocalStorage' from JSON`,
+  );
+}
+
+/** @internal */
+export const SyncAcquireResponseBucketNameSecretRef2$inboundSchema: z.ZodType<
+  SyncAcquireResponseBucketNameSecretRef2,
+  unknown
+> = z.object({
+  key: z.string(),
+  name: z.string(),
+});
+
+export function syncAcquireResponseBucketNameSecretRef2FromJSON(
+  jsonString: string,
+): SafeParseResult<
+  SyncAcquireResponseBucketNameSecretRef2,
+  SDKValidationError
+> {
+  return safeParse(
+    jsonString,
+    (x) =>
+      SyncAcquireResponseBucketNameSecretRef2$inboundSchema.parse(
+        JSON.parse(x),
+      ),
+    `Failed to parse 'SyncAcquireResponseBucketNameSecretRef2' from JSON`,
+  );
+}
+
+/** @internal */
+export const SyncAcquireResponseBucketName2$inboundSchema: z.ZodType<
+  SyncAcquireResponseBucketName2,
+  unknown
+> = z.object({
+  secretRef: z.lazy(() =>
+    SyncAcquireResponseBucketNameSecretRef2$inboundSchema
+  ),
+});
+
+export function syncAcquireResponseBucketName2FromJSON(
+  jsonString: string,
+): SafeParseResult<SyncAcquireResponseBucketName2, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => SyncAcquireResponseBucketName2$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'SyncAcquireResponseBucketName2' from JSON`,
+  );
+}
+
+/** @internal */
+export const SyncAcquireResponseBucketNameUnion2$inboundSchema: z.ZodType<
+  SyncAcquireResponseBucketNameUnion2,
+  unknown
+> = z.union([
+  z.lazy(() => SyncAcquireResponseBucketName2$inboundSchema),
+  z.any(),
+  z.string(),
+]);
+
+export function syncAcquireResponseBucketNameUnion2FromJSON(
+  jsonString: string,
+): SafeParseResult<SyncAcquireResponseBucketNameUnion2, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) =>
+      SyncAcquireResponseBucketNameUnion2$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'SyncAcquireResponseBucketNameUnion2' from JSON`,
+  );
+}
+
+/** @internal */
+export const SyncAcquireResponseTypeStorage3$inboundSchema: z.ZodEnum<
+  typeof SyncAcquireResponseTypeStorage3
+> = z.enum(SyncAcquireResponseTypeStorage3);
+
+/** @internal */
+export const SyncAcquireResponseExternalBindingsGcs$inboundSchema: z.ZodType<
+  SyncAcquireResponseExternalBindingsGcs,
+  unknown
+> = z.object({
+  bucketName: z.nullable(
+    z.union([
+      z.lazy(() => SyncAcquireResponseBucketName2$inboundSchema),
+      z.any(),
+      z.string(),
+    ]),
+  ).optional(),
+  service: z.literal("gcs"),
+  type: SyncAcquireResponseTypeStorage3$inboundSchema,
+});
+
+export function syncAcquireResponseExternalBindingsGcsFromJSON(
+  jsonString: string,
+): SafeParseResult<SyncAcquireResponseExternalBindingsGcs, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) =>
+      SyncAcquireResponseExternalBindingsGcs$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'SyncAcquireResponseExternalBindingsGcs' from JSON`,
+  );
+}
+
+/** @internal */
+export const SyncAcquireResponseAccountNameSecretRef1$inboundSchema: z.ZodType<
+  SyncAcquireResponseAccountNameSecretRef1,
+  unknown
+> = z.object({
+  key: z.string(),
+  name: z.string(),
+});
+
+export function syncAcquireResponseAccountNameSecretRef1FromJSON(
+  jsonString: string,
+): SafeParseResult<
+  SyncAcquireResponseAccountNameSecretRef1,
+  SDKValidationError
+> {
+  return safeParse(
+    jsonString,
+    (x) =>
+      SyncAcquireResponseAccountNameSecretRef1$inboundSchema.parse(
+        JSON.parse(x),
+      ),
+    `Failed to parse 'SyncAcquireResponseAccountNameSecretRef1' from JSON`,
+  );
+}
+
+/** @internal */
+export const SyncAcquireResponseAccountName1$inboundSchema: z.ZodType<
+  SyncAcquireResponseAccountName1,
+  unknown
+> = z.object({
+  secretRef: z.lazy(() =>
+    SyncAcquireResponseAccountNameSecretRef1$inboundSchema
+  ),
+});
+
+export function syncAcquireResponseAccountName1FromJSON(
+  jsonString: string,
+): SafeParseResult<SyncAcquireResponseAccountName1, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => SyncAcquireResponseAccountName1$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'SyncAcquireResponseAccountName1' from JSON`,
+  );
+}
+
+/** @internal */
+export const SyncAcquireResponseAccountNameUnion1$inboundSchema: z.ZodType<
+  SyncAcquireResponseAccountNameUnion1,
+  unknown
+> = z.union([
+  z.lazy(() => SyncAcquireResponseAccountName1$inboundSchema),
+  z.any(),
+  z.string(),
+]);
+
+export function syncAcquireResponseAccountNameUnion1FromJSON(
+  jsonString: string,
+): SafeParseResult<SyncAcquireResponseAccountNameUnion1, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) =>
+      SyncAcquireResponseAccountNameUnion1$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'SyncAcquireResponseAccountNameUnion1' from JSON`,
+  );
+}
+
+/** @internal */
+export const SyncAcquireResponseContainerNameSecretRef$inboundSchema: z.ZodType<
+  SyncAcquireResponseContainerNameSecretRef,
+  unknown
+> = z.object({
+  key: z.string(),
+  name: z.string(),
+});
+
+export function syncAcquireResponseContainerNameSecretRefFromJSON(
+  jsonString: string,
+): SafeParseResult<
+  SyncAcquireResponseContainerNameSecretRef,
+  SDKValidationError
+> {
+  return safeParse(
+    jsonString,
+    (x) =>
+      SyncAcquireResponseContainerNameSecretRef$inboundSchema.parse(
+        JSON.parse(x),
+      ),
+    `Failed to parse 'SyncAcquireResponseContainerNameSecretRef' from JSON`,
+  );
+}
+
+/** @internal */
+export const SyncAcquireResponseContainerName$inboundSchema: z.ZodType<
+  SyncAcquireResponseContainerName,
+  unknown
+> = z.object({
+  secretRef: z.lazy(() =>
+    SyncAcquireResponseContainerNameSecretRef$inboundSchema
+  ),
+});
+
+export function syncAcquireResponseContainerNameFromJSON(
+  jsonString: string,
+): SafeParseResult<SyncAcquireResponseContainerName, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => SyncAcquireResponseContainerName$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'SyncAcquireResponseContainerName' from JSON`,
+  );
+}
+
+/** @internal */
+export const SyncAcquireResponseContainerNameUnion$inboundSchema: z.ZodType<
+  SyncAcquireResponseContainerNameUnion,
+  unknown
+> = z.union([
+  z.lazy(() => SyncAcquireResponseContainerName$inboundSchema),
+  z.any(),
+  z.string(),
+]);
+
+export function syncAcquireResponseContainerNameUnionFromJSON(
+  jsonString: string,
+): SafeParseResult<SyncAcquireResponseContainerNameUnion, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) =>
+      SyncAcquireResponseContainerNameUnion$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'SyncAcquireResponseContainerNameUnion' from JSON`,
+  );
+}
+
+/** @internal */
+export const SyncAcquireResponseTypeStorage2$inboundSchema: z.ZodEnum<
+  typeof SyncAcquireResponseTypeStorage2
+> = z.enum(SyncAcquireResponseTypeStorage2);
+
+/** @internal */
+export const SyncAcquireResponseExternalBindingsBlob$inboundSchema: z.ZodType<
+  SyncAcquireResponseExternalBindingsBlob,
+  unknown
+> = z.object({
+  accountName: z.nullable(
+    z.union([
+      z.lazy(() => SyncAcquireResponseAccountName1$inboundSchema),
+      z.any(),
+      z.string(),
+    ]),
+  ).optional(),
+  containerName: z.nullable(
+    z.union([
+      z.lazy(() => SyncAcquireResponseContainerName$inboundSchema),
+      z.any(),
+      z.string(),
+    ]),
+  ).optional(),
+  service: z.literal("blob"),
+  type: SyncAcquireResponseTypeStorage2$inboundSchema,
+});
+
+export function syncAcquireResponseExternalBindingsBlobFromJSON(
+  jsonString: string,
+): SafeParseResult<
+  SyncAcquireResponseExternalBindingsBlob,
+  SDKValidationError
+> {
+  return safeParse(
+    jsonString,
+    (x) =>
+      SyncAcquireResponseExternalBindingsBlob$inboundSchema.parse(
+        JSON.parse(x),
+      ),
+    `Failed to parse 'SyncAcquireResponseExternalBindingsBlob' from JSON`,
+  );
+}
+
+/** @internal */
+export const SyncAcquireResponseBucketNameSecretRef1$inboundSchema: z.ZodType<
+  SyncAcquireResponseBucketNameSecretRef1,
+  unknown
+> = z.object({
+  key: z.string(),
+  name: z.string(),
+});
+
+export function syncAcquireResponseBucketNameSecretRef1FromJSON(
+  jsonString: string,
+): SafeParseResult<
+  SyncAcquireResponseBucketNameSecretRef1,
+  SDKValidationError
+> {
+  return safeParse(
+    jsonString,
+    (x) =>
+      SyncAcquireResponseBucketNameSecretRef1$inboundSchema.parse(
+        JSON.parse(x),
+      ),
+    `Failed to parse 'SyncAcquireResponseBucketNameSecretRef1' from JSON`,
+  );
+}
+
+/** @internal */
+export const SyncAcquireResponseBucketName1$inboundSchema: z.ZodType<
+  SyncAcquireResponseBucketName1,
+  unknown
+> = z.object({
+  secretRef: z.lazy(() =>
+    SyncAcquireResponseBucketNameSecretRef1$inboundSchema
+  ),
+});
+
+export function syncAcquireResponseBucketName1FromJSON(
+  jsonString: string,
+): SafeParseResult<SyncAcquireResponseBucketName1, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => SyncAcquireResponseBucketName1$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'SyncAcquireResponseBucketName1' from JSON`,
+  );
+}
+
+/** @internal */
+export const SyncAcquireResponseBucketNameUnion1$inboundSchema: z.ZodType<
+  SyncAcquireResponseBucketNameUnion1,
+  unknown
+> = z.union([
+  z.lazy(() => SyncAcquireResponseBucketName1$inboundSchema),
+  z.any(),
+  z.string(),
+]);
+
+export function syncAcquireResponseBucketNameUnion1FromJSON(
+  jsonString: string,
+): SafeParseResult<SyncAcquireResponseBucketNameUnion1, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) =>
+      SyncAcquireResponseBucketNameUnion1$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'SyncAcquireResponseBucketNameUnion1' from JSON`,
+  );
+}
+
+/** @internal */
+export const SyncAcquireResponseTypeStorage1$inboundSchema: z.ZodEnum<
+  typeof SyncAcquireResponseTypeStorage1
+> = z.enum(SyncAcquireResponseTypeStorage1);
+
+/** @internal */
+export const SyncAcquireResponseExternalBindingsS3$inboundSchema: z.ZodType<
+  SyncAcquireResponseExternalBindingsS3,
+  unknown
+> = z.object({
+  bucketName: z.nullable(
+    z.union([
+      z.lazy(() => SyncAcquireResponseBucketName1$inboundSchema),
+      z.any(),
+      z.string(),
+    ]),
+  ).optional(),
+  service: z.literal("s3"),
+  type: SyncAcquireResponseTypeStorage1$inboundSchema,
+});
+
+export function syncAcquireResponseExternalBindingsS3FromJSON(
+  jsonString: string,
+): SafeParseResult<SyncAcquireResponseExternalBindingsS3, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) =>
+      SyncAcquireResponseExternalBindingsS3$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'SyncAcquireResponseExternalBindingsS3' from JSON`,
+  );
+}
+
+/** @internal */
+export const SyncAcquireResponseExternalBindingsUnion1$inboundSchema: z.ZodType<
+  SyncAcquireResponseExternalBindingsUnion1,
+  unknown
+> = z.union([
+  z.lazy(() => SyncAcquireResponseExternalBindingsS3$inboundSchema),
+  z.lazy(() => SyncAcquireResponseExternalBindingsBlob$inboundSchema),
+  z.lazy(() => SyncAcquireResponseExternalBindingsGcs$inboundSchema),
+  z.lazy(() => SyncAcquireResponseExternalBindingsLocalStorage$inboundSchema),
+]);
+
+export function syncAcquireResponseExternalBindingsUnion1FromJSON(
+  jsonString: string,
+): SafeParseResult<
+  SyncAcquireResponseExternalBindingsUnion1,
+  SDKValidationError
+> {
+  return safeParse(
+    jsonString,
+    (x) =>
+      SyncAcquireResponseExternalBindingsUnion1$inboundSchema.parse(
+        JSON.parse(x),
+      ),
+    `Failed to parse 'SyncAcquireResponseExternalBindingsUnion1' from JSON`,
+  );
+}
+
+/** @internal */
+export const SyncAcquireResponseExternalBindingsUnion7$inboundSchema: z.ZodType<
+  SyncAcquireResponseExternalBindingsUnion7,
+  unknown
+> = z.union([
+  SyncAcquireResponseExternalBindingsContainerAppsEnvironment$inboundSchema,
+  z.union([
+    z.lazy(() => SyncAcquireResponseExternalBindingsS3$inboundSchema),
+    z.lazy(() => SyncAcquireResponseExternalBindingsBlob$inboundSchema),
+    z.lazy(() => SyncAcquireResponseExternalBindingsGcs$inboundSchema),
+    z.lazy(() => SyncAcquireResponseExternalBindingsLocalStorage$inboundSchema),
+  ]),
+  z.union([
+    z.lazy(() => SyncAcquireResponseExternalBindingsSqs$inboundSchema),
+    SyncAcquireResponseExternalBindingsPubsub$inboundSchema,
+    SyncAcquireResponseExternalBindingsServicebus$inboundSchema,
+    SyncAcquireResponseExternalBindingsLocalQueue$inboundSchema,
+  ]),
+  SyncAcquireResponseExternalBindingsUnion3$inboundSchema,
+  SyncAcquireResponseExternalBindingsUnion4$inboundSchema,
+  SyncAcquireResponseExternalBindingsUnion5$inboundSchema,
+  SyncAcquireResponseExternalBindingsUnion6$inboundSchema,
+]);
+
+export function syncAcquireResponseExternalBindingsUnion7FromJSON(
+  jsonString: string,
+): SafeParseResult<
+  SyncAcquireResponseExternalBindingsUnion7,
+  SDKValidationError
+> {
+  return safeParse(
+    jsonString,
+    (x) =>
+      SyncAcquireResponseExternalBindingsUnion7$inboundSchema.parse(
+        JSON.parse(x),
+      ),
+    `Failed to parse 'SyncAcquireResponseExternalBindingsUnion7' from JSON`,
+  );
+}
+
+/** @internal */
+export const SyncAcquireResponsePlatformKubernetes$inboundSchema: z.ZodEnum<
+  typeof SyncAcquireResponsePlatformKubernetes
+> = z.enum(SyncAcquireResponsePlatformKubernetes);
+
+/** @internal */
+export const SyncAcquireResponseManagementConfigKubernetes$inboundSchema:
+  z.ZodType<SyncAcquireResponseManagementConfigKubernetes, unknown> = z.object({
+    platform: SyncAcquireResponsePlatformKubernetes$inboundSchema,
+  });
+
+export function syncAcquireResponseManagementConfigKubernetesFromJSON(
+  jsonString: string,
+): SafeParseResult<
+  SyncAcquireResponseManagementConfigKubernetes,
+  SDKValidationError
+> {
+  return safeParse(
+    jsonString,
+    (x) =>
+      SyncAcquireResponseManagementConfigKubernetes$inboundSchema.parse(
+        JSON.parse(x),
+      ),
+    `Failed to parse 'SyncAcquireResponseManagementConfigKubernetes' from JSON`,
+  );
+}
+
+/** @internal */
+export const SyncAcquireResponseConfigPlatformAzure$inboundSchema: z.ZodEnum<
+  typeof SyncAcquireResponseConfigPlatformAzure
+> = z.enum(SyncAcquireResponseConfigPlatformAzure);
+
+/** @internal */
+export const SyncAcquireResponseManagementConfigAzure$inboundSchema: z.ZodType<
+  SyncAcquireResponseManagementConfigAzure,
+  unknown
+> = z.object({
+  managingTenantId: z.string(),
+  oidcIssuer: z.string(),
+  oidcSubject: z.string(),
+  platform: SyncAcquireResponseConfigPlatformAzure$inboundSchema,
+});
+
+export function syncAcquireResponseManagementConfigAzureFromJSON(
+  jsonString: string,
+): SafeParseResult<
+  SyncAcquireResponseManagementConfigAzure,
+  SDKValidationError
+> {
+  return safeParse(
+    jsonString,
+    (x) =>
+      SyncAcquireResponseManagementConfigAzure$inboundSchema.parse(
+        JSON.parse(x),
+      ),
+    `Failed to parse 'SyncAcquireResponseManagementConfigAzure' from JSON`,
+  );
+}
+
+/** @internal */
+export const SyncAcquireResponseConfigPlatformGcp$inboundSchema: z.ZodEnum<
+  typeof SyncAcquireResponseConfigPlatformGcp
+> = z.enum(SyncAcquireResponseConfigPlatformGcp);
+
+/** @internal */
+export const SyncAcquireResponseManagementConfigGcp$inboundSchema: z.ZodType<
+  SyncAcquireResponseManagementConfigGcp,
+  unknown
+> = z.object({
+  serviceAccountEmail: z.string(),
+  platform: SyncAcquireResponseConfigPlatformGcp$inboundSchema,
+});
+
+export function syncAcquireResponseManagementConfigGcpFromJSON(
+  jsonString: string,
+): SafeParseResult<SyncAcquireResponseManagementConfigGcp, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) =>
+      SyncAcquireResponseManagementConfigGcp$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'SyncAcquireResponseManagementConfigGcp' from JSON`,
+  );
+}
+
+/** @internal */
+export const SyncAcquireResponseConfigPlatformAws$inboundSchema: z.ZodEnum<
+  typeof SyncAcquireResponseConfigPlatformAws
+> = z.enum(SyncAcquireResponseConfigPlatformAws);
+
+/** @internal */
+export const SyncAcquireResponseManagementConfigAws$inboundSchema: z.ZodType<
+  SyncAcquireResponseManagementConfigAws,
+  unknown
+> = z.object({
+  managingRoleArn: z.string(),
+  platform: SyncAcquireResponseConfigPlatformAws$inboundSchema,
+});
+
+export function syncAcquireResponseManagementConfigAwsFromJSON(
+  jsonString: string,
+): SafeParseResult<SyncAcquireResponseManagementConfigAws, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) =>
+      SyncAcquireResponseManagementConfigAws$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'SyncAcquireResponseManagementConfigAws' from JSON`,
+  );
+}
+
+/** @internal */
+export const SyncAcquireResponseManagementConfigUnion$inboundSchema: z.ZodType<
+  SyncAcquireResponseManagementConfigUnion,
+  unknown
+> = z.union([
+  z.lazy(() => SyncAcquireResponseManagementConfigAzure$inboundSchema),
+  z.lazy(() => SyncAcquireResponseManagementConfigAws$inboundSchema),
+  z.lazy(() => SyncAcquireResponseManagementConfigGcp$inboundSchema),
+  z.lazy(() => SyncAcquireResponseManagementConfigKubernetes$inboundSchema),
+  z.any(),
+]);
+
+export function syncAcquireResponseManagementConfigUnionFromJSON(
+  jsonString: string,
+): SafeParseResult<
+  SyncAcquireResponseManagementConfigUnion,
+  SDKValidationError
+> {
+  return safeParse(
+    jsonString,
+    (x) =>
+      SyncAcquireResponseManagementConfigUnion$inboundSchema.parse(
+        JSON.parse(x),
+      ),
+    `Failed to parse 'SyncAcquireResponseManagementConfigUnion' from JSON`,
+  );
+}
+
+/** @internal */
+export const SyncAcquireResponseMonitoring$inboundSchema: z.ZodType<
+  SyncAcquireResponseMonitoring,
+  unknown
+> = z.object({
+  logsAuthHeader: z.string(),
+  logsEndpoint: z.string(),
+  metricsAuthHeader: z.nullable(z.string()).optional(),
+  metricsEndpoint: z.nullable(z.string()).optional(),
+  resourceAttributes: z.record(z.string(), z.string()).optional(),
+});
+
+export function syncAcquireResponseMonitoringFromJSON(
+  jsonString: string,
+): SafeParseResult<SyncAcquireResponseMonitoring, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => SyncAcquireResponseMonitoring$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'SyncAcquireResponseMonitoring' from JSON`,
+  );
+}
+
+/** @internal */
+export const SyncAcquireResponseMonitoringUnion$inboundSchema: z.ZodType<
+  SyncAcquireResponseMonitoringUnion,
+  unknown
+> = z.union([
+  z.lazy(() => SyncAcquireResponseMonitoring$inboundSchema),
+  z.any(),
+]);
+
+export function syncAcquireResponseMonitoringUnionFromJSON(
+  jsonString: string,
+): SafeParseResult<SyncAcquireResponseMonitoringUnion, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) =>
+      SyncAcquireResponseMonitoringUnion$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'SyncAcquireResponseMonitoringUnion' from JSON`,
+  );
+}
+
+/** @internal */
+export const SyncAcquireResponsePoolsAutoscale$inboundSchema: z.ZodType<
+  SyncAcquireResponsePoolsAutoscale,
+  unknown
+> = z.object({
+  machine: z.nullable(z.string()).optional(),
+  max: z.int(),
+  min: z.int(),
+  mode: z.literal("autoscale"),
+});
+
+export function syncAcquireResponsePoolsAutoscaleFromJSON(
+  jsonString: string,
+): SafeParseResult<SyncAcquireResponsePoolsAutoscale, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => SyncAcquireResponsePoolsAutoscale$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'SyncAcquireResponsePoolsAutoscale' from JSON`,
+  );
+}
+
+/** @internal */
+export const SyncAcquireResponsePoolsFixed$inboundSchema: z.ZodType<
+  SyncAcquireResponsePoolsFixed,
+  unknown
+> = z.object({
+  machine: z.nullable(z.string()).optional(),
+  machines: z.int(),
+  mode: z.literal("fixed"),
+});
+
+export function syncAcquireResponsePoolsFixedFromJSON(
+  jsonString: string,
+): SafeParseResult<SyncAcquireResponsePoolsFixed, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => SyncAcquireResponsePoolsFixed$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'SyncAcquireResponsePoolsFixed' from JSON`,
+  );
+}
+
+/** @internal */
+export const SyncAcquireResponsePoolsUnion$inboundSchema: z.ZodType<
+  SyncAcquireResponsePoolsUnion,
+  unknown
+> = z.union([
+  z.lazy(() => SyncAcquireResponsePoolsFixed$inboundSchema),
+  z.lazy(() => SyncAcquireResponsePoolsAutoscale$inboundSchema),
+]);
+
+export function syncAcquireResponsePoolsUnionFromJSON(
+  jsonString: string,
+): SafeParseResult<SyncAcquireResponsePoolsUnion, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => SyncAcquireResponsePoolsUnion$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'SyncAcquireResponsePoolsUnion' from JSON`,
+  );
+}
+
+/** @internal */
+export const SyncAcquireResponseCompute$inboundSchema: z.ZodType<
+  SyncAcquireResponseCompute,
+  unknown
+> = z.object({
+  pools: z.record(
+    z.string(),
+    z.union([
+      z.lazy(() => SyncAcquireResponsePoolsFixed$inboundSchema),
+      z.lazy(() => SyncAcquireResponsePoolsAutoscale$inboundSchema),
+    ]),
+  ).optional(),
+});
+
+export function syncAcquireResponseComputeFromJSON(
+  jsonString: string,
+): SafeParseResult<SyncAcquireResponseCompute, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => SyncAcquireResponseCompute$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'SyncAcquireResponseCompute' from JSON`,
+  );
+}
+
+/** @internal */
+export const SyncAcquireResponseComputeUnion$inboundSchema: z.ZodType<
+  SyncAcquireResponseComputeUnion,
+  unknown
+> = z.union([z.lazy(() => SyncAcquireResponseCompute$inboundSchema), z.any()]);
+
+export function syncAcquireResponseComputeUnionFromJSON(
+  jsonString: string,
+): SafeParseResult<SyncAcquireResponseComputeUnion, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => SyncAcquireResponseComputeUnion$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'SyncAcquireResponseComputeUnion' from JSON`,
+  );
+}
+
+/** @internal */
+export const SyncAcquireResponseDeploymentModel$inboundSchema: z.ZodEnum<
+  typeof SyncAcquireResponseDeploymentModel
+> = z.enum(SyncAcquireResponseDeploymentModel);
+
+/** @internal */
+export const SyncAcquireResponseAwsStackSettings$inboundSchema: z.ZodType<
+  SyncAcquireResponseAwsStackSettings,
+  unknown
+> = z.object({
+  certificateArn: z.string(),
+});
+
+export function syncAcquireResponseAwsStackSettingsFromJSON(
+  jsonString: string,
+): SafeParseResult<SyncAcquireResponseAwsStackSettings, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) =>
+      SyncAcquireResponseAwsStackSettings$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'SyncAcquireResponseAwsStackSettings' from JSON`,
+  );
+}
+
+/** @internal */
+export const SyncAcquireResponseStackSettingsAwsUnion$inboundSchema: z.ZodType<
+  SyncAcquireResponseStackSettingsAwsUnion,
+  unknown
+> = z.union([
+  z.lazy(() => SyncAcquireResponseAwsStackSettings$inboundSchema),
+  z.any(),
+]);
+
+export function syncAcquireResponseStackSettingsAwsUnionFromJSON(
+  jsonString: string,
+): SafeParseResult<
+  SyncAcquireResponseStackSettingsAwsUnion,
+  SDKValidationError
+> {
+  return safeParse(
+    jsonString,
+    (x) =>
+      SyncAcquireResponseStackSettingsAwsUnion$inboundSchema.parse(
+        JSON.parse(x),
+      ),
+    `Failed to parse 'SyncAcquireResponseStackSettingsAwsUnion' from JSON`,
+  );
+}
+
+/** @internal */
+export const SyncAcquireResponseAzureStackSettings$inboundSchema: z.ZodType<
+  SyncAcquireResponseAzureStackSettings,
+  unknown
+> = z.object({
+  keyVaultCertificateId: z.string(),
+  keyVaultResourceId: z.nullable(z.string()).optional(),
+});
+
+export function syncAcquireResponseAzureStackSettingsFromJSON(
+  jsonString: string,
+): SafeParseResult<SyncAcquireResponseAzureStackSettings, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) =>
+      SyncAcquireResponseAzureStackSettings$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'SyncAcquireResponseAzureStackSettings' from JSON`,
+  );
+}
+
+/** @internal */
+export const SyncAcquireResponseStackSettingsAzureUnion$inboundSchema:
+  z.ZodType<SyncAcquireResponseStackSettingsAzureUnion, unknown> = z.union([
+    z.lazy(() => SyncAcquireResponseAzureStackSettings$inboundSchema),
+    z.any(),
+  ]);
+
+export function syncAcquireResponseStackSettingsAzureUnionFromJSON(
+  jsonString: string,
+): SafeParseResult<
+  SyncAcquireResponseStackSettingsAzureUnion,
+  SDKValidationError
+> {
+  return safeParse(
+    jsonString,
+    (x) =>
+      SyncAcquireResponseStackSettingsAzureUnion$inboundSchema.parse(
+        JSON.parse(x),
+      ),
+    `Failed to parse 'SyncAcquireResponseStackSettingsAzureUnion' from JSON`,
+  );
+}
+
+/** @internal */
+export const SyncAcquireResponseGcpStackSettings$inboundSchema: z.ZodType<
+  SyncAcquireResponseGcpStackSettings,
+  unknown
+> = z.object({
+  certificateName: z.string(),
+});
+
+export function syncAcquireResponseGcpStackSettingsFromJSON(
+  jsonString: string,
+): SafeParseResult<SyncAcquireResponseGcpStackSettings, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) =>
+      SyncAcquireResponseGcpStackSettings$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'SyncAcquireResponseGcpStackSettings' from JSON`,
+  );
+}
+
+/** @internal */
+export const SyncAcquireResponseStackSettingsGcpUnion$inboundSchema: z.ZodType<
+  SyncAcquireResponseStackSettingsGcpUnion,
+  unknown
+> = z.union([
+  z.lazy(() => SyncAcquireResponseGcpStackSettings$inboundSchema),
+  z.any(),
+]);
+
+export function syncAcquireResponseStackSettingsGcpUnionFromJSON(
+  jsonString: string,
+): SafeParseResult<
+  SyncAcquireResponseStackSettingsGcpUnion,
+  SDKValidationError
+> {
+  return safeParse(
+    jsonString,
+    (x) =>
+      SyncAcquireResponseStackSettingsGcpUnion$inboundSchema.parse(
+        JSON.parse(x),
+      ),
+    `Failed to parse 'SyncAcquireResponseStackSettingsGcpUnion' from JSON`,
+  );
+}
+
+/** @internal */
+export const SyncAcquireResponseTlsSecretRef$inboundSchema: z.ZodType<
+  SyncAcquireResponseTlsSecretRef,
+  unknown
+> = z.object({
+  namespace: z.nullable(z.string()).optional(),
+  secretName: z.string(),
+});
+
+export function syncAcquireResponseTlsSecretRefFromJSON(
+  jsonString: string,
+): SafeParseResult<SyncAcquireResponseTlsSecretRef, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => SyncAcquireResponseTlsSecretRef$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'SyncAcquireResponseTlsSecretRef' from JSON`,
+  );
+}
+
+/** @internal */
+export const SyncAcquireResponseDomainsKubernetes$inboundSchema: z.ZodType<
+  SyncAcquireResponseDomainsKubernetes,
+  unknown
+> = z.object({
+  tlsSecretRef: z.lazy(() => SyncAcquireResponseTlsSecretRef$inboundSchema),
+});
+
+export function syncAcquireResponseDomainsKubernetesFromJSON(
+  jsonString: string,
+): SafeParseResult<SyncAcquireResponseDomainsKubernetes, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) =>
+      SyncAcquireResponseDomainsKubernetes$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'SyncAcquireResponseDomainsKubernetes' from JSON`,
+  );
+}
+
+/** @internal */
+export const SyncAcquireResponseDomainsKubernetesUnion$inboundSchema: z.ZodType<
+  SyncAcquireResponseDomainsKubernetesUnion,
+  unknown
+> = z.union([
+  z.lazy(() => SyncAcquireResponseDomainsKubernetes$inboundSchema),
+  z.any(),
+]);
+
+export function syncAcquireResponseDomainsKubernetesUnionFromJSON(
+  jsonString: string,
+): SafeParseResult<
+  SyncAcquireResponseDomainsKubernetesUnion,
+  SDKValidationError
+> {
+  return safeParse(
+    jsonString,
+    (x) =>
+      SyncAcquireResponseDomainsKubernetesUnion$inboundSchema.parse(
+        JSON.parse(x),
+      ),
+    `Failed to parse 'SyncAcquireResponseDomainsKubernetesUnion' from JSON`,
+  );
+}
+
+/** @internal */
+export const SyncAcquireResponseDomainsCertificate$inboundSchema: z.ZodType<
+  SyncAcquireResponseDomainsCertificate,
+  unknown
+> = z.object({
+  aws: z.nullable(
+    z.union([
+      z.lazy(() => SyncAcquireResponseAwsStackSettings$inboundSchema),
+      z.any(),
+    ]),
+  ).optional(),
+  azure: z.nullable(
+    z.union([
+      z.lazy(() => SyncAcquireResponseAzureStackSettings$inboundSchema),
+      z.any(),
+    ]),
+  ).optional(),
+  gcp: z.nullable(
+    z.union([
+      z.lazy(() => SyncAcquireResponseGcpStackSettings$inboundSchema),
+      z.any(),
+    ]),
+  ).optional(),
+  kubernetes: z.nullable(
+    z.union([
+      z.lazy(() => SyncAcquireResponseDomainsKubernetes$inboundSchema),
+      z.any(),
+    ]),
+  ).optional(),
+});
+
+export function syncAcquireResponseDomainsCertificateFromJSON(
+  jsonString: string,
+): SafeParseResult<SyncAcquireResponseDomainsCertificate, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) =>
+      SyncAcquireResponseDomainsCertificate$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'SyncAcquireResponseDomainsCertificate' from JSON`,
+  );
+}
+
+/** @internal */
+export const SyncAcquireResponseCustomDomains$inboundSchema: z.ZodType<
+  SyncAcquireResponseCustomDomains,
+  unknown
+> = z.object({
+  certificate: z.lazy(() =>
+    SyncAcquireResponseDomainsCertificate$inboundSchema
+  ),
+  domain: z.string(),
+});
+
+export function syncAcquireResponseCustomDomainsFromJSON(
+  jsonString: string,
+): SafeParseResult<SyncAcquireResponseCustomDomains, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => SyncAcquireResponseCustomDomains$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'SyncAcquireResponseCustomDomains' from JSON`,
+  );
+}
+
+/** @internal */
+export const SyncAcquireResponseDomains$inboundSchema: z.ZodType<
+  SyncAcquireResponseDomains,
+  unknown
+> = z.object({
+  customDomains: z.nullable(
+    z.record(
+      z.string(),
+      z.lazy(() => SyncAcquireResponseCustomDomains$inboundSchema),
+    ),
+  ).optional(),
+});
+
+export function syncAcquireResponseDomainsFromJSON(
+  jsonString: string,
+): SafeParseResult<SyncAcquireResponseDomains, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => SyncAcquireResponseDomains$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'SyncAcquireResponseDomains' from JSON`,
+  );
+}
+
+/** @internal */
+export const SyncAcquireResponseDomainsUnion$inboundSchema: z.ZodType<
+  SyncAcquireResponseDomainsUnion,
+  unknown
+> = z.union([z.lazy(() => SyncAcquireResponseDomains$inboundSchema), z.any()]);
+
+export function syncAcquireResponseDomainsUnionFromJSON(
+  jsonString: string,
+): SafeParseResult<SyncAcquireResponseDomainsUnion, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => SyncAcquireResponseDomainsUnion$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'SyncAcquireResponseDomainsUnion' from JSON`,
+  );
+}
+
+/** @internal */
+export const SyncAcquireResponseStackSettingsExternalBindings$inboundSchema:
+  z.ZodType<SyncAcquireResponseStackSettingsExternalBindings, unknown> = z
+    .object({});
+
+export function syncAcquireResponseStackSettingsExternalBindingsFromJSON(
+  jsonString: string,
+): SafeParseResult<
+  SyncAcquireResponseStackSettingsExternalBindings,
+  SDKValidationError
+> {
+  return safeParse(
+    jsonString,
+    (x) =>
+      SyncAcquireResponseStackSettingsExternalBindings$inboundSchema.parse(
+        JSON.parse(x),
+      ),
+    `Failed to parse 'SyncAcquireResponseStackSettingsExternalBindings' from JSON`,
+  );
+}
+
+/** @internal */
+export const SyncAcquireResponseHeartbeats$inboundSchema: z.ZodEnum<
+  typeof SyncAcquireResponseHeartbeats
+> = z.enum(SyncAcquireResponseHeartbeats);
+
+/** @internal */
+export const SyncAcquireResponseCloud$inboundSchema: z.ZodType<
+  SyncAcquireResponseCloud,
+  unknown
+> = z.object({
+  accountId: z.nullable(z.string()).optional(),
+  clusterId: z.nullable(z.string()).optional(),
+  clusterName: z.nullable(z.string()).optional(),
+  projectId: z.nullable(z.string()).optional(),
+  region: z.nullable(z.string()).optional(),
+  resourceGroup: z.nullable(z.string()).optional(),
+  subscriptionId: z.nullable(z.string()).optional(),
+});
+
+export function syncAcquireResponseCloudFromJSON(
+  jsonString: string,
+): SafeParseResult<SyncAcquireResponseCloud, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => SyncAcquireResponseCloud$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'SyncAcquireResponseCloud' from JSON`,
+  );
+}
+
+/** @internal */
+export const SyncAcquireResponseCloudUnion$inboundSchema: z.ZodType<
+  SyncAcquireResponseCloudUnion,
+  unknown
+> = z.union([z.lazy(() => SyncAcquireResponseCloud$inboundSchema), z.any()]);
+
+export function syncAcquireResponseCloudUnionFromJSON(
+  jsonString: string,
+): SafeParseResult<SyncAcquireResponseCloudUnion, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => SyncAcquireResponseCloudUnion$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'SyncAcquireResponseCloudUnion' from JSON`,
+  );
+}
+
+/** @internal */
+export const SyncAcquireResponseOwnership$inboundSchema: z.ZodEnum<
+  typeof SyncAcquireResponseOwnership
+> = z.enum(SyncAcquireResponseOwnership);
+
+/** @internal */
+export const SyncAcquireResponseCluster$inboundSchema: z.ZodType<
+  SyncAcquireResponseCluster,
+  unknown
+> = z.object({
+  cloud: z.nullable(
+    z.union([z.lazy(() => SyncAcquireResponseCloud$inboundSchema), z.any()]),
+  ).optional(),
+  namespace: z.nullable(z.string()).optional(),
+  ownership: SyncAcquireResponseOwnership$inboundSchema,
+});
+
+export function syncAcquireResponseClusterFromJSON(
+  jsonString: string,
+): SafeParseResult<SyncAcquireResponseCluster, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => SyncAcquireResponseCluster$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'SyncAcquireResponseCluster' from JSON`,
+  );
+}
+
+/** @internal */
+export const SyncAcquireResponseClusterUnion$inboundSchema: z.ZodType<
+  SyncAcquireResponseClusterUnion,
+  unknown
+> = z.union([z.lazy(() => SyncAcquireResponseCluster$inboundSchema), z.any()]);
+
+export function syncAcquireResponseClusterUnionFromJSON(
+  jsonString: string,
+): SafeParseResult<SyncAcquireResponseClusterUnion, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => SyncAcquireResponseClusterUnion$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'SyncAcquireResponseClusterUnion' from JSON`,
+  );
+}
+
+/** @internal */
+export const SyncAcquireResponseCertificateNone2$inboundSchema: z.ZodType<
+  SyncAcquireResponseCertificateNone2,
+  unknown
+> = z.object({
+  mode: z.literal("none"),
+});
+
+export function syncAcquireResponseCertificateNone2FromJSON(
+  jsonString: string,
+): SafeParseResult<SyncAcquireResponseCertificateNone2, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) =>
+      SyncAcquireResponseCertificateNone2$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'SyncAcquireResponseCertificateNone2' from JSON`,
+  );
+}
+
+/** @internal */
+export const SyncAcquireResponseCertificateManagedTLSSecret2$inboundSchema:
+  z.ZodType<SyncAcquireResponseCertificateManagedTLSSecret2, unknown> = z
+    .object({
+      mode: z.literal("managedTlsSecret"),
+      secretNameTemplate: z.string(),
+    });
+
+export function syncAcquireResponseCertificateManagedTLSSecret2FromJSON(
+  jsonString: string,
+): SafeParseResult<
+  SyncAcquireResponseCertificateManagedTLSSecret2,
+  SDKValidationError
+> {
+  return safeParse(
+    jsonString,
+    (x) =>
+      SyncAcquireResponseCertificateManagedTLSSecret2$inboundSchema.parse(
+        JSON.parse(x),
+      ),
+    `Failed to parse 'SyncAcquireResponseCertificateManagedTLSSecret2' from JSON`,
+  );
+}
+
+/** @internal */
+export const SyncAcquireResponseCertificateAwsAcmArn2$inboundSchema: z.ZodType<
+  SyncAcquireResponseCertificateAwsAcmArn2,
+  unknown
+> = z.object({
+  certificateArn: z.string(),
+  mode: z.literal("awsAcmArn"),
+});
+
+export function syncAcquireResponseCertificateAwsAcmArn2FromJSON(
+  jsonString: string,
+): SafeParseResult<
+  SyncAcquireResponseCertificateAwsAcmArn2,
+  SDKValidationError
+> {
+  return safeParse(
+    jsonString,
+    (x) =>
+      SyncAcquireResponseCertificateAwsAcmArn2$inboundSchema.parse(
+        JSON.parse(x),
+      ),
+    `Failed to parse 'SyncAcquireResponseCertificateAwsAcmArn2' from JSON`,
+  );
+}
+
+/** @internal */
+export const SyncAcquireResponseCertificateManagedAcmImport2$inboundSchema:
+  z.ZodType<SyncAcquireResponseCertificateManagedAcmImport2, unknown> = z
+    .object({
+      mode: z.literal("managedAcmImport"),
+      region: z.nullable(z.string()).optional(),
+      tags: z.record(z.string(), z.string()).optional(),
+    });
+
+export function syncAcquireResponseCertificateManagedAcmImport2FromJSON(
+  jsonString: string,
+): SafeParseResult<
+  SyncAcquireResponseCertificateManagedAcmImport2,
+  SDKValidationError
+> {
+  return safeParse(
+    jsonString,
+    (x) =>
+      SyncAcquireResponseCertificateManagedAcmImport2$inboundSchema.parse(
+        JSON.parse(x),
+      ),
+    `Failed to parse 'SyncAcquireResponseCertificateManagedAcmImport2' from JSON`,
+  );
+}
+
+/** @internal */
+export const SyncAcquireResponseCertificateTLSSecretRef2$inboundSchema:
+  z.ZodType<SyncAcquireResponseCertificateTLSSecretRef2, unknown> = z.object({
+    namespace: z.nullable(z.string()).optional(),
+    secretName: z.string(),
+    mode: z.literal("tlsSecretRef"),
+  });
+
+export function syncAcquireResponseCertificateTLSSecretRef2FromJSON(
+  jsonString: string,
+): SafeParseResult<
+  SyncAcquireResponseCertificateTLSSecretRef2,
+  SDKValidationError
+> {
+  return safeParse(
+    jsonString,
+    (x) =>
+      SyncAcquireResponseCertificateTLSSecretRef2$inboundSchema.parse(
+        JSON.parse(x),
+      ),
+    `Failed to parse 'SyncAcquireResponseCertificateTLSSecretRef2' from JSON`,
+  );
+}
+
+/** @internal */
+export const SyncAcquireResponseCertificateUnion2$inboundSchema: z.ZodType<
+  SyncAcquireResponseCertificateUnion2,
+  unknown
+> = z.union([
+  z.lazy(() => SyncAcquireResponseCertificateTLSSecretRef2$inboundSchema),
+  z.lazy(() => SyncAcquireResponseCertificateManagedAcmImport2$inboundSchema),
+  z.lazy(() => SyncAcquireResponseCertificateAwsAcmArn2$inboundSchema),
+  z.lazy(() => SyncAcquireResponseCertificateManagedTLSSecret2$inboundSchema),
+  z.lazy(() => SyncAcquireResponseCertificateNone2$inboundSchema),
+]);
+
+export function syncAcquireResponseCertificateUnion2FromJSON(
+  jsonString: string,
+): SafeParseResult<SyncAcquireResponseCertificateUnion2, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) =>
+      SyncAcquireResponseCertificateUnion2$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'SyncAcquireResponseCertificateUnion2' from JSON`,
+  );
+}
+
+/** @internal */
+export const SyncAcquireResponseModeCustom$inboundSchema: z.ZodEnum<
+  typeof SyncAcquireResponseModeCustom
+> = z.enum(SyncAcquireResponseModeCustom);
+
+/** @internal */
+export const SyncAcquireResponseProviderAzureApplicationGatewayForContainersEnum4$inboundSchema:
+  z.ZodEnum<
+    typeof SyncAcquireResponseProviderAzureApplicationGatewayForContainersEnum4
+  > = z.enum(
+    SyncAcquireResponseProviderAzureApplicationGatewayForContainersEnum4,
+  );
+
+/** @internal */
+export const SyncAcquireResponseProviderAzureApplicationGatewayForContainers4$inboundSchema:
+  z.ZodType<
+    SyncAcquireResponseProviderAzureApplicationGatewayForContainers4,
+    unknown
+  > = z.object({
+    albName: z.nullable(z.string()).optional(),
+    albNamespace: z.nullable(z.string()).optional(),
+    frontend: z.string(),
+    provider:
+      SyncAcquireResponseProviderAzureApplicationGatewayForContainersEnum4$inboundSchema,
+  });
+
+export function syncAcquireResponseProviderAzureApplicationGatewayForContainers4FromJSON(
+  jsonString: string,
+): SafeParseResult<
+  SyncAcquireResponseProviderAzureApplicationGatewayForContainers4,
+  SDKValidationError
+> {
+  return safeParse(
+    jsonString,
+    (x) =>
+      SyncAcquireResponseProviderAzureApplicationGatewayForContainers4$inboundSchema
+        .parse(JSON.parse(x)),
+    `Failed to parse 'SyncAcquireResponseProviderAzureApplicationGatewayForContainers4' from JSON`,
+  );
+}
+
+/** @internal */
+export const SyncAcquireResponseProviderGkeGatewayEnum4$inboundSchema:
+  z.ZodEnum<typeof SyncAcquireResponseProviderGkeGatewayEnum4> = z.enum(
+    SyncAcquireResponseProviderGkeGatewayEnum4,
+  );
+
+/** @internal */
+export const SyncAcquireResponseProviderGkeGateway4$inboundSchema: z.ZodType<
+  SyncAcquireResponseProviderGkeGateway4,
+  unknown
+> = z.object({
+  provider: SyncAcquireResponseProviderGkeGatewayEnum4$inboundSchema,
+  staticAddressName: z.nullable(z.string()).optional(),
+});
+
+export function syncAcquireResponseProviderGkeGateway4FromJSON(
+  jsonString: string,
+): SafeParseResult<SyncAcquireResponseProviderGkeGateway4, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) =>
+      SyncAcquireResponseProviderGkeGateway4$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'SyncAcquireResponseProviderGkeGateway4' from JSON`,
+  );
+}
+
+/** @internal */
+export const SyncAcquireResponseProviderAwsAlbEnum4$inboundSchema: z.ZodEnum<
+  typeof SyncAcquireResponseProviderAwsAlbEnum4
+> = z.enum(SyncAcquireResponseProviderAwsAlbEnum4);
+
+/** @internal */
+export const SyncAcquireResponseProviderAwsAlb4$inboundSchema: z.ZodType<
+  SyncAcquireResponseProviderAwsAlb4,
+  unknown
+> = z.object({
+  ipAddressType: z.nullable(z.string()).optional(),
+  provider: SyncAcquireResponseProviderAwsAlbEnum4$inboundSchema,
+  scheme: z.string(),
+  subnetIds: z.array(z.string()).optional(),
+  targetType: z.string(),
+});
+
+export function syncAcquireResponseProviderAwsAlb4FromJSON(
+  jsonString: string,
+): SafeParseResult<SyncAcquireResponseProviderAwsAlb4, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) =>
+      SyncAcquireResponseProviderAwsAlb4$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'SyncAcquireResponseProviderAwsAlb4' from JSON`,
+  );
+}
+
+/** @internal */
+export const SyncAcquireResponseProviderUnion4$inboundSchema: z.ZodType<
+  SyncAcquireResponseProviderUnion4,
+  unknown
+> = z.union([
+  z.lazy(() => SyncAcquireResponseProviderAwsAlb4$inboundSchema),
+  z.lazy(() =>
+    SyncAcquireResponseProviderAzureApplicationGatewayForContainers4$inboundSchema
+  ),
+  z.lazy(() => SyncAcquireResponseProviderGkeGateway4$inboundSchema),
+  z.any(),
+]);
+
+export function syncAcquireResponseProviderUnion4FromJSON(
+  jsonString: string,
+): SafeParseResult<SyncAcquireResponseProviderUnion4, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => SyncAcquireResponseProviderUnion4$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'SyncAcquireResponseProviderUnion4' from JSON`,
+  );
+}
+
+/** @internal */
+export const SyncAcquireResponseRouteGateway2$inboundSchema: z.ZodType<
+  SyncAcquireResponseRouteGateway2,
+  unknown
+> = z.object({
+  annotations: z.record(z.string(), z.string()).optional(),
+  controller: z.nullable(z.string()).optional(),
+  gatewayClassName: z.string(),
+  labels: z.record(z.string(), z.string()).optional(),
+  listenerPort: z.int(),
+  provider: z.nullable(
+    z.union([
+      z.lazy(() => SyncAcquireResponseProviderAwsAlb4$inboundSchema),
+      z.lazy(() =>
+        SyncAcquireResponseProviderAzureApplicationGatewayForContainers4$inboundSchema
+      ),
+      z.lazy(() => SyncAcquireResponseProviderGkeGateway4$inboundSchema),
+      z.any(),
+    ]),
+  ).optional(),
+  routeApi: z.literal("gateway"),
+});
+
+export function syncAcquireResponseRouteGateway2FromJSON(
+  jsonString: string,
+): SafeParseResult<SyncAcquireResponseRouteGateway2, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => SyncAcquireResponseRouteGateway2$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'SyncAcquireResponseRouteGateway2' from JSON`,
+  );
+}
+
+/** @internal */
+export const SyncAcquireResponseProviderAzureApplicationGatewayForContainersEnum3$inboundSchema:
+  z.ZodEnum<
+    typeof SyncAcquireResponseProviderAzureApplicationGatewayForContainersEnum3
+  > = z.enum(
+    SyncAcquireResponseProviderAzureApplicationGatewayForContainersEnum3,
+  );
 
 /** @internal */
 export const SyncAcquireResponseProviderAzureApplicationGatewayForContainers3$inboundSchema:
@@ -1027,7 +3490,7 @@ export const SyncAcquireResponseRouteUnion2$inboundSchema: z.ZodType<
   unknown
 > = z.union([
   z.lazy(() => SyncAcquireResponseRouteIngress2$inboundSchema),
-  SyncAcquireResponseRouteGateway2$inboundSchema,
+  z.lazy(() => SyncAcquireResponseRouteGateway2$inboundSchema),
 ]);
 
 export function syncAcquireResponseRouteUnion2FromJSON(
@@ -1045,12 +3508,18 @@ export const SyncAcquireResponseExposureCustom$inboundSchema: z.ZodType<
   SyncAcquireResponseExposureCustom,
   unknown
 > = z.object({
-  certificate: SyncAcquireResponseCertificateUnion2$inboundSchema,
+  certificate: z.union([
+    z.lazy(() => SyncAcquireResponseCertificateTLSSecretRef2$inboundSchema),
+    z.lazy(() => SyncAcquireResponseCertificateManagedAcmImport2$inboundSchema),
+    z.lazy(() => SyncAcquireResponseCertificateAwsAcmArn2$inboundSchema),
+    z.lazy(() => SyncAcquireResponseCertificateManagedTLSSecret2$inboundSchema),
+    z.lazy(() => SyncAcquireResponseCertificateNone2$inboundSchema),
+  ]),
   domain: z.string(),
   mode: SyncAcquireResponseModeCustom$inboundSchema,
   route: z.union([
     z.lazy(() => SyncAcquireResponseRouteIngress2$inboundSchema),
-    SyncAcquireResponseRouteGateway2$inboundSchema,
+    z.lazy(() => SyncAcquireResponseRouteGateway2$inboundSchema),
   ]),
 });
 
@@ -1599,7 +4068,9 @@ export const SyncAcquireResponseKubernetes$inboundSchema: z.ZodType<
   SyncAcquireResponseKubernetes,
   unknown
 > = z.object({
-  cluster: z.nullable(SyncAcquireResponseClusterUnion$inboundSchema).optional(),
+  cluster: z.nullable(
+    z.union([z.lazy(() => SyncAcquireResponseCluster$inboundSchema), z.any()]),
+  ).optional(),
   exposure: z.nullable(
     z.union([
       z.lazy(() => SyncAcquireResponseExposureCustom$inboundSchema),
@@ -1651,6 +4122,7 @@ export const SyncAcquireResponseNetworkByoVnetAzure$inboundSchema: z.ZodType<
   unknown
 > = z.object({
   application_gateway_subnet_name: z.nullable(z.string()).optional(),
+  private_endpoint_subnet_name: z.nullable(z.string()).optional(),
   private_subnet_name: z.string(),
   public_subnet_name: z.string(),
   type: SyncAcquireResponseTypeByoVnetAzure$inboundSchema,
@@ -1658,6 +4130,7 @@ export const SyncAcquireResponseNetworkByoVnetAzure$inboundSchema: z.ZodType<
 }).transform((v) => {
   return remap$(v, {
     "application_gateway_subnet_name": "applicationGatewaySubnetName",
+    "private_endpoint_subnet_name": "privateEndpointSubnetName",
     "private_subnet_name": "privateSubnetName",
     "public_subnet_name": "publicSubnetName",
     "vnet_resource_id": "vnetResourceId",
@@ -1833,11 +4306,17 @@ export const SyncAcquireResponseStackSettings$inboundSchema: z.ZodType<
   SyncAcquireResponseStackSettings,
   unknown
 > = z.object({
-  compute: z.nullable(SyncAcquireResponseComputeUnion$inboundSchema).optional(),
+  compute: z.nullable(
+    z.union([z.lazy(() => SyncAcquireResponseCompute$inboundSchema), z.any()]),
+  ).optional(),
   deploymentModel: SyncAcquireResponseDeploymentModel$inboundSchema.optional(),
-  domains: z.nullable(SyncAcquireResponseDomainsUnion$inboundSchema).optional(),
+  domains: z.nullable(
+    z.union([z.lazy(() => SyncAcquireResponseDomains$inboundSchema), z.any()]),
+  ).optional(),
   externalBindings: z.nullable(
-    SyncAcquireResponseStackSettingsExternalBindings$inboundSchema,
+    z.lazy(() =>
+      SyncAcquireResponseStackSettingsExternalBindings$inboundSchema
+    ),
   ).optional(),
   heartbeats: SyncAcquireResponseHeartbeats$inboundSchema.optional(),
   kubernetes: z.nullable(
@@ -1889,14 +4368,44 @@ export const SyncAcquireResponseConfig$inboundSchema: z.ZodType<
   environmentVariables: SyncAcquireResponseEnvironmentVariables$inboundSchema,
   externalBindings: z.record(
     z.string(),
-    SyncAcquireResponseExternalBindingsUnion6$inboundSchema,
+    z.union([
+      SyncAcquireResponseExternalBindingsContainerAppsEnvironment$inboundSchema,
+      z.union([
+        z.lazy(() => SyncAcquireResponseExternalBindingsS3$inboundSchema),
+        z.lazy(() => SyncAcquireResponseExternalBindingsBlob$inboundSchema),
+        z.lazy(() => SyncAcquireResponseExternalBindingsGcs$inboundSchema),
+        z.lazy(() =>
+          SyncAcquireResponseExternalBindingsLocalStorage$inboundSchema
+        ),
+      ]),
+      z.union([
+        z.lazy(() => SyncAcquireResponseExternalBindingsSqs$inboundSchema),
+        SyncAcquireResponseExternalBindingsPubsub$inboundSchema,
+        SyncAcquireResponseExternalBindingsServicebus$inboundSchema,
+        SyncAcquireResponseExternalBindingsLocalQueue$inboundSchema,
+      ]),
+      SyncAcquireResponseExternalBindingsUnion3$inboundSchema,
+      SyncAcquireResponseExternalBindingsUnion4$inboundSchema,
+      SyncAcquireResponseExternalBindingsUnion5$inboundSchema,
+      SyncAcquireResponseExternalBindingsUnion6$inboundSchema,
+    ]),
   ).optional(),
   managementConfig: z.nullable(
-    SyncAcquireResponseManagementConfigUnion$inboundSchema,
+    z.union([
+      z.lazy(() => SyncAcquireResponseManagementConfigAzure$inboundSchema),
+      z.lazy(() => SyncAcquireResponseManagementConfigAws$inboundSchema),
+      z.lazy(() => SyncAcquireResponseManagementConfigGcp$inboundSchema),
+      z.lazy(() => SyncAcquireResponseManagementConfigKubernetes$inboundSchema),
+      z.any(),
+    ]),
   ).optional(),
   managerUrl: z.nullable(z.string()).optional(),
-  monitoring: z.nullable(SyncAcquireResponseMonitoringUnion$inboundSchema)
-    .optional(),
+  monitoring: z.nullable(
+    z.union([
+      z.lazy(() => SyncAcquireResponseMonitoring$inboundSchema),
+      z.any(),
+    ]),
+  ).optional(),
   nativeImageHost: z.nullable(z.string()).optional(),
   publicEndpoints: z.nullable(
     z.record(z.string(), z.record(z.string(), z.string())),

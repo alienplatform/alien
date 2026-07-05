@@ -5,7 +5,7 @@
 //!
 //! Pull model (Local, Kubernetes): installs and starts the alien-agent service.
 
-use crate::deployment_tracking::DeploymentTracker;
+use crate::deployment_tracking::{DeploymentTracker, TrackedLocalDeployment};
 use crate::error::{ErrorData, Result};
 use crate::output;
 use alien_cli_common::network::{self, NetworkArgs, NetworkMode};
@@ -36,6 +36,7 @@ use std::{
     io::{IsTerminal, Write},
     path::{Path, PathBuf},
     str::FromStr,
+    sync::Arc,
 };
 
 #[derive(Parser, Debug, Clone)]
@@ -108,8 +109,8 @@ pub struct UpArgs {
     #[arg(long)]
     pub foreground: bool,
 
-    /// Data directory for agent state (foreground mode only).
-    /// Defaults to ~/.alien/agent-data.
+    /// Data directory for local agent state.
+    /// Defaults to the service data directory, or ~/.alien/agent-data in foreground mode.
     #[arg(long)]
     pub data_dir: Option<String>,
 
@@ -261,6 +262,7 @@ impl From<DeployConfigNetwork> for NetworkSettings {
                 public_subnet_name,
                 private_subnet_name,
                 application_gateway_subnet_name: None,
+                private_endpoint_subnet_name: None,
             },
         }
     }
@@ -284,6 +286,36 @@ mod tests {
         assert!(!requires_install_context(Platform::Kubernetes));
         assert!(!requires_install_context(Platform::Local));
         assert!(!requires_install_context(Platform::Test));
+    }
+
+    #[test]
+    fn local_tracking_uses_service_data_dir_by_default() {
+        let args = UpArgs::parse_from(["alien-deploy", "--platform", "local"]);
+        let local = local_tracking_metadata(&args, Platform::Local)
+            .expect("local deployments should be tracked with local metadata");
+
+        assert_eq!(
+            local.data_dir,
+            crate::commands::agent::default_service_data_dir()
+        );
+        assert!(local.service_managed);
+    }
+
+    #[test]
+    fn local_tracking_uses_foreground_data_dir() {
+        let args = UpArgs::parse_from([
+            "alien-deploy",
+            "--platform",
+            "local",
+            "--foreground",
+            "--data-dir",
+            "/tmp/alien-foreground-state",
+        ]);
+        let local = local_tracking_metadata(&args, Platform::Local)
+            .expect("local deployments should be tracked with local metadata");
+
+        assert_eq!(local.data_dir, "/tmp/alien-foreground-state");
+        assert!(!local.service_managed);
     }
 
     #[test]
@@ -835,6 +867,7 @@ pub async fn up_command(args: UpArgs, embedded_config: Option<&DeployCliConfig>)
     // Use deployment-scoped token if the manager returned one, otherwise keep the original.
     let effective_token = init.deployment_token.unwrap_or_else(|| token.clone());
     let client = create_manager_client(&effective_token, &manager_url)?;
+    let local_tracking = local_tracking_metadata(&args, platform);
 
     // Track the deployment locally
     let mut tracker = DeploymentTracker::new()?;
@@ -844,6 +877,7 @@ pub async fn up_command(args: UpArgs, embedded_config: Option<&DeployCliConfig>)
         effective_token.clone(),
         manager_url.clone(),
         platform_str.clone(),
+        local_tracking,
     )?;
 
     // Check if the deployment is already active — nothing to do.
@@ -1963,6 +1997,7 @@ async fn run_pull_model(
             .await
         }
         _ => {
+            let data_dir = local_agent_data_dir(args);
             run_local_pull_model(
                 args,
                 manager_url,
@@ -1972,10 +2007,39 @@ async fn run_pull_model(
                 &platform.to_string(),
                 embedded_config,
                 public_endpoints,
+                data_dir.as_deref(),
             )
             .await
         }
     }
+}
+
+fn default_foreground_data_dir() -> PathBuf {
+    dirs::home_dir()
+        .unwrap_or_else(|| PathBuf::from("/tmp"))
+        .join(".alien")
+        .join("agent-data")
+}
+
+fn local_agent_data_dir(args: &UpArgs) -> Option<String> {
+    args.data_dir.clone().or_else(|| {
+        if args.foreground {
+            Some(default_foreground_data_dir().to_string_lossy().to_string())
+        } else {
+            Some(super::agent::default_service_data_dir())
+        }
+    })
+}
+
+fn local_tracking_metadata(args: &UpArgs, platform: Platform) -> Option<TrackedLocalDeployment> {
+    if platform != Platform::Local {
+        return None;
+    }
+
+    local_agent_data_dir(args).map(|data_dir| TrackedLocalDeployment {
+        data_dir,
+        service_managed: !args.foreground,
+    })
 }
 
 async fn run_local_pull_model(
@@ -1987,6 +2051,7 @@ async fn run_local_pull_model(
     platform: &str,
     embedded_config: Option<&DeployCliConfig>,
     public_endpoints: Option<&PublicEndpointUrls>,
+    data_dir: Option<&str>,
 ) -> Result<()> {
     // Find or download the alien-agent binary
     let binary_path = find_or_download_agent_binary(embedded_config).await?;
@@ -2007,7 +2072,7 @@ async fn run_local_pull_model(
             deployment_name,
             platform,
             &encryption_key,
-            args.data_dir.as_deref(),
+            data_dir,
             public_endpoints,
             args.enable_local_debug,
             args.local_debug_shell_command.as_deref(),
@@ -2025,7 +2090,7 @@ async fn run_local_pull_model(
         deployment_id: Some(deployment_id.to_string()),
         agent_name: Some(deployment_name.to_string()),
         platform: platform.to_string(),
-        data_dir: None,
+        data_dir: data_dir.map(ToOwned::to_owned),
         encryption_key: args.encryption_key.clone(),
         public_endpoints: public_endpoints.cloned(),
         enable_local_debug: args.enable_local_debug,
@@ -2062,10 +2127,7 @@ async fn run_agent_foreground(
     let data_dir = if let Some(dir) = data_dir_override {
         std::path::PathBuf::from(dir)
     } else {
-        dirs::home_dir()
-            .unwrap_or_else(|| std::path::PathBuf::from("/tmp"))
-            .join(".alien")
-            .join("agent-data")
+        default_foreground_data_dir()
     };
 
     // The agent rejects `--sync-token`/`--encryption-key` because argv is
@@ -2694,42 +2756,45 @@ pub async fn push_initial_setup(
             message: "Failed to deserialize environment_info from manager".to_string(),
         })?;
 
-    // If there's a desired release, fetch the full release info
+    // If there's a desired release, fetch the full release info. A failed fetch must fail the
+    // setup, not silently degrade to a no-release deploy: swallowing it would report success while
+    // having installed nothing the caller asked for.
     let target_release = if let Some(ref release_id) = deployment.desired_release_id {
-        match client.get_release().id(release_id).send().await {
-            Ok(resp) => {
-                let rel = resp.into_inner();
-                let platform_stack_value = release_stack_value_for_platform(rel.stack, platform)
-                    .ok_or_else(|| {
-                        AlienError::new(ErrorData::ConfigurationError {
-                            message: format!(
-                                "Release {} has no stack for platform {}",
-                                release_id,
-                                platform.as_str()
-                            ),
-                        })
-                    })?;
-
-                // No stack rewriting — release already stores proxy URIs.
-                // Controllers use image URIs as-is.
-                let stack = serde_json::from_value(platform_stack_value)
-                    .into_alien_error()
-                    .context(ErrorData::ConfigurationError {
-                        message: "Failed to parse release stack".to_string(),
-                    })?;
-
-                Some(ReleaseInfo {
-                    release_id: rel.id,
-                    version: None,
-                    description: None,
-                    stack,
+        let resp = client
+            .get_release()
+            .id(release_id)
+            .send()
+            .await
+            .into_sdk_error()
+            .context(ErrorData::ConfigurationError {
+                message: format!("Failed to fetch desired release {release_id} from manager"),
+            })?;
+        let rel = resp.into_inner();
+        let platform_stack_value = release_stack_value_for_platform(rel.stack, platform)
+            .ok_or_else(|| {
+                AlienError::new(ErrorData::ConfigurationError {
+                    message: format!(
+                        "Release {} has no stack for platform {}",
+                        release_id,
+                        platform.as_str()
+                    ),
                 })
-            }
-            Err(e) => {
-                output::warn(&format!("Could not fetch release {}: {}", release_id, e));
-                None
-            }
-        }
+            })?;
+
+        // No stack rewriting — release already stores proxy URIs.
+        // Controllers use image URIs as-is.
+        let stack = serde_json::from_value(platform_stack_value)
+            .into_alien_error()
+            .context(ErrorData::ConfigurationError {
+                message: "Failed to parse release stack".to_string(),
+            })?;
+
+        Some(ReleaseInfo {
+            release_id: rel.id,
+            version: None,
+            description: None,
+            stack,
+        })
     } else {
         None
     };
@@ -2753,14 +2818,17 @@ pub async fn push_initial_setup(
     // push_initial_setup runs with *target* credentials, so re-collecting
     // ensures the environment_info reflects the actual target project.
     let environment_platform = base_platform.unwrap_or(platform);
-    match alien_deployment::collect_environment_info(environment_platform, &client_config).await {
-        Ok(env_info) => {
-            state.environment_info = Some(env_info);
-        }
-        Err(e) => {
-            tracing::warn!("Failed to collect target environment info: {e}");
-        }
-    }
+    // Fail fast rather than proceed with absent/stale environment info: a setup that silently drops
+    // the target environment would report success while the deployment's env_info is wrong. Wrap in
+    // DeploymentFailed (retryable/internal = inherit), not the hard-non-retryable ConfigurationError,
+    // so a transient cloud blip in collect_environment_info (live STS / project-metadata calls) stays
+    // retryable instead of becoming a permanent setup failure.
+    let env_info = alien_deployment::collect_environment_info(environment_platform, &client_config)
+        .await
+        .context(ErrorData::DeploymentFailed {
+            operation: "target environment-info collection".to_string(),
+        })?;
+    state.environment_info = Some(env_info);
 
     // Reconstruct DeploymentConfig from stack_settings
     let mut stack_settings: StackSettings = deployment
@@ -2816,13 +2884,17 @@ pub async fn push_initial_setup(
     // it to release before proceeding. 2 minutes (60 × 2s) is sufficient because
     // the manager skips Pending/InitialSetup for push-mode deployments — if it
     // holds the lock, it checks push-mode + Pending and releases immediately.
-    // Acquire sync lock — retry until the specific deployment is locked by us.
     let session = format!("push-setup-{}", uuid::Uuid::new_v4());
-    let acquired_deployment = acquire_setup_run_deployment(client, deployment_id, &session)
-        .await
-        .context(ErrorData::DeploymentFailed {
-            operation: "acquire sync lock".to_string(),
-        })?;
+    let acquired_deployment = acquire_setup_run_deployment(
+        client,
+        deployment_id,
+        &session,
+        stack_settings.deployment_model,
+    )
+    .await
+    .context(ErrorData::DeploymentFailed {
+        operation: "acquire sync lock".to_string(),
+    })?;
 
     if let Some(acquired_config) = acquired_deployment.get("deploymentConfig").cloned() {
         config = serde_json::from_value(acquired_config)
@@ -3052,6 +3124,7 @@ pub async fn push_deletion(
     })?;
 
     apply_external_bindings_from_stack_settings(&mut config, &stack_settings);
+    let service_provider = runtime_service_provider(&client_config)?;
 
     if platform == Platform::Local
         && !matches!(
@@ -3065,6 +3138,8 @@ pub async fn push_deletion(
             &mut state,
             &mut config,
             &client_config,
+            stack_settings.deployment_model,
+            service_provider.clone(),
         )
         .await?;
 
@@ -3080,8 +3155,30 @@ pub async fn push_deletion(
         &mut state,
         &mut config,
         &client_config,
+        stack_settings.deployment_model,
+        service_provider,
     )
     .await
+}
+
+fn runtime_service_provider(
+    client_config: &ClientConfig,
+) -> Result<Option<Arc<dyn alien_infra::PlatformServiceProvider>>> {
+    let ClientConfig::Local { state_directory } = client_config else {
+        return Ok(None);
+    };
+
+    let local_bindings = alien_local::LocalBindingsProvider::new(Path::new(state_directory))
+        .context(ErrorData::ConfigurationError {
+            message: format!(
+                "Failed to create local runtime provider from '{}'",
+                state_directory
+            ),
+        })?;
+
+    Ok(Some(Arc::new(
+        alien_infra::DefaultPlatformServiceProvider::with_local_bindings(local_bindings),
+    )))
 }
 
 async fn run_runtime_deletion(
@@ -3090,9 +3187,11 @@ async fn run_runtime_deletion(
     state: &mut DeploymentState,
     config: &mut DeploymentConfig,
     client_config: &ClientConfig,
+    deployment_model: alien_core::DeploymentModel,
+    service_provider: Option<Arc<dyn alien_infra::PlatformServiceProvider>>,
 ) -> Result<()> {
     let session = format!("push-runtime-deletion-{}", uuid::Uuid::new_v4());
-    acquire_runtime_delete_deployment(client, deployment_id, &session)
+    acquire_runtime_delete_deployment(client, deployment_id, &session, deployment_model)
         .await
         .context(ErrorData::DeploymentFailed {
             operation: "acquire runtime deletion lock".to_string(),
@@ -3143,7 +3242,7 @@ async fn run_runtime_deletion(
         deployment_id,
         &policy,
         &transport,
-        None,
+        service_provider,
         None,
     )
     .await;
@@ -3180,13 +3279,16 @@ async fn run_setup_deletion(
     state: &mut DeploymentState,
     config: &mut DeploymentConfig,
     client_config: &ClientConfig,
+    deployment_model: alien_core::DeploymentModel,
+    service_provider: Option<Arc<dyn alien_infra::PlatformServiceProvider>>,
 ) -> Result<()> {
     let session = format!("push-setup-deletion-{}", uuid::Uuid::new_v4());
-    let acquire_outcome = acquire_setup_delete_deployment(client, deployment_id, &session)
-        .await
-        .context(ErrorData::DeploymentFailed {
-            operation: "acquire setup teardown lock".to_string(),
-        })?;
+    let acquire_outcome =
+        acquire_setup_delete_deployment(client, deployment_id, &session, deployment_model)
+            .await
+            .context(ErrorData::DeploymentFailed {
+                operation: "acquire setup teardown lock".to_string(),
+            })?;
 
     if matches!(acquire_outcome, SetupDeleteAcquireOutcome::AlreadyDeleted) {
         output::success("Deployment deleted successfully.");
@@ -3238,7 +3340,7 @@ async fn run_setup_deletion(
         deployment_id,
         &policy,
         &transport,
-        None,
+        service_provider,
     )
     .await
     .map(|setup_result| {

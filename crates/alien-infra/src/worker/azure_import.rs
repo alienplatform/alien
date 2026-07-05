@@ -32,6 +32,8 @@ impl ResourceImporter for AzureWorkerImporter {
             container_app_name: Some(data.container_app_name),
             resource_id: None,
             url: data.fqdn.as_ref().map(|f| format!("https://{}", f)),
+            // The ingress host (CNAME target) isn't in ImportData; the heartbeat handler rebuilds it.
+            container_app_url: None,
             pending_operation_url: None,
             pending_operation_retry_after: None,
             dapr_components: Vec::new(),

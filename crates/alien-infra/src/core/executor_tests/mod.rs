@@ -14,6 +14,7 @@
 mod helpers;
 
 // Core functionality tests
+mod binding_sync_tests;
 mod deletion_tests;
 mod dependency_tests;
 mod lifecycle_tests;

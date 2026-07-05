@@ -1,5 +1,6 @@
 pub mod api_client;
 pub mod artifactregistry;
+pub mod cloud_sql;
 pub mod cloudbuild;
 pub mod cloudrun;
 pub mod cloudscheduler;
