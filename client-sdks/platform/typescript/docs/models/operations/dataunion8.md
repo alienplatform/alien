@@ -29,7 +29,7 @@ const value: operations.DataCloudSQL = {
     collectionIssues: [
       {
         message: "<value>",
-        reason: "api-unavailable",
+        reason: "forbidden",
         severity: "error",
         source: "<value>",
       },
@@ -76,4 +76,3 @@ const value: operations.DataLocal8 = {
   backend: "local",
 };
 ```
-

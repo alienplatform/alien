@@ -237,6 +237,9 @@ export type { LocalStorageHeartbeatData } from "./zod/local-storage-heartbeat-da
 export type { LocalVaultHeartbeatData } from "./zod/local-vault-heartbeat-data-schema.js";
 export type { LocalWorkerHeartbeatData } from "./zod/local-worker-heartbeat-data-schema.js";
 export type { MachineProfile } from "./zod/machine-profile-schema.js";
+export type { MachinesComputeClusterHeartbeatData } from "./zod/machines-compute-cluster-heartbeat-data-schema.js";
+export type { MachinesComputeMachineStatus } from "./zod/machines-compute-machine-status-schema.js";
+export type { MachinesDaemonHeartbeatData } from "./zod/machines-daemon-heartbeat-data-schema.js";
 export type { ManagedRuntimeEventInvolvedObject } from "./zod/managed-runtime-event-involved-object-schema.js";
 export type { ManagedRuntimeEventSnapshot } from "./zod/managed-runtime-event-snapshot-schema.js";
 export type { ManagedRuntimeEventSource } from "./zod/managed-runtime-event-source-schema.js";
@@ -586,6 +589,9 @@ export { LocalStorageHeartbeatDataSchema } from "./zod/local-storage-heartbeat-d
 export { LocalVaultHeartbeatDataSchema } from "./zod/local-vault-heartbeat-data-schema.js";
 export { LocalWorkerHeartbeatDataSchema } from "./zod/local-worker-heartbeat-data-schema.js";
 export { MachineProfileSchema } from "./zod/machine-profile-schema.js";
+export { MachinesComputeClusterHeartbeatDataSchema } from "./zod/machines-compute-cluster-heartbeat-data-schema.js";
+export { MachinesComputeMachineStatusSchema } from "./zod/machines-compute-machine-status-schema.js";
+export { MachinesDaemonHeartbeatDataSchema } from "./zod/machines-daemon-heartbeat-data-schema.js";
 export { ManagedRuntimeEventInvolvedObjectSchema } from "./zod/managed-runtime-event-involved-object-schema.js";
 export { ManagedRuntimeEventSnapshotSchema } from "./zod/managed-runtime-event-snapshot-schema.js";
 export { ManagedRuntimeEventSourceSchema } from "./zod/managed-runtime-event-source-schema.js";

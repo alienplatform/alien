@@ -20,7 +20,7 @@ let value: DataKubernetesCluster = {
       collectionIssues: [
         {
           message: "<value>",
-          reason: "api-unavailable",
+          reason: "timed-out",
           severity: "warning",
           source: "<value>",
         },

@@ -16,7 +16,7 @@ let value: Heartbeat = {
       daemonInstances: [
         {
           name: "<value>",
-          ready: true,
+          ready: false,
           replicaId: "<id>",
         },
       ],
@@ -27,21 +27,14 @@ let value: Heartbeat = {
       horizonStatus: "<value>",
       latestUpdateTimestamp: "<value>",
       status: {
-        collectionIssues: [
-          {
-            message: "<value>",
-            reason: "not-installed",
-            severity: "warning",
-            source: "<value>",
-          },
-        ],
-        health: "unknown",
-        lifecycle: "running",
-        partial: false,
+        collectionIssues: [],
+        health: "unhealthy",
+        lifecycle: "stopped",
+        partial: true,
         stale: false,
       },
       unavailableInstances: 461497,
-      backend: "azure",
+      backend: "machines",
     },
     resourceType: "daemon",
   },

@@ -91,8 +91,8 @@ const value: models.DataAzureManagedIdentity1 = {
     collectionIssues: [
       {
         message: "<value>",
-        reason: "api-unavailable",
-        severity: "error",
+        reason: "timed-out",
+        severity: "warning",
         source: "<value>",
       },
     ],
@@ -121,4 +121,3 @@ const value: models.DataLocal10 = {
   backend: "local",
 };
 ```
-

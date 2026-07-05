@@ -1307,6 +1307,10 @@ export type NewDeploymentRequest = {
    * Optional physical-name prefix for generated cloud resources. Omit to let the manager generate one.
    */
   resourcePrefix?: string | undefined;
+  /**
+   * Optional deployment subdomain under the project's generated-domain parent. Omit to generate a random subdomain.
+   */
+  publicSubdomain?: string | undefined;
   setupMethod?: DeploymentSetupMethod | undefined;
   setupMetadata?: { [k: string]: any | null } | undefined;
   /**
@@ -3827,6 +3831,7 @@ export type NewDeploymentRequest$Outbound = {
   project: string;
   stackSettings?: NewDeploymentRequestStackSettings$Outbound | undefined;
   resourcePrefix?: string | undefined;
+  publicSubdomain?: string | undefined;
   setupMethod?: string | undefined;
   setupMetadata?: { [k: string]: any | null } | undefined;
   inputValues?: { [k: string]: StackInputValueRequest$Outbound } | undefined;
@@ -3861,6 +3866,7 @@ export const NewDeploymentRequest$outboundSchema: z.ZodType<
   stackSettings: z.lazy(() => NewDeploymentRequestStackSettings$outboundSchema)
     .optional(),
   resourcePrefix: z.string().optional(),
+  publicSubdomain: z.string().optional(),
   setupMethod: DeploymentSetupMethod$outboundSchema.optional(),
   setupMetadata: z.record(z.string(), z.nullable(z.any())).optional(),
   inputValues: z.record(z.string(), StackInputValueRequest$outboundSchema)

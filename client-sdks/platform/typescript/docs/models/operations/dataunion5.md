@@ -40,15 +40,15 @@ const value: operations.DataGcp2 = {
     collectionIssues: [
       {
         message: "<value>",
-        reason: "forbidden",
-        severity: "error",
+        reason: "collection-failed",
+        severity: "warning",
         source: "<value>",
       },
     ],
-    health: "healthy",
-    lifecycle: "deleted",
-    partial: false,
-    stale: true,
+    health: "unknown",
+    lifecycle: "failed",
+    partial: true,
+    stale: false,
   },
   backend: "gcp",
 };
@@ -72,17 +72,49 @@ const value: operations.DataAzure2 = {
     collectionIssues: [
       {
         message: "<value>",
-        reason: "collection-failed",
+        reason: "api-unavailable",
         severity: "warning",
         source: "<value>",
       },
     ],
-    health: "degraded",
-    lifecycle: "running",
+    health: "healthy",
+    lifecycle: "deleting",
     partial: true,
-    stale: false,
+    stale: true,
   },
   backend: "azure",
+};
+```
+
+### `operations.DataMachines2`
+
+```typescript
+const value: operations.DataMachines2 = {
+  capacityGroups: [
+    {
+      currentMachines: 818927,
+      desiredMachines: 925900,
+      groupId: "<id>",
+    },
+  ],
+  machines: [],
+  name: "<value>",
+  nodes: {},
+  status: {
+    collectionIssues: [
+      {
+        message: "<value>",
+        reason: "timed-out",
+        severity: "error",
+        source: "<value>",
+      },
+    ],
+    health: "unhealthy",
+    lifecycle: "stopping",
+    partial: true,
+    stale: true,
+  },
+  backend: "machines",
 };
 ```
 
@@ -111,4 +143,3 @@ const value: operations.DataLocal5 = {
   backend: "local",
 };
 ```
-

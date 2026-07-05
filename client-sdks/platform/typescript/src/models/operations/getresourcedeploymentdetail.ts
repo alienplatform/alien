@@ -88,6 +88,194 @@ export const ControllerPlatform = {
  */
 export type ControllerPlatform = ClosedEnum<typeof ControllerPlatform>;
 
+export const Reason65 = {
+  Forbidden: "forbidden",
+  NotInstalled: "not-installed",
+  ApiUnavailable: "api-unavailable",
+  CollectionFailed: "collection-failed",
+  TimedOut: "timed-out",
+} as const;
+export type Reason65 = ClosedEnum<typeof Reason65>;
+
+export const CollectionIssueSeverity65 = {
+  Info: "info",
+  Warning: "warning",
+  Error: "error",
+} as const;
+export type CollectionIssueSeverity65 = ClosedEnum<
+  typeof CollectionIssueSeverity65
+>;
+
+export type CollectionIssue65 = {
+  message: string;
+  reason: Reason65;
+  severity: CollectionIssueSeverity65;
+  source: string;
+};
+
+export const Health65 = {
+  Unknown: "unknown",
+  Healthy: "healthy",
+  Degraded: "degraded",
+  Unhealthy: "unhealthy",
+} as const;
+export type Health65 = ClosedEnum<typeof Health65>;
+
+export const Lifecycle65 = {
+  Unknown: "unknown",
+  Creating: "creating",
+  Updating: "updating",
+  Running: "running",
+  Scaling: "scaling",
+  Stopping: "stopping",
+  Stopped: "stopped",
+  Deleting: "deleting",
+  Deleted: "deleted",
+  Failed: "failed",
+} as const;
+export type Lifecycle65 = ClosedEnum<typeof Lifecycle65>;
+
+export type DataStatus65 = {
+  collectionIssues: Array<CollectionIssue65>;
+  health: Health65;
+  lifecycle: Lifecycle65;
+  message?: string | null | undefined;
+  partial: boolean;
+  stale: boolean;
+};
+
+export type Data5 = {
+  createdAt?: string | null | undefined;
+  disableLocalAuth?: boolean | null | undefined;
+  location?: string | null | undefined;
+  metricId?: string | null | undefined;
+  minimumTlsVersion?: string | null | undefined;
+  name: string;
+  namespaceStatus?: string | null | undefined;
+  premiumMessagingPartitions?: number | null | undefined;
+  privateEndpointConnectionCount: number;
+  provisioningState?: string | null | undefined;
+  publicNetworkAccess?: string | null | undefined;
+  resourceGroup?: string | null | undefined;
+  resourceId?: string | null | undefined;
+  serviceBusEndpoint?: string | null | undefined;
+  skuCapacity?: number | null | undefined;
+  skuName?: string | null | undefined;
+  skuTier?: string | null | undefined;
+  status: DataStatus65;
+  updatedAt?: string | null | undefined;
+  zoneRedundant?: boolean | null | undefined;
+};
+
+export type DataAzureServiceBusNamespace = {
+  data: Data5;
+  resourceType: "azure_service_bus_namespace";
+};
+
+export const Reason64 = {
+  Forbidden: "forbidden",
+  NotInstalled: "not-installed",
+  ApiUnavailable: "api-unavailable",
+  CollectionFailed: "collection-failed",
+  TimedOut: "timed-out",
+} as const;
+export type Reason64 = ClosedEnum<typeof Reason64>;
+
+export const CollectionIssueSeverity64 = {
+  Info: "info",
+  Warning: "warning",
+  Error: "error",
+} as const;
+export type CollectionIssueSeverity64 = ClosedEnum<
+  typeof CollectionIssueSeverity64
+>;
+
+export type CollectionIssue64 = {
+  message: string;
+  reason: Reason64;
+  severity: CollectionIssueSeverity64;
+  source: string;
+};
+
+export const Health64 = {
+  Unknown: "unknown",
+  Healthy: "healthy",
+  Degraded: "degraded",
+  Unhealthy: "unhealthy",
+} as const;
+export type Health64 = ClosedEnum<typeof Health64>;
+
+export const Lifecycle64 = {
+  Unknown: "unknown",
+  Creating: "creating",
+  Updating: "updating",
+  Running: "running",
+  Scaling: "scaling",
+  Stopping: "stopping",
+  Stopped: "stopped",
+  Deleting: "deleting",
+  Deleted: "deleted",
+  Failed: "failed",
+} as const;
+export type Lifecycle64 = ClosedEnum<typeof Lifecycle64>;
+
+export type DataStatus64 = {
+  collectionIssues: Array<CollectionIssue64>;
+  health: Health64;
+  lifecycle: Lifecycle64;
+  message?: string | null | undefined;
+  partial: boolean;
+  stale: boolean;
+};
+
+export type WorkloadProfile = {
+  maximumCount?: number | null | undefined;
+  minimumCount?: number | null | undefined;
+  name: string;
+  workloadProfileType: string;
+};
+
+export type Data4 = {
+  customDomainVerificationId?: string | null | undefined;
+  defaultDomain?: string | null | undefined;
+  eventStreamEndpoint?: string | null | undefined;
+  infrastructureResourceGroup?: string | null | undefined;
+  kind?: string | null | undefined;
+  location?: string | null | undefined;
+  name: string;
+  provisioningState?: string | null | undefined;
+  resourceGroup?: string | null | undefined;
+  resourceId?: string | null | undefined;
+  staticIp?: string | null | undefined;
+  status: DataStatus64;
+  workloadProfileCount: number;
+  workloadProfiles: Array<WorkloadProfile>;
+  zoneRedundant?: boolean | null | undefined;
+};
+
+export type DataAzureContainerAppsEnvironment = {
+  data: Data4;
+  resourceType: "azure_container_apps_environment";
+};
+
+export type PrimaryEndpoints = {
+  blob?: string | null | undefined;
+  dfs?: string | null | undefined;
+  file?: string | null | undefined;
+  queue?: string | null | undefined;
+  table?: string | null | undefined;
+  web?: string | null | undefined;
+};
+
+export type SecondaryEndpoints = {
+  blob?: string | null | undefined;
+  dfs?: string | null | undefined;
+  file?: string | null | undefined;
+  queue?: string | null | undefined;
+  table?: string | null | undefined;
+  web?: string | null | undefined;
+};
+
 export const Reason63 = {
   Forbidden: "forbidden",
   NotInstalled: "not-installed",
@@ -144,32 +332,35 @@ export type DataStatus63 = {
   stale: boolean;
 };
 
-export type Data5 = {
-  createdAt?: string | null | undefined;
-  disableLocalAuth?: boolean | null | undefined;
+export type Data3 = {
+  allowBlobPublicAccess?: boolean | null | undefined;
+  allowSharedKeyAccess?: boolean | null | undefined;
+  encryptionKeySource?: string | null | undefined;
+  kind?: string | null | undefined;
   location?: string | null | undefined;
-  metricId?: string | null | undefined;
   minimumTlsVersion?: string | null | undefined;
   name: string;
-  namespaceStatus?: string | null | undefined;
-  premiumMessagingPartitions?: number | null | undefined;
-  privateEndpointConnectionCount: number;
+  networkBypass?: string | null | undefined;
+  networkDefaultAction?: string | null | undefined;
+  networkIpRuleCount?: number | null | undefined;
+  networkResourceAccessRuleCount?: number | null | undefined;
+  networkVirtualNetworkRuleCount?: number | null | undefined;
+  primaryEndpoints: PrimaryEndpoints;
   provisioningState?: string | null | undefined;
   publicNetworkAccess?: string | null | undefined;
+  requireInfrastructureEncryption?: boolean | null | undefined;
   resourceGroup?: string | null | undefined;
   resourceId?: string | null | undefined;
-  serviceBusEndpoint?: string | null | undefined;
-  skuCapacity?: number | null | undefined;
+  secondaryEndpoints: SecondaryEndpoints;
   skuName?: string | null | undefined;
   skuTier?: string | null | undefined;
   status: DataStatus63;
-  updatedAt?: string | null | undefined;
-  zoneRedundant?: boolean | null | undefined;
+  supportsHttpsTrafficOnly?: boolean | null | undefined;
 };
 
-export type DataAzureServiceBusNamespace = {
-  data: Data5;
-  resourceType: "azure_service_bus_namespace";
+export type DataAzureStorageAccount = {
+  data: Data3;
+  resourceType: "azure_storage_account";
 };
 
 export const Reason62 = {
@@ -228,52 +419,18 @@ export type DataStatus62 = {
   stale: boolean;
 };
 
-export type WorkloadProfile = {
-  maximumCount?: number | null | undefined;
-  minimumCount?: number | null | undefined;
-  name: string;
-  workloadProfileType: string;
-};
-
-export type Data4 = {
-  customDomainVerificationId?: string | null | undefined;
-  defaultDomain?: string | null | undefined;
-  eventStreamEndpoint?: string | null | undefined;
-  infrastructureResourceGroup?: string | null | undefined;
-  kind?: string | null | undefined;
+export type Data2 = {
   location?: string | null | undefined;
+  managedTags: { [k: string]: string };
   name: string;
   provisioningState?: string | null | undefined;
-  resourceGroup?: string | null | undefined;
   resourceId?: string | null | undefined;
-  staticIp?: string | null | undefined;
   status: DataStatus62;
-  workloadProfileCount: number;
-  workloadProfiles: Array<WorkloadProfile>;
-  zoneRedundant?: boolean | null | undefined;
 };
 
-export type DataAzureContainerAppsEnvironment = {
-  data: Data4;
-  resourceType: "azure_container_apps_environment";
-};
-
-export type PrimaryEndpoints = {
-  blob?: string | null | undefined;
-  dfs?: string | null | undefined;
-  file?: string | null | undefined;
-  queue?: string | null | undefined;
-  table?: string | null | undefined;
-  web?: string | null | undefined;
-};
-
-export type SecondaryEndpoints = {
-  blob?: string | null | undefined;
-  dfs?: string | null | undefined;
-  file?: string | null | undefined;
-  queue?: string | null | undefined;
-  table?: string | null | undefined;
-  web?: string | null | undefined;
+export type DataAzureResourceGroup = {
+  data: Data2;
+  resourceType: "azure_resource_group";
 };
 
 export const Reason61 = {
@@ -332,35 +489,15 @@ export type DataStatus61 = {
   stale: boolean;
 };
 
-export type Data3 = {
-  allowBlobPublicAccess?: boolean | null | undefined;
-  allowSharedKeyAccess?: boolean | null | undefined;
-  encryptionKeySource?: string | null | undefined;
-  kind?: string | null | undefined;
-  location?: string | null | undefined;
-  minimumTlsVersion?: string | null | undefined;
-  name: string;
-  networkBypass?: string | null | undefined;
-  networkDefaultAction?: string | null | undefined;
-  networkIpRuleCount?: number | null | undefined;
-  networkResourceAccessRuleCount?: number | null | undefined;
-  networkVirtualNetworkRuleCount?: number | null | undefined;
-  primaryEndpoints: PrimaryEndpoints;
-  provisioningState?: string | null | undefined;
-  publicNetworkAccess?: string | null | undefined;
-  requireInfrastructureEncryption?: boolean | null | undefined;
-  resourceGroup?: string | null | undefined;
-  resourceId?: string | null | undefined;
-  secondaryEndpoints: SecondaryEndpoints;
-  skuName?: string | null | undefined;
-  skuTier?: string | null | undefined;
+export type DataAzureResourceProvider = {
+  namespace: string;
+  providerId?: string | null | undefined;
+  registered: boolean;
+  registrationPolicy?: string | null | undefined;
+  registrationState?: string | null | undefined;
+  resourceTypeCount: number;
   status: DataStatus61;
-  supportsHttpsTrafficOnly?: boolean | null | undefined;
-};
-
-export type DataAzureStorageAccount = {
-  data: Data3;
-  resourceType: "azure_storage_account";
+  backend: "azureResourceProvider";
 };
 
 export const Reason60 = {
@@ -419,18 +556,55 @@ export type DataStatus60 = {
   stale: boolean;
 };
 
-export type Data2 = {
-  location?: string | null | undefined;
-  managedTags: { [k: string]: string };
-  name: string;
-  provisioningState?: string | null | undefined;
-  resourceId?: string | null | undefined;
+export type DataGcpServiceUsage = {
+  enabled: boolean;
+  lastOperationName?: string | null | undefined;
+  projectId: string;
+  serviceName: string;
+  serviceResourceName?: string | null | undefined;
+  state?: string | null | undefined;
   status: DataStatus60;
+  title?: string | null | undefined;
+  backend: "gcpServiceUsage";
 };
 
-export type DataAzureResourceGroup = {
-  data: Data2;
-  resourceType: "azure_resource_group";
+export type DataUnion15 = DataGcpServiceUsage | DataAzureResourceProvider;
+
+export type DataServiceActivation = {
+  data: DataGcpServiceUsage | DataAzureResourceProvider;
+  resourceType: "service_activation";
+};
+
+export type InvolvedObject10 = {
+  apiVersion?: string | null | undefined;
+  fieldPath?: string | null | undefined;
+  kind?: string | null | undefined;
+  name?: string | null | undefined;
+  namespace?: string | null | undefined;
+  resourceVersion?: string | null | undefined;
+  uid?: string | null | undefined;
+};
+
+export type InvolvedObjectUnion10 = InvolvedObject10 | any;
+
+export type GetResourceDeploymentDetailSource10 = {
+  component?: string | null | undefined;
+  host?: string | null | undefined;
+};
+
+export type SourceUnion10 = GetResourceDeploymentDetailSource10 | any;
+
+export type Event13 = {
+  count?: number | null | undefined;
+  eventTime?: Date | null | undefined;
+  firstTimestamp?: Date | null | undefined;
+  involvedObject?: InvolvedObject10 | any | null | undefined;
+  lastTimestamp?: Date | null | undefined;
+  message: string;
+  raw?: any | null | undefined;
+  reason: string;
+  source?: GetResourceDeploymentDetailSource10 | any | null | undefined;
+  type?: string | null | undefined;
 };
 
 export const Reason59 = {
@@ -489,15 +663,19 @@ export type DataStatus59 = {
   stale: boolean;
 };
 
-export type DataAzureResourceProvider = {
+export type DataKubernetesJob = {
+  active?: number | null | undefined;
+  completionTime?: Date | null | undefined;
+  conditionCount: number;
+  events: Array<Event13>;
+  failed?: number | null | undefined;
+  imageDigest?: string | null | undefined;
+  jobName: string;
   namespace: string;
-  providerId?: string | null | undefined;
-  registered: boolean;
-  registrationPolicy?: string | null | undefined;
-  registrationState?: string | null | undefined;
-  resourceTypeCount: number;
+  startTime?: Date | null | undefined;
   status: DataStatus59;
-  backend: "azureResourceProvider";
+  succeeded?: number | null | undefined;
+  backend: "kubernetesJob";
 };
 
 export const Reason58 = {
@@ -556,55 +734,14 @@ export type DataStatus58 = {
   stale: boolean;
 };
 
-export type DataGcpServiceUsage = {
-  enabled: boolean;
-  lastOperationName?: string | null | undefined;
-  projectId: string;
-  serviceName: string;
-  serviceResourceName?: string | null | undefined;
-  state?: string | null | undefined;
+export type DataAzureContainerApps2 = {
+  environmentVariableCount: number;
+  managedEnvironmentId: string;
+  managedIdentityId?: string | null | undefined;
+  resourceGroupName: string;
+  resourcePrefix?: string | null | undefined;
   status: DataStatus58;
-  title?: string | null | undefined;
-  backend: "gcpServiceUsage";
-};
-
-export type DataUnion15 = DataGcpServiceUsage | DataAzureResourceProvider;
-
-export type DataServiceActivation = {
-  data: DataGcpServiceUsage | DataAzureResourceProvider;
-  resourceType: "service_activation";
-};
-
-export type InvolvedObject9 = {
-  apiVersion?: string | null | undefined;
-  fieldPath?: string | null | undefined;
-  kind?: string | null | undefined;
-  name?: string | null | undefined;
-  namespace?: string | null | undefined;
-  resourceVersion?: string | null | undefined;
-  uid?: string | null | undefined;
-};
-
-export type InvolvedObjectUnion9 = InvolvedObject9 | any;
-
-export type GetResourceDeploymentDetailSource9 = {
-  component?: string | null | undefined;
-  host?: string | null | undefined;
-};
-
-export type SourceUnion9 = GetResourceDeploymentDetailSource9 | any;
-
-export type Event12 = {
-  count?: number | null | undefined;
-  eventTime?: Date | null | undefined;
-  firstTimestamp?: Date | null | undefined;
-  involvedObject?: InvolvedObject9 | any | null | undefined;
-  lastTimestamp?: Date | null | undefined;
-  message: string;
-  raw?: any | null | undefined;
-  reason: string;
-  source?: GetResourceDeploymentDetailSource9 | any | null | undefined;
-  type?: string | null | undefined;
+  backend: "azureContainerApps";
 };
 
 export const Reason57 = {
@@ -663,19 +800,14 @@ export type DataStatus57 = {
   stale: boolean;
 };
 
-export type DataKubernetesJob = {
-  active?: number | null | undefined;
-  completionTime?: Date | null | undefined;
-  conditionCount: number;
-  events: Array<Event12>;
-  failed?: number | null | undefined;
-  imageDigest?: string | null | undefined;
-  jobName: string;
-  namespace: string;
-  startTime?: Date | null | undefined;
+export type DataGcpCloudBuild = {
+  buildConfigId: string;
+  environmentVariableCount: number;
+  location: string;
+  projectId: string;
+  serviceAccount?: string | null | undefined;
   status: DataStatus57;
-  succeeded?: number | null | undefined;
-  backend: "kubernetesJob";
+  backend: "gcpCloudBuild";
 };
 
 export const Reason56 = {
@@ -734,14 +866,44 @@ export type DataStatus56 = {
   stale: boolean;
 };
 
-export type DataAzureContainerApps2 = {
+export type DataAwsCodeBuild = {
+  artifactsEncryptionDisabled?: boolean | null | undefined;
+  artifactsType?: string | null | undefined;
+  cloudWatchLogsStatus?: string | null | undefined;
+  computeType?: string | null | undefined;
+  created?: number | null | undefined;
+  description?: string | null | undefined;
+  encryptionKeyPresent: boolean;
+  environmentImage?: string | null | undefined;
+  environmentType?: string | null | undefined;
   environmentVariableCount: number;
-  managedEnvironmentId: string;
-  managedIdentityId?: string | null | undefined;
-  resourceGroupName: string;
-  resourcePrefix?: string | null | undefined;
+  imagePullCredentialsType?: string | null | undefined;
+  lastModified?: number | null | undefined;
+  privilegedMode?: boolean | null | undefined;
+  projectArn?: string | null | undefined;
+  projectName: string;
+  queuedTimeoutInMinutes?: number | null | undefined;
+  s3LogsStatus?: string | null | undefined;
+  serviceRolePresent: boolean;
+  sourceType?: string | null | undefined;
   status: DataStatus56;
-  backend: "azureContainerApps";
+  timeoutInMinutes?: number | null | undefined;
+  backend: "awsCodeBuild";
+};
+
+export type DataUnion14 =
+  | DataAwsCodeBuild
+  | DataGcpCloudBuild
+  | DataAzureContainerApps2
+  | DataKubernetesJob;
+
+export type DataBuild = {
+  data:
+    | DataAwsCodeBuild
+    | DataGcpCloudBuild
+    | DataAzureContainerApps2
+    | DataKubernetesJob;
+  resourceType: "build";
 };
 
 export const Reason55 = {
@@ -800,14 +962,11 @@ export type DataStatus55 = {
   stale: boolean;
 };
 
-export type DataGcpCloudBuild = {
-  buildConfigId: string;
-  environmentVariableCount: number;
-  location: string;
-  projectId: string;
-  serviceAccount?: string | null | undefined;
+export type DataLocal11 = {
+  reachable: boolean;
+  registryUrl: string;
   status: DataStatus55;
-  backend: "gcpCloudBuild";
+  backend: "local";
 };
 
 export const Reason54 = {
@@ -866,44 +1025,35 @@ export type DataStatus54 = {
   stale: boolean;
 };
 
-export type DataAwsCodeBuild = {
-  artifactsEncryptionDisabled?: boolean | null | undefined;
-  artifactsType?: string | null | undefined;
-  cloudWatchLogsStatus?: string | null | undefined;
-  computeType?: string | null | undefined;
-  created?: number | null | undefined;
-  description?: string | null | undefined;
-  encryptionKeyPresent: boolean;
-  environmentImage?: string | null | undefined;
-  environmentType?: string | null | undefined;
-  environmentVariableCount: number;
-  imagePullCredentialsType?: string | null | undefined;
-  lastModified?: number | null | undefined;
-  privilegedMode?: boolean | null | undefined;
-  projectArn?: string | null | undefined;
-  projectName: string;
-  queuedTimeoutInMinutes?: number | null | undefined;
-  s3LogsStatus?: string | null | undefined;
-  serviceRolePresent: boolean;
-  sourceType?: string | null | undefined;
+export type DataAzureContainerRegistry = {
+  adminUserEnabled: boolean;
+  anonymousPullEnabled: boolean;
+  creationDate?: string | null | undefined;
+  dataEndpointEnabled?: boolean | null | undefined;
+  dataEndpointHostNames: Array<string>;
+  encryptionKeyIdentifierPresent: boolean;
+  encryptionKeyVaultUriPresent: boolean;
+  encryptionStatus?: string | null | undefined;
+  ipRuleCount: number;
+  location: string;
+  loginServer?: string | null | undefined;
+  managedTagCount: number;
+  name: string;
+  networkRuleBypassOptions: string;
+  networkRuleDefaultAction?: string | null | undefined;
+  policiesPresent: boolean;
+  policyCount: number;
+  privateEndpointConnectionCount: number;
+  provisioningState?: string | null | undefined;
+  publicNetworkAccess: string;
+  resourceGroup: string;
+  resourceId?: string | null | undefined;
+  skuName: string;
+  skuTier?: string | null | undefined;
   status: DataStatus54;
-  timeoutInMinutes?: number | null | undefined;
-  backend: "awsCodeBuild";
-};
-
-export type DataUnion14 =
-  | DataAwsCodeBuild
-  | DataGcpCloudBuild
-  | DataAzureContainerApps2
-  | DataKubernetesJob;
-
-export type DataBuild = {
-  data:
-    | DataAwsCodeBuild
-    | DataGcpCloudBuild
-    | DataAzureContainerApps2
-    | DataKubernetesJob;
-  resourceType: "build";
+  type?: string | null | undefined;
+  zoneRedundancy: string;
+  backend: "azureContainerRegistry";
 };
 
 export const Reason53 = {
@@ -962,11 +1112,41 @@ export type DataStatus53 = {
   stale: boolean;
 };
 
-export type DataLocal11 = {
-  reachable: boolean;
-  registryUrl: string;
+export type DataGcpArtifactRegistry = {
+  cleanupPolicyCount: number;
+  cleanupPolicyDryRun?: boolean | null | undefined;
+  createTime?: string | null | undefined;
+  description?: string | null | undefined;
+  format?: string | null | undefined;
+  iamBindingCount: number;
+  iamPolicyEtagPresent: boolean;
+  iamRoles: Array<string>;
+  kmsKeyNamePresent: boolean;
+  labelCount: number;
+  location: string;
+  mode?: string | null | undefined;
+  name?: string | null | undefined;
+  projectId: string;
+  pullServiceAccountEmail?: string | null | undefined;
+  pushServiceAccountEmail?: string | null | undefined;
+  repositoryId: string;
+  satisfiesPzs?: boolean | null | undefined;
+  sizeBytes?: string | null | undefined;
   status: DataStatus53;
-  backend: "local";
+  updateTime?: string | null | undefined;
+  backend: "gcpArtifactRegistry";
+};
+
+export type Repository = {
+  createdAt: number;
+  encryptionType?: string | null | undefined;
+  imageTagMutability?: string | null | undefined;
+  kmsKeyPresent: boolean;
+  registryId: string;
+  repositoryArn: string;
+  repositoryName: string;
+  repositoryUri: string;
+  scanOnPush?: boolean | null | undefined;
 };
 
 export const Reason52 = {
@@ -1025,35 +1205,33 @@ export type DataStatus52 = {
   stale: boolean;
 };
 
-export type DataAzureContainerRegistry = {
-  adminUserEnabled: boolean;
-  anonymousPullEnabled: boolean;
-  creationDate?: string | null | undefined;
-  dataEndpointEnabled?: boolean | null | undefined;
-  dataEndpointHostNames: Array<string>;
-  encryptionKeyIdentifierPresent: boolean;
-  encryptionKeyVaultUriPresent: boolean;
-  encryptionStatus?: string | null | undefined;
-  ipRuleCount: number;
-  location: string;
-  loginServer?: string | null | undefined;
-  managedTagCount: number;
-  name: string;
-  networkRuleBypassOptions: string;
-  networkRuleDefaultAction?: string | null | undefined;
-  policiesPresent: boolean;
-  policyCount: number;
-  privateEndpointConnectionCount: number;
-  provisioningState?: string | null | undefined;
-  publicNetworkAccess: string;
-  resourceGroup: string;
-  resourceId?: string | null | undefined;
-  skuName: string;
-  skuTier?: string | null | undefined;
+export type DataAwsEcr = {
+  pullRoleArn?: string | null | undefined;
+  pushRoleArn?: string | null | undefined;
+  region: string;
+  registryId: string;
+  registryUri: string;
+  repositories: Array<Repository>;
+  repositoriesTruncated: boolean;
+  repositoryCount: number;
+  repositoryPrefix: string;
   status: DataStatus52;
-  type?: string | null | undefined;
-  zoneRedundancy: string;
-  backend: "azureContainerRegistry";
+  backend: "awsEcr";
+};
+
+export type DataUnion13 =
+  | DataAwsEcr
+  | DataGcpArtifactRegistry
+  | DataAzureContainerRegistry
+  | DataLocal11;
+
+export type DataArtifactRegistry = {
+  data:
+    | DataAwsEcr
+    | DataGcpArtifactRegistry
+    | DataAzureContainerRegistry
+    | DataLocal11;
+  resourceType: "artifact-registry";
 };
 
 export const Reason51 = {
@@ -1112,41 +1290,16 @@ export type DataStatus51 = {
   stale: boolean;
 };
 
-export type DataGcpArtifactRegistry = {
-  cleanupPolicyCount: number;
-  cleanupPolicyDryRun?: boolean | null | undefined;
-  createTime?: string | null | undefined;
-  description?: string | null | undefined;
-  format?: string | null | undefined;
-  iamBindingCount: number;
-  iamPolicyEtagPresent: boolean;
-  iamRoles: Array<string>;
-  kmsKeyNamePresent: boolean;
-  labelCount: number;
-  location: string;
-  mode?: string | null | undefined;
-  name?: string | null | undefined;
-  projectId: string;
-  pullServiceAccountEmail?: string | null | undefined;
-  pushServiceAccountEmail?: string | null | undefined;
-  repositoryId: string;
-  satisfiesPzs?: boolean | null | undefined;
-  sizeBytes?: string | null | undefined;
+export type DataAzureManagedIdentity2 = {
+  ficName?: string | null | undefined;
+  roleAssignmentIds: Array<string>;
+  roleDefinitionId?: string | null | undefined;
   status: DataStatus51;
-  updateTime?: string | null | undefined;
-  backend: "gcpArtifactRegistry";
-};
-
-export type Repository = {
-  createdAt: number;
-  encryptionType?: string | null | undefined;
-  imageTagMutability?: string | null | undefined;
-  kmsKeyPresent: boolean;
-  registryId: string;
-  repositoryArn: string;
-  repositoryName: string;
-  repositoryUri: string;
-  scanOnPush?: boolean | null | undefined;
+  tenantId?: string | null | undefined;
+  uamiClientId?: string | null | undefined;
+  uamiPrincipalId?: string | null | undefined;
+  uamiResourceId?: string | null | undefined;
+  backend: "azureManagedIdentity";
 };
 
 export const Reason50 = {
@@ -1205,33 +1358,13 @@ export type DataStatus50 = {
   stale: boolean;
 };
 
-export type DataAwsEcr = {
-  pullRoleArn?: string | null | undefined;
-  pushRoleArn?: string | null | undefined;
-  region: string;
-  registryId: string;
-  registryUri: string;
-  repositories: Array<Repository>;
-  repositoriesTruncated: boolean;
-  repositoryCount: number;
-  repositoryPrefix: string;
+export type DataGcpServiceAccount2 = {
+  impersonationGranted: boolean;
+  roleBound: boolean;
+  serviceAccountEmail?: string | null | undefined;
+  serviceAccountUniqueId?: string | null | undefined;
   status: DataStatus50;
-  backend: "awsEcr";
-};
-
-export type DataUnion13 =
-  | DataAwsEcr
-  | DataGcpArtifactRegistry
-  | DataAzureContainerRegistry
-  | DataLocal11;
-
-export type DataArtifactRegistry = {
-  data:
-    | DataAwsEcr
-    | DataGcpArtifactRegistry
-    | DataAzureContainerRegistry
-    | DataLocal11;
-  resourceType: "artifact-registry";
+  backend: "gcpServiceAccount";
 };
 
 export const Reason49 = {
@@ -1290,16 +1423,22 @@ export type DataStatus49 = {
   stale: boolean;
 };
 
-export type DataAzureManagedIdentity2 = {
-  ficName?: string | null | undefined;
-  roleAssignmentIds: Array<string>;
-  roleDefinitionId?: string | null | undefined;
+export type DataAwsIamRole2 = {
+  managementPermissionsApplied: boolean;
+  roleArn?: string | null | undefined;
+  roleName?: string | null | undefined;
   status: DataStatus49;
-  tenantId?: string | null | undefined;
-  uamiClientId?: string | null | undefined;
-  uamiPrincipalId?: string | null | undefined;
-  uamiResourceId?: string | null | undefined;
-  backend: "azureManagedIdentity";
+  backend: "awsIamRole";
+};
+
+export type DataUnion12 =
+  | DataAwsIamRole2
+  | DataGcpServiceAccount2
+  | DataAzureManagedIdentity2;
+
+export type DataRemoteStackManagement = {
+  data: DataAwsIamRole2 | DataGcpServiceAccount2 | DataAzureManagedIdentity2;
+  resourceType: "remote-stack-management";
 };
 
 export const Reason48 = {
@@ -1358,13 +1497,23 @@ export type DataStatus48 = {
   stale: boolean;
 };
 
-export type DataGcpServiceAccount2 = {
-  impersonationGranted: boolean;
-  roleBound: boolean;
-  serviceAccountEmail?: string | null | undefined;
-  serviceAccountUniqueId?: string | null | undefined;
+export type DataAzureVnet = {
+  applicationGatewaySubnetName?: string | null | undefined;
+  cidrBlock?: string | null | undefined;
+  isByoVnet: boolean;
+  lastByoVnetVerificationErrorCode?: string | null | undefined;
+  location?: string | null | undefined;
+  natGatewayId?: string | null | undefined;
+  nsgId?: string | null | undefined;
+  privateEndpointSubnetName?: string | null | undefined;
+  privateSubnetName?: string | null | undefined;
+  publicIpId?: string | null | undefined;
+  publicSubnetName?: string | null | undefined;
+  resourceGroup?: string | null | undefined;
   status: DataStatus48;
-  backend: "gcpServiceAccount";
+  vnetName?: string | null | undefined;
+  vnetResourceId?: string | null | undefined;
+  backend: "azureVnet";
 };
 
 export const Reason47 = {
@@ -1423,22 +1572,19 @@ export type DataStatus47 = {
   stale: boolean;
 };
 
-export type DataAwsIamRole2 = {
-  managementPermissionsApplied: boolean;
-  roleArn?: string | null | undefined;
-  roleName?: string | null | undefined;
+export type DataGcpVpc = {
+  cidrBlock?: string | null | undefined;
+  cloudNatName?: string | null | undefined;
+  firewallName?: string | null | undefined;
+  isByoVpc: boolean;
+  networkName?: string | null | undefined;
+  networkSelfLink?: string | null | undefined;
+  region?: string | null | undefined;
+  routerName?: string | null | undefined;
   status: DataStatus47;
-  backend: "awsIamRole";
-};
-
-export type DataUnion12 =
-  | DataAwsIamRole2
-  | DataGcpServiceAccount2
-  | DataAzureManagedIdentity2;
-
-export type DataRemoteStackManagement = {
-  data: DataAwsIamRole2 | DataGcpServiceAccount2 | DataAzureManagedIdentity2;
-  resourceType: "remote-stack-management";
+  subnetworkName?: string | null | undefined;
+  subnetworkSelfLink?: string | null | undefined;
+  backend: "gcpVpc";
 };
 
 export const Reason46 = {
@@ -1497,23 +1643,27 @@ export type DataStatus46 = {
   stale: boolean;
 };
 
-export type DataAzureVnet = {
-  applicationGatewaySubnetName?: string | null | undefined;
+export type DataAwsVpc = {
+  availabilityZones: Array<string>;
   cidrBlock?: string | null | undefined;
-  isByoVnet: boolean;
-  lastByoVnetVerificationErrorCode?: string | null | undefined;
-  location?: string | null | undefined;
+  internetGatewayId?: string | null | undefined;
+  isByoVpc: boolean;
   natGatewayId?: string | null | undefined;
-  nsgId?: string | null | undefined;
-  privateEndpointSubnetName?: string | null | undefined;
-  privateSubnetName?: string | null | undefined;
-  publicIpId?: string | null | undefined;
-  publicSubnetName?: string | null | undefined;
-  resourceGroup?: string | null | undefined;
+  privateSubnetIds: Array<string>;
+  publicSubnetIds: Array<string>;
+  routeTableCount: number;
+  securityGroupId?: string | null | undefined;
   status: DataStatus46;
-  vnetName?: string | null | undefined;
-  vnetResourceId?: string | null | undefined;
-  backend: "azureVnet";
+  vpcId?: string | null | undefined;
+  vpcState?: string | null | undefined;
+  backend: "awsVpc";
+};
+
+export type DataUnion11 = DataAwsVpc | DataGcpVpc | DataAzureVnet;
+
+export type DataNetwork = {
+  data: DataAwsVpc | DataGcpVpc | DataAzureVnet;
+  resourceType: "network";
 };
 
 export const Reason45 = {
@@ -1572,19 +1722,11 @@ export type DataStatus45 = {
   stale: boolean;
 };
 
-export type DataGcpVpc = {
-  cidrBlock?: string | null | undefined;
-  cloudNatName?: string | null | undefined;
-  firewallName?: string | null | undefined;
-  isByoVpc: boolean;
-  networkName?: string | null | undefined;
-  networkSelfLink?: string | null | undefined;
-  region?: string | null | undefined;
-  routerName?: string | null | undefined;
+export type DataLocal10 = {
+  configured: boolean;
+  identity: string;
   status: DataStatus45;
-  subnetworkName?: string | null | undefined;
-  subnetworkSelfLink?: string | null | undefined;
-  backend: "gcpVpc";
+  backend: "local";
 };
 
 export const Reason44 = {
@@ -1643,27 +1785,24 @@ export type DataStatus44 = {
   stale: boolean;
 };
 
-export type DataAwsVpc = {
-  availabilityZones: Array<string>;
-  cidrBlock?: string | null | undefined;
-  internetGatewayId?: string | null | undefined;
-  isByoVpc: boolean;
-  natGatewayId?: string | null | undefined;
-  privateSubnetIds: Array<string>;
-  publicSubnetIds: Array<string>;
-  routeTableCount: number;
-  securityGroupId?: string | null | undefined;
+export type DataAzureManagedIdentity1 = {
+  clientId?: string | null | undefined;
+  customRoleDefinitionCount: number;
+  customRoleDefinitionIds: Array<string>;
+  isolationScope?: string | null | undefined;
+  location: string;
+  managedTagCount: number;
+  name: string;
+  principalId?: string | null | undefined;
+  resourceGroup: string;
+  resourceId: string;
+  roleAssignmentCount: number;
+  roleAssignmentIds: Array<string>;
+  stackPermissionsApplied: boolean;
   status: DataStatus44;
-  vpcId?: string | null | undefined;
-  vpcState?: string | null | undefined;
-  backend: "awsVpc";
-};
-
-export type DataUnion11 = DataAwsVpc | DataGcpVpc | DataAzureVnet;
-
-export type DataNetwork = {
-  data: DataAwsVpc | DataGcpVpc | DataAzureVnet;
-  resourceType: "network";
+  tenantId?: string | null | undefined;
+  type?: string | null | undefined;
+  backend: "azureManagedIdentity";
 };
 
 export const Reason43 = {
@@ -1722,11 +1861,22 @@ export type DataStatus43 = {
   stale: boolean;
 };
 
-export type DataLocal10 = {
-  configured: boolean;
-  identity: string;
+export type DataGcpServiceAccount1 = {
+  description?: string | null | undefined;
+  disabled?: boolean | null | undefined;
+  displayName?: string | null | undefined;
+  email: string;
+  etag?: string | null | undefined;
+  name?: string | null | undefined;
+  oauth2ClientId?: string | null | undefined;
+  projectBindingCount: number;
+  projectId?: string | null | undefined;
+  projectRoles: Array<string>;
+  serviceAccountBindingCount: number;
+  serviceAccountRoles: Array<string>;
   status: DataStatus43;
-  backend: "local";
+  uniqueId?: string | null | undefined;
+  backend: "gcpServiceAccount";
 };
 
 export const Reason42 = {
@@ -1785,24 +1935,43 @@ export type DataStatus42 = {
   stale: boolean;
 };
 
-export type DataAzureManagedIdentity1 = {
-  clientId?: string | null | undefined;
-  customRoleDefinitionCount: number;
-  customRoleDefinitionIds: Array<string>;
-  isolationScope?: string | null | undefined;
-  location: string;
+export type DataAwsIamRole1 = {
+  assumeRolePolicyPresent: boolean;
+  attachedPolicyCount: number;
+  attachedPolicyNames: Array<string>;
+  createDate: string;
+  description?: string | null | undefined;
+  inlinePolicyCount: number;
+  inlinePolicyNames: Array<string>;
+  lastUsedDate?: string | null | undefined;
+  lastUsedRegion?: string | null | undefined;
   managedTagCount: number;
-  name: string;
-  principalId?: string | null | undefined;
-  resourceGroup: string;
-  resourceId: string;
-  roleAssignmentCount: number;
-  roleAssignmentIds: Array<string>;
+  maxSessionDuration?: number | null | undefined;
+  path: string;
+  permissionsBoundaryArn?: string | null | undefined;
+  permissionsBoundaryType?: string | null | undefined;
+  roleArn: string;
+  roleId: string;
+  roleName: string;
   stackPermissionsApplied: boolean;
   status: DataStatus42;
-  tenantId?: string | null | undefined;
-  type?: string | null | undefined;
-  backend: "azureManagedIdentity";
+  tagCount: number;
+  backend: "awsIamRole";
+};
+
+export type DataUnion10 =
+  | DataAwsIamRole1
+  | DataGcpServiceAccount1
+  | DataAzureManagedIdentity1
+  | DataLocal10;
+
+export type DataServiceAccount = {
+  data:
+    | DataAwsIamRole1
+    | DataGcpServiceAccount1
+    | DataAzureManagedIdentity1
+    | DataLocal10;
+  resourceType: "service-account";
 };
 
 export const Reason41 = {
@@ -1861,22 +2030,15 @@ export type DataStatus41 = {
   stale: boolean;
 };
 
-export type DataGcpServiceAccount1 = {
-  description?: string | null | undefined;
-  disabled?: boolean | null | undefined;
-  displayName?: string | null | undefined;
-  email: string;
-  etag?: string | null | undefined;
-  name?: string | null | undefined;
-  oauth2ClientId?: string | null | undefined;
-  projectBindingCount: number;
-  projectId?: string | null | undefined;
-  projectRoles: Array<string>;
-  serviceAccountBindingCount: number;
-  serviceAccountRoles: Array<string>;
+export type DataLocal9 = {
+  isDirectory?: boolean | null | undefined;
+  modifiedAt?: Date | null | undefined;
+  path: string;
+  pathExists: boolean;
+  readonly?: boolean | null | undefined;
+  secretMetadataListed: boolean;
   status: DataStatus41;
-  uniqueId?: string | null | undefined;
-  backend: "gcpServiceAccount";
+  backend: "local";
 };
 
 export const Reason40 = {
@@ -1935,43 +2097,12 @@ export type DataStatus40 = {
   stale: boolean;
 };
 
-export type DataAwsIamRole1 = {
-  assumeRolePolicyPresent: boolean;
-  attachedPolicyCount: number;
-  attachedPolicyNames: Array<string>;
-  createDate: string;
-  description?: string | null | undefined;
-  inlinePolicyCount: number;
-  inlinePolicyNames: Array<string>;
-  lastUsedDate?: string | null | undefined;
-  lastUsedRegion?: string | null | undefined;
-  managedTagCount: number;
-  maxSessionDuration?: number | null | undefined;
-  path: string;
-  permissionsBoundaryArn?: string | null | undefined;
-  permissionsBoundaryType?: string | null | undefined;
-  roleArn: string;
-  roleId: string;
-  roleName: string;
-  stackPermissionsApplied: boolean;
+export type DataKubernetesSecret = {
+  namespace: string;
+  prefix: string;
+  secretMetadataListed: boolean;
   status: DataStatus40;
-  tagCount: number;
-  backend: "awsIamRole";
-};
-
-export type DataUnion10 =
-  | DataAwsIamRole1
-  | DataGcpServiceAccount1
-  | DataAzureManagedIdentity1
-  | DataLocal10;
-
-export type DataServiceAccount = {
-  data:
-    | DataAwsIamRole1
-    | DataGcpServiceAccount1
-    | DataAzureManagedIdentity1
-    | DataLocal10;
-  resourceType: "service-account";
+  backend: "kubernetesSecret";
 };
 
 export const Reason39 = {
@@ -2030,15 +2161,25 @@ export type DataStatus39 = {
   stale: boolean;
 };
 
-export type DataLocal9 = {
-  isDirectory?: boolean | null | undefined;
-  modifiedAt?: Date | null | undefined;
-  path: string;
-  pathExists: boolean;
-  readonly?: boolean | null | undefined;
+export type DataAzureKeyVault = {
+  accessPolicyCount: number;
+  location?: string | null | undefined;
+  name: string;
+  privateEndpointConnectionCount: number;
+  provisioningState?: string | null | undefined;
+  publicNetworkAccess: string;
+  purgeProtectionEnabled?: boolean | null | undefined;
+  rbacAuthorizationEnabled: boolean;
+  resourceGroup?: string | null | undefined;
+  resourceId?: string | null | undefined;
   secretMetadataListed: boolean;
+  skuFamily?: string | null | undefined;
+  skuName?: string | null | undefined;
+  softDeleteEnabled: boolean;
+  softDeleteRetentionDays: number;
   status: DataStatus39;
-  backend: "local";
+  vaultUri?: string | null | undefined;
+  backend: "azureKeyVault";
 };
 
 export const Reason38 = {
@@ -2097,12 +2238,13 @@ export type DataStatus38 = {
   stale: boolean;
 };
 
-export type DataKubernetesSecret = {
-  namespace: string;
+export type DataGcpSecretManager = {
+  location: string;
   prefix: string;
+  projectId: string;
   secretMetadataListed: boolean;
   status: DataStatus38;
-  backend: "kubernetesSecret";
+  backend: "gcpSecretManager";
 };
 
 export const Reason37 = {
@@ -2161,25 +2303,38 @@ export type DataStatus37 = {
   stale: boolean;
 };
 
-export type DataAzureKeyVault = {
-  accessPolicyCount: number;
-  location?: string | null | undefined;
-  name: string;
-  privateEndpointConnectionCount: number;
-  provisioningState?: string | null | undefined;
-  publicNetworkAccess: string;
-  purgeProtectionEnabled?: boolean | null | undefined;
-  rbacAuthorizationEnabled: boolean;
-  resourceGroup?: string | null | undefined;
-  resourceId?: string | null | undefined;
-  secretMetadataListed: boolean;
-  skuFamily?: string | null | undefined;
-  skuName?: string | null | undefined;
-  softDeleteEnabled: boolean;
-  softDeleteRetentionDays: number;
+export type DataAwsParameterStore = {
+  accountId: string;
+  hasMoreParameters?: boolean | null | undefined;
+  latestModifiedAt?: Date | null | undefined;
+  parameterMetadataSampled: boolean;
+  prefix: string;
+  region: string;
+  sampledAdvancedTierCount?: number | null | undefined;
+  sampledKmsKeyMetadataPresentCount?: number | null | undefined;
+  sampledParameterCount?: number | null | undefined;
+  sampledSecureStringCount?: number | null | undefined;
+  sampledStringCount?: number | null | undefined;
+  sampledStringListCount?: number | null | undefined;
   status: DataStatus37;
-  vaultUri?: string | null | undefined;
-  backend: "azureKeyVault";
+  backend: "awsParameterStore";
+};
+
+export type DataUnion9 =
+  | DataAwsParameterStore
+  | DataGcpSecretManager
+  | DataAzureKeyVault
+  | DataKubernetesSecret
+  | DataLocal9;
+
+export type DataVault = {
+  data:
+    | DataAwsParameterStore
+    | DataGcpSecretManager
+    | DataAzureKeyVault
+    | DataKubernetesSecret
+    | DataLocal9;
+  resourceType: "vault";
 };
 
 export const Reason36 = {
@@ -2238,13 +2393,13 @@ export type DataStatus36 = {
   stale: boolean;
 };
 
-export type DataGcpSecretManager = {
-  location: string;
-  prefix: string;
-  projectId: string;
-  secretMetadataListed: boolean;
+export type DataLocal8 = {
+  name: string;
+  port?: number | null | undefined;
+  processRunning: boolean;
   status: DataStatus36;
-  backend: "gcpSecretManager";
+  version: string;
+  backend: "local";
 };
 
 export const Reason35 = {
@@ -2303,38 +2458,12 @@ export type DataStatus35 = {
   stale: boolean;
 };
 
-export type DataAwsParameterStore = {
-  accountId: string;
-  hasMoreParameters?: boolean | null | undefined;
-  latestModifiedAt?: Date | null | undefined;
-  parameterMetadataSampled: boolean;
-  prefix: string;
-  region: string;
-  sampledAdvancedTierCount?: number | null | undefined;
-  sampledKmsKeyMetadataPresentCount?: number | null | undefined;
-  sampledParameterCount?: number | null | undefined;
-  sampledSecureStringCount?: number | null | undefined;
-  sampledStringCount?: number | null | undefined;
-  sampledStringListCount?: number | null | undefined;
+export type DataFlexibleServer = {
+  serverName: string;
+  state?: string | null | undefined;
   status: DataStatus35;
-  backend: "awsParameterStore";
-};
-
-export type DataUnion9 =
-  | DataAwsParameterStore
-  | DataGcpSecretManager
-  | DataAzureKeyVault
-  | DataKubernetesSecret
-  | DataLocal9;
-
-export type DataVault = {
-  data:
-    | DataAwsParameterStore
-    | DataGcpSecretManager
-    | DataAzureKeyVault
-    | DataKubernetesSecret
-    | DataLocal9;
-  resourceType: "vault";
+  version?: string | null | undefined;
+  backend: "flexibleServer";
 };
 
 export const Reason34 = {
@@ -2393,13 +2522,12 @@ export type DataStatus34 = {
   stale: boolean;
 };
 
-export type DataLocal8 = {
-  name: string;
-  port?: number | null | undefined;
-  processRunning: boolean;
+export type DataCloudSQL = {
+  databaseVersion?: string | null | undefined;
+  instanceName: string;
+  state?: string | null | undefined;
   status: DataStatus34;
-  version: string;
-  backend: "local";
+  backend: "cloudSql";
 };
 
 export const Reason33 = {
@@ -2458,12 +2586,34 @@ export type DataStatus33 = {
   stale: boolean;
 };
 
-export type DataFlexibleServer = {
-  serverName: string;
-  state?: string | null | undefined;
+export type DataAurora = {
+  clusterIdentifier: string;
+  endpoint?: string | null | undefined;
+  engineVersion?: string | null | undefined;
+  /**
+   * True when a `minCapacity: 0` instance has not reached 0 ACU over the observation
+   *
+   * @remarks
+   * window — it is silently paying always-on prices (auto-pause verification).
+   */
+  neverPauses: boolean;
+  /**
+   * Latest sampled `ServerlessDatabaseCapacity` (ACU).
+   */
+  serverlessCapacity?: number | null | undefined;
   status: DataStatus33;
-  version?: string | null | undefined;
-  backend: "flexibleServer";
+  backend: "aurora";
+};
+
+export type DataUnion8 =
+  | DataAurora
+  | DataCloudSQL
+  | DataFlexibleServer
+  | DataLocal8;
+
+export type DataPostgres = {
+  data: DataAurora | DataCloudSQL | DataFlexibleServer | DataLocal8;
+  resourceType: "postgres";
 };
 
 export const Reason32 = {
@@ -2522,12 +2672,14 @@ export type DataStatus32 = {
   stale: boolean;
 };
 
-export type DataCloudSQL = {
-  databaseVersion?: string | null | undefined;
-  instanceName: string;
-  state?: string | null | undefined;
+export type DataLocal7 = {
+  cloudMetadataSupported: boolean;
+  isDirectory?: boolean | null | undefined;
+  name: string;
+  path: string;
+  pathExists: boolean;
   status: DataStatus32;
-  backend: "cloudSql";
+  backend: "local";
 };
 
 export const Reason31 = {
@@ -2586,34 +2738,20 @@ export type DataStatus31 = {
   stale: boolean;
 };
 
-export type DataAurora = {
-  clusterIdentifier: string;
+export type DataAzureTable = {
   endpoint?: string | null | undefined;
-  engineVersion?: string | null | undefined;
-  /**
-   * True when a `minCapacity: 0` instance has not reached 0 ACU over the observation
-   *
-   * @remarks
-   * window — it is silently paying always-on prices (auto-pause verification).
-   */
-  neverPauses: boolean;
-  /**
-   * Latest sampled `ServerlessDatabaseCapacity` (ACU).
-   */
-  serverlessCapacity?: number | null | undefined;
+  resourceGroup?: string | null | undefined;
+  signedIdentifierCount?: number | null | undefined;
   status: DataStatus31;
-  backend: "aurora";
-};
-
-export type DataUnion8 =
-  | DataAurora
-  | DataCloudSQL
-  | DataFlexibleServer
-  | DataLocal8;
-
-export type DataPostgres = {
-  data: DataAurora | DataCloudSQL | DataFlexibleServer | DataLocal8;
-  resourceType: "postgres";
+  storageAccountKind?: string | null | undefined;
+  storageAccountLocation?: string | null | undefined;
+  storageAccountName: string;
+  storageAccountPrimaryStatus?: string | null | undefined;
+  storageAccountProvisioningState?: string | null | undefined;
+  storageAccountResourceId?: string | null | undefined;
+  tableExists: boolean;
+  tableName: string;
+  backend: "azureTable";
 };
 
 export const Reason30 = {
@@ -2672,14 +2810,31 @@ export type DataStatus30 = {
   stale: boolean;
 };
 
-export type DataLocal7 = {
-  cloudMetadataSupported: boolean;
-  isDirectory?: boolean | null | undefined;
-  name: string;
-  path: string;
-  pathExists: boolean;
+export type DataGcpFirestore = {
+  appEngineIntegrationMode?: string | null | undefined;
+  cmekEnabled: boolean;
+  concurrencyMode?: string | null | undefined;
+  createTime?: string | null | undefined;
+  databaseEdition?: string | null | undefined;
+  databaseName: string;
+  databaseType?: string | null | undefined;
+  deleteProtectionState?: string | null | undefined;
+  deleteTime?: string | null | undefined;
+  earliestVersionTime?: string | null | undefined;
+  endpoint?: string | null | undefined;
+  locationId?: string | null | undefined;
+  pointInTimeRecoveryEnablement?: string | null | undefined;
+  projectId?: string | null | undefined;
+  sourceInfoPresent: boolean;
   status: DataStatus30;
-  backend: "local";
+  updateTime?: string | null | undefined;
+  versionRetentionPeriod?: string | null | undefined;
+  backend: "gcpFirestore";
+};
+
+export type KeySchema = {
+  attributeName: string;
+  keyType: string;
 };
 
 export const Reason29 = {
@@ -2738,20 +2893,40 @@ export type DataStatus29 = {
   stale: boolean;
 };
 
-export type DataAzureTable = {
-  endpoint?: string | null | undefined;
-  resourceGroup?: string | null | undefined;
-  signedIdentifierCount?: number | null | undefined;
+export type DataAwsDynamoDb = {
+  billingMode?: string | null | undefined;
+  deletionProtectionEnabled?: boolean | null | undefined;
+  globalSecondaryIndexCount?: number | null | undefined;
+  itemCount?: number | null | undefined;
+  keySchema: Array<KeySchema>;
+  localSecondaryIndexCount?: number | null | undefined;
+  name: string;
+  region?: string | null | undefined;
+  replicaCount?: number | null | undefined;
+  restoreInProgress?: boolean | null | undefined;
+  sseStatus?: string | null | undefined;
+  sseType?: string | null | undefined;
   status: DataStatus29;
-  storageAccountKind?: string | null | undefined;
-  storageAccountLocation?: string | null | undefined;
-  storageAccountName: string;
-  storageAccountPrimaryStatus?: string | null | undefined;
-  storageAccountProvisioningState?: string | null | undefined;
-  storageAccountResourceId?: string | null | undefined;
-  tableExists: boolean;
-  tableName: string;
-  backend: "azureTable";
+  streamEnabled?: boolean | null | undefined;
+  streamViewType?: string | null | undefined;
+  tableArn?: string | null | undefined;
+  tableClass?: string | null | undefined;
+  tableSizeBytes?: number | null | undefined;
+  tableStatus?: string | null | undefined;
+  ttlAttributeName?: string | null | undefined;
+  ttlStatus?: string | null | undefined;
+  backend: "awsDynamoDb";
+};
+
+export type DataUnion7 =
+  | DataAwsDynamoDb
+  | DataGcpFirestore
+  | DataAzureTable
+  | DataLocal7;
+
+export type DataKv = {
+  data: DataAwsDynamoDb | DataGcpFirestore | DataAzureTable | DataLocal7;
+  resourceType: "kv";
 };
 
 export const Reason28 = {
@@ -2810,31 +2985,12 @@ export type DataStatus28 = {
   stale: boolean;
 };
 
-export type DataGcpFirestore = {
-  appEngineIntegrationMode?: string | null | undefined;
-  cmekEnabled: boolean;
-  concurrencyMode?: string | null | undefined;
-  createTime?: string | null | undefined;
-  databaseEdition?: string | null | undefined;
-  databaseName: string;
-  databaseType?: string | null | undefined;
-  deleteProtectionState?: string | null | undefined;
-  deleteTime?: string | null | undefined;
-  earliestVersionTime?: string | null | undefined;
-  endpoint?: string | null | undefined;
-  locationId?: string | null | undefined;
-  pointInTimeRecoveryEnablement?: string | null | undefined;
-  projectId?: string | null | undefined;
-  sourceInfoPresent: boolean;
+export type DataLocal6 = {
+  name: string;
+  path?: string | null | undefined;
+  serviceStatus?: string | null | undefined;
   status: DataStatus28;
-  updateTime?: string | null | undefined;
-  versionRetentionPeriod?: string | null | undefined;
-  backend: "gcpFirestore";
-};
-
-export type KeySchema = {
-  attributeName: string;
-  keyType: string;
+  backend: "local";
 };
 
 export const Reason27 = {
@@ -2893,40 +3049,40 @@ export type DataStatus27 = {
   stale: boolean;
 };
 
-export type DataAwsDynamoDb = {
-  billingMode?: string | null | undefined;
-  deletionProtectionEnabled?: boolean | null | undefined;
-  globalSecondaryIndexCount?: number | null | undefined;
-  itemCount?: number | null | undefined;
-  keySchema: Array<KeySchema>;
-  localSecondaryIndexCount?: number | null | undefined;
+export type DataAzureServiceBus = {
+  accessedAt?: string | null | undefined;
+  activeMessageCount?: number | null | undefined;
+  autoDeleteOnIdle?: string | null | undefined;
+  createdAt?: string | null | undefined;
+  deadLetterMessageCount?: number | null | undefined;
+  deadLetteringOnMessageExpiration?: boolean | null | undefined;
+  defaultMessageTimeToLive?: string | null | undefined;
+  duplicateDetectionHistoryTimeWindow?: string | null | undefined;
+  enableBatchedOperations?: boolean | null | undefined;
+  enableExpress?: boolean | null | undefined;
+  enablePartitioning?: boolean | null | undefined;
+  endpoint?: string | null | undefined;
+  forwardDeadLetteredMessagesTo?: string | null | undefined;
+  forwardTo?: string | null | undefined;
+  lockDuration?: string | null | undefined;
+  maxDeliveryCount?: number | null | undefined;
+  maxMessageSizeInKilobytes?: number | null | undefined;
+  maxSizeInMegabytes?: number | null | undefined;
+  messageCount?: number | null | undefined;
   name: string;
-  region?: string | null | undefined;
-  replicaCount?: number | null | undefined;
-  restoreInProgress?: boolean | null | undefined;
-  sseStatus?: string | null | undefined;
-  sseType?: string | null | undefined;
+  namespaceName: string;
+  queueStatus?: string | null | undefined;
+  requiresDuplicateDetection?: boolean | null | undefined;
+  requiresSession?: boolean | null | undefined;
+  resourceGroup?: string | null | undefined;
+  resourceId?: string | null | undefined;
+  scheduledMessageCount?: number | null | undefined;
+  sizeInBytes?: number | null | undefined;
   status: DataStatus27;
-  streamEnabled?: boolean | null | undefined;
-  streamViewType?: string | null | undefined;
-  tableArn?: string | null | undefined;
-  tableClass?: string | null | undefined;
-  tableSizeBytes?: number | null | undefined;
-  tableStatus?: string | null | undefined;
-  ttlAttributeName?: string | null | undefined;
-  ttlStatus?: string | null | undefined;
-  backend: "awsDynamoDb";
-};
-
-export type DataUnion7 =
-  | DataAwsDynamoDb
-  | DataGcpFirestore
-  | DataAzureTable
-  | DataLocal7;
-
-export type DataKv = {
-  data: DataAwsDynamoDb | DataGcpFirestore | DataAzureTable | DataLocal7;
-  resourceType: "kv";
+  transferDeadLetterMessageCount?: number | null | undefined;
+  transferMessageCount?: number | null | undefined;
+  updatedAt?: string | null | undefined;
+  backend: "azureServiceBus";
 };
 
 export const Reason26 = {
@@ -2985,12 +3141,42 @@ export type DataStatus26 = {
   stale: boolean;
 };
 
-export type DataLocal6 = {
-  name: string;
-  path?: string | null | undefined;
-  serviceStatus?: string | null | undefined;
+export type DataGcpPubSub = {
+  endpoint?: string | null | undefined;
+  kmsKeyName?: string | null | undefined;
+  messageStorageAllowedPersistenceRegions: Array<string>;
+  messageStorageEnforceInTransit?: boolean | null | undefined;
+  projectId?: string | null | undefined;
+  schemaEncoding?: string | null | undefined;
+  schemaFirstRevisionId?: string | null | undefined;
+  schemaLastRevisionId?: string | null | undefined;
+  schemaName?: string | null | undefined;
   status: DataStatus26;
-  backend: "local";
+  subscriptionAckDeadlineSeconds?: number | null | undefined;
+  subscriptionDeadLetterMaxDeliveryAttempts?: number | null | undefined;
+  subscriptionDeadLetterTopic?: string | null | undefined;
+  subscriptionDetached?: boolean | null | undefined;
+  subscriptionEnableMessageOrdering?: boolean | null | undefined;
+  subscriptionFilter?: string | null | undefined;
+  subscriptionFullName?: string | null | undefined;
+  subscriptionLabels: { [k: string]: string };
+  subscriptionMessageRetentionDuration?: string | null | undefined;
+  subscriptionName?: string | null | undefined;
+  subscriptionPushAttributes: { [k: string]: string };
+  subscriptionPushConfigPresent?: boolean | null | undefined;
+  subscriptionPushEndpoint?: string | null | undefined;
+  subscriptionPushNoWrapperWriteMetadata?: boolean | null | undefined;
+  subscriptionPushOidcAudience?: string | null | undefined;
+  subscriptionPushOidcServiceAccountEmail?: string | null | undefined;
+  subscriptionPushPubsubWrapperWriteMetadata?: boolean | null | undefined;
+  subscriptionRetainAckedMessages?: boolean | null | undefined;
+  subscriptionState?: string | null | undefined;
+  topicFullName?: string | null | undefined;
+  topicLabels: { [k: string]: string };
+  topicMessageRetentionDuration?: string | null | undefined;
+  topicName: string;
+  topicState?: string | null | undefined;
+  backend: "gcpPubSub";
 };
 
 export const Reason25 = {
@@ -3049,192 +3235,6 @@ export type DataStatus25 = {
   stale: boolean;
 };
 
-export type DataAzureServiceBus = {
-  accessedAt?: string | null | undefined;
-  activeMessageCount?: number | null | undefined;
-  autoDeleteOnIdle?: string | null | undefined;
-  createdAt?: string | null | undefined;
-  deadLetterMessageCount?: number | null | undefined;
-  deadLetteringOnMessageExpiration?: boolean | null | undefined;
-  defaultMessageTimeToLive?: string | null | undefined;
-  duplicateDetectionHistoryTimeWindow?: string | null | undefined;
-  enableBatchedOperations?: boolean | null | undefined;
-  enableExpress?: boolean | null | undefined;
-  enablePartitioning?: boolean | null | undefined;
-  endpoint?: string | null | undefined;
-  forwardDeadLetteredMessagesTo?: string | null | undefined;
-  forwardTo?: string | null | undefined;
-  lockDuration?: string | null | undefined;
-  maxDeliveryCount?: number | null | undefined;
-  maxMessageSizeInKilobytes?: number | null | undefined;
-  maxSizeInMegabytes?: number | null | undefined;
-  messageCount?: number | null | undefined;
-  name: string;
-  namespaceName: string;
-  queueStatus?: string | null | undefined;
-  requiresDuplicateDetection?: boolean | null | undefined;
-  requiresSession?: boolean | null | undefined;
-  resourceGroup?: string | null | undefined;
-  resourceId?: string | null | undefined;
-  scheduledMessageCount?: number | null | undefined;
-  sizeInBytes?: number | null | undefined;
-  status: DataStatus25;
-  transferDeadLetterMessageCount?: number | null | undefined;
-  transferMessageCount?: number | null | undefined;
-  updatedAt?: string | null | undefined;
-  backend: "azureServiceBus";
-};
-
-export const Reason24 = {
-  Forbidden: "forbidden",
-  NotInstalled: "not-installed",
-  ApiUnavailable: "api-unavailable",
-  CollectionFailed: "collection-failed",
-  TimedOut: "timed-out",
-} as const;
-export type Reason24 = ClosedEnum<typeof Reason24>;
-
-export const CollectionIssueSeverity24 = {
-  Info: "info",
-  Warning: "warning",
-  Error: "error",
-} as const;
-export type CollectionIssueSeverity24 = ClosedEnum<
-  typeof CollectionIssueSeverity24
->;
-
-export type CollectionIssue24 = {
-  message: string;
-  reason: Reason24;
-  severity: CollectionIssueSeverity24;
-  source: string;
-};
-
-export const Health24 = {
-  Unknown: "unknown",
-  Healthy: "healthy",
-  Degraded: "degraded",
-  Unhealthy: "unhealthy",
-} as const;
-export type Health24 = ClosedEnum<typeof Health24>;
-
-export const Lifecycle24 = {
-  Unknown: "unknown",
-  Creating: "creating",
-  Updating: "updating",
-  Running: "running",
-  Scaling: "scaling",
-  Stopping: "stopping",
-  Stopped: "stopped",
-  Deleting: "deleting",
-  Deleted: "deleted",
-  Failed: "failed",
-} as const;
-export type Lifecycle24 = ClosedEnum<typeof Lifecycle24>;
-
-export type DataStatus24 = {
-  collectionIssues: Array<CollectionIssue24>;
-  health: Health24;
-  lifecycle: Lifecycle24;
-  message?: string | null | undefined;
-  partial: boolean;
-  stale: boolean;
-};
-
-export type DataGcpPubSub = {
-  endpoint?: string | null | undefined;
-  kmsKeyName?: string | null | undefined;
-  messageStorageAllowedPersistenceRegions: Array<string>;
-  messageStorageEnforceInTransit?: boolean | null | undefined;
-  projectId?: string | null | undefined;
-  schemaEncoding?: string | null | undefined;
-  schemaFirstRevisionId?: string | null | undefined;
-  schemaLastRevisionId?: string | null | undefined;
-  schemaName?: string | null | undefined;
-  status: DataStatus24;
-  subscriptionAckDeadlineSeconds?: number | null | undefined;
-  subscriptionDeadLetterMaxDeliveryAttempts?: number | null | undefined;
-  subscriptionDeadLetterTopic?: string | null | undefined;
-  subscriptionDetached?: boolean | null | undefined;
-  subscriptionEnableMessageOrdering?: boolean | null | undefined;
-  subscriptionFilter?: string | null | undefined;
-  subscriptionFullName?: string | null | undefined;
-  subscriptionLabels: { [k: string]: string };
-  subscriptionMessageRetentionDuration?: string | null | undefined;
-  subscriptionName?: string | null | undefined;
-  subscriptionPushAttributes: { [k: string]: string };
-  subscriptionPushConfigPresent?: boolean | null | undefined;
-  subscriptionPushEndpoint?: string | null | undefined;
-  subscriptionPushNoWrapperWriteMetadata?: boolean | null | undefined;
-  subscriptionPushOidcAudience?: string | null | undefined;
-  subscriptionPushOidcServiceAccountEmail?: string | null | undefined;
-  subscriptionPushPubsubWrapperWriteMetadata?: boolean | null | undefined;
-  subscriptionRetainAckedMessages?: boolean | null | undefined;
-  subscriptionState?: string | null | undefined;
-  topicFullName?: string | null | undefined;
-  topicLabels: { [k: string]: string };
-  topicMessageRetentionDuration?: string | null | undefined;
-  topicName: string;
-  topicState?: string | null | undefined;
-  backend: "gcpPubSub";
-};
-
-export const Reason23 = {
-  Forbidden: "forbidden",
-  NotInstalled: "not-installed",
-  ApiUnavailable: "api-unavailable",
-  CollectionFailed: "collection-failed",
-  TimedOut: "timed-out",
-} as const;
-export type Reason23 = ClosedEnum<typeof Reason23>;
-
-export const CollectionIssueSeverity23 = {
-  Info: "info",
-  Warning: "warning",
-  Error: "error",
-} as const;
-export type CollectionIssueSeverity23 = ClosedEnum<
-  typeof CollectionIssueSeverity23
->;
-
-export type CollectionIssue23 = {
-  message: string;
-  reason: Reason23;
-  severity: CollectionIssueSeverity23;
-  source: string;
-};
-
-export const Health23 = {
-  Unknown: "unknown",
-  Healthy: "healthy",
-  Degraded: "degraded",
-  Unhealthy: "unhealthy",
-} as const;
-export type Health23 = ClosedEnum<typeof Health23>;
-
-export const Lifecycle23 = {
-  Unknown: "unknown",
-  Creating: "creating",
-  Updating: "updating",
-  Running: "running",
-  Scaling: "scaling",
-  Stopping: "stopping",
-  Stopped: "stopped",
-  Deleting: "deleting",
-  Deleted: "deleted",
-  Failed: "failed",
-} as const;
-export type Lifecycle23 = ClosedEnum<typeof Lifecycle23>;
-
-export type DataStatus23 = {
-  collectionIssues: Array<CollectionIssue23>;
-  health: Health23;
-  lifecycle: Lifecycle23;
-  message?: string | null | undefined;
-  partial: boolean;
-  stale: boolean;
-};
-
 export type DataAwsSqs = {
   approximateCounts: boolean;
   approximateDelayedMessages?: number | null | undefined;
@@ -3258,7 +3258,7 @@ export type DataAwsSqs = {
   region?: string | null | undefined;
   sqsManagedSseEnabled?: boolean | null | undefined;
   sseEnabled?: boolean | null | undefined;
-  status: DataStatus23;
+  status: DataStatus25;
   visibilityTimeoutSeconds?: number | null | undefined;
   backend: "awsSqs";
 };
@@ -3274,7 +3274,7 @@ export type DataQueue = {
   resourceType: "queue";
 };
 
-export const CpuUnit10 = {
+export const CpuUnit11 = {
   Count: "count",
   Percent: "percent",
   Bytes: "bytes",
@@ -3282,16 +3282,16 @@ export const CpuUnit10 = {
   Milliseconds: "milliseconds",
   RequestsPerSecond: "requests-per-second",
 } as const;
-export type CpuUnit10 = ClosedEnum<typeof CpuUnit10>;
+export type CpuUnit11 = ClosedEnum<typeof CpuUnit11>;
 
-export type Cpu10 = {
-  unit: CpuUnit10;
+export type Cpu11 = {
+  unit: CpuUnit11;
   value: number;
 };
 
-export type CpuUnion10 = Cpu10 | any;
+export type CpuUnion11 = Cpu11 | any;
 
-export type InvolvedObject8 = {
+export type InvolvedObject9 = {
   apiVersion?: string | null | undefined;
   fieldPath?: string | null | undefined;
   kind?: string | null | undefined;
@@ -3301,29 +3301,29 @@ export type InvolvedObject8 = {
   uid?: string | null | undefined;
 };
 
-export type InvolvedObjectUnion8 = InvolvedObject8 | any;
+export type InvolvedObjectUnion9 = InvolvedObject9 | any;
 
-export type GetResourceDeploymentDetailSource8 = {
+export type GetResourceDeploymentDetailSource9 = {
   component?: string | null | undefined;
   host?: string | null | undefined;
 };
 
-export type SourceUnion8 = GetResourceDeploymentDetailSource8 | any;
+export type SourceUnion9 = GetResourceDeploymentDetailSource9 | any;
 
-export type Event11 = {
+export type Event12 = {
   count?: number | null | undefined;
   eventTime?: Date | null | undefined;
   firstTimestamp?: Date | null | undefined;
-  involvedObject?: InvolvedObject8 | any | null | undefined;
+  involvedObject?: InvolvedObject9 | any | null | undefined;
   lastTimestamp?: Date | null | undefined;
   message: string;
   raw?: any | null | undefined;
   reason: string;
-  source?: GetResourceDeploymentDetailSource8 | any | null | undefined;
+  source?: GetResourceDeploymentDetailSource9 | any | null | undefined;
   type?: string | null | undefined;
 };
 
-export const MemoryUnit10 = {
+export const MemoryUnit11 = {
   Count: "count",
   Percent: "percent",
   Bytes: "bytes",
@@ -3331,14 +3331,14 @@ export const MemoryUnit10 = {
   Milliseconds: "milliseconds",
   RequestsPerSecond: "requests-per-second",
 } as const;
-export type MemoryUnit10 = ClosedEnum<typeof MemoryUnit10>;
+export type MemoryUnit11 = ClosedEnum<typeof MemoryUnit11>;
 
-export type Memory10 = {
-  unit: MemoryUnit10;
+export type Memory11 = {
+  unit: MemoryUnit11;
   value: number;
 };
 
-export type MemoryUnion10 = Memory10 | any;
+export type MemoryUnion11 = Memory11 | any;
 
 export type NodeCounts = {
   current?: number | null | undefined;
@@ -3494,6 +3494,312 @@ export type PodCounts = {
   ready?: number | null | undefined;
 };
 
+export const Reason24 = {
+  Forbidden: "forbidden",
+  NotInstalled: "not-installed",
+  ApiUnavailable: "api-unavailable",
+  CollectionFailed: "collection-failed",
+  TimedOut: "timed-out",
+} as const;
+export type Reason24 = ClosedEnum<typeof Reason24>;
+
+export const CollectionIssueSeverity24 = {
+  Info: "info",
+  Warning: "warning",
+  Error: "error",
+} as const;
+export type CollectionIssueSeverity24 = ClosedEnum<
+  typeof CollectionIssueSeverity24
+>;
+
+export type CollectionIssue24 = {
+  message: string;
+  reason: Reason24;
+  severity: CollectionIssueSeverity24;
+  source: string;
+};
+
+export const Health24 = {
+  Unknown: "unknown",
+  Healthy: "healthy",
+  Degraded: "degraded",
+  Unhealthy: "unhealthy",
+} as const;
+export type Health24 = ClosedEnum<typeof Health24>;
+
+export const Lifecycle24 = {
+  Unknown: "unknown",
+  Creating: "creating",
+  Updating: "updating",
+  Running: "running",
+  Scaling: "scaling",
+  Stopping: "stopping",
+  Stopped: "stopped",
+  Deleting: "deleting",
+  Deleted: "deleted",
+  Failed: "failed",
+} as const;
+export type Lifecycle24 = ClosedEnum<typeof Lifecycle24>;
+
+export type DataStatus24 = {
+  collectionIssues: Array<CollectionIssue24>;
+  health: Health24;
+  lifecycle: Lifecycle24;
+  message?: string | null | undefined;
+  partial: boolean;
+  stale: boolean;
+};
+
+export type Data1 = {
+  cpu?: Cpu11 | any | null | undefined;
+  events: Array<Event12>;
+  memory?: Memory11 | any | null | undefined;
+  name: string;
+  namespace?: string | null | undefined;
+  nodeCounts: NodeCounts;
+  nodeStatuses?: Array<NodeStatus> | undefined;
+  podCounts: PodCounts;
+  region?: string | null | undefined;
+  status: DataStatus24;
+  version?: string | null | undefined;
+};
+
+export type DataKubernetesCluster = {
+  data: Data1;
+  resourceType: "kubernetes-cluster";
+};
+
+export type Nodes5 = {
+  current?: number | null | undefined;
+  desired?: number | null | undefined;
+  ready?: number | null | undefined;
+};
+
+export const Reason23 = {
+  Forbidden: "forbidden",
+  NotInstalled: "not-installed",
+  ApiUnavailable: "api-unavailable",
+  CollectionFailed: "collection-failed",
+  TimedOut: "timed-out",
+} as const;
+export type Reason23 = ClosedEnum<typeof Reason23>;
+
+export const CollectionIssueSeverity23 = {
+  Info: "info",
+  Warning: "warning",
+  Error: "error",
+} as const;
+export type CollectionIssueSeverity23 = ClosedEnum<
+  typeof CollectionIssueSeverity23
+>;
+
+export type CollectionIssue23 = {
+  message: string;
+  reason: Reason23;
+  severity: CollectionIssueSeverity23;
+  source: string;
+};
+
+export const Health23 = {
+  Unknown: "unknown",
+  Healthy: "healthy",
+  Degraded: "degraded",
+  Unhealthy: "unhealthy",
+} as const;
+export type Health23 = ClosedEnum<typeof Health23>;
+
+export const Lifecycle23 = {
+  Unknown: "unknown",
+  Creating: "creating",
+  Updating: "updating",
+  Running: "running",
+  Scaling: "scaling",
+  Stopping: "stopping",
+  Stopped: "stopped",
+  Deleting: "deleting",
+  Deleted: "deleted",
+  Failed: "failed",
+} as const;
+export type Lifecycle23 = ClosedEnum<typeof Lifecycle23>;
+
+export type DataStatus23 = {
+  collectionIssues: Array<CollectionIssue23>;
+  health: Health23;
+  lifecycle: Lifecycle23;
+  message?: string | null | undefined;
+  partial: boolean;
+  stale: boolean;
+};
+
+export type DataLocal5 = {
+  dockerApiVersion?: string | null | undefined;
+  dockerArch?: string | null | undefined;
+  dockerAvailable: boolean;
+  dockerOs?: string | null | undefined;
+  dockerVersion?: string | null | undefined;
+  hostIdentifier?: string | null | undefined;
+  name: string;
+  networkAvailable: boolean;
+  networkName?: string | null | undefined;
+  nodes: Nodes5;
+  runningContainers?: number | null | undefined;
+  status: DataStatus23;
+  trackedContainers?: number | null | undefined;
+  backend: "local";
+};
+
+export const Category4 = {
+  Quota: "quota",
+  Capacity: "capacity",
+  Allocation: "allocation",
+  Other: "other",
+} as const;
+export type Category4 = ClosedEnum<typeof Category4>;
+
+export type CapacityBlocker4 = {
+  category: Category4;
+  message: string;
+  observedAt: Date;
+  providerCode?: string | null | undefined;
+  providerReference?: string | null | undefined;
+};
+
+export type CapacityBlockerUnion4 = CapacityBlocker4 | any;
+
+export type Blocker4 = {
+  reason: string;
+  replicaId: string;
+  schedulingMode: string;
+  state: string;
+  workloadName: string;
+};
+
+export const DrainProgressStatus4 = {
+  Draining: "draining",
+  Drained: "drained",
+  Terminating: "terminating",
+} as const;
+export type DrainProgressStatus4 = ClosedEnum<typeof DrainProgressStatus4>;
+
+export type DrainProgress4 = {
+  blockers?: Array<Blocker4> | undefined;
+  drainDeadlineAt?: string | null | undefined;
+  drainRequestedAt?: string | null | undefined;
+  drainedAt?: string | null | undefined;
+  force: boolean;
+  machineId: string;
+  replicaCount: number;
+  stalled: boolean;
+  status: DrainProgressStatus4;
+};
+
+export type DrainProgressUnion4 = DrainProgress4 | any;
+
+export const UtilizationUnit4 = {
+  Count: "count",
+  Percent: "percent",
+  Bytes: "bytes",
+  Cores: "cores",
+  Milliseconds: "milliseconds",
+  RequestsPerSecond: "requests-per-second",
+} as const;
+export type UtilizationUnit4 = ClosedEnum<typeof UtilizationUnit4>;
+
+export type Utilization4 = {
+  unit: UtilizationUnit4;
+  value: number;
+};
+
+export type UtilizationUnion4 = Utilization4 | any;
+
+export type Recommendation4 = {
+  desiredMachines: number;
+  reason?: string | null | undefined;
+  unschedulableReplicas?: number | null | undefined;
+  utilization?: Utilization4 | any | null | undefined;
+};
+
+export type RecommendationUnion4 = Recommendation4 | any;
+
+export type CapacityGroup4 = {
+  capacityBlocker?: CapacityBlocker4 | any | null | undefined;
+  currentMachines: number;
+  desiredMachines: number;
+  drainProgress?: DrainProgress4 | any | null | undefined;
+  groupId: string;
+  instanceType?: string | null | undefined;
+  maxMachines?: number | null | undefined;
+  minMachines?: number | null | undefined;
+  recommendation?: Recommendation4 | any | null | undefined;
+};
+
+export const CpuUnit10 = {
+  Count: "count",
+  Percent: "percent",
+  Bytes: "bytes",
+  Cores: "cores",
+  Milliseconds: "milliseconds",
+  RequestsPerSecond: "requests-per-second",
+} as const;
+export type CpuUnit10 = ClosedEnum<typeof CpuUnit10>;
+
+export type Cpu10 = {
+  unit: CpuUnit10;
+  value: number;
+};
+
+export type CpuUnion10 = Cpu10 | any;
+
+export type DrainBlocker = {
+  reason: string;
+  replicaId: string;
+  schedulingMode: string;
+  state: string;
+  workloadName: string;
+};
+
+export type Machine = {
+  capacityGroup: string;
+  cpuCores?: number | null | undefined;
+  drainBlockers?: Array<DrainBlocker> | undefined;
+  drainDeadlineAt?: string | null | undefined;
+  drainForce: boolean;
+  drainRequestedAt?: string | null | undefined;
+  drainedAt?: string | null | undefined;
+  horizondVersion?: string | null | undefined;
+  lastHeartbeat: string;
+  machineId: string;
+  memoryBytes?: number | null | undefined;
+  overlayIp?: string | null | undefined;
+  publicIp?: string | null | undefined;
+  replicaCount: number;
+  status: string;
+  zone: string;
+};
+
+export const MemoryUnit10 = {
+  Count: "count",
+  Percent: "percent",
+  Bytes: "bytes",
+  Cores: "cores",
+  Milliseconds: "milliseconds",
+  RequestsPerSecond: "requests-per-second",
+} as const;
+export type MemoryUnit10 = ClosedEnum<typeof MemoryUnit10>;
+
+export type Memory10 = {
+  unit: MemoryUnit10;
+  value: number;
+};
+
+export type MemoryUnion10 = Memory10 | any;
+
+export type Nodes4 = {
+  current?: number | null | undefined;
+  desired?: number | null | undefined;
+  ready?: number | null | undefined;
+};
+
 export const Reason22 = {
   Forbidden: "forbidden",
   NotInstalled: "not-installed",
@@ -3550,102 +3856,16 @@ export type DataStatus22 = {
   stale: boolean;
 };
 
-export type Data1 = {
+export type DataMachines2 = {
+  backendClusterId?: string | null | undefined;
+  capacityGroups: Array<CapacityGroup4>;
   cpu?: Cpu10 | any | null | undefined;
-  events: Array<Event11>;
+  machines: Array<Machine>;
   memory?: Memory10 | any | null | undefined;
   name: string;
-  namespace?: string | null | undefined;
-  nodeCounts: NodeCounts;
-  nodeStatuses?: Array<NodeStatus> | undefined;
-  podCounts: PodCounts;
-  region?: string | null | undefined;
-  status: DataStatus22;
-  version?: string | null | undefined;
-};
-
-export type DataKubernetesCluster = {
-  data: Data1;
-  resourceType: "kubernetes-cluster";
-};
-
-export type Nodes4 = {
-  current?: number | null | undefined;
-  desired?: number | null | undefined;
-  ready?: number | null | undefined;
-};
-
-export const Reason21 = {
-  Forbidden: "forbidden",
-  NotInstalled: "not-installed",
-  ApiUnavailable: "api-unavailable",
-  CollectionFailed: "collection-failed",
-  TimedOut: "timed-out",
-} as const;
-export type Reason21 = ClosedEnum<typeof Reason21>;
-
-export const CollectionIssueSeverity21 = {
-  Info: "info",
-  Warning: "warning",
-  Error: "error",
-} as const;
-export type CollectionIssueSeverity21 = ClosedEnum<
-  typeof CollectionIssueSeverity21
->;
-
-export type CollectionIssue21 = {
-  message: string;
-  reason: Reason21;
-  severity: CollectionIssueSeverity21;
-  source: string;
-};
-
-export const Health21 = {
-  Unknown: "unknown",
-  Healthy: "healthy",
-  Degraded: "degraded",
-  Unhealthy: "unhealthy",
-} as const;
-export type Health21 = ClosedEnum<typeof Health21>;
-
-export const Lifecycle21 = {
-  Unknown: "unknown",
-  Creating: "creating",
-  Updating: "updating",
-  Running: "running",
-  Scaling: "scaling",
-  Stopping: "stopping",
-  Stopped: "stopped",
-  Deleting: "deleting",
-  Deleted: "deleted",
-  Failed: "failed",
-} as const;
-export type Lifecycle21 = ClosedEnum<typeof Lifecycle21>;
-
-export type DataStatus21 = {
-  collectionIssues: Array<CollectionIssue21>;
-  health: Health21;
-  lifecycle: Lifecycle21;
-  message?: string | null | undefined;
-  partial: boolean;
-  stale: boolean;
-};
-
-export type DataLocal5 = {
-  dockerApiVersion?: string | null | undefined;
-  dockerArch?: string | null | undefined;
-  dockerAvailable: boolean;
-  dockerOs?: string | null | undefined;
-  dockerVersion?: string | null | undefined;
-  hostIdentifier?: string | null | undefined;
-  name: string;
-  networkAvailable: boolean;
-  networkName?: string | null | undefined;
   nodes: Nodes4;
-  runningContainers?: number | null | undefined;
-  status: DataStatus21;
-  trackedContainers?: number | null | undefined;
-  backend: "local";
+  status: DataStatus22;
+  backend: "machines";
 };
 
 export const Category3 = {
@@ -3781,40 +4001,40 @@ export type ProviderFleet3 = {
   providerId: string;
 };
 
-export const Reason20 = {
+export const Reason21 = {
   Forbidden: "forbidden",
   NotInstalled: "not-installed",
   ApiUnavailable: "api-unavailable",
   CollectionFailed: "collection-failed",
   TimedOut: "timed-out",
 } as const;
-export type Reason20 = ClosedEnum<typeof Reason20>;
+export type Reason21 = ClosedEnum<typeof Reason21>;
 
-export const CollectionIssueSeverity20 = {
+export const CollectionIssueSeverity21 = {
   Info: "info",
   Warning: "warning",
   Error: "error",
 } as const;
-export type CollectionIssueSeverity20 = ClosedEnum<
-  typeof CollectionIssueSeverity20
+export type CollectionIssueSeverity21 = ClosedEnum<
+  typeof CollectionIssueSeverity21
 >;
 
-export type CollectionIssue20 = {
+export type CollectionIssue21 = {
   message: string;
-  reason: Reason20;
-  severity: CollectionIssueSeverity20;
+  reason: Reason21;
+  severity: CollectionIssueSeverity21;
   source: string;
 };
 
-export const Health20 = {
+export const Health21 = {
   Unknown: "unknown",
   Healthy: "healthy",
   Degraded: "degraded",
   Unhealthy: "unhealthy",
 } as const;
-export type Health20 = ClosedEnum<typeof Health20>;
+export type Health21 = ClosedEnum<typeof Health21>;
 
-export const Lifecycle20 = {
+export const Lifecycle21 = {
   Unknown: "unknown",
   Creating: "creating",
   Updating: "updating",
@@ -3826,12 +4046,12 @@ export const Lifecycle20 = {
   Deleted: "deleted",
   Failed: "failed",
 } as const;
-export type Lifecycle20 = ClosedEnum<typeof Lifecycle20>;
+export type Lifecycle21 = ClosedEnum<typeof Lifecycle21>;
 
-export type DataStatus20 = {
-  collectionIssues: Array<CollectionIssue20>;
-  health: Health20;
-  lifecycle: Lifecycle20;
+export type DataStatus21 = {
+  collectionIssues: Array<CollectionIssue21>;
+  health: Health21;
+  lifecycle: Lifecycle21;
   message?: string | null | undefined;
   partial: boolean;
   stale: boolean;
@@ -3846,7 +4066,7 @@ export type DataAzure2 = {
   nodes: Nodes3;
   providerFleets: Array<ProviderFleet3>;
   region?: string | null | undefined;
-  status: DataStatus20;
+  status: DataStatus21;
   backend: "azure";
 };
 
@@ -3983,40 +4203,40 @@ export type ProviderFleet2 = {
   providerId: string;
 };
 
-export const Reason19 = {
+export const Reason20 = {
   Forbidden: "forbidden",
   NotInstalled: "not-installed",
   ApiUnavailable: "api-unavailable",
   CollectionFailed: "collection-failed",
   TimedOut: "timed-out",
 } as const;
-export type Reason19 = ClosedEnum<typeof Reason19>;
+export type Reason20 = ClosedEnum<typeof Reason20>;
 
-export const CollectionIssueSeverity19 = {
+export const CollectionIssueSeverity20 = {
   Info: "info",
   Warning: "warning",
   Error: "error",
 } as const;
-export type CollectionIssueSeverity19 = ClosedEnum<
-  typeof CollectionIssueSeverity19
+export type CollectionIssueSeverity20 = ClosedEnum<
+  typeof CollectionIssueSeverity20
 >;
 
-export type CollectionIssue19 = {
+export type CollectionIssue20 = {
   message: string;
-  reason: Reason19;
-  severity: CollectionIssueSeverity19;
+  reason: Reason20;
+  severity: CollectionIssueSeverity20;
   source: string;
 };
 
-export const Health19 = {
+export const Health20 = {
   Unknown: "unknown",
   Healthy: "healthy",
   Degraded: "degraded",
   Unhealthy: "unhealthy",
 } as const;
-export type Health19 = ClosedEnum<typeof Health19>;
+export type Health20 = ClosedEnum<typeof Health20>;
 
-export const Lifecycle19 = {
+export const Lifecycle20 = {
   Unknown: "unknown",
   Creating: "creating",
   Updating: "updating",
@@ -4028,12 +4248,12 @@ export const Lifecycle19 = {
   Deleted: "deleted",
   Failed: "failed",
 } as const;
-export type Lifecycle19 = ClosedEnum<typeof Lifecycle19>;
+export type Lifecycle20 = ClosedEnum<typeof Lifecycle20>;
 
-export type DataStatus19 = {
-  collectionIssues: Array<CollectionIssue19>;
-  health: Health19;
-  lifecycle: Lifecycle19;
+export type DataStatus20 = {
+  collectionIssues: Array<CollectionIssue20>;
+  health: Health20;
+  lifecycle: Lifecycle20;
   message?: string | null | undefined;
   partial: boolean;
   stale: boolean;
@@ -4048,7 +4268,7 @@ export type DataGcp2 = {
   nodes: Nodes2;
   providerFleets: Array<ProviderFleet2>;
   region?: string | null | undefined;
-  status: DataStatus19;
+  status: DataStatus20;
   backend: "gcp";
 };
 
@@ -4185,6 +4405,168 @@ export type ProviderFleet1 = {
   providerId: string;
 };
 
+export const Reason19 = {
+  Forbidden: "forbidden",
+  NotInstalled: "not-installed",
+  ApiUnavailable: "api-unavailable",
+  CollectionFailed: "collection-failed",
+  TimedOut: "timed-out",
+} as const;
+export type Reason19 = ClosedEnum<typeof Reason19>;
+
+export const CollectionIssueSeverity19 = {
+  Info: "info",
+  Warning: "warning",
+  Error: "error",
+} as const;
+export type CollectionIssueSeverity19 = ClosedEnum<
+  typeof CollectionIssueSeverity19
+>;
+
+export type CollectionIssue19 = {
+  message: string;
+  reason: Reason19;
+  severity: CollectionIssueSeverity19;
+  source: string;
+};
+
+export const Health19 = {
+  Unknown: "unknown",
+  Healthy: "healthy",
+  Degraded: "degraded",
+  Unhealthy: "unhealthy",
+} as const;
+export type Health19 = ClosedEnum<typeof Health19>;
+
+export const Lifecycle19 = {
+  Unknown: "unknown",
+  Creating: "creating",
+  Updating: "updating",
+  Running: "running",
+  Scaling: "scaling",
+  Stopping: "stopping",
+  Stopped: "stopped",
+  Deleting: "deleting",
+  Deleted: "deleted",
+  Failed: "failed",
+} as const;
+export type Lifecycle19 = ClosedEnum<typeof Lifecycle19>;
+
+export type DataStatus19 = {
+  collectionIssues: Array<CollectionIssue19>;
+  health: Health19;
+  lifecycle: Lifecycle19;
+  message?: string | null | undefined;
+  partial: boolean;
+  stale: boolean;
+};
+
+export type DataAws2 = {
+  backendClusterId?: string | null | undefined;
+  capacityGroups: Array<CapacityGroup1>;
+  cpu?: Cpu7 | any | null | undefined;
+  memory?: Memory7 | any | null | undefined;
+  name: string;
+  nodes: Nodes1;
+  providerFleets: Array<ProviderFleet1>;
+  region?: string | null | undefined;
+  status: DataStatus19;
+  backend: "aws";
+};
+
+export type DataUnion5 =
+  | DataAws2
+  | DataGcp2
+  | DataAzure2
+  | DataMachines2
+  | DataLocal5;
+
+export type DataComputeCluster = {
+  data: DataAws2 | DataGcp2 | DataAzure2 | DataMachines2 | DataLocal5;
+  resourceType: "compute-cluster";
+};
+
+export const DaemonInstanceCpuUnit = {
+  Count: "count",
+  Percent: "percent",
+  Bytes: "bytes",
+  Cores: "cores",
+  Milliseconds: "milliseconds",
+  RequestsPerSecond: "requests-per-second",
+} as const;
+export type DaemonInstanceCpuUnit = ClosedEnum<typeof DaemonInstanceCpuUnit>;
+
+export type DaemonInstanceCpu = {
+  unit: DaemonInstanceCpuUnit;
+  value: number;
+};
+
+export type DaemonInstanceCpuUnion5 = DaemonInstanceCpu | any;
+
+export const DaemonInstanceKind = {
+  Container: "container",
+  Process: "process",
+  Daemon: "daemon",
+} as const;
+export type DaemonInstanceKind = ClosedEnum<typeof DaemonInstanceKind>;
+
+export const DaemonInstanceMemoryUnit = {
+  Count: "count",
+  Percent: "percent",
+  Bytes: "bytes",
+  Cores: "cores",
+  Milliseconds: "milliseconds",
+  RequestsPerSecond: "requests-per-second",
+} as const;
+export type DaemonInstanceMemoryUnit = ClosedEnum<
+  typeof DaemonInstanceMemoryUnit
+>;
+
+export type DaemonInstanceMemory = {
+  unit: DaemonInstanceMemoryUnit;
+  value: number;
+};
+
+export type DaemonInstanceMemoryUnion5 = DaemonInstanceMemory | any;
+
+export type DaemonInstance5 = {
+  cpu?: DaemonInstanceCpu | any | null | undefined;
+  kind: DaemonInstanceKind;
+  memory?: DaemonInstanceMemory | any | null | undefined;
+  name: string;
+  phase?: string | null | undefined;
+  pid?: number | null | undefined;
+  ready: boolean;
+  restartCount?: number | null | undefined;
+  unitId: string;
+};
+
+export type DaemonInstanceUnion = DaemonInstance5 | any;
+
+export const EventSeverity3 = {
+  Info: "info",
+  Warning: "warning",
+  Error: "error",
+} as const;
+export type EventSeverity3 = ClosedEnum<typeof EventSeverity3>;
+
+export type Subject3 = {
+  id?: string | null | undefined;
+  kind: string;
+  name?: string | null | undefined;
+};
+
+export type SubjectUnion3 = Subject3 | any;
+
+export type Event11 = {
+  kind: string;
+  message: string;
+  raw?: any | null | undefined;
+  severity: EventSeverity3;
+  subject?: Subject3 | any | null | undefined;
+  timestamp: Date;
+};
+
 export const Reason18 = {
   Forbidden: "forbidden",
   NotInstalled: "not-installed",
@@ -4241,174 +4623,17 @@ export type DataStatus18 = {
   stale: boolean;
 };
 
-export type DataAws2 = {
-  backendClusterId?: string | null | undefined;
-  capacityGroups: Array<CapacityGroup1>;
-  cpu?: Cpu7 | any | null | undefined;
-  memory?: Memory7 | any | null | undefined;
-  name: string;
-  nodes: Nodes1;
-  providerFleets: Array<ProviderFleet1>;
-  region?: string | null | undefined;
-  status: DataStatus18;
-  backend: "aws";
-};
-
-export type DataUnion5 = DataAws2 | DataGcp2 | DataAzure2 | DataLocal5;
-
-export type DataComputeCluster = {
-  data: DataAws2 | DataGcp2 | DataAzure2 | DataLocal5;
-  resourceType: "compute-cluster";
-};
-
-export const DaemonInstanceCpuUnit = {
-  Count: "count",
-  Percent: "percent",
-  Bytes: "bytes",
-  Cores: "cores",
-  Milliseconds: "milliseconds",
-  RequestsPerSecond: "requests-per-second",
-} as const;
-export type DaemonInstanceCpuUnit = ClosedEnum<typeof DaemonInstanceCpuUnit>;
-
-export type DaemonInstanceCpu = {
-  unit: DaemonInstanceCpuUnit;
-  value: number;
-};
-
-export type DaemonInstanceCpuUnion4 = DaemonInstanceCpu | any;
-
-export const DaemonInstanceKind = {
-  Container: "container",
-  Process: "process",
-  Daemon: "daemon",
-} as const;
-export type DaemonInstanceKind = ClosedEnum<typeof DaemonInstanceKind>;
-
-export const DaemonInstanceMemoryUnit = {
-  Count: "count",
-  Percent: "percent",
-  Bytes: "bytes",
-  Cores: "cores",
-  Milliseconds: "milliseconds",
-  RequestsPerSecond: "requests-per-second",
-} as const;
-export type DaemonInstanceMemoryUnit = ClosedEnum<
-  typeof DaemonInstanceMemoryUnit
->;
-
-export type DaemonInstanceMemory = {
-  unit: DaemonInstanceMemoryUnit;
-  value: number;
-};
-
-export type DaemonInstanceMemoryUnion4 = DaemonInstanceMemory | any;
-
-export type DaemonInstance4 = {
-  cpu?: DaemonInstanceCpu | any | null | undefined;
-  kind: DaemonInstanceKind;
-  memory?: DaemonInstanceMemory | any | null | undefined;
-  name: string;
-  phase?: string | null | undefined;
-  pid?: number | null | undefined;
-  ready: boolean;
-  restartCount?: number | null | undefined;
-  unitId: string;
-};
-
-export type DaemonInstanceUnion = DaemonInstance4 | any;
-
-export const EventSeverity3 = {
-  Info: "info",
-  Warning: "warning",
-  Error: "error",
-} as const;
-export type EventSeverity3 = ClosedEnum<typeof EventSeverity3>;
-
-export type Subject3 = {
-  id?: string | null | undefined;
-  kind: string;
-  name?: string | null | undefined;
-};
-
-export type SubjectUnion3 = Subject3 | any;
-
-export type Event10 = {
-  kind: string;
-  message: string;
-  raw?: any | null | undefined;
-  severity: EventSeverity3;
-  subject?: Subject3 | any | null | undefined;
-  timestamp: Date;
-};
-
-export const Reason17 = {
-  Forbidden: "forbidden",
-  NotInstalled: "not-installed",
-  ApiUnavailable: "api-unavailable",
-  CollectionFailed: "collection-failed",
-  TimedOut: "timed-out",
-} as const;
-export type Reason17 = ClosedEnum<typeof Reason17>;
-
-export const CollectionIssueSeverity17 = {
-  Info: "info",
-  Warning: "warning",
-  Error: "error",
-} as const;
-export type CollectionIssueSeverity17 = ClosedEnum<
-  typeof CollectionIssueSeverity17
->;
-
-export type CollectionIssue17 = {
-  message: string;
-  reason: Reason17;
-  severity: CollectionIssueSeverity17;
-  source: string;
-};
-
-export const Health17 = {
-  Unknown: "unknown",
-  Healthy: "healthy",
-  Degraded: "degraded",
-  Unhealthy: "unhealthy",
-} as const;
-export type Health17 = ClosedEnum<typeof Health17>;
-
-export const Lifecycle17 = {
-  Unknown: "unknown",
-  Creating: "creating",
-  Updating: "updating",
-  Running: "running",
-  Scaling: "scaling",
-  Stopping: "stopping",
-  Stopped: "stopped",
-  Deleting: "deleting",
-  Deleted: "deleted",
-  Failed: "failed",
-} as const;
-export type Lifecycle17 = ClosedEnum<typeof Lifecycle17>;
-
-export type DataStatus17 = {
-  collectionIssues: Array<CollectionIssue17>;
-  health: Health17;
-  lifecycle: Lifecycle17;
-  message?: string | null | undefined;
-  partial: boolean;
-  stale: boolean;
-};
-
 export type DataLocal4 = {
   commandSupported: boolean;
-  daemonInstance?: DaemonInstance4 | any | null | undefined;
+  daemonInstance?: DaemonInstance5 | any | null | undefined;
   daemonName?: string | undefined;
-  events: Array<Event10>;
+  events: Array<Event11>;
   exitReason?: string | null | undefined;
   imagePathPresent: boolean;
   pid?: number | null | undefined;
   restartCount?: number | null | undefined;
   runtimeId: string;
-  status: DataStatus17;
+  status: DataStatus18;
   backend: "local";
 };
 
@@ -4429,7 +4654,7 @@ export type Cpu6 = {
 
 export type CpuUnion6 = Cpu6 | any;
 
-export type InvolvedObject7 = {
+export type InvolvedObject8 = {
   apiVersion?: string | null | undefined;
   fieldPath?: string | null | undefined;
   kind?: string | null | undefined;
@@ -4439,25 +4664,25 @@ export type InvolvedObject7 = {
   uid?: string | null | undefined;
 };
 
-export type InvolvedObjectUnion7 = InvolvedObject7 | any;
+export type InvolvedObjectUnion8 = InvolvedObject8 | any;
 
-export type GetResourceDeploymentDetailSource7 = {
+export type GetResourceDeploymentDetailSource8 = {
   component?: string | null | undefined;
   host?: string | null | undefined;
 };
 
-export type SourceUnion7 = GetResourceDeploymentDetailSource7 | any;
+export type SourceUnion8 = GetResourceDeploymentDetailSource8 | any;
 
-export type Event9 = {
+export type Event10 = {
   count?: number | null | undefined;
   eventTime?: Date | null | undefined;
   firstTimestamp?: Date | null | undefined;
-  involvedObject?: InvolvedObject7 | any | null | undefined;
+  involvedObject?: InvolvedObject8 | any | null | undefined;
   lastTimestamp?: Date | null | undefined;
   message: string;
   raw?: any | null | undefined;
   reason: string;
-  source?: GetResourceDeploymentDetailSource7 | any | null | undefined;
+  source?: GetResourceDeploymentDetailSource8 | any | null | undefined;
   type?: string | null | undefined;
 };
 
@@ -4543,6 +4768,188 @@ export type Replicas4 = {
   updated?: number | null | undefined;
 };
 
+export const Reason17 = {
+  Forbidden: "forbidden",
+  NotInstalled: "not-installed",
+  ApiUnavailable: "api-unavailable",
+  CollectionFailed: "collection-failed",
+  TimedOut: "timed-out",
+} as const;
+export type Reason17 = ClosedEnum<typeof Reason17>;
+
+export const CollectionIssueSeverity17 = {
+  Info: "info",
+  Warning: "warning",
+  Error: "error",
+} as const;
+export type CollectionIssueSeverity17 = ClosedEnum<
+  typeof CollectionIssueSeverity17
+>;
+
+export type CollectionIssue17 = {
+  message: string;
+  reason: Reason17;
+  severity: CollectionIssueSeverity17;
+  source: string;
+};
+
+export const Health17 = {
+  Unknown: "unknown",
+  Healthy: "healthy",
+  Degraded: "degraded",
+  Unhealthy: "unhealthy",
+} as const;
+export type Health17 = ClosedEnum<typeof Health17>;
+
+export const Lifecycle17 = {
+  Unknown: "unknown",
+  Creating: "creating",
+  Updating: "updating",
+  Running: "running",
+  Scaling: "scaling",
+  Stopping: "stopping",
+  Stopped: "stopped",
+  Deleting: "deleting",
+  Deleted: "deleted",
+  Failed: "failed",
+} as const;
+export type Lifecycle17 = ClosedEnum<typeof Lifecycle17>;
+
+export type DataStatus17 = {
+  collectionIssues: Array<CollectionIssue17>;
+  health: Health17;
+  lifecycle: Lifecycle17;
+  message?: string | null | undefined;
+  partial: boolean;
+  stale: boolean;
+};
+
+export type WorkloadCondition3 = {
+  lastTransitionTime?: Date | null | undefined;
+  message?: string | null | undefined;
+  reason?: string | null | undefined;
+  status: string;
+  type: string;
+};
+
+export type Workload3 = {
+  availableReplicas?: number | null | undefined;
+  conditions: Array<WorkloadCondition3>;
+  desiredGeneration?: number | null | undefined;
+  desiredReplicas?: number | null | undefined;
+  observedGeneration?: number | null | undefined;
+  readyReplicas?: number | null | undefined;
+  rolloutReason?: string | null | undefined;
+  updatedReplicas?: number | null | undefined;
+};
+
+export type WorkloadUnion3 = Workload3 | any;
+
+export type DataKubernetes3 = {
+  commandSupported: boolean;
+  cpu?: Cpu6 | any | null | undefined;
+  events: Array<Event10>;
+  memory?: Memory6 | any | null | undefined;
+  name: string;
+  namespace: string;
+  pods: Array<Pod3>;
+  replicas: Replicas4;
+  restarts?: number | null | undefined;
+  status: DataStatus17;
+  workload?: Workload3 | any | null | undefined;
+  backend: "kubernetes";
+};
+
+export const CpuDaemonInstanceUnit4 = {
+  Count: "count",
+  Percent: "percent",
+  Bytes: "bytes",
+  Cores: "cores",
+  Milliseconds: "milliseconds",
+  RequestsPerSecond: "requests-per-second",
+} as const;
+export type CpuDaemonInstanceUnit4 = ClosedEnum<typeof CpuDaemonInstanceUnit4>;
+
+export type CpuDaemonInstance4 = {
+  unit: CpuDaemonInstanceUnit4;
+  value: number;
+};
+
+export type DaemonInstanceCpuUnion4 = CpuDaemonInstance4 | any;
+
+export const MemoryDaemonInstanceUnit4 = {
+  Count: "count",
+  Percent: "percent",
+  Bytes: "bytes",
+  Cores: "cores",
+  Milliseconds: "milliseconds",
+  RequestsPerSecond: "requests-per-second",
+} as const;
+export type MemoryDaemonInstanceUnit4 = ClosedEnum<
+  typeof MemoryDaemonInstanceUnit4
+>;
+
+export type MemoryDaemonInstance4 = {
+  unit: MemoryDaemonInstanceUnit4;
+  value: number;
+};
+
+export type DaemonInstanceMemoryUnion4 = MemoryDaemonInstance4 | any;
+
+export type DaemonInstance4 = {
+  cpu?: CpuDaemonInstance4 | any | null | undefined;
+  ip?: string | null | undefined;
+  machineId?: string | null | undefined;
+  memory?: MemoryDaemonInstance4 | any | null | undefined;
+  message?: string | null | undefined;
+  metricsHealthy?: boolean | null | undefined;
+  metricsLastUpdated?: string | null | undefined;
+  metricsStatus?: string | null | undefined;
+  name: string;
+  nodeName?: string | null | undefined;
+  phase?: string | null | undefined;
+  ready: boolean;
+  reason?: string | null | undefined;
+  replicaId: string;
+  restartCount?: number | null | undefined;
+  status?: string | null | undefined;
+  terminatedReason?: string | null | undefined;
+  waitingReason?: string | null | undefined;
+};
+
+export type InvolvedObject7 = {
+  details?: any | null | undefined;
+  id?: string | null | undefined;
+  kind?: string | null | undefined;
+  machineId?: string | null | undefined;
+  name?: string | null | undefined;
+  replicaId?: string | null | undefined;
+};
+
+export type InvolvedObjectUnion7 = InvolvedObject7 | any;
+
+export type GetResourceDeploymentDetailSource7 = {
+  component?: string | null | undefined;
+  host?: string | null | undefined;
+};
+
+export type SourceUnion7 = GetResourceDeploymentDetailSource7 | any;
+
+export type Event9 = {
+  count?: number | null | undefined;
+  details?: any | null | undefined;
+  eventId?: string | null | undefined;
+  eventTime?: Date | null | undefined;
+  firstTimestamp?: Date | null | undefined;
+  involvedObject?: InvolvedObject7 | any | null | undefined;
+  lastTimestamp?: Date | null | undefined;
+  message: string;
+  raw?: any | null | undefined;
+  reason: string;
+  source?: GetResourceDeploymentDetailSource7 | any | null | undefined;
+  type?: string | null | undefined;
+};
+
 export const Reason16 = {
   Forbidden: "forbidden",
   NotInstalled: "not-installed",
@@ -4599,40 +5006,23 @@ export type DataStatus16 = {
   stale: boolean;
 };
 
-export type WorkloadCondition3 = {
-  lastTransitionTime?: Date | null | undefined;
-  message?: string | null | undefined;
-  reason?: string | null | undefined;
-  status: string;
-  type: string;
-};
-
-export type Workload3 = {
-  availableReplicas?: number | null | undefined;
-  conditions: Array<WorkloadCondition3>;
-  desiredGeneration?: number | null | undefined;
-  desiredReplicas?: number | null | undefined;
-  observedGeneration?: number | null | undefined;
-  readyReplicas?: number | null | undefined;
-  rolloutReason?: string | null | undefined;
-  updatedReplicas?: number | null | undefined;
-};
-
-export type WorkloadUnion3 = Workload3 | any;
-
-export type DataKubernetes3 = {
+export type DataMachines1 = {
+  assignedMachines: number;
+  capacityGroup: string;
   commandSupported: boolean;
-  cpu?: Cpu6 | any | null | undefined;
+  daemonInstances: Array<DaemonInstance4>;
+  daemonName?: string | undefined;
+  desiredMachines: number;
   events: Array<Event9>;
-  memory?: Memory6 | any | null | undefined;
-  name: string;
-  namespace: string;
-  pods: Array<Pod3>;
-  replicas: Replicas4;
-  restarts?: number | null | undefined;
+  healthyInstances: number;
+  horizonClusterId: string;
+  horizonStatus: string;
+  horizonStatusMessage?: string | null | undefined;
+  horizonStatusReason?: string | null | undefined;
+  latestUpdateTimestamp: string;
   status: DataStatus16;
-  workload?: Workload3 | any | null | undefined;
-  backend: "kubernetes";
+  unavailableInstances: number;
+  backend: "machines";
 };
 
 export const CpuDaemonInstanceUnit3 = {
@@ -5134,11 +5524,18 @@ export type DataUnion4 =
   | DataAws1
   | DataGcp1
   | DataAzure1
+  | DataMachines1
   | DataKubernetes3
   | DataLocal4;
 
 export type DataDaemon = {
-  data: DataAws1 | DataGcp1 | DataAzure1 | DataKubernetes3 | DataLocal4;
+  data:
+    | DataAws1
+    | DataGcp1
+    | DataAzure1
+    | DataMachines1
+    | DataKubernetes3
+    | DataLocal4;
   resourceType: "daemon";
 };
 
@@ -6967,64 +7364,64 @@ export const ControllerPlatform$inboundSchema: z.ZodEnum<
 > = z.enum(ControllerPlatform);
 
 /** @internal */
-export const Reason63$inboundSchema: z.ZodEnum<typeof Reason63> = z.enum(
-  Reason63,
+export const Reason65$inboundSchema: z.ZodEnum<typeof Reason65> = z.enum(
+  Reason65,
 );
 
 /** @internal */
-export const CollectionIssueSeverity63$inboundSchema: z.ZodEnum<
-  typeof CollectionIssueSeverity63
-> = z.enum(CollectionIssueSeverity63);
+export const CollectionIssueSeverity65$inboundSchema: z.ZodEnum<
+  typeof CollectionIssueSeverity65
+> = z.enum(CollectionIssueSeverity65);
 
 /** @internal */
-export const CollectionIssue63$inboundSchema: z.ZodType<
-  CollectionIssue63,
+export const CollectionIssue65$inboundSchema: z.ZodType<
+  CollectionIssue65,
   unknown
 > = z.object({
   message: z.string(),
-  reason: Reason63$inboundSchema,
-  severity: CollectionIssueSeverity63$inboundSchema,
+  reason: Reason65$inboundSchema,
+  severity: CollectionIssueSeverity65$inboundSchema,
   source: z.string(),
 });
 
-export function collectionIssue63FromJSON(
+export function collectionIssue65FromJSON(
   jsonString: string,
-): SafeParseResult<CollectionIssue63, SDKValidationError> {
+): SafeParseResult<CollectionIssue65, SDKValidationError> {
   return safeParse(
     jsonString,
-    (x) => CollectionIssue63$inboundSchema.parse(JSON.parse(x)),
-    `Failed to parse 'CollectionIssue63' from JSON`,
+    (x) => CollectionIssue65$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'CollectionIssue65' from JSON`,
   );
 }
 
 /** @internal */
-export const Health63$inboundSchema: z.ZodEnum<typeof Health63> = z.enum(
-  Health63,
+export const Health65$inboundSchema: z.ZodEnum<typeof Health65> = z.enum(
+  Health65,
 );
 
 /** @internal */
-export const Lifecycle63$inboundSchema: z.ZodEnum<typeof Lifecycle63> = z.enum(
-  Lifecycle63,
+export const Lifecycle65$inboundSchema: z.ZodEnum<typeof Lifecycle65> = z.enum(
+  Lifecycle65,
 );
 
 /** @internal */
-export const DataStatus63$inboundSchema: z.ZodType<DataStatus63, unknown> = z
+export const DataStatus65$inboundSchema: z.ZodType<DataStatus65, unknown> = z
   .object({
-    collectionIssues: z.array(z.lazy(() => CollectionIssue63$inboundSchema)),
-    health: Health63$inboundSchema,
-    lifecycle: Lifecycle63$inboundSchema,
+    collectionIssues: z.array(z.lazy(() => CollectionIssue65$inboundSchema)),
+    health: Health65$inboundSchema,
+    lifecycle: Lifecycle65$inboundSchema,
     message: z.nullable(z.string()).optional(),
     partial: z.boolean(),
     stale: z.boolean(),
   });
 
-export function dataStatus63FromJSON(
+export function dataStatus65FromJSON(
   jsonString: string,
-): SafeParseResult<DataStatus63, SDKValidationError> {
+): SafeParseResult<DataStatus65, SDKValidationError> {
   return safeParse(
     jsonString,
-    (x) => DataStatus63$inboundSchema.parse(JSON.parse(x)),
-    `Failed to parse 'DataStatus63' from JSON`,
+    (x) => DataStatus65$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'DataStatus65' from JSON`,
   );
 }
 
@@ -7047,7 +7444,7 @@ export const Data5$inboundSchema: z.ZodType<Data5, unknown> = z.object({
   skuCapacity: z.nullable(z.int()).optional(),
   skuName: z.nullable(z.string()).optional(),
   skuTier: z.nullable(z.string()).optional(),
-  status: z.lazy(() => DataStatus63$inboundSchema),
+  status: z.lazy(() => DataStatus65$inboundSchema),
   updatedAt: z.nullable(z.string()).optional(),
   zoneRedundant: z.nullable(z.boolean()).optional(),
 });
@@ -7082,64 +7479,64 @@ export function dataAzureServiceBusNamespaceFromJSON(
 }
 
 /** @internal */
-export const Reason62$inboundSchema: z.ZodEnum<typeof Reason62> = z.enum(
-  Reason62,
+export const Reason64$inboundSchema: z.ZodEnum<typeof Reason64> = z.enum(
+  Reason64,
 );
 
 /** @internal */
-export const CollectionIssueSeverity62$inboundSchema: z.ZodEnum<
-  typeof CollectionIssueSeverity62
-> = z.enum(CollectionIssueSeverity62);
+export const CollectionIssueSeverity64$inboundSchema: z.ZodEnum<
+  typeof CollectionIssueSeverity64
+> = z.enum(CollectionIssueSeverity64);
 
 /** @internal */
-export const CollectionIssue62$inboundSchema: z.ZodType<
-  CollectionIssue62,
+export const CollectionIssue64$inboundSchema: z.ZodType<
+  CollectionIssue64,
   unknown
 > = z.object({
   message: z.string(),
-  reason: Reason62$inboundSchema,
-  severity: CollectionIssueSeverity62$inboundSchema,
+  reason: Reason64$inboundSchema,
+  severity: CollectionIssueSeverity64$inboundSchema,
   source: z.string(),
 });
 
-export function collectionIssue62FromJSON(
+export function collectionIssue64FromJSON(
   jsonString: string,
-): SafeParseResult<CollectionIssue62, SDKValidationError> {
+): SafeParseResult<CollectionIssue64, SDKValidationError> {
   return safeParse(
     jsonString,
-    (x) => CollectionIssue62$inboundSchema.parse(JSON.parse(x)),
-    `Failed to parse 'CollectionIssue62' from JSON`,
+    (x) => CollectionIssue64$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'CollectionIssue64' from JSON`,
   );
 }
 
 /** @internal */
-export const Health62$inboundSchema: z.ZodEnum<typeof Health62> = z.enum(
-  Health62,
+export const Health64$inboundSchema: z.ZodEnum<typeof Health64> = z.enum(
+  Health64,
 );
 
 /** @internal */
-export const Lifecycle62$inboundSchema: z.ZodEnum<typeof Lifecycle62> = z.enum(
-  Lifecycle62,
+export const Lifecycle64$inboundSchema: z.ZodEnum<typeof Lifecycle64> = z.enum(
+  Lifecycle64,
 );
 
 /** @internal */
-export const DataStatus62$inboundSchema: z.ZodType<DataStatus62, unknown> = z
+export const DataStatus64$inboundSchema: z.ZodType<DataStatus64, unknown> = z
   .object({
-    collectionIssues: z.array(z.lazy(() => CollectionIssue62$inboundSchema)),
-    health: Health62$inboundSchema,
-    lifecycle: Lifecycle62$inboundSchema,
+    collectionIssues: z.array(z.lazy(() => CollectionIssue64$inboundSchema)),
+    health: Health64$inboundSchema,
+    lifecycle: Lifecycle64$inboundSchema,
     message: z.nullable(z.string()).optional(),
     partial: z.boolean(),
     stale: z.boolean(),
   });
 
-export function dataStatus62FromJSON(
+export function dataStatus64FromJSON(
   jsonString: string,
-): SafeParseResult<DataStatus62, SDKValidationError> {
+): SafeParseResult<DataStatus64, SDKValidationError> {
   return safeParse(
     jsonString,
-    (x) => DataStatus62$inboundSchema.parse(JSON.parse(x)),
-    `Failed to parse 'DataStatus62' from JSON`,
+    (x) => DataStatus64$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'DataStatus64' from JSON`,
   );
 }
 
@@ -7177,7 +7574,7 @@ export const Data4$inboundSchema: z.ZodType<Data4, unknown> = z.object({
   resourceGroup: z.nullable(z.string()).optional(),
   resourceId: z.nullable(z.string()).optional(),
   staticIp: z.nullable(z.string()).optional(),
-  status: z.lazy(() => DataStatus62$inboundSchema),
+  status: z.lazy(() => DataStatus64$inboundSchema),
   workloadProfileCount: z.int(),
   workloadProfiles: z.array(z.lazy(() => WorkloadProfile$inboundSchema)),
   zoneRedundant: z.nullable(z.boolean()).optional(),
@@ -7259,6 +7656,225 @@ export function secondaryEndpointsFromJSON(
 }
 
 /** @internal */
+export const Reason63$inboundSchema: z.ZodEnum<typeof Reason63> = z.enum(
+  Reason63,
+);
+
+/** @internal */
+export const CollectionIssueSeverity63$inboundSchema: z.ZodEnum<
+  typeof CollectionIssueSeverity63
+> = z.enum(CollectionIssueSeverity63);
+
+/** @internal */
+export const CollectionIssue63$inboundSchema: z.ZodType<
+  CollectionIssue63,
+  unknown
+> = z.object({
+  message: z.string(),
+  reason: Reason63$inboundSchema,
+  severity: CollectionIssueSeverity63$inboundSchema,
+  source: z.string(),
+});
+
+export function collectionIssue63FromJSON(
+  jsonString: string,
+): SafeParseResult<CollectionIssue63, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => CollectionIssue63$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'CollectionIssue63' from JSON`,
+  );
+}
+
+/** @internal */
+export const Health63$inboundSchema: z.ZodEnum<typeof Health63> = z.enum(
+  Health63,
+);
+
+/** @internal */
+export const Lifecycle63$inboundSchema: z.ZodEnum<typeof Lifecycle63> = z.enum(
+  Lifecycle63,
+);
+
+/** @internal */
+export const DataStatus63$inboundSchema: z.ZodType<DataStatus63, unknown> = z
+  .object({
+    collectionIssues: z.array(z.lazy(() => CollectionIssue63$inboundSchema)),
+    health: Health63$inboundSchema,
+    lifecycle: Lifecycle63$inboundSchema,
+    message: z.nullable(z.string()).optional(),
+    partial: z.boolean(),
+    stale: z.boolean(),
+  });
+
+export function dataStatus63FromJSON(
+  jsonString: string,
+): SafeParseResult<DataStatus63, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => DataStatus63$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'DataStatus63' from JSON`,
+  );
+}
+
+/** @internal */
+export const Data3$inboundSchema: z.ZodType<Data3, unknown> = z.object({
+  allowBlobPublicAccess: z.nullable(z.boolean()).optional(),
+  allowSharedKeyAccess: z.nullable(z.boolean()).optional(),
+  encryptionKeySource: z.nullable(z.string()).optional(),
+  kind: z.nullable(z.string()).optional(),
+  location: z.nullable(z.string()).optional(),
+  minimumTlsVersion: z.nullable(z.string()).optional(),
+  name: z.string(),
+  networkBypass: z.nullable(z.string()).optional(),
+  networkDefaultAction: z.nullable(z.string()).optional(),
+  networkIpRuleCount: z.nullable(z.int()).optional(),
+  networkResourceAccessRuleCount: z.nullable(z.int()).optional(),
+  networkVirtualNetworkRuleCount: z.nullable(z.int()).optional(),
+  primaryEndpoints: z.lazy(() => PrimaryEndpoints$inboundSchema),
+  provisioningState: z.nullable(z.string()).optional(),
+  publicNetworkAccess: z.nullable(z.string()).optional(),
+  requireInfrastructureEncryption: z.nullable(z.boolean()).optional(),
+  resourceGroup: z.nullable(z.string()).optional(),
+  resourceId: z.nullable(z.string()).optional(),
+  secondaryEndpoints: z.lazy(() => SecondaryEndpoints$inboundSchema),
+  skuName: z.nullable(z.string()).optional(),
+  skuTier: z.nullable(z.string()).optional(),
+  status: z.lazy(() => DataStatus63$inboundSchema),
+  supportsHttpsTrafficOnly: z.nullable(z.boolean()).optional(),
+});
+
+export function data3FromJSON(
+  jsonString: string,
+): SafeParseResult<Data3, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => Data3$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'Data3' from JSON`,
+  );
+}
+
+/** @internal */
+export const DataAzureStorageAccount$inboundSchema: z.ZodType<
+  DataAzureStorageAccount,
+  unknown
+> = z.object({
+  data: z.lazy(() => Data3$inboundSchema),
+  resourceType: z.literal("azure_storage_account"),
+});
+
+export function dataAzureStorageAccountFromJSON(
+  jsonString: string,
+): SafeParseResult<DataAzureStorageAccount, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => DataAzureStorageAccount$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'DataAzureStorageAccount' from JSON`,
+  );
+}
+
+/** @internal */
+export const Reason62$inboundSchema: z.ZodEnum<typeof Reason62> = z.enum(
+  Reason62,
+);
+
+/** @internal */
+export const CollectionIssueSeverity62$inboundSchema: z.ZodEnum<
+  typeof CollectionIssueSeverity62
+> = z.enum(CollectionIssueSeverity62);
+
+/** @internal */
+export const CollectionIssue62$inboundSchema: z.ZodType<
+  CollectionIssue62,
+  unknown
+> = z.object({
+  message: z.string(),
+  reason: Reason62$inboundSchema,
+  severity: CollectionIssueSeverity62$inboundSchema,
+  source: z.string(),
+});
+
+export function collectionIssue62FromJSON(
+  jsonString: string,
+): SafeParseResult<CollectionIssue62, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => CollectionIssue62$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'CollectionIssue62' from JSON`,
+  );
+}
+
+/** @internal */
+export const Health62$inboundSchema: z.ZodEnum<typeof Health62> = z.enum(
+  Health62,
+);
+
+/** @internal */
+export const Lifecycle62$inboundSchema: z.ZodEnum<typeof Lifecycle62> = z.enum(
+  Lifecycle62,
+);
+
+/** @internal */
+export const DataStatus62$inboundSchema: z.ZodType<DataStatus62, unknown> = z
+  .object({
+    collectionIssues: z.array(z.lazy(() => CollectionIssue62$inboundSchema)),
+    health: Health62$inboundSchema,
+    lifecycle: Lifecycle62$inboundSchema,
+    message: z.nullable(z.string()).optional(),
+    partial: z.boolean(),
+    stale: z.boolean(),
+  });
+
+export function dataStatus62FromJSON(
+  jsonString: string,
+): SafeParseResult<DataStatus62, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => DataStatus62$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'DataStatus62' from JSON`,
+  );
+}
+
+/** @internal */
+export const Data2$inboundSchema: z.ZodType<Data2, unknown> = z.object({
+  location: z.nullable(z.string()).optional(),
+  managedTags: z.record(z.string(), z.string()),
+  name: z.string(),
+  provisioningState: z.nullable(z.string()).optional(),
+  resourceId: z.nullable(z.string()).optional(),
+  status: z.lazy(() => DataStatus62$inboundSchema),
+});
+
+export function data2FromJSON(
+  jsonString: string,
+): SafeParseResult<Data2, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => Data2$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'Data2' from JSON`,
+  );
+}
+
+/** @internal */
+export const DataAzureResourceGroup$inboundSchema: z.ZodType<
+  DataAzureResourceGroup,
+  unknown
+> = z.object({
+  data: z.lazy(() => Data2$inboundSchema),
+  resourceType: z.literal("azure_resource_group"),
+});
+
+export function dataAzureResourceGroupFromJSON(
+  jsonString: string,
+): SafeParseResult<DataAzureResourceGroup, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => DataAzureResourceGroup$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'DataAzureResourceGroup' from JSON`,
+  );
+}
+
+/** @internal */
 export const Reason61$inboundSchema: z.ZodEnum<typeof Reason61> = z.enum(
   Reason61,
 );
@@ -7321,58 +7937,27 @@ export function dataStatus61FromJSON(
 }
 
 /** @internal */
-export const Data3$inboundSchema: z.ZodType<Data3, unknown> = z.object({
-  allowBlobPublicAccess: z.nullable(z.boolean()).optional(),
-  allowSharedKeyAccess: z.nullable(z.boolean()).optional(),
-  encryptionKeySource: z.nullable(z.string()).optional(),
-  kind: z.nullable(z.string()).optional(),
-  location: z.nullable(z.string()).optional(),
-  minimumTlsVersion: z.nullable(z.string()).optional(),
-  name: z.string(),
-  networkBypass: z.nullable(z.string()).optional(),
-  networkDefaultAction: z.nullable(z.string()).optional(),
-  networkIpRuleCount: z.nullable(z.int()).optional(),
-  networkResourceAccessRuleCount: z.nullable(z.int()).optional(),
-  networkVirtualNetworkRuleCount: z.nullable(z.int()).optional(),
-  primaryEndpoints: z.lazy(() => PrimaryEndpoints$inboundSchema),
-  provisioningState: z.nullable(z.string()).optional(),
-  publicNetworkAccess: z.nullable(z.string()).optional(),
-  requireInfrastructureEncryption: z.nullable(z.boolean()).optional(),
-  resourceGroup: z.nullable(z.string()).optional(),
-  resourceId: z.nullable(z.string()).optional(),
-  secondaryEndpoints: z.lazy(() => SecondaryEndpoints$inboundSchema),
-  skuName: z.nullable(z.string()).optional(),
-  skuTier: z.nullable(z.string()).optional(),
-  status: z.lazy(() => DataStatus61$inboundSchema),
-  supportsHttpsTrafficOnly: z.nullable(z.boolean()).optional(),
-});
-
-export function data3FromJSON(
-  jsonString: string,
-): SafeParseResult<Data3, SDKValidationError> {
-  return safeParse(
-    jsonString,
-    (x) => Data3$inboundSchema.parse(JSON.parse(x)),
-    `Failed to parse 'Data3' from JSON`,
-  );
-}
-
-/** @internal */
-export const DataAzureStorageAccount$inboundSchema: z.ZodType<
-  DataAzureStorageAccount,
+export const DataAzureResourceProvider$inboundSchema: z.ZodType<
+  DataAzureResourceProvider,
   unknown
 > = z.object({
-  data: z.lazy(() => Data3$inboundSchema),
-  resourceType: z.literal("azure_storage_account"),
+  namespace: z.string(),
+  providerId: z.nullable(z.string()).optional(),
+  registered: z.boolean(),
+  registrationPolicy: z.nullable(z.string()).optional(),
+  registrationState: z.nullable(z.string()).optional(),
+  resourceTypeCount: z.int(),
+  status: z.lazy(() => DataStatus61$inboundSchema),
+  backend: z.literal("azureResourceProvider"),
 });
 
-export function dataAzureStorageAccountFromJSON(
+export function dataAzureResourceProviderFromJSON(
   jsonString: string,
-): SafeParseResult<DataAzureStorageAccount, SDKValidationError> {
+): SafeParseResult<DataAzureResourceProvider, SDKValidationError> {
   return safeParse(
     jsonString,
-    (x) => DataAzureStorageAccount$inboundSchema.parse(JSON.parse(x)),
-    `Failed to parse 'DataAzureStorageAccount' from JSON`,
+    (x) => DataAzureResourceProvider$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'DataAzureResourceProvider' from JSON`,
   );
 }
 
@@ -7439,41 +8024,181 @@ export function dataStatus60FromJSON(
 }
 
 /** @internal */
-export const Data2$inboundSchema: z.ZodType<Data2, unknown> = z.object({
-  location: z.nullable(z.string()).optional(),
-  managedTags: z.record(z.string(), z.string()),
-  name: z.string(),
-  provisioningState: z.nullable(z.string()).optional(),
-  resourceId: z.nullable(z.string()).optional(),
+export const DataGcpServiceUsage$inboundSchema: z.ZodType<
+  DataGcpServiceUsage,
+  unknown
+> = z.object({
+  enabled: z.boolean(),
+  lastOperationName: z.nullable(z.string()).optional(),
+  projectId: z.string(),
+  serviceName: z.string(),
+  serviceResourceName: z.nullable(z.string()).optional(),
+  state: z.nullable(z.string()).optional(),
   status: z.lazy(() => DataStatus60$inboundSchema),
+  title: z.nullable(z.string()).optional(),
+  backend: z.literal("gcpServiceUsage"),
 });
 
-export function data2FromJSON(
+export function dataGcpServiceUsageFromJSON(
   jsonString: string,
-): SafeParseResult<Data2, SDKValidationError> {
+): SafeParseResult<DataGcpServiceUsage, SDKValidationError> {
   return safeParse(
     jsonString,
-    (x) => Data2$inboundSchema.parse(JSON.parse(x)),
-    `Failed to parse 'Data2' from JSON`,
+    (x) => DataGcpServiceUsage$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'DataGcpServiceUsage' from JSON`,
   );
 }
 
 /** @internal */
-export const DataAzureResourceGroup$inboundSchema: z.ZodType<
-  DataAzureResourceGroup,
-  unknown
-> = z.object({
-  data: z.lazy(() => Data2$inboundSchema),
-  resourceType: z.literal("azure_resource_group"),
-});
+export const DataUnion15$inboundSchema: z.ZodType<DataUnion15, unknown> = z
+  .union([
+    z.lazy(() => DataGcpServiceUsage$inboundSchema),
+    z.lazy(() => DataAzureResourceProvider$inboundSchema),
+  ]);
 
-export function dataAzureResourceGroupFromJSON(
+export function dataUnion15FromJSON(
   jsonString: string,
-): SafeParseResult<DataAzureResourceGroup, SDKValidationError> {
+): SafeParseResult<DataUnion15, SDKValidationError> {
   return safeParse(
     jsonString,
-    (x) => DataAzureResourceGroup$inboundSchema.parse(JSON.parse(x)),
-    `Failed to parse 'DataAzureResourceGroup' from JSON`,
+    (x) => DataUnion15$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'DataUnion15' from JSON`,
+  );
+}
+
+/** @internal */
+export const DataServiceActivation$inboundSchema: z.ZodType<
+  DataServiceActivation,
+  unknown
+> = z.object({
+  data: z.union([
+    z.lazy(() => DataGcpServiceUsage$inboundSchema),
+    z.lazy(() => DataAzureResourceProvider$inboundSchema),
+  ]),
+  resourceType: z.literal("service_activation"),
+});
+
+export function dataServiceActivationFromJSON(
+  jsonString: string,
+): SafeParseResult<DataServiceActivation, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => DataServiceActivation$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'DataServiceActivation' from JSON`,
+  );
+}
+
+/** @internal */
+export const InvolvedObject10$inboundSchema: z.ZodType<
+  InvolvedObject10,
+  unknown
+> = z.object({
+  apiVersion: z.nullable(z.string()).optional(),
+  fieldPath: z.nullable(z.string()).optional(),
+  kind: z.nullable(z.string()).optional(),
+  name: z.nullable(z.string()).optional(),
+  namespace: z.nullable(z.string()).optional(),
+  resourceVersion: z.nullable(z.string()).optional(),
+  uid: z.nullable(z.string()).optional(),
+});
+
+export function involvedObject10FromJSON(
+  jsonString: string,
+): SafeParseResult<InvolvedObject10, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => InvolvedObject10$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'InvolvedObject10' from JSON`,
+  );
+}
+
+/** @internal */
+export const InvolvedObjectUnion10$inboundSchema: z.ZodType<
+  InvolvedObjectUnion10,
+  unknown
+> = z.union([z.lazy(() => InvolvedObject10$inboundSchema), z.any()]);
+
+export function involvedObjectUnion10FromJSON(
+  jsonString: string,
+): SafeParseResult<InvolvedObjectUnion10, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => InvolvedObjectUnion10$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'InvolvedObjectUnion10' from JSON`,
+  );
+}
+
+/** @internal */
+export const GetResourceDeploymentDetailSource10$inboundSchema: z.ZodType<
+  GetResourceDeploymentDetailSource10,
+  unknown
+> = z.object({
+  component: z.nullable(z.string()).optional(),
+  host: z.nullable(z.string()).optional(),
+});
+
+export function getResourceDeploymentDetailSource10FromJSON(
+  jsonString: string,
+): SafeParseResult<GetResourceDeploymentDetailSource10, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) =>
+      GetResourceDeploymentDetailSource10$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'GetResourceDeploymentDetailSource10' from JSON`,
+  );
+}
+
+/** @internal */
+export const SourceUnion10$inboundSchema: z.ZodType<SourceUnion10, unknown> = z
+  .union([
+    z.lazy(() => GetResourceDeploymentDetailSource10$inboundSchema),
+    z.any(),
+  ]);
+
+export function sourceUnion10FromJSON(
+  jsonString: string,
+): SafeParseResult<SourceUnion10, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => SourceUnion10$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'SourceUnion10' from JSON`,
+  );
+}
+
+/** @internal */
+export const Event13$inboundSchema: z.ZodType<Event13, unknown> = z.object({
+  count: z.nullable(z.int()).optional(),
+  eventTime: z.nullable(
+    z.iso.datetime({ offset: true }).transform(v => new Date(v)),
+  ).optional(),
+  firstTimestamp: z.nullable(
+    z.iso.datetime({ offset: true }).transform(v => new Date(v)),
+  ).optional(),
+  involvedObject: z.nullable(
+    z.union([z.lazy(() => InvolvedObject10$inboundSchema), z.any()]),
+  ).optional(),
+  lastTimestamp: z.nullable(
+    z.iso.datetime({ offset: true }).transform(v => new Date(v)),
+  ).optional(),
+  message: z.string(),
+  raw: z.nullable(z.any()).optional(),
+  reason: z.string(),
+  source: z.nullable(
+    z.union([
+      z.lazy(() => GetResourceDeploymentDetailSource10$inboundSchema),
+      z.any(),
+    ]),
+  ).optional(),
+  type: z.nullable(z.string()).optional(),
+});
+
+export function event13FromJSON(
+  jsonString: string,
+): SafeParseResult<Event13, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => Event13$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'Event13' from JSON`,
   );
 }
 
@@ -7540,27 +8265,35 @@ export function dataStatus59FromJSON(
 }
 
 /** @internal */
-export const DataAzureResourceProvider$inboundSchema: z.ZodType<
-  DataAzureResourceProvider,
+export const DataKubernetesJob$inboundSchema: z.ZodType<
+  DataKubernetesJob,
   unknown
 > = z.object({
+  active: z.nullable(z.int()).optional(),
+  completionTime: z.nullable(
+    z.iso.datetime({ offset: true }).transform(v => new Date(v)),
+  ).optional(),
+  conditionCount: z.int(),
+  events: z.array(z.lazy(() => Event13$inboundSchema)),
+  failed: z.nullable(z.int()).optional(),
+  imageDigest: z.nullable(z.string()).optional(),
+  jobName: z.string(),
   namespace: z.string(),
-  providerId: z.nullable(z.string()).optional(),
-  registered: z.boolean(),
-  registrationPolicy: z.nullable(z.string()).optional(),
-  registrationState: z.nullable(z.string()).optional(),
-  resourceTypeCount: z.int(),
+  startTime: z.nullable(
+    z.iso.datetime({ offset: true }).transform(v => new Date(v)),
+  ).optional(),
   status: z.lazy(() => DataStatus59$inboundSchema),
-  backend: z.literal("azureResourceProvider"),
+  succeeded: z.nullable(z.int()).optional(),
+  backend: z.literal("kubernetesJob"),
 });
 
-export function dataAzureResourceProviderFromJSON(
+export function dataKubernetesJobFromJSON(
   jsonString: string,
-): SafeParseResult<DataAzureResourceProvider, SDKValidationError> {
+): SafeParseResult<DataKubernetesJob, SDKValidationError> {
   return safeParse(
     jsonString,
-    (x) => DataAzureResourceProvider$inboundSchema.parse(JSON.parse(x)),
-    `Failed to parse 'DataAzureResourceProvider' from JSON`,
+    (x) => DataKubernetesJob$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'DataKubernetesJob' from JSON`,
   );
 }
 
@@ -7627,67 +8360,3502 @@ export function dataStatus58FromJSON(
 }
 
 /** @internal */
-export const DataGcpServiceUsage$inboundSchema: z.ZodType<
-  DataGcpServiceUsage,
+export const DataAzureContainerApps2$inboundSchema: z.ZodType<
+  DataAzureContainerApps2,
   unknown
 > = z.object({
-  enabled: z.boolean(),
-  lastOperationName: z.nullable(z.string()).optional(),
-  projectId: z.string(),
-  serviceName: z.string(),
-  serviceResourceName: z.nullable(z.string()).optional(),
-  state: z.nullable(z.string()).optional(),
+  environmentVariableCount: z.int(),
+  managedEnvironmentId: z.string(),
+  managedIdentityId: z.nullable(z.string()).optional(),
+  resourceGroupName: z.string(),
+  resourcePrefix: z.nullable(z.string()).optional(),
   status: z.lazy(() => DataStatus58$inboundSchema),
-  title: z.nullable(z.string()).optional(),
-  backend: z.literal("gcpServiceUsage"),
+  backend: z.literal("azureContainerApps"),
 });
 
-export function dataGcpServiceUsageFromJSON(
+export function dataAzureContainerApps2FromJSON(
   jsonString: string,
-): SafeParseResult<DataGcpServiceUsage, SDKValidationError> {
+): SafeParseResult<DataAzureContainerApps2, SDKValidationError> {
   return safeParse(
     jsonString,
-    (x) => DataGcpServiceUsage$inboundSchema.parse(JSON.parse(x)),
-    `Failed to parse 'DataGcpServiceUsage' from JSON`,
+    (x) => DataAzureContainerApps2$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'DataAzureContainerApps2' from JSON`,
   );
 }
 
 /** @internal */
-export const DataUnion15$inboundSchema: z.ZodType<DataUnion15, unknown> = z
+export const Reason57$inboundSchema: z.ZodEnum<typeof Reason57> = z.enum(
+  Reason57,
+);
+
+/** @internal */
+export const CollectionIssueSeverity57$inboundSchema: z.ZodEnum<
+  typeof CollectionIssueSeverity57
+> = z.enum(CollectionIssueSeverity57);
+
+/** @internal */
+export const CollectionIssue57$inboundSchema: z.ZodType<
+  CollectionIssue57,
+  unknown
+> = z.object({
+  message: z.string(),
+  reason: Reason57$inboundSchema,
+  severity: CollectionIssueSeverity57$inboundSchema,
+  source: z.string(),
+});
+
+export function collectionIssue57FromJSON(
+  jsonString: string,
+): SafeParseResult<CollectionIssue57, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => CollectionIssue57$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'CollectionIssue57' from JSON`,
+  );
+}
+
+/** @internal */
+export const Health57$inboundSchema: z.ZodEnum<typeof Health57> = z.enum(
+  Health57,
+);
+
+/** @internal */
+export const Lifecycle57$inboundSchema: z.ZodEnum<typeof Lifecycle57> = z.enum(
+  Lifecycle57,
+);
+
+/** @internal */
+export const DataStatus57$inboundSchema: z.ZodType<DataStatus57, unknown> = z
+  .object({
+    collectionIssues: z.array(z.lazy(() => CollectionIssue57$inboundSchema)),
+    health: Health57$inboundSchema,
+    lifecycle: Lifecycle57$inboundSchema,
+    message: z.nullable(z.string()).optional(),
+    partial: z.boolean(),
+    stale: z.boolean(),
+  });
+
+export function dataStatus57FromJSON(
+  jsonString: string,
+): SafeParseResult<DataStatus57, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => DataStatus57$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'DataStatus57' from JSON`,
+  );
+}
+
+/** @internal */
+export const DataGcpCloudBuild$inboundSchema: z.ZodType<
+  DataGcpCloudBuild,
+  unknown
+> = z.object({
+  buildConfigId: z.string(),
+  environmentVariableCount: z.int(),
+  location: z.string(),
+  projectId: z.string(),
+  serviceAccount: z.nullable(z.string()).optional(),
+  status: z.lazy(() => DataStatus57$inboundSchema),
+  backend: z.literal("gcpCloudBuild"),
+});
+
+export function dataGcpCloudBuildFromJSON(
+  jsonString: string,
+): SafeParseResult<DataGcpCloudBuild, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => DataGcpCloudBuild$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'DataGcpCloudBuild' from JSON`,
+  );
+}
+
+/** @internal */
+export const Reason56$inboundSchema: z.ZodEnum<typeof Reason56> = z.enum(
+  Reason56,
+);
+
+/** @internal */
+export const CollectionIssueSeverity56$inboundSchema: z.ZodEnum<
+  typeof CollectionIssueSeverity56
+> = z.enum(CollectionIssueSeverity56);
+
+/** @internal */
+export const CollectionIssue56$inboundSchema: z.ZodType<
+  CollectionIssue56,
+  unknown
+> = z.object({
+  message: z.string(),
+  reason: Reason56$inboundSchema,
+  severity: CollectionIssueSeverity56$inboundSchema,
+  source: z.string(),
+});
+
+export function collectionIssue56FromJSON(
+  jsonString: string,
+): SafeParseResult<CollectionIssue56, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => CollectionIssue56$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'CollectionIssue56' from JSON`,
+  );
+}
+
+/** @internal */
+export const Health56$inboundSchema: z.ZodEnum<typeof Health56> = z.enum(
+  Health56,
+);
+
+/** @internal */
+export const Lifecycle56$inboundSchema: z.ZodEnum<typeof Lifecycle56> = z.enum(
+  Lifecycle56,
+);
+
+/** @internal */
+export const DataStatus56$inboundSchema: z.ZodType<DataStatus56, unknown> = z
+  .object({
+    collectionIssues: z.array(z.lazy(() => CollectionIssue56$inboundSchema)),
+    health: Health56$inboundSchema,
+    lifecycle: Lifecycle56$inboundSchema,
+    message: z.nullable(z.string()).optional(),
+    partial: z.boolean(),
+    stale: z.boolean(),
+  });
+
+export function dataStatus56FromJSON(
+  jsonString: string,
+): SafeParseResult<DataStatus56, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => DataStatus56$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'DataStatus56' from JSON`,
+  );
+}
+
+/** @internal */
+export const DataAwsCodeBuild$inboundSchema: z.ZodType<
+  DataAwsCodeBuild,
+  unknown
+> = z.object({
+  artifactsEncryptionDisabled: z.nullable(z.boolean()).optional(),
+  artifactsType: z.nullable(z.string()).optional(),
+  cloudWatchLogsStatus: z.nullable(z.string()).optional(),
+  computeType: z.nullable(z.string()).optional(),
+  created: z.nullable(z.number()).optional(),
+  description: z.nullable(z.string()).optional(),
+  encryptionKeyPresent: z.boolean(),
+  environmentImage: z.nullable(z.string()).optional(),
+  environmentType: z.nullable(z.string()).optional(),
+  environmentVariableCount: z.int(),
+  imagePullCredentialsType: z.nullable(z.string()).optional(),
+  lastModified: z.nullable(z.number()).optional(),
+  privilegedMode: z.nullable(z.boolean()).optional(),
+  projectArn: z.nullable(z.string()).optional(),
+  projectName: z.string(),
+  queuedTimeoutInMinutes: z.nullable(z.int()).optional(),
+  s3LogsStatus: z.nullable(z.string()).optional(),
+  serviceRolePresent: z.boolean(),
+  sourceType: z.nullable(z.string()).optional(),
+  status: z.lazy(() => DataStatus56$inboundSchema),
+  timeoutInMinutes: z.nullable(z.int()).optional(),
+  backend: z.literal("awsCodeBuild"),
+});
+
+export function dataAwsCodeBuildFromJSON(
+  jsonString: string,
+): SafeParseResult<DataAwsCodeBuild, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => DataAwsCodeBuild$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'DataAwsCodeBuild' from JSON`,
+  );
+}
+
+/** @internal */
+export const DataUnion14$inboundSchema: z.ZodType<DataUnion14, unknown> = z
   .union([
-    z.lazy(() => DataGcpServiceUsage$inboundSchema),
-    z.lazy(() => DataAzureResourceProvider$inboundSchema),
+    z.lazy(() => DataAwsCodeBuild$inboundSchema),
+    z.lazy(() => DataGcpCloudBuild$inboundSchema),
+    z.lazy(() => DataAzureContainerApps2$inboundSchema),
+    z.lazy(() => DataKubernetesJob$inboundSchema),
   ]);
 
-export function dataUnion15FromJSON(
+export function dataUnion14FromJSON(
   jsonString: string,
-): SafeParseResult<DataUnion15, SDKValidationError> {
+): SafeParseResult<DataUnion14, SDKValidationError> {
   return safeParse(
     jsonString,
-    (x) => DataUnion15$inboundSchema.parse(JSON.parse(x)),
-    `Failed to parse 'DataUnion15' from JSON`,
+    (x) => DataUnion14$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'DataUnion14' from JSON`,
   );
 }
 
 /** @internal */
-export const DataServiceActivation$inboundSchema: z.ZodType<
-  DataServiceActivation,
+export const DataBuild$inboundSchema: z.ZodType<DataBuild, unknown> = z.object({
+  data: z.union([
+    z.lazy(() => DataAwsCodeBuild$inboundSchema),
+    z.lazy(() => DataGcpCloudBuild$inboundSchema),
+    z.lazy(() => DataAzureContainerApps2$inboundSchema),
+    z.lazy(() => DataKubernetesJob$inboundSchema),
+  ]),
+  resourceType: z.literal("build"),
+});
+
+export function dataBuildFromJSON(
+  jsonString: string,
+): SafeParseResult<DataBuild, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => DataBuild$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'DataBuild' from JSON`,
+  );
+}
+
+/** @internal */
+export const Reason55$inboundSchema: z.ZodEnum<typeof Reason55> = z.enum(
+  Reason55,
+);
+
+/** @internal */
+export const CollectionIssueSeverity55$inboundSchema: z.ZodEnum<
+  typeof CollectionIssueSeverity55
+> = z.enum(CollectionIssueSeverity55);
+
+/** @internal */
+export const CollectionIssue55$inboundSchema: z.ZodType<
+  CollectionIssue55,
+  unknown
+> = z.object({
+  message: z.string(),
+  reason: Reason55$inboundSchema,
+  severity: CollectionIssueSeverity55$inboundSchema,
+  source: z.string(),
+});
+
+export function collectionIssue55FromJSON(
+  jsonString: string,
+): SafeParseResult<CollectionIssue55, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => CollectionIssue55$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'CollectionIssue55' from JSON`,
+  );
+}
+
+/** @internal */
+export const Health55$inboundSchema: z.ZodEnum<typeof Health55> = z.enum(
+  Health55,
+);
+
+/** @internal */
+export const Lifecycle55$inboundSchema: z.ZodEnum<typeof Lifecycle55> = z.enum(
+  Lifecycle55,
+);
+
+/** @internal */
+export const DataStatus55$inboundSchema: z.ZodType<DataStatus55, unknown> = z
+  .object({
+    collectionIssues: z.array(z.lazy(() => CollectionIssue55$inboundSchema)),
+    health: Health55$inboundSchema,
+    lifecycle: Lifecycle55$inboundSchema,
+    message: z.nullable(z.string()).optional(),
+    partial: z.boolean(),
+    stale: z.boolean(),
+  });
+
+export function dataStatus55FromJSON(
+  jsonString: string,
+): SafeParseResult<DataStatus55, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => DataStatus55$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'DataStatus55' from JSON`,
+  );
+}
+
+/** @internal */
+export const DataLocal11$inboundSchema: z.ZodType<DataLocal11, unknown> = z
+  .object({
+    reachable: z.boolean(),
+    registryUrl: z.string(),
+    status: z.lazy(() => DataStatus55$inboundSchema),
+    backend: z.literal("local"),
+  });
+
+export function dataLocal11FromJSON(
+  jsonString: string,
+): SafeParseResult<DataLocal11, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => DataLocal11$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'DataLocal11' from JSON`,
+  );
+}
+
+/** @internal */
+export const Reason54$inboundSchema: z.ZodEnum<typeof Reason54> = z.enum(
+  Reason54,
+);
+
+/** @internal */
+export const CollectionIssueSeverity54$inboundSchema: z.ZodEnum<
+  typeof CollectionIssueSeverity54
+> = z.enum(CollectionIssueSeverity54);
+
+/** @internal */
+export const CollectionIssue54$inboundSchema: z.ZodType<
+  CollectionIssue54,
+  unknown
+> = z.object({
+  message: z.string(),
+  reason: Reason54$inboundSchema,
+  severity: CollectionIssueSeverity54$inboundSchema,
+  source: z.string(),
+});
+
+export function collectionIssue54FromJSON(
+  jsonString: string,
+): SafeParseResult<CollectionIssue54, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => CollectionIssue54$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'CollectionIssue54' from JSON`,
+  );
+}
+
+/** @internal */
+export const Health54$inboundSchema: z.ZodEnum<typeof Health54> = z.enum(
+  Health54,
+);
+
+/** @internal */
+export const Lifecycle54$inboundSchema: z.ZodEnum<typeof Lifecycle54> = z.enum(
+  Lifecycle54,
+);
+
+/** @internal */
+export const DataStatus54$inboundSchema: z.ZodType<DataStatus54, unknown> = z
+  .object({
+    collectionIssues: z.array(z.lazy(() => CollectionIssue54$inboundSchema)),
+    health: Health54$inboundSchema,
+    lifecycle: Lifecycle54$inboundSchema,
+    message: z.nullable(z.string()).optional(),
+    partial: z.boolean(),
+    stale: z.boolean(),
+  });
+
+export function dataStatus54FromJSON(
+  jsonString: string,
+): SafeParseResult<DataStatus54, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => DataStatus54$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'DataStatus54' from JSON`,
+  );
+}
+
+/** @internal */
+export const DataAzureContainerRegistry$inboundSchema: z.ZodType<
+  DataAzureContainerRegistry,
+  unknown
+> = z.object({
+  adminUserEnabled: z.boolean(),
+  anonymousPullEnabled: z.boolean(),
+  creationDate: z.nullable(z.string()).optional(),
+  dataEndpointEnabled: z.nullable(z.boolean()).optional(),
+  dataEndpointHostNames: z.array(z.string()),
+  encryptionKeyIdentifierPresent: z.boolean(),
+  encryptionKeyVaultUriPresent: z.boolean(),
+  encryptionStatus: z.nullable(z.string()).optional(),
+  ipRuleCount: z.int(),
+  location: z.string(),
+  loginServer: z.nullable(z.string()).optional(),
+  managedTagCount: z.int(),
+  name: z.string(),
+  networkRuleBypassOptions: z.string(),
+  networkRuleDefaultAction: z.nullable(z.string()).optional(),
+  policiesPresent: z.boolean(),
+  policyCount: z.int(),
+  privateEndpointConnectionCount: z.int(),
+  provisioningState: z.nullable(z.string()).optional(),
+  publicNetworkAccess: z.string(),
+  resourceGroup: z.string(),
+  resourceId: z.nullable(z.string()).optional(),
+  skuName: z.string(),
+  skuTier: z.nullable(z.string()).optional(),
+  status: z.lazy(() => DataStatus54$inboundSchema),
+  type: z.nullable(z.string()).optional(),
+  zoneRedundancy: z.string(),
+  backend: z.literal("azureContainerRegistry"),
+});
+
+export function dataAzureContainerRegistryFromJSON(
+  jsonString: string,
+): SafeParseResult<DataAzureContainerRegistry, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => DataAzureContainerRegistry$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'DataAzureContainerRegistry' from JSON`,
+  );
+}
+
+/** @internal */
+export const Reason53$inboundSchema: z.ZodEnum<typeof Reason53> = z.enum(
+  Reason53,
+);
+
+/** @internal */
+export const CollectionIssueSeverity53$inboundSchema: z.ZodEnum<
+  typeof CollectionIssueSeverity53
+> = z.enum(CollectionIssueSeverity53);
+
+/** @internal */
+export const CollectionIssue53$inboundSchema: z.ZodType<
+  CollectionIssue53,
+  unknown
+> = z.object({
+  message: z.string(),
+  reason: Reason53$inboundSchema,
+  severity: CollectionIssueSeverity53$inboundSchema,
+  source: z.string(),
+});
+
+export function collectionIssue53FromJSON(
+  jsonString: string,
+): SafeParseResult<CollectionIssue53, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => CollectionIssue53$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'CollectionIssue53' from JSON`,
+  );
+}
+
+/** @internal */
+export const Health53$inboundSchema: z.ZodEnum<typeof Health53> = z.enum(
+  Health53,
+);
+
+/** @internal */
+export const Lifecycle53$inboundSchema: z.ZodEnum<typeof Lifecycle53> = z.enum(
+  Lifecycle53,
+);
+
+/** @internal */
+export const DataStatus53$inboundSchema: z.ZodType<DataStatus53, unknown> = z
+  .object({
+    collectionIssues: z.array(z.lazy(() => CollectionIssue53$inboundSchema)),
+    health: Health53$inboundSchema,
+    lifecycle: Lifecycle53$inboundSchema,
+    message: z.nullable(z.string()).optional(),
+    partial: z.boolean(),
+    stale: z.boolean(),
+  });
+
+export function dataStatus53FromJSON(
+  jsonString: string,
+): SafeParseResult<DataStatus53, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => DataStatus53$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'DataStatus53' from JSON`,
+  );
+}
+
+/** @internal */
+export const DataGcpArtifactRegistry$inboundSchema: z.ZodType<
+  DataGcpArtifactRegistry,
+  unknown
+> = z.object({
+  cleanupPolicyCount: z.int(),
+  cleanupPolicyDryRun: z.nullable(z.boolean()).optional(),
+  createTime: z.nullable(z.string()).optional(),
+  description: z.nullable(z.string()).optional(),
+  format: z.nullable(z.string()).optional(),
+  iamBindingCount: z.int(),
+  iamPolicyEtagPresent: z.boolean(),
+  iamRoles: z.array(z.string()),
+  kmsKeyNamePresent: z.boolean(),
+  labelCount: z.int(),
+  location: z.string(),
+  mode: z.nullable(z.string()).optional(),
+  name: z.nullable(z.string()).optional(),
+  projectId: z.string(),
+  pullServiceAccountEmail: z.nullable(z.string()).optional(),
+  pushServiceAccountEmail: z.nullable(z.string()).optional(),
+  repositoryId: z.string(),
+  satisfiesPzs: z.nullable(z.boolean()).optional(),
+  sizeBytes: z.nullable(z.string()).optional(),
+  status: z.lazy(() => DataStatus53$inboundSchema),
+  updateTime: z.nullable(z.string()).optional(),
+  backend: z.literal("gcpArtifactRegistry"),
+});
+
+export function dataGcpArtifactRegistryFromJSON(
+  jsonString: string,
+): SafeParseResult<DataGcpArtifactRegistry, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => DataGcpArtifactRegistry$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'DataGcpArtifactRegistry' from JSON`,
+  );
+}
+
+/** @internal */
+export const Repository$inboundSchema: z.ZodType<Repository, unknown> = z
+  .object({
+    createdAt: z.number(),
+    encryptionType: z.nullable(z.string()).optional(),
+    imageTagMutability: z.nullable(z.string()).optional(),
+    kmsKeyPresent: z.boolean(),
+    registryId: z.string(),
+    repositoryArn: z.string(),
+    repositoryName: z.string(),
+    repositoryUri: z.string(),
+    scanOnPush: z.nullable(z.boolean()).optional(),
+  });
+
+export function repositoryFromJSON(
+  jsonString: string,
+): SafeParseResult<Repository, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => Repository$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'Repository' from JSON`,
+  );
+}
+
+/** @internal */
+export const Reason52$inboundSchema: z.ZodEnum<typeof Reason52> = z.enum(
+  Reason52,
+);
+
+/** @internal */
+export const CollectionIssueSeverity52$inboundSchema: z.ZodEnum<
+  typeof CollectionIssueSeverity52
+> = z.enum(CollectionIssueSeverity52);
+
+/** @internal */
+export const CollectionIssue52$inboundSchema: z.ZodType<
+  CollectionIssue52,
+  unknown
+> = z.object({
+  message: z.string(),
+  reason: Reason52$inboundSchema,
+  severity: CollectionIssueSeverity52$inboundSchema,
+  source: z.string(),
+});
+
+export function collectionIssue52FromJSON(
+  jsonString: string,
+): SafeParseResult<CollectionIssue52, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => CollectionIssue52$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'CollectionIssue52' from JSON`,
+  );
+}
+
+/** @internal */
+export const Health52$inboundSchema: z.ZodEnum<typeof Health52> = z.enum(
+  Health52,
+);
+
+/** @internal */
+export const Lifecycle52$inboundSchema: z.ZodEnum<typeof Lifecycle52> = z.enum(
+  Lifecycle52,
+);
+
+/** @internal */
+export const DataStatus52$inboundSchema: z.ZodType<DataStatus52, unknown> = z
+  .object({
+    collectionIssues: z.array(z.lazy(() => CollectionIssue52$inboundSchema)),
+    health: Health52$inboundSchema,
+    lifecycle: Lifecycle52$inboundSchema,
+    message: z.nullable(z.string()).optional(),
+    partial: z.boolean(),
+    stale: z.boolean(),
+  });
+
+export function dataStatus52FromJSON(
+  jsonString: string,
+): SafeParseResult<DataStatus52, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => DataStatus52$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'DataStatus52' from JSON`,
+  );
+}
+
+/** @internal */
+export const DataAwsEcr$inboundSchema: z.ZodType<DataAwsEcr, unknown> = z
+  .object({
+    pullRoleArn: z.nullable(z.string()).optional(),
+    pushRoleArn: z.nullable(z.string()).optional(),
+    region: z.string(),
+    registryId: z.string(),
+    registryUri: z.string(),
+    repositories: z.array(z.lazy(() => Repository$inboundSchema)),
+    repositoriesTruncated: z.boolean(),
+    repositoryCount: z.int(),
+    repositoryPrefix: z.string(),
+    status: z.lazy(() => DataStatus52$inboundSchema),
+    backend: z.literal("awsEcr"),
+  });
+
+export function dataAwsEcrFromJSON(
+  jsonString: string,
+): SafeParseResult<DataAwsEcr, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => DataAwsEcr$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'DataAwsEcr' from JSON`,
+  );
+}
+
+/** @internal */
+export const DataUnion13$inboundSchema: z.ZodType<DataUnion13, unknown> = z
+  .union([
+    z.lazy(() => DataAwsEcr$inboundSchema),
+    z.lazy(() => DataGcpArtifactRegistry$inboundSchema),
+    z.lazy(() => DataAzureContainerRegistry$inboundSchema),
+    z.lazy(() => DataLocal11$inboundSchema),
+  ]);
+
+export function dataUnion13FromJSON(
+  jsonString: string,
+): SafeParseResult<DataUnion13, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => DataUnion13$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'DataUnion13' from JSON`,
+  );
+}
+
+/** @internal */
+export const DataArtifactRegistry$inboundSchema: z.ZodType<
+  DataArtifactRegistry,
   unknown
 > = z.object({
   data: z.union([
-    z.lazy(() => DataGcpServiceUsage$inboundSchema),
-    z.lazy(() => DataAzureResourceProvider$inboundSchema),
+    z.lazy(() => DataAwsEcr$inboundSchema),
+    z.lazy(() => DataGcpArtifactRegistry$inboundSchema),
+    z.lazy(() => DataAzureContainerRegistry$inboundSchema),
+    z.lazy(() => DataLocal11$inboundSchema),
   ]),
-  resourceType: z.literal("service_activation"),
+  resourceType: z.literal("artifact-registry"),
 });
 
-export function dataServiceActivationFromJSON(
+export function dataArtifactRegistryFromJSON(
   jsonString: string,
-): SafeParseResult<DataServiceActivation, SDKValidationError> {
+): SafeParseResult<DataArtifactRegistry, SDKValidationError> {
   return safeParse(
     jsonString,
-    (x) => DataServiceActivation$inboundSchema.parse(JSON.parse(x)),
-    `Failed to parse 'DataServiceActivation' from JSON`,
+    (x) => DataArtifactRegistry$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'DataArtifactRegistry' from JSON`,
+  );
+}
+
+/** @internal */
+export const Reason51$inboundSchema: z.ZodEnum<typeof Reason51> = z.enum(
+  Reason51,
+);
+
+/** @internal */
+export const CollectionIssueSeverity51$inboundSchema: z.ZodEnum<
+  typeof CollectionIssueSeverity51
+> = z.enum(CollectionIssueSeverity51);
+
+/** @internal */
+export const CollectionIssue51$inboundSchema: z.ZodType<
+  CollectionIssue51,
+  unknown
+> = z.object({
+  message: z.string(),
+  reason: Reason51$inboundSchema,
+  severity: CollectionIssueSeverity51$inboundSchema,
+  source: z.string(),
+});
+
+export function collectionIssue51FromJSON(
+  jsonString: string,
+): SafeParseResult<CollectionIssue51, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => CollectionIssue51$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'CollectionIssue51' from JSON`,
+  );
+}
+
+/** @internal */
+export const Health51$inboundSchema: z.ZodEnum<typeof Health51> = z.enum(
+  Health51,
+);
+
+/** @internal */
+export const Lifecycle51$inboundSchema: z.ZodEnum<typeof Lifecycle51> = z.enum(
+  Lifecycle51,
+);
+
+/** @internal */
+export const DataStatus51$inboundSchema: z.ZodType<DataStatus51, unknown> = z
+  .object({
+    collectionIssues: z.array(z.lazy(() => CollectionIssue51$inboundSchema)),
+    health: Health51$inboundSchema,
+    lifecycle: Lifecycle51$inboundSchema,
+    message: z.nullable(z.string()).optional(),
+    partial: z.boolean(),
+    stale: z.boolean(),
+  });
+
+export function dataStatus51FromJSON(
+  jsonString: string,
+): SafeParseResult<DataStatus51, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => DataStatus51$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'DataStatus51' from JSON`,
+  );
+}
+
+/** @internal */
+export const DataAzureManagedIdentity2$inboundSchema: z.ZodType<
+  DataAzureManagedIdentity2,
+  unknown
+> = z.object({
+  ficName: z.nullable(z.string()).optional(),
+  roleAssignmentIds: z.array(z.string()),
+  roleDefinitionId: z.nullable(z.string()).optional(),
+  status: z.lazy(() => DataStatus51$inboundSchema),
+  tenantId: z.nullable(z.string()).optional(),
+  uamiClientId: z.nullable(z.string()).optional(),
+  uamiPrincipalId: z.nullable(z.string()).optional(),
+  uamiResourceId: z.nullable(z.string()).optional(),
+  backend: z.literal("azureManagedIdentity"),
+});
+
+export function dataAzureManagedIdentity2FromJSON(
+  jsonString: string,
+): SafeParseResult<DataAzureManagedIdentity2, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => DataAzureManagedIdentity2$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'DataAzureManagedIdentity2' from JSON`,
+  );
+}
+
+/** @internal */
+export const Reason50$inboundSchema: z.ZodEnum<typeof Reason50> = z.enum(
+  Reason50,
+);
+
+/** @internal */
+export const CollectionIssueSeverity50$inboundSchema: z.ZodEnum<
+  typeof CollectionIssueSeverity50
+> = z.enum(CollectionIssueSeverity50);
+
+/** @internal */
+export const CollectionIssue50$inboundSchema: z.ZodType<
+  CollectionIssue50,
+  unknown
+> = z.object({
+  message: z.string(),
+  reason: Reason50$inboundSchema,
+  severity: CollectionIssueSeverity50$inboundSchema,
+  source: z.string(),
+});
+
+export function collectionIssue50FromJSON(
+  jsonString: string,
+): SafeParseResult<CollectionIssue50, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => CollectionIssue50$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'CollectionIssue50' from JSON`,
+  );
+}
+
+/** @internal */
+export const Health50$inboundSchema: z.ZodEnum<typeof Health50> = z.enum(
+  Health50,
+);
+
+/** @internal */
+export const Lifecycle50$inboundSchema: z.ZodEnum<typeof Lifecycle50> = z.enum(
+  Lifecycle50,
+);
+
+/** @internal */
+export const DataStatus50$inboundSchema: z.ZodType<DataStatus50, unknown> = z
+  .object({
+    collectionIssues: z.array(z.lazy(() => CollectionIssue50$inboundSchema)),
+    health: Health50$inboundSchema,
+    lifecycle: Lifecycle50$inboundSchema,
+    message: z.nullable(z.string()).optional(),
+    partial: z.boolean(),
+    stale: z.boolean(),
+  });
+
+export function dataStatus50FromJSON(
+  jsonString: string,
+): SafeParseResult<DataStatus50, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => DataStatus50$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'DataStatus50' from JSON`,
+  );
+}
+
+/** @internal */
+export const DataGcpServiceAccount2$inboundSchema: z.ZodType<
+  DataGcpServiceAccount2,
+  unknown
+> = z.object({
+  impersonationGranted: z.boolean(),
+  roleBound: z.boolean(),
+  serviceAccountEmail: z.nullable(z.string()).optional(),
+  serviceAccountUniqueId: z.nullable(z.string()).optional(),
+  status: z.lazy(() => DataStatus50$inboundSchema),
+  backend: z.literal("gcpServiceAccount"),
+});
+
+export function dataGcpServiceAccount2FromJSON(
+  jsonString: string,
+): SafeParseResult<DataGcpServiceAccount2, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => DataGcpServiceAccount2$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'DataGcpServiceAccount2' from JSON`,
+  );
+}
+
+/** @internal */
+export const Reason49$inboundSchema: z.ZodEnum<typeof Reason49> = z.enum(
+  Reason49,
+);
+
+/** @internal */
+export const CollectionIssueSeverity49$inboundSchema: z.ZodEnum<
+  typeof CollectionIssueSeverity49
+> = z.enum(CollectionIssueSeverity49);
+
+/** @internal */
+export const CollectionIssue49$inboundSchema: z.ZodType<
+  CollectionIssue49,
+  unknown
+> = z.object({
+  message: z.string(),
+  reason: Reason49$inboundSchema,
+  severity: CollectionIssueSeverity49$inboundSchema,
+  source: z.string(),
+});
+
+export function collectionIssue49FromJSON(
+  jsonString: string,
+): SafeParseResult<CollectionIssue49, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => CollectionIssue49$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'CollectionIssue49' from JSON`,
+  );
+}
+
+/** @internal */
+export const Health49$inboundSchema: z.ZodEnum<typeof Health49> = z.enum(
+  Health49,
+);
+
+/** @internal */
+export const Lifecycle49$inboundSchema: z.ZodEnum<typeof Lifecycle49> = z.enum(
+  Lifecycle49,
+);
+
+/** @internal */
+export const DataStatus49$inboundSchema: z.ZodType<DataStatus49, unknown> = z
+  .object({
+    collectionIssues: z.array(z.lazy(() => CollectionIssue49$inboundSchema)),
+    health: Health49$inboundSchema,
+    lifecycle: Lifecycle49$inboundSchema,
+    message: z.nullable(z.string()).optional(),
+    partial: z.boolean(),
+    stale: z.boolean(),
+  });
+
+export function dataStatus49FromJSON(
+  jsonString: string,
+): SafeParseResult<DataStatus49, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => DataStatus49$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'DataStatus49' from JSON`,
+  );
+}
+
+/** @internal */
+export const DataAwsIamRole2$inboundSchema: z.ZodType<
+  DataAwsIamRole2,
+  unknown
+> = z.object({
+  managementPermissionsApplied: z.boolean(),
+  roleArn: z.nullable(z.string()).optional(),
+  roleName: z.nullable(z.string()).optional(),
+  status: z.lazy(() => DataStatus49$inboundSchema),
+  backend: z.literal("awsIamRole"),
+});
+
+export function dataAwsIamRole2FromJSON(
+  jsonString: string,
+): SafeParseResult<DataAwsIamRole2, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => DataAwsIamRole2$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'DataAwsIamRole2' from JSON`,
+  );
+}
+
+/** @internal */
+export const DataUnion12$inboundSchema: z.ZodType<DataUnion12, unknown> = z
+  .union([
+    z.lazy(() => DataAwsIamRole2$inboundSchema),
+    z.lazy(() => DataGcpServiceAccount2$inboundSchema),
+    z.lazy(() => DataAzureManagedIdentity2$inboundSchema),
+  ]);
+
+export function dataUnion12FromJSON(
+  jsonString: string,
+): SafeParseResult<DataUnion12, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => DataUnion12$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'DataUnion12' from JSON`,
+  );
+}
+
+/** @internal */
+export const DataRemoteStackManagement$inboundSchema: z.ZodType<
+  DataRemoteStackManagement,
+  unknown
+> = z.object({
+  data: z.union([
+    z.lazy(() => DataAwsIamRole2$inboundSchema),
+    z.lazy(() => DataGcpServiceAccount2$inboundSchema),
+    z.lazy(() => DataAzureManagedIdentity2$inboundSchema),
+  ]),
+  resourceType: z.literal("remote-stack-management"),
+});
+
+export function dataRemoteStackManagementFromJSON(
+  jsonString: string,
+): SafeParseResult<DataRemoteStackManagement, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => DataRemoteStackManagement$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'DataRemoteStackManagement' from JSON`,
+  );
+}
+
+/** @internal */
+export const Reason48$inboundSchema: z.ZodEnum<typeof Reason48> = z.enum(
+  Reason48,
+);
+
+/** @internal */
+export const CollectionIssueSeverity48$inboundSchema: z.ZodEnum<
+  typeof CollectionIssueSeverity48
+> = z.enum(CollectionIssueSeverity48);
+
+/** @internal */
+export const CollectionIssue48$inboundSchema: z.ZodType<
+  CollectionIssue48,
+  unknown
+> = z.object({
+  message: z.string(),
+  reason: Reason48$inboundSchema,
+  severity: CollectionIssueSeverity48$inboundSchema,
+  source: z.string(),
+});
+
+export function collectionIssue48FromJSON(
+  jsonString: string,
+): SafeParseResult<CollectionIssue48, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => CollectionIssue48$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'CollectionIssue48' from JSON`,
+  );
+}
+
+/** @internal */
+export const Health48$inboundSchema: z.ZodEnum<typeof Health48> = z.enum(
+  Health48,
+);
+
+/** @internal */
+export const Lifecycle48$inboundSchema: z.ZodEnum<typeof Lifecycle48> = z.enum(
+  Lifecycle48,
+);
+
+/** @internal */
+export const DataStatus48$inboundSchema: z.ZodType<DataStatus48, unknown> = z
+  .object({
+    collectionIssues: z.array(z.lazy(() => CollectionIssue48$inboundSchema)),
+    health: Health48$inboundSchema,
+    lifecycle: Lifecycle48$inboundSchema,
+    message: z.nullable(z.string()).optional(),
+    partial: z.boolean(),
+    stale: z.boolean(),
+  });
+
+export function dataStatus48FromJSON(
+  jsonString: string,
+): SafeParseResult<DataStatus48, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => DataStatus48$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'DataStatus48' from JSON`,
+  );
+}
+
+/** @internal */
+export const DataAzureVnet$inboundSchema: z.ZodType<DataAzureVnet, unknown> = z
+  .object({
+    applicationGatewaySubnetName: z.nullable(z.string()).optional(),
+    cidrBlock: z.nullable(z.string()).optional(),
+    isByoVnet: z.boolean(),
+    lastByoVnetVerificationErrorCode: z.nullable(z.string()).optional(),
+    location: z.nullable(z.string()).optional(),
+    natGatewayId: z.nullable(z.string()).optional(),
+    nsgId: z.nullable(z.string()).optional(),
+    privateEndpointSubnetName: z.nullable(z.string()).optional(),
+    privateSubnetName: z.nullable(z.string()).optional(),
+    publicIpId: z.nullable(z.string()).optional(),
+    publicSubnetName: z.nullable(z.string()).optional(),
+    resourceGroup: z.nullable(z.string()).optional(),
+    status: z.lazy(() => DataStatus48$inboundSchema),
+    vnetName: z.nullable(z.string()).optional(),
+    vnetResourceId: z.nullable(z.string()).optional(),
+    backend: z.literal("azureVnet"),
+  });
+
+export function dataAzureVnetFromJSON(
+  jsonString: string,
+): SafeParseResult<DataAzureVnet, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => DataAzureVnet$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'DataAzureVnet' from JSON`,
+  );
+}
+
+/** @internal */
+export const Reason47$inboundSchema: z.ZodEnum<typeof Reason47> = z.enum(
+  Reason47,
+);
+
+/** @internal */
+export const CollectionIssueSeverity47$inboundSchema: z.ZodEnum<
+  typeof CollectionIssueSeverity47
+> = z.enum(CollectionIssueSeverity47);
+
+/** @internal */
+export const CollectionIssue47$inboundSchema: z.ZodType<
+  CollectionIssue47,
+  unknown
+> = z.object({
+  message: z.string(),
+  reason: Reason47$inboundSchema,
+  severity: CollectionIssueSeverity47$inboundSchema,
+  source: z.string(),
+});
+
+export function collectionIssue47FromJSON(
+  jsonString: string,
+): SafeParseResult<CollectionIssue47, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => CollectionIssue47$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'CollectionIssue47' from JSON`,
+  );
+}
+
+/** @internal */
+export const Health47$inboundSchema: z.ZodEnum<typeof Health47> = z.enum(
+  Health47,
+);
+
+/** @internal */
+export const Lifecycle47$inboundSchema: z.ZodEnum<typeof Lifecycle47> = z.enum(
+  Lifecycle47,
+);
+
+/** @internal */
+export const DataStatus47$inboundSchema: z.ZodType<DataStatus47, unknown> = z
+  .object({
+    collectionIssues: z.array(z.lazy(() => CollectionIssue47$inboundSchema)),
+    health: Health47$inboundSchema,
+    lifecycle: Lifecycle47$inboundSchema,
+    message: z.nullable(z.string()).optional(),
+    partial: z.boolean(),
+    stale: z.boolean(),
+  });
+
+export function dataStatus47FromJSON(
+  jsonString: string,
+): SafeParseResult<DataStatus47, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => DataStatus47$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'DataStatus47' from JSON`,
+  );
+}
+
+/** @internal */
+export const DataGcpVpc$inboundSchema: z.ZodType<DataGcpVpc, unknown> = z
+  .object({
+    cidrBlock: z.nullable(z.string()).optional(),
+    cloudNatName: z.nullable(z.string()).optional(),
+    firewallName: z.nullable(z.string()).optional(),
+    isByoVpc: z.boolean(),
+    networkName: z.nullable(z.string()).optional(),
+    networkSelfLink: z.nullable(z.string()).optional(),
+    region: z.nullable(z.string()).optional(),
+    routerName: z.nullable(z.string()).optional(),
+    status: z.lazy(() => DataStatus47$inboundSchema),
+    subnetworkName: z.nullable(z.string()).optional(),
+    subnetworkSelfLink: z.nullable(z.string()).optional(),
+    backend: z.literal("gcpVpc"),
+  });
+
+export function dataGcpVpcFromJSON(
+  jsonString: string,
+): SafeParseResult<DataGcpVpc, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => DataGcpVpc$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'DataGcpVpc' from JSON`,
+  );
+}
+
+/** @internal */
+export const Reason46$inboundSchema: z.ZodEnum<typeof Reason46> = z.enum(
+  Reason46,
+);
+
+/** @internal */
+export const CollectionIssueSeverity46$inboundSchema: z.ZodEnum<
+  typeof CollectionIssueSeverity46
+> = z.enum(CollectionIssueSeverity46);
+
+/** @internal */
+export const CollectionIssue46$inboundSchema: z.ZodType<
+  CollectionIssue46,
+  unknown
+> = z.object({
+  message: z.string(),
+  reason: Reason46$inboundSchema,
+  severity: CollectionIssueSeverity46$inboundSchema,
+  source: z.string(),
+});
+
+export function collectionIssue46FromJSON(
+  jsonString: string,
+): SafeParseResult<CollectionIssue46, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => CollectionIssue46$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'CollectionIssue46' from JSON`,
+  );
+}
+
+/** @internal */
+export const Health46$inboundSchema: z.ZodEnum<typeof Health46> = z.enum(
+  Health46,
+);
+
+/** @internal */
+export const Lifecycle46$inboundSchema: z.ZodEnum<typeof Lifecycle46> = z.enum(
+  Lifecycle46,
+);
+
+/** @internal */
+export const DataStatus46$inboundSchema: z.ZodType<DataStatus46, unknown> = z
+  .object({
+    collectionIssues: z.array(z.lazy(() => CollectionIssue46$inboundSchema)),
+    health: Health46$inboundSchema,
+    lifecycle: Lifecycle46$inboundSchema,
+    message: z.nullable(z.string()).optional(),
+    partial: z.boolean(),
+    stale: z.boolean(),
+  });
+
+export function dataStatus46FromJSON(
+  jsonString: string,
+): SafeParseResult<DataStatus46, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => DataStatus46$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'DataStatus46' from JSON`,
+  );
+}
+
+/** @internal */
+export const DataAwsVpc$inboundSchema: z.ZodType<DataAwsVpc, unknown> = z
+  .object({
+    availabilityZones: z.array(z.string()),
+    cidrBlock: z.nullable(z.string()).optional(),
+    internetGatewayId: z.nullable(z.string()).optional(),
+    isByoVpc: z.boolean(),
+    natGatewayId: z.nullable(z.string()).optional(),
+    privateSubnetIds: z.array(z.string()),
+    publicSubnetIds: z.array(z.string()),
+    routeTableCount: z.int(),
+    securityGroupId: z.nullable(z.string()).optional(),
+    status: z.lazy(() => DataStatus46$inboundSchema),
+    vpcId: z.nullable(z.string()).optional(),
+    vpcState: z.nullable(z.string()).optional(),
+    backend: z.literal("awsVpc"),
+  });
+
+export function dataAwsVpcFromJSON(
+  jsonString: string,
+): SafeParseResult<DataAwsVpc, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => DataAwsVpc$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'DataAwsVpc' from JSON`,
+  );
+}
+
+/** @internal */
+export const DataUnion11$inboundSchema: z.ZodType<DataUnion11, unknown> = z
+  .union([
+    z.lazy(() => DataAwsVpc$inboundSchema),
+    z.lazy(() => DataGcpVpc$inboundSchema),
+    z.lazy(() => DataAzureVnet$inboundSchema),
+  ]);
+
+export function dataUnion11FromJSON(
+  jsonString: string,
+): SafeParseResult<DataUnion11, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => DataUnion11$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'DataUnion11' from JSON`,
+  );
+}
+
+/** @internal */
+export const DataNetwork$inboundSchema: z.ZodType<DataNetwork, unknown> = z
+  .object({
+    data: z.union([
+      z.lazy(() => DataAwsVpc$inboundSchema),
+      z.lazy(() => DataGcpVpc$inboundSchema),
+      z.lazy(() => DataAzureVnet$inboundSchema),
+    ]),
+    resourceType: z.literal("network"),
+  });
+
+export function dataNetworkFromJSON(
+  jsonString: string,
+): SafeParseResult<DataNetwork, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => DataNetwork$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'DataNetwork' from JSON`,
+  );
+}
+
+/** @internal */
+export const Reason45$inboundSchema: z.ZodEnum<typeof Reason45> = z.enum(
+  Reason45,
+);
+
+/** @internal */
+export const CollectionIssueSeverity45$inboundSchema: z.ZodEnum<
+  typeof CollectionIssueSeverity45
+> = z.enum(CollectionIssueSeverity45);
+
+/** @internal */
+export const CollectionIssue45$inboundSchema: z.ZodType<
+  CollectionIssue45,
+  unknown
+> = z.object({
+  message: z.string(),
+  reason: Reason45$inboundSchema,
+  severity: CollectionIssueSeverity45$inboundSchema,
+  source: z.string(),
+});
+
+export function collectionIssue45FromJSON(
+  jsonString: string,
+): SafeParseResult<CollectionIssue45, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => CollectionIssue45$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'CollectionIssue45' from JSON`,
+  );
+}
+
+/** @internal */
+export const Health45$inboundSchema: z.ZodEnum<typeof Health45> = z.enum(
+  Health45,
+);
+
+/** @internal */
+export const Lifecycle45$inboundSchema: z.ZodEnum<typeof Lifecycle45> = z.enum(
+  Lifecycle45,
+);
+
+/** @internal */
+export const DataStatus45$inboundSchema: z.ZodType<DataStatus45, unknown> = z
+  .object({
+    collectionIssues: z.array(z.lazy(() => CollectionIssue45$inboundSchema)),
+    health: Health45$inboundSchema,
+    lifecycle: Lifecycle45$inboundSchema,
+    message: z.nullable(z.string()).optional(),
+    partial: z.boolean(),
+    stale: z.boolean(),
+  });
+
+export function dataStatus45FromJSON(
+  jsonString: string,
+): SafeParseResult<DataStatus45, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => DataStatus45$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'DataStatus45' from JSON`,
+  );
+}
+
+/** @internal */
+export const DataLocal10$inboundSchema: z.ZodType<DataLocal10, unknown> = z
+  .object({
+    configured: z.boolean(),
+    identity: z.string(),
+    status: z.lazy(() => DataStatus45$inboundSchema),
+    backend: z.literal("local"),
+  });
+
+export function dataLocal10FromJSON(
+  jsonString: string,
+): SafeParseResult<DataLocal10, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => DataLocal10$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'DataLocal10' from JSON`,
+  );
+}
+
+/** @internal */
+export const Reason44$inboundSchema: z.ZodEnum<typeof Reason44> = z.enum(
+  Reason44,
+);
+
+/** @internal */
+export const CollectionIssueSeverity44$inboundSchema: z.ZodEnum<
+  typeof CollectionIssueSeverity44
+> = z.enum(CollectionIssueSeverity44);
+
+/** @internal */
+export const CollectionIssue44$inboundSchema: z.ZodType<
+  CollectionIssue44,
+  unknown
+> = z.object({
+  message: z.string(),
+  reason: Reason44$inboundSchema,
+  severity: CollectionIssueSeverity44$inboundSchema,
+  source: z.string(),
+});
+
+export function collectionIssue44FromJSON(
+  jsonString: string,
+): SafeParseResult<CollectionIssue44, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => CollectionIssue44$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'CollectionIssue44' from JSON`,
+  );
+}
+
+/** @internal */
+export const Health44$inboundSchema: z.ZodEnum<typeof Health44> = z.enum(
+  Health44,
+);
+
+/** @internal */
+export const Lifecycle44$inboundSchema: z.ZodEnum<typeof Lifecycle44> = z.enum(
+  Lifecycle44,
+);
+
+/** @internal */
+export const DataStatus44$inboundSchema: z.ZodType<DataStatus44, unknown> = z
+  .object({
+    collectionIssues: z.array(z.lazy(() => CollectionIssue44$inboundSchema)),
+    health: Health44$inboundSchema,
+    lifecycle: Lifecycle44$inboundSchema,
+    message: z.nullable(z.string()).optional(),
+    partial: z.boolean(),
+    stale: z.boolean(),
+  });
+
+export function dataStatus44FromJSON(
+  jsonString: string,
+): SafeParseResult<DataStatus44, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => DataStatus44$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'DataStatus44' from JSON`,
+  );
+}
+
+/** @internal */
+export const DataAzureManagedIdentity1$inboundSchema: z.ZodType<
+  DataAzureManagedIdentity1,
+  unknown
+> = z.object({
+  clientId: z.nullable(z.string()).optional(),
+  customRoleDefinitionCount: z.int(),
+  customRoleDefinitionIds: z.array(z.string()),
+  isolationScope: z.nullable(z.string()).optional(),
+  location: z.string(),
+  managedTagCount: z.int(),
+  name: z.string(),
+  principalId: z.nullable(z.string()).optional(),
+  resourceGroup: z.string(),
+  resourceId: z.string(),
+  roleAssignmentCount: z.int(),
+  roleAssignmentIds: z.array(z.string()),
+  stackPermissionsApplied: z.boolean(),
+  status: z.lazy(() => DataStatus44$inboundSchema),
+  tenantId: z.nullable(z.string()).optional(),
+  type: z.nullable(z.string()).optional(),
+  backend: z.literal("azureManagedIdentity"),
+});
+
+export function dataAzureManagedIdentity1FromJSON(
+  jsonString: string,
+): SafeParseResult<DataAzureManagedIdentity1, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => DataAzureManagedIdentity1$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'DataAzureManagedIdentity1' from JSON`,
+  );
+}
+
+/** @internal */
+export const Reason43$inboundSchema: z.ZodEnum<typeof Reason43> = z.enum(
+  Reason43,
+);
+
+/** @internal */
+export const CollectionIssueSeverity43$inboundSchema: z.ZodEnum<
+  typeof CollectionIssueSeverity43
+> = z.enum(CollectionIssueSeverity43);
+
+/** @internal */
+export const CollectionIssue43$inboundSchema: z.ZodType<
+  CollectionIssue43,
+  unknown
+> = z.object({
+  message: z.string(),
+  reason: Reason43$inboundSchema,
+  severity: CollectionIssueSeverity43$inboundSchema,
+  source: z.string(),
+});
+
+export function collectionIssue43FromJSON(
+  jsonString: string,
+): SafeParseResult<CollectionIssue43, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => CollectionIssue43$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'CollectionIssue43' from JSON`,
+  );
+}
+
+/** @internal */
+export const Health43$inboundSchema: z.ZodEnum<typeof Health43> = z.enum(
+  Health43,
+);
+
+/** @internal */
+export const Lifecycle43$inboundSchema: z.ZodEnum<typeof Lifecycle43> = z.enum(
+  Lifecycle43,
+);
+
+/** @internal */
+export const DataStatus43$inboundSchema: z.ZodType<DataStatus43, unknown> = z
+  .object({
+    collectionIssues: z.array(z.lazy(() => CollectionIssue43$inboundSchema)),
+    health: Health43$inboundSchema,
+    lifecycle: Lifecycle43$inboundSchema,
+    message: z.nullable(z.string()).optional(),
+    partial: z.boolean(),
+    stale: z.boolean(),
+  });
+
+export function dataStatus43FromJSON(
+  jsonString: string,
+): SafeParseResult<DataStatus43, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => DataStatus43$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'DataStatus43' from JSON`,
+  );
+}
+
+/** @internal */
+export const DataGcpServiceAccount1$inboundSchema: z.ZodType<
+  DataGcpServiceAccount1,
+  unknown
+> = z.object({
+  description: z.nullable(z.string()).optional(),
+  disabled: z.nullable(z.boolean()).optional(),
+  displayName: z.nullable(z.string()).optional(),
+  email: z.string(),
+  etag: z.nullable(z.string()).optional(),
+  name: z.nullable(z.string()).optional(),
+  oauth2ClientId: z.nullable(z.string()).optional(),
+  projectBindingCount: z.int(),
+  projectId: z.nullable(z.string()).optional(),
+  projectRoles: z.array(z.string()),
+  serviceAccountBindingCount: z.int(),
+  serviceAccountRoles: z.array(z.string()),
+  status: z.lazy(() => DataStatus43$inboundSchema),
+  uniqueId: z.nullable(z.string()).optional(),
+  backend: z.literal("gcpServiceAccount"),
+});
+
+export function dataGcpServiceAccount1FromJSON(
+  jsonString: string,
+): SafeParseResult<DataGcpServiceAccount1, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => DataGcpServiceAccount1$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'DataGcpServiceAccount1' from JSON`,
+  );
+}
+
+/** @internal */
+export const Reason42$inboundSchema: z.ZodEnum<typeof Reason42> = z.enum(
+  Reason42,
+);
+
+/** @internal */
+export const CollectionIssueSeverity42$inboundSchema: z.ZodEnum<
+  typeof CollectionIssueSeverity42
+> = z.enum(CollectionIssueSeverity42);
+
+/** @internal */
+export const CollectionIssue42$inboundSchema: z.ZodType<
+  CollectionIssue42,
+  unknown
+> = z.object({
+  message: z.string(),
+  reason: Reason42$inboundSchema,
+  severity: CollectionIssueSeverity42$inboundSchema,
+  source: z.string(),
+});
+
+export function collectionIssue42FromJSON(
+  jsonString: string,
+): SafeParseResult<CollectionIssue42, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => CollectionIssue42$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'CollectionIssue42' from JSON`,
+  );
+}
+
+/** @internal */
+export const Health42$inboundSchema: z.ZodEnum<typeof Health42> = z.enum(
+  Health42,
+);
+
+/** @internal */
+export const Lifecycle42$inboundSchema: z.ZodEnum<typeof Lifecycle42> = z.enum(
+  Lifecycle42,
+);
+
+/** @internal */
+export const DataStatus42$inboundSchema: z.ZodType<DataStatus42, unknown> = z
+  .object({
+    collectionIssues: z.array(z.lazy(() => CollectionIssue42$inboundSchema)),
+    health: Health42$inboundSchema,
+    lifecycle: Lifecycle42$inboundSchema,
+    message: z.nullable(z.string()).optional(),
+    partial: z.boolean(),
+    stale: z.boolean(),
+  });
+
+export function dataStatus42FromJSON(
+  jsonString: string,
+): SafeParseResult<DataStatus42, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => DataStatus42$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'DataStatus42' from JSON`,
+  );
+}
+
+/** @internal */
+export const DataAwsIamRole1$inboundSchema: z.ZodType<
+  DataAwsIamRole1,
+  unknown
+> = z.object({
+  assumeRolePolicyPresent: z.boolean(),
+  attachedPolicyCount: z.int(),
+  attachedPolicyNames: z.array(z.string()),
+  createDate: z.string(),
+  description: z.nullable(z.string()).optional(),
+  inlinePolicyCount: z.int(),
+  inlinePolicyNames: z.array(z.string()),
+  lastUsedDate: z.nullable(z.string()).optional(),
+  lastUsedRegion: z.nullable(z.string()).optional(),
+  managedTagCount: z.int(),
+  maxSessionDuration: z.nullable(z.int()).optional(),
+  path: z.string(),
+  permissionsBoundaryArn: z.nullable(z.string()).optional(),
+  permissionsBoundaryType: z.nullable(z.string()).optional(),
+  roleArn: z.string(),
+  roleId: z.string(),
+  roleName: z.string(),
+  stackPermissionsApplied: z.boolean(),
+  status: z.lazy(() => DataStatus42$inboundSchema),
+  tagCount: z.int(),
+  backend: z.literal("awsIamRole"),
+});
+
+export function dataAwsIamRole1FromJSON(
+  jsonString: string,
+): SafeParseResult<DataAwsIamRole1, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => DataAwsIamRole1$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'DataAwsIamRole1' from JSON`,
+  );
+}
+
+/** @internal */
+export const DataUnion10$inboundSchema: z.ZodType<DataUnion10, unknown> = z
+  .union([
+    z.lazy(() => DataAwsIamRole1$inboundSchema),
+    z.lazy(() => DataGcpServiceAccount1$inboundSchema),
+    z.lazy(() => DataAzureManagedIdentity1$inboundSchema),
+    z.lazy(() => DataLocal10$inboundSchema),
+  ]);
+
+export function dataUnion10FromJSON(
+  jsonString: string,
+): SafeParseResult<DataUnion10, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => DataUnion10$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'DataUnion10' from JSON`,
+  );
+}
+
+/** @internal */
+export const DataServiceAccount$inboundSchema: z.ZodType<
+  DataServiceAccount,
+  unknown
+> = z.object({
+  data: z.union([
+    z.lazy(() => DataAwsIamRole1$inboundSchema),
+    z.lazy(() => DataGcpServiceAccount1$inboundSchema),
+    z.lazy(() => DataAzureManagedIdentity1$inboundSchema),
+    z.lazy(() => DataLocal10$inboundSchema),
+  ]),
+  resourceType: z.literal("service-account"),
+});
+
+export function dataServiceAccountFromJSON(
+  jsonString: string,
+): SafeParseResult<DataServiceAccount, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => DataServiceAccount$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'DataServiceAccount' from JSON`,
+  );
+}
+
+/** @internal */
+export const Reason41$inboundSchema: z.ZodEnum<typeof Reason41> = z.enum(
+  Reason41,
+);
+
+/** @internal */
+export const CollectionIssueSeverity41$inboundSchema: z.ZodEnum<
+  typeof CollectionIssueSeverity41
+> = z.enum(CollectionIssueSeverity41);
+
+/** @internal */
+export const CollectionIssue41$inboundSchema: z.ZodType<
+  CollectionIssue41,
+  unknown
+> = z.object({
+  message: z.string(),
+  reason: Reason41$inboundSchema,
+  severity: CollectionIssueSeverity41$inboundSchema,
+  source: z.string(),
+});
+
+export function collectionIssue41FromJSON(
+  jsonString: string,
+): SafeParseResult<CollectionIssue41, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => CollectionIssue41$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'CollectionIssue41' from JSON`,
+  );
+}
+
+/** @internal */
+export const Health41$inboundSchema: z.ZodEnum<typeof Health41> = z.enum(
+  Health41,
+);
+
+/** @internal */
+export const Lifecycle41$inboundSchema: z.ZodEnum<typeof Lifecycle41> = z.enum(
+  Lifecycle41,
+);
+
+/** @internal */
+export const DataStatus41$inboundSchema: z.ZodType<DataStatus41, unknown> = z
+  .object({
+    collectionIssues: z.array(z.lazy(() => CollectionIssue41$inboundSchema)),
+    health: Health41$inboundSchema,
+    lifecycle: Lifecycle41$inboundSchema,
+    message: z.nullable(z.string()).optional(),
+    partial: z.boolean(),
+    stale: z.boolean(),
+  });
+
+export function dataStatus41FromJSON(
+  jsonString: string,
+): SafeParseResult<DataStatus41, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => DataStatus41$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'DataStatus41' from JSON`,
+  );
+}
+
+/** @internal */
+export const DataLocal9$inboundSchema: z.ZodType<DataLocal9, unknown> = z
+  .object({
+    isDirectory: z.nullable(z.boolean()).optional(),
+    modifiedAt: z.nullable(
+      z.iso.datetime({ offset: true }).transform(v => new Date(v)),
+    ).optional(),
+    path: z.string(),
+    pathExists: z.boolean(),
+    readonly: z.nullable(z.boolean()).optional(),
+    secretMetadataListed: z.boolean(),
+    status: z.lazy(() => DataStatus41$inboundSchema),
+    backend: z.literal("local"),
+  });
+
+export function dataLocal9FromJSON(
+  jsonString: string,
+): SafeParseResult<DataLocal9, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => DataLocal9$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'DataLocal9' from JSON`,
+  );
+}
+
+/** @internal */
+export const Reason40$inboundSchema: z.ZodEnum<typeof Reason40> = z.enum(
+  Reason40,
+);
+
+/** @internal */
+export const CollectionIssueSeverity40$inboundSchema: z.ZodEnum<
+  typeof CollectionIssueSeverity40
+> = z.enum(CollectionIssueSeverity40);
+
+/** @internal */
+export const CollectionIssue40$inboundSchema: z.ZodType<
+  CollectionIssue40,
+  unknown
+> = z.object({
+  message: z.string(),
+  reason: Reason40$inboundSchema,
+  severity: CollectionIssueSeverity40$inboundSchema,
+  source: z.string(),
+});
+
+export function collectionIssue40FromJSON(
+  jsonString: string,
+): SafeParseResult<CollectionIssue40, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => CollectionIssue40$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'CollectionIssue40' from JSON`,
+  );
+}
+
+/** @internal */
+export const Health40$inboundSchema: z.ZodEnum<typeof Health40> = z.enum(
+  Health40,
+);
+
+/** @internal */
+export const Lifecycle40$inboundSchema: z.ZodEnum<typeof Lifecycle40> = z.enum(
+  Lifecycle40,
+);
+
+/** @internal */
+export const DataStatus40$inboundSchema: z.ZodType<DataStatus40, unknown> = z
+  .object({
+    collectionIssues: z.array(z.lazy(() => CollectionIssue40$inboundSchema)),
+    health: Health40$inboundSchema,
+    lifecycle: Lifecycle40$inboundSchema,
+    message: z.nullable(z.string()).optional(),
+    partial: z.boolean(),
+    stale: z.boolean(),
+  });
+
+export function dataStatus40FromJSON(
+  jsonString: string,
+): SafeParseResult<DataStatus40, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => DataStatus40$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'DataStatus40' from JSON`,
+  );
+}
+
+/** @internal */
+export const DataKubernetesSecret$inboundSchema: z.ZodType<
+  DataKubernetesSecret,
+  unknown
+> = z.object({
+  namespace: z.string(),
+  prefix: z.string(),
+  secretMetadataListed: z.boolean(),
+  status: z.lazy(() => DataStatus40$inboundSchema),
+  backend: z.literal("kubernetesSecret"),
+});
+
+export function dataKubernetesSecretFromJSON(
+  jsonString: string,
+): SafeParseResult<DataKubernetesSecret, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => DataKubernetesSecret$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'DataKubernetesSecret' from JSON`,
+  );
+}
+
+/** @internal */
+export const Reason39$inboundSchema: z.ZodEnum<typeof Reason39> = z.enum(
+  Reason39,
+);
+
+/** @internal */
+export const CollectionIssueSeverity39$inboundSchema: z.ZodEnum<
+  typeof CollectionIssueSeverity39
+> = z.enum(CollectionIssueSeverity39);
+
+/** @internal */
+export const CollectionIssue39$inboundSchema: z.ZodType<
+  CollectionIssue39,
+  unknown
+> = z.object({
+  message: z.string(),
+  reason: Reason39$inboundSchema,
+  severity: CollectionIssueSeverity39$inboundSchema,
+  source: z.string(),
+});
+
+export function collectionIssue39FromJSON(
+  jsonString: string,
+): SafeParseResult<CollectionIssue39, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => CollectionIssue39$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'CollectionIssue39' from JSON`,
+  );
+}
+
+/** @internal */
+export const Health39$inboundSchema: z.ZodEnum<typeof Health39> = z.enum(
+  Health39,
+);
+
+/** @internal */
+export const Lifecycle39$inboundSchema: z.ZodEnum<typeof Lifecycle39> = z.enum(
+  Lifecycle39,
+);
+
+/** @internal */
+export const DataStatus39$inboundSchema: z.ZodType<DataStatus39, unknown> = z
+  .object({
+    collectionIssues: z.array(z.lazy(() => CollectionIssue39$inboundSchema)),
+    health: Health39$inboundSchema,
+    lifecycle: Lifecycle39$inboundSchema,
+    message: z.nullable(z.string()).optional(),
+    partial: z.boolean(),
+    stale: z.boolean(),
+  });
+
+export function dataStatus39FromJSON(
+  jsonString: string,
+): SafeParseResult<DataStatus39, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => DataStatus39$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'DataStatus39' from JSON`,
+  );
+}
+
+/** @internal */
+export const DataAzureKeyVault$inboundSchema: z.ZodType<
+  DataAzureKeyVault,
+  unknown
+> = z.object({
+  accessPolicyCount: z.int(),
+  location: z.nullable(z.string()).optional(),
+  name: z.string(),
+  privateEndpointConnectionCount: z.int(),
+  provisioningState: z.nullable(z.string()).optional(),
+  publicNetworkAccess: z.string(),
+  purgeProtectionEnabled: z.nullable(z.boolean()).optional(),
+  rbacAuthorizationEnabled: z.boolean(),
+  resourceGroup: z.nullable(z.string()).optional(),
+  resourceId: z.nullable(z.string()).optional(),
+  secretMetadataListed: z.boolean(),
+  skuFamily: z.nullable(z.string()).optional(),
+  skuName: z.nullable(z.string()).optional(),
+  softDeleteEnabled: z.boolean(),
+  softDeleteRetentionDays: z.int(),
+  status: z.lazy(() => DataStatus39$inboundSchema),
+  vaultUri: z.nullable(z.string()).optional(),
+  backend: z.literal("azureKeyVault"),
+});
+
+export function dataAzureKeyVaultFromJSON(
+  jsonString: string,
+): SafeParseResult<DataAzureKeyVault, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => DataAzureKeyVault$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'DataAzureKeyVault' from JSON`,
+  );
+}
+
+/** @internal */
+export const Reason38$inboundSchema: z.ZodEnum<typeof Reason38> = z.enum(
+  Reason38,
+);
+
+/** @internal */
+export const CollectionIssueSeverity38$inboundSchema: z.ZodEnum<
+  typeof CollectionIssueSeverity38
+> = z.enum(CollectionIssueSeverity38);
+
+/** @internal */
+export const CollectionIssue38$inboundSchema: z.ZodType<
+  CollectionIssue38,
+  unknown
+> = z.object({
+  message: z.string(),
+  reason: Reason38$inboundSchema,
+  severity: CollectionIssueSeverity38$inboundSchema,
+  source: z.string(),
+});
+
+export function collectionIssue38FromJSON(
+  jsonString: string,
+): SafeParseResult<CollectionIssue38, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => CollectionIssue38$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'CollectionIssue38' from JSON`,
+  );
+}
+
+/** @internal */
+export const Health38$inboundSchema: z.ZodEnum<typeof Health38> = z.enum(
+  Health38,
+);
+
+/** @internal */
+export const Lifecycle38$inboundSchema: z.ZodEnum<typeof Lifecycle38> = z.enum(
+  Lifecycle38,
+);
+
+/** @internal */
+export const DataStatus38$inboundSchema: z.ZodType<DataStatus38, unknown> = z
+  .object({
+    collectionIssues: z.array(z.lazy(() => CollectionIssue38$inboundSchema)),
+    health: Health38$inboundSchema,
+    lifecycle: Lifecycle38$inboundSchema,
+    message: z.nullable(z.string()).optional(),
+    partial: z.boolean(),
+    stale: z.boolean(),
+  });
+
+export function dataStatus38FromJSON(
+  jsonString: string,
+): SafeParseResult<DataStatus38, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => DataStatus38$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'DataStatus38' from JSON`,
+  );
+}
+
+/** @internal */
+export const DataGcpSecretManager$inboundSchema: z.ZodType<
+  DataGcpSecretManager,
+  unknown
+> = z.object({
+  location: z.string(),
+  prefix: z.string(),
+  projectId: z.string(),
+  secretMetadataListed: z.boolean(),
+  status: z.lazy(() => DataStatus38$inboundSchema),
+  backend: z.literal("gcpSecretManager"),
+});
+
+export function dataGcpSecretManagerFromJSON(
+  jsonString: string,
+): SafeParseResult<DataGcpSecretManager, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => DataGcpSecretManager$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'DataGcpSecretManager' from JSON`,
+  );
+}
+
+/** @internal */
+export const Reason37$inboundSchema: z.ZodEnum<typeof Reason37> = z.enum(
+  Reason37,
+);
+
+/** @internal */
+export const CollectionIssueSeverity37$inboundSchema: z.ZodEnum<
+  typeof CollectionIssueSeverity37
+> = z.enum(CollectionIssueSeverity37);
+
+/** @internal */
+export const CollectionIssue37$inboundSchema: z.ZodType<
+  CollectionIssue37,
+  unknown
+> = z.object({
+  message: z.string(),
+  reason: Reason37$inboundSchema,
+  severity: CollectionIssueSeverity37$inboundSchema,
+  source: z.string(),
+});
+
+export function collectionIssue37FromJSON(
+  jsonString: string,
+): SafeParseResult<CollectionIssue37, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => CollectionIssue37$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'CollectionIssue37' from JSON`,
+  );
+}
+
+/** @internal */
+export const Health37$inboundSchema: z.ZodEnum<typeof Health37> = z.enum(
+  Health37,
+);
+
+/** @internal */
+export const Lifecycle37$inboundSchema: z.ZodEnum<typeof Lifecycle37> = z.enum(
+  Lifecycle37,
+);
+
+/** @internal */
+export const DataStatus37$inboundSchema: z.ZodType<DataStatus37, unknown> = z
+  .object({
+    collectionIssues: z.array(z.lazy(() => CollectionIssue37$inboundSchema)),
+    health: Health37$inboundSchema,
+    lifecycle: Lifecycle37$inboundSchema,
+    message: z.nullable(z.string()).optional(),
+    partial: z.boolean(),
+    stale: z.boolean(),
+  });
+
+export function dataStatus37FromJSON(
+  jsonString: string,
+): SafeParseResult<DataStatus37, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => DataStatus37$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'DataStatus37' from JSON`,
+  );
+}
+
+/** @internal */
+export const DataAwsParameterStore$inboundSchema: z.ZodType<
+  DataAwsParameterStore,
+  unknown
+> = z.object({
+  accountId: z.string(),
+  hasMoreParameters: z.nullable(z.boolean()).optional(),
+  latestModifiedAt: z.nullable(
+    z.iso.datetime({ offset: true }).transform(v => new Date(v)),
+  ).optional(),
+  parameterMetadataSampled: z.boolean(),
+  prefix: z.string(),
+  region: z.string(),
+  sampledAdvancedTierCount: z.nullable(z.int()).optional(),
+  sampledKmsKeyMetadataPresentCount: z.nullable(z.int()).optional(),
+  sampledParameterCount: z.nullable(z.int()).optional(),
+  sampledSecureStringCount: z.nullable(z.int()).optional(),
+  sampledStringCount: z.nullable(z.int()).optional(),
+  sampledStringListCount: z.nullable(z.int()).optional(),
+  status: z.lazy(() => DataStatus37$inboundSchema),
+  backend: z.literal("awsParameterStore"),
+});
+
+export function dataAwsParameterStoreFromJSON(
+  jsonString: string,
+): SafeParseResult<DataAwsParameterStore, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => DataAwsParameterStore$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'DataAwsParameterStore' from JSON`,
+  );
+}
+
+/** @internal */
+export const DataUnion9$inboundSchema: z.ZodType<DataUnion9, unknown> = z.union(
+  [
+    z.lazy(() => DataAwsParameterStore$inboundSchema),
+    z.lazy(() => DataGcpSecretManager$inboundSchema),
+    z.lazy(() => DataAzureKeyVault$inboundSchema),
+    z.lazy(() => DataKubernetesSecret$inboundSchema),
+    z.lazy(() => DataLocal9$inboundSchema),
+  ],
+);
+
+export function dataUnion9FromJSON(
+  jsonString: string,
+): SafeParseResult<DataUnion9, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => DataUnion9$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'DataUnion9' from JSON`,
+  );
+}
+
+/** @internal */
+export const DataVault$inboundSchema: z.ZodType<DataVault, unknown> = z.object({
+  data: z.union([
+    z.lazy(() => DataAwsParameterStore$inboundSchema),
+    z.lazy(() => DataGcpSecretManager$inboundSchema),
+    z.lazy(() => DataAzureKeyVault$inboundSchema),
+    z.lazy(() => DataKubernetesSecret$inboundSchema),
+    z.lazy(() => DataLocal9$inboundSchema),
+  ]),
+  resourceType: z.literal("vault"),
+});
+
+export function dataVaultFromJSON(
+  jsonString: string,
+): SafeParseResult<DataVault, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => DataVault$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'DataVault' from JSON`,
+  );
+}
+
+/** @internal */
+export const Reason36$inboundSchema: z.ZodEnum<typeof Reason36> = z.enum(
+  Reason36,
+);
+
+/** @internal */
+export const CollectionIssueSeverity36$inboundSchema: z.ZodEnum<
+  typeof CollectionIssueSeverity36
+> = z.enum(CollectionIssueSeverity36);
+
+/** @internal */
+export const CollectionIssue36$inboundSchema: z.ZodType<
+  CollectionIssue36,
+  unknown
+> = z.object({
+  message: z.string(),
+  reason: Reason36$inboundSchema,
+  severity: CollectionIssueSeverity36$inboundSchema,
+  source: z.string(),
+});
+
+export function collectionIssue36FromJSON(
+  jsonString: string,
+): SafeParseResult<CollectionIssue36, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => CollectionIssue36$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'CollectionIssue36' from JSON`,
+  );
+}
+
+/** @internal */
+export const Health36$inboundSchema: z.ZodEnum<typeof Health36> = z.enum(
+  Health36,
+);
+
+/** @internal */
+export const Lifecycle36$inboundSchema: z.ZodEnum<typeof Lifecycle36> = z.enum(
+  Lifecycle36,
+);
+
+/** @internal */
+export const DataStatus36$inboundSchema: z.ZodType<DataStatus36, unknown> = z
+  .object({
+    collectionIssues: z.array(z.lazy(() => CollectionIssue36$inboundSchema)),
+    health: Health36$inboundSchema,
+    lifecycle: Lifecycle36$inboundSchema,
+    message: z.nullable(z.string()).optional(),
+    partial: z.boolean(),
+    stale: z.boolean(),
+  });
+
+export function dataStatus36FromJSON(
+  jsonString: string,
+): SafeParseResult<DataStatus36, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => DataStatus36$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'DataStatus36' from JSON`,
+  );
+}
+
+/** @internal */
+export const DataLocal8$inboundSchema: z.ZodType<DataLocal8, unknown> = z
+  .object({
+    name: z.string(),
+    port: z.nullable(z.int()).optional(),
+    processRunning: z.boolean(),
+    status: z.lazy(() => DataStatus36$inboundSchema),
+    version: z.string(),
+    backend: z.literal("local"),
+  });
+
+export function dataLocal8FromJSON(
+  jsonString: string,
+): SafeParseResult<DataLocal8, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => DataLocal8$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'DataLocal8' from JSON`,
+  );
+}
+
+/** @internal */
+export const Reason35$inboundSchema: z.ZodEnum<typeof Reason35> = z.enum(
+  Reason35,
+);
+
+/** @internal */
+export const CollectionIssueSeverity35$inboundSchema: z.ZodEnum<
+  typeof CollectionIssueSeverity35
+> = z.enum(CollectionIssueSeverity35);
+
+/** @internal */
+export const CollectionIssue35$inboundSchema: z.ZodType<
+  CollectionIssue35,
+  unknown
+> = z.object({
+  message: z.string(),
+  reason: Reason35$inboundSchema,
+  severity: CollectionIssueSeverity35$inboundSchema,
+  source: z.string(),
+});
+
+export function collectionIssue35FromJSON(
+  jsonString: string,
+): SafeParseResult<CollectionIssue35, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => CollectionIssue35$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'CollectionIssue35' from JSON`,
+  );
+}
+
+/** @internal */
+export const Health35$inboundSchema: z.ZodEnum<typeof Health35> = z.enum(
+  Health35,
+);
+
+/** @internal */
+export const Lifecycle35$inboundSchema: z.ZodEnum<typeof Lifecycle35> = z.enum(
+  Lifecycle35,
+);
+
+/** @internal */
+export const DataStatus35$inboundSchema: z.ZodType<DataStatus35, unknown> = z
+  .object({
+    collectionIssues: z.array(z.lazy(() => CollectionIssue35$inboundSchema)),
+    health: Health35$inboundSchema,
+    lifecycle: Lifecycle35$inboundSchema,
+    message: z.nullable(z.string()).optional(),
+    partial: z.boolean(),
+    stale: z.boolean(),
+  });
+
+export function dataStatus35FromJSON(
+  jsonString: string,
+): SafeParseResult<DataStatus35, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => DataStatus35$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'DataStatus35' from JSON`,
+  );
+}
+
+/** @internal */
+export const DataFlexibleServer$inboundSchema: z.ZodType<
+  DataFlexibleServer,
+  unknown
+> = z.object({
+  serverName: z.string(),
+  state: z.nullable(z.string()).optional(),
+  status: z.lazy(() => DataStatus35$inboundSchema),
+  version: z.nullable(z.string()).optional(),
+  backend: z.literal("flexibleServer"),
+});
+
+export function dataFlexibleServerFromJSON(
+  jsonString: string,
+): SafeParseResult<DataFlexibleServer, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => DataFlexibleServer$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'DataFlexibleServer' from JSON`,
+  );
+}
+
+/** @internal */
+export const Reason34$inboundSchema: z.ZodEnum<typeof Reason34> = z.enum(
+  Reason34,
+);
+
+/** @internal */
+export const CollectionIssueSeverity34$inboundSchema: z.ZodEnum<
+  typeof CollectionIssueSeverity34
+> = z.enum(CollectionIssueSeverity34);
+
+/** @internal */
+export const CollectionIssue34$inboundSchema: z.ZodType<
+  CollectionIssue34,
+  unknown
+> = z.object({
+  message: z.string(),
+  reason: Reason34$inboundSchema,
+  severity: CollectionIssueSeverity34$inboundSchema,
+  source: z.string(),
+});
+
+export function collectionIssue34FromJSON(
+  jsonString: string,
+): SafeParseResult<CollectionIssue34, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => CollectionIssue34$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'CollectionIssue34' from JSON`,
+  );
+}
+
+/** @internal */
+export const Health34$inboundSchema: z.ZodEnum<typeof Health34> = z.enum(
+  Health34,
+);
+
+/** @internal */
+export const Lifecycle34$inboundSchema: z.ZodEnum<typeof Lifecycle34> = z.enum(
+  Lifecycle34,
+);
+
+/** @internal */
+export const DataStatus34$inboundSchema: z.ZodType<DataStatus34, unknown> = z
+  .object({
+    collectionIssues: z.array(z.lazy(() => CollectionIssue34$inboundSchema)),
+    health: Health34$inboundSchema,
+    lifecycle: Lifecycle34$inboundSchema,
+    message: z.nullable(z.string()).optional(),
+    partial: z.boolean(),
+    stale: z.boolean(),
+  });
+
+export function dataStatus34FromJSON(
+  jsonString: string,
+): SafeParseResult<DataStatus34, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => DataStatus34$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'DataStatus34' from JSON`,
+  );
+}
+
+/** @internal */
+export const DataCloudSQL$inboundSchema: z.ZodType<DataCloudSQL, unknown> = z
+  .object({
+    databaseVersion: z.nullable(z.string()).optional(),
+    instanceName: z.string(),
+    state: z.nullable(z.string()).optional(),
+    status: z.lazy(() => DataStatus34$inboundSchema),
+    backend: z.literal("cloudSql"),
+  });
+
+export function dataCloudSQLFromJSON(
+  jsonString: string,
+): SafeParseResult<DataCloudSQL, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => DataCloudSQL$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'DataCloudSQL' from JSON`,
+  );
+}
+
+/** @internal */
+export const Reason33$inboundSchema: z.ZodEnum<typeof Reason33> = z.enum(
+  Reason33,
+);
+
+/** @internal */
+export const CollectionIssueSeverity33$inboundSchema: z.ZodEnum<
+  typeof CollectionIssueSeverity33
+> = z.enum(CollectionIssueSeverity33);
+
+/** @internal */
+export const CollectionIssue33$inboundSchema: z.ZodType<
+  CollectionIssue33,
+  unknown
+> = z.object({
+  message: z.string(),
+  reason: Reason33$inboundSchema,
+  severity: CollectionIssueSeverity33$inboundSchema,
+  source: z.string(),
+});
+
+export function collectionIssue33FromJSON(
+  jsonString: string,
+): SafeParseResult<CollectionIssue33, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => CollectionIssue33$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'CollectionIssue33' from JSON`,
+  );
+}
+
+/** @internal */
+export const Health33$inboundSchema: z.ZodEnum<typeof Health33> = z.enum(
+  Health33,
+);
+
+/** @internal */
+export const Lifecycle33$inboundSchema: z.ZodEnum<typeof Lifecycle33> = z.enum(
+  Lifecycle33,
+);
+
+/** @internal */
+export const DataStatus33$inboundSchema: z.ZodType<DataStatus33, unknown> = z
+  .object({
+    collectionIssues: z.array(z.lazy(() => CollectionIssue33$inboundSchema)),
+    health: Health33$inboundSchema,
+    lifecycle: Lifecycle33$inboundSchema,
+    message: z.nullable(z.string()).optional(),
+    partial: z.boolean(),
+    stale: z.boolean(),
+  });
+
+export function dataStatus33FromJSON(
+  jsonString: string,
+): SafeParseResult<DataStatus33, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => DataStatus33$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'DataStatus33' from JSON`,
+  );
+}
+
+/** @internal */
+export const DataAurora$inboundSchema: z.ZodType<DataAurora, unknown> = z
+  .object({
+    clusterIdentifier: z.string(),
+    endpoint: z.nullable(z.string()).optional(),
+    engineVersion: z.nullable(z.string()).optional(),
+    neverPauses: z.boolean(),
+    serverlessCapacity: z.nullable(z.number()).optional(),
+    status: z.lazy(() => DataStatus33$inboundSchema),
+    backend: z.literal("aurora"),
+  });
+
+export function dataAuroraFromJSON(
+  jsonString: string,
+): SafeParseResult<DataAurora, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => DataAurora$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'DataAurora' from JSON`,
+  );
+}
+
+/** @internal */
+export const DataUnion8$inboundSchema: z.ZodType<DataUnion8, unknown> = z.union(
+  [
+    z.lazy(() => DataAurora$inboundSchema),
+    z.lazy(() => DataCloudSQL$inboundSchema),
+    z.lazy(() => DataFlexibleServer$inboundSchema),
+    z.lazy(() => DataLocal8$inboundSchema),
+  ],
+);
+
+export function dataUnion8FromJSON(
+  jsonString: string,
+): SafeParseResult<DataUnion8, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => DataUnion8$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'DataUnion8' from JSON`,
+  );
+}
+
+/** @internal */
+export const DataPostgres$inboundSchema: z.ZodType<DataPostgres, unknown> = z
+  .object({
+    data: z.union([
+      z.lazy(() => DataAurora$inboundSchema),
+      z.lazy(() => DataCloudSQL$inboundSchema),
+      z.lazy(() => DataFlexibleServer$inboundSchema),
+      z.lazy(() => DataLocal8$inboundSchema),
+    ]),
+    resourceType: z.literal("postgres"),
+  });
+
+export function dataPostgresFromJSON(
+  jsonString: string,
+): SafeParseResult<DataPostgres, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => DataPostgres$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'DataPostgres' from JSON`,
+  );
+}
+
+/** @internal */
+export const Reason32$inboundSchema: z.ZodEnum<typeof Reason32> = z.enum(
+  Reason32,
+);
+
+/** @internal */
+export const CollectionIssueSeverity32$inboundSchema: z.ZodEnum<
+  typeof CollectionIssueSeverity32
+> = z.enum(CollectionIssueSeverity32);
+
+/** @internal */
+export const CollectionIssue32$inboundSchema: z.ZodType<
+  CollectionIssue32,
+  unknown
+> = z.object({
+  message: z.string(),
+  reason: Reason32$inboundSchema,
+  severity: CollectionIssueSeverity32$inboundSchema,
+  source: z.string(),
+});
+
+export function collectionIssue32FromJSON(
+  jsonString: string,
+): SafeParseResult<CollectionIssue32, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => CollectionIssue32$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'CollectionIssue32' from JSON`,
+  );
+}
+
+/** @internal */
+export const Health32$inboundSchema: z.ZodEnum<typeof Health32> = z.enum(
+  Health32,
+);
+
+/** @internal */
+export const Lifecycle32$inboundSchema: z.ZodEnum<typeof Lifecycle32> = z.enum(
+  Lifecycle32,
+);
+
+/** @internal */
+export const DataStatus32$inboundSchema: z.ZodType<DataStatus32, unknown> = z
+  .object({
+    collectionIssues: z.array(z.lazy(() => CollectionIssue32$inboundSchema)),
+    health: Health32$inboundSchema,
+    lifecycle: Lifecycle32$inboundSchema,
+    message: z.nullable(z.string()).optional(),
+    partial: z.boolean(),
+    stale: z.boolean(),
+  });
+
+export function dataStatus32FromJSON(
+  jsonString: string,
+): SafeParseResult<DataStatus32, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => DataStatus32$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'DataStatus32' from JSON`,
+  );
+}
+
+/** @internal */
+export const DataLocal7$inboundSchema: z.ZodType<DataLocal7, unknown> = z
+  .object({
+    cloudMetadataSupported: z.boolean(),
+    isDirectory: z.nullable(z.boolean()).optional(),
+    name: z.string(),
+    path: z.string(),
+    pathExists: z.boolean(),
+    status: z.lazy(() => DataStatus32$inboundSchema),
+    backend: z.literal("local"),
+  });
+
+export function dataLocal7FromJSON(
+  jsonString: string,
+): SafeParseResult<DataLocal7, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => DataLocal7$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'DataLocal7' from JSON`,
+  );
+}
+
+/** @internal */
+export const Reason31$inboundSchema: z.ZodEnum<typeof Reason31> = z.enum(
+  Reason31,
+);
+
+/** @internal */
+export const CollectionIssueSeverity31$inboundSchema: z.ZodEnum<
+  typeof CollectionIssueSeverity31
+> = z.enum(CollectionIssueSeverity31);
+
+/** @internal */
+export const CollectionIssue31$inboundSchema: z.ZodType<
+  CollectionIssue31,
+  unknown
+> = z.object({
+  message: z.string(),
+  reason: Reason31$inboundSchema,
+  severity: CollectionIssueSeverity31$inboundSchema,
+  source: z.string(),
+});
+
+export function collectionIssue31FromJSON(
+  jsonString: string,
+): SafeParseResult<CollectionIssue31, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => CollectionIssue31$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'CollectionIssue31' from JSON`,
+  );
+}
+
+/** @internal */
+export const Health31$inboundSchema: z.ZodEnum<typeof Health31> = z.enum(
+  Health31,
+);
+
+/** @internal */
+export const Lifecycle31$inboundSchema: z.ZodEnum<typeof Lifecycle31> = z.enum(
+  Lifecycle31,
+);
+
+/** @internal */
+export const DataStatus31$inboundSchema: z.ZodType<DataStatus31, unknown> = z
+  .object({
+    collectionIssues: z.array(z.lazy(() => CollectionIssue31$inboundSchema)),
+    health: Health31$inboundSchema,
+    lifecycle: Lifecycle31$inboundSchema,
+    message: z.nullable(z.string()).optional(),
+    partial: z.boolean(),
+    stale: z.boolean(),
+  });
+
+export function dataStatus31FromJSON(
+  jsonString: string,
+): SafeParseResult<DataStatus31, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => DataStatus31$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'DataStatus31' from JSON`,
+  );
+}
+
+/** @internal */
+export const DataAzureTable$inboundSchema: z.ZodType<DataAzureTable, unknown> =
+  z.object({
+    endpoint: z.nullable(z.string()).optional(),
+    resourceGroup: z.nullable(z.string()).optional(),
+    signedIdentifierCount: z.nullable(z.int()).optional(),
+    status: z.lazy(() => DataStatus31$inboundSchema),
+    storageAccountKind: z.nullable(z.string()).optional(),
+    storageAccountLocation: z.nullable(z.string()).optional(),
+    storageAccountName: z.string(),
+    storageAccountPrimaryStatus: z.nullable(z.string()).optional(),
+    storageAccountProvisioningState: z.nullable(z.string()).optional(),
+    storageAccountResourceId: z.nullable(z.string()).optional(),
+    tableExists: z.boolean(),
+    tableName: z.string(),
+    backend: z.literal("azureTable"),
+  });
+
+export function dataAzureTableFromJSON(
+  jsonString: string,
+): SafeParseResult<DataAzureTable, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => DataAzureTable$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'DataAzureTable' from JSON`,
+  );
+}
+
+/** @internal */
+export const Reason30$inboundSchema: z.ZodEnum<typeof Reason30> = z.enum(
+  Reason30,
+);
+
+/** @internal */
+export const CollectionIssueSeverity30$inboundSchema: z.ZodEnum<
+  typeof CollectionIssueSeverity30
+> = z.enum(CollectionIssueSeverity30);
+
+/** @internal */
+export const CollectionIssue30$inboundSchema: z.ZodType<
+  CollectionIssue30,
+  unknown
+> = z.object({
+  message: z.string(),
+  reason: Reason30$inboundSchema,
+  severity: CollectionIssueSeverity30$inboundSchema,
+  source: z.string(),
+});
+
+export function collectionIssue30FromJSON(
+  jsonString: string,
+): SafeParseResult<CollectionIssue30, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => CollectionIssue30$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'CollectionIssue30' from JSON`,
+  );
+}
+
+/** @internal */
+export const Health30$inboundSchema: z.ZodEnum<typeof Health30> = z.enum(
+  Health30,
+);
+
+/** @internal */
+export const Lifecycle30$inboundSchema: z.ZodEnum<typeof Lifecycle30> = z.enum(
+  Lifecycle30,
+);
+
+/** @internal */
+export const DataStatus30$inboundSchema: z.ZodType<DataStatus30, unknown> = z
+  .object({
+    collectionIssues: z.array(z.lazy(() => CollectionIssue30$inboundSchema)),
+    health: Health30$inboundSchema,
+    lifecycle: Lifecycle30$inboundSchema,
+    message: z.nullable(z.string()).optional(),
+    partial: z.boolean(),
+    stale: z.boolean(),
+  });
+
+export function dataStatus30FromJSON(
+  jsonString: string,
+): SafeParseResult<DataStatus30, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => DataStatus30$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'DataStatus30' from JSON`,
+  );
+}
+
+/** @internal */
+export const DataGcpFirestore$inboundSchema: z.ZodType<
+  DataGcpFirestore,
+  unknown
+> = z.object({
+  appEngineIntegrationMode: z.nullable(z.string()).optional(),
+  cmekEnabled: z.boolean(),
+  concurrencyMode: z.nullable(z.string()).optional(),
+  createTime: z.nullable(z.string()).optional(),
+  databaseEdition: z.nullable(z.string()).optional(),
+  databaseName: z.string(),
+  databaseType: z.nullable(z.string()).optional(),
+  deleteProtectionState: z.nullable(z.string()).optional(),
+  deleteTime: z.nullable(z.string()).optional(),
+  earliestVersionTime: z.nullable(z.string()).optional(),
+  endpoint: z.nullable(z.string()).optional(),
+  locationId: z.nullable(z.string()).optional(),
+  pointInTimeRecoveryEnablement: z.nullable(z.string()).optional(),
+  projectId: z.nullable(z.string()).optional(),
+  sourceInfoPresent: z.boolean(),
+  status: z.lazy(() => DataStatus30$inboundSchema),
+  updateTime: z.nullable(z.string()).optional(),
+  versionRetentionPeriod: z.nullable(z.string()).optional(),
+  backend: z.literal("gcpFirestore"),
+});
+
+export function dataGcpFirestoreFromJSON(
+  jsonString: string,
+): SafeParseResult<DataGcpFirestore, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => DataGcpFirestore$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'DataGcpFirestore' from JSON`,
+  );
+}
+
+/** @internal */
+export const KeySchema$inboundSchema: z.ZodType<KeySchema, unknown> = z.object({
+  attributeName: z.string(),
+  keyType: z.string(),
+});
+
+export function keySchemaFromJSON(
+  jsonString: string,
+): SafeParseResult<KeySchema, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => KeySchema$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'KeySchema' from JSON`,
+  );
+}
+
+/** @internal */
+export const Reason29$inboundSchema: z.ZodEnum<typeof Reason29> = z.enum(
+  Reason29,
+);
+
+/** @internal */
+export const CollectionIssueSeverity29$inboundSchema: z.ZodEnum<
+  typeof CollectionIssueSeverity29
+> = z.enum(CollectionIssueSeverity29);
+
+/** @internal */
+export const CollectionIssue29$inboundSchema: z.ZodType<
+  CollectionIssue29,
+  unknown
+> = z.object({
+  message: z.string(),
+  reason: Reason29$inboundSchema,
+  severity: CollectionIssueSeverity29$inboundSchema,
+  source: z.string(),
+});
+
+export function collectionIssue29FromJSON(
+  jsonString: string,
+): SafeParseResult<CollectionIssue29, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => CollectionIssue29$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'CollectionIssue29' from JSON`,
+  );
+}
+
+/** @internal */
+export const Health29$inboundSchema: z.ZodEnum<typeof Health29> = z.enum(
+  Health29,
+);
+
+/** @internal */
+export const Lifecycle29$inboundSchema: z.ZodEnum<typeof Lifecycle29> = z.enum(
+  Lifecycle29,
+);
+
+/** @internal */
+export const DataStatus29$inboundSchema: z.ZodType<DataStatus29, unknown> = z
+  .object({
+    collectionIssues: z.array(z.lazy(() => CollectionIssue29$inboundSchema)),
+    health: Health29$inboundSchema,
+    lifecycle: Lifecycle29$inboundSchema,
+    message: z.nullable(z.string()).optional(),
+    partial: z.boolean(),
+    stale: z.boolean(),
+  });
+
+export function dataStatus29FromJSON(
+  jsonString: string,
+): SafeParseResult<DataStatus29, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => DataStatus29$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'DataStatus29' from JSON`,
+  );
+}
+
+/** @internal */
+export const DataAwsDynamoDb$inboundSchema: z.ZodType<
+  DataAwsDynamoDb,
+  unknown
+> = z.object({
+  billingMode: z.nullable(z.string()).optional(),
+  deletionProtectionEnabled: z.nullable(z.boolean()).optional(),
+  globalSecondaryIndexCount: z.nullable(z.int()).optional(),
+  itemCount: z.nullable(z.int()).optional(),
+  keySchema: z.array(z.lazy(() => KeySchema$inboundSchema)),
+  localSecondaryIndexCount: z.nullable(z.int()).optional(),
+  name: z.string(),
+  region: z.nullable(z.string()).optional(),
+  replicaCount: z.nullable(z.int()).optional(),
+  restoreInProgress: z.nullable(z.boolean()).optional(),
+  sseStatus: z.nullable(z.string()).optional(),
+  sseType: z.nullable(z.string()).optional(),
+  status: z.lazy(() => DataStatus29$inboundSchema),
+  streamEnabled: z.nullable(z.boolean()).optional(),
+  streamViewType: z.nullable(z.string()).optional(),
+  tableArn: z.nullable(z.string()).optional(),
+  tableClass: z.nullable(z.string()).optional(),
+  tableSizeBytes: z.nullable(z.int()).optional(),
+  tableStatus: z.nullable(z.string()).optional(),
+  ttlAttributeName: z.nullable(z.string()).optional(),
+  ttlStatus: z.nullable(z.string()).optional(),
+  backend: z.literal("awsDynamoDb"),
+});
+
+export function dataAwsDynamoDbFromJSON(
+  jsonString: string,
+): SafeParseResult<DataAwsDynamoDb, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => DataAwsDynamoDb$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'DataAwsDynamoDb' from JSON`,
+  );
+}
+
+/** @internal */
+export const DataUnion7$inboundSchema: z.ZodType<DataUnion7, unknown> = z.union(
+  [
+    z.lazy(() => DataAwsDynamoDb$inboundSchema),
+    z.lazy(() => DataGcpFirestore$inboundSchema),
+    z.lazy(() => DataAzureTable$inboundSchema),
+    z.lazy(() => DataLocal7$inboundSchema),
+  ],
+);
+
+export function dataUnion7FromJSON(
+  jsonString: string,
+): SafeParseResult<DataUnion7, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => DataUnion7$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'DataUnion7' from JSON`,
+  );
+}
+
+/** @internal */
+export const DataKv$inboundSchema: z.ZodType<DataKv, unknown> = z.object({
+  data: z.union([
+    z.lazy(() => DataAwsDynamoDb$inboundSchema),
+    z.lazy(() => DataGcpFirestore$inboundSchema),
+    z.lazy(() => DataAzureTable$inboundSchema),
+    z.lazy(() => DataLocal7$inboundSchema),
+  ]),
+  resourceType: z.literal("kv"),
+});
+
+export function dataKvFromJSON(
+  jsonString: string,
+): SafeParseResult<DataKv, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => DataKv$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'DataKv' from JSON`,
+  );
+}
+
+/** @internal */
+export const Reason28$inboundSchema: z.ZodEnum<typeof Reason28> = z.enum(
+  Reason28,
+);
+
+/** @internal */
+export const CollectionIssueSeverity28$inboundSchema: z.ZodEnum<
+  typeof CollectionIssueSeverity28
+> = z.enum(CollectionIssueSeverity28);
+
+/** @internal */
+export const CollectionIssue28$inboundSchema: z.ZodType<
+  CollectionIssue28,
+  unknown
+> = z.object({
+  message: z.string(),
+  reason: Reason28$inboundSchema,
+  severity: CollectionIssueSeverity28$inboundSchema,
+  source: z.string(),
+});
+
+export function collectionIssue28FromJSON(
+  jsonString: string,
+): SafeParseResult<CollectionIssue28, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => CollectionIssue28$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'CollectionIssue28' from JSON`,
+  );
+}
+
+/** @internal */
+export const Health28$inboundSchema: z.ZodEnum<typeof Health28> = z.enum(
+  Health28,
+);
+
+/** @internal */
+export const Lifecycle28$inboundSchema: z.ZodEnum<typeof Lifecycle28> = z.enum(
+  Lifecycle28,
+);
+
+/** @internal */
+export const DataStatus28$inboundSchema: z.ZodType<DataStatus28, unknown> = z
+  .object({
+    collectionIssues: z.array(z.lazy(() => CollectionIssue28$inboundSchema)),
+    health: Health28$inboundSchema,
+    lifecycle: Lifecycle28$inboundSchema,
+    message: z.nullable(z.string()).optional(),
+    partial: z.boolean(),
+    stale: z.boolean(),
+  });
+
+export function dataStatus28FromJSON(
+  jsonString: string,
+): SafeParseResult<DataStatus28, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => DataStatus28$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'DataStatus28' from JSON`,
+  );
+}
+
+/** @internal */
+export const DataLocal6$inboundSchema: z.ZodType<DataLocal6, unknown> = z
+  .object({
+    name: z.string(),
+    path: z.nullable(z.string()).optional(),
+    serviceStatus: z.nullable(z.string()).optional(),
+    status: z.lazy(() => DataStatus28$inboundSchema),
+    backend: z.literal("local"),
+  });
+
+export function dataLocal6FromJSON(
+  jsonString: string,
+): SafeParseResult<DataLocal6, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => DataLocal6$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'DataLocal6' from JSON`,
+  );
+}
+
+/** @internal */
+export const Reason27$inboundSchema: z.ZodEnum<typeof Reason27> = z.enum(
+  Reason27,
+);
+
+/** @internal */
+export const CollectionIssueSeverity27$inboundSchema: z.ZodEnum<
+  typeof CollectionIssueSeverity27
+> = z.enum(CollectionIssueSeverity27);
+
+/** @internal */
+export const CollectionIssue27$inboundSchema: z.ZodType<
+  CollectionIssue27,
+  unknown
+> = z.object({
+  message: z.string(),
+  reason: Reason27$inboundSchema,
+  severity: CollectionIssueSeverity27$inboundSchema,
+  source: z.string(),
+});
+
+export function collectionIssue27FromJSON(
+  jsonString: string,
+): SafeParseResult<CollectionIssue27, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => CollectionIssue27$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'CollectionIssue27' from JSON`,
+  );
+}
+
+/** @internal */
+export const Health27$inboundSchema: z.ZodEnum<typeof Health27> = z.enum(
+  Health27,
+);
+
+/** @internal */
+export const Lifecycle27$inboundSchema: z.ZodEnum<typeof Lifecycle27> = z.enum(
+  Lifecycle27,
+);
+
+/** @internal */
+export const DataStatus27$inboundSchema: z.ZodType<DataStatus27, unknown> = z
+  .object({
+    collectionIssues: z.array(z.lazy(() => CollectionIssue27$inboundSchema)),
+    health: Health27$inboundSchema,
+    lifecycle: Lifecycle27$inboundSchema,
+    message: z.nullable(z.string()).optional(),
+    partial: z.boolean(),
+    stale: z.boolean(),
+  });
+
+export function dataStatus27FromJSON(
+  jsonString: string,
+): SafeParseResult<DataStatus27, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => DataStatus27$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'DataStatus27' from JSON`,
+  );
+}
+
+/** @internal */
+export const DataAzureServiceBus$inboundSchema: z.ZodType<
+  DataAzureServiceBus,
+  unknown
+> = z.object({
+  accessedAt: z.nullable(z.string()).optional(),
+  activeMessageCount: z.nullable(z.int()).optional(),
+  autoDeleteOnIdle: z.nullable(z.string()).optional(),
+  createdAt: z.nullable(z.string()).optional(),
+  deadLetterMessageCount: z.nullable(z.int()).optional(),
+  deadLetteringOnMessageExpiration: z.nullable(z.boolean()).optional(),
+  defaultMessageTimeToLive: z.nullable(z.string()).optional(),
+  duplicateDetectionHistoryTimeWindow: z.nullable(z.string()).optional(),
+  enableBatchedOperations: z.nullable(z.boolean()).optional(),
+  enableExpress: z.nullable(z.boolean()).optional(),
+  enablePartitioning: z.nullable(z.boolean()).optional(),
+  endpoint: z.nullable(z.string()).optional(),
+  forwardDeadLetteredMessagesTo: z.nullable(z.string()).optional(),
+  forwardTo: z.nullable(z.string()).optional(),
+  lockDuration: z.nullable(z.string()).optional(),
+  maxDeliveryCount: z.nullable(z.int()).optional(),
+  maxMessageSizeInKilobytes: z.nullable(z.int()).optional(),
+  maxSizeInMegabytes: z.nullable(z.int()).optional(),
+  messageCount: z.nullable(z.int()).optional(),
+  name: z.string(),
+  namespaceName: z.string(),
+  queueStatus: z.nullable(z.string()).optional(),
+  requiresDuplicateDetection: z.nullable(z.boolean()).optional(),
+  requiresSession: z.nullable(z.boolean()).optional(),
+  resourceGroup: z.nullable(z.string()).optional(),
+  resourceId: z.nullable(z.string()).optional(),
+  scheduledMessageCount: z.nullable(z.int()).optional(),
+  sizeInBytes: z.nullable(z.int()).optional(),
+  status: z.lazy(() => DataStatus27$inboundSchema),
+  transferDeadLetterMessageCount: z.nullable(z.int()).optional(),
+  transferMessageCount: z.nullable(z.int()).optional(),
+  updatedAt: z.nullable(z.string()).optional(),
+  backend: z.literal("azureServiceBus"),
+});
+
+export function dataAzureServiceBusFromJSON(
+  jsonString: string,
+): SafeParseResult<DataAzureServiceBus, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => DataAzureServiceBus$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'DataAzureServiceBus' from JSON`,
+  );
+}
+
+/** @internal */
+export const Reason26$inboundSchema: z.ZodEnum<typeof Reason26> = z.enum(
+  Reason26,
+);
+
+/** @internal */
+export const CollectionIssueSeverity26$inboundSchema: z.ZodEnum<
+  typeof CollectionIssueSeverity26
+> = z.enum(CollectionIssueSeverity26);
+
+/** @internal */
+export const CollectionIssue26$inboundSchema: z.ZodType<
+  CollectionIssue26,
+  unknown
+> = z.object({
+  message: z.string(),
+  reason: Reason26$inboundSchema,
+  severity: CollectionIssueSeverity26$inboundSchema,
+  source: z.string(),
+});
+
+export function collectionIssue26FromJSON(
+  jsonString: string,
+): SafeParseResult<CollectionIssue26, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => CollectionIssue26$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'CollectionIssue26' from JSON`,
+  );
+}
+
+/** @internal */
+export const Health26$inboundSchema: z.ZodEnum<typeof Health26> = z.enum(
+  Health26,
+);
+
+/** @internal */
+export const Lifecycle26$inboundSchema: z.ZodEnum<typeof Lifecycle26> = z.enum(
+  Lifecycle26,
+);
+
+/** @internal */
+export const DataStatus26$inboundSchema: z.ZodType<DataStatus26, unknown> = z
+  .object({
+    collectionIssues: z.array(z.lazy(() => CollectionIssue26$inboundSchema)),
+    health: Health26$inboundSchema,
+    lifecycle: Lifecycle26$inboundSchema,
+    message: z.nullable(z.string()).optional(),
+    partial: z.boolean(),
+    stale: z.boolean(),
+  });
+
+export function dataStatus26FromJSON(
+  jsonString: string,
+): SafeParseResult<DataStatus26, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => DataStatus26$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'DataStatus26' from JSON`,
+  );
+}
+
+/** @internal */
+export const DataGcpPubSub$inboundSchema: z.ZodType<DataGcpPubSub, unknown> = z
+  .object({
+    endpoint: z.nullable(z.string()).optional(),
+    kmsKeyName: z.nullable(z.string()).optional(),
+    messageStorageAllowedPersistenceRegions: z.array(z.string()),
+    messageStorageEnforceInTransit: z.nullable(z.boolean()).optional(),
+    projectId: z.nullable(z.string()).optional(),
+    schemaEncoding: z.nullable(z.string()).optional(),
+    schemaFirstRevisionId: z.nullable(z.string()).optional(),
+    schemaLastRevisionId: z.nullable(z.string()).optional(),
+    schemaName: z.nullable(z.string()).optional(),
+    status: z.lazy(() => DataStatus26$inboundSchema),
+    subscriptionAckDeadlineSeconds: z.nullable(z.int()).optional(),
+    subscriptionDeadLetterMaxDeliveryAttempts: z.nullable(z.int()).optional(),
+    subscriptionDeadLetterTopic: z.nullable(z.string()).optional(),
+    subscriptionDetached: z.nullable(z.boolean()).optional(),
+    subscriptionEnableMessageOrdering: z.nullable(z.boolean()).optional(),
+    subscriptionFilter: z.nullable(z.string()).optional(),
+    subscriptionFullName: z.nullable(z.string()).optional(),
+    subscriptionLabels: z.record(z.string(), z.string()),
+    subscriptionMessageRetentionDuration: z.nullable(z.string()).optional(),
+    subscriptionName: z.nullable(z.string()).optional(),
+    subscriptionPushAttributes: z.record(z.string(), z.string()),
+    subscriptionPushConfigPresent: z.nullable(z.boolean()).optional(),
+    subscriptionPushEndpoint: z.nullable(z.string()).optional(),
+    subscriptionPushNoWrapperWriteMetadata: z.nullable(z.boolean()).optional(),
+    subscriptionPushOidcAudience: z.nullable(z.string()).optional(),
+    subscriptionPushOidcServiceAccountEmail: z.nullable(z.string()).optional(),
+    subscriptionPushPubsubWrapperWriteMetadata: z.nullable(z.boolean())
+      .optional(),
+    subscriptionRetainAckedMessages: z.nullable(z.boolean()).optional(),
+    subscriptionState: z.nullable(z.string()).optional(),
+    topicFullName: z.nullable(z.string()).optional(),
+    topicLabels: z.record(z.string(), z.string()),
+    topicMessageRetentionDuration: z.nullable(z.string()).optional(),
+    topicName: z.string(),
+    topicState: z.nullable(z.string()).optional(),
+    backend: z.literal("gcpPubSub"),
+  });
+
+export function dataGcpPubSubFromJSON(
+  jsonString: string,
+): SafeParseResult<DataGcpPubSub, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => DataGcpPubSub$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'DataGcpPubSub' from JSON`,
+  );
+}
+
+/** @internal */
+export const Reason25$inboundSchema: z.ZodEnum<typeof Reason25> = z.enum(
+  Reason25,
+);
+
+/** @internal */
+export const CollectionIssueSeverity25$inboundSchema: z.ZodEnum<
+  typeof CollectionIssueSeverity25
+> = z.enum(CollectionIssueSeverity25);
+
+/** @internal */
+export const CollectionIssue25$inboundSchema: z.ZodType<
+  CollectionIssue25,
+  unknown
+> = z.object({
+  message: z.string(),
+  reason: Reason25$inboundSchema,
+  severity: CollectionIssueSeverity25$inboundSchema,
+  source: z.string(),
+});
+
+export function collectionIssue25FromJSON(
+  jsonString: string,
+): SafeParseResult<CollectionIssue25, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => CollectionIssue25$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'CollectionIssue25' from JSON`,
+  );
+}
+
+/** @internal */
+export const Health25$inboundSchema: z.ZodEnum<typeof Health25> = z.enum(
+  Health25,
+);
+
+/** @internal */
+export const Lifecycle25$inboundSchema: z.ZodEnum<typeof Lifecycle25> = z.enum(
+  Lifecycle25,
+);
+
+/** @internal */
+export const DataStatus25$inboundSchema: z.ZodType<DataStatus25, unknown> = z
+  .object({
+    collectionIssues: z.array(z.lazy(() => CollectionIssue25$inboundSchema)),
+    health: Health25$inboundSchema,
+    lifecycle: Lifecycle25$inboundSchema,
+    message: z.nullable(z.string()).optional(),
+    partial: z.boolean(),
+    stale: z.boolean(),
+  });
+
+export function dataStatus25FromJSON(
+  jsonString: string,
+): SafeParseResult<DataStatus25, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => DataStatus25$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'DataStatus25' from JSON`,
+  );
+}
+
+/** @internal */
+export const DataAwsSqs$inboundSchema: z.ZodType<DataAwsSqs, unknown> = z
+  .object({
+    approximateCounts: z.boolean(),
+    approximateDelayedMessages: z.nullable(z.int()).optional(),
+    approximateInFlightMessages: z.nullable(z.int()).optional(),
+    approximateVisibleMessages: z.nullable(z.int()).optional(),
+    contentBasedDeduplication: z.nullable(z.boolean()).optional(),
+    deduplicationScope: z.nullable(z.string()).optional(),
+    delaySeconds: z.nullable(z.int()).optional(),
+    fifoQueue: z.nullable(z.boolean()).optional(),
+    fifoThroughputLimit: z.nullable(z.string()).optional(),
+    kmsDataKeyReusePeriodSeconds: z.nullable(z.int()).optional(),
+    kmsMasterKeyId: z.nullable(z.string()).optional(),
+    maximumMessageSize: z.nullable(z.int()).optional(),
+    messageRetentionPeriodSeconds: z.nullable(z.int()).optional(),
+    name: z.string(),
+    queueArn: z.nullable(z.string()).optional(),
+    queueUrl: z.nullable(z.string()).optional(),
+    receiveMessageWaitTimeSeconds: z.nullable(z.int()).optional(),
+    redriveAllowPolicy: z.nullable(z.string()).optional(),
+    redrivePolicy: z.nullable(z.string()).optional(),
+    region: z.nullable(z.string()).optional(),
+    sqsManagedSseEnabled: z.nullable(z.boolean()).optional(),
+    sseEnabled: z.nullable(z.boolean()).optional(),
+    status: z.lazy(() => DataStatus25$inboundSchema),
+    visibilityTimeoutSeconds: z.nullable(z.int()).optional(),
+    backend: z.literal("awsSqs"),
+  });
+
+export function dataAwsSqsFromJSON(
+  jsonString: string,
+): SafeParseResult<DataAwsSqs, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => DataAwsSqs$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'DataAwsSqs' from JSON`,
+  );
+}
+
+/** @internal */
+export const DataUnion6$inboundSchema: z.ZodType<DataUnion6, unknown> = z.union(
+  [
+    z.lazy(() => DataAwsSqs$inboundSchema),
+    z.lazy(() => DataGcpPubSub$inboundSchema),
+    z.lazy(() => DataAzureServiceBus$inboundSchema),
+    z.lazy(() => DataLocal6$inboundSchema),
+  ],
+);
+
+export function dataUnion6FromJSON(
+  jsonString: string,
+): SafeParseResult<DataUnion6, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => DataUnion6$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'DataUnion6' from JSON`,
+  );
+}
+
+/** @internal */
+export const DataQueue$inboundSchema: z.ZodType<DataQueue, unknown> = z.object({
+  data: z.union([
+    z.lazy(() => DataAwsSqs$inboundSchema),
+    z.lazy(() => DataGcpPubSub$inboundSchema),
+    z.lazy(() => DataAzureServiceBus$inboundSchema),
+    z.lazy(() => DataLocal6$inboundSchema),
+  ]),
+  resourceType: z.literal("queue"),
+});
+
+export function dataQueueFromJSON(
+  jsonString: string,
+): SafeParseResult<DataQueue, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => DataQueue$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'DataQueue' from JSON`,
+  );
+}
+
+/** @internal */
+export const CpuUnit11$inboundSchema: z.ZodEnum<typeof CpuUnit11> = z.enum(
+  CpuUnit11,
+);
+
+/** @internal */
+export const Cpu11$inboundSchema: z.ZodType<Cpu11, unknown> = z.object({
+  unit: CpuUnit11$inboundSchema,
+  value: z.number(),
+});
+
+export function cpu11FromJSON(
+  jsonString: string,
+): SafeParseResult<Cpu11, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => Cpu11$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'Cpu11' from JSON`,
+  );
+}
+
+/** @internal */
+export const CpuUnion11$inboundSchema: z.ZodType<CpuUnion11, unknown> = z.union(
+  [z.lazy(() => Cpu11$inboundSchema), z.any()],
+);
+
+export function cpuUnion11FromJSON(
+  jsonString: string,
+): SafeParseResult<CpuUnion11, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => CpuUnion11$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'CpuUnion11' from JSON`,
   );
 }
 
@@ -7806,3807 +11974,36 @@ export function event12FromJSON(
 }
 
 /** @internal */
-export const Reason57$inboundSchema: z.ZodEnum<typeof Reason57> = z.enum(
-  Reason57,
-);
+export const MemoryUnit11$inboundSchema: z.ZodEnum<typeof MemoryUnit11> = z
+  .enum(MemoryUnit11);
 
 /** @internal */
-export const CollectionIssueSeverity57$inboundSchema: z.ZodEnum<
-  typeof CollectionIssueSeverity57
-> = z.enum(CollectionIssueSeverity57);
-
-/** @internal */
-export const CollectionIssue57$inboundSchema: z.ZodType<
-  CollectionIssue57,
-  unknown
-> = z.object({
-  message: z.string(),
-  reason: Reason57$inboundSchema,
-  severity: CollectionIssueSeverity57$inboundSchema,
-  source: z.string(),
-});
-
-export function collectionIssue57FromJSON(
-  jsonString: string,
-): SafeParseResult<CollectionIssue57, SDKValidationError> {
-  return safeParse(
-    jsonString,
-    (x) => CollectionIssue57$inboundSchema.parse(JSON.parse(x)),
-    `Failed to parse 'CollectionIssue57' from JSON`,
-  );
-}
-
-/** @internal */
-export const Health57$inboundSchema: z.ZodEnum<typeof Health57> = z.enum(
-  Health57,
-);
-
-/** @internal */
-export const Lifecycle57$inboundSchema: z.ZodEnum<typeof Lifecycle57> = z.enum(
-  Lifecycle57,
-);
-
-/** @internal */
-export const DataStatus57$inboundSchema: z.ZodType<DataStatus57, unknown> = z
-  .object({
-    collectionIssues: z.array(z.lazy(() => CollectionIssue57$inboundSchema)),
-    health: Health57$inboundSchema,
-    lifecycle: Lifecycle57$inboundSchema,
-    message: z.nullable(z.string()).optional(),
-    partial: z.boolean(),
-    stale: z.boolean(),
-  });
-
-export function dataStatus57FromJSON(
-  jsonString: string,
-): SafeParseResult<DataStatus57, SDKValidationError> {
-  return safeParse(
-    jsonString,
-    (x) => DataStatus57$inboundSchema.parse(JSON.parse(x)),
-    `Failed to parse 'DataStatus57' from JSON`,
-  );
-}
-
-/** @internal */
-export const DataKubernetesJob$inboundSchema: z.ZodType<
-  DataKubernetesJob,
-  unknown
-> = z.object({
-  active: z.nullable(z.int()).optional(),
-  completionTime: z.nullable(
-    z.iso.datetime({ offset: true }).transform(v => new Date(v)),
-  ).optional(),
-  conditionCount: z.int(),
-  events: z.array(z.lazy(() => Event12$inboundSchema)),
-  failed: z.nullable(z.int()).optional(),
-  imageDigest: z.nullable(z.string()).optional(),
-  jobName: z.string(),
-  namespace: z.string(),
-  startTime: z.nullable(
-    z.iso.datetime({ offset: true }).transform(v => new Date(v)),
-  ).optional(),
-  status: z.lazy(() => DataStatus57$inboundSchema),
-  succeeded: z.nullable(z.int()).optional(),
-  backend: z.literal("kubernetesJob"),
-});
-
-export function dataKubernetesJobFromJSON(
-  jsonString: string,
-): SafeParseResult<DataKubernetesJob, SDKValidationError> {
-  return safeParse(
-    jsonString,
-    (x) => DataKubernetesJob$inboundSchema.parse(JSON.parse(x)),
-    `Failed to parse 'DataKubernetesJob' from JSON`,
-  );
-}
-
-/** @internal */
-export const Reason56$inboundSchema: z.ZodEnum<typeof Reason56> = z.enum(
-  Reason56,
-);
-
-/** @internal */
-export const CollectionIssueSeverity56$inboundSchema: z.ZodEnum<
-  typeof CollectionIssueSeverity56
-> = z.enum(CollectionIssueSeverity56);
-
-/** @internal */
-export const CollectionIssue56$inboundSchema: z.ZodType<
-  CollectionIssue56,
-  unknown
-> = z.object({
-  message: z.string(),
-  reason: Reason56$inboundSchema,
-  severity: CollectionIssueSeverity56$inboundSchema,
-  source: z.string(),
-});
-
-export function collectionIssue56FromJSON(
-  jsonString: string,
-): SafeParseResult<CollectionIssue56, SDKValidationError> {
-  return safeParse(
-    jsonString,
-    (x) => CollectionIssue56$inboundSchema.parse(JSON.parse(x)),
-    `Failed to parse 'CollectionIssue56' from JSON`,
-  );
-}
-
-/** @internal */
-export const Health56$inboundSchema: z.ZodEnum<typeof Health56> = z.enum(
-  Health56,
-);
-
-/** @internal */
-export const Lifecycle56$inboundSchema: z.ZodEnum<typeof Lifecycle56> = z.enum(
-  Lifecycle56,
-);
-
-/** @internal */
-export const DataStatus56$inboundSchema: z.ZodType<DataStatus56, unknown> = z
-  .object({
-    collectionIssues: z.array(z.lazy(() => CollectionIssue56$inboundSchema)),
-    health: Health56$inboundSchema,
-    lifecycle: Lifecycle56$inboundSchema,
-    message: z.nullable(z.string()).optional(),
-    partial: z.boolean(),
-    stale: z.boolean(),
-  });
-
-export function dataStatus56FromJSON(
-  jsonString: string,
-): SafeParseResult<DataStatus56, SDKValidationError> {
-  return safeParse(
-    jsonString,
-    (x) => DataStatus56$inboundSchema.parse(JSON.parse(x)),
-    `Failed to parse 'DataStatus56' from JSON`,
-  );
-}
-
-/** @internal */
-export const DataAzureContainerApps2$inboundSchema: z.ZodType<
-  DataAzureContainerApps2,
-  unknown
-> = z.object({
-  environmentVariableCount: z.int(),
-  managedEnvironmentId: z.string(),
-  managedIdentityId: z.nullable(z.string()).optional(),
-  resourceGroupName: z.string(),
-  resourcePrefix: z.nullable(z.string()).optional(),
-  status: z.lazy(() => DataStatus56$inboundSchema),
-  backend: z.literal("azureContainerApps"),
-});
-
-export function dataAzureContainerApps2FromJSON(
-  jsonString: string,
-): SafeParseResult<DataAzureContainerApps2, SDKValidationError> {
-  return safeParse(
-    jsonString,
-    (x) => DataAzureContainerApps2$inboundSchema.parse(JSON.parse(x)),
-    `Failed to parse 'DataAzureContainerApps2' from JSON`,
-  );
-}
-
-/** @internal */
-export const Reason55$inboundSchema: z.ZodEnum<typeof Reason55> = z.enum(
-  Reason55,
-);
-
-/** @internal */
-export const CollectionIssueSeverity55$inboundSchema: z.ZodEnum<
-  typeof CollectionIssueSeverity55
-> = z.enum(CollectionIssueSeverity55);
-
-/** @internal */
-export const CollectionIssue55$inboundSchema: z.ZodType<
-  CollectionIssue55,
-  unknown
-> = z.object({
-  message: z.string(),
-  reason: Reason55$inboundSchema,
-  severity: CollectionIssueSeverity55$inboundSchema,
-  source: z.string(),
-});
-
-export function collectionIssue55FromJSON(
-  jsonString: string,
-): SafeParseResult<CollectionIssue55, SDKValidationError> {
-  return safeParse(
-    jsonString,
-    (x) => CollectionIssue55$inboundSchema.parse(JSON.parse(x)),
-    `Failed to parse 'CollectionIssue55' from JSON`,
-  );
-}
-
-/** @internal */
-export const Health55$inboundSchema: z.ZodEnum<typeof Health55> = z.enum(
-  Health55,
-);
-
-/** @internal */
-export const Lifecycle55$inboundSchema: z.ZodEnum<typeof Lifecycle55> = z.enum(
-  Lifecycle55,
-);
-
-/** @internal */
-export const DataStatus55$inboundSchema: z.ZodType<DataStatus55, unknown> = z
-  .object({
-    collectionIssues: z.array(z.lazy(() => CollectionIssue55$inboundSchema)),
-    health: Health55$inboundSchema,
-    lifecycle: Lifecycle55$inboundSchema,
-    message: z.nullable(z.string()).optional(),
-    partial: z.boolean(),
-    stale: z.boolean(),
-  });
-
-export function dataStatus55FromJSON(
-  jsonString: string,
-): SafeParseResult<DataStatus55, SDKValidationError> {
-  return safeParse(
-    jsonString,
-    (x) => DataStatus55$inboundSchema.parse(JSON.parse(x)),
-    `Failed to parse 'DataStatus55' from JSON`,
-  );
-}
-
-/** @internal */
-export const DataGcpCloudBuild$inboundSchema: z.ZodType<
-  DataGcpCloudBuild,
-  unknown
-> = z.object({
-  buildConfigId: z.string(),
-  environmentVariableCount: z.int(),
-  location: z.string(),
-  projectId: z.string(),
-  serviceAccount: z.nullable(z.string()).optional(),
-  status: z.lazy(() => DataStatus55$inboundSchema),
-  backend: z.literal("gcpCloudBuild"),
-});
-
-export function dataGcpCloudBuildFromJSON(
-  jsonString: string,
-): SafeParseResult<DataGcpCloudBuild, SDKValidationError> {
-  return safeParse(
-    jsonString,
-    (x) => DataGcpCloudBuild$inboundSchema.parse(JSON.parse(x)),
-    `Failed to parse 'DataGcpCloudBuild' from JSON`,
-  );
-}
-
-/** @internal */
-export const Reason54$inboundSchema: z.ZodEnum<typeof Reason54> = z.enum(
-  Reason54,
-);
-
-/** @internal */
-export const CollectionIssueSeverity54$inboundSchema: z.ZodEnum<
-  typeof CollectionIssueSeverity54
-> = z.enum(CollectionIssueSeverity54);
-
-/** @internal */
-export const CollectionIssue54$inboundSchema: z.ZodType<
-  CollectionIssue54,
-  unknown
-> = z.object({
-  message: z.string(),
-  reason: Reason54$inboundSchema,
-  severity: CollectionIssueSeverity54$inboundSchema,
-  source: z.string(),
-});
-
-export function collectionIssue54FromJSON(
-  jsonString: string,
-): SafeParseResult<CollectionIssue54, SDKValidationError> {
-  return safeParse(
-    jsonString,
-    (x) => CollectionIssue54$inboundSchema.parse(JSON.parse(x)),
-    `Failed to parse 'CollectionIssue54' from JSON`,
-  );
-}
-
-/** @internal */
-export const Health54$inboundSchema: z.ZodEnum<typeof Health54> = z.enum(
-  Health54,
-);
-
-/** @internal */
-export const Lifecycle54$inboundSchema: z.ZodEnum<typeof Lifecycle54> = z.enum(
-  Lifecycle54,
-);
-
-/** @internal */
-export const DataStatus54$inboundSchema: z.ZodType<DataStatus54, unknown> = z
-  .object({
-    collectionIssues: z.array(z.lazy(() => CollectionIssue54$inboundSchema)),
-    health: Health54$inboundSchema,
-    lifecycle: Lifecycle54$inboundSchema,
-    message: z.nullable(z.string()).optional(),
-    partial: z.boolean(),
-    stale: z.boolean(),
-  });
-
-export function dataStatus54FromJSON(
-  jsonString: string,
-): SafeParseResult<DataStatus54, SDKValidationError> {
-  return safeParse(
-    jsonString,
-    (x) => DataStatus54$inboundSchema.parse(JSON.parse(x)),
-    `Failed to parse 'DataStatus54' from JSON`,
-  );
-}
-
-/** @internal */
-export const DataAwsCodeBuild$inboundSchema: z.ZodType<
-  DataAwsCodeBuild,
-  unknown
-> = z.object({
-  artifactsEncryptionDisabled: z.nullable(z.boolean()).optional(),
-  artifactsType: z.nullable(z.string()).optional(),
-  cloudWatchLogsStatus: z.nullable(z.string()).optional(),
-  computeType: z.nullable(z.string()).optional(),
-  created: z.nullable(z.number()).optional(),
-  description: z.nullable(z.string()).optional(),
-  encryptionKeyPresent: z.boolean(),
-  environmentImage: z.nullable(z.string()).optional(),
-  environmentType: z.nullable(z.string()).optional(),
-  environmentVariableCount: z.int(),
-  imagePullCredentialsType: z.nullable(z.string()).optional(),
-  lastModified: z.nullable(z.number()).optional(),
-  privilegedMode: z.nullable(z.boolean()).optional(),
-  projectArn: z.nullable(z.string()).optional(),
-  projectName: z.string(),
-  queuedTimeoutInMinutes: z.nullable(z.int()).optional(),
-  s3LogsStatus: z.nullable(z.string()).optional(),
-  serviceRolePresent: z.boolean(),
-  sourceType: z.nullable(z.string()).optional(),
-  status: z.lazy(() => DataStatus54$inboundSchema),
-  timeoutInMinutes: z.nullable(z.int()).optional(),
-  backend: z.literal("awsCodeBuild"),
-});
-
-export function dataAwsCodeBuildFromJSON(
-  jsonString: string,
-): SafeParseResult<DataAwsCodeBuild, SDKValidationError> {
-  return safeParse(
-    jsonString,
-    (x) => DataAwsCodeBuild$inboundSchema.parse(JSON.parse(x)),
-    `Failed to parse 'DataAwsCodeBuild' from JSON`,
-  );
-}
-
-/** @internal */
-export const DataUnion14$inboundSchema: z.ZodType<DataUnion14, unknown> = z
-  .union([
-    z.lazy(() => DataAwsCodeBuild$inboundSchema),
-    z.lazy(() => DataGcpCloudBuild$inboundSchema),
-    z.lazy(() => DataAzureContainerApps2$inboundSchema),
-    z.lazy(() => DataKubernetesJob$inboundSchema),
-  ]);
-
-export function dataUnion14FromJSON(
-  jsonString: string,
-): SafeParseResult<DataUnion14, SDKValidationError> {
-  return safeParse(
-    jsonString,
-    (x) => DataUnion14$inboundSchema.parse(JSON.parse(x)),
-    `Failed to parse 'DataUnion14' from JSON`,
-  );
-}
-
-/** @internal */
-export const DataBuild$inboundSchema: z.ZodType<DataBuild, unknown> = z.object({
-  data: z.union([
-    z.lazy(() => DataAwsCodeBuild$inboundSchema),
-    z.lazy(() => DataGcpCloudBuild$inboundSchema),
-    z.lazy(() => DataAzureContainerApps2$inboundSchema),
-    z.lazy(() => DataKubernetesJob$inboundSchema),
-  ]),
-  resourceType: z.literal("build"),
-});
-
-export function dataBuildFromJSON(
-  jsonString: string,
-): SafeParseResult<DataBuild, SDKValidationError> {
-  return safeParse(
-    jsonString,
-    (x) => DataBuild$inboundSchema.parse(JSON.parse(x)),
-    `Failed to parse 'DataBuild' from JSON`,
-  );
-}
-
-/** @internal */
-export const Reason53$inboundSchema: z.ZodEnum<typeof Reason53> = z.enum(
-  Reason53,
-);
-
-/** @internal */
-export const CollectionIssueSeverity53$inboundSchema: z.ZodEnum<
-  typeof CollectionIssueSeverity53
-> = z.enum(CollectionIssueSeverity53);
-
-/** @internal */
-export const CollectionIssue53$inboundSchema: z.ZodType<
-  CollectionIssue53,
-  unknown
-> = z.object({
-  message: z.string(),
-  reason: Reason53$inboundSchema,
-  severity: CollectionIssueSeverity53$inboundSchema,
-  source: z.string(),
-});
-
-export function collectionIssue53FromJSON(
-  jsonString: string,
-): SafeParseResult<CollectionIssue53, SDKValidationError> {
-  return safeParse(
-    jsonString,
-    (x) => CollectionIssue53$inboundSchema.parse(JSON.parse(x)),
-    `Failed to parse 'CollectionIssue53' from JSON`,
-  );
-}
-
-/** @internal */
-export const Health53$inboundSchema: z.ZodEnum<typeof Health53> = z.enum(
-  Health53,
-);
-
-/** @internal */
-export const Lifecycle53$inboundSchema: z.ZodEnum<typeof Lifecycle53> = z.enum(
-  Lifecycle53,
-);
-
-/** @internal */
-export const DataStatus53$inboundSchema: z.ZodType<DataStatus53, unknown> = z
-  .object({
-    collectionIssues: z.array(z.lazy(() => CollectionIssue53$inboundSchema)),
-    health: Health53$inboundSchema,
-    lifecycle: Lifecycle53$inboundSchema,
-    message: z.nullable(z.string()).optional(),
-    partial: z.boolean(),
-    stale: z.boolean(),
-  });
-
-export function dataStatus53FromJSON(
-  jsonString: string,
-): SafeParseResult<DataStatus53, SDKValidationError> {
-  return safeParse(
-    jsonString,
-    (x) => DataStatus53$inboundSchema.parse(JSON.parse(x)),
-    `Failed to parse 'DataStatus53' from JSON`,
-  );
-}
-
-/** @internal */
-export const DataLocal11$inboundSchema: z.ZodType<DataLocal11, unknown> = z
-  .object({
-    reachable: z.boolean(),
-    registryUrl: z.string(),
-    status: z.lazy(() => DataStatus53$inboundSchema),
-    backend: z.literal("local"),
-  });
-
-export function dataLocal11FromJSON(
-  jsonString: string,
-): SafeParseResult<DataLocal11, SDKValidationError> {
-  return safeParse(
-    jsonString,
-    (x) => DataLocal11$inboundSchema.parse(JSON.parse(x)),
-    `Failed to parse 'DataLocal11' from JSON`,
-  );
-}
-
-/** @internal */
-export const Reason52$inboundSchema: z.ZodEnum<typeof Reason52> = z.enum(
-  Reason52,
-);
-
-/** @internal */
-export const CollectionIssueSeverity52$inboundSchema: z.ZodEnum<
-  typeof CollectionIssueSeverity52
-> = z.enum(CollectionIssueSeverity52);
-
-/** @internal */
-export const CollectionIssue52$inboundSchema: z.ZodType<
-  CollectionIssue52,
-  unknown
-> = z.object({
-  message: z.string(),
-  reason: Reason52$inboundSchema,
-  severity: CollectionIssueSeverity52$inboundSchema,
-  source: z.string(),
-});
-
-export function collectionIssue52FromJSON(
-  jsonString: string,
-): SafeParseResult<CollectionIssue52, SDKValidationError> {
-  return safeParse(
-    jsonString,
-    (x) => CollectionIssue52$inboundSchema.parse(JSON.parse(x)),
-    `Failed to parse 'CollectionIssue52' from JSON`,
-  );
-}
-
-/** @internal */
-export const Health52$inboundSchema: z.ZodEnum<typeof Health52> = z.enum(
-  Health52,
-);
-
-/** @internal */
-export const Lifecycle52$inboundSchema: z.ZodEnum<typeof Lifecycle52> = z.enum(
-  Lifecycle52,
-);
-
-/** @internal */
-export const DataStatus52$inboundSchema: z.ZodType<DataStatus52, unknown> = z
-  .object({
-    collectionIssues: z.array(z.lazy(() => CollectionIssue52$inboundSchema)),
-    health: Health52$inboundSchema,
-    lifecycle: Lifecycle52$inboundSchema,
-    message: z.nullable(z.string()).optional(),
-    partial: z.boolean(),
-    stale: z.boolean(),
-  });
-
-export function dataStatus52FromJSON(
-  jsonString: string,
-): SafeParseResult<DataStatus52, SDKValidationError> {
-  return safeParse(
-    jsonString,
-    (x) => DataStatus52$inboundSchema.parse(JSON.parse(x)),
-    `Failed to parse 'DataStatus52' from JSON`,
-  );
-}
-
-/** @internal */
-export const DataAzureContainerRegistry$inboundSchema: z.ZodType<
-  DataAzureContainerRegistry,
-  unknown
-> = z.object({
-  adminUserEnabled: z.boolean(),
-  anonymousPullEnabled: z.boolean(),
-  creationDate: z.nullable(z.string()).optional(),
-  dataEndpointEnabled: z.nullable(z.boolean()).optional(),
-  dataEndpointHostNames: z.array(z.string()),
-  encryptionKeyIdentifierPresent: z.boolean(),
-  encryptionKeyVaultUriPresent: z.boolean(),
-  encryptionStatus: z.nullable(z.string()).optional(),
-  ipRuleCount: z.int(),
-  location: z.string(),
-  loginServer: z.nullable(z.string()).optional(),
-  managedTagCount: z.int(),
-  name: z.string(),
-  networkRuleBypassOptions: z.string(),
-  networkRuleDefaultAction: z.nullable(z.string()).optional(),
-  policiesPresent: z.boolean(),
-  policyCount: z.int(),
-  privateEndpointConnectionCount: z.int(),
-  provisioningState: z.nullable(z.string()).optional(),
-  publicNetworkAccess: z.string(),
-  resourceGroup: z.string(),
-  resourceId: z.nullable(z.string()).optional(),
-  skuName: z.string(),
-  skuTier: z.nullable(z.string()).optional(),
-  status: z.lazy(() => DataStatus52$inboundSchema),
-  type: z.nullable(z.string()).optional(),
-  zoneRedundancy: z.string(),
-  backend: z.literal("azureContainerRegistry"),
-});
-
-export function dataAzureContainerRegistryFromJSON(
-  jsonString: string,
-): SafeParseResult<DataAzureContainerRegistry, SDKValidationError> {
-  return safeParse(
-    jsonString,
-    (x) => DataAzureContainerRegistry$inboundSchema.parse(JSON.parse(x)),
-    `Failed to parse 'DataAzureContainerRegistry' from JSON`,
-  );
-}
-
-/** @internal */
-export const Reason51$inboundSchema: z.ZodEnum<typeof Reason51> = z.enum(
-  Reason51,
-);
-
-/** @internal */
-export const CollectionIssueSeverity51$inboundSchema: z.ZodEnum<
-  typeof CollectionIssueSeverity51
-> = z.enum(CollectionIssueSeverity51);
-
-/** @internal */
-export const CollectionIssue51$inboundSchema: z.ZodType<
-  CollectionIssue51,
-  unknown
-> = z.object({
-  message: z.string(),
-  reason: Reason51$inboundSchema,
-  severity: CollectionIssueSeverity51$inboundSchema,
-  source: z.string(),
-});
-
-export function collectionIssue51FromJSON(
-  jsonString: string,
-): SafeParseResult<CollectionIssue51, SDKValidationError> {
-  return safeParse(
-    jsonString,
-    (x) => CollectionIssue51$inboundSchema.parse(JSON.parse(x)),
-    `Failed to parse 'CollectionIssue51' from JSON`,
-  );
-}
-
-/** @internal */
-export const Health51$inboundSchema: z.ZodEnum<typeof Health51> = z.enum(
-  Health51,
-);
-
-/** @internal */
-export const Lifecycle51$inboundSchema: z.ZodEnum<typeof Lifecycle51> = z.enum(
-  Lifecycle51,
-);
-
-/** @internal */
-export const DataStatus51$inboundSchema: z.ZodType<DataStatus51, unknown> = z
-  .object({
-    collectionIssues: z.array(z.lazy(() => CollectionIssue51$inboundSchema)),
-    health: Health51$inboundSchema,
-    lifecycle: Lifecycle51$inboundSchema,
-    message: z.nullable(z.string()).optional(),
-    partial: z.boolean(),
-    stale: z.boolean(),
-  });
-
-export function dataStatus51FromJSON(
-  jsonString: string,
-): SafeParseResult<DataStatus51, SDKValidationError> {
-  return safeParse(
-    jsonString,
-    (x) => DataStatus51$inboundSchema.parse(JSON.parse(x)),
-    `Failed to parse 'DataStatus51' from JSON`,
-  );
-}
-
-/** @internal */
-export const DataGcpArtifactRegistry$inboundSchema: z.ZodType<
-  DataGcpArtifactRegistry,
-  unknown
-> = z.object({
-  cleanupPolicyCount: z.int(),
-  cleanupPolicyDryRun: z.nullable(z.boolean()).optional(),
-  createTime: z.nullable(z.string()).optional(),
-  description: z.nullable(z.string()).optional(),
-  format: z.nullable(z.string()).optional(),
-  iamBindingCount: z.int(),
-  iamPolicyEtagPresent: z.boolean(),
-  iamRoles: z.array(z.string()),
-  kmsKeyNamePresent: z.boolean(),
-  labelCount: z.int(),
-  location: z.string(),
-  mode: z.nullable(z.string()).optional(),
-  name: z.nullable(z.string()).optional(),
-  projectId: z.string(),
-  pullServiceAccountEmail: z.nullable(z.string()).optional(),
-  pushServiceAccountEmail: z.nullable(z.string()).optional(),
-  repositoryId: z.string(),
-  satisfiesPzs: z.nullable(z.boolean()).optional(),
-  sizeBytes: z.nullable(z.string()).optional(),
-  status: z.lazy(() => DataStatus51$inboundSchema),
-  updateTime: z.nullable(z.string()).optional(),
-  backend: z.literal("gcpArtifactRegistry"),
-});
-
-export function dataGcpArtifactRegistryFromJSON(
-  jsonString: string,
-): SafeParseResult<DataGcpArtifactRegistry, SDKValidationError> {
-  return safeParse(
-    jsonString,
-    (x) => DataGcpArtifactRegistry$inboundSchema.parse(JSON.parse(x)),
-    `Failed to parse 'DataGcpArtifactRegistry' from JSON`,
-  );
-}
-
-/** @internal */
-export const Repository$inboundSchema: z.ZodType<Repository, unknown> = z
-  .object({
-    createdAt: z.number(),
-    encryptionType: z.nullable(z.string()).optional(),
-    imageTagMutability: z.nullable(z.string()).optional(),
-    kmsKeyPresent: z.boolean(),
-    registryId: z.string(),
-    repositoryArn: z.string(),
-    repositoryName: z.string(),
-    repositoryUri: z.string(),
-    scanOnPush: z.nullable(z.boolean()).optional(),
-  });
-
-export function repositoryFromJSON(
-  jsonString: string,
-): SafeParseResult<Repository, SDKValidationError> {
-  return safeParse(
-    jsonString,
-    (x) => Repository$inboundSchema.parse(JSON.parse(x)),
-    `Failed to parse 'Repository' from JSON`,
-  );
-}
-
-/** @internal */
-export const Reason50$inboundSchema: z.ZodEnum<typeof Reason50> = z.enum(
-  Reason50,
-);
-
-/** @internal */
-export const CollectionIssueSeverity50$inboundSchema: z.ZodEnum<
-  typeof CollectionIssueSeverity50
-> = z.enum(CollectionIssueSeverity50);
-
-/** @internal */
-export const CollectionIssue50$inboundSchema: z.ZodType<
-  CollectionIssue50,
-  unknown
-> = z.object({
-  message: z.string(),
-  reason: Reason50$inboundSchema,
-  severity: CollectionIssueSeverity50$inboundSchema,
-  source: z.string(),
-});
-
-export function collectionIssue50FromJSON(
-  jsonString: string,
-): SafeParseResult<CollectionIssue50, SDKValidationError> {
-  return safeParse(
-    jsonString,
-    (x) => CollectionIssue50$inboundSchema.parse(JSON.parse(x)),
-    `Failed to parse 'CollectionIssue50' from JSON`,
-  );
-}
-
-/** @internal */
-export const Health50$inboundSchema: z.ZodEnum<typeof Health50> = z.enum(
-  Health50,
-);
-
-/** @internal */
-export const Lifecycle50$inboundSchema: z.ZodEnum<typeof Lifecycle50> = z.enum(
-  Lifecycle50,
-);
-
-/** @internal */
-export const DataStatus50$inboundSchema: z.ZodType<DataStatus50, unknown> = z
-  .object({
-    collectionIssues: z.array(z.lazy(() => CollectionIssue50$inboundSchema)),
-    health: Health50$inboundSchema,
-    lifecycle: Lifecycle50$inboundSchema,
-    message: z.nullable(z.string()).optional(),
-    partial: z.boolean(),
-    stale: z.boolean(),
-  });
-
-export function dataStatus50FromJSON(
-  jsonString: string,
-): SafeParseResult<DataStatus50, SDKValidationError> {
-  return safeParse(
-    jsonString,
-    (x) => DataStatus50$inboundSchema.parse(JSON.parse(x)),
-    `Failed to parse 'DataStatus50' from JSON`,
-  );
-}
-
-/** @internal */
-export const DataAwsEcr$inboundSchema: z.ZodType<DataAwsEcr, unknown> = z
-  .object({
-    pullRoleArn: z.nullable(z.string()).optional(),
-    pushRoleArn: z.nullable(z.string()).optional(),
-    region: z.string(),
-    registryId: z.string(),
-    registryUri: z.string(),
-    repositories: z.array(z.lazy(() => Repository$inboundSchema)),
-    repositoriesTruncated: z.boolean(),
-    repositoryCount: z.int(),
-    repositoryPrefix: z.string(),
-    status: z.lazy(() => DataStatus50$inboundSchema),
-    backend: z.literal("awsEcr"),
-  });
-
-export function dataAwsEcrFromJSON(
-  jsonString: string,
-): SafeParseResult<DataAwsEcr, SDKValidationError> {
-  return safeParse(
-    jsonString,
-    (x) => DataAwsEcr$inboundSchema.parse(JSON.parse(x)),
-    `Failed to parse 'DataAwsEcr' from JSON`,
-  );
-}
-
-/** @internal */
-export const DataUnion13$inboundSchema: z.ZodType<DataUnion13, unknown> = z
-  .union([
-    z.lazy(() => DataAwsEcr$inboundSchema),
-    z.lazy(() => DataGcpArtifactRegistry$inboundSchema),
-    z.lazy(() => DataAzureContainerRegistry$inboundSchema),
-    z.lazy(() => DataLocal11$inboundSchema),
-  ]);
-
-export function dataUnion13FromJSON(
-  jsonString: string,
-): SafeParseResult<DataUnion13, SDKValidationError> {
-  return safeParse(
-    jsonString,
-    (x) => DataUnion13$inboundSchema.parse(JSON.parse(x)),
-    `Failed to parse 'DataUnion13' from JSON`,
-  );
-}
-
-/** @internal */
-export const DataArtifactRegistry$inboundSchema: z.ZodType<
-  DataArtifactRegistry,
-  unknown
-> = z.object({
-  data: z.union([
-    z.lazy(() => DataAwsEcr$inboundSchema),
-    z.lazy(() => DataGcpArtifactRegistry$inboundSchema),
-    z.lazy(() => DataAzureContainerRegistry$inboundSchema),
-    z.lazy(() => DataLocal11$inboundSchema),
-  ]),
-  resourceType: z.literal("artifact-registry"),
-});
-
-export function dataArtifactRegistryFromJSON(
-  jsonString: string,
-): SafeParseResult<DataArtifactRegistry, SDKValidationError> {
-  return safeParse(
-    jsonString,
-    (x) => DataArtifactRegistry$inboundSchema.parse(JSON.parse(x)),
-    `Failed to parse 'DataArtifactRegistry' from JSON`,
-  );
-}
-
-/** @internal */
-export const Reason49$inboundSchema: z.ZodEnum<typeof Reason49> = z.enum(
-  Reason49,
-);
-
-/** @internal */
-export const CollectionIssueSeverity49$inboundSchema: z.ZodEnum<
-  typeof CollectionIssueSeverity49
-> = z.enum(CollectionIssueSeverity49);
-
-/** @internal */
-export const CollectionIssue49$inboundSchema: z.ZodType<
-  CollectionIssue49,
-  unknown
-> = z.object({
-  message: z.string(),
-  reason: Reason49$inboundSchema,
-  severity: CollectionIssueSeverity49$inboundSchema,
-  source: z.string(),
-});
-
-export function collectionIssue49FromJSON(
-  jsonString: string,
-): SafeParseResult<CollectionIssue49, SDKValidationError> {
-  return safeParse(
-    jsonString,
-    (x) => CollectionIssue49$inboundSchema.parse(JSON.parse(x)),
-    `Failed to parse 'CollectionIssue49' from JSON`,
-  );
-}
-
-/** @internal */
-export const Health49$inboundSchema: z.ZodEnum<typeof Health49> = z.enum(
-  Health49,
-);
-
-/** @internal */
-export const Lifecycle49$inboundSchema: z.ZodEnum<typeof Lifecycle49> = z.enum(
-  Lifecycle49,
-);
-
-/** @internal */
-export const DataStatus49$inboundSchema: z.ZodType<DataStatus49, unknown> = z
-  .object({
-    collectionIssues: z.array(z.lazy(() => CollectionIssue49$inboundSchema)),
-    health: Health49$inboundSchema,
-    lifecycle: Lifecycle49$inboundSchema,
-    message: z.nullable(z.string()).optional(),
-    partial: z.boolean(),
-    stale: z.boolean(),
-  });
-
-export function dataStatus49FromJSON(
-  jsonString: string,
-): SafeParseResult<DataStatus49, SDKValidationError> {
-  return safeParse(
-    jsonString,
-    (x) => DataStatus49$inboundSchema.parse(JSON.parse(x)),
-    `Failed to parse 'DataStatus49' from JSON`,
-  );
-}
-
-/** @internal */
-export const DataAzureManagedIdentity2$inboundSchema: z.ZodType<
-  DataAzureManagedIdentity2,
-  unknown
-> = z.object({
-  ficName: z.nullable(z.string()).optional(),
-  roleAssignmentIds: z.array(z.string()),
-  roleDefinitionId: z.nullable(z.string()).optional(),
-  status: z.lazy(() => DataStatus49$inboundSchema),
-  tenantId: z.nullable(z.string()).optional(),
-  uamiClientId: z.nullable(z.string()).optional(),
-  uamiPrincipalId: z.nullable(z.string()).optional(),
-  uamiResourceId: z.nullable(z.string()).optional(),
-  backend: z.literal("azureManagedIdentity"),
-});
-
-export function dataAzureManagedIdentity2FromJSON(
-  jsonString: string,
-): SafeParseResult<DataAzureManagedIdentity2, SDKValidationError> {
-  return safeParse(
-    jsonString,
-    (x) => DataAzureManagedIdentity2$inboundSchema.parse(JSON.parse(x)),
-    `Failed to parse 'DataAzureManagedIdentity2' from JSON`,
-  );
-}
-
-/** @internal */
-export const Reason48$inboundSchema: z.ZodEnum<typeof Reason48> = z.enum(
-  Reason48,
-);
-
-/** @internal */
-export const CollectionIssueSeverity48$inboundSchema: z.ZodEnum<
-  typeof CollectionIssueSeverity48
-> = z.enum(CollectionIssueSeverity48);
-
-/** @internal */
-export const CollectionIssue48$inboundSchema: z.ZodType<
-  CollectionIssue48,
-  unknown
-> = z.object({
-  message: z.string(),
-  reason: Reason48$inboundSchema,
-  severity: CollectionIssueSeverity48$inboundSchema,
-  source: z.string(),
-});
-
-export function collectionIssue48FromJSON(
-  jsonString: string,
-): SafeParseResult<CollectionIssue48, SDKValidationError> {
-  return safeParse(
-    jsonString,
-    (x) => CollectionIssue48$inboundSchema.parse(JSON.parse(x)),
-    `Failed to parse 'CollectionIssue48' from JSON`,
-  );
-}
-
-/** @internal */
-export const Health48$inboundSchema: z.ZodEnum<typeof Health48> = z.enum(
-  Health48,
-);
-
-/** @internal */
-export const Lifecycle48$inboundSchema: z.ZodEnum<typeof Lifecycle48> = z.enum(
-  Lifecycle48,
-);
-
-/** @internal */
-export const DataStatus48$inboundSchema: z.ZodType<DataStatus48, unknown> = z
-  .object({
-    collectionIssues: z.array(z.lazy(() => CollectionIssue48$inboundSchema)),
-    health: Health48$inboundSchema,
-    lifecycle: Lifecycle48$inboundSchema,
-    message: z.nullable(z.string()).optional(),
-    partial: z.boolean(),
-    stale: z.boolean(),
-  });
-
-export function dataStatus48FromJSON(
-  jsonString: string,
-): SafeParseResult<DataStatus48, SDKValidationError> {
-  return safeParse(
-    jsonString,
-    (x) => DataStatus48$inboundSchema.parse(JSON.parse(x)),
-    `Failed to parse 'DataStatus48' from JSON`,
-  );
-}
-
-/** @internal */
-export const DataGcpServiceAccount2$inboundSchema: z.ZodType<
-  DataGcpServiceAccount2,
-  unknown
-> = z.object({
-  impersonationGranted: z.boolean(),
-  roleBound: z.boolean(),
-  serviceAccountEmail: z.nullable(z.string()).optional(),
-  serviceAccountUniqueId: z.nullable(z.string()).optional(),
-  status: z.lazy(() => DataStatus48$inboundSchema),
-  backend: z.literal("gcpServiceAccount"),
-});
-
-export function dataGcpServiceAccount2FromJSON(
-  jsonString: string,
-): SafeParseResult<DataGcpServiceAccount2, SDKValidationError> {
-  return safeParse(
-    jsonString,
-    (x) => DataGcpServiceAccount2$inboundSchema.parse(JSON.parse(x)),
-    `Failed to parse 'DataGcpServiceAccount2' from JSON`,
-  );
-}
-
-/** @internal */
-export const Reason47$inboundSchema: z.ZodEnum<typeof Reason47> = z.enum(
-  Reason47,
-);
-
-/** @internal */
-export const CollectionIssueSeverity47$inboundSchema: z.ZodEnum<
-  typeof CollectionIssueSeverity47
-> = z.enum(CollectionIssueSeverity47);
-
-/** @internal */
-export const CollectionIssue47$inboundSchema: z.ZodType<
-  CollectionIssue47,
-  unknown
-> = z.object({
-  message: z.string(),
-  reason: Reason47$inboundSchema,
-  severity: CollectionIssueSeverity47$inboundSchema,
-  source: z.string(),
-});
-
-export function collectionIssue47FromJSON(
-  jsonString: string,
-): SafeParseResult<CollectionIssue47, SDKValidationError> {
-  return safeParse(
-    jsonString,
-    (x) => CollectionIssue47$inboundSchema.parse(JSON.parse(x)),
-    `Failed to parse 'CollectionIssue47' from JSON`,
-  );
-}
-
-/** @internal */
-export const Health47$inboundSchema: z.ZodEnum<typeof Health47> = z.enum(
-  Health47,
-);
-
-/** @internal */
-export const Lifecycle47$inboundSchema: z.ZodEnum<typeof Lifecycle47> = z.enum(
-  Lifecycle47,
-);
-
-/** @internal */
-export const DataStatus47$inboundSchema: z.ZodType<DataStatus47, unknown> = z
-  .object({
-    collectionIssues: z.array(z.lazy(() => CollectionIssue47$inboundSchema)),
-    health: Health47$inboundSchema,
-    lifecycle: Lifecycle47$inboundSchema,
-    message: z.nullable(z.string()).optional(),
-    partial: z.boolean(),
-    stale: z.boolean(),
-  });
-
-export function dataStatus47FromJSON(
-  jsonString: string,
-): SafeParseResult<DataStatus47, SDKValidationError> {
-  return safeParse(
-    jsonString,
-    (x) => DataStatus47$inboundSchema.parse(JSON.parse(x)),
-    `Failed to parse 'DataStatus47' from JSON`,
-  );
-}
-
-/** @internal */
-export const DataAwsIamRole2$inboundSchema: z.ZodType<
-  DataAwsIamRole2,
-  unknown
-> = z.object({
-  managementPermissionsApplied: z.boolean(),
-  roleArn: z.nullable(z.string()).optional(),
-  roleName: z.nullable(z.string()).optional(),
-  status: z.lazy(() => DataStatus47$inboundSchema),
-  backend: z.literal("awsIamRole"),
-});
-
-export function dataAwsIamRole2FromJSON(
-  jsonString: string,
-): SafeParseResult<DataAwsIamRole2, SDKValidationError> {
-  return safeParse(
-    jsonString,
-    (x) => DataAwsIamRole2$inboundSchema.parse(JSON.parse(x)),
-    `Failed to parse 'DataAwsIamRole2' from JSON`,
-  );
-}
-
-/** @internal */
-export const DataUnion12$inboundSchema: z.ZodType<DataUnion12, unknown> = z
-  .union([
-    z.lazy(() => DataAwsIamRole2$inboundSchema),
-    z.lazy(() => DataGcpServiceAccount2$inboundSchema),
-    z.lazy(() => DataAzureManagedIdentity2$inboundSchema),
-  ]);
-
-export function dataUnion12FromJSON(
-  jsonString: string,
-): SafeParseResult<DataUnion12, SDKValidationError> {
-  return safeParse(
-    jsonString,
-    (x) => DataUnion12$inboundSchema.parse(JSON.parse(x)),
-    `Failed to parse 'DataUnion12' from JSON`,
-  );
-}
-
-/** @internal */
-export const DataRemoteStackManagement$inboundSchema: z.ZodType<
-  DataRemoteStackManagement,
-  unknown
-> = z.object({
-  data: z.union([
-    z.lazy(() => DataAwsIamRole2$inboundSchema),
-    z.lazy(() => DataGcpServiceAccount2$inboundSchema),
-    z.lazy(() => DataAzureManagedIdentity2$inboundSchema),
-  ]),
-  resourceType: z.literal("remote-stack-management"),
-});
-
-export function dataRemoteStackManagementFromJSON(
-  jsonString: string,
-): SafeParseResult<DataRemoteStackManagement, SDKValidationError> {
-  return safeParse(
-    jsonString,
-    (x) => DataRemoteStackManagement$inboundSchema.parse(JSON.parse(x)),
-    `Failed to parse 'DataRemoteStackManagement' from JSON`,
-  );
-}
-
-/** @internal */
-export const Reason46$inboundSchema: z.ZodEnum<typeof Reason46> = z.enum(
-  Reason46,
-);
-
-/** @internal */
-export const CollectionIssueSeverity46$inboundSchema: z.ZodEnum<
-  typeof CollectionIssueSeverity46
-> = z.enum(CollectionIssueSeverity46);
-
-/** @internal */
-export const CollectionIssue46$inboundSchema: z.ZodType<
-  CollectionIssue46,
-  unknown
-> = z.object({
-  message: z.string(),
-  reason: Reason46$inboundSchema,
-  severity: CollectionIssueSeverity46$inboundSchema,
-  source: z.string(),
-});
-
-export function collectionIssue46FromJSON(
-  jsonString: string,
-): SafeParseResult<CollectionIssue46, SDKValidationError> {
-  return safeParse(
-    jsonString,
-    (x) => CollectionIssue46$inboundSchema.parse(JSON.parse(x)),
-    `Failed to parse 'CollectionIssue46' from JSON`,
-  );
-}
-
-/** @internal */
-export const Health46$inboundSchema: z.ZodEnum<typeof Health46> = z.enum(
-  Health46,
-);
-
-/** @internal */
-export const Lifecycle46$inboundSchema: z.ZodEnum<typeof Lifecycle46> = z.enum(
-  Lifecycle46,
-);
-
-/** @internal */
-export const DataStatus46$inboundSchema: z.ZodType<DataStatus46, unknown> = z
-  .object({
-    collectionIssues: z.array(z.lazy(() => CollectionIssue46$inboundSchema)),
-    health: Health46$inboundSchema,
-    lifecycle: Lifecycle46$inboundSchema,
-    message: z.nullable(z.string()).optional(),
-    partial: z.boolean(),
-    stale: z.boolean(),
-  });
-
-export function dataStatus46FromJSON(
-  jsonString: string,
-): SafeParseResult<DataStatus46, SDKValidationError> {
-  return safeParse(
-    jsonString,
-    (x) => DataStatus46$inboundSchema.parse(JSON.parse(x)),
-    `Failed to parse 'DataStatus46' from JSON`,
-  );
-}
-
-/** @internal */
-export const DataAzureVnet$inboundSchema: z.ZodType<DataAzureVnet, unknown> = z
-  .object({
-    applicationGatewaySubnetName: z.nullable(z.string()).optional(),
-    cidrBlock: z.nullable(z.string()).optional(),
-    isByoVnet: z.boolean(),
-    lastByoVnetVerificationErrorCode: z.nullable(z.string()).optional(),
-    location: z.nullable(z.string()).optional(),
-    natGatewayId: z.nullable(z.string()).optional(),
-    nsgId: z.nullable(z.string()).optional(),
-    privateEndpointSubnetName: z.nullable(z.string()).optional(),
-    privateSubnetName: z.nullable(z.string()).optional(),
-    publicIpId: z.nullable(z.string()).optional(),
-    publicSubnetName: z.nullable(z.string()).optional(),
-    resourceGroup: z.nullable(z.string()).optional(),
-    status: z.lazy(() => DataStatus46$inboundSchema),
-    vnetName: z.nullable(z.string()).optional(),
-    vnetResourceId: z.nullable(z.string()).optional(),
-    backend: z.literal("azureVnet"),
-  });
-
-export function dataAzureVnetFromJSON(
-  jsonString: string,
-): SafeParseResult<DataAzureVnet, SDKValidationError> {
-  return safeParse(
-    jsonString,
-    (x) => DataAzureVnet$inboundSchema.parse(JSON.parse(x)),
-    `Failed to parse 'DataAzureVnet' from JSON`,
-  );
-}
-
-/** @internal */
-export const Reason45$inboundSchema: z.ZodEnum<typeof Reason45> = z.enum(
-  Reason45,
-);
-
-/** @internal */
-export const CollectionIssueSeverity45$inboundSchema: z.ZodEnum<
-  typeof CollectionIssueSeverity45
-> = z.enum(CollectionIssueSeverity45);
-
-/** @internal */
-export const CollectionIssue45$inboundSchema: z.ZodType<
-  CollectionIssue45,
-  unknown
-> = z.object({
-  message: z.string(),
-  reason: Reason45$inboundSchema,
-  severity: CollectionIssueSeverity45$inboundSchema,
-  source: z.string(),
-});
-
-export function collectionIssue45FromJSON(
-  jsonString: string,
-): SafeParseResult<CollectionIssue45, SDKValidationError> {
-  return safeParse(
-    jsonString,
-    (x) => CollectionIssue45$inboundSchema.parse(JSON.parse(x)),
-    `Failed to parse 'CollectionIssue45' from JSON`,
-  );
-}
-
-/** @internal */
-export const Health45$inboundSchema: z.ZodEnum<typeof Health45> = z.enum(
-  Health45,
-);
-
-/** @internal */
-export const Lifecycle45$inboundSchema: z.ZodEnum<typeof Lifecycle45> = z.enum(
-  Lifecycle45,
-);
-
-/** @internal */
-export const DataStatus45$inboundSchema: z.ZodType<DataStatus45, unknown> = z
-  .object({
-    collectionIssues: z.array(z.lazy(() => CollectionIssue45$inboundSchema)),
-    health: Health45$inboundSchema,
-    lifecycle: Lifecycle45$inboundSchema,
-    message: z.nullable(z.string()).optional(),
-    partial: z.boolean(),
-    stale: z.boolean(),
-  });
-
-export function dataStatus45FromJSON(
-  jsonString: string,
-): SafeParseResult<DataStatus45, SDKValidationError> {
-  return safeParse(
-    jsonString,
-    (x) => DataStatus45$inboundSchema.parse(JSON.parse(x)),
-    `Failed to parse 'DataStatus45' from JSON`,
-  );
-}
-
-/** @internal */
-export const DataGcpVpc$inboundSchema: z.ZodType<DataGcpVpc, unknown> = z
-  .object({
-    cidrBlock: z.nullable(z.string()).optional(),
-    cloudNatName: z.nullable(z.string()).optional(),
-    firewallName: z.nullable(z.string()).optional(),
-    isByoVpc: z.boolean(),
-    networkName: z.nullable(z.string()).optional(),
-    networkSelfLink: z.nullable(z.string()).optional(),
-    region: z.nullable(z.string()).optional(),
-    routerName: z.nullable(z.string()).optional(),
-    status: z.lazy(() => DataStatus45$inboundSchema),
-    subnetworkName: z.nullable(z.string()).optional(),
-    subnetworkSelfLink: z.nullable(z.string()).optional(),
-    backend: z.literal("gcpVpc"),
-  });
-
-export function dataGcpVpcFromJSON(
-  jsonString: string,
-): SafeParseResult<DataGcpVpc, SDKValidationError> {
-  return safeParse(
-    jsonString,
-    (x) => DataGcpVpc$inboundSchema.parse(JSON.parse(x)),
-    `Failed to parse 'DataGcpVpc' from JSON`,
-  );
-}
-
-/** @internal */
-export const Reason44$inboundSchema: z.ZodEnum<typeof Reason44> = z.enum(
-  Reason44,
-);
-
-/** @internal */
-export const CollectionIssueSeverity44$inboundSchema: z.ZodEnum<
-  typeof CollectionIssueSeverity44
-> = z.enum(CollectionIssueSeverity44);
-
-/** @internal */
-export const CollectionIssue44$inboundSchema: z.ZodType<
-  CollectionIssue44,
-  unknown
-> = z.object({
-  message: z.string(),
-  reason: Reason44$inboundSchema,
-  severity: CollectionIssueSeverity44$inboundSchema,
-  source: z.string(),
-});
-
-export function collectionIssue44FromJSON(
-  jsonString: string,
-): SafeParseResult<CollectionIssue44, SDKValidationError> {
-  return safeParse(
-    jsonString,
-    (x) => CollectionIssue44$inboundSchema.parse(JSON.parse(x)),
-    `Failed to parse 'CollectionIssue44' from JSON`,
-  );
-}
-
-/** @internal */
-export const Health44$inboundSchema: z.ZodEnum<typeof Health44> = z.enum(
-  Health44,
-);
-
-/** @internal */
-export const Lifecycle44$inboundSchema: z.ZodEnum<typeof Lifecycle44> = z.enum(
-  Lifecycle44,
-);
-
-/** @internal */
-export const DataStatus44$inboundSchema: z.ZodType<DataStatus44, unknown> = z
-  .object({
-    collectionIssues: z.array(z.lazy(() => CollectionIssue44$inboundSchema)),
-    health: Health44$inboundSchema,
-    lifecycle: Lifecycle44$inboundSchema,
-    message: z.nullable(z.string()).optional(),
-    partial: z.boolean(),
-    stale: z.boolean(),
-  });
-
-export function dataStatus44FromJSON(
-  jsonString: string,
-): SafeParseResult<DataStatus44, SDKValidationError> {
-  return safeParse(
-    jsonString,
-    (x) => DataStatus44$inboundSchema.parse(JSON.parse(x)),
-    `Failed to parse 'DataStatus44' from JSON`,
-  );
-}
-
-/** @internal */
-export const DataAwsVpc$inboundSchema: z.ZodType<DataAwsVpc, unknown> = z
-  .object({
-    availabilityZones: z.array(z.string()),
-    cidrBlock: z.nullable(z.string()).optional(),
-    internetGatewayId: z.nullable(z.string()).optional(),
-    isByoVpc: z.boolean(),
-    natGatewayId: z.nullable(z.string()).optional(),
-    privateSubnetIds: z.array(z.string()),
-    publicSubnetIds: z.array(z.string()),
-    routeTableCount: z.int(),
-    securityGroupId: z.nullable(z.string()).optional(),
-    status: z.lazy(() => DataStatus44$inboundSchema),
-    vpcId: z.nullable(z.string()).optional(),
-    vpcState: z.nullable(z.string()).optional(),
-    backend: z.literal("awsVpc"),
-  });
-
-export function dataAwsVpcFromJSON(
-  jsonString: string,
-): SafeParseResult<DataAwsVpc, SDKValidationError> {
-  return safeParse(
-    jsonString,
-    (x) => DataAwsVpc$inboundSchema.parse(JSON.parse(x)),
-    `Failed to parse 'DataAwsVpc' from JSON`,
-  );
-}
-
-/** @internal */
-export const DataUnion11$inboundSchema: z.ZodType<DataUnion11, unknown> = z
-  .union([
-    z.lazy(() => DataAwsVpc$inboundSchema),
-    z.lazy(() => DataGcpVpc$inboundSchema),
-    z.lazy(() => DataAzureVnet$inboundSchema),
-  ]);
-
-export function dataUnion11FromJSON(
-  jsonString: string,
-): SafeParseResult<DataUnion11, SDKValidationError> {
-  return safeParse(
-    jsonString,
-    (x) => DataUnion11$inboundSchema.parse(JSON.parse(x)),
-    `Failed to parse 'DataUnion11' from JSON`,
-  );
-}
-
-/** @internal */
-export const DataNetwork$inboundSchema: z.ZodType<DataNetwork, unknown> = z
-  .object({
-    data: z.union([
-      z.lazy(() => DataAwsVpc$inboundSchema),
-      z.lazy(() => DataGcpVpc$inboundSchema),
-      z.lazy(() => DataAzureVnet$inboundSchema),
-    ]),
-    resourceType: z.literal("network"),
-  });
-
-export function dataNetworkFromJSON(
-  jsonString: string,
-): SafeParseResult<DataNetwork, SDKValidationError> {
-  return safeParse(
-    jsonString,
-    (x) => DataNetwork$inboundSchema.parse(JSON.parse(x)),
-    `Failed to parse 'DataNetwork' from JSON`,
-  );
-}
-
-/** @internal */
-export const Reason43$inboundSchema: z.ZodEnum<typeof Reason43> = z.enum(
-  Reason43,
-);
-
-/** @internal */
-export const CollectionIssueSeverity43$inboundSchema: z.ZodEnum<
-  typeof CollectionIssueSeverity43
-> = z.enum(CollectionIssueSeverity43);
-
-/** @internal */
-export const CollectionIssue43$inboundSchema: z.ZodType<
-  CollectionIssue43,
-  unknown
-> = z.object({
-  message: z.string(),
-  reason: Reason43$inboundSchema,
-  severity: CollectionIssueSeverity43$inboundSchema,
-  source: z.string(),
-});
-
-export function collectionIssue43FromJSON(
-  jsonString: string,
-): SafeParseResult<CollectionIssue43, SDKValidationError> {
-  return safeParse(
-    jsonString,
-    (x) => CollectionIssue43$inboundSchema.parse(JSON.parse(x)),
-    `Failed to parse 'CollectionIssue43' from JSON`,
-  );
-}
-
-/** @internal */
-export const Health43$inboundSchema: z.ZodEnum<typeof Health43> = z.enum(
-  Health43,
-);
-
-/** @internal */
-export const Lifecycle43$inboundSchema: z.ZodEnum<typeof Lifecycle43> = z.enum(
-  Lifecycle43,
-);
-
-/** @internal */
-export const DataStatus43$inboundSchema: z.ZodType<DataStatus43, unknown> = z
-  .object({
-    collectionIssues: z.array(z.lazy(() => CollectionIssue43$inboundSchema)),
-    health: Health43$inboundSchema,
-    lifecycle: Lifecycle43$inboundSchema,
-    message: z.nullable(z.string()).optional(),
-    partial: z.boolean(),
-    stale: z.boolean(),
-  });
-
-export function dataStatus43FromJSON(
-  jsonString: string,
-): SafeParseResult<DataStatus43, SDKValidationError> {
-  return safeParse(
-    jsonString,
-    (x) => DataStatus43$inboundSchema.parse(JSON.parse(x)),
-    `Failed to parse 'DataStatus43' from JSON`,
-  );
-}
-
-/** @internal */
-export const DataLocal10$inboundSchema: z.ZodType<DataLocal10, unknown> = z
-  .object({
-    configured: z.boolean(),
-    identity: z.string(),
-    status: z.lazy(() => DataStatus43$inboundSchema),
-    backend: z.literal("local"),
-  });
-
-export function dataLocal10FromJSON(
-  jsonString: string,
-): SafeParseResult<DataLocal10, SDKValidationError> {
-  return safeParse(
-    jsonString,
-    (x) => DataLocal10$inboundSchema.parse(JSON.parse(x)),
-    `Failed to parse 'DataLocal10' from JSON`,
-  );
-}
-
-/** @internal */
-export const Reason42$inboundSchema: z.ZodEnum<typeof Reason42> = z.enum(
-  Reason42,
-);
-
-/** @internal */
-export const CollectionIssueSeverity42$inboundSchema: z.ZodEnum<
-  typeof CollectionIssueSeverity42
-> = z.enum(CollectionIssueSeverity42);
-
-/** @internal */
-export const CollectionIssue42$inboundSchema: z.ZodType<
-  CollectionIssue42,
-  unknown
-> = z.object({
-  message: z.string(),
-  reason: Reason42$inboundSchema,
-  severity: CollectionIssueSeverity42$inboundSchema,
-  source: z.string(),
-});
-
-export function collectionIssue42FromJSON(
-  jsonString: string,
-): SafeParseResult<CollectionIssue42, SDKValidationError> {
-  return safeParse(
-    jsonString,
-    (x) => CollectionIssue42$inboundSchema.parse(JSON.parse(x)),
-    `Failed to parse 'CollectionIssue42' from JSON`,
-  );
-}
-
-/** @internal */
-export const Health42$inboundSchema: z.ZodEnum<typeof Health42> = z.enum(
-  Health42,
-);
-
-/** @internal */
-export const Lifecycle42$inboundSchema: z.ZodEnum<typeof Lifecycle42> = z.enum(
-  Lifecycle42,
-);
-
-/** @internal */
-export const DataStatus42$inboundSchema: z.ZodType<DataStatus42, unknown> = z
-  .object({
-    collectionIssues: z.array(z.lazy(() => CollectionIssue42$inboundSchema)),
-    health: Health42$inboundSchema,
-    lifecycle: Lifecycle42$inboundSchema,
-    message: z.nullable(z.string()).optional(),
-    partial: z.boolean(),
-    stale: z.boolean(),
-  });
-
-export function dataStatus42FromJSON(
-  jsonString: string,
-): SafeParseResult<DataStatus42, SDKValidationError> {
-  return safeParse(
-    jsonString,
-    (x) => DataStatus42$inboundSchema.parse(JSON.parse(x)),
-    `Failed to parse 'DataStatus42' from JSON`,
-  );
-}
-
-/** @internal */
-export const DataAzureManagedIdentity1$inboundSchema: z.ZodType<
-  DataAzureManagedIdentity1,
-  unknown
-> = z.object({
-  clientId: z.nullable(z.string()).optional(),
-  customRoleDefinitionCount: z.int(),
-  customRoleDefinitionIds: z.array(z.string()),
-  isolationScope: z.nullable(z.string()).optional(),
-  location: z.string(),
-  managedTagCount: z.int(),
-  name: z.string(),
-  principalId: z.nullable(z.string()).optional(),
-  resourceGroup: z.string(),
-  resourceId: z.string(),
-  roleAssignmentCount: z.int(),
-  roleAssignmentIds: z.array(z.string()),
-  stackPermissionsApplied: z.boolean(),
-  status: z.lazy(() => DataStatus42$inboundSchema),
-  tenantId: z.nullable(z.string()).optional(),
-  type: z.nullable(z.string()).optional(),
-  backend: z.literal("azureManagedIdentity"),
-});
-
-export function dataAzureManagedIdentity1FromJSON(
-  jsonString: string,
-): SafeParseResult<DataAzureManagedIdentity1, SDKValidationError> {
-  return safeParse(
-    jsonString,
-    (x) => DataAzureManagedIdentity1$inboundSchema.parse(JSON.parse(x)),
-    `Failed to parse 'DataAzureManagedIdentity1' from JSON`,
-  );
-}
-
-/** @internal */
-export const Reason41$inboundSchema: z.ZodEnum<typeof Reason41> = z.enum(
-  Reason41,
-);
-
-/** @internal */
-export const CollectionIssueSeverity41$inboundSchema: z.ZodEnum<
-  typeof CollectionIssueSeverity41
-> = z.enum(CollectionIssueSeverity41);
-
-/** @internal */
-export const CollectionIssue41$inboundSchema: z.ZodType<
-  CollectionIssue41,
-  unknown
-> = z.object({
-  message: z.string(),
-  reason: Reason41$inboundSchema,
-  severity: CollectionIssueSeverity41$inboundSchema,
-  source: z.string(),
-});
-
-export function collectionIssue41FromJSON(
-  jsonString: string,
-): SafeParseResult<CollectionIssue41, SDKValidationError> {
-  return safeParse(
-    jsonString,
-    (x) => CollectionIssue41$inboundSchema.parse(JSON.parse(x)),
-    `Failed to parse 'CollectionIssue41' from JSON`,
-  );
-}
-
-/** @internal */
-export const Health41$inboundSchema: z.ZodEnum<typeof Health41> = z.enum(
-  Health41,
-);
-
-/** @internal */
-export const Lifecycle41$inboundSchema: z.ZodEnum<typeof Lifecycle41> = z.enum(
-  Lifecycle41,
-);
-
-/** @internal */
-export const DataStatus41$inboundSchema: z.ZodType<DataStatus41, unknown> = z
-  .object({
-    collectionIssues: z.array(z.lazy(() => CollectionIssue41$inboundSchema)),
-    health: Health41$inboundSchema,
-    lifecycle: Lifecycle41$inboundSchema,
-    message: z.nullable(z.string()).optional(),
-    partial: z.boolean(),
-    stale: z.boolean(),
-  });
-
-export function dataStatus41FromJSON(
-  jsonString: string,
-): SafeParseResult<DataStatus41, SDKValidationError> {
-  return safeParse(
-    jsonString,
-    (x) => DataStatus41$inboundSchema.parse(JSON.parse(x)),
-    `Failed to parse 'DataStatus41' from JSON`,
-  );
-}
-
-/** @internal */
-export const DataGcpServiceAccount1$inboundSchema: z.ZodType<
-  DataGcpServiceAccount1,
-  unknown
-> = z.object({
-  description: z.nullable(z.string()).optional(),
-  disabled: z.nullable(z.boolean()).optional(),
-  displayName: z.nullable(z.string()).optional(),
-  email: z.string(),
-  etag: z.nullable(z.string()).optional(),
-  name: z.nullable(z.string()).optional(),
-  oauth2ClientId: z.nullable(z.string()).optional(),
-  projectBindingCount: z.int(),
-  projectId: z.nullable(z.string()).optional(),
-  projectRoles: z.array(z.string()),
-  serviceAccountBindingCount: z.int(),
-  serviceAccountRoles: z.array(z.string()),
-  status: z.lazy(() => DataStatus41$inboundSchema),
-  uniqueId: z.nullable(z.string()).optional(),
-  backend: z.literal("gcpServiceAccount"),
-});
-
-export function dataGcpServiceAccount1FromJSON(
-  jsonString: string,
-): SafeParseResult<DataGcpServiceAccount1, SDKValidationError> {
-  return safeParse(
-    jsonString,
-    (x) => DataGcpServiceAccount1$inboundSchema.parse(JSON.parse(x)),
-    `Failed to parse 'DataGcpServiceAccount1' from JSON`,
-  );
-}
-
-/** @internal */
-export const Reason40$inboundSchema: z.ZodEnum<typeof Reason40> = z.enum(
-  Reason40,
-);
-
-/** @internal */
-export const CollectionIssueSeverity40$inboundSchema: z.ZodEnum<
-  typeof CollectionIssueSeverity40
-> = z.enum(CollectionIssueSeverity40);
-
-/** @internal */
-export const CollectionIssue40$inboundSchema: z.ZodType<
-  CollectionIssue40,
-  unknown
-> = z.object({
-  message: z.string(),
-  reason: Reason40$inboundSchema,
-  severity: CollectionIssueSeverity40$inboundSchema,
-  source: z.string(),
-});
-
-export function collectionIssue40FromJSON(
-  jsonString: string,
-): SafeParseResult<CollectionIssue40, SDKValidationError> {
-  return safeParse(
-    jsonString,
-    (x) => CollectionIssue40$inboundSchema.parse(JSON.parse(x)),
-    `Failed to parse 'CollectionIssue40' from JSON`,
-  );
-}
-
-/** @internal */
-export const Health40$inboundSchema: z.ZodEnum<typeof Health40> = z.enum(
-  Health40,
-);
-
-/** @internal */
-export const Lifecycle40$inboundSchema: z.ZodEnum<typeof Lifecycle40> = z.enum(
-  Lifecycle40,
-);
-
-/** @internal */
-export const DataStatus40$inboundSchema: z.ZodType<DataStatus40, unknown> = z
-  .object({
-    collectionIssues: z.array(z.lazy(() => CollectionIssue40$inboundSchema)),
-    health: Health40$inboundSchema,
-    lifecycle: Lifecycle40$inboundSchema,
-    message: z.nullable(z.string()).optional(),
-    partial: z.boolean(),
-    stale: z.boolean(),
-  });
-
-export function dataStatus40FromJSON(
-  jsonString: string,
-): SafeParseResult<DataStatus40, SDKValidationError> {
-  return safeParse(
-    jsonString,
-    (x) => DataStatus40$inboundSchema.parse(JSON.parse(x)),
-    `Failed to parse 'DataStatus40' from JSON`,
-  );
-}
-
-/** @internal */
-export const DataAwsIamRole1$inboundSchema: z.ZodType<
-  DataAwsIamRole1,
-  unknown
-> = z.object({
-  assumeRolePolicyPresent: z.boolean(),
-  attachedPolicyCount: z.int(),
-  attachedPolicyNames: z.array(z.string()),
-  createDate: z.string(),
-  description: z.nullable(z.string()).optional(),
-  inlinePolicyCount: z.int(),
-  inlinePolicyNames: z.array(z.string()),
-  lastUsedDate: z.nullable(z.string()).optional(),
-  lastUsedRegion: z.nullable(z.string()).optional(),
-  managedTagCount: z.int(),
-  maxSessionDuration: z.nullable(z.int()).optional(),
-  path: z.string(),
-  permissionsBoundaryArn: z.nullable(z.string()).optional(),
-  permissionsBoundaryType: z.nullable(z.string()).optional(),
-  roleArn: z.string(),
-  roleId: z.string(),
-  roleName: z.string(),
-  stackPermissionsApplied: z.boolean(),
-  status: z.lazy(() => DataStatus40$inboundSchema),
-  tagCount: z.int(),
-  backend: z.literal("awsIamRole"),
-});
-
-export function dataAwsIamRole1FromJSON(
-  jsonString: string,
-): SafeParseResult<DataAwsIamRole1, SDKValidationError> {
-  return safeParse(
-    jsonString,
-    (x) => DataAwsIamRole1$inboundSchema.parse(JSON.parse(x)),
-    `Failed to parse 'DataAwsIamRole1' from JSON`,
-  );
-}
-
-/** @internal */
-export const DataUnion10$inboundSchema: z.ZodType<DataUnion10, unknown> = z
-  .union([
-    z.lazy(() => DataAwsIamRole1$inboundSchema),
-    z.lazy(() => DataGcpServiceAccount1$inboundSchema),
-    z.lazy(() => DataAzureManagedIdentity1$inboundSchema),
-    z.lazy(() => DataLocal10$inboundSchema),
-  ]);
-
-export function dataUnion10FromJSON(
-  jsonString: string,
-): SafeParseResult<DataUnion10, SDKValidationError> {
-  return safeParse(
-    jsonString,
-    (x) => DataUnion10$inboundSchema.parse(JSON.parse(x)),
-    `Failed to parse 'DataUnion10' from JSON`,
-  );
-}
-
-/** @internal */
-export const DataServiceAccount$inboundSchema: z.ZodType<
-  DataServiceAccount,
-  unknown
-> = z.object({
-  data: z.union([
-    z.lazy(() => DataAwsIamRole1$inboundSchema),
-    z.lazy(() => DataGcpServiceAccount1$inboundSchema),
-    z.lazy(() => DataAzureManagedIdentity1$inboundSchema),
-    z.lazy(() => DataLocal10$inboundSchema),
-  ]),
-  resourceType: z.literal("service-account"),
-});
-
-export function dataServiceAccountFromJSON(
-  jsonString: string,
-): SafeParseResult<DataServiceAccount, SDKValidationError> {
-  return safeParse(
-    jsonString,
-    (x) => DataServiceAccount$inboundSchema.parse(JSON.parse(x)),
-    `Failed to parse 'DataServiceAccount' from JSON`,
-  );
-}
-
-/** @internal */
-export const Reason39$inboundSchema: z.ZodEnum<typeof Reason39> = z.enum(
-  Reason39,
-);
-
-/** @internal */
-export const CollectionIssueSeverity39$inboundSchema: z.ZodEnum<
-  typeof CollectionIssueSeverity39
-> = z.enum(CollectionIssueSeverity39);
-
-/** @internal */
-export const CollectionIssue39$inboundSchema: z.ZodType<
-  CollectionIssue39,
-  unknown
-> = z.object({
-  message: z.string(),
-  reason: Reason39$inboundSchema,
-  severity: CollectionIssueSeverity39$inboundSchema,
-  source: z.string(),
-});
-
-export function collectionIssue39FromJSON(
-  jsonString: string,
-): SafeParseResult<CollectionIssue39, SDKValidationError> {
-  return safeParse(
-    jsonString,
-    (x) => CollectionIssue39$inboundSchema.parse(JSON.parse(x)),
-    `Failed to parse 'CollectionIssue39' from JSON`,
-  );
-}
-
-/** @internal */
-export const Health39$inboundSchema: z.ZodEnum<typeof Health39> = z.enum(
-  Health39,
-);
-
-/** @internal */
-export const Lifecycle39$inboundSchema: z.ZodEnum<typeof Lifecycle39> = z.enum(
-  Lifecycle39,
-);
-
-/** @internal */
-export const DataStatus39$inboundSchema: z.ZodType<DataStatus39, unknown> = z
-  .object({
-    collectionIssues: z.array(z.lazy(() => CollectionIssue39$inboundSchema)),
-    health: Health39$inboundSchema,
-    lifecycle: Lifecycle39$inboundSchema,
-    message: z.nullable(z.string()).optional(),
-    partial: z.boolean(),
-    stale: z.boolean(),
-  });
-
-export function dataStatus39FromJSON(
-  jsonString: string,
-): SafeParseResult<DataStatus39, SDKValidationError> {
-  return safeParse(
-    jsonString,
-    (x) => DataStatus39$inboundSchema.parse(JSON.parse(x)),
-    `Failed to parse 'DataStatus39' from JSON`,
-  );
-}
-
-/** @internal */
-export const DataLocal9$inboundSchema: z.ZodType<DataLocal9, unknown> = z
-  .object({
-    isDirectory: z.nullable(z.boolean()).optional(),
-    modifiedAt: z.nullable(
-      z.iso.datetime({ offset: true }).transform(v => new Date(v)),
-    ).optional(),
-    path: z.string(),
-    pathExists: z.boolean(),
-    readonly: z.nullable(z.boolean()).optional(),
-    secretMetadataListed: z.boolean(),
-    status: z.lazy(() => DataStatus39$inboundSchema),
-    backend: z.literal("local"),
-  });
-
-export function dataLocal9FromJSON(
-  jsonString: string,
-): SafeParseResult<DataLocal9, SDKValidationError> {
-  return safeParse(
-    jsonString,
-    (x) => DataLocal9$inboundSchema.parse(JSON.parse(x)),
-    `Failed to parse 'DataLocal9' from JSON`,
-  );
-}
-
-/** @internal */
-export const Reason38$inboundSchema: z.ZodEnum<typeof Reason38> = z.enum(
-  Reason38,
-);
-
-/** @internal */
-export const CollectionIssueSeverity38$inboundSchema: z.ZodEnum<
-  typeof CollectionIssueSeverity38
-> = z.enum(CollectionIssueSeverity38);
-
-/** @internal */
-export const CollectionIssue38$inboundSchema: z.ZodType<
-  CollectionIssue38,
-  unknown
-> = z.object({
-  message: z.string(),
-  reason: Reason38$inboundSchema,
-  severity: CollectionIssueSeverity38$inboundSchema,
-  source: z.string(),
-});
-
-export function collectionIssue38FromJSON(
-  jsonString: string,
-): SafeParseResult<CollectionIssue38, SDKValidationError> {
-  return safeParse(
-    jsonString,
-    (x) => CollectionIssue38$inboundSchema.parse(JSON.parse(x)),
-    `Failed to parse 'CollectionIssue38' from JSON`,
-  );
-}
-
-/** @internal */
-export const Health38$inboundSchema: z.ZodEnum<typeof Health38> = z.enum(
-  Health38,
-);
-
-/** @internal */
-export const Lifecycle38$inboundSchema: z.ZodEnum<typeof Lifecycle38> = z.enum(
-  Lifecycle38,
-);
-
-/** @internal */
-export const DataStatus38$inboundSchema: z.ZodType<DataStatus38, unknown> = z
-  .object({
-    collectionIssues: z.array(z.lazy(() => CollectionIssue38$inboundSchema)),
-    health: Health38$inboundSchema,
-    lifecycle: Lifecycle38$inboundSchema,
-    message: z.nullable(z.string()).optional(),
-    partial: z.boolean(),
-    stale: z.boolean(),
-  });
-
-export function dataStatus38FromJSON(
-  jsonString: string,
-): SafeParseResult<DataStatus38, SDKValidationError> {
-  return safeParse(
-    jsonString,
-    (x) => DataStatus38$inboundSchema.parse(JSON.parse(x)),
-    `Failed to parse 'DataStatus38' from JSON`,
-  );
-}
-
-/** @internal */
-export const DataKubernetesSecret$inboundSchema: z.ZodType<
-  DataKubernetesSecret,
-  unknown
-> = z.object({
-  namespace: z.string(),
-  prefix: z.string(),
-  secretMetadataListed: z.boolean(),
-  status: z.lazy(() => DataStatus38$inboundSchema),
-  backend: z.literal("kubernetesSecret"),
-});
-
-export function dataKubernetesSecretFromJSON(
-  jsonString: string,
-): SafeParseResult<DataKubernetesSecret, SDKValidationError> {
-  return safeParse(
-    jsonString,
-    (x) => DataKubernetesSecret$inboundSchema.parse(JSON.parse(x)),
-    `Failed to parse 'DataKubernetesSecret' from JSON`,
-  );
-}
-
-/** @internal */
-export const Reason37$inboundSchema: z.ZodEnum<typeof Reason37> = z.enum(
-  Reason37,
-);
-
-/** @internal */
-export const CollectionIssueSeverity37$inboundSchema: z.ZodEnum<
-  typeof CollectionIssueSeverity37
-> = z.enum(CollectionIssueSeverity37);
-
-/** @internal */
-export const CollectionIssue37$inboundSchema: z.ZodType<
-  CollectionIssue37,
-  unknown
-> = z.object({
-  message: z.string(),
-  reason: Reason37$inboundSchema,
-  severity: CollectionIssueSeverity37$inboundSchema,
-  source: z.string(),
-});
-
-export function collectionIssue37FromJSON(
-  jsonString: string,
-): SafeParseResult<CollectionIssue37, SDKValidationError> {
-  return safeParse(
-    jsonString,
-    (x) => CollectionIssue37$inboundSchema.parse(JSON.parse(x)),
-    `Failed to parse 'CollectionIssue37' from JSON`,
-  );
-}
-
-/** @internal */
-export const Health37$inboundSchema: z.ZodEnum<typeof Health37> = z.enum(
-  Health37,
-);
-
-/** @internal */
-export const Lifecycle37$inboundSchema: z.ZodEnum<typeof Lifecycle37> = z.enum(
-  Lifecycle37,
-);
-
-/** @internal */
-export const DataStatus37$inboundSchema: z.ZodType<DataStatus37, unknown> = z
-  .object({
-    collectionIssues: z.array(z.lazy(() => CollectionIssue37$inboundSchema)),
-    health: Health37$inboundSchema,
-    lifecycle: Lifecycle37$inboundSchema,
-    message: z.nullable(z.string()).optional(),
-    partial: z.boolean(),
-    stale: z.boolean(),
-  });
-
-export function dataStatus37FromJSON(
-  jsonString: string,
-): SafeParseResult<DataStatus37, SDKValidationError> {
-  return safeParse(
-    jsonString,
-    (x) => DataStatus37$inboundSchema.parse(JSON.parse(x)),
-    `Failed to parse 'DataStatus37' from JSON`,
-  );
-}
-
-/** @internal */
-export const DataAzureKeyVault$inboundSchema: z.ZodType<
-  DataAzureKeyVault,
-  unknown
-> = z.object({
-  accessPolicyCount: z.int(),
-  location: z.nullable(z.string()).optional(),
-  name: z.string(),
-  privateEndpointConnectionCount: z.int(),
-  provisioningState: z.nullable(z.string()).optional(),
-  publicNetworkAccess: z.string(),
-  purgeProtectionEnabled: z.nullable(z.boolean()).optional(),
-  rbacAuthorizationEnabled: z.boolean(),
-  resourceGroup: z.nullable(z.string()).optional(),
-  resourceId: z.nullable(z.string()).optional(),
-  secretMetadataListed: z.boolean(),
-  skuFamily: z.nullable(z.string()).optional(),
-  skuName: z.nullable(z.string()).optional(),
-  softDeleteEnabled: z.boolean(),
-  softDeleteRetentionDays: z.int(),
-  status: z.lazy(() => DataStatus37$inboundSchema),
-  vaultUri: z.nullable(z.string()).optional(),
-  backend: z.literal("azureKeyVault"),
-});
-
-export function dataAzureKeyVaultFromJSON(
-  jsonString: string,
-): SafeParseResult<DataAzureKeyVault, SDKValidationError> {
-  return safeParse(
-    jsonString,
-    (x) => DataAzureKeyVault$inboundSchema.parse(JSON.parse(x)),
-    `Failed to parse 'DataAzureKeyVault' from JSON`,
-  );
-}
-
-/** @internal */
-export const Reason36$inboundSchema: z.ZodEnum<typeof Reason36> = z.enum(
-  Reason36,
-);
-
-/** @internal */
-export const CollectionIssueSeverity36$inboundSchema: z.ZodEnum<
-  typeof CollectionIssueSeverity36
-> = z.enum(CollectionIssueSeverity36);
-
-/** @internal */
-export const CollectionIssue36$inboundSchema: z.ZodType<
-  CollectionIssue36,
-  unknown
-> = z.object({
-  message: z.string(),
-  reason: Reason36$inboundSchema,
-  severity: CollectionIssueSeverity36$inboundSchema,
-  source: z.string(),
-});
-
-export function collectionIssue36FromJSON(
-  jsonString: string,
-): SafeParseResult<CollectionIssue36, SDKValidationError> {
-  return safeParse(
-    jsonString,
-    (x) => CollectionIssue36$inboundSchema.parse(JSON.parse(x)),
-    `Failed to parse 'CollectionIssue36' from JSON`,
-  );
-}
-
-/** @internal */
-export const Health36$inboundSchema: z.ZodEnum<typeof Health36> = z.enum(
-  Health36,
-);
-
-/** @internal */
-export const Lifecycle36$inboundSchema: z.ZodEnum<typeof Lifecycle36> = z.enum(
-  Lifecycle36,
-);
-
-/** @internal */
-export const DataStatus36$inboundSchema: z.ZodType<DataStatus36, unknown> = z
-  .object({
-    collectionIssues: z.array(z.lazy(() => CollectionIssue36$inboundSchema)),
-    health: Health36$inboundSchema,
-    lifecycle: Lifecycle36$inboundSchema,
-    message: z.nullable(z.string()).optional(),
-    partial: z.boolean(),
-    stale: z.boolean(),
-  });
-
-export function dataStatus36FromJSON(
-  jsonString: string,
-): SafeParseResult<DataStatus36, SDKValidationError> {
-  return safeParse(
-    jsonString,
-    (x) => DataStatus36$inboundSchema.parse(JSON.parse(x)),
-    `Failed to parse 'DataStatus36' from JSON`,
-  );
-}
-
-/** @internal */
-export const DataGcpSecretManager$inboundSchema: z.ZodType<
-  DataGcpSecretManager,
-  unknown
-> = z.object({
-  location: z.string(),
-  prefix: z.string(),
-  projectId: z.string(),
-  secretMetadataListed: z.boolean(),
-  status: z.lazy(() => DataStatus36$inboundSchema),
-  backend: z.literal("gcpSecretManager"),
-});
-
-export function dataGcpSecretManagerFromJSON(
-  jsonString: string,
-): SafeParseResult<DataGcpSecretManager, SDKValidationError> {
-  return safeParse(
-    jsonString,
-    (x) => DataGcpSecretManager$inboundSchema.parse(JSON.parse(x)),
-    `Failed to parse 'DataGcpSecretManager' from JSON`,
-  );
-}
-
-/** @internal */
-export const Reason35$inboundSchema: z.ZodEnum<typeof Reason35> = z.enum(
-  Reason35,
-);
-
-/** @internal */
-export const CollectionIssueSeverity35$inboundSchema: z.ZodEnum<
-  typeof CollectionIssueSeverity35
-> = z.enum(CollectionIssueSeverity35);
-
-/** @internal */
-export const CollectionIssue35$inboundSchema: z.ZodType<
-  CollectionIssue35,
-  unknown
-> = z.object({
-  message: z.string(),
-  reason: Reason35$inboundSchema,
-  severity: CollectionIssueSeverity35$inboundSchema,
-  source: z.string(),
-});
-
-export function collectionIssue35FromJSON(
-  jsonString: string,
-): SafeParseResult<CollectionIssue35, SDKValidationError> {
-  return safeParse(
-    jsonString,
-    (x) => CollectionIssue35$inboundSchema.parse(JSON.parse(x)),
-    `Failed to parse 'CollectionIssue35' from JSON`,
-  );
-}
-
-/** @internal */
-export const Health35$inboundSchema: z.ZodEnum<typeof Health35> = z.enum(
-  Health35,
-);
-
-/** @internal */
-export const Lifecycle35$inboundSchema: z.ZodEnum<typeof Lifecycle35> = z.enum(
-  Lifecycle35,
-);
-
-/** @internal */
-export const DataStatus35$inboundSchema: z.ZodType<DataStatus35, unknown> = z
-  .object({
-    collectionIssues: z.array(z.lazy(() => CollectionIssue35$inboundSchema)),
-    health: Health35$inboundSchema,
-    lifecycle: Lifecycle35$inboundSchema,
-    message: z.nullable(z.string()).optional(),
-    partial: z.boolean(),
-    stale: z.boolean(),
-  });
-
-export function dataStatus35FromJSON(
-  jsonString: string,
-): SafeParseResult<DataStatus35, SDKValidationError> {
-  return safeParse(
-    jsonString,
-    (x) => DataStatus35$inboundSchema.parse(JSON.parse(x)),
-    `Failed to parse 'DataStatus35' from JSON`,
-  );
-}
-
-/** @internal */
-export const DataAwsParameterStore$inboundSchema: z.ZodType<
-  DataAwsParameterStore,
-  unknown
-> = z.object({
-  accountId: z.string(),
-  hasMoreParameters: z.nullable(z.boolean()).optional(),
-  latestModifiedAt: z.nullable(
-    z.iso.datetime({ offset: true }).transform(v => new Date(v)),
-  ).optional(),
-  parameterMetadataSampled: z.boolean(),
-  prefix: z.string(),
-  region: z.string(),
-  sampledAdvancedTierCount: z.nullable(z.int()).optional(),
-  sampledKmsKeyMetadataPresentCount: z.nullable(z.int()).optional(),
-  sampledParameterCount: z.nullable(z.int()).optional(),
-  sampledSecureStringCount: z.nullable(z.int()).optional(),
-  sampledStringCount: z.nullable(z.int()).optional(),
-  sampledStringListCount: z.nullable(z.int()).optional(),
-  status: z.lazy(() => DataStatus35$inboundSchema),
-  backend: z.literal("awsParameterStore"),
-});
-
-export function dataAwsParameterStoreFromJSON(
-  jsonString: string,
-): SafeParseResult<DataAwsParameterStore, SDKValidationError> {
-  return safeParse(
-    jsonString,
-    (x) => DataAwsParameterStore$inboundSchema.parse(JSON.parse(x)),
-    `Failed to parse 'DataAwsParameterStore' from JSON`,
-  );
-}
-
-/** @internal */
-export const DataUnion9$inboundSchema: z.ZodType<DataUnion9, unknown> = z.union(
-  [
-    z.lazy(() => DataAwsParameterStore$inboundSchema),
-    z.lazy(() => DataGcpSecretManager$inboundSchema),
-    z.lazy(() => DataAzureKeyVault$inboundSchema),
-    z.lazy(() => DataKubernetesSecret$inboundSchema),
-    z.lazy(() => DataLocal9$inboundSchema),
-  ],
-);
-
-export function dataUnion9FromJSON(
-  jsonString: string,
-): SafeParseResult<DataUnion9, SDKValidationError> {
-  return safeParse(
-    jsonString,
-    (x) => DataUnion9$inboundSchema.parse(JSON.parse(x)),
-    `Failed to parse 'DataUnion9' from JSON`,
-  );
-}
-
-/** @internal */
-export const DataVault$inboundSchema: z.ZodType<DataVault, unknown> = z.object({
-  data: z.union([
-    z.lazy(() => DataAwsParameterStore$inboundSchema),
-    z.lazy(() => DataGcpSecretManager$inboundSchema),
-    z.lazy(() => DataAzureKeyVault$inboundSchema),
-    z.lazy(() => DataKubernetesSecret$inboundSchema),
-    z.lazy(() => DataLocal9$inboundSchema),
-  ]),
-  resourceType: z.literal("vault"),
-});
-
-export function dataVaultFromJSON(
-  jsonString: string,
-): SafeParseResult<DataVault, SDKValidationError> {
-  return safeParse(
-    jsonString,
-    (x) => DataVault$inboundSchema.parse(JSON.parse(x)),
-    `Failed to parse 'DataVault' from JSON`,
-  );
-}
-
-/** @internal */
-export const Reason34$inboundSchema: z.ZodEnum<typeof Reason34> = z.enum(
-  Reason34,
-);
-
-/** @internal */
-export const CollectionIssueSeverity34$inboundSchema: z.ZodEnum<
-  typeof CollectionIssueSeverity34
-> = z.enum(CollectionIssueSeverity34);
-
-/** @internal */
-export const CollectionIssue34$inboundSchema: z.ZodType<
-  CollectionIssue34,
-  unknown
-> = z.object({
-  message: z.string(),
-  reason: Reason34$inboundSchema,
-  severity: CollectionIssueSeverity34$inboundSchema,
-  source: z.string(),
-});
-
-export function collectionIssue34FromJSON(
-  jsonString: string,
-): SafeParseResult<CollectionIssue34, SDKValidationError> {
-  return safeParse(
-    jsonString,
-    (x) => CollectionIssue34$inboundSchema.parse(JSON.parse(x)),
-    `Failed to parse 'CollectionIssue34' from JSON`,
-  );
-}
-
-/** @internal */
-export const Health34$inboundSchema: z.ZodEnum<typeof Health34> = z.enum(
-  Health34,
-);
-
-/** @internal */
-export const Lifecycle34$inboundSchema: z.ZodEnum<typeof Lifecycle34> = z.enum(
-  Lifecycle34,
-);
-
-/** @internal */
-export const DataStatus34$inboundSchema: z.ZodType<DataStatus34, unknown> = z
-  .object({
-    collectionIssues: z.array(z.lazy(() => CollectionIssue34$inboundSchema)),
-    health: Health34$inboundSchema,
-    lifecycle: Lifecycle34$inboundSchema,
-    message: z.nullable(z.string()).optional(),
-    partial: z.boolean(),
-    stale: z.boolean(),
-  });
-
-export function dataStatus34FromJSON(
-  jsonString: string,
-): SafeParseResult<DataStatus34, SDKValidationError> {
-  return safeParse(
-    jsonString,
-    (x) => DataStatus34$inboundSchema.parse(JSON.parse(x)),
-    `Failed to parse 'DataStatus34' from JSON`,
-  );
-}
-
-/** @internal */
-export const DataLocal8$inboundSchema: z.ZodType<DataLocal8, unknown> = z
-  .object({
-    name: z.string(),
-    port: z.nullable(z.int()).optional(),
-    processRunning: z.boolean(),
-    status: z.lazy(() => DataStatus34$inboundSchema),
-    version: z.string(),
-    backend: z.literal("local"),
-  });
-
-export function dataLocal8FromJSON(
-  jsonString: string,
-): SafeParseResult<DataLocal8, SDKValidationError> {
-  return safeParse(
-    jsonString,
-    (x) => DataLocal8$inboundSchema.parse(JSON.parse(x)),
-    `Failed to parse 'DataLocal8' from JSON`,
-  );
-}
-
-/** @internal */
-export const Reason33$inboundSchema: z.ZodEnum<typeof Reason33> = z.enum(
-  Reason33,
-);
-
-/** @internal */
-export const CollectionIssueSeverity33$inboundSchema: z.ZodEnum<
-  typeof CollectionIssueSeverity33
-> = z.enum(CollectionIssueSeverity33);
-
-/** @internal */
-export const CollectionIssue33$inboundSchema: z.ZodType<
-  CollectionIssue33,
-  unknown
-> = z.object({
-  message: z.string(),
-  reason: Reason33$inboundSchema,
-  severity: CollectionIssueSeverity33$inboundSchema,
-  source: z.string(),
-});
-
-export function collectionIssue33FromJSON(
-  jsonString: string,
-): SafeParseResult<CollectionIssue33, SDKValidationError> {
-  return safeParse(
-    jsonString,
-    (x) => CollectionIssue33$inboundSchema.parse(JSON.parse(x)),
-    `Failed to parse 'CollectionIssue33' from JSON`,
-  );
-}
-
-/** @internal */
-export const Health33$inboundSchema: z.ZodEnum<typeof Health33> = z.enum(
-  Health33,
-);
-
-/** @internal */
-export const Lifecycle33$inboundSchema: z.ZodEnum<typeof Lifecycle33> = z.enum(
-  Lifecycle33,
-);
-
-/** @internal */
-export const DataStatus33$inboundSchema: z.ZodType<DataStatus33, unknown> = z
-  .object({
-    collectionIssues: z.array(z.lazy(() => CollectionIssue33$inboundSchema)),
-    health: Health33$inboundSchema,
-    lifecycle: Lifecycle33$inboundSchema,
-    message: z.nullable(z.string()).optional(),
-    partial: z.boolean(),
-    stale: z.boolean(),
-  });
-
-export function dataStatus33FromJSON(
-  jsonString: string,
-): SafeParseResult<DataStatus33, SDKValidationError> {
-  return safeParse(
-    jsonString,
-    (x) => DataStatus33$inboundSchema.parse(JSON.parse(x)),
-    `Failed to parse 'DataStatus33' from JSON`,
-  );
-}
-
-/** @internal */
-export const DataFlexibleServer$inboundSchema: z.ZodType<
-  DataFlexibleServer,
-  unknown
-> = z.object({
-  serverName: z.string(),
-  state: z.nullable(z.string()).optional(),
-  status: z.lazy(() => DataStatus33$inboundSchema),
-  version: z.nullable(z.string()).optional(),
-  backend: z.literal("flexibleServer"),
-});
-
-export function dataFlexibleServerFromJSON(
-  jsonString: string,
-): SafeParseResult<DataFlexibleServer, SDKValidationError> {
-  return safeParse(
-    jsonString,
-    (x) => DataFlexibleServer$inboundSchema.parse(JSON.parse(x)),
-    `Failed to parse 'DataFlexibleServer' from JSON`,
-  );
-}
-
-/** @internal */
-export const Reason32$inboundSchema: z.ZodEnum<typeof Reason32> = z.enum(
-  Reason32,
-);
-
-/** @internal */
-export const CollectionIssueSeverity32$inboundSchema: z.ZodEnum<
-  typeof CollectionIssueSeverity32
-> = z.enum(CollectionIssueSeverity32);
-
-/** @internal */
-export const CollectionIssue32$inboundSchema: z.ZodType<
-  CollectionIssue32,
-  unknown
-> = z.object({
-  message: z.string(),
-  reason: Reason32$inboundSchema,
-  severity: CollectionIssueSeverity32$inboundSchema,
-  source: z.string(),
-});
-
-export function collectionIssue32FromJSON(
-  jsonString: string,
-): SafeParseResult<CollectionIssue32, SDKValidationError> {
-  return safeParse(
-    jsonString,
-    (x) => CollectionIssue32$inboundSchema.parse(JSON.parse(x)),
-    `Failed to parse 'CollectionIssue32' from JSON`,
-  );
-}
-
-/** @internal */
-export const Health32$inboundSchema: z.ZodEnum<typeof Health32> = z.enum(
-  Health32,
-);
-
-/** @internal */
-export const Lifecycle32$inboundSchema: z.ZodEnum<typeof Lifecycle32> = z.enum(
-  Lifecycle32,
-);
-
-/** @internal */
-export const DataStatus32$inboundSchema: z.ZodType<DataStatus32, unknown> = z
-  .object({
-    collectionIssues: z.array(z.lazy(() => CollectionIssue32$inboundSchema)),
-    health: Health32$inboundSchema,
-    lifecycle: Lifecycle32$inboundSchema,
-    message: z.nullable(z.string()).optional(),
-    partial: z.boolean(),
-    stale: z.boolean(),
-  });
-
-export function dataStatus32FromJSON(
-  jsonString: string,
-): SafeParseResult<DataStatus32, SDKValidationError> {
-  return safeParse(
-    jsonString,
-    (x) => DataStatus32$inboundSchema.parse(JSON.parse(x)),
-    `Failed to parse 'DataStatus32' from JSON`,
-  );
-}
-
-/** @internal */
-export const DataCloudSQL$inboundSchema: z.ZodType<DataCloudSQL, unknown> = z
-  .object({
-    databaseVersion: z.nullable(z.string()).optional(),
-    instanceName: z.string(),
-    state: z.nullable(z.string()).optional(),
-    status: z.lazy(() => DataStatus32$inboundSchema),
-    backend: z.literal("cloudSql"),
-  });
-
-export function dataCloudSQLFromJSON(
-  jsonString: string,
-): SafeParseResult<DataCloudSQL, SDKValidationError> {
-  return safeParse(
-    jsonString,
-    (x) => DataCloudSQL$inboundSchema.parse(JSON.parse(x)),
-    `Failed to parse 'DataCloudSQL' from JSON`,
-  );
-}
-
-/** @internal */
-export const Reason31$inboundSchema: z.ZodEnum<typeof Reason31> = z.enum(
-  Reason31,
-);
-
-/** @internal */
-export const CollectionIssueSeverity31$inboundSchema: z.ZodEnum<
-  typeof CollectionIssueSeverity31
-> = z.enum(CollectionIssueSeverity31);
-
-/** @internal */
-export const CollectionIssue31$inboundSchema: z.ZodType<
-  CollectionIssue31,
-  unknown
-> = z.object({
-  message: z.string(),
-  reason: Reason31$inboundSchema,
-  severity: CollectionIssueSeverity31$inboundSchema,
-  source: z.string(),
-});
-
-export function collectionIssue31FromJSON(
-  jsonString: string,
-): SafeParseResult<CollectionIssue31, SDKValidationError> {
-  return safeParse(
-    jsonString,
-    (x) => CollectionIssue31$inboundSchema.parse(JSON.parse(x)),
-    `Failed to parse 'CollectionIssue31' from JSON`,
-  );
-}
-
-/** @internal */
-export const Health31$inboundSchema: z.ZodEnum<typeof Health31> = z.enum(
-  Health31,
-);
-
-/** @internal */
-export const Lifecycle31$inboundSchema: z.ZodEnum<typeof Lifecycle31> = z.enum(
-  Lifecycle31,
-);
-
-/** @internal */
-export const DataStatus31$inboundSchema: z.ZodType<DataStatus31, unknown> = z
-  .object({
-    collectionIssues: z.array(z.lazy(() => CollectionIssue31$inboundSchema)),
-    health: Health31$inboundSchema,
-    lifecycle: Lifecycle31$inboundSchema,
-    message: z.nullable(z.string()).optional(),
-    partial: z.boolean(),
-    stale: z.boolean(),
-  });
-
-export function dataStatus31FromJSON(
-  jsonString: string,
-): SafeParseResult<DataStatus31, SDKValidationError> {
-  return safeParse(
-    jsonString,
-    (x) => DataStatus31$inboundSchema.parse(JSON.parse(x)),
-    `Failed to parse 'DataStatus31' from JSON`,
-  );
-}
-
-/** @internal */
-export const DataAurora$inboundSchema: z.ZodType<DataAurora, unknown> = z
-  .object({
-    clusterIdentifier: z.string(),
-    endpoint: z.nullable(z.string()).optional(),
-    engineVersion: z.nullable(z.string()).optional(),
-    neverPauses: z.boolean(),
-    serverlessCapacity: z.nullable(z.number()).optional(),
-    status: z.lazy(() => DataStatus31$inboundSchema),
-    backend: z.literal("aurora"),
-  });
-
-export function dataAuroraFromJSON(
-  jsonString: string,
-): SafeParseResult<DataAurora, SDKValidationError> {
-  return safeParse(
-    jsonString,
-    (x) => DataAurora$inboundSchema.parse(JSON.parse(x)),
-    `Failed to parse 'DataAurora' from JSON`,
-  );
-}
-
-/** @internal */
-export const DataUnion8$inboundSchema: z.ZodType<DataUnion8, unknown> = z.union(
-  [
-    z.lazy(() => DataAurora$inboundSchema),
-    z.lazy(() => DataCloudSQL$inboundSchema),
-    z.lazy(() => DataFlexibleServer$inboundSchema),
-    z.lazy(() => DataLocal8$inboundSchema),
-  ],
-);
-
-export function dataUnion8FromJSON(
-  jsonString: string,
-): SafeParseResult<DataUnion8, SDKValidationError> {
-  return safeParse(
-    jsonString,
-    (x) => DataUnion8$inboundSchema.parse(JSON.parse(x)),
-    `Failed to parse 'DataUnion8' from JSON`,
-  );
-}
-
-/** @internal */
-export const DataPostgres$inboundSchema: z.ZodType<DataPostgres, unknown> = z
-  .object({
-    data: z.union([
-      z.lazy(() => DataAurora$inboundSchema),
-      z.lazy(() => DataCloudSQL$inboundSchema),
-      z.lazy(() => DataFlexibleServer$inboundSchema),
-      z.lazy(() => DataLocal8$inboundSchema),
-    ]),
-    resourceType: z.literal("postgres"),
-  });
-
-export function dataPostgresFromJSON(
-  jsonString: string,
-): SafeParseResult<DataPostgres, SDKValidationError> {
-  return safeParse(
-    jsonString,
-    (x) => DataPostgres$inboundSchema.parse(JSON.parse(x)),
-    `Failed to parse 'DataPostgres' from JSON`,
-  );
-}
-
-/** @internal */
-export const Reason30$inboundSchema: z.ZodEnum<typeof Reason30> = z.enum(
-  Reason30,
-);
-
-/** @internal */
-export const CollectionIssueSeverity30$inboundSchema: z.ZodEnum<
-  typeof CollectionIssueSeverity30
-> = z.enum(CollectionIssueSeverity30);
-
-/** @internal */
-export const CollectionIssue30$inboundSchema: z.ZodType<
-  CollectionIssue30,
-  unknown
-> = z.object({
-  message: z.string(),
-  reason: Reason30$inboundSchema,
-  severity: CollectionIssueSeverity30$inboundSchema,
-  source: z.string(),
-});
-
-export function collectionIssue30FromJSON(
-  jsonString: string,
-): SafeParseResult<CollectionIssue30, SDKValidationError> {
-  return safeParse(
-    jsonString,
-    (x) => CollectionIssue30$inboundSchema.parse(JSON.parse(x)),
-    `Failed to parse 'CollectionIssue30' from JSON`,
-  );
-}
-
-/** @internal */
-export const Health30$inboundSchema: z.ZodEnum<typeof Health30> = z.enum(
-  Health30,
-);
-
-/** @internal */
-export const Lifecycle30$inboundSchema: z.ZodEnum<typeof Lifecycle30> = z.enum(
-  Lifecycle30,
-);
-
-/** @internal */
-export const DataStatus30$inboundSchema: z.ZodType<DataStatus30, unknown> = z
-  .object({
-    collectionIssues: z.array(z.lazy(() => CollectionIssue30$inboundSchema)),
-    health: Health30$inboundSchema,
-    lifecycle: Lifecycle30$inboundSchema,
-    message: z.nullable(z.string()).optional(),
-    partial: z.boolean(),
-    stale: z.boolean(),
-  });
-
-export function dataStatus30FromJSON(
-  jsonString: string,
-): SafeParseResult<DataStatus30, SDKValidationError> {
-  return safeParse(
-    jsonString,
-    (x) => DataStatus30$inboundSchema.parse(JSON.parse(x)),
-    `Failed to parse 'DataStatus30' from JSON`,
-  );
-}
-
-/** @internal */
-export const DataLocal7$inboundSchema: z.ZodType<DataLocal7, unknown> = z
-  .object({
-    cloudMetadataSupported: z.boolean(),
-    isDirectory: z.nullable(z.boolean()).optional(),
-    name: z.string(),
-    path: z.string(),
-    pathExists: z.boolean(),
-    status: z.lazy(() => DataStatus30$inboundSchema),
-    backend: z.literal("local"),
-  });
-
-export function dataLocal7FromJSON(
-  jsonString: string,
-): SafeParseResult<DataLocal7, SDKValidationError> {
-  return safeParse(
-    jsonString,
-    (x) => DataLocal7$inboundSchema.parse(JSON.parse(x)),
-    `Failed to parse 'DataLocal7' from JSON`,
-  );
-}
-
-/** @internal */
-export const Reason29$inboundSchema: z.ZodEnum<typeof Reason29> = z.enum(
-  Reason29,
-);
-
-/** @internal */
-export const CollectionIssueSeverity29$inboundSchema: z.ZodEnum<
-  typeof CollectionIssueSeverity29
-> = z.enum(CollectionIssueSeverity29);
-
-/** @internal */
-export const CollectionIssue29$inboundSchema: z.ZodType<
-  CollectionIssue29,
-  unknown
-> = z.object({
-  message: z.string(),
-  reason: Reason29$inboundSchema,
-  severity: CollectionIssueSeverity29$inboundSchema,
-  source: z.string(),
-});
-
-export function collectionIssue29FromJSON(
-  jsonString: string,
-): SafeParseResult<CollectionIssue29, SDKValidationError> {
-  return safeParse(
-    jsonString,
-    (x) => CollectionIssue29$inboundSchema.parse(JSON.parse(x)),
-    `Failed to parse 'CollectionIssue29' from JSON`,
-  );
-}
-
-/** @internal */
-export const Health29$inboundSchema: z.ZodEnum<typeof Health29> = z.enum(
-  Health29,
-);
-
-/** @internal */
-export const Lifecycle29$inboundSchema: z.ZodEnum<typeof Lifecycle29> = z.enum(
-  Lifecycle29,
-);
-
-/** @internal */
-export const DataStatus29$inboundSchema: z.ZodType<DataStatus29, unknown> = z
-  .object({
-    collectionIssues: z.array(z.lazy(() => CollectionIssue29$inboundSchema)),
-    health: Health29$inboundSchema,
-    lifecycle: Lifecycle29$inboundSchema,
-    message: z.nullable(z.string()).optional(),
-    partial: z.boolean(),
-    stale: z.boolean(),
-  });
-
-export function dataStatus29FromJSON(
-  jsonString: string,
-): SafeParseResult<DataStatus29, SDKValidationError> {
-  return safeParse(
-    jsonString,
-    (x) => DataStatus29$inboundSchema.parse(JSON.parse(x)),
-    `Failed to parse 'DataStatus29' from JSON`,
-  );
-}
-
-/** @internal */
-export const DataAzureTable$inboundSchema: z.ZodType<DataAzureTable, unknown> =
-  z.object({
-    endpoint: z.nullable(z.string()).optional(),
-    resourceGroup: z.nullable(z.string()).optional(),
-    signedIdentifierCount: z.nullable(z.int()).optional(),
-    status: z.lazy(() => DataStatus29$inboundSchema),
-    storageAccountKind: z.nullable(z.string()).optional(),
-    storageAccountLocation: z.nullable(z.string()).optional(),
-    storageAccountName: z.string(),
-    storageAccountPrimaryStatus: z.nullable(z.string()).optional(),
-    storageAccountProvisioningState: z.nullable(z.string()).optional(),
-    storageAccountResourceId: z.nullable(z.string()).optional(),
-    tableExists: z.boolean(),
-    tableName: z.string(),
-    backend: z.literal("azureTable"),
-  });
-
-export function dataAzureTableFromJSON(
-  jsonString: string,
-): SafeParseResult<DataAzureTable, SDKValidationError> {
-  return safeParse(
-    jsonString,
-    (x) => DataAzureTable$inboundSchema.parse(JSON.parse(x)),
-    `Failed to parse 'DataAzureTable' from JSON`,
-  );
-}
-
-/** @internal */
-export const Reason28$inboundSchema: z.ZodEnum<typeof Reason28> = z.enum(
-  Reason28,
-);
-
-/** @internal */
-export const CollectionIssueSeverity28$inboundSchema: z.ZodEnum<
-  typeof CollectionIssueSeverity28
-> = z.enum(CollectionIssueSeverity28);
-
-/** @internal */
-export const CollectionIssue28$inboundSchema: z.ZodType<
-  CollectionIssue28,
-  unknown
-> = z.object({
-  message: z.string(),
-  reason: Reason28$inboundSchema,
-  severity: CollectionIssueSeverity28$inboundSchema,
-  source: z.string(),
-});
-
-export function collectionIssue28FromJSON(
-  jsonString: string,
-): SafeParseResult<CollectionIssue28, SDKValidationError> {
-  return safeParse(
-    jsonString,
-    (x) => CollectionIssue28$inboundSchema.parse(JSON.parse(x)),
-    `Failed to parse 'CollectionIssue28' from JSON`,
-  );
-}
-
-/** @internal */
-export const Health28$inboundSchema: z.ZodEnum<typeof Health28> = z.enum(
-  Health28,
-);
-
-/** @internal */
-export const Lifecycle28$inboundSchema: z.ZodEnum<typeof Lifecycle28> = z.enum(
-  Lifecycle28,
-);
-
-/** @internal */
-export const DataStatus28$inboundSchema: z.ZodType<DataStatus28, unknown> = z
-  .object({
-    collectionIssues: z.array(z.lazy(() => CollectionIssue28$inboundSchema)),
-    health: Health28$inboundSchema,
-    lifecycle: Lifecycle28$inboundSchema,
-    message: z.nullable(z.string()).optional(),
-    partial: z.boolean(),
-    stale: z.boolean(),
-  });
-
-export function dataStatus28FromJSON(
-  jsonString: string,
-): SafeParseResult<DataStatus28, SDKValidationError> {
-  return safeParse(
-    jsonString,
-    (x) => DataStatus28$inboundSchema.parse(JSON.parse(x)),
-    `Failed to parse 'DataStatus28' from JSON`,
-  );
-}
-
-/** @internal */
-export const DataGcpFirestore$inboundSchema: z.ZodType<
-  DataGcpFirestore,
-  unknown
-> = z.object({
-  appEngineIntegrationMode: z.nullable(z.string()).optional(),
-  cmekEnabled: z.boolean(),
-  concurrencyMode: z.nullable(z.string()).optional(),
-  createTime: z.nullable(z.string()).optional(),
-  databaseEdition: z.nullable(z.string()).optional(),
-  databaseName: z.string(),
-  databaseType: z.nullable(z.string()).optional(),
-  deleteProtectionState: z.nullable(z.string()).optional(),
-  deleteTime: z.nullable(z.string()).optional(),
-  earliestVersionTime: z.nullable(z.string()).optional(),
-  endpoint: z.nullable(z.string()).optional(),
-  locationId: z.nullable(z.string()).optional(),
-  pointInTimeRecoveryEnablement: z.nullable(z.string()).optional(),
-  projectId: z.nullable(z.string()).optional(),
-  sourceInfoPresent: z.boolean(),
-  status: z.lazy(() => DataStatus28$inboundSchema),
-  updateTime: z.nullable(z.string()).optional(),
-  versionRetentionPeriod: z.nullable(z.string()).optional(),
-  backend: z.literal("gcpFirestore"),
-});
-
-export function dataGcpFirestoreFromJSON(
-  jsonString: string,
-): SafeParseResult<DataGcpFirestore, SDKValidationError> {
-  return safeParse(
-    jsonString,
-    (x) => DataGcpFirestore$inboundSchema.parse(JSON.parse(x)),
-    `Failed to parse 'DataGcpFirestore' from JSON`,
-  );
-}
-
-/** @internal */
-export const KeySchema$inboundSchema: z.ZodType<KeySchema, unknown> = z.object({
-  attributeName: z.string(),
-  keyType: z.string(),
-});
-
-export function keySchemaFromJSON(
-  jsonString: string,
-): SafeParseResult<KeySchema, SDKValidationError> {
-  return safeParse(
-    jsonString,
-    (x) => KeySchema$inboundSchema.parse(JSON.parse(x)),
-    `Failed to parse 'KeySchema' from JSON`,
-  );
-}
-
-/** @internal */
-export const Reason27$inboundSchema: z.ZodEnum<typeof Reason27> = z.enum(
-  Reason27,
-);
-
-/** @internal */
-export const CollectionIssueSeverity27$inboundSchema: z.ZodEnum<
-  typeof CollectionIssueSeverity27
-> = z.enum(CollectionIssueSeverity27);
-
-/** @internal */
-export const CollectionIssue27$inboundSchema: z.ZodType<
-  CollectionIssue27,
-  unknown
-> = z.object({
-  message: z.string(),
-  reason: Reason27$inboundSchema,
-  severity: CollectionIssueSeverity27$inboundSchema,
-  source: z.string(),
-});
-
-export function collectionIssue27FromJSON(
-  jsonString: string,
-): SafeParseResult<CollectionIssue27, SDKValidationError> {
-  return safeParse(
-    jsonString,
-    (x) => CollectionIssue27$inboundSchema.parse(JSON.parse(x)),
-    `Failed to parse 'CollectionIssue27' from JSON`,
-  );
-}
-
-/** @internal */
-export const Health27$inboundSchema: z.ZodEnum<typeof Health27> = z.enum(
-  Health27,
-);
-
-/** @internal */
-export const Lifecycle27$inboundSchema: z.ZodEnum<typeof Lifecycle27> = z.enum(
-  Lifecycle27,
-);
-
-/** @internal */
-export const DataStatus27$inboundSchema: z.ZodType<DataStatus27, unknown> = z
-  .object({
-    collectionIssues: z.array(z.lazy(() => CollectionIssue27$inboundSchema)),
-    health: Health27$inboundSchema,
-    lifecycle: Lifecycle27$inboundSchema,
-    message: z.nullable(z.string()).optional(),
-    partial: z.boolean(),
-    stale: z.boolean(),
-  });
-
-export function dataStatus27FromJSON(
-  jsonString: string,
-): SafeParseResult<DataStatus27, SDKValidationError> {
-  return safeParse(
-    jsonString,
-    (x) => DataStatus27$inboundSchema.parse(JSON.parse(x)),
-    `Failed to parse 'DataStatus27' from JSON`,
-  );
-}
-
-/** @internal */
-export const DataAwsDynamoDb$inboundSchema: z.ZodType<
-  DataAwsDynamoDb,
-  unknown
-> = z.object({
-  billingMode: z.nullable(z.string()).optional(),
-  deletionProtectionEnabled: z.nullable(z.boolean()).optional(),
-  globalSecondaryIndexCount: z.nullable(z.int()).optional(),
-  itemCount: z.nullable(z.int()).optional(),
-  keySchema: z.array(z.lazy(() => KeySchema$inboundSchema)),
-  localSecondaryIndexCount: z.nullable(z.int()).optional(),
-  name: z.string(),
-  region: z.nullable(z.string()).optional(),
-  replicaCount: z.nullable(z.int()).optional(),
-  restoreInProgress: z.nullable(z.boolean()).optional(),
-  sseStatus: z.nullable(z.string()).optional(),
-  sseType: z.nullable(z.string()).optional(),
-  status: z.lazy(() => DataStatus27$inboundSchema),
-  streamEnabled: z.nullable(z.boolean()).optional(),
-  streamViewType: z.nullable(z.string()).optional(),
-  tableArn: z.nullable(z.string()).optional(),
-  tableClass: z.nullable(z.string()).optional(),
-  tableSizeBytes: z.nullable(z.int()).optional(),
-  tableStatus: z.nullable(z.string()).optional(),
-  ttlAttributeName: z.nullable(z.string()).optional(),
-  ttlStatus: z.nullable(z.string()).optional(),
-  backend: z.literal("awsDynamoDb"),
-});
-
-export function dataAwsDynamoDbFromJSON(
-  jsonString: string,
-): SafeParseResult<DataAwsDynamoDb, SDKValidationError> {
-  return safeParse(
-    jsonString,
-    (x) => DataAwsDynamoDb$inboundSchema.parse(JSON.parse(x)),
-    `Failed to parse 'DataAwsDynamoDb' from JSON`,
-  );
-}
-
-/** @internal */
-export const DataUnion7$inboundSchema: z.ZodType<DataUnion7, unknown> = z.union(
-  [
-    z.lazy(() => DataAwsDynamoDb$inboundSchema),
-    z.lazy(() => DataGcpFirestore$inboundSchema),
-    z.lazy(() => DataAzureTable$inboundSchema),
-    z.lazy(() => DataLocal7$inboundSchema),
-  ],
-);
-
-export function dataUnion7FromJSON(
-  jsonString: string,
-): SafeParseResult<DataUnion7, SDKValidationError> {
-  return safeParse(
-    jsonString,
-    (x) => DataUnion7$inboundSchema.parse(JSON.parse(x)),
-    `Failed to parse 'DataUnion7' from JSON`,
-  );
-}
-
-/** @internal */
-export const DataKv$inboundSchema: z.ZodType<DataKv, unknown> = z.object({
-  data: z.union([
-    z.lazy(() => DataAwsDynamoDb$inboundSchema),
-    z.lazy(() => DataGcpFirestore$inboundSchema),
-    z.lazy(() => DataAzureTable$inboundSchema),
-    z.lazy(() => DataLocal7$inboundSchema),
-  ]),
-  resourceType: z.literal("kv"),
-});
-
-export function dataKvFromJSON(
-  jsonString: string,
-): SafeParseResult<DataKv, SDKValidationError> {
-  return safeParse(
-    jsonString,
-    (x) => DataKv$inboundSchema.parse(JSON.parse(x)),
-    `Failed to parse 'DataKv' from JSON`,
-  );
-}
-
-/** @internal */
-export const Reason26$inboundSchema: z.ZodEnum<typeof Reason26> = z.enum(
-  Reason26,
-);
-
-/** @internal */
-export const CollectionIssueSeverity26$inboundSchema: z.ZodEnum<
-  typeof CollectionIssueSeverity26
-> = z.enum(CollectionIssueSeverity26);
-
-/** @internal */
-export const CollectionIssue26$inboundSchema: z.ZodType<
-  CollectionIssue26,
-  unknown
-> = z.object({
-  message: z.string(),
-  reason: Reason26$inboundSchema,
-  severity: CollectionIssueSeverity26$inboundSchema,
-  source: z.string(),
-});
-
-export function collectionIssue26FromJSON(
-  jsonString: string,
-): SafeParseResult<CollectionIssue26, SDKValidationError> {
-  return safeParse(
-    jsonString,
-    (x) => CollectionIssue26$inboundSchema.parse(JSON.parse(x)),
-    `Failed to parse 'CollectionIssue26' from JSON`,
-  );
-}
-
-/** @internal */
-export const Health26$inboundSchema: z.ZodEnum<typeof Health26> = z.enum(
-  Health26,
-);
-
-/** @internal */
-export const Lifecycle26$inboundSchema: z.ZodEnum<typeof Lifecycle26> = z.enum(
-  Lifecycle26,
-);
-
-/** @internal */
-export const DataStatus26$inboundSchema: z.ZodType<DataStatus26, unknown> = z
-  .object({
-    collectionIssues: z.array(z.lazy(() => CollectionIssue26$inboundSchema)),
-    health: Health26$inboundSchema,
-    lifecycle: Lifecycle26$inboundSchema,
-    message: z.nullable(z.string()).optional(),
-    partial: z.boolean(),
-    stale: z.boolean(),
-  });
-
-export function dataStatus26FromJSON(
-  jsonString: string,
-): SafeParseResult<DataStatus26, SDKValidationError> {
-  return safeParse(
-    jsonString,
-    (x) => DataStatus26$inboundSchema.parse(JSON.parse(x)),
-    `Failed to parse 'DataStatus26' from JSON`,
-  );
-}
-
-/** @internal */
-export const DataLocal6$inboundSchema: z.ZodType<DataLocal6, unknown> = z
-  .object({
-    name: z.string(),
-    path: z.nullable(z.string()).optional(),
-    serviceStatus: z.nullable(z.string()).optional(),
-    status: z.lazy(() => DataStatus26$inboundSchema),
-    backend: z.literal("local"),
-  });
-
-export function dataLocal6FromJSON(
-  jsonString: string,
-): SafeParseResult<DataLocal6, SDKValidationError> {
-  return safeParse(
-    jsonString,
-    (x) => DataLocal6$inboundSchema.parse(JSON.parse(x)),
-    `Failed to parse 'DataLocal6' from JSON`,
-  );
-}
-
-/** @internal */
-export const Reason25$inboundSchema: z.ZodEnum<typeof Reason25> = z.enum(
-  Reason25,
-);
-
-/** @internal */
-export const CollectionIssueSeverity25$inboundSchema: z.ZodEnum<
-  typeof CollectionIssueSeverity25
-> = z.enum(CollectionIssueSeverity25);
-
-/** @internal */
-export const CollectionIssue25$inboundSchema: z.ZodType<
-  CollectionIssue25,
-  unknown
-> = z.object({
-  message: z.string(),
-  reason: Reason25$inboundSchema,
-  severity: CollectionIssueSeverity25$inboundSchema,
-  source: z.string(),
-});
-
-export function collectionIssue25FromJSON(
-  jsonString: string,
-): SafeParseResult<CollectionIssue25, SDKValidationError> {
-  return safeParse(
-    jsonString,
-    (x) => CollectionIssue25$inboundSchema.parse(JSON.parse(x)),
-    `Failed to parse 'CollectionIssue25' from JSON`,
-  );
-}
-
-/** @internal */
-export const Health25$inboundSchema: z.ZodEnum<typeof Health25> = z.enum(
-  Health25,
-);
-
-/** @internal */
-export const Lifecycle25$inboundSchema: z.ZodEnum<typeof Lifecycle25> = z.enum(
-  Lifecycle25,
-);
-
-/** @internal */
-export const DataStatus25$inboundSchema: z.ZodType<DataStatus25, unknown> = z
-  .object({
-    collectionIssues: z.array(z.lazy(() => CollectionIssue25$inboundSchema)),
-    health: Health25$inboundSchema,
-    lifecycle: Lifecycle25$inboundSchema,
-    message: z.nullable(z.string()).optional(),
-    partial: z.boolean(),
-    stale: z.boolean(),
-  });
-
-export function dataStatus25FromJSON(
-  jsonString: string,
-): SafeParseResult<DataStatus25, SDKValidationError> {
-  return safeParse(
-    jsonString,
-    (x) => DataStatus25$inboundSchema.parse(JSON.parse(x)),
-    `Failed to parse 'DataStatus25' from JSON`,
-  );
-}
-
-/** @internal */
-export const DataAzureServiceBus$inboundSchema: z.ZodType<
-  DataAzureServiceBus,
-  unknown
-> = z.object({
-  accessedAt: z.nullable(z.string()).optional(),
-  activeMessageCount: z.nullable(z.int()).optional(),
-  autoDeleteOnIdle: z.nullable(z.string()).optional(),
-  createdAt: z.nullable(z.string()).optional(),
-  deadLetterMessageCount: z.nullable(z.int()).optional(),
-  deadLetteringOnMessageExpiration: z.nullable(z.boolean()).optional(),
-  defaultMessageTimeToLive: z.nullable(z.string()).optional(),
-  duplicateDetectionHistoryTimeWindow: z.nullable(z.string()).optional(),
-  enableBatchedOperations: z.nullable(z.boolean()).optional(),
-  enableExpress: z.nullable(z.boolean()).optional(),
-  enablePartitioning: z.nullable(z.boolean()).optional(),
-  endpoint: z.nullable(z.string()).optional(),
-  forwardDeadLetteredMessagesTo: z.nullable(z.string()).optional(),
-  forwardTo: z.nullable(z.string()).optional(),
-  lockDuration: z.nullable(z.string()).optional(),
-  maxDeliveryCount: z.nullable(z.int()).optional(),
-  maxMessageSizeInKilobytes: z.nullable(z.int()).optional(),
-  maxSizeInMegabytes: z.nullable(z.int()).optional(),
-  messageCount: z.nullable(z.int()).optional(),
-  name: z.string(),
-  namespaceName: z.string(),
-  queueStatus: z.nullable(z.string()).optional(),
-  requiresDuplicateDetection: z.nullable(z.boolean()).optional(),
-  requiresSession: z.nullable(z.boolean()).optional(),
-  resourceGroup: z.nullable(z.string()).optional(),
-  resourceId: z.nullable(z.string()).optional(),
-  scheduledMessageCount: z.nullable(z.int()).optional(),
-  sizeInBytes: z.nullable(z.int()).optional(),
-  status: z.lazy(() => DataStatus25$inboundSchema),
-  transferDeadLetterMessageCount: z.nullable(z.int()).optional(),
-  transferMessageCount: z.nullable(z.int()).optional(),
-  updatedAt: z.nullable(z.string()).optional(),
-  backend: z.literal("azureServiceBus"),
-});
-
-export function dataAzureServiceBusFromJSON(
-  jsonString: string,
-): SafeParseResult<DataAzureServiceBus, SDKValidationError> {
-  return safeParse(
-    jsonString,
-    (x) => DataAzureServiceBus$inboundSchema.parse(JSON.parse(x)),
-    `Failed to parse 'DataAzureServiceBus' from JSON`,
-  );
-}
-
-/** @internal */
-export const Reason24$inboundSchema: z.ZodEnum<typeof Reason24> = z.enum(
-  Reason24,
-);
-
-/** @internal */
-export const CollectionIssueSeverity24$inboundSchema: z.ZodEnum<
-  typeof CollectionIssueSeverity24
-> = z.enum(CollectionIssueSeverity24);
-
-/** @internal */
-export const CollectionIssue24$inboundSchema: z.ZodType<
-  CollectionIssue24,
-  unknown
-> = z.object({
-  message: z.string(),
-  reason: Reason24$inboundSchema,
-  severity: CollectionIssueSeverity24$inboundSchema,
-  source: z.string(),
-});
-
-export function collectionIssue24FromJSON(
-  jsonString: string,
-): SafeParseResult<CollectionIssue24, SDKValidationError> {
-  return safeParse(
-    jsonString,
-    (x) => CollectionIssue24$inboundSchema.parse(JSON.parse(x)),
-    `Failed to parse 'CollectionIssue24' from JSON`,
-  );
-}
-
-/** @internal */
-export const Health24$inboundSchema: z.ZodEnum<typeof Health24> = z.enum(
-  Health24,
-);
-
-/** @internal */
-export const Lifecycle24$inboundSchema: z.ZodEnum<typeof Lifecycle24> = z.enum(
-  Lifecycle24,
-);
-
-/** @internal */
-export const DataStatus24$inboundSchema: z.ZodType<DataStatus24, unknown> = z
-  .object({
-    collectionIssues: z.array(z.lazy(() => CollectionIssue24$inboundSchema)),
-    health: Health24$inboundSchema,
-    lifecycle: Lifecycle24$inboundSchema,
-    message: z.nullable(z.string()).optional(),
-    partial: z.boolean(),
-    stale: z.boolean(),
-  });
-
-export function dataStatus24FromJSON(
-  jsonString: string,
-): SafeParseResult<DataStatus24, SDKValidationError> {
-  return safeParse(
-    jsonString,
-    (x) => DataStatus24$inboundSchema.parse(JSON.parse(x)),
-    `Failed to parse 'DataStatus24' from JSON`,
-  );
-}
-
-/** @internal */
-export const DataGcpPubSub$inboundSchema: z.ZodType<DataGcpPubSub, unknown> = z
-  .object({
-    endpoint: z.nullable(z.string()).optional(),
-    kmsKeyName: z.nullable(z.string()).optional(),
-    messageStorageAllowedPersistenceRegions: z.array(z.string()),
-    messageStorageEnforceInTransit: z.nullable(z.boolean()).optional(),
-    projectId: z.nullable(z.string()).optional(),
-    schemaEncoding: z.nullable(z.string()).optional(),
-    schemaFirstRevisionId: z.nullable(z.string()).optional(),
-    schemaLastRevisionId: z.nullable(z.string()).optional(),
-    schemaName: z.nullable(z.string()).optional(),
-    status: z.lazy(() => DataStatus24$inboundSchema),
-    subscriptionAckDeadlineSeconds: z.nullable(z.int()).optional(),
-    subscriptionDeadLetterMaxDeliveryAttempts: z.nullable(z.int()).optional(),
-    subscriptionDeadLetterTopic: z.nullable(z.string()).optional(),
-    subscriptionDetached: z.nullable(z.boolean()).optional(),
-    subscriptionEnableMessageOrdering: z.nullable(z.boolean()).optional(),
-    subscriptionFilter: z.nullable(z.string()).optional(),
-    subscriptionFullName: z.nullable(z.string()).optional(),
-    subscriptionLabels: z.record(z.string(), z.string()),
-    subscriptionMessageRetentionDuration: z.nullable(z.string()).optional(),
-    subscriptionName: z.nullable(z.string()).optional(),
-    subscriptionPushAttributes: z.record(z.string(), z.string()),
-    subscriptionPushConfigPresent: z.nullable(z.boolean()).optional(),
-    subscriptionPushEndpoint: z.nullable(z.string()).optional(),
-    subscriptionPushNoWrapperWriteMetadata: z.nullable(z.boolean()).optional(),
-    subscriptionPushOidcAudience: z.nullable(z.string()).optional(),
-    subscriptionPushOidcServiceAccountEmail: z.nullable(z.string()).optional(),
-    subscriptionPushPubsubWrapperWriteMetadata: z.nullable(z.boolean())
-      .optional(),
-    subscriptionRetainAckedMessages: z.nullable(z.boolean()).optional(),
-    subscriptionState: z.nullable(z.string()).optional(),
-    topicFullName: z.nullable(z.string()).optional(),
-    topicLabels: z.record(z.string(), z.string()),
-    topicMessageRetentionDuration: z.nullable(z.string()).optional(),
-    topicName: z.string(),
-    topicState: z.nullable(z.string()).optional(),
-    backend: z.literal("gcpPubSub"),
-  });
-
-export function dataGcpPubSubFromJSON(
-  jsonString: string,
-): SafeParseResult<DataGcpPubSub, SDKValidationError> {
-  return safeParse(
-    jsonString,
-    (x) => DataGcpPubSub$inboundSchema.parse(JSON.parse(x)),
-    `Failed to parse 'DataGcpPubSub' from JSON`,
-  );
-}
-
-/** @internal */
-export const Reason23$inboundSchema: z.ZodEnum<typeof Reason23> = z.enum(
-  Reason23,
-);
-
-/** @internal */
-export const CollectionIssueSeverity23$inboundSchema: z.ZodEnum<
-  typeof CollectionIssueSeverity23
-> = z.enum(CollectionIssueSeverity23);
-
-/** @internal */
-export const CollectionIssue23$inboundSchema: z.ZodType<
-  CollectionIssue23,
-  unknown
-> = z.object({
-  message: z.string(),
-  reason: Reason23$inboundSchema,
-  severity: CollectionIssueSeverity23$inboundSchema,
-  source: z.string(),
-});
-
-export function collectionIssue23FromJSON(
-  jsonString: string,
-): SafeParseResult<CollectionIssue23, SDKValidationError> {
-  return safeParse(
-    jsonString,
-    (x) => CollectionIssue23$inboundSchema.parse(JSON.parse(x)),
-    `Failed to parse 'CollectionIssue23' from JSON`,
-  );
-}
-
-/** @internal */
-export const Health23$inboundSchema: z.ZodEnum<typeof Health23> = z.enum(
-  Health23,
-);
-
-/** @internal */
-export const Lifecycle23$inboundSchema: z.ZodEnum<typeof Lifecycle23> = z.enum(
-  Lifecycle23,
-);
-
-/** @internal */
-export const DataStatus23$inboundSchema: z.ZodType<DataStatus23, unknown> = z
-  .object({
-    collectionIssues: z.array(z.lazy(() => CollectionIssue23$inboundSchema)),
-    health: Health23$inboundSchema,
-    lifecycle: Lifecycle23$inboundSchema,
-    message: z.nullable(z.string()).optional(),
-    partial: z.boolean(),
-    stale: z.boolean(),
-  });
-
-export function dataStatus23FromJSON(
-  jsonString: string,
-): SafeParseResult<DataStatus23, SDKValidationError> {
-  return safeParse(
-    jsonString,
-    (x) => DataStatus23$inboundSchema.parse(JSON.parse(x)),
-    `Failed to parse 'DataStatus23' from JSON`,
-  );
-}
-
-/** @internal */
-export const DataAwsSqs$inboundSchema: z.ZodType<DataAwsSqs, unknown> = z
-  .object({
-    approximateCounts: z.boolean(),
-    approximateDelayedMessages: z.nullable(z.int()).optional(),
-    approximateInFlightMessages: z.nullable(z.int()).optional(),
-    approximateVisibleMessages: z.nullable(z.int()).optional(),
-    contentBasedDeduplication: z.nullable(z.boolean()).optional(),
-    deduplicationScope: z.nullable(z.string()).optional(),
-    delaySeconds: z.nullable(z.int()).optional(),
-    fifoQueue: z.nullable(z.boolean()).optional(),
-    fifoThroughputLimit: z.nullable(z.string()).optional(),
-    kmsDataKeyReusePeriodSeconds: z.nullable(z.int()).optional(),
-    kmsMasterKeyId: z.nullable(z.string()).optional(),
-    maximumMessageSize: z.nullable(z.int()).optional(),
-    messageRetentionPeriodSeconds: z.nullable(z.int()).optional(),
-    name: z.string(),
-    queueArn: z.nullable(z.string()).optional(),
-    queueUrl: z.nullable(z.string()).optional(),
-    receiveMessageWaitTimeSeconds: z.nullable(z.int()).optional(),
-    redriveAllowPolicy: z.nullable(z.string()).optional(),
-    redrivePolicy: z.nullable(z.string()).optional(),
-    region: z.nullable(z.string()).optional(),
-    sqsManagedSseEnabled: z.nullable(z.boolean()).optional(),
-    sseEnabled: z.nullable(z.boolean()).optional(),
-    status: z.lazy(() => DataStatus23$inboundSchema),
-    visibilityTimeoutSeconds: z.nullable(z.int()).optional(),
-    backend: z.literal("awsSqs"),
-  });
-
-export function dataAwsSqsFromJSON(
-  jsonString: string,
-): SafeParseResult<DataAwsSqs, SDKValidationError> {
-  return safeParse(
-    jsonString,
-    (x) => DataAwsSqs$inboundSchema.parse(JSON.parse(x)),
-    `Failed to parse 'DataAwsSqs' from JSON`,
-  );
-}
-
-/** @internal */
-export const DataUnion6$inboundSchema: z.ZodType<DataUnion6, unknown> = z.union(
-  [
-    z.lazy(() => DataAwsSqs$inboundSchema),
-    z.lazy(() => DataGcpPubSub$inboundSchema),
-    z.lazy(() => DataAzureServiceBus$inboundSchema),
-    z.lazy(() => DataLocal6$inboundSchema),
-  ],
-);
-
-export function dataUnion6FromJSON(
-  jsonString: string,
-): SafeParseResult<DataUnion6, SDKValidationError> {
-  return safeParse(
-    jsonString,
-    (x) => DataUnion6$inboundSchema.parse(JSON.parse(x)),
-    `Failed to parse 'DataUnion6' from JSON`,
-  );
-}
-
-/** @internal */
-export const DataQueue$inboundSchema: z.ZodType<DataQueue, unknown> = z.object({
-  data: z.union([
-    z.lazy(() => DataAwsSqs$inboundSchema),
-    z.lazy(() => DataGcpPubSub$inboundSchema),
-    z.lazy(() => DataAzureServiceBus$inboundSchema),
-    z.lazy(() => DataLocal6$inboundSchema),
-  ]),
-  resourceType: z.literal("queue"),
-});
-
-export function dataQueueFromJSON(
-  jsonString: string,
-): SafeParseResult<DataQueue, SDKValidationError> {
-  return safeParse(
-    jsonString,
-    (x) => DataQueue$inboundSchema.parse(JSON.parse(x)),
-    `Failed to parse 'DataQueue' from JSON`,
-  );
-}
-
-/** @internal */
-export const CpuUnit10$inboundSchema: z.ZodEnum<typeof CpuUnit10> = z.enum(
-  CpuUnit10,
-);
-
-/** @internal */
-export const Cpu10$inboundSchema: z.ZodType<Cpu10, unknown> = z.object({
-  unit: CpuUnit10$inboundSchema,
+export const Memory11$inboundSchema: z.ZodType<Memory11, unknown> = z.object({
+  unit: MemoryUnit11$inboundSchema,
   value: z.number(),
 });
 
-export function cpu10FromJSON(
+export function memory11FromJSON(
   jsonString: string,
-): SafeParseResult<Cpu10, SDKValidationError> {
+): SafeParseResult<Memory11, SDKValidationError> {
   return safeParse(
     jsonString,
-    (x) => Cpu10$inboundSchema.parse(JSON.parse(x)),
-    `Failed to parse 'Cpu10' from JSON`,
+    (x) => Memory11$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'Memory11' from JSON`,
   );
 }
 
 /** @internal */
-export const CpuUnion10$inboundSchema: z.ZodType<CpuUnion10, unknown> = z.union(
-  [z.lazy(() => Cpu10$inboundSchema), z.any()],
-);
+export const MemoryUnion11$inboundSchema: z.ZodType<MemoryUnion11, unknown> = z
+  .union([z.lazy(() => Memory11$inboundSchema), z.any()]);
 
-export function cpuUnion10FromJSON(
+export function memoryUnion11FromJSON(
   jsonString: string,
-): SafeParseResult<CpuUnion10, SDKValidationError> {
+): SafeParseResult<MemoryUnion11, SDKValidationError> {
   return safeParse(
     jsonString,
-    (x) => CpuUnion10$inboundSchema.parse(JSON.parse(x)),
-    `Failed to parse 'CpuUnion10' from JSON`,
-  );
-}
-
-/** @internal */
-export const InvolvedObject8$inboundSchema: z.ZodType<
-  InvolvedObject8,
-  unknown
-> = z.object({
-  apiVersion: z.nullable(z.string()).optional(),
-  fieldPath: z.nullable(z.string()).optional(),
-  kind: z.nullable(z.string()).optional(),
-  name: z.nullable(z.string()).optional(),
-  namespace: z.nullable(z.string()).optional(),
-  resourceVersion: z.nullable(z.string()).optional(),
-  uid: z.nullable(z.string()).optional(),
-});
-
-export function involvedObject8FromJSON(
-  jsonString: string,
-): SafeParseResult<InvolvedObject8, SDKValidationError> {
-  return safeParse(
-    jsonString,
-    (x) => InvolvedObject8$inboundSchema.parse(JSON.parse(x)),
-    `Failed to parse 'InvolvedObject8' from JSON`,
-  );
-}
-
-/** @internal */
-export const InvolvedObjectUnion8$inboundSchema: z.ZodType<
-  InvolvedObjectUnion8,
-  unknown
-> = z.union([z.lazy(() => InvolvedObject8$inboundSchema), z.any()]);
-
-export function involvedObjectUnion8FromJSON(
-  jsonString: string,
-): SafeParseResult<InvolvedObjectUnion8, SDKValidationError> {
-  return safeParse(
-    jsonString,
-    (x) => InvolvedObjectUnion8$inboundSchema.parse(JSON.parse(x)),
-    `Failed to parse 'InvolvedObjectUnion8' from JSON`,
-  );
-}
-
-/** @internal */
-export const GetResourceDeploymentDetailSource8$inboundSchema: z.ZodType<
-  GetResourceDeploymentDetailSource8,
-  unknown
-> = z.object({
-  component: z.nullable(z.string()).optional(),
-  host: z.nullable(z.string()).optional(),
-});
-
-export function getResourceDeploymentDetailSource8FromJSON(
-  jsonString: string,
-): SafeParseResult<GetResourceDeploymentDetailSource8, SDKValidationError> {
-  return safeParse(
-    jsonString,
-    (x) =>
-      GetResourceDeploymentDetailSource8$inboundSchema.parse(JSON.parse(x)),
-    `Failed to parse 'GetResourceDeploymentDetailSource8' from JSON`,
-  );
-}
-
-/** @internal */
-export const SourceUnion8$inboundSchema: z.ZodType<SourceUnion8, unknown> = z
-  .union([
-    z.lazy(() => GetResourceDeploymentDetailSource8$inboundSchema),
-    z.any(),
-  ]);
-
-export function sourceUnion8FromJSON(
-  jsonString: string,
-): SafeParseResult<SourceUnion8, SDKValidationError> {
-  return safeParse(
-    jsonString,
-    (x) => SourceUnion8$inboundSchema.parse(JSON.parse(x)),
-    `Failed to parse 'SourceUnion8' from JSON`,
-  );
-}
-
-/** @internal */
-export const Event11$inboundSchema: z.ZodType<Event11, unknown> = z.object({
-  count: z.nullable(z.int()).optional(),
-  eventTime: z.nullable(
-    z.iso.datetime({ offset: true }).transform(v => new Date(v)),
-  ).optional(),
-  firstTimestamp: z.nullable(
-    z.iso.datetime({ offset: true }).transform(v => new Date(v)),
-  ).optional(),
-  involvedObject: z.nullable(
-    z.union([z.lazy(() => InvolvedObject8$inboundSchema), z.any()]),
-  ).optional(),
-  lastTimestamp: z.nullable(
-    z.iso.datetime({ offset: true }).transform(v => new Date(v)),
-  ).optional(),
-  message: z.string(),
-  raw: z.nullable(z.any()).optional(),
-  reason: z.string(),
-  source: z.nullable(
-    z.union([
-      z.lazy(() => GetResourceDeploymentDetailSource8$inboundSchema),
-      z.any(),
-    ]),
-  ).optional(),
-  type: z.nullable(z.string()).optional(),
-});
-
-export function event11FromJSON(
-  jsonString: string,
-): SafeParseResult<Event11, SDKValidationError> {
-  return safeParse(
-    jsonString,
-    (x) => Event11$inboundSchema.parse(JSON.parse(x)),
-    `Failed to parse 'Event11' from JSON`,
-  );
-}
-
-/** @internal */
-export const MemoryUnit10$inboundSchema: z.ZodEnum<typeof MemoryUnit10> = z
-  .enum(MemoryUnit10);
-
-/** @internal */
-export const Memory10$inboundSchema: z.ZodType<Memory10, unknown> = z.object({
-  unit: MemoryUnit10$inboundSchema,
-  value: z.number(),
-});
-
-export function memory10FromJSON(
-  jsonString: string,
-): SafeParseResult<Memory10, SDKValidationError> {
-  return safeParse(
-    jsonString,
-    (x) => Memory10$inboundSchema.parse(JSON.parse(x)),
-    `Failed to parse 'Memory10' from JSON`,
-  );
-}
-
-/** @internal */
-export const MemoryUnion10$inboundSchema: z.ZodType<MemoryUnion10, unknown> = z
-  .union([z.lazy(() => Memory10$inboundSchema), z.any()]);
-
-export function memoryUnion10FromJSON(
-  jsonString: string,
-): SafeParseResult<MemoryUnion10, SDKValidationError> {
-  return safeParse(
-    jsonString,
-    (x) => MemoryUnion10$inboundSchema.parse(JSON.parse(x)),
-    `Failed to parse 'MemoryUnion10' from JSON`,
+    (x) => MemoryUnion11$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'MemoryUnion11' from JSON`,
   );
 }
 
@@ -11995,6 +12392,573 @@ export function podCountsFromJSON(
 }
 
 /** @internal */
+export const Reason24$inboundSchema: z.ZodEnum<typeof Reason24> = z.enum(
+  Reason24,
+);
+
+/** @internal */
+export const CollectionIssueSeverity24$inboundSchema: z.ZodEnum<
+  typeof CollectionIssueSeverity24
+> = z.enum(CollectionIssueSeverity24);
+
+/** @internal */
+export const CollectionIssue24$inboundSchema: z.ZodType<
+  CollectionIssue24,
+  unknown
+> = z.object({
+  message: z.string(),
+  reason: Reason24$inboundSchema,
+  severity: CollectionIssueSeverity24$inboundSchema,
+  source: z.string(),
+});
+
+export function collectionIssue24FromJSON(
+  jsonString: string,
+): SafeParseResult<CollectionIssue24, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => CollectionIssue24$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'CollectionIssue24' from JSON`,
+  );
+}
+
+/** @internal */
+export const Health24$inboundSchema: z.ZodEnum<typeof Health24> = z.enum(
+  Health24,
+);
+
+/** @internal */
+export const Lifecycle24$inboundSchema: z.ZodEnum<typeof Lifecycle24> = z.enum(
+  Lifecycle24,
+);
+
+/** @internal */
+export const DataStatus24$inboundSchema: z.ZodType<DataStatus24, unknown> = z
+  .object({
+    collectionIssues: z.array(z.lazy(() => CollectionIssue24$inboundSchema)),
+    health: Health24$inboundSchema,
+    lifecycle: Lifecycle24$inboundSchema,
+    message: z.nullable(z.string()).optional(),
+    partial: z.boolean(),
+    stale: z.boolean(),
+  });
+
+export function dataStatus24FromJSON(
+  jsonString: string,
+): SafeParseResult<DataStatus24, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => DataStatus24$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'DataStatus24' from JSON`,
+  );
+}
+
+/** @internal */
+export const Data1$inboundSchema: z.ZodType<Data1, unknown> = z.object({
+  cpu: z.nullable(z.union([z.lazy(() => Cpu11$inboundSchema), z.any()]))
+    .optional(),
+  events: z.array(z.lazy(() => Event12$inboundSchema)),
+  memory: z.nullable(z.union([z.lazy(() => Memory11$inboundSchema), z.any()]))
+    .optional(),
+  name: z.string(),
+  namespace: z.nullable(z.string()).optional(),
+  nodeCounts: z.lazy(() => NodeCounts$inboundSchema),
+  nodeStatuses: z.array(z.lazy(() => NodeStatus$inboundSchema)).optional(),
+  podCounts: z.lazy(() => PodCounts$inboundSchema),
+  region: z.nullable(z.string()).optional(),
+  status: z.lazy(() => DataStatus24$inboundSchema),
+  version: z.nullable(z.string()).optional(),
+});
+
+export function data1FromJSON(
+  jsonString: string,
+): SafeParseResult<Data1, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => Data1$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'Data1' from JSON`,
+  );
+}
+
+/** @internal */
+export const DataKubernetesCluster$inboundSchema: z.ZodType<
+  DataKubernetesCluster,
+  unknown
+> = z.object({
+  data: z.lazy(() => Data1$inboundSchema),
+  resourceType: z.literal("kubernetes-cluster"),
+});
+
+export function dataKubernetesClusterFromJSON(
+  jsonString: string,
+): SafeParseResult<DataKubernetesCluster, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => DataKubernetesCluster$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'DataKubernetesCluster' from JSON`,
+  );
+}
+
+/** @internal */
+export const Nodes5$inboundSchema: z.ZodType<Nodes5, unknown> = z.object({
+  current: z.nullable(z.int()).optional(),
+  desired: z.nullable(z.int()).optional(),
+  ready: z.nullable(z.int()).optional(),
+});
+
+export function nodes5FromJSON(
+  jsonString: string,
+): SafeParseResult<Nodes5, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => Nodes5$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'Nodes5' from JSON`,
+  );
+}
+
+/** @internal */
+export const Reason23$inboundSchema: z.ZodEnum<typeof Reason23> = z.enum(
+  Reason23,
+);
+
+/** @internal */
+export const CollectionIssueSeverity23$inboundSchema: z.ZodEnum<
+  typeof CollectionIssueSeverity23
+> = z.enum(CollectionIssueSeverity23);
+
+/** @internal */
+export const CollectionIssue23$inboundSchema: z.ZodType<
+  CollectionIssue23,
+  unknown
+> = z.object({
+  message: z.string(),
+  reason: Reason23$inboundSchema,
+  severity: CollectionIssueSeverity23$inboundSchema,
+  source: z.string(),
+});
+
+export function collectionIssue23FromJSON(
+  jsonString: string,
+): SafeParseResult<CollectionIssue23, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => CollectionIssue23$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'CollectionIssue23' from JSON`,
+  );
+}
+
+/** @internal */
+export const Health23$inboundSchema: z.ZodEnum<typeof Health23> = z.enum(
+  Health23,
+);
+
+/** @internal */
+export const Lifecycle23$inboundSchema: z.ZodEnum<typeof Lifecycle23> = z.enum(
+  Lifecycle23,
+);
+
+/** @internal */
+export const DataStatus23$inboundSchema: z.ZodType<DataStatus23, unknown> = z
+  .object({
+    collectionIssues: z.array(z.lazy(() => CollectionIssue23$inboundSchema)),
+    health: Health23$inboundSchema,
+    lifecycle: Lifecycle23$inboundSchema,
+    message: z.nullable(z.string()).optional(),
+    partial: z.boolean(),
+    stale: z.boolean(),
+  });
+
+export function dataStatus23FromJSON(
+  jsonString: string,
+): SafeParseResult<DataStatus23, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => DataStatus23$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'DataStatus23' from JSON`,
+  );
+}
+
+/** @internal */
+export const DataLocal5$inboundSchema: z.ZodType<DataLocal5, unknown> = z
+  .object({
+    dockerApiVersion: z.nullable(z.string()).optional(),
+    dockerArch: z.nullable(z.string()).optional(),
+    dockerAvailable: z.boolean(),
+    dockerOs: z.nullable(z.string()).optional(),
+    dockerVersion: z.nullable(z.string()).optional(),
+    hostIdentifier: z.nullable(z.string()).optional(),
+    name: z.string(),
+    networkAvailable: z.boolean(),
+    networkName: z.nullable(z.string()).optional(),
+    nodes: z.lazy(() => Nodes5$inboundSchema),
+    runningContainers: z.nullable(z.int()).optional(),
+    status: z.lazy(() => DataStatus23$inboundSchema),
+    trackedContainers: z.nullable(z.int()).optional(),
+    backend: z.literal("local"),
+  });
+
+export function dataLocal5FromJSON(
+  jsonString: string,
+): SafeParseResult<DataLocal5, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => DataLocal5$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'DataLocal5' from JSON`,
+  );
+}
+
+/** @internal */
+export const Category4$inboundSchema: z.ZodEnum<typeof Category4> = z.enum(
+  Category4,
+);
+
+/** @internal */
+export const CapacityBlocker4$inboundSchema: z.ZodType<
+  CapacityBlocker4,
+  unknown
+> = z.object({
+  category: Category4$inboundSchema,
+  message: z.string(),
+  observedAt: z.iso.datetime({ offset: true }).transform(v => new Date(v)),
+  providerCode: z.nullable(z.string()).optional(),
+  providerReference: z.nullable(z.string()).optional(),
+});
+
+export function capacityBlocker4FromJSON(
+  jsonString: string,
+): SafeParseResult<CapacityBlocker4, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => CapacityBlocker4$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'CapacityBlocker4' from JSON`,
+  );
+}
+
+/** @internal */
+export const CapacityBlockerUnion4$inboundSchema: z.ZodType<
+  CapacityBlockerUnion4,
+  unknown
+> = z.union([z.lazy(() => CapacityBlocker4$inboundSchema), z.any()]);
+
+export function capacityBlockerUnion4FromJSON(
+  jsonString: string,
+): SafeParseResult<CapacityBlockerUnion4, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => CapacityBlockerUnion4$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'CapacityBlockerUnion4' from JSON`,
+  );
+}
+
+/** @internal */
+export const Blocker4$inboundSchema: z.ZodType<Blocker4, unknown> = z.object({
+  reason: z.string(),
+  replicaId: z.string(),
+  schedulingMode: z.string(),
+  state: z.string(),
+  workloadName: z.string(),
+});
+
+export function blocker4FromJSON(
+  jsonString: string,
+): SafeParseResult<Blocker4, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => Blocker4$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'Blocker4' from JSON`,
+  );
+}
+
+/** @internal */
+export const DrainProgressStatus4$inboundSchema: z.ZodEnum<
+  typeof DrainProgressStatus4
+> = z.enum(DrainProgressStatus4);
+
+/** @internal */
+export const DrainProgress4$inboundSchema: z.ZodType<DrainProgress4, unknown> =
+  z.object({
+    blockers: z.array(z.lazy(() => Blocker4$inboundSchema)).optional(),
+    drainDeadlineAt: z.nullable(z.string()).optional(),
+    drainRequestedAt: z.nullable(z.string()).optional(),
+    drainedAt: z.nullable(z.string()).optional(),
+    force: z.boolean(),
+    machineId: z.string(),
+    replicaCount: z.int(),
+    stalled: z.boolean(),
+    status: DrainProgressStatus4$inboundSchema,
+  });
+
+export function drainProgress4FromJSON(
+  jsonString: string,
+): SafeParseResult<DrainProgress4, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => DrainProgress4$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'DrainProgress4' from JSON`,
+  );
+}
+
+/** @internal */
+export const DrainProgressUnion4$inboundSchema: z.ZodType<
+  DrainProgressUnion4,
+  unknown
+> = z.union([z.lazy(() => DrainProgress4$inboundSchema), z.any()]);
+
+export function drainProgressUnion4FromJSON(
+  jsonString: string,
+): SafeParseResult<DrainProgressUnion4, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => DrainProgressUnion4$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'DrainProgressUnion4' from JSON`,
+  );
+}
+
+/** @internal */
+export const UtilizationUnit4$inboundSchema: z.ZodEnum<
+  typeof UtilizationUnit4
+> = z.enum(UtilizationUnit4);
+
+/** @internal */
+export const Utilization4$inboundSchema: z.ZodType<Utilization4, unknown> = z
+  .object({
+    unit: UtilizationUnit4$inboundSchema,
+    value: z.number(),
+  });
+
+export function utilization4FromJSON(
+  jsonString: string,
+): SafeParseResult<Utilization4, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => Utilization4$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'Utilization4' from JSON`,
+  );
+}
+
+/** @internal */
+export const UtilizationUnion4$inboundSchema: z.ZodType<
+  UtilizationUnion4,
+  unknown
+> = z.union([z.lazy(() => Utilization4$inboundSchema), z.any()]);
+
+export function utilizationUnion4FromJSON(
+  jsonString: string,
+): SafeParseResult<UtilizationUnion4, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => UtilizationUnion4$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'UtilizationUnion4' from JSON`,
+  );
+}
+
+/** @internal */
+export const Recommendation4$inboundSchema: z.ZodType<
+  Recommendation4,
+  unknown
+> = z.object({
+  desiredMachines: z.int(),
+  reason: z.nullable(z.string()).optional(),
+  unschedulableReplicas: z.nullable(z.int()).optional(),
+  utilization: z.nullable(
+    z.union([z.lazy(() => Utilization4$inboundSchema), z.any()]),
+  ).optional(),
+});
+
+export function recommendation4FromJSON(
+  jsonString: string,
+): SafeParseResult<Recommendation4, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => Recommendation4$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'Recommendation4' from JSON`,
+  );
+}
+
+/** @internal */
+export const RecommendationUnion4$inboundSchema: z.ZodType<
+  RecommendationUnion4,
+  unknown
+> = z.union([z.lazy(() => Recommendation4$inboundSchema), z.any()]);
+
+export function recommendationUnion4FromJSON(
+  jsonString: string,
+): SafeParseResult<RecommendationUnion4, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => RecommendationUnion4$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'RecommendationUnion4' from JSON`,
+  );
+}
+
+/** @internal */
+export const CapacityGroup4$inboundSchema: z.ZodType<CapacityGroup4, unknown> =
+  z.object({
+    capacityBlocker: z.nullable(
+      z.union([z.lazy(() => CapacityBlocker4$inboundSchema), z.any()]),
+    ).optional(),
+    currentMachines: z.int(),
+    desiredMachines: z.int(),
+    drainProgress: z.nullable(
+      z.union([z.lazy(() => DrainProgress4$inboundSchema), z.any()]),
+    ).optional(),
+    groupId: z.string(),
+    instanceType: z.nullable(z.string()).optional(),
+    maxMachines: z.nullable(z.int()).optional(),
+    minMachines: z.nullable(z.int()).optional(),
+    recommendation: z.nullable(
+      z.union([z.lazy(() => Recommendation4$inboundSchema), z.any()]),
+    ).optional(),
+  });
+
+export function capacityGroup4FromJSON(
+  jsonString: string,
+): SafeParseResult<CapacityGroup4, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => CapacityGroup4$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'CapacityGroup4' from JSON`,
+  );
+}
+
+/** @internal */
+export const CpuUnit10$inboundSchema: z.ZodEnum<typeof CpuUnit10> = z.enum(
+  CpuUnit10,
+);
+
+/** @internal */
+export const Cpu10$inboundSchema: z.ZodType<Cpu10, unknown> = z.object({
+  unit: CpuUnit10$inboundSchema,
+  value: z.number(),
+});
+
+export function cpu10FromJSON(
+  jsonString: string,
+): SafeParseResult<Cpu10, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => Cpu10$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'Cpu10' from JSON`,
+  );
+}
+
+/** @internal */
+export const CpuUnion10$inboundSchema: z.ZodType<CpuUnion10, unknown> = z.union(
+  [z.lazy(() => Cpu10$inboundSchema), z.any()],
+);
+
+export function cpuUnion10FromJSON(
+  jsonString: string,
+): SafeParseResult<CpuUnion10, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => CpuUnion10$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'CpuUnion10' from JSON`,
+  );
+}
+
+/** @internal */
+export const DrainBlocker$inboundSchema: z.ZodType<DrainBlocker, unknown> = z
+  .object({
+    reason: z.string(),
+    replicaId: z.string(),
+    schedulingMode: z.string(),
+    state: z.string(),
+    workloadName: z.string(),
+  });
+
+export function drainBlockerFromJSON(
+  jsonString: string,
+): SafeParseResult<DrainBlocker, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => DrainBlocker$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'DrainBlocker' from JSON`,
+  );
+}
+
+/** @internal */
+export const Machine$inboundSchema: z.ZodType<Machine, unknown> = z.object({
+  capacityGroup: z.string(),
+  cpuCores: z.nullable(z.number()).optional(),
+  drainBlockers: z.array(z.lazy(() => DrainBlocker$inboundSchema)).optional(),
+  drainDeadlineAt: z.nullable(z.string()).optional(),
+  drainForce: z.boolean(),
+  drainRequestedAt: z.nullable(z.string()).optional(),
+  drainedAt: z.nullable(z.string()).optional(),
+  horizondVersion: z.nullable(z.string()).optional(),
+  lastHeartbeat: z.string(),
+  machineId: z.string(),
+  memoryBytes: z.nullable(z.int()).optional(),
+  overlayIp: z.nullable(z.string()).optional(),
+  publicIp: z.nullable(z.string()).optional(),
+  replicaCount: z.int(),
+  status: z.string(),
+  zone: z.string(),
+});
+
+export function machineFromJSON(
+  jsonString: string,
+): SafeParseResult<Machine, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => Machine$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'Machine' from JSON`,
+  );
+}
+
+/** @internal */
+export const MemoryUnit10$inboundSchema: z.ZodEnum<typeof MemoryUnit10> = z
+  .enum(MemoryUnit10);
+
+/** @internal */
+export const Memory10$inboundSchema: z.ZodType<Memory10, unknown> = z.object({
+  unit: MemoryUnit10$inboundSchema,
+  value: z.number(),
+});
+
+export function memory10FromJSON(
+  jsonString: string,
+): SafeParseResult<Memory10, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => Memory10$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'Memory10' from JSON`,
+  );
+}
+
+/** @internal */
+export const MemoryUnion10$inboundSchema: z.ZodType<MemoryUnion10, unknown> = z
+  .union([z.lazy(() => Memory10$inboundSchema), z.any()]);
+
+export function memoryUnion10FromJSON(
+  jsonString: string,
+): SafeParseResult<MemoryUnion10, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => MemoryUnion10$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'MemoryUnion10' from JSON`,
+  );
+}
+
+/** @internal */
+export const Nodes4$inboundSchema: z.ZodType<Nodes4, unknown> = z.object({
+  current: z.nullable(z.int()).optional(),
+  desired: z.nullable(z.int()).optional(),
+  ready: z.nullable(z.int()).optional(),
+});
+
+export function nodes4FromJSON(
+  jsonString: string,
+): SafeParseResult<Nodes4, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => Nodes4$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'Nodes4' from JSON`,
+  );
+}
+
+/** @internal */
 export const Reason22$inboundSchema: z.ZodEnum<typeof Reason22> = z.enum(
   Reason22,
 );
@@ -12057,156 +13021,28 @@ export function dataStatus22FromJSON(
 }
 
 /** @internal */
-export const Data1$inboundSchema: z.ZodType<Data1, unknown> = z.object({
-  cpu: z.nullable(z.union([z.lazy(() => Cpu10$inboundSchema), z.any()]))
-    .optional(),
-  events: z.array(z.lazy(() => Event11$inboundSchema)),
-  memory: z.nullable(z.union([z.lazy(() => Memory10$inboundSchema), z.any()]))
-    .optional(),
-  name: z.string(),
-  namespace: z.nullable(z.string()).optional(),
-  nodeCounts: z.lazy(() => NodeCounts$inboundSchema),
-  nodeStatuses: z.array(z.lazy(() => NodeStatus$inboundSchema)).optional(),
-  podCounts: z.lazy(() => PodCounts$inboundSchema),
-  region: z.nullable(z.string()).optional(),
-  status: z.lazy(() => DataStatus22$inboundSchema),
-  version: z.nullable(z.string()).optional(),
-});
-
-export function data1FromJSON(
-  jsonString: string,
-): SafeParseResult<Data1, SDKValidationError> {
-  return safeParse(
-    jsonString,
-    (x) => Data1$inboundSchema.parse(JSON.parse(x)),
-    `Failed to parse 'Data1' from JSON`,
-  );
-}
-
-/** @internal */
-export const DataKubernetesCluster$inboundSchema: z.ZodType<
-  DataKubernetesCluster,
-  unknown
-> = z.object({
-  data: z.lazy(() => Data1$inboundSchema),
-  resourceType: z.literal("kubernetes-cluster"),
-});
-
-export function dataKubernetesClusterFromJSON(
-  jsonString: string,
-): SafeParseResult<DataKubernetesCluster, SDKValidationError> {
-  return safeParse(
-    jsonString,
-    (x) => DataKubernetesCluster$inboundSchema.parse(JSON.parse(x)),
-    `Failed to parse 'DataKubernetesCluster' from JSON`,
-  );
-}
-
-/** @internal */
-export const Nodes4$inboundSchema: z.ZodType<Nodes4, unknown> = z.object({
-  current: z.nullable(z.int()).optional(),
-  desired: z.nullable(z.int()).optional(),
-  ready: z.nullable(z.int()).optional(),
-});
-
-export function nodes4FromJSON(
-  jsonString: string,
-): SafeParseResult<Nodes4, SDKValidationError> {
-  return safeParse(
-    jsonString,
-    (x) => Nodes4$inboundSchema.parse(JSON.parse(x)),
-    `Failed to parse 'Nodes4' from JSON`,
-  );
-}
-
-/** @internal */
-export const Reason21$inboundSchema: z.ZodEnum<typeof Reason21> = z.enum(
-  Reason21,
-);
-
-/** @internal */
-export const CollectionIssueSeverity21$inboundSchema: z.ZodEnum<
-  typeof CollectionIssueSeverity21
-> = z.enum(CollectionIssueSeverity21);
-
-/** @internal */
-export const CollectionIssue21$inboundSchema: z.ZodType<
-  CollectionIssue21,
-  unknown
-> = z.object({
-  message: z.string(),
-  reason: Reason21$inboundSchema,
-  severity: CollectionIssueSeverity21$inboundSchema,
-  source: z.string(),
-});
-
-export function collectionIssue21FromJSON(
-  jsonString: string,
-): SafeParseResult<CollectionIssue21, SDKValidationError> {
-  return safeParse(
-    jsonString,
-    (x) => CollectionIssue21$inboundSchema.parse(JSON.parse(x)),
-    `Failed to parse 'CollectionIssue21' from JSON`,
-  );
-}
-
-/** @internal */
-export const Health21$inboundSchema: z.ZodEnum<typeof Health21> = z.enum(
-  Health21,
-);
-
-/** @internal */
-export const Lifecycle21$inboundSchema: z.ZodEnum<typeof Lifecycle21> = z.enum(
-  Lifecycle21,
-);
-
-/** @internal */
-export const DataStatus21$inboundSchema: z.ZodType<DataStatus21, unknown> = z
+export const DataMachines2$inboundSchema: z.ZodType<DataMachines2, unknown> = z
   .object({
-    collectionIssues: z.array(z.lazy(() => CollectionIssue21$inboundSchema)),
-    health: Health21$inboundSchema,
-    lifecycle: Lifecycle21$inboundSchema,
-    message: z.nullable(z.string()).optional(),
-    partial: z.boolean(),
-    stale: z.boolean(),
-  });
-
-export function dataStatus21FromJSON(
-  jsonString: string,
-): SafeParseResult<DataStatus21, SDKValidationError> {
-  return safeParse(
-    jsonString,
-    (x) => DataStatus21$inboundSchema.parse(JSON.parse(x)),
-    `Failed to parse 'DataStatus21' from JSON`,
-  );
-}
-
-/** @internal */
-export const DataLocal5$inboundSchema: z.ZodType<DataLocal5, unknown> = z
-  .object({
-    dockerApiVersion: z.nullable(z.string()).optional(),
-    dockerArch: z.nullable(z.string()).optional(),
-    dockerAvailable: z.boolean(),
-    dockerOs: z.nullable(z.string()).optional(),
-    dockerVersion: z.nullable(z.string()).optional(),
-    hostIdentifier: z.nullable(z.string()).optional(),
+    backendClusterId: z.nullable(z.string()).optional(),
+    capacityGroups: z.array(z.lazy(() => CapacityGroup4$inboundSchema)),
+    cpu: z.nullable(z.union([z.lazy(() => Cpu10$inboundSchema), z.any()]))
+      .optional(),
+    machines: z.array(z.lazy(() => Machine$inboundSchema)),
+    memory: z.nullable(z.union([z.lazy(() => Memory10$inboundSchema), z.any()]))
+      .optional(),
     name: z.string(),
-    networkAvailable: z.boolean(),
-    networkName: z.nullable(z.string()).optional(),
     nodes: z.lazy(() => Nodes4$inboundSchema),
-    runningContainers: z.nullable(z.int()).optional(),
-    status: z.lazy(() => DataStatus21$inboundSchema),
-    trackedContainers: z.nullable(z.int()).optional(),
-    backend: z.literal("local"),
+    status: z.lazy(() => DataStatus22$inboundSchema),
+    backend: z.literal("machines"),
   });
 
-export function dataLocal5FromJSON(
+export function dataMachines2FromJSON(
   jsonString: string,
-): SafeParseResult<DataLocal5, SDKValidationError> {
+): SafeParseResult<DataMachines2, SDKValidationError> {
   return safeParse(
     jsonString,
-    (x) => DataLocal5$inboundSchema.parse(JSON.parse(x)),
-    `Failed to parse 'DataLocal5' from JSON`,
+    (x) => DataMachines2$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'DataMachines2' from JSON`,
   );
 }
 
@@ -12534,64 +13370,64 @@ export function providerFleet3FromJSON(
 }
 
 /** @internal */
-export const Reason20$inboundSchema: z.ZodEnum<typeof Reason20> = z.enum(
-  Reason20,
+export const Reason21$inboundSchema: z.ZodEnum<typeof Reason21> = z.enum(
+  Reason21,
 );
 
 /** @internal */
-export const CollectionIssueSeverity20$inboundSchema: z.ZodEnum<
-  typeof CollectionIssueSeverity20
-> = z.enum(CollectionIssueSeverity20);
+export const CollectionIssueSeverity21$inboundSchema: z.ZodEnum<
+  typeof CollectionIssueSeverity21
+> = z.enum(CollectionIssueSeverity21);
 
 /** @internal */
-export const CollectionIssue20$inboundSchema: z.ZodType<
-  CollectionIssue20,
+export const CollectionIssue21$inboundSchema: z.ZodType<
+  CollectionIssue21,
   unknown
 > = z.object({
   message: z.string(),
-  reason: Reason20$inboundSchema,
-  severity: CollectionIssueSeverity20$inboundSchema,
+  reason: Reason21$inboundSchema,
+  severity: CollectionIssueSeverity21$inboundSchema,
   source: z.string(),
 });
 
-export function collectionIssue20FromJSON(
+export function collectionIssue21FromJSON(
   jsonString: string,
-): SafeParseResult<CollectionIssue20, SDKValidationError> {
+): SafeParseResult<CollectionIssue21, SDKValidationError> {
   return safeParse(
     jsonString,
-    (x) => CollectionIssue20$inboundSchema.parse(JSON.parse(x)),
-    `Failed to parse 'CollectionIssue20' from JSON`,
+    (x) => CollectionIssue21$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'CollectionIssue21' from JSON`,
   );
 }
 
 /** @internal */
-export const Health20$inboundSchema: z.ZodEnum<typeof Health20> = z.enum(
-  Health20,
+export const Health21$inboundSchema: z.ZodEnum<typeof Health21> = z.enum(
+  Health21,
 );
 
 /** @internal */
-export const Lifecycle20$inboundSchema: z.ZodEnum<typeof Lifecycle20> = z.enum(
-  Lifecycle20,
+export const Lifecycle21$inboundSchema: z.ZodEnum<typeof Lifecycle21> = z.enum(
+  Lifecycle21,
 );
 
 /** @internal */
-export const DataStatus20$inboundSchema: z.ZodType<DataStatus20, unknown> = z
+export const DataStatus21$inboundSchema: z.ZodType<DataStatus21, unknown> = z
   .object({
-    collectionIssues: z.array(z.lazy(() => CollectionIssue20$inboundSchema)),
-    health: Health20$inboundSchema,
-    lifecycle: Lifecycle20$inboundSchema,
+    collectionIssues: z.array(z.lazy(() => CollectionIssue21$inboundSchema)),
+    health: Health21$inboundSchema,
+    lifecycle: Lifecycle21$inboundSchema,
     message: z.nullable(z.string()).optional(),
     partial: z.boolean(),
     stale: z.boolean(),
   });
 
-export function dataStatus20FromJSON(
+export function dataStatus21FromJSON(
   jsonString: string,
-): SafeParseResult<DataStatus20, SDKValidationError> {
+): SafeParseResult<DataStatus21, SDKValidationError> {
   return safeParse(
     jsonString,
-    (x) => DataStatus20$inboundSchema.parse(JSON.parse(x)),
-    `Failed to parse 'DataStatus20' from JSON`,
+    (x) => DataStatus21$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'DataStatus21' from JSON`,
   );
 }
 
@@ -12608,7 +13444,7 @@ export const DataAzure2$inboundSchema: z.ZodType<DataAzure2, unknown> = z
     nodes: z.lazy(() => Nodes3$inboundSchema),
     providerFleets: z.array(z.lazy(() => ProviderFleet3$inboundSchema)),
     region: z.nullable(z.string()).optional(),
-    status: z.lazy(() => DataStatus20$inboundSchema),
+    status: z.lazy(() => DataStatus21$inboundSchema),
     backend: z.literal("azure"),
   });
 
@@ -12946,64 +13782,64 @@ export function providerFleet2FromJSON(
 }
 
 /** @internal */
-export const Reason19$inboundSchema: z.ZodEnum<typeof Reason19> = z.enum(
-  Reason19,
+export const Reason20$inboundSchema: z.ZodEnum<typeof Reason20> = z.enum(
+  Reason20,
 );
 
 /** @internal */
-export const CollectionIssueSeverity19$inboundSchema: z.ZodEnum<
-  typeof CollectionIssueSeverity19
-> = z.enum(CollectionIssueSeverity19);
+export const CollectionIssueSeverity20$inboundSchema: z.ZodEnum<
+  typeof CollectionIssueSeverity20
+> = z.enum(CollectionIssueSeverity20);
 
 /** @internal */
-export const CollectionIssue19$inboundSchema: z.ZodType<
-  CollectionIssue19,
+export const CollectionIssue20$inboundSchema: z.ZodType<
+  CollectionIssue20,
   unknown
 > = z.object({
   message: z.string(),
-  reason: Reason19$inboundSchema,
-  severity: CollectionIssueSeverity19$inboundSchema,
+  reason: Reason20$inboundSchema,
+  severity: CollectionIssueSeverity20$inboundSchema,
   source: z.string(),
 });
 
-export function collectionIssue19FromJSON(
+export function collectionIssue20FromJSON(
   jsonString: string,
-): SafeParseResult<CollectionIssue19, SDKValidationError> {
+): SafeParseResult<CollectionIssue20, SDKValidationError> {
   return safeParse(
     jsonString,
-    (x) => CollectionIssue19$inboundSchema.parse(JSON.parse(x)),
-    `Failed to parse 'CollectionIssue19' from JSON`,
+    (x) => CollectionIssue20$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'CollectionIssue20' from JSON`,
   );
 }
 
 /** @internal */
-export const Health19$inboundSchema: z.ZodEnum<typeof Health19> = z.enum(
-  Health19,
+export const Health20$inboundSchema: z.ZodEnum<typeof Health20> = z.enum(
+  Health20,
 );
 
 /** @internal */
-export const Lifecycle19$inboundSchema: z.ZodEnum<typeof Lifecycle19> = z.enum(
-  Lifecycle19,
+export const Lifecycle20$inboundSchema: z.ZodEnum<typeof Lifecycle20> = z.enum(
+  Lifecycle20,
 );
 
 /** @internal */
-export const DataStatus19$inboundSchema: z.ZodType<DataStatus19, unknown> = z
+export const DataStatus20$inboundSchema: z.ZodType<DataStatus20, unknown> = z
   .object({
-    collectionIssues: z.array(z.lazy(() => CollectionIssue19$inboundSchema)),
-    health: Health19$inboundSchema,
-    lifecycle: Lifecycle19$inboundSchema,
+    collectionIssues: z.array(z.lazy(() => CollectionIssue20$inboundSchema)),
+    health: Health20$inboundSchema,
+    lifecycle: Lifecycle20$inboundSchema,
     message: z.nullable(z.string()).optional(),
     partial: z.boolean(),
     stale: z.boolean(),
   });
 
-export function dataStatus19FromJSON(
+export function dataStatus20FromJSON(
   jsonString: string,
-): SafeParseResult<DataStatus19, SDKValidationError> {
+): SafeParseResult<DataStatus20, SDKValidationError> {
   return safeParse(
     jsonString,
-    (x) => DataStatus19$inboundSchema.parse(JSON.parse(x)),
-    `Failed to parse 'DataStatus19' from JSON`,
+    (x) => DataStatus20$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'DataStatus20' from JSON`,
   );
 }
 
@@ -13019,7 +13855,7 @@ export const DataGcp2$inboundSchema: z.ZodType<DataGcp2, unknown> = z.object({
   nodes: z.lazy(() => Nodes2$inboundSchema),
   providerFleets: z.array(z.lazy(() => ProviderFleet2$inboundSchema)),
   region: z.nullable(z.string()).optional(),
-  status: z.lazy(() => DataStatus19$inboundSchema),
+  status: z.lazy(() => DataStatus20$inboundSchema),
   backend: z.literal("gcp"),
 });
 
@@ -13357,6 +14193,327 @@ export function providerFleet1FromJSON(
 }
 
 /** @internal */
+export const Reason19$inboundSchema: z.ZodEnum<typeof Reason19> = z.enum(
+  Reason19,
+);
+
+/** @internal */
+export const CollectionIssueSeverity19$inboundSchema: z.ZodEnum<
+  typeof CollectionIssueSeverity19
+> = z.enum(CollectionIssueSeverity19);
+
+/** @internal */
+export const CollectionIssue19$inboundSchema: z.ZodType<
+  CollectionIssue19,
+  unknown
+> = z.object({
+  message: z.string(),
+  reason: Reason19$inboundSchema,
+  severity: CollectionIssueSeverity19$inboundSchema,
+  source: z.string(),
+});
+
+export function collectionIssue19FromJSON(
+  jsonString: string,
+): SafeParseResult<CollectionIssue19, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => CollectionIssue19$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'CollectionIssue19' from JSON`,
+  );
+}
+
+/** @internal */
+export const Health19$inboundSchema: z.ZodEnum<typeof Health19> = z.enum(
+  Health19,
+);
+
+/** @internal */
+export const Lifecycle19$inboundSchema: z.ZodEnum<typeof Lifecycle19> = z.enum(
+  Lifecycle19,
+);
+
+/** @internal */
+export const DataStatus19$inboundSchema: z.ZodType<DataStatus19, unknown> = z
+  .object({
+    collectionIssues: z.array(z.lazy(() => CollectionIssue19$inboundSchema)),
+    health: Health19$inboundSchema,
+    lifecycle: Lifecycle19$inboundSchema,
+    message: z.nullable(z.string()).optional(),
+    partial: z.boolean(),
+    stale: z.boolean(),
+  });
+
+export function dataStatus19FromJSON(
+  jsonString: string,
+): SafeParseResult<DataStatus19, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => DataStatus19$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'DataStatus19' from JSON`,
+  );
+}
+
+/** @internal */
+export const DataAws2$inboundSchema: z.ZodType<DataAws2, unknown> = z.object({
+  backendClusterId: z.nullable(z.string()).optional(),
+  capacityGroups: z.array(z.lazy(() => CapacityGroup1$inboundSchema)),
+  cpu: z.nullable(z.union([z.lazy(() => Cpu7$inboundSchema), z.any()]))
+    .optional(),
+  memory: z.nullable(z.union([z.lazy(() => Memory7$inboundSchema), z.any()]))
+    .optional(),
+  name: z.string(),
+  nodes: z.lazy(() => Nodes1$inboundSchema),
+  providerFleets: z.array(z.lazy(() => ProviderFleet1$inboundSchema)),
+  region: z.nullable(z.string()).optional(),
+  status: z.lazy(() => DataStatus19$inboundSchema),
+  backend: z.literal("aws"),
+});
+
+export function dataAws2FromJSON(
+  jsonString: string,
+): SafeParseResult<DataAws2, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => DataAws2$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'DataAws2' from JSON`,
+  );
+}
+
+/** @internal */
+export const DataUnion5$inboundSchema: z.ZodType<DataUnion5, unknown> = z.union(
+  [
+    z.lazy(() => DataAws2$inboundSchema),
+    z.lazy(() => DataGcp2$inboundSchema),
+    z.lazy(() => DataAzure2$inboundSchema),
+    z.lazy(() => DataMachines2$inboundSchema),
+    z.lazy(() => DataLocal5$inboundSchema),
+  ],
+);
+
+export function dataUnion5FromJSON(
+  jsonString: string,
+): SafeParseResult<DataUnion5, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => DataUnion5$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'DataUnion5' from JSON`,
+  );
+}
+
+/** @internal */
+export const DataComputeCluster$inboundSchema: z.ZodType<
+  DataComputeCluster,
+  unknown
+> = z.object({
+  data: z.union([
+    z.lazy(() => DataAws2$inboundSchema),
+    z.lazy(() => DataGcp2$inboundSchema),
+    z.lazy(() => DataAzure2$inboundSchema),
+    z.lazy(() => DataMachines2$inboundSchema),
+    z.lazy(() => DataLocal5$inboundSchema),
+  ]),
+  resourceType: z.literal("compute-cluster"),
+});
+
+export function dataComputeClusterFromJSON(
+  jsonString: string,
+): SafeParseResult<DataComputeCluster, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => DataComputeCluster$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'DataComputeCluster' from JSON`,
+  );
+}
+
+/** @internal */
+export const DaemonInstanceCpuUnit$inboundSchema: z.ZodEnum<
+  typeof DaemonInstanceCpuUnit
+> = z.enum(DaemonInstanceCpuUnit);
+
+/** @internal */
+export const DaemonInstanceCpu$inboundSchema: z.ZodType<
+  DaemonInstanceCpu,
+  unknown
+> = z.object({
+  unit: DaemonInstanceCpuUnit$inboundSchema,
+  value: z.number(),
+});
+
+export function daemonInstanceCpuFromJSON(
+  jsonString: string,
+): SafeParseResult<DaemonInstanceCpu, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => DaemonInstanceCpu$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'DaemonInstanceCpu' from JSON`,
+  );
+}
+
+/** @internal */
+export const DaemonInstanceCpuUnion5$inboundSchema: z.ZodType<
+  DaemonInstanceCpuUnion5,
+  unknown
+> = z.union([z.lazy(() => DaemonInstanceCpu$inboundSchema), z.any()]);
+
+export function daemonInstanceCpuUnion5FromJSON(
+  jsonString: string,
+): SafeParseResult<DaemonInstanceCpuUnion5, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => DaemonInstanceCpuUnion5$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'DaemonInstanceCpuUnion5' from JSON`,
+  );
+}
+
+/** @internal */
+export const DaemonInstanceKind$inboundSchema: z.ZodEnum<
+  typeof DaemonInstanceKind
+> = z.enum(DaemonInstanceKind);
+
+/** @internal */
+export const DaemonInstanceMemoryUnit$inboundSchema: z.ZodEnum<
+  typeof DaemonInstanceMemoryUnit
+> = z.enum(DaemonInstanceMemoryUnit);
+
+/** @internal */
+export const DaemonInstanceMemory$inboundSchema: z.ZodType<
+  DaemonInstanceMemory,
+  unknown
+> = z.object({
+  unit: DaemonInstanceMemoryUnit$inboundSchema,
+  value: z.number(),
+});
+
+export function daemonInstanceMemoryFromJSON(
+  jsonString: string,
+): SafeParseResult<DaemonInstanceMemory, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => DaemonInstanceMemory$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'DaemonInstanceMemory' from JSON`,
+  );
+}
+
+/** @internal */
+export const DaemonInstanceMemoryUnion5$inboundSchema: z.ZodType<
+  DaemonInstanceMemoryUnion5,
+  unknown
+> = z.union([z.lazy(() => DaemonInstanceMemory$inboundSchema), z.any()]);
+
+export function daemonInstanceMemoryUnion5FromJSON(
+  jsonString: string,
+): SafeParseResult<DaemonInstanceMemoryUnion5, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => DaemonInstanceMemoryUnion5$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'DaemonInstanceMemoryUnion5' from JSON`,
+  );
+}
+
+/** @internal */
+export const DaemonInstance5$inboundSchema: z.ZodType<
+  DaemonInstance5,
+  unknown
+> = z.object({
+  cpu: z.nullable(
+    z.union([z.lazy(() => DaemonInstanceCpu$inboundSchema), z.any()]),
+  ).optional(),
+  kind: DaemonInstanceKind$inboundSchema,
+  memory: z.nullable(
+    z.union([z.lazy(() => DaemonInstanceMemory$inboundSchema), z.any()]),
+  ).optional(),
+  name: z.string(),
+  phase: z.nullable(z.string()).optional(),
+  pid: z.nullable(z.int()).optional(),
+  ready: z.boolean(),
+  restartCount: z.nullable(z.int()).optional(),
+  unitId: z.string(),
+});
+
+export function daemonInstance5FromJSON(
+  jsonString: string,
+): SafeParseResult<DaemonInstance5, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => DaemonInstance5$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'DaemonInstance5' from JSON`,
+  );
+}
+
+/** @internal */
+export const DaemonInstanceUnion$inboundSchema: z.ZodType<
+  DaemonInstanceUnion,
+  unknown
+> = z.union([z.lazy(() => DaemonInstance5$inboundSchema), z.any()]);
+
+export function daemonInstanceUnionFromJSON(
+  jsonString: string,
+): SafeParseResult<DaemonInstanceUnion, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => DaemonInstanceUnion$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'DaemonInstanceUnion' from JSON`,
+  );
+}
+
+/** @internal */
+export const EventSeverity3$inboundSchema: z.ZodEnum<typeof EventSeverity3> = z
+  .enum(EventSeverity3);
+
+/** @internal */
+export const Subject3$inboundSchema: z.ZodType<Subject3, unknown> = z.object({
+  id: z.nullable(z.string()).optional(),
+  kind: z.string(),
+  name: z.nullable(z.string()).optional(),
+});
+
+export function subject3FromJSON(
+  jsonString: string,
+): SafeParseResult<Subject3, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => Subject3$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'Subject3' from JSON`,
+  );
+}
+
+/** @internal */
+export const SubjectUnion3$inboundSchema: z.ZodType<SubjectUnion3, unknown> = z
+  .union([z.lazy(() => Subject3$inboundSchema), z.any()]);
+
+export function subjectUnion3FromJSON(
+  jsonString: string,
+): SafeParseResult<SubjectUnion3, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => SubjectUnion3$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'SubjectUnion3' from JSON`,
+  );
+}
+
+/** @internal */
+export const Event11$inboundSchema: z.ZodType<Event11, unknown> = z.object({
+  kind: z.string(),
+  message: z.string(),
+  raw: z.nullable(z.any()).optional(),
+  severity: EventSeverity3$inboundSchema,
+  subject: z.nullable(z.union([z.lazy(() => Subject3$inboundSchema), z.any()]))
+    .optional(),
+  timestamp: z.iso.datetime({ offset: true }).transform(v => new Date(v)),
+});
+
+export function event11FromJSON(
+  jsonString: string,
+): SafeParseResult<Event11, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => Event11$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'Event11' from JSON`,
+  );
+}
+
+/** @internal */
 export const Reason18$inboundSchema: z.ZodEnum<typeof Reason18> = z.enum(
   Reason18,
 );
@@ -13419,339 +14576,20 @@ export function dataStatus18FromJSON(
 }
 
 /** @internal */
-export const DataAws2$inboundSchema: z.ZodType<DataAws2, unknown> = z.object({
-  backendClusterId: z.nullable(z.string()).optional(),
-  capacityGroups: z.array(z.lazy(() => CapacityGroup1$inboundSchema)),
-  cpu: z.nullable(z.union([z.lazy(() => Cpu7$inboundSchema), z.any()]))
-    .optional(),
-  memory: z.nullable(z.union([z.lazy(() => Memory7$inboundSchema), z.any()]))
-    .optional(),
-  name: z.string(),
-  nodes: z.lazy(() => Nodes1$inboundSchema),
-  providerFleets: z.array(z.lazy(() => ProviderFleet1$inboundSchema)),
-  region: z.nullable(z.string()).optional(),
-  status: z.lazy(() => DataStatus18$inboundSchema),
-  backend: z.literal("aws"),
-});
-
-export function dataAws2FromJSON(
-  jsonString: string,
-): SafeParseResult<DataAws2, SDKValidationError> {
-  return safeParse(
-    jsonString,
-    (x) => DataAws2$inboundSchema.parse(JSON.parse(x)),
-    `Failed to parse 'DataAws2' from JSON`,
-  );
-}
-
-/** @internal */
-export const DataUnion5$inboundSchema: z.ZodType<DataUnion5, unknown> = z.union(
-  [
-    z.lazy(() => DataAws2$inboundSchema),
-    z.lazy(() => DataGcp2$inboundSchema),
-    z.lazy(() => DataAzure2$inboundSchema),
-    z.lazy(() => DataLocal5$inboundSchema),
-  ],
-);
-
-export function dataUnion5FromJSON(
-  jsonString: string,
-): SafeParseResult<DataUnion5, SDKValidationError> {
-  return safeParse(
-    jsonString,
-    (x) => DataUnion5$inboundSchema.parse(JSON.parse(x)),
-    `Failed to parse 'DataUnion5' from JSON`,
-  );
-}
-
-/** @internal */
-export const DataComputeCluster$inboundSchema: z.ZodType<
-  DataComputeCluster,
-  unknown
-> = z.object({
-  data: z.union([
-    z.lazy(() => DataAws2$inboundSchema),
-    z.lazy(() => DataGcp2$inboundSchema),
-    z.lazy(() => DataAzure2$inboundSchema),
-    z.lazy(() => DataLocal5$inboundSchema),
-  ]),
-  resourceType: z.literal("compute-cluster"),
-});
-
-export function dataComputeClusterFromJSON(
-  jsonString: string,
-): SafeParseResult<DataComputeCluster, SDKValidationError> {
-  return safeParse(
-    jsonString,
-    (x) => DataComputeCluster$inboundSchema.parse(JSON.parse(x)),
-    `Failed to parse 'DataComputeCluster' from JSON`,
-  );
-}
-
-/** @internal */
-export const DaemonInstanceCpuUnit$inboundSchema: z.ZodEnum<
-  typeof DaemonInstanceCpuUnit
-> = z.enum(DaemonInstanceCpuUnit);
-
-/** @internal */
-export const DaemonInstanceCpu$inboundSchema: z.ZodType<
-  DaemonInstanceCpu,
-  unknown
-> = z.object({
-  unit: DaemonInstanceCpuUnit$inboundSchema,
-  value: z.number(),
-});
-
-export function daemonInstanceCpuFromJSON(
-  jsonString: string,
-): SafeParseResult<DaemonInstanceCpu, SDKValidationError> {
-  return safeParse(
-    jsonString,
-    (x) => DaemonInstanceCpu$inboundSchema.parse(JSON.parse(x)),
-    `Failed to parse 'DaemonInstanceCpu' from JSON`,
-  );
-}
-
-/** @internal */
-export const DaemonInstanceCpuUnion4$inboundSchema: z.ZodType<
-  DaemonInstanceCpuUnion4,
-  unknown
-> = z.union([z.lazy(() => DaemonInstanceCpu$inboundSchema), z.any()]);
-
-export function daemonInstanceCpuUnion4FromJSON(
-  jsonString: string,
-): SafeParseResult<DaemonInstanceCpuUnion4, SDKValidationError> {
-  return safeParse(
-    jsonString,
-    (x) => DaemonInstanceCpuUnion4$inboundSchema.parse(JSON.parse(x)),
-    `Failed to parse 'DaemonInstanceCpuUnion4' from JSON`,
-  );
-}
-
-/** @internal */
-export const DaemonInstanceKind$inboundSchema: z.ZodEnum<
-  typeof DaemonInstanceKind
-> = z.enum(DaemonInstanceKind);
-
-/** @internal */
-export const DaemonInstanceMemoryUnit$inboundSchema: z.ZodEnum<
-  typeof DaemonInstanceMemoryUnit
-> = z.enum(DaemonInstanceMemoryUnit);
-
-/** @internal */
-export const DaemonInstanceMemory$inboundSchema: z.ZodType<
-  DaemonInstanceMemory,
-  unknown
-> = z.object({
-  unit: DaemonInstanceMemoryUnit$inboundSchema,
-  value: z.number(),
-});
-
-export function daemonInstanceMemoryFromJSON(
-  jsonString: string,
-): SafeParseResult<DaemonInstanceMemory, SDKValidationError> {
-  return safeParse(
-    jsonString,
-    (x) => DaemonInstanceMemory$inboundSchema.parse(JSON.parse(x)),
-    `Failed to parse 'DaemonInstanceMemory' from JSON`,
-  );
-}
-
-/** @internal */
-export const DaemonInstanceMemoryUnion4$inboundSchema: z.ZodType<
-  DaemonInstanceMemoryUnion4,
-  unknown
-> = z.union([z.lazy(() => DaemonInstanceMemory$inboundSchema), z.any()]);
-
-export function daemonInstanceMemoryUnion4FromJSON(
-  jsonString: string,
-): SafeParseResult<DaemonInstanceMemoryUnion4, SDKValidationError> {
-  return safeParse(
-    jsonString,
-    (x) => DaemonInstanceMemoryUnion4$inboundSchema.parse(JSON.parse(x)),
-    `Failed to parse 'DaemonInstanceMemoryUnion4' from JSON`,
-  );
-}
-
-/** @internal */
-export const DaemonInstance4$inboundSchema: z.ZodType<
-  DaemonInstance4,
-  unknown
-> = z.object({
-  cpu: z.nullable(
-    z.union([z.lazy(() => DaemonInstanceCpu$inboundSchema), z.any()]),
-  ).optional(),
-  kind: DaemonInstanceKind$inboundSchema,
-  memory: z.nullable(
-    z.union([z.lazy(() => DaemonInstanceMemory$inboundSchema), z.any()]),
-  ).optional(),
-  name: z.string(),
-  phase: z.nullable(z.string()).optional(),
-  pid: z.nullable(z.int()).optional(),
-  ready: z.boolean(),
-  restartCount: z.nullable(z.int()).optional(),
-  unitId: z.string(),
-});
-
-export function daemonInstance4FromJSON(
-  jsonString: string,
-): SafeParseResult<DaemonInstance4, SDKValidationError> {
-  return safeParse(
-    jsonString,
-    (x) => DaemonInstance4$inboundSchema.parse(JSON.parse(x)),
-    `Failed to parse 'DaemonInstance4' from JSON`,
-  );
-}
-
-/** @internal */
-export const DaemonInstanceUnion$inboundSchema: z.ZodType<
-  DaemonInstanceUnion,
-  unknown
-> = z.union([z.lazy(() => DaemonInstance4$inboundSchema), z.any()]);
-
-export function daemonInstanceUnionFromJSON(
-  jsonString: string,
-): SafeParseResult<DaemonInstanceUnion, SDKValidationError> {
-  return safeParse(
-    jsonString,
-    (x) => DaemonInstanceUnion$inboundSchema.parse(JSON.parse(x)),
-    `Failed to parse 'DaemonInstanceUnion' from JSON`,
-  );
-}
-
-/** @internal */
-export const EventSeverity3$inboundSchema: z.ZodEnum<typeof EventSeverity3> = z
-  .enum(EventSeverity3);
-
-/** @internal */
-export const Subject3$inboundSchema: z.ZodType<Subject3, unknown> = z.object({
-  id: z.nullable(z.string()).optional(),
-  kind: z.string(),
-  name: z.nullable(z.string()).optional(),
-});
-
-export function subject3FromJSON(
-  jsonString: string,
-): SafeParseResult<Subject3, SDKValidationError> {
-  return safeParse(
-    jsonString,
-    (x) => Subject3$inboundSchema.parse(JSON.parse(x)),
-    `Failed to parse 'Subject3' from JSON`,
-  );
-}
-
-/** @internal */
-export const SubjectUnion3$inboundSchema: z.ZodType<SubjectUnion3, unknown> = z
-  .union([z.lazy(() => Subject3$inboundSchema), z.any()]);
-
-export function subjectUnion3FromJSON(
-  jsonString: string,
-): SafeParseResult<SubjectUnion3, SDKValidationError> {
-  return safeParse(
-    jsonString,
-    (x) => SubjectUnion3$inboundSchema.parse(JSON.parse(x)),
-    `Failed to parse 'SubjectUnion3' from JSON`,
-  );
-}
-
-/** @internal */
-export const Event10$inboundSchema: z.ZodType<Event10, unknown> = z.object({
-  kind: z.string(),
-  message: z.string(),
-  raw: z.nullable(z.any()).optional(),
-  severity: EventSeverity3$inboundSchema,
-  subject: z.nullable(z.union([z.lazy(() => Subject3$inboundSchema), z.any()]))
-    .optional(),
-  timestamp: z.iso.datetime({ offset: true }).transform(v => new Date(v)),
-});
-
-export function event10FromJSON(
-  jsonString: string,
-): SafeParseResult<Event10, SDKValidationError> {
-  return safeParse(
-    jsonString,
-    (x) => Event10$inboundSchema.parse(JSON.parse(x)),
-    `Failed to parse 'Event10' from JSON`,
-  );
-}
-
-/** @internal */
-export const Reason17$inboundSchema: z.ZodEnum<typeof Reason17> = z.enum(
-  Reason17,
-);
-
-/** @internal */
-export const CollectionIssueSeverity17$inboundSchema: z.ZodEnum<
-  typeof CollectionIssueSeverity17
-> = z.enum(CollectionIssueSeverity17);
-
-/** @internal */
-export const CollectionIssue17$inboundSchema: z.ZodType<
-  CollectionIssue17,
-  unknown
-> = z.object({
-  message: z.string(),
-  reason: Reason17$inboundSchema,
-  severity: CollectionIssueSeverity17$inboundSchema,
-  source: z.string(),
-});
-
-export function collectionIssue17FromJSON(
-  jsonString: string,
-): SafeParseResult<CollectionIssue17, SDKValidationError> {
-  return safeParse(
-    jsonString,
-    (x) => CollectionIssue17$inboundSchema.parse(JSON.parse(x)),
-    `Failed to parse 'CollectionIssue17' from JSON`,
-  );
-}
-
-/** @internal */
-export const Health17$inboundSchema: z.ZodEnum<typeof Health17> = z.enum(
-  Health17,
-);
-
-/** @internal */
-export const Lifecycle17$inboundSchema: z.ZodEnum<typeof Lifecycle17> = z.enum(
-  Lifecycle17,
-);
-
-/** @internal */
-export const DataStatus17$inboundSchema: z.ZodType<DataStatus17, unknown> = z
-  .object({
-    collectionIssues: z.array(z.lazy(() => CollectionIssue17$inboundSchema)),
-    health: Health17$inboundSchema,
-    lifecycle: Lifecycle17$inboundSchema,
-    message: z.nullable(z.string()).optional(),
-    partial: z.boolean(),
-    stale: z.boolean(),
-  });
-
-export function dataStatus17FromJSON(
-  jsonString: string,
-): SafeParseResult<DataStatus17, SDKValidationError> {
-  return safeParse(
-    jsonString,
-    (x) => DataStatus17$inboundSchema.parse(JSON.parse(x)),
-    `Failed to parse 'DataStatus17' from JSON`,
-  );
-}
-
-/** @internal */
 export const DataLocal4$inboundSchema: z.ZodType<DataLocal4, unknown> = z
   .object({
     commandSupported: z.boolean(),
     daemonInstance: z.nullable(
-      z.union([z.lazy(() => DaemonInstance4$inboundSchema), z.any()]),
+      z.union([z.lazy(() => DaemonInstance5$inboundSchema), z.any()]),
     ).optional(),
     daemonName: z.string().optional(),
-    events: z.array(z.lazy(() => Event10$inboundSchema)),
+    events: z.array(z.lazy(() => Event11$inboundSchema)),
     exitReason: z.nullable(z.string()).optional(),
     imagePathPresent: z.boolean(),
     pid: z.nullable(z.int()).optional(),
     restartCount: z.nullable(z.int()).optional(),
     runtimeId: z.string(),
-    status: z.lazy(() => DataStatus17$inboundSchema),
+    status: z.lazy(() => DataStatus18$inboundSchema),
     backend: z.literal("local"),
   });
 
@@ -13803,8 +14641,8 @@ export function cpuUnion6FromJSON(
 }
 
 /** @internal */
-export const InvolvedObject7$inboundSchema: z.ZodType<
-  InvolvedObject7,
+export const InvolvedObject8$inboundSchema: z.ZodType<
+  InvolvedObject8,
   unknown
 > = z.object({
   apiVersion: z.nullable(z.string()).optional(),
@@ -13816,71 +14654,71 @@ export const InvolvedObject7$inboundSchema: z.ZodType<
   uid: z.nullable(z.string()).optional(),
 });
 
-export function involvedObject7FromJSON(
+export function involvedObject8FromJSON(
   jsonString: string,
-): SafeParseResult<InvolvedObject7, SDKValidationError> {
+): SafeParseResult<InvolvedObject8, SDKValidationError> {
   return safeParse(
     jsonString,
-    (x) => InvolvedObject7$inboundSchema.parse(JSON.parse(x)),
-    `Failed to parse 'InvolvedObject7' from JSON`,
+    (x) => InvolvedObject8$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'InvolvedObject8' from JSON`,
   );
 }
 
 /** @internal */
-export const InvolvedObjectUnion7$inboundSchema: z.ZodType<
-  InvolvedObjectUnion7,
+export const InvolvedObjectUnion8$inboundSchema: z.ZodType<
+  InvolvedObjectUnion8,
   unknown
-> = z.union([z.lazy(() => InvolvedObject7$inboundSchema), z.any()]);
+> = z.union([z.lazy(() => InvolvedObject8$inboundSchema), z.any()]);
 
-export function involvedObjectUnion7FromJSON(
+export function involvedObjectUnion8FromJSON(
   jsonString: string,
-): SafeParseResult<InvolvedObjectUnion7, SDKValidationError> {
+): SafeParseResult<InvolvedObjectUnion8, SDKValidationError> {
   return safeParse(
     jsonString,
-    (x) => InvolvedObjectUnion7$inboundSchema.parse(JSON.parse(x)),
-    `Failed to parse 'InvolvedObjectUnion7' from JSON`,
+    (x) => InvolvedObjectUnion8$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'InvolvedObjectUnion8' from JSON`,
   );
 }
 
 /** @internal */
-export const GetResourceDeploymentDetailSource7$inboundSchema: z.ZodType<
-  GetResourceDeploymentDetailSource7,
+export const GetResourceDeploymentDetailSource8$inboundSchema: z.ZodType<
+  GetResourceDeploymentDetailSource8,
   unknown
 > = z.object({
   component: z.nullable(z.string()).optional(),
   host: z.nullable(z.string()).optional(),
 });
 
-export function getResourceDeploymentDetailSource7FromJSON(
+export function getResourceDeploymentDetailSource8FromJSON(
   jsonString: string,
-): SafeParseResult<GetResourceDeploymentDetailSource7, SDKValidationError> {
+): SafeParseResult<GetResourceDeploymentDetailSource8, SDKValidationError> {
   return safeParse(
     jsonString,
     (x) =>
-      GetResourceDeploymentDetailSource7$inboundSchema.parse(JSON.parse(x)),
-    `Failed to parse 'GetResourceDeploymentDetailSource7' from JSON`,
+      GetResourceDeploymentDetailSource8$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'GetResourceDeploymentDetailSource8' from JSON`,
   );
 }
 
 /** @internal */
-export const SourceUnion7$inboundSchema: z.ZodType<SourceUnion7, unknown> = z
+export const SourceUnion8$inboundSchema: z.ZodType<SourceUnion8, unknown> = z
   .union([
-    z.lazy(() => GetResourceDeploymentDetailSource7$inboundSchema),
+    z.lazy(() => GetResourceDeploymentDetailSource8$inboundSchema),
     z.any(),
   ]);
 
-export function sourceUnion7FromJSON(
+export function sourceUnion8FromJSON(
   jsonString: string,
-): SafeParseResult<SourceUnion7, SDKValidationError> {
+): SafeParseResult<SourceUnion8, SDKValidationError> {
   return safeParse(
     jsonString,
-    (x) => SourceUnion7$inboundSchema.parse(JSON.parse(x)),
-    `Failed to parse 'SourceUnion7' from JSON`,
+    (x) => SourceUnion8$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'SourceUnion8' from JSON`,
   );
 }
 
 /** @internal */
-export const Event9$inboundSchema: z.ZodType<Event9, unknown> = z.object({
+export const Event10$inboundSchema: z.ZodType<Event10, unknown> = z.object({
   count: z.nullable(z.int()).optional(),
   eventTime: z.nullable(
     z.iso.datetime({ offset: true }).transform(v => new Date(v)),
@@ -13889,7 +14727,7 @@ export const Event9$inboundSchema: z.ZodType<Event9, unknown> = z.object({
     z.iso.datetime({ offset: true }).transform(v => new Date(v)),
   ).optional(),
   involvedObject: z.nullable(
-    z.union([z.lazy(() => InvolvedObject7$inboundSchema), z.any()]),
+    z.union([z.lazy(() => InvolvedObject8$inboundSchema), z.any()]),
   ).optional(),
   lastTimestamp: z.nullable(
     z.iso.datetime({ offset: true }).transform(v => new Date(v)),
@@ -13899,20 +14737,20 @@ export const Event9$inboundSchema: z.ZodType<Event9, unknown> = z.object({
   reason: z.string(),
   source: z.nullable(
     z.union([
-      z.lazy(() => GetResourceDeploymentDetailSource7$inboundSchema),
+      z.lazy(() => GetResourceDeploymentDetailSource8$inboundSchema),
       z.any(),
     ]),
   ).optional(),
   type: z.nullable(z.string()).optional(),
 });
 
-export function event9FromJSON(
+export function event10FromJSON(
   jsonString: string,
-): SafeParseResult<Event9, SDKValidationError> {
+): SafeParseResult<Event10, SDKValidationError> {
   return safeParse(
     jsonString,
-    (x) => Event9$inboundSchema.parse(JSON.parse(x)),
-    `Failed to parse 'Event9' from JSON`,
+    (x) => Event10$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'Event10' from JSON`,
   );
 }
 
@@ -14093,64 +14931,64 @@ export function replicas4FromJSON(
 }
 
 /** @internal */
-export const Reason16$inboundSchema: z.ZodEnum<typeof Reason16> = z.enum(
-  Reason16,
+export const Reason17$inboundSchema: z.ZodEnum<typeof Reason17> = z.enum(
+  Reason17,
 );
 
 /** @internal */
-export const CollectionIssueSeverity16$inboundSchema: z.ZodEnum<
-  typeof CollectionIssueSeverity16
-> = z.enum(CollectionIssueSeverity16);
+export const CollectionIssueSeverity17$inboundSchema: z.ZodEnum<
+  typeof CollectionIssueSeverity17
+> = z.enum(CollectionIssueSeverity17);
 
 /** @internal */
-export const CollectionIssue16$inboundSchema: z.ZodType<
-  CollectionIssue16,
+export const CollectionIssue17$inboundSchema: z.ZodType<
+  CollectionIssue17,
   unknown
 > = z.object({
   message: z.string(),
-  reason: Reason16$inboundSchema,
-  severity: CollectionIssueSeverity16$inboundSchema,
+  reason: Reason17$inboundSchema,
+  severity: CollectionIssueSeverity17$inboundSchema,
   source: z.string(),
 });
 
-export function collectionIssue16FromJSON(
+export function collectionIssue17FromJSON(
   jsonString: string,
-): SafeParseResult<CollectionIssue16, SDKValidationError> {
+): SafeParseResult<CollectionIssue17, SDKValidationError> {
   return safeParse(
     jsonString,
-    (x) => CollectionIssue16$inboundSchema.parse(JSON.parse(x)),
-    `Failed to parse 'CollectionIssue16' from JSON`,
+    (x) => CollectionIssue17$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'CollectionIssue17' from JSON`,
   );
 }
 
 /** @internal */
-export const Health16$inboundSchema: z.ZodEnum<typeof Health16> = z.enum(
-  Health16,
+export const Health17$inboundSchema: z.ZodEnum<typeof Health17> = z.enum(
+  Health17,
 );
 
 /** @internal */
-export const Lifecycle16$inboundSchema: z.ZodEnum<typeof Lifecycle16> = z.enum(
-  Lifecycle16,
+export const Lifecycle17$inboundSchema: z.ZodEnum<typeof Lifecycle17> = z.enum(
+  Lifecycle17,
 );
 
 /** @internal */
-export const DataStatus16$inboundSchema: z.ZodType<DataStatus16, unknown> = z
+export const DataStatus17$inboundSchema: z.ZodType<DataStatus17, unknown> = z
   .object({
-    collectionIssues: z.array(z.lazy(() => CollectionIssue16$inboundSchema)),
-    health: Health16$inboundSchema,
-    lifecycle: Lifecycle16$inboundSchema,
+    collectionIssues: z.array(z.lazy(() => CollectionIssue17$inboundSchema)),
+    health: Health17$inboundSchema,
+    lifecycle: Lifecycle17$inboundSchema,
     message: z.nullable(z.string()).optional(),
     partial: z.boolean(),
     stale: z.boolean(),
   });
 
-export function dataStatus16FromJSON(
+export function dataStatus17FromJSON(
   jsonString: string,
-): SafeParseResult<DataStatus16, SDKValidationError> {
+): SafeParseResult<DataStatus17, SDKValidationError> {
   return safeParse(
     jsonString,
-    (x) => DataStatus16$inboundSchema.parse(JSON.parse(x)),
-    `Failed to parse 'DataStatus16' from JSON`,
+    (x) => DataStatus17$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'DataStatus17' from JSON`,
   );
 }
 
@@ -14222,7 +15060,7 @@ export const DataKubernetes3$inboundSchema: z.ZodType<
   commandSupported: z.boolean(),
   cpu: z.nullable(z.union([z.lazy(() => Cpu6$inboundSchema), z.any()]))
     .optional(),
-  events: z.array(z.lazy(() => Event9$inboundSchema)),
+  events: z.array(z.lazy(() => Event10$inboundSchema)),
   memory: z.nullable(z.union([z.lazy(() => Memory6$inboundSchema), z.any()]))
     .optional(),
   name: z.string(),
@@ -14230,7 +15068,7 @@ export const DataKubernetes3$inboundSchema: z.ZodType<
   pods: z.array(z.lazy(() => Pod3$inboundSchema)),
   replicas: z.lazy(() => Replicas4$inboundSchema),
   restarts: z.nullable(z.int()).optional(),
-  status: z.lazy(() => DataStatus16$inboundSchema),
+  status: z.lazy(() => DataStatus17$inboundSchema),
   workload: z.nullable(
     z.union([z.lazy(() => Workload3$inboundSchema), z.any()]),
   ).optional(),
@@ -14244,6 +15082,333 @@ export function dataKubernetes3FromJSON(
     jsonString,
     (x) => DataKubernetes3$inboundSchema.parse(JSON.parse(x)),
     `Failed to parse 'DataKubernetes3' from JSON`,
+  );
+}
+
+/** @internal */
+export const CpuDaemonInstanceUnit4$inboundSchema: z.ZodEnum<
+  typeof CpuDaemonInstanceUnit4
+> = z.enum(CpuDaemonInstanceUnit4);
+
+/** @internal */
+export const CpuDaemonInstance4$inboundSchema: z.ZodType<
+  CpuDaemonInstance4,
+  unknown
+> = z.object({
+  unit: CpuDaemonInstanceUnit4$inboundSchema,
+  value: z.number(),
+});
+
+export function cpuDaemonInstance4FromJSON(
+  jsonString: string,
+): SafeParseResult<CpuDaemonInstance4, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => CpuDaemonInstance4$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'CpuDaemonInstance4' from JSON`,
+  );
+}
+
+/** @internal */
+export const DaemonInstanceCpuUnion4$inboundSchema: z.ZodType<
+  DaemonInstanceCpuUnion4,
+  unknown
+> = z.union([z.lazy(() => CpuDaemonInstance4$inboundSchema), z.any()]);
+
+export function daemonInstanceCpuUnion4FromJSON(
+  jsonString: string,
+): SafeParseResult<DaemonInstanceCpuUnion4, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => DaemonInstanceCpuUnion4$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'DaemonInstanceCpuUnion4' from JSON`,
+  );
+}
+
+/** @internal */
+export const MemoryDaemonInstanceUnit4$inboundSchema: z.ZodEnum<
+  typeof MemoryDaemonInstanceUnit4
+> = z.enum(MemoryDaemonInstanceUnit4);
+
+/** @internal */
+export const MemoryDaemonInstance4$inboundSchema: z.ZodType<
+  MemoryDaemonInstance4,
+  unknown
+> = z.object({
+  unit: MemoryDaemonInstanceUnit4$inboundSchema,
+  value: z.number(),
+});
+
+export function memoryDaemonInstance4FromJSON(
+  jsonString: string,
+): SafeParseResult<MemoryDaemonInstance4, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => MemoryDaemonInstance4$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'MemoryDaemonInstance4' from JSON`,
+  );
+}
+
+/** @internal */
+export const DaemonInstanceMemoryUnion4$inboundSchema: z.ZodType<
+  DaemonInstanceMemoryUnion4,
+  unknown
+> = z.union([z.lazy(() => MemoryDaemonInstance4$inboundSchema), z.any()]);
+
+export function daemonInstanceMemoryUnion4FromJSON(
+  jsonString: string,
+): SafeParseResult<DaemonInstanceMemoryUnion4, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => DaemonInstanceMemoryUnion4$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'DaemonInstanceMemoryUnion4' from JSON`,
+  );
+}
+
+/** @internal */
+export const DaemonInstance4$inboundSchema: z.ZodType<
+  DaemonInstance4,
+  unknown
+> = z.object({
+  cpu: z.nullable(
+    z.union([z.lazy(() => CpuDaemonInstance4$inboundSchema), z.any()]),
+  ).optional(),
+  ip: z.nullable(z.string()).optional(),
+  machineId: z.nullable(z.string()).optional(),
+  memory: z.nullable(
+    z.union([z.lazy(() => MemoryDaemonInstance4$inboundSchema), z.any()]),
+  ).optional(),
+  message: z.nullable(z.string()).optional(),
+  metricsHealthy: z.nullable(z.boolean()).optional(),
+  metricsLastUpdated: z.nullable(z.string()).optional(),
+  metricsStatus: z.nullable(z.string()).optional(),
+  name: z.string(),
+  nodeName: z.nullable(z.string()).optional(),
+  phase: z.nullable(z.string()).optional(),
+  ready: z.boolean(),
+  reason: z.nullable(z.string()).optional(),
+  replicaId: z.string(),
+  restartCount: z.nullable(z.int()).optional(),
+  status: z.nullable(z.string()).optional(),
+  terminatedReason: z.nullable(z.string()).optional(),
+  waitingReason: z.nullable(z.string()).optional(),
+});
+
+export function daemonInstance4FromJSON(
+  jsonString: string,
+): SafeParseResult<DaemonInstance4, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => DaemonInstance4$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'DaemonInstance4' from JSON`,
+  );
+}
+
+/** @internal */
+export const InvolvedObject7$inboundSchema: z.ZodType<
+  InvolvedObject7,
+  unknown
+> = z.object({
+  details: z.nullable(z.any()).optional(),
+  id: z.nullable(z.string()).optional(),
+  kind: z.nullable(z.string()).optional(),
+  machineId: z.nullable(z.string()).optional(),
+  name: z.nullable(z.string()).optional(),
+  replicaId: z.nullable(z.string()).optional(),
+});
+
+export function involvedObject7FromJSON(
+  jsonString: string,
+): SafeParseResult<InvolvedObject7, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => InvolvedObject7$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'InvolvedObject7' from JSON`,
+  );
+}
+
+/** @internal */
+export const InvolvedObjectUnion7$inboundSchema: z.ZodType<
+  InvolvedObjectUnion7,
+  unknown
+> = z.union([z.lazy(() => InvolvedObject7$inboundSchema), z.any()]);
+
+export function involvedObjectUnion7FromJSON(
+  jsonString: string,
+): SafeParseResult<InvolvedObjectUnion7, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => InvolvedObjectUnion7$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'InvolvedObjectUnion7' from JSON`,
+  );
+}
+
+/** @internal */
+export const GetResourceDeploymentDetailSource7$inboundSchema: z.ZodType<
+  GetResourceDeploymentDetailSource7,
+  unknown
+> = z.object({
+  component: z.nullable(z.string()).optional(),
+  host: z.nullable(z.string()).optional(),
+});
+
+export function getResourceDeploymentDetailSource7FromJSON(
+  jsonString: string,
+): SafeParseResult<GetResourceDeploymentDetailSource7, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) =>
+      GetResourceDeploymentDetailSource7$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'GetResourceDeploymentDetailSource7' from JSON`,
+  );
+}
+
+/** @internal */
+export const SourceUnion7$inboundSchema: z.ZodType<SourceUnion7, unknown> = z
+  .union([
+    z.lazy(() => GetResourceDeploymentDetailSource7$inboundSchema),
+    z.any(),
+  ]);
+
+export function sourceUnion7FromJSON(
+  jsonString: string,
+): SafeParseResult<SourceUnion7, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => SourceUnion7$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'SourceUnion7' from JSON`,
+  );
+}
+
+/** @internal */
+export const Event9$inboundSchema: z.ZodType<Event9, unknown> = z.object({
+  count: z.nullable(z.int()).optional(),
+  details: z.nullable(z.any()).optional(),
+  eventId: z.nullable(z.string()).optional(),
+  eventTime: z.nullable(
+    z.iso.datetime({ offset: true }).transform(v => new Date(v)),
+  ).optional(),
+  firstTimestamp: z.nullable(
+    z.iso.datetime({ offset: true }).transform(v => new Date(v)),
+  ).optional(),
+  involvedObject: z.nullable(
+    z.union([z.lazy(() => InvolvedObject7$inboundSchema), z.any()]),
+  ).optional(),
+  lastTimestamp: z.nullable(
+    z.iso.datetime({ offset: true }).transform(v => new Date(v)),
+  ).optional(),
+  message: z.string(),
+  raw: z.nullable(z.any()).optional(),
+  reason: z.string(),
+  source: z.nullable(
+    z.union([
+      z.lazy(() => GetResourceDeploymentDetailSource7$inboundSchema),
+      z.any(),
+    ]),
+  ).optional(),
+  type: z.nullable(z.string()).optional(),
+});
+
+export function event9FromJSON(
+  jsonString: string,
+): SafeParseResult<Event9, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => Event9$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'Event9' from JSON`,
+  );
+}
+
+/** @internal */
+export const Reason16$inboundSchema: z.ZodEnum<typeof Reason16> = z.enum(
+  Reason16,
+);
+
+/** @internal */
+export const CollectionIssueSeverity16$inboundSchema: z.ZodEnum<
+  typeof CollectionIssueSeverity16
+> = z.enum(CollectionIssueSeverity16);
+
+/** @internal */
+export const CollectionIssue16$inboundSchema: z.ZodType<
+  CollectionIssue16,
+  unknown
+> = z.object({
+  message: z.string(),
+  reason: Reason16$inboundSchema,
+  severity: CollectionIssueSeverity16$inboundSchema,
+  source: z.string(),
+});
+
+export function collectionIssue16FromJSON(
+  jsonString: string,
+): SafeParseResult<CollectionIssue16, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => CollectionIssue16$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'CollectionIssue16' from JSON`,
+  );
+}
+
+/** @internal */
+export const Health16$inboundSchema: z.ZodEnum<typeof Health16> = z.enum(
+  Health16,
+);
+
+/** @internal */
+export const Lifecycle16$inboundSchema: z.ZodEnum<typeof Lifecycle16> = z.enum(
+  Lifecycle16,
+);
+
+/** @internal */
+export const DataStatus16$inboundSchema: z.ZodType<DataStatus16, unknown> = z
+  .object({
+    collectionIssues: z.array(z.lazy(() => CollectionIssue16$inboundSchema)),
+    health: Health16$inboundSchema,
+    lifecycle: Lifecycle16$inboundSchema,
+    message: z.nullable(z.string()).optional(),
+    partial: z.boolean(),
+    stale: z.boolean(),
+  });
+
+export function dataStatus16FromJSON(
+  jsonString: string,
+): SafeParseResult<DataStatus16, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => DataStatus16$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'DataStatus16' from JSON`,
+  );
+}
+
+/** @internal */
+export const DataMachines1$inboundSchema: z.ZodType<DataMachines1, unknown> = z
+  .object({
+    assignedMachines: z.int(),
+    capacityGroup: z.string(),
+    commandSupported: z.boolean(),
+    daemonInstances: z.array(z.lazy(() => DaemonInstance4$inboundSchema)),
+    daemonName: z.string().optional(),
+    desiredMachines: z.int(),
+    events: z.array(z.lazy(() => Event9$inboundSchema)),
+    healthyInstances: z.int(),
+    horizonClusterId: z.string(),
+    horizonStatus: z.string(),
+    horizonStatusMessage: z.nullable(z.string()).optional(),
+    horizonStatusReason: z.nullable(z.string()).optional(),
+    latestUpdateTimestamp: z.string(),
+    status: z.lazy(() => DataStatus16$inboundSchema),
+    unavailableInstances: z.int(),
+    backend: z.literal("machines"),
+  });
+
+export function dataMachines1FromJSON(
+  jsonString: string,
+): SafeParseResult<DataMachines1, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => DataMachines1$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'DataMachines1' from JSON`,
   );
 }
 
@@ -15232,6 +16397,7 @@ export const DataUnion4$inboundSchema: z.ZodType<DataUnion4, unknown> = z.union(
     z.lazy(() => DataAws1$inboundSchema),
     z.lazy(() => DataGcp1$inboundSchema),
     z.lazy(() => DataAzure1$inboundSchema),
+    z.lazy(() => DataMachines1$inboundSchema),
     z.lazy(() => DataKubernetes3$inboundSchema),
     z.lazy(() => DataLocal4$inboundSchema),
   ],
@@ -15254,6 +16420,7 @@ export const DataDaemon$inboundSchema: z.ZodType<DataDaemon, unknown> = z
       z.lazy(() => DataAws1$inboundSchema),
       z.lazy(() => DataGcp1$inboundSchema),
       z.lazy(() => DataAzure1$inboundSchema),
+      z.lazy(() => DataMachines1$inboundSchema),
       z.lazy(() => DataKubernetes3$inboundSchema),
       z.lazy(() => DataLocal4$inboundSchema),
     ]),

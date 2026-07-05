@@ -13,8 +13,8 @@ let value: DataKubernetesSecret = {
     collectionIssues: [
       {
         message: "<value>",
-        reason: "timed-out",
-        severity: "error",
+        reason: "api-unavailable",
+        severity: "info",
         source: "<value>",
       },
     ],
@@ -34,5 +34,5 @@ let value: DataKubernetesSecret = {
 | `namespace`                                                        | *string*                                                           | :heavy_check_mark:                                                 | N/A                                                                |
 | `prefix`                                                           | *string*                                                           | :heavy_check_mark:                                                 | N/A                                                                |
 | `secretMetadataListed`                                             | *boolean*                                                          | :heavy_check_mark:                                                 | N/A                                                                |
-| `status`                                                           | [operations.DataStatus38](../../models/operations/datastatus38.md) | :heavy_check_mark:                                                 | N/A                                                                |
+| `status`                                                           | [operations.DataStatus40](../../models/operations/datastatus40.md) | :heavy_check_mark:                                                 | N/A                                                                |
 | `backend`                                                          | *"kubernetesSecret"*                                               | :heavy_check_mark:                                                 | N/A                                                                |

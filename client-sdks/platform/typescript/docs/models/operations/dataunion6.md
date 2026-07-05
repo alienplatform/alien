@@ -59,15 +59,15 @@ const value: operations.DataAzureServiceBus = {
     collectionIssues: [
       {
         message: "<value>",
-        reason: "timed-out",
-        severity: "info",
+        reason: "collection-failed",
+        severity: "error",
         source: "<value>",
       },
     ],
-    health: "degraded",
-    lifecycle: "deleting",
-    partial: true,
-    stale: true,
+    health: "unknown",
+    lifecycle: "scaling",
+    partial: false,
+    stale: false,
   },
   backend: "azureServiceBus",
 };
@@ -88,4 +88,3 @@ const value: operations.DataLocal6 = {
   backend: "local",
 };
 ```
-

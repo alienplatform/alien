@@ -20,15 +20,15 @@ let value: DataAzure2 = {
     collectionIssues: [
       {
         message: "<value>",
-        reason: "not-installed",
-        severity: "info",
+        reason: "api-unavailable",
+        severity: "warning",
         source: "<value>",
       },
     ],
-    health: "degraded",
-    lifecycle: "running",
+    health: "healthy",
+    lifecycle: "deleting",
     partial: true,
-    stale: false,
+    stale: true,
   },
   backend: "azure",
 };
@@ -46,5 +46,5 @@ let value: DataAzure2 = {
 | `nodes`                                                                    | [models.Nodes3](../models/nodes3.md)                                       | :heavy_check_mark:                                                         | N/A                                                                        |
 | `providerFleets`                                                           | [models.ProviderFleet3](../models/providerfleet3.md)[]                     | :heavy_check_mark:                                                         | N/A                                                                        |
 | `region`                                                                   | *string*                                                                   | :heavy_minus_sign:                                                         | N/A                                                                        |
-| `status`                                                                   | [models.ResourceHeartbeatStatus20](../models/resourceheartbeatstatus20.md) | :heavy_check_mark:                                                         | N/A                                                                        |
+| `status`                                                                   | [models.ResourceHeartbeatStatus21](../models/resourceheartbeatstatus21.md) | :heavy_check_mark:                                                         | N/A                                                                        |
 | `backend`                                                                  | *"azure"*                                                                  | :heavy_check_mark:                                                         | N/A                                                                        |

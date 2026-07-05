@@ -3,12 +3,12 @@
 
 ## Supported Types
 
-### `models.DaemonInstanceCpu`
+### `models.CpuDaemonInstance4`
 
 ```typescript
-const value: models.DaemonInstanceCpu = {
-  unit: "bytes",
-  value: 4886.5,
+const value: models.CpuDaemonInstance4 = {
+  unit: "milliseconds",
+  value: 3027.48,
 };
 ```
 
@@ -17,4 +17,3 @@ const value: models.DaemonInstanceCpu = {
 ```typescript
 const value: any = "<value>";
 ```
-

@@ -122,17 +122,17 @@ const value: models.DataDaemon = {
         {
           message: "<value>",
           reason: "api-unavailable",
-          severity: "info",
+          severity: "warning",
           source: "<value>",
         },
       ],
-      health: "degraded",
-      lifecycle: "running",
-      partial: false,
+      health: "unknown",
+      lifecycle: "stopped",
+      partial: true,
       stale: true,
     },
     unavailableInstances: 431179,
-    backend: "gcp",
+    backend: "azure",
   },
   resourceType: "daemon",
 };
@@ -185,7 +185,7 @@ const value: models.DataKubernetesCluster = {
       collectionIssues: [
         {
           message: "<value>",
-          reason: "api-unavailable",
+          reason: "timed-out",
           severity: "warning",
           source: "<value>",
         },
@@ -241,15 +241,15 @@ const value: models.DataKv = {
       collectionIssues: [
         {
           message: "<value>",
-          reason: "not-installed",
+          reason: "api-unavailable",
           severity: "warning",
           source: "<value>",
         },
       ],
-      health: "healthy",
-      lifecycle: "scaling",
-      partial: false,
-      stale: true,
+      health: "degraded",
+      lifecycle: "unknown",
+      partial: true,
+      stale: false,
     },
     storageAccountName: "<value>",
     tableExists: false,
@@ -326,8 +326,8 @@ const value: models.DataServiceAccount = {
       collectionIssues: [
         {
           message: "<value>",
-          reason: "api-unavailable",
-          severity: "error",
+          reason: "timed-out",
+          severity: "warning",
           source: "<value>",
         },
       ],
@@ -421,7 +421,7 @@ const value: models.DataBuild = {
         {
           message: "<value>",
           reason: "not-installed",
-          severity: "error",
+          severity: "info",
           source: "<value>",
         },
       ],

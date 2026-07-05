@@ -21,7 +21,7 @@ let value: DataGcp2 = {
       {
         message: "<value>",
         reason: "not-installed",
-        severity: "warning",
+        severity: "info",
         source: "<value>",
       },
     ],
@@ -46,5 +46,5 @@ let value: DataGcp2 = {
 | `nodes`                                                                    | [models.Nodes2](../models/nodes2.md)                                       | :heavy_check_mark:                                                         | N/A                                                                        |
 | `providerFleets`                                                           | [models.ProviderFleet2](../models/providerfleet2.md)[]                     | :heavy_check_mark:                                                         | N/A                                                                        |
 | `region`                                                                   | *string*                                                                   | :heavy_minus_sign:                                                         | N/A                                                                        |
-| `status`                                                                   | [models.ResourceHeartbeatStatus19](../models/resourceheartbeatstatus19.md) | :heavy_check_mark:                                                         | N/A                                                                        |
+| `status`                                                                   | [models.ResourceHeartbeatStatus20](../models/resourceheartbeatstatus20.md) | :heavy_check_mark:                                                         | N/A                                                                        |
 | `backend`                                                                  | *"gcp"*                                                                    | :heavy_check_mark:                                                         | N/A                                                                        |

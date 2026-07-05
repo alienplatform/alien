@@ -6775,6 +6775,11 @@
             "$ref": "#/components/schemas/Platform",
             "nullable": true
           },
+          "publicSubdomain": {
+            "type": "string",
+            "description": "Optional generated-domain subdomain to use for this deployment.",
+            "nullable": true
+          },
           "scope": {
             "type": "string",
             "nullable": true

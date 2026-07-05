@@ -75,8 +75,8 @@ const value: operations.DataKubernetesSecret = {
     collectionIssues: [
       {
         message: "<value>",
-        reason: "timed-out",
-        severity: "error",
+        reason: "api-unavailable",
+        severity: "info",
         source: "<value>",
       },
     ],
@@ -100,17 +100,16 @@ const value: operations.DataLocal9 = {
     collectionIssues: [
       {
         message: "<value>",
-        reason: "timed-out",
+        reason: "not-installed",
         severity: "info",
         source: "<value>",
       },
     ],
-    health: "unknown",
-    lifecycle: "creating",
+    health: "unhealthy",
+    lifecycle: "unknown",
     partial: true,
-    stale: false,
+    stale: true,
   },
   backend: "local",
 };
 ```
-

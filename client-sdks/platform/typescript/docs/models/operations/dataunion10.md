@@ -51,15 +51,15 @@ const value: operations.DataGcpServiceAccount1 = {
     collectionIssues: [
       {
         message: "<value>",
-        reason: "not-installed",
-        severity: "info",
+        reason: "collection-failed",
+        severity: "error",
         source: "<value>",
       },
     ],
-    health: "degraded",
+    health: "healthy",
     lifecycle: "stopped",
-    partial: true,
-    stale: false,
+    partial: false,
+    stale: true,
   },
   backend: "gcpServiceAccount",
 };
@@ -91,13 +91,13 @@ const value: operations.DataAzureManagedIdentity1 = {
     collectionIssues: [
       {
         message: "<value>",
-        reason: "timed-out",
-        severity: "warning",
+        reason: "not-installed",
+        severity: "error",
         source: "<value>",
       },
     ],
-    health: "healthy",
-    lifecycle: "stopped",
+    health: "unknown",
+    lifecycle: "deleting",
     partial: true,
     stale: false,
   },
@@ -121,4 +121,3 @@ const value: operations.DataLocal10 = {
   backend: "local",
 };
 ```
-

@@ -156,6 +156,9 @@ pub struct AgentSyncResponse {
 pub struct InitializeRequest {
     pub name: Option<String>,
     pub platform: Option<Platform>,
+    /// Optional generated-domain subdomain to use for this deployment.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub public_subdomain: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub scope: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -1581,6 +1584,7 @@ async fn initialize(
                         stack_settings: settings,
                         stack_state: None,
                         environment_variables: None,
+                        public_subdomain: req.public_subdomain,
                         input_values: req.input_values,
                         deployment_token: dep_token,
                     },

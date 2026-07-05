@@ -2935,6 +2935,10 @@ export type PersistImportedDeploymentRequest = {
   deploymentGroupId: string;
   managerId: string;
   /**
+   * Optional deployment subdomain under the project's generated-domain parent. Omit to generate a random subdomain.
+   */
+  publicSubdomain?: string | undefined;
+  /**
    * Represents the target cloud platform.
    */
   platform: PersistImportedDeploymentRequestPlatformEnum;
@@ -8903,6 +8907,7 @@ export type PersistImportedDeploymentRequest$Outbound = {
   name: string;
   deploymentGroupId: string;
   managerId: string;
+  publicSubdomain?: string | undefined;
   platform: string;
   basePlatform?: string | undefined;
   stackSettings: PersistImportedDeploymentRequestStackSettings$Outbound;
@@ -8945,6 +8950,7 @@ export const PersistImportedDeploymentRequest$outboundSchema: z.ZodType<
   name: z.string(),
   deploymentGroupId: z.string(),
   managerId: z.string(),
+  publicSubdomain: z.string().optional(),
   platform: PersistImportedDeploymentRequestPlatformEnum$outboundSchema,
   basePlatform: KubernetesBasePlatform$outboundSchema.optional(),
   stackSettings: z.lazy(() =>

@@ -237,6 +237,9 @@ export type { LocalStorageHeartbeatData } from "./local-storage-heartbeat-data-s
 export type { LocalVaultHeartbeatData } from "./local-vault-heartbeat-data-schema.js";
 export type { LocalWorkerHeartbeatData } from "./local-worker-heartbeat-data-schema.js";
 export type { MachineProfile } from "./machine-profile-schema.js";
+export type { MachinesComputeClusterHeartbeatData } from "./machines-compute-cluster-heartbeat-data-schema.js";
+export type { MachinesComputeMachineStatus } from "./machines-compute-machine-status-schema.js";
+export type { MachinesDaemonHeartbeatData } from "./machines-daemon-heartbeat-data-schema.js";
 export type { ManagedRuntimeEventInvolvedObject } from "./managed-runtime-event-involved-object-schema.js";
 export type { ManagedRuntimeEventSnapshot } from "./managed-runtime-event-snapshot-schema.js";
 export type { ManagedRuntimeEventSource } from "./managed-runtime-event-source-schema.js";
@@ -586,6 +589,9 @@ export { LocalStorageHeartbeatDataSchema } from "./local-storage-heartbeat-data-
 export { LocalVaultHeartbeatDataSchema } from "./local-vault-heartbeat-data-schema.js";
 export { LocalWorkerHeartbeatDataSchema } from "./local-worker-heartbeat-data-schema.js";
 export { MachineProfileSchema } from "./machine-profile-schema.js";
+export { MachinesComputeClusterHeartbeatDataSchema } from "./machines-compute-cluster-heartbeat-data-schema.js";
+export { MachinesComputeMachineStatusSchema } from "./machines-compute-machine-status-schema.js";
+export { MachinesDaemonHeartbeatDataSchema } from "./machines-daemon-heartbeat-data-schema.js";
 export { ManagedRuntimeEventInvolvedObjectSchema } from "./managed-runtime-event-involved-object-schema.js";
 export { ManagedRuntimeEventSnapshotSchema } from "./managed-runtime-event-snapshot-schema.js";
 export { ManagedRuntimeEventSourceSchema } from "./managed-runtime-event-source-schema.js";

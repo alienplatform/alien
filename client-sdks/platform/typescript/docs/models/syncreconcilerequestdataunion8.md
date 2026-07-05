@@ -29,8 +29,8 @@ const value: models.DataCloudSQL = {
     collectionIssues: [
       {
         message: "<value>",
-        reason: "timed-out",
-        severity: "error",
+        reason: "forbidden",
+        severity: "warning",
         source: "<value>",
       },
     ],
@@ -76,4 +76,3 @@ const value: models.DataLocal8 = {
   backend: "local",
 };
 ```
-

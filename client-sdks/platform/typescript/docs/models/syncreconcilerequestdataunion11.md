@@ -24,10 +24,10 @@ const value: models.DataAwsVpc = {
         source: "<value>",
       },
     ],
-    health: "unhealthy",
-    lifecycle: "scaling",
+    health: "unknown",
+    lifecycle: "unknown",
     partial: true,
-    stale: true,
+    stale: false,
   },
   backend: "awsVpc",
 };
@@ -64,4 +64,3 @@ const value: models.DataAzureVnet = {
   backend: "azureVnet",
 };
 ```
-

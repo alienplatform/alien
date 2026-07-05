@@ -58,18 +58,18 @@ const value: operations.DataAzureTable = {
     collectionIssues: [
       {
         message: "<value>",
-        reason: "api-unavailable",
-        severity: "warning",
+        reason: "forbidden",
+        severity: "info",
         source: "<value>",
       },
     ],
-    health: "degraded",
-    lifecycle: "unknown",
-    partial: true,
-    stale: false,
+    health: "healthy",
+    lifecycle: "scaling",
+    partial: false,
+    stale: true,
   },
   storageAccountName: "<value>",
-  tableExists: false,
+  tableExists: true,
   tableName: "<value>",
   backend: "azureTable",
 };
@@ -93,4 +93,3 @@ const value: operations.DataLocal7 = {
   backend: "local",
 };
 ```
-

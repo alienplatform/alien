@@ -840,6 +840,7 @@ async fn native_deployment_blocks_imported_name() {
                 stack_settings: StackSettings::default(),
                 stack_state: None,
                 environment_variables: None,
+                public_subdomain: None,
                 input_values: Default::default(),
                 deployment_token: None,
             },

@@ -15,13 +15,13 @@ let value: DataBuild = {
       collectionIssues: [
         {
           message: "<value>",
-          reason: "api-unavailable",
-          severity: "error",
+          reason: "not-installed",
+          severity: "info",
           source: "<value>",
         },
       ],
-      health: "degraded",
-      lifecycle: "unknown",
+      health: "healthy",
+      lifecycle: "failed",
       partial: false,
       stale: true,
     },

@@ -7881,6 +7881,13 @@
               }
             ]
           },
+          "publicSubdomain": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Optional generated-domain subdomain to use for this deployment."
+          },
           "scope": {
             "type": [
               "string",

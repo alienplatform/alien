@@ -75,7 +75,7 @@ const value: models.DataKubernetesSecret = {
     collectionIssues: [
       {
         message: "<value>",
-        reason: "forbidden",
+        reason: "collection-failed",
         severity: "info",
         source: "<value>",
       },
@@ -113,4 +113,3 @@ const value: models.DataLocal9 = {
   backend: "local",
 };
 ```
-
