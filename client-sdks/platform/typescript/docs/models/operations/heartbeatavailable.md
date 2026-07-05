@@ -26,7 +26,7 @@ let value: HeartbeatAvailable = {
           collectionIssues: [
             {
               message: "<value>",
-              reason: "forbidden",
+              reason: "collection-failed",
               severity: "warning",
               source: "<value>",
             },

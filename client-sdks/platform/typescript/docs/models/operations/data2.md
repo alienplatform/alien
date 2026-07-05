@@ -12,15 +12,15 @@ let value: Data2 = {
     collectionIssues: [
       {
         message: "<value>",
-        reason: "not-installed",
-        severity: "info",
+        reason: "api-unavailable",
+        severity: "error",
         source: "<value>",
       },
     ],
-    health: "degraded",
-    lifecycle: "deleting",
+    health: "unknown",
+    lifecycle: "running",
     partial: true,
-    stale: true,
+    stale: false,
   },
 };
 ```
@@ -34,4 +34,4 @@ let value: Data2 = {
 | `name`                                                             | *string*                                                           | :heavy_check_mark:                                                 | N/A                                                                |
 | `provisioningState`                                                | *string*                                                           | :heavy_minus_sign:                                                 | N/A                                                                |
 | `resourceId`                                                       | *string*                                                           | :heavy_minus_sign:                                                 | N/A                                                                |
-| `status`                                                           | [operations.DataStatus56](../../models/operations/datastatus56.md) | :heavy_check_mark:                                                 | N/A                                                                |
+| `status`                                                           | [operations.DataStatus60](../../models/operations/datastatus60.md) | :heavy_check_mark:                                                 | N/A                                                                |

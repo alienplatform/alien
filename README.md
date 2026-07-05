@@ -82,10 +82,10 @@ alien serve
 
 ### Pull model
 
-**Like an app checking for updates.** For customers that can't or won't allow a cross-account IAM role, they can run `alien-agent` in their environment instead. It connects outbound to the Alien server, fetches releases, and deploys locally. No inbound connections, no open ports.
+**Like an app checking for updates.** For customers that can't or won't allow a cross-account IAM role, they can run `alien-operator` in their environment instead. It connects outbound to the Alien server, fetches releases, and deploys locally. No inbound connections, no open ports.
 
 ```bash
-docker run ghcr.io/alienplatform/alien-agent \
+docker run ghcr.io/alienplatform/alien-operator \
   --sync-url https://alien.example.com \
   --sync-token <token> \
   --platform aws
@@ -98,7 +98,7 @@ docker run ghcr.io/alienplatform/alien-agent \
                                               ║                                     ║
 ╔═ alien serve ═══════════╗     outbound      ║  ┌─ Isolated Area ──────────────┐   ║
 ║                         ║      HTTPS        ║  │                              │   ║
-║  Releases        ◀──────╬───────────────────╬──│── alien-agent                │   ║
+║  Releases        ◀──────╬───────────────────╬──│── alien-operator                │   ║
 ║  Telemetry       ◀──────╬───────────────────╬──│──  ┏━━━━━━━━━━┓              │   ║
 ║  Commands        ◀──────╬───────────────────╬──│──  ┃ Worker ┃              │   ║
 ║                         ║                   ║  │    ┗━━━━━━━━━━┛              │   ║
@@ -164,7 +164,7 @@ Builds your code, pushes artifacts, and creates a release. Every active deployme
 
 ## What you can build
 
-- **AI Worker** — Agent harness in your cloud, tool execution in theirs. Read files, run commands, query data — all local. ([example](examples/remote-worker-ts))
+- **AI Worker** — Operator harness in your cloud, tool execution in theirs. Read files, run commands, query data — all local. ([example](examples/remote-worker-ts))
 - **Data Connector** — Query Snowflake, Postgres, or any private database. No shared credentials, no exposed services. ([example](examples/data-connector-ts))
 - **Browser Automation** — Headless browser inside their network. Navigate Jira, SAP, GitLab, on-prem wikis. 
 - **Security Outpost** — Scan IAM policies, storage, network configs from inside the perimeter. On a schedule or on-demand.

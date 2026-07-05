@@ -13,7 +13,8 @@ pub use aws_runtime::{
 };
 pub use azure_runtime::{
     azure_predefined_role_id, dedupe_azure_role_bindings, AzureCustomRole, AzureGrantPlan,
-    AzureRoleBinding, AzureRoleDefinition, AzureRoleDefinitionRef, AzureRuntimePermissionsGenerator,
+    AzureRoleBinding, AzureRoleDefinition, AzureRoleDefinitionRef,
+    AzureRuntimePermissionsGenerator,
 };
 pub use gcp_runtime::{
     custom_role_permission_set_prefix, custom_role_prefix, GcpBindingResourceKind,

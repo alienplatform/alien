@@ -753,12 +753,15 @@ async fn reconcile_succeeds_under_other_session_lock() {
                 state,
                 update_heartbeat: false,
                 heartbeats: vec![],
+                observed_inventory_batches: vec![],
                 suggested_delay_ms: None,
-                agent_version: None,
-                agent_os: None,
-                agent_arch: None,
-                regime: None,
-                agent_image_repository: None,
+                capabilities: vec![],
+                operator_version: None,
+                operator_os: None,
+                operator_arch: None,
+                packaging: None,
+                operator_image_repository: None,
+                operator_update: None,
             },
         )
         .await
@@ -822,12 +825,15 @@ async fn reconcile_refreshes_owned_lock_lease() {
                 state,
                 update_heartbeat: false,
                 heartbeats: vec![],
+                observed_inventory_batches: vec![],
                 suggested_delay_ms: None,
-                agent_version: None,
-                agent_os: None,
-                agent_arch: None,
-                regime: None,
-                agent_image_repository: None,
+                capabilities: vec![],
+                operator_version: None,
+                operator_os: None,
+                operator_arch: None,
+                packaging: None,
+                operator_image_repository: None,
+                operator_update: None,
             },
         )
         .await
@@ -1311,10 +1317,10 @@ async fn agent_metadata_is_null_until_first_sync_report() {
         .await
         .unwrap()
         .expect("deployment exists");
-    assert!(fetched.agent_version.is_none(), "agent_version must be NULL pre-sync");
-    assert!(fetched.agent_os.is_none());
-    assert!(fetched.agent_arch.is_none());
-    assert!(fetched.regime.is_none());
+    assert!(fetched.operator_version.is_none(), "operator_version must be NULL pre-sync");
+    assert!(fetched.operator_os.is_none());
+    assert!(fetched.operator_arch.is_none());
+    assert!(fetched.packaging.is_none());
 }
 
 /// The agent reports its full inventory on a sync; the manager writes
@@ -1345,12 +1351,12 @@ async fn update_agent_metadata_persists_full_inventory() {
         .await
         .unwrap()
         .unwrap();
-    assert_eq!(fetched.agent_version.as_deref(), Some("1.4.0"));
-    assert_eq!(fetched.agent_os.as_deref(), Some("linux"));
-    assert_eq!(fetched.agent_arch.as_deref(), Some("aarch64"));
-    assert_eq!(fetched.regime.as_deref(), Some("kubernetes"));
+    assert_eq!(fetched.operator_version.as_deref(), Some("1.4.0"));
+    assert_eq!(fetched.operator_os.as_deref(), Some("linux"));
+    assert_eq!(fetched.operator_arch.as_deref(), Some("aarch64"));
+    assert_eq!(fetched.packaging.as_deref(), Some("kubernetes"));
     assert_eq!(
-        fetched.agent_image_repository.as_deref(),
+        fetched.operator_image_repository.as_deref(),
         Some("ghcr.io/alien-dev/alien-agent")
     );
 }
@@ -1391,8 +1397,8 @@ async fn update_agent_metadata_with_all_none_is_a_noop() {
         .await
         .unwrap()
         .unwrap();
-    assert_eq!(fetched.agent_version.as_deref(), Some("1.4.0"));
-    assert_eq!(fetched.regime.as_deref(), Some("kubernetes"));
+    assert_eq!(fetched.operator_version.as_deref(), Some("1.4.0"));
+    assert_eq!(fetched.packaging.as_deref(), Some("kubernetes"));
 }
 
 /// A partial update only touches the specified columns — useful for
@@ -1419,7 +1425,7 @@ async fn update_agent_metadata_partial_update_preserves_others() {
         .unwrap();
 
     // Agent upgraded to 1.4.0; OS/arch/regime/repo didn't change, so the
-    // handler only forwards agent_version this time (hypothetically — the
+    // handler only forwards operator_version this time (hypothetically — the
     // real agent always sends all fields, but the contract supports
     // partial updates).
     store
@@ -1440,8 +1446,8 @@ async fn update_agent_metadata_partial_update_preserves_others() {
         .await
         .unwrap()
         .unwrap();
-    assert_eq!(fetched.agent_version.as_deref(), Some("1.4.0"), "version updated");
-    assert_eq!(fetched.agent_os.as_deref(), Some("linux"), "os preserved");
-    assert_eq!(fetched.agent_arch.as_deref(), Some("aarch64"), "arch preserved");
-    assert_eq!(fetched.regime.as_deref(), Some("kubernetes"), "regime preserved");
+    assert_eq!(fetched.operator_version.as_deref(), Some("1.4.0"), "version updated");
+    assert_eq!(fetched.operator_os.as_deref(), Some("linux"), "os preserved");
+    assert_eq!(fetched.operator_arch.as_deref(), Some("aarch64"), "arch preserved");
+    assert_eq!(fetched.packaging.as_deref(), Some("kubernetes"), "regime preserved");
 }

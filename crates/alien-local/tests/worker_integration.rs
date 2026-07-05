@@ -277,7 +277,9 @@ async fn test_start_without_extract_fails() {
     let provider = create_test_provider(temp_dir.path().to_path_buf());
     let manager = provider.worker_manager();
 
-    let result = manager.start_worker("no-image", HashMap::new(), Vec::new()).await;
+    let result = manager
+        .start_worker("no-image", HashMap::new(), Vec::new())
+        .await;
     assert!(result.is_err());
 }
 

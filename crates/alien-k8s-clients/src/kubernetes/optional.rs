@@ -9,6 +9,7 @@ pub enum OptionalKubernetesReadSource {
     MetricsApi,
     Events,
     Nodes,
+    Workloads,
 }
 
 impl OptionalKubernetesReadSource {
@@ -17,6 +18,7 @@ impl OptionalKubernetesReadSource {
             Self::MetricsApi => "metricsApi",
             Self::Events => "events",
             Self::Nodes => "nodes",
+            Self::Workloads => "workloads",
         }
     }
 }

@@ -16,7 +16,6 @@ let value: DataAws1 = {
       replicaId: "<id>",
     },
   ],
-  daemonName: "<value>",
   desiredMachines: 896332,
   events: [
     {
@@ -32,17 +31,17 @@ let value: DataAws1 = {
     collectionIssues: [
       {
         message: "<value>",
-        reason: "not-installed",
+        reason: "collection-failed",
         severity: "info",
         source: "<value>",
       },
     ],
-    health: "degraded",
-    lifecycle: "unknown",
+    health: "unhealthy",
+    lifecycle: "deleted",
     partial: false,
     stale: false,
   },
-  unavailableInstances: 702316,
+  unavailableInstances: 873077,
   backend: "aws",
 };
 ```
@@ -55,7 +54,7 @@ let value: DataAws1 = {
 | `capacityGroup`                                                                | *string*                                                                       | :heavy_check_mark:                                                             | N/A                                                                            |
 | `commandSupported`                                                             | *boolean*                                                                      | :heavy_check_mark:                                                             | N/A                                                                            |
 | `daemonInstances`                                                              | [models.DaemonInstance1](../models/daemoninstance1.md)[]                       | :heavy_check_mark:                                                             | N/A                                                                            |
-| `daemonName`                                                                   | *string*                                                                       | :heavy_check_mark:                                                             | N/A                                                                            |
+| `daemonName`                                                                   | *string*                                                                       | :heavy_minus_sign:                                                             | N/A                                                                            |
 | `desiredMachines`                                                              | *number*                                                                       | :heavy_check_mark:                                                             | N/A                                                                            |
 | `events`                                                                       | [models.SyncReconcileRequestEvent6](../models/syncreconcilerequestevent6.md)[] | :heavy_check_mark:                                                             | N/A                                                                            |
 | `healthyInstances`                                                             | *number*                                                                       | :heavy_check_mark:                                                             | N/A                                                                            |
@@ -64,6 +63,6 @@ let value: DataAws1 = {
 | `horizonStatusMessage`                                                         | *string*                                                                       | :heavy_minus_sign:                                                             | N/A                                                                            |
 | `horizonStatusReason`                                                          | *string*                                                                       | :heavy_minus_sign:                                                             | N/A                                                                            |
 | `latestUpdateTimestamp`                                                        | *string*                                                                       | :heavy_check_mark:                                                             | N/A                                                                            |
-| `status`                                                                       | [models.HeartbeatStatus13](../models/heartbeatstatus13.md)                     | :heavy_check_mark:                                                             | N/A                                                                            |
+| `status`                                                                       | [models.ResourceHeartbeatStatus13](../models/resourceheartbeatstatus13.md)     | :heavy_check_mark:                                                             | N/A                                                                            |
 | `unavailableInstances`                                                         | *number*                                                                       | :heavy_check_mark:                                                             | N/A                                                                            |
 | `backend`                                                                      | *"aws"*                                                                        | :heavy_check_mark:                                                             | N/A                                                                            |

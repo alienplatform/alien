@@ -15,8 +15,9 @@ fn deserialize_bool_or_null<'de, D: Deserializer<'de>>(deserializer: D) -> Resul
 }
 
 use alien_core::{
-    sync::TargetDeployment, DeploymentConfig, DeploymentModel, DeploymentState, DeploymentStatus,
-    EnvironmentVariable, EnvironmentVariablesSnapshot, Platform, ReleaseInfo, ResourceHeartbeat,
+    sync::{OperatorCapabilityReport, TargetDeployment},
+    DeploymentConfig, DeploymentModel, DeploymentState, DeploymentStatus, EnvironmentVariable,
+    EnvironmentVariablesSnapshot, ObservedInventoryBatch, Platform, ReleaseInfo, ResourceHeartbeat,
 };
 use alien_error::AlienError;
 
@@ -80,8 +81,14 @@ pub struct ReconcileRequest {
     pub update_heartbeat: bool,
     #[serde(default)]
     pub suggested_delay_ms: Option<u64>,
-    #[serde(default)]
+    #[serde(default, rename = "resourceHeartbeats")]
     pub heartbeats: Vec<ResourceHeartbeat>,
+    #[serde(default, rename = "observedInventoryBatches")]
+    pub observed_inventory_batches: Vec<ObservedInventoryBatch>,
+    #[serde(default)]
+    pub capabilities: Vec<OperatorCapabilityReport>,
+    #[serde(default, rename = "operatorVersion")]
+    pub operator_version: Option<String>,
 }
 
 #[derive(Debug, Serialize)]
@@ -114,32 +121,34 @@ pub struct AgentSyncRequest {
     /// the agent's progress (status, stack_state, etc.).
     #[serde(default)]
     pub current_state: Option<serde_json::Value>,
-    /// Agent binary version (from `env!("CARGO_PKG_VERSION")` at build time).
-    /// Lets the manager build fleet inventory and decide whether to send an
-    /// `agent_target` in the response.
+    /// Managed resource status samples emitted by pull-mode deployment steps.
+    #[serde(default, rename = "resourceHeartbeats")]
+    pub heartbeats: Vec<ResourceHeartbeat>,
+    #[serde(default, rename = "observedInventoryBatches")]
+    pub observed_inventory_batches: Vec<ObservedInventoryBatch>,
     #[serde(default)]
-    pub agent_version: Option<String>,
-    /// Agent host OS — `linux` / `macos` / `windows`.
+    pub capabilities: Vec<OperatorCapabilityReport>,
+    #[serde(default, rename = "operatorVersion")]
+    pub operator_version: Option<String>,
+    /// Operator host OS — `linux` / `macos` / `windows`.
     #[serde(default)]
-    pub agent_os: Option<String>,
-    /// Agent host arch — `x86_64` / `aarch64`.
+    pub operator_os: Option<String>,
+    /// Operator host arch — `x86_64` / `aarch64`.
     #[serde(default)]
-    pub agent_arch: Option<String>,
-    /// Supervisor regime — `os-service` / `kubernetes`.
+    pub operator_arch: Option<String>,
+    /// Supervisor packaging — `os-service` / `kubernetes`.
     #[serde(default)]
-    pub regime: Option<String>,
-    /// Image repository the agent was pulled from (no tag), injected by
-    /// the chart at install time. Surfaced in the dashboard so admins see
-    /// the registry a pinned tag will be pulled from. Optional and
-    /// Kubernetes-only.
+    pub packaging: Option<String>,
+    /// Image repository the operator was pulled from (no tag), chart-injected.
+    /// Surfaced in the dashboard pin-version UI. Optional and Kubernetes-only.
     #[serde(default)]
-    pub agent_image_repository: Option<String>,
-    /// Outcome of the agent's in-flight self-update (structured
-    /// `AgentUpdateReport`). Forwarded verbatim to the platform reconcile so the
-    /// dashboard can show a truthful failed/in-progress state; opaque to the
+    pub operator_image_repository: Option<String>,
+    /// Outcome of the operator's in-flight self-update (structured
+    /// `OperatorUpdateReport`), forwarded verbatim to the platform reconcile so
+    /// the dashboard can show a truthful failed/in-progress state; opaque to the
     /// standalone manager. Optional for back-compat.
     #[serde(default)]
-    pub agent_update: Option<serde_json::Value>,
+    pub operator_update: Option<serde_json::Value>,
 }
 
 #[derive(Debug, Serialize)]
@@ -162,7 +171,7 @@ pub struct AgentSyncResponse {
     /// (OS-service flow) or `helm` (Kubernetes flow); the agent picks the
     /// one matching its regime.
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub agent_target: Option<serde_json::Value>,
+    pub operator_target: Option<serde_json::Value>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -171,6 +180,14 @@ pub struct AgentSyncResponse {
 pub struct InitializeRequest {
     pub name: Option<String>,
     pub platform: Option<Platform>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub scope: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub permission: Option<String>,
+    /// Setup method that is registering this deployment, such as `manual` for
+    /// rendered Operator manifests or `helm` for generated Helm installs.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub setup_method: Option<String>,
     /// Optional base cloud platform for Kubernetes setup targets such as
     /// EKS/GKE/AKS. The runtime platform remains Kubernetes.
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -445,15 +462,16 @@ async fn reconcile(
                 update_heartbeat: req.update_heartbeat,
                 suggested_delay_ms: req.suggested_delay_ms,
                 heartbeats: req.heartbeats,
-                // Non-agent reconcile path (push/platform-api) doesn't carry
-                // the agent self-update inventory; leave it out of the
-                // forwarded request.
-                agent_version: None,
-                agent_os: None,
-                agent_arch: None,
-                regime: None,
-                agent_image_repository: None,
-                agent_update: None,
+                observed_inventory_batches: req.observed_inventory_batches,
+                capabilities: req.capabilities,
+                operator_version: req.operator_version,
+                // Non-agent reconcile path (push/platform-api) doesn't carry the
+                // operator self-update inventory; leave it out.
+                operator_os: None,
+                operator_arch: None,
+                packaging: None,
+                operator_image_repository: None,
+                operator_update: None,
             },
         )
         .await
@@ -550,7 +568,7 @@ mod tests {
         build_target_deployment_config, deployment_needs_target, deployment_state_from_record,
         deployment_target_release_id, management_platform, release_stack_platform,
         should_ignore_agent_state_report, should_return_current_state_for_agent_sync,
-        validate_initialize_base_platform, ReconcileRequest,
+        validate_initialize_base_platform, AgentSyncRequest, ReconcileRequest,
     };
 
     #[test]
@@ -585,6 +603,9 @@ mod tests {
         .expect("reconcile request without heartbeats should remain compatible");
 
         assert!(req.heartbeats.is_empty());
+        assert!(req.observed_inventory_batches.is_empty());
+        assert!(req.capabilities.is_empty());
+        assert!(req.operator_version.is_none());
         assert!(req.update_heartbeat);
     }
 
@@ -595,7 +616,7 @@ mod tests {
             "session": "session_test",
             "state": { "status": "running" },
             "updateHeartbeat": true,
-            "heartbeats": [{
+            "resourceHeartbeats": [{
                 "deploymentId": "dep_test",
                 "resourceId": "api",
                 "resourceType": "container",
@@ -635,6 +656,75 @@ mod tests {
             }]
         }))
         .expect("reconcile request should accept typed heartbeat envelopes");
+
+        assert_eq!(req.heartbeats.len(), 1);
+        assert_eq!(req.heartbeats[0].resource_id, "api");
+        assert!(matches!(
+            req.heartbeats[0].data,
+            ResourceHeartbeatData::Container(_)
+        ));
+    }
+
+    #[test]
+    fn agent_sync_request_defaults_missing_heartbeats_to_empty() {
+        let req: AgentSyncRequest = serde_json::from_value(json!({
+            "deploymentId": "dep_test",
+            "currentState": null
+        }))
+        .expect("agent sync request without heartbeats should remain compatible");
+
+        assert!(req.heartbeats.is_empty());
+        assert!(req.observed_inventory_batches.is_empty());
+        assert!(req.capabilities.is_empty());
+        assert!(req.operator_version.is_none());
+    }
+
+    #[test]
+    fn agent_sync_request_accepts_typed_heartbeats() {
+        let req: AgentSyncRequest = serde_json::from_value(json!({
+            "deploymentId": "dep_test",
+            "currentState": null,
+            "resourceHeartbeats": [{
+                "deploymentId": "dep_test",
+                "resourceId": "api",
+                "resourceType": "container",
+                "controllerPlatform": "kubernetes",
+                "backend": "kubernetes",
+                "observedAt": "2026-01-01T00:00:00Z",
+                "data": {
+                    "resourceType": "container",
+                    "data": {
+                        "backend": "kubernetes",
+                        "status": {
+                            "health": "healthy",
+                            "lifecycle": "running",
+                            "message": null,
+                            "stale": false,
+                            "partial": true,
+                            "collectionIssues": [{
+                                "source": "metrics",
+                                "reason": "not-installed",
+                                "severity": "warning",
+                                "message": "metrics API is not installed"
+                            }]
+                        },
+                        "namespace": "default",
+                        "name": "api",
+                        "workloadKind": "deployment",
+                        "replicas": { "desired": 2, "current": 2, "ready": 2, "available": 2, "updated": null, "misscheduled": null },
+                        "restarts": 0,
+                        "cpu": null,
+                        "memory": null,
+                        "workload": null,
+                        "pods": [],
+                        "instances": [],
+                        "events": []
+                    }
+                },
+                "raw": []
+            }]
+        }))
+        .expect("agent sync request should accept typed heartbeat envelopes");
 
         assert_eq!(req.heartbeats.len(), 1);
         assert_eq!(req.heartbeats[0].resource_id, "api");
@@ -708,6 +798,16 @@ mod tests {
         let mut agent_state = uninitialized_state();
         agent_state.status = DeploymentStatus::Deleting;
 
+        assert!(!should_ignore_agent_state_report(&deployment, &agent_state));
+    }
+
+    #[test]
+    fn accepts_observe_only_running_state_without_desired_release() {
+        let deployment = deployment_record_with_state("pending", None);
+        let mut agent_state = uninitialized_state();
+        agent_state.status = DeploymentStatus::Running;
+
+        assert!(!agent_state.has_desired());
         assert!(!should_ignore_agent_state_report(&deployment, &agent_state));
     }
 
@@ -809,6 +909,13 @@ mod tests {
     }
 
     #[test]
+    fn observe_only_deployment_does_not_need_target() {
+        let deployment = deployment_record_with_state("running", None);
+
+        assert!(!deployment_needs_target(&deployment));
+    }
+
+    #[test]
     fn deployment_needs_target_when_desired_differs_from_current() {
         let mut deployment = deployment_record_with_state("running", None);
         deployment.current_release_id = Some("rel_old".to_string());
@@ -874,6 +981,9 @@ mod tests {
             compute_backend: None,
             external_bindings: ExternalBindings::default(),
             base_platform: None,
+            label_domain: None,
+            observe_label_selector: None,
+            observe_all_namespaces: false,
             public_endpoints: None,
             domain_metadata: None,
             monitoring: None,
@@ -920,12 +1030,12 @@ mod tests {
             created_at: now,
             updated_at: Some(now),
             error: None,
-            agent_version: None,
-            agent_os: None,
-            agent_arch: None,
+            operator_version: None,
+            operator_os: None,
+            operator_arch: None,
             regime: None,
-            agent_image_repository: None,
-            target_agent_version: None,
+            operator_image_repository: None,
+            target_operator_version: None,
         }
     }
 }
@@ -971,7 +1081,7 @@ async fn agent_sync(
     }
 
     // Persist the agent self-update inventory the agent reported on this sync
-    // (`agent_version`, `agent_os`, `agent_arch`, `regime`). Runs on every
+    // (`operator_version`, `operator_os`, `operator_arch`, `regime`). Runs on every
     // sync regardless of whether the agent reported a state change, so the
     // manager has a fleet-wide view of which version each host is on. Old
     // agents that don't send these fields are no-ops.
@@ -980,11 +1090,11 @@ async fn agent_sync(
         .update_agent_metadata(
             &subject,
             &req.deployment_id,
-            req.agent_version.as_deref(),
-            req.agent_os.as_deref(),
-            req.agent_arch.as_deref(),
-            req.regime.as_deref(),
-            req.agent_image_repository.as_deref(),
+            req.operator_version.as_deref(),
+            req.operator_os.as_deref(),
+            req.operator_arch.as_deref(),
+            req.packaging.as_deref(),
+            req.operator_image_repository.as_deref(),
         )
         .await
     {
@@ -1028,18 +1138,19 @@ async fn agent_sync(
                                 session: "agent-sync".to_string(),
                                 state: agent_state.clone(),
                                 update_heartbeat: true,
-                                heartbeats: vec![],
+                                heartbeats: req.heartbeats.clone(),
+                                observed_inventory_batches: req.observed_inventory_batches.clone(),
+                                capabilities: req.capabilities.clone(),
+                                operator_version: req.operator_version.clone(),
                                 suggested_delay_ms: None,
-                                // Forward the agent self-update inventory the
-                                // agent reported on this sync so multi-tenant
-                                // embedders can persist it in their own
-                                // deployment row.
-                                agent_version: req.agent_version.clone(),
-                                agent_os: req.agent_os.clone(),
-                                agent_arch: req.agent_arch.clone(),
-                                regime: req.regime.clone(),
-                                agent_image_repository: req.agent_image_repository.clone(),
-                                agent_update: req.agent_update.clone(),
+                                // Forward the operator self-update inventory the
+                                // operator reported on this sync so multi-tenant
+                                // embedders can persist it in their own row.
+                                operator_os: req.operator_os.clone(),
+                                operator_arch: req.operator_arch.clone(),
+                                packaging: req.packaging.clone(),
+                                operator_image_repository: req.operator_image_repository.clone(),
+                                operator_update: req.operator_update.clone(),
                             },
                         )
                         .await
@@ -1165,7 +1276,7 @@ async fn agent_sync(
 
                 Some(TargetDeployment {
                     release_info: ReleaseInfo {
-                        release_id: r.id,
+                        release_id: Some(r.id),
                         version: None,
                         description: None,
                         stack,
@@ -1203,14 +1314,52 @@ async fn agent_sync(
         };
         let target_release = target.as_ref().map(|t| t.release_info.clone());
         match deployment_state_from_record(&deployment, current_release, target_release) {
-            Some(deployment_state) => match serde_json::to_value(deployment_state) {
-                Ok(v) => Some(v),
-                Err(e) => {
-                    tracing::warn!("Failed to serialize deployment state: {e}");
-                    return ErrorData::internal("Failed to serialize deployment state")
-                        .into_response();
+            Some(deployment_state) => {
+                if !req.heartbeats.is_empty()
+                    || !req.observed_inventory_batches.is_empty()
+                    || !req.capabilities.is_empty()
+                    || req.operator_version.is_some()
+                {
+                    if let Err(e) = state
+                        .deployment_store
+                        .reconcile(
+                            &subject,
+                            ReconcileData {
+                                deployment_id: req.deployment_id.clone(),
+                                session: "agent-sync".to_string(),
+                                state: deployment_state.clone(),
+                                update_heartbeat: true,
+                                heartbeats: req.heartbeats.clone(),
+                                observed_inventory_batches: req.observed_inventory_batches.clone(),
+                                capabilities: req.capabilities.clone(),
+                                operator_version: req.operator_version.clone(),
+                                operator_os: req.operator_os.clone(),
+                                operator_arch: req.operator_arch.clone(),
+                                packaging: req.packaging.clone(),
+                                operator_image_repository: req.operator_image_repository.clone(),
+                                operator_update: req.operator_update.clone(),
+                                suggested_delay_ms: None,
+                            },
+                        )
+                        .await
+                    {
+                        tracing::warn!(
+                            deployment_id = %req.deployment_id,
+                            error = %e,
+                            "Failed to reconcile agent-reported heartbeats"
+                        );
+                    }
                 }
-            },
+
+                match serde_json::to_value(deployment_state) {
+                    Ok(v) => Some(v),
+                    Err(e) => {
+                        tracing::warn!("Failed to serialize deployment state: {e}");
+                        return ErrorData::internal("Failed to serialize deployment state")
+                            .into_response();
+                    }
+                }
+            }
             None => None,
         }
     } else {
@@ -1219,9 +1368,9 @@ async fn agent_sync(
 
     // Agent upgrade decision: if the deployment has a pinned target version
     // that differs from what the agent just reported, drive an upgrade via
-    // `agent_target` in the response.
-    let agent_target =
-        build_agent_target(&deployment, req.agent_version.as_deref(), req.regime.as_deref())
+    // `operator_target` in the response.
+    let operator_target =
+        build_operator_target(&deployment, req.operator_version.as_deref(), req.packaging.as_deref())
             .and_then(|t| serde_json::to_value(t).ok());
 
     Json(AgentSyncResponse {
@@ -1235,12 +1384,12 @@ async fn agent_sync(
             }
         },
         commands_url: Some(state.config.commands_base_url()),
-        agent_target,
+        operator_target,
     })
     .into_response()
 }
 
-/// Build `AgentTarget` when `deployment.target_agent_version` is set AND
+/// Build `OperatorTarget` when `deployment.target_operator_version` is set AND
 /// differs from what the agent just reported. The regime field controls
 /// which sub-target (`binary` for os-service, `helm` for kubernetes) gets
 /// populated.
@@ -1249,16 +1398,16 @@ async fn agent_sync(
 /// emitted as empty strings — the agent re-uses its current chart_ref (from
 /// the existing helm release metadata) and only the values overlay flips the
 /// `runtime.image.tag`. This avoids per-version chart re-publication.
-fn build_agent_target(
+fn build_operator_target(
     deployment: &crate::traits::DeploymentRecord,
     reported_version: Option<&str>,
     regime: Option<&str>,
-) -> Option<alien_core::sync::AgentTarget> {
-    let target_version = deployment.target_agent_version.as_deref()?;
+) -> Option<alien_core::sync::OperatorTarget> {
+    let target_version = deployment.target_operator_version.as_deref()?;
     if reported_version == Some(target_version) {
         return None;
     }
-    let helm = (regime == Some("kubernetes")).then(|| alien_core::sync::AgentHelmTarget {
+    let helm = (regime == Some("kubernetes")).then(|| alien_core::sync::OperatorHelmTarget {
         // Agent reads chart_repo/chart_version directly; when empty it falls
         // back to its `ALIEN_AGENT_CHART_REF` / `ALIEN_AGENT_CHART_VERSION`
         // env vars (injected by the chart at install time). Leaving blank
@@ -1276,7 +1425,7 @@ fn build_agent_target(
         // os-service path not in this MVP — skip without emitting.
         return None;
     }
-    Some(alien_core::sync::AgentTarget {
+    Some(alien_core::sync::OperatorTarget {
         version: target_version.to_string(),
         min_supported_version: target_version.to_string(),
         binary: None,
@@ -1472,7 +1621,7 @@ fn release_info_from_record(
     release_stack_platform: Platform,
 ) -> Option<ReleaseInfo> {
     Some(ReleaseInfo {
-        release_id: release.id.clone(),
+        release_id: Some(release.id.clone()),
         version: None,
         description: None,
         stack: release.stacks.get(&release_stack_platform)?.clone(),

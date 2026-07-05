@@ -21,7 +21,8 @@ matching the production backend; the resize proof does not depend on connectivit
 
 use alien_gcp_clients::cloud_sql::{
     postgres_database_version, BackupConfiguration, CloudSqlApi, CloudSqlClient, DatabaseInstance,
-    InstancePatch, InstanceSettings, InstanceSettingsPatch, IpConfiguration, PscConfig, SqlOperation,
+    InstancePatch, InstanceSettings, InstanceSettingsPatch, IpConfiguration, PscConfig,
+    SqlOperation,
 };
 use alien_gcp_clients::gcp::{GcpClientConfig, GcpCredentials};
 use reqwest::Client;
@@ -64,10 +65,17 @@ async fn poll_operation(client: &CloudSqlClient, op: &str, timeout: Duration) {
             .await
             .expect("get_operation should succeed");
         if o.is_done() {
-            assert!(!o.has_error(), "operation {op} finished with error: {:?}", o.error);
+            assert!(
+                !o.has_error(),
+                "operation {op} finished with error: {:?}",
+                o.error
+            );
             return;
         }
-        assert!(start.elapsed() < timeout, "operation {op} did not finish within {timeout:?}");
+        assert!(
+            start.elapsed() < timeout,
+            "operation {op} did not finish within {timeout:?}"
+        );
         tokio::time::sleep(Duration::from_secs(15)).await;
     }
 }
@@ -133,7 +141,10 @@ async fn cloud_sql_tier_resize_is_in_place_not_recreate() {
     poll_operation(&client, &create_op.name, Duration::from_secs(1200)).await;
     let before = wait_runnable(&client, &name, Duration::from_secs(300)).await;
     assert_eq!(before.name, name);
-    assert_eq!(before.settings.tier, SMALL_TIER, "instance must start at the small tier");
+    assert_eq!(
+        before.settings.tier, SMALL_TIER,
+        "instance must start at the small tier"
+    );
 
     // Resize the machine tier in place via instances.patch.
     let patch_op = client
@@ -161,7 +172,10 @@ async fn cloud_sql_tier_resize_is_in_place_not_recreate() {
         after.name, before.name,
         "IN-PLACE: instance name must be unchanged; a recreate would change identity and lose data"
     );
-    assert_eq!(after.settings.tier, LARGE_TIER, "tier must have changed to the larger tier");
+    assert_eq!(
+        after.settings.tier, LARGE_TIER,
+        "tier must have changed to the larger tier"
+    );
     assert_eq!(
         after.database_version, before.database_version,
         "engine version must be unchanged by a tier resize"

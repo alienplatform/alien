@@ -5,9 +5,10 @@ use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 
 use alien_core::{
-    import::ImportSourceKind, DeploymentConfig, DeploymentModel, DeploymentState, EnvironmentInfo,
-    EnvironmentVariable, ManagementConfig, Platform, ResourceHeartbeat, RuntimeMetadata,
-    StackSettings, StackState,
+    import::ImportSourceKind, sync::OperatorCapabilityReport, DeploymentConfig, DeploymentModel,
+    DeploymentState, EnvironmentInfo, EnvironmentVariable, ManagementConfig,
+    ObservedInventoryBatch, Platform, ResourceHeartbeat, RuntimeMetadata, StackSettings,
+    StackState,
 };
 use alien_error::AlienError;
 
@@ -76,23 +77,23 @@ pub struct DeploymentRecord {
     // Agent self-update inventory, written by the sync handler.
     // All four are NULL until the agent has actually reported in.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub agent_version: Option<String>,
+    pub operator_version: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub agent_os: Option<String>,
+    pub operator_os: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub agent_arch: Option<String>,
+    pub operator_arch: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub regime: Option<String>,
+    pub packaging: Option<String>,
     // Image repository the agent was pulled from, reported on sync.
     // Surfaced in the dashboard pin-version UI so admins see the registry.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub agent_image_repository: Option<String>,
+    pub operator_image_repository: Option<String>,
 
-    // Desired agent version. When set AND ≠ `agent_version`, the sync
-    // handler emits `agent_target` in the response so the agent triggers
+    // Desired agent version. When set AND ≠ `operator_version`, the sync
+    // handler emits `operator_target` in the response so the agent triggers
     // an upgrade. NULL = no pin, no upgrade.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub target_agent_version: Option<String>,
+    pub target_operator_version: Option<String>,
 }
 
 impl std::fmt::Debug for DeploymentRecord {
@@ -249,21 +250,22 @@ pub struct ReconcileData {
     pub update_heartbeat: bool,
     pub suggested_delay_ms: Option<u64>,
     pub heartbeats: Vec<ResourceHeartbeat>,
-    /// Agent self-update inventory the agent reported on this sync. Forwarded
-    /// by multi-tenant embedders into their platform-side reconcile request so
-    /// the SaaS dashboard can show fleet inventory. Each `None` means "leave
-    /// the existing column untouched" rather than "blank it" — important for
-    /// back-compat with agents that don't report these fields.
-    pub agent_version: Option<String>,
-    pub agent_os: Option<String>,
-    pub agent_arch: Option<String>,
-    pub regime: Option<String>,
-    pub agent_image_repository: Option<String>,
-    /// Structured `AgentUpdateReport` the agent attached on this sync, forwarded
-    /// verbatim by multi-tenant embedders into their platform reconcile so the
-    /// dashboard's "Alien Agent Update" event reflects a real failure/progress
-    /// signal instead of a timeout guess. `None` = no update in flight.
-    pub agent_update: Option<serde_json::Value>,
+    pub observed_inventory_batches: Vec<ObservedInventoryBatch>,
+    pub capabilities: Vec<OperatorCapabilityReport>,
+    pub operator_version: Option<String>,
+    /// Operator self-update inventory reported on this sync. Forwarded by
+    /// multi-tenant embedders into their platform-side reconcile request so the
+    /// dashboard can show fleet inventory. Each `None` means "leave the existing
+    /// column untouched" — back-compat with operators that don't report these.
+    pub operator_os: Option<String>,
+    pub operator_arch: Option<String>,
+    pub packaging: Option<String>,
+    pub operator_image_repository: Option<String>,
+    /// Structured `OperatorUpdateReport` the operator attached on this sync,
+    /// forwarded verbatim into the platform reconcile so the dashboard's
+    /// "Alien Operator Update" event reflects a real failure/progress signal.
+    /// `None` = no update in flight.
+    pub operator_update: Option<serde_json::Value>,
 }
 
 /// Persistence for deployments and deployment groups.
@@ -368,34 +370,34 @@ pub trait DeploymentStore: Send + Sync {
     ) -> Result<(), AlienError>;
 
     /// Persist the agent self-update inventory reported on a `SyncRequest`
-    /// (`agent_version`, `agent_os`, `agent_arch`, `regime`, image repo).
+    /// (`operator_version`, `operator_os`, `operator_arch`, `regime`, image repo).
     /// Called on every agent sync — alongside the heartbeat update — so the
     /// manager has a fleet-wide view of which version + registry each host
-    /// is on and can decide whether to send an `agent_target` in the
+    /// is on and can decide whether to send an `operator_target` in the
     /// response. A field of `None` leaves the corresponding column
     /// untouched.
     async fn update_agent_metadata(
         &self,
         caller: &crate::auth::Subject,
         id: &str,
-        agent_version: Option<&str>,
-        agent_os: Option<&str>,
-        agent_arch: Option<&str>,
+        operator_version: Option<&str>,
+        operator_os: Option<&str>,
+        operator_arch: Option<&str>,
         regime: Option<&str>,
-        agent_image_repository: Option<&str>,
+        operator_image_repository: Option<&str>,
     ) -> Result<(), AlienError>;
 
     /// Set (or clear with `None`) the deployment's target agent version.
-    /// When set AND different from the agent's reported `agent_version` the
-    /// sync handler emits `agent_target` on every /v1/sync until the agent
+    /// When set AND different from the agent's reported `operator_version` the
+    /// sync handler emits `operator_target` on every /v1/sync until the agent
     /// catches up. This is the admin-side knob behind the dashboard's
     /// "Set target version" control and the standalone manager's
     /// `PUT /v1/deployments/:id/target-agent-version` endpoint.
-    async fn set_target_agent_version(
+    async fn set_target_operator_version(
         &self,
         caller: &crate::auth::Subject,
         id: &str,
-        target_agent_version: Option<&str>,
+        target_operator_version: Option<&str>,
     ) -> Result<(), AlienError>;
 
     async fn set_redeploy(&self, caller: &crate::auth::Subject, id: &str)

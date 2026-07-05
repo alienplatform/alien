@@ -1,0 +1,24 @@
+# OutputsOperatorImage
+
+Outputs from an Operator image package build
+
+## Example Usage
+
+```typescript
+import { OutputsOperatorImage } from "@alienplatform/platform-api/models";
+
+let value: OutputsOperatorImage = {
+  digest: "<value>",
+  image: "https://loremflickr.com/104/2323?lock=152100383342186",
+  type: "operator-image",
+};
+```
+
+## Fields
+
+| Field                                                                         | Type                                                                          | Required                                                                      | Description                                                                   |
+| ----------------------------------------------------------------------------- | ----------------------------------------------------------------------------- | ----------------------------------------------------------------------------- | ----------------------------------------------------------------------------- |
+| `digest`                                                                      | *string*                                                                      | :heavy_check_mark:                                                            | Image digest (e.g., "sha256:abc123...")                                       |
+| `image`                                                                       | *string*                                                                      | :heavy_check_mark:                                                            | Full image reference (e.g., "public.ecr.aws/acme/operators/project-id:1.2.3") |
+| `labelDomain`                                                                 | *string*                                                                      | :heavy_minus_sign:                                                            | DNS-style label domain embedded into the Operator binary, if whitelabeled.    |
+| `type`                                                                        | [models.OutputsTypeOperatorImage](../models/outputstypeoperatorimage.md)      | :heavy_check_mark:                                                            | N/A                                                                           |

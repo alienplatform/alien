@@ -1446,36 +1446,11 @@
           "deploymentId"
         ],
         "properties": {
-          "agentArch": {
-            "type": [
-              "string",
-              "null"
-            ],
-            "description": "Agent host arch — `x86_64` / `aarch64`."
-          },
-          "agentImageRepository": {
-            "type": [
-              "string",
-              "null"
-            ],
-            "description": "Image repository the agent was pulled from (no tag), injected by\nthe chart at install time. Surfaced in the dashboard so admins see\nthe registry a pinned tag will be pulled from. Optional and\nKubernetes-only."
-          },
-          "agentOs": {
-            "type": [
-              "string",
-              "null"
-            ],
-            "description": "Agent host OS — `linux` / `macos` / `windows`."
-          },
-          "agentUpdate": {
-            "description": "Outcome of the agent's in-flight self-update (structured\n`AgentUpdateReport`). Forwarded verbatim to the platform reconcile so the\ndashboard can show a truthful failed/in-progress state; opaque to the\nstandalone manager. Optional for back-compat."
-          },
-          "agentVersion": {
-            "type": [
-              "string",
-              "null"
-            ],
-            "description": "Agent binary version (from `env!(\"CARGO_PKG_VERSION\")` at build time).\nLets the manager build fleet inventory and decide whether to send an\n`agent_target` in the response."
+          "capabilities": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/OperatorCapabilityReport"
+            }
           },
           "currentState": {
             "description": "Current deployment state as reported by the agent.\nWhen present, the manager updates the deployment record to reflect\nthe agent's progress (status, stack_state, etc.)."
@@ -1483,21 +1458,61 @@
           "deploymentId": {
             "type": "string"
           },
-          "regime": {
+          "observedInventoryBatches": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ObservedInventoryBatch"
+            }
+          },
+          "operatorArch": {
             "type": [
               "string",
               "null"
             ],
-            "description": "Supervisor regime — `os-service` / `kubernetes`."
+            "description": "Operator host arch — `x86_64` / `aarch64`."
+          },
+          "operatorImageRepository": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Image repository the operator was pulled from (no tag), chart-injected.\nSurfaced in the dashboard pin-version UI. Optional and Kubernetes-only."
+          },
+          "operatorOs": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Operator host OS — `linux` / `macos` / `windows`."
+          },
+          "operatorUpdate": {
+            "description": "Outcome of the operator's in-flight self-update (structured\n`OperatorUpdateReport`), forwarded verbatim to the platform reconcile so\nthe dashboard can show a truthful failed/in-progress state; opaque to the\nstandalone manager. Optional for back-compat."
+          },
+          "operatorVersion": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "packaging": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Supervisor packaging — `os-service` / `kubernetes`."
+          },
+          "resourceHeartbeats": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ResourceHeartbeat"
+            },
+            "description": "Managed resource status samples emitted by pull-mode deployment steps."
           }
         }
       },
       "AgentSyncResponse": {
         "type": "object",
         "properties": {
-          "agentTarget": {
-            "description": "Desired agent self-update target. The payload carries either `binary`\n(OS-service flow) or `helm` (Kubernetes flow); the agent picks the\none matching its regime."
-          },
           "commandsUrl": {
             "type": [
               "string",
@@ -1507,6 +1522,9 @@
           },
           "currentState": {
             "description": "Authoritative deployment state from the manager.\n\nReturned when a pull deployment attaches with an empty local state while\nthe manager already has imported or previously reconciled state."
+          },
+          "operatorTarget": {
+            "description": "Desired agent self-update target. The payload carries either `binary`\n(OS-service flow) or `helm` (Kubernetes flow); the agent picks the\none matching its regime."
           },
           "target": {}
         }
@@ -1941,7 +1959,6 @@
         "required": [
           "status",
           "horizonClusterId",
-          "daemonName",
           "horizonStatus",
           "capacityGroup",
           "desiredMachines",
@@ -3671,7 +3688,6 @@
         "required": [
           "status",
           "horizonClusterId",
-          "daemonName",
           "horizonStatus",
           "capacityGroup",
           "desiredMachines",
@@ -6149,30 +6165,6 @@
           "createdAt"
         ],
         "properties": {
-          "agentArch": {
-            "type": [
-              "string",
-              "null"
-            ]
-          },
-          "agentImageRepository": {
-            "type": [
-              "string",
-              "null"
-            ]
-          },
-          "agentOs": {
-            "type": [
-              "string",
-              "null"
-            ]
-          },
-          "agentVersion": {
-            "type": [
-              "string",
-              "null"
-            ]
-          },
           "createdAt": {
             "type": "string"
           },
@@ -6225,18 +6217,42 @@
           "name": {
             "type": "string"
           },
+          "operatorArch": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "operatorImageRepository": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "operatorOs": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "operatorVersion": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "packaging": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
           "platform": {
             "$ref": "#/components/schemas/Platform"
           },
           "projectId": {
             "type": "string",
             "description": "Required by the platform-SDK Deployment schema. Standalone is\nsingle-tenant; reuse the same synthetic project id used in the\ndeployment-groups route."
-          },
-          "regime": {
-            "type": [
-              "string",
-              "null"
-            ]
           },
           "retryRequested": {
             "type": "boolean"
@@ -6247,7 +6263,7 @@
           "status": {
             "type": "string"
           },
-          "targetAgentVersion": {
+          "targetOperatorVersion": {
             "type": [
               "string",
               "null"
@@ -6878,7 +6894,6 @@
         "required": [
           "status",
           "horizonClusterId",
-          "daemonName",
           "horizonStatus",
           "capacityGroup",
           "desiredMachines",
@@ -7821,6 +7836,12 @@
               "null"
             ]
           },
+          "permission": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
           "platform": {
             "oneOf": [
               {
@@ -7830,6 +7851,19 @@
                 "$ref": "#/components/schemas/Platform"
               }
             ]
+          },
+          "scope": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "setupMethod": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Setup method that is registering this deployment, such as `manual` for\nrendered Operator manifests or `helm` for generated Helm installs."
           },
           "stackSettings": {
             "oneOf": [
@@ -9850,7 +9884,6 @@
         "type": "object",
         "required": [
           "status",
-          "daemonName",
           "runtimeId",
           "commandSupported",
           "imagePathPresent",
@@ -11025,6 +11058,215 @@
           "unhealthy"
         ]
       },
+      "ObservedInventoryBatch": {
+        "type": "object",
+        "required": [
+          "sourceKind",
+          "inventoryScope",
+          "controllerPlatform",
+          "backend",
+          "observedAt",
+          "complete",
+          "resources"
+        ],
+        "properties": {
+          "backend": {
+            "$ref": "#/components/schemas/HeartbeatBackend",
+            "description": "Backend whose observer produced this snapshot."
+          },
+          "complete": {
+            "type": "boolean",
+            "description": "Whether this batch is a complete replacement for the scope. Complete\nbatches tombstone previously observed rows in the same scope when they\nare absent from `resources`."
+          },
+          "controllerPlatform": {
+            "$ref": "#/components/schemas/Platform",
+            "description": "Platform whose observer produced this snapshot."
+          },
+          "inventoryScope": {
+            "type": "string",
+            "description": "Stable scope for the provider list operation that produced this batch."
+          },
+          "observedAt": {
+            "type": "string",
+            "format": "date-time",
+            "description": "Time the inventory scope was observed."
+          },
+          "resources": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ObservedResourceSample"
+            }
+          },
+          "sourceKind": {
+            "type": "string",
+            "description": "Writer/source for this inventory pass, such as `operator` or\n`manager-observer`."
+          }
+        }
+      },
+      "ObservedResourceSample": {
+        "type": "object",
+        "required": [
+          "rawIdentity",
+          "providerKind",
+          "displayName",
+          "health",
+          "lifecycle",
+          "partial",
+          "providerStale"
+        ],
+        "properties": {
+          "alienResourceId": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "attributes": {
+            "type": "object",
+            "additionalProperties": {
+              "$ref": "#/components/schemas/Value"
+            },
+            "propertyNames": {
+              "type": "string"
+            }
+          },
+          "collectionIssues": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/HeartbeatCollectionIssue"
+            }
+          },
+          "counts": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/ObservedCounts"
+              }
+            ]
+          },
+          "deploymentId": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "displayName": {
+            "type": "string"
+          },
+          "health": {
+            "$ref": "#/components/schemas/ObservedHealth"
+          },
+          "labels": {
+            "type": "object",
+            "additionalProperties": {
+              "type": "string"
+            },
+            "propertyNames": {
+              "type": "string"
+            }
+          },
+          "lifecycle": {
+            "$ref": "#/components/schemas/ProviderLifecycleState"
+          },
+          "message": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "namespace": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "partial": {
+            "type": "boolean"
+          },
+          "providerKind": {
+            "type": "string",
+            "description": "Provider-native kind, such as `apps/v1/Deployment`,\n`AWS::S3::Bucket`, `storage.googleapis.com/Bucket`, or an Azure\nresource type."
+          },
+          "providerStale": {
+            "type": "boolean"
+          },
+          "raw": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/RawHeartbeatSnippet"
+            }
+          },
+          "rawIdentity": {
+            "type": "string",
+            "description": "Provider-native stable identity: Kubernetes object identity, cloud ARN,\nGCP full resource name, Azure resource id, etc."
+          },
+          "region": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "resourceTypeHint": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/ResourceType"
+              }
+            ]
+          },
+          "scope": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "version": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Release/version identity observed from the provider resource, when available."
+          }
+        }
+      },
+      "OperatorCapabilityReport": {
+        "type": "object",
+        "description": "Report-only Operator capability status.",
+        "required": [
+          "key",
+          "state"
+        ],
+        "properties": {
+          "detail": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Optional human-readable detail from the Operator."
+          },
+          "key": {
+            "type": "string",
+            "description": "Stable capability key, such as `k8s-workloads` or `logs`."
+          },
+          "state": {
+            "$ref": "#/components/schemas/OperatorCapabilityState",
+            "description": "Whether the capability is currently usable."
+          }
+        }
+      },
+      "OperatorCapabilityState": {
+        "type": "string",
+        "description": "State of an Operator capability as observed inside the environment.",
+        "enum": [
+          "granted",
+          "denied",
+          "unavailable"
+        ]
+      },
       "Platform": {
         "type": "string",
         "description": "Represents the target cloud platform.",
@@ -11484,10 +11726,28 @@
           "state"
         ],
         "properties": {
+          "capabilities": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/OperatorCapabilityReport"
+            }
+          },
           "deploymentId": {
             "type": "string"
           },
-          "heartbeats": {
+          "observedInventoryBatches": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ObservedInventoryBatch"
+            }
+          },
+          "operatorVersion": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "resourceHeartbeats": {
             "type": "array",
             "items": {
               "$ref": "#/components/schemas/ResourceHeartbeat"
@@ -11795,7 +12055,8 @@
             }
           },
           "resourceId": {
-            "type": "string"
+            "type": "string",
+            "description": "Alien resource id, such as the `alien.Container` or `alien.Storage`\nresource id from the stack."
           },
           "resourceType": {
             "$ref": "#/components/schemas/ResourceType"

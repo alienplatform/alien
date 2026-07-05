@@ -9,20 +9,13 @@ let value: ResourceHeartbeatDataAzureContainerAppsEnvironment = {
   data: {
     name: "<value>",
     status: {
-      collectionIssues: [
-        {
-          message: "<value>",
-          reason: "forbidden",
-          severity: "info",
-          source: "<value>",
-        },
-      ],
-      health: "unhealthy",
-      lifecycle: "creating",
+      collectionIssues: [],
+      health: "healthy",
+      lifecycle: "scaling",
       partial: true,
       stale: false,
     },
-    workloadProfileCount: 511598,
+    workloadProfileCount: 324464,
     workloadProfiles: [
       {
         name: "<value>",

@@ -93,17 +93,17 @@ pub struct DeploymentResponse {
     // Agent self-update inventory — populated by the sync handler
     // on every agent /v1/sync. NULL until the agent has first reported.
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub agent_version: Option<String>,
+    pub operator_version: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub agent_os: Option<String>,
+    pub operator_os: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub agent_arch: Option<String>,
+    pub operator_arch: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub regime: Option<String>,
+    pub packaging: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub agent_image_repository: Option<String>,
+    pub operator_image_repository: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub target_agent_version: Option<String>,
+    pub target_operator_version: Option<String>,
 }
 
 #[derive(Debug, Serialize, Clone)]
@@ -233,7 +233,7 @@ pub fn router() -> Router<AppState> {
         .route("/v1/deployments/{id}/redeploy", post(redeploy))
         .route(
             "/v1/deployments/{id}/target-agent-version",
-            put(set_target_agent_version),
+            put(set_target_operator_version),
         )
 }
 
@@ -283,12 +283,12 @@ fn record_to_response(
         error: r.error.clone(),
         deployment_group,
         // Surface the agent self-update inventory.
-        agent_version: r.agent_version.clone(),
-        agent_os: r.agent_os.clone(),
-        agent_arch: r.agent_arch.clone(),
-        regime: r.regime.clone(),
-        agent_image_repository: r.agent_image_repository.clone(),
-        target_agent_version: r.target_agent_version.clone(),
+        operator_version: r.operator_version.clone(),
+        operator_os: r.operator_os.clone(),
+        operator_arch: r.operator_arch.clone(),
+        packaging: r.packaging.clone(),
+        operator_image_repository: r.operator_image_repository.clone(),
+        target_operator_version: r.target_operator_version.clone(),
     }
 }
 
@@ -863,13 +863,13 @@ async fn redeploy(
 pub struct SetTargetAgentVersionRequest {
     /// Target agent version (semver). `None`/omitted clears the target.
     #[serde(default)]
-    pub target_agent_version: Option<String>,
+    pub target_operator_version: Option<String>,
 }
 
 /// Admin-only knob behind the dashboard's "Set target version" control
 /// (and the equivalent flow on the SaaS API). Writes
-/// `target_agent_version` on the deployment row; the sync handler reads
-/// it on each /v1/sync and emits `agent_target` whenever it differs from
+/// `target_operator_version` on the deployment row; the sync handler reads
+/// it on each /v1/sync and emits `operator_target` whenever it differs from
 /// the agent's reported version, until they match.
 #[cfg_attr(feature = "openapi", utoipa::path(
     put,
@@ -886,7 +886,7 @@ pub struct SetTargetAgentVersionRequest {
         (status = 404, description = "Not found"),
     )
 ))]
-async fn set_target_agent_version(
+async fn set_target_operator_version(
     State(state): State<AppState>,
     headers: HeaderMap,
     Path(id): Path<String>,
@@ -908,7 +908,7 @@ async fn set_target_agent_version(
 
     // Reject clearly-malformed semver early so admins get a 4xx rather
     // than the agent silently ignoring an unparseable tag later.
-    if let Some(v) = req.target_agent_version.as_deref() {
+    if let Some(v) = req.target_operator_version.as_deref() {
         if !is_plausible_semver(v) {
             return ErrorData::bad_request(
                 "targetAgentVersion must be a semver string (e.g. 1.4.0)",
@@ -919,7 +919,7 @@ async fn set_target_agent_version(
 
     if let Err(e) = state
         .deployment_store
-        .set_target_agent_version(&subject, &id, req.target_agent_version.as_deref())
+        .set_target_operator_version(&subject, &id, req.target_operator_version.as_deref())
         .await
     {
         return e.into_response();

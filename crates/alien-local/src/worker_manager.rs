@@ -1763,9 +1763,14 @@ mod tests {
 
         // Persisted metadata: no password, no binding key; the (non-secret) link name stays.
         let json = serde_json::to_string(&metadata).expect("metadata serializes");
-        assert!(!json.contains("s3cr3t"), "persisted metadata leaks the password: {json}");
+        assert!(
+            !json.contains("s3cr3t"),
+            "persisted metadata leaks the password: {json}"
+        );
         assert!(!metadata.env_vars.contains_key("ALIEN_PGDB_BINDING"));
-        assert!(metadata.runtime_only_binding_names.contains(&"pgdb".to_string()));
+        assert!(metadata
+            .runtime_only_binding_names
+            .contains(&"pgdb".to_string()));
 
         // Live process env: the password is delivered to the worker.
         assert!(live
@@ -1833,7 +1838,10 @@ mod tests {
             &[],
         );
         let json = serde_json::to_string(&metadata).expect("metadata serializes");
-        assert!(!json.contains("s3cr3t"), "named binding must be stripped even unresolved: {json}");
+        assert!(
+            !json.contains("s3cr3t"),
+            "named binding must be stripped even unresolved: {json}"
+        );
         assert!(!metadata.env_vars.contains_key("ALIEN_PGDB_BINDING"));
         assert_eq!(metadata.env_vars.get("FOO"), Some(&"bar".to_string()));
     }

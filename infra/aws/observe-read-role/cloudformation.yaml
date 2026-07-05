@@ -1,0 +1,78 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Description: Read-only Alien observe role for existing AWS resources.
+
+Parameters:
+  Name:
+    Type: String
+    Description: IAM role name to create.
+  ManagerManagingRoleArn:
+    Type: String
+    Description: ARN of the Alien manager role allowed to assume this observe role.
+  ExternalId:
+    Type: String
+    NoEcho: true
+    Description: Per-customer ExternalId required for sts:AssumeRole.
+
+Resources:
+  ObserveReadRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Ref Name
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Sid: AllowAlienManagerToObserve
+            Effect: Allow
+            Principal:
+              AWS: !Ref ManagerManagingRoleArn
+            Action: sts:AssumeRole
+            Condition:
+              StringEquals:
+                sts:ExternalId: !Ref ExternalId
+      Tags:
+        - Key: alien.dev/component
+          Value: observe-read-role
+
+  ObserveReadPolicy:
+    Type: AWS::IAM::Policy
+    Properties:
+      PolicyName: !Sub "${Name}-read"
+      Roles:
+        - !Ref ObserveReadRole
+      PolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Sid: Discovery
+            Effect: Allow
+            Action:
+              - tag:GetResources
+              - tag:GetTagKeys
+              - tag:GetTagValues
+            Resource: "*"
+          - Sid: HealthMetrics
+            Effect: Allow
+            Action:
+              - cloudwatch:GetMetricData
+              - cloudwatch:ListMetrics
+            Resource: "*"
+          - Sid: DescribeReadOnly
+            Effect: Allow
+            Action:
+              - ec2:Describe*
+              - rds:Describe*
+              - ecs:Describe*
+              - ecs:List*
+              - elasticloadbalancing:Describe*
+              - s3:ListAllMyBuckets
+              - s3:GetBucketLocation
+              - lambda:List*
+              - lambda:GetFunctionConfiguration
+            Resource: "*"
+
+Outputs:
+  RoleArn:
+    Description: ARN of the observe read role.
+    Value: !GetAtt ObserveReadRole.Arn
+  RoleName:
+    Description: Name of the observe read role.
+    Value: !Ref ObserveReadRole

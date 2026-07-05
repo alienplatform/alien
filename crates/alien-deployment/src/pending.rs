@@ -108,6 +108,7 @@ pub async fn handle_pending(
         suggested_delay_ms: None,
         update_heartbeat: false,
         heartbeats: vec![],
+        observed_inventory_batches: vec![],
     })
 }
 

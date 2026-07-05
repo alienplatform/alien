@@ -30,7 +30,7 @@ pub struct ManagerConfig {
     /// Public base URL for this manager instance (used for command response URLs, OAuth callbacks, etc.).
     /// Defaults to http://localhost:{port} when not set.
     pub base_url: Option<String>,
-    /// Base URL for release binary downloads (alien-deploy, alien-agent).
+    /// Base URL for release binary downloads (alien-deploy, alien-operator).
     /// Defaults to https://releases.alien.dev. Configurable via ALIEN_RELEASES_URL env var.
     pub releases_url: Option<String>,
     /// Target platforms this manager handles (platform mode).

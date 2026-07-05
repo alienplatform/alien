@@ -7,7 +7,6 @@
 
 ```typescript
 const value: models.SyncAcquireResponseTargetRelease = {
-  releaseId: "<id>",
   stack: {
     id: "<id>",
     resources: {},

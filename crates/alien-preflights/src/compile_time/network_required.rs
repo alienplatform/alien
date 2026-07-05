@@ -364,7 +364,9 @@ mod tests {
         resources.insert(
             "db".to_string(),
             ResourceEntry {
-                config: alien_core::Resource::new(alien_core::Postgres::new("db".to_string()).build()),
+                config: alien_core::Resource::new(
+                    alien_core::Postgres::new("db".to_string()).build(),
+                ),
                 lifecycle: ResourceLifecycle::Frozen,
                 dependencies: Vec::new(),
                 remote_access: false,

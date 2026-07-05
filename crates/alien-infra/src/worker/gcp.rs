@@ -30,7 +30,7 @@ use alien_core::{
     ResourceHeartbeatData, ResourceOutputs, ResourceRef, ResourceStatus, Worker,
     WorkerHeartbeatData, WorkerOutputs, WorkloadHeartbeatStatus,
 };
-use alien_error::{AlienError, Context, ContextError, IntoAlienError};
+use alien_error::{AlienError, Context, ContextError, GenericError, IntoAlienError};
 use alien_macros::controller;
 use chrono::Utc;
 use sha2::{Digest, Sha256};
@@ -44,6 +44,26 @@ fn is_remote_resource_conflict(error: &AlienError<CloudClientErrorData>) -> bool
         &error.error,
         Some(CloudClientErrorData::RemoteResourceConflict { .. })
     )
+}
+
+fn error_chain_contains_resource_in_use(
+    code: &str,
+    message: &str,
+    source: Option<&AlienError<GenericError>>,
+) -> bool {
+    (code == "INVALID_INPUT" || code == "HTTP_RESPONSE_ERROR")
+        && (message.contains("being used by") || message.contains("resourceInUseByAnotherResource"))
+        || source.is_some_and(|source| {
+            error_chain_contains_resource_in_use(
+                &source.code,
+                &source.message,
+                source.source.as_deref(),
+            )
+        })
+}
+
+fn is_gcp_resource_in_use(error: &AlienError<CloudClientErrorData>) -> bool {
+    error_chain_contains_resource_in_use(&error.code, &error.message, error.source.as_deref())
 }
 
 fn same_unordered_strings(left: &[String], right: &[String]) -> bool {
@@ -3299,43 +3319,50 @@ impl GcpWorkerController {
     ) -> Result<HandlerAction> {
         let gcp_config = ctx.get_gcp_config()?;
 
-        if let Some(forwarding_rule_name) = &self.forwarding_rule_name {
-            info!(name=%forwarding_rule_name, "Deleting forwarding rule");
+        let forwarding_rule_already_deleted =
+            if let Some(forwarding_rule_name) = &self.forwarding_rule_name {
+                info!(name=%forwarding_rule_name, "Deleting forwarding rule");
 
-            match ctx
-                .service_provider
-                .get_gcp_compute_client(gcp_config)?
-                .delete_global_forwarding_rule(forwarding_rule_name.clone())
-                .await
-            {
-                Ok(_) => {
-                    info!(name=%forwarding_rule_name, "Forwarding rule deletion initiated");
-                }
-                Err(e)
-                    if matches!(
-                        e.error,
-                        Some(CloudClientErrorData::RemoteResourceNotFound { .. })
-                    ) =>
+                match ctx
+                    .service_provider
+                    .get_gcp_compute_client(gcp_config)?
+                    .delete_global_forwarding_rule(forwarding_rule_name.clone())
+                    .await
                 {
-                    info!(name=%forwarding_rule_name, "Forwarding rule was already deleted");
+                    Ok(_) => {
+                        info!(name=%forwarding_rule_name, "Forwarding rule deletion initiated");
+                        false
+                    }
+                    Err(e)
+                        if matches!(
+                            e.error,
+                            Some(CloudClientErrorData::RemoteResourceNotFound { .. })
+                        ) =>
+                    {
+                        info!(name=%forwarding_rule_name, "Forwarding rule was already deleted");
+                        true
+                    }
+                    Err(e) => {
+                        return Err(e.context(ErrorData::CloudPlatformError {
+                            message: format!(
+                                "Failed to delete forwarding rule '{}'",
+                                forwarding_rule_name
+                            ),
+                            resource_id: None,
+                        }));
+                    }
                 }
-                Err(e) => {
-                    return Err(e.context(ErrorData::CloudPlatformError {
-                        message: format!(
-                            "Failed to delete forwarding rule '{}'",
-                            forwarding_rule_name
-                        ),
-                        resource_id: None,
-                    }));
-                }
-            }
+            } else {
+                false
+            };
 
+        if forwarding_rule_already_deleted {
             self.forwarding_rule_name = None;
         }
 
         Ok(HandlerAction::Continue {
             state: DeletingTargetHttpsProxy,
-            suggested_delay: Some(Duration::from_secs(2)),
+            suggested_delay: Some(Duration::from_secs(10)),
         })
     }
 
@@ -3370,6 +3397,16 @@ impl GcpWorkerController {
                 {
                     info!(name=%proxy_name, "Target HTTPS proxy was already deleted");
                 }
+                Err(e) if is_gcp_resource_in_use(&e) => {
+                    info!(
+                        name=%proxy_name,
+                        "Target HTTPS proxy is still referenced by another GCP resource; retrying deletion"
+                    );
+                    return Ok(HandlerAction::Stay {
+                        max_times: 30,
+                        suggested_delay: Some(Duration::from_secs(10)),
+                    });
+                }
                 Err(e) => {
                     return Err(e.context(ErrorData::CloudPlatformError {
                         message: format!("Failed to delete target HTTPS proxy '{}'", proxy_name),
@@ -3377,9 +3414,10 @@ impl GcpWorkerController {
                     }));
                 }
             }
-
-            self.target_https_proxy_name = None;
         }
+
+        self.forwarding_rule_name = None;
+        self.target_https_proxy_name = None;
 
         Ok(HandlerAction::Continue {
             state: DeletingUrlMap,
@@ -5493,7 +5531,10 @@ mod tests {
     //! See `crate::core::controller_test` for a comprehensive guide on testing infrastructure controllers.
 
     use std::collections::HashMap;
-    use std::sync::Arc;
+    use std::sync::{
+        atomic::{AtomicUsize, Ordering},
+        Arc,
+    };
 
     use alien_client_core::{ErrorData as CloudClientErrorData, Result as CloudClientResult};
     use alien_core::{
@@ -5665,6 +5706,13 @@ mod tests {
         mock.expect_delete_global_address()
             .returning(|_| Ok(Operation::default()));
         Arc::new(mock)
+    }
+
+    fn resource_in_use_error() -> AlienError<CloudClientErrorData> {
+        AlienError::new(CloudClientErrorData::InvalidInput {
+            message: "The targetHttpsProxy resource is already being used by forwardingRules/test-fwd resourceInUseByAnotherResource".to_string(),
+            field_name: None,
+        })
     }
 
     fn create_successful_service_response(service_name: &str) -> Service {
@@ -6272,6 +6320,68 @@ mod tests {
 
         // Verify outputs are no longer available
         assert!(executor.outputs().is_none());
+    }
+
+    #[tokio::test]
+    async fn test_delete_retries_target_proxy_while_forwarding_rule_reference_drains() {
+        let worker = function_public_ingress();
+        let function_name = format!("test-{}", worker.id);
+        let proxy_delete_attempts = Arc::new(AtomicUsize::new(0));
+        let proxy_delete_attempts_for_mock = Arc::clone(&proxy_delete_attempts);
+        let mock_cloudrun = setup_mock_client_for_creation_and_deletion(&function_name, true);
+
+        let mut mock_compute = MockComputeApi::new();
+        mock_compute
+            .expect_delete_global_forwarding_rule()
+            .returning(|_| Ok(Operation::default()));
+        mock_compute
+            .expect_delete_target_https_proxy()
+            .returning(move |_| {
+                if proxy_delete_attempts_for_mock.fetch_add(1, Ordering::SeqCst) == 0 {
+                    Err(resource_in_use_error())
+                } else {
+                    Ok(Operation::default())
+                }
+            });
+        mock_compute
+            .expect_delete_url_map()
+            .returning(|_| Ok(Operation::default()));
+        mock_compute
+            .expect_delete_backend_service()
+            .returning(|_| Ok(Operation::default()));
+        mock_compute
+            .expect_delete_region_network_endpoint_group()
+            .returning(|_, _| Ok(Operation::default()));
+        mock_compute
+            .expect_delete_global_address()
+            .returning(|_| Ok(Operation::default()));
+
+        let mock_provider =
+            setup_mock_service_provider(mock_cloudrun, Some(Arc::new(mock_compute)));
+        let mut controller = GcpWorkerController::mock_ready(&function_name);
+        controller.forwarding_rule_name = Some("test-fwd".to_string());
+        controller.target_https_proxy_name = Some("test-proxy".to_string());
+        controller.url_map_name = Some("test-url-map".to_string());
+        controller.backend_service_name = Some("test-backend".to_string());
+        controller.serverless_neg_name = Some("test-neg".to_string());
+        controller.global_address_name = Some("test-address".to_string());
+        controller.global_address_ip = Some("203.0.113.9".to_string());
+
+        let mut executor = SingleControllerExecutor::builder()
+            .resource(worker)
+            .controller(controller)
+            .platform(Platform::Gcp)
+            .service_provider(mock_provider)
+            .with_test_dependencies()
+            .build()
+            .await
+            .unwrap();
+
+        executor.delete().unwrap();
+        executor.run_until_terminal().await.unwrap();
+
+        assert_eq!(executor.status(), ResourceStatus::Deleted);
+        assert_eq!(proxy_delete_attempts.load(Ordering::SeqCst), 2);
     }
 
     // ─────────────── SPECIFIC VALIDATION TESTS ─────────────────

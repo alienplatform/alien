@@ -3,10 +3,10 @@
 
 ## Supported Types
 
-### `operations.Source3`
+### `operations.GetResourceDeploymentDetailSource3`
 
 ```typescript
-const value: operations.Source3 = {};
+const value: operations.GetResourceDeploymentDetailSource3 = {};
 ```
 
 ### `any`

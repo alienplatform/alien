@@ -11,6 +11,22 @@ use async_trait::async_trait;
 #[cfg(feature = "test-utils")]
 use mockall::automock;
 
+/// Build an `apps/v1` collection URL. An empty `namespace` yields the
+/// cluster-scoped collection (`/apis/apps/v1/<resource>`), which lists across all
+/// namespaces; a non-empty one yields the namespaced collection.
+fn apps_v1_collection_url(base_url: &str, namespace: &str, resource: &str) -> String {
+    if namespace.is_empty() {
+        format!("{}/apis/apps/v1/{}", base_url, resource)
+    } else {
+        format!(
+            "{}/apis/apps/v1/namespaces/{}/{}",
+            base_url,
+            urlencoding::encode(namespace),
+            resource
+        )
+    }
+}
+
 #[cfg_attr(feature = "test-utils", automock)]
 #[async_trait]
 pub trait DeploymentApi: Send + Sync + std::fmt::Debug {
@@ -40,6 +56,12 @@ pub trait DeploymentApi: Send + Sync + std::fmt::Debug {
         statefulset: &StatefulSet,
     ) -> Result<StatefulSet>;
     async fn get_statefulset(&self, namespace: &str, name: &str) -> Result<StatefulSet>;
+    async fn list_statefulsets(
+        &self,
+        namespace: &str,
+        label_selector: Option<String>,
+        field_selector: Option<String>,
+    ) -> Result<List<StatefulSet>>;
     async fn update_statefulset(
         &self,
         namespace: &str,
@@ -50,6 +72,12 @@ pub trait DeploymentApi: Send + Sync + std::fmt::Debug {
 
     async fn create_daemonset(&self, namespace: &str, daemonset: &DaemonSet) -> Result<DaemonSet>;
     async fn get_daemonset(&self, namespace: &str, name: &str) -> Result<DaemonSet>;
+    async fn list_daemonsets(
+        &self,
+        namespace: &str,
+        label_selector: Option<String>,
+        field_selector: Option<String>,
+    ) -> Result<List<DaemonSet>>;
     async fn update_daemonset(
         &self,
         namespace: &str,
@@ -109,11 +137,7 @@ impl KubernetesClient {
         label_selector: Option<String>,
         field_selector: Option<String>,
     ) -> Result<List<Deployment>> {
-        let mut url = format!(
-            "{}/apis/apps/v1/namespaces/{}/deployments",
-            self.get_base_url(),
-            urlencoding::encode(namespace)
-        );
+        let mut url = apps_v1_collection_url(&self.get_base_url(), namespace, "deployments");
         let mut query_params = Vec::new();
 
         if let Some(ls) = &label_selector {
@@ -222,6 +246,39 @@ impl KubernetesClient {
         sign_send_json(builder, &self.auth_config()).await
     }
 
+    /// List statefulsets in the specified namespace with optional selectors
+    pub async fn list_statefulsets(
+        &self,
+        namespace: &str,
+        label_selector: Option<String>,
+        field_selector: Option<String>,
+    ) -> Result<List<StatefulSet>> {
+        let mut url = apps_v1_collection_url(&self.get_base_url(), namespace, "statefulsets");
+        let mut query_params = Vec::new();
+
+        if let Some(ls) = &label_selector {
+            query_params.push(("labelSelector", ls.as_str()));
+        }
+        if let Some(fs) = &field_selector {
+            query_params.push(("fieldSelector", fs.as_str()));
+        }
+
+        if !query_params.is_empty() {
+            url.push('?');
+            url.push_str(
+                &query_params
+                    .iter()
+                    .map(|(k, v)| format!("{}={}", k, urlencoding::encode(v)))
+                    .collect::<Vec<_>>()
+                    .join("&"),
+            );
+        }
+
+        let builder = self.client().request(Method::GET, &url);
+
+        sign_send_json(builder, &self.auth_config()).await
+    }
+
     /// Update a statefulset in the specified namespace
     pub async fn update_statefulset(
         &self,
@@ -300,6 +357,39 @@ impl KubernetesClient {
             urlencoding::encode(namespace),
             urlencoding::encode(name)
         );
+        let builder = self.client().request(Method::GET, &url);
+
+        sign_send_json(builder, &self.auth_config()).await
+    }
+
+    /// List daemonsets in the specified namespace with optional selectors
+    pub async fn list_daemonsets(
+        &self,
+        namespace: &str,
+        label_selector: Option<String>,
+        field_selector: Option<String>,
+    ) -> Result<List<DaemonSet>> {
+        let mut url = apps_v1_collection_url(&self.get_base_url(), namespace, "daemonsets");
+        let mut query_params = Vec::new();
+
+        if let Some(ls) = &label_selector {
+            query_params.push(("labelSelector", ls.as_str()));
+        }
+        if let Some(fs) = &field_selector {
+            query_params.push(("fieldSelector", fs.as_str()));
+        }
+
+        if !query_params.is_empty() {
+            url.push('?');
+            url.push_str(
+                &query_params
+                    .iter()
+                    .map(|(k, v)| format!("{}={}", k, urlencoding::encode(v)))
+                    .collect::<Vec<_>>()
+                    .join("&"),
+            );
+        }
+
         let builder = self.client().request(Method::GET, &url);
 
         sign_send_json(builder, &self.auth_config()).await
@@ -396,6 +486,16 @@ impl DeploymentApi for KubernetesClient {
         self.get_statefulset(namespace, name).await
     }
 
+    async fn list_statefulsets(
+        &self,
+        namespace: &str,
+        label_selector: Option<String>,
+        field_selector: Option<String>,
+    ) -> Result<List<StatefulSet>> {
+        self.list_statefulsets(namespace, label_selector, field_selector)
+            .await
+    }
+
     async fn update_statefulset(
         &self,
         namespace: &str,
@@ -415,6 +515,16 @@ impl DeploymentApi for KubernetesClient {
 
     async fn get_daemonset(&self, namespace: &str, name: &str) -> Result<DaemonSet> {
         self.get_daemonset(namespace, name).await
+    }
+
+    async fn list_daemonsets(
+        &self,
+        namespace: &str,
+        label_selector: Option<String>,
+        field_selector: Option<String>,
+    ) -> Result<List<DaemonSet>> {
+        self.list_daemonsets(namespace, label_selector, field_selector)
+            .await
     }
 
     async fn update_daemonset(

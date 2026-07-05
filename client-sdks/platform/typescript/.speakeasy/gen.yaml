@@ -16,8 +16,6 @@ generation:
     requestResponseComponentNamesFeb2024: true
     securityFeb2025: true
     sharedErrorComponentsApr2025: true
-    sharedNestedComponentsJan2026: false
-    nameOverrideFeb2026: false
   auth:
     oAuth2ClientCredentialsEnabled: false
     oAuth2PasswordEnabled: false
@@ -27,14 +25,13 @@ generation:
   schemas:
     allOfMergeStrategy: shallowMerge
   requestBodyFieldName: ""
-  versioningStrategy: automatic
   persistentEdits: {}
   tests:
     generateTests: false
     generateNewTests: true
     skipResponseBodyAssertions: false
 typescript:
-  version: 1.1.1
+  version: 1.0.185
   acceptHeaderEnum: true
   additionalDependencies:
     dependencies: {}
@@ -60,8 +57,6 @@ typescript:
   enumFormat: union
   envVarPrefix: ALIEN
   exportZodModelNamespace: false
-  fixEnumNameSanitization: false
-  flatAdditionalProperties: false
   flattenGlobalSecurity: true
   flatteningOrder: parameters-first
   formStringArrayEncodeMode: encoded-string
@@ -80,7 +75,6 @@ typescript:
   inputModelSuffix: input
   jsonpath: rfc9535
   laxMode: strict
-  legacyFileNaming: true
   maxMethodParams: 0
   methodArguments: infer-optional-args
   modelPropertyCasing: camel
@@ -89,13 +83,10 @@ typescript:
   outputModelSuffix: output
   packageName: '@alienplatform/platform-api'
   preApplyUnionDiscriminators: true
-  preserveModelFieldNames: false
   responseFormat: flat
   sseFlatResponse: true
   templateVersion: v2
   unionStrategy: left-to-right
   usageSDKInitImports: []
   useIndexModules: true
-  useOxlint: false
-  useTsgo: false
   zodVersion: v4

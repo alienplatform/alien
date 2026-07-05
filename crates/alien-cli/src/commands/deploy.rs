@@ -295,6 +295,8 @@ pub async fn deploy_task(args: DeployArgs, ctx: ExecutionMode) -> Result<()> {
                             deployment_group_id: None,
                             environment_info: None,
                             input_values: HashMap::new(),
+                            operator_scope: None,
+                            operator_permission: None,
                             setup_method: None,
                             setup_metadata: None,
                         })
@@ -477,7 +479,7 @@ pub async fn deploy_task(args: DeployArgs, ctx: ExecutionMode) -> Result<()> {
                                 serde_json::from_value::<alien_core::Stack>(stack_json)
                             {
                                 current.target_release = Some(alien_core::ReleaseInfo {
-                                    release_id: release_id.clone(),
+                                    release_id: Some(release_id.clone()),
                                     version: None,
                                     description: None,
                                     stack,

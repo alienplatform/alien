@@ -3,6 +3,7 @@
  */
 
 import * as z from "zod/v4";
+import { remap as remap$ } from "../lib/primitives.js";
 import {
   collectExtraKeys as collectExtraKeys$,
   safeParse,
@@ -10,30 +11,1907 @@ import {
 import { ClosedEnum } from "../types/enums.js";
 import { Result as SafeParseResult } from "../types/fp.js";
 import {
-  DeploymentBasePlatform,
-  DeploymentBasePlatform$inboundSchema,
-  DeploymentEnvironmentInfoUnion,
-  DeploymentEnvironmentInfoUnion$inboundSchema,
-  DeploymentInput,
-  DeploymentInput$inboundSchema,
-  DeploymentManagementEnum,
-  DeploymentManagementEnum$inboundSchema,
-  DeploymentOverrideAw,
-  DeploymentOverrideAw$inboundSchema,
-  DeploymentPlatform,
-  DeploymentPlatform$inboundSchema,
-  DeploymentStackSettings,
-  DeploymentStackSettings$inboundSchema,
-  DeploymentStackState,
-  DeploymentStackState$inboundSchema,
-  DeploymentStatus,
-  DeploymentStatus$inboundSchema,
-} from "./deploymentoverrideaw.js";
-import {
   EnvironmentVariableConfig,
   EnvironmentVariableConfig$inboundSchema,
 } from "./environmentvariableconfig.js";
 import { SDKValidationError } from "./errors/sdkvalidationerror.js";
+import {
+  OperatorCapabilityReport,
+  OperatorCapabilityReport$inboundSchema,
+} from "./operatorcapabilityreport.js";
+
+/**
+ * Deployment status in the deployment lifecycle.
+ *
+ * @remarks
+ *
+ * For observe-only deployments with no release or stack state, `Running`
+ * means the Operator is attached. Connectivity comes from `lastHeartbeatAt`;
+ * resource health comes from inventory and resource heartbeat data.
+ */
+export const DeploymentStatus = {
+  Pending: "pending",
+  PreflightsFailed: "preflights-failed",
+  InitialSetup: "initial-setup",
+  InitialSetupFailed: "initial-setup-failed",
+  Provisioning: "provisioning",
+  ProvisioningFailed: "provisioning-failed",
+  Running: "running",
+  RefreshFailed: "refresh-failed",
+  UpdatePending: "update-pending",
+  Updating: "updating",
+  UpdateFailed: "update-failed",
+  DeletePending: "delete-pending",
+  Deleting: "deleting",
+  DeleteFailed: "delete-failed",
+  TeardownRequired: "teardown-required",
+  TeardownFailed: "teardown-failed",
+  Deleted: "deleted",
+  Error: "error",
+} as const;
+/**
+ * Deployment status in the deployment lifecycle.
+ *
+ * @remarks
+ *
+ * For observe-only deployments with no release or stack state, `Running`
+ * means the Operator is attached. Connectivity comes from `lastHeartbeatAt`;
+ * resource health comes from inventory and resource heartbeat data.
+ */
+export type DeploymentStatus = ClosedEnum<typeof DeploymentStatus>;
+
+/**
+ * Target platform for the deployment
+ */
+export const DeploymentPlatform = {
+  Aws: "aws",
+  Gcp: "gcp",
+  Azure: "azure",
+  Kubernetes: "kubernetes",
+  Local: "local",
+  Test: "test",
+} as const;
+/**
+ * Target platform for the deployment
+ */
+export type DeploymentPlatform = ClosedEnum<typeof DeploymentPlatform>;
+
+/**
+ * Underlying cloud platform for Kubernetes deployments.
+ */
+export const DeploymentBasePlatform = {
+  Aws: "aws",
+  Gcp: "gcp",
+  Azure: "azure",
+} as const;
+/**
+ * Underlying cloud platform for Kubernetes deployments.
+ */
+export type DeploymentBasePlatform = ClosedEnum<typeof DeploymentBasePlatform>;
+
+export const DeploymentPlatformTest = {
+  Test: "test",
+} as const;
+export type DeploymentPlatformTest = ClosedEnum<typeof DeploymentPlatformTest>;
+
+/**
+ * Test platform environment information (mock)
+ */
+export type DeploymentEnvironmentInfoTest = {
+  /**
+   * Test identifier for this environment
+   */
+  testId: string;
+  platform: DeploymentPlatformTest;
+};
+
+export const DeploymentPlatformLocal = {
+  Local: "local",
+} as const;
+export type DeploymentPlatformLocal = ClosedEnum<
+  typeof DeploymentPlatformLocal
+>;
+
+/**
+ * Local platform environment information
+ */
+export type DeploymentEnvironmentInfoLocal = {
+  /**
+   * Architecture (e.g., "x86_64", "aarch64")
+   */
+  arch: string;
+  /**
+   * Hostname of the machine running the deployment
+   */
+  hostname: string;
+  /**
+   * Operating system (e.g., "linux", "macos", "windows")
+   */
+  os: string;
+  platform: DeploymentPlatformLocal;
+};
+
+export const DeploymentPlatformAzure = {
+  Azure: "azure",
+} as const;
+export type DeploymentPlatformAzure = ClosedEnum<
+  typeof DeploymentPlatformAzure
+>;
+
+/**
+ * Azure-specific environment information
+ */
+export type DeploymentEnvironmentInfoAzure = {
+  /**
+   * Azure location/region
+   */
+  location: string;
+  /**
+   * Azure subscription ID
+   */
+  subscriptionId: string;
+  /**
+   * Azure tenant ID
+   */
+  tenantId: string;
+  platform: DeploymentPlatformAzure;
+};
+
+export const DeploymentPlatformGcp = {
+  Gcp: "gcp",
+} as const;
+export type DeploymentPlatformGcp = ClosedEnum<typeof DeploymentPlatformGcp>;
+
+/**
+ * GCP-specific environment information
+ */
+export type DeploymentEnvironmentInfoGcp = {
+  /**
+   * GCP project ID (e.g., "my-project")
+   */
+  projectId: string;
+  /**
+   * GCP project number (e.g., "123456789012")
+   */
+  projectNumber: string;
+  /**
+   * GCP region
+   */
+  region: string;
+  platform: DeploymentPlatformGcp;
+};
+
+export const DeploymentPlatformAws = {
+  Aws: "aws",
+} as const;
+export type DeploymentPlatformAws = ClosedEnum<typeof DeploymentPlatformAws>;
+
+/**
+ * AWS-specific environment information
+ */
+export type DeploymentEnvironmentInfoAws = {
+  /**
+   * AWS account ID
+   */
+  accountId: string;
+  /**
+   * AWS region
+   */
+  region: string;
+  platform: DeploymentPlatformAws;
+};
+
+/**
+ * Cloud environment information
+ */
+export type DeploymentEnvironmentInfoUnion =
+  | DeploymentEnvironmentInfoGcp
+  | DeploymentEnvironmentInfoAzure
+  | DeploymentEnvironmentInfoLocal
+  | DeploymentEnvironmentInfoAws
+  | DeploymentEnvironmentInfoTest
+  | any;
+
+export type DeploymentPoolsAutoscale = {
+  /**
+   * Provider machine type selected for this deployment.
+   */
+  machine?: string | null | undefined;
+  /**
+   * Maximum machine count.
+   */
+  max: number;
+  /**
+   * Minimum machine count.
+   */
+  min: number;
+  mode: "autoscale";
+};
+
+export type DeploymentPoolsFixed = {
+  /**
+   * Provider machine type selected for this deployment.
+   */
+  machine?: string | null | undefined;
+  /**
+   * Number of machines to run.
+   */
+  machines: number;
+  mode: "fixed";
+};
+
+/**
+ * User-selected deployment settings for one compute pool.
+ */
+export type DeploymentPoolsUnion =
+  | DeploymentPoolsFixed
+  | DeploymentPoolsAutoscale;
+
+/**
+ * Deployment-time compute choices for Alien-managed compute pools.
+ *
+ * @remarks
+ *
+ * Application source declares portable pool requirements. This settings
+ * object stores the concrete choices made for one deployment, such as the
+ * provider machine type and selected machine counts.
+ */
+export type DeploymentCompute = {
+  /**
+   * Selected compute choices keyed by pool ID.
+   */
+  pools?:
+    | { [k: string]: DeploymentPoolsFixed | DeploymentPoolsAutoscale }
+    | undefined;
+};
+
+export type DeploymentComputeUnion = DeploymentCompute | any;
+
+/**
+ * Deployment model: how updates are delivered to the remote environment.
+ */
+export const DeploymentDeploymentModel = {
+  Push: "push",
+  Pull: "pull",
+} as const;
+/**
+ * Deployment model: how updates are delivered to the remote environment.
+ */
+export type DeploymentDeploymentModel = ClosedEnum<
+  typeof DeploymentDeploymentModel
+>;
+
+export type DeploymentAws = {
+  certificateArn: string;
+};
+
+export type DeploymentAwsUnion = DeploymentAws | any;
+
+export type DeploymentAzureStackSettings = {
+  keyVaultCertificateId: string;
+  keyVaultResourceId?: string | null | undefined;
+};
+
+export type DeploymentAzureUnion = DeploymentAzureStackSettings | any;
+
+export type DeploymentGcpStackSettings = {
+  certificateName: string;
+};
+
+export type DeploymentGcpUnion = DeploymentGcpStackSettings | any;
+
+/**
+ * Namespace-scoped Kubernetes TLS Secret reference.
+ */
+export type DeploymentTlsSecretRef = {
+  /**
+   * Secret namespace. Defaults to the release namespace when omitted.
+   */
+  namespace?: string | null | undefined;
+  /**
+   * Secret name.
+   */
+  secretName: string;
+};
+
+export type DeploymentDomainsKubernetes = {
+  /**
+   * Namespace-scoped Kubernetes TLS Secret reference.
+   */
+  tlsSecretRef: DeploymentTlsSecretRef;
+};
+
+export type DeploymentDomainsKubernetesUnion =
+  | DeploymentDomainsKubernetes
+  | any;
+
+/**
+ * Platform-specific certificate references for custom domains.
+ */
+export type DeploymentDomainsCertificate = {
+  aws?: DeploymentAws | any | null | undefined;
+  azure?: DeploymentAzureStackSettings | any | null | undefined;
+  gcp?: DeploymentGcpStackSettings | any | null | undefined;
+  kubernetes?: DeploymentDomainsKubernetes | any | null | undefined;
+};
+
+/**
+ * Custom domain configuration for a single resource.
+ */
+export type DeploymentCustomDomains = {
+  /**
+   * Platform-specific certificate references for custom domains.
+   */
+  certificate: DeploymentDomainsCertificate;
+  /**
+   * Fully qualified domain name to use.
+   */
+  domain: string;
+};
+
+/**
+ * Domain configuration for the stack.
+ *
+ * @remarks
+ *
+ * When `custom_domains` is set, the specified resources use customer-provided
+ * domains and certificates. Otherwise, Alien auto-generates domains.
+ */
+export type DeploymentDomains = {
+  /**
+   * Custom domain configuration per resource ID.
+   */
+  customDomains?: { [k: string]: DeploymentCustomDomains } | null | undefined;
+};
+
+export type DeploymentDomainsUnion = DeploymentDomains | any;
+
+/**
+ * External bindings for pre-existing infrastructure.
+ *
+ * @remarks
+ * Allows using existing resources (MinIO, Redis, shared Container Apps
+ * Environment, etc.) instead of having Alien provision them.
+ * Required for Kubernetes platform, optional for cloud platforms.
+ */
+export type DeploymentExternalBindings = {};
+
+/**
+ * How heartbeat health checks are handled.
+ */
+export const DeploymentHeartbeats = {
+  Off: "off",
+  On: "on",
+} as const;
+/**
+ * How heartbeat health checks are handled.
+ */
+export type DeploymentHeartbeats = ClosedEnum<typeof DeploymentHeartbeats>;
+
+/**
+ * Optional provider-specific identity for a cloud-backed Kubernetes cluster.
+ */
+export type DeploymentCloud = {
+  accountId?: string | null | undefined;
+  clusterId?: string | null | undefined;
+  clusterName?: string | null | undefined;
+  projectId?: string | null | undefined;
+  region?: string | null | undefined;
+  resourceGroup?: string | null | undefined;
+  subscriptionId?: string | null | undefined;
+};
+
+export type DeploymentCloudUnion = DeploymentCloud | any;
+
+/**
+ * Ownership model for the Kubernetes cluster.
+ */
+export const DeploymentOwnership = {
+  Managed: "managed",
+  Existing: "existing",
+  External: "external",
+} as const;
+/**
+ * Ownership model for the Kubernetes cluster.
+ */
+export type DeploymentOwnership = ClosedEnum<typeof DeploymentOwnership>;
+
+/**
+ * Kubernetes cluster setup settings.
+ */
+export type DeploymentCluster = {
+  cloud?: DeploymentCloud | any | null | undefined;
+  /**
+   * Namespace where the Alien chart and application resources run.
+   */
+  namespace?: string | null | undefined;
+  /**
+   * Ownership model for the Kubernetes cluster.
+   */
+  ownership: DeploymentOwnership;
+};
+
+export type DeploymentClusterUnion = DeploymentCluster | any;
+
+export type DeploymentCertificateNone2 = {
+  mode: "none";
+};
+
+export type DeploymentCertificateManagedTLSSecret2 = {
+  mode: "managedTlsSecret";
+  /**
+   * Secret name template. Runtime may substitute resource/deployment tokens.
+   */
+  secretNameTemplate: string;
+};
+
+export type DeploymentCertificateAwsAcmArn2 = {
+  /**
+   * Existing ACM certificate ARN.
+   */
+  certificateArn: string;
+  mode: "awsAcmArn";
+};
+
+export type DeploymentCertificateManagedAcmImport2 = {
+  mode: "managedAcmImport";
+  /**
+   * ACM region. Defaults to the deployment region when omitted.
+   */
+  region?: string | null | undefined;
+  /**
+   * Tags applied to runtime-imported ACM certificates.
+   */
+  tags?: { [k: string]: string } | undefined;
+};
+
+/**
+ * Namespace-scoped Kubernetes TLS Secret reference.
+ */
+export type DeploymentCertificateTLSSecretRef2 = {
+  /**
+   * Secret namespace. Defaults to the release namespace when omitted.
+   */
+  namespace?: string | null | undefined;
+  /**
+   * Secret name.
+   */
+  secretName: string;
+  mode: "tlsSecretRef";
+};
+
+/**
+ * Certificate publication or reference mode for Kubernetes public endpoints.
+ */
+export type DeploymentCertificateUnion2 =
+  | DeploymentCertificateTLSSecretRef2
+  | DeploymentCertificateManagedAcmImport2
+  | DeploymentCertificateAwsAcmArn2
+  | DeploymentCertificateManagedTLSSecret2
+  | DeploymentCertificateNone2;
+
+export const DeploymentModeCustom = {
+  Custom: "custom",
+} as const;
+export type DeploymentModeCustom = ClosedEnum<typeof DeploymentModeCustom>;
+
+export const DeploymentProviderAzureApplicationGatewayForContainersEnum4 = {
+  AzureApplicationGatewayForContainers: "azureApplicationGatewayForContainers",
+} as const;
+export type DeploymentProviderAzureApplicationGatewayForContainersEnum4 =
+  ClosedEnum<
+    typeof DeploymentProviderAzureApplicationGatewayForContainersEnum4
+  >;
+
+export type DeploymentProviderAzureApplicationGatewayForContainers4 = {
+  /**
+   * Optional ALB name when using BYO Application Gateway resources.
+   */
+  albName?: string | null | undefined;
+  /**
+   * Optional ALB namespace when using BYO Application Gateway resources.
+   */
+  albNamespace?: string | null | undefined;
+  /**
+   * Public or internal frontend exposure.
+   */
+  frontend: string;
+  provider: DeploymentProviderAzureApplicationGatewayForContainersEnum4;
+};
+
+export const DeploymentProviderGkeGatewayEnum4 = {
+  GkeGateway: "gkeGateway",
+} as const;
+export type DeploymentProviderGkeGatewayEnum4 = ClosedEnum<
+  typeof DeploymentProviderGkeGatewayEnum4
+>;
+
+export type DeploymentProviderGkeGateway4 = {
+  provider: DeploymentProviderGkeGatewayEnum4;
+  /**
+   * Optional static address name for the Gateway frontend.
+   */
+  staticAddressName?: string | null | undefined;
+};
+
+export const DeploymentProviderAwsAlbEnum4 = {
+  AwsAlb: "awsAlb",
+} as const;
+export type DeploymentProviderAwsAlbEnum4 = ClosedEnum<
+  typeof DeploymentProviderAwsAlbEnum4
+>;
+
+export type DeploymentProviderAwsAlb4 = {
+  /**
+   * Optional ALB IP address type, such as `dualstack`.
+   */
+  ipAddressType?: string | null | undefined;
+  provider: DeploymentProviderAwsAlbEnum4;
+  /**
+   * Internet-facing or internal ALB scheme.
+   */
+  scheme: string;
+  /**
+   * Explicit subnet IDs when the profile cannot rely on controller discovery.
+   */
+  subnetIds?: Array<string> | undefined;
+  /**
+   * ALB target type, usually `ip`.
+   */
+  targetType: string;
+};
+
+export type DeploymentProviderUnion4 =
+  | DeploymentProviderAwsAlb4
+  | DeploymentProviderAzureApplicationGatewayForContainers4
+  | DeploymentProviderGkeGateway4
+  | any;
+
+/**
+ * Shared Gateway API route profile values.
+ */
+export type DeploymentRouteGateway2 = {
+  /**
+   * Annotations applied to route objects.
+   */
+  annotations?: { [k: string]: string } | undefined;
+  /**
+   * Route controller identifier, for example a cloud Gateway controller.
+   */
+  controller?: string | null | undefined;
+  /**
+   * GatewayClass selected for generated Gateways.
+   */
+  gatewayClassName: string;
+  /**
+   * Labels applied to route objects.
+   */
+  labels?: { [k: string]: string } | undefined;
+  /**
+   * Listener port, usually 443.
+   */
+  listenerPort: number;
+  provider?:
+    | DeploymentProviderAwsAlb4
+    | DeploymentProviderAzureApplicationGatewayForContainers4
+    | DeploymentProviderGkeGateway4
+    | any
+    | null
+    | undefined;
+  routeApi: "gateway";
+};
+
+export const DeploymentProviderAzureApplicationGatewayForContainersEnum3 = {
+  AzureApplicationGatewayForContainers: "azureApplicationGatewayForContainers",
+} as const;
+export type DeploymentProviderAzureApplicationGatewayForContainersEnum3 =
+  ClosedEnum<
+    typeof DeploymentProviderAzureApplicationGatewayForContainersEnum3
+  >;
+
+export type DeploymentProviderAzureApplicationGatewayForContainers3 = {
+  /**
+   * Optional ALB name when using BYO Application Gateway resources.
+   */
+  albName?: string | null | undefined;
+  /**
+   * Optional ALB namespace when using BYO Application Gateway resources.
+   */
+  albNamespace?: string | null | undefined;
+  /**
+   * Public or internal frontend exposure.
+   */
+  frontend: string;
+  provider: DeploymentProviderAzureApplicationGatewayForContainersEnum3;
+};
+
+export const DeploymentProviderGkeGatewayEnum3 = {
+  GkeGateway: "gkeGateway",
+} as const;
+export type DeploymentProviderGkeGatewayEnum3 = ClosedEnum<
+  typeof DeploymentProviderGkeGatewayEnum3
+>;
+
+export type DeploymentProviderGkeGateway3 = {
+  provider: DeploymentProviderGkeGatewayEnum3;
+  /**
+   * Optional static address name for the Gateway frontend.
+   */
+  staticAddressName?: string | null | undefined;
+};
+
+export const DeploymentProviderAwsAlbEnum3 = {
+  AwsAlb: "awsAlb",
+} as const;
+export type DeploymentProviderAwsAlbEnum3 = ClosedEnum<
+  typeof DeploymentProviderAwsAlbEnum3
+>;
+
+export type DeploymentProviderAwsAlb3 = {
+  /**
+   * Optional ALB IP address type, such as `dualstack`.
+   */
+  ipAddressType?: string | null | undefined;
+  provider: DeploymentProviderAwsAlbEnum3;
+  /**
+   * Internet-facing or internal ALB scheme.
+   */
+  scheme: string;
+  /**
+   * Explicit subnet IDs when the profile cannot rely on controller discovery.
+   */
+  subnetIds?: Array<string> | undefined;
+  /**
+   * ALB target type, usually `ip`.
+   */
+  targetType: string;
+};
+
+export type DeploymentProviderUnion3 =
+  | DeploymentProviderAwsAlb3
+  | DeploymentProviderAzureApplicationGatewayForContainers3
+  | DeploymentProviderGkeGateway3
+  | any;
+
+/**
+ * Shared Ingress route profile values.
+ */
+export type DeploymentRouteIngress2 = {
+  /**
+   * Annotations applied to route objects.
+   */
+  annotations?: { [k: string]: string } | undefined;
+  /**
+   * Route controller identifier, for example `eks.amazonaws.com/alb`.
+   */
+  controller?: string | null | undefined;
+  /**
+   * `spec.ingressClassName` for generated Ingresses.
+   */
+  ingressClassName: string;
+  /**
+   * Labels applied to route objects.
+   */
+  labels?: { [k: string]: string } | undefined;
+  provider?:
+    | DeploymentProviderAwsAlb3
+    | DeploymentProviderAzureApplicationGatewayForContainers3
+    | DeploymentProviderGkeGateway3
+    | any
+    | null
+    | undefined;
+  routeApi: "ingress";
+};
+
+/**
+ * Kubernetes route API selected for public endpoints.
+ */
+export type DeploymentRouteUnion2 =
+  | DeploymentRouteIngress2
+  | DeploymentRouteGateway2;
+
+export type DeploymentExposureCustom = {
+  /**
+   * Certificate publication or reference mode for Kubernetes public endpoints.
+   */
+  certificate:
+    | DeploymentCertificateTLSSecretRef2
+    | DeploymentCertificateManagedAcmImport2
+    | DeploymentCertificateAwsAcmArn2
+    | DeploymentCertificateManagedTLSSecret2
+    | DeploymentCertificateNone2;
+  /**
+   * Hostname routed by the Kubernetes public endpoint.
+   */
+  domain: string;
+  mode: DeploymentModeCustom;
+  /**
+   * Kubernetes route API selected for public endpoints.
+   */
+  route: DeploymentRouteIngress2 | DeploymentRouteGateway2;
+};
+
+export type DeploymentCertificateNone1 = {
+  mode: "none";
+};
+
+export type DeploymentCertificateManagedTLSSecret1 = {
+  mode: "managedTlsSecret";
+  /**
+   * Secret name template. Runtime may substitute resource/deployment tokens.
+   */
+  secretNameTemplate: string;
+};
+
+export type DeploymentCertificateAwsAcmArn1 = {
+  /**
+   * Existing ACM certificate ARN.
+   */
+  certificateArn: string;
+  mode: "awsAcmArn";
+};
+
+export type DeploymentCertificateManagedAcmImport1 = {
+  mode: "managedAcmImport";
+  /**
+   * ACM region. Defaults to the deployment region when omitted.
+   */
+  region?: string | null | undefined;
+  /**
+   * Tags applied to runtime-imported ACM certificates.
+   */
+  tags?: { [k: string]: string } | undefined;
+};
+
+/**
+ * Namespace-scoped Kubernetes TLS Secret reference.
+ */
+export type DeploymentCertificateTLSSecretRef1 = {
+  /**
+   * Secret namespace. Defaults to the release namespace when omitted.
+   */
+  namespace?: string | null | undefined;
+  /**
+   * Secret name.
+   */
+  secretName: string;
+  mode: "tlsSecretRef";
+};
+
+/**
+ * Certificate publication or reference mode for Kubernetes public endpoints.
+ */
+export type DeploymentCertificateUnion1 =
+  | DeploymentCertificateTLSSecretRef1
+  | DeploymentCertificateManagedAcmImport1
+  | DeploymentCertificateAwsAcmArn1
+  | DeploymentCertificateManagedTLSSecret1
+  | DeploymentCertificateNone1;
+
+export const DeploymentModeGenerated = {
+  Generated: "generated",
+} as const;
+export type DeploymentModeGenerated = ClosedEnum<
+  typeof DeploymentModeGenerated
+>;
+
+export const DeploymentProviderAzureApplicationGatewayForContainersEnum2 = {
+  AzureApplicationGatewayForContainers: "azureApplicationGatewayForContainers",
+} as const;
+export type DeploymentProviderAzureApplicationGatewayForContainersEnum2 =
+  ClosedEnum<
+    typeof DeploymentProviderAzureApplicationGatewayForContainersEnum2
+  >;
+
+export type DeploymentProviderAzureApplicationGatewayForContainers2 = {
+  /**
+   * Optional ALB name when using BYO Application Gateway resources.
+   */
+  albName?: string | null | undefined;
+  /**
+   * Optional ALB namespace when using BYO Application Gateway resources.
+   */
+  albNamespace?: string | null | undefined;
+  /**
+   * Public or internal frontend exposure.
+   */
+  frontend: string;
+  provider: DeploymentProviderAzureApplicationGatewayForContainersEnum2;
+};
+
+export const DeploymentProviderGkeGatewayEnum2 = {
+  GkeGateway: "gkeGateway",
+} as const;
+export type DeploymentProviderGkeGatewayEnum2 = ClosedEnum<
+  typeof DeploymentProviderGkeGatewayEnum2
+>;
+
+export type DeploymentProviderGkeGateway2 = {
+  provider: DeploymentProviderGkeGatewayEnum2;
+  /**
+   * Optional static address name for the Gateway frontend.
+   */
+  staticAddressName?: string | null | undefined;
+};
+
+export const DeploymentProviderAwsAlbEnum2 = {
+  AwsAlb: "awsAlb",
+} as const;
+export type DeploymentProviderAwsAlbEnum2 = ClosedEnum<
+  typeof DeploymentProviderAwsAlbEnum2
+>;
+
+export type DeploymentProviderAwsAlb2 = {
+  /**
+   * Optional ALB IP address type, such as `dualstack`.
+   */
+  ipAddressType?: string | null | undefined;
+  provider: DeploymentProviderAwsAlbEnum2;
+  /**
+   * Internet-facing or internal ALB scheme.
+   */
+  scheme: string;
+  /**
+   * Explicit subnet IDs when the profile cannot rely on controller discovery.
+   */
+  subnetIds?: Array<string> | undefined;
+  /**
+   * ALB target type, usually `ip`.
+   */
+  targetType: string;
+};
+
+export type DeploymentProviderUnion2 =
+  | DeploymentProviderAwsAlb2
+  | DeploymentProviderAzureApplicationGatewayForContainers2
+  | DeploymentProviderGkeGateway2
+  | any;
+
+/**
+ * Shared Gateway API route profile values.
+ */
+export type DeploymentRouteGateway1 = {
+  /**
+   * Annotations applied to route objects.
+   */
+  annotations?: { [k: string]: string } | undefined;
+  /**
+   * Route controller identifier, for example a cloud Gateway controller.
+   */
+  controller?: string | null | undefined;
+  /**
+   * GatewayClass selected for generated Gateways.
+   */
+  gatewayClassName: string;
+  /**
+   * Labels applied to route objects.
+   */
+  labels?: { [k: string]: string } | undefined;
+  /**
+   * Listener port, usually 443.
+   */
+  listenerPort: number;
+  provider?:
+    | DeploymentProviderAwsAlb2
+    | DeploymentProviderAzureApplicationGatewayForContainers2
+    | DeploymentProviderGkeGateway2
+    | any
+    | null
+    | undefined;
+  routeApi: "gateway";
+};
+
+export const DeploymentProviderAzureApplicationGatewayForContainersEnum1 = {
+  AzureApplicationGatewayForContainers: "azureApplicationGatewayForContainers",
+} as const;
+export type DeploymentProviderAzureApplicationGatewayForContainersEnum1 =
+  ClosedEnum<
+    typeof DeploymentProviderAzureApplicationGatewayForContainersEnum1
+  >;
+
+export type DeploymentProviderAzureApplicationGatewayForContainers1 = {
+  /**
+   * Optional ALB name when using BYO Application Gateway resources.
+   */
+  albName?: string | null | undefined;
+  /**
+   * Optional ALB namespace when using BYO Application Gateway resources.
+   */
+  albNamespace?: string | null | undefined;
+  /**
+   * Public or internal frontend exposure.
+   */
+  frontend: string;
+  provider: DeploymentProviderAzureApplicationGatewayForContainersEnum1;
+};
+
+export const DeploymentProviderGkeGatewayEnum1 = {
+  GkeGateway: "gkeGateway",
+} as const;
+export type DeploymentProviderGkeGatewayEnum1 = ClosedEnum<
+  typeof DeploymentProviderGkeGatewayEnum1
+>;
+
+export type DeploymentProviderGkeGateway1 = {
+  provider: DeploymentProviderGkeGatewayEnum1;
+  /**
+   * Optional static address name for the Gateway frontend.
+   */
+  staticAddressName?: string | null | undefined;
+};
+
+export const DeploymentProviderAwsAlbEnum1 = {
+  AwsAlb: "awsAlb",
+} as const;
+export type DeploymentProviderAwsAlbEnum1 = ClosedEnum<
+  typeof DeploymentProviderAwsAlbEnum1
+>;
+
+export type DeploymentProviderAwsAlb1 = {
+  /**
+   * Optional ALB IP address type, such as `dualstack`.
+   */
+  ipAddressType?: string | null | undefined;
+  provider: DeploymentProviderAwsAlbEnum1;
+  /**
+   * Internet-facing or internal ALB scheme.
+   */
+  scheme: string;
+  /**
+   * Explicit subnet IDs when the profile cannot rely on controller discovery.
+   */
+  subnetIds?: Array<string> | undefined;
+  /**
+   * ALB target type, usually `ip`.
+   */
+  targetType: string;
+};
+
+export type DeploymentProviderUnion1 =
+  | DeploymentProviderAwsAlb1
+  | DeploymentProviderAzureApplicationGatewayForContainers1
+  | DeploymentProviderGkeGateway1
+  | any;
+
+/**
+ * Shared Ingress route profile values.
+ */
+export type DeploymentRouteIngress1 = {
+  /**
+   * Annotations applied to route objects.
+   */
+  annotations?: { [k: string]: string } | undefined;
+  /**
+   * Route controller identifier, for example `eks.amazonaws.com/alb`.
+   */
+  controller?: string | null | undefined;
+  /**
+   * `spec.ingressClassName` for generated Ingresses.
+   */
+  ingressClassName: string;
+  /**
+   * Labels applied to route objects.
+   */
+  labels?: { [k: string]: string } | undefined;
+  provider?:
+    | DeploymentProviderAwsAlb1
+    | DeploymentProviderAzureApplicationGatewayForContainers1
+    | DeploymentProviderGkeGateway1
+    | any
+    | null
+    | undefined;
+  routeApi: "ingress";
+};
+
+/**
+ * Kubernetes route API selected for public endpoints.
+ */
+export type DeploymentRouteUnion1 =
+  | DeploymentRouteIngress1
+  | DeploymentRouteGateway1;
+
+export type DeploymentExposureGenerated = {
+  /**
+   * Certificate publication or reference mode for Kubernetes public endpoints.
+   */
+  certificate:
+    | DeploymentCertificateTLSSecretRef1
+    | DeploymentCertificateManagedAcmImport1
+    | DeploymentCertificateAwsAcmArn1
+    | DeploymentCertificateManagedTLSSecret1
+    | DeploymentCertificateNone1;
+  mode: DeploymentModeGenerated;
+  /**
+   * Kubernetes route API selected for public endpoints.
+   */
+  route: DeploymentRouteIngress1 | DeploymentRouteGateway1;
+};
+
+export const DeploymentModeDisabled = {
+  Disabled: "disabled",
+} as const;
+export type DeploymentModeDisabled = ClosedEnum<typeof DeploymentModeDisabled>;
+
+export type DeploymentExposureDisabled = {
+  mode: DeploymentModeDisabled;
+};
+
+export type DeploymentExposureUnion =
+  | DeploymentExposureCustom
+  | DeploymentExposureGenerated
+  | DeploymentExposureDisabled
+  | any;
+
+/**
+ * Kubernetes runtime substrate configuration.
+ *
+ * @remarks
+ *
+ * This controls how setup chooses the cluster backing `Platform::Kubernetes`
+ * deployments. When omitted, cloud-backed Kubernetes deployments default to a
+ * managed cluster and generic/on-prem Kubernetes defaults to an external
+ * cluster.
+ */
+export type DeploymentKubernetes = {
+  cluster?: DeploymentCluster | any | null | undefined;
+  exposure?:
+    | DeploymentExposureCustom
+    | DeploymentExposureGenerated
+    | DeploymentExposureDisabled
+    | any
+    | null
+    | undefined;
+};
+
+export type DeploymentKubernetesUnion = DeploymentKubernetes | any;
+
+export const DeploymentTypeByoVnetAzure = {
+  ByoVnetAzure: "byo-vnet-azure",
+} as const;
+export type DeploymentTypeByoVnetAzure = ClosedEnum<
+  typeof DeploymentTypeByoVnetAzure
+>;
+
+export type DeploymentNetworkByoVnetAzure = {
+  /**
+   * Name of the dedicated classic Application Gateway subnet within the VNet.
+   */
+  applicationGatewaySubnetName?: string | null | undefined;
+  /**
+   * Name of the dedicated subnet that hosts Private Endpoints (e.g. for a
+   *
+   * @remarks
+   * Postgres Flexible Server). A Private Endpoint must not share the private
+   * subnet, which is already claimed by the Container Apps environment's
+   * `infrastructure_subnet_id`. Required only when the stack contains a
+   * Postgres resource; otherwise unused.
+   */
+  privateEndpointSubnetName?: string | null | undefined;
+  /**
+   * Name of the private subnet within the VNet
+   */
+  privateSubnetName: string;
+  /**
+   * Name of the public subnet within the VNet
+   */
+  publicSubnetName: string;
+  type: DeploymentTypeByoVnetAzure;
+  /**
+   * The full resource ID of the existing VNet
+   */
+  vnetResourceId: string;
+};
+
+export const DeploymentTypeByoVpcGcp = {
+  ByoVpcGcp: "byo-vpc-gcp",
+} as const;
+export type DeploymentTypeByoVpcGcp = ClosedEnum<
+  typeof DeploymentTypeByoVpcGcp
+>;
+
+export type DeploymentNetworkByoVpcGcp = {
+  /**
+   * The name of the existing VPC network
+   */
+  networkName: string;
+  /**
+   * The region of the subnet
+   */
+  region: string;
+  /**
+   * The name of the subnet to use
+   */
+  subnetName: string;
+  type: DeploymentTypeByoVpcGcp;
+};
+
+export const DeploymentTypeByoVpcAws = {
+  ByoVpcAws: "byo-vpc-aws",
+} as const;
+export type DeploymentTypeByoVpcAws = ClosedEnum<
+  typeof DeploymentTypeByoVpcAws
+>;
+
+export type DeploymentNetworkByoVpcAws = {
+  /**
+   * IDs of private subnets
+   */
+  privateSubnetIds: Array<string>;
+  /**
+   * IDs of public subnets (required for public ingress)
+   */
+  publicSubnetIds: Array<string>;
+  /**
+   * Optional security group IDs to use
+   */
+  securityGroupIds?: Array<string> | undefined;
+  type: DeploymentTypeByoVpcAws;
+  /**
+   * The ID of the existing VPC
+   */
+  vpcId: string;
+};
+
+export const DeploymentTypeCreate = {
+  Create: "create",
+} as const;
+export type DeploymentTypeCreate = ClosedEnum<typeof DeploymentTypeCreate>;
+
+export type DeploymentNetworkCreate = {
+  /**
+   * Number of availability zones (default: 2).
+   */
+  availabilityZones?: number | undefined;
+  /**
+   * VPC/VNet CIDR block. If not specified, auto-generated from stack ID
+   *
+   * @remarks
+   * to reduce conflicts (e.g., "10.{hash}.0.0/16").
+   */
+  cidr?: string | null | undefined;
+  type: DeploymentTypeCreate;
+};
+
+export const DeploymentTypeUseDefault = {
+  UseDefault: "use-default",
+} as const;
+export type DeploymentTypeUseDefault = ClosedEnum<
+  typeof DeploymentTypeUseDefault
+>;
+
+export type DeploymentNetworkUseDefault = {
+  type: DeploymentTypeUseDefault;
+};
+
+export type DeploymentNetworkUnion =
+  | DeploymentNetworkByoVpcAws
+  | DeploymentNetworkByoVpcGcp
+  | DeploymentNetworkByoVnetAzure
+  | DeploymentNetworkUseDefault
+  | DeploymentNetworkCreate
+  | any;
+
+/**
+ * How telemetry (logs, metrics, traces) is handled.
+ */
+export const DeploymentTelemetry = {
+  Off: "off",
+  Auto: "auto",
+  ApprovalRequired: "approval-required",
+} as const;
+/**
+ * How telemetry (logs, metrics, traces) is handled.
+ */
+export type DeploymentTelemetry = ClosedEnum<typeof DeploymentTelemetry>;
+
+/**
+ * How updates are delivered to the deployment.
+ */
+export const DeploymentUpdates = {
+  Auto: "auto",
+  ApprovalRequired: "approval-required",
+} as const;
+/**
+ * How updates are delivered to the deployment.
+ */
+export type DeploymentUpdates = ClosedEnum<typeof DeploymentUpdates>;
+
+/**
+ * User-provided configuration (network, deployment model, approvals)
+ */
+export type DeploymentStackSettings = {
+  compute?: DeploymentCompute | any | null | undefined;
+  /**
+   * Deployment model: how updates are delivered to the remote environment.
+   */
+  deploymentModel?: DeploymentDeploymentModel | undefined;
+  domains?: DeploymentDomains | any | null | undefined;
+  /**
+   * External bindings for pre-existing infrastructure.
+   *
+   * @remarks
+   * Allows using existing resources (MinIO, Redis, shared Container Apps
+   * Environment, etc.) instead of having Alien provision them.
+   * Required for Kubernetes platform, optional for cloud platforms.
+   */
+  externalBindings?: DeploymentExternalBindings | null | undefined;
+  /**
+   * How heartbeat health checks are handled.
+   */
+  heartbeats?: DeploymentHeartbeats | undefined;
+  kubernetes?: DeploymentKubernetes | any | null | undefined;
+  network?:
+    | DeploymentNetworkByoVpcAws
+    | DeploymentNetworkByoVpcGcp
+    | DeploymentNetworkByoVnetAzure
+    | DeploymentNetworkUseDefault
+    | DeploymentNetworkCreate
+    | any
+    | null
+    | undefined;
+  /**
+   * How telemetry (logs, metrics, traces) is handled.
+   */
+  telemetry?: DeploymentTelemetry | undefined;
+  /**
+   * How updates are delivered to the deployment.
+   */
+  updates?: DeploymentUpdates | undefined;
+};
+
+/**
+ * Represents the target cloud platform.
+ */
+export const DeploymentStackStatePlatform = {
+  Aws: "aws",
+  Gcp: "gcp",
+  Azure: "azure",
+  Kubernetes: "kubernetes",
+  Local: "local",
+  Test: "test",
+} as const;
+/**
+ * Represents the target cloud platform.
+ */
+export type DeploymentStackStatePlatform = ClosedEnum<
+  typeof DeploymentStackStatePlatform
+>;
+
+/**
+ * Resource that can hold any resource type in the Alien system. All resources share common 'type' and 'id' fields with additional type-specific properties.
+ */
+export type DeploymentStackStateConfig = {
+  /**
+   * The unique identifier for this specific resource instance. Must contain only alphanumeric characters, hyphens, and underscores ([A-Za-z0-9-_]). Maximum 64 characters.
+   */
+  id: string;
+  /**
+   * Resource type identifier that determines the specific kind of resource. This field is used for polymorphic deserialization and resource-specific behavior.
+   */
+  type: string;
+  additionalProperties?: { [k: string]: any | null } | undefined;
+};
+
+/**
+ * Represents the target cloud platform.
+ */
+export const DeploymentControllerPlatformEnum = {
+  Aws: "aws",
+  Gcp: "gcp",
+  Azure: "azure",
+  Kubernetes: "kubernetes",
+  Local: "local",
+  Test: "test",
+} as const;
+/**
+ * Represents the target cloud platform.
+ */
+export type DeploymentControllerPlatformEnum = ClosedEnum<
+  typeof DeploymentControllerPlatformEnum
+>;
+
+export type DeploymentControllerPlatformUnion =
+  | DeploymentControllerPlatformEnum
+  | any;
+
+/**
+ * New ResourceRef that works with any resource type.
+ *
+ * @remarks
+ * This can eventually replace the enum-based ResourceRef for full extensibility.
+ */
+export type DeploymentStackStateDependency = {
+  id: string;
+  /**
+   * Resource type identifier that determines the specific kind of resource. This field is used for polymorphic deserialization and resource-specific behavior.
+   */
+  type: string;
+};
+
+/**
+ * Canonical error container that provides a structured way to represent errors
+ *
+ * @remarks
+ * with rich metadata including error codes, human-readable messages, context,
+ * and chaining capabilities for error propagation.
+ *
+ * This struct is designed to be both machine-readable and user-friendly,
+ * supporting serialization for API responses and detailed error reporting
+ * in distributed systems.
+ */
+export type DeploymentErrorStackState = {
+  /**
+   * A unique identifier for the type of error.
+   *
+   * @remarks
+   *
+   * This should be a short, machine-readable string that can be used
+   * by clients to programmatically handle different error types.
+   * Examples: "NOT_FOUND", "VALIDATION_ERROR", "TIMEOUT"
+   */
+  code: string;
+  /**
+   * Additional diagnostic information about the error context.
+   *
+   * @remarks
+   *
+   * This optional field can contain structured data providing more details
+   * about the error, such as validation errors, request parameters that
+   * caused the issue, or other relevant context information.
+   */
+  context?: any | null | undefined;
+  /**
+   * Optional human-facing remediation hint.
+   */
+  hint?: string | null | undefined;
+  /**
+   * HTTP status code for this error.
+   *
+   * @remarks
+   *
+   * Used when converting the error to an HTTP response. If None, falls back to
+   * the error type's default status code or 500.
+   */
+  httpStatusCode?: number | null | undefined;
+  /**
+   * Indicates if this is an internal error that should not be exposed to users.
+   *
+   * @remarks
+   *
+   * When `true`, this error contains sensitive information or implementation
+   * details that should not be shown to end-users. Such errors should be
+   * logged for debugging but replaced with generic error messages in responses.
+   */
+  internal: boolean;
+  /**
+   * Human-readable error message.
+   *
+   * @remarks
+   *
+   * This message should be clear and actionable for developers or end-users,
+   * providing context about what went wrong and potentially how to fix it.
+   */
+  message: string;
+  /**
+   * Indicates whether the operation that caused the error should be retried.
+   *
+   * @remarks
+   *
+   * When `true`, the error is transient and the operation might succeed
+   * if attempted again. When `false`, retrying the same operation is
+   * unlikely to succeed without changes.
+   */
+  retryable: boolean;
+  /**
+   * The underlying error that caused this error, creating an error chain.
+   *
+   * @remarks
+   *
+   * This allows for proper error propagation and debugging by maintaining
+   * the full context of how an error occurred through multiple layers
+   * of an application.
+   */
+  source?: any | null | undefined;
+};
+
+export type DeploymentErrorUnion = DeploymentErrorStackState | any;
+
+/**
+ * Describes the lifecycle of a resource within a stack, determining how it's managed and deployed.
+ */
+export const DeploymentLifecycleStackStateEnum = {
+  Frozen: "frozen",
+  Live: "live",
+} as const;
+/**
+ * Describes the lifecycle of a resource within a stack, determining how it's managed and deployed.
+ */
+export type DeploymentLifecycleStackStateEnum = ClosedEnum<
+  typeof DeploymentLifecycleStackStateEnum
+>;
+
+export type DeploymentLifecycleUnion = DeploymentLifecycleStackStateEnum | any;
+
+/**
+ * Resource outputs that can hold output data for any resource type in the Alien system. All resource outputs share a common 'type' field with additional type-specific output properties.
+ */
+export type DeploymentOutputs = {
+  /**
+   * Resource type identifier that determines the specific kind of resource. This field is used for polymorphic deserialization and resource-specific behavior.
+   */
+  type: string;
+  additionalProperties?: { [k: string]: any | null } | undefined;
+};
+
+export type DeploymentOutputsUnion = DeploymentOutputs | any;
+
+/**
+ * Resource that can hold any resource type in the Alien system. All resources share common 'type' and 'id' fields with additional type-specific properties.
+ */
+export type DeploymentPreviousConfig = {
+  /**
+   * The unique identifier for this specific resource instance. Must contain only alphanumeric characters, hyphens, and underscores ([A-Za-z0-9-_]). Maximum 64 characters.
+   */
+  id: string;
+  /**
+   * Resource type identifier that determines the specific kind of resource. This field is used for polymorphic deserialization and resource-specific behavior.
+   */
+  type: string;
+  additionalProperties?: { [k: string]: any | null } | undefined;
+};
+
+export type DeploymentPreviousConfigUnion = DeploymentPreviousConfig | any;
+
+/**
+ * Represents the high-level status of a resource during its lifecycle.
+ */
+export const DeploymentStackStateStatus = {
+  Pending: "pending",
+  Provisioning: "provisioning",
+  ProvisionFailed: "provision-failed",
+  Running: "running",
+  Updating: "updating",
+  UpdateFailed: "update-failed",
+  Deleting: "deleting",
+  DeleteFailed: "delete-failed",
+  TeardownRequired: "teardown-required",
+  Deleted: "deleted",
+  RefreshFailed: "refresh-failed",
+} as const;
+/**
+ * Represents the high-level status of a resource during its lifecycle.
+ */
+export type DeploymentStackStateStatus = ClosedEnum<
+  typeof DeploymentStackStateStatus
+>;
+
+/**
+ * Represents the state of a single resource within the stack for a specific platform.
+ */
+export type DeploymentStackStateResources = {
+  /**
+   * The platform-specific resource controller that manages this resource's lifecycle.
+   *
+   * @remarks
+   * This is None when the resource status is Pending.
+   * Stored as JSON to make the struct serializable and movable to alien-core.
+   */
+  internal?: any | null | undefined;
+  /**
+   * Resource that can hold any resource type in the Alien system. All resources share common 'type' and 'id' fields with additional type-specific properties.
+   */
+  config: DeploymentStackStateConfig;
+  controllerPlatform?:
+    | DeploymentControllerPlatformEnum
+    | any
+    | null
+    | undefined;
+  /**
+   * Complete list of dependencies for this resource, including infrastructure dependencies.
+   *
+   * @remarks
+   * This preserves the full dependency information from the stack definition.
+   */
+  dependencies?: Array<DeploymentStackStateDependency> | undefined;
+  error?: DeploymentErrorStackState | any | null | undefined;
+  /**
+   * Stores the controller state that failed, used for manual retry operations.
+   *
+   * @remarks
+   * This allows resuming from the exact point where the failure occurred.
+   * Stored as JSON to make the struct serializable and movable to alien-core.
+   */
+  lastFailedState?: any | null | undefined;
+  lifecycle?: DeploymentLifecycleStackStateEnum | any | null | undefined;
+  outputs?: DeploymentOutputs | any | null | undefined;
+  previousConfig?: DeploymentPreviousConfig | any | null | undefined;
+  /**
+   * Binding parameters for remote access.
+   *
+   * @remarks
+   * Only populated when the resource has `remote_access: true` in its ResourceEntry.
+   * This is the JSON serialization of the binding configuration (e.g., StorageBinding, VaultBinding).
+   * Populated by controllers during provisioning using get_binding_params().
+   */
+  remoteBindingParams?: any | null | undefined;
+  /**
+   * Tracks consecutive retry attempts for the current state transition.
+   */
+  retryAttempt?: number | undefined;
+  /**
+   * Represents the high-level status of a resource during its lifecycle.
+   */
+  status: DeploymentStackStateStatus;
+  /**
+   * The high-level type of the resource (e.g., Worker::RESOURCE_TYPE, Storage::RESOURCE_TYPE).
+   */
+  type: string;
+};
+
+/**
+ * State of infrastructure components managed by this deployment
+ */
+export type DeploymentStackState = {
+  /**
+   * Represents the target cloud platform.
+   */
+  platform: DeploymentStackStatePlatform;
+  /**
+   * A prefix used for resource naming to ensure uniqueness across deployments.
+   */
+  resourcePrefix: string;
+  /**
+   * The state of individual resources, keyed by resource ID.
+   */
+  resources: { [k: string]: DeploymentStackStateResources };
+};
+
+export const DeploymentTypeStringList = {
+  StringList: "stringList",
+} as const;
+export type DeploymentTypeStringList = ClosedEnum<
+  typeof DeploymentTypeStringList
+>;
+
+export type DeploymentDefaultStringList = {
+  type: DeploymentTypeStringList;
+  /**
+   * String list default.
+   */
+  value: Array<string>;
+};
+
+export const DeploymentTypeBoolean = {
+  Boolean: "boolean",
+} as const;
+export type DeploymentTypeBoolean = ClosedEnum<typeof DeploymentTypeBoolean>;
+
+export type DeploymentDefaultBoolean = {
+  type: DeploymentTypeBoolean;
+  /**
+   * Boolean default.
+   */
+  value: boolean;
+};
+
+export const DeploymentTypeNumber = {
+  Number: "number",
+} as const;
+export type DeploymentTypeNumber = ClosedEnum<typeof DeploymentTypeNumber>;
+
+export type DeploymentDefaultNumber = {
+  type: DeploymentTypeNumber;
+  /**
+   * Number default.
+   */
+  value: string;
+};
+
+export const DeploymentTypeString = {
+  String: "string",
+} as const;
+export type DeploymentTypeString = ClosedEnum<typeof DeploymentTypeString>;
+
+export type DeploymentDefaultString = {
+  type: DeploymentTypeString;
+  /**
+   * String default.
+   */
+  value: string;
+};
+
+export type DeploymentDefaultUnion =
+  | DeploymentDefaultString
+  | DeploymentDefaultNumber
+  | DeploymentDefaultBoolean
+  | DeploymentDefaultStringList
+  | any;
+
+/**
+ * Environment variable handling for a stack input mapping.
+ */
+export const DeploymentTypeEnvEnum = {
+  Plain: "plain",
+  Secret: "secret",
+} as const;
+/**
+ * Environment variable handling for a stack input mapping.
+ */
+export type DeploymentTypeEnvEnum = ClosedEnum<typeof DeploymentTypeEnvEnum>;
+
+export type DeploymentTypeUnion = DeploymentTypeEnvEnum | any;
+
+/**
+ * How a resolved stack input is injected into runtime environment variables.
+ */
+export type DeploymentEnv = {
+  /**
+   * Environment variable name.
+   */
+  name: string;
+  /**
+   * Target resource IDs or patterns. None means every env-capable resource.
+   */
+  targetResources?: Array<string> | null | undefined;
+  type?: DeploymentTypeEnvEnum | any | null | undefined;
+};
+
+/**
+ * Primitive stack input kind.
+ */
+export const DeploymentKind = {
+  String: "string",
+  Secret: "secret",
+  Number: "number",
+  Integer: "integer",
+  Boolean: "boolean",
+  Enum: "enum",
+  StringList: "stringList",
+} as const;
+/**
+ * Primitive stack input kind.
+ */
+export type DeploymentKind = ClosedEnum<typeof DeploymentKind>;
+
+/**
+ * Represents the target cloud platform.
+ */
+export const DeploymentPreparedStackPlatform = {
+  Aws: "aws",
+  Gcp: "gcp",
+  Azure: "azure",
+  Kubernetes: "kubernetes",
+  Local: "local",
+  Test: "test",
+} as const;
+/**
+ * Represents the target cloud platform.
+ */
+export type DeploymentPreparedStackPlatform = ClosedEnum<
+  typeof DeploymentPreparedStackPlatform
+>;
+
+/**
+ * Who can provide a stack input value.
+ */
+export const DeploymentProvidedBy = {
+  Developer: "developer",
+  Deployer: "deployer",
+} as const;
+/**
+ * Who can provide a stack input value.
+ */
+export type DeploymentProvidedBy = ClosedEnum<typeof DeploymentProvidedBy>;
+
+/**
+ * Portable stack input validation constraints.
+ */
+export type DeploymentValidation = {
+  /**
+   * Semantic format hint such as url.
+   */
+  format?: string | null | undefined;
+  /**
+   * Maximum number.
+   */
+  max?: string | null | undefined;
+  /**
+   * Maximum string-list items.
+   */
+  maxItems?: number | null | undefined;
+  /**
+   * Maximum string length.
+   */
+  maxLength?: number | null | undefined;
+  /**
+   * Minimum number.
+   */
+  min?: string | null | undefined;
+  /**
+   * Minimum string-list items.
+   */
+  minItems?: number | null | undefined;
+  /**
+   * Minimum string length.
+   */
+  minLength?: number | null | undefined;
+  /**
+   * Portable whole-value regex pattern.
+   */
+  pattern?: string | null | undefined;
+  /**
+   * Allowed string enum values.
+   */
+  values?: Array<string> | null | undefined;
+};
+
+export type DeploymentValidationUnion = DeploymentValidation | any;
+
+/**
+ * Stack input definition serialized into a release stack.
+ */
+export type DeploymentInput = {
+  default?:
+    | DeploymentDefaultString
+    | DeploymentDefaultNumber
+    | DeploymentDefaultBoolean
+    | DeploymentDefaultStringList
+    | any
+    | null
+    | undefined;
+  /**
+   * Human-facing helper text.
+   */
+  description: string;
+  /**
+   * Runtime env-var mappings for v1 input resolution.
+   */
+  env?: Array<DeploymentEnv> | undefined;
+  /**
+   * Stable input ID used by CLI/API calls.
+   */
+  id: string;
+  /**
+   * Primitive stack input kind.
+   */
+  kind: DeploymentKind;
+  /**
+   * Human-facing field label.
+   */
+  label: string;
+  /**
+   * Example placeholder shown in UI.
+   */
+  placeholder?: string | null | undefined;
+  /**
+   * Platforms where this input applies.
+   */
+  platforms?: Array<DeploymentPreparedStackPlatform> | null | undefined;
+  /**
+   * Who can provide this value.
+   */
+  providedBy: Array<DeploymentProvidedBy>;
+  /**
+   * Whether a resolved value is required before deployment can proceed.
+   */
+  required: boolean;
+  validation?: DeploymentValidation | any | null | undefined;
+};
+
+export const DeploymentManagementEnum = {
+  Auto: "auto",
+} as const;
+export type DeploymentManagementEnum = ClosedEnum<
+  typeof DeploymentManagementEnum
+>;
+
+/**
+ * AWS-specific binding specification
+ */
+export type DeploymentOverrideAwResource = {
+  /**
+   * Optional condition for additional filtering (rare)
+   */
+  condition?: { [k: string]: { [k: string]: string } } | null | undefined;
+  /**
+   * Resource ARNs to bind to
+   */
+  resources: Array<string>;
+};
+
+/**
+ * AWS-specific binding specification
+ */
+export type DeploymentOverrideAwStack = {
+  /**
+   * Optional condition for additional filtering (rare)
+   */
+  condition?: { [k: string]: { [k: string]: string } } | null | undefined;
+  /**
+   * Resource ARNs to bind to
+   */
+  resources: Array<string>;
+};
+
+/**
+ * Generic binding configuration for permissions
+ */
+export type DeploymentOverrideAwBinding = {
+  /**
+   * AWS-specific binding specification
+   */
+  resource?: DeploymentOverrideAwResource | undefined;
+  /**
+   * AWS-specific binding specification
+   */
+  stack?: DeploymentOverrideAwStack | undefined;
+};
+
+/**
+ * IAM effect. Defaults to Allow.
+ */
+export const DeploymentOverrideEffect = {
+  Allow: "Allow",
+  Deny: "Deny",
+} as const;
+/**
+ * IAM effect. Defaults to Allow.
+ */
+export type DeploymentOverrideEffect = ClosedEnum<
+  typeof DeploymentOverrideEffect
+>;
+
+/**
+ * Grant permissions for a specific cloud platform
+ */
+export type DeploymentOverrideAwGrant = {
+  /**
+   * AWS IAM actions (only for AWS)
+   */
+  actions?: Array<string> | null | undefined;
+  /**
+   * Azure actions (only for Azure)
+   */
+  dataActions?: Array<string> | null | undefined;
+  /**
+   * GCP permissions that require an exact residual custom role.
+   */
+  permissions?: Array<string> | null | undefined;
+  /**
+   * Provider predefined roles to bind directly.
+   */
+  predefinedRoles?: Array<string> | null | undefined;
+  /**
+   * GCP residual custom permissions to pair with predefined roles.
+   */
+  residualPermissions?: Array<string> | null | undefined;
+};
+
+/**
+ * AWS-specific platform permission configuration
+ */
+export type DeploymentOverrideAw = {
+  /**
+   * Generic binding configuration for permissions
+   */
+  binding: DeploymentOverrideAwBinding;
+  /**
+   * Short admin-facing description of why this entry exists.
+   */
+  description?: string | null | undefined;
+  /**
+   * IAM effect. Defaults to Allow.
+   */
+  effect?: DeploymentOverrideEffect | undefined;
+  /**
+   * Grant permissions for a specific cloud platform
+   */
+  grant: DeploymentOverrideAwGrant;
+  /**
+   * Stable admin-facing label for this permission entry.
+   */
+  label?: string | null | undefined;
+};
 
 /**
  * Azure-specific binding specification
@@ -1272,43 +3150,6 @@ export type DeploymentCurrentEnvironmentVariables = {
   createdAt: Date;
 };
 
-/**
- * Agent host OS reported on the last sync
- */
-export const DeploymentAgentOs = {
-  Linux: "linux",
-  Macos: "macos",
-  Windows: "windows",
-} as const;
-/**
- * Agent host OS reported on the last sync
- */
-export type DeploymentAgentOs = ClosedEnum<typeof DeploymentAgentOs>;
-
-/**
- * Agent host architecture reported on the last sync
- */
-export const DeploymentAgentArch = {
-  X8664: "x86_64",
-  Aarch64: "aarch64",
-} as const;
-/**
- * Agent host architecture reported on the last sync
- */
-export type DeploymentAgentArch = ClosedEnum<typeof DeploymentAgentArch>;
-
-/**
- * Supervisor regime reported on the last sync. Drives which `agent_target` payload (`binary` vs `helm`) the manager sends.
- */
-export const DeploymentRegime = {
-  OsService: "os-service",
-  Kubernetes: "kubernetes",
-} as const;
-/**
- * Supervisor regime reported on the last sync. Drives which `agent_target` payload (`binary` vs `helm`) the manager sends.
- */
-export type DeploymentRegime = ClosedEnum<typeof DeploymentRegime>;
-
 export type Deployment = {
   /**
    * Unique identifier for the deployment.
@@ -1323,7 +3164,13 @@ export type Deployment = {
    */
   publicSubdomain?: string | null | undefined;
   /**
-   * Deployment status in the deployment lifecycle
+   * Deployment status in the deployment lifecycle.
+   *
+   * @remarks
+   *
+   * For observe-only deployments with no release or stack state, `Running`
+   * means the Operator is attached. Connectivity comes from `lastHeartbeatAt`;
+   * resource health comes from inventory and resource heartbeat data.
    */
   status: DeploymentStatus;
   /**
@@ -1353,7 +3200,15 @@ export type Deployment = {
   /**
    * Cloud environment information
    */
-  environmentInfo?: DeploymentEnvironmentInfoUnion | null | undefined;
+  environmentInfo?:
+    | DeploymentEnvironmentInfoGcp
+    | DeploymentEnvironmentInfoAzure
+    | DeploymentEnvironmentInfoLocal
+    | DeploymentEnvironmentInfoAws
+    | DeploymentEnvironmentInfoTest
+    | any
+    | null
+    | undefined;
   /**
    * User-provided configuration (network, deployment model, approvals)
    */
@@ -1403,6 +3258,22 @@ export type Deployment = {
    */
   setupFingerprintVersion?: number | null | undefined;
   /**
+   * Display-only scope reported by the Operator manifest
+   */
+  operatorScope?: string | null | undefined;
+  /**
+   * Display-only permission tier reported by the Operator manifest
+   */
+  operatorPermission?: string | null | undefined;
+  /**
+   * Version reported by the Operator
+   */
+  operatorVersion?: string | null | undefined;
+  /**
+   * Capability state reported by the Operator
+   */
+  capabilities?: Array<OperatorCapabilityReport> | null | undefined;
+  /**
    * Whether a retry has been requested for a failed deployment
    */
   retryRequested: boolean;
@@ -1439,31 +3310,2491 @@ export type Deployment = {
    * Unique identifier for the workspace.
    */
   workspaceId: string;
-  /**
-   * Agent binary version reported on the last sync (e.g. "1.3.5")
-   */
-  agentVersion?: string | null | undefined;
-  /**
-   * Agent host OS reported on the last sync
-   */
-  agentOs?: DeploymentAgentOs | null | undefined;
-  /**
-   * Agent host architecture reported on the last sync
-   */
-  agentArch?: DeploymentAgentArch | null | undefined;
-  /**
-   * Supervisor regime reported on the last sync. Drives which `agent_target` payload (`binary` vs `helm`) the manager sends.
-   */
-  regime?: DeploymentRegime | null | undefined;
-  /**
-   * Container image repository the agent was pulled from (no tag), chart-injected at install time. Surfaced in the dashboard pin-version UI so admins see the registry a pinned tag will be pulled from.
-   */
-  agentImageRepository?: string | null | undefined;
-  /**
-   * Pinned target agent version (semver). When set and different from agentVersion, the manager drives an upgrade to this version via agent_target.
-   */
-  targetAgentVersion?: string | null | undefined;
 };
+
+/** @internal */
+export const DeploymentStatus$inboundSchema: z.ZodEnum<
+  typeof DeploymentStatus
+> = z.enum(DeploymentStatus);
+
+/** @internal */
+export const DeploymentPlatform$inboundSchema: z.ZodEnum<
+  typeof DeploymentPlatform
+> = z.enum(DeploymentPlatform);
+
+/** @internal */
+export const DeploymentBasePlatform$inboundSchema: z.ZodEnum<
+  typeof DeploymentBasePlatform
+> = z.enum(DeploymentBasePlatform);
+
+/** @internal */
+export const DeploymentPlatformTest$inboundSchema: z.ZodEnum<
+  typeof DeploymentPlatformTest
+> = z.enum(DeploymentPlatformTest);
+
+/** @internal */
+export const DeploymentEnvironmentInfoTest$inboundSchema: z.ZodType<
+  DeploymentEnvironmentInfoTest,
+  unknown
+> = z.object({
+  testId: z.string(),
+  platform: DeploymentPlatformTest$inboundSchema,
+});
+
+export function deploymentEnvironmentInfoTestFromJSON(
+  jsonString: string,
+): SafeParseResult<DeploymentEnvironmentInfoTest, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => DeploymentEnvironmentInfoTest$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'DeploymentEnvironmentInfoTest' from JSON`,
+  );
+}
+
+/** @internal */
+export const DeploymentPlatformLocal$inboundSchema: z.ZodEnum<
+  typeof DeploymentPlatformLocal
+> = z.enum(DeploymentPlatformLocal);
+
+/** @internal */
+export const DeploymentEnvironmentInfoLocal$inboundSchema: z.ZodType<
+  DeploymentEnvironmentInfoLocal,
+  unknown
+> = z.object({
+  arch: z.string(),
+  hostname: z.string(),
+  os: z.string(),
+  platform: DeploymentPlatformLocal$inboundSchema,
+});
+
+export function deploymentEnvironmentInfoLocalFromJSON(
+  jsonString: string,
+): SafeParseResult<DeploymentEnvironmentInfoLocal, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => DeploymentEnvironmentInfoLocal$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'DeploymentEnvironmentInfoLocal' from JSON`,
+  );
+}
+
+/** @internal */
+export const DeploymentPlatformAzure$inboundSchema: z.ZodEnum<
+  typeof DeploymentPlatformAzure
+> = z.enum(DeploymentPlatformAzure);
+
+/** @internal */
+export const DeploymentEnvironmentInfoAzure$inboundSchema: z.ZodType<
+  DeploymentEnvironmentInfoAzure,
+  unknown
+> = z.object({
+  location: z.string(),
+  subscriptionId: z.string(),
+  tenantId: z.string(),
+  platform: DeploymentPlatformAzure$inboundSchema,
+});
+
+export function deploymentEnvironmentInfoAzureFromJSON(
+  jsonString: string,
+): SafeParseResult<DeploymentEnvironmentInfoAzure, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => DeploymentEnvironmentInfoAzure$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'DeploymentEnvironmentInfoAzure' from JSON`,
+  );
+}
+
+/** @internal */
+export const DeploymentPlatformGcp$inboundSchema: z.ZodEnum<
+  typeof DeploymentPlatformGcp
+> = z.enum(DeploymentPlatformGcp);
+
+/** @internal */
+export const DeploymentEnvironmentInfoGcp$inboundSchema: z.ZodType<
+  DeploymentEnvironmentInfoGcp,
+  unknown
+> = z.object({
+  projectId: z.string(),
+  projectNumber: z.string(),
+  region: z.string(),
+  platform: DeploymentPlatformGcp$inboundSchema,
+});
+
+export function deploymentEnvironmentInfoGcpFromJSON(
+  jsonString: string,
+): SafeParseResult<DeploymentEnvironmentInfoGcp, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => DeploymentEnvironmentInfoGcp$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'DeploymentEnvironmentInfoGcp' from JSON`,
+  );
+}
+
+/** @internal */
+export const DeploymentPlatformAws$inboundSchema: z.ZodEnum<
+  typeof DeploymentPlatformAws
+> = z.enum(DeploymentPlatformAws);
+
+/** @internal */
+export const DeploymentEnvironmentInfoAws$inboundSchema: z.ZodType<
+  DeploymentEnvironmentInfoAws,
+  unknown
+> = z.object({
+  accountId: z.string(),
+  region: z.string(),
+  platform: DeploymentPlatformAws$inboundSchema,
+});
+
+export function deploymentEnvironmentInfoAwsFromJSON(
+  jsonString: string,
+): SafeParseResult<DeploymentEnvironmentInfoAws, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => DeploymentEnvironmentInfoAws$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'DeploymentEnvironmentInfoAws' from JSON`,
+  );
+}
+
+/** @internal */
+export const DeploymentEnvironmentInfoUnion$inboundSchema: z.ZodType<
+  DeploymentEnvironmentInfoUnion,
+  unknown
+> = z.union([
+  z.lazy(() => DeploymentEnvironmentInfoGcp$inboundSchema),
+  z.lazy(() => DeploymentEnvironmentInfoAzure$inboundSchema),
+  z.lazy(() => DeploymentEnvironmentInfoLocal$inboundSchema),
+  z.lazy(() => DeploymentEnvironmentInfoAws$inboundSchema),
+  z.lazy(() => DeploymentEnvironmentInfoTest$inboundSchema),
+  z.any(),
+]);
+
+export function deploymentEnvironmentInfoUnionFromJSON(
+  jsonString: string,
+): SafeParseResult<DeploymentEnvironmentInfoUnion, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => DeploymentEnvironmentInfoUnion$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'DeploymentEnvironmentInfoUnion' from JSON`,
+  );
+}
+
+/** @internal */
+export const DeploymentPoolsAutoscale$inboundSchema: z.ZodType<
+  DeploymentPoolsAutoscale,
+  unknown
+> = z.object({
+  machine: z.nullable(z.string()).optional(),
+  max: z.int(),
+  min: z.int(),
+  mode: z.literal("autoscale"),
+});
+
+export function deploymentPoolsAutoscaleFromJSON(
+  jsonString: string,
+): SafeParseResult<DeploymentPoolsAutoscale, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => DeploymentPoolsAutoscale$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'DeploymentPoolsAutoscale' from JSON`,
+  );
+}
+
+/** @internal */
+export const DeploymentPoolsFixed$inboundSchema: z.ZodType<
+  DeploymentPoolsFixed,
+  unknown
+> = z.object({
+  machine: z.nullable(z.string()).optional(),
+  machines: z.int(),
+  mode: z.literal("fixed"),
+});
+
+export function deploymentPoolsFixedFromJSON(
+  jsonString: string,
+): SafeParseResult<DeploymentPoolsFixed, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => DeploymentPoolsFixed$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'DeploymentPoolsFixed' from JSON`,
+  );
+}
+
+/** @internal */
+export const DeploymentPoolsUnion$inboundSchema: z.ZodType<
+  DeploymentPoolsUnion,
+  unknown
+> = z.union([
+  z.lazy(() => DeploymentPoolsFixed$inboundSchema),
+  z.lazy(() => DeploymentPoolsAutoscale$inboundSchema),
+]);
+
+export function deploymentPoolsUnionFromJSON(
+  jsonString: string,
+): SafeParseResult<DeploymentPoolsUnion, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => DeploymentPoolsUnion$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'DeploymentPoolsUnion' from JSON`,
+  );
+}
+
+/** @internal */
+export const DeploymentCompute$inboundSchema: z.ZodType<
+  DeploymentCompute,
+  unknown
+> = z.object({
+  pools: z.record(
+    z.string(),
+    z.union([
+      z.lazy(() => DeploymentPoolsFixed$inboundSchema),
+      z.lazy(() => DeploymentPoolsAutoscale$inboundSchema),
+    ]),
+  ).optional(),
+});
+
+export function deploymentComputeFromJSON(
+  jsonString: string,
+): SafeParseResult<DeploymentCompute, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => DeploymentCompute$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'DeploymentCompute' from JSON`,
+  );
+}
+
+/** @internal */
+export const DeploymentComputeUnion$inboundSchema: z.ZodType<
+  DeploymentComputeUnion,
+  unknown
+> = z.union([z.lazy(() => DeploymentCompute$inboundSchema), z.any()]);
+
+export function deploymentComputeUnionFromJSON(
+  jsonString: string,
+): SafeParseResult<DeploymentComputeUnion, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => DeploymentComputeUnion$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'DeploymentComputeUnion' from JSON`,
+  );
+}
+
+/** @internal */
+export const DeploymentDeploymentModel$inboundSchema: z.ZodEnum<
+  typeof DeploymentDeploymentModel
+> = z.enum(DeploymentDeploymentModel);
+
+/** @internal */
+export const DeploymentAws$inboundSchema: z.ZodType<DeploymentAws, unknown> = z
+  .object({
+    certificateArn: z.string(),
+  });
+
+export function deploymentAwsFromJSON(
+  jsonString: string,
+): SafeParseResult<DeploymentAws, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => DeploymentAws$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'DeploymentAws' from JSON`,
+  );
+}
+
+/** @internal */
+export const DeploymentAwsUnion$inboundSchema: z.ZodType<
+  DeploymentAwsUnion,
+  unknown
+> = z.union([z.lazy(() => DeploymentAws$inboundSchema), z.any()]);
+
+export function deploymentAwsUnionFromJSON(
+  jsonString: string,
+): SafeParseResult<DeploymentAwsUnion, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => DeploymentAwsUnion$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'DeploymentAwsUnion' from JSON`,
+  );
+}
+
+/** @internal */
+export const DeploymentAzureStackSettings$inboundSchema: z.ZodType<
+  DeploymentAzureStackSettings,
+  unknown
+> = z.object({
+  keyVaultCertificateId: z.string(),
+  keyVaultResourceId: z.nullable(z.string()).optional(),
+});
+
+export function deploymentAzureStackSettingsFromJSON(
+  jsonString: string,
+): SafeParseResult<DeploymentAzureStackSettings, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => DeploymentAzureStackSettings$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'DeploymentAzureStackSettings' from JSON`,
+  );
+}
+
+/** @internal */
+export const DeploymentAzureUnion$inboundSchema: z.ZodType<
+  DeploymentAzureUnion,
+  unknown
+> = z.union([
+  z.lazy(() => DeploymentAzureStackSettings$inboundSchema),
+  z.any(),
+]);
+
+export function deploymentAzureUnionFromJSON(
+  jsonString: string,
+): SafeParseResult<DeploymentAzureUnion, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => DeploymentAzureUnion$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'DeploymentAzureUnion' from JSON`,
+  );
+}
+
+/** @internal */
+export const DeploymentGcpStackSettings$inboundSchema: z.ZodType<
+  DeploymentGcpStackSettings,
+  unknown
+> = z.object({
+  certificateName: z.string(),
+});
+
+export function deploymentGcpStackSettingsFromJSON(
+  jsonString: string,
+): SafeParseResult<DeploymentGcpStackSettings, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => DeploymentGcpStackSettings$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'DeploymentGcpStackSettings' from JSON`,
+  );
+}
+
+/** @internal */
+export const DeploymentGcpUnion$inboundSchema: z.ZodType<
+  DeploymentGcpUnion,
+  unknown
+> = z.union([z.lazy(() => DeploymentGcpStackSettings$inboundSchema), z.any()]);
+
+export function deploymentGcpUnionFromJSON(
+  jsonString: string,
+): SafeParseResult<DeploymentGcpUnion, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => DeploymentGcpUnion$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'DeploymentGcpUnion' from JSON`,
+  );
+}
+
+/** @internal */
+export const DeploymentTlsSecretRef$inboundSchema: z.ZodType<
+  DeploymentTlsSecretRef,
+  unknown
+> = z.object({
+  namespace: z.nullable(z.string()).optional(),
+  secretName: z.string(),
+});
+
+export function deploymentTlsSecretRefFromJSON(
+  jsonString: string,
+): SafeParseResult<DeploymentTlsSecretRef, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => DeploymentTlsSecretRef$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'DeploymentTlsSecretRef' from JSON`,
+  );
+}
+
+/** @internal */
+export const DeploymentDomainsKubernetes$inboundSchema: z.ZodType<
+  DeploymentDomainsKubernetes,
+  unknown
+> = z.object({
+  tlsSecretRef: z.lazy(() => DeploymentTlsSecretRef$inboundSchema),
+});
+
+export function deploymentDomainsKubernetesFromJSON(
+  jsonString: string,
+): SafeParseResult<DeploymentDomainsKubernetes, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => DeploymentDomainsKubernetes$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'DeploymentDomainsKubernetes' from JSON`,
+  );
+}
+
+/** @internal */
+export const DeploymentDomainsKubernetesUnion$inboundSchema: z.ZodType<
+  DeploymentDomainsKubernetesUnion,
+  unknown
+> = z.union([z.lazy(() => DeploymentDomainsKubernetes$inboundSchema), z.any()]);
+
+export function deploymentDomainsKubernetesUnionFromJSON(
+  jsonString: string,
+): SafeParseResult<DeploymentDomainsKubernetesUnion, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => DeploymentDomainsKubernetesUnion$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'DeploymentDomainsKubernetesUnion' from JSON`,
+  );
+}
+
+/** @internal */
+export const DeploymentDomainsCertificate$inboundSchema: z.ZodType<
+  DeploymentDomainsCertificate,
+  unknown
+> = z.object({
+  aws: z.nullable(z.union([z.lazy(() => DeploymentAws$inboundSchema), z.any()]))
+    .optional(),
+  azure: z.nullable(
+    z.union([
+      z.lazy(() => DeploymentAzureStackSettings$inboundSchema),
+      z.any(),
+    ]),
+  ).optional(),
+  gcp: z.nullable(
+    z.union([z.lazy(() => DeploymentGcpStackSettings$inboundSchema), z.any()]),
+  ).optional(),
+  kubernetes: z.nullable(
+    z.union([z.lazy(() => DeploymentDomainsKubernetes$inboundSchema), z.any()]),
+  ).optional(),
+});
+
+export function deploymentDomainsCertificateFromJSON(
+  jsonString: string,
+): SafeParseResult<DeploymentDomainsCertificate, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => DeploymentDomainsCertificate$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'DeploymentDomainsCertificate' from JSON`,
+  );
+}
+
+/** @internal */
+export const DeploymentCustomDomains$inboundSchema: z.ZodType<
+  DeploymentCustomDomains,
+  unknown
+> = z.object({
+  certificate: z.lazy(() => DeploymentDomainsCertificate$inboundSchema),
+  domain: z.string(),
+});
+
+export function deploymentCustomDomainsFromJSON(
+  jsonString: string,
+): SafeParseResult<DeploymentCustomDomains, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => DeploymentCustomDomains$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'DeploymentCustomDomains' from JSON`,
+  );
+}
+
+/** @internal */
+export const DeploymentDomains$inboundSchema: z.ZodType<
+  DeploymentDomains,
+  unknown
+> = z.object({
+  customDomains: z.nullable(
+    z.record(z.string(), z.lazy(() => DeploymentCustomDomains$inboundSchema)),
+  ).optional(),
+});
+
+export function deploymentDomainsFromJSON(
+  jsonString: string,
+): SafeParseResult<DeploymentDomains, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => DeploymentDomains$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'DeploymentDomains' from JSON`,
+  );
+}
+
+/** @internal */
+export const DeploymentDomainsUnion$inboundSchema: z.ZodType<
+  DeploymentDomainsUnion,
+  unknown
+> = z.union([z.lazy(() => DeploymentDomains$inboundSchema), z.any()]);
+
+export function deploymentDomainsUnionFromJSON(
+  jsonString: string,
+): SafeParseResult<DeploymentDomainsUnion, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => DeploymentDomainsUnion$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'DeploymentDomainsUnion' from JSON`,
+  );
+}
+
+/** @internal */
+export const DeploymentExternalBindings$inboundSchema: z.ZodType<
+  DeploymentExternalBindings,
+  unknown
+> = z.object({});
+
+export function deploymentExternalBindingsFromJSON(
+  jsonString: string,
+): SafeParseResult<DeploymentExternalBindings, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => DeploymentExternalBindings$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'DeploymentExternalBindings' from JSON`,
+  );
+}
+
+/** @internal */
+export const DeploymentHeartbeats$inboundSchema: z.ZodEnum<
+  typeof DeploymentHeartbeats
+> = z.enum(DeploymentHeartbeats);
+
+/** @internal */
+export const DeploymentCloud$inboundSchema: z.ZodType<
+  DeploymentCloud,
+  unknown
+> = z.object({
+  accountId: z.nullable(z.string()).optional(),
+  clusterId: z.nullable(z.string()).optional(),
+  clusterName: z.nullable(z.string()).optional(),
+  projectId: z.nullable(z.string()).optional(),
+  region: z.nullable(z.string()).optional(),
+  resourceGroup: z.nullable(z.string()).optional(),
+  subscriptionId: z.nullable(z.string()).optional(),
+});
+
+export function deploymentCloudFromJSON(
+  jsonString: string,
+): SafeParseResult<DeploymentCloud, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => DeploymentCloud$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'DeploymentCloud' from JSON`,
+  );
+}
+
+/** @internal */
+export const DeploymentCloudUnion$inboundSchema: z.ZodType<
+  DeploymentCloudUnion,
+  unknown
+> = z.union([z.lazy(() => DeploymentCloud$inboundSchema), z.any()]);
+
+export function deploymentCloudUnionFromJSON(
+  jsonString: string,
+): SafeParseResult<DeploymentCloudUnion, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => DeploymentCloudUnion$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'DeploymentCloudUnion' from JSON`,
+  );
+}
+
+/** @internal */
+export const DeploymentOwnership$inboundSchema: z.ZodEnum<
+  typeof DeploymentOwnership
+> = z.enum(DeploymentOwnership);
+
+/** @internal */
+export const DeploymentCluster$inboundSchema: z.ZodType<
+  DeploymentCluster,
+  unknown
+> = z.object({
+  cloud: z.nullable(
+    z.union([z.lazy(() => DeploymentCloud$inboundSchema), z.any()]),
+  ).optional(),
+  namespace: z.nullable(z.string()).optional(),
+  ownership: DeploymentOwnership$inboundSchema,
+});
+
+export function deploymentClusterFromJSON(
+  jsonString: string,
+): SafeParseResult<DeploymentCluster, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => DeploymentCluster$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'DeploymentCluster' from JSON`,
+  );
+}
+
+/** @internal */
+export const DeploymentClusterUnion$inboundSchema: z.ZodType<
+  DeploymentClusterUnion,
+  unknown
+> = z.union([z.lazy(() => DeploymentCluster$inboundSchema), z.any()]);
+
+export function deploymentClusterUnionFromJSON(
+  jsonString: string,
+): SafeParseResult<DeploymentClusterUnion, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => DeploymentClusterUnion$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'DeploymentClusterUnion' from JSON`,
+  );
+}
+
+/** @internal */
+export const DeploymentCertificateNone2$inboundSchema: z.ZodType<
+  DeploymentCertificateNone2,
+  unknown
+> = z.object({
+  mode: z.literal("none"),
+});
+
+export function deploymentCertificateNone2FromJSON(
+  jsonString: string,
+): SafeParseResult<DeploymentCertificateNone2, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => DeploymentCertificateNone2$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'DeploymentCertificateNone2' from JSON`,
+  );
+}
+
+/** @internal */
+export const DeploymentCertificateManagedTLSSecret2$inboundSchema: z.ZodType<
+  DeploymentCertificateManagedTLSSecret2,
+  unknown
+> = z.object({
+  mode: z.literal("managedTlsSecret"),
+  secretNameTemplate: z.string(),
+});
+
+export function deploymentCertificateManagedTLSSecret2FromJSON(
+  jsonString: string,
+): SafeParseResult<DeploymentCertificateManagedTLSSecret2, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) =>
+      DeploymentCertificateManagedTLSSecret2$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'DeploymentCertificateManagedTLSSecret2' from JSON`,
+  );
+}
+
+/** @internal */
+export const DeploymentCertificateAwsAcmArn2$inboundSchema: z.ZodType<
+  DeploymentCertificateAwsAcmArn2,
+  unknown
+> = z.object({
+  certificateArn: z.string(),
+  mode: z.literal("awsAcmArn"),
+});
+
+export function deploymentCertificateAwsAcmArn2FromJSON(
+  jsonString: string,
+): SafeParseResult<DeploymentCertificateAwsAcmArn2, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => DeploymentCertificateAwsAcmArn2$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'DeploymentCertificateAwsAcmArn2' from JSON`,
+  );
+}
+
+/** @internal */
+export const DeploymentCertificateManagedAcmImport2$inboundSchema: z.ZodType<
+  DeploymentCertificateManagedAcmImport2,
+  unknown
+> = z.object({
+  mode: z.literal("managedAcmImport"),
+  region: z.nullable(z.string()).optional(),
+  tags: z.record(z.string(), z.string()).optional(),
+});
+
+export function deploymentCertificateManagedAcmImport2FromJSON(
+  jsonString: string,
+): SafeParseResult<DeploymentCertificateManagedAcmImport2, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) =>
+      DeploymentCertificateManagedAcmImport2$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'DeploymentCertificateManagedAcmImport2' from JSON`,
+  );
+}
+
+/** @internal */
+export const DeploymentCertificateTLSSecretRef2$inboundSchema: z.ZodType<
+  DeploymentCertificateTLSSecretRef2,
+  unknown
+> = z.object({
+  namespace: z.nullable(z.string()).optional(),
+  secretName: z.string(),
+  mode: z.literal("tlsSecretRef"),
+});
+
+export function deploymentCertificateTLSSecretRef2FromJSON(
+  jsonString: string,
+): SafeParseResult<DeploymentCertificateTLSSecretRef2, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) =>
+      DeploymentCertificateTLSSecretRef2$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'DeploymentCertificateTLSSecretRef2' from JSON`,
+  );
+}
+
+/** @internal */
+export const DeploymentCertificateUnion2$inboundSchema: z.ZodType<
+  DeploymentCertificateUnion2,
+  unknown
+> = z.union([
+  z.lazy(() => DeploymentCertificateTLSSecretRef2$inboundSchema),
+  z.lazy(() => DeploymentCertificateManagedAcmImport2$inboundSchema),
+  z.lazy(() => DeploymentCertificateAwsAcmArn2$inboundSchema),
+  z.lazy(() => DeploymentCertificateManagedTLSSecret2$inboundSchema),
+  z.lazy(() => DeploymentCertificateNone2$inboundSchema),
+]);
+
+export function deploymentCertificateUnion2FromJSON(
+  jsonString: string,
+): SafeParseResult<DeploymentCertificateUnion2, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => DeploymentCertificateUnion2$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'DeploymentCertificateUnion2' from JSON`,
+  );
+}
+
+/** @internal */
+export const DeploymentModeCustom$inboundSchema: z.ZodEnum<
+  typeof DeploymentModeCustom
+> = z.enum(DeploymentModeCustom);
+
+/** @internal */
+export const DeploymentProviderAzureApplicationGatewayForContainersEnum4$inboundSchema:
+  z.ZodEnum<
+    typeof DeploymentProviderAzureApplicationGatewayForContainersEnum4
+  > = z.enum(DeploymentProviderAzureApplicationGatewayForContainersEnum4);
+
+/** @internal */
+export const DeploymentProviderAzureApplicationGatewayForContainers4$inboundSchema:
+  z.ZodType<DeploymentProviderAzureApplicationGatewayForContainers4, unknown> =
+    z.object({
+      albName: z.nullable(z.string()).optional(),
+      albNamespace: z.nullable(z.string()).optional(),
+      frontend: z.string(),
+      provider:
+        DeploymentProviderAzureApplicationGatewayForContainersEnum4$inboundSchema,
+    });
+
+export function deploymentProviderAzureApplicationGatewayForContainers4FromJSON(
+  jsonString: string,
+): SafeParseResult<
+  DeploymentProviderAzureApplicationGatewayForContainers4,
+  SDKValidationError
+> {
+  return safeParse(
+    jsonString,
+    (x) =>
+      DeploymentProviderAzureApplicationGatewayForContainers4$inboundSchema
+        .parse(JSON.parse(x)),
+    `Failed to parse 'DeploymentProviderAzureApplicationGatewayForContainers4' from JSON`,
+  );
+}
+
+/** @internal */
+export const DeploymentProviderGkeGatewayEnum4$inboundSchema: z.ZodEnum<
+  typeof DeploymentProviderGkeGatewayEnum4
+> = z.enum(DeploymentProviderGkeGatewayEnum4);
+
+/** @internal */
+export const DeploymentProviderGkeGateway4$inboundSchema: z.ZodType<
+  DeploymentProviderGkeGateway4,
+  unknown
+> = z.object({
+  provider: DeploymentProviderGkeGatewayEnum4$inboundSchema,
+  staticAddressName: z.nullable(z.string()).optional(),
+});
+
+export function deploymentProviderGkeGateway4FromJSON(
+  jsonString: string,
+): SafeParseResult<DeploymentProviderGkeGateway4, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => DeploymentProviderGkeGateway4$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'DeploymentProviderGkeGateway4' from JSON`,
+  );
+}
+
+/** @internal */
+export const DeploymentProviderAwsAlbEnum4$inboundSchema: z.ZodEnum<
+  typeof DeploymentProviderAwsAlbEnum4
+> = z.enum(DeploymentProviderAwsAlbEnum4);
+
+/** @internal */
+export const DeploymentProviderAwsAlb4$inboundSchema: z.ZodType<
+  DeploymentProviderAwsAlb4,
+  unknown
+> = z.object({
+  ipAddressType: z.nullable(z.string()).optional(),
+  provider: DeploymentProviderAwsAlbEnum4$inboundSchema,
+  scheme: z.string(),
+  subnetIds: z.array(z.string()).optional(),
+  targetType: z.string(),
+});
+
+export function deploymentProviderAwsAlb4FromJSON(
+  jsonString: string,
+): SafeParseResult<DeploymentProviderAwsAlb4, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => DeploymentProviderAwsAlb4$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'DeploymentProviderAwsAlb4' from JSON`,
+  );
+}
+
+/** @internal */
+export const DeploymentProviderUnion4$inboundSchema: z.ZodType<
+  DeploymentProviderUnion4,
+  unknown
+> = z.union([
+  z.lazy(() => DeploymentProviderAwsAlb4$inboundSchema),
+  z.lazy(() =>
+    DeploymentProviderAzureApplicationGatewayForContainers4$inboundSchema
+  ),
+  z.lazy(() => DeploymentProviderGkeGateway4$inboundSchema),
+  z.any(),
+]);
+
+export function deploymentProviderUnion4FromJSON(
+  jsonString: string,
+): SafeParseResult<DeploymentProviderUnion4, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => DeploymentProviderUnion4$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'DeploymentProviderUnion4' from JSON`,
+  );
+}
+
+/** @internal */
+export const DeploymentRouteGateway2$inboundSchema: z.ZodType<
+  DeploymentRouteGateway2,
+  unknown
+> = z.object({
+  annotations: z.record(z.string(), z.string()).optional(),
+  controller: z.nullable(z.string()).optional(),
+  gatewayClassName: z.string(),
+  labels: z.record(z.string(), z.string()).optional(),
+  listenerPort: z.int(),
+  provider: z.nullable(
+    z.union([
+      z.lazy(() => DeploymentProviderAwsAlb4$inboundSchema),
+      z.lazy(() =>
+        DeploymentProviderAzureApplicationGatewayForContainers4$inboundSchema
+      ),
+      z.lazy(() => DeploymentProviderGkeGateway4$inboundSchema),
+      z.any(),
+    ]),
+  ).optional(),
+  routeApi: z.literal("gateway"),
+});
+
+export function deploymentRouteGateway2FromJSON(
+  jsonString: string,
+): SafeParseResult<DeploymentRouteGateway2, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => DeploymentRouteGateway2$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'DeploymentRouteGateway2' from JSON`,
+  );
+}
+
+/** @internal */
+export const DeploymentProviderAzureApplicationGatewayForContainersEnum3$inboundSchema:
+  z.ZodEnum<
+    typeof DeploymentProviderAzureApplicationGatewayForContainersEnum3
+  > = z.enum(DeploymentProviderAzureApplicationGatewayForContainersEnum3);
+
+/** @internal */
+export const DeploymentProviderAzureApplicationGatewayForContainers3$inboundSchema:
+  z.ZodType<DeploymentProviderAzureApplicationGatewayForContainers3, unknown> =
+    z.object({
+      albName: z.nullable(z.string()).optional(),
+      albNamespace: z.nullable(z.string()).optional(),
+      frontend: z.string(),
+      provider:
+        DeploymentProviderAzureApplicationGatewayForContainersEnum3$inboundSchema,
+    });
+
+export function deploymentProviderAzureApplicationGatewayForContainers3FromJSON(
+  jsonString: string,
+): SafeParseResult<
+  DeploymentProviderAzureApplicationGatewayForContainers3,
+  SDKValidationError
+> {
+  return safeParse(
+    jsonString,
+    (x) =>
+      DeploymentProviderAzureApplicationGatewayForContainers3$inboundSchema
+        .parse(JSON.parse(x)),
+    `Failed to parse 'DeploymentProviderAzureApplicationGatewayForContainers3' from JSON`,
+  );
+}
+
+/** @internal */
+export const DeploymentProviderGkeGatewayEnum3$inboundSchema: z.ZodEnum<
+  typeof DeploymentProviderGkeGatewayEnum3
+> = z.enum(DeploymentProviderGkeGatewayEnum3);
+
+/** @internal */
+export const DeploymentProviderGkeGateway3$inboundSchema: z.ZodType<
+  DeploymentProviderGkeGateway3,
+  unknown
+> = z.object({
+  provider: DeploymentProviderGkeGatewayEnum3$inboundSchema,
+  staticAddressName: z.nullable(z.string()).optional(),
+});
+
+export function deploymentProviderGkeGateway3FromJSON(
+  jsonString: string,
+): SafeParseResult<DeploymentProviderGkeGateway3, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => DeploymentProviderGkeGateway3$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'DeploymentProviderGkeGateway3' from JSON`,
+  );
+}
+
+/** @internal */
+export const DeploymentProviderAwsAlbEnum3$inboundSchema: z.ZodEnum<
+  typeof DeploymentProviderAwsAlbEnum3
+> = z.enum(DeploymentProviderAwsAlbEnum3);
+
+/** @internal */
+export const DeploymentProviderAwsAlb3$inboundSchema: z.ZodType<
+  DeploymentProviderAwsAlb3,
+  unknown
+> = z.object({
+  ipAddressType: z.nullable(z.string()).optional(),
+  provider: DeploymentProviderAwsAlbEnum3$inboundSchema,
+  scheme: z.string(),
+  subnetIds: z.array(z.string()).optional(),
+  targetType: z.string(),
+});
+
+export function deploymentProviderAwsAlb3FromJSON(
+  jsonString: string,
+): SafeParseResult<DeploymentProviderAwsAlb3, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => DeploymentProviderAwsAlb3$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'DeploymentProviderAwsAlb3' from JSON`,
+  );
+}
+
+/** @internal */
+export const DeploymentProviderUnion3$inboundSchema: z.ZodType<
+  DeploymentProviderUnion3,
+  unknown
+> = z.union([
+  z.lazy(() => DeploymentProviderAwsAlb3$inboundSchema),
+  z.lazy(() =>
+    DeploymentProviderAzureApplicationGatewayForContainers3$inboundSchema
+  ),
+  z.lazy(() => DeploymentProviderGkeGateway3$inboundSchema),
+  z.any(),
+]);
+
+export function deploymentProviderUnion3FromJSON(
+  jsonString: string,
+): SafeParseResult<DeploymentProviderUnion3, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => DeploymentProviderUnion3$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'DeploymentProviderUnion3' from JSON`,
+  );
+}
+
+/** @internal */
+export const DeploymentRouteIngress2$inboundSchema: z.ZodType<
+  DeploymentRouteIngress2,
+  unknown
+> = z.object({
+  annotations: z.record(z.string(), z.string()).optional(),
+  controller: z.nullable(z.string()).optional(),
+  ingressClassName: z.string(),
+  labels: z.record(z.string(), z.string()).optional(),
+  provider: z.nullable(
+    z.union([
+      z.lazy(() => DeploymentProviderAwsAlb3$inboundSchema),
+      z.lazy(() =>
+        DeploymentProviderAzureApplicationGatewayForContainers3$inboundSchema
+      ),
+      z.lazy(() => DeploymentProviderGkeGateway3$inboundSchema),
+      z.any(),
+    ]),
+  ).optional(),
+  routeApi: z.literal("ingress"),
+});
+
+export function deploymentRouteIngress2FromJSON(
+  jsonString: string,
+): SafeParseResult<DeploymentRouteIngress2, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => DeploymentRouteIngress2$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'DeploymentRouteIngress2' from JSON`,
+  );
+}
+
+/** @internal */
+export const DeploymentRouteUnion2$inboundSchema: z.ZodType<
+  DeploymentRouteUnion2,
+  unknown
+> = z.union([
+  z.lazy(() => DeploymentRouteIngress2$inboundSchema),
+  z.lazy(() => DeploymentRouteGateway2$inboundSchema),
+]);
+
+export function deploymentRouteUnion2FromJSON(
+  jsonString: string,
+): SafeParseResult<DeploymentRouteUnion2, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => DeploymentRouteUnion2$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'DeploymentRouteUnion2' from JSON`,
+  );
+}
+
+/** @internal */
+export const DeploymentExposureCustom$inboundSchema: z.ZodType<
+  DeploymentExposureCustom,
+  unknown
+> = z.object({
+  certificate: z.union([
+    z.lazy(() => DeploymentCertificateTLSSecretRef2$inboundSchema),
+    z.lazy(() => DeploymentCertificateManagedAcmImport2$inboundSchema),
+    z.lazy(() => DeploymentCertificateAwsAcmArn2$inboundSchema),
+    z.lazy(() => DeploymentCertificateManagedTLSSecret2$inboundSchema),
+    z.lazy(() => DeploymentCertificateNone2$inboundSchema),
+  ]),
+  domain: z.string(),
+  mode: DeploymentModeCustom$inboundSchema,
+  route: z.union([
+    z.lazy(() => DeploymentRouteIngress2$inboundSchema),
+    z.lazy(() => DeploymentRouteGateway2$inboundSchema),
+  ]),
+});
+
+export function deploymentExposureCustomFromJSON(
+  jsonString: string,
+): SafeParseResult<DeploymentExposureCustom, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => DeploymentExposureCustom$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'DeploymentExposureCustom' from JSON`,
+  );
+}
+
+/** @internal */
+export const DeploymentCertificateNone1$inboundSchema: z.ZodType<
+  DeploymentCertificateNone1,
+  unknown
+> = z.object({
+  mode: z.literal("none"),
+});
+
+export function deploymentCertificateNone1FromJSON(
+  jsonString: string,
+): SafeParseResult<DeploymentCertificateNone1, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => DeploymentCertificateNone1$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'DeploymentCertificateNone1' from JSON`,
+  );
+}
+
+/** @internal */
+export const DeploymentCertificateManagedTLSSecret1$inboundSchema: z.ZodType<
+  DeploymentCertificateManagedTLSSecret1,
+  unknown
+> = z.object({
+  mode: z.literal("managedTlsSecret"),
+  secretNameTemplate: z.string(),
+});
+
+export function deploymentCertificateManagedTLSSecret1FromJSON(
+  jsonString: string,
+): SafeParseResult<DeploymentCertificateManagedTLSSecret1, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) =>
+      DeploymentCertificateManagedTLSSecret1$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'DeploymentCertificateManagedTLSSecret1' from JSON`,
+  );
+}
+
+/** @internal */
+export const DeploymentCertificateAwsAcmArn1$inboundSchema: z.ZodType<
+  DeploymentCertificateAwsAcmArn1,
+  unknown
+> = z.object({
+  certificateArn: z.string(),
+  mode: z.literal("awsAcmArn"),
+});
+
+export function deploymentCertificateAwsAcmArn1FromJSON(
+  jsonString: string,
+): SafeParseResult<DeploymentCertificateAwsAcmArn1, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => DeploymentCertificateAwsAcmArn1$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'DeploymentCertificateAwsAcmArn1' from JSON`,
+  );
+}
+
+/** @internal */
+export const DeploymentCertificateManagedAcmImport1$inboundSchema: z.ZodType<
+  DeploymentCertificateManagedAcmImport1,
+  unknown
+> = z.object({
+  mode: z.literal("managedAcmImport"),
+  region: z.nullable(z.string()).optional(),
+  tags: z.record(z.string(), z.string()).optional(),
+});
+
+export function deploymentCertificateManagedAcmImport1FromJSON(
+  jsonString: string,
+): SafeParseResult<DeploymentCertificateManagedAcmImport1, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) =>
+      DeploymentCertificateManagedAcmImport1$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'DeploymentCertificateManagedAcmImport1' from JSON`,
+  );
+}
+
+/** @internal */
+export const DeploymentCertificateTLSSecretRef1$inboundSchema: z.ZodType<
+  DeploymentCertificateTLSSecretRef1,
+  unknown
+> = z.object({
+  namespace: z.nullable(z.string()).optional(),
+  secretName: z.string(),
+  mode: z.literal("tlsSecretRef"),
+});
+
+export function deploymentCertificateTLSSecretRef1FromJSON(
+  jsonString: string,
+): SafeParseResult<DeploymentCertificateTLSSecretRef1, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) =>
+      DeploymentCertificateTLSSecretRef1$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'DeploymentCertificateTLSSecretRef1' from JSON`,
+  );
+}
+
+/** @internal */
+export const DeploymentCertificateUnion1$inboundSchema: z.ZodType<
+  DeploymentCertificateUnion1,
+  unknown
+> = z.union([
+  z.lazy(() => DeploymentCertificateTLSSecretRef1$inboundSchema),
+  z.lazy(() => DeploymentCertificateManagedAcmImport1$inboundSchema),
+  z.lazy(() => DeploymentCertificateAwsAcmArn1$inboundSchema),
+  z.lazy(() => DeploymentCertificateManagedTLSSecret1$inboundSchema),
+  z.lazy(() => DeploymentCertificateNone1$inboundSchema),
+]);
+
+export function deploymentCertificateUnion1FromJSON(
+  jsonString: string,
+): SafeParseResult<DeploymentCertificateUnion1, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => DeploymentCertificateUnion1$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'DeploymentCertificateUnion1' from JSON`,
+  );
+}
+
+/** @internal */
+export const DeploymentModeGenerated$inboundSchema: z.ZodEnum<
+  typeof DeploymentModeGenerated
+> = z.enum(DeploymentModeGenerated);
+
+/** @internal */
+export const DeploymentProviderAzureApplicationGatewayForContainersEnum2$inboundSchema:
+  z.ZodEnum<
+    typeof DeploymentProviderAzureApplicationGatewayForContainersEnum2
+  > = z.enum(DeploymentProviderAzureApplicationGatewayForContainersEnum2);
+
+/** @internal */
+export const DeploymentProviderAzureApplicationGatewayForContainers2$inboundSchema:
+  z.ZodType<DeploymentProviderAzureApplicationGatewayForContainers2, unknown> =
+    z.object({
+      albName: z.nullable(z.string()).optional(),
+      albNamespace: z.nullable(z.string()).optional(),
+      frontend: z.string(),
+      provider:
+        DeploymentProviderAzureApplicationGatewayForContainersEnum2$inboundSchema,
+    });
+
+export function deploymentProviderAzureApplicationGatewayForContainers2FromJSON(
+  jsonString: string,
+): SafeParseResult<
+  DeploymentProviderAzureApplicationGatewayForContainers2,
+  SDKValidationError
+> {
+  return safeParse(
+    jsonString,
+    (x) =>
+      DeploymentProviderAzureApplicationGatewayForContainers2$inboundSchema
+        .parse(JSON.parse(x)),
+    `Failed to parse 'DeploymentProviderAzureApplicationGatewayForContainers2' from JSON`,
+  );
+}
+
+/** @internal */
+export const DeploymentProviderGkeGatewayEnum2$inboundSchema: z.ZodEnum<
+  typeof DeploymentProviderGkeGatewayEnum2
+> = z.enum(DeploymentProviderGkeGatewayEnum2);
+
+/** @internal */
+export const DeploymentProviderGkeGateway2$inboundSchema: z.ZodType<
+  DeploymentProviderGkeGateway2,
+  unknown
+> = z.object({
+  provider: DeploymentProviderGkeGatewayEnum2$inboundSchema,
+  staticAddressName: z.nullable(z.string()).optional(),
+});
+
+export function deploymentProviderGkeGateway2FromJSON(
+  jsonString: string,
+): SafeParseResult<DeploymentProviderGkeGateway2, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => DeploymentProviderGkeGateway2$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'DeploymentProviderGkeGateway2' from JSON`,
+  );
+}
+
+/** @internal */
+export const DeploymentProviderAwsAlbEnum2$inboundSchema: z.ZodEnum<
+  typeof DeploymentProviderAwsAlbEnum2
+> = z.enum(DeploymentProviderAwsAlbEnum2);
+
+/** @internal */
+export const DeploymentProviderAwsAlb2$inboundSchema: z.ZodType<
+  DeploymentProviderAwsAlb2,
+  unknown
+> = z.object({
+  ipAddressType: z.nullable(z.string()).optional(),
+  provider: DeploymentProviderAwsAlbEnum2$inboundSchema,
+  scheme: z.string(),
+  subnetIds: z.array(z.string()).optional(),
+  targetType: z.string(),
+});
+
+export function deploymentProviderAwsAlb2FromJSON(
+  jsonString: string,
+): SafeParseResult<DeploymentProviderAwsAlb2, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => DeploymentProviderAwsAlb2$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'DeploymentProviderAwsAlb2' from JSON`,
+  );
+}
+
+/** @internal */
+export const DeploymentProviderUnion2$inboundSchema: z.ZodType<
+  DeploymentProviderUnion2,
+  unknown
+> = z.union([
+  z.lazy(() => DeploymentProviderAwsAlb2$inboundSchema),
+  z.lazy(() =>
+    DeploymentProviderAzureApplicationGatewayForContainers2$inboundSchema
+  ),
+  z.lazy(() => DeploymentProviderGkeGateway2$inboundSchema),
+  z.any(),
+]);
+
+export function deploymentProviderUnion2FromJSON(
+  jsonString: string,
+): SafeParseResult<DeploymentProviderUnion2, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => DeploymentProviderUnion2$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'DeploymentProviderUnion2' from JSON`,
+  );
+}
+
+/** @internal */
+export const DeploymentRouteGateway1$inboundSchema: z.ZodType<
+  DeploymentRouteGateway1,
+  unknown
+> = z.object({
+  annotations: z.record(z.string(), z.string()).optional(),
+  controller: z.nullable(z.string()).optional(),
+  gatewayClassName: z.string(),
+  labels: z.record(z.string(), z.string()).optional(),
+  listenerPort: z.int(),
+  provider: z.nullable(
+    z.union([
+      z.lazy(() => DeploymentProviderAwsAlb2$inboundSchema),
+      z.lazy(() =>
+        DeploymentProviderAzureApplicationGatewayForContainers2$inboundSchema
+      ),
+      z.lazy(() => DeploymentProviderGkeGateway2$inboundSchema),
+      z.any(),
+    ]),
+  ).optional(),
+  routeApi: z.literal("gateway"),
+});
+
+export function deploymentRouteGateway1FromJSON(
+  jsonString: string,
+): SafeParseResult<DeploymentRouteGateway1, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => DeploymentRouteGateway1$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'DeploymentRouteGateway1' from JSON`,
+  );
+}
+
+/** @internal */
+export const DeploymentProviderAzureApplicationGatewayForContainersEnum1$inboundSchema:
+  z.ZodEnum<
+    typeof DeploymentProviderAzureApplicationGatewayForContainersEnum1
+  > = z.enum(DeploymentProviderAzureApplicationGatewayForContainersEnum1);
+
+/** @internal */
+export const DeploymentProviderAzureApplicationGatewayForContainers1$inboundSchema:
+  z.ZodType<DeploymentProviderAzureApplicationGatewayForContainers1, unknown> =
+    z.object({
+      albName: z.nullable(z.string()).optional(),
+      albNamespace: z.nullable(z.string()).optional(),
+      frontend: z.string(),
+      provider:
+        DeploymentProviderAzureApplicationGatewayForContainersEnum1$inboundSchema,
+    });
+
+export function deploymentProviderAzureApplicationGatewayForContainers1FromJSON(
+  jsonString: string,
+): SafeParseResult<
+  DeploymentProviderAzureApplicationGatewayForContainers1,
+  SDKValidationError
+> {
+  return safeParse(
+    jsonString,
+    (x) =>
+      DeploymentProviderAzureApplicationGatewayForContainers1$inboundSchema
+        .parse(JSON.parse(x)),
+    `Failed to parse 'DeploymentProviderAzureApplicationGatewayForContainers1' from JSON`,
+  );
+}
+
+/** @internal */
+export const DeploymentProviderGkeGatewayEnum1$inboundSchema: z.ZodEnum<
+  typeof DeploymentProviderGkeGatewayEnum1
+> = z.enum(DeploymentProviderGkeGatewayEnum1);
+
+/** @internal */
+export const DeploymentProviderGkeGateway1$inboundSchema: z.ZodType<
+  DeploymentProviderGkeGateway1,
+  unknown
+> = z.object({
+  provider: DeploymentProviderGkeGatewayEnum1$inboundSchema,
+  staticAddressName: z.nullable(z.string()).optional(),
+});
+
+export function deploymentProviderGkeGateway1FromJSON(
+  jsonString: string,
+): SafeParseResult<DeploymentProviderGkeGateway1, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => DeploymentProviderGkeGateway1$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'DeploymentProviderGkeGateway1' from JSON`,
+  );
+}
+
+/** @internal */
+export const DeploymentProviderAwsAlbEnum1$inboundSchema: z.ZodEnum<
+  typeof DeploymentProviderAwsAlbEnum1
+> = z.enum(DeploymentProviderAwsAlbEnum1);
+
+/** @internal */
+export const DeploymentProviderAwsAlb1$inboundSchema: z.ZodType<
+  DeploymentProviderAwsAlb1,
+  unknown
+> = z.object({
+  ipAddressType: z.nullable(z.string()).optional(),
+  provider: DeploymentProviderAwsAlbEnum1$inboundSchema,
+  scheme: z.string(),
+  subnetIds: z.array(z.string()).optional(),
+  targetType: z.string(),
+});
+
+export function deploymentProviderAwsAlb1FromJSON(
+  jsonString: string,
+): SafeParseResult<DeploymentProviderAwsAlb1, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => DeploymentProviderAwsAlb1$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'DeploymentProviderAwsAlb1' from JSON`,
+  );
+}
+
+/** @internal */
+export const DeploymentProviderUnion1$inboundSchema: z.ZodType<
+  DeploymentProviderUnion1,
+  unknown
+> = z.union([
+  z.lazy(() => DeploymentProviderAwsAlb1$inboundSchema),
+  z.lazy(() =>
+    DeploymentProviderAzureApplicationGatewayForContainers1$inboundSchema
+  ),
+  z.lazy(() => DeploymentProviderGkeGateway1$inboundSchema),
+  z.any(),
+]);
+
+export function deploymentProviderUnion1FromJSON(
+  jsonString: string,
+): SafeParseResult<DeploymentProviderUnion1, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => DeploymentProviderUnion1$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'DeploymentProviderUnion1' from JSON`,
+  );
+}
+
+/** @internal */
+export const DeploymentRouteIngress1$inboundSchema: z.ZodType<
+  DeploymentRouteIngress1,
+  unknown
+> = z.object({
+  annotations: z.record(z.string(), z.string()).optional(),
+  controller: z.nullable(z.string()).optional(),
+  ingressClassName: z.string(),
+  labels: z.record(z.string(), z.string()).optional(),
+  provider: z.nullable(
+    z.union([
+      z.lazy(() => DeploymentProviderAwsAlb1$inboundSchema),
+      z.lazy(() =>
+        DeploymentProviderAzureApplicationGatewayForContainers1$inboundSchema
+      ),
+      z.lazy(() => DeploymentProviderGkeGateway1$inboundSchema),
+      z.any(),
+    ]),
+  ).optional(),
+  routeApi: z.literal("ingress"),
+});
+
+export function deploymentRouteIngress1FromJSON(
+  jsonString: string,
+): SafeParseResult<DeploymentRouteIngress1, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => DeploymentRouteIngress1$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'DeploymentRouteIngress1' from JSON`,
+  );
+}
+
+/** @internal */
+export const DeploymentRouteUnion1$inboundSchema: z.ZodType<
+  DeploymentRouteUnion1,
+  unknown
+> = z.union([
+  z.lazy(() => DeploymentRouteIngress1$inboundSchema),
+  z.lazy(() => DeploymentRouteGateway1$inboundSchema),
+]);
+
+export function deploymentRouteUnion1FromJSON(
+  jsonString: string,
+): SafeParseResult<DeploymentRouteUnion1, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => DeploymentRouteUnion1$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'DeploymentRouteUnion1' from JSON`,
+  );
+}
+
+/** @internal */
+export const DeploymentExposureGenerated$inboundSchema: z.ZodType<
+  DeploymentExposureGenerated,
+  unknown
+> = z.object({
+  certificate: z.union([
+    z.lazy(() => DeploymentCertificateTLSSecretRef1$inboundSchema),
+    z.lazy(() => DeploymentCertificateManagedAcmImport1$inboundSchema),
+    z.lazy(() => DeploymentCertificateAwsAcmArn1$inboundSchema),
+    z.lazy(() => DeploymentCertificateManagedTLSSecret1$inboundSchema),
+    z.lazy(() => DeploymentCertificateNone1$inboundSchema),
+  ]),
+  mode: DeploymentModeGenerated$inboundSchema,
+  route: z.union([
+    z.lazy(() => DeploymentRouteIngress1$inboundSchema),
+    z.lazy(() => DeploymentRouteGateway1$inboundSchema),
+  ]),
+});
+
+export function deploymentExposureGeneratedFromJSON(
+  jsonString: string,
+): SafeParseResult<DeploymentExposureGenerated, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => DeploymentExposureGenerated$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'DeploymentExposureGenerated' from JSON`,
+  );
+}
+
+/** @internal */
+export const DeploymentModeDisabled$inboundSchema: z.ZodEnum<
+  typeof DeploymentModeDisabled
+> = z.enum(DeploymentModeDisabled);
+
+/** @internal */
+export const DeploymentExposureDisabled$inboundSchema: z.ZodType<
+  DeploymentExposureDisabled,
+  unknown
+> = z.object({
+  mode: DeploymentModeDisabled$inboundSchema,
+});
+
+export function deploymentExposureDisabledFromJSON(
+  jsonString: string,
+): SafeParseResult<DeploymentExposureDisabled, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => DeploymentExposureDisabled$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'DeploymentExposureDisabled' from JSON`,
+  );
+}
+
+/** @internal */
+export const DeploymentExposureUnion$inboundSchema: z.ZodType<
+  DeploymentExposureUnion,
+  unknown
+> = z.union([
+  z.lazy(() => DeploymentExposureCustom$inboundSchema),
+  z.lazy(() => DeploymentExposureGenerated$inboundSchema),
+  z.lazy(() => DeploymentExposureDisabled$inboundSchema),
+  z.any(),
+]);
+
+export function deploymentExposureUnionFromJSON(
+  jsonString: string,
+): SafeParseResult<DeploymentExposureUnion, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => DeploymentExposureUnion$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'DeploymentExposureUnion' from JSON`,
+  );
+}
+
+/** @internal */
+export const DeploymentKubernetes$inboundSchema: z.ZodType<
+  DeploymentKubernetes,
+  unknown
+> = z.object({
+  cluster: z.nullable(
+    z.union([z.lazy(() => DeploymentCluster$inboundSchema), z.any()]),
+  ).optional(),
+  exposure: z.nullable(
+    z.union([
+      z.lazy(() => DeploymentExposureCustom$inboundSchema),
+      z.lazy(() => DeploymentExposureGenerated$inboundSchema),
+      z.lazy(() => DeploymentExposureDisabled$inboundSchema),
+      z.any(),
+    ]),
+  ).optional(),
+});
+
+export function deploymentKubernetesFromJSON(
+  jsonString: string,
+): SafeParseResult<DeploymentKubernetes, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => DeploymentKubernetes$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'DeploymentKubernetes' from JSON`,
+  );
+}
+
+/** @internal */
+export const DeploymentKubernetesUnion$inboundSchema: z.ZodType<
+  DeploymentKubernetesUnion,
+  unknown
+> = z.union([z.lazy(() => DeploymentKubernetes$inboundSchema), z.any()]);
+
+export function deploymentKubernetesUnionFromJSON(
+  jsonString: string,
+): SafeParseResult<DeploymentKubernetesUnion, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => DeploymentKubernetesUnion$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'DeploymentKubernetesUnion' from JSON`,
+  );
+}
+
+/** @internal */
+export const DeploymentTypeByoVnetAzure$inboundSchema: z.ZodEnum<
+  typeof DeploymentTypeByoVnetAzure
+> = z.enum(DeploymentTypeByoVnetAzure);
+
+/** @internal */
+export const DeploymentNetworkByoVnetAzure$inboundSchema: z.ZodType<
+  DeploymentNetworkByoVnetAzure,
+  unknown
+> = z.object({
+  application_gateway_subnet_name: z.nullable(z.string()).optional(),
+  private_endpoint_subnet_name: z.nullable(z.string()).optional(),
+  private_subnet_name: z.string(),
+  public_subnet_name: z.string(),
+  type: DeploymentTypeByoVnetAzure$inboundSchema,
+  vnet_resource_id: z.string(),
+}).transform((v) => {
+  return remap$(v, {
+    "application_gateway_subnet_name": "applicationGatewaySubnetName",
+    "private_endpoint_subnet_name": "privateEndpointSubnetName",
+    "private_subnet_name": "privateSubnetName",
+    "public_subnet_name": "publicSubnetName",
+    "vnet_resource_id": "vnetResourceId",
+  });
+});
+
+export function deploymentNetworkByoVnetAzureFromJSON(
+  jsonString: string,
+): SafeParseResult<DeploymentNetworkByoVnetAzure, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => DeploymentNetworkByoVnetAzure$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'DeploymentNetworkByoVnetAzure' from JSON`,
+  );
+}
+
+/** @internal */
+export const DeploymentTypeByoVpcGcp$inboundSchema: z.ZodEnum<
+  typeof DeploymentTypeByoVpcGcp
+> = z.enum(DeploymentTypeByoVpcGcp);
+
+/** @internal */
+export const DeploymentNetworkByoVpcGcp$inboundSchema: z.ZodType<
+  DeploymentNetworkByoVpcGcp,
+  unknown
+> = z.object({
+  network_name: z.string(),
+  region: z.string(),
+  subnet_name: z.string(),
+  type: DeploymentTypeByoVpcGcp$inboundSchema,
+}).transform((v) => {
+  return remap$(v, {
+    "network_name": "networkName",
+    "subnet_name": "subnetName",
+  });
+});
+
+export function deploymentNetworkByoVpcGcpFromJSON(
+  jsonString: string,
+): SafeParseResult<DeploymentNetworkByoVpcGcp, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => DeploymentNetworkByoVpcGcp$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'DeploymentNetworkByoVpcGcp' from JSON`,
+  );
+}
+
+/** @internal */
+export const DeploymentTypeByoVpcAws$inboundSchema: z.ZodEnum<
+  typeof DeploymentTypeByoVpcAws
+> = z.enum(DeploymentTypeByoVpcAws);
+
+/** @internal */
+export const DeploymentNetworkByoVpcAws$inboundSchema: z.ZodType<
+  DeploymentNetworkByoVpcAws,
+  unknown
+> = z.object({
+  private_subnet_ids: z.array(z.string()),
+  public_subnet_ids: z.array(z.string()),
+  security_group_ids: z.array(z.string()).optional(),
+  type: DeploymentTypeByoVpcAws$inboundSchema,
+  vpc_id: z.string(),
+}).transform((v) => {
+  return remap$(v, {
+    "private_subnet_ids": "privateSubnetIds",
+    "public_subnet_ids": "publicSubnetIds",
+    "security_group_ids": "securityGroupIds",
+    "vpc_id": "vpcId",
+  });
+});
+
+export function deploymentNetworkByoVpcAwsFromJSON(
+  jsonString: string,
+): SafeParseResult<DeploymentNetworkByoVpcAws, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => DeploymentNetworkByoVpcAws$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'DeploymentNetworkByoVpcAws' from JSON`,
+  );
+}
+
+/** @internal */
+export const DeploymentTypeCreate$inboundSchema: z.ZodEnum<
+  typeof DeploymentTypeCreate
+> = z.enum(DeploymentTypeCreate);
+
+/** @internal */
+export const DeploymentNetworkCreate$inboundSchema: z.ZodType<
+  DeploymentNetworkCreate,
+  unknown
+> = z.object({
+  availability_zones: z.int().optional(),
+  cidr: z.nullable(z.string()).optional(),
+  type: DeploymentTypeCreate$inboundSchema,
+}).transform((v) => {
+  return remap$(v, {
+    "availability_zones": "availabilityZones",
+  });
+});
+
+export function deploymentNetworkCreateFromJSON(
+  jsonString: string,
+): SafeParseResult<DeploymentNetworkCreate, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => DeploymentNetworkCreate$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'DeploymentNetworkCreate' from JSON`,
+  );
+}
+
+/** @internal */
+export const DeploymentTypeUseDefault$inboundSchema: z.ZodEnum<
+  typeof DeploymentTypeUseDefault
+> = z.enum(DeploymentTypeUseDefault);
+
+/** @internal */
+export const DeploymentNetworkUseDefault$inboundSchema: z.ZodType<
+  DeploymentNetworkUseDefault,
+  unknown
+> = z.object({
+  type: DeploymentTypeUseDefault$inboundSchema,
+});
+
+export function deploymentNetworkUseDefaultFromJSON(
+  jsonString: string,
+): SafeParseResult<DeploymentNetworkUseDefault, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => DeploymentNetworkUseDefault$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'DeploymentNetworkUseDefault' from JSON`,
+  );
+}
+
+/** @internal */
+export const DeploymentNetworkUnion$inboundSchema: z.ZodType<
+  DeploymentNetworkUnion,
+  unknown
+> = z.union([
+  z.lazy(() => DeploymentNetworkByoVpcAws$inboundSchema),
+  z.lazy(() => DeploymentNetworkByoVpcGcp$inboundSchema),
+  z.lazy(() => DeploymentNetworkByoVnetAzure$inboundSchema),
+  z.lazy(() => DeploymentNetworkUseDefault$inboundSchema),
+  z.lazy(() => DeploymentNetworkCreate$inboundSchema),
+  z.any(),
+]);
+
+export function deploymentNetworkUnionFromJSON(
+  jsonString: string,
+): SafeParseResult<DeploymentNetworkUnion, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => DeploymentNetworkUnion$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'DeploymentNetworkUnion' from JSON`,
+  );
+}
+
+/** @internal */
+export const DeploymentTelemetry$inboundSchema: z.ZodEnum<
+  typeof DeploymentTelemetry
+> = z.enum(DeploymentTelemetry);
+
+/** @internal */
+export const DeploymentUpdates$inboundSchema: z.ZodEnum<
+  typeof DeploymentUpdates
+> = z.enum(DeploymentUpdates);
+
+/** @internal */
+export const DeploymentStackSettings$inboundSchema: z.ZodType<
+  DeploymentStackSettings,
+  unknown
+> = z.object({
+  compute: z.nullable(
+    z.union([z.lazy(() => DeploymentCompute$inboundSchema), z.any()]),
+  ).optional(),
+  deploymentModel: DeploymentDeploymentModel$inboundSchema.optional(),
+  domains: z.nullable(
+    z.union([z.lazy(() => DeploymentDomains$inboundSchema), z.any()]),
+  ).optional(),
+  externalBindings: z.nullable(
+    z.lazy(() => DeploymentExternalBindings$inboundSchema),
+  ).optional(),
+  heartbeats: DeploymentHeartbeats$inboundSchema.optional(),
+  kubernetes: z.nullable(
+    z.union([z.lazy(() => DeploymentKubernetes$inboundSchema), z.any()]),
+  ).optional(),
+  network: z.nullable(
+    z.union([
+      z.lazy(() => DeploymentNetworkByoVpcAws$inboundSchema),
+      z.lazy(() => DeploymentNetworkByoVpcGcp$inboundSchema),
+      z.lazy(() => DeploymentNetworkByoVnetAzure$inboundSchema),
+      z.lazy(() => DeploymentNetworkUseDefault$inboundSchema),
+      z.lazy(() => DeploymentNetworkCreate$inboundSchema),
+      z.any(),
+    ]),
+  ).optional(),
+  telemetry: DeploymentTelemetry$inboundSchema.optional(),
+  updates: DeploymentUpdates$inboundSchema.optional(),
+});
+
+export function deploymentStackSettingsFromJSON(
+  jsonString: string,
+): SafeParseResult<DeploymentStackSettings, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => DeploymentStackSettings$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'DeploymentStackSettings' from JSON`,
+  );
+}
+
+/** @internal */
+export const DeploymentStackStatePlatform$inboundSchema: z.ZodEnum<
+  typeof DeploymentStackStatePlatform
+> = z.enum(DeploymentStackStatePlatform);
+
+/** @internal */
+export const DeploymentStackStateConfig$inboundSchema: z.ZodType<
+  DeploymentStackStateConfig,
+  unknown
+> = collectExtraKeys$(
+  z.object({
+    id: z.string(),
+    type: z.string(),
+  }).catchall(z.any()),
+  "additionalProperties",
+  true,
+);
+
+export function deploymentStackStateConfigFromJSON(
+  jsonString: string,
+): SafeParseResult<DeploymentStackStateConfig, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => DeploymentStackStateConfig$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'DeploymentStackStateConfig' from JSON`,
+  );
+}
+
+/** @internal */
+export const DeploymentControllerPlatformEnum$inboundSchema: z.ZodEnum<
+  typeof DeploymentControllerPlatformEnum
+> = z.enum(DeploymentControllerPlatformEnum);
+
+/** @internal */
+export const DeploymentControllerPlatformUnion$inboundSchema: z.ZodType<
+  DeploymentControllerPlatformUnion,
+  unknown
+> = z.union([DeploymentControllerPlatformEnum$inboundSchema, z.any()]);
+
+export function deploymentControllerPlatformUnionFromJSON(
+  jsonString: string,
+): SafeParseResult<DeploymentControllerPlatformUnion, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => DeploymentControllerPlatformUnion$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'DeploymentControllerPlatformUnion' from JSON`,
+  );
+}
+
+/** @internal */
+export const DeploymentStackStateDependency$inboundSchema: z.ZodType<
+  DeploymentStackStateDependency,
+  unknown
+> = z.object({
+  id: z.string(),
+  type: z.string(),
+});
+
+export function deploymentStackStateDependencyFromJSON(
+  jsonString: string,
+): SafeParseResult<DeploymentStackStateDependency, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => DeploymentStackStateDependency$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'DeploymentStackStateDependency' from JSON`,
+  );
+}
+
+/** @internal */
+export const DeploymentErrorStackState$inboundSchema: z.ZodType<
+  DeploymentErrorStackState,
+  unknown
+> = z.object({
+  code: z.string(),
+  context: z.nullable(z.any()).optional(),
+  hint: z.nullable(z.string()).optional(),
+  httpStatusCode: z.nullable(z.int()).optional(),
+  internal: z.boolean(),
+  message: z.string(),
+  retryable: z.boolean().default(false),
+  source: z.nullable(z.any()).optional(),
+});
+
+export function deploymentErrorStackStateFromJSON(
+  jsonString: string,
+): SafeParseResult<DeploymentErrorStackState, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => DeploymentErrorStackState$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'DeploymentErrorStackState' from JSON`,
+  );
+}
+
+/** @internal */
+export const DeploymentErrorUnion$inboundSchema: z.ZodType<
+  DeploymentErrorUnion,
+  unknown
+> = z.union([z.lazy(() => DeploymentErrorStackState$inboundSchema), z.any()]);
+
+export function deploymentErrorUnionFromJSON(
+  jsonString: string,
+): SafeParseResult<DeploymentErrorUnion, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => DeploymentErrorUnion$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'DeploymentErrorUnion' from JSON`,
+  );
+}
+
+/** @internal */
+export const DeploymentLifecycleStackStateEnum$inboundSchema: z.ZodEnum<
+  typeof DeploymentLifecycleStackStateEnum
+> = z.enum(DeploymentLifecycleStackStateEnum);
+
+/** @internal */
+export const DeploymentLifecycleUnion$inboundSchema: z.ZodType<
+  DeploymentLifecycleUnion,
+  unknown
+> = z.union([DeploymentLifecycleStackStateEnum$inboundSchema, z.any()]);
+
+export function deploymentLifecycleUnionFromJSON(
+  jsonString: string,
+): SafeParseResult<DeploymentLifecycleUnion, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => DeploymentLifecycleUnion$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'DeploymentLifecycleUnion' from JSON`,
+  );
+}
+
+/** @internal */
+export const DeploymentOutputs$inboundSchema: z.ZodType<
+  DeploymentOutputs,
+  unknown
+> = collectExtraKeys$(
+  z.object({
+    type: z.string(),
+  }).catchall(z.any()),
+  "additionalProperties",
+  true,
+);
+
+export function deploymentOutputsFromJSON(
+  jsonString: string,
+): SafeParseResult<DeploymentOutputs, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => DeploymentOutputs$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'DeploymentOutputs' from JSON`,
+  );
+}
+
+/** @internal */
+export const DeploymentOutputsUnion$inboundSchema: z.ZodType<
+  DeploymentOutputsUnion,
+  unknown
+> = z.union([z.lazy(() => DeploymentOutputs$inboundSchema), z.any()]);
+
+export function deploymentOutputsUnionFromJSON(
+  jsonString: string,
+): SafeParseResult<DeploymentOutputsUnion, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => DeploymentOutputsUnion$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'DeploymentOutputsUnion' from JSON`,
+  );
+}
+
+/** @internal */
+export const DeploymentPreviousConfig$inboundSchema: z.ZodType<
+  DeploymentPreviousConfig,
+  unknown
+> = collectExtraKeys$(
+  z.object({
+    id: z.string(),
+    type: z.string(),
+  }).catchall(z.any()),
+  "additionalProperties",
+  true,
+);
+
+export function deploymentPreviousConfigFromJSON(
+  jsonString: string,
+): SafeParseResult<DeploymentPreviousConfig, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => DeploymentPreviousConfig$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'DeploymentPreviousConfig' from JSON`,
+  );
+}
+
+/** @internal */
+export const DeploymentPreviousConfigUnion$inboundSchema: z.ZodType<
+  DeploymentPreviousConfigUnion,
+  unknown
+> = z.union([z.lazy(() => DeploymentPreviousConfig$inboundSchema), z.any()]);
+
+export function deploymentPreviousConfigUnionFromJSON(
+  jsonString: string,
+): SafeParseResult<DeploymentPreviousConfigUnion, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => DeploymentPreviousConfigUnion$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'DeploymentPreviousConfigUnion' from JSON`,
+  );
+}
+
+/** @internal */
+export const DeploymentStackStateStatus$inboundSchema: z.ZodEnum<
+  typeof DeploymentStackStateStatus
+> = z.enum(DeploymentStackStateStatus);
+
+/** @internal */
+export const DeploymentStackStateResources$inboundSchema: z.ZodType<
+  DeploymentStackStateResources,
+  unknown
+> = z.object({
+  _internal: z.nullable(z.any()).optional(),
+  config: z.lazy(() => DeploymentStackStateConfig$inboundSchema),
+  controllerPlatform: z.nullable(
+    z.union([DeploymentControllerPlatformEnum$inboundSchema, z.any()]),
+  ).optional(),
+  dependencies: z.array(
+    z.lazy(() => DeploymentStackStateDependency$inboundSchema),
+  ).optional(),
+  error: z.nullable(
+    z.union([z.lazy(() => DeploymentErrorStackState$inboundSchema), z.any()]),
+  ).optional(),
+  lastFailedState: z.nullable(z.any()).optional(),
+  lifecycle: z.nullable(
+    z.union([DeploymentLifecycleStackStateEnum$inboundSchema, z.any()]),
+  ).optional(),
+  outputs: z.nullable(
+    z.union([z.lazy(() => DeploymentOutputs$inboundSchema), z.any()]),
+  ).optional(),
+  previousConfig: z.nullable(
+    z.union([z.lazy(() => DeploymentPreviousConfig$inboundSchema), z.any()]),
+  ).optional(),
+  remoteBindingParams: z.nullable(z.any()).optional(),
+  retryAttempt: z.int().optional(),
+  status: DeploymentStackStateStatus$inboundSchema,
+  type: z.string(),
+}).transform((v) => {
+  return remap$(v, {
+    "_internal": "internal",
+  });
+});
+
+export function deploymentStackStateResourcesFromJSON(
+  jsonString: string,
+): SafeParseResult<DeploymentStackStateResources, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => DeploymentStackStateResources$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'DeploymentStackStateResources' from JSON`,
+  );
+}
+
+/** @internal */
+export const DeploymentStackState$inboundSchema: z.ZodType<
+  DeploymentStackState,
+  unknown
+> = z.object({
+  platform: DeploymentStackStatePlatform$inboundSchema,
+  resourcePrefix: z.string(),
+  resources: z.record(
+    z.string(),
+    z.lazy(() => DeploymentStackStateResources$inboundSchema),
+  ),
+});
+
+export function deploymentStackStateFromJSON(
+  jsonString: string,
+): SafeParseResult<DeploymentStackState, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => DeploymentStackState$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'DeploymentStackState' from JSON`,
+  );
+}
+
+/** @internal */
+export const DeploymentTypeStringList$inboundSchema: z.ZodEnum<
+  typeof DeploymentTypeStringList
+> = z.enum(DeploymentTypeStringList);
+
+/** @internal */
+export const DeploymentDefaultStringList$inboundSchema: z.ZodType<
+  DeploymentDefaultStringList,
+  unknown
+> = z.object({
+  type: DeploymentTypeStringList$inboundSchema,
+  value: z.array(z.string()),
+});
+
+export function deploymentDefaultStringListFromJSON(
+  jsonString: string,
+): SafeParseResult<DeploymentDefaultStringList, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => DeploymentDefaultStringList$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'DeploymentDefaultStringList' from JSON`,
+  );
+}
+
+/** @internal */
+export const DeploymentTypeBoolean$inboundSchema: z.ZodEnum<
+  typeof DeploymentTypeBoolean
+> = z.enum(DeploymentTypeBoolean);
+
+/** @internal */
+export const DeploymentDefaultBoolean$inboundSchema: z.ZodType<
+  DeploymentDefaultBoolean,
+  unknown
+> = z.object({
+  type: DeploymentTypeBoolean$inboundSchema,
+  value: z.boolean(),
+});
+
+export function deploymentDefaultBooleanFromJSON(
+  jsonString: string,
+): SafeParseResult<DeploymentDefaultBoolean, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => DeploymentDefaultBoolean$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'DeploymentDefaultBoolean' from JSON`,
+  );
+}
+
+/** @internal */
+export const DeploymentTypeNumber$inboundSchema: z.ZodEnum<
+  typeof DeploymentTypeNumber
+> = z.enum(DeploymentTypeNumber);
+
+/** @internal */
+export const DeploymentDefaultNumber$inboundSchema: z.ZodType<
+  DeploymentDefaultNumber,
+  unknown
+> = z.object({
+  type: DeploymentTypeNumber$inboundSchema,
+  value: z.string(),
+});
+
+export function deploymentDefaultNumberFromJSON(
+  jsonString: string,
+): SafeParseResult<DeploymentDefaultNumber, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => DeploymentDefaultNumber$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'DeploymentDefaultNumber' from JSON`,
+  );
+}
+
+/** @internal */
+export const DeploymentTypeString$inboundSchema: z.ZodEnum<
+  typeof DeploymentTypeString
+> = z.enum(DeploymentTypeString);
+
+/** @internal */
+export const DeploymentDefaultString$inboundSchema: z.ZodType<
+  DeploymentDefaultString,
+  unknown
+> = z.object({
+  type: DeploymentTypeString$inboundSchema,
+  value: z.string(),
+});
+
+export function deploymentDefaultStringFromJSON(
+  jsonString: string,
+): SafeParseResult<DeploymentDefaultString, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => DeploymentDefaultString$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'DeploymentDefaultString' from JSON`,
+  );
+}
+
+/** @internal */
+export const DeploymentDefaultUnion$inboundSchema: z.ZodType<
+  DeploymentDefaultUnion,
+  unknown
+> = z.union([
+  z.lazy(() => DeploymentDefaultString$inboundSchema),
+  z.lazy(() => DeploymentDefaultNumber$inboundSchema),
+  z.lazy(() => DeploymentDefaultBoolean$inboundSchema),
+  z.lazy(() => DeploymentDefaultStringList$inboundSchema),
+  z.any(),
+]);
+
+export function deploymentDefaultUnionFromJSON(
+  jsonString: string,
+): SafeParseResult<DeploymentDefaultUnion, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => DeploymentDefaultUnion$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'DeploymentDefaultUnion' from JSON`,
+  );
+}
+
+/** @internal */
+export const DeploymentTypeEnvEnum$inboundSchema: z.ZodEnum<
+  typeof DeploymentTypeEnvEnum
+> = z.enum(DeploymentTypeEnvEnum);
+
+/** @internal */
+export const DeploymentTypeUnion$inboundSchema: z.ZodType<
+  DeploymentTypeUnion,
+  unknown
+> = z.union([DeploymentTypeEnvEnum$inboundSchema, z.any()]);
+
+export function deploymentTypeUnionFromJSON(
+  jsonString: string,
+): SafeParseResult<DeploymentTypeUnion, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => DeploymentTypeUnion$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'DeploymentTypeUnion' from JSON`,
+  );
+}
+
+/** @internal */
+export const DeploymentEnv$inboundSchema: z.ZodType<DeploymentEnv, unknown> = z
+  .object({
+    name: z.string(),
+    targetResources: z.nullable(z.array(z.string())).optional(),
+    type: z.nullable(z.union([DeploymentTypeEnvEnum$inboundSchema, z.any()]))
+      .optional(),
+  });
+
+export function deploymentEnvFromJSON(
+  jsonString: string,
+): SafeParseResult<DeploymentEnv, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => DeploymentEnv$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'DeploymentEnv' from JSON`,
+  );
+}
+
+/** @internal */
+export const DeploymentKind$inboundSchema: z.ZodEnum<typeof DeploymentKind> = z
+  .enum(DeploymentKind);
+
+/** @internal */
+export const DeploymentPreparedStackPlatform$inboundSchema: z.ZodEnum<
+  typeof DeploymentPreparedStackPlatform
+> = z.enum(DeploymentPreparedStackPlatform);
+
+/** @internal */
+export const DeploymentProvidedBy$inboundSchema: z.ZodEnum<
+  typeof DeploymentProvidedBy
+> = z.enum(DeploymentProvidedBy);
+
+/** @internal */
+export const DeploymentValidation$inboundSchema: z.ZodType<
+  DeploymentValidation,
+  unknown
+> = z.object({
+  format: z.nullable(z.string()).optional(),
+  max: z.nullable(z.string()).optional(),
+  maxItems: z.nullable(z.int()).optional(),
+  maxLength: z.nullable(z.int()).optional(),
+  min: z.nullable(z.string()).optional(),
+  minItems: z.nullable(z.int()).optional(),
+  minLength: z.nullable(z.int()).optional(),
+  pattern: z.nullable(z.string()).optional(),
+  values: z.nullable(z.array(z.string())).optional(),
+});
+
+export function deploymentValidationFromJSON(
+  jsonString: string,
+): SafeParseResult<DeploymentValidation, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => DeploymentValidation$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'DeploymentValidation' from JSON`,
+  );
+}
+
+/** @internal */
+export const DeploymentValidationUnion$inboundSchema: z.ZodType<
+  DeploymentValidationUnion,
+  unknown
+> = z.union([z.lazy(() => DeploymentValidation$inboundSchema), z.any()]);
+
+export function deploymentValidationUnionFromJSON(
+  jsonString: string,
+): SafeParseResult<DeploymentValidationUnion, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => DeploymentValidationUnion$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'DeploymentValidationUnion' from JSON`,
+  );
+}
+
+/** @internal */
+export const DeploymentInput$inboundSchema: z.ZodType<
+  DeploymentInput,
+  unknown
+> = z.object({
+  default: z.nullable(
+    z.union([
+      z.lazy(() => DeploymentDefaultString$inboundSchema),
+      z.lazy(() => DeploymentDefaultNumber$inboundSchema),
+      z.lazy(() => DeploymentDefaultBoolean$inboundSchema),
+      z.lazy(() => DeploymentDefaultStringList$inboundSchema),
+      z.any(),
+    ]),
+  ).optional(),
+  description: z.string(),
+  env: z.array(z.lazy(() => DeploymentEnv$inboundSchema)).optional(),
+  id: z.string(),
+  kind: DeploymentKind$inboundSchema,
+  label: z.string(),
+  placeholder: z.nullable(z.string()).optional(),
+  platforms: z.nullable(z.array(DeploymentPreparedStackPlatform$inboundSchema))
+    .optional(),
+  providedBy: z.array(DeploymentProvidedBy$inboundSchema),
+  required: z.boolean(),
+  validation: z.nullable(
+    z.union([z.lazy(() => DeploymentValidation$inboundSchema), z.any()]),
+  ).optional(),
+});
+
+export function deploymentInputFromJSON(
+  jsonString: string,
+): SafeParseResult<DeploymentInput, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => DeploymentInput$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'DeploymentInput' from JSON`,
+  );
+}
+
+/** @internal */
+export const DeploymentManagementEnum$inboundSchema: z.ZodEnum<
+  typeof DeploymentManagementEnum
+> = z.enum(DeploymentManagementEnum);
+
+/** @internal */
+export const DeploymentOverrideAwResource$inboundSchema: z.ZodType<
+  DeploymentOverrideAwResource,
+  unknown
+> = z.object({
+  condition: z.nullable(z.record(z.string(), z.record(z.string(), z.string())))
+    .optional(),
+  resources: z.array(z.string()),
+});
+
+export function deploymentOverrideAwResourceFromJSON(
+  jsonString: string,
+): SafeParseResult<DeploymentOverrideAwResource, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => DeploymentOverrideAwResource$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'DeploymentOverrideAwResource' from JSON`,
+  );
+}
+
+/** @internal */
+export const DeploymentOverrideAwStack$inboundSchema: z.ZodType<
+  DeploymentOverrideAwStack,
+  unknown
+> = z.object({
+  condition: z.nullable(z.record(z.string(), z.record(z.string(), z.string())))
+    .optional(),
+  resources: z.array(z.string()),
+});
+
+export function deploymentOverrideAwStackFromJSON(
+  jsonString: string,
+): SafeParseResult<DeploymentOverrideAwStack, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => DeploymentOverrideAwStack$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'DeploymentOverrideAwStack' from JSON`,
+  );
+}
+
+/** @internal */
+export const DeploymentOverrideAwBinding$inboundSchema: z.ZodType<
+  DeploymentOverrideAwBinding,
+  unknown
+> = z.object({
+  resource: z.lazy(() => DeploymentOverrideAwResource$inboundSchema).optional(),
+  stack: z.lazy(() => DeploymentOverrideAwStack$inboundSchema).optional(),
+});
+
+export function deploymentOverrideAwBindingFromJSON(
+  jsonString: string,
+): SafeParseResult<DeploymentOverrideAwBinding, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => DeploymentOverrideAwBinding$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'DeploymentOverrideAwBinding' from JSON`,
+  );
+}
+
+/** @internal */
+export const DeploymentOverrideEffect$inboundSchema: z.ZodEnum<
+  typeof DeploymentOverrideEffect
+> = z.enum(DeploymentOverrideEffect);
+
+/** @internal */
+export const DeploymentOverrideAwGrant$inboundSchema: z.ZodType<
+  DeploymentOverrideAwGrant,
+  unknown
+> = z.object({
+  actions: z.nullable(z.array(z.string())).optional(),
+  dataActions: z.nullable(z.array(z.string())).optional(),
+  permissions: z.nullable(z.array(z.string())).optional(),
+  predefinedRoles: z.nullable(z.array(z.string())).optional(),
+  residualPermissions: z.nullable(z.array(z.string())).optional(),
+});
+
+export function deploymentOverrideAwGrantFromJSON(
+  jsonString: string,
+): SafeParseResult<DeploymentOverrideAwGrant, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => DeploymentOverrideAwGrant$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'DeploymentOverrideAwGrant' from JSON`,
+  );
+}
+
+/** @internal */
+export const DeploymentOverrideAw$inboundSchema: z.ZodType<
+  DeploymentOverrideAw,
+  unknown
+> = z.object({
+  binding: z.lazy(() => DeploymentOverrideAwBinding$inboundSchema),
+  description: z.nullable(z.string()).optional(),
+  effect: DeploymentOverrideEffect$inboundSchema.optional(),
+  grant: z.lazy(() => DeploymentOverrideAwGrant$inboundSchema),
+  label: z.nullable(z.string()).optional(),
+});
+
+export function deploymentOverrideAwFromJSON(
+  jsonString: string,
+): SafeParseResult<DeploymentOverrideAw, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => DeploymentOverrideAw$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'DeploymentOverrideAw' from JSON`,
+  );
+}
 
 /** @internal */
 export const DeploymentOverrideAzureResource$inboundSchema: z.ZodType<
@@ -1764,7 +6095,8 @@ export const DeploymentOverridePlatforms$inboundSchema: z.ZodType<
   DeploymentOverridePlatforms,
   unknown
 > = z.object({
-  aws: z.nullable(z.array(DeploymentOverrideAw$inboundSchema)).optional(),
+  aws: z.nullable(z.array(z.lazy(() => DeploymentOverrideAw$inboundSchema)))
+    .optional(),
   azure: z.nullable(
     z.array(z.lazy(() => DeploymentOverrideAzure$inboundSchema)),
   ).optional(),
@@ -2910,7 +7242,7 @@ export const DeploymentPreparedStack$inboundSchema: z.ZodType<
   unknown
 > = z.object({
   id: z.string(),
-  inputs: z.array(DeploymentInput$inboundSchema).optional(),
+  inputs: z.array(z.lazy(() => DeploymentInput$inboundSchema)).optional(),
   permissions: z.lazy(() => DeploymentPermissions$inboundSchema).optional(),
   resources: z.record(
     z.string(),
@@ -3047,21 +7379,6 @@ export function deploymentCurrentEnvironmentVariablesFromJSON(
 }
 
 /** @internal */
-export const DeploymentAgentOs$inboundSchema: z.ZodEnum<
-  typeof DeploymentAgentOs
-> = z.enum(DeploymentAgentOs);
-
-/** @internal */
-export const DeploymentAgentArch$inboundSchema: z.ZodEnum<
-  typeof DeploymentAgentArch
-> = z.enum(DeploymentAgentArch);
-
-/** @internal */
-export const DeploymentRegime$inboundSchema: z.ZodEnum<
-  typeof DeploymentRegime
-> = z.enum(DeploymentRegime);
-
-/** @internal */
 export const Deployment$inboundSchema: z.ZodType<Deployment, unknown> = z
   .object({
     id: z.string(),
@@ -3074,10 +7391,19 @@ export const Deployment$inboundSchema: z.ZodType<Deployment, unknown> = z
     region: z.nullable(z.string()).optional(),
     deploymentProtocolVersion: z.int(),
     deploymentGroupId: z.string(),
-    environmentInfo: z.nullable(DeploymentEnvironmentInfoUnion$inboundSchema)
+    environmentInfo: z.nullable(
+      z.union([
+        z.lazy(() => DeploymentEnvironmentInfoGcp$inboundSchema),
+        z.lazy(() => DeploymentEnvironmentInfoAzure$inboundSchema),
+        z.lazy(() => DeploymentEnvironmentInfoLocal$inboundSchema),
+        z.lazy(() => DeploymentEnvironmentInfoAws$inboundSchema),
+        z.lazy(() => DeploymentEnvironmentInfoTest$inboundSchema),
+        z.any(),
+      ]),
+    ).optional(),
+    stackSettings: z.lazy(() => DeploymentStackSettings$inboundSchema),
+    stackState: z.nullable(z.lazy(() => DeploymentStackState$inboundSchema))
       .optional(),
-    stackSettings: DeploymentStackSettings$inboundSchema,
-    stackState: z.nullable(DeploymentStackState$inboundSchema).optional(),
     runtimeMetadata: z.nullable(
       z.lazy(() => DeploymentRuntimeMetadata$inboundSchema),
     ).optional(),
@@ -3091,6 +7417,11 @@ export const Deployment$inboundSchema: z.ZodType<Deployment, unknown> = z
     setupTarget: z.nullable(z.string()).optional(),
     setupFingerprint: z.nullable(z.string()).optional(),
     setupFingerprintVersion: z.nullable(z.int()).optional(),
+    operatorScope: z.nullable(z.string()).optional(),
+    operatorPermission: z.nullable(z.string()).optional(),
+    operatorVersion: z.nullable(z.string()).optional(),
+    capabilities: z.nullable(z.array(OperatorCapabilityReport$inboundSchema))
+      .optional(),
     retryRequested: z.boolean(),
     lastHeartbeatAt: z.nullable(
       z.iso.datetime({ offset: true }).transform(v => new Date(v)),
@@ -3109,12 +7440,6 @@ export const Deployment$inboundSchema: z.ZodType<Deployment, unknown> = z
     updatedAt: z.iso.datetime({ offset: true }).transform(v => new Date(v)),
     managerId: z.string(),
     workspaceId: z.string(),
-    agentVersion: z.nullable(z.string()).optional(),
-    agentOs: z.nullable(DeploymentAgentOs$inboundSchema).optional(),
-    agentArch: z.nullable(DeploymentAgentArch$inboundSchema).optional(),
-    regime: z.nullable(DeploymentRegime$inboundSchema).optional(),
-    agentImageRepository: z.nullable(z.string()).optional(),
-    targetAgentVersion: z.nullable(z.string()).optional(),
   });
 
 export function deploymentFromJSON(

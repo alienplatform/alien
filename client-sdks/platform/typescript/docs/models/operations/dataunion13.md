@@ -3,106 +3,110 @@
 
 ## Supported Types
 
-### `operations.DataAwsCodeBuild`
+### `operations.DataAwsEcr`
 
 ```typescript
-const value: operations.DataAwsCodeBuild = {
-  encryptionKeyPresent: true,
-  environmentVariableCount: 879452,
-  projectName: "<value>",
-  serviceRolePresent: true,
+const value: operations.DataAwsEcr = {
+  region: "<value>",
+  registryId: "<id>",
+  registryUri: "https://mindless-bench.com",
+  repositories: [
+    {
+      createdAt: 8040.15,
+      kmsKeyPresent: true,
+      registryId: "<id>",
+      repositoryArn: "<value>",
+      repositoryName: "<value>",
+      repositoryUri: "https://glossy-disclosure.info",
+    },
+  ],
+  repositoriesTruncated: true,
+  repositoryCount: 980949,
+  repositoryPrefix: "<value>",
   status: {
-    collectionIssues: [
-      {
-        message: "<value>",
-        reason: "timed-out",
-        severity: "warning",
-        source: "<value>",
-      },
-    ],
-    health: "healthy",
-    lifecycle: "failed",
+    collectionIssues: [],
+    health: "unknown",
+    lifecycle: "stopped",
     partial: false,
-    stale: true,
+    stale: false,
   },
-  backend: "awsCodeBuild",
+  backend: "awsEcr",
 };
 ```
 
-### `operations.DataGcpCloudBuild`
+### `operations.DataGcpArtifactRegistry`
 
 ```typescript
-const value: operations.DataGcpCloudBuild = {
-  buildConfigId: "<id>",
-  environmentVariableCount: 982514,
+const value: operations.DataGcpArtifactRegistry = {
+  cleanupPolicyCount: 150101,
+  iamBindingCount: 410292,
+  iamPolicyEtagPresent: true,
+  iamRoles: [],
+  kmsKeyNamePresent: true,
+  labelCount: 560331,
   location: "<value>",
   projectId: "<id>",
+  repositoryId: "<id>",
   status: {
-    collectionIssues: [
-      {
-        message: "<value>",
-        reason: "not-installed",
-        severity: "warning",
-        source: "<value>",
-      },
-    ],
-    health: "unknown",
-    lifecycle: "deleting",
-    partial: true,
-    stale: true,
-  },
-  backend: "gcpCloudBuild",
-};
-```
-
-### `operations.DataAzureContainerApps2`
-
-```typescript
-const value: operations.DataAzureContainerApps2 = {
-  environmentVariableCount: 246098,
-  managedEnvironmentId: "<id>",
-  resourceGroupName: "<value>",
-  status: {
-    collectionIssues: [
-      {
-        message: "<value>",
-        reason: "not-installed",
-        severity: "info",
-        source: "<value>",
-      },
-    ],
-    health: "unhealthy",
-    lifecycle: "deleting",
-    partial: true,
-    stale: true,
-  },
-  backend: "azureContainerApps",
-};
-```
-
-### `operations.DataKubernetesJob`
-
-```typescript
-const value: operations.DataKubernetesJob = {
-  conditionCount: 902553,
-  events: [],
-  jobName: "<value>",
-  namespace: "<value>",
-  status: {
-    collectionIssues: [
-      {
-        message: "<value>",
-        reason: "timed-out",
-        severity: "error",
-        source: "<value>",
-      },
-    ],
+    collectionIssues: [],
     health: "degraded",
-    lifecycle: "scaling",
+    lifecycle: "stopped",
     partial: false,
-    stale: true,
+    stale: false,
   },
-  backend: "kubernetesJob",
+  backend: "gcpArtifactRegistry",
+};
+```
+
+### `operations.DataAzureContainerRegistry`
+
+```typescript
+const value: operations.DataAzureContainerRegistry = {
+  adminUserEnabled: false,
+  anonymousPullEnabled: true,
+  dataEndpointHostNames: [
+    "<value 1>",
+    "<value 2>",
+  ],
+  encryptionKeyIdentifierPresent: false,
+  encryptionKeyVaultUriPresent: false,
+  ipRuleCount: 806238,
+  location: "<value>",
+  managedTagCount: 395726,
+  name: "<value>",
+  networkRuleBypassOptions: "<value>",
+  policiesPresent: true,
+  policyCount: 284832,
+  privateEndpointConnectionCount: 849232,
+  publicNetworkAccess: "<value>",
+  resourceGroup: "<value>",
+  skuName: "<value>",
+  status: {
+    collectionIssues: [],
+    health: "unhealthy",
+    lifecycle: "failed",
+    partial: true,
+    stale: false,
+  },
+  zoneRedundancy: "<value>",
+  backend: "azureContainerRegistry",
+};
+```
+
+### `operations.DataLocal11`
+
+```typescript
+const value: operations.DataLocal11 = {
+  reachable: false,
+  registryUrl: "https://well-documented-remark.biz/",
+  status: {
+    collectionIssues: [],
+    health: "unknown",
+    lifecycle: "creating",
+    partial: true,
+    stale: false,
+  },
+  backend: "local",
 };
 ```
 

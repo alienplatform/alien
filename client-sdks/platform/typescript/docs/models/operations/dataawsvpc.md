@@ -18,15 +18,15 @@ let value: DataAwsVpc = {
     collectionIssues: [
       {
         message: "<value>",
-        reason: "api-unavailable",
-        severity: "info",
+        reason: "timed-out",
+        severity: "warning",
         source: "<value>",
       },
     ],
-    health: "unhealthy",
-    lifecycle: "scaling",
+    health: "unknown",
+    lifecycle: "unknown",
     partial: true,
-    stale: true,
+    stale: false,
   },
   backend: "awsVpc",
 };
@@ -45,7 +45,7 @@ let value: DataAwsVpc = {
 | `publicSubnetIds`                                                  | *string*[]                                                         | :heavy_check_mark:                                                 | N/A                                                                |
 | `routeTableCount`                                                  | *number*                                                           | :heavy_check_mark:                                                 | N/A                                                                |
 | `securityGroupId`                                                  | *string*                                                           | :heavy_minus_sign:                                                 | N/A                                                                |
-| `status`                                                           | [operations.DataStatus40](../../models/operations/datastatus40.md) | :heavy_check_mark:                                                 | N/A                                                                |
+| `status`                                                           | [operations.DataStatus44](../../models/operations/datastatus44.md) | :heavy_check_mark:                                                 | N/A                                                                |
 | `vpcId`                                                            | *string*                                                           | :heavy_minus_sign:                                                 | N/A                                                                |
 | `vpcState`                                                         | *string*                                                           | :heavy_minus_sign:                                                 | N/A                                                                |
 | `backend`                                                          | *"awsVpc"*                                                         | :heavy_check_mark:                                                 | N/A                                                                |

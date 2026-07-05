@@ -10,7 +10,7 @@ use std::sync::Arc;
 use async_trait::async_trait;
 
 use alien_bindings::BindingsProviderApi;
-use alien_core::{DeploymentState, Platform, ResourceHeartbeat};
+use alien_core::{DeploymentState, ObservedInventoryBatch, Platform, ResourceHeartbeat};
 use alien_deployment::transport::{DeploymentLoopTransport, StepReconcileResult};
 use alien_error::AlienError;
 
@@ -53,6 +53,7 @@ impl DeploymentLoopTransport for ManagerTransport {
         update_heartbeat: bool,
         suggested_delay_ms: Option<u64>,
         heartbeats: Vec<ResourceHeartbeat>,
+        observed_inventory_batches: Vec<ObservedInventoryBatch>,
     ) -> Result<StepReconcileResult, AlienError> {
         // 1. Reconcile cross-account registry access (best-effort).
         //    This must happen before persisting so the `registry_access_granted`
@@ -81,14 +82,16 @@ impl DeploymentLoopTransport for ManagerTransport {
                     update_heartbeat,
                     suggested_delay_ms,
                     heartbeats,
+                    observed_inventory_batches,
+                    capabilities: Vec::new(),
+                    operator_version: None,
                     // Background reconciliation from inside the manager — no
-                    // agent self-update inventory in this code path.
-                    agent_version: None,
-                    agent_os: None,
-                    agent_arch: None,
-                    regime: None,
-                    agent_image_repository: None,
-                    agent_update: None,
+                    // operator self-update inventory in this code path.
+                    operator_os: None,
+                    operator_arch: None,
+                    packaging: None,
+                    operator_image_repository: None,
+                    operator_update: None,
                 },
             )
             .await?;

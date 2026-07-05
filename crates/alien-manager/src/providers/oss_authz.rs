@@ -288,12 +288,12 @@ mod tests {
             created_at: Utc::now(),
             updated_at: None,
             error: None,
-            agent_version: None,
-            agent_os: None,
-            agent_arch: None,
+            operator_version: None,
+            operator_os: None,
+            operator_arch: None,
             regime: None,
-            agent_image_repository: None,
-            target_agent_version: None,
+            operator_image_repository: None,
+            target_operator_version: None,
         }
     }
 

@@ -238,12 +238,12 @@ impl SqliteDeploymentStore {
                 .optional_string(26, "project_id")?
                 .unwrap_or_else(|| "default".to_string()),
             // Agent self-update inventory; indices match DEPLOYMENT_COLUMNS order.
-            agent_version: p.optional_string(27, "agent_version")?,
-            agent_os: p.optional_string(28, "agent_os")?,
-            agent_arch: p.optional_string(29, "agent_arch")?,
-            regime: p.optional_string(30, "regime")?,
-            agent_image_repository: p.optional_string(31, "agent_image_repository")?,
-            target_agent_version: p.optional_string(32, "target_agent_version")?,
+            operator_version: p.optional_string(27, "operator_version")?,
+            operator_os: p.optional_string(28, "operator_os")?,
+            operator_arch: p.optional_string(29, "operator_arch")?,
+            packaging: p.optional_string(30, "packaging")?,
+            operator_image_repository: p.optional_string(31, "operator_image_repository")?,
+            target_operator_version: p.optional_string(32, "target_operator_version")?,
         })
     }
 
@@ -371,12 +371,12 @@ mod tests {
             created_at: now,
             updated_at: Some(now),
             error: None,
-            agent_version: None,
-            agent_os: None,
-            agent_arch: None,
-            regime: None,
-            agent_image_repository: None,
-            target_agent_version: None,
+            operator_version: None,
+            operator_os: None,
+            operator_arch: None,
+            packaging: None,
+            operator_image_repository: None,
+            target_operator_version: None,
         }
     }
 }
@@ -511,12 +511,12 @@ impl DeploymentStore for SqliteDeploymentStore {
             updated_at: None,
             error: None,
             // Agent self-update inventory — NULL until the agent's first sync.
-            agent_version: None,
-            agent_os: None,
-            agent_arch: None,
-            regime: None,
-            agent_image_repository: None,
-            target_agent_version: None,
+            operator_version: None,
+            operator_os: None,
+            operator_arch: None,
+            packaging: None,
+            operator_image_repository: None,
+            target_operator_version: None,
         })
     }
 
@@ -681,12 +681,12 @@ impl DeploymentStore for SqliteDeploymentStore {
             updated_at: None,
             error: None,
             // Agent self-update inventory — NULL until the agent's first sync.
-            agent_version: None,
-            agent_os: None,
-            agent_arch: None,
-            regime: None,
-            agent_image_repository: None,
-            target_agent_version: None,
+            operator_version: None,
+            operator_os: None,
+            operator_arch: None,
+            packaging: None,
+            operator_image_repository: None,
+            target_operator_version: None,
         })
     }
 
@@ -947,19 +947,19 @@ impl DeploymentStore for SqliteDeploymentStore {
         &self,
         _caller: &crate::auth::Subject,
         id: &str,
-        agent_version: Option<&str>,
-        agent_os: Option<&str>,
-        agent_arch: Option<&str>,
-        regime: Option<&str>,
-        agent_image_repository: Option<&str>,
+        operator_version: Option<&str>,
+        operator_os: Option<&str>,
+        operator_arch: Option<&str>,
+        packaging: Option<&str>,
+        operator_image_repository: Option<&str>,
     ) -> Result<(), AlienError> {
         // Nothing to do if the agent didn't report any of these fields
         // (e.g. an older agent on the wire).
-        if agent_version.is_none()
-            && agent_os.is_none()
-            && agent_arch.is_none()
-            && regime.is_none()
-            && agent_image_repository.is_none()
+        if operator_version.is_none()
+            && operator_os.is_none()
+            && operator_arch.is_none()
+            && packaging.is_none()
+            && operator_image_repository.is_none()
         {
             return Ok(());
         }
@@ -968,19 +968,19 @@ impl DeploymentStore for SqliteDeploymentStore {
         let sql = {
             let mut q = Query::update();
             q.table(Deployments::Table);
-            if let Some(v) = agent_version {
+            if let Some(v) = operator_version {
                 q.value(Deployments::AgentVersion, v);
             }
-            if let Some(v) = agent_os {
+            if let Some(v) = operator_os {
                 q.value(Deployments::AgentOs, v);
             }
-            if let Some(v) = agent_arch {
+            if let Some(v) = operator_arch {
                 q.value(Deployments::AgentArch, v);
             }
-            if let Some(v) = regime {
+            if let Some(v) = packaging {
                 q.value(Deployments::Regime, v);
             }
-            if let Some(v) = agent_image_repository {
+            if let Some(v) = operator_image_repository {
                 q.value(Deployments::AgentImageRepository, v);
             }
             q.and_where(Expr::col(Deployments::Id).eq(id))
@@ -1002,16 +1002,16 @@ impl DeploymentStore for SqliteDeploymentStore {
         self.db.execute(&sql).await
     }
 
-    async fn set_target_agent_version(
+    async fn set_target_operator_version(
         &self,
         _caller: &crate::auth::Subject,
         id: &str,
-        target_agent_version: Option<&str>,
+        target_operator_version: Option<&str>,
     ) -> Result<(), AlienError> {
         let sql = {
             let mut q = Query::update();
             q.table(Deployments::Table);
-            match target_agent_version {
+            match target_operator_version {
                 Some(v) => q.value(Deployments::TargetAgentVersion, v),
                 // sea_query treats `Option::<&str>::None` as SQL NULL.
                 None => q.value(Deployments::TargetAgentVersion, Option::<&str>::None),
@@ -1230,7 +1230,10 @@ impl DeploymentStore for SqliteDeploymentStore {
                 message: "Failed to serialize runtime_metadata".to_string(),
             })?;
 
-        let current_release_id = state.current_release.as_ref().map(|r| r.release_id.clone());
+        let current_release_id = state
+            .current_release
+            .as_ref()
+            .and_then(|r| r.release_id.clone());
 
         // Serialize status using serde (kebab-case per DeploymentStatus definition)
         let status_str = serde_json::to_value(&state.status)

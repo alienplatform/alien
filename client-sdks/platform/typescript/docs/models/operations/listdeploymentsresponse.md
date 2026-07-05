@@ -27,6 +27,7 @@ let value: ListDeploymentsResponse = {
       workspaceId: "ws_It13CUaGEhLLAB87simX0",
       release: {
         id: "rel_WbhQgksrawSKIpEN0NAssHX9",
+        version: "<value>",
         gitMetadata: {
           commitSha: "dc36199b2234c6586ebe05ec94078a895c707e29",
           commitMessage:

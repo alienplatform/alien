@@ -3,65 +3,122 @@
 
 ## Supported Types
 
-### `operations.DataAwsVpc`
+### `operations.DataAwsIamRole1`
 
 ```typescript
-const value: operations.DataAwsVpc = {
-  availabilityZones: [
-    "<value 1>",
-    "<value 2>",
-  ],
-  isByoVpc: true,
-  privateSubnetIds: [],
-  publicSubnetIds: [],
-  routeTableCount: 759318,
-  status: {
-    collectionIssues: [
-      {
-        message: "<value>",
-        reason: "api-unavailable",
-        severity: "info",
-        source: "<value>",
-      },
-    ],
-    health: "unhealthy",
-    lifecycle: "scaling",
-    partial: true,
-    stale: true,
-  },
-  backend: "awsVpc",
-};
-```
-
-### `operations.DataGcpVpc`
-
-```typescript
-const value: operations.DataGcpVpc = {
-  isByoVpc: true,
+const value: operations.DataAwsIamRole1 = {
+  assumeRolePolicyPresent: false,
+  attachedPolicyCount: 410901,
+  attachedPolicyNames: [],
+  createDate: "<value>",
+  inlinePolicyCount: 846965,
+  inlinePolicyNames: [],
+  managedTagCount: 519428,
+  path: "/etc",
+  roleArn: "<value>",
+  roleId: "<id>",
+  roleName: "<value>",
+  stackPermissionsApplied: false,
   status: {
     collectionIssues: [],
-    health: "degraded",
+    health: "healthy",
     lifecycle: "deleting",
     partial: true,
     stale: false,
   },
-  backend: "gcpVpc",
+  tagCount: 250500,
+  backend: "awsIamRole",
 };
 ```
 
-### `operations.DataAzureVnet`
+### `operations.DataGcpServiceAccount1`
 
 ```typescript
-const value: operations.DataAzureVnet = {
-  isByoVnet: true,
+const value: operations.DataGcpServiceAccount1 = {
+  email: "Narciso53@hotmail.com",
+  projectBindingCount: 780560,
+  projectRoles: [
+    "<value 1>",
+    "<value 2>",
+  ],
+  serviceAccountBindingCount: 884958,
+  serviceAccountRoles: [
+    "<value 1>",
+    "<value 2>",
+    "<value 3>",
+  ],
+  status: {
+    collectionIssues: [
+      {
+        message: "<value>",
+        reason: "not-installed",
+        severity: "info",
+        source: "<value>",
+      },
+    ],
+    health: "degraded",
+    lifecycle: "stopped",
+    partial: true,
+    stale: false,
+  },
+  backend: "gcpServiceAccount",
+};
+```
+
+### `operations.DataAzureManagedIdentity1`
+
+```typescript
+const value: operations.DataAzureManagedIdentity1 = {
+  customRoleDefinitionCount: 863031,
+  customRoleDefinitionIds: [
+    "<value 1>",
+    "<value 2>",
+    "<value 3>",
+  ],
+  location: "<value>",
+  managedTagCount: 765674,
+  name: "<value>",
+  resourceGroup: "<value>",
+  resourceId: "<id>",
+  roleAssignmentCount: 833585,
+  roleAssignmentIds: [
+    "<value 1>",
+    "<value 2>",
+    "<value 3>",
+  ],
+  stackPermissionsApplied: false,
+  status: {
+    collectionIssues: [
+      {
+        message: "<value>",
+        reason: "timed-out",
+        severity: "warning",
+        source: "<value>",
+      },
+    ],
+    health: "healthy",
+    lifecycle: "stopped",
+    partial: true,
+    stale: false,
+  },
+  backend: "azureManagedIdentity",
+};
+```
+
+### `operations.DataLocal10`
+
+```typescript
+const value: operations.DataLocal10 = {
+  configured: true,
+  identity: "<value>",
   status: {
     collectionIssues: [],
     health: "unhealthy",
-    lifecycle: "unknown",
+    lifecycle: "updating",
     partial: true,
     stale: true,
   },
-  backend: "azureVnet",
+  backend: "local",
 };
 ```
 

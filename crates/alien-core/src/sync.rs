@@ -1,103 +1,150 @@
-//! Sync protocol types for agent ↔ manager communication.
+//! Sync protocol types for operator ↔ manager communication.
 //!
-//! The agent periodically calls `POST /v1/sync` with a `SyncRequest` and
-//! receives a `SyncResponse` containing the target deployment state.
+//! The operator periodically calls `POST /v1/sync` with a `SyncRequest` and
+//! receives a `SyncResponse` containing the target deployment state (and, when a
+//! self-update is pinned, an `operator_target`).
 
 use serde::{Deserialize, Serialize};
 
-use crate::{DeploymentConfig, DeploymentState, ReleaseInfo};
+use crate::{
+    DeploymentConfig, DeploymentState, ObservedInventoryBatch, ReleaseInfo, ResourceHeartbeat,
+};
 
-/// Request sent by the agent to the manager during periodic sync.
+/// State of an Operator capability as observed inside the environment.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
+#[serde(rename_all = "kebab-case")]
+pub enum OperatorCapabilityState {
+    /// The Operator has the permission or local facility needed for the capability.
+    Granted,
+    /// The environment explicitly denied the capability.
+    Denied,
+    /// The capability does not apply in this environment.
+    Unavailable,
+}
+
+/// Report-only Operator capability status.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
+#[serde(rename_all = "camelCase")]
+pub struct OperatorCapabilityReport {
+    /// Stable capability key, such as `k8s-workloads` or `logs`.
+    pub key: String,
+    /// Whether the capability is currently usable.
+    pub state: OperatorCapabilityState,
+    /// Optional human-readable detail from the Operator.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub detail: Option<String>,
+}
+
+/// Request sent by the operator to the manager during periodic sync.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct SyncRequest {
-    /// The deployment ID this agent is managing.
+    /// The deployment ID this operator is managing.
     pub deployment_id: String,
-    /// Current deployment state as seen by the agent.
+    /// Current deployment state as seen by the operator.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub current_state: Option<DeploymentState>,
-    /// Agent binary version, from `env!("CARGO_PKG_VERSION")` at build time.
-    /// Lets the manager build fleet-wide version inventory and decide
-    /// whether to send an `agent_target`. Optional for back-compat with
-    /// older agents.
+    /// Managed Alien resource status samples emitted by the Operator's deployment step.
+    #[serde(
+        default,
+        rename = "resourceHeartbeats",
+        skip_serializing_if = "Vec::is_empty"
+    )]
+    pub heartbeats: Vec<ResourceHeartbeat>,
+    /// Observed raw-resource inventory batches successfully read by the Operator.
+    #[serde(
+        default,
+        rename = "observedInventoryBatches",
+        skip_serializing_if = "Vec::is_empty"
+    )]
+    pub observed_inventory_batches: Vec<ObservedInventoryBatch>,
+    /// Report-only capabilities observed by the Operator.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub capabilities: Vec<OperatorCapabilityReport>,
+    /// Version of the Operator binary reporting this sync (from
+    /// `env!("CARGO_PKG_VERSION")` at build time). Lets the manager build
+    /// fleet-wide version inventory and decide whether to send an
+    /// `operator_target`. Optional for back-compat with older operators.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub agent_version: Option<String>,
+    pub operator_version: Option<String>,
     /// `linux` / `macos` / `windows`. From `std::env::consts::OS`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub agent_os: Option<String>,
+    pub operator_os: Option<String>,
     /// `x86_64` / `aarch64`. From `std::env::consts::ARCH`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub agent_arch: Option<String>,
-    /// How the agent is supervised — `os-service` (launcher) or `kubernetes`
+    pub operator_arch: Option<String>,
+    /// How the operator is supervised — `os-service` (launcher) or `kubernetes`
     /// (Helm). Detected at runtime from `KUBERNETES_SERVICE_HOST`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub regime: Option<AgentRegime>,
-    /// Container image repository the agent was pulled from (without the
-    /// tag), e.g. `ghcr.io/alien-dev/alien-agent`. The chart injects this
-    /// via `ALIEN_AGENT_IMAGE_REPOSITORY` (= `.Values.runtime.image.repository`),
+    pub packaging: Option<OperatorPackaging>,
+    /// Container image repository the operator was pulled from (without the
+    /// tag), e.g. `ghcr.io/alien-dev/alien-operator`. The chart injects this via
+    /// `ALIEN_OPERATOR_IMAGE_REPOSITORY` (= `.Values.runtime.image.repository`),
     /// so admins can see the supply-chain link before pinning a new tag.
-    /// Optional and Kubernetes-only — the os-service regime fills the same
-    /// role with its launcher manifest URL.
+    /// Optional and Kubernetes-only — the os-service regime fills the same role
+    /// with its launcher manifest URL.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub agent_image_repository: Option<String>,
-    /// Outcome of the agent's in-flight self-update for the currently-pinned
+    pub operator_image_repository: Option<String>,
+    /// Outcome of the operator's in-flight self-update for the currently-pinned
     /// target, if any. Absent when no update is in flight. Lets the manager
     /// distinguish "still converging" from "the last attempt failed" instead of
     /// inferring failure from a stalled version. Optional for back-compat.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub agent_update: Option<AgentUpdateReport>,
+    pub operator_update: Option<OperatorUpdateReport>,
 }
 
-/// Supervisor regime for an agent. Drives which `agent_target` payload
-/// (`binary` vs `helm`) the manager sends and how the agent actuates the
+/// Supervisor regime for an operator. Drives which `operator_target` payload
+/// (`binary` vs `helm`) the manager sends and how the operator actuates the
 /// upgrade.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
-pub enum AgentRegime {
+pub enum OperatorPackaging {
     /// Native OS service — the launcher swaps the binary on disk.
     OsService,
-    /// Kubernetes pod — agent creates a Helm-runner Job that runs `helm upgrade --atomic`.
+    /// Kubernetes pod — operator creates a Helm-runner Job that runs `helm upgrade --atomic`.
     Kubernetes,
 }
 
-/// Agent-reported state of the current self-update attempt.
+/// Operator-reported state of the current self-update attempt.
 ///
 /// Success is deliberately not a variant — convergence
-/// (`agent_version == target_agent_version`) is the success signal. This report
-/// only distinguishes "an attempt is running" from "the last attempt failed",
-/// so the manager can surface a truthful failure instead of inferring one from
-/// a stalled version. Internally tagged by `state`.
+/// (`operator_version == target_operator_version`) is the success signal. This
+/// report only distinguishes "an attempt is running" from "the last attempt
+/// failed", so the manager can surface a truthful failure instead of inferring
+/// one from a stalled version. Internally tagged by `state`.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "state", rename_all = "camelCase")]
-pub enum AgentUpdateReport {
+pub enum OperatorUpdateReport {
     /// A Job for `target_version` is currently running (attempt `attempt`,
-    /// 1-based). Reported so the dashboard can show "running" from the agent's
+    /// 1-based). Reported so the dashboard can show "running" from the operator's
     /// own view rather than only "pinned".
     #[serde(rename_all = "camelCase")]
     InProgress {
         target_version: String,
         attempt: u32,
     },
-    /// The most recent attempt for `target_version` failed; the agent is still
+    /// The most recent attempt for `target_version` failed; the operator is still
     /// on its prior version (rolled back / never swapped) and will back off and
     /// retry. Whether the *episode* is terminal is decided manager-side.
     #[serde(rename_all = "camelCase")]
     Failed {
         target_version: String,
-        /// Which stage failed — see `AgentUpdatePhase`.
-        phase: AgentUpdatePhase,
+        /// Which stage failed — see `OperatorUpdatePhase`.
+        phase: OperatorUpdatePhase,
         /// Human-readable detail: helm error, image-pull reason, k8s API error.
         message: String,
         attempt: u32,
     },
 }
 
-/// Which stage of a self-update attempt failed. Maps to the operator's triage:
+/// Which stage of a self-update attempt failed. Maps to operator triage:
 /// `Pull` → the image tag/registry; `Apply` → the chart/values/cluster.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
-pub enum AgentUpdatePhase {
-    /// Creating the Helm-runner Job / staging the binary failed — the agent
+pub enum OperatorUpdatePhase {
+    /// Creating the Helm-runner Job / staging the binary failed — the operator
     /// knows directly (the k8s API rejected the create, or a download failed).
     Spawn,
     /// The new pod's image could not be pulled (ImagePullBackOff / ErrImagePull
@@ -108,63 +155,62 @@ pub enum AgentUpdatePhase {
     Apply,
 }
 
-/// Response from the manager to the agent sync request.
+/// Response from the manager to the operator sync request.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct SyncResponse {
     /// Authoritative deployment state from the manager.
     ///
-    /// Pull agents use this to hydrate local state when attaching to an
-    /// already-imported deployment. Absent means the agent's local state is
+    /// Pull operators use this to hydrate local state when attaching to an
+    /// already-imported deployment. Absent means the operator's local state is
     /// already authoritative or no state has been established yet.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub current_state: Option<DeploymentState>,
-    /// Target deployment the agent should converge toward.
-    /// None means no changes needed.
+    /// Target deployment the operator should converge toward.
+    /// None means no changes needed or this is an observe-only deployment.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub target: Option<TargetDeployment>,
     /// Public URL for the commands API (e.g. `https://manager.example.com/v1`).
     /// Cloud-deployed workers use this to poll for pending commands.
-    /// When absent, the agent falls back to its sync URL.
+    /// When absent, the operator falls back to its sync URL.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub commands_url: Option<String>,
-    /// Desired agent self-update target. The agent acts on whichever payload
-    /// matches its regime: `binary` for `os-service`, `helm` for `kubernetes`.
-    /// None means no upgrade pending.
+    /// Desired operator self-update target. The operator acts on whichever
+    /// payload matches its regime: `binary` for `os-service`, `helm` for
+    /// `kubernetes`. None means no upgrade pending.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub agent_target: Option<AgentTarget>,
+    pub operator_target: Option<OperatorTarget>,
 }
 
-/// Desired agent upgrade payload, sent by the manager on the sync exchange.
+/// Desired operator upgrade payload, sent by the manager on the sync exchange.
 ///
-/// The agent reads `binary` or `helm` depending on its regime. The manager is
-/// the single source of truth for the target version per deployment per
-/// channel, and on Kubernetes also for the full desired values.
+/// The operator reads `binary` or `helm` depending on its regime. The manager is
+/// the single source of truth for the target version per deployment per channel,
+/// and on Kubernetes also for the full desired values.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
-pub struct AgentTarget {
-    /// Target agent version (e.g. "1.4.0").
+pub struct OperatorTarget {
+    /// Target operator version (e.g. "1.4.0").
     pub version: String,
-    /// The agent should refuse the upgrade if its own version is older than
+    /// The operator should refuse the upgrade if its own version is older than
     /// this — used by the manager to enforce a floor on incremental migrations.
     pub min_supported_version: String,
     /// OS-service actuation payload. Present iff the deployment's regime is `os-service`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub binary: Option<AgentBinaryTarget>,
+    pub binary: Option<OperatorBinaryTarget>,
     /// Kubernetes actuation payload. Present iff the deployment's regime is `kubernetes`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub helm: Option<AgentHelmTarget>,
+    pub helm: Option<OperatorHelmTarget>,
 }
 
-/// OS-service binary upgrade payload — the agent downloads, verifies the
+/// OS-service binary upgrade payload — the operator downloads, verifies the
 /// SHA-256, stages the binary, and exits; the launcher performs the
-/// health-gated swap. The `signature` field is **future work**: it rides
-/// along on the wire so newer agents can enforce it once the signing
-/// infrastructure lands, but the current launcher trusts SHA-256 +
-/// HTTPS for the download.
+/// health-gated swap. The `signature` field is **future work**: it rides along
+/// on the wire so newer operators can enforce it once the signing infrastructure
+/// lands, but the current launcher trusts SHA-256 + HTTPS for the download.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
-pub struct AgentBinaryTarget {
+pub struct OperatorBinaryTarget {
     /// `(os, arch)` → download URL. Keyed as `"<os>/<arch>"` (e.g. `"linux/x86_64"`).
     pub artifacts: std::collections::BTreeMap<String, String>,
     /// SHA-256 digest of the binary, lowercase hex.
@@ -175,24 +221,24 @@ pub struct AgentBinaryTarget {
     pub signature: String,
 }
 
-/// Kubernetes upgrade payload — the agent writes the full values to a
-/// ConfigMap (sensitive values to a Secret) and creates a Helm-runner Job
-/// that runs `helm upgrade --atomic`. Helm's revision-scoped rollback covers
-/// both the image and the values.
+/// Kubernetes upgrade payload — the operator writes the full values to a
+/// ConfigMap (sensitive values to a Secret) and creates a Helm-runner Job that
+/// runs `helm upgrade --atomic`. Helm's revision-scoped rollback covers both the
+/// image and the values.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
-pub struct AgentHelmTarget {
-    /// OCI registry reference for the chart (e.g. `oci://ghcr.io/alienplatform/alien-agent`).
+pub struct OperatorHelmTarget {
+    /// OCI registry reference for the chart (e.g. `oci://ghcr.io/alienplatform/alien-operator`).
     pub chart_repo: String,
     /// Chart version (e.g. `"1.4.0"`).
     pub chart_version: String,
-    /// Full desired values document (manager-owned). Stored verbatim by Helm
-    /// in the release Secret, so MUST NOT contain raw secrets — those go via
+    /// Full desired values document (manager-owned). Stored verbatim by Helm in
+    /// the release Secret, so MUST NOT contain raw secrets — those go via
     /// `sensitive_values` as references.
     pub values: serde_json::Value,
-    /// Sensitive values, expressed as references to existing Kubernetes
-    /// Secrets in the namespace. Keyed by JSON-Pointer path into `values`.
-    /// The agent materializes these into a Secret the chart mounts via
+    /// Sensitive values, expressed as references to existing Kubernetes Secrets
+    /// in the namespace. Keyed by JSON-Pointer path into `values`. The operator
+    /// materializes these into a Secret the chart mounts via
     /// `valueFrom: secretKeyRef:`, so the material never reaches the release
     /// history Secret base64-encoded.
     #[serde(default)]
@@ -207,7 +253,7 @@ pub struct SecretRef {
     pub key: String,
 }
 
-/// Target deployment state for the agent to converge toward.
+/// Target deployment state for the operator to converge toward.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct TargetDeployment {
@@ -225,12 +271,15 @@ mod tests {
         SyncRequest {
             deployment_id: "dep_abc123".to_string(),
             current_state: None,
-            agent_version: None,
-            agent_os: None,
-            agent_arch: None,
-            regime: None,
-            agent_image_repository: None,
-            agent_update: None,
+            heartbeats: Vec::new(),
+            observed_inventory_batches: Vec::new(),
+            capabilities: Vec::new(),
+            operator_version: None,
+            operator_os: None,
+            operator_arch: None,
+            packaging: None,
+            operator_image_repository: None,
+            operator_update: None,
         }
     }
 
@@ -239,7 +288,7 @@ mod tests {
             current_state: None,
             target: None,
             commands_url: None,
-            agent_target: None,
+            operator_target: None,
         }
     }
 
@@ -248,8 +297,10 @@ mod tests {
         let req = empty_sync_request();
         let json = serde_json::to_value(&req).unwrap();
         assert_eq!(json["deploymentId"], "dep_abc123");
-        // current_state is None → should be omitted
         assert!(json.get("currentState").is_none());
+        assert!(json.get("resourceHeartbeats").is_none());
+        assert!(json.get("capabilities").is_none());
+        assert!(json.get("operatorVersion").is_none());
     }
 
     #[test]
@@ -258,13 +309,16 @@ mod tests {
         let req: SyncRequest = serde_json::from_str(json).unwrap();
         assert_eq!(req.deployment_id, "dep_xyz");
         assert!(req.current_state.is_none());
+        assert!(req.heartbeats.is_empty());
+        assert!(req.observed_inventory_batches.is_empty());
+        assert!(req.capabilities.is_empty());
+        assert!(req.operator_version.is_none());
     }
 
     #[test]
     fn test_sync_response_empty() {
         let resp = empty_sync_response();
         let json = serde_json::to_value(&resp).unwrap();
-        // target is None → should be omitted
         assert!(json.get("target").is_none());
         assert!(json.get("currentState").is_none());
     }
@@ -280,79 +334,86 @@ mod tests {
 
     #[test]
     fn test_sync_request_with_camel_case() {
-        // Verify camelCase renaming works correctly
         let json = r#"{"deploymentId": "dep_1", "currentState": null}"#;
         let req: SyncRequest = serde_json::from_str(json).unwrap();
         assert_eq!(req.deployment_id, "dep_1");
         assert!(req.current_state.is_none());
+        assert!(req.heartbeats.is_empty());
+        assert!(req.capabilities.is_empty());
 
         // snake_case should NOT work
         let json = r#"{"deployment_id": "dep_1"}"#;
         assert!(serde_json::from_str::<SyncRequest>(json).is_err());
     }
 
-    // --- agent self-update wire format tests -----------------------------
+    // --- operator self-update wire format tests --------------------------
 
-    /// A new agent that fills in the self-update fields produces JSON the
-    /// new manager can deserialize, with the expected camelCase + kebab-case
-    /// values from the design doc.
+    /// An operator that fills in the self-update fields produces JSON the
+    /// manager can deserialize, with the expected camelCase + kebab-case values.
     #[test]
     fn test_sync_request_with_self_update_fields_roundtrip() {
-        let req = SyncRequest {
-            deployment_id: "dep_abc".to_string(),
-            current_state: None,
-            agent_version: Some("1.3.5".to_string()),
-            agent_os: Some("linux".to_string()),
-            agent_arch: Some("aarch64".to_string()),
-            regime: Some(AgentRegime::Kubernetes),
-            agent_image_repository: Some("ghcr.io/alien-dev/alien-agent".to_string()),
-            agent_update: None,
-        };
+        let mut req = empty_sync_request();
+        req.operator_version = Some("1.3.5".to_string());
+        req.operator_os = Some("linux".to_string());
+        req.operator_arch = Some("aarch64".to_string());
+        req.regime = Some(OperatorPackaging::Kubernetes);
+        req.operator_image_repository = Some("ghcr.io/alien-dev/alien-operator".to_string());
         let json = serde_json::to_value(&req).unwrap();
-        assert_eq!(json["agentVersion"], "1.3.5");
-        assert_eq!(json["agentOs"], "linux");
-        assert_eq!(json["agentArch"], "aarch64");
-        assert_eq!(json["regime"], "kubernetes"); // kebab-case enum
-        assert_eq!(json["agentImageRepository"], "ghcr.io/alien-dev/alien-agent");
-        let back: SyncRequest = serde_json::from_value(json).unwrap();
-        assert_eq!(back.agent_version.as_deref(), Some("1.3.5"));
+        assert_eq!(json["operatorVersion"], "1.3.5");
+        assert_eq!(json["operatorOs"], "linux");
+        assert_eq!(json["operatorArch"], "aarch64");
+        assert_eq!(json["packaging"], "kubernetes"); // kebab-case enum
         assert_eq!(
-            back.agent_image_repository.as_deref(),
-            Some("ghcr.io/alien-dev/alien-agent")
+            json["operatorImageRepository"],
+            "ghcr.io/alien-dev/alien-operator"
         );
-        assert_eq!(back.regime, Some(AgentRegime::Kubernetes));
+        let back: SyncRequest = serde_json::from_value(json).unwrap();
+        assert_eq!(back.operator_version.as_deref(), Some("1.3.5"));
+        assert_eq!(back.regime, Some(OperatorPackaging::Kubernetes));
     }
 
-    /// **Backward compat (new manager, old agent):** an old agent on the
-    /// wire doesn't send agentVersion/Os/Arch/regime. The new manager must
-    /// deserialize without complaint — the four fields default to None.
+    /// Backward compat: an old operator omits the self-update fields; the
+    /// manager deserializes them as None/empty.
     #[test]
-    fn test_sync_request_old_agent_no_self_update_fields() {
-        let json =
-            r#"{"deploymentId": "dep_old", "currentState": null}"#;
+    fn test_sync_request_old_operator_no_self_update_fields() {
+        let json = r#"{"deploymentId": "dep_old", "currentState": null}"#;
         let req: SyncRequest = serde_json::from_str(json).unwrap();
         assert_eq!(req.deployment_id, "dep_old");
-        assert!(req.agent_version.is_none());
-        assert!(req.agent_os.is_none());
-        assert!(req.agent_arch.is_none());
+        assert!(req.operator_version.is_none());
+        assert!(req.operator_os.is_none());
+        assert!(req.operator_arch.is_none());
         assert!(req.regime.is_none());
+        assert!(req.operator_update.is_none());
     }
 
-    /// **Backward compat (old client, new payload):** the SyncResponse's
-    /// new `agentTarget` field is omitted (skip_serializing_if = None), so
-    /// an old agent that does not know about it still gets a clean response.
+    /// The SyncResponse's `operatorTarget` is omitted when None so an old
+    /// operator still gets a clean response.
     #[test]
-    fn test_sync_response_old_client_no_agent_target() {
+    fn test_sync_response_old_client_no_operator_target() {
         let resp = empty_sync_response();
         let json = serde_json::to_value(&resp).unwrap();
-        assert!(json.get("agentTarget").is_none());
+        assert!(json.get("operatorTarget").is_none());
     }
 
-    /// `AgentUpdateReport` round-trips: internally tagged by `state`
+    #[test]
+    fn test_operator_regime_kebab_case() {
+        assert_eq!(
+            serde_json::to_value(OperatorPackaging::OsService).unwrap(),
+            serde_json::json!("os-service")
+        );
+        assert_eq!(
+            serde_json::to_value(OperatorPackaging::Kubernetes).unwrap(),
+            serde_json::json!("kubernetes")
+        );
+        let r: OperatorPackaging = serde_json::from_str("\"os-service\"").unwrap();
+        assert_eq!(r, OperatorPackaging::OsService);
+    }
+
+    /// `OperatorUpdateReport` round-trips: internally tagged by `state`
     /// (camelCase variant), camelCase fields, kebab-case phase.
     #[test]
-    fn test_agent_update_report_roundtrip() {
-        let in_progress = AgentUpdateReport::InProgress {
+    fn test_operator_update_report_roundtrip() {
+        let in_progress = OperatorUpdateReport::InProgress {
             target_version: "1.4.0".to_string(),
             attempt: 1,
         };
@@ -361,13 +422,13 @@ mod tests {
         assert_eq!(json["targetVersion"], "1.4.0");
         assert_eq!(json["attempt"], 1);
         assert_eq!(
-            serde_json::from_value::<AgentUpdateReport>(json).unwrap(),
+            serde_json::from_value::<OperatorUpdateReport>(json).unwrap(),
             in_progress
         );
 
-        let failed = AgentUpdateReport::Failed {
+        let failed = OperatorUpdateReport::Failed {
             target_version: "1.4.0".to_string(),
-            phase: AgentUpdatePhase::Pull,
+            phase: OperatorUpdatePhase::Pull,
             message: "image :1.4.0 not found".to_string(),
             attempt: 3,
         };
@@ -378,55 +439,28 @@ mod tests {
         assert_eq!(json["message"], "image :1.4.0 not found");
         assert_eq!(json["attempt"], 3);
         assert_eq!(
-            serde_json::from_value::<AgentUpdateReport>(json).unwrap(),
+            serde_json::from_value::<OperatorUpdateReport>(json).unwrap(),
             failed
         );
     }
 
-    /// An old agent omits `agentUpdate`; the new manager defaults it to None.
     #[test]
-    fn test_sync_request_agent_update_omitted_when_none() {
-        let json = serde_json::to_value(empty_sync_request()).unwrap();
-        assert!(json.get("agentUpdate").is_none());
-        let req: SyncRequest =
-            serde_json::from_str(r#"{"deploymentId": "dep_x"}"#).unwrap();
-        assert!(req.agent_update.is_none());
-    }
-
-    #[test]
-    fn test_agent_regime_kebab_case() {
-        assert_eq!(
-            serde_json::to_value(AgentRegime::OsService).unwrap(),
-            serde_json::json!("os-service")
-        );
-        assert_eq!(
-            serde_json::to_value(AgentRegime::Kubernetes).unwrap(),
-            serde_json::json!("kubernetes")
-        );
-        let r: AgentRegime = serde_json::from_str("\"os-service\"").unwrap();
-        assert_eq!(r, AgentRegime::OsService);
-    }
-
-    /// AgentTarget.helm carries the full structure for the Kubernetes
-    /// regime — verify the chart_repo/values/sensitive_values shape
-    /// survives a JSON roundtrip.
-    #[test]
-    fn test_agent_target_helm_roundtrip() {
+    fn test_operator_target_helm_roundtrip() {
         let mut sensitive = std::collections::BTreeMap::new();
         sensitive.insert(
             "/management/token".to_string(),
             SecretRef {
-                name: "alien-agent".to_string(),
+                name: "alien-operator".to_string(),
                 key: "sync-token".to_string(),
             },
         );
-        let helm = AgentHelmTarget {
-            chart_repo: "oci://ghcr.io/alienplatform/alien-agent".to_string(),
+        let helm = OperatorHelmTarget {
+            chart_repo: "oci://ghcr.io/alienplatform/alien-operator".to_string(),
             chart_version: "1.4.0".to_string(),
             values: serde_json::json!({"runtime": {"image": {"tag": "1.4.0"}}}),
             sensitive_values: sensitive,
         };
-        let target = AgentTarget {
+        let target = OperatorTarget {
             version: "1.4.0".to_string(),
             min_supported_version: "1.3.0".to_string(),
             binary: None,
@@ -436,41 +470,8 @@ mod tests {
         assert_eq!(json["minSupportedVersion"], "1.3.0");
         assert!(json.get("binary").is_none(), "binary must be omitted");
         assert_eq!(json["helm"]["chartVersion"], "1.4.0");
-        assert_eq!(
-            json["helm"]["sensitiveValues"]["/management/token"]["name"],
-            "alien-agent"
-        );
-        let back: AgentTarget = serde_json::from_value(json).unwrap();
+        let back: OperatorTarget = serde_json::from_value(json).unwrap();
         assert!(back.binary.is_none());
         assert_eq!(back.helm.unwrap().chart_version, "1.4.0");
-    }
-
-    /// AgentTarget.binary carries the OS-service payload (artifacts/sha256/
-    /// signature).
-    #[test]
-    fn test_agent_target_binary_roundtrip() {
-        let mut artifacts = std::collections::BTreeMap::new();
-        artifacts.insert(
-            "linux/aarch64".to_string(),
-            "https://releases.alien.dev/1.4.0/linux-aarch64/alien-agent".to_string(),
-        );
-        let bin = AgentBinaryTarget {
-            artifacts,
-            sha256: "abc123".to_string(),
-            signature: "base64sig==".to_string(),
-        };
-        let target = AgentTarget {
-            version: "1.4.0".to_string(),
-            min_supported_version: "1.3.0".to_string(),
-            binary: Some(bin),
-            helm: None,
-        };
-        let json = serde_json::to_value(&target).unwrap();
-        assert!(json.get("helm").is_none(), "helm must be omitted");
-        assert_eq!(json["binary"]["sha256"], "abc123");
-        assert_eq!(
-            json["binary"]["artifacts"]["linux/aarch64"],
-            "https://releases.alien.dev/1.4.0/linux-aarch64/alien-agent"
-        );
     }
 }

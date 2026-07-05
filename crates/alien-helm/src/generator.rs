@@ -53,6 +53,85 @@ pub struct ManagerFetchHelmValuesOptions<'a> {
     pub azure_location: Option<&'a str>,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum OperatorPermission {
+    /// Namespaced, read-only workload observation.
+    Observe,
+}
+
+impl OperatorPermission {
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::Observe => "observe",
+        }
+    }
+}
+
+/// How the rendered operator documents are meant to be consumed.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum OperatorOutputFormat {
+    /// Flat multi-document manifest for `kubectl apply` to a single cluster.
+    /// Namespace and environment name are concrete literals.
+    RawManifest,
+    /// Helm-templated documents to paste into an existing chart's `templates/`.
+    /// Namespace resolves to `.Release.Namespace` and the per-environment name
+    /// to `.Values.alien.environmentName`, so one file serves every install.
+    HelmTemplate,
+}
+
+/// How much of the cluster the operator manages. This is the single decision
+/// that flips a namespaced `Role` to a cluster-wide `ClusterRole` and widens
+/// what the operator observes from one namespace to all of them.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum OperatorScope {
+    /// Manage only the namespace the operator is installed in. Grants a
+    /// namespaced `Role`/`RoleBinding`.
+    Namespace,
+    /// Manage the **whole cluster** (spans namespaces). Grants a
+    /// `ClusterRole`/`ClusterRoleBinding`.
+    Cluster,
+}
+
+impl OperatorScope {
+    /// Whether this scope requires cluster-wide (cluster-scoped) RBAC.
+    fn is_cluster_wide(self) -> bool {
+        matches!(self, OperatorScope::Cluster)
+    }
+}
+
+pub struct OperatorManifestOptions<'a> {
+    pub manager_url: &'a str,
+    pub group_token: &'a str,
+    pub encryption_key: &'a str,
+    pub image: &'a str,
+    pub log_collector: Option<OperatorLogCollectorOptions<'a>>,
+    /// Names the Kubernetes objects and labels. Stable per app/project — the
+    /// same across every customer install. (Formerly `release_name`.)
+    pub project_name: &'a str,
+    /// The per-environment identity reported as `OPERATOR_NAME`. Required for
+    /// `RawManifest`; ignored for `HelmTemplate`, which sources it from
+    /// `.Values.alien.environmentName` so each install is distinct.
+    pub environment_name: Option<&'a str>,
+    /// The namespace the operator installs into. Required (non-empty) for
+    /// `RawManifest`; ignored for `HelmTemplate`, which uses `.Release.Namespace`.
+    /// In `Namespace` scope this is also the namespace observed.
+    pub install_namespace: Option<&'a str>,
+    pub scope: OperatorScope,
+    /// Optional Kubernetes label selector that narrows what the operator manages,
+    /// applied on top of `scope`. Independent of namespace vs cluster scope: a
+    /// cluster-scoped operator can still filter to labeled resources, and a
+    /// namespaced one can filter within its namespace. `None` manages everything
+    /// in scope.
+    pub label_selector: Option<&'a str>,
+    pub permission: OperatorPermission,
+    pub format: OperatorOutputFormat,
+}
+
+pub struct OperatorLogCollectorOptions<'a> {
+    pub image: &'a str,
+    pub token: &'a str,
+}
+
 /// Generate a Helm chart for `stack`.
 pub fn generate_helm_chart(stack: &Stack, options: HelmOptions<'_>) -> Result<HelmChart> {
     let chart_name = sanitize_chart_name(&options.chart_name);
@@ -89,6 +168,26 @@ pub fn generate_helm_chart(stack: &Stack, options: HelmOptions<'_>) -> Result<He
     files.insert("templates/secret.yaml".to_string(), secret_tpl());
     files.insert("templates/configmap.yaml".to_string(), configmap_tpl());
     files.insert("templates/deployment.yaml".to_string(), deployment_tpl());
+    files.insert(
+        "templates/whitelabeled-log-collector-serviceaccount.yaml".to_string(),
+        whitelabeled_log_collector_serviceaccount_tpl(),
+    );
+    files.insert(
+        "templates/whitelabeled-log-collector-role.yaml".to_string(),
+        whitelabeled_log_collector_role_tpl(),
+    );
+    files.insert(
+        "templates/whitelabeled-log-collector-rolebinding.yaml".to_string(),
+        whitelabeled_log_collector_rolebinding_tpl(),
+    );
+    files.insert(
+        "templates/whitelabeled-log-collector-configmap.yaml".to_string(),
+        whitelabeled_log_collector_configmap_tpl(),
+    );
+    files.insert(
+        "templates/whitelabeled-log-collector-daemonset.yaml".to_string(),
+        whitelabeled_log_collector_daemonset_tpl(),
+    );
     files.insert("templates/pvc.yaml".to_string(), pvc_tpl());
     files.insert("templates/service.yaml".to_string(), service_tpl());
     files.insert("templates/cleanup-job.yaml".to_string(), cleanup_job_tpl());
@@ -142,6 +241,125 @@ pub fn generate_helm_chart(stack: &Stack, options: HelmOptions<'_>) -> Result<He
         name: chart_name,
         files,
     })
+}
+
+pub fn generate_operator_manifest(options: OperatorManifestOptions<'_>) -> Result<String> {
+    validate_runtime_encryption_key(options.encryption_key)?;
+    validate_operator_options(&options)?;
+
+    let base_name = sanitize_chart_name(options.project_name);
+    let operator_name = format!("{base_name}-operator");
+    let identity_pvc_name = format!("{operator_name}-identity");
+
+    // The install namespace: where every operator object lives, the binding
+    // subject's namespace, and (in `Namespace` scope) the observed namespace. A
+    // Helm template defers it to `.Release.Namespace`; a raw manifest pins it to
+    // a concrete value so `kubectl apply` and binding subjects resolve.
+    let namespace_expr = match options.format {
+        OperatorOutputFormat::HelmTemplate => "{{ .Release.Namespace }}".to_string(),
+        OperatorOutputFormat::RawManifest => options
+            .install_namespace
+            .expect("validated by validate_operator_options")
+            .to_string(),
+    };
+    let namespace = namespace_expr.as_str();
+
+    // OPERATOR_NAME is the per-environment identity. A raw manifest carries the
+    // concrete name; a Helm template sources it per install from values so one
+    // file registers every customer environment distinctly.
+    let environment_name_expr = match options.format {
+        OperatorOutputFormat::HelmTemplate => "{{ .Values.alien.environmentName }}".to_string(),
+        OperatorOutputFormat::RawManifest => options
+            .environment_name
+            .expect("validated by validate_operator_options")
+            .to_string(),
+    };
+
+    let labels = operator_labels(&base_name);
+    let cluster_wide = options.scope.is_cluster_wide();
+
+    let mut docs = Vec::new();
+    docs.push(operator_service_account_doc(
+        namespace,
+        &operator_name,
+        &labels,
+    ));
+    // Cluster-wide (label) scope needs cluster-scoped read RBAC; namespace scope
+    // stays a namespaced Role. Both grant only get/list/watch.
+    if cluster_wide {
+        docs.push(operator_clusterrole_doc(&operator_name, &labels));
+        docs.push(operator_clusterrolebinding_doc(
+            namespace,
+            &operator_name,
+            &labels,
+        ));
+    } else {
+        docs.push(operator_role_doc(namespace, &operator_name, &labels));
+        docs.push(operator_rolebinding_doc(namespace, &operator_name, &labels));
+    }
+    docs.push(operator_secret_doc(
+        namespace,
+        &operator_name,
+        options.group_token,
+        options.encryption_key,
+        options
+            .log_collector
+            .as_ref()
+            .map(|collector| collector.token),
+        &labels,
+    ));
+    docs.push(operator_identity_pvc_doc(
+        namespace,
+        &identity_pvc_name,
+        &labels,
+    ));
+    docs.push(operator_deployment_doc(
+        namespace,
+        &operator_name,
+        &identity_pvc_name,
+        &options,
+        namespace,
+        &environment_name_expr,
+        options.label_selector,
+        &labels,
+    ));
+    if let Some(log_collector) = options.log_collector.as_ref() {
+        let mut collector_labels = labels.clone();
+        collector_labels.insert(
+            "app.kubernetes.io/component".to_string(),
+            "whitelabeled-log-collector".to_string(),
+        );
+        docs.push(operator_service_doc(namespace, &operator_name, &labels));
+        docs.push(operator_log_collector_service_account_doc(
+            namespace,
+            &operator_name,
+            &collector_labels,
+        ));
+        docs.push(operator_log_collector_role_doc(
+            namespace,
+            &operator_name,
+            &collector_labels,
+        ));
+        docs.push(operator_log_collector_role_binding_doc(
+            namespace,
+            &operator_name,
+            &collector_labels,
+        ));
+        docs.push(operator_log_collector_configmap_doc(
+            namespace,
+            &operator_name,
+            namespace,
+            &collector_labels,
+        ));
+        docs.push(operator_log_collector_daemonset_doc(
+            namespace,
+            &operator_name,
+            log_collector.image,
+            &collector_labels,
+        ));
+    }
+
+    Ok(ensure_trailing_newline(docs.join("---\n")))
 }
 
 /// Render one complete values file from registered deployment state.
@@ -231,6 +449,13 @@ pub fn render_manager_fetch_values(options: ManagerFetchHelmValuesOptions<'_>) -
         "serviceAccountPrefix: {}\n",
         yaml_string(&options.stack_state.resource_prefix)
     ));
+    yaml.push_str("logCollector:\n");
+    yaml.push_str("  scope:\n");
+    yaml.push_str(&format!(
+        "    deploymentLabelValue: {}\n",
+        yaml_string(&options.stack_state.resource_prefix)
+    ));
+    yaml.push('\n');
 
     append_manager_service_account(&mut yaml, options.stack_state, options.base_platform)?;
     append_registered_service_accounts(
@@ -260,6 +485,623 @@ fn validate_runtime_encryption_key(key: &str) -> Result<()> {
     Err(AlienError::new(ErrorData::GenericError {
         message: "runtime encryption key must be exactly 64 hex characters".to_string(),
     }))
+}
+
+fn validate_operator_options(options: &OperatorManifestOptions<'_>) -> Result<()> {
+    let invalid = |message: &str| {
+        Err(AlienError::new(ErrorData::GenericError {
+            message: message.to_string(),
+        }))
+    };
+
+    // A label selector, when given, must be non-empty.
+    if let Some(selector) = options.label_selector {
+        if selector.trim().is_empty() {
+            return invalid("operator label selector must not be empty");
+        }
+    }
+
+    // Raw manifests are applied to one concrete cluster, so the install namespace
+    // and per-environment identity must be concrete. Helm defers both to install.
+    if options.format == OperatorOutputFormat::RawManifest {
+        if options
+            .install_namespace
+            .map(|ns| ns.trim().is_empty())
+            .unwrap_or(true)
+        {
+            return invalid("raw manifests require an install namespace");
+        }
+        if options
+            .environment_name
+            .map(|name| name.trim().is_empty())
+            .unwrap_or(true)
+        {
+            return invalid("raw manifests require an environment name");
+        }
+    }
+
+    Ok(())
+}
+
+fn operator_labels(base_name: &str) -> BTreeMap<String, String> {
+    BTreeMap::from([
+        ("app.kubernetes.io/name".to_string(), "operator".to_string()),
+        (
+            "app.kubernetes.io/instance".to_string(),
+            base_name.to_string(),
+        ),
+        (
+            "app.kubernetes.io/component".to_string(),
+            "operator".to_string(),
+        ),
+        (
+            "app.kubernetes.io/managed-by".to_string(),
+            "kubectl".to_string(),
+        ),
+    ])
+}
+
+fn operator_service_account_doc(
+    namespace: &str,
+    operator_name: &str,
+    labels: &BTreeMap<String, String>,
+) -> String {
+    let mut yaml = operator_metadata_doc("v1", "ServiceAccount", namespace, operator_name, labels);
+    yaml.push_str("automountServiceAccountToken: true\n");
+    yaml
+}
+
+fn operator_role_doc(
+    namespace: &str,
+    operator_name: &str,
+    labels: &BTreeMap<String, String>,
+) -> String {
+    let mut yaml = operator_metadata_doc(
+        "rbac.authorization.k8s.io/v1",
+        "Role",
+        namespace,
+        operator_name,
+        labels,
+    );
+    yaml.push_str(OPERATOR_OBSERVE_RULES);
+    yaml
+}
+
+fn operator_rolebinding_doc(
+    namespace: &str,
+    operator_name: &str,
+    labels: &BTreeMap<String, String>,
+) -> String {
+    let mut yaml = operator_metadata_doc(
+        "rbac.authorization.k8s.io/v1",
+        "RoleBinding",
+        namespace,
+        operator_name,
+        labels,
+    );
+    yaml.push_str(&format!(
+        r#"subjects:
+  - kind: ServiceAccount
+    name: {}
+    namespace: {}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: {}
+"#,
+        yaml_string(operator_name),
+        yaml_string(namespace),
+        yaml_string(operator_name)
+    ));
+    yaml
+}
+
+/// Read-only observe rules, shared by the namespaced `Role` and the cluster-wide
+/// `ClusterRole`. Only `get/list/watch`; never `secrets` or `pods/log`.
+const OPERATOR_OBSERVE_RULES: &str = r#"rules:
+  - apiGroups: [""]
+    resources: ["pods", "services", "configmaps", "persistentvolumeclaims", "events", "endpoints"]
+    verbs: ["get", "list", "watch"]
+  - apiGroups: ["apps"]
+    resources: ["deployments", "statefulsets", "daemonsets", "replicasets"]
+    verbs: ["get", "list", "watch"]
+  - apiGroups: ["batch"]
+    resources: ["jobs", "cronjobs"]
+    verbs: ["get", "list", "watch"]
+  - apiGroups: ["metrics.k8s.io"]
+    resources: ["pods"]
+    verbs: ["get", "list", "watch"]
+"#;
+
+/// Cluster-scoped metadata header (no `metadata.namespace`) for `ClusterRole` and
+/// `ClusterRoleBinding`, which are not namespaced objects.
+fn operator_cluster_metadata_doc(
+    kind: &str,
+    name: &str,
+    labels: &BTreeMap<String, String>,
+) -> String {
+    let mut yaml = String::new();
+    yaml.push_str("apiVersion: rbac.authorization.k8s.io/v1\n");
+    yaml.push_str(&format!("kind: {}\n", yaml_string(kind)));
+    yaml.push_str("metadata:\n");
+    yaml.push_str(&format!("  name: {}\n", yaml_string(name)));
+    yaml.push_str("  labels:\n");
+    append_operator_labels(&mut yaml, labels, 4);
+    yaml
+}
+
+fn operator_clusterrole_doc(operator_name: &str, labels: &BTreeMap<String, String>) -> String {
+    let mut yaml = operator_cluster_metadata_doc("ClusterRole", operator_name, labels);
+    yaml.push_str(OPERATOR_OBSERVE_RULES);
+    yaml
+}
+
+fn operator_clusterrolebinding_doc(
+    subject_namespace: &str,
+    operator_name: &str,
+    labels: &BTreeMap<String, String>,
+) -> String {
+    let mut yaml = operator_cluster_metadata_doc("ClusterRoleBinding", operator_name, labels);
+    yaml.push_str(&format!(
+        r#"subjects:
+  - kind: ServiceAccount
+    name: {}
+    namespace: {}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: {}
+"#,
+        yaml_string(operator_name),
+        yaml_string(subject_namespace),
+        yaml_string(operator_name)
+    ));
+    yaml
+}
+
+fn operator_secret_doc(
+    namespace: &str,
+    operator_name: &str,
+    group_token: &str,
+    encryption_key: &str,
+    collector_token: Option<&str>,
+    labels: &BTreeMap<String, String>,
+) -> String {
+    let mut yaml = operator_metadata_doc("v1", "Secret", namespace, operator_name, labels);
+    yaml.push_str("type: Opaque\n");
+    yaml.push_str("stringData:\n");
+    yaml.push_str(&format!("  sync-token: {}\n", yaml_string(group_token)));
+    yaml.push_str(&format!(
+        "  encryption-key: {}\n",
+        yaml_string(encryption_key)
+    ));
+    if let Some(collector_token) = collector_token {
+        yaml.push_str(&format!(
+            "  collector-token: {}\n",
+            yaml_string(collector_token)
+        ));
+    }
+    yaml
+}
+
+fn operator_identity_pvc_doc(
+    namespace: &str,
+    pvc_name: &str,
+    labels: &BTreeMap<String, String>,
+) -> String {
+    let mut yaml =
+        operator_metadata_doc("v1", "PersistentVolumeClaim", namespace, pvc_name, labels);
+    yaml.push_str(
+        r#"spec:
+  accessModes: ["ReadWriteOnce"]
+  resources:
+    requests:
+      storage: "1Gi"
+"#,
+    );
+    yaml
+}
+
+#[allow(clippy::too_many_arguments)]
+fn operator_deployment_doc(
+    namespace: &str,
+    operator_name: &str,
+    identity_pvc_name: &str,
+    options: &OperatorManifestOptions<'_>,
+    observed_namespace: &str,
+    environment_name: &str,
+    label_selector: Option<&str>,
+    labels: &BTreeMap<String, String>,
+) -> String {
+    let mut yaml = operator_metadata_doc("apps/v1", "Deployment", namespace, operator_name, labels);
+    yaml.push_str("spec:\n");
+    yaml.push_str("  replicas: 1\n");
+    yaml.push_str("  selector:\n");
+    yaml.push_str("    matchLabels:\n");
+    append_operator_selector_labels(&mut yaml, labels, 6);
+    yaml.push_str("  template:\n");
+    yaml.push_str("    metadata:\n");
+    yaml.push_str("      labels:\n");
+    append_operator_labels(&mut yaml, labels, 8);
+    yaml.push_str("    spec:\n");
+    yaml.push_str(&format!(
+        "      serviceAccountName: {}\n",
+        yaml_string(operator_name)
+    ));
+    yaml.push_str("      automountServiceAccountToken: true\n");
+    yaml.push_str("      securityContext:\n");
+    yaml.push_str("        runAsNonRoot: true\n");
+    yaml.push_str("        runAsUser: 1000\n");
+    yaml.push_str("        runAsGroup: 1000\n");
+    yaml.push_str("        fsGroup: 1000\n");
+    yaml.push_str("        seccompProfile:\n");
+    yaml.push_str("          type: RuntimeDefault\n");
+    yaml.push_str("      containers:\n");
+    yaml.push_str("        - name: operator\n");
+    yaml.push_str(&format!(
+        "          image: {}\n",
+        yaml_string(options.image)
+    ));
+    yaml.push_str("          imagePullPolicy: IfNotPresent\n");
+    yaml.push_str("          securityContext:\n");
+    yaml.push_str("            allowPrivilegeEscalation: false\n");
+    yaml.push_str("            readOnlyRootFilesystem: true\n");
+    yaml.push_str("            capabilities:\n");
+    yaml.push_str("              drop: [\"ALL\"]\n");
+    yaml.push_str("          env:\n");
+    append_env_value(&mut yaml, "PLATFORM", "kubernetes");
+    append_env_value(&mut yaml, "SYNC_URL", options.manager_url);
+    append_env_value(&mut yaml, "OPERATOR_NAME", environment_name);
+    append_env_value(&mut yaml, "KUBERNETES_NAMESPACE", namespace);
+    append_env_value(&mut yaml, "OPERATOR_SCOPE", observed_namespace);
+    // Cluster scope observes every namespace; namespace scope stays in its own.
+    // The selector (if any) filters within whichever scope is chosen.
+    if options.scope.is_cluster_wide() {
+        append_env_value(&mut yaml, "OPERATOR_OBSERVE_ALL_NAMESPACES", "true");
+    }
+    if let Some(label_selector) = label_selector {
+        append_env_value(&mut yaml, "OPERATOR_LABEL_SELECTOR", label_selector);
+    }
+    // Helm distributions surface the running app version as a value, so each install
+    // reports the release it's on. Raw manifests omit it; the vendor sets
+    // OPERATOR_RELEASE_VERSION themselves if they want version/rollout visibility.
+    if options.format == OperatorOutputFormat::HelmTemplate {
+        append_env_value(
+            &mut yaml,
+            "OPERATOR_RELEASE_VERSION",
+            "{{ .Values.alien.version }}",
+        );
+    }
+    append_env_value(
+        &mut yaml,
+        "OPERATOR_PERMISSION",
+        options.permission.as_str(),
+    );
+    append_env_value(&mut yaml, "OPERATOR_SETUP_METHOD", "manual");
+    append_env_value(&mut yaml, "DATA_DIR", "/var/lib/operator");
+    if options.log_collector.is_some() {
+        append_env_value(&mut yaml, "OTLP_HOST", "0.0.0.0");
+        append_env_value(&mut yaml, "OTLP_PORT", "8080");
+        append_env_value(
+            &mut yaml,
+            "COLLECTOR_TOKEN_FILE",
+            "/etc/operator/secrets/collector-token",
+        );
+    }
+    append_env_value(
+        &mut yaml,
+        "SYNC_TOKEN_FILE",
+        "/etc/operator/secrets/sync-token",
+    );
+    append_env_value(
+        &mut yaml,
+        "OPERATOR_ENCRYPTION_KEY_FILE",
+        "/etc/operator/secrets/encryption-key",
+    );
+    append_env_value(&mut yaml, "SYNC_INTERVAL", "30");
+    if options.log_collector.is_some() {
+        yaml.push_str("          ports:\n");
+        yaml.push_str("            - name: http\n");
+        yaml.push_str("              containerPort: 8080\n");
+    }
+    yaml.push_str("          volumeMounts:\n");
+    yaml.push_str("            - name: credentials\n");
+    yaml.push_str("              mountPath: /etc/operator/secrets\n");
+    yaml.push_str("              readOnly: true\n");
+    yaml.push_str("            - name: identity\n");
+    yaml.push_str("              mountPath: /var/lib/operator\n");
+    yaml.push_str("            - name: tmp\n");
+    yaml.push_str("              mountPath: /tmp\n");
+    yaml.push_str("          resources:\n");
+    yaml.push_str("            requests:\n");
+    yaml.push_str("              cpu: 50m\n");
+    yaml.push_str("              memory: 128Mi\n");
+    yaml.push_str("            limits:\n");
+    yaml.push_str("              cpu: 500m\n");
+    yaml.push_str("              memory: 512Mi\n");
+    yaml.push_str("      volumes:\n");
+    yaml.push_str("        - name: credentials\n");
+    yaml.push_str("          secret:\n");
+    yaml.push_str(&format!(
+        "            secretName: {}\n",
+        yaml_string(operator_name)
+    ));
+    yaml.push_str("            defaultMode: 384\n");
+    yaml.push_str("        - name: identity\n");
+    yaml.push_str("          persistentVolumeClaim:\n");
+    yaml.push_str(&format!(
+        "            claimName: {}\n",
+        yaml_string(identity_pvc_name)
+    ));
+    yaml.push_str("        - name: tmp\n");
+    yaml.push_str("          emptyDir:\n");
+    yaml.push_str("            sizeLimit: 64Mi\n");
+    yaml
+}
+
+fn operator_service_doc(
+    namespace: &str,
+    operator_name: &str,
+    labels: &BTreeMap<String, String>,
+) -> String {
+    let mut yaml = operator_metadata_doc("v1", "Service", namespace, operator_name, labels);
+    yaml.push_str("spec:\n");
+    yaml.push_str("  type: ClusterIP\n");
+    yaml.push_str("  selector:\n");
+    append_operator_selector_labels(&mut yaml, labels, 4);
+    yaml.push_str("  ports:\n");
+    yaml.push_str("    - name: http\n");
+    yaml.push_str("      port: 8080\n");
+    yaml.push_str("      targetPort: http\n");
+    yaml
+}
+
+fn operator_log_collector_service_account_doc(
+    namespace: &str,
+    operator_name: &str,
+    labels: &BTreeMap<String, String>,
+) -> String {
+    let name = format!("{operator_name}-whitelabeled-log-collector");
+    let mut yaml = operator_metadata_doc("v1", "ServiceAccount", namespace, &name, labels);
+    yaml.push_str("automountServiceAccountToken: true\n");
+    yaml
+}
+
+fn operator_log_collector_role_doc(
+    namespace: &str,
+    operator_name: &str,
+    labels: &BTreeMap<String, String>,
+) -> String {
+    let name = format!("{operator_name}-whitelabeled-log-collector");
+    let mut yaml = operator_metadata_doc(
+        "rbac.authorization.k8s.io/v1",
+        "Role",
+        namespace,
+        &name,
+        labels,
+    );
+    yaml.push_str("rules:\n");
+    yaml.push_str("  - apiGroups: [\"\"]\n");
+    yaml.push_str("    resources: [\"pods\"]\n");
+    yaml.push_str("    verbs: [\"get\", \"list\", \"watch\"]\n");
+    yaml
+}
+
+fn operator_log_collector_role_binding_doc(
+    namespace: &str,
+    operator_name: &str,
+    labels: &BTreeMap<String, String>,
+) -> String {
+    let name = format!("{operator_name}-whitelabeled-log-collector");
+    let mut yaml = operator_metadata_doc(
+        "rbac.authorization.k8s.io/v1",
+        "RoleBinding",
+        namespace,
+        &name,
+        labels,
+    );
+    yaml.push_str("roleRef:\n");
+    yaml.push_str("  apiGroup: rbac.authorization.k8s.io\n");
+    yaml.push_str("  kind: Role\n");
+    yaml.push_str(&format!("  name: {}\n", yaml_string(&name)));
+    yaml.push_str("subjects:\n");
+    yaml.push_str("  - kind: ServiceAccount\n");
+    yaml.push_str(&format!("    name: {}\n", yaml_string(&name)));
+    yaml.push_str(&format!("    namespace: {}\n", yaml_string(namespace)));
+    yaml
+}
+
+fn operator_log_collector_configmap_doc(
+    namespace: &str,
+    operator_name: &str,
+    observed_namespace: &str,
+    labels: &BTreeMap<String, String>,
+) -> String {
+    let name = format!("{operator_name}-whitelabeled-log-collector");
+    let mut yaml = operator_metadata_doc("v1", "ConfigMap", namespace, &name, labels);
+    yaml.push_str("data:\n");
+    yaml.push_str("  collector.conf: |\n");
+    yaml.push_str("    [SERVICE]\n");
+    yaml.push_str("        Flush        2\n");
+    yaml.push_str("        Log_Level    info\n");
+    yaml.push_str("        Parsers_File parsers.conf\n");
+    yaml.push_str("        storage.path /buffers\n");
+    yaml.push_str("        storage.sync normal\n");
+    yaml.push_str("        storage.backlog.mem_limit 64M\n\n");
+    yaml.push_str("    [INPUT]\n");
+    yaml.push_str("        Name              tail\n");
+    yaml.push_str(&format!(
+        "        Path              /var/log/pods/{}_*/*/*.log\n",
+        observed_namespace
+    ));
+    yaml.push_str(&format!(
+        "        Exclude_Path      /var/log/pods/{}_{}-*/*/*.log\n",
+        observed_namespace, operator_name
+    ));
+    yaml.push_str("        Path_Key          filename\n");
+    // Built-in multiline parsers auto-detect the runtime log format: `cri` for
+    // containerd (EKS/GKE/AKS, k8s >=1.24) and `docker` for the docker-json format
+    // used by Docker-runtime clusters (Docker Desktop, OrbStack, legacy on-prem).
+    yaml.push_str("        multiline.parser  docker, cri\n");
+    yaml.push_str("        Tag               kube.*\n");
+    yaml.push_str(&format!(
+        "        DB                /buffers/{operator_name}-whitelabeled-log-collector.db\n"
+    ));
+    yaml.push_str("        Mem_Buf_Limit     64MB\n");
+    yaml.push_str("        Skip_Long_Lines   On\n");
+    yaml.push_str("        Read_from_Head    On\n");
+    yaml.push_str("        Refresh_Interval  5\n");
+    yaml.push_str("        storage.type      filesystem\n\n");
+    yaml.push_str("    [FILTER]\n");
+    yaml.push_str("        Name                kubernetes\n");
+    yaml.push_str("        Match               kube.*\n");
+    yaml.push_str("        Merge_Log           Off\n");
+    yaml.push_str("        Keep_Log            On\n");
+    yaml.push_str("        Labels              On\n");
+    yaml.push_str("        Annotations         Off\n\n");
+    yaml.push_str("    [OUTPUT]\n");
+    yaml.push_str("        Name          http\n");
+    // Without a Match the router never routes the tailed kube.* records to this
+    // output ("NO match for http.0 output instance"), so no pod logs are shipped.
+    yaml.push_str("        Match         kube.*\n");
+    yaml.push_str(&format!(
+        "        Host          {operator_name}.{namespace}.svc.cluster.local\n"
+    ));
+    yaml.push_str("        Port          8080\n");
+    yaml.push_str("        URI           /internal/logs\n");
+    yaml.push_str("        Format        json\n");
+    yaml.push_str("        Json_Date_Key observed_at\n");
+    yaml.push_str("        Header        Authorization Bearer ${COLLECTOR_TOKEN}\n\n");
+    yaml.push_str("  parsers.conf: |\n");
+    yaml.push_str("    [PARSER]\n");
+    yaml.push_str("        Name        cri\n");
+    yaml.push_str("        Format      regex\n");
+    yaml.push_str(
+        "        Regex       ^(?<time>[^ ]+) (?<stream>stdout|stderr) (?<logtag>[^ ]*) (?<log>.*)$\n",
+    );
+    yaml.push_str("        Time_Key    time\n");
+    yaml.push_str("        Time_Format %Y-%m-%dT%H:%M:%S.%L%z\n");
+    yaml
+}
+
+fn operator_log_collector_daemonset_doc(
+    namespace: &str,
+    operator_name: &str,
+    image: &str,
+    labels: &BTreeMap<String, String>,
+) -> String {
+    let name = format!("{operator_name}-whitelabeled-log-collector");
+    let mut yaml = operator_metadata_doc("apps/v1", "DaemonSet", namespace, &name, labels);
+    yaml.push_str("spec:\n");
+    yaml.push_str("  selector:\n");
+    yaml.push_str("    matchLabels:\n");
+    append_operator_selector_labels(&mut yaml, labels, 6);
+    yaml.push_str("  template:\n");
+    yaml.push_str("    metadata:\n");
+    yaml.push_str("      labels:\n");
+    append_operator_labels(&mut yaml, labels, 8);
+    yaml.push_str("    spec:\n");
+    yaml.push_str(&format!(
+        "      serviceAccountName: {}\n",
+        yaml_string(&name)
+    ));
+    yaml.push_str("      tolerations:\n");
+    yaml.push_str("        - operator: Exists\n");
+    yaml.push_str("      containers:\n");
+    yaml.push_str("        - name: collector\n");
+    yaml.push_str(&format!("          image: {}\n", yaml_string(image)));
+    yaml.push_str("          imagePullPolicy: IfNotPresent\n");
+    yaml.push_str("          args: [\"-c\", \"/collector/etc/collector.conf\"]\n");
+    yaml.push_str("          env:\n");
+    yaml.push_str("            - name: COLLECTOR_TOKEN\n");
+    yaml.push_str("              valueFrom:\n");
+    yaml.push_str("                secretKeyRef:\n");
+    yaml.push_str(&format!(
+        "                  name: {}\n",
+        yaml_string(operator_name)
+    ));
+    yaml.push_str("                  key: collector-token\n");
+    yaml.push_str("          volumeMounts:\n");
+    yaml.push_str("            - name: config\n");
+    yaml.push_str("              mountPath: /collector/etc\n");
+    yaml.push_str("              readOnly: true\n");
+    yaml.push_str("            - name: varlog\n");
+    yaml.push_str("              mountPath: /var/log\n");
+    yaml.push_str("              readOnly: true\n");
+    // Docker-runtime clusters symlink /var/log/pods/.../*.log to the json log files
+    // under /var/lib/docker/containers, so the symlink targets must be mounted too or
+    // fluent-bit reads nothing. Harmless on containerd nodes (DirectoryOrCreate).
+    yaml.push_str("            - name: dockercontainers\n");
+    yaml.push_str("              mountPath: /var/lib/docker/containers\n");
+    yaml.push_str("              readOnly: true\n");
+    yaml.push_str("            - name: buffers\n");
+    yaml.push_str("              mountPath: /buffers\n");
+    yaml.push_str("      volumes:\n");
+    yaml.push_str("        - name: config\n");
+    yaml.push_str("          configMap:\n");
+    yaml.push_str(&format!("            name: {}\n", yaml_string(&name)));
+    yaml.push_str("        - name: varlog\n");
+    yaml.push_str("          hostPath:\n");
+    yaml.push_str("            path: /var/log\n");
+    yaml.push_str("            type: Directory\n");
+    yaml.push_str("        - name: dockercontainers\n");
+    yaml.push_str("          hostPath:\n");
+    yaml.push_str("            path: /var/lib/docker/containers\n");
+    yaml.push_str("            type: DirectoryOrCreate\n");
+    yaml.push_str("        - name: buffers\n");
+    yaml.push_str("          emptyDir: {}\n");
+    yaml
+}
+
+fn operator_metadata_doc(
+    api_version: &str,
+    kind: &str,
+    namespace: &str,
+    name: &str,
+    labels: &BTreeMap<String, String>,
+) -> String {
+    let mut yaml = String::new();
+    yaml.push_str(&format!("apiVersion: {}\n", yaml_string(api_version)));
+    yaml.push_str(&format!("kind: {}\n", yaml_string(kind)));
+    yaml.push_str("metadata:\n");
+    yaml.push_str(&format!("  name: {}\n", yaml_string(name)));
+    yaml.push_str(&format!("  namespace: {}\n", yaml_string(namespace)));
+    yaml.push_str("  labels:\n");
+    append_operator_labels(&mut yaml, labels, 4);
+    yaml
+}
+
+fn append_operator_selector_labels(
+    yaml: &mut String,
+    labels: &BTreeMap<String, String>,
+    indent: usize,
+) {
+    for key in ["app.kubernetes.io/name", "app.kubernetes.io/instance"] {
+        if let Some(value) = labels.get(key) {
+            yaml.push_str(&format!(
+                "{}{}: {}\n",
+                " ".repeat(indent),
+                yaml_key(key),
+                yaml_string(value)
+            ));
+        }
+    }
+}
+
+fn append_operator_labels(yaml: &mut String, labels: &BTreeMap<String, String>, indent: usize) {
+    for (key, value) in labels {
+        yaml.push_str(&format!(
+            "{}{}: {}\n",
+            " ".repeat(indent),
+            yaml_key(key),
+            yaml_string(value)
+        ));
+    }
+}
+
+fn append_env_value(yaml: &mut String, name: &str, value: &str) {
+    yaml.push_str(&format!("            - name: {}\n", yaml_string(name)));
+    yaml.push_str(&format!("              value: {}\n", yaml_string(value)));
 }
 
 /// Result of dispatching every stack resource through the
@@ -518,7 +1360,7 @@ runtime:
       name: ""
       key: encryption-key
   # Agent self-update inputs the agent passes to the Helm-runner Job it
-  # spawns on `agent_target.helm`. Set chartRef + chartVersion to the OCI
+  # spawns on `operator_target.helm`. Set chartRef + chartVersion to the OCI
   # ref + version used at install time — the agent re-uses them in
   # `helm upgrade --reuse-values`. Leave blank if you don't want to enable
   # in-cluster agent upgrades for this install.
@@ -587,7 +1429,7 @@ runtime:
     persistence:
       # Enabled by default: the agent's `data_dir` holds its persistent
       # deployment_id + sync-token. Without a PVC, any pod restart (e.g.
-      # the rolling restart triggered by self-update / `agent_target.helm`)
+      # the rolling restart triggered by self-update / `operator_target.helm`)
       # wipes that state, the new pod re-runs `/v1/initialize`, hits a
       # name-conflict 409, crashloops, and helm `--atomic` rolls back.
       # Operators on clusters without a default StorageClass must either
@@ -624,6 +1466,23 @@ runtime:
         repository: alpine/k8s
         tag: "1.32.0"
         pullPolicy: IfNotPresent
+
+logCollector:
+  enabled: false
+  token: "replace-me-with-a-stable-in-cluster-collector-token"
+  image:
+    repository: fluent/fluent-bit
+    tag: "3.2"
+    pullPolicy: IfNotPresent
+  resources:
+    requests:
+      cpu: 50m
+      memory: 64Mi
+    limits:
+      memory: 256Mi
+  scope:
+    deploymentLabelKey: "alien.dev/deployment"
+    deploymentLabelValue: ""
 
 heartbeat:
   collection:
@@ -674,7 +1533,7 @@ clusterBootstrap:
 
     append_service_accounts(&mut yaml, analysis);
     append_stack_settings(&mut yaml, stack_settings)?;
-    yaml.push_str("\ninfrastructure: null\n\nbasePlatform: null\nbasePlatformConfig:\n  gcp:\n    projectId: \"\"\n    region: \"\"\n  aws:\n    region: \"\"\n  azure:\n    location: \"\"\n    subscriptionId: \"\"\n    tenantId: \"\"\nserviceAccountPrefix: \"\"\nmanagerServiceAccount:\n  annotations: {}\n  labels: {}\n\n# Agent self-update. When the agent receives agent_target.helm on /v1/sync\n# it creates a short-lived Helm-runner Job that runs `helm upgrade --atomic`.\n# The Job runs as `alien-agent-upgrader`; we keep the SA optional so charts\n# that don't want self-update can disable it.\nupgrader:\n  enabled: true\n");
+    yaml.push_str("\ninfrastructure: null\n\nbasePlatform: null\nbasePlatformConfig:\n  gcp:\n    projectId: \"\"\n    region: \"\"\n  aws:\n    region: \"\"\n  azure:\n    location: \"\"\n    subscriptionId: \"\"\n    tenantId: \"\"\nserviceAccountPrefix: \"\"\nmanagerServiceAccount:\n  annotations: {}\n  labels: {}\n\n# Agent self-update. When the agent receives operator_target.helm on /v1/sync\n# it creates a short-lived Helm-runner Job that runs `helm upgrade --atomic`.\n# The Job runs as `alien-agent-upgrader`; we keep the SA optional so charts\n# that don't want self-update can disable it.\nupgrader:\n  enabled: true\n");
     append_services(&mut yaml, analysis);
     yaml.push_str("\npublicEndpoints: {}\n");
 
@@ -1364,6 +2223,32 @@ fn values_schema_json() -> String {
         "labels": { "type": "object", "additionalProperties": { "type": "string" } }
       }
     },
+    "logCollector": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "enabled": { "type": "boolean" },
+        "token": { "type": "string" },
+        "image": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "repository": { "type": "string", "minLength": 1 },
+            "tag": { "type": "string", "minLength": 1 },
+            "pullPolicy": { "type": "string", "enum": ["Always", "IfNotPresent", "Never"] }
+          }
+        },
+        "resources": { "type": "object" },
+        "scope": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "deploymentLabelKey": { "type": "string" },
+            "deploymentLabelValue": { "type": "string" }
+          }
+        }
+      }
+    },
     "serviceAccounts": {
       "type": "object",
       "additionalProperties": {
@@ -1670,7 +2555,7 @@ helm.sh/chart: {{ printf "%s-%s" .Chart.Name .Chart.Version | replace "+" "_" }}
 
 {{/*
   ServiceAccount used by the Helm-runner Job the agent creates when it
-  acts on agent_target.helm. Held as a least-privilege boundary; bound
+  acts on operator_target.helm. Held as a least-privilege boundary; bound
   to the existing Role so the Job can mutate the Deployment + release
   Secrets.
 */}}
@@ -1755,7 +2640,7 @@ metadata:
 {{- end }}
 {{- if .Values.upgrader.enabled }}
 # alien-agent-upgrader is the ServiceAccount used by the Helm-runner Job
-# the agent creates when it acts on agent_target.helm. It exists as a
+# the agent creates when it acts on operator_target.helm. It exists as a
 # least-privilege boundary for the Job — the agent pod itself uses
 # `alien-agent-manager-sa` and only needs to create Jobs + stage
 # ConfigMaps/Secrets. Operators are not restricted by this — the
@@ -2022,7 +2907,7 @@ fn secret_tpl() -> String {
     {{- $encryptionKey = printf "%x" (b64dec (randBytes 32)) -}}
   {{- end -}}
 {{- end -}}
-{{- if or $createManagementSecret $createEncryptionSecret .Values.infrastructure }}
+{{- if or $createManagementSecret $createEncryptionSecret .Values.infrastructure .Values.logCollector.enabled }}
 apiVersion: v1
 kind: Secret
 metadata:
@@ -2039,6 +2924,9 @@ stringData:
   {{- end }}
   {{- if .Values.infrastructure }}
   external-bindings.json: {{ toJson .Values.infrastructure | quote }}
+  {{- end }}
+  {{- if .Values.logCollector.enabled }}
+  collector-token: {{ required "logCollector.token is required when logCollector.enabled=true" .Values.logCollector.token | quote }}
   {{- end }}
 {{- end }}
 "#
@@ -2181,7 +3069,7 @@ spec:
             - name: PLATFORM
               value: kubernetes
             {{- if .Values.basePlatform }}
-            - name: ALIEN_BASE_PLATFORM
+            - name: OPERATOR_BASE_PLATFORM
               value: {{ .Values.basePlatform | quote }}
             {{- end }}
             {{- if and (eq .Values.basePlatform "aws") .Values.basePlatformConfig.aws.region }}
@@ -2227,45 +3115,47 @@ spec:
               value: {{ .Release.Namespace | quote }}
             - name: KUBERNETES_HELM_RELEASE
               value: {{ .Release.Name | quote }}
-            - name: ALIEN_AGENT_UPGRADER_SA
+            - name: ALIEN_OPERATOR_UPGRADER_SA
               value: {{ include "deployment.upgraderServiceAccountName" . | quote }}
             # Reported back on /v1/sync so the dashboard can surface the
             # registry an admin will pull a new tag from when pinning a
-            # target agent version.
-            - name: ALIEN_AGENT_IMAGE_REPOSITORY
+            # target operator version.
+            - name: ALIEN_OPERATOR_IMAGE_REPOSITORY
               value: {{ .Values.runtime.image.repository | quote }}
             {{- if .Values.runtime.upgrade.chartRef }}
-            # Used by the agent when it receives `agent_target.helm` and
+            # Used by the operator when it receives `operator_target.helm` and
             # spawns a Helm-runner Job to apply the new version. The Job
             # runs `helm upgrade --reuse-values` against this chart so only
             # the manager-supplied `values` override (e.g. image.tag) flips.
-            - name: ALIEN_AGENT_CHART_REF
+            - name: ALIEN_OPERATOR_CHART_REF
               value: {{ .Values.runtime.upgrade.chartRef | quote }}
             {{- end }}
             {{- if .Values.runtime.upgrade.chartVersion }}
-            - name: ALIEN_AGENT_CHART_VERSION
+            - name: ALIEN_OPERATOR_CHART_VERSION
               value: {{ .Values.runtime.upgrade.chartVersion | quote }}
             {{- end }}
             {{- if .Values.runtime.upgrade.helmRunnerImage }}
-            - name: ALIEN_AGENT_HELM_RUNNER_IMAGE
+            - name: ALIEN_OPERATOR_HELM_RUNNER_IMAGE
               value: {{ .Values.runtime.upgrade.helmRunnerImage | quote }}
             {{- end }}
             {{- if .Values.runtime.upgrade.extraArgs }}
             # Extra flags spliced into the `helm upgrade` command the
-            # agent's helm-runner Job runs. Use sparingly — exists for
+            # operator's helm-runner Job runs. Use sparingly — exists for
             # local-dev/insecure OCI registries (`--plain-http`) and
             # similar one-off escape hatches; production should leave empty.
-            - name: ALIEN_AGENT_HELM_EXTRA_ARGS
+            - name: ALIEN_OPERATOR_HELM_EXTRA_ARGS
               value: {{ .Values.runtime.upgrade.extraArgs | quote }}
             {{- end }}
             {{- if .Values.serviceAccountPrefix }}
             # Pin the deployment's resource_prefix to the same value used for
             # ServiceAccount naming, so Helm-created SAs and vault secret names
-            # stay aligned across agent restarts (pull-model storage is ephemeral
-            # and the agent would otherwise regenerate a random prefix each time).
+            # stay aligned across operator restarts (pull-model storage is ephemeral
+            # and the operator would otherwise regenerate a random prefix each time).
             - name: ALIEN_RESOURCE_PREFIX
               value: {{ .Values.serviceAccountPrefix | quote }}
             {{- end }}
+            - name: OPERATOR_SETUP_METHOD
+              value: "helm"
             - name: DATA_DIR
               value: {{ .Values.runtime.data.mountPath | quote }}
             - name: SYNC_TOKEN_FILE
@@ -2286,6 +3176,10 @@ spec:
               value: {{ .Values.runtime.api.port | quote }}
             - name: OTLP_HOST
               value: {{ .Values.runtime.api.bindHost | quote }}
+            {{- if .Values.logCollector.enabled }}
+            - name: COLLECTOR_TOKEN_FILE
+              value: /etc/deployment/secrets/collector-token
+            {{- end }}
           ports:
             - name: otlp
               containerPort: {{ .Values.runtime.api.port }}
@@ -2327,6 +3221,12 @@ spec:
               subPath: external-bindings.json
               readOnly: true
             {{- end }}
+            {{- if .Values.logCollector.enabled }}
+            - name: collector-token
+              mountPath: /etc/deployment/secrets/collector-token
+              subPath: collector-token
+              readOnly: true
+            {{- end }}
             {{- if .Values.runtime.tmp.enabled }}
             - name: tmp
               mountPath: /tmp
@@ -2359,6 +3259,15 @@ spec:
                 path: external-bindings.json
             defaultMode: 384
         {{- end }}
+        {{- if .Values.logCollector.enabled }}
+        - name: collector-token
+          secret:
+            secretName: {{ include "deployment.fullname" . }}
+            items:
+              - key: collector-token
+                path: collector-token
+            defaultMode: 384
+        {{- end }}
         {{- if .Values.runtime.tmp.enabled }}
         - name: tmp
           emptyDir:
@@ -2376,7 +3285,7 @@ spec:
 }
 
 fn service_tpl() -> String {
-    r#"{{- if .Values.runtime.api.enabled }}
+    r#"{{- if or .Values.runtime.api.enabled .Values.logCollector.enabled }}
 apiVersion: v1
 kind: Service
 metadata:
@@ -2392,6 +3301,204 @@ spec:
     - name: http
       port: {{ .Values.runtime.api.port }}
       targetPort: otlp
+{{- end }}
+"#
+    .to_string()
+}
+
+fn whitelabeled_log_collector_serviceaccount_tpl() -> String {
+    r#"{{- if .Values.logCollector.enabled }}
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: {{ include "deployment.fullname" . }}-whitelabeled-log-collector
+  labels:
+    {{- include "deployment.labels" . | nindent 4 }}
+    app.kubernetes.io/component: whitelabeled-log-collector
+automountServiceAccountToken: true
+{{- end }}
+"#
+    .to_string()
+}
+
+fn whitelabeled_log_collector_role_tpl() -> String {
+    r#"{{- if .Values.logCollector.enabled }}
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: {{ include "deployment.fullname" . }}-whitelabeled-log-collector
+  labels:
+    {{- include "deployment.labels" . | nindent 4 }}
+    app.kubernetes.io/component: whitelabeled-log-collector
+rules:
+  - apiGroups: [""]
+    resources: ["pods"]
+    verbs: ["get", "list", "watch"]
+{{- end }}
+"#
+    .to_string()
+}
+
+fn whitelabeled_log_collector_rolebinding_tpl() -> String {
+    r#"{{- if .Values.logCollector.enabled }}
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: {{ include "deployment.fullname" . }}-whitelabeled-log-collector
+  labels:
+    {{- include "deployment.labels" . | nindent 4 }}
+    app.kubernetes.io/component: whitelabeled-log-collector
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: {{ include "deployment.fullname" . }}-whitelabeled-log-collector
+subjects:
+  - kind: ServiceAccount
+    name: {{ include "deployment.fullname" . }}-whitelabeled-log-collector
+    namespace: {{ .Release.Namespace }}
+{{- end }}
+"#
+    .to_string()
+}
+
+fn whitelabeled_log_collector_configmap_tpl() -> String {
+    r#"{{- if .Values.logCollector.enabled }}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "deployment.fullname" . }}-whitelabeled-log-collector
+  labels:
+    {{- include "deployment.labels" . | nindent 4 }}
+    app.kubernetes.io/component: whitelabeled-log-collector
+data:
+  collector.conf: |
+    [SERVICE]
+        Flush        2
+        Log_Level    info
+        Parsers_File parsers.conf
+        storage.path /buffers
+        storage.sync normal
+        storage.backlog.mem_limit 64M
+
+    [INPUT]
+        Name              tail
+        Path              /var/log/pods/{{ .Release.Namespace }}_*/*/*.log
+        Exclude_Path      /var/log/pods/{{ .Release.Namespace }}_{{ include "deployment.fullname" . }}-*/*/*.log
+        Path_Key          filename
+        multiline.parser  docker, cri
+        Tag               kube.*
+        DB                /buffers/{{ include "deployment.fullname" . }}-whitelabeled-log-collector.db
+        Mem_Buf_Limit     64MB
+        Skip_Long_Lines   On
+        Read_from_Head    On
+        Refresh_Interval  5
+        storage.type      filesystem
+
+    [FILTER]
+        Name                kubernetes
+        Match               kube.*
+        Merge_Log           Off
+        Keep_Log            On
+        Labels              On
+        Annotations         Off
+
+    {{- if and .Values.logCollector.scope.deploymentLabelKey .Values.logCollector.scope.deploymentLabelValue }}
+    [FILTER]
+        Name                grep
+        Match               kube.*
+        Regex               $kubernetes['labels']['{{ .Values.logCollector.scope.deploymentLabelKey }}'] ^{{ .Values.logCollector.scope.deploymentLabelValue }}$
+    {{- end }}
+
+    [OUTPUT]
+        Name          http
+        Match         kube.*
+        Host          {{ include "deployment.fullname" . }}.{{ .Release.Namespace }}.svc.cluster.local
+        Port          {{ .Values.runtime.api.port }}
+        URI           /internal/logs
+        Format        json
+        Json_Date_Key observed_at
+        Header        Authorization Bearer ${COLLECTOR_TOKEN}
+
+  parsers.conf: |
+    [PARSER]
+        Name        cri
+        Format      regex
+        Regex       ^(?<time>[^ ]+) (?<stream>stdout|stderr) (?<logtag>[^ ]*) (?<log>.*)$
+        Time_Key    time
+        Time_Format %Y-%m-%dT%H:%M:%S.%L%z
+{{- end }}
+"#
+    .to_string()
+}
+
+fn whitelabeled_log_collector_daemonset_tpl() -> String {
+    r#"{{- if .Values.logCollector.enabled }}
+apiVersion: apps/v1
+kind: DaemonSet
+metadata:
+  name: {{ include "deployment.fullname" . }}-whitelabeled-log-collector
+  labels:
+    {{- include "deployment.labels" . | nindent 4 }}
+    app.kubernetes.io/component: whitelabeled-log-collector
+spec:
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: {{ include "deployment.name" . }}
+      app.kubernetes.io/instance: {{ .Release.Name }}
+      app.kubernetes.io/component: whitelabeled-log-collector
+  template:
+    metadata:
+      labels:
+        {{- include "deployment.labels" . | nindent 8 }}
+        app.kubernetes.io/component: whitelabeled-log-collector
+    spec:
+      serviceAccountName: {{ include "deployment.fullname" . }}-whitelabeled-log-collector
+      tolerations:
+        - operator: Exists
+      containers:
+        - name: collector
+          image: "{{ .Values.logCollector.image.repository }}:{{ .Values.logCollector.image.tag }}"
+          imagePullPolicy: {{ .Values.logCollector.image.pullPolicy }}
+          args:
+            - -c
+            - /collector/etc/collector.conf
+          env:
+            - name: COLLECTOR_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "deployment.fullname" . }}
+                  key: collector-token
+          volumeMounts:
+            - name: config
+              mountPath: /collector/etc
+              readOnly: true
+            - name: varlog
+              mountPath: /var/log
+              readOnly: true
+            - name: dockercontainers
+              mountPath: /var/lib/docker/containers
+              readOnly: true
+            - name: buffers
+              mountPath: /buffers
+          resources:
+            {{- toYaml .Values.logCollector.resources | nindent 12 }}
+      volumes:
+        - name: config
+          configMap:
+            name: {{ include "deployment.fullname" . }}-whitelabeled-log-collector
+        - name: varlog
+          hostPath:
+            path: /var/log
+            type: Directory
+        # Docker-runtime clusters symlink pod logs to /var/lib/docker/containers;
+        # mount it so fluent-bit can follow them. DirectoryOrCreate is harmless on
+        # containerd nodes where the path doesn't exist.
+        - name: dockercontainers
+          hostPath:
+            path: /var/lib/docker/containers
+            type: DirectoryOrCreate
+        - name: buffers
+          emptyDir: {}
 {{- end }}
 "#
     .to_string()
@@ -2941,7 +4048,7 @@ fn sanitize_chart_name(value: &str) -> String {
     }
     let out = out.trim_matches('-');
     if out.is_empty() {
-        "alien-deployment".to_string()
+        "deployment".to_string()
     } else {
         out.chars()
             .take(63)
@@ -2983,6 +4090,465 @@ mod tests {
         ResourceOutputs, ResourceStatus, StackResourceState, Storage, WorkerCode,
         WorkerPublicEndpoint, WorkerTrigger,
     };
+    use serde::Deserialize;
+    use serde_yaml::Value as YamlValue;
+
+    fn operator_test_manifest() -> String {
+        generate_operator_manifest(OperatorManifestOptions {
+            manager_url: "https://manager.example.com",
+            group_token: "ax_dg_test",
+            encryption_key: "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+            image: "registry.example.com/operator:test",
+            log_collector: None,
+            project_name: "my-saas",
+            environment_name: Some("acme-prod-eu"),
+            install_namespace: Some("demo"),
+            scope: OperatorScope::Namespace,
+            label_selector: None,
+            permission: OperatorPermission::Observe,
+            format: OperatorOutputFormat::RawManifest,
+        })
+        .expect("operator manifest should render")
+    }
+
+    fn operator_test_manifest_with_log_collector() -> String {
+        generate_operator_manifest(OperatorManifestOptions {
+            manager_url: "https://manager.example.com",
+            group_token: "ax_dg_test",
+            encryption_key: "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+            image: "registry.example.com/operator:test",
+            log_collector: Some(OperatorLogCollectorOptions {
+                image: "fluent/fluent-bit:3.2",
+                token: "collector-secret",
+            }),
+            project_name: "my-saas",
+            environment_name: Some("acme-prod-eu"),
+            install_namespace: Some("demo"),
+            scope: OperatorScope::Namespace,
+            label_selector: None,
+            permission: OperatorPermission::Observe,
+            format: OperatorOutputFormat::RawManifest,
+        })
+        .expect("operator manifest should render")
+    }
+
+    fn operator_env_value<'a>(deployment: &'a YamlValue, name: &str) -> Option<&'a str> {
+        deployment
+            .get("spec")
+            .and_then(|spec| spec.get("template"))
+            .and_then(|template| template.get("spec"))
+            .and_then(|spec| spec.get("containers"))
+            .and_then(YamlValue::as_sequence)
+            .and_then(|containers| containers.first())
+            .and_then(|container| container.get("env"))
+            .and_then(YamlValue::as_sequence)?
+            .iter()
+            .find(|entry| yaml_str(entry, "name") == Some(name))
+            .and_then(|entry| yaml_str(entry, "value"))
+    }
+
+    fn parse_manifest_docs(manifest: &str) -> Vec<YamlValue> {
+        serde_yaml::Deserializer::from_str(manifest)
+            .map(|doc| YamlValue::deserialize(doc).expect("manifest doc should parse as YAML"))
+            .filter(|doc| !doc.is_null())
+            .collect()
+    }
+
+    fn yaml_str<'a>(value: &'a YamlValue, key: &str) -> Option<&'a str> {
+        value.get(key).and_then(YamlValue::as_str)
+    }
+
+    fn yaml_path<'a>(value: &'a YamlValue, path: &[&str]) -> Option<&'a YamlValue> {
+        path.iter().try_fold(value, |current, key| current.get(key))
+    }
+
+    fn docs_by_kind(docs: &[YamlValue], kind: &str) -> Vec<YamlValue> {
+        docs.iter()
+            .filter(|doc| yaml_str(doc, "kind") == Some(kind))
+            .cloned()
+            .collect()
+    }
+
+    #[test]
+    fn operator_manifest_renders_flat_namespaced_documents() {
+        let docs = parse_manifest_docs(&operator_test_manifest());
+        let kinds = docs
+            .iter()
+            .map(|doc| yaml_str(doc, "kind").expect("doc should have kind"))
+            .collect::<Vec<_>>();
+
+        assert_eq!(
+            kinds,
+            vec![
+                "ServiceAccount",
+                "Role",
+                "RoleBinding",
+                "Secret",
+                "PersistentVolumeClaim",
+                "Deployment"
+            ]
+        );
+        assert!(
+            docs_by_kind(&docs, "ClusterRole").is_empty(),
+            "operator manifest must not grant cluster-scoped RBAC"
+        );
+        assert!(
+            docs_by_kind(&docs, "ClusterRoleBinding").is_empty(),
+            "operator manifest must not bind cluster-scoped RBAC"
+        );
+        for doc in docs {
+            assert_eq!(
+                yaml_path(&doc, &["metadata", "namespace"]).and_then(YamlValue::as_str),
+                Some("demo"),
+                "every operator document should be namespaced"
+            );
+        }
+    }
+
+    #[test]
+    fn operator_manifest_role_is_read_only_and_does_not_read_secrets() {
+        let docs = parse_manifest_docs(&operator_test_manifest());
+        let role = docs_by_kind(&docs, "Role")
+            .into_iter()
+            .next()
+            .expect("operator manifest should include Role");
+        let rules = role
+            .get("rules")
+            .and_then(YamlValue::as_sequence)
+            .expect("Role should include rules");
+
+        for rule in rules {
+            let verbs = rule
+                .get("verbs")
+                .and_then(YamlValue::as_sequence)
+                .expect("rule should include verbs")
+                .iter()
+                .map(|verb| verb.as_str().expect("verb should be string"))
+                .collect::<Vec<_>>();
+            assert_eq!(verbs, vec!["get", "list", "watch"]);
+
+            let resources = rule
+                .get("resources")
+                .and_then(YamlValue::as_sequence)
+                .expect("rule should include resources")
+                .iter()
+                .map(|resource| resource.as_str().expect("resource should be string"))
+                .collect::<Vec<_>>();
+            assert!(
+                !resources.contains(&"secrets"),
+                "observe Operator must not read customer Secrets"
+            );
+            assert!(
+                !resources.contains(&"pods/log"),
+                "logs must flow through the log collector, not Kubernetes API tailing"
+            );
+        }
+    }
+
+    #[test]
+    fn operator_manifest_deployment_uses_group_token_and_persistent_identity() {
+        let docs = parse_manifest_docs(&operator_test_manifest());
+        let deployment = docs_by_kind(&docs, "Deployment")
+            .into_iter()
+            .next()
+            .expect("operator manifest should include Deployment");
+        let env = deployment
+            .get("spec")
+            .and_then(|spec| spec.get("template"))
+            .and_then(|template| template.get("spec"))
+            .and_then(|spec| spec.get("containers"))
+            .and_then(YamlValue::as_sequence)
+            .and_then(|containers| containers.first())
+            .and_then(|container| container.get("env"))
+            .and_then(YamlValue::as_sequence)
+            .expect("operator container should include env");
+        let env_names = env
+            .iter()
+            .filter_map(|entry| entry.get("name").and_then(YamlValue::as_str))
+            .collect::<Vec<_>>();
+
+        assert!(env_names.contains(&"OPERATOR_SCOPE"));
+        assert!(env_names.contains(&"OPERATOR_PERMISSION"));
+        assert!(env_names.contains(&"SYNC_TOKEN_FILE"));
+        assert!(
+            !env_names.contains(&"DEPLOYMENT_ID"),
+            "first boot must self-register and then persist deployment identity"
+        );
+
+        // Object names derive from the project (stable per app); the per-environment
+        // identity is carried only by OPERATOR_NAME so one project can host many envs.
+        assert_eq!(
+            operator_env_value(&deployment, "OPERATOR_NAME"),
+            Some("acme-prod-eu"),
+            "OPERATOR_NAME is the per-environment identity"
+        );
+        assert_eq!(
+            operator_env_value(&deployment, "KUBERNETES_NAMESPACE"),
+            Some("demo")
+        );
+        assert_eq!(
+            deployment
+                .get("spec")
+                .and_then(|spec| spec.get("template"))
+                .and_then(|template| template.get("spec"))
+                .and_then(|spec| spec.get("volumes"))
+                .and_then(YamlValue::as_sequence)
+                .and_then(|volumes| volumes.get(1))
+                .and_then(|volume| volume.get("persistentVolumeClaim"))
+                .and_then(|claim| claim.get("claimName"))
+                .and_then(YamlValue::as_str),
+            Some("my-saas-operator-identity")
+        );
+
+        let secret = docs_by_kind(&docs, "Secret")
+            .into_iter()
+            .next()
+            .expect("operator manifest should include Secret");
+        assert_eq!(
+            secret
+                .get("stringData")
+                .and_then(|data| data.get("sync-token"))
+                .and_then(YamlValue::as_str),
+            Some("ax_dg_test")
+        );
+    }
+
+    #[test]
+    fn operator_manifest_can_include_log_collector_without_control_plane_credentials() {
+        let manifest = operator_test_manifest_with_log_collector();
+        let docs = parse_manifest_docs(&manifest);
+        let kinds = docs
+            .iter()
+            .map(|doc| yaml_str(doc, "kind").expect("doc should have kind"))
+            .collect::<Vec<_>>();
+
+        assert!(kinds.contains(&"Service"));
+        assert!(kinds.contains(&"Role"));
+        assert!(kinds.contains(&"RoleBinding"));
+        assert!(kinds.contains(&"DaemonSet"));
+        assert!(manifest.contains("whitelabeled-log-collector"));
+        assert!(manifest.contains("/var/log/pods/demo_"));
+        assert!(manifest.contains("/internal/logs"));
+        assert!(manifest.contains("COLLECTOR_TOKEN_FILE"));
+        assert!(manifest.contains("collector-token"));
+        assert!(manifest.contains("fluent/fluent-bit:3.2"));
+        assert!(!manifest.contains("pods/log"));
+        assert!(!manifest.contains("void"));
+
+        let collector_role = docs_by_kind(&docs, "Role")
+            .into_iter()
+            .find(|role| {
+                role.get("metadata")
+                    .and_then(|metadata| metadata.get("name"))
+                    .and_then(YamlValue::as_str)
+                    .is_some_and(|name| name.ends_with("-whitelabeled-log-collector"))
+            })
+            .expect("operator manifest should include collector Role");
+        let resources = collector_role
+            .get("rules")
+            .and_then(YamlValue::as_sequence)
+            .and_then(|rules| rules.first())
+            .and_then(|rule| rule.get("resources"))
+            .and_then(YamlValue::as_sequence)
+            .expect("collector Role should include resources")
+            .iter()
+            .filter_map(YamlValue::as_str)
+            .collect::<Vec<_>>();
+        assert_eq!(resources, vec!["pods"]);
+
+        let daemonset = docs_by_kind(&docs, "DaemonSet")
+            .into_iter()
+            .next()
+            .expect("operator manifest should include collector DaemonSet");
+        let env = daemonset
+            .get("spec")
+            .and_then(|spec| spec.get("template"))
+            .and_then(|template| template.get("spec"))
+            .and_then(|spec| spec.get("containers"))
+            .and_then(YamlValue::as_sequence)
+            .and_then(|containers| containers.first())
+            .and_then(|container| container.get("env"))
+            .and_then(YamlValue::as_sequence)
+            .expect("collector container should include env");
+        let env_names = env
+            .iter()
+            .filter_map(|entry| entry.get("name").and_then(YamlValue::as_str))
+            .collect::<Vec<_>>();
+        assert_eq!(env_names, vec!["COLLECTOR_TOKEN"]);
+    }
+
+    #[test]
+    fn operator_manifest_emits_label_selector_only_when_scoped() {
+        // Default test scope has no label selector.
+        let docs = parse_manifest_docs(&operator_test_manifest());
+        let deployment = docs_by_kind(&docs, "Deployment")
+            .into_iter()
+            .next()
+            .unwrap();
+        assert_eq!(
+            operator_env_value(&deployment, "OPERATOR_LABEL_SELECTOR"),
+            None
+        );
+
+        // Namespace scope grants a namespaced Role, no cluster-wide RBAC.
+        assert_eq!(docs_by_kind(&docs, "Role").len(), 1);
+        assert!(docs_by_kind(&docs, "ClusterRole").is_empty());
+
+        // Label scope is cluster-wide: emits the selector env and ClusterRole/
+        // ClusterRoleBinding instead of a namespaced Role.
+        let manifest = generate_operator_manifest(OperatorManifestOptions {
+            manager_url: "https://manager.example.com",
+            group_token: "ax_dg_test",
+            encryption_key: TEST_RUNTIME_ENCRYPTION_KEY,
+            image: "registry.example.com/operator:test",
+            log_collector: None,
+            project_name: "my-saas",
+            environment_name: Some("acme-prod-eu"),
+            install_namespace: Some("demo"),
+            scope: OperatorScope::Cluster,
+            label_selector: Some("app.kubernetes.io/part-of=my-saas"),
+            permission: OperatorPermission::Observe,
+            format: OperatorOutputFormat::RawManifest,
+        })
+        .expect("operator manifest should render");
+        let docs = parse_manifest_docs(&manifest);
+        let deployment = docs_by_kind(&docs, "Deployment")
+            .into_iter()
+            .next()
+            .unwrap();
+        assert_eq!(
+            operator_env_value(&deployment, "OPERATOR_LABEL_SELECTOR"),
+            Some("app.kubernetes.io/part-of=my-saas")
+        );
+
+        assert!(
+            docs_by_kind(&docs, "Role").is_empty(),
+            "cluster-wide scope must not emit a namespaced Role"
+        );
+        let cluster_role = docs_by_kind(&docs, "ClusterRole")
+            .into_iter()
+            .next()
+            .expect("label scope should emit a ClusterRole");
+        assert!(
+            yaml_path(&cluster_role, &["metadata", "namespace"]).is_none(),
+            "ClusterRole must not be namespaced"
+        );
+        let crb = docs_by_kind(&docs, "ClusterRoleBinding")
+            .into_iter()
+            .next()
+            .expect("label scope should emit a ClusterRoleBinding");
+        let subject = crb
+            .get("subjects")
+            .and_then(YamlValue::as_sequence)
+            .and_then(|s| s.first())
+            .expect("ClusterRoleBinding should have a subject");
+        assert_eq!(
+            subject.get("namespace").and_then(YamlValue::as_str),
+            Some("demo"),
+            "ClusterRoleBinding subject must reference the install namespace"
+        );
+    }
+
+    #[test]
+    fn operator_helm_template_sources_namespace_and_identity_from_helm() {
+        let manifest = generate_operator_manifest(OperatorManifestOptions {
+            manager_url: "https://manager.example.com",
+            group_token: "ax_dg_test",
+            encryption_key: TEST_RUNTIME_ENCRYPTION_KEY,
+            image: "registry.example.com/operator:test",
+            log_collector: None,
+            project_name: "my-saas",
+            // Ignored for Helm output — the value comes from .Values / .Release per install.
+            environment_name: None,
+            install_namespace: None,
+            scope: OperatorScope::Namespace,
+            label_selector: None,
+            permission: OperatorPermission::Observe,
+            format: OperatorOutputFormat::HelmTemplate,
+        })
+        .expect("helm template should render");
+
+        let docs = parse_manifest_docs(&manifest);
+        for doc in &docs {
+            assert_eq!(
+                yaml_path(doc, &["metadata", "namespace"]).and_then(YamlValue::as_str),
+                Some("{{ .Release.Namespace }}"),
+                "helm documents install into the release namespace"
+            );
+        }
+        let deployment = docs_by_kind(&docs, "Deployment")
+            .into_iter()
+            .next()
+            .unwrap();
+        assert_eq!(
+            operator_env_value(&deployment, "OPERATOR_NAME"),
+            Some("{{ .Values.alien.environmentName }}"),
+            "each install registers under its own environment name"
+        );
+        // Object names still come from the project, not from any environment.
+        assert_eq!(
+            yaml_path(&deployment, &["metadata", "name"]).and_then(YamlValue::as_str),
+            Some("my-saas-operator")
+        );
+    }
+
+    #[test]
+    fn raw_manifest_requires_install_namespace_and_environment_name() {
+        let missing_namespace = generate_operator_manifest(OperatorManifestOptions {
+            manager_url: "https://manager.example.com",
+            group_token: "ax_dg_test",
+            encryption_key: TEST_RUNTIME_ENCRYPTION_KEY,
+            image: "registry.example.com/operator:test",
+            log_collector: None,
+            project_name: "my-saas",
+            environment_name: Some("acme"),
+            install_namespace: None,
+            scope: OperatorScope::Namespace,
+            label_selector: None,
+            permission: OperatorPermission::Observe,
+            format: OperatorOutputFormat::RawManifest,
+        });
+        assert!(
+            missing_namespace.is_err(),
+            "raw output needs an install namespace"
+        );
+
+        let missing_env = generate_operator_manifest(OperatorManifestOptions {
+            manager_url: "https://manager.example.com",
+            group_token: "ax_dg_test",
+            encryption_key: TEST_RUNTIME_ENCRYPTION_KEY,
+            image: "registry.example.com/operator:test",
+            log_collector: None,
+            project_name: "my-saas",
+            environment_name: None,
+            install_namespace: Some("demo"),
+            scope: OperatorScope::Namespace,
+            label_selector: None,
+            permission: OperatorPermission::Observe,
+            format: OperatorOutputFormat::RawManifest,
+        });
+        assert!(missing_env.is_err(), "raw output needs an environment name");
+
+        // Label scope must carry a non-empty selector.
+        let empty_label = generate_operator_manifest(OperatorManifestOptions {
+            manager_url: "https://manager.example.com",
+            group_token: "ax_dg_test",
+            encryption_key: TEST_RUNTIME_ENCRYPTION_KEY,
+            image: "registry.example.com/operator:test",
+            log_collector: None,
+            project_name: "my-saas",
+            environment_name: Some("acme"),
+            install_namespace: Some("demo"),
+            scope: OperatorScope::Cluster,
+            label_selector: Some("   "),
+            permission: OperatorPermission::Observe,
+            format: OperatorOutputFormat::RawManifest,
+        });
+        assert!(
+            empty_label.is_err(),
+            "label scope needs a non-empty selector"
+        );
+    }
 
     const TEST_RUNTIME_ENCRYPTION_KEY: &str =
         "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
@@ -3047,6 +4613,48 @@ management:
     }
 
     #[test]
+    fn log_collector_enabled_chart_lints_and_templates() {
+        let registry = HelmRegistry::built_in();
+        let chart = generate_helm_chart(
+            &sample_stack(),
+            HelmOptions {
+                registry: &registry,
+                stack_settings: StackSettings::default(),
+                chart_name: "sample-stack".to_string(),
+            },
+        )
+        .expect("chart should render");
+
+        let values = r#"
+logCollector:
+  enabled: true
+  token: test-collector-token
+  scope:
+    deploymentLabelValue: e2e123
+"#;
+
+        let files = chart.files.clone();
+        crate::test_utils::helm_template_and_validate(&files, Some(values))
+            .assert_ok("helm template log collector");
+        let rendered = crate::test_utils::helm_template(&files, Some(values));
+        rendered.assert_ok("helm render log collector");
+        assert!(rendered.stdout.contains("kind: DaemonSet"));
+        assert!(rendered.stdout.contains("whitelabeled-log-collector"));
+        assert!(rendered.stdout.contains("COLLECTOR_TOKEN_FILE"));
+        assert!(rendered.stdout.contains("/var/log/pods/default_"));
+        assert!(rendered.stdout.contains("fluent/fluent-bit:3.2"));
+        assert!(rendered
+            .stdout
+            .contains("$kubernetes['labels']['alien.dev/deployment'] ^e2e123$"));
+        assert!(rendered.stdout.contains("resources: [\"pods\"]"));
+        assert!(rendered
+            .stdout
+            .contains("verbs: [\"get\", \"list\", \"watch\"]"));
+        assert!(!rendered.stdout.contains("resources: [\"pods/log\"]"));
+        assert!(!rendered.stdout.contains("void"));
+    }
+
+    #[test]
     fn registered_setup_values_include_runtime_encryption_key() {
         let stack_state =
             alien_core::StackState::with_resource_prefix(Platform::Kubernetes, "e2e123".into());
@@ -3069,6 +4677,17 @@ management:
 
         assert!(values.contains("runtime:\n  encryption:\n"));
         assert!(values.contains(&format!("    key: '{}'", TEST_RUNTIME_ENCRYPTION_KEY)));
+
+        let values_yaml: YamlValue =
+            serde_yaml::from_str(&values).expect("registered setup values should parse");
+        assert_eq!(
+            yaml_path(
+                &values_yaml,
+                &["logCollector", "scope", "deploymentLabelValue"]
+            )
+            .and_then(YamlValue::as_str),
+            Some("e2e123")
+        );
     }
 
     #[test]
@@ -3224,7 +4843,7 @@ management:
                     kubernetes_api_reachable: true,
                     namespace_ready: true,
                     rbac_ready: true,
-                    agent_ready: false,
+                    operator_ready: false,
                     cloud_metadata_ready: Some(true),
                     azure_application_gateway_for_containers: Some(
                         AzureApplicationGatewayForContainersBootstrap {

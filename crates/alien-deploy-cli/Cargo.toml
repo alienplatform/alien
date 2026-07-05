@@ -23,7 +23,7 @@ alien-deployment = { workspace = true }
 alien-helm = { workspace = true }
 alien-infra = { workspace = true, features = ["aws", "gcp", "azure", "test", "local"] }
 alien-local = { workspace = true }
-alien-agent = { path = "../alien-agent" }
+alien-operator = { path = "../alien-operator" }
 alien-manager-api = { path = "../../client-sdks/manager/rust" }
 
 # Async & HTTP

@@ -40,7 +40,7 @@ const value: models.DataGcp2 = {
     collectionIssues: [
       {
         message: "<value>",
-        reason: "api-unavailable",
+        reason: "not-installed",
         severity: "warning",
         source: "<value>",
       },
@@ -72,15 +72,15 @@ const value: models.DataAzure2 = {
     collectionIssues: [
       {
         message: "<value>",
-        reason: "api-unavailable",
-        severity: "warning",
+        reason: "not-installed",
+        severity: "info",
         source: "<value>",
       },
     ],
-    health: "healthy",
-    lifecycle: "deleting",
+    health: "degraded",
+    lifecycle: "running",
     partial: true,
-    stale: true,
+    stale: false,
   },
   backend: "azure",
 };
@@ -98,14 +98,14 @@ const value: models.DataLocal5 = {
     collectionIssues: [
       {
         message: "<value>",
-        reason: "collection-failed",
-        severity: "info",
+        reason: "forbidden",
+        severity: "error",
         source: "<value>",
       },
     ],
     health: "unknown",
-    lifecycle: "stopped",
-    partial: true,
+    lifecycle: "running",
+    partial: false,
     stale: true,
   },
   backend: "local",

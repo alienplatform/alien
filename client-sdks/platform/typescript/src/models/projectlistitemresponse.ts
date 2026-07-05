@@ -124,11 +124,23 @@ export type ProjectListItemResponseCloudformation = {
 /**
  * Operator image package configuration. Required when Helm is enabled. If null, Operator image packages will not be generated.
  */
-export type ProjectListItemResponseAgentImage = {
+export type ProjectListItemResponseOperatorImage = {
+  /**
+   * Short brand slug used for generated resource names.
+   */
+  brand?: string | null | undefined;
   /**
    * Human-friendly display name for logs and startup messages
    */
   displayName: string;
+  /**
+   * Branded environment variable prefix (e.g., "ACME").
+   */
+  envPrefix?: string | null | undefined;
+  /**
+   * Branded Kubernetes/cloud label domain (e.g., "acme.dev").
+   */
+  labelDomain?: string | null | undefined;
   /**
    * Image name (e.g., "acme-operator")
    */
@@ -186,7 +198,7 @@ export type ProjectListItemResponsePackagesConfig = {
   /**
    * Operator image package configuration. Required when Helm is enabled. If null, Operator image packages will not be generated.
    */
-  agentImage?: ProjectListItemResponseAgentImage | null | undefined;
+  operatorImage?: ProjectListItemResponseOperatorImage | null | undefined;
   /**
    * Helm chart package configuration. If null, Helm packages will not be generated.
    */
@@ -364,22 +376,26 @@ export function projectListItemResponseCloudformationFromJSON(
 }
 
 /** @internal */
-export const ProjectListItemResponseAgentImage$inboundSchema: z.ZodType<
-  ProjectListItemResponseAgentImage,
+export const ProjectListItemResponseOperatorImage$inboundSchema: z.ZodType<
+  ProjectListItemResponseOperatorImage,
   unknown
 > = z.object({
+  brand: z.nullable(z.string()).optional(),
   displayName: z.string(),
+  envPrefix: z.nullable(z.string()).optional(),
+  labelDomain: z.nullable(z.string()).optional(),
   name: z.string(),
   enabled: z.boolean(),
 });
 
-export function projectListItemResponseAgentImageFromJSON(
+export function projectListItemResponseOperatorImageFromJSON(
   jsonString: string,
-): SafeParseResult<ProjectListItemResponseAgentImage, SDKValidationError> {
+): SafeParseResult<ProjectListItemResponseOperatorImage, SDKValidationError> {
   return safeParse(
     jsonString,
-    (x) => ProjectListItemResponseAgentImage$inboundSchema.parse(JSON.parse(x)),
-    `Failed to parse 'ProjectListItemResponseAgentImage' from JSON`,
+    (x) =>
+      ProjectListItemResponseOperatorImage$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'ProjectListItemResponseOperatorImage' from JSON`,
   );
 }
 
@@ -432,8 +448,8 @@ export const ProjectListItemResponsePackagesConfig$inboundSchema: z.ZodType<
   cloudformation: z.nullable(
     z.lazy(() => ProjectListItemResponseCloudformation$inboundSchema),
   ).optional(),
-  agentImage: z.nullable(
-    z.lazy(() => ProjectListItemResponseAgentImage$inboundSchema),
+  operatorImage: z.nullable(
+    z.lazy(() => ProjectListItemResponseOperatorImage$inboundSchema),
   ).optional(),
   helm: z.nullable(z.lazy(() => ProjectListItemResponseHelm$inboundSchema))
     .optional(),

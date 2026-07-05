@@ -117,6 +117,54 @@ const alienManager = new AlienManager({
 async function run() {
   const result = await alienManager.sync.agentSync({
     deploymentId: "<id>",
+    observedInventoryBatches: [
+      {
+        backend: "local",
+        complete: false,
+        controllerPlatform: "gcp",
+        inventoryScope: "<value>",
+        observedAt: new Date("2024-02-21T16:58:35.335Z"),
+        resources: [
+          {
+            displayName: "Olin.Feest",
+            health: "unhealthy",
+            lifecycle: "updating",
+            partial: true,
+            providerKind: "<value>",
+            providerStale: true,
+            rawIdentity: "<value>",
+            resourceTypeHint: "worker",
+          },
+        ],
+        sourceKind: "<value>",
+      },
+    ],
+    resourceHeartbeats: [
+      {
+        backend: "kubernetes",
+        controllerPlatform: "gcp",
+        data: {
+          data: {
+            path: "/etc/mail",
+            pathExists: true,
+            secretMetadataListed: false,
+            status: {
+              collectionIssues: [],
+              health: "unhealthy",
+              lifecycle: "failed",
+              partial: true,
+              stale: false,
+            },
+            backend: "local",
+          },
+          resourceType: "vault",
+        },
+        observedAt: new Date("2026-05-14T05:33:22.635Z"),
+        raw: [],
+        resourceId: "<id>",
+        resourceType: "worker",
+      },
+    ],
   });
 
   console.log(result);
@@ -143,6 +191,54 @@ const alienManager = new AlienManagerCore({
 async function run() {
   const res = await syncAgentSync(alienManager, {
     deploymentId: "<id>",
+    observedInventoryBatches: [
+      {
+        backend: "local",
+        complete: false,
+        controllerPlatform: "gcp",
+        inventoryScope: "<value>",
+        observedAt: new Date("2024-02-21T16:58:35.335Z"),
+        resources: [
+          {
+            displayName: "Olin.Feest",
+            health: "unhealthy",
+            lifecycle: "updating",
+            partial: true,
+            providerKind: "<value>",
+            providerStale: true,
+            rawIdentity: "<value>",
+            resourceTypeHint: "worker",
+          },
+        ],
+        sourceKind: "<value>",
+      },
+    ],
+    resourceHeartbeats: [
+      {
+        backend: "kubernetes",
+        controllerPlatform: "gcp",
+        data: {
+          data: {
+            path: "/etc/mail",
+            pathExists: true,
+            secretMetadataListed: false,
+            status: {
+              collectionIssues: [],
+              health: "unhealthy",
+              lifecycle: "failed",
+              partial: true,
+              stale: false,
+            },
+            backend: "local",
+          },
+          resourceType: "vault",
+        },
+        observedAt: new Date("2026-05-14T05:33:22.635Z"),
+        raw: [],
+        resourceId: "<id>",
+        resourceType: "worker",
+      },
+    ],
   });
   if (res.ok) {
     const { value: result } = res;
@@ -272,28 +368,54 @@ const alienManager = new AlienManager({
 async function run() {
   const result = await alienManager.sync.reconcile({
     deploymentId: "<id>",
-    heartbeats: [
+    observedInventoryBatches: [
       {
         backend: "external",
-        controllerPlatform: "gcp",
+        complete: true,
+        controllerPlatform: "local",
+        inventoryScope: "<value>",
+        observedAt: new Date("2024-07-25T23:31:08.887Z"),
+        resources: [],
+        sourceKind: "<value>",
+      },
+    ],
+    resourceHeartbeats: [
+      {
+        backend: "external",
+        controllerPlatform: "test",
         data: {
           data: {
-            enabled: false,
-            projectId: "<id>",
-            serviceName: "<value>",
+            namespace: "<value>",
+            prefix: "<value>",
+            secretMetadataListed: true,
             status: {
-              collectionIssues: [],
-              health: "unhealthy",
-              lifecycle: "failed",
-              partial: true,
+              collectionIssues: [
+                {
+                  message: "<value>",
+                  reason: "collection-failed",
+                  severity: "warning",
+                  source: "<value>",
+                },
+              ],
+              health: "healthy",
+              lifecycle: "updating",
+              partial: false,
               stale: false,
             },
-            backend: "gcpServiceUsage",
+            backend: "kubernetesSecret",
           },
-          resourceType: "service_activation",
+          resourceType: "vault",
         },
-        observedAt: new Date("2024-11-07T15:56:57.583Z"),
-        raw: [],
+        observedAt: new Date("2025-11-14T09:40:20.690Z"),
+        raw: [
+          {
+            body: "<value>",
+            collectedAt: new Date("2024-09-20T22:56:29.622Z"),
+            format: "json",
+            source: "<value>",
+            truncated: false,
+          },
+        ],
         resourceId: "<id>",
         resourceType: "worker",
       },
@@ -400,28 +522,54 @@ const alienManager = new AlienManagerCore({
 async function run() {
   const res = await syncReconcile(alienManager, {
     deploymentId: "<id>",
-    heartbeats: [
+    observedInventoryBatches: [
       {
         backend: "external",
-        controllerPlatform: "gcp",
+        complete: true,
+        controllerPlatform: "local",
+        inventoryScope: "<value>",
+        observedAt: new Date("2024-07-25T23:31:08.887Z"),
+        resources: [],
+        sourceKind: "<value>",
+      },
+    ],
+    resourceHeartbeats: [
+      {
+        backend: "external",
+        controllerPlatform: "test",
         data: {
           data: {
-            enabled: false,
-            projectId: "<id>",
-            serviceName: "<value>",
+            namespace: "<value>",
+            prefix: "<value>",
+            secretMetadataListed: true,
             status: {
-              collectionIssues: [],
-              health: "unhealthy",
-              lifecycle: "failed",
-              partial: true,
+              collectionIssues: [
+                {
+                  message: "<value>",
+                  reason: "collection-failed",
+                  severity: "warning",
+                  source: "<value>",
+                },
+              ],
+              health: "healthy",
+              lifecycle: "updating",
+              partial: false,
               stale: false,
             },
-            backend: "gcpServiceUsage",
+            backend: "kubernetesSecret",
           },
-          resourceType: "service_activation",
+          resourceType: "vault",
         },
-        observedAt: new Date("2024-11-07T15:56:57.583Z"),
-        raw: [],
+        observedAt: new Date("2025-11-14T09:40:20.690Z"),
+        raw: [
+          {
+            body: "<value>",
+            collectedAt: new Date("2024-09-20T22:56:29.622Z"),
+            format: "json",
+            source: "<value>",
+            truncated: false,
+          },
+        ],
         resourceId: "<id>",
         resourceType: "worker",
       },
