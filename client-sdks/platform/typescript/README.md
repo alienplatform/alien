@@ -232,6 +232,13 @@ run();
 * [list](docs/sdks/events/README.md#list) - Retrieve all events.
 * [get](docs/sdks/events/README.md#get) - Retrieve an event by ID.
 
+### [Machines](docs/sdks/machines/README.md)
+
+* [listJoinTokens](docs/sdks/machines/README.md#listjointokens)
+* [rotateJoinToken](docs/sdks/machines/README.md#rotatejointoken)
+* [revokeJoinToken](docs/sdks/machines/README.md#revokejointoken)
+* [listInventory](docs/sdks/machines/README.md#listinventory)
+
 ### [Managers](docs/sdks/managers/README.md)
 
 * [list](docs/sdks/managers/README.md#list) - Retrieve all managers.
@@ -400,6 +407,10 @@ To read more about standalone functions, check [FUNCTIONS.md](./FUNCTIONS.md).
 - [`domainsRefresh`](docs/sdks/domains/README.md#refresh) - Refresh workspace domain verification.
 - [`eventsGet`](docs/sdks/events/README.md#get) - Retrieve an event by ID.
 - [`eventsList`](docs/sdks/events/README.md#list) - Retrieve all events.
+- [`machinesListInventory`](docs/sdks/machines/README.md#listinventory)
+- [`machinesListJoinTokens`](docs/sdks/machines/README.md#listjointokens)
+- [`machinesRevokeJoinToken`](docs/sdks/machines/README.md#revokejointoken)
+- [`machinesRotateJoinToken`](docs/sdks/machines/README.md#rotatejointoken)
 - [`managersCancelSetup`](docs/sdks/managers/README.md#cancelsetup) - Cancel pending private-manager setup, revoke setup/runtime tokens, and remove the undeployed manager record.
 - [`managersCreate`](docs/sdks/managers/README.md#create) - Create a new manager.
 - [`managersDelete`](docs/sdks/managers/README.md#delete) - Delete a manager by ID.
