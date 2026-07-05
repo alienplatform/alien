@@ -9,12 +9,18 @@ import {
   ObservedInventoryBatch$outboundSchema,
 } from "./observedinventorybatch.js";
 import {
+  OperatorCapabilityReport,
+  OperatorCapabilityReport$Outbound,
+  OperatorCapabilityReport$outboundSchema,
+} from "./operatorcapabilityreport.js";
+import {
   ResourceHeartbeat,
   ResourceHeartbeat$Outbound,
   ResourceHeartbeat$outboundSchema,
 } from "./resourceheartbeat.js";
 
 export type AgentSyncRequest = {
+  capabilities?: Array<OperatorCapabilityReport> | undefined;
   /**
    * Current deployment state as reported by the agent.
    *
@@ -25,6 +31,7 @@ export type AgentSyncRequest = {
   currentState?: any | undefined;
   deploymentId: string;
   observedInventoryBatches?: Array<ObservedInventoryBatch> | undefined;
+  operatorVersion?: string | null | undefined;
   /**
    * Managed resource status samples emitted by pull-mode deployment steps.
    */
@@ -33,9 +40,11 @@ export type AgentSyncRequest = {
 
 /** @internal */
 export type AgentSyncRequest$Outbound = {
+  capabilities?: Array<OperatorCapabilityReport$Outbound> | undefined;
   currentState?: any | undefined;
   deploymentId: string;
   observedInventoryBatches?: Array<ObservedInventoryBatch$Outbound> | undefined;
+  operatorVersion?: string | null | undefined;
   resourceHeartbeats?: Array<ResourceHeartbeat$Outbound> | undefined;
 };
 
@@ -44,10 +53,12 @@ export const AgentSyncRequest$outboundSchema: z.ZodType<
   AgentSyncRequest$Outbound,
   AgentSyncRequest
 > = z.object({
+  capabilities: z.array(OperatorCapabilityReport$outboundSchema).optional(),
   currentState: z.any().optional(),
   deploymentId: z.string(),
   observedInventoryBatches: z.array(ObservedInventoryBatch$outboundSchema)
     .optional(),
+  operatorVersion: z.nullable(z.string()).optional(),
   resourceHeartbeats: z.array(ResourceHeartbeat$outboundSchema).optional(),
 });
 

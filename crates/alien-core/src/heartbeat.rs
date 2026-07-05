@@ -993,6 +993,8 @@ pub struct ComputeCapacityGroupStatus {
     pub instance_type: Option<String>,
     pub recommendation: Option<ComputeCapacityRecommendation>,
     pub capacity_blocker: Option<ComputeCapacityBlocker>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub drain_progress: Option<ComputeDrainProgress>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -1024,6 +1026,42 @@ pub struct ComputeCapacityRecommendation {
     pub reason: Option<String>,
     pub utilization: Option<MetricSample>,
     pub unschedulable_replicas: Option<u32>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
+#[serde(rename_all = "camelCase")]
+pub enum ComputeDrainProgressStatus {
+    Draining,
+    Drained,
+    Terminating,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
+#[serde(rename_all = "camelCase")]
+pub struct ComputeDrainBlocker {
+    pub workload_name: String,
+    pub replica_id: String,
+    pub scheduling_mode: String,
+    pub state: String,
+    pub reason: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
+#[serde(rename_all = "camelCase")]
+pub struct ComputeDrainProgress {
+    pub machine_id: String,
+    pub status: ComputeDrainProgressStatus,
+    pub replica_count: i64,
+    pub force: bool,
+    pub stalled: bool,
+    pub drain_requested_at: Option<String>,
+    pub drain_deadline_at: Option<String>,
+    pub drained_at: Option<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub blockers: Vec<ComputeDrainBlocker>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

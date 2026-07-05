@@ -126,6 +126,8 @@ export * from "./observedcounts.js";
 export * from "./observedhealth.js";
 export * from "./observedinventorybatch.js";
 export * from "./observedresourcesample.js";
+export * from "./operatorcapabilityreport.js";
+export * from "./operatorcapabilitystate.js";
 export * from "./platformenum.js";
 export * from "./postgresheartbeatdata.js";
 export * from "./postgresheartbeatstatus.js";

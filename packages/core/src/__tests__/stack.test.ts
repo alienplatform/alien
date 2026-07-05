@@ -30,10 +30,15 @@ describe("Stack builder validation", () => {
           cpu: "4",
           memoryBytes: 17179869184,
           ephemeralStorageBytes: 21474836480,
+          architecture: "x86_64",
           gpu: undefined,
         },
         minSize: 2,
         maxSize: 2,
+        scalePolicy: {
+          type: "fixed",
+          machines: { min: 2, max: 4, default: 2 },
+        },
         nestedVirtualization: true,
       },
     ])
@@ -146,6 +151,26 @@ describe("Stack builder validation", () => {
       size: "20Gi",
       mountPath: "/var/lib/postgresql/data",
     })
+  })
+
+  it("builds container and daemon stop grace periods", () => {
+    const container = new alien.Container("api")
+      .code({ type: "image", image: "nginx:latest" })
+      .cpu(0.25)
+      .memory("256Mi")
+      .permissions("execution")
+      .stopGracePeriod(21_600)
+      .build()
+
+    expect(container.config.stopGracePeriodSeconds).toBe(21_600)
+
+    const daemon = new alien.Daemon("log-forwarder")
+      .code({ type: "image", image: "registry.example.com/log-forwarder:latest" })
+      .permissions("execution")
+      .stopGracePeriod(21_600)
+      .build()
+
+    expect(daemon.config.stopGracePeriodSeconds).toBe(21_600)
   })
 
   it("builds container and daemon wildcard public endpoint options", () => {

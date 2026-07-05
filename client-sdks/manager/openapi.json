@@ -5238,6 +5238,16 @@
             "format": "int32",
             "minimum": 0
           },
+          "drainProgress": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/ComputeDrainProgress"
+              }
+            ]
+          },
           "groupId": {
             "type": "string"
           },
@@ -5435,6 +5445,93 @@
             "type": "boolean"
           }
         }
+      },
+      "ComputeDrainBlocker": {
+        "type": "object",
+        "required": [
+          "workloadName",
+          "replicaId",
+          "schedulingMode",
+          "state",
+          "reason"
+        ],
+        "properties": {
+          "reason": {
+            "type": "string"
+          },
+          "replicaId": {
+            "type": "string"
+          },
+          "schedulingMode": {
+            "type": "string"
+          },
+          "state": {
+            "type": "string"
+          },
+          "workloadName": {
+            "type": "string"
+          }
+        }
+      },
+      "ComputeDrainProgress": {
+        "type": "object",
+        "required": [
+          "machineId",
+          "status",
+          "replicaCount",
+          "force",
+          "stalled"
+        ],
+        "properties": {
+          "blockers": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ComputeDrainBlocker"
+            }
+          },
+          "drainDeadlineAt": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "drainRequestedAt": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "drainedAt": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "force": {
+            "type": "boolean"
+          },
+          "machineId": {
+            "type": "string"
+          },
+          "replicaCount": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "stalled": {
+            "type": "boolean"
+          },
+          "status": {
+            "$ref": "#/components/schemas/ComputeDrainProgressStatus"
+          }
+        }
+      },
+      "ComputeDrainProgressStatus": {
+        "type": "string",
+        "enum": [
+          "draining",
+          "drained",
+          "terminating"
+        ]
       },
       "ComputePoolSelection": {
         "oneOf": [

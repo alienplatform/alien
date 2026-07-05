@@ -5355,6 +5355,20 @@ export type SyncAcquireResponseHorizonMachineImageGcpUnion =
   | any;
 
 /**
+ * Download artifact for one horizond release platform.
+ */
+export type SyncAcquireResponseHorizondArtifacts = {
+  /**
+   * SHA-256 digest for the artifact payload.
+   */
+  sha256: string;
+  /**
+   * HTTPS URL for the artifact.
+   */
+  url: string;
+};
+
+/**
  * Horizon machine image catalog.
  *
  * @remarks
@@ -5381,6 +5395,10 @@ export type SyncAcquireResponseHorizonMachineImage = {
    * Git commit SHA used to build the image.
    */
   gitSha: string;
+  /**
+   * Per-architecture horizond artifacts by release-platform key.
+   */
+  horizondArtifacts: { [k: string]: SyncAcquireResponseHorizondArtifacts };
   /**
    * horizond daemon version baked into the image.
    */
@@ -18240,6 +18258,26 @@ export function syncAcquireResponseHorizonMachineImageGcpUnionFromJSON(
 }
 
 /** @internal */
+export const SyncAcquireResponseHorizondArtifacts$inboundSchema: z.ZodType<
+  SyncAcquireResponseHorizondArtifacts,
+  unknown
+> = z.object({
+  sha256: z.string(),
+  url: z.string(),
+});
+
+export function syncAcquireResponseHorizondArtifactsFromJSON(
+  jsonString: string,
+): SafeParseResult<SyncAcquireResponseHorizondArtifacts, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) =>
+      SyncAcquireResponseHorizondArtifacts$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'SyncAcquireResponseHorizondArtifacts' from JSON`,
+  );
+}
+
+/** @internal */
 export const SyncAcquireResponseHorizonMachineImage$inboundSchema: z.ZodType<
   SyncAcquireResponseHorizonMachineImage,
   unknown
@@ -18266,6 +18304,10 @@ export const SyncAcquireResponseHorizonMachineImage$inboundSchema: z.ZodType<
     ]),
   ).optional(),
   gitSha: z.string(),
+  horizondArtifacts: z.record(
+    z.string(),
+    z.lazy(() => SyncAcquireResponseHorizondArtifacts$inboundSchema),
+  ),
   horizondVersion: z.string(),
   machineImageVersion: z.string(),
 });

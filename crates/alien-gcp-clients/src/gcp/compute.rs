@@ -509,6 +509,15 @@ pub trait ComputeApi: Send + Sync + Debug {
         size: i32,
     ) -> Result<Operation>;
 
+    /// Deletes selected managed instances and reduces the instance group manager target size.
+    /// See: https://cloud.google.com/compute/docs/reference/rest/v1/instanceGroupManagers/deleteInstances
+    async fn delete_instance_group_manager_instances(
+        &self,
+        zone: String,
+        instance_group_manager_name: String,
+        request: InstanceGroupManagersDeleteInstancesRequest,
+    ) -> Result<Operation>;
+
     /// Lists managed instances in an instance group manager.
     /// See: https://cloud.google.com/compute/docs/reference/rest/v1/instanceGroupManagers/listManagedInstances
     async fn list_managed_instances(
@@ -1708,6 +1717,27 @@ impl ComputeApi for ComputeClient {
                 &path,
                 Some(query_params),
                 Option::<()>::None,
+                &instance_group_manager_name,
+            )
+            .await
+    }
+
+    async fn delete_instance_group_manager_instances(
+        &self,
+        zone: String,
+        instance_group_manager_name: String,
+        request: InstanceGroupManagersDeleteInstancesRequest,
+    ) -> Result<Operation> {
+        let path = format!(
+            "projects/{}/zones/{}/instanceGroupManagers/{}/deleteInstances",
+            self.project_id, zone, instance_group_manager_name
+        );
+        self.base
+            .execute_request(
+                Method::POST,
+                &path,
+                None,
+                Some(request),
                 &instance_group_manager_name,
             )
             .await
@@ -5065,6 +5095,20 @@ pub struct InstanceGroupManagersListManagedInstancesResponse {
     /// Next page token.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub next_page_token: Option<String>,
+}
+
+/// Request to delete selected managed instances from an instance group manager.
+#[derive(Debug, Serialize, Deserialize, Clone, Default, Builder)]
+#[serde(rename_all = "camelCase")]
+pub struct InstanceGroupManagersDeleteInstancesRequest {
+    /// Instance URLs to delete from the managed instance group.
+    #[builder(default)]
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub instances: Vec<String>,
+
+    /// Continue when valid instances are mixed with already-deleting or non-member instances.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub skip_instances_on_validation_error: Option<bool>,
 }
 
 /// Managed instance in an instance group.
