@@ -8,7 +8,9 @@ name = "alien-test-app"
 path = "src/bin/main.rs"
 
 [dependencies]
-alien-bindings = { workspace = true, features = ["grpc"] }
+# `grpc` provides the worker-protocol control/wait_until client; `local` provides
+# the in-process local binding providers now that bindings are resolved directly.
+alien-bindings = { workspace = true, features = ["grpc", "local"] }
 alien-error = { workspace = true, features = ["axum"] }
 axum = { workspace = true, features = ["macros", "tokio", "http1", "http2"] }
 chrono = { workspace = true }

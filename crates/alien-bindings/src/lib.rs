@@ -3,9 +3,9 @@ use alien_error::AlienError;
 // Re-export core traits and types
 pub use alien_context::AlienContext;
 pub use alien_core::{
-    BindingsMode, Platform, ENV_ALIEN_BINDINGS_MODE, ENV_ALIEN_DEPLOYMENT_TYPE,
-    ENV_OPERATOR_BASE_PLATFORM,
+    Platform, ENV_ALIEN_BINDINGS_MODE, ENV_ALIEN_DEPLOYMENT_TYPE, ENV_OPERATOR_BASE_PLATFORM,
 };
+pub use bindings::Bindings;
 pub use error::{ErrorData, Result};
 pub use provider::BindingsProvider;
 pub use traits::{
@@ -17,6 +17,7 @@ pub use traits::{
 };
 pub use wait_until::{DrainConfig, DrainResponse, WaitUntil, WaitUntilContext};
 
+pub mod bindings;
 pub mod error;
 #[cfg(feature = "grpc")]
 pub mod grpc;
@@ -59,25 +60,6 @@ pub fn get_platform_from_env(env: &std::collections::HashMap<String, String>) ->
             variable_name: ENV_ALIEN_DEPLOYMENT_TYPE.to_string(),
             value: deployment_type.clone(),
             reason: "Cannot parse the ALIEN_DEPLOYMENT_TYPE environment variable".to_string(),
-        })
-    })
-}
-
-/// Parse ALIEN_BINDINGS_MODE from environment variables.
-/// Defaults to Direct if not specified.
-pub fn get_bindings_mode_from_env(
-    env: &std::collections::HashMap<String, String>,
-) -> Result<BindingsMode> {
-    let mode_str = env
-        .get(ENV_ALIEN_BINDINGS_MODE)
-        .map(|s| s.as_str())
-        .unwrap_or("direct");
-
-    mode_str.parse().map_err(|reason: String| {
-        AlienError::new(ErrorData::InvalidEnvironmentVariable {
-            variable_name: ENV_ALIEN_BINDINGS_MODE.to_string(),
-            value: mode_str.to_string(),
-            reason,
         })
     })
 }

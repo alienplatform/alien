@@ -20,7 +20,11 @@ serde = { workspace = true, features = ["derive"] }
 serde_json = { workspace = true }
 
 # Database
-sled = { workspace = true }
+# Format probe for the localkv.v1 store in KV health checks. Needs
+# `experimental_multiprocess_wal` (0.7-pre only) to probe a store other
+# processes hold open; the exact pin and rationale live in the workspace
+# Cargo.toml.
+turso = { workspace = true }
 # Embedded Postgres for the Local platform (downloads + runs native binaries)
 postgresql_embedded = { workspace = true }
 # Installs the pgvector extension into the embedded server from Alien's release host

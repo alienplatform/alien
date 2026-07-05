@@ -1,4 +1,4 @@
-use crate::error::{ErrorData, Result};
+use crate::error::{binding_env_var, ErrorData, Result};
 use crate::traits::{Binding, Postgres, PostgresConnectionParams, SslMode};
 use alien_core::bindings::{BindingValue, PostgresBinding};
 use alien_error::{AlienError, Context};
@@ -55,6 +55,7 @@ impl LocalPostgres {
                     _ => "cloud",
                 };
                 return Err(AlienError::new(ErrorData::BindingConfigInvalid {
+                    env_var: binding_env_var(binding_name),
                     binding_name: binding_name.to_string(),
                     reason: format!(
                         "{backend} Postgres bindings are resolved in-process by the workload SDK, \
@@ -78,6 +79,7 @@ fn resolve_params(
     sslmode: SslMode,
 ) -> Result<PostgresConnectionParams> {
     let invalid = |field: &str| ErrorData::BindingConfigInvalid {
+        env_var: binding_env_var(binding_name),
         binding_name: binding_name.to_string(),
         reason: format!("Failed to extract '{}' from Postgres binding", field),
     };

@@ -111,6 +111,9 @@ impl Queue for AwsSqsQueue {
                 QueueMessage {
                     payload,
                     receipt_handle: m.receipt_handle,
+                    // SQS redelivery counts (ApproximateReceiveCount) are not
+                    // requested on this receive path yet.
+                    attempt: 1,
                 }
             })
             .collect();

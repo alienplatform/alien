@@ -1,5 +1,5 @@
 use crate::{
-    error::{ErrorData, Result},
+    error::{binding_env_var, ErrorData, Result},
     traits::{Binding, Build},
 };
 use alien_core::{bindings::BuildBinding, BuildConfig, BuildExecution, BuildStatus};
@@ -40,6 +40,7 @@ impl LocalBuild {
             BuildBinding::Local(config) => config,
             _ => {
                 return Err(AlienError::new(ErrorData::BindingConfigInvalid {
+                    env_var: binding_env_var(&binding_name),
                     binding_name: binding_name.clone(),
                     reason: "Expected Local binding, got different service type".to_string(),
                 }));
@@ -50,6 +51,7 @@ impl LocalBuild {
             .data_dir
             .into_value(&binding_name, "data_dir")
             .context(ErrorData::BindingConfigInvalid {
+                env_var: binding_env_var(&binding_name),
                 binding_name: binding_name.clone(),
                 reason: "Failed to extract data_dir from binding".to_string(),
             })?;
@@ -58,6 +60,7 @@ impl LocalBuild {
             .build_env_vars
             .into_value(&binding_name, "build_env_vars")
             .context(ErrorData::BindingConfigInvalid {
+                env_var: binding_env_var(&binding_name),
                 binding_name: binding_name.clone(),
                 reason: "Failed to extract build_env_vars from binding".to_string(),
             })?;
@@ -68,6 +71,7 @@ impl LocalBuild {
         std::fs::create_dir_all(&base_dir)
             .into_alien_error()
             .context(ErrorData::BindingConfigInvalid {
+                env_var: binding_env_var(&binding_name),
                 binding_name: binding_name.clone(),
                 reason: "Failed to create build directory".to_string(),
             })?;

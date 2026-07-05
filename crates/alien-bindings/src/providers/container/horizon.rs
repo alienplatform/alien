@@ -18,13 +18,14 @@ pub struct HorizonContainer {
 impl HorizonContainer {
     /// Create a new managed cloud container binding
     pub fn new(binding: HorizonContainerBinding) -> Result<Self> {
-        use crate::error::ErrorData;
+        use crate::error::{binding_env_var, ErrorData};
         use alien_error::Context;
 
         let container_name = binding
             .container_name
             .into_value("container", "container_name")
             .context(ErrorData::BindingConfigInvalid {
+                env_var: binding_env_var("container"),
                 binding_name: "container".to_string(),
                 reason: "Failed to resolve container_name from binding".to_string(),
             })?;
@@ -33,6 +34,7 @@ impl HorizonContainer {
             .internal_url
             .into_value("container", "internal_url")
             .context(ErrorData::BindingConfigInvalid {
+                env_var: binding_env_var("container"),
                 binding_name: "container".to_string(),
                 reason: "Failed to resolve internal_url from binding".to_string(),
             })?;
@@ -42,6 +44,7 @@ impl HorizonContainer {
             .map(|v| {
                 v.into_value("container", "public_url")
                     .context(ErrorData::BindingConfigInvalid {
+                        env_var: binding_env_var("container"),
                         binding_name: "container".to_string(),
                         reason: "Failed to resolve public_url from binding".to_string(),
                     })

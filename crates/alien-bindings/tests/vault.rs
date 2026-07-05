@@ -5,8 +5,6 @@ use alien_bindings::{
     BindingsProvider,
 };
 
-#[cfg(feature = "grpc")]
-use alien_bindings::{grpc::run_grpc_server, providers::grpc_provider::GrpcBindingsProvider};
 use alien_core::bindings::{self, VaultBinding};
 
 // Unified BindingsProvider handles routing to appropriate implementations
@@ -21,7 +19,6 @@ use std::{
 };
 use tempfile::TempDir;
 use test_context::AsyncTestContext;
-use tokio::task::JoinHandle;
 use uuid::Uuid;
 use workspace_root::get_workspace_root;
 
@@ -45,8 +42,6 @@ use base64::{engine::general_purpose, Engine as _};
 use reqwest::Client;
 #[cfg(feature = "azure")]
 use tracing::{info, warn};
-
-const GRPC_BINDING_NAME: &str = "test-grpc-vault-binding";
 
 fn load_test_env() {
     // Load .env.test from the workspace root
@@ -141,141 +136,6 @@ impl LocalProviderTestContext {
 }
 
 // --- gRPC Provider Context ---
-#[cfg(feature = "grpc")]
-struct GrpcProviderTestContext {
-    vault: Arc<dyn Vault>,
-    _server_handle:
-        JoinHandle<Result<(), alien_error::AlienError<alien_bindings::error::ErrorData>>>,
-    _temp_data_dir: TempDir, // Manages ALIEN_DATA_DIR for the gRPC server's LocalBindingsProvider
-    created_secrets: std::sync::Mutex<HashSet<String>>,
-}
-
-#[cfg(feature = "grpc")]
-impl AsyncTestContext for GrpcProviderTestContext {
-    async fn setup() -> Self {
-        load_test_env();
-        let temp_data_dir = tempfile::tempdir()
-            .expect("Failed to create temp dir for ALIEN_DATA_DIR (gRPC server)");
-
-        // Env map for the BindingsProvider used by the gRPC server
-        let server_binding = VaultBinding::local(
-            GRPC_BINDING_NAME,
-            temp_data_dir.path().to_str().unwrap().to_string(),
-        );
-
-        let mut server_provider_env_map: HashMap<String, String> = env::vars().collect();
-        let server_binding_json =
-            serde_json::to_string(&server_binding).expect("Failed to serialize server binding");
-        server_provider_env_map.insert(
-            bindings::binding_env_var_name(GRPC_BINDING_NAME),
-            server_binding_json,
-        );
-        server_provider_env_map.insert("ALIEN_DEPLOYMENT_TYPE".to_string(), "local".to_string());
-
-        let local_provider_for_server = Arc::new(
-            BindingsProvider::from_env(server_provider_env_map)
-                .await
-                .expect("Failed to load bindings provider"),
-        );
-
-        let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
-            .await
-            .expect("Failed to bind to random port");
-        let addr = listener.local_addr().expect("Failed to get local address");
-        drop(listener); // Release the port so the server can bind to it
-
-        let server_addr_str = addr.to_string();
-        let server_addr_for_spawn = server_addr_str.clone();
-
-        let server_handle = tokio::spawn(async move {
-            let handles = run_grpc_server(local_provider_for_server, &server_addr_for_spawn)
-                .await
-                .unwrap();
-
-            // Wait for server to be ready
-            handles
-                .readiness_receiver
-                .await
-                .expect("Server should become ready");
-            handles.server_task.await.unwrap()
-        });
-
-        tokio::time::sleep(std::time::Duration::from_millis(500)).await; // Allow server to start, increased sleep
-
-        // Env map for the GrpcBindingsProvider (client-side)
-        let mut service_provider_env_map: HashMap<String, String> = env::vars().collect();
-        service_provider_env_map.insert(
-            "ALIEN_BINDINGS_GRPC_ADDRESS".to_string(),
-            server_addr_str.clone(),
-        );
-        service_provider_env_map.insert("ALIEN_DEPLOYMENT_TYPE".to_string(), "grpc".to_string());
-
-        let grpc_provider = GrpcBindingsProvider::new_with_env(service_provider_env_map)
-            .expect("Failed to load bindings provider");
-
-        let vault = grpc_provider
-            .load_vault(GRPC_BINDING_NAME)
-            .await
-            .unwrap_or_else(|e| {
-                panic!(
-                    "Failed to load Grpc vault for binding '{}' using ALIEN_BINDINGS_GRPC_ADDRESS='{}': {:?}",
-                    GRPC_BINDING_NAME, server_addr_str, e
-                )
-            });
-
-        Self {
-            vault,
-            _server_handle: server_handle,
-            _temp_data_dir: temp_data_dir,
-            created_secrets: std::sync::Mutex::new(HashSet::new()),
-        }
-    }
-
-    async fn teardown(self) {
-        // Clean up created secrets
-        let secrets_to_cleanup = {
-            let secrets = self.created_secrets.lock().unwrap();
-            secrets.clone()
-        };
-
-        for secret_name in secrets_to_cleanup {
-            self.cleanup_secret(&secret_name).await;
-        }
-
-        // Clean up gRPC server
-        self._server_handle.abort();
-    }
-}
-
-#[cfg(feature = "grpc")]
-#[async_trait]
-impl VaultTestContext for GrpcProviderTestContext {
-    async fn get_vault(&self) -> Arc<dyn Vault> {
-        self.vault.clone()
-    }
-    fn provider_name(&self) -> &'static str {
-        "grpc"
-    }
-    fn track_secret(&self, secret_name: &str) {
-        let mut secrets = self.created_secrets.lock().unwrap();
-        secrets.insert(secret_name.to_string());
-    }
-}
-
-#[cfg(feature = "grpc")]
-impl GrpcProviderTestContext {
-    async fn cleanup_secret(&self, secret_name: &str) {
-        match self.vault.delete_secret(secret_name).await {
-            Ok(_) => {
-                // Successfully deleted
-            }
-            Err(_) => {
-                // Ignore cleanup errors - resource might already be deleted
-            }
-        }
-    }
-}
-
 // --- Cloud Provider Contexts ---
 
 #[cfg(feature = "aws")]
@@ -789,8 +649,6 @@ impl AzureProviderTestContext {
 
 #[rstest]
 #[case::local(LocalProviderTestContext::setup().await)]
-// TODO(CRITICAL): Enable gRPC after local is stateful
-// #[cfg_attr(feature = "grpc", case::grpc(GrpcProviderTestContext::setup().await))]
 #[cfg_attr(feature = "aws", case::aws(AwsProviderTestContext::setup().await))]
 #[cfg_attr(feature = "azure", case::azure(AzureProviderTestContext::setup().await))]
 #[cfg_attr(feature = "gcp", case::gcp(GcpProviderTestContext::setup().await))]
@@ -830,8 +688,6 @@ async fn test_set_and_get_secret(#[case] ctx: impl VaultTestContext) {
 
 #[rstest]
 #[case::local(LocalProviderTestContext::setup().await)]
-// TODO(CRITICAL): Enable gRPC after local is stateful
-// #[cfg_attr(feature = "grpc", case::grpc(GrpcProviderTestContext::setup().await))]
 #[cfg_attr(feature = "aws", case::aws(AwsProviderTestContext::setup().await))]
 #[cfg_attr(feature = "azure", case::azure(AzureProviderTestContext::setup().await))]
 #[cfg_attr(feature = "gcp", case::gcp(GcpProviderTestContext::setup().await))]
@@ -898,8 +754,6 @@ async fn test_delete_secret(#[case] ctx: impl VaultTestContext) {
 
 #[rstest]
 #[case::local(LocalProviderTestContext::setup().await)]
-// TODO(CRITICAL): Enable gRPC after local is stateful
-// #[cfg_attr(feature = "grpc", case::grpc(GrpcProviderTestContext::setup().await))]
 #[cfg_attr(feature = "aws", case::aws(AwsProviderTestContext::setup().await))]
 #[cfg_attr(feature = "azure", case::azure(AzureProviderTestContext::setup().await))]
 #[cfg_attr(feature = "gcp", case::gcp(GcpProviderTestContext::setup().await))]
@@ -922,8 +776,6 @@ async fn test_get_nonexistent_secret(#[case] ctx: impl VaultTestContext) {
 
 #[rstest]
 #[case::local(LocalProviderTestContext::setup().await)]
-// TODO(CRITICAL): Enable gRPC after local is stateful
-// #[cfg_attr(feature = "grpc", case::grpc(GrpcProviderTestContext::setup().await))]
 #[cfg_attr(feature = "aws", case::aws(AwsProviderTestContext::setup().await))]
 #[cfg_attr(feature = "azure", case::azure(AzureProviderTestContext::setup().await))]
 #[cfg_attr(feature = "gcp", case::gcp(GcpProviderTestContext::setup().await))]

@@ -10,7 +10,7 @@ use crate::{
     reader::Reader,
     writer::Writer,
 };
-use alien_sdk::AlienContext;
+use alien_sdk::Bindings;
 use axum::{
     routing::{get, post},
     Router,
@@ -91,13 +91,14 @@ async fn main() -> Result<()> {
 
     tracing::info!("Running in {:?} mode on port {}", mode, port);
 
-    // Initialize Alien context
-    let ctx = AlienContext::from_env()
-        .await
-        .map_err(|e| Error::Configuration(format!("Failed to create Alien context: {}", e)))?;
+    // Load bindings configured via `ALIEN_*_BINDING` environment variables. This is a
+    // long-running, resident process (no Worker event handlers), so it talks to bindings
+    // directly rather than through `AlienContext`'s event loop.
+    let bindings = Bindings::from_env()
+        .map_err(|e| Error::Configuration(format!("Failed to load bindings: {}", e)))?;
 
     // Load storage binding
-    let storage = ctx.get_bindings().load_storage("data").await.map_err(|e| {
+    let storage = bindings.storage("data").await.map_err(|e| {
         Error::Configuration(format!("Failed to load storage binding 'data': {}", e))
     })?;
 

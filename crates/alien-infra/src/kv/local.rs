@@ -116,7 +116,7 @@ impl LocalKvController {
         info!(kv_id=%config.id, "Updating local KV (no-op)");
 
         // For local KV, updates are typically no-op since the database path doesn't change
-        // The sled database persists with its contents unchanged
+        // The SQLite database persists with its contents unchanged
 
         Ok(HandlerAction::Continue {
             state: Ready,

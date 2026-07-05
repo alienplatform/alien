@@ -23,7 +23,7 @@ tracing = { workspace = true }
 tracing-subscriber = { workspace = true, features = ["env-filter", "json"] }
 
 # Encrypted database
-turso = "0.5"
+turso = { workspace = true }
 aegis = { version = "0.9", features = ["pure-rust"] }
 
 # Utilities
