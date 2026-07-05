@@ -12,13 +12,13 @@
     "owningTask": "08"
   },
   {
-    "check": "import",
+    "check": "import-error-reexports",
     "package": "sdk",
     "reason": "facade root is missing pinned error re-exports",
     "owningTask": "03"
   },
   {
-    "check": "import",
+    "check": "import-worker-runtime",
     "package": "sdk",
     "reason": "subpath ./worker-runtime is not exported",
     "owningTask": "03"

@@ -90,7 +90,7 @@ async function checkSdk(): Promise<void> {
 
   const missingErrors = missingExports(mod, SDK_FACADE_ERROR_REEXPORTS)
   report({
-    check: "import",
+    check: "import-error-reexports",
     package: "sdk",
     status: missingErrors.length === 0 ? "pass" : "fail",
     reason: missingErrors.length === 0 ? "ok" : "facade root is missing pinned error re-exports",
@@ -102,13 +102,18 @@ async function checkSdk(): Promise<void> {
 }
 
 // --- @alienplatform/sdk/worker-runtime — subpath OPEN until task 03 ----------
+// Uses its own `check` name (distinct from the facade's "import"/"import-error-
+// reexports") so per-package results stay one-assertion-per-key: run.ts's
+// runtime-divergence check groups by check+package to compare Bun vs Node, and
+// a shared name across unrelated assertions would let two different checks
+// masquerade as "the same assertion, different runtime".
 async function checkSdkWorkerRuntime(): Promise<void> {
   try {
     const mod = await import("@alienplatform/sdk/worker-runtime")
     const missing = missingExports(mod, ["runWorker"])
     if (missing.length > 0) {
       report({
-        check: "import",
+        check: "import-worker-runtime",
         package: "sdk",
         status: "fail",
         reason: "worker-runtime subpath is missing pinned export runWorker",
@@ -117,7 +122,7 @@ async function checkSdkWorkerRuntime(): Promise<void> {
       return
     }
     report({
-      check: "import",
+      check: "import-worker-runtime",
       package: "sdk",
       status: "pass",
       reason: "ok",
@@ -125,7 +130,7 @@ async function checkSdkWorkerRuntime(): Promise<void> {
     })
   } catch (err) {
     report({
-      check: "import",
+      check: "import-worker-runtime",
       package: "sdk",
       status: "fail",
       reason: "subpath ./worker-runtime is not exported",
