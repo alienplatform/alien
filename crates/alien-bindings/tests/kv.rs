@@ -5,8 +5,6 @@ use alien_bindings::{
     BindingsProvider,
 };
 
-#[cfg(feature = "grpc")]
-use alien_bindings::{grpc::run_grpc_server, providers::grpc_provider::GrpcBindingsProvider};
 use alien_core::bindings::{self, KvBinding};
 
 #[cfg(feature = "gcp")]
@@ -46,13 +44,9 @@ use std::{
 };
 use tempfile::TempDir;
 use test_context::AsyncTestContext;
-use tokio::net::TcpListener;
-use tokio::task::JoinHandle;
 use tracing::{info, warn};
 use uuid::Uuid;
 use workspace_root::get_workspace_root;
-
-const GRPC_BINDING_NAME: &str = "test-grpc-kv-binding";
 
 fn load_test_env() {
     // Load .env.test from the workspace root
@@ -148,138 +142,6 @@ impl LocalProviderTestContext {
 }
 
 // --- gRPC Provider Context ---
-#[cfg(feature = "grpc")]
-struct GrpcProviderTestContext {
-    kv: Arc<dyn Kv>,
-    _server_handle:
-        JoinHandle<Result<(), alien_error::AlienError<alien_bindings::error::ErrorData>>>,
-    _temp_data_dir: TempDir,
-    created_keys: std::sync::Mutex<HashSet<String>>,
-}
-
-#[cfg(feature = "grpc")]
-impl AsyncTestContext for GrpcProviderTestContext {
-    async fn setup() -> Self {
-        load_test_env();
-        let temp_data_dir = tempfile::tempdir()
-            .expect("Failed to create temp dir for ALIEN_DATA_DIR (gRPC server)");
-        let temp_data_dir_path = temp_data_dir.path().to_str().unwrap().to_string();
-
-        // Env map for the BindingsProvider used by the gRPC server
-        let server_binding = KvBinding::local(temp_data_dir_path.clone());
-
-        let mut server_provider_env_map: HashMap<String, String> = env::vars().collect();
-        let server_binding_json =
-            serde_json::to_string(&server_binding).expect("Failed to serialize server binding");
-        server_provider_env_map.insert(
-            bindings::binding_env_var_name(GRPC_BINDING_NAME),
-            server_binding_json,
-        );
-        server_provider_env_map.insert("ALIEN_DEPLOYMENT_TYPE".to_string(), "local".to_string());
-
-        let local_provider_for_server = Arc::new(
-            BindingsProvider::from_env(server_provider_env_map)
-                .await
-                .expect("Failed to load bindings provider"),
-        );
-
-        let listener = TcpListener::bind("127.0.0.1:0")
-            .await
-            .expect("Failed to bind to random port");
-        let addr = listener.local_addr().expect("Failed to get local address");
-        drop(listener); // Release the port so the server can bind to it
-
-        let server_addr_str = addr.to_string();
-        let server_addr_for_spawn = server_addr_str.clone();
-
-        let server_handle = tokio::spawn(async move {
-            let handles = run_grpc_server(local_provider_for_server, &server_addr_for_spawn)
-                .await
-                .unwrap();
-
-            // Wait for server to be ready
-            handles
-                .readiness_receiver
-                .await
-                .expect("Server should become ready");
-            handles.server_task.await.unwrap()
-        });
-
-        tokio::time::sleep(std::time::Duration::from_millis(500)).await; // Allow server to start
-
-        // Env map for the GrpcBindingsProvider (client-side)
-        let mut service_provider_env_map: HashMap<String, String> = env::vars().collect();
-        service_provider_env_map.insert(
-            "ALIEN_BINDINGS_GRPC_ADDRESS".to_string(),
-            server_addr_str.clone(),
-        );
-        service_provider_env_map.insert("ALIEN_DEPLOYMENT_TYPE".to_string(), "grpc".to_string());
-
-        let grpc_provider = GrpcBindingsProvider::new_with_env(service_provider_env_map)
-            .expect("Failed to load bindings provider");
-
-        let kv = grpc_provider
-            .load_kv(GRPC_BINDING_NAME)
-            .await
-            .unwrap_or_else(|e| {
-                panic!(
-                    "Failed to load Grpc KV for binding '{}' using ALIEN_BINDINGS_GRPC_ADDRESS='{}': {:?}",
-                    GRPC_BINDING_NAME, server_addr_str, e
-                )
-            });
-
-        Self {
-            kv,
-            _server_handle: server_handle,
-            _temp_data_dir: temp_data_dir,
-            created_keys: std::sync::Mutex::new(HashSet::new()),
-        }
-    }
-
-    async fn teardown(self) {
-        // Clean up created keys
-        let keys_to_cleanup = {
-            let keys = self.created_keys.lock().unwrap();
-            keys.clone()
-        };
-
-        for key in keys_to_cleanup {
-            self.cleanup_key(&key).await;
-        }
-
-        self._server_handle.abort();
-    }
-}
-
-#[cfg(feature = "grpc")]
-#[async_trait]
-impl KvTestContext for GrpcProviderTestContext {
-    async fn get_kv(&self) -> Arc<dyn Kv> {
-        self.kv.clone()
-    }
-    fn provider_name(&self) -> &'static str {
-        "grpc"
-    }
-    fn track_key(&self, key: &str) {
-        let mut keys = self.created_keys.lock().unwrap();
-        keys.insert(key.to_string());
-    }
-}
-
-#[cfg(feature = "grpc")]
-impl GrpcProviderTestContext {
-    async fn cleanup_key(&self, key: &str) {
-        match self.kv.delete(key).await {
-            Ok(_) => {
-                // Successfully deleted
-            }
-            Err(_) => {
-                // Ignore cleanup errors - key might already be deleted
-            }
-        }
-    }
-}
-
 // --- AWS Provider Context ---
 #[cfg(feature = "aws")]
 struct AwsProviderTestContext {
@@ -1117,7 +979,6 @@ impl KubernetesProviderTestContext {
 
 #[rstest]
 #[cfg_attr(feature = "local", case::local(LocalProviderTestContext::setup().await))]
-#[cfg_attr(feature = "grpc", case::grpc(GrpcProviderTestContext::setup().await))]
 #[cfg_attr(feature = "aws", case::aws(AwsProviderTestContext::setup().await))]
 #[cfg_attr(feature = "azure", case::azure(AzureProviderTestContext::setup().await))]
 #[cfg_attr(feature = "gcp", case::gcp(GcpProviderTestContext::setup().await))]
@@ -1159,7 +1020,6 @@ async fn test_put_and_get(#[case] ctx: impl KvTestContext) {
 
 #[rstest]
 #[cfg_attr(feature = "local", case::local(LocalProviderTestContext::setup().await))]
-#[cfg_attr(feature = "grpc", case::grpc(GrpcProviderTestContext::setup().await))]
 #[cfg_attr(feature = "aws", case::aws(AwsProviderTestContext::setup().await))]
 #[cfg_attr(feature = "azure", case::azure(AzureProviderTestContext::setup().await))]
 #[cfg_attr(feature = "gcp", case::gcp(GcpProviderTestContext::setup().await))]
@@ -1225,7 +1085,6 @@ async fn test_delete_operation(#[case] ctx: impl KvTestContext) {
 
 #[rstest]
 #[cfg_attr(feature = "local", case::local(LocalProviderTestContext::setup().await))]
-#[cfg_attr(feature = "grpc", case::grpc(GrpcProviderTestContext::setup().await))]
 #[cfg_attr(feature = "aws", case::aws(AwsProviderTestContext::setup().await))]
 #[cfg_attr(feature = "azure", case::azure(AzureProviderTestContext::setup().await))]
 #[cfg_attr(feature = "gcp", case::gcp(GcpProviderTestContext::setup().await))]
@@ -1279,7 +1138,6 @@ async fn test_exists_operation(#[case] ctx: impl KvTestContext) {
 
 #[rstest]
 #[cfg_attr(feature = "local", case::local(LocalProviderTestContext::setup().await))]
-#[cfg_attr(feature = "grpc", case::grpc(GrpcProviderTestContext::setup().await))]
 #[cfg_attr(feature = "aws", case::aws(AwsProviderTestContext::setup().await))]
 #[cfg_attr(feature = "azure", case::azure(AzureProviderTestContext::setup().await))]
 #[cfg_attr(feature = "gcp", case::gcp(GcpProviderTestContext::setup().await))]
@@ -1373,7 +1231,6 @@ async fn test_put_if_not_exists(#[case] ctx: impl KvTestContext) {
 
 #[rstest]
 #[cfg_attr(feature = "local", case::local(LocalProviderTestContext::setup().await))]
-#[cfg_attr(feature = "grpc", case::grpc(GrpcProviderTestContext::setup().await))]
 #[cfg_attr(feature = "aws", case::aws(AwsProviderTestContext::setup().await))]
 #[cfg_attr(feature = "azure", case::azure(AzureProviderTestContext::setup().await))]
 #[cfg_attr(feature = "gcp", case::gcp(GcpProviderTestContext::setup().await))]
@@ -1453,7 +1310,6 @@ async fn test_ttl_expiry(#[case] ctx: impl KvTestContext) {
 
 #[rstest]
 #[cfg_attr(feature = "local", case::local(LocalProviderTestContext::setup().await))]
-#[cfg_attr(feature = "grpc", case::grpc(GrpcProviderTestContext::setup().await))]
 #[cfg_attr(feature = "aws", case::aws(AwsProviderTestContext::setup().await))]
 #[cfg_attr(feature = "azure", case::azure(AzureProviderTestContext::setup().await))]
 #[cfg_attr(feature = "gcp", case::gcp(GcpProviderTestContext::setup().await))]
@@ -1562,7 +1418,6 @@ async fn test_scan_prefix(#[case] ctx: impl KvTestContext) {
 
 #[rstest]
 #[cfg_attr(feature = "local", case::local(LocalProviderTestContext::setup().await))]
-#[cfg_attr(feature = "grpc", case::grpc(GrpcProviderTestContext::setup().await))]
 #[cfg_attr(feature = "aws", case::aws(AwsProviderTestContext::setup().await))]
 #[cfg_attr(feature = "azure", case::azure(AzureProviderTestContext::setup().await))]
 #[cfg_attr(feature = "gcp", case::gcp(GcpProviderTestContext::setup().await))]
@@ -1620,7 +1475,6 @@ async fn test_key_validation(#[case] ctx: impl KvTestContext) {
 
 #[rstest]
 #[cfg_attr(feature = "local", case::local(LocalProviderTestContext::setup().await))]
-#[cfg_attr(feature = "grpc", case::grpc(GrpcProviderTestContext::setup().await))]
 #[cfg_attr(feature = "aws", case::aws(AwsProviderTestContext::setup().await))]
 #[cfg_attr(feature = "azure", case::azure(AzureProviderTestContext::setup().await))]
 #[cfg_attr(feature = "gcp", case::gcp(GcpProviderTestContext::setup().await))]
@@ -1670,7 +1524,6 @@ async fn test_value_validation(#[case] ctx: impl KvTestContext) {
 
 #[rstest]
 #[cfg_attr(feature = "local", case::local(LocalProviderTestContext::setup().await))]
-#[cfg_attr(feature = "grpc", case::grpc(GrpcProviderTestContext::setup().await))]
 #[cfg_attr(feature = "aws", case::aws(AwsProviderTestContext::setup().await))]
 #[cfg_attr(feature = "azure", case::azure(AzureProviderTestContext::setup().await))]
 #[cfg_attr(feature = "gcp", case::gcp(GcpProviderTestContext::setup().await))]
@@ -1712,7 +1565,6 @@ async fn test_get_nonexistent_key(#[case] ctx: impl KvTestContext) {
 
 #[rstest]
 #[cfg_attr(feature = "local", case::local(LocalProviderTestContext::setup().await))]
-#[cfg_attr(feature = "grpc", case::grpc(GrpcProviderTestContext::setup().await))]
 #[cfg_attr(feature = "aws", case::aws(AwsProviderTestContext::setup().await))]
 #[cfg_attr(feature = "azure", case::azure(AzureProviderTestContext::setup().await))]
 #[cfg_attr(feature = "gcp", case::gcp(GcpProviderTestContext::setup().await))]
@@ -1769,7 +1621,6 @@ async fn test_overwrite_value(#[case] ctx: impl KvTestContext) {
 
 #[rstest]
 #[cfg_attr(feature = "local", case::local(LocalProviderTestContext::setup().await))]
-#[cfg_attr(feature = "grpc", case::grpc(GrpcProviderTestContext::setup().await))]
 #[cfg_attr(feature = "aws", case::aws(AwsProviderTestContext::setup().await))]
 #[cfg_attr(feature = "azure", case::azure(AzureProviderTestContext::setup().await))]
 #[cfg_attr(feature = "gcp", case::gcp(GcpProviderTestContext::setup().await))]

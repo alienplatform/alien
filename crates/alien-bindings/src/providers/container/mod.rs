@@ -11,14 +11,8 @@ mod local;
 #[cfg(feature = "kubernetes")]
 mod kubernetes;
 
-#[cfg(feature = "grpc")]
-mod grpc;
-
 pub use horizon::HorizonContainer;
 pub use local::LocalContainer;
 
 #[cfg(feature = "kubernetes")]
 pub use kubernetes::KubernetesContainer;
-
-#[cfg(feature = "grpc")]
-pub use grpc::GrpcContainer;

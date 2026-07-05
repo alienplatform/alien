@@ -1,48 +1,13 @@
 use crate::{
     error::{ErrorData, Result},
     grpc::{
-        artifact_registry_service::{
-            alien_bindings::artifact_registry::FILE_DESCRIPTOR_SET as ARTIFACT_REGISTRY_FILE_DESCRIPTOR_SET,
-            ArtifactRegistryGrpcServer,
-        },
-        build_service::{
-            alien_bindings::build::FILE_DESCRIPTOR_SET as BUILD_FILE_DESCRIPTOR_SET,
-            BuildGrpcServer,
-        },
-        container_service::{
-            alien_bindings::container::FILE_DESCRIPTOR_SET as CONTAINER_FILE_DESCRIPTOR_SET,
-            ContainerGrpcServer,
-        },
         control_service::{
             alien_bindings::control::FILE_DESCRIPTOR_SET as CONTROL_FILE_DESCRIPTOR_SET,
             ControlGrpcServer,
         },
-        kv_service::{
-            alien_bindings::kv::FILE_DESCRIPTOR_SET as KV_FILE_DESCRIPTOR_SET, KvGrpcServer,
-        },
-        queue_service::{
-            alien_bindings::queue::FILE_DESCRIPTOR_SET as QUEUE_FILE_DESCRIPTOR_SET,
-            QueueGrpcServer,
-        },
-        service_account_service::{
-            alien_bindings::service_account::FILE_DESCRIPTOR_SET as SERVICE_ACCOUNT_FILE_DESCRIPTOR_SET,
-            ServiceAccountGrpcServer,
-        },
-        storage_service::{
-            alien_bindings::storage::FILE_DESCRIPTOR_SET as STORAGE_FILE_DESCRIPTOR_SET,
-            StorageGrpcServer,
-        },
-        vault_service::{
-            alien_bindings::vault::FILE_DESCRIPTOR_SET as VAULT_FILE_DESCRIPTOR_SET,
-            VaultGrpcServer,
-        },
         wait_until_service::{
             alien_bindings::wait_until::FILE_DESCRIPTOR_SET as WAIT_UNTIL_FILE_DESCRIPTOR_SET,
             WaitUntilGrpcServer,
-        },
-        worker_service::{
-            alien_bindings::worker::FILE_DESCRIPTOR_SET as WORKER_FILE_DESCRIPTOR_SET,
-            WorkerGrpcServer,
         },
         MAX_GRPC_MESSAGE_SIZE,
     },
@@ -63,12 +28,17 @@ pub struct GrpcServerHandles {
     pub readiness_receiver: oneshot::Receiver<()>,
 }
 
-/// Configures and runs the main alien-bindings gRPC server.
+/// Configures and runs the alien-bindings worker-protocol gRPC server.
 ///
-/// This server will host all implemented gRPC services (Storage, KV, Queue, Control, etc.).
-/// Returns handles for drain coordination, control service, and readiness notification.
+/// This server hosts the worker-protocol services (Control + WaitUntil) that
+/// coordinate the runtime with the application it manages. The bindings
+/// themselves are now resolved in-process by the direct provider, so no
+/// per-binding gRPC service is registered here.
+///
+/// The `provider` argument is retained for signature compatibility with the
+/// runtime callers; the worker-protocol services do not consult it.
 pub async fn run_grpc_server(
-    provider: Arc<dyn BindingsProviderApi>,
+    _provider: Arc<dyn BindingsProviderApi>,
     addr_str: &str,
 ) -> Result<GrpcServerHandles> {
     let addr: std::net::SocketAddr =
@@ -82,17 +52,18 @@ pub async fn run_grpc_server(
 
     info!("Configuring gRPC server for {}", addr);
 
-    // The bindings gRPC server is unauthenticated by design — it's intra-machine
-    // IPC between alien-runtime and the application code it manages, and they
-    // share a trust boundary. Binding to a non-loopback address erases that
-    // assumption (think `0.0.0.0` from a misconfigured ALIEN_BINDINGS_ADDRESS,
-    // `--network=host` Docker, or shared-pod sidecar). Make the misconfiguration
-    // loud at startup rather than silently exposing Vault/Storage/KV.
+    // The worker-protocol gRPC server is unauthenticated by design — it's
+    // intra-machine IPC between alien-runtime and the application code it
+    // manages, and they share a trust boundary. Binding to a non-loopback
+    // address erases that assumption (think `0.0.0.0` from a misconfigured
+    // ALIEN_BINDINGS_ADDRESS, `--network=host` Docker, or shared-pod sidecar).
+    // Make the misconfiguration loud at startup rather than silently exposing
+    // the control/drain channel.
     if !addr.ip().is_loopback() {
         tracing::warn!(
             address = %addr,
             "alien-runtime gRPC server is binding to a NON-LOOPBACK address. \
-            This exposes the bindings server (Vault, Storage, KV, Control) to anyone who can \
+            This exposes the worker-protocol server (Control, WaitUntil) to anyone who can \
             reach this network interface. The server has no authentication. Set \
             ALIEN_BINDINGS_ADDRESS=127.0.0.1:51351 unless you have a specific reason to expose it."
         );
@@ -106,51 +77,6 @@ pub async fn run_grpc_server(
 
     let mut router = Server::builder()
         .concurrency_limit_per_connection(256) // Allow many concurrent requests per connection
-        .add_service(
-            StorageGrpcServer::new(provider.clone())
-                .into_service()
-                .max_decoding_message_size(MAX_GRPC_MESSAGE_SIZE),
-        )
-        .add_service(
-            BuildGrpcServer::new(provider.clone())
-                .into_service()
-                .max_decoding_message_size(MAX_GRPC_MESSAGE_SIZE),
-        )
-        .add_service(
-            ArtifactRegistryGrpcServer::new(provider.clone())
-                .into_service()
-                .max_decoding_message_size(MAX_GRPC_MESSAGE_SIZE),
-        )
-        .add_service(
-            VaultGrpcServer::new(provider.clone())
-                .into_service()
-                .max_decoding_message_size(MAX_GRPC_MESSAGE_SIZE),
-        )
-        .add_service(
-            KvGrpcServer::new(provider.clone())
-                .into_service()
-                .max_decoding_message_size(MAX_GRPC_MESSAGE_SIZE),
-        )
-        .add_service(
-            QueueGrpcServer::new(provider.clone())
-                .into_service()
-                .max_decoding_message_size(MAX_GRPC_MESSAGE_SIZE),
-        )
-        .add_service(
-            WorkerGrpcServer::new(provider.clone())
-                .into_service()
-                .max_decoding_message_size(MAX_GRPC_MESSAGE_SIZE),
-        )
-        .add_service(
-            ContainerGrpcServer::new(provider.clone())
-                .into_service()
-                .max_decoding_message_size(MAX_GRPC_MESSAGE_SIZE),
-        )
-        .add_service(
-            ServiceAccountGrpcServer::new(provider.clone())
-                .into_service()
-                .max_decoding_message_size(MAX_GRPC_MESSAGE_SIZE),
-        )
         .add_service(
             (*wait_until_server)
                 .clone()
@@ -166,15 +92,6 @@ pub async fn run_grpc_server(
 
     // Add reflection service
     let reflection_service = tonic_reflection::server::Builder::configure()
-        .register_encoded_file_descriptor_set(STORAGE_FILE_DESCRIPTOR_SET)
-        .register_encoded_file_descriptor_set(BUILD_FILE_DESCRIPTOR_SET)
-        .register_encoded_file_descriptor_set(ARTIFACT_REGISTRY_FILE_DESCRIPTOR_SET)
-        .register_encoded_file_descriptor_set(VAULT_FILE_DESCRIPTOR_SET)
-        .register_encoded_file_descriptor_set(KV_FILE_DESCRIPTOR_SET)
-        .register_encoded_file_descriptor_set(QUEUE_FILE_DESCRIPTOR_SET)
-        .register_encoded_file_descriptor_set(WORKER_FILE_DESCRIPTOR_SET)
-        .register_encoded_file_descriptor_set(CONTAINER_FILE_DESCRIPTOR_SET)
-        .register_encoded_file_descriptor_set(SERVICE_ACCOUNT_FILE_DESCRIPTOR_SET)
         .register_encoded_file_descriptor_set(WAIT_UNTIL_FILE_DESCRIPTOR_SET)
         .register_encoded_file_descriptor_set(CONTROL_FILE_DESCRIPTOR_SET)
         .build_v1()

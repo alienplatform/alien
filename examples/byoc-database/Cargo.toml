@@ -4,8 +4,10 @@ version = "0.1.0"
 edition = "2021"
 
 [dependencies]
-# Alien bindings (gRPC client mode - connects to alien-runtime)
-alien-sdk = { workspace = true, default-features = false, features = ["grpc"] }
+# Alien bindings (direct in-process bindings via `Bindings::from_env()` - this is a
+# Container/Daemon-shaped resident process, not a Worker, so it never needs the gRPC
+# binding client)
+alien-sdk = { workspace = true, default-features = false, features = ["all-platforms"] }
 
 # Error handling
 thiserror = { workspace = true }

@@ -1,5 +1,5 @@
 use crate::{
-    error::{map_cloud_client_error, Error, ErrorData},
+    error::{binding_env_var, map_cloud_client_error, Error, ErrorData},
     providers::build::script::create_build_wrapper_script,
     traits::{Binding, Build},
 };
@@ -43,6 +43,7 @@ impl CodebuildBuild {
             BuildBinding::Codebuild(config) => config,
             _ => {
                 return Err(Error::new(ErrorData::BindingConfigInvalid {
+                    env_var: binding_env_var(&binding_name),
                     binding_name: binding_name.clone(),
                     reason: "Expected CodeBuild binding, got different service type".to_string(),
                 }));
@@ -53,6 +54,7 @@ impl CodebuildBuild {
             .project_name
             .into_value(&binding_name, "project_name")
             .context(ErrorData::BindingConfigInvalid {
+                env_var: binding_env_var(&binding_name),
                 binding_name: binding_name.clone(),
                 reason: "Failed to extract project_name from binding".to_string(),
             })?;
@@ -61,6 +63,7 @@ impl CodebuildBuild {
             .build_env_vars
             .into_value(&binding_name, "build_env_vars")
             .context(ErrorData::BindingConfigInvalid {
+                env_var: binding_env_var(&binding_name),
                 binding_name: binding_name.clone(),
                 reason: "Failed to extract build_env_vars from binding".to_string(),
             })?;
@@ -69,6 +72,7 @@ impl CodebuildBuild {
             .monitoring
             .into_value(&binding_name, "monitoring")
             .context(ErrorData::BindingConfigInvalid {
+                env_var: binding_env_var(&binding_name),
                 binding_name: binding_name.clone(),
                 reason: "Failed to extract monitoring from binding".to_string(),
             })?;

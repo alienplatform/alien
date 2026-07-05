@@ -9,8 +9,6 @@ pub mod aws_s3;
 pub mod azure_blob;
 #[cfg(feature = "gcp")]
 pub mod gcp_gcs;
-#[cfg(feature = "grpc")]
-pub mod grpc;
 #[cfg(feature = "local")]
 pub mod local;
 
@@ -20,7 +18,5 @@ pub use aws_s3::S3Storage;
 pub use azure_blob::BlobStorage;
 #[cfg(feature = "gcp")]
 pub use gcp_gcs::GcsStorage;
-#[cfg(feature = "grpc")]
-pub use grpc::GrpcStorage;
 #[cfg(feature = "local")]
 pub use local::LocalStorage;

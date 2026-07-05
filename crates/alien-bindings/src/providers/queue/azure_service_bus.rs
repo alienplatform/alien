@@ -141,6 +141,9 @@ impl Queue for AzureServiceBusQueue {
                     messages.push(QueueMessage {
                         payload,
                         receipt_handle,
+                        // Service Bus delivery counts (DeliveryCount broker
+                        // property) are not plumbed on this path yet.
+                        attempt: 1,
                     });
                 }
                 Ok(None) => {

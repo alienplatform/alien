@@ -5,8 +5,9 @@ use tracing::{debug, info};
 
 /// Manager for local KV resources.
 ///
-/// Creates directories for sled databases. The binding opens its own database
-/// handle and performs all operations directly.
+/// Creates the on-disk directory for each KV resource. The `LocalKv` binding
+/// opens its own SQLite-compatible database (`localkv.v1`) inside that
+/// directory and performs all operations directly.
 ///
 /// # State Scoping
 /// All KV databases are created under `{state_dir}/kv/{resource_id}/`.
@@ -28,7 +29,8 @@ impl LocalKvManager {
 
     /// Creates a KV database directory for a resource.
     ///
-    /// The binding will open its own sled database handle using this path.
+    /// The binding will open its own SQLite-compatible database
+    /// (`localkv.sqlite`) inside this directory.
     ///
     /// # Arguments
     /// * `id` - Resource identifier
@@ -121,10 +123,32 @@ impl LocalKvManager {
         self.state_dir.join("kv").join(id).exists()
     }
 
-    /// Verifies that a KV resource exists and is healthy by actually opening it.
+    /// Verifies that a KV resource exists and is healthy by inspecting its
+    /// store against the `localkv.v1` on-disk contract.
     ///
-    /// This performs a real 'open' operation similar to what bindings do, ensuring
-    /// the KV database is accessible and can be opened with sled.
+    /// Mirrors the format check `LocalKv` performs on open: it opens
+    /// `<kv_path>/localkv.sqlite` with turso (SQLite-compatible file format),
+    /// reads the `('format', ...)` row from the `meta` table, and reports
+    /// healthy only when it equals `localkv.v1`. turso exposes no read-only
+    /// open, so the probe is a plain open that only ever runs `SELECT`;
+    /// turso's multi-process WAL mode (experimental upstream, enabled
+    /// explicitly here exactly as in the binding) plus a busy_timeout let it
+    /// run concurrently with the worker runtime and trigger service that hold
+    /// live read-write handles to the same file.
+    ///
+    /// Health-vs-not decisions (faithful to the previous embedded-KV check):
+    /// - Missing resource directory → `ServiceResourceNotFound` (the resource
+    ///   was never created / was deleted — same as the old check's
+    ///   `!kv_path.exists()` branch).
+    /// - Path exists but is a file → `LocalDirectoryError`.
+    /// - Directory exists but `localkv.sqlite` is absent → **healthy**. The
+    ///   controller creates the resource directory (`create_kv`) and reaches
+    ///   this `Ready`-state health check before any binding has opened the
+    ///   store, so the file only materializes on first `LocalKv::new`. The old
+    ///   embedded-KV check opened (and thereby created) its database on this
+    ///   empty directory and returned Ok, so reporting healthy here preserves
+    ///   that behavior; a not-yet-opened store is a valid state, not a failure.
+    /// - `localkv.sqlite` present with a wrong/unreadable format → error.
     ///
     /// # Arguments
     /// * `id` - Resource identifier
@@ -151,17 +175,15 @@ impl LocalKvManager {
             }));
         }
 
-        // Try to actually open the sled database
-        // This ensures the database is accessible, not corrupted, etc.
-        sled::open(&kv_path)
-            .into_alien_error()
-            .context(ErrorData::LocalDatabaseError {
-                database_path: kv_path.display().to_string(),
-                operation: "open".to_string(),
-                reason: "Failed to open sled database".to_string(),
-            })?;
+        let db_path = kv_path.join("localkv.sqlite");
 
-        Ok(())
+        // Store not yet materialized (directory created, no binding opened yet):
+        // healthy, matching the old open-creates-the-database behavior.
+        if !db_path.exists() {
+            return Ok(());
+        }
+
+        crate::store_probe::check_store_format(&db_path, "localkv.v1").await
     }
 
     /// Gets the binding configuration for a KV resource.

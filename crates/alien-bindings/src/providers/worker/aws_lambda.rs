@@ -1,4 +1,4 @@
-use crate::error::{ErrorData, Result};
+use crate::error::{binding_env_var, ErrorData, Result};
 use crate::traits::{Binding, Worker, WorkerInvokeRequest, WorkerInvokeResponse};
 use alien_aws_clients::lambda::{InvocationType, InvokeRequest, LambdaApi, LambdaClient};
 use alien_aws_clients::AwsCredentialProvider;
@@ -36,6 +36,7 @@ impl LambdaWorker {
             .clone()
             .into_value("worker", "worker_name")
             .context(ErrorData::BindingConfigInvalid {
+                env_var: binding_env_var("worker"),
                 binding_name: "worker".to_string(),
                 reason: "Failed to resolve worker_name from binding".to_string(),
             })
@@ -153,6 +154,7 @@ impl Worker for LambdaWorker {
         if let Some(url_binding) = &self.binding.url {
             let url = url_binding.clone().into_value("worker", "url").context(
                 ErrorData::BindingConfigInvalid {
+                    env_var: binding_env_var("worker"),
                     binding_name: "worker".to_string(),
                     reason: "Failed to resolve url from binding".to_string(),
                 },
