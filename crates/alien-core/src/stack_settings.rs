@@ -332,6 +332,28 @@ pub struct DomainSettings {
     /// Custom domain configuration per resource ID.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub custom_domains: Option<HashMap<String, CustomDomainConfig>>,
+    /// Public endpoint DNS target selection for machines deployments.
+    ///
+    /// When omitted, machines deployments publish healthy machine public
+    /// addresses directly. Use `LoadBalancer` when an external load balancer
+    /// fronts the machines and Alien should publish a CNAME to that target.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub public_endpoint_target: Option<PublicEndpointTargetSettings>,
+}
+
+/// DNS target mode for public endpoints.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
+#[serde(rename_all = "camelCase", tag = "mode")]
+pub enum PublicEndpointTargetSettings {
+    /// Publish DNS records directly to healthy machine public IP addresses.
+    MachineAddresses,
+    /// Publish a CNAME record to an external load balancer.
+    #[serde(rename_all = "camelCase")]
+    LoadBalancer {
+        /// DNS name or URL for the external load balancer.
+        cname_target: String,
+    },
 }
 
 /// Custom domain configuration for a single resource.

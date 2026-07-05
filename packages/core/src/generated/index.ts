@@ -277,6 +277,7 @@ export type { ProviderFleetStatus } from "./zod/provider-fleet-status-schema.js"
 export type { ProviderLifecycleState } from "./zod/provider-lifecycle-state-schema.js";
 export type { PublicEndpointOutput } from "./zod/public-endpoint-output-schema.js";
 export type { PublicEndpoint } from "./zod/public-endpoint-schema.js";
+export type { PublicEndpointTargetSettings } from "./zod/public-endpoint-target-settings-schema.js";
 export type { PushProgress } from "./zod/push-progress-schema.js";
 export type { QueueHeartbeatData } from "./zod/queue-heartbeat-data-schema.js";
 export type { QueueHeartbeatStatus } from "./zod/queue-heartbeat-status-schema.js";
@@ -629,6 +630,7 @@ export { ProviderFleetStatusSchema } from "./zod/provider-fleet-status-schema.js
 export { ProviderLifecycleStateSchema } from "./zod/provider-lifecycle-state-schema.js";
 export { PublicEndpointOutputSchema } from "./zod/public-endpoint-output-schema.js";
 export { PublicEndpointSchema } from "./zod/public-endpoint-schema.js";
+export { PublicEndpointTargetSettingsSchema } from "./zod/public-endpoint-target-settings-schema.js";
 export { PushProgressSchema } from "./zod/push-progress-schema.js";
 export { QueueHeartbeatDataSchema } from "./zod/queue-heartbeat-data-schema.js";
 export { QueueHeartbeatStatusSchema } from "./zod/queue-heartbeat-status-schema.js";
