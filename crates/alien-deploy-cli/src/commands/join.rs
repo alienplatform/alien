@@ -797,6 +797,7 @@ fn remove_dir_if_exists(path: &Path) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use flate2::{write::GzEncoder, Compression};
     use std::io::Write;
 
     fn linux_host(systemd_runtime_dir: &Path) -> HostFacts<'_> {
@@ -1035,5 +1036,180 @@ mod tests {
                 .expect("token"),
             "jt_secret"
         );
+    }
+
+    #[test]
+    fn bundle_extraction_rejects_paths_outside_install_root() {
+        let root = tempfile::tempdir().expect("install root");
+        let archive_path = root.path().join("bundle.tar.gz");
+        write_raw_test_archive(&archive_path, "../escape", b"nope");
+
+        let error = extract_tar_gz(&archive_path, &root.path().join("extract"))
+            .expect_err("archive traversal should fail");
+
+        assert_eq!(error.code, "VALIDATION_ERROR");
+        assert!(!root.path().join("escape").exists());
+    }
+
+    #[test]
+    fn bundle_extraction_can_repair_after_partial_install() {
+        let root = tempfile::tempdir().expect("install root");
+        let archive_path = root.path().join("bundle.tar.gz");
+        let destination = root.path().join("bundle");
+        let executable = destination.join("bin/machine");
+        std::fs::create_dir_all(executable.parent().expect("parent")).expect("partial dir");
+        std::fs::write(&executable, b"partial").expect("partial executable");
+        write_test_archive(&archive_path, &[("bin/machine", b"complete".as_slice())]);
+
+        std::fs::remove_dir_all(&destination).expect("replace partial bundle");
+        std::fs::create_dir_all(&destination).expect("recreate bundle dir");
+        extract_tar_gz(&archive_path, &destination).expect("extract repaired bundle");
+
+        assert_eq!(std::fs::read(&executable).expect("executable"), b"complete");
+    }
+
+    #[test]
+    fn machine_config_rejoin_overwrites_stale_token_and_zone() {
+        let root = tempfile::tempdir().expect("install root");
+        let paths = install_paths(root.path());
+        std::fs::create_dir_all(&paths.config_dir).expect("config dir");
+        std::fs::write(paths.config_dir.join("join-token"), "stale").expect("stale token");
+        std::fs::write(
+            paths.config_dir.join("machine.toml"),
+            "capacity_group = \"old\"\nzone = \"old-zone\"\n",
+        )
+        .expect("stale config");
+        let manifest = MachineBundleManifest {
+            version: "2026-07-05".to_string(),
+            service: MachineBundleService {
+                label: "dev.alien.machine".to_string(),
+                executable: "bin/machine".to_string(),
+                args: vec![],
+            },
+            artifacts: vec![],
+        };
+        let args = JoinArgs {
+            token: Some("jt_new".to_string()),
+            token_file: None,
+            capacity_group: "gpu".to_string(),
+            zone: Some("rack-2".to_string()),
+            bundle_url: Some("https://packages.example.com/manifest.json".to_string()),
+            dry_run: false,
+            install_root: root.path().to_path_buf(),
+        };
+        let request = build_join_request(&args, None, linux_host(root.path())).expect("request");
+
+        let config_path =
+            write_machine_config(&paths, &request, &manifest).expect("rewrite machine config");
+
+        assert_eq!(
+            std::fs::read_to_string(paths.config_dir.join("join-token")).expect("token"),
+            "jt_new"
+        );
+        let config = std::fs::read_to_string(config_path).expect("config");
+        assert!(config.contains("capacity_group = \"gpu\""));
+        assert!(config.contains("zone = \"rack-2\""));
+        assert!(!config.contains("old-zone"));
+    }
+
+    #[test]
+    fn install_state_rejoin_overwrites_stale_state() {
+        let root = tempfile::tempdir().expect("install root");
+        let paths = install_paths(root.path());
+        let first = MachineInstallState {
+            bundle_version: "old".to_string(),
+            service_label: "dev.alien.old".to_string(),
+            executable_path: PathBuf::from("/old/bin"),
+            config_path: PathBuf::from("/old/config.toml"),
+        };
+        let second = MachineInstallState {
+            bundle_version: "new".to_string(),
+            service_label: "dev.alien.new".to_string(),
+            executable_path: PathBuf::from("/new/bin"),
+            config_path: PathBuf::from("/new/config.toml"),
+        };
+
+        write_install_state(&paths, &first).expect("write first state");
+        write_install_state(&paths, &second).expect("rewrite state");
+        let stored = read_install_state(&install_state_path(&paths)).expect("read state");
+
+        assert_eq!(stored.bundle_version, "new");
+        assert_eq!(stored.service_label, "dev.alien.new");
+        assert_eq!(stored.executable_path, PathBuf::from("/new/bin"));
+        assert_eq!(stored.config_path, PathBuf::from("/new/config.toml"));
+    }
+
+    #[test]
+    fn service_executable_path_must_stay_inside_bundle() {
+        let root = tempfile::tempdir().expect("install root");
+
+        let parent_error = safe_join(root.path(), "../bin/machine")
+            .expect_err("parent directory traversal should fail");
+        assert_eq!(parent_error.code, "VALIDATION_ERROR");
+
+        let absolute_error =
+            safe_join(root.path(), "/bin/machine").expect_err("absolute executable should fail");
+        assert_eq!(absolute_error.code, "VALIDATION_ERROR");
+    }
+
+    fn write_test_archive(path: &Path, entries: &[(&str, &[u8])]) {
+        let file = File::create(path).expect("archive file");
+        let encoder = GzEncoder::new(file, Compression::default());
+        let mut builder = tar::Builder::new(encoder);
+
+        for (name, contents) in entries {
+            let mut header = tar::Header::new_gnu();
+            header.set_size(contents.len() as u64);
+            header.set_mode(0o755);
+            header.set_cksum();
+            builder
+                .append_data(&mut header, *name, *contents)
+                .expect("archive entry");
+        }
+
+        let encoder = builder.into_inner().expect("finish tar");
+        encoder.finish().expect("finish gzip");
+    }
+
+    fn write_raw_test_archive(path: &Path, entry_name: &str, contents: &[u8]) {
+        let file = File::create(path).expect("archive file");
+        let mut encoder = GzEncoder::new(file, Compression::default());
+        let mut header = [0_u8; 512];
+        let name = entry_name.as_bytes();
+        header[..name.len()].copy_from_slice(name);
+        write_tar_octal(&mut header[100..108], 0o644);
+        write_tar_octal(&mut header[108..116], 0);
+        write_tar_octal(&mut header[116..124], 0);
+        write_tar_octal(&mut header[124..136], contents.len() as u64);
+        write_tar_octal(&mut header[136..148], 0);
+        header[148..156].fill(b' ');
+        header[156] = b'0';
+        header[257..263].copy_from_slice(b"ustar\0");
+        header[263..265].copy_from_slice(b"00");
+        let checksum: u32 = header.iter().map(|byte| u32::from(*byte)).sum();
+        write_tar_checksum(&mut header[148..156], checksum);
+
+        encoder.write_all(&header).expect("header");
+        encoder.write_all(contents).expect("contents");
+        let padding = (512 - (contents.len() % 512)) % 512;
+        if padding > 0 {
+            encoder.write_all(&vec![0_u8; padding]).expect("padding");
+        }
+        encoder.write_all(&[0_u8; 1024]).expect("end of archive");
+        encoder.finish().expect("finish gzip");
+    }
+
+    fn write_tar_octal(field: &mut [u8], value: u64) {
+        field.fill(0);
+        let encoded = format!("{:0width$o}", value, width = field.len() - 1);
+        field[..encoded.len()].copy_from_slice(encoded.as_bytes());
+    }
+
+    fn write_tar_checksum(field: &mut [u8], value: u32) {
+        field.fill(0);
+        let encoded = format!("{value:06o}");
+        field[..encoded.len()].copy_from_slice(encoded.as_bytes());
+        field[6] = 0;
+        field[7] = b' ';
     }
 }
