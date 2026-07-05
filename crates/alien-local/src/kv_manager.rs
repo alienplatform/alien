@@ -183,72 +183,7 @@ impl LocalKvManager {
             return Ok(());
         }
 
-        let db = turso::Builder::new_local(&db_path.to_string_lossy())
-            // Same explicit opt-in as the LocalKv binding: the store may be
-            // held open by other processes while we probe it.
-            .experimental_multiprocess_wal(true)
-            .build()
-            .await
-            .into_alien_error()
-            .context(ErrorData::LocalDatabaseError {
-                database_path: db_path.display().to_string(),
-                operation: "open".to_string(),
-                reason: "Failed to open localkv.v1 database for probing".to_string(),
-            })?;
-        let conn = db
-            .connect()
-            .into_alien_error()
-            .context(ErrorData::LocalDatabaseError {
-                database_path: db_path.display().to_string(),
-                operation: "open".to_string(),
-                reason: "Failed to open probe connection".to_string(),
-            })?;
-        conn.busy_timeout(std::time::Duration::from_secs(5))
-            .into_alien_error()
-            .context(ErrorData::LocalDatabaseError {
-                database_path: db_path.display().to_string(),
-                operation: "open".to_string(),
-                reason: "Failed to set busy_timeout".to_string(),
-            })?;
-
-        // Read the format marker, draining the query to completion (an
-        // unfinished turso statement would keep a read transaction open).
-        let read_error = |reason: &str| ErrorData::LocalDatabaseError {
-            database_path: db_path.display().to_string(),
-            operation: "read".to_string(),
-            reason: reason.to_string(),
-        };
-        let mut rows = conn
-            .query("SELECT value FROM meta WHERE key = 'format'", ())
-            .await
-            .into_alien_error()
-            .context(read_error("Failed to read format marker from meta table"))?;
-        let mut format: Option<String> = None;
-        while let Some(row) = rows
-            .next()
-            .await
-            .into_alien_error()
-            .context(read_error("Failed to read format marker row"))?
-        {
-            if format.is_none() {
-                format = row.get_value(0).ok().and_then(|value| match value {
-                    turso::Value::Text(s) => Some(s),
-                    _ => None,
-                });
-            }
-        }
-        let format = format
-            .ok_or_else(|| AlienError::new(read_error("Format marker missing from meta table")))?;
-
-        if format != "localkv.v1" {
-            return Err(AlienError::new(ErrorData::LocalDatabaseError {
-                database_path: db_path.display().to_string(),
-                operation: "read".to_string(),
-                reason: format!("Unsupported store format '{format}' (expected 'localkv.v1')"),
-            }));
-        }
-
-        Ok(())
+        crate::store_probe::check_store_format(&db_path, "localkv.v1").await
     }
 
     /// Gets the binding configuration for a KV resource.

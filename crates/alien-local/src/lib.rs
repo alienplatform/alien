@@ -59,6 +59,7 @@ mod local_bindings_provider;
 mod postgres_manager;
 mod queue_manager;
 mod storage_manager;
+mod store_probe;
 pub mod trigger_service;
 mod vault_manager;
 mod worker_manager;
