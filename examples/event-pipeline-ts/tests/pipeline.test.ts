@@ -1,7 +1,11 @@
 import { type Deployment, deploy } from "@alienplatform/testing"
 import { afterAll, beforeAll, describe, expect, it } from "vitest"
 
-describe("event-pipeline-ts", () => {
+// TypeScript binding access is unavailable between the binding-gRPC deletion
+// (ALIEN-217) and the direct-bindings addon (ALIEN-214/215) — unskip when
+// @alienplatform/bindings lands. Every test in this file drives commands that
+// hit the kv or queue bindings.
+describe.skip("event-pipeline-ts", () => {
   let deployment: Deployment
 
   beforeAll(async () => {
