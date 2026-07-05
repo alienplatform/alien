@@ -153,6 +153,7 @@ mod tests {
         Stack {
             id: "stack_test".to_string(),
             resources: IndexMap::new(),
+            inputs: vec![],
             permissions: crate::PermissionsConfig::default(),
             supported_platforms: None,
         }
