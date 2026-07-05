@@ -47,11 +47,15 @@ impl Bindings {
         Self::from_env_map(std::env::vars().collect())
     }
 
-    /// Sync-constructs `Bindings` from an explicit environment map. Shared by `from_env`
-    /// and by this module's tests, which inject `ALIEN_*_BINDING` variables this way
-    /// instead of mutating the real process environment (process-global state that's
-    /// unsafe to share across parallel tests).
-    fn from_env_map(env: HashMap<String, String>) -> Result<Self> {
+    /// Sync-constructs `Bindings` from an explicit environment map instead of the process
+    /// environment.
+    ///
+    /// This is public for embedders that resolve bindings from a caller-supplied map rather
+    /// than `std::env` — notably the napi addon, which merges `std::env::vars()` with
+    /// per-call overrides before constructing `Bindings`. It is also what `from_env`
+    /// delegates to and what this module's tests use to inject `ALIEN_*_BINDING` variables
+    /// (avoiding process-global state that's unsafe to share across parallel tests).
+    pub fn from_env_map(env: HashMap<String, String>) -> Result<Self> {
         Ok(Self {
             provider: BindingsProvider::from_env_lazy(env)?,
         })
@@ -194,6 +198,58 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn queue_nack_and_purge_reachable_through_trait_object() {
+        // The point of promoting nack/purge onto the Queue trait: they must be
+        // callable on the `Arc<dyn Queue>` the app-facing API hands back.
+        let temp_dir = TempDir::new().expect("tempdir");
+        let json = format!(
+            r#"{{"service":"local-queue","queuePath":"{}"}}"#,
+            temp_dir.path().join("queue.db").display()
+        );
+        let env = with_binding(base_env(), "jobs", &json);
+        let bindings = Bindings::from_env_map(env).expect("valid env should construct Bindings");
+
+        let queue = bindings
+            .queue("jobs")
+            .await
+            .expect("queue binding should load");
+
+        // nack: an in-flight message under the default lease is hidden, but a
+        // nack makes it immediately redeliverable.
+        queue
+            .send("jobs", MessagePayload::Text("retry".to_string()))
+            .await
+            .expect("send should succeed");
+        let first = queue.receive("jobs", 1).await.expect("receive should succeed");
+        assert_eq!(first.len(), 1);
+        assert!(
+            queue
+                .receive("jobs", 1)
+                .await
+                .expect("receive should succeed")
+                .is_empty(),
+            "in-flight message must be hidden before nack"
+        );
+        queue
+            .nack("jobs", &first[0].receipt_handle)
+            .await
+            .expect("nack should succeed");
+        let redelivered = queue.receive("jobs", 1).await.expect("receive should succeed");
+        assert_eq!(redelivered.len(), 1, "nacked message must be redelivered");
+
+        // purge: clears everything, in flight or visible.
+        queue.purge("jobs").await.expect("purge should succeed");
+        assert!(
+            queue
+                .receive("jobs", 1)
+                .await
+                .expect("receive should succeed")
+                .is_empty(),
+            "purge must empty the queue"
+        );
+    }
+
+    #[tokio::test]
     async fn vault_delegates_to_local_provider_and_performs_real_io() {
         let temp_dir = TempDir::new().expect("tempdir");
         let json = format!(
@@ -217,6 +273,19 @@ mod tests {
             .await
             .expect("get_secret should succeed");
         assert_eq!(value, "sekrit");
+
+        // list_secrets must be reachable through the `Arc<dyn Vault>` surface
+        // and return the stored names.
+        vault
+            .set_secret("db-url", "postgres://…")
+            .await
+            .expect("set_secret should succeed");
+        let mut names = vault
+            .list_secrets()
+            .await
+            .expect("list_secrets should succeed");
+        names.sort();
+        assert_eq!(names, vec!["api-key".to_string(), "db-url".to_string()]);
     }
 
     #[tokio::test]
