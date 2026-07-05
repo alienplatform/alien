@@ -6,12 +6,21 @@ import * as z from "zod/v4";
 import { safeParse } from "../lib/schemas.js";
 import { Result as SafeParseResult } from "../types/fp.js";
 import { SDKValidationError } from "./errors/sdkvalidationerror.js";
+import {
+  MachinesDrainBlocker,
+  MachinesDrainBlocker$inboundSchema,
+} from "./machinesdrainblocker.js";
 
 export type MachinesInventoryItem = {
   machineId: string;
   status: string;
   capacityGroup: string;
   zone: string;
+  drainBlockers: Array<MachinesDrainBlocker>;
+  drainDeadlineAt?: string | null | undefined;
+  drainForce: boolean;
+  drainRequestedAt?: string | null | undefined;
+  drainedAt?: string | null | undefined;
   publicIp?: string | null | undefined;
   overlayIp?: string | null | undefined;
   lastHeartbeat: string;
@@ -28,6 +37,11 @@ export const MachinesInventoryItem$inboundSchema: z.ZodType<
   status: z.string(),
   capacityGroup: z.string(),
   zone: z.string(),
+  drainBlockers: z.array(MachinesDrainBlocker$inboundSchema),
+  drainDeadlineAt: z.nullable(z.string()).optional(),
+  drainForce: z.boolean(),
+  drainRequestedAt: z.nullable(z.string()).optional(),
+  drainedAt: z.nullable(z.string()).optional(),
   publicIp: z.nullable(z.string()).optional(),
   overlayIp: z.nullable(z.string()).optional(),
   lastHeartbeat: z.string(),

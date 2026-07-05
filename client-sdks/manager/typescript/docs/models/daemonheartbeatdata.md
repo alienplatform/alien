@@ -125,6 +125,44 @@ const value: models.DaemonHeartbeatDataAzure = {
 };
 ```
 
+### `models.DaemonHeartbeatDataMachines`
+
+```typescript
+const value: models.DaemonHeartbeatDataMachines = {
+  assignedMachines: 335329,
+  capacityGroup: "<value>",
+  commandSupported: true,
+  daemonInstances: [],
+  desiredMachines: 299843,
+  events: [
+    {
+      message: "<value>",
+      reason: "<value>",
+    },
+  ],
+  healthyInstances: 565744,
+  horizonClusterId: "<id>",
+  horizonStatus: "<value>",
+  latestUpdateTimestamp: "<value>",
+  status: {
+    collectionIssues: [
+      {
+        message: "<value>",
+        reason: "forbidden",
+        severity: "info",
+        source: "<value>",
+      },
+    ],
+    health: "unhealthy",
+    lifecycle: "deleting",
+    partial: false,
+    stale: false,
+  },
+  unavailableInstances: 588890,
+  backend: "machines",
+};
+```
+
 ### `models.DaemonHeartbeatDataKubernetes`
 
 ```typescript
@@ -183,4 +221,3 @@ const value: models.DaemonHeartbeatDataLocal = {
   backend: "local",
 };
 ```
-

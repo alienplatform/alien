@@ -12,8 +12,14 @@ let value: ListMachinesInventoryResponse = {
       status: "<value>",
       capacityGroup: "<value>",
       zone: "<value>",
+      drainBlockers: [
+        {
+          reason: "<value>",
+        },
+      ],
+      drainForce: false,
       lastHeartbeat: "<value>",
-      replicaCount: 951682,
+      replicaCount: 999417,
     },
   ],
 };

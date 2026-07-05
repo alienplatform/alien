@@ -115,6 +115,7 @@ export * from "./localruntimeeventsnapshot.js";
 export * from "./localruntimeeventsubject.js";
 export * from "./localruntimeunitkind.js";
 export * from "./localruntimeunitstatus.js";
+export * from "./machinescomputemachinestatus.js";
 export * from "./managedruntimeeventinvolvedobject.js";
 export * from "./managedruntimeeventsnapshot.js";
 export * from "./managedruntimeeventsource.js";

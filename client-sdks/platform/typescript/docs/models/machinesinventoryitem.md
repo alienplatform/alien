@@ -10,21 +10,28 @@ let value: MachinesInventoryItem = {
   status: "<value>",
   capacityGroup: "<value>",
   zone: "<value>",
+  drainBlockers: [],
+  drainForce: true,
   lastHeartbeat: "<value>",
-  replicaCount: 173601,
+  replicaCount: 477393,
 };
 ```
 
 ## Fields
 
-| Field              | Type               | Required           | Description        |
-| ------------------ | ------------------ | ------------------ | ------------------ |
-| `machineId`        | *string*           | :heavy_check_mark: | N/A                |
-| `status`           | *string*           | :heavy_check_mark: | N/A                |
-| `capacityGroup`    | *string*           | :heavy_check_mark: | N/A                |
-| `zone`             | *string*           | :heavy_check_mark: | N/A                |
-| `publicIp`         | *string*           | :heavy_minus_sign: | N/A                |
-| `overlayIp`        | *string*           | :heavy_minus_sign: | N/A                |
-| `lastHeartbeat`    | *string*           | :heavy_check_mark: | N/A                |
-| `horizondVersion`  | *string*           | :heavy_minus_sign: | N/A                |
-| `replicaCount`     | *number*           | :heavy_check_mark: | N/A                |
+| Field                                                              | Type                                                               | Required                                                           | Description                                                        |
+| ------------------------------------------------------------------ | ------------------------------------------------------------------ | ------------------------------------------------------------------ | ------------------------------------------------------------------ |
+| `machineId`                                                        | *string*                                                           | :heavy_check_mark:                                                 | N/A                                                                |
+| `status`                                                           | *string*                                                           | :heavy_check_mark:                                                 | N/A                                                                |
+| `capacityGroup`                                                    | *string*                                                           | :heavy_check_mark:                                                 | N/A                                                                |
+| `zone`                                                             | *string*                                                           | :heavy_check_mark:                                                 | N/A                                                                |
+| `drainBlockers`                                                    | [models.MachinesDrainBlocker](../models/machinesdrainblocker.md)[] | :heavy_check_mark:                                                 | N/A                                                                |
+| `drainDeadlineAt`                                                  | *string*                                                           | :heavy_minus_sign:                                                 | N/A                                                                |
+| `drainForce`                                                       | *boolean*                                                          | :heavy_check_mark:                                                 | N/A                                                                |
+| `drainRequestedAt`                                                 | *string*                                                           | :heavy_minus_sign:                                                 | N/A                                                                |
+| `drainedAt`                                                        | *string*                                                           | :heavy_minus_sign:                                                 | N/A                                                                |
+| `publicIp`                                                         | *string*                                                           | :heavy_minus_sign:                                                 | N/A                                                                |
+| `overlayIp`                                                        | *string*                                                           | :heavy_minus_sign:                                                 | N/A                                                                |
+| `lastHeartbeat`                                                    | *string*                                                           | :heavy_check_mark:                                                 | N/A                                                                |
+| `horizondVersion`                                                  | *string*                                                           | :heavy_minus_sign:                                                 | N/A                                                                |
+| `replicaCount`                                                     | *number*                                                           | :heavy_check_mark:                                                 | N/A                                                                |

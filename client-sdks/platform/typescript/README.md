@@ -1,6 +1,6 @@
 # openapi
 
-Developer-friendly & type-safe Typescript SDK specifically catered to leverage *openapi* API.
+Developer-friendly & type-safe Typescript SDK specifically catered to leverage _openapi_ API.
 
 <div align="left">
     <a href="https://www.speakeasy.com/?utm_source=openapi&utm_campaign=typescript"><img src="https://www.speakeasy.com/assets/badges/built-by-speakeasy.svg" /></a>
@@ -9,8 +9,8 @@ Developer-friendly & type-safe Typescript SDK specifically catered to leverage *
     </a>
 </div>
 
-
 <br /><br />
+
 > [!IMPORTANT]
 > This SDK is not yet ready for production use. To complete setup please follow the steps outlined in your [workspace](https://app.speakeasy.com/org/alien/alien). Delete this section before > publishing to a package manager.
 
@@ -238,6 +238,8 @@ run();
 * [rotateJoinToken](docs/sdks/machines/README.md#rotatejointoken)
 * [revokeJoinToken](docs/sdks/machines/README.md#revokejointoken)
 * [listInventory](docs/sdks/machines/README.md#listinventory)
+* [drainMachine](docs/sdks/machines/README.md#drainmachine)
+* [removeMachine](docs/sdks/machines/README.md#removemachine)
 
 ### [Managers](docs/sdks/managers/README.md)
 
@@ -407,8 +409,10 @@ To read more about standalone functions, check [FUNCTIONS.md](./FUNCTIONS.md).
 - [`domainsRefresh`](docs/sdks/domains/README.md#refresh) - Refresh workspace domain verification.
 - [`eventsGet`](docs/sdks/events/README.md#get) - Retrieve an event by ID.
 - [`eventsList`](docs/sdks/events/README.md#list) - Retrieve all events.
+- [`machinesDrainMachine`](docs/sdks/machines/README.md#drainmachine)
 - [`machinesListInventory`](docs/sdks/machines/README.md#listinventory)
 - [`machinesListJoinTokens`](docs/sdks/machines/README.md#listjointokens)
+- [`machinesRemoveMachine`](docs/sdks/machines/README.md#removemachine)
 - [`machinesRevokeJoinToken`](docs/sdks/machines/README.md#revokejointoken)
 - [`machinesRotateJoinToken`](docs/sdks/machines/README.md#rotatejointoken)
 - [`managersCancelSetup`](docs/sdks/managers/README.md#cancelsetup) - Cancel pending private-manager setup, revoke setup/runtime tokens, and remove the undeployed manager record.
@@ -725,7 +729,7 @@ looking for the latest version.
 
 ## Contributions
 
-While we value open-source contributions to this SDK, this library is generated programmatically. Any manual changes added to internal files will be overwritten on the next generation. 
-We look forward to hearing your feedback. Feel free to open a PR or an issue with a proof of concept and we'll do our best to include it in a future release. 
+While we value open-source contributions to this SDK, this library is generated programmatically. Any manual changes added to internal files will be overwritten on the next generation.
+We look forward to hearing your feedback. Feel free to open a PR or an issue with a proof of concept and we'll do our best to include it in a future release.
 
 ### SDK Created by [Speakeasy](https://www.speakeasy.com/?utm_source=openapi&utm_campaign=typescript)

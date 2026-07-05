@@ -5390,6 +5390,27 @@
           {
             "allOf": [
               {
+                "$ref": "#/components/schemas/MachinesComputeClusterHeartbeatData"
+              },
+              {
+                "type": "object",
+                "required": [
+                  "backend"
+                ],
+                "properties": {
+                  "backend": {
+                    "type": "string",
+                    "enum": [
+                      "machines"
+                    ]
+                  }
+                }
+              }
+            ]
+          },
+          {
+            "allOf": [
+              {
                 "$ref": "#/components/schemas/LocalComputeClusterHeartbeatData"
               },
               {
@@ -6012,6 +6033,27 @@
                     "type": "string",
                     "enum": [
                       "azure"
+                    ]
+                  }
+                }
+              }
+            ]
+          },
+          {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/MachinesDaemonHeartbeatData"
+              },
+              {
+                "type": "object",
+                "required": [
+                  "backend"
+                ],
+                "properties": {
+                  "backend": {
+                    "type": "string",
+                    "enum": [
+                      "machines"
                     ]
                   }
                 }
@@ -10341,6 +10383,241 @@
             "$ref": "#/components/schemas/WorkloadHeartbeatStatus"
           },
           "triggerCount": {
+            "type": "integer",
+            "format": "int32",
+            "minimum": 0
+          }
+        }
+      },
+      "MachinesComputeClusterHeartbeatData": {
+        "type": "object",
+        "required": [
+          "status",
+          "nodes",
+          "name",
+          "capacityGroups",
+          "machines"
+        ],
+        "properties": {
+          "backendClusterId": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "capacityGroups": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ComputeCapacityGroupStatus"
+            }
+          },
+          "cpu": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/MetricSample"
+              }
+            ]
+          },
+          "machines": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/MachinesComputeMachineStatus"
+            }
+          },
+          "memory": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/MetricSample"
+              }
+            ]
+          },
+          "name": {
+            "type": "string"
+          },
+          "nodes": {
+            "$ref": "#/components/schemas/ObservedCounts"
+          },
+          "status": {
+            "$ref": "#/components/schemas/ComputeClusterHeartbeatStatus"
+          }
+        }
+      },
+      "MachinesComputeMachineStatus": {
+        "type": "object",
+        "required": [
+          "machineId",
+          "status",
+          "capacityGroup",
+          "zone",
+          "lastHeartbeat",
+          "replicaCount",
+          "drainForce"
+        ],
+        "properties": {
+          "capacityGroup": {
+            "type": "string"
+          },
+          "cpuCores": {
+            "type": [
+              "number",
+              "null"
+            ],
+            "format": "double"
+          },
+          "drainBlockers": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ComputeDrainBlocker"
+            }
+          },
+          "drainDeadlineAt": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "drainForce": {
+            "type": "boolean"
+          },
+          "drainRequestedAt": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "drainedAt": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "horizondVersion": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "lastHeartbeat": {
+            "type": "string"
+          },
+          "machineId": {
+            "type": "string"
+          },
+          "memoryBytes": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64"
+          },
+          "overlayIp": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "publicIp": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "replicaCount": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "status": {
+            "type": "string"
+          },
+          "zone": {
+            "type": "string"
+          }
+        }
+      },
+      "MachinesDaemonHeartbeatData": {
+        "type": "object",
+        "required": [
+          "status",
+          "horizonClusterId",
+          "horizonStatus",
+          "capacityGroup",
+          "desiredMachines",
+          "assignedMachines",
+          "healthyInstances",
+          "unavailableInstances",
+          "commandSupported",
+          "latestUpdateTimestamp",
+          "daemonInstances",
+          "events"
+        ],
+        "properties": {
+          "assignedMachines": {
+            "type": "integer",
+            "format": "int32",
+            "minimum": 0
+          },
+          "capacityGroup": {
+            "type": "string"
+          },
+          "commandSupported": {
+            "type": "boolean"
+          },
+          "daemonInstances": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ManagedRuntimeUnitStatus"
+            }
+          },
+          "daemonName": {
+            "type": "string"
+          },
+          "desiredMachines": {
+            "type": "integer",
+            "format": "int32",
+            "minimum": 0
+          },
+          "events": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ManagedRuntimeEventSnapshot"
+            }
+          },
+          "healthyInstances": {
+            "type": "integer",
+            "format": "int32",
+            "minimum": 0
+          },
+          "horizonClusterId": {
+            "type": "string"
+          },
+          "horizonStatus": {
+            "type": "string"
+          },
+          "horizonStatusMessage": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "horizonStatusReason": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "latestUpdateTimestamp": {
+            "type": "string"
+          },
+          "status": {
+            "$ref": "#/components/schemas/WorkloadHeartbeatStatus"
+          },
+          "unavailableInstances": {
             "type": "integer",
             "format": "int32",
             "minimum": 0

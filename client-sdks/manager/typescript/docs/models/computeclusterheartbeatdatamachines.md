@@ -1,22 +1,21 @@
-# ComputeClusterHeartbeatDataGcp
+# ComputeClusterHeartbeatDataMachines
 
 ## Example Usage
 
 ```typescript
-import { ComputeClusterHeartbeatDataGcp } from "@alienplatform/manager-api/models";
+import { ComputeClusterHeartbeatDataMachines } from "@alienplatform/manager-api/models";
 
-let value: ComputeClusterHeartbeatDataGcp = {
-  capacityGroups: [],
-  name: "<value>",
-  nodes: {},
-  providerFleets: [
+let value: ComputeClusterHeartbeatDataMachines = {
+  capacityGroups: [
     {
-      currentMachines: 240908,
-      desiredMachines: 853061,
+      currentMachines: 799180,
+      desiredMachines: 987548,
       groupId: "<id>",
-      providerId: "<id>",
     },
   ],
+  machines: [],
+  name: "<value>",
+  nodes: {},
   status: {
     collectionIssues: [
       {
@@ -31,7 +30,7 @@ let value: ComputeClusterHeartbeatDataGcp = {
     partial: true,
     stale: false,
   },
-  backend: "gcp",
+  backend: "machines",
 };
 ```
 
@@ -42,10 +41,9 @@ let value: ComputeClusterHeartbeatDataGcp = {
 | `backendClusterId`                                                                 | *string*                                                                           | :heavy_minus_sign:                                                                 | N/A                                                                                |
 | `capacityGroups`                                                                   | [models.ComputeCapacityGroupStatus](../models/computecapacitygroupstatus.md)[]     | :heavy_check_mark:                                                                 | N/A                                                                                |
 | `cpu`                                                                              | [models.MetricSample](../models/metricsample.md)                                   | :heavy_minus_sign:                                                                 | N/A                                                                                |
+| `machines`                                                                         | [models.MachinesComputeMachineStatus](../models/machinescomputemachinestatus.md)[] | :heavy_check_mark:                                                                 | N/A                                                                                |
 | `memory`                                                                           | [models.MetricSample](../models/metricsample.md)                                   | :heavy_minus_sign:                                                                 | N/A                                                                                |
 | `name`                                                                             | *string*                                                                           | :heavy_check_mark:                                                                 | N/A                                                                                |
 | `nodes`                                                                            | [models.ObservedCounts](../models/observedcounts.md)                               | :heavy_check_mark:                                                                 | N/A                                                                                |
-| `providerFleets`                                                                   | [models.ProviderFleetStatus](../models/providerfleetstatus.md)[]                   | :heavy_check_mark:                                                                 | N/A                                                                                |
-| `region`                                                                           | *string*                                                                           | :heavy_minus_sign:                                                                 | N/A                                                                                |
 | `status`                                                                           | [models.ComputeClusterHeartbeatStatus](../models/computeclusterheartbeatstatus.md) | :heavy_check_mark:                                                                 | N/A                                                                                |
-| `backend`                                                                          | *"gcp"*                                                                            | :heavy_check_mark:                                                                 | N/A                                                                                |
+| `backend`                                                                          | *"machines"*                                                                       | :heavy_check_mark:                                                                 | N/A                                                                                |

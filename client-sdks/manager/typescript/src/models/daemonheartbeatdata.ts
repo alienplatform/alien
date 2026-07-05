@@ -83,6 +83,25 @@ export type DaemonHeartbeatDataKubernetes = {
   backend: "kubernetes";
 };
 
+export type DaemonHeartbeatDataMachines = {
+  assignedMachines: number;
+  capacityGroup: string;
+  commandSupported: boolean;
+  daemonInstances: Array<ManagedRuntimeUnitStatus>;
+  daemonName?: string | undefined;
+  desiredMachines: number;
+  events: Array<ManagedRuntimeEventSnapshot>;
+  healthyInstances: number;
+  horizonClusterId: string;
+  horizonStatus: string;
+  horizonStatusMessage?: string | null | undefined;
+  horizonStatusReason?: string | null | undefined;
+  latestUpdateTimestamp: string;
+  status: WorkloadHeartbeatStatus;
+  unavailableInstances: number;
+  backend: "machines";
+};
+
 export type DaemonHeartbeatDataAzure = {
   assignedMachines: number;
   capacityGroup: string;
@@ -144,6 +163,7 @@ export type DaemonHeartbeatData =
   | DaemonHeartbeatDataAws
   | DaemonHeartbeatDataGcp
   | DaemonHeartbeatDataAzure
+  | DaemonHeartbeatDataMachines
   | DaemonHeartbeatDataKubernetes
   | DaemonHeartbeatDataLocal;
 
@@ -229,6 +249,59 @@ export function daemonHeartbeatDataKubernetesToJSON(
   return JSON.stringify(
     DaemonHeartbeatDataKubernetes$outboundSchema.parse(
       daemonHeartbeatDataKubernetes,
+    ),
+  );
+}
+
+/** @internal */
+export type DaemonHeartbeatDataMachines$Outbound = {
+  assignedMachines: number;
+  capacityGroup: string;
+  commandSupported: boolean;
+  daemonInstances: Array<ManagedRuntimeUnitStatus$Outbound>;
+  daemonName?: string | undefined;
+  desiredMachines: number;
+  events: Array<ManagedRuntimeEventSnapshot$Outbound>;
+  healthyInstances: number;
+  horizonClusterId: string;
+  horizonStatus: string;
+  horizonStatusMessage?: string | null | undefined;
+  horizonStatusReason?: string | null | undefined;
+  latestUpdateTimestamp: string;
+  status: WorkloadHeartbeatStatus$Outbound;
+  unavailableInstances: number;
+  backend: "machines";
+};
+
+/** @internal */
+export const DaemonHeartbeatDataMachines$outboundSchema: z.ZodType<
+  DaemonHeartbeatDataMachines$Outbound,
+  DaemonHeartbeatDataMachines
+> = z.object({
+  assignedMachines: z.int(),
+  capacityGroup: z.string(),
+  commandSupported: z.boolean(),
+  daemonInstances: z.array(ManagedRuntimeUnitStatus$outboundSchema),
+  daemonName: z.string().optional(),
+  desiredMachines: z.int(),
+  events: z.array(ManagedRuntimeEventSnapshot$outboundSchema),
+  healthyInstances: z.int(),
+  horizonClusterId: z.string(),
+  horizonStatus: z.string(),
+  horizonStatusMessage: z.nullable(z.string()).optional(),
+  horizonStatusReason: z.nullable(z.string()).optional(),
+  latestUpdateTimestamp: z.string(),
+  status: WorkloadHeartbeatStatus$outboundSchema,
+  unavailableInstances: z.int(),
+  backend: z.literal("machines"),
+});
+
+export function daemonHeartbeatDataMachinesToJSON(
+  daemonHeartbeatDataMachines: DaemonHeartbeatDataMachines,
+): string {
+  return JSON.stringify(
+    DaemonHeartbeatDataMachines$outboundSchema.parse(
+      daemonHeartbeatDataMachines,
     ),
   );
 }
@@ -391,6 +464,7 @@ export type DaemonHeartbeatData$Outbound =
   | DaemonHeartbeatDataAws$Outbound
   | DaemonHeartbeatDataGcp$Outbound
   | DaemonHeartbeatDataAzure$Outbound
+  | DaemonHeartbeatDataMachines$Outbound
   | DaemonHeartbeatDataKubernetes$Outbound
   | DaemonHeartbeatDataLocal$Outbound;
 
@@ -402,6 +476,7 @@ export const DaemonHeartbeatData$outboundSchema: z.ZodType<
   z.lazy(() => DaemonHeartbeatDataAws$outboundSchema),
   z.lazy(() => DaemonHeartbeatDataGcp$outboundSchema),
   z.lazy(() => DaemonHeartbeatDataAzure$outboundSchema),
+  z.lazy(() => DaemonHeartbeatDataMachines$outboundSchema),
   z.lazy(() => DaemonHeartbeatDataKubernetes$outboundSchema),
   z.lazy(() => DaemonHeartbeatDataLocal$outboundSchema),
 ]);
