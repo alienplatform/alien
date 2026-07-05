@@ -10,23 +10,40 @@ let value: ResourceHeartbeat = {
   controllerPlatform: "kubernetes",
   data: {
     data: {
-      bindMountCount: 947766,
+      commandSupported: false,
       events: [],
-      portCount: 126023,
-      runtimeReachable: false,
+      name: "<value>",
+      namespace: "<value>",
+      pods: [],
+      replicas: {},
       status: {
-        collectionIssues: [],
-        health: "unknown",
-        lifecycle: "running",
+        collectionIssues: [
+          {
+            message: "<value>",
+            reason: "forbidden",
+            severity: "info",
+            source: "<value>",
+          },
+        ],
+        health: "unhealthy",
+        lifecycle: "deleting",
         partial: false,
-        stale: true,
+        stale: false,
       },
-      backend: "local",
+      backend: "kubernetes",
     },
-    resourceType: "container",
+    resourceType: "daemon",
   },
-  observedAt: new Date("2024-04-21T00:33:03.766Z"),
-  raw: [],
+  observedAt: new Date("2024-03-25T05:59:17.875Z"),
+  raw: [
+    {
+      body: "<value>",
+      collectedAt: new Date("2026-05-11T10:48:38.268Z"),
+      format: "text",
+      source: "<value>",
+      truncated: false,
+    },
+  ],
   resourceId: "<id>",
   resourceType: "worker",
 };
@@ -42,5 +59,5 @@ let value: ResourceHeartbeat = {
 | `deploymentId`                                                                                                                                             | *string*                                                                                                                                                   | :heavy_minus_sign:                                                                                                                                         | N/A                                                                                                                                                        |                                                                                                                                                            |
 | `observedAt`                                                                                                                                               | [Date](https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/Date)                                                              | :heavy_check_mark:                                                                                                                                         | N/A                                                                                                                                                        |                                                                                                                                                            |
 | `raw`                                                                                                                                                      | [models.RawHeartbeatSnippet](../models/rawheartbeatsnippet.md)[]                                                                                           | :heavy_check_mark:                                                                                                                                         | N/A                                                                                                                                                        |                                                                                                                                                            |
-| `resourceId`                                                                                                                                               | *string*                                                                                                                                                   | :heavy_check_mark:                                                                                                                                         | N/A                                                                                                                                                        |                                                                                                                                                            |
+| `resourceId`                                                                                                                                               | *string*                                                                                                                                                   | :heavy_check_mark:                                                                                                                                         | Alien resource id, such as the `alien.Container` or `alien.Storage`<br/>resource id from the stack.                                                        |                                                                                                                                                            |
 | `resourceType`                                                                                                                                             | *string*                                                                                                                                                   | :heavy_check_mark:                                                                                                                                         | Resource type identifier that determines the specific kind of resource. This field is used for polymorphic deserialization and resource-specific behavior. | worker                                                                                                                                                     |

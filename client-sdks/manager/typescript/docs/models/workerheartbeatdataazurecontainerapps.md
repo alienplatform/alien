@@ -8,11 +8,18 @@ import { WorkerHeartbeatDataAzureContainerApps } from "@alienplatform/manager-ap
 let value: WorkerHeartbeatDataAzureContainerApps = {
   appName: "<value>",
   status: {
-    collectionIssues: [],
-    health: "unknown",
-    lifecycle: "running",
+    collectionIssues: [
+      {
+        message: "<value>",
+        reason: "forbidden",
+        severity: "info",
+        source: "<value>",
+      },
+    ],
+    health: "unhealthy",
+    lifecycle: "deleting",
     partial: false,
-    stale: true,
+    stale: false,
   },
   backend: "azureContainerApps",
 };

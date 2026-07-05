@@ -5,10 +5,11 @@
 //!
 //! **Key Principles:**
 //! - **Fail Fast on Conflict for Create/Update**: Issue the cloud API call directly and propagate all errors (including `RemoteResourceConflict`). The executor handles retries automatically. Deletion flows still tolerate `RemoteResourceNotFound` and `RemoteAccessDenied`.
-//! - **Always Retry from Start**: When operations fail, always retry from the beginning of that flow (Start state)
-//! - **Strictly Linear State Flow**: Each flow follows the exact same sequence every time - NO conditional branching or optimization anywhere
-//! - **One Logical Operation Per State**: Each state performs exactly one logical operation (command or query)
-//! - **Predictability Over Efficiency**: Always go through all states in order, even if some are no-ops
+//! - **Retry-Safe Handler Boundaries**: A handler should perform at most one externally durable mutating operation unless the phase is explicitly idempotent, progress-tracked, or best-effort cleanup.
+//! - **Retry Failed State**: The executor retries the failed handler state, stores `last_failed_state`, and manual retry resumes from that state.
+//! - **Stable Phase Order**: Flows should follow predictable phases. No-op phases are fine when they keep update/delete paths easier to reason about.
+//! - **Separate Commands And Waits**: Async provider commands and readiness polling belong in separate states.
+//! - **Truthful State**: Store remote IDs and operation names as soon as they are known, before later states depend on them.
 //!
 //! **Examples:**
 //! - `AwsWorkerController`: Manages Lambda functions, IAM roles, and deployment packages
@@ -17,25 +18,25 @@
 //!
 //! ## State Design Principles
 //!
-//! ### Linear State Flow with Start States
-//! Resource controllers must follow a **strictly linear state flow** where each flow has a dedicated Start state
-//! that performs the first operation. This ensures predictability and simplicity.
+//! ### Predictable State Flow with Start States
+//! Resource controllers should follow predictable phases where each flow has a dedicated Start state
+//! that performs real setup or the first retry-safe operation. This ensures predictability and simplicity.
 //!
 //! **Required flow pattern:**
 //! ```ignore
 //! enum MyResourceStatus {
-//!     // Create flow - always linear
+//!     // Create flow
 //!     CreateStart,        // Performs first operation (e.g., create service account)
 //!     CreatingRole,       // Performs second operation
 //!     BindingRoleToAccount, // Performs third operation
 //!     Ready,              // Terminal state
 //!     CreateFailed,       // Failure state
 //!
-//!     // Update flow - always linear
+//!     // Update flow
 //!     UpdateStart,        // Performs update operation
 //!     UpdateFailed,       // Failure state
 //!
-//!     // Delete flow - always linear
+//!     // Delete flow
 //!     DeleteStart,        // Performs first delete operation (e.g., unbind role)
 //!     DeletingRole,       // Performs second delete operation
 //!     DeletingServiceAccount, // Performs third delete operation
@@ -44,14 +45,18 @@
 //! }
 //! ```
 //!
-//! ### One Logical Operation Per State
-//! Each state should perform exactly one logical cloud operation. This includes both **command operations**
-//! (that change remote state) and **query operations** (that check remote state). Start states are **not**
-//! transition states - they must perform actual operations.
+//! ### Retry-Safe Operation Boundaries
+//! Each handler is a retry boundary. Prefer at most one externally durable mutating operation per handler.
+//! Durable mutations include cloud calls that create, update, delete, bind, assign, attach, detach, or otherwise
+//! change provider state. This keeps retries safe: if the handler fails after the mutation, retrying the same
+//! handler should not duplicate, corrupt, or skip cleanup.
 //!
-//! **Command vs Query Operations:**
-//! - **Command Operations**: Create, update, delete resources (e.g., `create_function`, `update_function_code`)
-//! - **Query Operations**: Check status, poll for completion (e.g., `get_function_configuration`, `describe_operation`)
+//! **Allowed in the same handler:**
+//! - validation and request construction
+//! - dependency state reads through `ResourceControllerContext`
+//! - desired/previous config comparison
+//! - preparatory provider reads before a command
+//! - local controller-state updates that record what was just proved or created
 //!
 //! **Reading Before Commands is Allowed:**
 //! It's perfectly fine to read/query cloud state as part of preparing for a command operation within the same state.
@@ -93,9 +98,9 @@
 //! }
 //! ```
 //!
-//! **Rule of thumb:** Start states should contain the logic and potential operation for their flow.
-//! They can conditionally perform operations based on internal state (e.g., `if s.url.is_some() { delete_url() }`),
-//! but should not be pure "decision" states that only choose the next state without any substantive logic.
+//! **Rule of thumb:** Start states should contain real flow setup and, when needed, the first retry-safe
+//! operation. They can conditionally route based on configured mode, optional features, ownership/lifecycle,
+//! already-created progress in controller state, or provider responses.
 //!
 //! **Avoid - Pure Decision States:**
 //! ```ignore
@@ -109,24 +114,23 @@
 //! }
 //! ```
 //!
-//! ### Strictly Linear Flow - No Conditional Optimization
-//! **CRITICAL PRINCIPLE**: Linear flow means **NO conditional branching or optimization anywhere**
-//! in the state machine, not just in Start states. Each state should always transition to the
-//! same next state, regardless of whether the operation was needed or successful.
+//! ### Stable Phase Order
+//! Linear flow means predictable phase order, not a ban on all branching. Keep the same conceptual phases for
+//! each operation, and prefer no-op phases over shortcuts when that makes retry/debug behavior easier to reason about.
 //!
 //! **Why Predictability Over Efficiency:**
 //! - Makes debugging much easier - you always know the exact path taken
-//! - Simplifies retry logic - failed operations always restart from a predictable point
+//! - Simplifies retry logic - failed operations resume from a predictable handler state
 //! - Reduces state machine complexity and edge cases
 //! - Makes the flow testable with a single path through each resource type
 //!
-//! **The Complete Linear Pattern:**
+//! **The Complete Phase Pattern:**
 //! ```ignore
-//! // Update flow - always follows this exact sequence
+//! // Update flow - follows this phase sequence
 //! UpdateStart → UpdateCodeWaitForActive → UpdateConfigStart → UpdateConfigWaitForActive → Ready
 //! ```
 //!
-//! **Good - Always Linear (Even with No-Ops):**
+//! **Good - Stable Phase Order (Even with No-Ops):**
 //! ```ignore
 //! async fn update_code_wait(&self, s: &MyState, ctx: &Context) -> Result<(MyState, Option<Duration>)> {
 //!     let status = client.get_function_configuration(&s.function_name).await?;
@@ -173,7 +177,7 @@
 //!
 //! **Multi-Step Operations:**
 //! For resources that need multiple types of updates (code, configuration, networking, etc.),
-//! **always** go through all phases in the same order, even if some phases are no-ops:
+//! go through all phases in the same order, even if some phases are no-ops:
 //!
 //! ```ignore
 //! enum WorkerStatus {
@@ -189,6 +193,20 @@
 //!
 //! This makes every update follow the exact same predictable path:
 //! Start → CodeWait → ConfigStart → ConfigWait → NetworkingStart → NetworkingWait → Ready
+//!
+//! ### Composite Controllers
+//! Some controllers manage composite resources: networks, exposed containers, compute clusters,
+//! per-replica disks, capacity groups, and provider IAM bundles. For these, a handler may represent
+//! one phase over a set of child resources when that phase is retry-safe.
+//!
+//! Acceptable batching patterns:
+//! - idempotent create/update APIs such as upsert/patch/apply
+//! - per-child progress stored in controller state before the next await can fail
+//! - best-effort delete loops that tolerate already-missing children
+//! - polling loops that only read provider state
+//! - independent child operations where rerunning the whole phase is safe
+//!
+//! Avoid multiple non-idempotent creates/updates in one handler without per-child progress tracking.
 //!
 //! ### Track Created Resources
 //! Store identifiers for created resources to enable proper cleanup and idempotent operations.
@@ -239,6 +257,11 @@
 //!
 //! ### Delete Operations – Best-Effort Cleanup
 //! Delete states should treat `RemoteResourceNotFound` and `RemoteAccessDenied` as success, making cleanup idempotent even when an imported resource has already been removed or is no longer accessible.
+//! Provider dependency-drain errors during delete, such as GCP `resourceInUseByAnotherResource`,
+//! AWS `DependencyViolation`/`ResourceInUse`, and Azure `InUse`/`Conflict`, should usually be
+//! handled as wait conditions. Keep the referenced remote ID in state and return `Stay` or a
+//! wait state with a delay until the provider proves the dependency is gone or the resource is
+//! `RemoteResourceNotFound`.
 //! ```ignore
 //! match client.delete_service_account(&name).await {
 //!     Ok(_) => next_state_deleting_role(),
@@ -1386,8 +1409,13 @@ mod tests {
         // this exercises the skip, not a `default()` controller whose `binding` is already `None`.
         const PASSWORD: &str = "round-trip-secret-must-not-persist";
         let mut controller = crate::postgres::LocalPostgresController::default();
-        controller.binding =
-            Some(PostgresBinding::local("127.0.0.1", 5432, "db", "alien", PASSWORD));
+        controller.binding = Some(PostgresBinding::local(
+            "127.0.0.1",
+            5432,
+            "db",
+            "alien",
+            PASSWORD,
+        ));
 
         let value = serialize_controller(&controller).expect("controller serializes");
         assert!(

@@ -114,6 +114,7 @@ pub async fn handle_running(
             suggested_delay_ms: None,
             update_heartbeat: false,
             heartbeats: heartbeats.clone(),
+            observed_inventory_batches: vec![],
         })
     } else {
         info!("Health check passed for all resources");
@@ -125,6 +126,7 @@ pub async fn handle_running(
             suggested_delay_ms: step_result.suggested_delay_ms,
             update_heartbeat: true, // Update heartbeat timestamp for Running status
             heartbeats,
+            observed_inventory_batches: vec![],
         })
     }
 }
@@ -156,6 +158,7 @@ pub async fn handle_refresh_failed(
             suggested_delay_ms: None,
             update_heartbeat: false,
             heartbeats: vec![],
+            observed_inventory_batches: vec![],
         });
     }
 
@@ -188,5 +191,6 @@ pub async fn handle_refresh_failed(
         suggested_delay_ms: None,
         update_heartbeat: false,
         heartbeats: vec![],
+        observed_inventory_batches: vec![],
     })
 }

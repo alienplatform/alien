@@ -11,11 +11,18 @@ const value: models.WorkerHeartbeatDataAwsLambda = {
   functionUrlCorsPresent: true,
   layerCount: 637035,
   status: {
-    collectionIssues: [],
-    health: "unknown",
-    lifecycle: "running",
+    collectionIssues: [
+      {
+        message: "<value>",
+        reason: "forbidden",
+        severity: "info",
+        source: "<value>",
+      },
+    ],
+    health: "unhealthy",
+    lifecycle: "deleting",
     partial: false,
-    stale: true,
+    stale: false,
   },
   triggerCount: 109377,
   backend: "awsLambda",
@@ -28,11 +35,18 @@ const value: models.WorkerHeartbeatDataAwsLambda = {
 const value: models.WorkerHeartbeatDataGcpCloudRun = {
   service: "<value>",
   status: {
-    collectionIssues: [],
-    health: "unknown",
-    lifecycle: "running",
+    collectionIssues: [
+      {
+        message: "<value>",
+        reason: "forbidden",
+        severity: "info",
+        source: "<value>",
+      },
+    ],
+    health: "unhealthy",
+    lifecycle: "deleting",
     partial: false,
-    stale: true,
+    stale: false,
   },
   trafficCount: 570634,
   urls: [
@@ -50,11 +64,18 @@ const value: models.WorkerHeartbeatDataGcpCloudRun = {
 const value: models.WorkerHeartbeatDataAzureContainerApps = {
   appName: "<value>",
   status: {
-    collectionIssues: [],
-    health: "unknown",
-    lifecycle: "running",
+    collectionIssues: [
+      {
+        message: "<value>",
+        reason: "forbidden",
+        severity: "info",
+        source: "<value>",
+      },
+    ],
+    health: "unhealthy",
+    lifecycle: "deleting",
     partial: false,
-    stale: true,
+    stale: false,
   },
   backend: "azureContainerApps",
 };
@@ -75,11 +96,18 @@ const value: models.WorkerHeartbeatDataKubernetes = {
   pods: [],
   replicas: {},
   status: {
-    collectionIssues: [],
-    health: "unknown",
-    lifecycle: "running",
+    collectionIssues: [
+      {
+        message: "<value>",
+        reason: "forbidden",
+        severity: "info",
+        source: "<value>",
+      },
+    ],
+    health: "unhealthy",
+    lifecycle: "deleting",
     partial: false,
-    stale: true,
+    stale: false,
   },
   triggerCount: 374516,
   workloadKind: "daemonSet",
@@ -102,11 +130,18 @@ const value: models.WorkerHeartbeatDataLocal = {
   ],
   imagePathPresent: true,
   status: {
-    collectionIssues: [],
-    health: "unknown",
-    lifecycle: "running",
+    collectionIssues: [
+      {
+        message: "<value>",
+        reason: "forbidden",
+        severity: "info",
+        source: "<value>",
+      },
+    ],
+    health: "unhealthy",
+    lifecycle: "deleting",
     partial: false,
-    stale: true,
+    stale: false,
   },
   triggerCount: 305200,
   backend: "local",

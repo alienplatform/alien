@@ -1,7 +1,7 @@
 //! Canonical deployment-loop contract.
 //!
 //! Every deployment-loop caller (alien-cli, alien-deploy-cli, alien-manager,
-//! alien-agent, alien-terraform) must use these types so loop semantics are
+//! alien-operator, alien-terraform) must use these types so loop semantics are
 //! consistent across push, pull, and platform paths.
 
 use crate::DeploymentStatus;
@@ -53,7 +53,7 @@ pub struct LoopResult {
 /// Different callers use different operations to express their intent:
 ///
 /// - **`Deploy`**: Drive the deployment all the way to Running. Used by
-///   alien-manager, alien-agent, alien-cli — any actor that should continue
+///   alien-manager, alien-operator, alien-cli — any actor that should continue
 ///   through Provisioning/Updating to Running.
 ///
 /// - **`InitialSetup`**: Drive only the initial setup phase (Pending →
@@ -115,7 +115,7 @@ pub fn classify_status(status: &DeploymentStatus, operation: LoopOperation) -> O
     }
 
     // Handoff: only for InitialSetup. The push CLI stops here because the
-    // manager takes over at Provisioning/Updating. The manager and agent use
+    // manager takes over at Provisioning/Updating. The manager and operator use
     // Deploy, which does NOT stop here — they continue stepping through
     // Provisioning/Updating to reach Running.
     if operation == LoopOperation::InitialSetup
@@ -135,7 +135,7 @@ pub fn classify_status(status: &DeploymentStatus, operation: LoopOperation) -> O
 }
 
 // Test ownership: Loop contract behavior tests live HERE (alien-deployment).
-// Callers (alien-manager, alien-agent, alien-deploy-cli) should NOT duplicate
+// Callers (alien-manager, alien-operator, alien-deploy-cli) should NOT duplicate
 // these tests. They can test their own integration with classify_status
 // (e.g. skip logic, operation selection) but not re-test the contract itself.
 
@@ -203,7 +203,7 @@ mod tests {
 
     #[test]
     fn test_provisioning_is_not_terminal_for_deploy() {
-        // Deploy (used by manager/agent) continues through Provisioning.
+        // Deploy (used by manager/operator) continues through Provisioning.
         let result = classify_status(&DeploymentStatus::Provisioning, LoopOperation::Deploy);
         assert!(
             result.is_none(),
@@ -257,7 +257,7 @@ mod tests {
 
     #[test]
     fn deploy_operation_expected_results() {
-        // Deploy is used by manager/agent/cli — continues through Provisioning/Updating.
+        // Deploy is used by manager/operator/cli — continues through Provisioning/Updating.
         let expectations: Vec<(DeploymentStatus, Option<(LoopStopReason, LoopOutcome)>)> = vec![
             (DeploymentStatus::Pending, None),
             (
@@ -568,7 +568,7 @@ mod tests {
                 status
             );
 
-            // Deploy (manager/agent) does NOT stop here — continues to Running.
+            // Deploy (manager/operator) does NOT stop here — continues to Running.
             let deploy_result = classify_status(&status, LoopOperation::Deploy);
             assert!(
                 deploy_result.is_none(),

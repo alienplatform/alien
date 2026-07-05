@@ -236,8 +236,8 @@
 //! ```
 
 use crate::core::{
-    DefaultPlatformServiceProvider, PlatformServiceProvider, ResourceController,
-    ResourceControllerContext, ResourceControllerStepResult, ResourceRegistry,
+    DefaultPlatformServiceProvider, HeartbeatCollector, PlatformServiceProvider,
+    ResourceController, ResourceControllerContext, ResourceControllerStepResult, ResourceRegistry,
 };
 use crate::error::{ErrorData, Result};
 use crate::worker::{AwsWorkerController, AzureWorkerController, GcpWorkerController};
@@ -254,9 +254,9 @@ use alien_core::{
     AwsManagementConfig, AzureContainerAppsEnvironment, AzureResourceGroup,
     AzureServiceBusNamespace, AzureStorageAccount, ComputeBackend, DeploymentConfig,
     DomainMetadata, EnvironmentVariablesSnapshot, ManagementConfig, Platform, Resource,
-    ResourceDefinition, ResourceEntry, ResourceLifecycle, ResourceOutputs, ResourceRef,
-    ResourceStatus, Stack, StackResourceState, StackSettings, StackState, Storage, Worker,
-    WorkerCode,
+    ResourceDefinition, ResourceEntry, ResourceHeartbeat, ResourceLifecycle, ResourceOutputs,
+    ResourceRef, ResourceStatus, Stack, StackResourceState, StackSettings, StackState, Storage,
+    Worker, WorkerCode,
 };
 use alien_error::{AlienError, Context};
 use alien_gcp_clients::{GcpClientConfig, GcpClientConfigExt as _};
@@ -330,6 +330,8 @@ pub struct SingleControllerExecutor {
     service_provider: Arc<dyn PlatformServiceProvider>,
     // Resource prefix
     resource_prefix: String,
+    // Heartbeats emitted by the most recent step.
+    last_heartbeats: Vec<ResourceHeartbeat>,
 }
 
 impl SingleControllerExecutor {
@@ -383,10 +385,11 @@ impl SingleControllerExecutor {
                 .manager_url("https://test-manager.alien.dev".to_string())
                 .deployment_token("test-deployment-token".to_string())
                 .build(),
-            heartbeat_collector: Default::default(),
+            heartbeat_collector: HeartbeatCollector::default(),
         };
 
         let step_result = self.controller.step(&context).await?;
+        self.last_heartbeats = context.heartbeat_collector.drain();
 
         // Update the stack state with the new controller state
         if let Some(resource_state) = self.stack_state.resources.get_mut(&self.resource_id) {
@@ -589,6 +592,11 @@ impl SingleControllerExecutor {
     /// Gets the current outputs of the controller.
     pub fn outputs(&self) -> Option<ResourceOutputs> {
         self.controller.get_outputs()
+    }
+
+    /// Returns heartbeats emitted by the most recent step.
+    pub fn last_heartbeats(&self) -> &[ResourceHeartbeat] {
+        &self.last_heartbeats
     }
 
     /// Gets a reference to the current stack state.
@@ -1090,6 +1098,7 @@ impl SingleControllerExecutorBuilder {
                 .service_provider
                 .unwrap_or_else(|| Arc::new(DefaultPlatformServiceProvider::default())),
             resource_prefix: "test".to_string(),
+            last_heartbeats: Vec::new(),
         })
     }
 }

@@ -263,7 +263,10 @@ impl CloudSqlApi for CloudSqlClient {
     }
 
     async fn create_database(&self, instance: &str, database: &str) -> Result<SqlOperation> {
-        let path = format!("projects/{}/instances/{}/databases", self.project_id, instance);
+        let path = format!(
+            "projects/{}/instances/{}/databases",
+            self.project_id, instance
+        );
         let body = Database {
             name: database.to_string(),
             instance: instance.to_string(),
@@ -326,7 +329,10 @@ mod tests {
         assert_eq!(json["databaseVersion"], "POSTGRES_17");
         // private-only: ipv4Enabled must be false and PSC enabled.
         assert_eq!(json["settings"]["ipConfiguration"]["ipv4Enabled"], false);
-        assert_eq!(json["settings"]["ipConfiguration"]["pscConfig"]["pscEnabled"], true);
+        assert_eq!(
+            json["settings"]["ipConfiguration"]["pscConfig"]["pscEnabled"],
+            true
+        );
         assert_eq!(json["settings"]["backupConfiguration"]["enabled"], true);
         assert_eq!(json["settings"]["availabilityType"], "REGIONAL");
         // password is request-only; state absent on the way out.
@@ -368,7 +374,10 @@ mod tests {
             Some("projects/p/regions/us-east1/serviceAttachments/a-abc123")
         );
         assert_eq!(
-            instance.ip_addresses.first().and_then(|m| m.ip_type.as_deref()),
+            instance
+                .ip_addresses
+                .first()
+                .and_then(|m| m.ip_type.as_deref()),
             Some("PRIVATE_SERVICE_CONNECT")
         );
     }
@@ -380,7 +389,10 @@ mod tests {
             "error":{"errors":[{"code":"INVALID_DATABASE_VERSION","message":"unsupported version"}]}}"#;
         let op: SqlOperation = serde_json::from_str(body).unwrap();
         assert!(op.is_done());
-        assert!(op.has_error(), "a DONE op with error.errors must report has_error");
+        assert!(
+            op.has_error(),
+            "a DONE op with error.errors must report has_error"
+        );
         assert_eq!(
             op.error.unwrap().errors[0].code.as_deref(),
             Some("INVALID_DATABASE_VERSION")
@@ -389,8 +401,7 @@ mod tests {
 
     #[test]
     fn operation_success_has_no_error() {
-        let op: SqlOperation =
-            serde_json::from_str(r#"{"name":"op-2","status":"DONE"}"#).unwrap();
+        let op: SqlOperation = serde_json::from_str(r#"{"name":"op-2","status":"DONE"}"#).unwrap();
         assert!(op.is_done());
         assert!(!op.has_error());
     }

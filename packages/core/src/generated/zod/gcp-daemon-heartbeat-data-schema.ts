@@ -15,7 +15,7 @@ export const GcpDaemonHeartbeatDataSchema = z.object({
 get "daemonInstances"(){
                 return z.array(ManagedRuntimeUnitStatusSchema)
               },
-"daemonName": z.string(),
+"daemonName": z.optional(z.string()),
 "desiredMachines": z.int().min(0),
 get "events"(){
                 return z.array(ManagedRuntimeEventSnapshotSchema)

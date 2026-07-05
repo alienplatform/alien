@@ -653,7 +653,7 @@ mod tests {
             status: DeploymentStatus::InitialSetup,
             platform: Platform::Gcp,
             current_release: Some(ReleaseInfo {
-                release_id: "rel_test".to_string(),
+                release_id: Some("rel_test".to_string()),
                 version: None,
                 description: None,
                 stack,

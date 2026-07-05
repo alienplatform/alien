@@ -187,11 +187,11 @@ impl KubernetesBuild {
             metadata: Some(ObjectMeta {
                 labels: Some({
                     let mut labels = BTreeMap::new();
-                    labels.insert("alien.dev/build-sandbox".to_string(), "true".to_string());
-                    labels.insert("alien.dev/build-id".to_string(), build_id.to_string());
+                    labels.insert("build-sandbox".to_string(), "true".to_string());
+                    labels.insert("build-id".to_string(), build_id.to_string());
                     labels.insert(
                         "app.kubernetes.io/managed-by".to_string(),
-                        "alien".to_string(),
+                        "operator".to_string(),
                     );
                     labels
                 }),
@@ -220,10 +220,10 @@ impl KubernetesBuild {
             namespace: Some(self.namespace.clone()),
             labels: Some({
                 let mut labels = BTreeMap::new();
-                labels.insert("alien.dev/build-id".to_string(), build_id.to_string());
+                labels.insert("build-id".to_string(), build_id.to_string());
                 labels.insert(
                     "app.kubernetes.io/managed-by".to_string(),
-                    "alien".to_string(),
+                    "operator".to_string(),
                 );
                 labels
             }),

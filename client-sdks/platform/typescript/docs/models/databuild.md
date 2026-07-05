@@ -15,13 +15,13 @@ let value: DataBuild = {
       collectionIssues: [
         {
           message: "<value>",
-          reason: "api-unavailable",
+          reason: "not-installed",
           severity: "error",
           source: "<value>",
         },
       ],
-      health: "degraded",
-      lifecycle: "unknown",
+      health: "healthy",
+      lifecycle: "failed",
       partial: false,
       stale: true,
     },
@@ -35,5 +35,5 @@ let value: DataBuild = {
 
 | Field                                    | Type                                     | Required                                 | Description                              |
 | ---------------------------------------- | ---------------------------------------- | ---------------------------------------- | ---------------------------------------- |
-| `data`                                   | *models.SyncReconcileRequestDataUnion13* | :heavy_check_mark:                       | N/A                                      |
+| `data`                                   | *models.SyncReconcileRequestDataUnion14* | :heavy_check_mark:                       | N/A                                      |
 | `resourceType`                           | *"build"*                                | :heavy_check_mark:                       | N/A                                      |

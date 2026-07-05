@@ -178,7 +178,6 @@ struct TestSetup {
     admin_token: String,
     deployment_token: String,
     deployment_id: String,
-    image_uri: String,
     release_store: Arc<dyn ReleaseStore>,
     deployment_store: Arc<dyn DeploymentStore>,
     _server_handle: tokio::task::JoinHandle<()>,
@@ -320,7 +319,7 @@ async fn setup() -> TestSetup {
             status: alien_core::DeploymentStatus::Running,
             platform: Platform::Local,
             current_release: Some(alien_core::ReleaseInfo {
-                release_id: release.id.clone(),
+                release_id: Some(release.id.clone()),
                 version: None,
                 description: None,
                 stack: empty_stack("test-stack"),
@@ -342,7 +341,10 @@ async fn setup() -> TestSetup {
                     state,
                     update_heartbeat: false,
                     heartbeats: vec![],
+                    observed_inventory_batches: vec![],
                     suggested_delay_ms: None,
+                    capabilities: vec![],
+                    operator_version: None,
                 },
             )
             .await
@@ -405,7 +407,6 @@ async fn setup() -> TestSetup {
         admin_token: admin_raw,
         deployment_token: deploy_raw,
         deployment_id: dep.id,
-        image_uri,
         release_store,
         deployment_store,
         _server_handle: server_handle,
@@ -793,7 +794,7 @@ async fn test_proxy_push_then_pull() {
             status: alien_core::DeploymentStatus::Running,
             platform: Platform::Local,
             current_release: Some(alien_core::ReleaseInfo {
-                release_id: new_release.id.clone(),
+                release_id: Some(new_release.id.clone()),
                 version: None,
                 description: None,
                 stack: empty_stack("test-stack-proxy"),
@@ -815,7 +816,10 @@ async fn test_proxy_push_then_pull() {
                     state,
                     update_heartbeat: false,
                     heartbeats: vec![],
+                    observed_inventory_batches: vec![],
                     suggested_delay_ms: None,
+                    capabilities: vec![],
+                    operator_version: None,
                 },
             )
             .await

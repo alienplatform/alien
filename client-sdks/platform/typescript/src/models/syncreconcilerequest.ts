@@ -5,6 +5,11 @@
 import * as z from "zod/v4";
 import { remap as remap$ } from "../lib/primitives.js";
 import { ClosedEnum } from "../types/enums.js";
+import {
+  OperatorCapabilityReport,
+  OperatorCapabilityReport$Outbound,
+  OperatorCapabilityReport$outboundSchema,
+} from "./operatorcapabilityreport.js";
 
 export const SyncReconcileRequestCurrentReleaseTypeStringList = {
   StringList: "stringList",
@@ -271,7 +276,7 @@ export type SyncReconcileRequestCurrentReleaseManagementEnum = ClosedEnum<
 /**
  * AWS-specific binding specification
  */
-export type SyncReconcileRequestCurrentReleaseOverrideAwResource = {
+export type CurrentReleaseOverrideStateAwResource = {
   /**
    * Optional condition for additional filtering (rare)
    */
@@ -303,7 +308,7 @@ export type SyncReconcileRequestCurrentReleaseOverrideAwBinding = {
   /**
    * AWS-specific binding specification
    */
-  resource?: SyncReconcileRequestCurrentReleaseOverrideAwResource | undefined;
+  resource?: CurrentReleaseOverrideStateAwResource | undefined;
   /**
    * AWS-specific binding specification
    */
@@ -379,7 +384,7 @@ export type SyncReconcileRequestCurrentReleaseOverrideAw = {
 /**
  * Azure-specific binding specification
  */
-export type SyncReconcileRequestCurrentReleaseOverrideAzureResource = {
+export type CurrentReleaseOverrideStateAzureResource = {
   /**
    * Scope (subscription/resource group/resource level)
    */
@@ -403,9 +408,7 @@ export type SyncReconcileRequestCurrentReleaseOverrideAzureBinding = {
   /**
    * Azure-specific binding specification
    */
-  resource?:
-    | SyncReconcileRequestCurrentReleaseOverrideAzureResource
-    | undefined;
+  resource?: CurrentReleaseOverrideStateAzureResource | undefined;
   /**
    * Azure-specific binding specification
    */
@@ -475,7 +478,7 @@ export type CurrentReleaseOverrideStateResourceConditionUnion =
 /**
  * GCP-specific binding specification
  */
-export type SyncReconcileRequestCurrentReleaseOverrideGcpResource = {
+export type CurrentReleaseOverrideStateGcpResource = {
   condition?:
     | CurrentReleaseOverrideConditionStateResource
     | any
@@ -517,7 +520,7 @@ export type SyncReconcileRequestCurrentReleaseOverrideGcpBinding = {
   /**
    * GCP-specific binding specification
    */
-  resource?: SyncReconcileRequestCurrentReleaseOverrideGcpResource | undefined;
+  resource?: CurrentReleaseOverrideStateGcpResource | undefined;
   /**
    * GCP-specific binding specification
    */
@@ -633,7 +636,7 @@ export type SyncReconcileRequestCurrentReleaseManagement2 = {
 /**
  * AWS-specific binding specification
  */
-export type SyncReconcileRequestCurrentReleaseExtendAwResource = {
+export type CurrentReleaseExtendStateAwResource = {
   /**
    * Optional condition for additional filtering (rare)
    */
@@ -665,7 +668,7 @@ export type SyncReconcileRequestCurrentReleaseExtendAwBinding = {
   /**
    * AWS-specific binding specification
    */
-  resource?: SyncReconcileRequestCurrentReleaseExtendAwResource | undefined;
+  resource?: CurrentReleaseExtendStateAwResource | undefined;
   /**
    * AWS-specific binding specification
    */
@@ -741,7 +744,7 @@ export type SyncReconcileRequestCurrentReleaseExtendAw = {
 /**
  * Azure-specific binding specification
  */
-export type SyncReconcileRequestCurrentReleaseExtendAzureResource = {
+export type CurrentReleaseExtendStateAzureResource = {
   /**
    * Scope (subscription/resource group/resource level)
    */
@@ -765,7 +768,7 @@ export type SyncReconcileRequestCurrentReleaseExtendAzureBinding = {
   /**
    * Azure-specific binding specification
    */
-  resource?: SyncReconcileRequestCurrentReleaseExtendAzureResource | undefined;
+  resource?: CurrentReleaseExtendStateAzureResource | undefined;
   /**
    * Azure-specific binding specification
    */
@@ -835,7 +838,7 @@ export type CurrentReleaseExtendStateResourceConditionUnion =
 /**
  * GCP-specific binding specification
  */
-export type SyncReconcileRequestCurrentReleaseExtendGcpResource = {
+export type CurrentReleaseExtendStateGcpResource = {
   condition?:
     | CurrentReleaseExtendConditionStateResource
     | any
@@ -877,7 +880,7 @@ export type SyncReconcileRequestCurrentReleaseExtendGcpBinding = {
   /**
    * GCP-specific binding specification
    */
-  resource?: SyncReconcileRequestCurrentReleaseExtendGcpResource | undefined;
+  resource?: CurrentReleaseExtendStateGcpResource | undefined;
   /**
    * GCP-specific binding specification
    */
@@ -1001,7 +1004,7 @@ export type SyncReconcileRequestCurrentReleaseManagementUnion =
 /**
  * AWS-specific binding specification
  */
-export type SyncReconcileRequestCurrentReleaseProfileAwResource = {
+export type CurrentReleaseProfileStateAwResource = {
   /**
    * Optional condition for additional filtering (rare)
    */
@@ -1033,7 +1036,7 @@ export type SyncReconcileRequestCurrentReleaseProfileAwBinding = {
   /**
    * AWS-specific binding specification
    */
-  resource?: SyncReconcileRequestCurrentReleaseProfileAwResource | undefined;
+  resource?: CurrentReleaseProfileStateAwResource | undefined;
   /**
    * AWS-specific binding specification
    */
@@ -1109,7 +1112,7 @@ export type SyncReconcileRequestCurrentReleaseProfileAw = {
 /**
  * Azure-specific binding specification
  */
-export type SyncReconcileRequestCurrentReleaseProfileAzureResource = {
+export type CurrentReleaseProfileStateAzureResource = {
   /**
    * Scope (subscription/resource group/resource level)
    */
@@ -1133,7 +1136,7 @@ export type SyncReconcileRequestCurrentReleaseProfileAzureBinding = {
   /**
    * Azure-specific binding specification
    */
-  resource?: SyncReconcileRequestCurrentReleaseProfileAzureResource | undefined;
+  resource?: CurrentReleaseProfileStateAzureResource | undefined;
   /**
    * Azure-specific binding specification
    */
@@ -1203,7 +1206,7 @@ export type CurrentReleaseProfileStateResourceConditionUnion =
 /**
  * GCP-specific binding specification
  */
-export type SyncReconcileRequestCurrentReleaseProfileGcpResource = {
+export type CurrentReleaseProfileStateGcpResource = {
   condition?:
     | CurrentReleaseProfileConditionStateResource
     | any
@@ -1245,7 +1248,7 @@ export type SyncReconcileRequestCurrentReleaseProfileGcpBinding = {
   /**
    * GCP-specific binding specification
    */
-  resource?: SyncReconcileRequestCurrentReleaseProfileGcpResource | undefined;
+  resource?: CurrentReleaseProfileStateGcpResource | undefined;
   /**
    * GCP-specific binding specification
    */
@@ -1502,9 +1505,12 @@ export type SyncReconcileRequestCurrentRelease = {
    */
   description?: string | null | undefined;
   /**
-   * Release ID (e.g., rel_xyz)
+   * Release ID (e.g., rel_xyz). `None` for an observe deployment, which has no
+   *
+   * @remarks
+   * Alien-assigned release — the platform resolves a release from `version`.
    */
-  releaseId: string;
+  releaseId?: string | null | undefined;
   /**
    * A bag of resources, unaware of any cloud.
    */
@@ -2014,7 +2020,7 @@ export type SyncReconcileRequestPreparedStackManagementEnum = ClosedEnum<
 /**
  * AWS-specific binding specification
  */
-export type SyncReconcileRequestPreparedStackOverrideAwResource = {
+export type PreparedStackOverrideStateAwResource = {
   /**
    * Optional condition for additional filtering (rare)
    */
@@ -2046,7 +2052,7 @@ export type SyncReconcileRequestPreparedStackOverrideAwBinding = {
   /**
    * AWS-specific binding specification
    */
-  resource?: SyncReconcileRequestPreparedStackOverrideAwResource | undefined;
+  resource?: PreparedStackOverrideStateAwResource | undefined;
   /**
    * AWS-specific binding specification
    */
@@ -2122,7 +2128,7 @@ export type SyncReconcileRequestPreparedStackOverrideAw = {
 /**
  * Azure-specific binding specification
  */
-export type SyncReconcileRequestPreparedStackOverrideAzureResource = {
+export type PreparedStackOverrideStateAzureResource = {
   /**
    * Scope (subscription/resource group/resource level)
    */
@@ -2146,7 +2152,7 @@ export type SyncReconcileRequestPreparedStackOverrideAzureBinding = {
   /**
    * Azure-specific binding specification
    */
-  resource?: SyncReconcileRequestPreparedStackOverrideAzureResource | undefined;
+  resource?: PreparedStackOverrideStateAzureResource | undefined;
   /**
    * Azure-specific binding specification
    */
@@ -2216,7 +2222,7 @@ export type PreparedStackOverrideStateResourceConditionUnion =
 /**
  * GCP-specific binding specification
  */
-export type SyncReconcileRequestPreparedStackOverrideGcpResource = {
+export type PreparedStackOverrideStateGcpResource = {
   condition?:
     | PreparedStackOverrideConditionStateResource
     | any
@@ -2258,7 +2264,7 @@ export type SyncReconcileRequestPreparedStackOverrideGcpBinding = {
   /**
    * GCP-specific binding specification
    */
-  resource?: SyncReconcileRequestPreparedStackOverrideGcpResource | undefined;
+  resource?: PreparedStackOverrideStateGcpResource | undefined;
   /**
    * GCP-specific binding specification
    */
@@ -2374,7 +2380,7 @@ export type SyncReconcileRequestPreparedStackManagement2 = {
 /**
  * AWS-specific binding specification
  */
-export type SyncReconcileRequestPreparedStackExtendAwResource = {
+export type PreparedStackExtendStateAwResource = {
   /**
    * Optional condition for additional filtering (rare)
    */
@@ -2406,7 +2412,7 @@ export type SyncReconcileRequestPreparedStackExtendAwBinding = {
   /**
    * AWS-specific binding specification
    */
-  resource?: SyncReconcileRequestPreparedStackExtendAwResource | undefined;
+  resource?: PreparedStackExtendStateAwResource | undefined;
   /**
    * AWS-specific binding specification
    */
@@ -2482,7 +2488,7 @@ export type SyncReconcileRequestPreparedStackExtendAw = {
 /**
  * Azure-specific binding specification
  */
-export type SyncReconcileRequestPreparedStackExtendAzureResource = {
+export type PreparedStackExtendStateAzureResource = {
   /**
    * Scope (subscription/resource group/resource level)
    */
@@ -2506,7 +2512,7 @@ export type SyncReconcileRequestPreparedStackExtendAzureBinding = {
   /**
    * Azure-specific binding specification
    */
-  resource?: SyncReconcileRequestPreparedStackExtendAzureResource | undefined;
+  resource?: PreparedStackExtendStateAzureResource | undefined;
   /**
    * Azure-specific binding specification
    */
@@ -2576,7 +2582,7 @@ export type PreparedStackExtendStateResourceConditionUnion =
 /**
  * GCP-specific binding specification
  */
-export type SyncReconcileRequestPreparedStackExtendGcpResource = {
+export type PreparedStackExtendStateGcpResource = {
   condition?:
     | PreparedStackExtendConditionStateResource
     | any
@@ -2618,7 +2624,7 @@ export type SyncReconcileRequestPreparedStackExtendGcpBinding = {
   /**
    * GCP-specific binding specification
    */
-  resource?: SyncReconcileRequestPreparedStackExtendGcpResource | undefined;
+  resource?: PreparedStackExtendStateGcpResource | undefined;
   /**
    * GCP-specific binding specification
    */
@@ -2742,7 +2748,7 @@ export type SyncReconcileRequestPreparedStackManagementUnion =
 /**
  * AWS-specific binding specification
  */
-export type SyncReconcileRequestPreparedStackProfileAwResource = {
+export type PreparedStackProfileStateAwResource = {
   /**
    * Optional condition for additional filtering (rare)
    */
@@ -2774,7 +2780,7 @@ export type SyncReconcileRequestPreparedStackProfileAwBinding = {
   /**
    * AWS-specific binding specification
    */
-  resource?: SyncReconcileRequestPreparedStackProfileAwResource | undefined;
+  resource?: PreparedStackProfileStateAwResource | undefined;
   /**
    * AWS-specific binding specification
    */
@@ -2850,7 +2856,7 @@ export type SyncReconcileRequestPreparedStackProfileAw = {
 /**
  * Azure-specific binding specification
  */
-export type SyncReconcileRequestPreparedStackProfileAzureResource = {
+export type PreparedStackProfileStateAzureResource = {
   /**
    * Scope (subscription/resource group/resource level)
    */
@@ -2874,7 +2880,7 @@ export type SyncReconcileRequestPreparedStackProfileAzureBinding = {
   /**
    * Azure-specific binding specification
    */
-  resource?: SyncReconcileRequestPreparedStackProfileAzureResource | undefined;
+  resource?: PreparedStackProfileStateAzureResource | undefined;
   /**
    * Azure-specific binding specification
    */
@@ -2944,7 +2950,7 @@ export type PreparedStackProfileStateResourceConditionUnion =
 /**
  * GCP-specific binding specification
  */
-export type SyncReconcileRequestPreparedStackProfileGcpResource = {
+export type PreparedStackProfileStateGcpResource = {
   condition?:
     | PreparedStackProfileConditionStateResource
     | any
@@ -2986,7 +2992,7 @@ export type SyncReconcileRequestPreparedStackProfileGcpBinding = {
   /**
    * GCP-specific binding specification
    */
-  resource?: SyncReconcileRequestPreparedStackProfileGcpResource | undefined;
+  resource?: PreparedStackProfileStateGcpResource | undefined;
   /**
    * GCP-specific binding specification
    */
@@ -3573,7 +3579,13 @@ export type SyncReconcileRequestStackStateUnion =
   | any;
 
 /**
- * Deployment status in the deployment lifecycle
+ * Deployment status in the deployment lifecycle.
+ *
+ * @remarks
+ *
+ * For observe-only deployments with no release or stack state, `Running`
+ * means the Operator is attached. Connectivity comes from `lastHeartbeatAt`;
+ * resource health comes from inventory and resource heartbeat data.
  */
 export const StateStatus = {
   Pending: "pending",
@@ -3596,7 +3608,13 @@ export const StateStatus = {
   Error: "error",
 } as const;
 /**
- * Deployment status in the deployment lifecycle
+ * Deployment status in the deployment lifecycle.
+ *
+ * @remarks
+ *
+ * For observe-only deployments with no release or stack state, `Running`
+ * means the Operator is attached. Connectivity comes from `lastHeartbeatAt`;
+ * resource health comes from inventory and resource heartbeat data.
  */
 export type StateStatus = ClosedEnum<typeof StateStatus>;
 
@@ -3863,7 +3881,7 @@ export type SyncReconcileRequestTargetReleaseManagementEnum = ClosedEnum<
 /**
  * AWS-specific binding specification
  */
-export type SyncReconcileRequestTargetReleaseOverrideAwResource = {
+export type TargetReleaseOverrideStateAwResource = {
   /**
    * Optional condition for additional filtering (rare)
    */
@@ -3895,7 +3913,7 @@ export type SyncReconcileRequestTargetReleaseOverrideAwBinding = {
   /**
    * AWS-specific binding specification
    */
-  resource?: SyncReconcileRequestTargetReleaseOverrideAwResource | undefined;
+  resource?: TargetReleaseOverrideStateAwResource | undefined;
   /**
    * AWS-specific binding specification
    */
@@ -3971,7 +3989,7 @@ export type SyncReconcileRequestTargetReleaseOverrideAw = {
 /**
  * Azure-specific binding specification
  */
-export type SyncReconcileRequestTargetReleaseOverrideAzureResource = {
+export type TargetReleaseOverrideStateAzureResource = {
   /**
    * Scope (subscription/resource group/resource level)
    */
@@ -3995,7 +4013,7 @@ export type SyncReconcileRequestTargetReleaseOverrideAzureBinding = {
   /**
    * Azure-specific binding specification
    */
-  resource?: SyncReconcileRequestTargetReleaseOverrideAzureResource | undefined;
+  resource?: TargetReleaseOverrideStateAzureResource | undefined;
   /**
    * Azure-specific binding specification
    */
@@ -4065,7 +4083,7 @@ export type TargetReleaseOverrideStateResourceConditionUnion =
 /**
  * GCP-specific binding specification
  */
-export type SyncReconcileRequestTargetReleaseOverrideGcpResource = {
+export type TargetReleaseOverrideStateGcpResource = {
   condition?:
     | TargetReleaseOverrideConditionStateResource
     | any
@@ -4107,7 +4125,7 @@ export type SyncReconcileRequestTargetReleaseOverrideGcpBinding = {
   /**
    * GCP-specific binding specification
    */
-  resource?: SyncReconcileRequestTargetReleaseOverrideGcpResource | undefined;
+  resource?: TargetReleaseOverrideStateGcpResource | undefined;
   /**
    * GCP-specific binding specification
    */
@@ -4223,7 +4241,7 @@ export type SyncReconcileRequestTargetReleaseManagement2 = {
 /**
  * AWS-specific binding specification
  */
-export type SyncReconcileRequestTargetReleaseExtendAwResource = {
+export type TargetReleaseExtendStateAwResource = {
   /**
    * Optional condition for additional filtering (rare)
    */
@@ -4255,7 +4273,7 @@ export type SyncReconcileRequestTargetReleaseExtendAwBinding = {
   /**
    * AWS-specific binding specification
    */
-  resource?: SyncReconcileRequestTargetReleaseExtendAwResource | undefined;
+  resource?: TargetReleaseExtendStateAwResource | undefined;
   /**
    * AWS-specific binding specification
    */
@@ -4331,7 +4349,7 @@ export type SyncReconcileRequestTargetReleaseExtendAw = {
 /**
  * Azure-specific binding specification
  */
-export type SyncReconcileRequestTargetReleaseExtendAzureResource = {
+export type TargetReleaseExtendStateAzureResource = {
   /**
    * Scope (subscription/resource group/resource level)
    */
@@ -4355,7 +4373,7 @@ export type SyncReconcileRequestTargetReleaseExtendAzureBinding = {
   /**
    * Azure-specific binding specification
    */
-  resource?: SyncReconcileRequestTargetReleaseExtendAzureResource | undefined;
+  resource?: TargetReleaseExtendStateAzureResource | undefined;
   /**
    * Azure-specific binding specification
    */
@@ -4425,7 +4443,7 @@ export type TargetReleaseExtendStateResourceConditionUnion =
 /**
  * GCP-specific binding specification
  */
-export type SyncReconcileRequestTargetReleaseExtendGcpResource = {
+export type TargetReleaseExtendStateGcpResource = {
   condition?:
     | TargetReleaseExtendConditionStateResource
     | any
@@ -4467,7 +4485,7 @@ export type SyncReconcileRequestTargetReleaseExtendGcpBinding = {
   /**
    * GCP-specific binding specification
    */
-  resource?: SyncReconcileRequestTargetReleaseExtendGcpResource | undefined;
+  resource?: TargetReleaseExtendStateGcpResource | undefined;
   /**
    * GCP-specific binding specification
    */
@@ -4591,7 +4609,7 @@ export type SyncReconcileRequestTargetReleaseManagementUnion =
 /**
  * AWS-specific binding specification
  */
-export type SyncReconcileRequestTargetReleaseProfileAwResource = {
+export type TargetReleaseProfileStateAwResource = {
   /**
    * Optional condition for additional filtering (rare)
    */
@@ -4623,7 +4641,7 @@ export type SyncReconcileRequestTargetReleaseProfileAwBinding = {
   /**
    * AWS-specific binding specification
    */
-  resource?: SyncReconcileRequestTargetReleaseProfileAwResource | undefined;
+  resource?: TargetReleaseProfileStateAwResource | undefined;
   /**
    * AWS-specific binding specification
    */
@@ -4699,7 +4717,7 @@ export type SyncReconcileRequestTargetReleaseProfileAw = {
 /**
  * Azure-specific binding specification
  */
-export type SyncReconcileRequestTargetReleaseProfileAzureResource = {
+export type TargetReleaseProfileStateAzureResource = {
   /**
    * Scope (subscription/resource group/resource level)
    */
@@ -4723,7 +4741,7 @@ export type SyncReconcileRequestTargetReleaseProfileAzureBinding = {
   /**
    * Azure-specific binding specification
    */
-  resource?: SyncReconcileRequestTargetReleaseProfileAzureResource | undefined;
+  resource?: TargetReleaseProfileStateAzureResource | undefined;
   /**
    * Azure-specific binding specification
    */
@@ -4793,7 +4811,7 @@ export type TargetReleaseProfileStateResourceConditionUnion =
 /**
  * GCP-specific binding specification
  */
-export type SyncReconcileRequestTargetReleaseProfileGcpResource = {
+export type TargetReleaseProfileStateGcpResource = {
   condition?:
     | TargetReleaseProfileConditionStateResource
     | any
@@ -4835,7 +4853,7 @@ export type SyncReconcileRequestTargetReleaseProfileGcpBinding = {
   /**
    * GCP-specific binding specification
    */
-  resource?: SyncReconcileRequestTargetReleaseProfileGcpResource | undefined;
+  resource?: TargetReleaseProfileStateGcpResource | undefined;
   /**
    * GCP-specific binding specification
    */
@@ -5092,9 +5110,12 @@ export type SyncReconcileRequestTargetRelease = {
    */
   description?: string | null | undefined;
   /**
-   * Release ID (e.g., rel_xyz)
+   * Release ID (e.g., rel_xyz). `None` for an observe deployment, which has no
+   *
+   * @remarks
+   * Alien-assigned release — the platform resolves a release from `version`.
    */
-  releaseId: string;
+  releaseId?: string | null | undefined;
   /**
    * A bag of resources, unaware of any cloud.
    */
@@ -5151,13 +5172,19 @@ export type SyncReconcileRequestState = {
     | undefined;
   stackState?: SyncReconcileRequestStackState | any | null | undefined;
   /**
-   * Deployment status in the deployment lifecycle
+   * Deployment status in the deployment lifecycle.
+   *
+   * @remarks
+   *
+   * For observe-only deployments with no release or stack state, `Running`
+   * means the Operator is attached. Connectivity comes from `lastHeartbeatAt`;
+   * resource health comes from inventory and resource heartbeat data.
    */
   status: StateStatus;
   targetRelease?: SyncReconcileRequestTargetRelease | any | null | undefined;
 };
 
-export const BackendEnum = {
+export const ResourceHeartbeatBackendEnum = {
   Aws: "aws",
   Gcp: "gcp",
   Azure: "azure",
@@ -5167,12 +5194,14 @@ export const BackendEnum = {
   External: "external",
   Test: "test",
 } as const;
-export type BackendEnum = ClosedEnum<typeof BackendEnum>;
+export type ResourceHeartbeatBackendEnum = ClosedEnum<
+  typeof ResourceHeartbeatBackendEnum
+>;
 
 /**
  * Represents the target cloud platform.
  */
-export const HeartbeatControllerPlatform = {
+export const ResourceHeartbeatControllerPlatform = {
   Aws: "aws",
   Gcp: "gcp",
   Azure: "azure",
@@ -5183,44 +5212,42 @@ export const HeartbeatControllerPlatform = {
 /**
  * Represents the target cloud platform.
  */
-export type HeartbeatControllerPlatform = ClosedEnum<
-  typeof HeartbeatControllerPlatform
+export type ResourceHeartbeatControllerPlatform = ClosedEnum<
+  typeof ResourceHeartbeatControllerPlatform
 >;
 
-export const Reason59 = {
+export const DataReason63 = {
   Forbidden: "forbidden",
   NotInstalled: "not-installed",
   ApiUnavailable: "api-unavailable",
   CollectionFailed: "collection-failed",
   TimedOut: "timed-out",
 } as const;
-export type Reason59 = ClosedEnum<typeof Reason59>;
+export type DataReason63 = ClosedEnum<typeof DataReason63>;
 
-export const CollectionIssueSeverity59 = {
+export const StatusSeverity63 = {
   Info: "info",
   Warning: "warning",
   Error: "error",
 } as const;
-export type CollectionIssueSeverity59 = ClosedEnum<
-  typeof CollectionIssueSeverity59
->;
+export type StatusSeverity63 = ClosedEnum<typeof StatusSeverity63>;
 
-export type CollectionIssue59 = {
+export type DataCollectionIssue63 = {
   message: string;
-  reason: Reason59;
-  severity: CollectionIssueSeverity59;
+  reason: DataReason63;
+  severity: StatusSeverity63;
   source: string;
 };
 
-export const Health59 = {
+export const DataHealth63 = {
   Unknown: "unknown",
   Healthy: "healthy",
   Degraded: "degraded",
   Unhealthy: "unhealthy",
 } as const;
-export type Health59 = ClosedEnum<typeof Health59>;
+export type DataHealth63 = ClosedEnum<typeof DataHealth63>;
 
-export const StatusLifecycle59 = {
+export const StatusLifecycle63 = {
   Unknown: "unknown",
   Creating: "creating",
   Updating: "updating",
@@ -5232,12 +5259,12 @@ export const StatusLifecycle59 = {
   Deleted: "deleted",
   Failed: "failed",
 } as const;
-export type StatusLifecycle59 = ClosedEnum<typeof StatusLifecycle59>;
+export type StatusLifecycle63 = ClosedEnum<typeof StatusLifecycle63>;
 
-export type HeartbeatStatus59 = {
-  collectionIssues: Array<CollectionIssue59>;
-  health: Health59;
-  lifecycle: StatusLifecycle59;
+export type ResourceHeartbeatStatus63 = {
+  collectionIssues: Array<DataCollectionIssue63>;
+  health: DataHealth63;
+  lifecycle: StatusLifecycle63;
   message?: string | null | undefined;
   partial: boolean;
   stale: boolean;
@@ -5261,7 +5288,7 @@ export type SyncReconcileRequestData5 = {
   skuCapacity?: number | null | undefined;
   skuName?: string | null | undefined;
   skuTier?: string | null | undefined;
-  status: HeartbeatStatus59;
+  status: ResourceHeartbeatStatus63;
   updatedAt?: string | null | undefined;
   zoneRedundant?: boolean | null | undefined;
 };
@@ -5271,40 +5298,38 @@ export type DataAzureServiceBusNamespace = {
   resourceType: "azure_service_bus_namespace";
 };
 
-export const Reason58 = {
+export const DataReason62 = {
   Forbidden: "forbidden",
   NotInstalled: "not-installed",
   ApiUnavailable: "api-unavailable",
   CollectionFailed: "collection-failed",
   TimedOut: "timed-out",
 } as const;
-export type Reason58 = ClosedEnum<typeof Reason58>;
+export type DataReason62 = ClosedEnum<typeof DataReason62>;
 
-export const CollectionIssueSeverity58 = {
+export const StatusSeverity62 = {
   Info: "info",
   Warning: "warning",
   Error: "error",
 } as const;
-export type CollectionIssueSeverity58 = ClosedEnum<
-  typeof CollectionIssueSeverity58
->;
+export type StatusSeverity62 = ClosedEnum<typeof StatusSeverity62>;
 
-export type CollectionIssue58 = {
+export type DataCollectionIssue62 = {
   message: string;
-  reason: Reason58;
-  severity: CollectionIssueSeverity58;
+  reason: DataReason62;
+  severity: StatusSeverity62;
   source: string;
 };
 
-export const Health58 = {
+export const DataHealth62 = {
   Unknown: "unknown",
   Healthy: "healthy",
   Degraded: "degraded",
   Unhealthy: "unhealthy",
 } as const;
-export type Health58 = ClosedEnum<typeof Health58>;
+export type DataHealth62 = ClosedEnum<typeof DataHealth62>;
 
-export const StatusLifecycle58 = {
+export const StatusLifecycle62 = {
   Unknown: "unknown",
   Creating: "creating",
   Updating: "updating",
@@ -5316,12 +5341,12 @@ export const StatusLifecycle58 = {
   Deleted: "deleted",
   Failed: "failed",
 } as const;
-export type StatusLifecycle58 = ClosedEnum<typeof StatusLifecycle58>;
+export type StatusLifecycle62 = ClosedEnum<typeof StatusLifecycle62>;
 
-export type HeartbeatStatus58 = {
-  collectionIssues: Array<CollectionIssue58>;
-  health: Health58;
-  lifecycle: StatusLifecycle58;
+export type ResourceHeartbeatStatus62 = {
+  collectionIssues: Array<DataCollectionIssue62>;
+  health: DataHealth62;
+  lifecycle: StatusLifecycle62;
   message?: string | null | undefined;
   partial: boolean;
   stale: boolean;
@@ -5346,7 +5371,7 @@ export type SyncReconcileRequestData4 = {
   resourceGroup?: string | null | undefined;
   resourceId?: string | null | undefined;
   staticIp?: string | null | undefined;
-  status: HeartbeatStatus58;
+  status: ResourceHeartbeatStatus62;
   workloadProfileCount: number;
   workloadProfiles: Array<WorkloadProfile>;
   zoneRedundant?: boolean | null | undefined;
@@ -5375,40 +5400,38 @@ export type SecondaryEndpoints = {
   web?: string | null | undefined;
 };
 
-export const Reason57 = {
+export const DataReason61 = {
   Forbidden: "forbidden",
   NotInstalled: "not-installed",
   ApiUnavailable: "api-unavailable",
   CollectionFailed: "collection-failed",
   TimedOut: "timed-out",
 } as const;
-export type Reason57 = ClosedEnum<typeof Reason57>;
+export type DataReason61 = ClosedEnum<typeof DataReason61>;
 
-export const CollectionIssueSeverity57 = {
+export const StatusSeverity61 = {
   Info: "info",
   Warning: "warning",
   Error: "error",
 } as const;
-export type CollectionIssueSeverity57 = ClosedEnum<
-  typeof CollectionIssueSeverity57
->;
+export type StatusSeverity61 = ClosedEnum<typeof StatusSeverity61>;
 
-export type CollectionIssue57 = {
+export type DataCollectionIssue61 = {
   message: string;
-  reason: Reason57;
-  severity: CollectionIssueSeverity57;
+  reason: DataReason61;
+  severity: StatusSeverity61;
   source: string;
 };
 
-export const Health57 = {
+export const DataHealth61 = {
   Unknown: "unknown",
   Healthy: "healthy",
   Degraded: "degraded",
   Unhealthy: "unhealthy",
 } as const;
-export type Health57 = ClosedEnum<typeof Health57>;
+export type DataHealth61 = ClosedEnum<typeof DataHealth61>;
 
-export const StatusLifecycle57 = {
+export const StatusLifecycle61 = {
   Unknown: "unknown",
   Creating: "creating",
   Updating: "updating",
@@ -5420,12 +5443,12 @@ export const StatusLifecycle57 = {
   Deleted: "deleted",
   Failed: "failed",
 } as const;
-export type StatusLifecycle57 = ClosedEnum<typeof StatusLifecycle57>;
+export type StatusLifecycle61 = ClosedEnum<typeof StatusLifecycle61>;
 
-export type HeartbeatStatus57 = {
-  collectionIssues: Array<CollectionIssue57>;
-  health: Health57;
-  lifecycle: StatusLifecycle57;
+export type ResourceHeartbeatStatus61 = {
+  collectionIssues: Array<DataCollectionIssue61>;
+  health: DataHealth61;
+  lifecycle: StatusLifecycle61;
   message?: string | null | undefined;
   partial: boolean;
   stale: boolean;
@@ -5453,7 +5476,7 @@ export type SyncReconcileRequestData3 = {
   secondaryEndpoints: SecondaryEndpoints;
   skuName?: string | null | undefined;
   skuTier?: string | null | undefined;
-  status: HeartbeatStatus57;
+  status: ResourceHeartbeatStatus61;
   supportsHttpsTrafficOnly?: boolean | null | undefined;
 };
 
@@ -5462,40 +5485,38 @@ export type DataAzureStorageAccount = {
   resourceType: "azure_storage_account";
 };
 
-export const Reason56 = {
+export const DataReason60 = {
   Forbidden: "forbidden",
   NotInstalled: "not-installed",
   ApiUnavailable: "api-unavailable",
   CollectionFailed: "collection-failed",
   TimedOut: "timed-out",
 } as const;
-export type Reason56 = ClosedEnum<typeof Reason56>;
+export type DataReason60 = ClosedEnum<typeof DataReason60>;
 
-export const CollectionIssueSeverity56 = {
+export const StatusSeverity60 = {
   Info: "info",
   Warning: "warning",
   Error: "error",
 } as const;
-export type CollectionIssueSeverity56 = ClosedEnum<
-  typeof CollectionIssueSeverity56
->;
+export type StatusSeverity60 = ClosedEnum<typeof StatusSeverity60>;
 
-export type CollectionIssue56 = {
+export type DataCollectionIssue60 = {
   message: string;
-  reason: Reason56;
-  severity: CollectionIssueSeverity56;
+  reason: DataReason60;
+  severity: StatusSeverity60;
   source: string;
 };
 
-export const Health56 = {
+export const DataHealth60 = {
   Unknown: "unknown",
   Healthy: "healthy",
   Degraded: "degraded",
   Unhealthy: "unhealthy",
 } as const;
-export type Health56 = ClosedEnum<typeof Health56>;
+export type DataHealth60 = ClosedEnum<typeof DataHealth60>;
 
-export const StatusLifecycle56 = {
+export const StatusLifecycle60 = {
   Unknown: "unknown",
   Creating: "creating",
   Updating: "updating",
@@ -5507,12 +5528,12 @@ export const StatusLifecycle56 = {
   Deleted: "deleted",
   Failed: "failed",
 } as const;
-export type StatusLifecycle56 = ClosedEnum<typeof StatusLifecycle56>;
+export type StatusLifecycle60 = ClosedEnum<typeof StatusLifecycle60>;
 
-export type HeartbeatStatus56 = {
-  collectionIssues: Array<CollectionIssue56>;
-  health: Health56;
-  lifecycle: StatusLifecycle56;
+export type ResourceHeartbeatStatus60 = {
+  collectionIssues: Array<DataCollectionIssue60>;
+  health: DataHealth60;
+  lifecycle: StatusLifecycle60;
   message?: string | null | undefined;
   partial: boolean;
   stale: boolean;
@@ -5524,7 +5545,7 @@ export type SyncReconcileRequestData2 = {
   name: string;
   provisioningState?: string | null | undefined;
   resourceId?: string | null | undefined;
-  status: HeartbeatStatus56;
+  status: ResourceHeartbeatStatus60;
 };
 
 export type DataAzureResourceGroup = {
@@ -5532,40 +5553,38 @@ export type DataAzureResourceGroup = {
   resourceType: "azure_resource_group";
 };
 
-export const Reason55 = {
+export const DataReason59 = {
   Forbidden: "forbidden",
   NotInstalled: "not-installed",
   ApiUnavailable: "api-unavailable",
   CollectionFailed: "collection-failed",
   TimedOut: "timed-out",
 } as const;
-export type Reason55 = ClosedEnum<typeof Reason55>;
+export type DataReason59 = ClosedEnum<typeof DataReason59>;
 
-export const CollectionIssueSeverity55 = {
+export const StatusSeverity59 = {
   Info: "info",
   Warning: "warning",
   Error: "error",
 } as const;
-export type CollectionIssueSeverity55 = ClosedEnum<
-  typeof CollectionIssueSeverity55
->;
+export type StatusSeverity59 = ClosedEnum<typeof StatusSeverity59>;
 
-export type CollectionIssue55 = {
+export type DataCollectionIssue59 = {
   message: string;
-  reason: Reason55;
-  severity: CollectionIssueSeverity55;
+  reason: DataReason59;
+  severity: StatusSeverity59;
   source: string;
 };
 
-export const Health55 = {
+export const DataHealth59 = {
   Unknown: "unknown",
   Healthy: "healthy",
   Degraded: "degraded",
   Unhealthy: "unhealthy",
 } as const;
-export type Health55 = ClosedEnum<typeof Health55>;
+export type DataHealth59 = ClosedEnum<typeof DataHealth59>;
 
-export const StatusLifecycle55 = {
+export const StatusLifecycle59 = {
   Unknown: "unknown",
   Creating: "creating",
   Updating: "updating",
@@ -5577,12 +5596,12 @@ export const StatusLifecycle55 = {
   Deleted: "deleted",
   Failed: "failed",
 } as const;
-export type StatusLifecycle55 = ClosedEnum<typeof StatusLifecycle55>;
+export type StatusLifecycle59 = ClosedEnum<typeof StatusLifecycle59>;
 
-export type HeartbeatStatus55 = {
-  collectionIssues: Array<CollectionIssue55>;
-  health: Health55;
-  lifecycle: StatusLifecycle55;
+export type ResourceHeartbeatStatus59 = {
+  collectionIssues: Array<DataCollectionIssue59>;
+  health: DataHealth59;
+  lifecycle: StatusLifecycle59;
   message?: string | null | undefined;
   partial: boolean;
   stale: boolean;
@@ -5595,44 +5614,42 @@ export type DataAzureResourceProvider = {
   registrationPolicy?: string | null | undefined;
   registrationState?: string | null | undefined;
   resourceTypeCount: number;
-  status: HeartbeatStatus55;
+  status: ResourceHeartbeatStatus59;
   backend: "azureResourceProvider";
 };
 
-export const Reason54 = {
+export const DataReason58 = {
   Forbidden: "forbidden",
   NotInstalled: "not-installed",
   ApiUnavailable: "api-unavailable",
   CollectionFailed: "collection-failed",
   TimedOut: "timed-out",
 } as const;
-export type Reason54 = ClosedEnum<typeof Reason54>;
+export type DataReason58 = ClosedEnum<typeof DataReason58>;
 
-export const CollectionIssueSeverity54 = {
+export const StatusSeverity58 = {
   Info: "info",
   Warning: "warning",
   Error: "error",
 } as const;
-export type CollectionIssueSeverity54 = ClosedEnum<
-  typeof CollectionIssueSeverity54
->;
+export type StatusSeverity58 = ClosedEnum<typeof StatusSeverity58>;
 
-export type CollectionIssue54 = {
+export type DataCollectionIssue58 = {
   message: string;
-  reason: Reason54;
-  severity: CollectionIssueSeverity54;
+  reason: DataReason58;
+  severity: StatusSeverity58;
   source: string;
 };
 
-export const Health54 = {
+export const DataHealth58 = {
   Unknown: "unknown",
   Healthy: "healthy",
   Degraded: "degraded",
   Unhealthy: "unhealthy",
 } as const;
-export type Health54 = ClosedEnum<typeof Health54>;
+export type DataHealth58 = ClosedEnum<typeof DataHealth58>;
 
-export const StatusLifecycle54 = {
+export const StatusLifecycle58 = {
   Unknown: "unknown",
   Creating: "creating",
   Updating: "updating",
@@ -5644,12 +5661,12 @@ export const StatusLifecycle54 = {
   Deleted: "deleted",
   Failed: "failed",
 } as const;
-export type StatusLifecycle54 = ClosedEnum<typeof StatusLifecycle54>;
+export type StatusLifecycle58 = ClosedEnum<typeof StatusLifecycle58>;
 
-export type HeartbeatStatus54 = {
-  collectionIssues: Array<CollectionIssue54>;
-  health: Health54;
-  lifecycle: StatusLifecycle54;
+export type ResourceHeartbeatStatus58 = {
+  collectionIssues: Array<DataCollectionIssue58>;
+  health: DataHealth58;
+  lifecycle: StatusLifecycle58;
   message?: string | null | undefined;
   partial: boolean;
   stale: boolean;
@@ -5662,12 +5679,12 @@ export type DataGcpServiceUsage = {
   serviceName: string;
   serviceResourceName?: string | null | undefined;
   state?: string | null | undefined;
-  status: HeartbeatStatus54;
+  status: ResourceHeartbeatStatus58;
   title?: string | null | undefined;
   backend: "gcpServiceUsage";
 };
 
-export type SyncReconcileRequestDataUnion14 =
+export type SyncReconcileRequestDataUnion15 =
   | DataGcpServiceUsage
   | DataAzureResourceProvider;
 
@@ -5708,40 +5725,38 @@ export type SyncReconcileRequestEvent12 = {
   type?: string | null | undefined;
 };
 
-export const Reason53 = {
+export const DataReason57 = {
   Forbidden: "forbidden",
   NotInstalled: "not-installed",
   ApiUnavailable: "api-unavailable",
   CollectionFailed: "collection-failed",
   TimedOut: "timed-out",
 } as const;
-export type Reason53 = ClosedEnum<typeof Reason53>;
+export type DataReason57 = ClosedEnum<typeof DataReason57>;
 
-export const CollectionIssueSeverity53 = {
+export const StatusSeverity57 = {
   Info: "info",
   Warning: "warning",
   Error: "error",
 } as const;
-export type CollectionIssueSeverity53 = ClosedEnum<
-  typeof CollectionIssueSeverity53
->;
+export type StatusSeverity57 = ClosedEnum<typeof StatusSeverity57>;
 
-export type CollectionIssue53 = {
+export type DataCollectionIssue57 = {
   message: string;
-  reason: Reason53;
-  severity: CollectionIssueSeverity53;
+  reason: DataReason57;
+  severity: StatusSeverity57;
   source: string;
 };
 
-export const Health53 = {
+export const DataHealth57 = {
   Unknown: "unknown",
   Healthy: "healthy",
   Degraded: "degraded",
   Unhealthy: "unhealthy",
 } as const;
-export type Health53 = ClosedEnum<typeof Health53>;
+export type DataHealth57 = ClosedEnum<typeof DataHealth57>;
 
-export const StatusLifecycle53 = {
+export const StatusLifecycle57 = {
   Unknown: "unknown",
   Creating: "creating",
   Updating: "updating",
@@ -5753,12 +5768,12 @@ export const StatusLifecycle53 = {
   Deleted: "deleted",
   Failed: "failed",
 } as const;
-export type StatusLifecycle53 = ClosedEnum<typeof StatusLifecycle53>;
+export type StatusLifecycle57 = ClosedEnum<typeof StatusLifecycle57>;
 
-export type HeartbeatStatus53 = {
-  collectionIssues: Array<CollectionIssue53>;
-  health: Health53;
-  lifecycle: StatusLifecycle53;
+export type ResourceHeartbeatStatus57 = {
+  collectionIssues: Array<DataCollectionIssue57>;
+  health: DataHealth57;
+  lifecycle: StatusLifecycle57;
   message?: string | null | undefined;
   partial: boolean;
   stale: boolean;
@@ -5774,45 +5789,43 @@ export type DataKubernetesJob = {
   jobName: string;
   namespace: string;
   startTime?: Date | null | undefined;
-  status: HeartbeatStatus53;
+  status: ResourceHeartbeatStatus57;
   succeeded?: number | null | undefined;
   backend: "kubernetesJob";
 };
 
-export const Reason52 = {
+export const DataReason56 = {
   Forbidden: "forbidden",
   NotInstalled: "not-installed",
   ApiUnavailable: "api-unavailable",
   CollectionFailed: "collection-failed",
   TimedOut: "timed-out",
 } as const;
-export type Reason52 = ClosedEnum<typeof Reason52>;
+export type DataReason56 = ClosedEnum<typeof DataReason56>;
 
-export const CollectionIssueSeverity52 = {
+export const StatusSeverity56 = {
   Info: "info",
   Warning: "warning",
   Error: "error",
 } as const;
-export type CollectionIssueSeverity52 = ClosedEnum<
-  typeof CollectionIssueSeverity52
->;
+export type StatusSeverity56 = ClosedEnum<typeof StatusSeverity56>;
 
-export type CollectionIssue52 = {
+export type DataCollectionIssue56 = {
   message: string;
-  reason: Reason52;
-  severity: CollectionIssueSeverity52;
+  reason: DataReason56;
+  severity: StatusSeverity56;
   source: string;
 };
 
-export const Health52 = {
+export const DataHealth56 = {
   Unknown: "unknown",
   Healthy: "healthy",
   Degraded: "degraded",
   Unhealthy: "unhealthy",
 } as const;
-export type Health52 = ClosedEnum<typeof Health52>;
+export type DataHealth56 = ClosedEnum<typeof DataHealth56>;
 
-export const StatusLifecycle52 = {
+export const StatusLifecycle56 = {
   Unknown: "unknown",
   Creating: "creating",
   Updating: "updating",
@@ -5824,12 +5837,12 @@ export const StatusLifecycle52 = {
   Deleted: "deleted",
   Failed: "failed",
 } as const;
-export type StatusLifecycle52 = ClosedEnum<typeof StatusLifecycle52>;
+export type StatusLifecycle56 = ClosedEnum<typeof StatusLifecycle56>;
 
-export type HeartbeatStatus52 = {
-  collectionIssues: Array<CollectionIssue52>;
-  health: Health52;
-  lifecycle: StatusLifecycle52;
+export type ResourceHeartbeatStatus56 = {
+  collectionIssues: Array<DataCollectionIssue56>;
+  health: DataHealth56;
+  lifecycle: StatusLifecycle56;
   message?: string | null | undefined;
   partial: boolean;
   stale: boolean;
@@ -5841,44 +5854,42 @@ export type DataAzureContainerApps2 = {
   managedIdentityId?: string | null | undefined;
   resourceGroupName: string;
   resourcePrefix?: string | null | undefined;
-  status: HeartbeatStatus52;
+  status: ResourceHeartbeatStatus56;
   backend: "azureContainerApps";
 };
 
-export const Reason51 = {
+export const DataReason55 = {
   Forbidden: "forbidden",
   NotInstalled: "not-installed",
   ApiUnavailable: "api-unavailable",
   CollectionFailed: "collection-failed",
   TimedOut: "timed-out",
 } as const;
-export type Reason51 = ClosedEnum<typeof Reason51>;
+export type DataReason55 = ClosedEnum<typeof DataReason55>;
 
-export const CollectionIssueSeverity51 = {
+export const StatusSeverity55 = {
   Info: "info",
   Warning: "warning",
   Error: "error",
 } as const;
-export type CollectionIssueSeverity51 = ClosedEnum<
-  typeof CollectionIssueSeverity51
->;
+export type StatusSeverity55 = ClosedEnum<typeof StatusSeverity55>;
 
-export type CollectionIssue51 = {
+export type DataCollectionIssue55 = {
   message: string;
-  reason: Reason51;
-  severity: CollectionIssueSeverity51;
+  reason: DataReason55;
+  severity: StatusSeverity55;
   source: string;
 };
 
-export const Health51 = {
+export const DataHealth55 = {
   Unknown: "unknown",
   Healthy: "healthy",
   Degraded: "degraded",
   Unhealthy: "unhealthy",
 } as const;
-export type Health51 = ClosedEnum<typeof Health51>;
+export type DataHealth55 = ClosedEnum<typeof DataHealth55>;
 
-export const StatusLifecycle51 = {
+export const StatusLifecycle55 = {
   Unknown: "unknown",
   Creating: "creating",
   Updating: "updating",
@@ -5890,12 +5901,12 @@ export const StatusLifecycle51 = {
   Deleted: "deleted",
   Failed: "failed",
 } as const;
-export type StatusLifecycle51 = ClosedEnum<typeof StatusLifecycle51>;
+export type StatusLifecycle55 = ClosedEnum<typeof StatusLifecycle55>;
 
-export type HeartbeatStatus51 = {
-  collectionIssues: Array<CollectionIssue51>;
-  health: Health51;
-  lifecycle: StatusLifecycle51;
+export type ResourceHeartbeatStatus55 = {
+  collectionIssues: Array<DataCollectionIssue55>;
+  health: DataHealth55;
+  lifecycle: StatusLifecycle55;
   message?: string | null | undefined;
   partial: boolean;
   stale: boolean;
@@ -5907,44 +5918,42 @@ export type DataGcpCloudBuild = {
   location: string;
   projectId: string;
   serviceAccount?: string | null | undefined;
-  status: HeartbeatStatus51;
+  status: ResourceHeartbeatStatus55;
   backend: "gcpCloudBuild";
 };
 
-export const Reason50 = {
+export const DataReason54 = {
   Forbidden: "forbidden",
   NotInstalled: "not-installed",
   ApiUnavailable: "api-unavailable",
   CollectionFailed: "collection-failed",
   TimedOut: "timed-out",
 } as const;
-export type Reason50 = ClosedEnum<typeof Reason50>;
+export type DataReason54 = ClosedEnum<typeof DataReason54>;
 
-export const CollectionIssueSeverity50 = {
+export const StatusSeverity54 = {
   Info: "info",
   Warning: "warning",
   Error: "error",
 } as const;
-export type CollectionIssueSeverity50 = ClosedEnum<
-  typeof CollectionIssueSeverity50
->;
+export type StatusSeverity54 = ClosedEnum<typeof StatusSeverity54>;
 
-export type CollectionIssue50 = {
+export type DataCollectionIssue54 = {
   message: string;
-  reason: Reason50;
-  severity: CollectionIssueSeverity50;
+  reason: DataReason54;
+  severity: StatusSeverity54;
   source: string;
 };
 
-export const Health50 = {
+export const DataHealth54 = {
   Unknown: "unknown",
   Healthy: "healthy",
   Degraded: "degraded",
   Unhealthy: "unhealthy",
 } as const;
-export type Health50 = ClosedEnum<typeof Health50>;
+export type DataHealth54 = ClosedEnum<typeof DataHealth54>;
 
-export const StatusLifecycle50 = {
+export const StatusLifecycle54 = {
   Unknown: "unknown",
   Creating: "creating",
   Updating: "updating",
@@ -5956,12 +5965,12 @@ export const StatusLifecycle50 = {
   Deleted: "deleted",
   Failed: "failed",
 } as const;
-export type StatusLifecycle50 = ClosedEnum<typeof StatusLifecycle50>;
+export type StatusLifecycle54 = ClosedEnum<typeof StatusLifecycle54>;
 
-export type HeartbeatStatus50 = {
-  collectionIssues: Array<CollectionIssue50>;
-  health: Health50;
-  lifecycle: StatusLifecycle50;
+export type ResourceHeartbeatStatus54 = {
+  collectionIssues: Array<DataCollectionIssue54>;
+  health: DataHealth54;
+  lifecycle: StatusLifecycle54;
   message?: string | null | undefined;
   partial: boolean;
   stale: boolean;
@@ -5987,12 +5996,12 @@ export type DataAwsCodeBuild = {
   s3LogsStatus?: string | null | undefined;
   serviceRolePresent: boolean;
   sourceType?: string | null | undefined;
-  status: HeartbeatStatus50;
+  status: ResourceHeartbeatStatus54;
   timeoutInMinutes?: number | null | undefined;
   backend: "awsCodeBuild";
 };
 
-export type SyncReconcileRequestDataUnion13 =
+export type SyncReconcileRequestDataUnion14 =
   | DataAwsCodeBuild
   | DataGcpCloudBuild
   | DataAzureContainerApps2
@@ -6007,40 +6016,38 @@ export type DataBuild = {
   resourceType: "build";
 };
 
-export const Reason49 = {
+export const DataReason53 = {
   Forbidden: "forbidden",
   NotInstalled: "not-installed",
   ApiUnavailable: "api-unavailable",
   CollectionFailed: "collection-failed",
   TimedOut: "timed-out",
 } as const;
-export type Reason49 = ClosedEnum<typeof Reason49>;
+export type DataReason53 = ClosedEnum<typeof DataReason53>;
 
-export const CollectionIssueSeverity49 = {
+export const StatusSeverity53 = {
   Info: "info",
   Warning: "warning",
   Error: "error",
 } as const;
-export type CollectionIssueSeverity49 = ClosedEnum<
-  typeof CollectionIssueSeverity49
->;
+export type StatusSeverity53 = ClosedEnum<typeof StatusSeverity53>;
 
-export type CollectionIssue49 = {
+export type DataCollectionIssue53 = {
   message: string;
-  reason: Reason49;
-  severity: CollectionIssueSeverity49;
+  reason: DataReason53;
+  severity: StatusSeverity53;
   source: string;
 };
 
-export const Health49 = {
+export const DataHealth53 = {
   Unknown: "unknown",
   Healthy: "healthy",
   Degraded: "degraded",
   Unhealthy: "unhealthy",
 } as const;
-export type Health49 = ClosedEnum<typeof Health49>;
+export type DataHealth53 = ClosedEnum<typeof DataHealth53>;
 
-export const StatusLifecycle49 = {
+export const StatusLifecycle53 = {
   Unknown: "unknown",
   Creating: "creating",
   Updating: "updating",
@@ -6052,58 +6059,56 @@ export const StatusLifecycle49 = {
   Deleted: "deleted",
   Failed: "failed",
 } as const;
-export type StatusLifecycle49 = ClosedEnum<typeof StatusLifecycle49>;
+export type StatusLifecycle53 = ClosedEnum<typeof StatusLifecycle53>;
 
-export type HeartbeatStatus49 = {
-  collectionIssues: Array<CollectionIssue49>;
-  health: Health49;
-  lifecycle: StatusLifecycle49;
+export type ResourceHeartbeatStatus53 = {
+  collectionIssues: Array<DataCollectionIssue53>;
+  health: DataHealth53;
+  lifecycle: StatusLifecycle53;
   message?: string | null | undefined;
   partial: boolean;
   stale: boolean;
 };
 
-export type DataLocal10 = {
+export type DataLocal11 = {
   reachable: boolean;
   registryUrl: string;
-  status: HeartbeatStatus49;
+  status: ResourceHeartbeatStatus53;
   backend: "local";
 };
 
-export const Reason48 = {
+export const DataReason52 = {
   Forbidden: "forbidden",
   NotInstalled: "not-installed",
   ApiUnavailable: "api-unavailable",
   CollectionFailed: "collection-failed",
   TimedOut: "timed-out",
 } as const;
-export type Reason48 = ClosedEnum<typeof Reason48>;
+export type DataReason52 = ClosedEnum<typeof DataReason52>;
 
-export const CollectionIssueSeverity48 = {
+export const StatusSeverity52 = {
   Info: "info",
   Warning: "warning",
   Error: "error",
 } as const;
-export type CollectionIssueSeverity48 = ClosedEnum<
-  typeof CollectionIssueSeverity48
->;
+export type StatusSeverity52 = ClosedEnum<typeof StatusSeverity52>;
 
-export type CollectionIssue48 = {
+export type DataCollectionIssue52 = {
   message: string;
-  reason: Reason48;
-  severity: CollectionIssueSeverity48;
+  reason: DataReason52;
+  severity: StatusSeverity52;
   source: string;
 };
 
-export const Health48 = {
+export const DataHealth52 = {
   Unknown: "unknown",
   Healthy: "healthy",
   Degraded: "degraded",
   Unhealthy: "unhealthy",
 } as const;
-export type Health48 = ClosedEnum<typeof Health48>;
+export type DataHealth52 = ClosedEnum<typeof DataHealth52>;
 
-export const StatusLifecycle48 = {
+export const StatusLifecycle52 = {
   Unknown: "unknown",
   Creating: "creating",
   Updating: "updating",
@@ -6115,12 +6120,12 @@ export const StatusLifecycle48 = {
   Deleted: "deleted",
   Failed: "failed",
 } as const;
-export type StatusLifecycle48 = ClosedEnum<typeof StatusLifecycle48>;
+export type StatusLifecycle52 = ClosedEnum<typeof StatusLifecycle52>;
 
-export type HeartbeatStatus48 = {
-  collectionIssues: Array<CollectionIssue48>;
-  health: Health48;
-  lifecycle: StatusLifecycle48;
+export type ResourceHeartbeatStatus52 = {
+  collectionIssues: Array<DataCollectionIssue52>;
+  health: DataHealth52;
+  lifecycle: StatusLifecycle52;
   message?: string | null | undefined;
   partial: boolean;
   stale: boolean;
@@ -6151,46 +6156,44 @@ export type DataAzureContainerRegistry = {
   resourceId?: string | null | undefined;
   skuName: string;
   skuTier?: string | null | undefined;
-  status: HeartbeatStatus48;
+  status: ResourceHeartbeatStatus52;
   type?: string | null | undefined;
   zoneRedundancy: string;
   backend: "azureContainerRegistry";
 };
 
-export const Reason47 = {
+export const DataReason51 = {
   Forbidden: "forbidden",
   NotInstalled: "not-installed",
   ApiUnavailable: "api-unavailable",
   CollectionFailed: "collection-failed",
   TimedOut: "timed-out",
 } as const;
-export type Reason47 = ClosedEnum<typeof Reason47>;
+export type DataReason51 = ClosedEnum<typeof DataReason51>;
 
-export const CollectionIssueSeverity47 = {
+export const StatusSeverity51 = {
   Info: "info",
   Warning: "warning",
   Error: "error",
 } as const;
-export type CollectionIssueSeverity47 = ClosedEnum<
-  typeof CollectionIssueSeverity47
->;
+export type StatusSeverity51 = ClosedEnum<typeof StatusSeverity51>;
 
-export type CollectionIssue47 = {
+export type DataCollectionIssue51 = {
   message: string;
-  reason: Reason47;
-  severity: CollectionIssueSeverity47;
+  reason: DataReason51;
+  severity: StatusSeverity51;
   source: string;
 };
 
-export const Health47 = {
+export const DataHealth51 = {
   Unknown: "unknown",
   Healthy: "healthy",
   Degraded: "degraded",
   Unhealthy: "unhealthy",
 } as const;
-export type Health47 = ClosedEnum<typeof Health47>;
+export type DataHealth51 = ClosedEnum<typeof DataHealth51>;
 
-export const StatusLifecycle47 = {
+export const StatusLifecycle51 = {
   Unknown: "unknown",
   Creating: "creating",
   Updating: "updating",
@@ -6202,12 +6205,12 @@ export const StatusLifecycle47 = {
   Deleted: "deleted",
   Failed: "failed",
 } as const;
-export type StatusLifecycle47 = ClosedEnum<typeof StatusLifecycle47>;
+export type StatusLifecycle51 = ClosedEnum<typeof StatusLifecycle51>;
 
-export type HeartbeatStatus47 = {
-  collectionIssues: Array<CollectionIssue47>;
-  health: Health47;
-  lifecycle: StatusLifecycle47;
+export type ResourceHeartbeatStatus51 = {
+  collectionIssues: Array<DataCollectionIssue51>;
+  health: DataHealth51;
+  lifecycle: StatusLifecycle51;
   message?: string | null | undefined;
   partial: boolean;
   stale: boolean;
@@ -6233,7 +6236,7 @@ export type DataGcpArtifactRegistry = {
   repositoryId: string;
   satisfiesPzs?: boolean | null | undefined;
   sizeBytes?: string | null | undefined;
-  status: HeartbeatStatus47;
+  status: ResourceHeartbeatStatus51;
   updateTime?: string | null | undefined;
   backend: "gcpArtifactRegistry";
 };
@@ -6250,40 +6253,38 @@ export type Repository = {
   scanOnPush?: boolean | null | undefined;
 };
 
-export const Reason46 = {
+export const DataReason50 = {
   Forbidden: "forbidden",
   NotInstalled: "not-installed",
   ApiUnavailable: "api-unavailable",
   CollectionFailed: "collection-failed",
   TimedOut: "timed-out",
 } as const;
-export type Reason46 = ClosedEnum<typeof Reason46>;
+export type DataReason50 = ClosedEnum<typeof DataReason50>;
 
-export const CollectionIssueSeverity46 = {
+export const StatusSeverity50 = {
   Info: "info",
   Warning: "warning",
   Error: "error",
 } as const;
-export type CollectionIssueSeverity46 = ClosedEnum<
-  typeof CollectionIssueSeverity46
->;
+export type StatusSeverity50 = ClosedEnum<typeof StatusSeverity50>;
 
-export type CollectionIssue46 = {
+export type DataCollectionIssue50 = {
   message: string;
-  reason: Reason46;
-  severity: CollectionIssueSeverity46;
+  reason: DataReason50;
+  severity: StatusSeverity50;
   source: string;
 };
 
-export const Health46 = {
+export const DataHealth50 = {
   Unknown: "unknown",
   Healthy: "healthy",
   Degraded: "degraded",
   Unhealthy: "unhealthy",
 } as const;
-export type Health46 = ClosedEnum<typeof Health46>;
+export type DataHealth50 = ClosedEnum<typeof DataHealth50>;
 
-export const StatusLifecycle46 = {
+export const StatusLifecycle50 = {
   Unknown: "unknown",
   Creating: "creating",
   Updating: "updating",
@@ -6295,12 +6296,12 @@ export const StatusLifecycle46 = {
   Deleted: "deleted",
   Failed: "failed",
 } as const;
-export type StatusLifecycle46 = ClosedEnum<typeof StatusLifecycle46>;
+export type StatusLifecycle50 = ClosedEnum<typeof StatusLifecycle50>;
 
-export type HeartbeatStatus46 = {
-  collectionIssues: Array<CollectionIssue46>;
-  health: Health46;
-  lifecycle: StatusLifecycle46;
+export type ResourceHeartbeatStatus50 = {
+  collectionIssues: Array<DataCollectionIssue50>;
+  health: DataHealth50;
+  lifecycle: StatusLifecycle50;
   message?: string | null | undefined;
   partial: boolean;
   stale: boolean;
@@ -6316,57 +6317,329 @@ export type DataAwsEcr = {
   repositoriesTruncated: boolean;
   repositoryCount: number;
   repositoryPrefix: string;
-  status: HeartbeatStatus46;
+  status: ResourceHeartbeatStatus50;
   backend: "awsEcr";
 };
 
-export type SyncReconcileRequestDataUnion12 =
+export type SyncReconcileRequestDataUnion13 =
   | DataAwsEcr
   | DataGcpArtifactRegistry
   | DataAzureContainerRegistry
-  | DataLocal10;
+  | DataLocal11;
 
 export type DataArtifactRegistry = {
   data:
     | DataAwsEcr
     | DataGcpArtifactRegistry
     | DataAzureContainerRegistry
-    | DataLocal10;
+    | DataLocal11;
   resourceType: "artifact-registry";
 };
 
-export const Reason45 = {
+export const DataReason49 = {
   Forbidden: "forbidden",
   NotInstalled: "not-installed",
   ApiUnavailable: "api-unavailable",
   CollectionFailed: "collection-failed",
   TimedOut: "timed-out",
 } as const;
-export type Reason45 = ClosedEnum<typeof Reason45>;
+export type DataReason49 = ClosedEnum<typeof DataReason49>;
 
-export const CollectionIssueSeverity45 = {
+export const StatusSeverity49 = {
   Info: "info",
   Warning: "warning",
   Error: "error",
 } as const;
-export type CollectionIssueSeverity45 = ClosedEnum<
-  typeof CollectionIssueSeverity45
->;
+export type StatusSeverity49 = ClosedEnum<typeof StatusSeverity49>;
 
-export type CollectionIssue45 = {
+export type DataCollectionIssue49 = {
   message: string;
-  reason: Reason45;
-  severity: CollectionIssueSeverity45;
+  reason: DataReason49;
+  severity: StatusSeverity49;
   source: string;
 };
 
-export const Health45 = {
+export const DataHealth49 = {
   Unknown: "unknown",
   Healthy: "healthy",
   Degraded: "degraded",
   Unhealthy: "unhealthy",
 } as const;
-export type Health45 = ClosedEnum<typeof Health45>;
+export type DataHealth49 = ClosedEnum<typeof DataHealth49>;
+
+export const StatusLifecycle49 = {
+  Unknown: "unknown",
+  Creating: "creating",
+  Updating: "updating",
+  Running: "running",
+  Scaling: "scaling",
+  Stopping: "stopping",
+  Stopped: "stopped",
+  Deleting: "deleting",
+  Deleted: "deleted",
+  Failed: "failed",
+} as const;
+export type StatusLifecycle49 = ClosedEnum<typeof StatusLifecycle49>;
+
+export type ResourceHeartbeatStatus49 = {
+  collectionIssues: Array<DataCollectionIssue49>;
+  health: DataHealth49;
+  lifecycle: StatusLifecycle49;
+  message?: string | null | undefined;
+  partial: boolean;
+  stale: boolean;
+};
+
+export type DataAzureManagedIdentity2 = {
+  ficName?: string | null | undefined;
+  roleAssignmentIds: Array<string>;
+  roleDefinitionId?: string | null | undefined;
+  status: ResourceHeartbeatStatus49;
+  tenantId?: string | null | undefined;
+  uamiClientId?: string | null | undefined;
+  uamiPrincipalId?: string | null | undefined;
+  uamiResourceId?: string | null | undefined;
+  backend: "azureManagedIdentity";
+};
+
+export const DataReason48 = {
+  Forbidden: "forbidden",
+  NotInstalled: "not-installed",
+  ApiUnavailable: "api-unavailable",
+  CollectionFailed: "collection-failed",
+  TimedOut: "timed-out",
+} as const;
+export type DataReason48 = ClosedEnum<typeof DataReason48>;
+
+export const StatusSeverity48 = {
+  Info: "info",
+  Warning: "warning",
+  Error: "error",
+} as const;
+export type StatusSeverity48 = ClosedEnum<typeof StatusSeverity48>;
+
+export type DataCollectionIssue48 = {
+  message: string;
+  reason: DataReason48;
+  severity: StatusSeverity48;
+  source: string;
+};
+
+export const DataHealth48 = {
+  Unknown: "unknown",
+  Healthy: "healthy",
+  Degraded: "degraded",
+  Unhealthy: "unhealthy",
+} as const;
+export type DataHealth48 = ClosedEnum<typeof DataHealth48>;
+
+export const StatusLifecycle48 = {
+  Unknown: "unknown",
+  Creating: "creating",
+  Updating: "updating",
+  Running: "running",
+  Scaling: "scaling",
+  Stopping: "stopping",
+  Stopped: "stopped",
+  Deleting: "deleting",
+  Deleted: "deleted",
+  Failed: "failed",
+} as const;
+export type StatusLifecycle48 = ClosedEnum<typeof StatusLifecycle48>;
+
+export type ResourceHeartbeatStatus48 = {
+  collectionIssues: Array<DataCollectionIssue48>;
+  health: DataHealth48;
+  lifecycle: StatusLifecycle48;
+  message?: string | null | undefined;
+  partial: boolean;
+  stale: boolean;
+};
+
+export type DataGcpServiceAccount2 = {
+  impersonationGranted: boolean;
+  roleBound: boolean;
+  serviceAccountEmail?: string | null | undefined;
+  serviceAccountUniqueId?: string | null | undefined;
+  status: ResourceHeartbeatStatus48;
+  backend: "gcpServiceAccount";
+};
+
+export const DataReason47 = {
+  Forbidden: "forbidden",
+  NotInstalled: "not-installed",
+  ApiUnavailable: "api-unavailable",
+  CollectionFailed: "collection-failed",
+  TimedOut: "timed-out",
+} as const;
+export type DataReason47 = ClosedEnum<typeof DataReason47>;
+
+export const StatusSeverity47 = {
+  Info: "info",
+  Warning: "warning",
+  Error: "error",
+} as const;
+export type StatusSeverity47 = ClosedEnum<typeof StatusSeverity47>;
+
+export type DataCollectionIssue47 = {
+  message: string;
+  reason: DataReason47;
+  severity: StatusSeverity47;
+  source: string;
+};
+
+export const DataHealth47 = {
+  Unknown: "unknown",
+  Healthy: "healthy",
+  Degraded: "degraded",
+  Unhealthy: "unhealthy",
+} as const;
+export type DataHealth47 = ClosedEnum<typeof DataHealth47>;
+
+export const StatusLifecycle47 = {
+  Unknown: "unknown",
+  Creating: "creating",
+  Updating: "updating",
+  Running: "running",
+  Scaling: "scaling",
+  Stopping: "stopping",
+  Stopped: "stopped",
+  Deleting: "deleting",
+  Deleted: "deleted",
+  Failed: "failed",
+} as const;
+export type StatusLifecycle47 = ClosedEnum<typeof StatusLifecycle47>;
+
+export type ResourceHeartbeatStatus47 = {
+  collectionIssues: Array<DataCollectionIssue47>;
+  health: DataHealth47;
+  lifecycle: StatusLifecycle47;
+  message?: string | null | undefined;
+  partial: boolean;
+  stale: boolean;
+};
+
+export type DataAwsIamRole2 = {
+  managementPermissionsApplied: boolean;
+  roleArn?: string | null | undefined;
+  roleName?: string | null | undefined;
+  status: ResourceHeartbeatStatus47;
+  backend: "awsIamRole";
+};
+
+export type SyncReconcileRequestDataUnion12 =
+  | DataAwsIamRole2
+  | DataGcpServiceAccount2
+  | DataAzureManagedIdentity2;
+
+export type DataRemoteStackManagement = {
+  data: DataAwsIamRole2 | DataGcpServiceAccount2 | DataAzureManagedIdentity2;
+  resourceType: "remote-stack-management";
+};
+
+export const DataReason46 = {
+  Forbidden: "forbidden",
+  NotInstalled: "not-installed",
+  ApiUnavailable: "api-unavailable",
+  CollectionFailed: "collection-failed",
+  TimedOut: "timed-out",
+} as const;
+export type DataReason46 = ClosedEnum<typeof DataReason46>;
+
+export const StatusSeverity46 = {
+  Info: "info",
+  Warning: "warning",
+  Error: "error",
+} as const;
+export type StatusSeverity46 = ClosedEnum<typeof StatusSeverity46>;
+
+export type DataCollectionIssue46 = {
+  message: string;
+  reason: DataReason46;
+  severity: StatusSeverity46;
+  source: string;
+};
+
+export const DataHealth46 = {
+  Unknown: "unknown",
+  Healthy: "healthy",
+  Degraded: "degraded",
+  Unhealthy: "unhealthy",
+} as const;
+export type DataHealth46 = ClosedEnum<typeof DataHealth46>;
+
+export const StatusLifecycle46 = {
+  Unknown: "unknown",
+  Creating: "creating",
+  Updating: "updating",
+  Running: "running",
+  Scaling: "scaling",
+  Stopping: "stopping",
+  Stopped: "stopped",
+  Deleting: "deleting",
+  Deleted: "deleted",
+  Failed: "failed",
+} as const;
+export type StatusLifecycle46 = ClosedEnum<typeof StatusLifecycle46>;
+
+export type ResourceHeartbeatStatus46 = {
+  collectionIssues: Array<DataCollectionIssue46>;
+  health: DataHealth46;
+  lifecycle: StatusLifecycle46;
+  message?: string | null | undefined;
+  partial: boolean;
+  stale: boolean;
+};
+
+export type DataAzureVnet = {
+  applicationGatewaySubnetName?: string | null | undefined;
+  cidrBlock?: string | null | undefined;
+  isByoVnet: boolean;
+  lastByoVnetVerificationErrorCode?: string | null | undefined;
+  location?: string | null | undefined;
+  natGatewayId?: string | null | undefined;
+  nsgId?: string | null | undefined;
+  privateEndpointSubnetName?: string | null | undefined;
+  privateSubnetName?: string | null | undefined;
+  publicIpId?: string | null | undefined;
+  publicSubnetName?: string | null | undefined;
+  resourceGroup?: string | null | undefined;
+  status: ResourceHeartbeatStatus46;
+  vnetName?: string | null | undefined;
+  vnetResourceId?: string | null | undefined;
+  backend: "azureVnet";
+};
+
+export const DataReason45 = {
+  Forbidden: "forbidden",
+  NotInstalled: "not-installed",
+  ApiUnavailable: "api-unavailable",
+  CollectionFailed: "collection-failed",
+  TimedOut: "timed-out",
+} as const;
+export type DataReason45 = ClosedEnum<typeof DataReason45>;
+
+export const StatusSeverity45 = {
+  Info: "info",
+  Warning: "warning",
+  Error: "error",
+} as const;
+export type StatusSeverity45 = ClosedEnum<typeof StatusSeverity45>;
+
+export type DataCollectionIssue45 = {
+  message: string;
+  reason: DataReason45;
+  severity: StatusSeverity45;
+  source: string;
+};
+
+export const DataHealth45 = {
+  Unknown: "unknown",
+  Healthy: "healthy",
+  Degraded: "degraded",
+  Unhealthy: "unhealthy",
+} as const;
+export type DataHealth45 = ClosedEnum<typeof DataHealth45>;
 
 export const StatusLifecycle45 = {
   Unknown: "unknown",
@@ -6382,59 +6655,60 @@ export const StatusLifecycle45 = {
 } as const;
 export type StatusLifecycle45 = ClosedEnum<typeof StatusLifecycle45>;
 
-export type HeartbeatStatus45 = {
-  collectionIssues: Array<CollectionIssue45>;
-  health: Health45;
+export type ResourceHeartbeatStatus45 = {
+  collectionIssues: Array<DataCollectionIssue45>;
+  health: DataHealth45;
   lifecycle: StatusLifecycle45;
   message?: string | null | undefined;
   partial: boolean;
   stale: boolean;
 };
 
-export type DataAzureManagedIdentity2 = {
-  ficName?: string | null | undefined;
-  roleAssignmentIds: Array<string>;
-  roleDefinitionId?: string | null | undefined;
-  status: HeartbeatStatus45;
-  tenantId?: string | null | undefined;
-  uamiClientId?: string | null | undefined;
-  uamiPrincipalId?: string | null | undefined;
-  uamiResourceId?: string | null | undefined;
-  backend: "azureManagedIdentity";
+export type DataGcpVpc = {
+  cidrBlock?: string | null | undefined;
+  cloudNatName?: string | null | undefined;
+  firewallName?: string | null | undefined;
+  isByoVpc: boolean;
+  networkName?: string | null | undefined;
+  networkSelfLink?: string | null | undefined;
+  region?: string | null | undefined;
+  routerName?: string | null | undefined;
+  status: ResourceHeartbeatStatus45;
+  subnetworkName?: string | null | undefined;
+  subnetworkSelfLink?: string | null | undefined;
+  backend: "gcpVpc";
 };
 
-export const Reason44 = {
+export const DataReason44 = {
   Forbidden: "forbidden",
   NotInstalled: "not-installed",
   ApiUnavailable: "api-unavailable",
   CollectionFailed: "collection-failed",
   TimedOut: "timed-out",
 } as const;
-export type Reason44 = ClosedEnum<typeof Reason44>;
+export type DataReason44 = ClosedEnum<typeof DataReason44>;
 
-export const CollectionIssueSeverity44 = {
+export const StatusSeverity44 = {
   Info: "info",
   Warning: "warning",
   Error: "error",
 } as const;
-export type CollectionIssueSeverity44 = ClosedEnum<
-  typeof CollectionIssueSeverity44
->;
+export type StatusSeverity44 = ClosedEnum<typeof StatusSeverity44>;
 
-export type CollectionIssue44 = {
+export type DataCollectionIssue44 = {
   message: string;
-  reason: Reason44;
-  severity: CollectionIssueSeverity44;
+  reason: DataReason44;
+  severity: StatusSeverity44;
   source: string;
 };
 
-export const Health44 = {
+export const DataHealth44 = {
   Unknown: "unknown",
   Healthy: "healthy",
   Degraded: "degraded",
   Unhealthy: "unhealthy",
 } as const;
-export type Health44 = ClosedEnum<typeof Health44>;
+export type DataHealth44 = ClosedEnum<typeof DataHealth44>;
 
 export const StatusLifecycle44 = {
   Unknown: "unknown",
@@ -6450,294 +6724,10 @@ export const StatusLifecycle44 = {
 } as const;
 export type StatusLifecycle44 = ClosedEnum<typeof StatusLifecycle44>;
 
-export type HeartbeatStatus44 = {
-  collectionIssues: Array<CollectionIssue44>;
-  health: Health44;
+export type ResourceHeartbeatStatus44 = {
+  collectionIssues: Array<DataCollectionIssue44>;
+  health: DataHealth44;
   lifecycle: StatusLifecycle44;
-  message?: string | null | undefined;
-  partial: boolean;
-  stale: boolean;
-};
-
-export type DataGcpServiceAccount2 = {
-  impersonationGranted: boolean;
-  roleBound: boolean;
-  serviceAccountEmail?: string | null | undefined;
-  serviceAccountUniqueId?: string | null | undefined;
-  status: HeartbeatStatus44;
-  backend: "gcpServiceAccount";
-};
-
-export const Reason43 = {
-  Forbidden: "forbidden",
-  NotInstalled: "not-installed",
-  ApiUnavailable: "api-unavailable",
-  CollectionFailed: "collection-failed",
-  TimedOut: "timed-out",
-} as const;
-export type Reason43 = ClosedEnum<typeof Reason43>;
-
-export const CollectionIssueSeverity43 = {
-  Info: "info",
-  Warning: "warning",
-  Error: "error",
-} as const;
-export type CollectionIssueSeverity43 = ClosedEnum<
-  typeof CollectionIssueSeverity43
->;
-
-export type CollectionIssue43 = {
-  message: string;
-  reason: Reason43;
-  severity: CollectionIssueSeverity43;
-  source: string;
-};
-
-export const Health43 = {
-  Unknown: "unknown",
-  Healthy: "healthy",
-  Degraded: "degraded",
-  Unhealthy: "unhealthy",
-} as const;
-export type Health43 = ClosedEnum<typeof Health43>;
-
-export const StatusLifecycle43 = {
-  Unknown: "unknown",
-  Creating: "creating",
-  Updating: "updating",
-  Running: "running",
-  Scaling: "scaling",
-  Stopping: "stopping",
-  Stopped: "stopped",
-  Deleting: "deleting",
-  Deleted: "deleted",
-  Failed: "failed",
-} as const;
-export type StatusLifecycle43 = ClosedEnum<typeof StatusLifecycle43>;
-
-export type HeartbeatStatus43 = {
-  collectionIssues: Array<CollectionIssue43>;
-  health: Health43;
-  lifecycle: StatusLifecycle43;
-  message?: string | null | undefined;
-  partial: boolean;
-  stale: boolean;
-};
-
-export type DataAwsIamRole2 = {
-  managementPermissionsApplied: boolean;
-  roleArn?: string | null | undefined;
-  roleName?: string | null | undefined;
-  status: HeartbeatStatus43;
-  backend: "awsIamRole";
-};
-
-export type SyncReconcileRequestDataUnion11 =
-  | DataAwsIamRole2
-  | DataGcpServiceAccount2
-  | DataAzureManagedIdentity2;
-
-export type DataRemoteStackManagement = {
-  data: DataAwsIamRole2 | DataGcpServiceAccount2 | DataAzureManagedIdentity2;
-  resourceType: "remote-stack-management";
-};
-
-export const Reason42 = {
-  Forbidden: "forbidden",
-  NotInstalled: "not-installed",
-  ApiUnavailable: "api-unavailable",
-  CollectionFailed: "collection-failed",
-  TimedOut: "timed-out",
-} as const;
-export type Reason42 = ClosedEnum<typeof Reason42>;
-
-export const CollectionIssueSeverity42 = {
-  Info: "info",
-  Warning: "warning",
-  Error: "error",
-} as const;
-export type CollectionIssueSeverity42 = ClosedEnum<
-  typeof CollectionIssueSeverity42
->;
-
-export type CollectionIssue42 = {
-  message: string;
-  reason: Reason42;
-  severity: CollectionIssueSeverity42;
-  source: string;
-};
-
-export const Health42 = {
-  Unknown: "unknown",
-  Healthy: "healthy",
-  Degraded: "degraded",
-  Unhealthy: "unhealthy",
-} as const;
-export type Health42 = ClosedEnum<typeof Health42>;
-
-export const StatusLifecycle42 = {
-  Unknown: "unknown",
-  Creating: "creating",
-  Updating: "updating",
-  Running: "running",
-  Scaling: "scaling",
-  Stopping: "stopping",
-  Stopped: "stopped",
-  Deleting: "deleting",
-  Deleted: "deleted",
-  Failed: "failed",
-} as const;
-export type StatusLifecycle42 = ClosedEnum<typeof StatusLifecycle42>;
-
-export type HeartbeatStatus42 = {
-  collectionIssues: Array<CollectionIssue42>;
-  health: Health42;
-  lifecycle: StatusLifecycle42;
-  message?: string | null | undefined;
-  partial: boolean;
-  stale: boolean;
-};
-
-export type DataAzureVnet = {
-  applicationGatewaySubnetName?: string | null | undefined;
-  cidrBlock?: string | null | undefined;
-  isByoVnet: boolean;
-  lastByoVnetVerificationErrorCode?: string | null | undefined;
-  location?: string | null | undefined;
-  natGatewayId?: string | null | undefined;
-  nsgId?: string | null | undefined;
-  privateSubnetName?: string | null | undefined;
-  publicIpId?: string | null | undefined;
-  publicSubnetName?: string | null | undefined;
-  resourceGroup?: string | null | undefined;
-  status: HeartbeatStatus42;
-  vnetName?: string | null | undefined;
-  vnetResourceId?: string | null | undefined;
-  backend: "azureVnet";
-};
-
-export const Reason41 = {
-  Forbidden: "forbidden",
-  NotInstalled: "not-installed",
-  ApiUnavailable: "api-unavailable",
-  CollectionFailed: "collection-failed",
-  TimedOut: "timed-out",
-} as const;
-export type Reason41 = ClosedEnum<typeof Reason41>;
-
-export const CollectionIssueSeverity41 = {
-  Info: "info",
-  Warning: "warning",
-  Error: "error",
-} as const;
-export type CollectionIssueSeverity41 = ClosedEnum<
-  typeof CollectionIssueSeverity41
->;
-
-export type CollectionIssue41 = {
-  message: string;
-  reason: Reason41;
-  severity: CollectionIssueSeverity41;
-  source: string;
-};
-
-export const Health41 = {
-  Unknown: "unknown",
-  Healthy: "healthy",
-  Degraded: "degraded",
-  Unhealthy: "unhealthy",
-} as const;
-export type Health41 = ClosedEnum<typeof Health41>;
-
-export const StatusLifecycle41 = {
-  Unknown: "unknown",
-  Creating: "creating",
-  Updating: "updating",
-  Running: "running",
-  Scaling: "scaling",
-  Stopping: "stopping",
-  Stopped: "stopped",
-  Deleting: "deleting",
-  Deleted: "deleted",
-  Failed: "failed",
-} as const;
-export type StatusLifecycle41 = ClosedEnum<typeof StatusLifecycle41>;
-
-export type HeartbeatStatus41 = {
-  collectionIssues: Array<CollectionIssue41>;
-  health: Health41;
-  lifecycle: StatusLifecycle41;
-  message?: string | null | undefined;
-  partial: boolean;
-  stale: boolean;
-};
-
-export type DataGcpVpc = {
-  cidrBlock?: string | null | undefined;
-  cloudNatName?: string | null | undefined;
-  firewallName?: string | null | undefined;
-  isByoVpc: boolean;
-  networkName?: string | null | undefined;
-  networkSelfLink?: string | null | undefined;
-  region?: string | null | undefined;
-  routerName?: string | null | undefined;
-  status: HeartbeatStatus41;
-  subnetworkName?: string | null | undefined;
-  subnetworkSelfLink?: string | null | undefined;
-  backend: "gcpVpc";
-};
-
-export const Reason40 = {
-  Forbidden: "forbidden",
-  NotInstalled: "not-installed",
-  ApiUnavailable: "api-unavailable",
-  CollectionFailed: "collection-failed",
-  TimedOut: "timed-out",
-} as const;
-export type Reason40 = ClosedEnum<typeof Reason40>;
-
-export const CollectionIssueSeverity40 = {
-  Info: "info",
-  Warning: "warning",
-  Error: "error",
-} as const;
-export type CollectionIssueSeverity40 = ClosedEnum<
-  typeof CollectionIssueSeverity40
->;
-
-export type CollectionIssue40 = {
-  message: string;
-  reason: Reason40;
-  severity: CollectionIssueSeverity40;
-  source: string;
-};
-
-export const Health40 = {
-  Unknown: "unknown",
-  Healthy: "healthy",
-  Degraded: "degraded",
-  Unhealthy: "unhealthy",
-} as const;
-export type Health40 = ClosedEnum<typeof Health40>;
-
-export const StatusLifecycle40 = {
-  Unknown: "unknown",
-  Creating: "creating",
-  Updating: "updating",
-  Running: "running",
-  Scaling: "scaling",
-  Stopping: "stopping",
-  Stopped: "stopped",
-  Deleting: "deleting",
-  Deleted: "deleted",
-  Failed: "failed",
-} as const;
-export type StatusLifecycle40 = ClosedEnum<typeof StatusLifecycle40>;
-
-export type HeartbeatStatus40 = {
-  collectionIssues: Array<CollectionIssue40>;
-  health: Health40;
-  lifecycle: StatusLifecycle40;
   message?: string | null | undefined;
   partial: boolean;
   stale: boolean;
@@ -6753,13 +6743,13 @@ export type DataAwsVpc = {
   publicSubnetIds: Array<string>;
   routeTableCount: number;
   securityGroupId?: string | null | undefined;
-  status: HeartbeatStatus40;
+  status: ResourceHeartbeatStatus44;
   vpcId?: string | null | undefined;
   vpcState?: string | null | undefined;
   backend: "awsVpc";
 };
 
-export type SyncReconcileRequestDataUnion10 =
+export type SyncReconcileRequestDataUnion11 =
   | DataAwsVpc
   | DataGcpVpc
   | DataAzureVnet;
@@ -6769,40 +6759,38 @@ export type DataNetwork = {
   resourceType: "network";
 };
 
-export const Reason39 = {
+export const DataReason43 = {
   Forbidden: "forbidden",
   NotInstalled: "not-installed",
   ApiUnavailable: "api-unavailable",
   CollectionFailed: "collection-failed",
   TimedOut: "timed-out",
 } as const;
-export type Reason39 = ClosedEnum<typeof Reason39>;
+export type DataReason43 = ClosedEnum<typeof DataReason43>;
 
-export const CollectionIssueSeverity39 = {
+export const StatusSeverity43 = {
   Info: "info",
   Warning: "warning",
   Error: "error",
 } as const;
-export type CollectionIssueSeverity39 = ClosedEnum<
-  typeof CollectionIssueSeverity39
->;
+export type StatusSeverity43 = ClosedEnum<typeof StatusSeverity43>;
 
-export type CollectionIssue39 = {
+export type DataCollectionIssue43 = {
   message: string;
-  reason: Reason39;
-  severity: CollectionIssueSeverity39;
+  reason: DataReason43;
+  severity: StatusSeverity43;
   source: string;
 };
 
-export const Health39 = {
+export const DataHealth43 = {
   Unknown: "unknown",
   Healthy: "healthy",
   Degraded: "degraded",
   Unhealthy: "unhealthy",
 } as const;
-export type Health39 = ClosedEnum<typeof Health39>;
+export type DataHealth43 = ClosedEnum<typeof DataHealth43>;
 
-export const StatusLifecycle39 = {
+export const StatusLifecycle43 = {
   Unknown: "unknown",
   Creating: "creating",
   Updating: "updating",
@@ -6814,58 +6802,56 @@ export const StatusLifecycle39 = {
   Deleted: "deleted",
   Failed: "failed",
 } as const;
-export type StatusLifecycle39 = ClosedEnum<typeof StatusLifecycle39>;
+export type StatusLifecycle43 = ClosedEnum<typeof StatusLifecycle43>;
 
-export type HeartbeatStatus39 = {
-  collectionIssues: Array<CollectionIssue39>;
-  health: Health39;
-  lifecycle: StatusLifecycle39;
+export type ResourceHeartbeatStatus43 = {
+  collectionIssues: Array<DataCollectionIssue43>;
+  health: DataHealth43;
+  lifecycle: StatusLifecycle43;
   message?: string | null | undefined;
   partial: boolean;
   stale: boolean;
 };
 
-export type DataLocal9 = {
+export type DataLocal10 = {
   configured: boolean;
   identity: string;
-  status: HeartbeatStatus39;
+  status: ResourceHeartbeatStatus43;
   backend: "local";
 };
 
-export const Reason38 = {
+export const DataReason42 = {
   Forbidden: "forbidden",
   NotInstalled: "not-installed",
   ApiUnavailable: "api-unavailable",
   CollectionFailed: "collection-failed",
   TimedOut: "timed-out",
 } as const;
-export type Reason38 = ClosedEnum<typeof Reason38>;
+export type DataReason42 = ClosedEnum<typeof DataReason42>;
 
-export const CollectionIssueSeverity38 = {
+export const StatusSeverity42 = {
   Info: "info",
   Warning: "warning",
   Error: "error",
 } as const;
-export type CollectionIssueSeverity38 = ClosedEnum<
-  typeof CollectionIssueSeverity38
->;
+export type StatusSeverity42 = ClosedEnum<typeof StatusSeverity42>;
 
-export type CollectionIssue38 = {
+export type DataCollectionIssue42 = {
   message: string;
-  reason: Reason38;
-  severity: CollectionIssueSeverity38;
+  reason: DataReason42;
+  severity: StatusSeverity42;
   source: string;
 };
 
-export const Health38 = {
+export const DataHealth42 = {
   Unknown: "unknown",
   Healthy: "healthy",
   Degraded: "degraded",
   Unhealthy: "unhealthy",
 } as const;
-export type Health38 = ClosedEnum<typeof Health38>;
+export type DataHealth42 = ClosedEnum<typeof DataHealth42>;
 
-export const StatusLifecycle38 = {
+export const StatusLifecycle42 = {
   Unknown: "unknown",
   Creating: "creating",
   Updating: "updating",
@@ -6877,12 +6863,12 @@ export const StatusLifecycle38 = {
   Deleted: "deleted",
   Failed: "failed",
 } as const;
-export type StatusLifecycle38 = ClosedEnum<typeof StatusLifecycle38>;
+export type StatusLifecycle42 = ClosedEnum<typeof StatusLifecycle42>;
 
-export type HeartbeatStatus38 = {
-  collectionIssues: Array<CollectionIssue38>;
-  health: Health38;
-  lifecycle: StatusLifecycle38;
+export type ResourceHeartbeatStatus42 = {
+  collectionIssues: Array<DataCollectionIssue42>;
+  health: DataHealth42;
+  lifecycle: StatusLifecycle42;
   message?: string | null | undefined;
   partial: boolean;
   stale: boolean;
@@ -6902,46 +6888,44 @@ export type DataAzureManagedIdentity1 = {
   roleAssignmentCount: number;
   roleAssignmentIds: Array<string>;
   stackPermissionsApplied: boolean;
-  status: HeartbeatStatus38;
+  status: ResourceHeartbeatStatus42;
   tenantId?: string | null | undefined;
   type?: string | null | undefined;
   backend: "azureManagedIdentity";
 };
 
-export const Reason37 = {
+export const DataReason41 = {
   Forbidden: "forbidden",
   NotInstalled: "not-installed",
   ApiUnavailable: "api-unavailable",
   CollectionFailed: "collection-failed",
   TimedOut: "timed-out",
 } as const;
-export type Reason37 = ClosedEnum<typeof Reason37>;
+export type DataReason41 = ClosedEnum<typeof DataReason41>;
 
-export const CollectionIssueSeverity37 = {
+export const StatusSeverity41 = {
   Info: "info",
   Warning: "warning",
   Error: "error",
 } as const;
-export type CollectionIssueSeverity37 = ClosedEnum<
-  typeof CollectionIssueSeverity37
->;
+export type StatusSeverity41 = ClosedEnum<typeof StatusSeverity41>;
 
-export type CollectionIssue37 = {
+export type DataCollectionIssue41 = {
   message: string;
-  reason: Reason37;
-  severity: CollectionIssueSeverity37;
+  reason: DataReason41;
+  severity: StatusSeverity41;
   source: string;
 };
 
-export const Health37 = {
+export const DataHealth41 = {
   Unknown: "unknown",
   Healthy: "healthy",
   Degraded: "degraded",
   Unhealthy: "unhealthy",
 } as const;
-export type Health37 = ClosedEnum<typeof Health37>;
+export type DataHealth41 = ClosedEnum<typeof DataHealth41>;
 
-export const StatusLifecycle37 = {
+export const StatusLifecycle41 = {
   Unknown: "unknown",
   Creating: "creating",
   Updating: "updating",
@@ -6953,12 +6937,12 @@ export const StatusLifecycle37 = {
   Deleted: "deleted",
   Failed: "failed",
 } as const;
-export type StatusLifecycle37 = ClosedEnum<typeof StatusLifecycle37>;
+export type StatusLifecycle41 = ClosedEnum<typeof StatusLifecycle41>;
 
-export type HeartbeatStatus37 = {
-  collectionIssues: Array<CollectionIssue37>;
-  health: Health37;
-  lifecycle: StatusLifecycle37;
+export type ResourceHeartbeatStatus41 = {
+  collectionIssues: Array<DataCollectionIssue41>;
+  health: DataHealth41;
+  lifecycle: StatusLifecycle41;
   message?: string | null | undefined;
   partial: boolean;
   stale: boolean;
@@ -6977,45 +6961,43 @@ export type DataGcpServiceAccount1 = {
   projectRoles: Array<string>;
   serviceAccountBindingCount: number;
   serviceAccountRoles: Array<string>;
-  status: HeartbeatStatus37;
+  status: ResourceHeartbeatStatus41;
   uniqueId?: string | null | undefined;
   backend: "gcpServiceAccount";
 };
 
-export const Reason36 = {
+export const DataReason40 = {
   Forbidden: "forbidden",
   NotInstalled: "not-installed",
   ApiUnavailable: "api-unavailable",
   CollectionFailed: "collection-failed",
   TimedOut: "timed-out",
 } as const;
-export type Reason36 = ClosedEnum<typeof Reason36>;
+export type DataReason40 = ClosedEnum<typeof DataReason40>;
 
-export const CollectionIssueSeverity36 = {
+export const StatusSeverity40 = {
   Info: "info",
   Warning: "warning",
   Error: "error",
 } as const;
-export type CollectionIssueSeverity36 = ClosedEnum<
-  typeof CollectionIssueSeverity36
->;
+export type StatusSeverity40 = ClosedEnum<typeof StatusSeverity40>;
 
-export type CollectionIssue36 = {
+export type DataCollectionIssue40 = {
   message: string;
-  reason: Reason36;
-  severity: CollectionIssueSeverity36;
+  reason: DataReason40;
+  severity: StatusSeverity40;
   source: string;
 };
 
-export const Health36 = {
+export const DataHealth40 = {
   Unknown: "unknown",
   Healthy: "healthy",
   Degraded: "degraded",
   Unhealthy: "unhealthy",
 } as const;
-export type Health36 = ClosedEnum<typeof Health36>;
+export type DataHealth40 = ClosedEnum<typeof DataHealth40>;
 
-export const StatusLifecycle36 = {
+export const StatusLifecycle40 = {
   Unknown: "unknown",
   Creating: "creating",
   Updating: "updating",
@@ -7027,12 +7009,12 @@ export const StatusLifecycle36 = {
   Deleted: "deleted",
   Failed: "failed",
 } as const;
-export type StatusLifecycle36 = ClosedEnum<typeof StatusLifecycle36>;
+export type StatusLifecycle40 = ClosedEnum<typeof StatusLifecycle40>;
 
-export type HeartbeatStatus36 = {
-  collectionIssues: Array<CollectionIssue36>;
-  health: Health36;
-  lifecycle: StatusLifecycle36;
+export type ResourceHeartbeatStatus40 = {
+  collectionIssues: Array<DataCollectionIssue40>;
+  health: DataHealth40;
+  lifecycle: StatusLifecycle40;
   message?: string | null | undefined;
   partial: boolean;
   stale: boolean;
@@ -7057,60 +7039,58 @@ export type DataAwsIamRole1 = {
   roleId: string;
   roleName: string;
   stackPermissionsApplied: boolean;
-  status: HeartbeatStatus36;
+  status: ResourceHeartbeatStatus40;
   tagCount: number;
   backend: "awsIamRole";
 };
 
-export type SyncReconcileRequestDataUnion9 =
+export type SyncReconcileRequestDataUnion10 =
   | DataAwsIamRole1
   | DataGcpServiceAccount1
   | DataAzureManagedIdentity1
-  | DataLocal9;
+  | DataLocal10;
 
 export type DataServiceAccount = {
   data:
     | DataAwsIamRole1
     | DataGcpServiceAccount1
     | DataAzureManagedIdentity1
-    | DataLocal9;
+    | DataLocal10;
   resourceType: "service-account";
 };
 
-export const Reason35 = {
+export const DataReason39 = {
   Forbidden: "forbidden",
   NotInstalled: "not-installed",
   ApiUnavailable: "api-unavailable",
   CollectionFailed: "collection-failed",
   TimedOut: "timed-out",
 } as const;
-export type Reason35 = ClosedEnum<typeof Reason35>;
+export type DataReason39 = ClosedEnum<typeof DataReason39>;
 
-export const CollectionIssueSeverity35 = {
+export const StatusSeverity39 = {
   Info: "info",
   Warning: "warning",
   Error: "error",
 } as const;
-export type CollectionIssueSeverity35 = ClosedEnum<
-  typeof CollectionIssueSeverity35
->;
+export type StatusSeverity39 = ClosedEnum<typeof StatusSeverity39>;
 
-export type CollectionIssue35 = {
+export type DataCollectionIssue39 = {
   message: string;
-  reason: Reason35;
-  severity: CollectionIssueSeverity35;
+  reason: DataReason39;
+  severity: StatusSeverity39;
   source: string;
 };
 
-export const Health35 = {
+export const DataHealth39 = {
   Unknown: "unknown",
   Healthy: "healthy",
   Degraded: "degraded",
   Unhealthy: "unhealthy",
 } as const;
-export type Health35 = ClosedEnum<typeof Health35>;
+export type DataHealth39 = ClosedEnum<typeof DataHealth39>;
 
-export const StatusLifecycle35 = {
+export const StatusLifecycle39 = {
   Unknown: "unknown",
   Creating: "creating",
   Updating: "updating",
@@ -7122,62 +7102,60 @@ export const StatusLifecycle35 = {
   Deleted: "deleted",
   Failed: "failed",
 } as const;
-export type StatusLifecycle35 = ClosedEnum<typeof StatusLifecycle35>;
+export type StatusLifecycle39 = ClosedEnum<typeof StatusLifecycle39>;
 
-export type HeartbeatStatus35 = {
-  collectionIssues: Array<CollectionIssue35>;
-  health: Health35;
-  lifecycle: StatusLifecycle35;
+export type ResourceHeartbeatStatus39 = {
+  collectionIssues: Array<DataCollectionIssue39>;
+  health: DataHealth39;
+  lifecycle: StatusLifecycle39;
   message?: string | null | undefined;
   partial: boolean;
   stale: boolean;
 };
 
-export type DataLocal8 = {
+export type DataLocal9 = {
   isDirectory?: boolean | null | undefined;
   modifiedAt?: Date | null | undefined;
   path: string;
   pathExists: boolean;
   readonly?: boolean | null | undefined;
   secretMetadataListed: boolean;
-  status: HeartbeatStatus35;
+  status: ResourceHeartbeatStatus39;
   backend: "local";
 };
 
-export const Reason34 = {
+export const DataReason38 = {
   Forbidden: "forbidden",
   NotInstalled: "not-installed",
   ApiUnavailable: "api-unavailable",
   CollectionFailed: "collection-failed",
   TimedOut: "timed-out",
 } as const;
-export type Reason34 = ClosedEnum<typeof Reason34>;
+export type DataReason38 = ClosedEnum<typeof DataReason38>;
 
-export const CollectionIssueSeverity34 = {
+export const StatusSeverity38 = {
   Info: "info",
   Warning: "warning",
   Error: "error",
 } as const;
-export type CollectionIssueSeverity34 = ClosedEnum<
-  typeof CollectionIssueSeverity34
->;
+export type StatusSeverity38 = ClosedEnum<typeof StatusSeverity38>;
 
-export type CollectionIssue34 = {
+export type DataCollectionIssue38 = {
   message: string;
-  reason: Reason34;
-  severity: CollectionIssueSeverity34;
+  reason: DataReason38;
+  severity: StatusSeverity38;
   source: string;
 };
 
-export const Health34 = {
+export const DataHealth38 = {
   Unknown: "unknown",
   Healthy: "healthy",
   Degraded: "degraded",
   Unhealthy: "unhealthy",
 } as const;
-export type Health34 = ClosedEnum<typeof Health34>;
+export type DataHealth38 = ClosedEnum<typeof DataHealth38>;
 
-export const StatusLifecycle34 = {
+export const StatusLifecycle38 = {
   Unknown: "unknown",
   Creating: "creating",
   Updating: "updating",
@@ -7189,12 +7167,12 @@ export const StatusLifecycle34 = {
   Deleted: "deleted",
   Failed: "failed",
 } as const;
-export type StatusLifecycle34 = ClosedEnum<typeof StatusLifecycle34>;
+export type StatusLifecycle38 = ClosedEnum<typeof StatusLifecycle38>;
 
-export type HeartbeatStatus34 = {
-  collectionIssues: Array<CollectionIssue34>;
-  health: Health34;
-  lifecycle: StatusLifecycle34;
+export type ResourceHeartbeatStatus38 = {
+  collectionIssues: Array<DataCollectionIssue38>;
+  health: DataHealth38;
+  lifecycle: StatusLifecycle38;
   message?: string | null | undefined;
   partial: boolean;
   stale: boolean;
@@ -7204,44 +7182,42 @@ export type DataKubernetesSecret = {
   namespace: string;
   prefix: string;
   secretMetadataListed: boolean;
-  status: HeartbeatStatus34;
+  status: ResourceHeartbeatStatus38;
   backend: "kubernetesSecret";
 };
 
-export const Reason33 = {
+export const DataReason37 = {
   Forbidden: "forbidden",
   NotInstalled: "not-installed",
   ApiUnavailable: "api-unavailable",
   CollectionFailed: "collection-failed",
   TimedOut: "timed-out",
 } as const;
-export type Reason33 = ClosedEnum<typeof Reason33>;
+export type DataReason37 = ClosedEnum<typeof DataReason37>;
 
-export const CollectionIssueSeverity33 = {
+export const StatusSeverity37 = {
   Info: "info",
   Warning: "warning",
   Error: "error",
 } as const;
-export type CollectionIssueSeverity33 = ClosedEnum<
-  typeof CollectionIssueSeverity33
->;
+export type StatusSeverity37 = ClosedEnum<typeof StatusSeverity37>;
 
-export type CollectionIssue33 = {
+export type DataCollectionIssue37 = {
   message: string;
-  reason: Reason33;
-  severity: CollectionIssueSeverity33;
+  reason: DataReason37;
+  severity: StatusSeverity37;
   source: string;
 };
 
-export const Health33 = {
+export const DataHealth37 = {
   Unknown: "unknown",
   Healthy: "healthy",
   Degraded: "degraded",
   Unhealthy: "unhealthy",
 } as const;
-export type Health33 = ClosedEnum<typeof Health33>;
+export type DataHealth37 = ClosedEnum<typeof DataHealth37>;
 
-export const StatusLifecycle33 = {
+export const StatusLifecycle37 = {
   Unknown: "unknown",
   Creating: "creating",
   Updating: "updating",
@@ -7253,12 +7229,12 @@ export const StatusLifecycle33 = {
   Deleted: "deleted",
   Failed: "failed",
 } as const;
-export type StatusLifecycle33 = ClosedEnum<typeof StatusLifecycle33>;
+export type StatusLifecycle37 = ClosedEnum<typeof StatusLifecycle37>;
 
-export type HeartbeatStatus33 = {
-  collectionIssues: Array<CollectionIssue33>;
-  health: Health33;
-  lifecycle: StatusLifecycle33;
+export type ResourceHeartbeatStatus37 = {
+  collectionIssues: Array<DataCollectionIssue37>;
+  health: DataHealth37;
+  lifecycle: StatusLifecycle37;
   message?: string | null | undefined;
   partial: boolean;
   stale: boolean;
@@ -7280,45 +7256,43 @@ export type DataAzureKeyVault = {
   skuName?: string | null | undefined;
   softDeleteEnabled: boolean;
   softDeleteRetentionDays: number;
-  status: HeartbeatStatus33;
+  status: ResourceHeartbeatStatus37;
   vaultUri?: string | null | undefined;
   backend: "azureKeyVault";
 };
 
-export const Reason32 = {
+export const DataReason36 = {
   Forbidden: "forbidden",
   NotInstalled: "not-installed",
   ApiUnavailable: "api-unavailable",
   CollectionFailed: "collection-failed",
   TimedOut: "timed-out",
 } as const;
-export type Reason32 = ClosedEnum<typeof Reason32>;
+export type DataReason36 = ClosedEnum<typeof DataReason36>;
 
-export const CollectionIssueSeverity32 = {
+export const StatusSeverity36 = {
   Info: "info",
   Warning: "warning",
   Error: "error",
 } as const;
-export type CollectionIssueSeverity32 = ClosedEnum<
-  typeof CollectionIssueSeverity32
->;
+export type StatusSeverity36 = ClosedEnum<typeof StatusSeverity36>;
 
-export type CollectionIssue32 = {
+export type DataCollectionIssue36 = {
   message: string;
-  reason: Reason32;
-  severity: CollectionIssueSeverity32;
+  reason: DataReason36;
+  severity: StatusSeverity36;
   source: string;
 };
 
-export const Health32 = {
+export const DataHealth36 = {
   Unknown: "unknown",
   Healthy: "healthy",
   Degraded: "degraded",
   Unhealthy: "unhealthy",
 } as const;
-export type Health32 = ClosedEnum<typeof Health32>;
+export type DataHealth36 = ClosedEnum<typeof DataHealth36>;
 
-export const StatusLifecycle32 = {
+export const StatusLifecycle36 = {
   Unknown: "unknown",
   Creating: "creating",
   Updating: "updating",
@@ -7330,12 +7304,12 @@ export const StatusLifecycle32 = {
   Deleted: "deleted",
   Failed: "failed",
 } as const;
-export type StatusLifecycle32 = ClosedEnum<typeof StatusLifecycle32>;
+export type StatusLifecycle36 = ClosedEnum<typeof StatusLifecycle36>;
 
-export type HeartbeatStatus32 = {
-  collectionIssues: Array<CollectionIssue32>;
-  health: Health32;
-  lifecycle: StatusLifecycle32;
+export type ResourceHeartbeatStatus36 = {
+  collectionIssues: Array<DataCollectionIssue36>;
+  health: DataHealth36;
+  lifecycle: StatusLifecycle36;
   message?: string | null | undefined;
   partial: boolean;
   stale: boolean;
@@ -7346,44 +7320,42 @@ export type DataGcpSecretManager = {
   prefix: string;
   projectId: string;
   secretMetadataListed: boolean;
-  status: HeartbeatStatus32;
+  status: ResourceHeartbeatStatus36;
   backend: "gcpSecretManager";
 };
 
-export const Reason31 = {
+export const DataReason35 = {
   Forbidden: "forbidden",
   NotInstalled: "not-installed",
   ApiUnavailable: "api-unavailable",
   CollectionFailed: "collection-failed",
   TimedOut: "timed-out",
 } as const;
-export type Reason31 = ClosedEnum<typeof Reason31>;
+export type DataReason35 = ClosedEnum<typeof DataReason35>;
 
-export const CollectionIssueSeverity31 = {
+export const StatusSeverity35 = {
   Info: "info",
   Warning: "warning",
   Error: "error",
 } as const;
-export type CollectionIssueSeverity31 = ClosedEnum<
-  typeof CollectionIssueSeverity31
->;
+export type StatusSeverity35 = ClosedEnum<typeof StatusSeverity35>;
 
-export type CollectionIssue31 = {
+export type DataCollectionIssue35 = {
   message: string;
-  reason: Reason31;
-  severity: CollectionIssueSeverity31;
+  reason: DataReason35;
+  severity: StatusSeverity35;
   source: string;
 };
 
-export const Health31 = {
+export const DataHealth35 = {
   Unknown: "unknown",
   Healthy: "healthy",
   Degraded: "degraded",
   Unhealthy: "unhealthy",
 } as const;
-export type Health31 = ClosedEnum<typeof Health31>;
+export type DataHealth35 = ClosedEnum<typeof DataHealth35>;
 
-export const StatusLifecycle31 = {
+export const StatusLifecycle35 = {
   Unknown: "unknown",
   Creating: "creating",
   Updating: "updating",
@@ -7395,12 +7367,12 @@ export const StatusLifecycle31 = {
   Deleted: "deleted",
   Failed: "failed",
 } as const;
-export type StatusLifecycle31 = ClosedEnum<typeof StatusLifecycle31>;
+export type StatusLifecycle35 = ClosedEnum<typeof StatusLifecycle35>;
 
-export type HeartbeatStatus31 = {
-  collectionIssues: Array<CollectionIssue31>;
-  health: Health31;
-  lifecycle: StatusLifecycle31;
+export type ResourceHeartbeatStatus35 = {
+  collectionIssues: Array<DataCollectionIssue35>;
+  health: DataHealth35;
+  lifecycle: StatusLifecycle35;
   message?: string | null | undefined;
   partial: boolean;
   stale: boolean;
@@ -7419,16 +7391,16 @@ export type DataAwsParameterStore = {
   sampledSecureStringCount?: number | null | undefined;
   sampledStringCount?: number | null | undefined;
   sampledStringListCount?: number | null | undefined;
-  status: HeartbeatStatus31;
+  status: ResourceHeartbeatStatus35;
   backend: "awsParameterStore";
 };
 
-export type SyncReconcileRequestDataUnion8 =
+export type SyncReconcileRequestDataUnion9 =
   | DataAwsParameterStore
   | DataGcpSecretManager
   | DataAzureKeyVault
   | DataKubernetesSecret
-  | DataLocal8;
+  | DataLocal9;
 
 export type DataVault = {
   data:
@@ -7436,42 +7408,311 @@ export type DataVault = {
     | DataGcpSecretManager
     | DataAzureKeyVault
     | DataKubernetesSecret
-    | DataLocal8;
+    | DataLocal9;
   resourceType: "vault";
 };
 
-export const Reason30 = {
+export const DataReason34 = {
   Forbidden: "forbidden",
   NotInstalled: "not-installed",
   ApiUnavailable: "api-unavailable",
   CollectionFailed: "collection-failed",
   TimedOut: "timed-out",
 } as const;
-export type Reason30 = ClosedEnum<typeof Reason30>;
+export type DataReason34 = ClosedEnum<typeof DataReason34>;
 
-export const CollectionIssueSeverity30 = {
+export const StatusSeverity34 = {
   Info: "info",
   Warning: "warning",
   Error: "error",
 } as const;
-export type CollectionIssueSeverity30 = ClosedEnum<
-  typeof CollectionIssueSeverity30
->;
+export type StatusSeverity34 = ClosedEnum<typeof StatusSeverity34>;
 
-export type CollectionIssue30 = {
+export type DataCollectionIssue34 = {
   message: string;
-  reason: Reason30;
-  severity: CollectionIssueSeverity30;
+  reason: DataReason34;
+  severity: StatusSeverity34;
   source: string;
 };
 
-export const Health30 = {
+export const DataHealth34 = {
   Unknown: "unknown",
   Healthy: "healthy",
   Degraded: "degraded",
   Unhealthy: "unhealthy",
 } as const;
-export type Health30 = ClosedEnum<typeof Health30>;
+export type DataHealth34 = ClosedEnum<typeof DataHealth34>;
+
+export const StatusLifecycle34 = {
+  Unknown: "unknown",
+  Creating: "creating",
+  Updating: "updating",
+  Running: "running",
+  Scaling: "scaling",
+  Stopping: "stopping",
+  Stopped: "stopped",
+  Deleting: "deleting",
+  Deleted: "deleted",
+  Failed: "failed",
+} as const;
+export type StatusLifecycle34 = ClosedEnum<typeof StatusLifecycle34>;
+
+export type ResourceHeartbeatStatus34 = {
+  collectionIssues: Array<DataCollectionIssue34>;
+  health: DataHealth34;
+  lifecycle: StatusLifecycle34;
+  message?: string | null | undefined;
+  partial: boolean;
+  stale: boolean;
+};
+
+export type DataLocal8 = {
+  name: string;
+  port?: number | null | undefined;
+  processRunning: boolean;
+  status: ResourceHeartbeatStatus34;
+  version: string;
+  backend: "local";
+};
+
+export const DataReason33 = {
+  Forbidden: "forbidden",
+  NotInstalled: "not-installed",
+  ApiUnavailable: "api-unavailable",
+  CollectionFailed: "collection-failed",
+  TimedOut: "timed-out",
+} as const;
+export type DataReason33 = ClosedEnum<typeof DataReason33>;
+
+export const StatusSeverity33 = {
+  Info: "info",
+  Warning: "warning",
+  Error: "error",
+} as const;
+export type StatusSeverity33 = ClosedEnum<typeof StatusSeverity33>;
+
+export type DataCollectionIssue33 = {
+  message: string;
+  reason: DataReason33;
+  severity: StatusSeverity33;
+  source: string;
+};
+
+export const DataHealth33 = {
+  Unknown: "unknown",
+  Healthy: "healthy",
+  Degraded: "degraded",
+  Unhealthy: "unhealthy",
+} as const;
+export type DataHealth33 = ClosedEnum<typeof DataHealth33>;
+
+export const StatusLifecycle33 = {
+  Unknown: "unknown",
+  Creating: "creating",
+  Updating: "updating",
+  Running: "running",
+  Scaling: "scaling",
+  Stopping: "stopping",
+  Stopped: "stopped",
+  Deleting: "deleting",
+  Deleted: "deleted",
+  Failed: "failed",
+} as const;
+export type StatusLifecycle33 = ClosedEnum<typeof StatusLifecycle33>;
+
+export type ResourceHeartbeatStatus33 = {
+  collectionIssues: Array<DataCollectionIssue33>;
+  health: DataHealth33;
+  lifecycle: StatusLifecycle33;
+  message?: string | null | undefined;
+  partial: boolean;
+  stale: boolean;
+};
+
+export type DataFlexibleServer = {
+  serverName: string;
+  state?: string | null | undefined;
+  status: ResourceHeartbeatStatus33;
+  version?: string | null | undefined;
+  backend: "flexibleServer";
+};
+
+export const DataReason32 = {
+  Forbidden: "forbidden",
+  NotInstalled: "not-installed",
+  ApiUnavailable: "api-unavailable",
+  CollectionFailed: "collection-failed",
+  TimedOut: "timed-out",
+} as const;
+export type DataReason32 = ClosedEnum<typeof DataReason32>;
+
+export const StatusSeverity32 = {
+  Info: "info",
+  Warning: "warning",
+  Error: "error",
+} as const;
+export type StatusSeverity32 = ClosedEnum<typeof StatusSeverity32>;
+
+export type DataCollectionIssue32 = {
+  message: string;
+  reason: DataReason32;
+  severity: StatusSeverity32;
+  source: string;
+};
+
+export const DataHealth32 = {
+  Unknown: "unknown",
+  Healthy: "healthy",
+  Degraded: "degraded",
+  Unhealthy: "unhealthy",
+} as const;
+export type DataHealth32 = ClosedEnum<typeof DataHealth32>;
+
+export const StatusLifecycle32 = {
+  Unknown: "unknown",
+  Creating: "creating",
+  Updating: "updating",
+  Running: "running",
+  Scaling: "scaling",
+  Stopping: "stopping",
+  Stopped: "stopped",
+  Deleting: "deleting",
+  Deleted: "deleted",
+  Failed: "failed",
+} as const;
+export type StatusLifecycle32 = ClosedEnum<typeof StatusLifecycle32>;
+
+export type ResourceHeartbeatStatus32 = {
+  collectionIssues: Array<DataCollectionIssue32>;
+  health: DataHealth32;
+  lifecycle: StatusLifecycle32;
+  message?: string | null | undefined;
+  partial: boolean;
+  stale: boolean;
+};
+
+export type DataCloudSQL = {
+  databaseVersion?: string | null | undefined;
+  instanceName: string;
+  state?: string | null | undefined;
+  status: ResourceHeartbeatStatus32;
+  backend: "cloudSql";
+};
+
+export const DataReason31 = {
+  Forbidden: "forbidden",
+  NotInstalled: "not-installed",
+  ApiUnavailable: "api-unavailable",
+  CollectionFailed: "collection-failed",
+  TimedOut: "timed-out",
+} as const;
+export type DataReason31 = ClosedEnum<typeof DataReason31>;
+
+export const StatusSeverity31 = {
+  Info: "info",
+  Warning: "warning",
+  Error: "error",
+} as const;
+export type StatusSeverity31 = ClosedEnum<typeof StatusSeverity31>;
+
+export type DataCollectionIssue31 = {
+  message: string;
+  reason: DataReason31;
+  severity: StatusSeverity31;
+  source: string;
+};
+
+export const DataHealth31 = {
+  Unknown: "unknown",
+  Healthy: "healthy",
+  Degraded: "degraded",
+  Unhealthy: "unhealthy",
+} as const;
+export type DataHealth31 = ClosedEnum<typeof DataHealth31>;
+
+export const StatusLifecycle31 = {
+  Unknown: "unknown",
+  Creating: "creating",
+  Updating: "updating",
+  Running: "running",
+  Scaling: "scaling",
+  Stopping: "stopping",
+  Stopped: "stopped",
+  Deleting: "deleting",
+  Deleted: "deleted",
+  Failed: "failed",
+} as const;
+export type StatusLifecycle31 = ClosedEnum<typeof StatusLifecycle31>;
+
+export type ResourceHeartbeatStatus31 = {
+  collectionIssues: Array<DataCollectionIssue31>;
+  health: DataHealth31;
+  lifecycle: StatusLifecycle31;
+  message?: string | null | undefined;
+  partial: boolean;
+  stale: boolean;
+};
+
+export type DataAurora = {
+  clusterIdentifier: string;
+  endpoint?: string | null | undefined;
+  engineVersion?: string | null | undefined;
+  /**
+   * True when a `minCapacity: 0` instance has not reached 0 ACU over the observation
+   *
+   * @remarks
+   * window — it is silently paying always-on prices (auto-pause verification).
+   */
+  neverPauses: boolean;
+  /**
+   * Latest sampled `ServerlessDatabaseCapacity` (ACU).
+   */
+  serverlessCapacity?: number | null | undefined;
+  status: ResourceHeartbeatStatus31;
+  backend: "aurora";
+};
+
+export type SyncReconcileRequestDataUnion8 =
+  | DataAurora
+  | DataCloudSQL
+  | DataFlexibleServer
+  | DataLocal8;
+
+export type DataPostgres = {
+  data: DataAurora | DataCloudSQL | DataFlexibleServer | DataLocal8;
+  resourceType: "postgres";
+};
+
+export const DataReason30 = {
+  Forbidden: "forbidden",
+  NotInstalled: "not-installed",
+  ApiUnavailable: "api-unavailable",
+  CollectionFailed: "collection-failed",
+  TimedOut: "timed-out",
+} as const;
+export type DataReason30 = ClosedEnum<typeof DataReason30>;
+
+export const StatusSeverity30 = {
+  Info: "info",
+  Warning: "warning",
+  Error: "error",
+} as const;
+export type StatusSeverity30 = ClosedEnum<typeof StatusSeverity30>;
+
+export type DataCollectionIssue30 = {
+  message: string;
+  reason: DataReason30;
+  severity: StatusSeverity30;
+  source: string;
+};
+
+export const DataHealth30 = {
+  Unknown: "unknown",
+  Healthy: "healthy",
+  Degraded: "degraded",
+  Unhealthy: "unhealthy",
+} as const;
+export type DataHealth30 = ClosedEnum<typeof DataHealth30>;
 
 export const StatusLifecycle30 = {
   Unknown: "unknown",
@@ -7487,9 +7728,9 @@ export const StatusLifecycle30 = {
 } as const;
 export type StatusLifecycle30 = ClosedEnum<typeof StatusLifecycle30>;
 
-export type HeartbeatStatus30 = {
-  collectionIssues: Array<CollectionIssue30>;
-  health: Health30;
+export type ResourceHeartbeatStatus30 = {
+  collectionIssues: Array<DataCollectionIssue30>;
+  health: DataHealth30;
   lifecycle: StatusLifecycle30;
   message?: string | null | undefined;
   partial: boolean;
@@ -7502,42 +7743,40 @@ export type DataLocal7 = {
   name: string;
   path: string;
   pathExists: boolean;
-  status: HeartbeatStatus30;
+  status: ResourceHeartbeatStatus30;
   backend: "local";
 };
 
-export const Reason29 = {
+export const DataReason29 = {
   Forbidden: "forbidden",
   NotInstalled: "not-installed",
   ApiUnavailable: "api-unavailable",
   CollectionFailed: "collection-failed",
   TimedOut: "timed-out",
 } as const;
-export type Reason29 = ClosedEnum<typeof Reason29>;
+export type DataReason29 = ClosedEnum<typeof DataReason29>;
 
-export const CollectionIssueSeverity29 = {
+export const StatusSeverity29 = {
   Info: "info",
   Warning: "warning",
   Error: "error",
 } as const;
-export type CollectionIssueSeverity29 = ClosedEnum<
-  typeof CollectionIssueSeverity29
->;
+export type StatusSeverity29 = ClosedEnum<typeof StatusSeverity29>;
 
-export type CollectionIssue29 = {
+export type DataCollectionIssue29 = {
   message: string;
-  reason: Reason29;
-  severity: CollectionIssueSeverity29;
+  reason: DataReason29;
+  severity: StatusSeverity29;
   source: string;
 };
 
-export const Health29 = {
+export const DataHealth29 = {
   Unknown: "unknown",
   Healthy: "healthy",
   Degraded: "degraded",
   Unhealthy: "unhealthy",
 } as const;
-export type Health29 = ClosedEnum<typeof Health29>;
+export type DataHealth29 = ClosedEnum<typeof DataHealth29>;
 
 export const StatusLifecycle29 = {
   Unknown: "unknown",
@@ -7553,9 +7792,9 @@ export const StatusLifecycle29 = {
 } as const;
 export type StatusLifecycle29 = ClosedEnum<typeof StatusLifecycle29>;
 
-export type HeartbeatStatus29 = {
-  collectionIssues: Array<CollectionIssue29>;
-  health: Health29;
+export type ResourceHeartbeatStatus29 = {
+  collectionIssues: Array<DataCollectionIssue29>;
+  health: DataHealth29;
   lifecycle: StatusLifecycle29;
   message?: string | null | undefined;
   partial: boolean;
@@ -7566,7 +7805,7 @@ export type DataAzureTable = {
   endpoint?: string | null | undefined;
   resourceGroup?: string | null | undefined;
   signedIdentifierCount?: number | null | undefined;
-  status: HeartbeatStatus29;
+  status: ResourceHeartbeatStatus29;
   storageAccountKind?: string | null | undefined;
   storageAccountLocation?: string | null | undefined;
   storageAccountName: string;
@@ -7578,38 +7817,36 @@ export type DataAzureTable = {
   backend: "azureTable";
 };
 
-export const Reason28 = {
+export const DataReason28 = {
   Forbidden: "forbidden",
   NotInstalled: "not-installed",
   ApiUnavailable: "api-unavailable",
   CollectionFailed: "collection-failed",
   TimedOut: "timed-out",
 } as const;
-export type Reason28 = ClosedEnum<typeof Reason28>;
+export type DataReason28 = ClosedEnum<typeof DataReason28>;
 
-export const CollectionIssueSeverity28 = {
+export const StatusSeverity28 = {
   Info: "info",
   Warning: "warning",
   Error: "error",
 } as const;
-export type CollectionIssueSeverity28 = ClosedEnum<
-  typeof CollectionIssueSeverity28
->;
+export type StatusSeverity28 = ClosedEnum<typeof StatusSeverity28>;
 
-export type CollectionIssue28 = {
+export type DataCollectionIssue28 = {
   message: string;
-  reason: Reason28;
-  severity: CollectionIssueSeverity28;
+  reason: DataReason28;
+  severity: StatusSeverity28;
   source: string;
 };
 
-export const Health28 = {
+export const DataHealth28 = {
   Unknown: "unknown",
   Healthy: "healthy",
   Degraded: "degraded",
   Unhealthy: "unhealthy",
 } as const;
-export type Health28 = ClosedEnum<typeof Health28>;
+export type DataHealth28 = ClosedEnum<typeof DataHealth28>;
 
 export const StatusLifecycle28 = {
   Unknown: "unknown",
@@ -7625,9 +7862,9 @@ export const StatusLifecycle28 = {
 } as const;
 export type StatusLifecycle28 = ClosedEnum<typeof StatusLifecycle28>;
 
-export type HeartbeatStatus28 = {
-  collectionIssues: Array<CollectionIssue28>;
-  health: Health28;
+export type ResourceHeartbeatStatus28 = {
+  collectionIssues: Array<DataCollectionIssue28>;
+  health: DataHealth28;
   lifecycle: StatusLifecycle28;
   message?: string | null | undefined;
   partial: boolean;
@@ -7650,7 +7887,7 @@ export type DataGcpFirestore = {
   pointInTimeRecoveryEnablement?: string | null | undefined;
   projectId?: string | null | undefined;
   sourceInfoPresent: boolean;
-  status: HeartbeatStatus28;
+  status: ResourceHeartbeatStatus28;
   updateTime?: string | null | undefined;
   versionRetentionPeriod?: string | null | undefined;
   backend: "gcpFirestore";
@@ -7661,38 +7898,36 @@ export type KeySchema = {
   keyType: string;
 };
 
-export const Reason27 = {
+export const DataReason27 = {
   Forbidden: "forbidden",
   NotInstalled: "not-installed",
   ApiUnavailable: "api-unavailable",
   CollectionFailed: "collection-failed",
   TimedOut: "timed-out",
 } as const;
-export type Reason27 = ClosedEnum<typeof Reason27>;
+export type DataReason27 = ClosedEnum<typeof DataReason27>;
 
-export const CollectionIssueSeverity27 = {
+export const StatusSeverity27 = {
   Info: "info",
   Warning: "warning",
   Error: "error",
 } as const;
-export type CollectionIssueSeverity27 = ClosedEnum<
-  typeof CollectionIssueSeverity27
->;
+export type StatusSeverity27 = ClosedEnum<typeof StatusSeverity27>;
 
-export type CollectionIssue27 = {
+export type DataCollectionIssue27 = {
   message: string;
-  reason: Reason27;
-  severity: CollectionIssueSeverity27;
+  reason: DataReason27;
+  severity: StatusSeverity27;
   source: string;
 };
 
-export const Health27 = {
+export const DataHealth27 = {
   Unknown: "unknown",
   Healthy: "healthy",
   Degraded: "degraded",
   Unhealthy: "unhealthy",
 } as const;
-export type Health27 = ClosedEnum<typeof Health27>;
+export type DataHealth27 = ClosedEnum<typeof DataHealth27>;
 
 export const StatusLifecycle27 = {
   Unknown: "unknown",
@@ -7708,9 +7943,9 @@ export const StatusLifecycle27 = {
 } as const;
 export type StatusLifecycle27 = ClosedEnum<typeof StatusLifecycle27>;
 
-export type HeartbeatStatus27 = {
-  collectionIssues: Array<CollectionIssue27>;
-  health: Health27;
+export type ResourceHeartbeatStatus27 = {
+  collectionIssues: Array<DataCollectionIssue27>;
+  health: DataHealth27;
   lifecycle: StatusLifecycle27;
   message?: string | null | undefined;
   partial: boolean;
@@ -7730,7 +7965,7 @@ export type DataAwsDynamoDb = {
   restoreInProgress?: boolean | null | undefined;
   sseStatus?: string | null | undefined;
   sseType?: string | null | undefined;
-  status: HeartbeatStatus27;
+  status: ResourceHeartbeatStatus27;
   streamEnabled?: boolean | null | undefined;
   streamViewType?: string | null | undefined;
   tableArn?: string | null | undefined;
@@ -7753,38 +7988,36 @@ export type DataKv = {
   resourceType: "kv";
 };
 
-export const Reason26 = {
+export const DataReason26 = {
   Forbidden: "forbidden",
   NotInstalled: "not-installed",
   ApiUnavailable: "api-unavailable",
   CollectionFailed: "collection-failed",
   TimedOut: "timed-out",
 } as const;
-export type Reason26 = ClosedEnum<typeof Reason26>;
+export type DataReason26 = ClosedEnum<typeof DataReason26>;
 
-export const CollectionIssueSeverity26 = {
+export const StatusSeverity26 = {
   Info: "info",
   Warning: "warning",
   Error: "error",
 } as const;
-export type CollectionIssueSeverity26 = ClosedEnum<
-  typeof CollectionIssueSeverity26
->;
+export type StatusSeverity26 = ClosedEnum<typeof StatusSeverity26>;
 
-export type CollectionIssue26 = {
+export type DataCollectionIssue26 = {
   message: string;
-  reason: Reason26;
-  severity: CollectionIssueSeverity26;
+  reason: DataReason26;
+  severity: StatusSeverity26;
   source: string;
 };
 
-export const Health26 = {
+export const DataHealth26 = {
   Unknown: "unknown",
   Healthy: "healthy",
   Degraded: "degraded",
   Unhealthy: "unhealthy",
 } as const;
-export type Health26 = ClosedEnum<typeof Health26>;
+export type DataHealth26 = ClosedEnum<typeof DataHealth26>;
 
 export const StatusLifecycle26 = {
   Unknown: "unknown",
@@ -7800,9 +8033,9 @@ export const StatusLifecycle26 = {
 } as const;
 export type StatusLifecycle26 = ClosedEnum<typeof StatusLifecycle26>;
 
-export type HeartbeatStatus26 = {
-  collectionIssues: Array<CollectionIssue26>;
-  health: Health26;
+export type ResourceHeartbeatStatus26 = {
+  collectionIssues: Array<DataCollectionIssue26>;
+  health: DataHealth26;
   lifecycle: StatusLifecycle26;
   message?: string | null | undefined;
   partial: boolean;
@@ -7813,42 +8046,40 @@ export type DataLocal6 = {
   name: string;
   path?: string | null | undefined;
   serviceStatus?: string | null | undefined;
-  status: HeartbeatStatus26;
+  status: ResourceHeartbeatStatus26;
   backend: "local";
 };
 
-export const Reason25 = {
+export const DataReason25 = {
   Forbidden: "forbidden",
   NotInstalled: "not-installed",
   ApiUnavailable: "api-unavailable",
   CollectionFailed: "collection-failed",
   TimedOut: "timed-out",
 } as const;
-export type Reason25 = ClosedEnum<typeof Reason25>;
+export type DataReason25 = ClosedEnum<typeof DataReason25>;
 
-export const CollectionIssueSeverity25 = {
+export const StatusSeverity25 = {
   Info: "info",
   Warning: "warning",
   Error: "error",
 } as const;
-export type CollectionIssueSeverity25 = ClosedEnum<
-  typeof CollectionIssueSeverity25
->;
+export type StatusSeverity25 = ClosedEnum<typeof StatusSeverity25>;
 
-export type CollectionIssue25 = {
+export type DataCollectionIssue25 = {
   message: string;
-  reason: Reason25;
-  severity: CollectionIssueSeverity25;
+  reason: DataReason25;
+  severity: StatusSeverity25;
   source: string;
 };
 
-export const Health25 = {
+export const DataHealth25 = {
   Unknown: "unknown",
   Healthy: "healthy",
   Degraded: "degraded",
   Unhealthy: "unhealthy",
 } as const;
-export type Health25 = ClosedEnum<typeof Health25>;
+export type DataHealth25 = ClosedEnum<typeof DataHealth25>;
 
 export const StatusLifecycle25 = {
   Unknown: "unknown",
@@ -7864,9 +8095,9 @@ export const StatusLifecycle25 = {
 } as const;
 export type StatusLifecycle25 = ClosedEnum<typeof StatusLifecycle25>;
 
-export type HeartbeatStatus25 = {
-  collectionIssues: Array<CollectionIssue25>;
-  health: Health25;
+export type ResourceHeartbeatStatus25 = {
+  collectionIssues: Array<DataCollectionIssue25>;
+  health: DataHealth25;
   lifecycle: StatusLifecycle25;
   message?: string | null | undefined;
   partial: boolean;
@@ -7902,45 +8133,43 @@ export type DataAzureServiceBus = {
   resourceId?: string | null | undefined;
   scheduledMessageCount?: number | null | undefined;
   sizeInBytes?: number | null | undefined;
-  status: HeartbeatStatus25;
+  status: ResourceHeartbeatStatus25;
   transferDeadLetterMessageCount?: number | null | undefined;
   transferMessageCount?: number | null | undefined;
   updatedAt?: string | null | undefined;
   backend: "azureServiceBus";
 };
 
-export const Reason24 = {
+export const DataReason24 = {
   Forbidden: "forbidden",
   NotInstalled: "not-installed",
   ApiUnavailable: "api-unavailable",
   CollectionFailed: "collection-failed",
   TimedOut: "timed-out",
 } as const;
-export type Reason24 = ClosedEnum<typeof Reason24>;
+export type DataReason24 = ClosedEnum<typeof DataReason24>;
 
-export const CollectionIssueSeverity24 = {
+export const StatusSeverity24 = {
   Info: "info",
   Warning: "warning",
   Error: "error",
 } as const;
-export type CollectionIssueSeverity24 = ClosedEnum<
-  typeof CollectionIssueSeverity24
->;
+export type StatusSeverity24 = ClosedEnum<typeof StatusSeverity24>;
 
-export type CollectionIssue24 = {
+export type DataCollectionIssue24 = {
   message: string;
-  reason: Reason24;
-  severity: CollectionIssueSeverity24;
+  reason: DataReason24;
+  severity: StatusSeverity24;
   source: string;
 };
 
-export const Health24 = {
+export const DataHealth24 = {
   Unknown: "unknown",
   Healthy: "healthy",
   Degraded: "degraded",
   Unhealthy: "unhealthy",
 } as const;
-export type Health24 = ClosedEnum<typeof Health24>;
+export type DataHealth24 = ClosedEnum<typeof DataHealth24>;
 
 export const StatusLifecycle24 = {
   Unknown: "unknown",
@@ -7956,9 +8185,9 @@ export const StatusLifecycle24 = {
 } as const;
 export type StatusLifecycle24 = ClosedEnum<typeof StatusLifecycle24>;
 
-export type HeartbeatStatus24 = {
-  collectionIssues: Array<CollectionIssue24>;
-  health: Health24;
+export type ResourceHeartbeatStatus24 = {
+  collectionIssues: Array<DataCollectionIssue24>;
+  health: DataHealth24;
   lifecycle: StatusLifecycle24;
   message?: string | null | undefined;
   partial: boolean;
@@ -7975,7 +8204,7 @@ export type DataGcpPubSub = {
   schemaFirstRevisionId?: string | null | undefined;
   schemaLastRevisionId?: string | null | undefined;
   schemaName?: string | null | undefined;
-  status: HeartbeatStatus24;
+  status: ResourceHeartbeatStatus24;
   subscriptionAckDeadlineSeconds?: number | null | undefined;
   subscriptionDeadLetterMaxDeliveryAttempts?: number | null | undefined;
   subscriptionDeadLetterTopic?: string | null | undefined;
@@ -8003,38 +8232,36 @@ export type DataGcpPubSub = {
   backend: "gcpPubSub";
 };
 
-export const Reason23 = {
+export const DataReason23 = {
   Forbidden: "forbidden",
   NotInstalled: "not-installed",
   ApiUnavailable: "api-unavailable",
   CollectionFailed: "collection-failed",
   TimedOut: "timed-out",
 } as const;
-export type Reason23 = ClosedEnum<typeof Reason23>;
+export type DataReason23 = ClosedEnum<typeof DataReason23>;
 
-export const CollectionIssueSeverity23 = {
+export const StatusSeverity23 = {
   Info: "info",
   Warning: "warning",
   Error: "error",
 } as const;
-export type CollectionIssueSeverity23 = ClosedEnum<
-  typeof CollectionIssueSeverity23
->;
+export type StatusSeverity23 = ClosedEnum<typeof StatusSeverity23>;
 
-export type CollectionIssue23 = {
+export type DataCollectionIssue23 = {
   message: string;
-  reason: Reason23;
-  severity: CollectionIssueSeverity23;
+  reason: DataReason23;
+  severity: StatusSeverity23;
   source: string;
 };
 
-export const Health23 = {
+export const DataHealth23 = {
   Unknown: "unknown",
   Healthy: "healthy",
   Degraded: "degraded",
   Unhealthy: "unhealthy",
 } as const;
-export type Health23 = ClosedEnum<typeof Health23>;
+export type DataHealth23 = ClosedEnum<typeof DataHealth23>;
 
 export const StatusLifecycle23 = {
   Unknown: "unknown",
@@ -8050,9 +8277,9 @@ export const StatusLifecycle23 = {
 } as const;
 export type StatusLifecycle23 = ClosedEnum<typeof StatusLifecycle23>;
 
-export type HeartbeatStatus23 = {
-  collectionIssues: Array<CollectionIssue23>;
-  health: Health23;
+export type ResourceHeartbeatStatus23 = {
+  collectionIssues: Array<DataCollectionIssue23>;
+  health: DataHealth23;
   lifecycle: StatusLifecycle23;
   message?: string | null | undefined;
   partial: boolean;
@@ -8082,7 +8309,7 @@ export type DataAwsSqs = {
   region?: string | null | undefined;
   sqsManagedSseEnabled?: boolean | null | undefined;
   sseEnabled?: boolean | null | undefined;
-  status: HeartbeatStatus23;
+  status: ResourceHeartbeatStatus23;
   visibilityTimeoutSeconds?: number | null | undefined;
   backend: "awsSqs";
 };
@@ -8318,38 +8545,36 @@ export type PodCounts = {
   ready?: number | null | undefined;
 };
 
-export const Reason22 = {
+export const DataReason22 = {
   Forbidden: "forbidden",
   NotInstalled: "not-installed",
   ApiUnavailable: "api-unavailable",
   CollectionFailed: "collection-failed",
   TimedOut: "timed-out",
 } as const;
-export type Reason22 = ClosedEnum<typeof Reason22>;
+export type DataReason22 = ClosedEnum<typeof DataReason22>;
 
-export const CollectionIssueSeverity22 = {
+export const StatusSeverity22 = {
   Info: "info",
   Warning: "warning",
   Error: "error",
 } as const;
-export type CollectionIssueSeverity22 = ClosedEnum<
-  typeof CollectionIssueSeverity22
->;
+export type StatusSeverity22 = ClosedEnum<typeof StatusSeverity22>;
 
-export type CollectionIssue22 = {
+export type DataCollectionIssue22 = {
   message: string;
-  reason: Reason22;
-  severity: CollectionIssueSeverity22;
+  reason: DataReason22;
+  severity: StatusSeverity22;
   source: string;
 };
 
-export const Health22 = {
+export const DataHealth22 = {
   Unknown: "unknown",
   Healthy: "healthy",
   Degraded: "degraded",
   Unhealthy: "unhealthy",
 } as const;
-export type Health22 = ClosedEnum<typeof Health22>;
+export type DataHealth22 = ClosedEnum<typeof DataHealth22>;
 
 export const StatusLifecycle22 = {
   Unknown: "unknown",
@@ -8365,9 +8590,9 @@ export const StatusLifecycle22 = {
 } as const;
 export type StatusLifecycle22 = ClosedEnum<typeof StatusLifecycle22>;
 
-export type HeartbeatStatus22 = {
-  collectionIssues: Array<CollectionIssue22>;
-  health: Health22;
+export type ResourceHeartbeatStatus22 = {
+  collectionIssues: Array<DataCollectionIssue22>;
+  health: DataHealth22;
   lifecycle: StatusLifecycle22;
   message?: string | null | undefined;
   partial: boolean;
@@ -8384,7 +8609,7 @@ export type SyncReconcileRequestData1 = {
   nodeStatuses?: Array<NodeStatus> | undefined;
   podCounts: PodCounts;
   region?: string | null | undefined;
-  status: HeartbeatStatus22;
+  status: ResourceHeartbeatStatus22;
   version?: string | null | undefined;
 };
 
@@ -8399,38 +8624,36 @@ export type Nodes4 = {
   ready?: number | null | undefined;
 };
 
-export const Reason21 = {
+export const DataReason21 = {
   Forbidden: "forbidden",
   NotInstalled: "not-installed",
   ApiUnavailable: "api-unavailable",
   CollectionFailed: "collection-failed",
   TimedOut: "timed-out",
 } as const;
-export type Reason21 = ClosedEnum<typeof Reason21>;
+export type DataReason21 = ClosedEnum<typeof DataReason21>;
 
-export const CollectionIssueSeverity21 = {
+export const StatusSeverity21 = {
   Info: "info",
   Warning: "warning",
   Error: "error",
 } as const;
-export type CollectionIssueSeverity21 = ClosedEnum<
-  typeof CollectionIssueSeverity21
->;
+export type StatusSeverity21 = ClosedEnum<typeof StatusSeverity21>;
 
-export type CollectionIssue21 = {
+export type DataCollectionIssue21 = {
   message: string;
-  reason: Reason21;
-  severity: CollectionIssueSeverity21;
+  reason: DataReason21;
+  severity: StatusSeverity21;
   source: string;
 };
 
-export const Health21 = {
+export const DataHealth21 = {
   Unknown: "unknown",
   Healthy: "healthy",
   Degraded: "degraded",
   Unhealthy: "unhealthy",
 } as const;
-export type Health21 = ClosedEnum<typeof Health21>;
+export type DataHealth21 = ClosedEnum<typeof DataHealth21>;
 
 export const StatusLifecycle21 = {
   Unknown: "unknown",
@@ -8446,9 +8669,9 @@ export const StatusLifecycle21 = {
 } as const;
 export type StatusLifecycle21 = ClosedEnum<typeof StatusLifecycle21>;
 
-export type HeartbeatStatus21 = {
-  collectionIssues: Array<CollectionIssue21>;
-  health: Health21;
+export type ResourceHeartbeatStatus21 = {
+  collectionIssues: Array<DataCollectionIssue21>;
+  health: DataHealth21;
   lifecycle: StatusLifecycle21;
   message?: string | null | undefined;
   partial: boolean;
@@ -8467,7 +8690,7 @@ export type DataLocal5 = {
   networkName?: string | null | undefined;
   nodes: Nodes4;
   runningContainers?: number | null | undefined;
-  status: HeartbeatStatus21;
+  status: ResourceHeartbeatStatus21;
   trackedContainers?: number | null | undefined;
   backend: "local";
 };
@@ -8489,6 +8712,35 @@ export type CapacityBlocker3 = {
 };
 
 export type CapacityBlockerUnion3 = CapacityBlocker3 | any;
+
+export type Blocker3 = {
+  reason: string;
+  replicaId: string;
+  schedulingMode: string;
+  state: string;
+  workloadName: string;
+};
+
+export const DrainProgressStatus3 = {
+  Draining: "draining",
+  Drained: "drained",
+  Terminating: "terminating",
+} as const;
+export type DrainProgressStatus3 = ClosedEnum<typeof DrainProgressStatus3>;
+
+export type DrainProgress3 = {
+  blockers?: Array<Blocker3> | undefined;
+  drainDeadlineAt?: string | null | undefined;
+  drainRequestedAt?: string | null | undefined;
+  drainedAt?: string | null | undefined;
+  force: boolean;
+  machineId: string;
+  replicaCount: number;
+  stalled: boolean;
+  status: DrainProgressStatus3;
+};
+
+export type DrainProgressUnion3 = DrainProgress3 | any;
 
 export const UtilizationUnit3 = {
   Count: "count",
@@ -8520,6 +8772,7 @@ export type CapacityGroup3 = {
   capacityBlocker?: CapacityBlocker3 | any | null | undefined;
   currentMachines: number;
   desiredMachines: number;
+  drainProgress?: DrainProgress3 | any | null | undefined;
   groupId: string;
   instanceType?: string | null | undefined;
   maxMachines?: number | null | undefined;
@@ -8575,38 +8828,36 @@ export type ProviderFleet3 = {
   providerId: string;
 };
 
-export const Reason20 = {
+export const DataReason20 = {
   Forbidden: "forbidden",
   NotInstalled: "not-installed",
   ApiUnavailable: "api-unavailable",
   CollectionFailed: "collection-failed",
   TimedOut: "timed-out",
 } as const;
-export type Reason20 = ClosedEnum<typeof Reason20>;
+export type DataReason20 = ClosedEnum<typeof DataReason20>;
 
-export const CollectionIssueSeverity20 = {
+export const StatusSeverity20 = {
   Info: "info",
   Warning: "warning",
   Error: "error",
 } as const;
-export type CollectionIssueSeverity20 = ClosedEnum<
-  typeof CollectionIssueSeverity20
->;
+export type StatusSeverity20 = ClosedEnum<typeof StatusSeverity20>;
 
-export type CollectionIssue20 = {
+export type DataCollectionIssue20 = {
   message: string;
-  reason: Reason20;
-  severity: CollectionIssueSeverity20;
+  reason: DataReason20;
+  severity: StatusSeverity20;
   source: string;
 };
 
-export const Health20 = {
+export const DataHealth20 = {
   Unknown: "unknown",
   Healthy: "healthy",
   Degraded: "degraded",
   Unhealthy: "unhealthy",
 } as const;
-export type Health20 = ClosedEnum<typeof Health20>;
+export type DataHealth20 = ClosedEnum<typeof DataHealth20>;
 
 export const StatusLifecycle20 = {
   Unknown: "unknown",
@@ -8622,9 +8873,9 @@ export const StatusLifecycle20 = {
 } as const;
 export type StatusLifecycle20 = ClosedEnum<typeof StatusLifecycle20>;
 
-export type HeartbeatStatus20 = {
-  collectionIssues: Array<CollectionIssue20>;
-  health: Health20;
+export type ResourceHeartbeatStatus20 = {
+  collectionIssues: Array<DataCollectionIssue20>;
+  health: DataHealth20;
   lifecycle: StatusLifecycle20;
   message?: string | null | undefined;
   partial: boolean;
@@ -8640,7 +8891,7 @@ export type DataAzure2 = {
   nodes: Nodes3;
   providerFleets: Array<ProviderFleet3>;
   region?: string | null | undefined;
-  status: HeartbeatStatus20;
+  status: ResourceHeartbeatStatus20;
   backend: "azure";
 };
 
@@ -8661,6 +8912,35 @@ export type CapacityBlocker2 = {
 };
 
 export type CapacityBlockerUnion2 = CapacityBlocker2 | any;
+
+export type Blocker2 = {
+  reason: string;
+  replicaId: string;
+  schedulingMode: string;
+  state: string;
+  workloadName: string;
+};
+
+export const DrainProgressStatus2 = {
+  Draining: "draining",
+  Drained: "drained",
+  Terminating: "terminating",
+} as const;
+export type DrainProgressStatus2 = ClosedEnum<typeof DrainProgressStatus2>;
+
+export type DrainProgress2 = {
+  blockers?: Array<Blocker2> | undefined;
+  drainDeadlineAt?: string | null | undefined;
+  drainRequestedAt?: string | null | undefined;
+  drainedAt?: string | null | undefined;
+  force: boolean;
+  machineId: string;
+  replicaCount: number;
+  stalled: boolean;
+  status: DrainProgressStatus2;
+};
+
+export type DrainProgressUnion2 = DrainProgress2 | any;
 
 export const UtilizationUnit2 = {
   Count: "count",
@@ -8692,6 +8972,7 @@ export type CapacityGroup2 = {
   capacityBlocker?: CapacityBlocker2 | any | null | undefined;
   currentMachines: number;
   desiredMachines: number;
+  drainProgress?: DrainProgress2 | any | null | undefined;
   groupId: string;
   instanceType?: string | null | undefined;
   maxMachines?: number | null | undefined;
@@ -8747,38 +9028,36 @@ export type ProviderFleet2 = {
   providerId: string;
 };
 
-export const Reason19 = {
+export const DataReason19 = {
   Forbidden: "forbidden",
   NotInstalled: "not-installed",
   ApiUnavailable: "api-unavailable",
   CollectionFailed: "collection-failed",
   TimedOut: "timed-out",
 } as const;
-export type Reason19 = ClosedEnum<typeof Reason19>;
+export type DataReason19 = ClosedEnum<typeof DataReason19>;
 
-export const CollectionIssueSeverity19 = {
+export const StatusSeverity19 = {
   Info: "info",
   Warning: "warning",
   Error: "error",
 } as const;
-export type CollectionIssueSeverity19 = ClosedEnum<
-  typeof CollectionIssueSeverity19
->;
+export type StatusSeverity19 = ClosedEnum<typeof StatusSeverity19>;
 
-export type CollectionIssue19 = {
+export type DataCollectionIssue19 = {
   message: string;
-  reason: Reason19;
-  severity: CollectionIssueSeverity19;
+  reason: DataReason19;
+  severity: StatusSeverity19;
   source: string;
 };
 
-export const Health19 = {
+export const DataHealth19 = {
   Unknown: "unknown",
   Healthy: "healthy",
   Degraded: "degraded",
   Unhealthy: "unhealthy",
 } as const;
-export type Health19 = ClosedEnum<typeof Health19>;
+export type DataHealth19 = ClosedEnum<typeof DataHealth19>;
 
 export const StatusLifecycle19 = {
   Unknown: "unknown",
@@ -8794,9 +9073,9 @@ export const StatusLifecycle19 = {
 } as const;
 export type StatusLifecycle19 = ClosedEnum<typeof StatusLifecycle19>;
 
-export type HeartbeatStatus19 = {
-  collectionIssues: Array<CollectionIssue19>;
-  health: Health19;
+export type ResourceHeartbeatStatus19 = {
+  collectionIssues: Array<DataCollectionIssue19>;
+  health: DataHealth19;
   lifecycle: StatusLifecycle19;
   message?: string | null | undefined;
   partial: boolean;
@@ -8812,7 +9091,7 @@ export type DataGcp2 = {
   nodes: Nodes2;
   providerFleets: Array<ProviderFleet2>;
   region?: string | null | undefined;
-  status: HeartbeatStatus19;
+  status: ResourceHeartbeatStatus19;
   backend: "gcp";
 };
 
@@ -8833,6 +9112,35 @@ export type CapacityBlocker1 = {
 };
 
 export type CapacityBlockerUnion1 = CapacityBlocker1 | any;
+
+export type Blocker1 = {
+  reason: string;
+  replicaId: string;
+  schedulingMode: string;
+  state: string;
+  workloadName: string;
+};
+
+export const DrainProgressStatus1 = {
+  Draining: "draining",
+  Drained: "drained",
+  Terminating: "terminating",
+} as const;
+export type DrainProgressStatus1 = ClosedEnum<typeof DrainProgressStatus1>;
+
+export type DrainProgress1 = {
+  blockers?: Array<Blocker1> | undefined;
+  drainDeadlineAt?: string | null | undefined;
+  drainRequestedAt?: string | null | undefined;
+  drainedAt?: string | null | undefined;
+  force: boolean;
+  machineId: string;
+  replicaCount: number;
+  stalled: boolean;
+  status: DrainProgressStatus1;
+};
+
+export type DrainProgressUnion1 = DrainProgress1 | any;
 
 export const UtilizationUnit1 = {
   Count: "count",
@@ -8864,6 +9172,7 @@ export type CapacityGroup1 = {
   capacityBlocker?: CapacityBlocker1 | any | null | undefined;
   currentMachines: number;
   desiredMachines: number;
+  drainProgress?: DrainProgress1 | any | null | undefined;
   groupId: string;
   instanceType?: string | null | undefined;
   maxMachines?: number | null | undefined;
@@ -8919,38 +9228,36 @@ export type ProviderFleet1 = {
   providerId: string;
 };
 
-export const Reason18 = {
+export const DataReason18 = {
   Forbidden: "forbidden",
   NotInstalled: "not-installed",
   ApiUnavailable: "api-unavailable",
   CollectionFailed: "collection-failed",
   TimedOut: "timed-out",
 } as const;
-export type Reason18 = ClosedEnum<typeof Reason18>;
+export type DataReason18 = ClosedEnum<typeof DataReason18>;
 
-export const CollectionIssueSeverity18 = {
+export const StatusSeverity18 = {
   Info: "info",
   Warning: "warning",
   Error: "error",
 } as const;
-export type CollectionIssueSeverity18 = ClosedEnum<
-  typeof CollectionIssueSeverity18
->;
+export type StatusSeverity18 = ClosedEnum<typeof StatusSeverity18>;
 
-export type CollectionIssue18 = {
+export type DataCollectionIssue18 = {
   message: string;
-  reason: Reason18;
-  severity: CollectionIssueSeverity18;
+  reason: DataReason18;
+  severity: StatusSeverity18;
   source: string;
 };
 
-export const Health18 = {
+export const DataHealth18 = {
   Unknown: "unknown",
   Healthy: "healthy",
   Degraded: "degraded",
   Unhealthy: "unhealthy",
 } as const;
-export type Health18 = ClosedEnum<typeof Health18>;
+export type DataHealth18 = ClosedEnum<typeof DataHealth18>;
 
 export const StatusLifecycle18 = {
   Unknown: "unknown",
@@ -8966,9 +9273,9 @@ export const StatusLifecycle18 = {
 } as const;
 export type StatusLifecycle18 = ClosedEnum<typeof StatusLifecycle18>;
 
-export type HeartbeatStatus18 = {
-  collectionIssues: Array<CollectionIssue18>;
-  health: Health18;
+export type ResourceHeartbeatStatus18 = {
+  collectionIssues: Array<DataCollectionIssue18>;
+  health: DataHealth18;
   lifecycle: StatusLifecycle18;
   message?: string | null | undefined;
   partial: boolean;
@@ -8984,7 +9291,7 @@ export type DataAws2 = {
   nodes: Nodes1;
   providerFleets: Array<ProviderFleet1>;
   region?: string | null | undefined;
-  status: HeartbeatStatus18;
+  status: ResourceHeartbeatStatus18;
   backend: "aws";
 };
 
@@ -9082,38 +9389,36 @@ export type SyncReconcileRequestEvent10 = {
   timestamp: Date;
 };
 
-export const Reason17 = {
+export const DataReason17 = {
   Forbidden: "forbidden",
   NotInstalled: "not-installed",
   ApiUnavailable: "api-unavailable",
   CollectionFailed: "collection-failed",
   TimedOut: "timed-out",
 } as const;
-export type Reason17 = ClosedEnum<typeof Reason17>;
+export type DataReason17 = ClosedEnum<typeof DataReason17>;
 
-export const CollectionIssueSeverity17 = {
+export const StatusSeverity17 = {
   Info: "info",
   Warning: "warning",
   Error: "error",
 } as const;
-export type CollectionIssueSeverity17 = ClosedEnum<
-  typeof CollectionIssueSeverity17
->;
+export type StatusSeverity17 = ClosedEnum<typeof StatusSeverity17>;
 
-export type CollectionIssue17 = {
+export type DataCollectionIssue17 = {
   message: string;
-  reason: Reason17;
-  severity: CollectionIssueSeverity17;
+  reason: DataReason17;
+  severity: StatusSeverity17;
   source: string;
 };
 
-export const Health17 = {
+export const DataHealth17 = {
   Unknown: "unknown",
   Healthy: "healthy",
   Degraded: "degraded",
   Unhealthy: "unhealthy",
 } as const;
-export type Health17 = ClosedEnum<typeof Health17>;
+export type DataHealth17 = ClosedEnum<typeof DataHealth17>;
 
 export const StatusLifecycle17 = {
   Unknown: "unknown",
@@ -9129,9 +9434,9 @@ export const StatusLifecycle17 = {
 } as const;
 export type StatusLifecycle17 = ClosedEnum<typeof StatusLifecycle17>;
 
-export type HeartbeatStatus17 = {
-  collectionIssues: Array<CollectionIssue17>;
-  health: Health17;
+export type ResourceHeartbeatStatus17 = {
+  collectionIssues: Array<DataCollectionIssue17>;
+  health: DataHealth17;
   lifecycle: StatusLifecycle17;
   message?: string | null | undefined;
   partial: boolean;
@@ -9141,14 +9446,14 @@ export type HeartbeatStatus17 = {
 export type DataLocal4 = {
   commandSupported: boolean;
   daemonInstance?: DaemonInstance4 | any | null | undefined;
-  daemonName: string;
+  daemonName?: string | undefined;
   events: Array<SyncReconcileRequestEvent10>;
   exitReason?: string | null | undefined;
   imagePathPresent: boolean;
   pid?: number | null | undefined;
   restartCount?: number | null | undefined;
   runtimeId: string;
-  status: HeartbeatStatus17;
+  status: ResourceHeartbeatStatus17;
   backend: "local";
 };
 
@@ -9283,38 +9588,36 @@ export type Replicas4 = {
   updated?: number | null | undefined;
 };
 
-export const Reason16 = {
+export const DataReason16 = {
   Forbidden: "forbidden",
   NotInstalled: "not-installed",
   ApiUnavailable: "api-unavailable",
   CollectionFailed: "collection-failed",
   TimedOut: "timed-out",
 } as const;
-export type Reason16 = ClosedEnum<typeof Reason16>;
+export type DataReason16 = ClosedEnum<typeof DataReason16>;
 
-export const CollectionIssueSeverity16 = {
+export const StatusSeverity16 = {
   Info: "info",
   Warning: "warning",
   Error: "error",
 } as const;
-export type CollectionIssueSeverity16 = ClosedEnum<
-  typeof CollectionIssueSeverity16
->;
+export type StatusSeverity16 = ClosedEnum<typeof StatusSeverity16>;
 
-export type CollectionIssue16 = {
+export type DataCollectionIssue16 = {
   message: string;
-  reason: Reason16;
-  severity: CollectionIssueSeverity16;
+  reason: DataReason16;
+  severity: StatusSeverity16;
   source: string;
 };
 
-export const Health16 = {
+export const DataHealth16 = {
   Unknown: "unknown",
   Healthy: "healthy",
   Degraded: "degraded",
   Unhealthy: "unhealthy",
 } as const;
-export type Health16 = ClosedEnum<typeof Health16>;
+export type DataHealth16 = ClosedEnum<typeof DataHealth16>;
 
 export const StatusLifecycle16 = {
   Unknown: "unknown",
@@ -9330,9 +9633,9 @@ export const StatusLifecycle16 = {
 } as const;
 export type StatusLifecycle16 = ClosedEnum<typeof StatusLifecycle16>;
 
-export type HeartbeatStatus16 = {
-  collectionIssues: Array<CollectionIssue16>;
-  health: Health16;
+export type ResourceHeartbeatStatus16 = {
+  collectionIssues: Array<DataCollectionIssue16>;
+  health: DataHealth16;
   lifecycle: StatusLifecycle16;
   message?: string | null | undefined;
   partial: boolean;
@@ -9370,7 +9673,7 @@ export type DataKubernetes3 = {
   pods: Array<Pod3>;
   replicas: Replicas4;
   restarts?: number | null | undefined;
-  status: HeartbeatStatus16;
+  status: ResourceHeartbeatStatus16;
   workload?: Workload3 | any | null | undefined;
   backend: "kubernetes";
 };
@@ -9465,38 +9768,36 @@ export type SyncReconcileRequestEvent8 = {
   type?: string | null | undefined;
 };
 
-export const Reason15 = {
+export const DataReason15 = {
   Forbidden: "forbidden",
   NotInstalled: "not-installed",
   ApiUnavailable: "api-unavailable",
   CollectionFailed: "collection-failed",
   TimedOut: "timed-out",
 } as const;
-export type Reason15 = ClosedEnum<typeof Reason15>;
+export type DataReason15 = ClosedEnum<typeof DataReason15>;
 
-export const CollectionIssueSeverity15 = {
+export const StatusSeverity15 = {
   Info: "info",
   Warning: "warning",
   Error: "error",
 } as const;
-export type CollectionIssueSeverity15 = ClosedEnum<
-  typeof CollectionIssueSeverity15
->;
+export type StatusSeverity15 = ClosedEnum<typeof StatusSeverity15>;
 
-export type CollectionIssue15 = {
+export type DataCollectionIssue15 = {
   message: string;
-  reason: Reason15;
-  severity: CollectionIssueSeverity15;
+  reason: DataReason15;
+  severity: StatusSeverity15;
   source: string;
 };
 
-export const Health15 = {
+export const DataHealth15 = {
   Unknown: "unknown",
   Healthy: "healthy",
   Degraded: "degraded",
   Unhealthy: "unhealthy",
 } as const;
-export type Health15 = ClosedEnum<typeof Health15>;
+export type DataHealth15 = ClosedEnum<typeof DataHealth15>;
 
 export const StatusLifecycle15 = {
   Unknown: "unknown",
@@ -9512,9 +9813,9 @@ export const StatusLifecycle15 = {
 } as const;
 export type StatusLifecycle15 = ClosedEnum<typeof StatusLifecycle15>;
 
-export type HeartbeatStatus15 = {
-  collectionIssues: Array<CollectionIssue15>;
-  health: Health15;
+export type ResourceHeartbeatStatus15 = {
+  collectionIssues: Array<DataCollectionIssue15>;
+  health: DataHealth15;
   lifecycle: StatusLifecycle15;
   message?: string | null | undefined;
   partial: boolean;
@@ -9526,7 +9827,7 @@ export type DataAzure1 = {
   capacityGroup: string;
   commandSupported: boolean;
   daemonInstances: Array<DaemonInstance3>;
-  daemonName: string;
+  daemonName?: string | undefined;
   desiredMachines: number;
   events: Array<SyncReconcileRequestEvent8>;
   healthyInstances: number;
@@ -9535,7 +9836,7 @@ export type DataAzure1 = {
   horizonStatusMessage?: string | null | undefined;
   horizonStatusReason?: string | null | undefined;
   latestUpdateTimestamp: string;
-  status: HeartbeatStatus15;
+  status: ResourceHeartbeatStatus15;
   unavailableInstances: number;
   backend: "azure";
 };
@@ -9630,38 +9931,36 @@ export type SyncReconcileRequestEvent7 = {
   type?: string | null | undefined;
 };
 
-export const Reason14 = {
+export const DataReason14 = {
   Forbidden: "forbidden",
   NotInstalled: "not-installed",
   ApiUnavailable: "api-unavailable",
   CollectionFailed: "collection-failed",
   TimedOut: "timed-out",
 } as const;
-export type Reason14 = ClosedEnum<typeof Reason14>;
+export type DataReason14 = ClosedEnum<typeof DataReason14>;
 
-export const CollectionIssueSeverity14 = {
+export const StatusSeverity14 = {
   Info: "info",
   Warning: "warning",
   Error: "error",
 } as const;
-export type CollectionIssueSeverity14 = ClosedEnum<
-  typeof CollectionIssueSeverity14
->;
+export type StatusSeverity14 = ClosedEnum<typeof StatusSeverity14>;
 
-export type CollectionIssue14 = {
+export type DataCollectionIssue14 = {
   message: string;
-  reason: Reason14;
-  severity: CollectionIssueSeverity14;
+  reason: DataReason14;
+  severity: StatusSeverity14;
   source: string;
 };
 
-export const Health14 = {
+export const DataHealth14 = {
   Unknown: "unknown",
   Healthy: "healthy",
   Degraded: "degraded",
   Unhealthy: "unhealthy",
 } as const;
-export type Health14 = ClosedEnum<typeof Health14>;
+export type DataHealth14 = ClosedEnum<typeof DataHealth14>;
 
 export const StatusLifecycle14 = {
   Unknown: "unknown",
@@ -9677,9 +9976,9 @@ export const StatusLifecycle14 = {
 } as const;
 export type StatusLifecycle14 = ClosedEnum<typeof StatusLifecycle14>;
 
-export type HeartbeatStatus14 = {
-  collectionIssues: Array<CollectionIssue14>;
-  health: Health14;
+export type ResourceHeartbeatStatus14 = {
+  collectionIssues: Array<DataCollectionIssue14>;
+  health: DataHealth14;
   lifecycle: StatusLifecycle14;
   message?: string | null | undefined;
   partial: boolean;
@@ -9691,7 +9990,7 @@ export type DataGcp1 = {
   capacityGroup: string;
   commandSupported: boolean;
   daemonInstances: Array<DaemonInstance2>;
-  daemonName: string;
+  daemonName?: string | undefined;
   desiredMachines: number;
   events: Array<SyncReconcileRequestEvent7>;
   healthyInstances: number;
@@ -9700,7 +9999,7 @@ export type DataGcp1 = {
   horizonStatusMessage?: string | null | undefined;
   horizonStatusReason?: string | null | undefined;
   latestUpdateTimestamp: string;
-  status: HeartbeatStatus14;
+  status: ResourceHeartbeatStatus14;
   unavailableInstances: number;
   backend: "gcp";
 };
@@ -9795,38 +10094,36 @@ export type SyncReconcileRequestEvent6 = {
   type?: string | null | undefined;
 };
 
-export const Reason13 = {
+export const DataReason13 = {
   Forbidden: "forbidden",
   NotInstalled: "not-installed",
   ApiUnavailable: "api-unavailable",
   CollectionFailed: "collection-failed",
   TimedOut: "timed-out",
 } as const;
-export type Reason13 = ClosedEnum<typeof Reason13>;
+export type DataReason13 = ClosedEnum<typeof DataReason13>;
 
-export const CollectionIssueSeverity13 = {
+export const StatusSeverity13 = {
   Info: "info",
   Warning: "warning",
   Error: "error",
 } as const;
-export type CollectionIssueSeverity13 = ClosedEnum<
-  typeof CollectionIssueSeverity13
->;
+export type StatusSeverity13 = ClosedEnum<typeof StatusSeverity13>;
 
-export type CollectionIssue13 = {
+export type DataCollectionIssue13 = {
   message: string;
-  reason: Reason13;
-  severity: CollectionIssueSeverity13;
+  reason: DataReason13;
+  severity: StatusSeverity13;
   source: string;
 };
 
-export const Health13 = {
+export const DataHealth13 = {
   Unknown: "unknown",
   Healthy: "healthy",
   Degraded: "degraded",
   Unhealthy: "unhealthy",
 } as const;
-export type Health13 = ClosedEnum<typeof Health13>;
+export type DataHealth13 = ClosedEnum<typeof DataHealth13>;
 
 export const StatusLifecycle13 = {
   Unknown: "unknown",
@@ -9842,9 +10139,9 @@ export const StatusLifecycle13 = {
 } as const;
 export type StatusLifecycle13 = ClosedEnum<typeof StatusLifecycle13>;
 
-export type HeartbeatStatus13 = {
-  collectionIssues: Array<CollectionIssue13>;
-  health: Health13;
+export type ResourceHeartbeatStatus13 = {
+  collectionIssues: Array<DataCollectionIssue13>;
+  health: DataHealth13;
   lifecycle: StatusLifecycle13;
   message?: string | null | undefined;
   partial: boolean;
@@ -9856,7 +10153,7 @@ export type DataAws1 = {
   capacityGroup: string;
   commandSupported: boolean;
   daemonInstances: Array<DaemonInstance1>;
-  daemonName: string;
+  daemonName?: string | undefined;
   desiredMachines: number;
   events: Array<SyncReconcileRequestEvent6>;
   healthyInstances: number;
@@ -9865,7 +10162,7 @@ export type DataAws1 = {
   horizonStatusMessage?: string | null | undefined;
   horizonStatusReason?: string | null | undefined;
   latestUpdateTimestamp: string;
-  status: HeartbeatStatus13;
+  status: ResourceHeartbeatStatus13;
   unavailableInstances: number;
   backend: "aws";
 };
@@ -9999,38 +10296,36 @@ export type Memory5 = {
 
 export type MemoryUnion5 = Memory5 | any;
 
-export const Reason12 = {
+export const DataReason12 = {
   Forbidden: "forbidden",
   NotInstalled: "not-installed",
   ApiUnavailable: "api-unavailable",
   CollectionFailed: "collection-failed",
   TimedOut: "timed-out",
 } as const;
-export type Reason12 = ClosedEnum<typeof Reason12>;
+export type DataReason12 = ClosedEnum<typeof DataReason12>;
 
-export const CollectionIssueSeverity12 = {
+export const StatusSeverity12 = {
   Info: "info",
   Warning: "warning",
   Error: "error",
 } as const;
-export type CollectionIssueSeverity12 = ClosedEnum<
-  typeof CollectionIssueSeverity12
->;
+export type StatusSeverity12 = ClosedEnum<typeof StatusSeverity12>;
 
-export type CollectionIssue12 = {
+export type DataCollectionIssue12 = {
   message: string;
-  reason: Reason12;
-  severity: CollectionIssueSeverity12;
+  reason: DataReason12;
+  severity: StatusSeverity12;
   source: string;
 };
 
-export const Health12 = {
+export const DataHealth12 = {
   Unknown: "unknown",
   Healthy: "healthy",
   Degraded: "degraded",
   Unhealthy: "unhealthy",
 } as const;
-export type Health12 = ClosedEnum<typeof Health12>;
+export type DataHealth12 = ClosedEnum<typeof DataHealth12>;
 
 export const StatusLifecycle12 = {
   Unknown: "unknown",
@@ -10046,9 +10341,9 @@ export const StatusLifecycle12 = {
 } as const;
 export type StatusLifecycle12 = ClosedEnum<typeof StatusLifecycle12>;
 
-export type HeartbeatStatus12 = {
-  collectionIssues: Array<CollectionIssue12>;
-  health: Health12;
+export type ResourceHeartbeatStatus12 = {
+  collectionIssues: Array<DataCollectionIssue12>;
+  health: DataHealth12;
   lifecycle: StatusLifecycle12;
   message?: string | null | undefined;
   partial: boolean;
@@ -10069,7 +10364,7 @@ export type DataLocal3 = {
   restartCount?: number | null | undefined;
   runtimeReachable: boolean;
   runtimeStatus?: string | null | undefined;
-  status: HeartbeatStatus12;
+  status: ResourceHeartbeatStatus12;
   backend: "local";
 };
 
@@ -10204,38 +10499,36 @@ export type Replicas3 = {
   updated?: number | null | undefined;
 };
 
-export const Reason11 = {
+export const DataReason11 = {
   Forbidden: "forbidden",
   NotInstalled: "not-installed",
   ApiUnavailable: "api-unavailable",
   CollectionFailed: "collection-failed",
   TimedOut: "timed-out",
 } as const;
-export type Reason11 = ClosedEnum<typeof Reason11>;
+export type DataReason11 = ClosedEnum<typeof DataReason11>;
 
-export const CollectionIssueSeverity11 = {
+export const StatusSeverity11 = {
   Info: "info",
   Warning: "warning",
   Error: "error",
 } as const;
-export type CollectionIssueSeverity11 = ClosedEnum<
-  typeof CollectionIssueSeverity11
->;
+export type StatusSeverity11 = ClosedEnum<typeof StatusSeverity11>;
 
-export type CollectionIssue11 = {
+export type DataCollectionIssue11 = {
   message: string;
-  reason: Reason11;
-  severity: CollectionIssueSeverity11;
+  reason: DataReason11;
+  severity: StatusSeverity11;
   source: string;
 };
 
-export const Health11 = {
+export const DataHealth11 = {
   Unknown: "unknown",
   Healthy: "healthy",
   Degraded: "degraded",
   Unhealthy: "unhealthy",
 } as const;
-export type Health11 = ClosedEnum<typeof Health11>;
+export type DataHealth11 = ClosedEnum<typeof DataHealth11>;
 
 export const StatusLifecycle11 = {
   Unknown: "unknown",
@@ -10251,9 +10544,9 @@ export const StatusLifecycle11 = {
 } as const;
 export type StatusLifecycle11 = ClosedEnum<typeof StatusLifecycle11>;
 
-export type HeartbeatStatus11 = {
-  collectionIssues: Array<CollectionIssue11>;
-  health: Health11;
+export type ResourceHeartbeatStatus11 = {
+  collectionIssues: Array<DataCollectionIssue11>;
+  health: DataHealth11;
   lifecycle: StatusLifecycle11;
   message?: string | null | undefined;
   partial: boolean;
@@ -10299,7 +10592,7 @@ export type DataKubernetes2 = {
   pods: Array<Pod2>;
   replicas: Replicas3;
   restarts?: number | null | undefined;
-  status: HeartbeatStatus11;
+  status: ResourceHeartbeatStatus11;
   workload?: Workload2 | any | null | undefined;
   workloadKind: WorkloadKind2;
   backend: "kubernetes";
@@ -10443,38 +10736,36 @@ export const SchedulingMode = {
 } as const;
 export type SchedulingMode = ClosedEnum<typeof SchedulingMode>;
 
-export const Reason10 = {
+export const DataReason10 = {
   Forbidden: "forbidden",
   NotInstalled: "not-installed",
   ApiUnavailable: "api-unavailable",
   CollectionFailed: "collection-failed",
   TimedOut: "timed-out",
 } as const;
-export type Reason10 = ClosedEnum<typeof Reason10>;
+export type DataReason10 = ClosedEnum<typeof DataReason10>;
 
-export const CollectionIssueSeverity10 = {
+export const StatusSeverity10 = {
   Info: "info",
   Warning: "warning",
   Error: "error",
 } as const;
-export type CollectionIssueSeverity10 = ClosedEnum<
-  typeof CollectionIssueSeverity10
->;
+export type StatusSeverity10 = ClosedEnum<typeof StatusSeverity10>;
 
-export type CollectionIssue10 = {
+export type DataCollectionIssue10 = {
   message: string;
-  reason: Reason10;
-  severity: CollectionIssueSeverity10;
+  reason: DataReason10;
+  severity: StatusSeverity10;
   source: string;
 };
 
-export const Health10 = {
+export const DataHealth10 = {
   Unknown: "unknown",
   Healthy: "healthy",
   Degraded: "degraded",
   Unhealthy: "unhealthy",
 } as const;
-export type Health10 = ClosedEnum<typeof Health10>;
+export type DataHealth10 = ClosedEnum<typeof DataHealth10>;
 
 export const StatusLifecycle10 = {
   Unknown: "unknown",
@@ -10490,9 +10781,9 @@ export const StatusLifecycle10 = {
 } as const;
 export type StatusLifecycle10 = ClosedEnum<typeof StatusLifecycle10>;
 
-export type HeartbeatStatus10 = {
-  collectionIssues: Array<CollectionIssue10>;
-  health: Health10;
+export type ResourceHeartbeatStatus10 = {
+  collectionIssues: Array<DataCollectionIssue10>;
+  health: DataHealth10;
   lifecycle: StatusLifecycle10;
   message?: string | null | undefined;
   partial: boolean;
@@ -10509,7 +10800,7 @@ export type DataHorizonPlatform = {
   replicaUnits: Array<ReplicaUnit>;
   replicas: Replicas2;
   schedulingMode: SchedulingMode;
-  status: HeartbeatStatus10;
+  status: ResourceHeartbeatStatus10;
   backend: "horizonPlatform";
 };
 
@@ -10638,38 +10929,36 @@ export type Process = {
 
 export type ProcessUnion = Process | any;
 
-export const Reason9 = {
+export const DataReason9 = {
   Forbidden: "forbidden",
   NotInstalled: "not-installed",
   ApiUnavailable: "api-unavailable",
   CollectionFailed: "collection-failed",
   TimedOut: "timed-out",
 } as const;
-export type Reason9 = ClosedEnum<typeof Reason9>;
+export type DataReason9 = ClosedEnum<typeof DataReason9>;
 
-export const CollectionIssueSeverity9 = {
+export const StatusSeverity9 = {
   Info: "info",
   Warning: "warning",
   Error: "error",
 } as const;
-export type CollectionIssueSeverity9 = ClosedEnum<
-  typeof CollectionIssueSeverity9
->;
+export type StatusSeverity9 = ClosedEnum<typeof StatusSeverity9>;
 
-export type CollectionIssue9 = {
+export type DataCollectionIssue9 = {
   message: string;
-  reason: Reason9;
-  severity: CollectionIssueSeverity9;
+  reason: DataReason9;
+  severity: StatusSeverity9;
   source: string;
 };
 
-export const Health9 = {
+export const DataHealth9 = {
   Unknown: "unknown",
   Healthy: "healthy",
   Degraded: "degraded",
   Unhealthy: "unhealthy",
 } as const;
-export type Health9 = ClosedEnum<typeof Health9>;
+export type DataHealth9 = ClosedEnum<typeof DataHealth9>;
 
 export const StatusLifecycle9 = {
   Unknown: "unknown",
@@ -10685,9 +10974,9 @@ export const StatusLifecycle9 = {
 } as const;
 export type StatusLifecycle9 = ClosedEnum<typeof StatusLifecycle9>;
 
-export type HeartbeatStatus9 = {
-  collectionIssues: Array<CollectionIssue9>;
-  health: Health9;
+export type ResourceHeartbeatStatus9 = {
+  collectionIssues: Array<DataCollectionIssue9>;
+  health: DataHealth9;
   lifecycle: StatusLifecycle9;
   message?: string | null | undefined;
   partial: boolean;
@@ -10703,7 +10992,7 @@ export type DataLocal2 = {
   pid?: number | null | undefined;
   process?: Process | any | null | undefined;
   readinessProbeOk?: boolean | null | undefined;
-  status: HeartbeatStatus9;
+  status: ResourceHeartbeatStatus9;
   triggerCount: number;
   backend: "local";
 };
@@ -10839,38 +11128,36 @@ export type Replicas1 = {
   updated?: number | null | undefined;
 };
 
-export const Reason8 = {
+export const DataReason8 = {
   Forbidden: "forbidden",
   NotInstalled: "not-installed",
   ApiUnavailable: "api-unavailable",
   CollectionFailed: "collection-failed",
   TimedOut: "timed-out",
 } as const;
-export type Reason8 = ClosedEnum<typeof Reason8>;
+export type DataReason8 = ClosedEnum<typeof DataReason8>;
 
-export const CollectionIssueSeverity8 = {
+export const StatusSeverity8 = {
   Info: "info",
   Warning: "warning",
   Error: "error",
 } as const;
-export type CollectionIssueSeverity8 = ClosedEnum<
-  typeof CollectionIssueSeverity8
->;
+export type StatusSeverity8 = ClosedEnum<typeof StatusSeverity8>;
 
-export type CollectionIssue8 = {
+export type DataCollectionIssue8 = {
   message: string;
-  reason: Reason8;
-  severity: CollectionIssueSeverity8;
+  reason: DataReason8;
+  severity: StatusSeverity8;
   source: string;
 };
 
-export const Health8 = {
+export const DataHealth8 = {
   Unknown: "unknown",
   Healthy: "healthy",
   Degraded: "degraded",
   Unhealthy: "unhealthy",
 } as const;
-export type Health8 = ClosedEnum<typeof Health8>;
+export type DataHealth8 = ClosedEnum<typeof DataHealth8>;
 
 export const StatusLifecycle8 = {
   Unknown: "unknown",
@@ -10886,9 +11173,9 @@ export const StatusLifecycle8 = {
 } as const;
 export type StatusLifecycle8 = ClosedEnum<typeof StatusLifecycle8>;
 
-export type HeartbeatStatus8 = {
-  collectionIssues: Array<CollectionIssue8>;
-  health: Health8;
+export type ResourceHeartbeatStatus8 = {
+  collectionIssues: Array<DataCollectionIssue8>;
+  health: DataHealth8;
   lifecycle: StatusLifecycle8;
   message?: string | null | undefined;
   partial: boolean;
@@ -10934,45 +11221,43 @@ export type DataKubernetes1 = {
   pods: Array<Pod1>;
   replicas: Replicas1;
   restarts?: number | null | undefined;
-  status: HeartbeatStatus8;
+  status: ResourceHeartbeatStatus8;
   triggerCount: number;
   workload?: Workload1 | any | null | undefined;
   workloadKind: WorkloadKind1;
   backend: "kubernetes";
 };
 
-export const Reason7 = {
+export const DataReason7 = {
   Forbidden: "forbidden",
   NotInstalled: "not-installed",
   ApiUnavailable: "api-unavailable",
   CollectionFailed: "collection-failed",
   TimedOut: "timed-out",
 } as const;
-export type Reason7 = ClosedEnum<typeof Reason7>;
+export type DataReason7 = ClosedEnum<typeof DataReason7>;
 
-export const CollectionIssueSeverity7 = {
+export const StatusSeverity7 = {
   Info: "info",
   Warning: "warning",
   Error: "error",
 } as const;
-export type CollectionIssueSeverity7 = ClosedEnum<
-  typeof CollectionIssueSeverity7
->;
+export type StatusSeverity7 = ClosedEnum<typeof StatusSeverity7>;
 
-export type CollectionIssue7 = {
+export type DataCollectionIssue7 = {
   message: string;
-  reason: Reason7;
-  severity: CollectionIssueSeverity7;
+  reason: DataReason7;
+  severity: StatusSeverity7;
   source: string;
 };
 
-export const Health7 = {
+export const DataHealth7 = {
   Unknown: "unknown",
   Healthy: "healthy",
   Degraded: "degraded",
   Unhealthy: "unhealthy",
 } as const;
-export type Health7 = ClosedEnum<typeof Health7>;
+export type DataHealth7 = ClosedEnum<typeof DataHealth7>;
 
 export const StatusLifecycle7 = {
   Unknown: "unknown",
@@ -10988,9 +11273,9 @@ export const StatusLifecycle7 = {
 } as const;
 export type StatusLifecycle7 = ClosedEnum<typeof StatusLifecycle7>;
 
-export type HeartbeatStatus7 = {
-  collectionIssues: Array<CollectionIssue7>;
-  health: Health7;
+export type ResourceHeartbeatStatus7 = {
+  collectionIssues: Array<DataCollectionIssue7>;
+  health: DataHealth7;
   lifecycle: StatusLifecycle7;
   message?: string | null | undefined;
   partial: boolean;
@@ -11008,42 +11293,40 @@ export type DataAzureContainerApps1 = {
   provisioningState?: string | null | undefined;
   revision?: string | null | undefined;
   runningStatus?: string | null | undefined;
-  status: HeartbeatStatus7;
+  status: ResourceHeartbeatStatus7;
   backend: "azureContainerApps";
 };
 
-export const Reason6 = {
+export const DataReason6 = {
   Forbidden: "forbidden",
   NotInstalled: "not-installed",
   ApiUnavailable: "api-unavailable",
   CollectionFailed: "collection-failed",
   TimedOut: "timed-out",
 } as const;
-export type Reason6 = ClosedEnum<typeof Reason6>;
+export type DataReason6 = ClosedEnum<typeof DataReason6>;
 
-export const CollectionIssueSeverity6 = {
+export const StatusSeverity6 = {
   Info: "info",
   Warning: "warning",
   Error: "error",
 } as const;
-export type CollectionIssueSeverity6 = ClosedEnum<
-  typeof CollectionIssueSeverity6
->;
+export type StatusSeverity6 = ClosedEnum<typeof StatusSeverity6>;
 
-export type CollectionIssue6 = {
+export type DataCollectionIssue6 = {
   message: string;
-  reason: Reason6;
-  severity: CollectionIssueSeverity6;
+  reason: DataReason6;
+  severity: StatusSeverity6;
   source: string;
 };
 
-export const Health6 = {
+export const DataHealth6 = {
   Unknown: "unknown",
   Healthy: "healthy",
   Degraded: "degraded",
   Unhealthy: "unhealthy",
 } as const;
-export type Health6 = ClosedEnum<typeof Health6>;
+export type DataHealth6 = ClosedEnum<typeof DataHealth6>;
 
 export const StatusLifecycle6 = {
   Unknown: "unknown",
@@ -11059,9 +11342,9 @@ export const StatusLifecycle6 = {
 } as const;
 export type StatusLifecycle6 = ClosedEnum<typeof StatusLifecycle6>;
 
-export type HeartbeatStatus6 = {
-  collectionIssues: Array<CollectionIssue6>;
-  health: Health6;
+export type ResourceHeartbeatStatus6 = {
+  collectionIssues: Array<DataCollectionIssue6>;
+  health: DataHealth6;
   lifecycle: StatusLifecycle6;
   message?: string | null | undefined;
   partial: boolean;
@@ -11080,45 +11363,43 @@ export type DataGcpCloudRun = {
   observedGeneration?: number | null | undefined;
   region?: string | null | undefined;
   service: string;
-  status: HeartbeatStatus6;
+  status: ResourceHeartbeatStatus6;
   trafficCount: number;
   uri?: string | null | undefined;
   urls: Array<string>;
   backend: "gcpCloudRun";
 };
 
-export const Reason5 = {
+export const DataReason5 = {
   Forbidden: "forbidden",
   NotInstalled: "not-installed",
   ApiUnavailable: "api-unavailable",
   CollectionFailed: "collection-failed",
   TimedOut: "timed-out",
 } as const;
-export type Reason5 = ClosedEnum<typeof Reason5>;
+export type DataReason5 = ClosedEnum<typeof DataReason5>;
 
-export const CollectionIssueSeverity5 = {
+export const StatusSeverity5 = {
   Info: "info",
   Warning: "warning",
   Error: "error",
 } as const;
-export type CollectionIssueSeverity5 = ClosedEnum<
-  typeof CollectionIssueSeverity5
->;
+export type StatusSeverity5 = ClosedEnum<typeof StatusSeverity5>;
 
-export type CollectionIssue5 = {
+export type DataCollectionIssue5 = {
   message: string;
-  reason: Reason5;
-  severity: CollectionIssueSeverity5;
+  reason: DataReason5;
+  severity: StatusSeverity5;
   source: string;
 };
 
-export const Health5 = {
+export const DataHealth5 = {
   Unknown: "unknown",
   Healthy: "healthy",
   Degraded: "degraded",
   Unhealthy: "unhealthy",
 } as const;
-export type Health5 = ClosedEnum<typeof Health5>;
+export type DataHealth5 = ClosedEnum<typeof DataHealth5>;
 
 export const StatusLifecycle5 = {
   Unknown: "unknown",
@@ -11134,9 +11415,9 @@ export const StatusLifecycle5 = {
 } as const;
 export type StatusLifecycle5 = ClosedEnum<typeof StatusLifecycle5>;
 
-export type HeartbeatStatus5 = {
-  collectionIssues: Array<CollectionIssue5>;
-  health: Health5;
+export type ResourceHeartbeatStatus5 = {
+  collectionIssues: Array<DataCollectionIssue5>;
+  health: DataHealth5;
   lifecycle: StatusLifecycle5;
   message?: string | null | undefined;
   partial: boolean;
@@ -11160,7 +11441,7 @@ export type DataAwsLambda = {
   state?: string | null | undefined;
   stateReason?: string | null | undefined;
   stateReasonCode?: string | null | undefined;
-  status: HeartbeatStatus5;
+  status: ResourceHeartbeatStatus5;
   timeoutSeconds?: number | null | undefined;
   triggerCount: number;
   version?: string | null | undefined;
@@ -11184,38 +11465,36 @@ export type DataWorker = {
   resourceType: "worker";
 };
 
-export const Reason4 = {
+export const DataReason4 = {
   Forbidden: "forbidden",
   NotInstalled: "not-installed",
   ApiUnavailable: "api-unavailable",
   CollectionFailed: "collection-failed",
   TimedOut: "timed-out",
 } as const;
-export type Reason4 = ClosedEnum<typeof Reason4>;
+export type DataReason4 = ClosedEnum<typeof DataReason4>;
 
-export const CollectionIssueSeverity4 = {
+export const StatusSeverity4 = {
   Info: "info",
   Warning: "warning",
   Error: "error",
 } as const;
-export type CollectionIssueSeverity4 = ClosedEnum<
-  typeof CollectionIssueSeverity4
->;
+export type StatusSeverity4 = ClosedEnum<typeof StatusSeverity4>;
 
-export type CollectionIssue4 = {
+export type DataCollectionIssue4 = {
   message: string;
-  reason: Reason4;
-  severity: CollectionIssueSeverity4;
+  reason: DataReason4;
+  severity: StatusSeverity4;
   source: string;
 };
 
-export const Health4 = {
+export const DataHealth4 = {
   Unknown: "unknown",
   Healthy: "healthy",
   Degraded: "degraded",
   Unhealthy: "unhealthy",
 } as const;
-export type Health4 = ClosedEnum<typeof Health4>;
+export type DataHealth4 = ClosedEnum<typeof DataHealth4>;
 
 export const StatusLifecycle4 = {
   Unknown: "unknown",
@@ -11231,9 +11510,9 @@ export const StatusLifecycle4 = {
 } as const;
 export type StatusLifecycle4 = ClosedEnum<typeof StatusLifecycle4>;
 
-export type HeartbeatStatus4 = {
-  collectionIssues: Array<CollectionIssue4>;
-  health: Health4;
+export type ResourceHeartbeatStatus4 = {
+  collectionIssues: Array<DataCollectionIssue4>;
+  health: DataHealth4;
   lifecycle: StatusLifecycle4;
   message?: string | null | undefined;
   partial: boolean;
@@ -11246,42 +11525,40 @@ export type DataLocal1 = {
   path: string;
   pathExists: boolean;
   readonly?: boolean | null | undefined;
-  status: HeartbeatStatus4;
+  status: ResourceHeartbeatStatus4;
   backend: "local";
 };
 
-export const Reason3 = {
+export const DataReason3 = {
   Forbidden: "forbidden",
   NotInstalled: "not-installed",
   ApiUnavailable: "api-unavailable",
   CollectionFailed: "collection-failed",
   TimedOut: "timed-out",
 } as const;
-export type Reason3 = ClosedEnum<typeof Reason3>;
+export type DataReason3 = ClosedEnum<typeof DataReason3>;
 
-export const CollectionIssueSeverity3 = {
+export const StatusSeverity3 = {
   Info: "info",
   Warning: "warning",
   Error: "error",
 } as const;
-export type CollectionIssueSeverity3 = ClosedEnum<
-  typeof CollectionIssueSeverity3
->;
+export type StatusSeverity3 = ClosedEnum<typeof StatusSeverity3>;
 
-export type CollectionIssue3 = {
+export type DataCollectionIssue3 = {
   message: string;
-  reason: Reason3;
-  severity: CollectionIssueSeverity3;
+  reason: DataReason3;
+  severity: StatusSeverity3;
   source: string;
 };
 
-export const Health3 = {
+export const DataHealth3 = {
   Unknown: "unknown",
   Healthy: "healthy",
   Degraded: "degraded",
   Unhealthy: "unhealthy",
 } as const;
-export type Health3 = ClosedEnum<typeof Health3>;
+export type DataHealth3 = ClosedEnum<typeof DataHealth3>;
 
 export const StatusLifecycle3 = {
   Unknown: "unknown",
@@ -11297,9 +11574,9 @@ export const StatusLifecycle3 = {
 } as const;
 export type StatusLifecycle3 = ClosedEnum<typeof StatusLifecycle3>;
 
-export type HeartbeatStatus3 = {
-  collectionIssues: Array<CollectionIssue3>;
-  health: Health3;
+export type ResourceHeartbeatStatus3 = {
+  collectionIssues: Array<DataCollectionIssue3>;
+  health: DataHealth3;
   lifecycle: StatusLifecycle3;
   message?: string | null | undefined;
   partial: boolean;
@@ -11331,7 +11608,7 @@ export type DataAzureBlob = {
   secondaryLocation?: string | null | undefined;
   skuName?: string | null | undefined;
   skuTier?: string | null | undefined;
-  status: HeartbeatStatus3;
+  status: ResourceHeartbeatStatus3;
   statusOfPrimary?: string | null | undefined;
   statusOfSecondary?: string | null | undefined;
   storageAccountName?: string | null | undefined;
@@ -11339,38 +11616,36 @@ export type DataAzureBlob = {
   backend: "azureBlob";
 };
 
-export const Reason2 = {
+export const DataReason2 = {
   Forbidden: "forbidden",
   NotInstalled: "not-installed",
   ApiUnavailable: "api-unavailable",
   CollectionFailed: "collection-failed",
   TimedOut: "timed-out",
 } as const;
-export type Reason2 = ClosedEnum<typeof Reason2>;
+export type DataReason2 = ClosedEnum<typeof DataReason2>;
 
-export const CollectionIssueSeverity2 = {
+export const StatusSeverity2 = {
   Info: "info",
   Warning: "warning",
   Error: "error",
 } as const;
-export type CollectionIssueSeverity2 = ClosedEnum<
-  typeof CollectionIssueSeverity2
->;
+export type StatusSeverity2 = ClosedEnum<typeof StatusSeverity2>;
 
-export type CollectionIssue2 = {
+export type DataCollectionIssue2 = {
   message: string;
-  reason: Reason2;
-  severity: CollectionIssueSeverity2;
+  reason: DataReason2;
+  severity: StatusSeverity2;
   source: string;
 };
 
-export const Health2 = {
+export const DataHealth2 = {
   Unknown: "unknown",
   Healthy: "healthy",
   Degraded: "degraded",
   Unhealthy: "unhealthy",
 } as const;
-export type Health2 = ClosedEnum<typeof Health2>;
+export type DataHealth2 = ClosedEnum<typeof DataHealth2>;
 
 export const StatusLifecycle2 = {
   Unknown: "unknown",
@@ -11386,9 +11661,9 @@ export const StatusLifecycle2 = {
 } as const;
 export type StatusLifecycle2 = ClosedEnum<typeof StatusLifecycle2>;
 
-export type HeartbeatStatus2 = {
-  collectionIssues: Array<CollectionIssue2>;
-  health: Health2;
+export type ResourceHeartbeatStatus2 = {
+  collectionIssues: Array<DataCollectionIssue2>;
+  health: DataHealth2;
   lifecycle: StatusLifecycle2;
   message?: string | null | undefined;
   partial: boolean;
@@ -11410,7 +11685,7 @@ export type DataGcpCloudStorage = {
   retentionPolicyIsLocked?: boolean | null | undefined;
   softDeleteEffectiveTime?: string | null | undefined;
   softDeleteRetentionDurationSeconds?: string | null | undefined;
-  status: HeartbeatStatus2;
+  status: ResourceHeartbeatStatus2;
   storageClass?: string | null | undefined;
   uniformBucketLevelAccessEnabled?: boolean | null | undefined;
   uniformBucketLevelAccessLockedTime?: string | null | undefined;
@@ -11418,38 +11693,36 @@ export type DataGcpCloudStorage = {
   backend: "gcpCloudStorage";
 };
 
-export const Reason1 = {
+export const DataReason1 = {
   Forbidden: "forbidden",
   NotInstalled: "not-installed",
   ApiUnavailable: "api-unavailable",
   CollectionFailed: "collection-failed",
   TimedOut: "timed-out",
 } as const;
-export type Reason1 = ClosedEnum<typeof Reason1>;
+export type DataReason1 = ClosedEnum<typeof DataReason1>;
 
-export const CollectionIssueSeverity1 = {
+export const StatusSeverity1 = {
   Info: "info",
   Warning: "warning",
   Error: "error",
 } as const;
-export type CollectionIssueSeverity1 = ClosedEnum<
-  typeof CollectionIssueSeverity1
->;
+export type StatusSeverity1 = ClosedEnum<typeof StatusSeverity1>;
 
-export type CollectionIssue1 = {
+export type DataCollectionIssue1 = {
   message: string;
-  reason: Reason1;
-  severity: CollectionIssueSeverity1;
+  reason: DataReason1;
+  severity: StatusSeverity1;
   source: string;
 };
 
-export const Health1 = {
+export const DataHealth1 = {
   Unknown: "unknown",
   Healthy: "healthy",
   Degraded: "degraded",
   Unhealthy: "unhealthy",
 } as const;
-export type Health1 = ClosedEnum<typeof Health1>;
+export type DataHealth1 = ClosedEnum<typeof DataHealth1>;
 
 export const StatusLifecycle1 = {
   Unknown: "unknown",
@@ -11465,9 +11738,9 @@ export const StatusLifecycle1 = {
 } as const;
 export type StatusLifecycle1 = ClosedEnum<typeof StatusLifecycle1>;
 
-export type HeartbeatStatus1 = {
-  collectionIssues: Array<CollectionIssue1>;
-  health: Health1;
+export type ResourceHeartbeatStatus1 = {
+  collectionIssues: Array<DataCollectionIssue1>;
+  health: DataHealth1;
   lifecycle: StatusLifecycle1;
   message?: string | null | undefined;
   partial: boolean;
@@ -11489,7 +11762,7 @@ export type DataAwsS3 = {
   publicAccessBlockPresent: boolean;
   region?: string | null | undefined;
   restrictPublicBuckets?: boolean | null | undefined;
-  status: HeartbeatStatus1;
+  status: ResourceHeartbeatStatus1;
   versioningEnabled?: boolean | null | undefined;
   versioningStatus?: string | null | undefined;
   backend: "awsS3";
@@ -11506,7 +11779,7 @@ export type DataStorage = {
   resourceType: "storage";
 };
 
-export type SyncReconcileRequestDataUnion15 =
+export type SyncReconcileRequestDataUnion16 =
   | DataStorage
   | DataWorker
   | DataContainer
@@ -11515,6 +11788,7 @@ export type SyncReconcileRequestDataUnion15 =
   | DataKubernetesCluster
   | DataQueue
   | DataKv
+  | DataPostgres
   | DataVault
   | DataServiceAccount
   | DataNetwork
@@ -11527,27 +11801,29 @@ export type SyncReconcileRequestDataUnion15 =
   | DataAzureContainerAppsEnvironment
   | DataAzureServiceBusNamespace;
 
-export const Format = {
+export const ResourceHeartbeatFormat = {
   Json: "json",
   Yaml: "yaml",
   Text: "text",
 } as const;
-export type Format = ClosedEnum<typeof Format>;
+export type ResourceHeartbeatFormat = ClosedEnum<
+  typeof ResourceHeartbeatFormat
+>;
 
-export type Raw = {
+export type ResourceHeartbeatRaw = {
   body: string;
   collectedAt: Date;
-  format: Format;
+  format: ResourceHeartbeatFormat;
   source: string;
   truncated: boolean;
 };
 
-export type Heartbeat = {
-  backend: BackendEnum;
+export type ResourceHeartbeat = {
+  backend: ResourceHeartbeatBackendEnum;
   /**
    * Represents the target cloud platform.
    */
-  controllerPlatform: HeartbeatControllerPlatform;
+  controllerPlatform: ResourceHeartbeatControllerPlatform;
   data:
     | DataStorage
     | DataWorker
@@ -11557,6 +11833,7 @@ export type Heartbeat = {
     | DataKubernetesCluster
     | DataQueue
     | DataKv
+    | DataPostgres
     | DataVault
     | DataServiceAccount
     | DataNetwork
@@ -11570,12 +11847,200 @@ export type Heartbeat = {
     | DataAzureServiceBusNamespace;
   deploymentId?: string | null | undefined;
   observedAt: Date;
-  raw: Array<Raw>;
+  raw: Array<ResourceHeartbeatRaw>;
+  /**
+   * Alien resource id, such as the `alien.Container` or `alien.Storage`
+   *
+   * @remarks
+   * resource id from the stack.
+   */
   resourceId: string;
   /**
    * Resource type identifier that determines the specific kind of resource. This field is used for polymorphic deserialization and resource-specific behavior.
    */
   resourceType: string;
+};
+
+/**
+ * Backend whose observer produced this snapshot.
+ */
+export const ObservedInventoryBatchBackend = {
+  Aws: "aws",
+  Gcp: "gcp",
+  Azure: "azure",
+  Kubernetes: "kubernetes",
+  Local: "local",
+  Managed: "managed",
+  External: "external",
+  Test: "test",
+} as const;
+/**
+ * Backend whose observer produced this snapshot.
+ */
+export type ObservedInventoryBatchBackend = ClosedEnum<
+  typeof ObservedInventoryBatchBackend
+>;
+
+/**
+ * Represents the target cloud platform.
+ */
+export const ObservedInventoryBatchControllerPlatform = {
+  Aws: "aws",
+  Gcp: "gcp",
+  Azure: "azure",
+  Kubernetes: "kubernetes",
+  Local: "local",
+  Test: "test",
+} as const;
+/**
+ * Represents the target cloud platform.
+ */
+export type ObservedInventoryBatchControllerPlatform = ClosedEnum<
+  typeof ObservedInventoryBatchControllerPlatform
+>;
+
+export const ResourceReason = {
+  Forbidden: "forbidden",
+  NotInstalled: "not-installed",
+  ApiUnavailable: "api-unavailable",
+  CollectionFailed: "collection-failed",
+  TimedOut: "timed-out",
+} as const;
+export type ResourceReason = ClosedEnum<typeof ResourceReason>;
+
+export const ResourceSeverity = {
+  Info: "info",
+  Warning: "warning",
+  Error: "error",
+} as const;
+export type ResourceSeverity = ClosedEnum<typeof ResourceSeverity>;
+
+export type ResourceCollectionIssue = {
+  message: string;
+  reason: ResourceReason;
+  severity: ResourceSeverity;
+  source: string;
+};
+
+export type Counts = {
+  current?: number | null | undefined;
+  desired?: number | null | undefined;
+  ready?: number | null | undefined;
+};
+
+export type CountsUnion = Counts | any;
+
+export const ResourceHealth = {
+  Unknown: "unknown",
+  Healthy: "healthy",
+  Degraded: "degraded",
+  Unhealthy: "unhealthy",
+} as const;
+export type ResourceHealth = ClosedEnum<typeof ResourceHealth>;
+
+export const ResourceLifecycle = {
+  Unknown: "unknown",
+  Creating: "creating",
+  Updating: "updating",
+  Running: "running",
+  Scaling: "scaling",
+  Stopping: "stopping",
+  Stopped: "stopped",
+  Deleting: "deleting",
+  Deleted: "deleted",
+  Failed: "failed",
+} as const;
+export type ResourceLifecycle = ClosedEnum<typeof ResourceLifecycle>;
+
+export const ResourceFormat = {
+  Json: "json",
+  Yaml: "yaml",
+  Text: "text",
+} as const;
+export type ResourceFormat = ClosedEnum<typeof ResourceFormat>;
+
+export type ResourceRaw = {
+  body: string;
+  collectedAt: Date;
+  format: ResourceFormat;
+  source: string;
+  truncated: boolean;
+};
+
+export type ResourceTypeHint = string | any;
+
+export type ObservedInventoryBatchResource = {
+  alienResourceId?: string | null | undefined;
+  attributes?: { [k: string]: any | null } | undefined;
+  collectionIssues?: Array<ResourceCollectionIssue> | undefined;
+  counts?: Counts | any | null | undefined;
+  deploymentId?: string | null | undefined;
+  displayName: string;
+  health: ResourceHealth;
+  labels?: { [k: string]: string } | undefined;
+  lifecycle: ResourceLifecycle;
+  message?: string | null | undefined;
+  namespace?: string | null | undefined;
+  partial: boolean;
+  /**
+   * Provider-native kind, such as `apps/v1/Deployment`,
+   *
+   * @remarks
+   * `AWS::S3::Bucket`, `storage.googleapis.com/Bucket`, or an Azure
+   * resource type.
+   */
+  providerKind: string;
+  providerStale: boolean;
+  raw?: Array<ResourceRaw> | undefined;
+  /**
+   * Provider-native stable identity: Kubernetes object identity, cloud ARN,
+   *
+   * @remarks
+   * GCP full resource name, Azure resource id, etc.
+   */
+  rawIdentity: string;
+  region?: string | null | undefined;
+  resourceTypeHint?: string | any | null | undefined;
+  scope?: string | null | undefined;
+  /**
+   * Release/version identity observed from the provider resource, when available.
+   */
+  version?: string | null | undefined;
+};
+
+export type ObservedInventoryBatch = {
+  /**
+   * Backend whose observer produced this snapshot.
+   */
+  backend: ObservedInventoryBatchBackend;
+  /**
+   * Whether this batch is a complete replacement for the scope. Complete
+   *
+   * @remarks
+   * batches tombstone previously observed rows in the same scope when they
+   * are absent from `resources`.
+   */
+  complete: boolean;
+  /**
+   * Represents the target cloud platform.
+   */
+  controllerPlatform: ObservedInventoryBatchControllerPlatform;
+  /**
+   * Stable scope for the provider list operation that produced this batch.
+   */
+  inventoryScope: string;
+  /**
+   * Time the inventory scope was observed.
+   */
+  observedAt: Date;
+  resources: Array<ObservedInventoryBatchResource>;
+  /**
+   * Writer/source for this inventory pass, such as `operator` or
+   *
+   * @remarks
+   * `manager-observer`.
+   */
+  sourceKind: string;
 };
 
 /**
@@ -11605,7 +12070,19 @@ export type SyncReconcileRequest = {
   /**
    * Latest typed resource heartbeats collected during this step.
    */
-  heartbeats?: Array<Heartbeat> | undefined;
+  resourceHeartbeats?: Array<ResourceHeartbeat> | undefined;
+  /**
+   * Observed raw-resource inventory batches read during this step.
+   */
+  observedInventoryBatches?: Array<ObservedInventoryBatch> | undefined;
+  /**
+   * Operator-reported runtime capabilities.
+   */
+  capabilities?: Array<OperatorCapabilityReport> | undefined;
+  /**
+   * Operator binary version reported by the runtime.
+   */
+  operatorVersion?: string | undefined;
 };
 
 /** @internal */
@@ -12015,30 +12492,27 @@ export const SyncReconcileRequestCurrentReleaseManagementEnum$outboundSchema:
   );
 
 /** @internal */
-export type SyncReconcileRequestCurrentReleaseOverrideAwResource$Outbound = {
+export type CurrentReleaseOverrideStateAwResource$Outbound = {
   condition?: { [k: string]: { [k: string]: string } } | null | undefined;
   resources: Array<string>;
 };
 
 /** @internal */
-export const SyncReconcileRequestCurrentReleaseOverrideAwResource$outboundSchema:
-  z.ZodType<
-    SyncReconcileRequestCurrentReleaseOverrideAwResource$Outbound,
-    SyncReconcileRequestCurrentReleaseOverrideAwResource
-  > = z.object({
-    condition: z.nullable(
-      z.record(z.string(), z.record(z.string(), z.string())),
-    ).optional(),
-    resources: z.array(z.string()),
-  });
+export const CurrentReleaseOverrideStateAwResource$outboundSchema: z.ZodType<
+  CurrentReleaseOverrideStateAwResource$Outbound,
+  CurrentReleaseOverrideStateAwResource
+> = z.object({
+  condition: z.nullable(z.record(z.string(), z.record(z.string(), z.string())))
+    .optional(),
+  resources: z.array(z.string()),
+});
 
-export function syncReconcileRequestCurrentReleaseOverrideAwResourceToJSON(
-  syncReconcileRequestCurrentReleaseOverrideAwResource:
-    SyncReconcileRequestCurrentReleaseOverrideAwResource,
+export function currentReleaseOverrideStateAwResourceToJSON(
+  currentReleaseOverrideStateAwResource: CurrentReleaseOverrideStateAwResource,
 ): string {
   return JSON.stringify(
-    SyncReconcileRequestCurrentReleaseOverrideAwResource$outboundSchema.parse(
-      syncReconcileRequestCurrentReleaseOverrideAwResource,
+    CurrentReleaseOverrideStateAwResource$outboundSchema.parse(
+      currentReleaseOverrideStateAwResource,
     ),
   );
 }
@@ -12074,9 +12548,7 @@ export function syncReconcileRequestCurrentReleaseOverrideAwStackToJSON(
 
 /** @internal */
 export type SyncReconcileRequestCurrentReleaseOverrideAwBinding$Outbound = {
-  resource?:
-    | SyncReconcileRequestCurrentReleaseOverrideAwResource$Outbound
-    | undefined;
+  resource?: CurrentReleaseOverrideStateAwResource$Outbound | undefined;
   stack?:
     | SyncReconcileRequestCurrentReleaseOverrideAwStack$Outbound
     | undefined;
@@ -12088,9 +12560,8 @@ export const SyncReconcileRequestCurrentReleaseOverrideAwBinding$outboundSchema:
     SyncReconcileRequestCurrentReleaseOverrideAwBinding$Outbound,
     SyncReconcileRequestCurrentReleaseOverrideAwBinding
   > = z.object({
-    resource: z.lazy(() =>
-      SyncReconcileRequestCurrentReleaseOverrideAwResource$outboundSchema
-    ).optional(),
+    resource: z.lazy(() => CurrentReleaseOverrideStateAwResource$outboundSchema)
+      .optional(),
     stack: z.lazy(() =>
       SyncReconcileRequestCurrentReleaseOverrideAwStack$outboundSchema
     ).optional(),
@@ -12185,26 +12656,26 @@ export function syncReconcileRequestCurrentReleaseOverrideAwToJSON(
 }
 
 /** @internal */
-export type SyncReconcileRequestCurrentReleaseOverrideAzureResource$Outbound = {
+export type CurrentReleaseOverrideStateAzureResource$Outbound = {
   scope: string;
 };
 
 /** @internal */
-export const SyncReconcileRequestCurrentReleaseOverrideAzureResource$outboundSchema:
-  z.ZodType<
-    SyncReconcileRequestCurrentReleaseOverrideAzureResource$Outbound,
-    SyncReconcileRequestCurrentReleaseOverrideAzureResource
-  > = z.object({
-    scope: z.string(),
-  });
+export const CurrentReleaseOverrideStateAzureResource$outboundSchema: z.ZodType<
+  CurrentReleaseOverrideStateAzureResource$Outbound,
+  CurrentReleaseOverrideStateAzureResource
+> = z.object({
+  scope: z.string(),
+});
 
-export function syncReconcileRequestCurrentReleaseOverrideAzureResourceToJSON(
-  syncReconcileRequestCurrentReleaseOverrideAzureResource:
-    SyncReconcileRequestCurrentReleaseOverrideAzureResource,
+export function currentReleaseOverrideStateAzureResourceToJSON(
+  currentReleaseOverrideStateAzureResource:
+    CurrentReleaseOverrideStateAzureResource,
 ): string {
   return JSON.stringify(
-    SyncReconcileRequestCurrentReleaseOverrideAzureResource$outboundSchema
-      .parse(syncReconcileRequestCurrentReleaseOverrideAzureResource),
+    CurrentReleaseOverrideStateAzureResource$outboundSchema.parse(
+      currentReleaseOverrideStateAzureResource,
+    ),
   );
 }
 
@@ -12235,9 +12706,7 @@ export function syncReconcileRequestCurrentReleaseOverrideAzureStackToJSON(
 
 /** @internal */
 export type SyncReconcileRequestCurrentReleaseOverrideAzureBinding$Outbound = {
-  resource?:
-    | SyncReconcileRequestCurrentReleaseOverrideAzureResource$Outbound
-    | undefined;
+  resource?: CurrentReleaseOverrideStateAzureResource$Outbound | undefined;
   stack?:
     | SyncReconcileRequestCurrentReleaseOverrideAzureStack$Outbound
     | undefined;
@@ -12250,7 +12719,7 @@ export const SyncReconcileRequestCurrentReleaseOverrideAzureBinding$outboundSche
     SyncReconcileRequestCurrentReleaseOverrideAzureBinding
   > = z.object({
     resource: z.lazy(() =>
-      SyncReconcileRequestCurrentReleaseOverrideAzureResource$outboundSchema
+      CurrentReleaseOverrideStateAzureResource$outboundSchema
     ).optional(),
     stack: z.lazy(() =>
       SyncReconcileRequestCurrentReleaseOverrideAzureStack$outboundSchema
@@ -12390,7 +12859,7 @@ export function currentReleaseOverrideStateResourceConditionUnionToJSON(
 }
 
 /** @internal */
-export type SyncReconcileRequestCurrentReleaseOverrideGcpResource$Outbound = {
+export type CurrentReleaseOverrideStateGcpResource$Outbound = {
   condition?:
     | CurrentReleaseOverrideConditionStateResource$Outbound
     | any
@@ -12400,29 +12869,26 @@ export type SyncReconcileRequestCurrentReleaseOverrideGcpResource$Outbound = {
 };
 
 /** @internal */
-export const SyncReconcileRequestCurrentReleaseOverrideGcpResource$outboundSchema:
-  z.ZodType<
-    SyncReconcileRequestCurrentReleaseOverrideGcpResource$Outbound,
-    SyncReconcileRequestCurrentReleaseOverrideGcpResource
-  > = z.object({
-    condition: z.nullable(
-      z.union([
-        z.lazy(() =>
-          CurrentReleaseOverrideConditionStateResource$outboundSchema
-        ),
-        z.any(),
-      ]),
-    ).optional(),
-    scope: z.string(),
-  });
+export const CurrentReleaseOverrideStateGcpResource$outboundSchema: z.ZodType<
+  CurrentReleaseOverrideStateGcpResource$Outbound,
+  CurrentReleaseOverrideStateGcpResource
+> = z.object({
+  condition: z.nullable(
+    z.union([
+      z.lazy(() => CurrentReleaseOverrideConditionStateResource$outboundSchema),
+      z.any(),
+    ]),
+  ).optional(),
+  scope: z.string(),
+});
 
-export function syncReconcileRequestCurrentReleaseOverrideGcpResourceToJSON(
-  syncReconcileRequestCurrentReleaseOverrideGcpResource:
-    SyncReconcileRequestCurrentReleaseOverrideGcpResource,
+export function currentReleaseOverrideStateGcpResourceToJSON(
+  currentReleaseOverrideStateGcpResource:
+    CurrentReleaseOverrideStateGcpResource,
 ): string {
   return JSON.stringify(
-    SyncReconcileRequestCurrentReleaseOverrideGcpResource$outboundSchema.parse(
-      syncReconcileRequestCurrentReleaseOverrideGcpResource,
+    CurrentReleaseOverrideStateGcpResource$outboundSchema.parse(
+      currentReleaseOverrideStateGcpResource,
     ),
   );
 }
@@ -12516,9 +12982,7 @@ export function syncReconcileRequestCurrentReleaseOverrideGcpStackToJSON(
 
 /** @internal */
 export type SyncReconcileRequestCurrentReleaseOverrideGcpBinding$Outbound = {
-  resource?:
-    | SyncReconcileRequestCurrentReleaseOverrideGcpResource$Outbound
-    | undefined;
+  resource?: CurrentReleaseOverrideStateGcpResource$Outbound | undefined;
   stack?:
     | SyncReconcileRequestCurrentReleaseOverrideGcpStack$Outbound
     | undefined;
@@ -12531,7 +12995,7 @@ export const SyncReconcileRequestCurrentReleaseOverrideGcpBinding$outboundSchema
     SyncReconcileRequestCurrentReleaseOverrideGcpBinding
   > = z.object({
     resource: z.lazy(() =>
-      SyncReconcileRequestCurrentReleaseOverrideGcpResource$outboundSchema
+      CurrentReleaseOverrideStateGcpResource$outboundSchema
     ).optional(),
     stack: z.lazy(() =>
       SyncReconcileRequestCurrentReleaseOverrideGcpStack$outboundSchema
@@ -12760,30 +13224,27 @@ export function syncReconcileRequestCurrentReleaseManagement2ToJSON(
 }
 
 /** @internal */
-export type SyncReconcileRequestCurrentReleaseExtendAwResource$Outbound = {
+export type CurrentReleaseExtendStateAwResource$Outbound = {
   condition?: { [k: string]: { [k: string]: string } } | null | undefined;
   resources: Array<string>;
 };
 
 /** @internal */
-export const SyncReconcileRequestCurrentReleaseExtendAwResource$outboundSchema:
-  z.ZodType<
-    SyncReconcileRequestCurrentReleaseExtendAwResource$Outbound,
-    SyncReconcileRequestCurrentReleaseExtendAwResource
-  > = z.object({
-    condition: z.nullable(
-      z.record(z.string(), z.record(z.string(), z.string())),
-    ).optional(),
-    resources: z.array(z.string()),
-  });
+export const CurrentReleaseExtendStateAwResource$outboundSchema: z.ZodType<
+  CurrentReleaseExtendStateAwResource$Outbound,
+  CurrentReleaseExtendStateAwResource
+> = z.object({
+  condition: z.nullable(z.record(z.string(), z.record(z.string(), z.string())))
+    .optional(),
+  resources: z.array(z.string()),
+});
 
-export function syncReconcileRequestCurrentReleaseExtendAwResourceToJSON(
-  syncReconcileRequestCurrentReleaseExtendAwResource:
-    SyncReconcileRequestCurrentReleaseExtendAwResource,
+export function currentReleaseExtendStateAwResourceToJSON(
+  currentReleaseExtendStateAwResource: CurrentReleaseExtendStateAwResource,
 ): string {
   return JSON.stringify(
-    SyncReconcileRequestCurrentReleaseExtendAwResource$outboundSchema.parse(
-      syncReconcileRequestCurrentReleaseExtendAwResource,
+    CurrentReleaseExtendStateAwResource$outboundSchema.parse(
+      currentReleaseExtendStateAwResource,
     ),
   );
 }
@@ -12819,9 +13280,7 @@ export function syncReconcileRequestCurrentReleaseExtendAwStackToJSON(
 
 /** @internal */
 export type SyncReconcileRequestCurrentReleaseExtendAwBinding$Outbound = {
-  resource?:
-    | SyncReconcileRequestCurrentReleaseExtendAwResource$Outbound
-    | undefined;
+  resource?: CurrentReleaseExtendStateAwResource$Outbound | undefined;
   stack?: SyncReconcileRequestCurrentReleaseExtendAwStack$Outbound | undefined;
 };
 
@@ -12831,9 +13290,8 @@ export const SyncReconcileRequestCurrentReleaseExtendAwBinding$outboundSchema:
     SyncReconcileRequestCurrentReleaseExtendAwBinding$Outbound,
     SyncReconcileRequestCurrentReleaseExtendAwBinding
   > = z.object({
-    resource: z.lazy(() =>
-      SyncReconcileRequestCurrentReleaseExtendAwResource$outboundSchema
-    ).optional(),
+    resource: z.lazy(() => CurrentReleaseExtendStateAwResource$outboundSchema)
+      .optional(),
     stack: z.lazy(() =>
       SyncReconcileRequestCurrentReleaseExtendAwStack$outboundSchema
     ).optional(),
@@ -12928,26 +13386,25 @@ export function syncReconcileRequestCurrentReleaseExtendAwToJSON(
 }
 
 /** @internal */
-export type SyncReconcileRequestCurrentReleaseExtendAzureResource$Outbound = {
+export type CurrentReleaseExtendStateAzureResource$Outbound = {
   scope: string;
 };
 
 /** @internal */
-export const SyncReconcileRequestCurrentReleaseExtendAzureResource$outboundSchema:
-  z.ZodType<
-    SyncReconcileRequestCurrentReleaseExtendAzureResource$Outbound,
-    SyncReconcileRequestCurrentReleaseExtendAzureResource
-  > = z.object({
-    scope: z.string(),
-  });
+export const CurrentReleaseExtendStateAzureResource$outboundSchema: z.ZodType<
+  CurrentReleaseExtendStateAzureResource$Outbound,
+  CurrentReleaseExtendStateAzureResource
+> = z.object({
+  scope: z.string(),
+});
 
-export function syncReconcileRequestCurrentReleaseExtendAzureResourceToJSON(
-  syncReconcileRequestCurrentReleaseExtendAzureResource:
-    SyncReconcileRequestCurrentReleaseExtendAzureResource,
+export function currentReleaseExtendStateAzureResourceToJSON(
+  currentReleaseExtendStateAzureResource:
+    CurrentReleaseExtendStateAzureResource,
 ): string {
   return JSON.stringify(
-    SyncReconcileRequestCurrentReleaseExtendAzureResource$outboundSchema.parse(
-      syncReconcileRequestCurrentReleaseExtendAzureResource,
+    CurrentReleaseExtendStateAzureResource$outboundSchema.parse(
+      currentReleaseExtendStateAzureResource,
     ),
   );
 }
@@ -12979,9 +13436,7 @@ export function syncReconcileRequestCurrentReleaseExtendAzureStackToJSON(
 
 /** @internal */
 export type SyncReconcileRequestCurrentReleaseExtendAzureBinding$Outbound = {
-  resource?:
-    | SyncReconcileRequestCurrentReleaseExtendAzureResource$Outbound
-    | undefined;
+  resource?: CurrentReleaseExtendStateAzureResource$Outbound | undefined;
   stack?:
     | SyncReconcileRequestCurrentReleaseExtendAzureStack$Outbound
     | undefined;
@@ -12994,7 +13449,7 @@ export const SyncReconcileRequestCurrentReleaseExtendAzureBinding$outboundSchema
     SyncReconcileRequestCurrentReleaseExtendAzureBinding
   > = z.object({
     resource: z.lazy(() =>
-      SyncReconcileRequestCurrentReleaseExtendAzureResource$outboundSchema
+      CurrentReleaseExtendStateAzureResource$outboundSchema
     ).optional(),
     stack: z.lazy(() =>
       SyncReconcileRequestCurrentReleaseExtendAzureStack$outboundSchema
@@ -13134,7 +13589,7 @@ export function currentReleaseExtendStateResourceConditionUnionToJSON(
 }
 
 /** @internal */
-export type SyncReconcileRequestCurrentReleaseExtendGcpResource$Outbound = {
+export type CurrentReleaseExtendStateGcpResource$Outbound = {
   condition?:
     | CurrentReleaseExtendConditionStateResource$Outbound
     | any
@@ -13144,27 +13599,25 @@ export type SyncReconcileRequestCurrentReleaseExtendGcpResource$Outbound = {
 };
 
 /** @internal */
-export const SyncReconcileRequestCurrentReleaseExtendGcpResource$outboundSchema:
-  z.ZodType<
-    SyncReconcileRequestCurrentReleaseExtendGcpResource$Outbound,
-    SyncReconcileRequestCurrentReleaseExtendGcpResource
-  > = z.object({
-    condition: z.nullable(
-      z.union([
-        z.lazy(() => CurrentReleaseExtendConditionStateResource$outboundSchema),
-        z.any(),
-      ]),
-    ).optional(),
-    scope: z.string(),
-  });
+export const CurrentReleaseExtendStateGcpResource$outboundSchema: z.ZodType<
+  CurrentReleaseExtendStateGcpResource$Outbound,
+  CurrentReleaseExtendStateGcpResource
+> = z.object({
+  condition: z.nullable(
+    z.union([
+      z.lazy(() => CurrentReleaseExtendConditionStateResource$outboundSchema),
+      z.any(),
+    ]),
+  ).optional(),
+  scope: z.string(),
+});
 
-export function syncReconcileRequestCurrentReleaseExtendGcpResourceToJSON(
-  syncReconcileRequestCurrentReleaseExtendGcpResource:
-    SyncReconcileRequestCurrentReleaseExtendGcpResource,
+export function currentReleaseExtendStateGcpResourceToJSON(
+  currentReleaseExtendStateGcpResource: CurrentReleaseExtendStateGcpResource,
 ): string {
   return JSON.stringify(
-    SyncReconcileRequestCurrentReleaseExtendGcpResource$outboundSchema.parse(
-      syncReconcileRequestCurrentReleaseExtendGcpResource,
+    CurrentReleaseExtendStateGcpResource$outboundSchema.parse(
+      currentReleaseExtendStateGcpResource,
     ),
   );
 }
@@ -13257,9 +13710,7 @@ export function syncReconcileRequestCurrentReleaseExtendGcpStackToJSON(
 
 /** @internal */
 export type SyncReconcileRequestCurrentReleaseExtendGcpBinding$Outbound = {
-  resource?:
-    | SyncReconcileRequestCurrentReleaseExtendGcpResource$Outbound
-    | undefined;
+  resource?: CurrentReleaseExtendStateGcpResource$Outbound | undefined;
   stack?: SyncReconcileRequestCurrentReleaseExtendGcpStack$Outbound | undefined;
 };
 
@@ -13269,9 +13720,8 @@ export const SyncReconcileRequestCurrentReleaseExtendGcpBinding$outboundSchema:
     SyncReconcileRequestCurrentReleaseExtendGcpBinding$Outbound,
     SyncReconcileRequestCurrentReleaseExtendGcpBinding
   > = z.object({
-    resource: z.lazy(() =>
-      SyncReconcileRequestCurrentReleaseExtendGcpResource$outboundSchema
-    ).optional(),
+    resource: z.lazy(() => CurrentReleaseExtendStateGcpResource$outboundSchema)
+      .optional(),
     stack: z.lazy(() =>
       SyncReconcileRequestCurrentReleaseExtendGcpStack$outboundSchema
     ).optional(),
@@ -13526,30 +13976,27 @@ export function syncReconcileRequestCurrentReleaseManagementUnionToJSON(
 }
 
 /** @internal */
-export type SyncReconcileRequestCurrentReleaseProfileAwResource$Outbound = {
+export type CurrentReleaseProfileStateAwResource$Outbound = {
   condition?: { [k: string]: { [k: string]: string } } | null | undefined;
   resources: Array<string>;
 };
 
 /** @internal */
-export const SyncReconcileRequestCurrentReleaseProfileAwResource$outboundSchema:
-  z.ZodType<
-    SyncReconcileRequestCurrentReleaseProfileAwResource$Outbound,
-    SyncReconcileRequestCurrentReleaseProfileAwResource
-  > = z.object({
-    condition: z.nullable(
-      z.record(z.string(), z.record(z.string(), z.string())),
-    ).optional(),
-    resources: z.array(z.string()),
-  });
+export const CurrentReleaseProfileStateAwResource$outboundSchema: z.ZodType<
+  CurrentReleaseProfileStateAwResource$Outbound,
+  CurrentReleaseProfileStateAwResource
+> = z.object({
+  condition: z.nullable(z.record(z.string(), z.record(z.string(), z.string())))
+    .optional(),
+  resources: z.array(z.string()),
+});
 
-export function syncReconcileRequestCurrentReleaseProfileAwResourceToJSON(
-  syncReconcileRequestCurrentReleaseProfileAwResource:
-    SyncReconcileRequestCurrentReleaseProfileAwResource,
+export function currentReleaseProfileStateAwResourceToJSON(
+  currentReleaseProfileStateAwResource: CurrentReleaseProfileStateAwResource,
 ): string {
   return JSON.stringify(
-    SyncReconcileRequestCurrentReleaseProfileAwResource$outboundSchema.parse(
-      syncReconcileRequestCurrentReleaseProfileAwResource,
+    CurrentReleaseProfileStateAwResource$outboundSchema.parse(
+      currentReleaseProfileStateAwResource,
     ),
   );
 }
@@ -13585,9 +14032,7 @@ export function syncReconcileRequestCurrentReleaseProfileAwStackToJSON(
 
 /** @internal */
 export type SyncReconcileRequestCurrentReleaseProfileAwBinding$Outbound = {
-  resource?:
-    | SyncReconcileRequestCurrentReleaseProfileAwResource$Outbound
-    | undefined;
+  resource?: CurrentReleaseProfileStateAwResource$Outbound | undefined;
   stack?: SyncReconcileRequestCurrentReleaseProfileAwStack$Outbound | undefined;
 };
 
@@ -13597,9 +14042,8 @@ export const SyncReconcileRequestCurrentReleaseProfileAwBinding$outboundSchema:
     SyncReconcileRequestCurrentReleaseProfileAwBinding$Outbound,
     SyncReconcileRequestCurrentReleaseProfileAwBinding
   > = z.object({
-    resource: z.lazy(() =>
-      SyncReconcileRequestCurrentReleaseProfileAwResource$outboundSchema
-    ).optional(),
+    resource: z.lazy(() => CurrentReleaseProfileStateAwResource$outboundSchema)
+      .optional(),
     stack: z.lazy(() =>
       SyncReconcileRequestCurrentReleaseProfileAwStack$outboundSchema
     ).optional(),
@@ -13694,26 +14138,25 @@ export function syncReconcileRequestCurrentReleaseProfileAwToJSON(
 }
 
 /** @internal */
-export type SyncReconcileRequestCurrentReleaseProfileAzureResource$Outbound = {
+export type CurrentReleaseProfileStateAzureResource$Outbound = {
   scope: string;
 };
 
 /** @internal */
-export const SyncReconcileRequestCurrentReleaseProfileAzureResource$outboundSchema:
-  z.ZodType<
-    SyncReconcileRequestCurrentReleaseProfileAzureResource$Outbound,
-    SyncReconcileRequestCurrentReleaseProfileAzureResource
-  > = z.object({
-    scope: z.string(),
-  });
+export const CurrentReleaseProfileStateAzureResource$outboundSchema: z.ZodType<
+  CurrentReleaseProfileStateAzureResource$Outbound,
+  CurrentReleaseProfileStateAzureResource
+> = z.object({
+  scope: z.string(),
+});
 
-export function syncReconcileRequestCurrentReleaseProfileAzureResourceToJSON(
-  syncReconcileRequestCurrentReleaseProfileAzureResource:
-    SyncReconcileRequestCurrentReleaseProfileAzureResource,
+export function currentReleaseProfileStateAzureResourceToJSON(
+  currentReleaseProfileStateAzureResource:
+    CurrentReleaseProfileStateAzureResource,
 ): string {
   return JSON.stringify(
-    SyncReconcileRequestCurrentReleaseProfileAzureResource$outboundSchema.parse(
-      syncReconcileRequestCurrentReleaseProfileAzureResource,
+    CurrentReleaseProfileStateAzureResource$outboundSchema.parse(
+      currentReleaseProfileStateAzureResource,
     ),
   );
 }
@@ -13745,9 +14188,7 @@ export function syncReconcileRequestCurrentReleaseProfileAzureStackToJSON(
 
 /** @internal */
 export type SyncReconcileRequestCurrentReleaseProfileAzureBinding$Outbound = {
-  resource?:
-    | SyncReconcileRequestCurrentReleaseProfileAzureResource$Outbound
-    | undefined;
+  resource?: CurrentReleaseProfileStateAzureResource$Outbound | undefined;
   stack?:
     | SyncReconcileRequestCurrentReleaseProfileAzureStack$Outbound
     | undefined;
@@ -13760,7 +14201,7 @@ export const SyncReconcileRequestCurrentReleaseProfileAzureBinding$outboundSchem
     SyncReconcileRequestCurrentReleaseProfileAzureBinding
   > = z.object({
     resource: z.lazy(() =>
-      SyncReconcileRequestCurrentReleaseProfileAzureResource$outboundSchema
+      CurrentReleaseProfileStateAzureResource$outboundSchema
     ).optional(),
     stack: z.lazy(() =>
       SyncReconcileRequestCurrentReleaseProfileAzureStack$outboundSchema
@@ -13900,7 +14341,7 @@ export function currentReleaseProfileStateResourceConditionUnionToJSON(
 }
 
 /** @internal */
-export type SyncReconcileRequestCurrentReleaseProfileGcpResource$Outbound = {
+export type CurrentReleaseProfileStateGcpResource$Outbound = {
   condition?:
     | CurrentReleaseProfileConditionStateResource$Outbound
     | any
@@ -13910,29 +14351,25 @@ export type SyncReconcileRequestCurrentReleaseProfileGcpResource$Outbound = {
 };
 
 /** @internal */
-export const SyncReconcileRequestCurrentReleaseProfileGcpResource$outboundSchema:
-  z.ZodType<
-    SyncReconcileRequestCurrentReleaseProfileGcpResource$Outbound,
-    SyncReconcileRequestCurrentReleaseProfileGcpResource
-  > = z.object({
-    condition: z.nullable(
-      z.union([
-        z.lazy(() =>
-          CurrentReleaseProfileConditionStateResource$outboundSchema
-        ),
-        z.any(),
-      ]),
-    ).optional(),
-    scope: z.string(),
-  });
+export const CurrentReleaseProfileStateGcpResource$outboundSchema: z.ZodType<
+  CurrentReleaseProfileStateGcpResource$Outbound,
+  CurrentReleaseProfileStateGcpResource
+> = z.object({
+  condition: z.nullable(
+    z.union([
+      z.lazy(() => CurrentReleaseProfileConditionStateResource$outboundSchema),
+      z.any(),
+    ]),
+  ).optional(),
+  scope: z.string(),
+});
 
-export function syncReconcileRequestCurrentReleaseProfileGcpResourceToJSON(
-  syncReconcileRequestCurrentReleaseProfileGcpResource:
-    SyncReconcileRequestCurrentReleaseProfileGcpResource,
+export function currentReleaseProfileStateGcpResourceToJSON(
+  currentReleaseProfileStateGcpResource: CurrentReleaseProfileStateGcpResource,
 ): string {
   return JSON.stringify(
-    SyncReconcileRequestCurrentReleaseProfileGcpResource$outboundSchema.parse(
-      syncReconcileRequestCurrentReleaseProfileGcpResource,
+    CurrentReleaseProfileStateGcpResource$outboundSchema.parse(
+      currentReleaseProfileStateGcpResource,
     ),
   );
 }
@@ -14025,9 +14462,7 @@ export function syncReconcileRequestCurrentReleaseProfileGcpStackToJSON(
 
 /** @internal */
 export type SyncReconcileRequestCurrentReleaseProfileGcpBinding$Outbound = {
-  resource?:
-    | SyncReconcileRequestCurrentReleaseProfileGcpResource$Outbound
-    | undefined;
+  resource?: CurrentReleaseProfileStateGcpResource$Outbound | undefined;
   stack?:
     | SyncReconcileRequestCurrentReleaseProfileGcpStack$Outbound
     | undefined;
@@ -14039,9 +14474,8 @@ export const SyncReconcileRequestCurrentReleaseProfileGcpBinding$outboundSchema:
     SyncReconcileRequestCurrentReleaseProfileGcpBinding$Outbound,
     SyncReconcileRequestCurrentReleaseProfileGcpBinding
   > = z.object({
-    resource: z.lazy(() =>
-      SyncReconcileRequestCurrentReleaseProfileGcpResource$outboundSchema
-    ).optional(),
+    resource: z.lazy(() => CurrentReleaseProfileStateGcpResource$outboundSchema)
+      .optional(),
     stack: z.lazy(() =>
       SyncReconcileRequestCurrentReleaseProfileGcpStack$outboundSchema
     ).optional(),
@@ -14446,7 +14880,7 @@ export function syncReconcileRequestCurrentReleaseStackToJSON(
 /** @internal */
 export type SyncReconcileRequestCurrentRelease$Outbound = {
   description?: string | null | undefined;
-  releaseId: string;
+  releaseId?: string | null | undefined;
   stack: SyncReconcileRequestCurrentReleaseStack$Outbound;
   version?: string | null | undefined;
 };
@@ -14457,7 +14891,7 @@ export const SyncReconcileRequestCurrentRelease$outboundSchema: z.ZodType<
   SyncReconcileRequestCurrentRelease
 > = z.object({
   description: z.nullable(z.string()).optional(),
-  releaseId: z.string(),
+  releaseId: z.nullable(z.string()).optional(),
   stack: z.lazy(() => SyncReconcileRequestCurrentReleaseStack$outboundSchema),
   version: z.nullable(z.string()).optional(),
 });
@@ -15163,30 +15597,27 @@ export const SyncReconcileRequestPreparedStackManagementEnum$outboundSchema:
   );
 
 /** @internal */
-export type SyncReconcileRequestPreparedStackOverrideAwResource$Outbound = {
+export type PreparedStackOverrideStateAwResource$Outbound = {
   condition?: { [k: string]: { [k: string]: string } } | null | undefined;
   resources: Array<string>;
 };
 
 /** @internal */
-export const SyncReconcileRequestPreparedStackOverrideAwResource$outboundSchema:
-  z.ZodType<
-    SyncReconcileRequestPreparedStackOverrideAwResource$Outbound,
-    SyncReconcileRequestPreparedStackOverrideAwResource
-  > = z.object({
-    condition: z.nullable(
-      z.record(z.string(), z.record(z.string(), z.string())),
-    ).optional(),
-    resources: z.array(z.string()),
-  });
+export const PreparedStackOverrideStateAwResource$outboundSchema: z.ZodType<
+  PreparedStackOverrideStateAwResource$Outbound,
+  PreparedStackOverrideStateAwResource
+> = z.object({
+  condition: z.nullable(z.record(z.string(), z.record(z.string(), z.string())))
+    .optional(),
+  resources: z.array(z.string()),
+});
 
-export function syncReconcileRequestPreparedStackOverrideAwResourceToJSON(
-  syncReconcileRequestPreparedStackOverrideAwResource:
-    SyncReconcileRequestPreparedStackOverrideAwResource,
+export function preparedStackOverrideStateAwResourceToJSON(
+  preparedStackOverrideStateAwResource: PreparedStackOverrideStateAwResource,
 ): string {
   return JSON.stringify(
-    SyncReconcileRequestPreparedStackOverrideAwResource$outboundSchema.parse(
-      syncReconcileRequestPreparedStackOverrideAwResource,
+    PreparedStackOverrideStateAwResource$outboundSchema.parse(
+      preparedStackOverrideStateAwResource,
     ),
   );
 }
@@ -15222,9 +15653,7 @@ export function syncReconcileRequestPreparedStackOverrideAwStackToJSON(
 
 /** @internal */
 export type SyncReconcileRequestPreparedStackOverrideAwBinding$Outbound = {
-  resource?:
-    | SyncReconcileRequestPreparedStackOverrideAwResource$Outbound
-    | undefined;
+  resource?: PreparedStackOverrideStateAwResource$Outbound | undefined;
   stack?: SyncReconcileRequestPreparedStackOverrideAwStack$Outbound | undefined;
 };
 
@@ -15234,9 +15663,8 @@ export const SyncReconcileRequestPreparedStackOverrideAwBinding$outboundSchema:
     SyncReconcileRequestPreparedStackOverrideAwBinding$Outbound,
     SyncReconcileRequestPreparedStackOverrideAwBinding
   > = z.object({
-    resource: z.lazy(() =>
-      SyncReconcileRequestPreparedStackOverrideAwResource$outboundSchema
-    ).optional(),
+    resource: z.lazy(() => PreparedStackOverrideStateAwResource$outboundSchema)
+      .optional(),
     stack: z.lazy(() =>
       SyncReconcileRequestPreparedStackOverrideAwStack$outboundSchema
     ).optional(),
@@ -15331,26 +15759,25 @@ export function syncReconcileRequestPreparedStackOverrideAwToJSON(
 }
 
 /** @internal */
-export type SyncReconcileRequestPreparedStackOverrideAzureResource$Outbound = {
+export type PreparedStackOverrideStateAzureResource$Outbound = {
   scope: string;
 };
 
 /** @internal */
-export const SyncReconcileRequestPreparedStackOverrideAzureResource$outboundSchema:
-  z.ZodType<
-    SyncReconcileRequestPreparedStackOverrideAzureResource$Outbound,
-    SyncReconcileRequestPreparedStackOverrideAzureResource
-  > = z.object({
-    scope: z.string(),
-  });
+export const PreparedStackOverrideStateAzureResource$outboundSchema: z.ZodType<
+  PreparedStackOverrideStateAzureResource$Outbound,
+  PreparedStackOverrideStateAzureResource
+> = z.object({
+  scope: z.string(),
+});
 
-export function syncReconcileRequestPreparedStackOverrideAzureResourceToJSON(
-  syncReconcileRequestPreparedStackOverrideAzureResource:
-    SyncReconcileRequestPreparedStackOverrideAzureResource,
+export function preparedStackOverrideStateAzureResourceToJSON(
+  preparedStackOverrideStateAzureResource:
+    PreparedStackOverrideStateAzureResource,
 ): string {
   return JSON.stringify(
-    SyncReconcileRequestPreparedStackOverrideAzureResource$outboundSchema.parse(
-      syncReconcileRequestPreparedStackOverrideAzureResource,
+    PreparedStackOverrideStateAzureResource$outboundSchema.parse(
+      preparedStackOverrideStateAzureResource,
     ),
   );
 }
@@ -15382,9 +15809,7 @@ export function syncReconcileRequestPreparedStackOverrideAzureStackToJSON(
 
 /** @internal */
 export type SyncReconcileRequestPreparedStackOverrideAzureBinding$Outbound = {
-  resource?:
-    | SyncReconcileRequestPreparedStackOverrideAzureResource$Outbound
-    | undefined;
+  resource?: PreparedStackOverrideStateAzureResource$Outbound | undefined;
   stack?:
     | SyncReconcileRequestPreparedStackOverrideAzureStack$Outbound
     | undefined;
@@ -15397,7 +15822,7 @@ export const SyncReconcileRequestPreparedStackOverrideAzureBinding$outboundSchem
     SyncReconcileRequestPreparedStackOverrideAzureBinding
   > = z.object({
     resource: z.lazy(() =>
-      SyncReconcileRequestPreparedStackOverrideAzureResource$outboundSchema
+      PreparedStackOverrideStateAzureResource$outboundSchema
     ).optional(),
     stack: z.lazy(() =>
       SyncReconcileRequestPreparedStackOverrideAzureStack$outboundSchema
@@ -15537,7 +15962,7 @@ export function preparedStackOverrideStateResourceConditionUnionToJSON(
 }
 
 /** @internal */
-export type SyncReconcileRequestPreparedStackOverrideGcpResource$Outbound = {
+export type PreparedStackOverrideStateGcpResource$Outbound = {
   condition?:
     | PreparedStackOverrideConditionStateResource$Outbound
     | any
@@ -15547,29 +15972,25 @@ export type SyncReconcileRequestPreparedStackOverrideGcpResource$Outbound = {
 };
 
 /** @internal */
-export const SyncReconcileRequestPreparedStackOverrideGcpResource$outboundSchema:
-  z.ZodType<
-    SyncReconcileRequestPreparedStackOverrideGcpResource$Outbound,
-    SyncReconcileRequestPreparedStackOverrideGcpResource
-  > = z.object({
-    condition: z.nullable(
-      z.union([
-        z.lazy(() =>
-          PreparedStackOverrideConditionStateResource$outboundSchema
-        ),
-        z.any(),
-      ]),
-    ).optional(),
-    scope: z.string(),
-  });
+export const PreparedStackOverrideStateGcpResource$outboundSchema: z.ZodType<
+  PreparedStackOverrideStateGcpResource$Outbound,
+  PreparedStackOverrideStateGcpResource
+> = z.object({
+  condition: z.nullable(
+    z.union([
+      z.lazy(() => PreparedStackOverrideConditionStateResource$outboundSchema),
+      z.any(),
+    ]),
+  ).optional(),
+  scope: z.string(),
+});
 
-export function syncReconcileRequestPreparedStackOverrideGcpResourceToJSON(
-  syncReconcileRequestPreparedStackOverrideGcpResource:
-    SyncReconcileRequestPreparedStackOverrideGcpResource,
+export function preparedStackOverrideStateGcpResourceToJSON(
+  preparedStackOverrideStateGcpResource: PreparedStackOverrideStateGcpResource,
 ): string {
   return JSON.stringify(
-    SyncReconcileRequestPreparedStackOverrideGcpResource$outboundSchema.parse(
-      syncReconcileRequestPreparedStackOverrideGcpResource,
+    PreparedStackOverrideStateGcpResource$outboundSchema.parse(
+      preparedStackOverrideStateGcpResource,
     ),
   );
 }
@@ -15664,9 +16085,7 @@ export function syncReconcileRequestPreparedStackOverrideGcpStackToJSON(
 
 /** @internal */
 export type SyncReconcileRequestPreparedStackOverrideGcpBinding$Outbound = {
-  resource?:
-    | SyncReconcileRequestPreparedStackOverrideGcpResource$Outbound
-    | undefined;
+  resource?: PreparedStackOverrideStateGcpResource$Outbound | undefined;
   stack?:
     | SyncReconcileRequestPreparedStackOverrideGcpStack$Outbound
     | undefined;
@@ -15678,9 +16097,8 @@ export const SyncReconcileRequestPreparedStackOverrideGcpBinding$outboundSchema:
     SyncReconcileRequestPreparedStackOverrideGcpBinding$Outbound,
     SyncReconcileRequestPreparedStackOverrideGcpBinding
   > = z.object({
-    resource: z.lazy(() =>
-      SyncReconcileRequestPreparedStackOverrideGcpResource$outboundSchema
-    ).optional(),
+    resource: z.lazy(() => PreparedStackOverrideStateGcpResource$outboundSchema)
+      .optional(),
     stack: z.lazy(() =>
       SyncReconcileRequestPreparedStackOverrideGcpStack$outboundSchema
     ).optional(),
@@ -15908,30 +16326,27 @@ export function syncReconcileRequestPreparedStackManagement2ToJSON(
 }
 
 /** @internal */
-export type SyncReconcileRequestPreparedStackExtendAwResource$Outbound = {
+export type PreparedStackExtendStateAwResource$Outbound = {
   condition?: { [k: string]: { [k: string]: string } } | null | undefined;
   resources: Array<string>;
 };
 
 /** @internal */
-export const SyncReconcileRequestPreparedStackExtendAwResource$outboundSchema:
-  z.ZodType<
-    SyncReconcileRequestPreparedStackExtendAwResource$Outbound,
-    SyncReconcileRequestPreparedStackExtendAwResource
-  > = z.object({
-    condition: z.nullable(
-      z.record(z.string(), z.record(z.string(), z.string())),
-    ).optional(),
-    resources: z.array(z.string()),
-  });
+export const PreparedStackExtendStateAwResource$outboundSchema: z.ZodType<
+  PreparedStackExtendStateAwResource$Outbound,
+  PreparedStackExtendStateAwResource
+> = z.object({
+  condition: z.nullable(z.record(z.string(), z.record(z.string(), z.string())))
+    .optional(),
+  resources: z.array(z.string()),
+});
 
-export function syncReconcileRequestPreparedStackExtendAwResourceToJSON(
-  syncReconcileRequestPreparedStackExtendAwResource:
-    SyncReconcileRequestPreparedStackExtendAwResource,
+export function preparedStackExtendStateAwResourceToJSON(
+  preparedStackExtendStateAwResource: PreparedStackExtendStateAwResource,
 ): string {
   return JSON.stringify(
-    SyncReconcileRequestPreparedStackExtendAwResource$outboundSchema.parse(
-      syncReconcileRequestPreparedStackExtendAwResource,
+    PreparedStackExtendStateAwResource$outboundSchema.parse(
+      preparedStackExtendStateAwResource,
     ),
   );
 }
@@ -15967,9 +16382,7 @@ export function syncReconcileRequestPreparedStackExtendAwStackToJSON(
 
 /** @internal */
 export type SyncReconcileRequestPreparedStackExtendAwBinding$Outbound = {
-  resource?:
-    | SyncReconcileRequestPreparedStackExtendAwResource$Outbound
-    | undefined;
+  resource?: PreparedStackExtendStateAwResource$Outbound | undefined;
   stack?: SyncReconcileRequestPreparedStackExtendAwStack$Outbound | undefined;
 };
 
@@ -15979,9 +16392,8 @@ export const SyncReconcileRequestPreparedStackExtendAwBinding$outboundSchema:
     SyncReconcileRequestPreparedStackExtendAwBinding$Outbound,
     SyncReconcileRequestPreparedStackExtendAwBinding
   > = z.object({
-    resource: z.lazy(() =>
-      SyncReconcileRequestPreparedStackExtendAwResource$outboundSchema
-    ).optional(),
+    resource: z.lazy(() => PreparedStackExtendStateAwResource$outboundSchema)
+      .optional(),
     stack: z.lazy(() =>
       SyncReconcileRequestPreparedStackExtendAwStack$outboundSchema
     ).optional(),
@@ -16076,26 +16488,24 @@ export function syncReconcileRequestPreparedStackExtendAwToJSON(
 }
 
 /** @internal */
-export type SyncReconcileRequestPreparedStackExtendAzureResource$Outbound = {
+export type PreparedStackExtendStateAzureResource$Outbound = {
   scope: string;
 };
 
 /** @internal */
-export const SyncReconcileRequestPreparedStackExtendAzureResource$outboundSchema:
-  z.ZodType<
-    SyncReconcileRequestPreparedStackExtendAzureResource$Outbound,
-    SyncReconcileRequestPreparedStackExtendAzureResource
-  > = z.object({
-    scope: z.string(),
-  });
+export const PreparedStackExtendStateAzureResource$outboundSchema: z.ZodType<
+  PreparedStackExtendStateAzureResource$Outbound,
+  PreparedStackExtendStateAzureResource
+> = z.object({
+  scope: z.string(),
+});
 
-export function syncReconcileRequestPreparedStackExtendAzureResourceToJSON(
-  syncReconcileRequestPreparedStackExtendAzureResource:
-    SyncReconcileRequestPreparedStackExtendAzureResource,
+export function preparedStackExtendStateAzureResourceToJSON(
+  preparedStackExtendStateAzureResource: PreparedStackExtendStateAzureResource,
 ): string {
   return JSON.stringify(
-    SyncReconcileRequestPreparedStackExtendAzureResource$outboundSchema.parse(
-      syncReconcileRequestPreparedStackExtendAzureResource,
+    PreparedStackExtendStateAzureResource$outboundSchema.parse(
+      preparedStackExtendStateAzureResource,
     ),
   );
 }
@@ -16127,9 +16537,7 @@ export function syncReconcileRequestPreparedStackExtendAzureStackToJSON(
 
 /** @internal */
 export type SyncReconcileRequestPreparedStackExtendAzureBinding$Outbound = {
-  resource?:
-    | SyncReconcileRequestPreparedStackExtendAzureResource$Outbound
-    | undefined;
+  resource?: PreparedStackExtendStateAzureResource$Outbound | undefined;
   stack?:
     | SyncReconcileRequestPreparedStackExtendAzureStack$Outbound
     | undefined;
@@ -16141,9 +16549,8 @@ export const SyncReconcileRequestPreparedStackExtendAzureBinding$outboundSchema:
     SyncReconcileRequestPreparedStackExtendAzureBinding$Outbound,
     SyncReconcileRequestPreparedStackExtendAzureBinding
   > = z.object({
-    resource: z.lazy(() =>
-      SyncReconcileRequestPreparedStackExtendAzureResource$outboundSchema
-    ).optional(),
+    resource: z.lazy(() => PreparedStackExtendStateAzureResource$outboundSchema)
+      .optional(),
     stack: z.lazy(() =>
       SyncReconcileRequestPreparedStackExtendAzureStack$outboundSchema
     ).optional(),
@@ -16282,7 +16689,7 @@ export function preparedStackExtendStateResourceConditionUnionToJSON(
 }
 
 /** @internal */
-export type SyncReconcileRequestPreparedStackExtendGcpResource$Outbound = {
+export type PreparedStackExtendStateGcpResource$Outbound = {
   condition?:
     | PreparedStackExtendConditionStateResource$Outbound
     | any
@@ -16292,27 +16699,25 @@ export type SyncReconcileRequestPreparedStackExtendGcpResource$Outbound = {
 };
 
 /** @internal */
-export const SyncReconcileRequestPreparedStackExtendGcpResource$outboundSchema:
-  z.ZodType<
-    SyncReconcileRequestPreparedStackExtendGcpResource$Outbound,
-    SyncReconcileRequestPreparedStackExtendGcpResource
-  > = z.object({
-    condition: z.nullable(
-      z.union([
-        z.lazy(() => PreparedStackExtendConditionStateResource$outboundSchema),
-        z.any(),
-      ]),
-    ).optional(),
-    scope: z.string(),
-  });
+export const PreparedStackExtendStateGcpResource$outboundSchema: z.ZodType<
+  PreparedStackExtendStateGcpResource$Outbound,
+  PreparedStackExtendStateGcpResource
+> = z.object({
+  condition: z.nullable(
+    z.union([
+      z.lazy(() => PreparedStackExtendConditionStateResource$outboundSchema),
+      z.any(),
+    ]),
+  ).optional(),
+  scope: z.string(),
+});
 
-export function syncReconcileRequestPreparedStackExtendGcpResourceToJSON(
-  syncReconcileRequestPreparedStackExtendGcpResource:
-    SyncReconcileRequestPreparedStackExtendGcpResource,
+export function preparedStackExtendStateGcpResourceToJSON(
+  preparedStackExtendStateGcpResource: PreparedStackExtendStateGcpResource,
 ): string {
   return JSON.stringify(
-    SyncReconcileRequestPreparedStackExtendGcpResource$outboundSchema.parse(
-      syncReconcileRequestPreparedStackExtendGcpResource,
+    PreparedStackExtendStateGcpResource$outboundSchema.parse(
+      preparedStackExtendStateGcpResource,
     ),
   );
 }
@@ -16407,9 +16812,7 @@ export function syncReconcileRequestPreparedStackExtendGcpStackToJSON(
 
 /** @internal */
 export type SyncReconcileRequestPreparedStackExtendGcpBinding$Outbound = {
-  resource?:
-    | SyncReconcileRequestPreparedStackExtendGcpResource$Outbound
-    | undefined;
+  resource?: PreparedStackExtendStateGcpResource$Outbound | undefined;
   stack?: SyncReconcileRequestPreparedStackExtendGcpStack$Outbound | undefined;
 };
 
@@ -16419,9 +16822,8 @@ export const SyncReconcileRequestPreparedStackExtendGcpBinding$outboundSchema:
     SyncReconcileRequestPreparedStackExtendGcpBinding$Outbound,
     SyncReconcileRequestPreparedStackExtendGcpBinding
   > = z.object({
-    resource: z.lazy(() =>
-      SyncReconcileRequestPreparedStackExtendGcpResource$outboundSchema
-    ).optional(),
+    resource: z.lazy(() => PreparedStackExtendStateGcpResource$outboundSchema)
+      .optional(),
     stack: z.lazy(() =>
       SyncReconcileRequestPreparedStackExtendGcpStack$outboundSchema
     ).optional(),
@@ -16676,30 +17078,27 @@ export function syncReconcileRequestPreparedStackManagementUnionToJSON(
 }
 
 /** @internal */
-export type SyncReconcileRequestPreparedStackProfileAwResource$Outbound = {
+export type PreparedStackProfileStateAwResource$Outbound = {
   condition?: { [k: string]: { [k: string]: string } } | null | undefined;
   resources: Array<string>;
 };
 
 /** @internal */
-export const SyncReconcileRequestPreparedStackProfileAwResource$outboundSchema:
-  z.ZodType<
-    SyncReconcileRequestPreparedStackProfileAwResource$Outbound,
-    SyncReconcileRequestPreparedStackProfileAwResource
-  > = z.object({
-    condition: z.nullable(
-      z.record(z.string(), z.record(z.string(), z.string())),
-    ).optional(),
-    resources: z.array(z.string()),
-  });
+export const PreparedStackProfileStateAwResource$outboundSchema: z.ZodType<
+  PreparedStackProfileStateAwResource$Outbound,
+  PreparedStackProfileStateAwResource
+> = z.object({
+  condition: z.nullable(z.record(z.string(), z.record(z.string(), z.string())))
+    .optional(),
+  resources: z.array(z.string()),
+});
 
-export function syncReconcileRequestPreparedStackProfileAwResourceToJSON(
-  syncReconcileRequestPreparedStackProfileAwResource:
-    SyncReconcileRequestPreparedStackProfileAwResource,
+export function preparedStackProfileStateAwResourceToJSON(
+  preparedStackProfileStateAwResource: PreparedStackProfileStateAwResource,
 ): string {
   return JSON.stringify(
-    SyncReconcileRequestPreparedStackProfileAwResource$outboundSchema.parse(
-      syncReconcileRequestPreparedStackProfileAwResource,
+    PreparedStackProfileStateAwResource$outboundSchema.parse(
+      preparedStackProfileStateAwResource,
     ),
   );
 }
@@ -16735,9 +17134,7 @@ export function syncReconcileRequestPreparedStackProfileAwStackToJSON(
 
 /** @internal */
 export type SyncReconcileRequestPreparedStackProfileAwBinding$Outbound = {
-  resource?:
-    | SyncReconcileRequestPreparedStackProfileAwResource$Outbound
-    | undefined;
+  resource?: PreparedStackProfileStateAwResource$Outbound | undefined;
   stack?: SyncReconcileRequestPreparedStackProfileAwStack$Outbound | undefined;
 };
 
@@ -16747,9 +17144,8 @@ export const SyncReconcileRequestPreparedStackProfileAwBinding$outboundSchema:
     SyncReconcileRequestPreparedStackProfileAwBinding$Outbound,
     SyncReconcileRequestPreparedStackProfileAwBinding
   > = z.object({
-    resource: z.lazy(() =>
-      SyncReconcileRequestPreparedStackProfileAwResource$outboundSchema
-    ).optional(),
+    resource: z.lazy(() => PreparedStackProfileStateAwResource$outboundSchema)
+      .optional(),
     stack: z.lazy(() =>
       SyncReconcileRequestPreparedStackProfileAwStack$outboundSchema
     ).optional(),
@@ -16844,26 +17240,25 @@ export function syncReconcileRequestPreparedStackProfileAwToJSON(
 }
 
 /** @internal */
-export type SyncReconcileRequestPreparedStackProfileAzureResource$Outbound = {
+export type PreparedStackProfileStateAzureResource$Outbound = {
   scope: string;
 };
 
 /** @internal */
-export const SyncReconcileRequestPreparedStackProfileAzureResource$outboundSchema:
-  z.ZodType<
-    SyncReconcileRequestPreparedStackProfileAzureResource$Outbound,
-    SyncReconcileRequestPreparedStackProfileAzureResource
-  > = z.object({
-    scope: z.string(),
-  });
+export const PreparedStackProfileStateAzureResource$outboundSchema: z.ZodType<
+  PreparedStackProfileStateAzureResource$Outbound,
+  PreparedStackProfileStateAzureResource
+> = z.object({
+  scope: z.string(),
+});
 
-export function syncReconcileRequestPreparedStackProfileAzureResourceToJSON(
-  syncReconcileRequestPreparedStackProfileAzureResource:
-    SyncReconcileRequestPreparedStackProfileAzureResource,
+export function preparedStackProfileStateAzureResourceToJSON(
+  preparedStackProfileStateAzureResource:
+    PreparedStackProfileStateAzureResource,
 ): string {
   return JSON.stringify(
-    SyncReconcileRequestPreparedStackProfileAzureResource$outboundSchema.parse(
-      syncReconcileRequestPreparedStackProfileAzureResource,
+    PreparedStackProfileStateAzureResource$outboundSchema.parse(
+      preparedStackProfileStateAzureResource,
     ),
   );
 }
@@ -16895,9 +17290,7 @@ export function syncReconcileRequestPreparedStackProfileAzureStackToJSON(
 
 /** @internal */
 export type SyncReconcileRequestPreparedStackProfileAzureBinding$Outbound = {
-  resource?:
-    | SyncReconcileRequestPreparedStackProfileAzureResource$Outbound
-    | undefined;
+  resource?: PreparedStackProfileStateAzureResource$Outbound | undefined;
   stack?:
     | SyncReconcileRequestPreparedStackProfileAzureStack$Outbound
     | undefined;
@@ -16910,7 +17303,7 @@ export const SyncReconcileRequestPreparedStackProfileAzureBinding$outboundSchema
     SyncReconcileRequestPreparedStackProfileAzureBinding
   > = z.object({
     resource: z.lazy(() =>
-      SyncReconcileRequestPreparedStackProfileAzureResource$outboundSchema
+      PreparedStackProfileStateAzureResource$outboundSchema
     ).optional(),
     stack: z.lazy(() =>
       SyncReconcileRequestPreparedStackProfileAzureStack$outboundSchema
@@ -17050,7 +17443,7 @@ export function preparedStackProfileStateResourceConditionUnionToJSON(
 }
 
 /** @internal */
-export type SyncReconcileRequestPreparedStackProfileGcpResource$Outbound = {
+export type PreparedStackProfileStateGcpResource$Outbound = {
   condition?:
     | PreparedStackProfileConditionStateResource$Outbound
     | any
@@ -17060,27 +17453,25 @@ export type SyncReconcileRequestPreparedStackProfileGcpResource$Outbound = {
 };
 
 /** @internal */
-export const SyncReconcileRequestPreparedStackProfileGcpResource$outboundSchema:
-  z.ZodType<
-    SyncReconcileRequestPreparedStackProfileGcpResource$Outbound,
-    SyncReconcileRequestPreparedStackProfileGcpResource
-  > = z.object({
-    condition: z.nullable(
-      z.union([
-        z.lazy(() => PreparedStackProfileConditionStateResource$outboundSchema),
-        z.any(),
-      ]),
-    ).optional(),
-    scope: z.string(),
-  });
+export const PreparedStackProfileStateGcpResource$outboundSchema: z.ZodType<
+  PreparedStackProfileStateGcpResource$Outbound,
+  PreparedStackProfileStateGcpResource
+> = z.object({
+  condition: z.nullable(
+    z.union([
+      z.lazy(() => PreparedStackProfileConditionStateResource$outboundSchema),
+      z.any(),
+    ]),
+  ).optional(),
+  scope: z.string(),
+});
 
-export function syncReconcileRequestPreparedStackProfileGcpResourceToJSON(
-  syncReconcileRequestPreparedStackProfileGcpResource:
-    SyncReconcileRequestPreparedStackProfileGcpResource,
+export function preparedStackProfileStateGcpResourceToJSON(
+  preparedStackProfileStateGcpResource: PreparedStackProfileStateGcpResource,
 ): string {
   return JSON.stringify(
-    SyncReconcileRequestPreparedStackProfileGcpResource$outboundSchema.parse(
-      syncReconcileRequestPreparedStackProfileGcpResource,
+    PreparedStackProfileStateGcpResource$outboundSchema.parse(
+      preparedStackProfileStateGcpResource,
     ),
   );
 }
@@ -17175,9 +17566,7 @@ export function syncReconcileRequestPreparedStackProfileGcpStackToJSON(
 
 /** @internal */
 export type SyncReconcileRequestPreparedStackProfileGcpBinding$Outbound = {
-  resource?:
-    | SyncReconcileRequestPreparedStackProfileGcpResource$Outbound
-    | undefined;
+  resource?: PreparedStackProfileStateGcpResource$Outbound | undefined;
   stack?: SyncReconcileRequestPreparedStackProfileGcpStack$Outbound | undefined;
 };
 
@@ -17187,9 +17576,8 @@ export const SyncReconcileRequestPreparedStackProfileGcpBinding$outboundSchema:
     SyncReconcileRequestPreparedStackProfileGcpBinding$Outbound,
     SyncReconcileRequestPreparedStackProfileGcpBinding
   > = z.object({
-    resource: z.lazy(() =>
-      SyncReconcileRequestPreparedStackProfileGcpResource$outboundSchema
-    ).optional(),
+    resource: z.lazy(() => PreparedStackProfileStateGcpResource$outboundSchema)
+      .optional(),
     stack: z.lazy(() =>
       SyncReconcileRequestPreparedStackProfileGcpStack$outboundSchema
     ).optional(),
@@ -18506,30 +18894,27 @@ export const SyncReconcileRequestTargetReleaseManagementEnum$outboundSchema:
   );
 
 /** @internal */
-export type SyncReconcileRequestTargetReleaseOverrideAwResource$Outbound = {
+export type TargetReleaseOverrideStateAwResource$Outbound = {
   condition?: { [k: string]: { [k: string]: string } } | null | undefined;
   resources: Array<string>;
 };
 
 /** @internal */
-export const SyncReconcileRequestTargetReleaseOverrideAwResource$outboundSchema:
-  z.ZodType<
-    SyncReconcileRequestTargetReleaseOverrideAwResource$Outbound,
-    SyncReconcileRequestTargetReleaseOverrideAwResource
-  > = z.object({
-    condition: z.nullable(
-      z.record(z.string(), z.record(z.string(), z.string())),
-    ).optional(),
-    resources: z.array(z.string()),
-  });
+export const TargetReleaseOverrideStateAwResource$outboundSchema: z.ZodType<
+  TargetReleaseOverrideStateAwResource$Outbound,
+  TargetReleaseOverrideStateAwResource
+> = z.object({
+  condition: z.nullable(z.record(z.string(), z.record(z.string(), z.string())))
+    .optional(),
+  resources: z.array(z.string()),
+});
 
-export function syncReconcileRequestTargetReleaseOverrideAwResourceToJSON(
-  syncReconcileRequestTargetReleaseOverrideAwResource:
-    SyncReconcileRequestTargetReleaseOverrideAwResource,
+export function targetReleaseOverrideStateAwResourceToJSON(
+  targetReleaseOverrideStateAwResource: TargetReleaseOverrideStateAwResource,
 ): string {
   return JSON.stringify(
-    SyncReconcileRequestTargetReleaseOverrideAwResource$outboundSchema.parse(
-      syncReconcileRequestTargetReleaseOverrideAwResource,
+    TargetReleaseOverrideStateAwResource$outboundSchema.parse(
+      targetReleaseOverrideStateAwResource,
     ),
   );
 }
@@ -18565,9 +18950,7 @@ export function syncReconcileRequestTargetReleaseOverrideAwStackToJSON(
 
 /** @internal */
 export type SyncReconcileRequestTargetReleaseOverrideAwBinding$Outbound = {
-  resource?:
-    | SyncReconcileRequestTargetReleaseOverrideAwResource$Outbound
-    | undefined;
+  resource?: TargetReleaseOverrideStateAwResource$Outbound | undefined;
   stack?: SyncReconcileRequestTargetReleaseOverrideAwStack$Outbound | undefined;
 };
 
@@ -18577,9 +18960,8 @@ export const SyncReconcileRequestTargetReleaseOverrideAwBinding$outboundSchema:
     SyncReconcileRequestTargetReleaseOverrideAwBinding$Outbound,
     SyncReconcileRequestTargetReleaseOverrideAwBinding
   > = z.object({
-    resource: z.lazy(() =>
-      SyncReconcileRequestTargetReleaseOverrideAwResource$outboundSchema
-    ).optional(),
+    resource: z.lazy(() => TargetReleaseOverrideStateAwResource$outboundSchema)
+      .optional(),
     stack: z.lazy(() =>
       SyncReconcileRequestTargetReleaseOverrideAwStack$outboundSchema
     ).optional(),
@@ -18674,26 +19056,25 @@ export function syncReconcileRequestTargetReleaseOverrideAwToJSON(
 }
 
 /** @internal */
-export type SyncReconcileRequestTargetReleaseOverrideAzureResource$Outbound = {
+export type TargetReleaseOverrideStateAzureResource$Outbound = {
   scope: string;
 };
 
 /** @internal */
-export const SyncReconcileRequestTargetReleaseOverrideAzureResource$outboundSchema:
-  z.ZodType<
-    SyncReconcileRequestTargetReleaseOverrideAzureResource$Outbound,
-    SyncReconcileRequestTargetReleaseOverrideAzureResource
-  > = z.object({
-    scope: z.string(),
-  });
+export const TargetReleaseOverrideStateAzureResource$outboundSchema: z.ZodType<
+  TargetReleaseOverrideStateAzureResource$Outbound,
+  TargetReleaseOverrideStateAzureResource
+> = z.object({
+  scope: z.string(),
+});
 
-export function syncReconcileRequestTargetReleaseOverrideAzureResourceToJSON(
-  syncReconcileRequestTargetReleaseOverrideAzureResource:
-    SyncReconcileRequestTargetReleaseOverrideAzureResource,
+export function targetReleaseOverrideStateAzureResourceToJSON(
+  targetReleaseOverrideStateAzureResource:
+    TargetReleaseOverrideStateAzureResource,
 ): string {
   return JSON.stringify(
-    SyncReconcileRequestTargetReleaseOverrideAzureResource$outboundSchema.parse(
-      syncReconcileRequestTargetReleaseOverrideAzureResource,
+    TargetReleaseOverrideStateAzureResource$outboundSchema.parse(
+      targetReleaseOverrideStateAzureResource,
     ),
   );
 }
@@ -18725,9 +19106,7 @@ export function syncReconcileRequestTargetReleaseOverrideAzureStackToJSON(
 
 /** @internal */
 export type SyncReconcileRequestTargetReleaseOverrideAzureBinding$Outbound = {
-  resource?:
-    | SyncReconcileRequestTargetReleaseOverrideAzureResource$Outbound
-    | undefined;
+  resource?: TargetReleaseOverrideStateAzureResource$Outbound | undefined;
   stack?:
     | SyncReconcileRequestTargetReleaseOverrideAzureStack$Outbound
     | undefined;
@@ -18740,7 +19119,7 @@ export const SyncReconcileRequestTargetReleaseOverrideAzureBinding$outboundSchem
     SyncReconcileRequestTargetReleaseOverrideAzureBinding
   > = z.object({
     resource: z.lazy(() =>
-      SyncReconcileRequestTargetReleaseOverrideAzureResource$outboundSchema
+      TargetReleaseOverrideStateAzureResource$outboundSchema
     ).optional(),
     stack: z.lazy(() =>
       SyncReconcileRequestTargetReleaseOverrideAzureStack$outboundSchema
@@ -18880,7 +19259,7 @@ export function targetReleaseOverrideStateResourceConditionUnionToJSON(
 }
 
 /** @internal */
-export type SyncReconcileRequestTargetReleaseOverrideGcpResource$Outbound = {
+export type TargetReleaseOverrideStateGcpResource$Outbound = {
   condition?:
     | TargetReleaseOverrideConditionStateResource$Outbound
     | any
@@ -18890,29 +19269,25 @@ export type SyncReconcileRequestTargetReleaseOverrideGcpResource$Outbound = {
 };
 
 /** @internal */
-export const SyncReconcileRequestTargetReleaseOverrideGcpResource$outboundSchema:
-  z.ZodType<
-    SyncReconcileRequestTargetReleaseOverrideGcpResource$Outbound,
-    SyncReconcileRequestTargetReleaseOverrideGcpResource
-  > = z.object({
-    condition: z.nullable(
-      z.union([
-        z.lazy(() =>
-          TargetReleaseOverrideConditionStateResource$outboundSchema
-        ),
-        z.any(),
-      ]),
-    ).optional(),
-    scope: z.string(),
-  });
+export const TargetReleaseOverrideStateGcpResource$outboundSchema: z.ZodType<
+  TargetReleaseOverrideStateGcpResource$Outbound,
+  TargetReleaseOverrideStateGcpResource
+> = z.object({
+  condition: z.nullable(
+    z.union([
+      z.lazy(() => TargetReleaseOverrideConditionStateResource$outboundSchema),
+      z.any(),
+    ]),
+  ).optional(),
+  scope: z.string(),
+});
 
-export function syncReconcileRequestTargetReleaseOverrideGcpResourceToJSON(
-  syncReconcileRequestTargetReleaseOverrideGcpResource:
-    SyncReconcileRequestTargetReleaseOverrideGcpResource,
+export function targetReleaseOverrideStateGcpResourceToJSON(
+  targetReleaseOverrideStateGcpResource: TargetReleaseOverrideStateGcpResource,
 ): string {
   return JSON.stringify(
-    SyncReconcileRequestTargetReleaseOverrideGcpResource$outboundSchema.parse(
-      syncReconcileRequestTargetReleaseOverrideGcpResource,
+    TargetReleaseOverrideStateGcpResource$outboundSchema.parse(
+      targetReleaseOverrideStateGcpResource,
     ),
   );
 }
@@ -19005,9 +19380,7 @@ export function syncReconcileRequestTargetReleaseOverrideGcpStackToJSON(
 
 /** @internal */
 export type SyncReconcileRequestTargetReleaseOverrideGcpBinding$Outbound = {
-  resource?:
-    | SyncReconcileRequestTargetReleaseOverrideGcpResource$Outbound
-    | undefined;
+  resource?: TargetReleaseOverrideStateGcpResource$Outbound | undefined;
   stack?:
     | SyncReconcileRequestTargetReleaseOverrideGcpStack$Outbound
     | undefined;
@@ -19019,9 +19392,8 @@ export const SyncReconcileRequestTargetReleaseOverrideGcpBinding$outboundSchema:
     SyncReconcileRequestTargetReleaseOverrideGcpBinding$Outbound,
     SyncReconcileRequestTargetReleaseOverrideGcpBinding
   > = z.object({
-    resource: z.lazy(() =>
-      SyncReconcileRequestTargetReleaseOverrideGcpResource$outboundSchema
-    ).optional(),
+    resource: z.lazy(() => TargetReleaseOverrideStateGcpResource$outboundSchema)
+      .optional(),
     stack: z.lazy(() =>
       SyncReconcileRequestTargetReleaseOverrideGcpStack$outboundSchema
     ).optional(),
@@ -19249,30 +19621,27 @@ export function syncReconcileRequestTargetReleaseManagement2ToJSON(
 }
 
 /** @internal */
-export type SyncReconcileRequestTargetReleaseExtendAwResource$Outbound = {
+export type TargetReleaseExtendStateAwResource$Outbound = {
   condition?: { [k: string]: { [k: string]: string } } | null | undefined;
   resources: Array<string>;
 };
 
 /** @internal */
-export const SyncReconcileRequestTargetReleaseExtendAwResource$outboundSchema:
-  z.ZodType<
-    SyncReconcileRequestTargetReleaseExtendAwResource$Outbound,
-    SyncReconcileRequestTargetReleaseExtendAwResource
-  > = z.object({
-    condition: z.nullable(
-      z.record(z.string(), z.record(z.string(), z.string())),
-    ).optional(),
-    resources: z.array(z.string()),
-  });
+export const TargetReleaseExtendStateAwResource$outboundSchema: z.ZodType<
+  TargetReleaseExtendStateAwResource$Outbound,
+  TargetReleaseExtendStateAwResource
+> = z.object({
+  condition: z.nullable(z.record(z.string(), z.record(z.string(), z.string())))
+    .optional(),
+  resources: z.array(z.string()),
+});
 
-export function syncReconcileRequestTargetReleaseExtendAwResourceToJSON(
-  syncReconcileRequestTargetReleaseExtendAwResource:
-    SyncReconcileRequestTargetReleaseExtendAwResource,
+export function targetReleaseExtendStateAwResourceToJSON(
+  targetReleaseExtendStateAwResource: TargetReleaseExtendStateAwResource,
 ): string {
   return JSON.stringify(
-    SyncReconcileRequestTargetReleaseExtendAwResource$outboundSchema.parse(
-      syncReconcileRequestTargetReleaseExtendAwResource,
+    TargetReleaseExtendStateAwResource$outboundSchema.parse(
+      targetReleaseExtendStateAwResource,
     ),
   );
 }
@@ -19308,9 +19677,7 @@ export function syncReconcileRequestTargetReleaseExtendAwStackToJSON(
 
 /** @internal */
 export type SyncReconcileRequestTargetReleaseExtendAwBinding$Outbound = {
-  resource?:
-    | SyncReconcileRequestTargetReleaseExtendAwResource$Outbound
-    | undefined;
+  resource?: TargetReleaseExtendStateAwResource$Outbound | undefined;
   stack?: SyncReconcileRequestTargetReleaseExtendAwStack$Outbound | undefined;
 };
 
@@ -19320,9 +19687,8 @@ export const SyncReconcileRequestTargetReleaseExtendAwBinding$outboundSchema:
     SyncReconcileRequestTargetReleaseExtendAwBinding$Outbound,
     SyncReconcileRequestTargetReleaseExtendAwBinding
   > = z.object({
-    resource: z.lazy(() =>
-      SyncReconcileRequestTargetReleaseExtendAwResource$outboundSchema
-    ).optional(),
+    resource: z.lazy(() => TargetReleaseExtendStateAwResource$outboundSchema)
+      .optional(),
     stack: z.lazy(() =>
       SyncReconcileRequestTargetReleaseExtendAwStack$outboundSchema
     ).optional(),
@@ -19417,26 +19783,24 @@ export function syncReconcileRequestTargetReleaseExtendAwToJSON(
 }
 
 /** @internal */
-export type SyncReconcileRequestTargetReleaseExtendAzureResource$Outbound = {
+export type TargetReleaseExtendStateAzureResource$Outbound = {
   scope: string;
 };
 
 /** @internal */
-export const SyncReconcileRequestTargetReleaseExtendAzureResource$outboundSchema:
-  z.ZodType<
-    SyncReconcileRequestTargetReleaseExtendAzureResource$Outbound,
-    SyncReconcileRequestTargetReleaseExtendAzureResource
-  > = z.object({
-    scope: z.string(),
-  });
+export const TargetReleaseExtendStateAzureResource$outboundSchema: z.ZodType<
+  TargetReleaseExtendStateAzureResource$Outbound,
+  TargetReleaseExtendStateAzureResource
+> = z.object({
+  scope: z.string(),
+});
 
-export function syncReconcileRequestTargetReleaseExtendAzureResourceToJSON(
-  syncReconcileRequestTargetReleaseExtendAzureResource:
-    SyncReconcileRequestTargetReleaseExtendAzureResource,
+export function targetReleaseExtendStateAzureResourceToJSON(
+  targetReleaseExtendStateAzureResource: TargetReleaseExtendStateAzureResource,
 ): string {
   return JSON.stringify(
-    SyncReconcileRequestTargetReleaseExtendAzureResource$outboundSchema.parse(
-      syncReconcileRequestTargetReleaseExtendAzureResource,
+    TargetReleaseExtendStateAzureResource$outboundSchema.parse(
+      targetReleaseExtendStateAzureResource,
     ),
   );
 }
@@ -19468,9 +19832,7 @@ export function syncReconcileRequestTargetReleaseExtendAzureStackToJSON(
 
 /** @internal */
 export type SyncReconcileRequestTargetReleaseExtendAzureBinding$Outbound = {
-  resource?:
-    | SyncReconcileRequestTargetReleaseExtendAzureResource$Outbound
-    | undefined;
+  resource?: TargetReleaseExtendStateAzureResource$Outbound | undefined;
   stack?:
     | SyncReconcileRequestTargetReleaseExtendAzureStack$Outbound
     | undefined;
@@ -19482,9 +19844,8 @@ export const SyncReconcileRequestTargetReleaseExtendAzureBinding$outboundSchema:
     SyncReconcileRequestTargetReleaseExtendAzureBinding$Outbound,
     SyncReconcileRequestTargetReleaseExtendAzureBinding
   > = z.object({
-    resource: z.lazy(() =>
-      SyncReconcileRequestTargetReleaseExtendAzureResource$outboundSchema
-    ).optional(),
+    resource: z.lazy(() => TargetReleaseExtendStateAzureResource$outboundSchema)
+      .optional(),
     stack: z.lazy(() =>
       SyncReconcileRequestTargetReleaseExtendAzureStack$outboundSchema
     ).optional(),
@@ -19623,7 +19984,7 @@ export function targetReleaseExtendStateResourceConditionUnionToJSON(
 }
 
 /** @internal */
-export type SyncReconcileRequestTargetReleaseExtendGcpResource$Outbound = {
+export type TargetReleaseExtendStateGcpResource$Outbound = {
   condition?:
     | TargetReleaseExtendConditionStateResource$Outbound
     | any
@@ -19633,27 +19994,25 @@ export type SyncReconcileRequestTargetReleaseExtendGcpResource$Outbound = {
 };
 
 /** @internal */
-export const SyncReconcileRequestTargetReleaseExtendGcpResource$outboundSchema:
-  z.ZodType<
-    SyncReconcileRequestTargetReleaseExtendGcpResource$Outbound,
-    SyncReconcileRequestTargetReleaseExtendGcpResource
-  > = z.object({
-    condition: z.nullable(
-      z.union([
-        z.lazy(() => TargetReleaseExtendConditionStateResource$outboundSchema),
-        z.any(),
-      ]),
-    ).optional(),
-    scope: z.string(),
-  });
+export const TargetReleaseExtendStateGcpResource$outboundSchema: z.ZodType<
+  TargetReleaseExtendStateGcpResource$Outbound,
+  TargetReleaseExtendStateGcpResource
+> = z.object({
+  condition: z.nullable(
+    z.union([
+      z.lazy(() => TargetReleaseExtendConditionStateResource$outboundSchema),
+      z.any(),
+    ]),
+  ).optional(),
+  scope: z.string(),
+});
 
-export function syncReconcileRequestTargetReleaseExtendGcpResourceToJSON(
-  syncReconcileRequestTargetReleaseExtendGcpResource:
-    SyncReconcileRequestTargetReleaseExtendGcpResource,
+export function targetReleaseExtendStateGcpResourceToJSON(
+  targetReleaseExtendStateGcpResource: TargetReleaseExtendStateGcpResource,
 ): string {
   return JSON.stringify(
-    SyncReconcileRequestTargetReleaseExtendGcpResource$outboundSchema.parse(
-      syncReconcileRequestTargetReleaseExtendGcpResource,
+    TargetReleaseExtendStateGcpResource$outboundSchema.parse(
+      targetReleaseExtendStateGcpResource,
     ),
   );
 }
@@ -19746,9 +20105,7 @@ export function syncReconcileRequestTargetReleaseExtendGcpStackToJSON(
 
 /** @internal */
 export type SyncReconcileRequestTargetReleaseExtendGcpBinding$Outbound = {
-  resource?:
-    | SyncReconcileRequestTargetReleaseExtendGcpResource$Outbound
-    | undefined;
+  resource?: TargetReleaseExtendStateGcpResource$Outbound | undefined;
   stack?: SyncReconcileRequestTargetReleaseExtendGcpStack$Outbound | undefined;
 };
 
@@ -19758,9 +20115,8 @@ export const SyncReconcileRequestTargetReleaseExtendGcpBinding$outboundSchema:
     SyncReconcileRequestTargetReleaseExtendGcpBinding$Outbound,
     SyncReconcileRequestTargetReleaseExtendGcpBinding
   > = z.object({
-    resource: z.lazy(() =>
-      SyncReconcileRequestTargetReleaseExtendGcpResource$outboundSchema
-    ).optional(),
+    resource: z.lazy(() => TargetReleaseExtendStateGcpResource$outboundSchema)
+      .optional(),
     stack: z.lazy(() =>
       SyncReconcileRequestTargetReleaseExtendGcpStack$outboundSchema
     ).optional(),
@@ -20015,30 +20371,27 @@ export function syncReconcileRequestTargetReleaseManagementUnionToJSON(
 }
 
 /** @internal */
-export type SyncReconcileRequestTargetReleaseProfileAwResource$Outbound = {
+export type TargetReleaseProfileStateAwResource$Outbound = {
   condition?: { [k: string]: { [k: string]: string } } | null | undefined;
   resources: Array<string>;
 };
 
 /** @internal */
-export const SyncReconcileRequestTargetReleaseProfileAwResource$outboundSchema:
-  z.ZodType<
-    SyncReconcileRequestTargetReleaseProfileAwResource$Outbound,
-    SyncReconcileRequestTargetReleaseProfileAwResource
-  > = z.object({
-    condition: z.nullable(
-      z.record(z.string(), z.record(z.string(), z.string())),
-    ).optional(),
-    resources: z.array(z.string()),
-  });
+export const TargetReleaseProfileStateAwResource$outboundSchema: z.ZodType<
+  TargetReleaseProfileStateAwResource$Outbound,
+  TargetReleaseProfileStateAwResource
+> = z.object({
+  condition: z.nullable(z.record(z.string(), z.record(z.string(), z.string())))
+    .optional(),
+  resources: z.array(z.string()),
+});
 
-export function syncReconcileRequestTargetReleaseProfileAwResourceToJSON(
-  syncReconcileRequestTargetReleaseProfileAwResource:
-    SyncReconcileRequestTargetReleaseProfileAwResource,
+export function targetReleaseProfileStateAwResourceToJSON(
+  targetReleaseProfileStateAwResource: TargetReleaseProfileStateAwResource,
 ): string {
   return JSON.stringify(
-    SyncReconcileRequestTargetReleaseProfileAwResource$outboundSchema.parse(
-      syncReconcileRequestTargetReleaseProfileAwResource,
+    TargetReleaseProfileStateAwResource$outboundSchema.parse(
+      targetReleaseProfileStateAwResource,
     ),
   );
 }
@@ -20074,9 +20427,7 @@ export function syncReconcileRequestTargetReleaseProfileAwStackToJSON(
 
 /** @internal */
 export type SyncReconcileRequestTargetReleaseProfileAwBinding$Outbound = {
-  resource?:
-    | SyncReconcileRequestTargetReleaseProfileAwResource$Outbound
-    | undefined;
+  resource?: TargetReleaseProfileStateAwResource$Outbound | undefined;
   stack?: SyncReconcileRequestTargetReleaseProfileAwStack$Outbound | undefined;
 };
 
@@ -20086,9 +20437,8 @@ export const SyncReconcileRequestTargetReleaseProfileAwBinding$outboundSchema:
     SyncReconcileRequestTargetReleaseProfileAwBinding$Outbound,
     SyncReconcileRequestTargetReleaseProfileAwBinding
   > = z.object({
-    resource: z.lazy(() =>
-      SyncReconcileRequestTargetReleaseProfileAwResource$outboundSchema
-    ).optional(),
+    resource: z.lazy(() => TargetReleaseProfileStateAwResource$outboundSchema)
+      .optional(),
     stack: z.lazy(() =>
       SyncReconcileRequestTargetReleaseProfileAwStack$outboundSchema
     ).optional(),
@@ -20183,26 +20533,25 @@ export function syncReconcileRequestTargetReleaseProfileAwToJSON(
 }
 
 /** @internal */
-export type SyncReconcileRequestTargetReleaseProfileAzureResource$Outbound = {
+export type TargetReleaseProfileStateAzureResource$Outbound = {
   scope: string;
 };
 
 /** @internal */
-export const SyncReconcileRequestTargetReleaseProfileAzureResource$outboundSchema:
-  z.ZodType<
-    SyncReconcileRequestTargetReleaseProfileAzureResource$Outbound,
-    SyncReconcileRequestTargetReleaseProfileAzureResource
-  > = z.object({
-    scope: z.string(),
-  });
+export const TargetReleaseProfileStateAzureResource$outboundSchema: z.ZodType<
+  TargetReleaseProfileStateAzureResource$Outbound,
+  TargetReleaseProfileStateAzureResource
+> = z.object({
+  scope: z.string(),
+});
 
-export function syncReconcileRequestTargetReleaseProfileAzureResourceToJSON(
-  syncReconcileRequestTargetReleaseProfileAzureResource:
-    SyncReconcileRequestTargetReleaseProfileAzureResource,
+export function targetReleaseProfileStateAzureResourceToJSON(
+  targetReleaseProfileStateAzureResource:
+    TargetReleaseProfileStateAzureResource,
 ): string {
   return JSON.stringify(
-    SyncReconcileRequestTargetReleaseProfileAzureResource$outboundSchema.parse(
-      syncReconcileRequestTargetReleaseProfileAzureResource,
+    TargetReleaseProfileStateAzureResource$outboundSchema.parse(
+      targetReleaseProfileStateAzureResource,
     ),
   );
 }
@@ -20234,9 +20583,7 @@ export function syncReconcileRequestTargetReleaseProfileAzureStackToJSON(
 
 /** @internal */
 export type SyncReconcileRequestTargetReleaseProfileAzureBinding$Outbound = {
-  resource?:
-    | SyncReconcileRequestTargetReleaseProfileAzureResource$Outbound
-    | undefined;
+  resource?: TargetReleaseProfileStateAzureResource$Outbound | undefined;
   stack?:
     | SyncReconcileRequestTargetReleaseProfileAzureStack$Outbound
     | undefined;
@@ -20249,7 +20596,7 @@ export const SyncReconcileRequestTargetReleaseProfileAzureBinding$outboundSchema
     SyncReconcileRequestTargetReleaseProfileAzureBinding
   > = z.object({
     resource: z.lazy(() =>
-      SyncReconcileRequestTargetReleaseProfileAzureResource$outboundSchema
+      TargetReleaseProfileStateAzureResource$outboundSchema
     ).optional(),
     stack: z.lazy(() =>
       SyncReconcileRequestTargetReleaseProfileAzureStack$outboundSchema
@@ -20389,7 +20736,7 @@ export function targetReleaseProfileStateResourceConditionUnionToJSON(
 }
 
 /** @internal */
-export type SyncReconcileRequestTargetReleaseProfileGcpResource$Outbound = {
+export type TargetReleaseProfileStateGcpResource$Outbound = {
   condition?:
     | TargetReleaseProfileConditionStateResource$Outbound
     | any
@@ -20399,27 +20746,25 @@ export type SyncReconcileRequestTargetReleaseProfileGcpResource$Outbound = {
 };
 
 /** @internal */
-export const SyncReconcileRequestTargetReleaseProfileGcpResource$outboundSchema:
-  z.ZodType<
-    SyncReconcileRequestTargetReleaseProfileGcpResource$Outbound,
-    SyncReconcileRequestTargetReleaseProfileGcpResource
-  > = z.object({
-    condition: z.nullable(
-      z.union([
-        z.lazy(() => TargetReleaseProfileConditionStateResource$outboundSchema),
-        z.any(),
-      ]),
-    ).optional(),
-    scope: z.string(),
-  });
+export const TargetReleaseProfileStateGcpResource$outboundSchema: z.ZodType<
+  TargetReleaseProfileStateGcpResource$Outbound,
+  TargetReleaseProfileStateGcpResource
+> = z.object({
+  condition: z.nullable(
+    z.union([
+      z.lazy(() => TargetReleaseProfileConditionStateResource$outboundSchema),
+      z.any(),
+    ]),
+  ).optional(),
+  scope: z.string(),
+});
 
-export function syncReconcileRequestTargetReleaseProfileGcpResourceToJSON(
-  syncReconcileRequestTargetReleaseProfileGcpResource:
-    SyncReconcileRequestTargetReleaseProfileGcpResource,
+export function targetReleaseProfileStateGcpResourceToJSON(
+  targetReleaseProfileStateGcpResource: TargetReleaseProfileStateGcpResource,
 ): string {
   return JSON.stringify(
-    SyncReconcileRequestTargetReleaseProfileGcpResource$outboundSchema.parse(
-      syncReconcileRequestTargetReleaseProfileGcpResource,
+    TargetReleaseProfileStateGcpResource$outboundSchema.parse(
+      targetReleaseProfileStateGcpResource,
     ),
   );
 }
@@ -20512,9 +20857,7 @@ export function syncReconcileRequestTargetReleaseProfileGcpStackToJSON(
 
 /** @internal */
 export type SyncReconcileRequestTargetReleaseProfileGcpBinding$Outbound = {
-  resource?:
-    | SyncReconcileRequestTargetReleaseProfileGcpResource$Outbound
-    | undefined;
+  resource?: TargetReleaseProfileStateGcpResource$Outbound | undefined;
   stack?: SyncReconcileRequestTargetReleaseProfileGcpStack$Outbound | undefined;
 };
 
@@ -20524,9 +20867,8 @@ export const SyncReconcileRequestTargetReleaseProfileGcpBinding$outboundSchema:
     SyncReconcileRequestTargetReleaseProfileGcpBinding$Outbound,
     SyncReconcileRequestTargetReleaseProfileGcpBinding
   > = z.object({
-    resource: z.lazy(() =>
-      SyncReconcileRequestTargetReleaseProfileGcpResource$outboundSchema
-    ).optional(),
+    resource: z.lazy(() => TargetReleaseProfileStateGcpResource$outboundSchema)
+      .optional(),
     stack: z.lazy(() =>
       SyncReconcileRequestTargetReleaseProfileGcpStack$outboundSchema
     ).optional(),
@@ -20927,7 +21269,7 @@ export function syncReconcileRequestTargetReleaseStackToJSON(
 /** @internal */
 export type SyncReconcileRequestTargetRelease$Outbound = {
   description?: string | null | undefined;
-  releaseId: string;
+  releaseId?: string | null | undefined;
   stack: SyncReconcileRequestTargetReleaseStack$Outbound;
   version?: string | null | undefined;
 };
@@ -20938,7 +21280,7 @@ export const SyncReconcileRequestTargetRelease$outboundSchema: z.ZodType<
   SyncReconcileRequestTargetRelease
 > = z.object({
   description: z.nullable(z.string()).optional(),
-  releaseId: z.string(),
+  releaseId: z.nullable(z.string()).optional(),
   stack: z.lazy(() => SyncReconcileRequestTargetReleaseStack$outboundSchema),
   version: z.nullable(z.string()).optional(),
 });
@@ -21069,27 +21411,26 @@ export function syncReconcileRequestStateToJSON(
 }
 
 /** @internal */
-export const BackendEnum$outboundSchema: z.ZodEnum<typeof BackendEnum> = z.enum(
-  BackendEnum,
-);
+export const ResourceHeartbeatBackendEnum$outboundSchema: z.ZodEnum<
+  typeof ResourceHeartbeatBackendEnum
+> = z.enum(ResourceHeartbeatBackendEnum);
 
 /** @internal */
-export const HeartbeatControllerPlatform$outboundSchema: z.ZodEnum<
-  typeof HeartbeatControllerPlatform
-> = z.enum(HeartbeatControllerPlatform);
+export const ResourceHeartbeatControllerPlatform$outboundSchema: z.ZodEnum<
+  typeof ResourceHeartbeatControllerPlatform
+> = z.enum(ResourceHeartbeatControllerPlatform);
 
 /** @internal */
-export const Reason59$outboundSchema: z.ZodEnum<typeof Reason59> = z.enum(
-  Reason59,
-);
+export const DataReason63$outboundSchema: z.ZodEnum<typeof DataReason63> = z
+  .enum(DataReason63);
 
 /** @internal */
-export const CollectionIssueSeverity59$outboundSchema: z.ZodEnum<
-  typeof CollectionIssueSeverity59
-> = z.enum(CollectionIssueSeverity59);
+export const StatusSeverity63$outboundSchema: z.ZodEnum<
+  typeof StatusSeverity63
+> = z.enum(StatusSeverity63);
 
 /** @internal */
-export type CollectionIssue59$Outbound = {
+export type DataCollectionIssue63$Outbound = {
   message: string;
   reason: string;
   severity: string;
@@ -21097,37 +21438,36 @@ export type CollectionIssue59$Outbound = {
 };
 
 /** @internal */
-export const CollectionIssue59$outboundSchema: z.ZodType<
-  CollectionIssue59$Outbound,
-  CollectionIssue59
+export const DataCollectionIssue63$outboundSchema: z.ZodType<
+  DataCollectionIssue63$Outbound,
+  DataCollectionIssue63
 > = z.object({
   message: z.string(),
-  reason: Reason59$outboundSchema,
-  severity: CollectionIssueSeverity59$outboundSchema,
+  reason: DataReason63$outboundSchema,
+  severity: StatusSeverity63$outboundSchema,
   source: z.string(),
 });
 
-export function collectionIssue59ToJSON(
-  collectionIssue59: CollectionIssue59,
+export function dataCollectionIssue63ToJSON(
+  dataCollectionIssue63: DataCollectionIssue63,
 ): string {
   return JSON.stringify(
-    CollectionIssue59$outboundSchema.parse(collectionIssue59),
+    DataCollectionIssue63$outboundSchema.parse(dataCollectionIssue63),
   );
 }
 
 /** @internal */
-export const Health59$outboundSchema: z.ZodEnum<typeof Health59> = z.enum(
-  Health59,
-);
+export const DataHealth63$outboundSchema: z.ZodEnum<typeof DataHealth63> = z
+  .enum(DataHealth63);
 
 /** @internal */
-export const StatusLifecycle59$outboundSchema: z.ZodEnum<
-  typeof StatusLifecycle59
-> = z.enum(StatusLifecycle59);
+export const StatusLifecycle63$outboundSchema: z.ZodEnum<
+  typeof StatusLifecycle63
+> = z.enum(StatusLifecycle63);
 
 /** @internal */
-export type HeartbeatStatus59$Outbound = {
-  collectionIssues: Array<CollectionIssue59$Outbound>;
+export type ResourceHeartbeatStatus63$Outbound = {
+  collectionIssues: Array<DataCollectionIssue63$Outbound>;
   health: string;
   lifecycle: string;
   message?: string | null | undefined;
@@ -21136,23 +21476,23 @@ export type HeartbeatStatus59$Outbound = {
 };
 
 /** @internal */
-export const HeartbeatStatus59$outboundSchema: z.ZodType<
-  HeartbeatStatus59$Outbound,
-  HeartbeatStatus59
+export const ResourceHeartbeatStatus63$outboundSchema: z.ZodType<
+  ResourceHeartbeatStatus63$Outbound,
+  ResourceHeartbeatStatus63
 > = z.object({
-  collectionIssues: z.array(z.lazy(() => CollectionIssue59$outboundSchema)),
-  health: Health59$outboundSchema,
-  lifecycle: StatusLifecycle59$outboundSchema,
+  collectionIssues: z.array(z.lazy(() => DataCollectionIssue63$outboundSchema)),
+  health: DataHealth63$outboundSchema,
+  lifecycle: StatusLifecycle63$outboundSchema,
   message: z.nullable(z.string()).optional(),
   partial: z.boolean(),
   stale: z.boolean(),
 });
 
-export function heartbeatStatus59ToJSON(
-  heartbeatStatus59: HeartbeatStatus59,
+export function resourceHeartbeatStatus63ToJSON(
+  resourceHeartbeatStatus63: ResourceHeartbeatStatus63,
 ): string {
   return JSON.stringify(
-    HeartbeatStatus59$outboundSchema.parse(heartbeatStatus59),
+    ResourceHeartbeatStatus63$outboundSchema.parse(resourceHeartbeatStatus63),
   );
 }
 
@@ -21175,7 +21515,7 @@ export type SyncReconcileRequestData5$Outbound = {
   skuCapacity?: number | null | undefined;
   skuName?: string | null | undefined;
   skuTier?: string | null | undefined;
-  status: HeartbeatStatus59$Outbound;
+  status: ResourceHeartbeatStatus63$Outbound;
   updatedAt?: string | null | undefined;
   zoneRedundant?: boolean | null | undefined;
 };
@@ -21202,7 +21542,7 @@ export const SyncReconcileRequestData5$outboundSchema: z.ZodType<
   skuCapacity: z.nullable(z.int()).optional(),
   skuName: z.nullable(z.string()).optional(),
   skuTier: z.nullable(z.string()).optional(),
-  status: z.lazy(() => HeartbeatStatus59$outboundSchema),
+  status: z.lazy(() => ResourceHeartbeatStatus63$outboundSchema),
   updatedAt: z.nullable(z.string()).optional(),
   zoneRedundant: z.nullable(z.boolean()).optional(),
 });
@@ -21241,17 +21581,16 @@ export function dataAzureServiceBusNamespaceToJSON(
 }
 
 /** @internal */
-export const Reason58$outboundSchema: z.ZodEnum<typeof Reason58> = z.enum(
-  Reason58,
-);
+export const DataReason62$outboundSchema: z.ZodEnum<typeof DataReason62> = z
+  .enum(DataReason62);
 
 /** @internal */
-export const CollectionIssueSeverity58$outboundSchema: z.ZodEnum<
-  typeof CollectionIssueSeverity58
-> = z.enum(CollectionIssueSeverity58);
+export const StatusSeverity62$outboundSchema: z.ZodEnum<
+  typeof StatusSeverity62
+> = z.enum(StatusSeverity62);
 
 /** @internal */
-export type CollectionIssue58$Outbound = {
+export type DataCollectionIssue62$Outbound = {
   message: string;
   reason: string;
   severity: string;
@@ -21259,37 +21598,36 @@ export type CollectionIssue58$Outbound = {
 };
 
 /** @internal */
-export const CollectionIssue58$outboundSchema: z.ZodType<
-  CollectionIssue58$Outbound,
-  CollectionIssue58
+export const DataCollectionIssue62$outboundSchema: z.ZodType<
+  DataCollectionIssue62$Outbound,
+  DataCollectionIssue62
 > = z.object({
   message: z.string(),
-  reason: Reason58$outboundSchema,
-  severity: CollectionIssueSeverity58$outboundSchema,
+  reason: DataReason62$outboundSchema,
+  severity: StatusSeverity62$outboundSchema,
   source: z.string(),
 });
 
-export function collectionIssue58ToJSON(
-  collectionIssue58: CollectionIssue58,
+export function dataCollectionIssue62ToJSON(
+  dataCollectionIssue62: DataCollectionIssue62,
 ): string {
   return JSON.stringify(
-    CollectionIssue58$outboundSchema.parse(collectionIssue58),
+    DataCollectionIssue62$outboundSchema.parse(dataCollectionIssue62),
   );
 }
 
 /** @internal */
-export const Health58$outboundSchema: z.ZodEnum<typeof Health58> = z.enum(
-  Health58,
-);
+export const DataHealth62$outboundSchema: z.ZodEnum<typeof DataHealth62> = z
+  .enum(DataHealth62);
 
 /** @internal */
-export const StatusLifecycle58$outboundSchema: z.ZodEnum<
-  typeof StatusLifecycle58
-> = z.enum(StatusLifecycle58);
+export const StatusLifecycle62$outboundSchema: z.ZodEnum<
+  typeof StatusLifecycle62
+> = z.enum(StatusLifecycle62);
 
 /** @internal */
-export type HeartbeatStatus58$Outbound = {
-  collectionIssues: Array<CollectionIssue58$Outbound>;
+export type ResourceHeartbeatStatus62$Outbound = {
+  collectionIssues: Array<DataCollectionIssue62$Outbound>;
   health: string;
   lifecycle: string;
   message?: string | null | undefined;
@@ -21298,23 +21636,23 @@ export type HeartbeatStatus58$Outbound = {
 };
 
 /** @internal */
-export const HeartbeatStatus58$outboundSchema: z.ZodType<
-  HeartbeatStatus58$Outbound,
-  HeartbeatStatus58
+export const ResourceHeartbeatStatus62$outboundSchema: z.ZodType<
+  ResourceHeartbeatStatus62$Outbound,
+  ResourceHeartbeatStatus62
 > = z.object({
-  collectionIssues: z.array(z.lazy(() => CollectionIssue58$outboundSchema)),
-  health: Health58$outboundSchema,
-  lifecycle: StatusLifecycle58$outboundSchema,
+  collectionIssues: z.array(z.lazy(() => DataCollectionIssue62$outboundSchema)),
+  health: DataHealth62$outboundSchema,
+  lifecycle: StatusLifecycle62$outboundSchema,
   message: z.nullable(z.string()).optional(),
   partial: z.boolean(),
   stale: z.boolean(),
 });
 
-export function heartbeatStatus58ToJSON(
-  heartbeatStatus58: HeartbeatStatus58,
+export function resourceHeartbeatStatus62ToJSON(
+  resourceHeartbeatStatus62: ResourceHeartbeatStatus62,
 ): string {
   return JSON.stringify(
-    HeartbeatStatus58$outboundSchema.parse(heartbeatStatus58),
+    ResourceHeartbeatStatus62$outboundSchema.parse(resourceHeartbeatStatus62),
   );
 }
 
@@ -21356,7 +21694,7 @@ export type SyncReconcileRequestData4$Outbound = {
   resourceGroup?: string | null | undefined;
   resourceId?: string | null | undefined;
   staticIp?: string | null | undefined;
-  status: HeartbeatStatus58$Outbound;
+  status: ResourceHeartbeatStatus62$Outbound;
   workloadProfileCount: number;
   workloadProfiles: Array<WorkloadProfile$Outbound>;
   zoneRedundant?: boolean | null | undefined;
@@ -21378,7 +21716,7 @@ export const SyncReconcileRequestData4$outboundSchema: z.ZodType<
   resourceGroup: z.nullable(z.string()).optional(),
   resourceId: z.nullable(z.string()).optional(),
   staticIp: z.nullable(z.string()).optional(),
-  status: z.lazy(() => HeartbeatStatus58$outboundSchema),
+  status: z.lazy(() => ResourceHeartbeatStatus62$outboundSchema),
   workloadProfileCount: z.int(),
   workloadProfiles: z.array(z.lazy(() => WorkloadProfile$outboundSchema)),
   zoneRedundant: z.nullable(z.boolean()).optional(),
@@ -21480,17 +21818,16 @@ export function secondaryEndpointsToJSON(
 }
 
 /** @internal */
-export const Reason57$outboundSchema: z.ZodEnum<typeof Reason57> = z.enum(
-  Reason57,
-);
+export const DataReason61$outboundSchema: z.ZodEnum<typeof DataReason61> = z
+  .enum(DataReason61);
 
 /** @internal */
-export const CollectionIssueSeverity57$outboundSchema: z.ZodEnum<
-  typeof CollectionIssueSeverity57
-> = z.enum(CollectionIssueSeverity57);
+export const StatusSeverity61$outboundSchema: z.ZodEnum<
+  typeof StatusSeverity61
+> = z.enum(StatusSeverity61);
 
 /** @internal */
-export type CollectionIssue57$Outbound = {
+export type DataCollectionIssue61$Outbound = {
   message: string;
   reason: string;
   severity: string;
@@ -21498,37 +21835,36 @@ export type CollectionIssue57$Outbound = {
 };
 
 /** @internal */
-export const CollectionIssue57$outboundSchema: z.ZodType<
-  CollectionIssue57$Outbound,
-  CollectionIssue57
+export const DataCollectionIssue61$outboundSchema: z.ZodType<
+  DataCollectionIssue61$Outbound,
+  DataCollectionIssue61
 > = z.object({
   message: z.string(),
-  reason: Reason57$outboundSchema,
-  severity: CollectionIssueSeverity57$outboundSchema,
+  reason: DataReason61$outboundSchema,
+  severity: StatusSeverity61$outboundSchema,
   source: z.string(),
 });
 
-export function collectionIssue57ToJSON(
-  collectionIssue57: CollectionIssue57,
+export function dataCollectionIssue61ToJSON(
+  dataCollectionIssue61: DataCollectionIssue61,
 ): string {
   return JSON.stringify(
-    CollectionIssue57$outboundSchema.parse(collectionIssue57),
+    DataCollectionIssue61$outboundSchema.parse(dataCollectionIssue61),
   );
 }
 
 /** @internal */
-export const Health57$outboundSchema: z.ZodEnum<typeof Health57> = z.enum(
-  Health57,
-);
+export const DataHealth61$outboundSchema: z.ZodEnum<typeof DataHealth61> = z
+  .enum(DataHealth61);
 
 /** @internal */
-export const StatusLifecycle57$outboundSchema: z.ZodEnum<
-  typeof StatusLifecycle57
-> = z.enum(StatusLifecycle57);
+export const StatusLifecycle61$outboundSchema: z.ZodEnum<
+  typeof StatusLifecycle61
+> = z.enum(StatusLifecycle61);
 
 /** @internal */
-export type HeartbeatStatus57$Outbound = {
-  collectionIssues: Array<CollectionIssue57$Outbound>;
+export type ResourceHeartbeatStatus61$Outbound = {
+  collectionIssues: Array<DataCollectionIssue61$Outbound>;
   health: string;
   lifecycle: string;
   message?: string | null | undefined;
@@ -21537,23 +21873,23 @@ export type HeartbeatStatus57$Outbound = {
 };
 
 /** @internal */
-export const HeartbeatStatus57$outboundSchema: z.ZodType<
-  HeartbeatStatus57$Outbound,
-  HeartbeatStatus57
+export const ResourceHeartbeatStatus61$outboundSchema: z.ZodType<
+  ResourceHeartbeatStatus61$Outbound,
+  ResourceHeartbeatStatus61
 > = z.object({
-  collectionIssues: z.array(z.lazy(() => CollectionIssue57$outboundSchema)),
-  health: Health57$outboundSchema,
-  lifecycle: StatusLifecycle57$outboundSchema,
+  collectionIssues: z.array(z.lazy(() => DataCollectionIssue61$outboundSchema)),
+  health: DataHealth61$outboundSchema,
+  lifecycle: StatusLifecycle61$outboundSchema,
   message: z.nullable(z.string()).optional(),
   partial: z.boolean(),
   stale: z.boolean(),
 });
 
-export function heartbeatStatus57ToJSON(
-  heartbeatStatus57: HeartbeatStatus57,
+export function resourceHeartbeatStatus61ToJSON(
+  resourceHeartbeatStatus61: ResourceHeartbeatStatus61,
 ): string {
   return JSON.stringify(
-    HeartbeatStatus57$outboundSchema.parse(heartbeatStatus57),
+    ResourceHeartbeatStatus61$outboundSchema.parse(resourceHeartbeatStatus61),
   );
 }
 
@@ -21580,7 +21916,7 @@ export type SyncReconcileRequestData3$Outbound = {
   secondaryEndpoints: SecondaryEndpoints$Outbound;
   skuName?: string | null | undefined;
   skuTier?: string | null | undefined;
-  status: HeartbeatStatus57$Outbound;
+  status: ResourceHeartbeatStatus61$Outbound;
   supportsHttpsTrafficOnly?: boolean | null | undefined;
 };
 
@@ -21610,7 +21946,7 @@ export const SyncReconcileRequestData3$outboundSchema: z.ZodType<
   secondaryEndpoints: z.lazy(() => SecondaryEndpoints$outboundSchema),
   skuName: z.nullable(z.string()).optional(),
   skuTier: z.nullable(z.string()).optional(),
-  status: z.lazy(() => HeartbeatStatus57$outboundSchema),
+  status: z.lazy(() => ResourceHeartbeatStatus61$outboundSchema),
   supportsHttpsTrafficOnly: z.nullable(z.boolean()).optional(),
 });
 
@@ -21646,17 +21982,16 @@ export function dataAzureStorageAccountToJSON(
 }
 
 /** @internal */
-export const Reason56$outboundSchema: z.ZodEnum<typeof Reason56> = z.enum(
-  Reason56,
-);
+export const DataReason60$outboundSchema: z.ZodEnum<typeof DataReason60> = z
+  .enum(DataReason60);
 
 /** @internal */
-export const CollectionIssueSeverity56$outboundSchema: z.ZodEnum<
-  typeof CollectionIssueSeverity56
-> = z.enum(CollectionIssueSeverity56);
+export const StatusSeverity60$outboundSchema: z.ZodEnum<
+  typeof StatusSeverity60
+> = z.enum(StatusSeverity60);
 
 /** @internal */
-export type CollectionIssue56$Outbound = {
+export type DataCollectionIssue60$Outbound = {
   message: string;
   reason: string;
   severity: string;
@@ -21664,37 +21999,36 @@ export type CollectionIssue56$Outbound = {
 };
 
 /** @internal */
-export const CollectionIssue56$outboundSchema: z.ZodType<
-  CollectionIssue56$Outbound,
-  CollectionIssue56
+export const DataCollectionIssue60$outboundSchema: z.ZodType<
+  DataCollectionIssue60$Outbound,
+  DataCollectionIssue60
 > = z.object({
   message: z.string(),
-  reason: Reason56$outboundSchema,
-  severity: CollectionIssueSeverity56$outboundSchema,
+  reason: DataReason60$outboundSchema,
+  severity: StatusSeverity60$outboundSchema,
   source: z.string(),
 });
 
-export function collectionIssue56ToJSON(
-  collectionIssue56: CollectionIssue56,
+export function dataCollectionIssue60ToJSON(
+  dataCollectionIssue60: DataCollectionIssue60,
 ): string {
   return JSON.stringify(
-    CollectionIssue56$outboundSchema.parse(collectionIssue56),
+    DataCollectionIssue60$outboundSchema.parse(dataCollectionIssue60),
   );
 }
 
 /** @internal */
-export const Health56$outboundSchema: z.ZodEnum<typeof Health56> = z.enum(
-  Health56,
-);
+export const DataHealth60$outboundSchema: z.ZodEnum<typeof DataHealth60> = z
+  .enum(DataHealth60);
 
 /** @internal */
-export const StatusLifecycle56$outboundSchema: z.ZodEnum<
-  typeof StatusLifecycle56
-> = z.enum(StatusLifecycle56);
+export const StatusLifecycle60$outboundSchema: z.ZodEnum<
+  typeof StatusLifecycle60
+> = z.enum(StatusLifecycle60);
 
 /** @internal */
-export type HeartbeatStatus56$Outbound = {
-  collectionIssues: Array<CollectionIssue56$Outbound>;
+export type ResourceHeartbeatStatus60$Outbound = {
+  collectionIssues: Array<DataCollectionIssue60$Outbound>;
   health: string;
   lifecycle: string;
   message?: string | null | undefined;
@@ -21703,23 +22037,23 @@ export type HeartbeatStatus56$Outbound = {
 };
 
 /** @internal */
-export const HeartbeatStatus56$outboundSchema: z.ZodType<
-  HeartbeatStatus56$Outbound,
-  HeartbeatStatus56
+export const ResourceHeartbeatStatus60$outboundSchema: z.ZodType<
+  ResourceHeartbeatStatus60$Outbound,
+  ResourceHeartbeatStatus60
 > = z.object({
-  collectionIssues: z.array(z.lazy(() => CollectionIssue56$outboundSchema)),
-  health: Health56$outboundSchema,
-  lifecycle: StatusLifecycle56$outboundSchema,
+  collectionIssues: z.array(z.lazy(() => DataCollectionIssue60$outboundSchema)),
+  health: DataHealth60$outboundSchema,
+  lifecycle: StatusLifecycle60$outboundSchema,
   message: z.nullable(z.string()).optional(),
   partial: z.boolean(),
   stale: z.boolean(),
 });
 
-export function heartbeatStatus56ToJSON(
-  heartbeatStatus56: HeartbeatStatus56,
+export function resourceHeartbeatStatus60ToJSON(
+  resourceHeartbeatStatus60: ResourceHeartbeatStatus60,
 ): string {
   return JSON.stringify(
-    HeartbeatStatus56$outboundSchema.parse(heartbeatStatus56),
+    ResourceHeartbeatStatus60$outboundSchema.parse(resourceHeartbeatStatus60),
   );
 }
 
@@ -21730,7 +22064,7 @@ export type SyncReconcileRequestData2$Outbound = {
   name: string;
   provisioningState?: string | null | undefined;
   resourceId?: string | null | undefined;
-  status: HeartbeatStatus56$Outbound;
+  status: ResourceHeartbeatStatus60$Outbound;
 };
 
 /** @internal */
@@ -21743,7 +22077,7 @@ export const SyncReconcileRequestData2$outboundSchema: z.ZodType<
   name: z.string(),
   provisioningState: z.nullable(z.string()).optional(),
   resourceId: z.nullable(z.string()).optional(),
-  status: z.lazy(() => HeartbeatStatus56$outboundSchema),
+  status: z.lazy(() => ResourceHeartbeatStatus60$outboundSchema),
 });
 
 export function syncReconcileRequestData2ToJSON(
@@ -21778,17 +22112,16 @@ export function dataAzureResourceGroupToJSON(
 }
 
 /** @internal */
-export const Reason55$outboundSchema: z.ZodEnum<typeof Reason55> = z.enum(
-  Reason55,
-);
+export const DataReason59$outboundSchema: z.ZodEnum<typeof DataReason59> = z
+  .enum(DataReason59);
 
 /** @internal */
-export const CollectionIssueSeverity55$outboundSchema: z.ZodEnum<
-  typeof CollectionIssueSeverity55
-> = z.enum(CollectionIssueSeverity55);
+export const StatusSeverity59$outboundSchema: z.ZodEnum<
+  typeof StatusSeverity59
+> = z.enum(StatusSeverity59);
 
 /** @internal */
-export type CollectionIssue55$Outbound = {
+export type DataCollectionIssue59$Outbound = {
   message: string;
   reason: string;
   severity: string;
@@ -21796,37 +22129,36 @@ export type CollectionIssue55$Outbound = {
 };
 
 /** @internal */
-export const CollectionIssue55$outboundSchema: z.ZodType<
-  CollectionIssue55$Outbound,
-  CollectionIssue55
+export const DataCollectionIssue59$outboundSchema: z.ZodType<
+  DataCollectionIssue59$Outbound,
+  DataCollectionIssue59
 > = z.object({
   message: z.string(),
-  reason: Reason55$outboundSchema,
-  severity: CollectionIssueSeverity55$outboundSchema,
+  reason: DataReason59$outboundSchema,
+  severity: StatusSeverity59$outboundSchema,
   source: z.string(),
 });
 
-export function collectionIssue55ToJSON(
-  collectionIssue55: CollectionIssue55,
+export function dataCollectionIssue59ToJSON(
+  dataCollectionIssue59: DataCollectionIssue59,
 ): string {
   return JSON.stringify(
-    CollectionIssue55$outboundSchema.parse(collectionIssue55),
+    DataCollectionIssue59$outboundSchema.parse(dataCollectionIssue59),
   );
 }
 
 /** @internal */
-export const Health55$outboundSchema: z.ZodEnum<typeof Health55> = z.enum(
-  Health55,
-);
+export const DataHealth59$outboundSchema: z.ZodEnum<typeof DataHealth59> = z
+  .enum(DataHealth59);
 
 /** @internal */
-export const StatusLifecycle55$outboundSchema: z.ZodEnum<
-  typeof StatusLifecycle55
-> = z.enum(StatusLifecycle55);
+export const StatusLifecycle59$outboundSchema: z.ZodEnum<
+  typeof StatusLifecycle59
+> = z.enum(StatusLifecycle59);
 
 /** @internal */
-export type HeartbeatStatus55$Outbound = {
-  collectionIssues: Array<CollectionIssue55$Outbound>;
+export type ResourceHeartbeatStatus59$Outbound = {
+  collectionIssues: Array<DataCollectionIssue59$Outbound>;
   health: string;
   lifecycle: string;
   message?: string | null | undefined;
@@ -21835,23 +22167,23 @@ export type HeartbeatStatus55$Outbound = {
 };
 
 /** @internal */
-export const HeartbeatStatus55$outboundSchema: z.ZodType<
-  HeartbeatStatus55$Outbound,
-  HeartbeatStatus55
+export const ResourceHeartbeatStatus59$outboundSchema: z.ZodType<
+  ResourceHeartbeatStatus59$Outbound,
+  ResourceHeartbeatStatus59
 > = z.object({
-  collectionIssues: z.array(z.lazy(() => CollectionIssue55$outboundSchema)),
-  health: Health55$outboundSchema,
-  lifecycle: StatusLifecycle55$outboundSchema,
+  collectionIssues: z.array(z.lazy(() => DataCollectionIssue59$outboundSchema)),
+  health: DataHealth59$outboundSchema,
+  lifecycle: StatusLifecycle59$outboundSchema,
   message: z.nullable(z.string()).optional(),
   partial: z.boolean(),
   stale: z.boolean(),
 });
 
-export function heartbeatStatus55ToJSON(
-  heartbeatStatus55: HeartbeatStatus55,
+export function resourceHeartbeatStatus59ToJSON(
+  resourceHeartbeatStatus59: ResourceHeartbeatStatus59,
 ): string {
   return JSON.stringify(
-    HeartbeatStatus55$outboundSchema.parse(heartbeatStatus55),
+    ResourceHeartbeatStatus59$outboundSchema.parse(resourceHeartbeatStatus59),
   );
 }
 
@@ -21863,7 +22195,7 @@ export type DataAzureResourceProvider$Outbound = {
   registrationPolicy?: string | null | undefined;
   registrationState?: string | null | undefined;
   resourceTypeCount: number;
-  status: HeartbeatStatus55$Outbound;
+  status: ResourceHeartbeatStatus59$Outbound;
   backend: "azureResourceProvider";
 };
 
@@ -21878,7 +22210,7 @@ export const DataAzureResourceProvider$outboundSchema: z.ZodType<
   registrationPolicy: z.nullable(z.string()).optional(),
   registrationState: z.nullable(z.string()).optional(),
   resourceTypeCount: z.int(),
-  status: z.lazy(() => HeartbeatStatus55$outboundSchema),
+  status: z.lazy(() => ResourceHeartbeatStatus59$outboundSchema),
   backend: z.literal("azureResourceProvider"),
 });
 
@@ -21891,17 +22223,16 @@ export function dataAzureResourceProviderToJSON(
 }
 
 /** @internal */
-export const Reason54$outboundSchema: z.ZodEnum<typeof Reason54> = z.enum(
-  Reason54,
-);
+export const DataReason58$outboundSchema: z.ZodEnum<typeof DataReason58> = z
+  .enum(DataReason58);
 
 /** @internal */
-export const CollectionIssueSeverity54$outboundSchema: z.ZodEnum<
-  typeof CollectionIssueSeverity54
-> = z.enum(CollectionIssueSeverity54);
+export const StatusSeverity58$outboundSchema: z.ZodEnum<
+  typeof StatusSeverity58
+> = z.enum(StatusSeverity58);
 
 /** @internal */
-export type CollectionIssue54$Outbound = {
+export type DataCollectionIssue58$Outbound = {
   message: string;
   reason: string;
   severity: string;
@@ -21909,37 +22240,36 @@ export type CollectionIssue54$Outbound = {
 };
 
 /** @internal */
-export const CollectionIssue54$outboundSchema: z.ZodType<
-  CollectionIssue54$Outbound,
-  CollectionIssue54
+export const DataCollectionIssue58$outboundSchema: z.ZodType<
+  DataCollectionIssue58$Outbound,
+  DataCollectionIssue58
 > = z.object({
   message: z.string(),
-  reason: Reason54$outboundSchema,
-  severity: CollectionIssueSeverity54$outboundSchema,
+  reason: DataReason58$outboundSchema,
+  severity: StatusSeverity58$outboundSchema,
   source: z.string(),
 });
 
-export function collectionIssue54ToJSON(
-  collectionIssue54: CollectionIssue54,
+export function dataCollectionIssue58ToJSON(
+  dataCollectionIssue58: DataCollectionIssue58,
 ): string {
   return JSON.stringify(
-    CollectionIssue54$outboundSchema.parse(collectionIssue54),
+    DataCollectionIssue58$outboundSchema.parse(dataCollectionIssue58),
   );
 }
 
 /** @internal */
-export const Health54$outboundSchema: z.ZodEnum<typeof Health54> = z.enum(
-  Health54,
-);
+export const DataHealth58$outboundSchema: z.ZodEnum<typeof DataHealth58> = z
+  .enum(DataHealth58);
 
 /** @internal */
-export const StatusLifecycle54$outboundSchema: z.ZodEnum<
-  typeof StatusLifecycle54
-> = z.enum(StatusLifecycle54);
+export const StatusLifecycle58$outboundSchema: z.ZodEnum<
+  typeof StatusLifecycle58
+> = z.enum(StatusLifecycle58);
 
 /** @internal */
-export type HeartbeatStatus54$Outbound = {
-  collectionIssues: Array<CollectionIssue54$Outbound>;
+export type ResourceHeartbeatStatus58$Outbound = {
+  collectionIssues: Array<DataCollectionIssue58$Outbound>;
   health: string;
   lifecycle: string;
   message?: string | null | undefined;
@@ -21948,23 +22278,23 @@ export type HeartbeatStatus54$Outbound = {
 };
 
 /** @internal */
-export const HeartbeatStatus54$outboundSchema: z.ZodType<
-  HeartbeatStatus54$Outbound,
-  HeartbeatStatus54
+export const ResourceHeartbeatStatus58$outboundSchema: z.ZodType<
+  ResourceHeartbeatStatus58$Outbound,
+  ResourceHeartbeatStatus58
 > = z.object({
-  collectionIssues: z.array(z.lazy(() => CollectionIssue54$outboundSchema)),
-  health: Health54$outboundSchema,
-  lifecycle: StatusLifecycle54$outboundSchema,
+  collectionIssues: z.array(z.lazy(() => DataCollectionIssue58$outboundSchema)),
+  health: DataHealth58$outboundSchema,
+  lifecycle: StatusLifecycle58$outboundSchema,
   message: z.nullable(z.string()).optional(),
   partial: z.boolean(),
   stale: z.boolean(),
 });
 
-export function heartbeatStatus54ToJSON(
-  heartbeatStatus54: HeartbeatStatus54,
+export function resourceHeartbeatStatus58ToJSON(
+  resourceHeartbeatStatus58: ResourceHeartbeatStatus58,
 ): string {
   return JSON.stringify(
-    HeartbeatStatus54$outboundSchema.parse(heartbeatStatus54),
+    ResourceHeartbeatStatus58$outboundSchema.parse(resourceHeartbeatStatus58),
   );
 }
 
@@ -21976,7 +22306,7 @@ export type DataGcpServiceUsage$Outbound = {
   serviceName: string;
   serviceResourceName?: string | null | undefined;
   state?: string | null | undefined;
-  status: HeartbeatStatus54$Outbound;
+  status: ResourceHeartbeatStatus58$Outbound;
   title?: string | null | undefined;
   backend: "gcpServiceUsage";
 };
@@ -21992,7 +22322,7 @@ export const DataGcpServiceUsage$outboundSchema: z.ZodType<
   serviceName: z.string(),
   serviceResourceName: z.nullable(z.string()).optional(),
   state: z.nullable(z.string()).optional(),
-  status: z.lazy(() => HeartbeatStatus54$outboundSchema),
+  status: z.lazy(() => ResourceHeartbeatStatus58$outboundSchema),
   title: z.nullable(z.string()).optional(),
   backend: z.literal("gcpServiceUsage"),
 });
@@ -22006,25 +22336,25 @@ export function dataGcpServiceUsageToJSON(
 }
 
 /** @internal */
-export type SyncReconcileRequestDataUnion14$Outbound =
+export type SyncReconcileRequestDataUnion15$Outbound =
   | DataGcpServiceUsage$Outbound
   | DataAzureResourceProvider$Outbound;
 
 /** @internal */
-export const SyncReconcileRequestDataUnion14$outboundSchema: z.ZodType<
-  SyncReconcileRequestDataUnion14$Outbound,
-  SyncReconcileRequestDataUnion14
+export const SyncReconcileRequestDataUnion15$outboundSchema: z.ZodType<
+  SyncReconcileRequestDataUnion15$Outbound,
+  SyncReconcileRequestDataUnion15
 > = z.union([
   z.lazy(() => DataGcpServiceUsage$outboundSchema),
   z.lazy(() => DataAzureResourceProvider$outboundSchema),
 ]);
 
-export function syncReconcileRequestDataUnion14ToJSON(
-  syncReconcileRequestDataUnion14: SyncReconcileRequestDataUnion14,
+export function syncReconcileRequestDataUnion15ToJSON(
+  syncReconcileRequestDataUnion15: SyncReconcileRequestDataUnion15,
 ): string {
   return JSON.stringify(
-    SyncReconcileRequestDataUnion14$outboundSchema.parse(
-      syncReconcileRequestDataUnion14,
+    SyncReconcileRequestDataUnion15$outboundSchema.parse(
+      syncReconcileRequestDataUnion15,
     ),
   );
 }
@@ -22195,17 +22525,16 @@ export function syncReconcileRequestEvent12ToJSON(
 }
 
 /** @internal */
-export const Reason53$outboundSchema: z.ZodEnum<typeof Reason53> = z.enum(
-  Reason53,
-);
+export const DataReason57$outboundSchema: z.ZodEnum<typeof DataReason57> = z
+  .enum(DataReason57);
 
 /** @internal */
-export const CollectionIssueSeverity53$outboundSchema: z.ZodEnum<
-  typeof CollectionIssueSeverity53
-> = z.enum(CollectionIssueSeverity53);
+export const StatusSeverity57$outboundSchema: z.ZodEnum<
+  typeof StatusSeverity57
+> = z.enum(StatusSeverity57);
 
 /** @internal */
-export type CollectionIssue53$Outbound = {
+export type DataCollectionIssue57$Outbound = {
   message: string;
   reason: string;
   severity: string;
@@ -22213,37 +22542,36 @@ export type CollectionIssue53$Outbound = {
 };
 
 /** @internal */
-export const CollectionIssue53$outboundSchema: z.ZodType<
-  CollectionIssue53$Outbound,
-  CollectionIssue53
+export const DataCollectionIssue57$outboundSchema: z.ZodType<
+  DataCollectionIssue57$Outbound,
+  DataCollectionIssue57
 > = z.object({
   message: z.string(),
-  reason: Reason53$outboundSchema,
-  severity: CollectionIssueSeverity53$outboundSchema,
+  reason: DataReason57$outboundSchema,
+  severity: StatusSeverity57$outboundSchema,
   source: z.string(),
 });
 
-export function collectionIssue53ToJSON(
-  collectionIssue53: CollectionIssue53,
+export function dataCollectionIssue57ToJSON(
+  dataCollectionIssue57: DataCollectionIssue57,
 ): string {
   return JSON.stringify(
-    CollectionIssue53$outboundSchema.parse(collectionIssue53),
+    DataCollectionIssue57$outboundSchema.parse(dataCollectionIssue57),
   );
 }
 
 /** @internal */
-export const Health53$outboundSchema: z.ZodEnum<typeof Health53> = z.enum(
-  Health53,
-);
+export const DataHealth57$outboundSchema: z.ZodEnum<typeof DataHealth57> = z
+  .enum(DataHealth57);
 
 /** @internal */
-export const StatusLifecycle53$outboundSchema: z.ZodEnum<
-  typeof StatusLifecycle53
-> = z.enum(StatusLifecycle53);
+export const StatusLifecycle57$outboundSchema: z.ZodEnum<
+  typeof StatusLifecycle57
+> = z.enum(StatusLifecycle57);
 
 /** @internal */
-export type HeartbeatStatus53$Outbound = {
-  collectionIssues: Array<CollectionIssue53$Outbound>;
+export type ResourceHeartbeatStatus57$Outbound = {
+  collectionIssues: Array<DataCollectionIssue57$Outbound>;
   health: string;
   lifecycle: string;
   message?: string | null | undefined;
@@ -22252,23 +22580,23 @@ export type HeartbeatStatus53$Outbound = {
 };
 
 /** @internal */
-export const HeartbeatStatus53$outboundSchema: z.ZodType<
-  HeartbeatStatus53$Outbound,
-  HeartbeatStatus53
+export const ResourceHeartbeatStatus57$outboundSchema: z.ZodType<
+  ResourceHeartbeatStatus57$Outbound,
+  ResourceHeartbeatStatus57
 > = z.object({
-  collectionIssues: z.array(z.lazy(() => CollectionIssue53$outboundSchema)),
-  health: Health53$outboundSchema,
-  lifecycle: StatusLifecycle53$outboundSchema,
+  collectionIssues: z.array(z.lazy(() => DataCollectionIssue57$outboundSchema)),
+  health: DataHealth57$outboundSchema,
+  lifecycle: StatusLifecycle57$outboundSchema,
   message: z.nullable(z.string()).optional(),
   partial: z.boolean(),
   stale: z.boolean(),
 });
 
-export function heartbeatStatus53ToJSON(
-  heartbeatStatus53: HeartbeatStatus53,
+export function resourceHeartbeatStatus57ToJSON(
+  resourceHeartbeatStatus57: ResourceHeartbeatStatus57,
 ): string {
   return JSON.stringify(
-    HeartbeatStatus53$outboundSchema.parse(heartbeatStatus53),
+    ResourceHeartbeatStatus57$outboundSchema.parse(resourceHeartbeatStatus57),
   );
 }
 
@@ -22283,7 +22611,7 @@ export type DataKubernetesJob$Outbound = {
   jobName: string;
   namespace: string;
   startTime?: string | null | undefined;
-  status: HeartbeatStatus53$Outbound;
+  status: ResourceHeartbeatStatus57$Outbound;
   succeeded?: number | null | undefined;
   backend: "kubernetesJob";
 };
@@ -22303,7 +22631,7 @@ export const DataKubernetesJob$outboundSchema: z.ZodType<
   jobName: z.string(),
   namespace: z.string(),
   startTime: z.nullable(z.date().transform(v => v.toISOString())).optional(),
-  status: z.lazy(() => HeartbeatStatus53$outboundSchema),
+  status: z.lazy(() => ResourceHeartbeatStatus57$outboundSchema),
   succeeded: z.nullable(z.int()).optional(),
   backend: z.literal("kubernetesJob"),
 });
@@ -22317,17 +22645,16 @@ export function dataKubernetesJobToJSON(
 }
 
 /** @internal */
-export const Reason52$outboundSchema: z.ZodEnum<typeof Reason52> = z.enum(
-  Reason52,
-);
+export const DataReason56$outboundSchema: z.ZodEnum<typeof DataReason56> = z
+  .enum(DataReason56);
 
 /** @internal */
-export const CollectionIssueSeverity52$outboundSchema: z.ZodEnum<
-  typeof CollectionIssueSeverity52
-> = z.enum(CollectionIssueSeverity52);
+export const StatusSeverity56$outboundSchema: z.ZodEnum<
+  typeof StatusSeverity56
+> = z.enum(StatusSeverity56);
 
 /** @internal */
-export type CollectionIssue52$Outbound = {
+export type DataCollectionIssue56$Outbound = {
   message: string;
   reason: string;
   severity: string;
@@ -22335,37 +22662,36 @@ export type CollectionIssue52$Outbound = {
 };
 
 /** @internal */
-export const CollectionIssue52$outboundSchema: z.ZodType<
-  CollectionIssue52$Outbound,
-  CollectionIssue52
+export const DataCollectionIssue56$outboundSchema: z.ZodType<
+  DataCollectionIssue56$Outbound,
+  DataCollectionIssue56
 > = z.object({
   message: z.string(),
-  reason: Reason52$outboundSchema,
-  severity: CollectionIssueSeverity52$outboundSchema,
+  reason: DataReason56$outboundSchema,
+  severity: StatusSeverity56$outboundSchema,
   source: z.string(),
 });
 
-export function collectionIssue52ToJSON(
-  collectionIssue52: CollectionIssue52,
+export function dataCollectionIssue56ToJSON(
+  dataCollectionIssue56: DataCollectionIssue56,
 ): string {
   return JSON.stringify(
-    CollectionIssue52$outboundSchema.parse(collectionIssue52),
+    DataCollectionIssue56$outboundSchema.parse(dataCollectionIssue56),
   );
 }
 
 /** @internal */
-export const Health52$outboundSchema: z.ZodEnum<typeof Health52> = z.enum(
-  Health52,
-);
+export const DataHealth56$outboundSchema: z.ZodEnum<typeof DataHealth56> = z
+  .enum(DataHealth56);
 
 /** @internal */
-export const StatusLifecycle52$outboundSchema: z.ZodEnum<
-  typeof StatusLifecycle52
-> = z.enum(StatusLifecycle52);
+export const StatusLifecycle56$outboundSchema: z.ZodEnum<
+  typeof StatusLifecycle56
+> = z.enum(StatusLifecycle56);
 
 /** @internal */
-export type HeartbeatStatus52$Outbound = {
-  collectionIssues: Array<CollectionIssue52$Outbound>;
+export type ResourceHeartbeatStatus56$Outbound = {
+  collectionIssues: Array<DataCollectionIssue56$Outbound>;
   health: string;
   lifecycle: string;
   message?: string | null | undefined;
@@ -22374,23 +22700,23 @@ export type HeartbeatStatus52$Outbound = {
 };
 
 /** @internal */
-export const HeartbeatStatus52$outboundSchema: z.ZodType<
-  HeartbeatStatus52$Outbound,
-  HeartbeatStatus52
+export const ResourceHeartbeatStatus56$outboundSchema: z.ZodType<
+  ResourceHeartbeatStatus56$Outbound,
+  ResourceHeartbeatStatus56
 > = z.object({
-  collectionIssues: z.array(z.lazy(() => CollectionIssue52$outboundSchema)),
-  health: Health52$outboundSchema,
-  lifecycle: StatusLifecycle52$outboundSchema,
+  collectionIssues: z.array(z.lazy(() => DataCollectionIssue56$outboundSchema)),
+  health: DataHealth56$outboundSchema,
+  lifecycle: StatusLifecycle56$outboundSchema,
   message: z.nullable(z.string()).optional(),
   partial: z.boolean(),
   stale: z.boolean(),
 });
 
-export function heartbeatStatus52ToJSON(
-  heartbeatStatus52: HeartbeatStatus52,
+export function resourceHeartbeatStatus56ToJSON(
+  resourceHeartbeatStatus56: ResourceHeartbeatStatus56,
 ): string {
   return JSON.stringify(
-    HeartbeatStatus52$outboundSchema.parse(heartbeatStatus52),
+    ResourceHeartbeatStatus56$outboundSchema.parse(resourceHeartbeatStatus56),
   );
 }
 
@@ -22401,7 +22727,7 @@ export type DataAzureContainerApps2$Outbound = {
   managedIdentityId?: string | null | undefined;
   resourceGroupName: string;
   resourcePrefix?: string | null | undefined;
-  status: HeartbeatStatus52$Outbound;
+  status: ResourceHeartbeatStatus56$Outbound;
   backend: "azureContainerApps";
 };
 
@@ -22415,7 +22741,7 @@ export const DataAzureContainerApps2$outboundSchema: z.ZodType<
   managedIdentityId: z.nullable(z.string()).optional(),
   resourceGroupName: z.string(),
   resourcePrefix: z.nullable(z.string()).optional(),
-  status: z.lazy(() => HeartbeatStatus52$outboundSchema),
+  status: z.lazy(() => ResourceHeartbeatStatus56$outboundSchema),
   backend: z.literal("azureContainerApps"),
 });
 
@@ -22428,17 +22754,16 @@ export function dataAzureContainerApps2ToJSON(
 }
 
 /** @internal */
-export const Reason51$outboundSchema: z.ZodEnum<typeof Reason51> = z.enum(
-  Reason51,
-);
+export const DataReason55$outboundSchema: z.ZodEnum<typeof DataReason55> = z
+  .enum(DataReason55);
 
 /** @internal */
-export const CollectionIssueSeverity51$outboundSchema: z.ZodEnum<
-  typeof CollectionIssueSeverity51
-> = z.enum(CollectionIssueSeverity51);
+export const StatusSeverity55$outboundSchema: z.ZodEnum<
+  typeof StatusSeverity55
+> = z.enum(StatusSeverity55);
 
 /** @internal */
-export type CollectionIssue51$Outbound = {
+export type DataCollectionIssue55$Outbound = {
   message: string;
   reason: string;
   severity: string;
@@ -22446,37 +22771,36 @@ export type CollectionIssue51$Outbound = {
 };
 
 /** @internal */
-export const CollectionIssue51$outboundSchema: z.ZodType<
-  CollectionIssue51$Outbound,
-  CollectionIssue51
+export const DataCollectionIssue55$outboundSchema: z.ZodType<
+  DataCollectionIssue55$Outbound,
+  DataCollectionIssue55
 > = z.object({
   message: z.string(),
-  reason: Reason51$outboundSchema,
-  severity: CollectionIssueSeverity51$outboundSchema,
+  reason: DataReason55$outboundSchema,
+  severity: StatusSeverity55$outboundSchema,
   source: z.string(),
 });
 
-export function collectionIssue51ToJSON(
-  collectionIssue51: CollectionIssue51,
+export function dataCollectionIssue55ToJSON(
+  dataCollectionIssue55: DataCollectionIssue55,
 ): string {
   return JSON.stringify(
-    CollectionIssue51$outboundSchema.parse(collectionIssue51),
+    DataCollectionIssue55$outboundSchema.parse(dataCollectionIssue55),
   );
 }
 
 /** @internal */
-export const Health51$outboundSchema: z.ZodEnum<typeof Health51> = z.enum(
-  Health51,
-);
+export const DataHealth55$outboundSchema: z.ZodEnum<typeof DataHealth55> = z
+  .enum(DataHealth55);
 
 /** @internal */
-export const StatusLifecycle51$outboundSchema: z.ZodEnum<
-  typeof StatusLifecycle51
-> = z.enum(StatusLifecycle51);
+export const StatusLifecycle55$outboundSchema: z.ZodEnum<
+  typeof StatusLifecycle55
+> = z.enum(StatusLifecycle55);
 
 /** @internal */
-export type HeartbeatStatus51$Outbound = {
-  collectionIssues: Array<CollectionIssue51$Outbound>;
+export type ResourceHeartbeatStatus55$Outbound = {
+  collectionIssues: Array<DataCollectionIssue55$Outbound>;
   health: string;
   lifecycle: string;
   message?: string | null | undefined;
@@ -22485,23 +22809,23 @@ export type HeartbeatStatus51$Outbound = {
 };
 
 /** @internal */
-export const HeartbeatStatus51$outboundSchema: z.ZodType<
-  HeartbeatStatus51$Outbound,
-  HeartbeatStatus51
+export const ResourceHeartbeatStatus55$outboundSchema: z.ZodType<
+  ResourceHeartbeatStatus55$Outbound,
+  ResourceHeartbeatStatus55
 > = z.object({
-  collectionIssues: z.array(z.lazy(() => CollectionIssue51$outboundSchema)),
-  health: Health51$outboundSchema,
-  lifecycle: StatusLifecycle51$outboundSchema,
+  collectionIssues: z.array(z.lazy(() => DataCollectionIssue55$outboundSchema)),
+  health: DataHealth55$outboundSchema,
+  lifecycle: StatusLifecycle55$outboundSchema,
   message: z.nullable(z.string()).optional(),
   partial: z.boolean(),
   stale: z.boolean(),
 });
 
-export function heartbeatStatus51ToJSON(
-  heartbeatStatus51: HeartbeatStatus51,
+export function resourceHeartbeatStatus55ToJSON(
+  resourceHeartbeatStatus55: ResourceHeartbeatStatus55,
 ): string {
   return JSON.stringify(
-    HeartbeatStatus51$outboundSchema.parse(heartbeatStatus51),
+    ResourceHeartbeatStatus55$outboundSchema.parse(resourceHeartbeatStatus55),
   );
 }
 
@@ -22512,7 +22836,7 @@ export type DataGcpCloudBuild$Outbound = {
   location: string;
   projectId: string;
   serviceAccount?: string | null | undefined;
-  status: HeartbeatStatus51$Outbound;
+  status: ResourceHeartbeatStatus55$Outbound;
   backend: "gcpCloudBuild";
 };
 
@@ -22526,7 +22850,7 @@ export const DataGcpCloudBuild$outboundSchema: z.ZodType<
   location: z.string(),
   projectId: z.string(),
   serviceAccount: z.nullable(z.string()).optional(),
-  status: z.lazy(() => HeartbeatStatus51$outboundSchema),
+  status: z.lazy(() => ResourceHeartbeatStatus55$outboundSchema),
   backend: z.literal("gcpCloudBuild"),
 });
 
@@ -22539,17 +22863,16 @@ export function dataGcpCloudBuildToJSON(
 }
 
 /** @internal */
-export const Reason50$outboundSchema: z.ZodEnum<typeof Reason50> = z.enum(
-  Reason50,
-);
+export const DataReason54$outboundSchema: z.ZodEnum<typeof DataReason54> = z
+  .enum(DataReason54);
 
 /** @internal */
-export const CollectionIssueSeverity50$outboundSchema: z.ZodEnum<
-  typeof CollectionIssueSeverity50
-> = z.enum(CollectionIssueSeverity50);
+export const StatusSeverity54$outboundSchema: z.ZodEnum<
+  typeof StatusSeverity54
+> = z.enum(StatusSeverity54);
 
 /** @internal */
-export type CollectionIssue50$Outbound = {
+export type DataCollectionIssue54$Outbound = {
   message: string;
   reason: string;
   severity: string;
@@ -22557,37 +22880,36 @@ export type CollectionIssue50$Outbound = {
 };
 
 /** @internal */
-export const CollectionIssue50$outboundSchema: z.ZodType<
-  CollectionIssue50$Outbound,
-  CollectionIssue50
+export const DataCollectionIssue54$outboundSchema: z.ZodType<
+  DataCollectionIssue54$Outbound,
+  DataCollectionIssue54
 > = z.object({
   message: z.string(),
-  reason: Reason50$outboundSchema,
-  severity: CollectionIssueSeverity50$outboundSchema,
+  reason: DataReason54$outboundSchema,
+  severity: StatusSeverity54$outboundSchema,
   source: z.string(),
 });
 
-export function collectionIssue50ToJSON(
-  collectionIssue50: CollectionIssue50,
+export function dataCollectionIssue54ToJSON(
+  dataCollectionIssue54: DataCollectionIssue54,
 ): string {
   return JSON.stringify(
-    CollectionIssue50$outboundSchema.parse(collectionIssue50),
+    DataCollectionIssue54$outboundSchema.parse(dataCollectionIssue54),
   );
 }
 
 /** @internal */
-export const Health50$outboundSchema: z.ZodEnum<typeof Health50> = z.enum(
-  Health50,
-);
+export const DataHealth54$outboundSchema: z.ZodEnum<typeof DataHealth54> = z
+  .enum(DataHealth54);
 
 /** @internal */
-export const StatusLifecycle50$outboundSchema: z.ZodEnum<
-  typeof StatusLifecycle50
-> = z.enum(StatusLifecycle50);
+export const StatusLifecycle54$outboundSchema: z.ZodEnum<
+  typeof StatusLifecycle54
+> = z.enum(StatusLifecycle54);
 
 /** @internal */
-export type HeartbeatStatus50$Outbound = {
-  collectionIssues: Array<CollectionIssue50$Outbound>;
+export type ResourceHeartbeatStatus54$Outbound = {
+  collectionIssues: Array<DataCollectionIssue54$Outbound>;
   health: string;
   lifecycle: string;
   message?: string | null | undefined;
@@ -22596,23 +22918,23 @@ export type HeartbeatStatus50$Outbound = {
 };
 
 /** @internal */
-export const HeartbeatStatus50$outboundSchema: z.ZodType<
-  HeartbeatStatus50$Outbound,
-  HeartbeatStatus50
+export const ResourceHeartbeatStatus54$outboundSchema: z.ZodType<
+  ResourceHeartbeatStatus54$Outbound,
+  ResourceHeartbeatStatus54
 > = z.object({
-  collectionIssues: z.array(z.lazy(() => CollectionIssue50$outboundSchema)),
-  health: Health50$outboundSchema,
-  lifecycle: StatusLifecycle50$outboundSchema,
+  collectionIssues: z.array(z.lazy(() => DataCollectionIssue54$outboundSchema)),
+  health: DataHealth54$outboundSchema,
+  lifecycle: StatusLifecycle54$outboundSchema,
   message: z.nullable(z.string()).optional(),
   partial: z.boolean(),
   stale: z.boolean(),
 });
 
-export function heartbeatStatus50ToJSON(
-  heartbeatStatus50: HeartbeatStatus50,
+export function resourceHeartbeatStatus54ToJSON(
+  resourceHeartbeatStatus54: ResourceHeartbeatStatus54,
 ): string {
   return JSON.stringify(
-    HeartbeatStatus50$outboundSchema.parse(heartbeatStatus50),
+    ResourceHeartbeatStatus54$outboundSchema.parse(resourceHeartbeatStatus54),
   );
 }
 
@@ -22637,7 +22959,7 @@ export type DataAwsCodeBuild$Outbound = {
   s3LogsStatus?: string | null | undefined;
   serviceRolePresent: boolean;
   sourceType?: string | null | undefined;
-  status: HeartbeatStatus50$Outbound;
+  status: ResourceHeartbeatStatus54$Outbound;
   timeoutInMinutes?: number | null | undefined;
   backend: "awsCodeBuild";
 };
@@ -22666,7 +22988,7 @@ export const DataAwsCodeBuild$outboundSchema: z.ZodType<
   s3LogsStatus: z.nullable(z.string()).optional(),
   serviceRolePresent: z.boolean(),
   sourceType: z.nullable(z.string()).optional(),
-  status: z.lazy(() => HeartbeatStatus50$outboundSchema),
+  status: z.lazy(() => ResourceHeartbeatStatus54$outboundSchema),
   timeoutInMinutes: z.nullable(z.int()).optional(),
   backend: z.literal("awsCodeBuild"),
 });
@@ -22680,16 +23002,16 @@ export function dataAwsCodeBuildToJSON(
 }
 
 /** @internal */
-export type SyncReconcileRequestDataUnion13$Outbound =
+export type SyncReconcileRequestDataUnion14$Outbound =
   | DataAwsCodeBuild$Outbound
   | DataGcpCloudBuild$Outbound
   | DataAzureContainerApps2$Outbound
   | DataKubernetesJob$Outbound;
 
 /** @internal */
-export const SyncReconcileRequestDataUnion13$outboundSchema: z.ZodType<
-  SyncReconcileRequestDataUnion13$Outbound,
-  SyncReconcileRequestDataUnion13
+export const SyncReconcileRequestDataUnion14$outboundSchema: z.ZodType<
+  SyncReconcileRequestDataUnion14$Outbound,
+  SyncReconcileRequestDataUnion14
 > = z.union([
   z.lazy(() => DataAwsCodeBuild$outboundSchema),
   z.lazy(() => DataGcpCloudBuild$outboundSchema),
@@ -22697,12 +23019,12 @@ export const SyncReconcileRequestDataUnion13$outboundSchema: z.ZodType<
   z.lazy(() => DataKubernetesJob$outboundSchema),
 ]);
 
-export function syncReconcileRequestDataUnion13ToJSON(
-  syncReconcileRequestDataUnion13: SyncReconcileRequestDataUnion13,
+export function syncReconcileRequestDataUnion14ToJSON(
+  syncReconcileRequestDataUnion14: SyncReconcileRequestDataUnion14,
 ): string {
   return JSON.stringify(
-    SyncReconcileRequestDataUnion13$outboundSchema.parse(
-      syncReconcileRequestDataUnion13,
+    SyncReconcileRequestDataUnion14$outboundSchema.parse(
+      syncReconcileRequestDataUnion14,
     ),
   );
 }
@@ -22736,17 +23058,16 @@ export function dataBuildToJSON(dataBuild: DataBuild): string {
 }
 
 /** @internal */
-export const Reason49$outboundSchema: z.ZodEnum<typeof Reason49> = z.enum(
-  Reason49,
-);
+export const DataReason53$outboundSchema: z.ZodEnum<typeof DataReason53> = z
+  .enum(DataReason53);
 
 /** @internal */
-export const CollectionIssueSeverity49$outboundSchema: z.ZodEnum<
-  typeof CollectionIssueSeverity49
-> = z.enum(CollectionIssueSeverity49);
+export const StatusSeverity53$outboundSchema: z.ZodEnum<
+  typeof StatusSeverity53
+> = z.enum(StatusSeverity53);
 
 /** @internal */
-export type CollectionIssue49$Outbound = {
+export type DataCollectionIssue53$Outbound = {
   message: string;
   reason: string;
   severity: string;
@@ -22754,37 +23075,36 @@ export type CollectionIssue49$Outbound = {
 };
 
 /** @internal */
-export const CollectionIssue49$outboundSchema: z.ZodType<
-  CollectionIssue49$Outbound,
-  CollectionIssue49
+export const DataCollectionIssue53$outboundSchema: z.ZodType<
+  DataCollectionIssue53$Outbound,
+  DataCollectionIssue53
 > = z.object({
   message: z.string(),
-  reason: Reason49$outboundSchema,
-  severity: CollectionIssueSeverity49$outboundSchema,
+  reason: DataReason53$outboundSchema,
+  severity: StatusSeverity53$outboundSchema,
   source: z.string(),
 });
 
-export function collectionIssue49ToJSON(
-  collectionIssue49: CollectionIssue49,
+export function dataCollectionIssue53ToJSON(
+  dataCollectionIssue53: DataCollectionIssue53,
 ): string {
   return JSON.stringify(
-    CollectionIssue49$outboundSchema.parse(collectionIssue49),
+    DataCollectionIssue53$outboundSchema.parse(dataCollectionIssue53),
   );
 }
 
 /** @internal */
-export const Health49$outboundSchema: z.ZodEnum<typeof Health49> = z.enum(
-  Health49,
-);
+export const DataHealth53$outboundSchema: z.ZodEnum<typeof DataHealth53> = z
+  .enum(DataHealth53);
 
 /** @internal */
-export const StatusLifecycle49$outboundSchema: z.ZodEnum<
-  typeof StatusLifecycle49
-> = z.enum(StatusLifecycle49);
+export const StatusLifecycle53$outboundSchema: z.ZodEnum<
+  typeof StatusLifecycle53
+> = z.enum(StatusLifecycle53);
 
 /** @internal */
-export type HeartbeatStatus49$Outbound = {
-  collectionIssues: Array<CollectionIssue49$Outbound>;
+export type ResourceHeartbeatStatus53$Outbound = {
+  collectionIssues: Array<DataCollectionIssue53$Outbound>;
   health: string;
   lifecycle: string;
   message?: string | null | undefined;
@@ -22793,61 +23113,60 @@ export type HeartbeatStatus49$Outbound = {
 };
 
 /** @internal */
-export const HeartbeatStatus49$outboundSchema: z.ZodType<
-  HeartbeatStatus49$Outbound,
-  HeartbeatStatus49
+export const ResourceHeartbeatStatus53$outboundSchema: z.ZodType<
+  ResourceHeartbeatStatus53$Outbound,
+  ResourceHeartbeatStatus53
 > = z.object({
-  collectionIssues: z.array(z.lazy(() => CollectionIssue49$outboundSchema)),
-  health: Health49$outboundSchema,
-  lifecycle: StatusLifecycle49$outboundSchema,
+  collectionIssues: z.array(z.lazy(() => DataCollectionIssue53$outboundSchema)),
+  health: DataHealth53$outboundSchema,
+  lifecycle: StatusLifecycle53$outboundSchema,
   message: z.nullable(z.string()).optional(),
   partial: z.boolean(),
   stale: z.boolean(),
 });
 
-export function heartbeatStatus49ToJSON(
-  heartbeatStatus49: HeartbeatStatus49,
+export function resourceHeartbeatStatus53ToJSON(
+  resourceHeartbeatStatus53: ResourceHeartbeatStatus53,
 ): string {
   return JSON.stringify(
-    HeartbeatStatus49$outboundSchema.parse(heartbeatStatus49),
+    ResourceHeartbeatStatus53$outboundSchema.parse(resourceHeartbeatStatus53),
   );
 }
 
 /** @internal */
-export type DataLocal10$Outbound = {
+export type DataLocal11$Outbound = {
   reachable: boolean;
   registryUrl: string;
-  status: HeartbeatStatus49$Outbound;
+  status: ResourceHeartbeatStatus53$Outbound;
   backend: "local";
 };
 
 /** @internal */
-export const DataLocal10$outboundSchema: z.ZodType<
-  DataLocal10$Outbound,
-  DataLocal10
+export const DataLocal11$outboundSchema: z.ZodType<
+  DataLocal11$Outbound,
+  DataLocal11
 > = z.object({
   reachable: z.boolean(),
   registryUrl: z.string(),
-  status: z.lazy(() => HeartbeatStatus49$outboundSchema),
+  status: z.lazy(() => ResourceHeartbeatStatus53$outboundSchema),
   backend: z.literal("local"),
 });
 
-export function dataLocal10ToJSON(dataLocal10: DataLocal10): string {
-  return JSON.stringify(DataLocal10$outboundSchema.parse(dataLocal10));
+export function dataLocal11ToJSON(dataLocal11: DataLocal11): string {
+  return JSON.stringify(DataLocal11$outboundSchema.parse(dataLocal11));
 }
 
 /** @internal */
-export const Reason48$outboundSchema: z.ZodEnum<typeof Reason48> = z.enum(
-  Reason48,
-);
+export const DataReason52$outboundSchema: z.ZodEnum<typeof DataReason52> = z
+  .enum(DataReason52);
 
 /** @internal */
-export const CollectionIssueSeverity48$outboundSchema: z.ZodEnum<
-  typeof CollectionIssueSeverity48
-> = z.enum(CollectionIssueSeverity48);
+export const StatusSeverity52$outboundSchema: z.ZodEnum<
+  typeof StatusSeverity52
+> = z.enum(StatusSeverity52);
 
 /** @internal */
-export type CollectionIssue48$Outbound = {
+export type DataCollectionIssue52$Outbound = {
   message: string;
   reason: string;
   severity: string;
@@ -22855,37 +23174,36 @@ export type CollectionIssue48$Outbound = {
 };
 
 /** @internal */
-export const CollectionIssue48$outboundSchema: z.ZodType<
-  CollectionIssue48$Outbound,
-  CollectionIssue48
+export const DataCollectionIssue52$outboundSchema: z.ZodType<
+  DataCollectionIssue52$Outbound,
+  DataCollectionIssue52
 > = z.object({
   message: z.string(),
-  reason: Reason48$outboundSchema,
-  severity: CollectionIssueSeverity48$outboundSchema,
+  reason: DataReason52$outboundSchema,
+  severity: StatusSeverity52$outboundSchema,
   source: z.string(),
 });
 
-export function collectionIssue48ToJSON(
-  collectionIssue48: CollectionIssue48,
+export function dataCollectionIssue52ToJSON(
+  dataCollectionIssue52: DataCollectionIssue52,
 ): string {
   return JSON.stringify(
-    CollectionIssue48$outboundSchema.parse(collectionIssue48),
+    DataCollectionIssue52$outboundSchema.parse(dataCollectionIssue52),
   );
 }
 
 /** @internal */
-export const Health48$outboundSchema: z.ZodEnum<typeof Health48> = z.enum(
-  Health48,
-);
+export const DataHealth52$outboundSchema: z.ZodEnum<typeof DataHealth52> = z
+  .enum(DataHealth52);
 
 /** @internal */
-export const StatusLifecycle48$outboundSchema: z.ZodEnum<
-  typeof StatusLifecycle48
-> = z.enum(StatusLifecycle48);
+export const StatusLifecycle52$outboundSchema: z.ZodEnum<
+  typeof StatusLifecycle52
+> = z.enum(StatusLifecycle52);
 
 /** @internal */
-export type HeartbeatStatus48$Outbound = {
-  collectionIssues: Array<CollectionIssue48$Outbound>;
+export type ResourceHeartbeatStatus52$Outbound = {
+  collectionIssues: Array<DataCollectionIssue52$Outbound>;
   health: string;
   lifecycle: string;
   message?: string | null | undefined;
@@ -22894,23 +23212,23 @@ export type HeartbeatStatus48$Outbound = {
 };
 
 /** @internal */
-export const HeartbeatStatus48$outboundSchema: z.ZodType<
-  HeartbeatStatus48$Outbound,
-  HeartbeatStatus48
+export const ResourceHeartbeatStatus52$outboundSchema: z.ZodType<
+  ResourceHeartbeatStatus52$Outbound,
+  ResourceHeartbeatStatus52
 > = z.object({
-  collectionIssues: z.array(z.lazy(() => CollectionIssue48$outboundSchema)),
-  health: Health48$outboundSchema,
-  lifecycle: StatusLifecycle48$outboundSchema,
+  collectionIssues: z.array(z.lazy(() => DataCollectionIssue52$outboundSchema)),
+  health: DataHealth52$outboundSchema,
+  lifecycle: StatusLifecycle52$outboundSchema,
   message: z.nullable(z.string()).optional(),
   partial: z.boolean(),
   stale: z.boolean(),
 });
 
-export function heartbeatStatus48ToJSON(
-  heartbeatStatus48: HeartbeatStatus48,
+export function resourceHeartbeatStatus52ToJSON(
+  resourceHeartbeatStatus52: ResourceHeartbeatStatus52,
 ): string {
   return JSON.stringify(
-    HeartbeatStatus48$outboundSchema.parse(heartbeatStatus48),
+    ResourceHeartbeatStatus52$outboundSchema.parse(resourceHeartbeatStatus52),
   );
 }
 
@@ -22940,7 +23258,7 @@ export type DataAzureContainerRegistry$Outbound = {
   resourceId?: string | null | undefined;
   skuName: string;
   skuTier?: string | null | undefined;
-  status: HeartbeatStatus48$Outbound;
+  status: ResourceHeartbeatStatus52$Outbound;
   type?: string | null | undefined;
   zoneRedundancy: string;
   backend: "azureContainerRegistry";
@@ -22975,7 +23293,7 @@ export const DataAzureContainerRegistry$outboundSchema: z.ZodType<
   resourceId: z.nullable(z.string()).optional(),
   skuName: z.string(),
   skuTier: z.nullable(z.string()).optional(),
-  status: z.lazy(() => HeartbeatStatus48$outboundSchema),
+  status: z.lazy(() => ResourceHeartbeatStatus52$outboundSchema),
   type: z.nullable(z.string()).optional(),
   zoneRedundancy: z.string(),
   backend: z.literal("azureContainerRegistry"),
@@ -22990,17 +23308,16 @@ export function dataAzureContainerRegistryToJSON(
 }
 
 /** @internal */
-export const Reason47$outboundSchema: z.ZodEnum<typeof Reason47> = z.enum(
-  Reason47,
-);
+export const DataReason51$outboundSchema: z.ZodEnum<typeof DataReason51> = z
+  .enum(DataReason51);
 
 /** @internal */
-export const CollectionIssueSeverity47$outboundSchema: z.ZodEnum<
-  typeof CollectionIssueSeverity47
-> = z.enum(CollectionIssueSeverity47);
+export const StatusSeverity51$outboundSchema: z.ZodEnum<
+  typeof StatusSeverity51
+> = z.enum(StatusSeverity51);
 
 /** @internal */
-export type CollectionIssue47$Outbound = {
+export type DataCollectionIssue51$Outbound = {
   message: string;
   reason: string;
   severity: string;
@@ -23008,37 +23325,36 @@ export type CollectionIssue47$Outbound = {
 };
 
 /** @internal */
-export const CollectionIssue47$outboundSchema: z.ZodType<
-  CollectionIssue47$Outbound,
-  CollectionIssue47
+export const DataCollectionIssue51$outboundSchema: z.ZodType<
+  DataCollectionIssue51$Outbound,
+  DataCollectionIssue51
 > = z.object({
   message: z.string(),
-  reason: Reason47$outboundSchema,
-  severity: CollectionIssueSeverity47$outboundSchema,
+  reason: DataReason51$outboundSchema,
+  severity: StatusSeverity51$outboundSchema,
   source: z.string(),
 });
 
-export function collectionIssue47ToJSON(
-  collectionIssue47: CollectionIssue47,
+export function dataCollectionIssue51ToJSON(
+  dataCollectionIssue51: DataCollectionIssue51,
 ): string {
   return JSON.stringify(
-    CollectionIssue47$outboundSchema.parse(collectionIssue47),
+    DataCollectionIssue51$outboundSchema.parse(dataCollectionIssue51),
   );
 }
 
 /** @internal */
-export const Health47$outboundSchema: z.ZodEnum<typeof Health47> = z.enum(
-  Health47,
-);
+export const DataHealth51$outboundSchema: z.ZodEnum<typeof DataHealth51> = z
+  .enum(DataHealth51);
 
 /** @internal */
-export const StatusLifecycle47$outboundSchema: z.ZodEnum<
-  typeof StatusLifecycle47
-> = z.enum(StatusLifecycle47);
+export const StatusLifecycle51$outboundSchema: z.ZodEnum<
+  typeof StatusLifecycle51
+> = z.enum(StatusLifecycle51);
 
 /** @internal */
-export type HeartbeatStatus47$Outbound = {
-  collectionIssues: Array<CollectionIssue47$Outbound>;
+export type ResourceHeartbeatStatus51$Outbound = {
+  collectionIssues: Array<DataCollectionIssue51$Outbound>;
   health: string;
   lifecycle: string;
   message?: string | null | undefined;
@@ -23047,23 +23363,23 @@ export type HeartbeatStatus47$Outbound = {
 };
 
 /** @internal */
-export const HeartbeatStatus47$outboundSchema: z.ZodType<
-  HeartbeatStatus47$Outbound,
-  HeartbeatStatus47
+export const ResourceHeartbeatStatus51$outboundSchema: z.ZodType<
+  ResourceHeartbeatStatus51$Outbound,
+  ResourceHeartbeatStatus51
 > = z.object({
-  collectionIssues: z.array(z.lazy(() => CollectionIssue47$outboundSchema)),
-  health: Health47$outboundSchema,
-  lifecycle: StatusLifecycle47$outboundSchema,
+  collectionIssues: z.array(z.lazy(() => DataCollectionIssue51$outboundSchema)),
+  health: DataHealth51$outboundSchema,
+  lifecycle: StatusLifecycle51$outboundSchema,
   message: z.nullable(z.string()).optional(),
   partial: z.boolean(),
   stale: z.boolean(),
 });
 
-export function heartbeatStatus47ToJSON(
-  heartbeatStatus47: HeartbeatStatus47,
+export function resourceHeartbeatStatus51ToJSON(
+  resourceHeartbeatStatus51: ResourceHeartbeatStatus51,
 ): string {
   return JSON.stringify(
-    HeartbeatStatus47$outboundSchema.parse(heartbeatStatus47),
+    ResourceHeartbeatStatus51$outboundSchema.parse(resourceHeartbeatStatus51),
   );
 }
 
@@ -23088,7 +23404,7 @@ export type DataGcpArtifactRegistry$Outbound = {
   repositoryId: string;
   satisfiesPzs?: boolean | null | undefined;
   sizeBytes?: string | null | undefined;
-  status: HeartbeatStatus47$Outbound;
+  status: ResourceHeartbeatStatus51$Outbound;
   updateTime?: string | null | undefined;
   backend: "gcpArtifactRegistry";
 };
@@ -23117,7 +23433,7 @@ export const DataGcpArtifactRegistry$outboundSchema: z.ZodType<
   repositoryId: z.string(),
   satisfiesPzs: z.nullable(z.boolean()).optional(),
   sizeBytes: z.nullable(z.string()).optional(),
-  status: z.lazy(() => HeartbeatStatus47$outboundSchema),
+  status: z.lazy(() => ResourceHeartbeatStatus51$outboundSchema),
   updateTime: z.nullable(z.string()).optional(),
   backend: z.literal("gcpArtifactRegistry"),
 });
@@ -23164,17 +23480,16 @@ export function repositoryToJSON(repository: Repository): string {
 }
 
 /** @internal */
-export const Reason46$outboundSchema: z.ZodEnum<typeof Reason46> = z.enum(
-  Reason46,
-);
+export const DataReason50$outboundSchema: z.ZodEnum<typeof DataReason50> = z
+  .enum(DataReason50);
 
 /** @internal */
-export const CollectionIssueSeverity46$outboundSchema: z.ZodEnum<
-  typeof CollectionIssueSeverity46
-> = z.enum(CollectionIssueSeverity46);
+export const StatusSeverity50$outboundSchema: z.ZodEnum<
+  typeof StatusSeverity50
+> = z.enum(StatusSeverity50);
 
 /** @internal */
-export type CollectionIssue46$Outbound = {
+export type DataCollectionIssue50$Outbound = {
   message: string;
   reason: string;
   severity: string;
@@ -23182,37 +23497,36 @@ export type CollectionIssue46$Outbound = {
 };
 
 /** @internal */
-export const CollectionIssue46$outboundSchema: z.ZodType<
-  CollectionIssue46$Outbound,
-  CollectionIssue46
+export const DataCollectionIssue50$outboundSchema: z.ZodType<
+  DataCollectionIssue50$Outbound,
+  DataCollectionIssue50
 > = z.object({
   message: z.string(),
-  reason: Reason46$outboundSchema,
-  severity: CollectionIssueSeverity46$outboundSchema,
+  reason: DataReason50$outboundSchema,
+  severity: StatusSeverity50$outboundSchema,
   source: z.string(),
 });
 
-export function collectionIssue46ToJSON(
-  collectionIssue46: CollectionIssue46,
+export function dataCollectionIssue50ToJSON(
+  dataCollectionIssue50: DataCollectionIssue50,
 ): string {
   return JSON.stringify(
-    CollectionIssue46$outboundSchema.parse(collectionIssue46),
+    DataCollectionIssue50$outboundSchema.parse(dataCollectionIssue50),
   );
 }
 
 /** @internal */
-export const Health46$outboundSchema: z.ZodEnum<typeof Health46> = z.enum(
-  Health46,
-);
+export const DataHealth50$outboundSchema: z.ZodEnum<typeof DataHealth50> = z
+  .enum(DataHealth50);
 
 /** @internal */
-export const StatusLifecycle46$outboundSchema: z.ZodEnum<
-  typeof StatusLifecycle46
-> = z.enum(StatusLifecycle46);
+export const StatusLifecycle50$outboundSchema: z.ZodEnum<
+  typeof StatusLifecycle50
+> = z.enum(StatusLifecycle50);
 
 /** @internal */
-export type HeartbeatStatus46$Outbound = {
-  collectionIssues: Array<CollectionIssue46$Outbound>;
+export type ResourceHeartbeatStatus50$Outbound = {
+  collectionIssues: Array<DataCollectionIssue50$Outbound>;
   health: string;
   lifecycle: string;
   message?: string | null | undefined;
@@ -23221,23 +23535,23 @@ export type HeartbeatStatus46$Outbound = {
 };
 
 /** @internal */
-export const HeartbeatStatus46$outboundSchema: z.ZodType<
-  HeartbeatStatus46$Outbound,
-  HeartbeatStatus46
+export const ResourceHeartbeatStatus50$outboundSchema: z.ZodType<
+  ResourceHeartbeatStatus50$Outbound,
+  ResourceHeartbeatStatus50
 > = z.object({
-  collectionIssues: z.array(z.lazy(() => CollectionIssue46$outboundSchema)),
-  health: Health46$outboundSchema,
-  lifecycle: StatusLifecycle46$outboundSchema,
+  collectionIssues: z.array(z.lazy(() => DataCollectionIssue50$outboundSchema)),
+  health: DataHealth50$outboundSchema,
+  lifecycle: StatusLifecycle50$outboundSchema,
   message: z.nullable(z.string()).optional(),
   partial: z.boolean(),
   stale: z.boolean(),
 });
 
-export function heartbeatStatus46ToJSON(
-  heartbeatStatus46: HeartbeatStatus46,
+export function resourceHeartbeatStatus50ToJSON(
+  resourceHeartbeatStatus50: ResourceHeartbeatStatus50,
 ): string {
   return JSON.stringify(
-    HeartbeatStatus46$outboundSchema.parse(heartbeatStatus46),
+    ResourceHeartbeatStatus50$outboundSchema.parse(resourceHeartbeatStatus50),
   );
 }
 
@@ -23252,7 +23566,7 @@ export type DataAwsEcr$Outbound = {
   repositoriesTruncated: boolean;
   repositoryCount: number;
   repositoryPrefix: string;
-  status: HeartbeatStatus46$Outbound;
+  status: ResourceHeartbeatStatus50$Outbound;
   backend: "awsEcr";
 };
 
@@ -23270,7 +23584,7 @@ export const DataAwsEcr$outboundSchema: z.ZodType<
   repositoriesTruncated: z.boolean(),
   repositoryCount: z.int(),
   repositoryPrefix: z.string(),
-  status: z.lazy(() => HeartbeatStatus46$outboundSchema),
+  status: z.lazy(() => ResourceHeartbeatStatus50$outboundSchema),
   backend: z.literal("awsEcr"),
 });
 
@@ -23279,29 +23593,29 @@ export function dataAwsEcrToJSON(dataAwsEcr: DataAwsEcr): string {
 }
 
 /** @internal */
-export type SyncReconcileRequestDataUnion12$Outbound =
+export type SyncReconcileRequestDataUnion13$Outbound =
   | DataAwsEcr$Outbound
   | DataGcpArtifactRegistry$Outbound
   | DataAzureContainerRegistry$Outbound
-  | DataLocal10$Outbound;
+  | DataLocal11$Outbound;
 
 /** @internal */
-export const SyncReconcileRequestDataUnion12$outboundSchema: z.ZodType<
-  SyncReconcileRequestDataUnion12$Outbound,
-  SyncReconcileRequestDataUnion12
+export const SyncReconcileRequestDataUnion13$outboundSchema: z.ZodType<
+  SyncReconcileRequestDataUnion13$Outbound,
+  SyncReconcileRequestDataUnion13
 > = z.union([
   z.lazy(() => DataAwsEcr$outboundSchema),
   z.lazy(() => DataGcpArtifactRegistry$outboundSchema),
   z.lazy(() => DataAzureContainerRegistry$outboundSchema),
-  z.lazy(() => DataLocal10$outboundSchema),
+  z.lazy(() => DataLocal11$outboundSchema),
 ]);
 
-export function syncReconcileRequestDataUnion12ToJSON(
-  syncReconcileRequestDataUnion12: SyncReconcileRequestDataUnion12,
+export function syncReconcileRequestDataUnion13ToJSON(
+  syncReconcileRequestDataUnion13: SyncReconcileRequestDataUnion13,
 ): string {
   return JSON.stringify(
-    SyncReconcileRequestDataUnion12$outboundSchema.parse(
-      syncReconcileRequestDataUnion12,
+    SyncReconcileRequestDataUnion13$outboundSchema.parse(
+      syncReconcileRequestDataUnion13,
     ),
   );
 }
@@ -23312,7 +23626,7 @@ export type DataArtifactRegistry$Outbound = {
     | DataAwsEcr$Outbound
     | DataGcpArtifactRegistry$Outbound
     | DataAzureContainerRegistry$Outbound
-    | DataLocal10$Outbound;
+    | DataLocal11$Outbound;
   resourceType: "artifact-registry";
 };
 
@@ -23325,7 +23639,7 @@ export const DataArtifactRegistry$outboundSchema: z.ZodType<
     z.lazy(() => DataAwsEcr$outboundSchema),
     z.lazy(() => DataGcpArtifactRegistry$outboundSchema),
     z.lazy(() => DataAzureContainerRegistry$outboundSchema),
-    z.lazy(() => DataLocal10$outboundSchema),
+    z.lazy(() => DataLocal11$outboundSchema),
   ]),
   resourceType: z.literal("artifact-registry"),
 });
@@ -23339,17 +23653,16 @@ export function dataArtifactRegistryToJSON(
 }
 
 /** @internal */
-export const Reason45$outboundSchema: z.ZodEnum<typeof Reason45> = z.enum(
-  Reason45,
-);
+export const DataReason49$outboundSchema: z.ZodEnum<typeof DataReason49> = z
+  .enum(DataReason49);
 
 /** @internal */
-export const CollectionIssueSeverity45$outboundSchema: z.ZodEnum<
-  typeof CollectionIssueSeverity45
-> = z.enum(CollectionIssueSeverity45);
+export const StatusSeverity49$outboundSchema: z.ZodEnum<
+  typeof StatusSeverity49
+> = z.enum(StatusSeverity49);
 
 /** @internal */
-export type CollectionIssue45$Outbound = {
+export type DataCollectionIssue49$Outbound = {
   message: string;
   reason: string;
   severity: string;
@@ -23357,37 +23670,36 @@ export type CollectionIssue45$Outbound = {
 };
 
 /** @internal */
-export const CollectionIssue45$outboundSchema: z.ZodType<
-  CollectionIssue45$Outbound,
-  CollectionIssue45
+export const DataCollectionIssue49$outboundSchema: z.ZodType<
+  DataCollectionIssue49$Outbound,
+  DataCollectionIssue49
 > = z.object({
   message: z.string(),
-  reason: Reason45$outboundSchema,
-  severity: CollectionIssueSeverity45$outboundSchema,
+  reason: DataReason49$outboundSchema,
+  severity: StatusSeverity49$outboundSchema,
   source: z.string(),
 });
 
-export function collectionIssue45ToJSON(
-  collectionIssue45: CollectionIssue45,
+export function dataCollectionIssue49ToJSON(
+  dataCollectionIssue49: DataCollectionIssue49,
 ): string {
   return JSON.stringify(
-    CollectionIssue45$outboundSchema.parse(collectionIssue45),
+    DataCollectionIssue49$outboundSchema.parse(dataCollectionIssue49),
   );
 }
 
 /** @internal */
-export const Health45$outboundSchema: z.ZodEnum<typeof Health45> = z.enum(
-  Health45,
-);
+export const DataHealth49$outboundSchema: z.ZodEnum<typeof DataHealth49> = z
+  .enum(DataHealth49);
 
 /** @internal */
-export const StatusLifecycle45$outboundSchema: z.ZodEnum<
-  typeof StatusLifecycle45
-> = z.enum(StatusLifecycle45);
+export const StatusLifecycle49$outboundSchema: z.ZodEnum<
+  typeof StatusLifecycle49
+> = z.enum(StatusLifecycle49);
 
 /** @internal */
-export type HeartbeatStatus45$Outbound = {
-  collectionIssues: Array<CollectionIssue45$Outbound>;
+export type ResourceHeartbeatStatus49$Outbound = {
+  collectionIssues: Array<DataCollectionIssue49$Outbound>;
   health: string;
   lifecycle: string;
   message?: string | null | undefined;
@@ -23396,23 +23708,23 @@ export type HeartbeatStatus45$Outbound = {
 };
 
 /** @internal */
-export const HeartbeatStatus45$outboundSchema: z.ZodType<
-  HeartbeatStatus45$Outbound,
-  HeartbeatStatus45
+export const ResourceHeartbeatStatus49$outboundSchema: z.ZodType<
+  ResourceHeartbeatStatus49$Outbound,
+  ResourceHeartbeatStatus49
 > = z.object({
-  collectionIssues: z.array(z.lazy(() => CollectionIssue45$outboundSchema)),
-  health: Health45$outboundSchema,
-  lifecycle: StatusLifecycle45$outboundSchema,
+  collectionIssues: z.array(z.lazy(() => DataCollectionIssue49$outboundSchema)),
+  health: DataHealth49$outboundSchema,
+  lifecycle: StatusLifecycle49$outboundSchema,
   message: z.nullable(z.string()).optional(),
   partial: z.boolean(),
   stale: z.boolean(),
 });
 
-export function heartbeatStatus45ToJSON(
-  heartbeatStatus45: HeartbeatStatus45,
+export function resourceHeartbeatStatus49ToJSON(
+  resourceHeartbeatStatus49: ResourceHeartbeatStatus49,
 ): string {
   return JSON.stringify(
-    HeartbeatStatus45$outboundSchema.parse(heartbeatStatus45),
+    ResourceHeartbeatStatus49$outboundSchema.parse(resourceHeartbeatStatus49),
   );
 }
 
@@ -23421,7 +23733,7 @@ export type DataAzureManagedIdentity2$Outbound = {
   ficName?: string | null | undefined;
   roleAssignmentIds: Array<string>;
   roleDefinitionId?: string | null | undefined;
-  status: HeartbeatStatus45$Outbound;
+  status: ResourceHeartbeatStatus49$Outbound;
   tenantId?: string | null | undefined;
   uamiClientId?: string | null | undefined;
   uamiPrincipalId?: string | null | undefined;
@@ -23437,7 +23749,7 @@ export const DataAzureManagedIdentity2$outboundSchema: z.ZodType<
   ficName: z.nullable(z.string()).optional(),
   roleAssignmentIds: z.array(z.string()),
   roleDefinitionId: z.nullable(z.string()).optional(),
-  status: z.lazy(() => HeartbeatStatus45$outboundSchema),
+  status: z.lazy(() => ResourceHeartbeatStatus49$outboundSchema),
   tenantId: z.nullable(z.string()).optional(),
   uamiClientId: z.nullable(z.string()).optional(),
   uamiPrincipalId: z.nullable(z.string()).optional(),
@@ -23454,17 +23766,16 @@ export function dataAzureManagedIdentity2ToJSON(
 }
 
 /** @internal */
-export const Reason44$outboundSchema: z.ZodEnum<typeof Reason44> = z.enum(
-  Reason44,
-);
+export const DataReason48$outboundSchema: z.ZodEnum<typeof DataReason48> = z
+  .enum(DataReason48);
 
 /** @internal */
-export const CollectionIssueSeverity44$outboundSchema: z.ZodEnum<
-  typeof CollectionIssueSeverity44
-> = z.enum(CollectionIssueSeverity44);
+export const StatusSeverity48$outboundSchema: z.ZodEnum<
+  typeof StatusSeverity48
+> = z.enum(StatusSeverity48);
 
 /** @internal */
-export type CollectionIssue44$Outbound = {
+export type DataCollectionIssue48$Outbound = {
   message: string;
   reason: string;
   severity: string;
@@ -23472,37 +23783,36 @@ export type CollectionIssue44$Outbound = {
 };
 
 /** @internal */
-export const CollectionIssue44$outboundSchema: z.ZodType<
-  CollectionIssue44$Outbound,
-  CollectionIssue44
+export const DataCollectionIssue48$outboundSchema: z.ZodType<
+  DataCollectionIssue48$Outbound,
+  DataCollectionIssue48
 > = z.object({
   message: z.string(),
-  reason: Reason44$outboundSchema,
-  severity: CollectionIssueSeverity44$outboundSchema,
+  reason: DataReason48$outboundSchema,
+  severity: StatusSeverity48$outboundSchema,
   source: z.string(),
 });
 
-export function collectionIssue44ToJSON(
-  collectionIssue44: CollectionIssue44,
+export function dataCollectionIssue48ToJSON(
+  dataCollectionIssue48: DataCollectionIssue48,
 ): string {
   return JSON.stringify(
-    CollectionIssue44$outboundSchema.parse(collectionIssue44),
+    DataCollectionIssue48$outboundSchema.parse(dataCollectionIssue48),
   );
 }
 
 /** @internal */
-export const Health44$outboundSchema: z.ZodEnum<typeof Health44> = z.enum(
-  Health44,
-);
+export const DataHealth48$outboundSchema: z.ZodEnum<typeof DataHealth48> = z
+  .enum(DataHealth48);
 
 /** @internal */
-export const StatusLifecycle44$outboundSchema: z.ZodEnum<
-  typeof StatusLifecycle44
-> = z.enum(StatusLifecycle44);
+export const StatusLifecycle48$outboundSchema: z.ZodEnum<
+  typeof StatusLifecycle48
+> = z.enum(StatusLifecycle48);
 
 /** @internal */
-export type HeartbeatStatus44$Outbound = {
-  collectionIssues: Array<CollectionIssue44$Outbound>;
+export type ResourceHeartbeatStatus48$Outbound = {
+  collectionIssues: Array<DataCollectionIssue48$Outbound>;
   health: string;
   lifecycle: string;
   message?: string | null | undefined;
@@ -23511,23 +23821,23 @@ export type HeartbeatStatus44$Outbound = {
 };
 
 /** @internal */
-export const HeartbeatStatus44$outboundSchema: z.ZodType<
-  HeartbeatStatus44$Outbound,
-  HeartbeatStatus44
+export const ResourceHeartbeatStatus48$outboundSchema: z.ZodType<
+  ResourceHeartbeatStatus48$Outbound,
+  ResourceHeartbeatStatus48
 > = z.object({
-  collectionIssues: z.array(z.lazy(() => CollectionIssue44$outboundSchema)),
-  health: Health44$outboundSchema,
-  lifecycle: StatusLifecycle44$outboundSchema,
+  collectionIssues: z.array(z.lazy(() => DataCollectionIssue48$outboundSchema)),
+  health: DataHealth48$outboundSchema,
+  lifecycle: StatusLifecycle48$outboundSchema,
   message: z.nullable(z.string()).optional(),
   partial: z.boolean(),
   stale: z.boolean(),
 });
 
-export function heartbeatStatus44ToJSON(
-  heartbeatStatus44: HeartbeatStatus44,
+export function resourceHeartbeatStatus48ToJSON(
+  resourceHeartbeatStatus48: ResourceHeartbeatStatus48,
 ): string {
   return JSON.stringify(
-    HeartbeatStatus44$outboundSchema.parse(heartbeatStatus44),
+    ResourceHeartbeatStatus48$outboundSchema.parse(resourceHeartbeatStatus48),
   );
 }
 
@@ -23537,7 +23847,7 @@ export type DataGcpServiceAccount2$Outbound = {
   roleBound: boolean;
   serviceAccountEmail?: string | null | undefined;
   serviceAccountUniqueId?: string | null | undefined;
-  status: HeartbeatStatus44$Outbound;
+  status: ResourceHeartbeatStatus48$Outbound;
   backend: "gcpServiceAccount";
 };
 
@@ -23550,7 +23860,7 @@ export const DataGcpServiceAccount2$outboundSchema: z.ZodType<
   roleBound: z.boolean(),
   serviceAccountEmail: z.nullable(z.string()).optional(),
   serviceAccountUniqueId: z.nullable(z.string()).optional(),
-  status: z.lazy(() => HeartbeatStatus44$outboundSchema),
+  status: z.lazy(() => ResourceHeartbeatStatus48$outboundSchema),
   backend: z.literal("gcpServiceAccount"),
 });
 
@@ -23563,17 +23873,16 @@ export function dataGcpServiceAccount2ToJSON(
 }
 
 /** @internal */
-export const Reason43$outboundSchema: z.ZodEnum<typeof Reason43> = z.enum(
-  Reason43,
-);
+export const DataReason47$outboundSchema: z.ZodEnum<typeof DataReason47> = z
+  .enum(DataReason47);
 
 /** @internal */
-export const CollectionIssueSeverity43$outboundSchema: z.ZodEnum<
-  typeof CollectionIssueSeverity43
-> = z.enum(CollectionIssueSeverity43);
+export const StatusSeverity47$outboundSchema: z.ZodEnum<
+  typeof StatusSeverity47
+> = z.enum(StatusSeverity47);
 
 /** @internal */
-export type CollectionIssue43$Outbound = {
+export type DataCollectionIssue47$Outbound = {
   message: string;
   reason: string;
   severity: string;
@@ -23581,37 +23890,36 @@ export type CollectionIssue43$Outbound = {
 };
 
 /** @internal */
-export const CollectionIssue43$outboundSchema: z.ZodType<
-  CollectionIssue43$Outbound,
-  CollectionIssue43
+export const DataCollectionIssue47$outboundSchema: z.ZodType<
+  DataCollectionIssue47$Outbound,
+  DataCollectionIssue47
 > = z.object({
   message: z.string(),
-  reason: Reason43$outboundSchema,
-  severity: CollectionIssueSeverity43$outboundSchema,
+  reason: DataReason47$outboundSchema,
+  severity: StatusSeverity47$outboundSchema,
   source: z.string(),
 });
 
-export function collectionIssue43ToJSON(
-  collectionIssue43: CollectionIssue43,
+export function dataCollectionIssue47ToJSON(
+  dataCollectionIssue47: DataCollectionIssue47,
 ): string {
   return JSON.stringify(
-    CollectionIssue43$outboundSchema.parse(collectionIssue43),
+    DataCollectionIssue47$outboundSchema.parse(dataCollectionIssue47),
   );
 }
 
 /** @internal */
-export const Health43$outboundSchema: z.ZodEnum<typeof Health43> = z.enum(
-  Health43,
-);
+export const DataHealth47$outboundSchema: z.ZodEnum<typeof DataHealth47> = z
+  .enum(DataHealth47);
 
 /** @internal */
-export const StatusLifecycle43$outboundSchema: z.ZodEnum<
-  typeof StatusLifecycle43
-> = z.enum(StatusLifecycle43);
+export const StatusLifecycle47$outboundSchema: z.ZodEnum<
+  typeof StatusLifecycle47
+> = z.enum(StatusLifecycle47);
 
 /** @internal */
-export type HeartbeatStatus43$Outbound = {
-  collectionIssues: Array<CollectionIssue43$Outbound>;
+export type ResourceHeartbeatStatus47$Outbound = {
+  collectionIssues: Array<DataCollectionIssue47$Outbound>;
   health: string;
   lifecycle: string;
   message?: string | null | undefined;
@@ -23620,23 +23928,23 @@ export type HeartbeatStatus43$Outbound = {
 };
 
 /** @internal */
-export const HeartbeatStatus43$outboundSchema: z.ZodType<
-  HeartbeatStatus43$Outbound,
-  HeartbeatStatus43
+export const ResourceHeartbeatStatus47$outboundSchema: z.ZodType<
+  ResourceHeartbeatStatus47$Outbound,
+  ResourceHeartbeatStatus47
 > = z.object({
-  collectionIssues: z.array(z.lazy(() => CollectionIssue43$outboundSchema)),
-  health: Health43$outboundSchema,
-  lifecycle: StatusLifecycle43$outboundSchema,
+  collectionIssues: z.array(z.lazy(() => DataCollectionIssue47$outboundSchema)),
+  health: DataHealth47$outboundSchema,
+  lifecycle: StatusLifecycle47$outboundSchema,
   message: z.nullable(z.string()).optional(),
   partial: z.boolean(),
   stale: z.boolean(),
 });
 
-export function heartbeatStatus43ToJSON(
-  heartbeatStatus43: HeartbeatStatus43,
+export function resourceHeartbeatStatus47ToJSON(
+  resourceHeartbeatStatus47: ResourceHeartbeatStatus47,
 ): string {
   return JSON.stringify(
-    HeartbeatStatus43$outboundSchema.parse(heartbeatStatus43),
+    ResourceHeartbeatStatus47$outboundSchema.parse(resourceHeartbeatStatus47),
   );
 }
 
@@ -23645,7 +23953,7 @@ export type DataAwsIamRole2$Outbound = {
   managementPermissionsApplied: boolean;
   roleArn?: string | null | undefined;
   roleName?: string | null | undefined;
-  status: HeartbeatStatus43$Outbound;
+  status: ResourceHeartbeatStatus47$Outbound;
   backend: "awsIamRole";
 };
 
@@ -23657,7 +23965,7 @@ export const DataAwsIamRole2$outboundSchema: z.ZodType<
   managementPermissionsApplied: z.boolean(),
   roleArn: z.nullable(z.string()).optional(),
   roleName: z.nullable(z.string()).optional(),
-  status: z.lazy(() => HeartbeatStatus43$outboundSchema),
+  status: z.lazy(() => ResourceHeartbeatStatus47$outboundSchema),
   backend: z.literal("awsIamRole"),
 });
 
@@ -23668,27 +23976,27 @@ export function dataAwsIamRole2ToJSON(
 }
 
 /** @internal */
-export type SyncReconcileRequestDataUnion11$Outbound =
+export type SyncReconcileRequestDataUnion12$Outbound =
   | DataAwsIamRole2$Outbound
   | DataGcpServiceAccount2$Outbound
   | DataAzureManagedIdentity2$Outbound;
 
 /** @internal */
-export const SyncReconcileRequestDataUnion11$outboundSchema: z.ZodType<
-  SyncReconcileRequestDataUnion11$Outbound,
-  SyncReconcileRequestDataUnion11
+export const SyncReconcileRequestDataUnion12$outboundSchema: z.ZodType<
+  SyncReconcileRequestDataUnion12$Outbound,
+  SyncReconcileRequestDataUnion12
 > = z.union([
   z.lazy(() => DataAwsIamRole2$outboundSchema),
   z.lazy(() => DataGcpServiceAccount2$outboundSchema),
   z.lazy(() => DataAzureManagedIdentity2$outboundSchema),
 ]);
 
-export function syncReconcileRequestDataUnion11ToJSON(
-  syncReconcileRequestDataUnion11: SyncReconcileRequestDataUnion11,
+export function syncReconcileRequestDataUnion12ToJSON(
+  syncReconcileRequestDataUnion12: SyncReconcileRequestDataUnion12,
 ): string {
   return JSON.stringify(
-    SyncReconcileRequestDataUnion11$outboundSchema.parse(
-      syncReconcileRequestDataUnion11,
+    SyncReconcileRequestDataUnion12$outboundSchema.parse(
+      syncReconcileRequestDataUnion12,
     ),
   );
 }
@@ -23724,17 +24032,16 @@ export function dataRemoteStackManagementToJSON(
 }
 
 /** @internal */
-export const Reason42$outboundSchema: z.ZodEnum<typeof Reason42> = z.enum(
-  Reason42,
-);
+export const DataReason46$outboundSchema: z.ZodEnum<typeof DataReason46> = z
+  .enum(DataReason46);
 
 /** @internal */
-export const CollectionIssueSeverity42$outboundSchema: z.ZodEnum<
-  typeof CollectionIssueSeverity42
-> = z.enum(CollectionIssueSeverity42);
+export const StatusSeverity46$outboundSchema: z.ZodEnum<
+  typeof StatusSeverity46
+> = z.enum(StatusSeverity46);
 
 /** @internal */
-export type CollectionIssue42$Outbound = {
+export type DataCollectionIssue46$Outbound = {
   message: string;
   reason: string;
   severity: string;
@@ -23742,37 +24049,36 @@ export type CollectionIssue42$Outbound = {
 };
 
 /** @internal */
-export const CollectionIssue42$outboundSchema: z.ZodType<
-  CollectionIssue42$Outbound,
-  CollectionIssue42
+export const DataCollectionIssue46$outboundSchema: z.ZodType<
+  DataCollectionIssue46$Outbound,
+  DataCollectionIssue46
 > = z.object({
   message: z.string(),
-  reason: Reason42$outboundSchema,
-  severity: CollectionIssueSeverity42$outboundSchema,
+  reason: DataReason46$outboundSchema,
+  severity: StatusSeverity46$outboundSchema,
   source: z.string(),
 });
 
-export function collectionIssue42ToJSON(
-  collectionIssue42: CollectionIssue42,
+export function dataCollectionIssue46ToJSON(
+  dataCollectionIssue46: DataCollectionIssue46,
 ): string {
   return JSON.stringify(
-    CollectionIssue42$outboundSchema.parse(collectionIssue42),
+    DataCollectionIssue46$outboundSchema.parse(dataCollectionIssue46),
   );
 }
 
 /** @internal */
-export const Health42$outboundSchema: z.ZodEnum<typeof Health42> = z.enum(
-  Health42,
-);
+export const DataHealth46$outboundSchema: z.ZodEnum<typeof DataHealth46> = z
+  .enum(DataHealth46);
 
 /** @internal */
-export const StatusLifecycle42$outboundSchema: z.ZodEnum<
-  typeof StatusLifecycle42
-> = z.enum(StatusLifecycle42);
+export const StatusLifecycle46$outboundSchema: z.ZodEnum<
+  typeof StatusLifecycle46
+> = z.enum(StatusLifecycle46);
 
 /** @internal */
-export type HeartbeatStatus42$Outbound = {
-  collectionIssues: Array<CollectionIssue42$Outbound>;
+export type ResourceHeartbeatStatus46$Outbound = {
+  collectionIssues: Array<DataCollectionIssue46$Outbound>;
   health: string;
   lifecycle: string;
   message?: string | null | undefined;
@@ -23781,23 +24087,23 @@ export type HeartbeatStatus42$Outbound = {
 };
 
 /** @internal */
-export const HeartbeatStatus42$outboundSchema: z.ZodType<
-  HeartbeatStatus42$Outbound,
-  HeartbeatStatus42
+export const ResourceHeartbeatStatus46$outboundSchema: z.ZodType<
+  ResourceHeartbeatStatus46$Outbound,
+  ResourceHeartbeatStatus46
 > = z.object({
-  collectionIssues: z.array(z.lazy(() => CollectionIssue42$outboundSchema)),
-  health: Health42$outboundSchema,
-  lifecycle: StatusLifecycle42$outboundSchema,
+  collectionIssues: z.array(z.lazy(() => DataCollectionIssue46$outboundSchema)),
+  health: DataHealth46$outboundSchema,
+  lifecycle: StatusLifecycle46$outboundSchema,
   message: z.nullable(z.string()).optional(),
   partial: z.boolean(),
   stale: z.boolean(),
 });
 
-export function heartbeatStatus42ToJSON(
-  heartbeatStatus42: HeartbeatStatus42,
+export function resourceHeartbeatStatus46ToJSON(
+  resourceHeartbeatStatus46: ResourceHeartbeatStatus46,
 ): string {
   return JSON.stringify(
-    HeartbeatStatus42$outboundSchema.parse(heartbeatStatus42),
+    ResourceHeartbeatStatus46$outboundSchema.parse(resourceHeartbeatStatus46),
   );
 }
 
@@ -23810,11 +24116,12 @@ export type DataAzureVnet$Outbound = {
   location?: string | null | undefined;
   natGatewayId?: string | null | undefined;
   nsgId?: string | null | undefined;
+  privateEndpointSubnetName?: string | null | undefined;
   privateSubnetName?: string | null | undefined;
   publicIpId?: string | null | undefined;
   publicSubnetName?: string | null | undefined;
   resourceGroup?: string | null | undefined;
-  status: HeartbeatStatus42$Outbound;
+  status: ResourceHeartbeatStatus46$Outbound;
   vnetName?: string | null | undefined;
   vnetResourceId?: string | null | undefined;
   backend: "azureVnet";
@@ -23832,11 +24139,12 @@ export const DataAzureVnet$outboundSchema: z.ZodType<
   location: z.nullable(z.string()).optional(),
   natGatewayId: z.nullable(z.string()).optional(),
   nsgId: z.nullable(z.string()).optional(),
+  privateEndpointSubnetName: z.nullable(z.string()).optional(),
   privateSubnetName: z.nullable(z.string()).optional(),
   publicIpId: z.nullable(z.string()).optional(),
   publicSubnetName: z.nullable(z.string()).optional(),
   resourceGroup: z.nullable(z.string()).optional(),
-  status: z.lazy(() => HeartbeatStatus42$outboundSchema),
+  status: z.lazy(() => ResourceHeartbeatStatus46$outboundSchema),
   vnetName: z.nullable(z.string()).optional(),
   vnetResourceId: z.nullable(z.string()).optional(),
   backend: z.literal("azureVnet"),
@@ -23847,17 +24155,16 @@ export function dataAzureVnetToJSON(dataAzureVnet: DataAzureVnet): string {
 }
 
 /** @internal */
-export const Reason41$outboundSchema: z.ZodEnum<typeof Reason41> = z.enum(
-  Reason41,
-);
+export const DataReason45$outboundSchema: z.ZodEnum<typeof DataReason45> = z
+  .enum(DataReason45);
 
 /** @internal */
-export const CollectionIssueSeverity41$outboundSchema: z.ZodEnum<
-  typeof CollectionIssueSeverity41
-> = z.enum(CollectionIssueSeverity41);
+export const StatusSeverity45$outboundSchema: z.ZodEnum<
+  typeof StatusSeverity45
+> = z.enum(StatusSeverity45);
 
 /** @internal */
-export type CollectionIssue41$Outbound = {
+export type DataCollectionIssue45$Outbound = {
   message: string;
   reason: string;
   severity: string;
@@ -23865,37 +24172,36 @@ export type CollectionIssue41$Outbound = {
 };
 
 /** @internal */
-export const CollectionIssue41$outboundSchema: z.ZodType<
-  CollectionIssue41$Outbound,
-  CollectionIssue41
+export const DataCollectionIssue45$outboundSchema: z.ZodType<
+  DataCollectionIssue45$Outbound,
+  DataCollectionIssue45
 > = z.object({
   message: z.string(),
-  reason: Reason41$outboundSchema,
-  severity: CollectionIssueSeverity41$outboundSchema,
+  reason: DataReason45$outboundSchema,
+  severity: StatusSeverity45$outboundSchema,
   source: z.string(),
 });
 
-export function collectionIssue41ToJSON(
-  collectionIssue41: CollectionIssue41,
+export function dataCollectionIssue45ToJSON(
+  dataCollectionIssue45: DataCollectionIssue45,
 ): string {
   return JSON.stringify(
-    CollectionIssue41$outboundSchema.parse(collectionIssue41),
+    DataCollectionIssue45$outboundSchema.parse(dataCollectionIssue45),
   );
 }
 
 /** @internal */
-export const Health41$outboundSchema: z.ZodEnum<typeof Health41> = z.enum(
-  Health41,
-);
+export const DataHealth45$outboundSchema: z.ZodEnum<typeof DataHealth45> = z
+  .enum(DataHealth45);
 
 /** @internal */
-export const StatusLifecycle41$outboundSchema: z.ZodEnum<
-  typeof StatusLifecycle41
-> = z.enum(StatusLifecycle41);
+export const StatusLifecycle45$outboundSchema: z.ZodEnum<
+  typeof StatusLifecycle45
+> = z.enum(StatusLifecycle45);
 
 /** @internal */
-export type HeartbeatStatus41$Outbound = {
-  collectionIssues: Array<CollectionIssue41$Outbound>;
+export type ResourceHeartbeatStatus45$Outbound = {
+  collectionIssues: Array<DataCollectionIssue45$Outbound>;
   health: string;
   lifecycle: string;
   message?: string | null | undefined;
@@ -23904,23 +24210,23 @@ export type HeartbeatStatus41$Outbound = {
 };
 
 /** @internal */
-export const HeartbeatStatus41$outboundSchema: z.ZodType<
-  HeartbeatStatus41$Outbound,
-  HeartbeatStatus41
+export const ResourceHeartbeatStatus45$outboundSchema: z.ZodType<
+  ResourceHeartbeatStatus45$Outbound,
+  ResourceHeartbeatStatus45
 > = z.object({
-  collectionIssues: z.array(z.lazy(() => CollectionIssue41$outboundSchema)),
-  health: Health41$outboundSchema,
-  lifecycle: StatusLifecycle41$outboundSchema,
+  collectionIssues: z.array(z.lazy(() => DataCollectionIssue45$outboundSchema)),
+  health: DataHealth45$outboundSchema,
+  lifecycle: StatusLifecycle45$outboundSchema,
   message: z.nullable(z.string()).optional(),
   partial: z.boolean(),
   stale: z.boolean(),
 });
 
-export function heartbeatStatus41ToJSON(
-  heartbeatStatus41: HeartbeatStatus41,
+export function resourceHeartbeatStatus45ToJSON(
+  resourceHeartbeatStatus45: ResourceHeartbeatStatus45,
 ): string {
   return JSON.stringify(
-    HeartbeatStatus41$outboundSchema.parse(heartbeatStatus41),
+    ResourceHeartbeatStatus45$outboundSchema.parse(resourceHeartbeatStatus45),
   );
 }
 
@@ -23934,7 +24240,7 @@ export type DataGcpVpc$Outbound = {
   networkSelfLink?: string | null | undefined;
   region?: string | null | undefined;
   routerName?: string | null | undefined;
-  status: HeartbeatStatus41$Outbound;
+  status: ResourceHeartbeatStatus45$Outbound;
   subnetworkName?: string | null | undefined;
   subnetworkSelfLink?: string | null | undefined;
   backend: "gcpVpc";
@@ -23953,7 +24259,7 @@ export const DataGcpVpc$outboundSchema: z.ZodType<
   networkSelfLink: z.nullable(z.string()).optional(),
   region: z.nullable(z.string()).optional(),
   routerName: z.nullable(z.string()).optional(),
-  status: z.lazy(() => HeartbeatStatus41$outboundSchema),
+  status: z.lazy(() => ResourceHeartbeatStatus45$outboundSchema),
   subnetworkName: z.nullable(z.string()).optional(),
   subnetworkSelfLink: z.nullable(z.string()).optional(),
   backend: z.literal("gcpVpc"),
@@ -23964,17 +24270,16 @@ export function dataGcpVpcToJSON(dataGcpVpc: DataGcpVpc): string {
 }
 
 /** @internal */
-export const Reason40$outboundSchema: z.ZodEnum<typeof Reason40> = z.enum(
-  Reason40,
-);
+export const DataReason44$outboundSchema: z.ZodEnum<typeof DataReason44> = z
+  .enum(DataReason44);
 
 /** @internal */
-export const CollectionIssueSeverity40$outboundSchema: z.ZodEnum<
-  typeof CollectionIssueSeverity40
-> = z.enum(CollectionIssueSeverity40);
+export const StatusSeverity44$outboundSchema: z.ZodEnum<
+  typeof StatusSeverity44
+> = z.enum(StatusSeverity44);
 
 /** @internal */
-export type CollectionIssue40$Outbound = {
+export type DataCollectionIssue44$Outbound = {
   message: string;
   reason: string;
   severity: string;
@@ -23982,37 +24287,36 @@ export type CollectionIssue40$Outbound = {
 };
 
 /** @internal */
-export const CollectionIssue40$outboundSchema: z.ZodType<
-  CollectionIssue40$Outbound,
-  CollectionIssue40
+export const DataCollectionIssue44$outboundSchema: z.ZodType<
+  DataCollectionIssue44$Outbound,
+  DataCollectionIssue44
 > = z.object({
   message: z.string(),
-  reason: Reason40$outboundSchema,
-  severity: CollectionIssueSeverity40$outboundSchema,
+  reason: DataReason44$outboundSchema,
+  severity: StatusSeverity44$outboundSchema,
   source: z.string(),
 });
 
-export function collectionIssue40ToJSON(
-  collectionIssue40: CollectionIssue40,
+export function dataCollectionIssue44ToJSON(
+  dataCollectionIssue44: DataCollectionIssue44,
 ): string {
   return JSON.stringify(
-    CollectionIssue40$outboundSchema.parse(collectionIssue40),
+    DataCollectionIssue44$outboundSchema.parse(dataCollectionIssue44),
   );
 }
 
 /** @internal */
-export const Health40$outboundSchema: z.ZodEnum<typeof Health40> = z.enum(
-  Health40,
-);
+export const DataHealth44$outboundSchema: z.ZodEnum<typeof DataHealth44> = z
+  .enum(DataHealth44);
 
 /** @internal */
-export const StatusLifecycle40$outboundSchema: z.ZodEnum<
-  typeof StatusLifecycle40
-> = z.enum(StatusLifecycle40);
+export const StatusLifecycle44$outboundSchema: z.ZodEnum<
+  typeof StatusLifecycle44
+> = z.enum(StatusLifecycle44);
 
 /** @internal */
-export type HeartbeatStatus40$Outbound = {
-  collectionIssues: Array<CollectionIssue40$Outbound>;
+export type ResourceHeartbeatStatus44$Outbound = {
+  collectionIssues: Array<DataCollectionIssue44$Outbound>;
   health: string;
   lifecycle: string;
   message?: string | null | undefined;
@@ -24021,23 +24325,23 @@ export type HeartbeatStatus40$Outbound = {
 };
 
 /** @internal */
-export const HeartbeatStatus40$outboundSchema: z.ZodType<
-  HeartbeatStatus40$Outbound,
-  HeartbeatStatus40
+export const ResourceHeartbeatStatus44$outboundSchema: z.ZodType<
+  ResourceHeartbeatStatus44$Outbound,
+  ResourceHeartbeatStatus44
 > = z.object({
-  collectionIssues: z.array(z.lazy(() => CollectionIssue40$outboundSchema)),
-  health: Health40$outboundSchema,
-  lifecycle: StatusLifecycle40$outboundSchema,
+  collectionIssues: z.array(z.lazy(() => DataCollectionIssue44$outboundSchema)),
+  health: DataHealth44$outboundSchema,
+  lifecycle: StatusLifecycle44$outboundSchema,
   message: z.nullable(z.string()).optional(),
   partial: z.boolean(),
   stale: z.boolean(),
 });
 
-export function heartbeatStatus40ToJSON(
-  heartbeatStatus40: HeartbeatStatus40,
+export function resourceHeartbeatStatus44ToJSON(
+  resourceHeartbeatStatus44: ResourceHeartbeatStatus44,
 ): string {
   return JSON.stringify(
-    HeartbeatStatus40$outboundSchema.parse(heartbeatStatus40),
+    ResourceHeartbeatStatus44$outboundSchema.parse(resourceHeartbeatStatus44),
   );
 }
 
@@ -24052,7 +24356,7 @@ export type DataAwsVpc$Outbound = {
   publicSubnetIds: Array<string>;
   routeTableCount: number;
   securityGroupId?: string | null | undefined;
-  status: HeartbeatStatus40$Outbound;
+  status: ResourceHeartbeatStatus44$Outbound;
   vpcId?: string | null | undefined;
   vpcState?: string | null | undefined;
   backend: "awsVpc";
@@ -24072,7 +24376,7 @@ export const DataAwsVpc$outboundSchema: z.ZodType<
   publicSubnetIds: z.array(z.string()),
   routeTableCount: z.int(),
   securityGroupId: z.nullable(z.string()).optional(),
-  status: z.lazy(() => HeartbeatStatus40$outboundSchema),
+  status: z.lazy(() => ResourceHeartbeatStatus44$outboundSchema),
   vpcId: z.nullable(z.string()).optional(),
   vpcState: z.nullable(z.string()).optional(),
   backend: z.literal("awsVpc"),
@@ -24083,27 +24387,27 @@ export function dataAwsVpcToJSON(dataAwsVpc: DataAwsVpc): string {
 }
 
 /** @internal */
-export type SyncReconcileRequestDataUnion10$Outbound =
+export type SyncReconcileRequestDataUnion11$Outbound =
   | DataAwsVpc$Outbound
   | DataGcpVpc$Outbound
   | DataAzureVnet$Outbound;
 
 /** @internal */
-export const SyncReconcileRequestDataUnion10$outboundSchema: z.ZodType<
-  SyncReconcileRequestDataUnion10$Outbound,
-  SyncReconcileRequestDataUnion10
+export const SyncReconcileRequestDataUnion11$outboundSchema: z.ZodType<
+  SyncReconcileRequestDataUnion11$Outbound,
+  SyncReconcileRequestDataUnion11
 > = z.union([
   z.lazy(() => DataAwsVpc$outboundSchema),
   z.lazy(() => DataGcpVpc$outboundSchema),
   z.lazy(() => DataAzureVnet$outboundSchema),
 ]);
 
-export function syncReconcileRequestDataUnion10ToJSON(
-  syncReconcileRequestDataUnion10: SyncReconcileRequestDataUnion10,
+export function syncReconcileRequestDataUnion11ToJSON(
+  syncReconcileRequestDataUnion11: SyncReconcileRequestDataUnion11,
 ): string {
   return JSON.stringify(
-    SyncReconcileRequestDataUnion10$outboundSchema.parse(
-      syncReconcileRequestDataUnion10,
+    SyncReconcileRequestDataUnion11$outboundSchema.parse(
+      syncReconcileRequestDataUnion11,
     ),
   );
 }
@@ -24132,17 +24436,16 @@ export function dataNetworkToJSON(dataNetwork: DataNetwork): string {
 }
 
 /** @internal */
-export const Reason39$outboundSchema: z.ZodEnum<typeof Reason39> = z.enum(
-  Reason39,
-);
+export const DataReason43$outboundSchema: z.ZodEnum<typeof DataReason43> = z
+  .enum(DataReason43);
 
 /** @internal */
-export const CollectionIssueSeverity39$outboundSchema: z.ZodEnum<
-  typeof CollectionIssueSeverity39
-> = z.enum(CollectionIssueSeverity39);
+export const StatusSeverity43$outboundSchema: z.ZodEnum<
+  typeof StatusSeverity43
+> = z.enum(StatusSeverity43);
 
 /** @internal */
-export type CollectionIssue39$Outbound = {
+export type DataCollectionIssue43$Outbound = {
   message: string;
   reason: string;
   severity: string;
@@ -24150,37 +24453,36 @@ export type CollectionIssue39$Outbound = {
 };
 
 /** @internal */
-export const CollectionIssue39$outboundSchema: z.ZodType<
-  CollectionIssue39$Outbound,
-  CollectionIssue39
+export const DataCollectionIssue43$outboundSchema: z.ZodType<
+  DataCollectionIssue43$Outbound,
+  DataCollectionIssue43
 > = z.object({
   message: z.string(),
-  reason: Reason39$outboundSchema,
-  severity: CollectionIssueSeverity39$outboundSchema,
+  reason: DataReason43$outboundSchema,
+  severity: StatusSeverity43$outboundSchema,
   source: z.string(),
 });
 
-export function collectionIssue39ToJSON(
-  collectionIssue39: CollectionIssue39,
+export function dataCollectionIssue43ToJSON(
+  dataCollectionIssue43: DataCollectionIssue43,
 ): string {
   return JSON.stringify(
-    CollectionIssue39$outboundSchema.parse(collectionIssue39),
+    DataCollectionIssue43$outboundSchema.parse(dataCollectionIssue43),
   );
 }
 
 /** @internal */
-export const Health39$outboundSchema: z.ZodEnum<typeof Health39> = z.enum(
-  Health39,
-);
+export const DataHealth43$outboundSchema: z.ZodEnum<typeof DataHealth43> = z
+  .enum(DataHealth43);
 
 /** @internal */
-export const StatusLifecycle39$outboundSchema: z.ZodEnum<
-  typeof StatusLifecycle39
-> = z.enum(StatusLifecycle39);
+export const StatusLifecycle43$outboundSchema: z.ZodEnum<
+  typeof StatusLifecycle43
+> = z.enum(StatusLifecycle43);
 
 /** @internal */
-export type HeartbeatStatus39$Outbound = {
-  collectionIssues: Array<CollectionIssue39$Outbound>;
+export type ResourceHeartbeatStatus43$Outbound = {
+  collectionIssues: Array<DataCollectionIssue43$Outbound>;
   health: string;
   lifecycle: string;
   message?: string | null | undefined;
@@ -24189,61 +24491,60 @@ export type HeartbeatStatus39$Outbound = {
 };
 
 /** @internal */
-export const HeartbeatStatus39$outboundSchema: z.ZodType<
-  HeartbeatStatus39$Outbound,
-  HeartbeatStatus39
+export const ResourceHeartbeatStatus43$outboundSchema: z.ZodType<
+  ResourceHeartbeatStatus43$Outbound,
+  ResourceHeartbeatStatus43
 > = z.object({
-  collectionIssues: z.array(z.lazy(() => CollectionIssue39$outboundSchema)),
-  health: Health39$outboundSchema,
-  lifecycle: StatusLifecycle39$outboundSchema,
+  collectionIssues: z.array(z.lazy(() => DataCollectionIssue43$outboundSchema)),
+  health: DataHealth43$outboundSchema,
+  lifecycle: StatusLifecycle43$outboundSchema,
   message: z.nullable(z.string()).optional(),
   partial: z.boolean(),
   stale: z.boolean(),
 });
 
-export function heartbeatStatus39ToJSON(
-  heartbeatStatus39: HeartbeatStatus39,
+export function resourceHeartbeatStatus43ToJSON(
+  resourceHeartbeatStatus43: ResourceHeartbeatStatus43,
 ): string {
   return JSON.stringify(
-    HeartbeatStatus39$outboundSchema.parse(heartbeatStatus39),
+    ResourceHeartbeatStatus43$outboundSchema.parse(resourceHeartbeatStatus43),
   );
 }
 
 /** @internal */
-export type DataLocal9$Outbound = {
+export type DataLocal10$Outbound = {
   configured: boolean;
   identity: string;
-  status: HeartbeatStatus39$Outbound;
+  status: ResourceHeartbeatStatus43$Outbound;
   backend: "local";
 };
 
 /** @internal */
-export const DataLocal9$outboundSchema: z.ZodType<
-  DataLocal9$Outbound,
-  DataLocal9
+export const DataLocal10$outboundSchema: z.ZodType<
+  DataLocal10$Outbound,
+  DataLocal10
 > = z.object({
   configured: z.boolean(),
   identity: z.string(),
-  status: z.lazy(() => HeartbeatStatus39$outboundSchema),
+  status: z.lazy(() => ResourceHeartbeatStatus43$outboundSchema),
   backend: z.literal("local"),
 });
 
-export function dataLocal9ToJSON(dataLocal9: DataLocal9): string {
-  return JSON.stringify(DataLocal9$outboundSchema.parse(dataLocal9));
+export function dataLocal10ToJSON(dataLocal10: DataLocal10): string {
+  return JSON.stringify(DataLocal10$outboundSchema.parse(dataLocal10));
 }
 
 /** @internal */
-export const Reason38$outboundSchema: z.ZodEnum<typeof Reason38> = z.enum(
-  Reason38,
-);
+export const DataReason42$outboundSchema: z.ZodEnum<typeof DataReason42> = z
+  .enum(DataReason42);
 
 /** @internal */
-export const CollectionIssueSeverity38$outboundSchema: z.ZodEnum<
-  typeof CollectionIssueSeverity38
-> = z.enum(CollectionIssueSeverity38);
+export const StatusSeverity42$outboundSchema: z.ZodEnum<
+  typeof StatusSeverity42
+> = z.enum(StatusSeverity42);
 
 /** @internal */
-export type CollectionIssue38$Outbound = {
+export type DataCollectionIssue42$Outbound = {
   message: string;
   reason: string;
   severity: string;
@@ -24251,37 +24552,36 @@ export type CollectionIssue38$Outbound = {
 };
 
 /** @internal */
-export const CollectionIssue38$outboundSchema: z.ZodType<
-  CollectionIssue38$Outbound,
-  CollectionIssue38
+export const DataCollectionIssue42$outboundSchema: z.ZodType<
+  DataCollectionIssue42$Outbound,
+  DataCollectionIssue42
 > = z.object({
   message: z.string(),
-  reason: Reason38$outboundSchema,
-  severity: CollectionIssueSeverity38$outboundSchema,
+  reason: DataReason42$outboundSchema,
+  severity: StatusSeverity42$outboundSchema,
   source: z.string(),
 });
 
-export function collectionIssue38ToJSON(
-  collectionIssue38: CollectionIssue38,
+export function dataCollectionIssue42ToJSON(
+  dataCollectionIssue42: DataCollectionIssue42,
 ): string {
   return JSON.stringify(
-    CollectionIssue38$outboundSchema.parse(collectionIssue38),
+    DataCollectionIssue42$outboundSchema.parse(dataCollectionIssue42),
   );
 }
 
 /** @internal */
-export const Health38$outboundSchema: z.ZodEnum<typeof Health38> = z.enum(
-  Health38,
-);
+export const DataHealth42$outboundSchema: z.ZodEnum<typeof DataHealth42> = z
+  .enum(DataHealth42);
 
 /** @internal */
-export const StatusLifecycle38$outboundSchema: z.ZodEnum<
-  typeof StatusLifecycle38
-> = z.enum(StatusLifecycle38);
+export const StatusLifecycle42$outboundSchema: z.ZodEnum<
+  typeof StatusLifecycle42
+> = z.enum(StatusLifecycle42);
 
 /** @internal */
-export type HeartbeatStatus38$Outbound = {
-  collectionIssues: Array<CollectionIssue38$Outbound>;
+export type ResourceHeartbeatStatus42$Outbound = {
+  collectionIssues: Array<DataCollectionIssue42$Outbound>;
   health: string;
   lifecycle: string;
   message?: string | null | undefined;
@@ -24290,23 +24590,23 @@ export type HeartbeatStatus38$Outbound = {
 };
 
 /** @internal */
-export const HeartbeatStatus38$outboundSchema: z.ZodType<
-  HeartbeatStatus38$Outbound,
-  HeartbeatStatus38
+export const ResourceHeartbeatStatus42$outboundSchema: z.ZodType<
+  ResourceHeartbeatStatus42$Outbound,
+  ResourceHeartbeatStatus42
 > = z.object({
-  collectionIssues: z.array(z.lazy(() => CollectionIssue38$outboundSchema)),
-  health: Health38$outboundSchema,
-  lifecycle: StatusLifecycle38$outboundSchema,
+  collectionIssues: z.array(z.lazy(() => DataCollectionIssue42$outboundSchema)),
+  health: DataHealth42$outboundSchema,
+  lifecycle: StatusLifecycle42$outboundSchema,
   message: z.nullable(z.string()).optional(),
   partial: z.boolean(),
   stale: z.boolean(),
 });
 
-export function heartbeatStatus38ToJSON(
-  heartbeatStatus38: HeartbeatStatus38,
+export function resourceHeartbeatStatus42ToJSON(
+  resourceHeartbeatStatus42: ResourceHeartbeatStatus42,
 ): string {
   return JSON.stringify(
-    HeartbeatStatus38$outboundSchema.parse(heartbeatStatus38),
+    ResourceHeartbeatStatus42$outboundSchema.parse(resourceHeartbeatStatus42),
   );
 }
 
@@ -24325,7 +24625,7 @@ export type DataAzureManagedIdentity1$Outbound = {
   roleAssignmentCount: number;
   roleAssignmentIds: Array<string>;
   stackPermissionsApplied: boolean;
-  status: HeartbeatStatus38$Outbound;
+  status: ResourceHeartbeatStatus42$Outbound;
   tenantId?: string | null | undefined;
   type?: string | null | undefined;
   backend: "azureManagedIdentity";
@@ -24349,7 +24649,7 @@ export const DataAzureManagedIdentity1$outboundSchema: z.ZodType<
   roleAssignmentCount: z.int(),
   roleAssignmentIds: z.array(z.string()),
   stackPermissionsApplied: z.boolean(),
-  status: z.lazy(() => HeartbeatStatus38$outboundSchema),
+  status: z.lazy(() => ResourceHeartbeatStatus42$outboundSchema),
   tenantId: z.nullable(z.string()).optional(),
   type: z.nullable(z.string()).optional(),
   backend: z.literal("azureManagedIdentity"),
@@ -24364,17 +24664,16 @@ export function dataAzureManagedIdentity1ToJSON(
 }
 
 /** @internal */
-export const Reason37$outboundSchema: z.ZodEnum<typeof Reason37> = z.enum(
-  Reason37,
-);
+export const DataReason41$outboundSchema: z.ZodEnum<typeof DataReason41> = z
+  .enum(DataReason41);
 
 /** @internal */
-export const CollectionIssueSeverity37$outboundSchema: z.ZodEnum<
-  typeof CollectionIssueSeverity37
-> = z.enum(CollectionIssueSeverity37);
+export const StatusSeverity41$outboundSchema: z.ZodEnum<
+  typeof StatusSeverity41
+> = z.enum(StatusSeverity41);
 
 /** @internal */
-export type CollectionIssue37$Outbound = {
+export type DataCollectionIssue41$Outbound = {
   message: string;
   reason: string;
   severity: string;
@@ -24382,37 +24681,36 @@ export type CollectionIssue37$Outbound = {
 };
 
 /** @internal */
-export const CollectionIssue37$outboundSchema: z.ZodType<
-  CollectionIssue37$Outbound,
-  CollectionIssue37
+export const DataCollectionIssue41$outboundSchema: z.ZodType<
+  DataCollectionIssue41$Outbound,
+  DataCollectionIssue41
 > = z.object({
   message: z.string(),
-  reason: Reason37$outboundSchema,
-  severity: CollectionIssueSeverity37$outboundSchema,
+  reason: DataReason41$outboundSchema,
+  severity: StatusSeverity41$outboundSchema,
   source: z.string(),
 });
 
-export function collectionIssue37ToJSON(
-  collectionIssue37: CollectionIssue37,
+export function dataCollectionIssue41ToJSON(
+  dataCollectionIssue41: DataCollectionIssue41,
 ): string {
   return JSON.stringify(
-    CollectionIssue37$outboundSchema.parse(collectionIssue37),
+    DataCollectionIssue41$outboundSchema.parse(dataCollectionIssue41),
   );
 }
 
 /** @internal */
-export const Health37$outboundSchema: z.ZodEnum<typeof Health37> = z.enum(
-  Health37,
-);
+export const DataHealth41$outboundSchema: z.ZodEnum<typeof DataHealth41> = z
+  .enum(DataHealth41);
 
 /** @internal */
-export const StatusLifecycle37$outboundSchema: z.ZodEnum<
-  typeof StatusLifecycle37
-> = z.enum(StatusLifecycle37);
+export const StatusLifecycle41$outboundSchema: z.ZodEnum<
+  typeof StatusLifecycle41
+> = z.enum(StatusLifecycle41);
 
 /** @internal */
-export type HeartbeatStatus37$Outbound = {
-  collectionIssues: Array<CollectionIssue37$Outbound>;
+export type ResourceHeartbeatStatus41$Outbound = {
+  collectionIssues: Array<DataCollectionIssue41$Outbound>;
   health: string;
   lifecycle: string;
   message?: string | null | undefined;
@@ -24421,23 +24719,23 @@ export type HeartbeatStatus37$Outbound = {
 };
 
 /** @internal */
-export const HeartbeatStatus37$outboundSchema: z.ZodType<
-  HeartbeatStatus37$Outbound,
-  HeartbeatStatus37
+export const ResourceHeartbeatStatus41$outboundSchema: z.ZodType<
+  ResourceHeartbeatStatus41$Outbound,
+  ResourceHeartbeatStatus41
 > = z.object({
-  collectionIssues: z.array(z.lazy(() => CollectionIssue37$outboundSchema)),
-  health: Health37$outboundSchema,
-  lifecycle: StatusLifecycle37$outboundSchema,
+  collectionIssues: z.array(z.lazy(() => DataCollectionIssue41$outboundSchema)),
+  health: DataHealth41$outboundSchema,
+  lifecycle: StatusLifecycle41$outboundSchema,
   message: z.nullable(z.string()).optional(),
   partial: z.boolean(),
   stale: z.boolean(),
 });
 
-export function heartbeatStatus37ToJSON(
-  heartbeatStatus37: HeartbeatStatus37,
+export function resourceHeartbeatStatus41ToJSON(
+  resourceHeartbeatStatus41: ResourceHeartbeatStatus41,
 ): string {
   return JSON.stringify(
-    HeartbeatStatus37$outboundSchema.parse(heartbeatStatus37),
+    ResourceHeartbeatStatus41$outboundSchema.parse(resourceHeartbeatStatus41),
   );
 }
 
@@ -24455,7 +24753,7 @@ export type DataGcpServiceAccount1$Outbound = {
   projectRoles: Array<string>;
   serviceAccountBindingCount: number;
   serviceAccountRoles: Array<string>;
-  status: HeartbeatStatus37$Outbound;
+  status: ResourceHeartbeatStatus41$Outbound;
   uniqueId?: string | null | undefined;
   backend: "gcpServiceAccount";
 };
@@ -24477,7 +24775,7 @@ export const DataGcpServiceAccount1$outboundSchema: z.ZodType<
   projectRoles: z.array(z.string()),
   serviceAccountBindingCount: z.int(),
   serviceAccountRoles: z.array(z.string()),
-  status: z.lazy(() => HeartbeatStatus37$outboundSchema),
+  status: z.lazy(() => ResourceHeartbeatStatus41$outboundSchema),
   uniqueId: z.nullable(z.string()).optional(),
   backend: z.literal("gcpServiceAccount"),
 });
@@ -24491,17 +24789,16 @@ export function dataGcpServiceAccount1ToJSON(
 }
 
 /** @internal */
-export const Reason36$outboundSchema: z.ZodEnum<typeof Reason36> = z.enum(
-  Reason36,
-);
+export const DataReason40$outboundSchema: z.ZodEnum<typeof DataReason40> = z
+  .enum(DataReason40);
 
 /** @internal */
-export const CollectionIssueSeverity36$outboundSchema: z.ZodEnum<
-  typeof CollectionIssueSeverity36
-> = z.enum(CollectionIssueSeverity36);
+export const StatusSeverity40$outboundSchema: z.ZodEnum<
+  typeof StatusSeverity40
+> = z.enum(StatusSeverity40);
 
 /** @internal */
-export type CollectionIssue36$Outbound = {
+export type DataCollectionIssue40$Outbound = {
   message: string;
   reason: string;
   severity: string;
@@ -24509,37 +24806,36 @@ export type CollectionIssue36$Outbound = {
 };
 
 /** @internal */
-export const CollectionIssue36$outboundSchema: z.ZodType<
-  CollectionIssue36$Outbound,
-  CollectionIssue36
+export const DataCollectionIssue40$outboundSchema: z.ZodType<
+  DataCollectionIssue40$Outbound,
+  DataCollectionIssue40
 > = z.object({
   message: z.string(),
-  reason: Reason36$outboundSchema,
-  severity: CollectionIssueSeverity36$outboundSchema,
+  reason: DataReason40$outboundSchema,
+  severity: StatusSeverity40$outboundSchema,
   source: z.string(),
 });
 
-export function collectionIssue36ToJSON(
-  collectionIssue36: CollectionIssue36,
+export function dataCollectionIssue40ToJSON(
+  dataCollectionIssue40: DataCollectionIssue40,
 ): string {
   return JSON.stringify(
-    CollectionIssue36$outboundSchema.parse(collectionIssue36),
+    DataCollectionIssue40$outboundSchema.parse(dataCollectionIssue40),
   );
 }
 
 /** @internal */
-export const Health36$outboundSchema: z.ZodEnum<typeof Health36> = z.enum(
-  Health36,
-);
+export const DataHealth40$outboundSchema: z.ZodEnum<typeof DataHealth40> = z
+  .enum(DataHealth40);
 
 /** @internal */
-export const StatusLifecycle36$outboundSchema: z.ZodEnum<
-  typeof StatusLifecycle36
-> = z.enum(StatusLifecycle36);
+export const StatusLifecycle40$outboundSchema: z.ZodEnum<
+  typeof StatusLifecycle40
+> = z.enum(StatusLifecycle40);
 
 /** @internal */
-export type HeartbeatStatus36$Outbound = {
-  collectionIssues: Array<CollectionIssue36$Outbound>;
+export type ResourceHeartbeatStatus40$Outbound = {
+  collectionIssues: Array<DataCollectionIssue40$Outbound>;
   health: string;
   lifecycle: string;
   message?: string | null | undefined;
@@ -24548,23 +24844,23 @@ export type HeartbeatStatus36$Outbound = {
 };
 
 /** @internal */
-export const HeartbeatStatus36$outboundSchema: z.ZodType<
-  HeartbeatStatus36$Outbound,
-  HeartbeatStatus36
+export const ResourceHeartbeatStatus40$outboundSchema: z.ZodType<
+  ResourceHeartbeatStatus40$Outbound,
+  ResourceHeartbeatStatus40
 > = z.object({
-  collectionIssues: z.array(z.lazy(() => CollectionIssue36$outboundSchema)),
-  health: Health36$outboundSchema,
-  lifecycle: StatusLifecycle36$outboundSchema,
+  collectionIssues: z.array(z.lazy(() => DataCollectionIssue40$outboundSchema)),
+  health: DataHealth40$outboundSchema,
+  lifecycle: StatusLifecycle40$outboundSchema,
   message: z.nullable(z.string()).optional(),
   partial: z.boolean(),
   stale: z.boolean(),
 });
 
-export function heartbeatStatus36ToJSON(
-  heartbeatStatus36: HeartbeatStatus36,
+export function resourceHeartbeatStatus40ToJSON(
+  resourceHeartbeatStatus40: ResourceHeartbeatStatus40,
 ): string {
   return JSON.stringify(
-    HeartbeatStatus36$outboundSchema.parse(heartbeatStatus36),
+    ResourceHeartbeatStatus40$outboundSchema.parse(resourceHeartbeatStatus40),
   );
 }
 
@@ -24588,7 +24884,7 @@ export type DataAwsIamRole1$Outbound = {
   roleId: string;
   roleName: string;
   stackPermissionsApplied: boolean;
-  status: HeartbeatStatus36$Outbound;
+  status: ResourceHeartbeatStatus40$Outbound;
   tagCount: number;
   backend: "awsIamRole";
 };
@@ -24616,7 +24912,7 @@ export const DataAwsIamRole1$outboundSchema: z.ZodType<
   roleId: z.string(),
   roleName: z.string(),
   stackPermissionsApplied: z.boolean(),
-  status: z.lazy(() => HeartbeatStatus36$outboundSchema),
+  status: z.lazy(() => ResourceHeartbeatStatus40$outboundSchema),
   tagCount: z.int(),
   backend: z.literal("awsIamRole"),
 });
@@ -24628,29 +24924,29 @@ export function dataAwsIamRole1ToJSON(
 }
 
 /** @internal */
-export type SyncReconcileRequestDataUnion9$Outbound =
+export type SyncReconcileRequestDataUnion10$Outbound =
   | DataAwsIamRole1$Outbound
   | DataGcpServiceAccount1$Outbound
   | DataAzureManagedIdentity1$Outbound
-  | DataLocal9$Outbound;
+  | DataLocal10$Outbound;
 
 /** @internal */
-export const SyncReconcileRequestDataUnion9$outboundSchema: z.ZodType<
-  SyncReconcileRequestDataUnion9$Outbound,
-  SyncReconcileRequestDataUnion9
+export const SyncReconcileRequestDataUnion10$outboundSchema: z.ZodType<
+  SyncReconcileRequestDataUnion10$Outbound,
+  SyncReconcileRequestDataUnion10
 > = z.union([
   z.lazy(() => DataAwsIamRole1$outboundSchema),
   z.lazy(() => DataGcpServiceAccount1$outboundSchema),
   z.lazy(() => DataAzureManagedIdentity1$outboundSchema),
-  z.lazy(() => DataLocal9$outboundSchema),
+  z.lazy(() => DataLocal10$outboundSchema),
 ]);
 
-export function syncReconcileRequestDataUnion9ToJSON(
-  syncReconcileRequestDataUnion9: SyncReconcileRequestDataUnion9,
+export function syncReconcileRequestDataUnion10ToJSON(
+  syncReconcileRequestDataUnion10: SyncReconcileRequestDataUnion10,
 ): string {
   return JSON.stringify(
-    SyncReconcileRequestDataUnion9$outboundSchema.parse(
-      syncReconcileRequestDataUnion9,
+    SyncReconcileRequestDataUnion10$outboundSchema.parse(
+      syncReconcileRequestDataUnion10,
     ),
   );
 }
@@ -24661,7 +24957,7 @@ export type DataServiceAccount$Outbound = {
     | DataAwsIamRole1$Outbound
     | DataGcpServiceAccount1$Outbound
     | DataAzureManagedIdentity1$Outbound
-    | DataLocal9$Outbound;
+    | DataLocal10$Outbound;
   resourceType: "service-account";
 };
 
@@ -24674,7 +24970,7 @@ export const DataServiceAccount$outboundSchema: z.ZodType<
     z.lazy(() => DataAwsIamRole1$outboundSchema),
     z.lazy(() => DataGcpServiceAccount1$outboundSchema),
     z.lazy(() => DataAzureManagedIdentity1$outboundSchema),
-    z.lazy(() => DataLocal9$outboundSchema),
+    z.lazy(() => DataLocal10$outboundSchema),
   ]),
   resourceType: z.literal("service-account"),
 });
@@ -24688,17 +24984,16 @@ export function dataServiceAccountToJSON(
 }
 
 /** @internal */
-export const Reason35$outboundSchema: z.ZodEnum<typeof Reason35> = z.enum(
-  Reason35,
-);
+export const DataReason39$outboundSchema: z.ZodEnum<typeof DataReason39> = z
+  .enum(DataReason39);
 
 /** @internal */
-export const CollectionIssueSeverity35$outboundSchema: z.ZodEnum<
-  typeof CollectionIssueSeverity35
-> = z.enum(CollectionIssueSeverity35);
+export const StatusSeverity39$outboundSchema: z.ZodEnum<
+  typeof StatusSeverity39
+> = z.enum(StatusSeverity39);
 
 /** @internal */
-export type CollectionIssue35$Outbound = {
+export type DataCollectionIssue39$Outbound = {
   message: string;
   reason: string;
   severity: string;
@@ -24706,37 +25001,36 @@ export type CollectionIssue35$Outbound = {
 };
 
 /** @internal */
-export const CollectionIssue35$outboundSchema: z.ZodType<
-  CollectionIssue35$Outbound,
-  CollectionIssue35
+export const DataCollectionIssue39$outboundSchema: z.ZodType<
+  DataCollectionIssue39$Outbound,
+  DataCollectionIssue39
 > = z.object({
   message: z.string(),
-  reason: Reason35$outboundSchema,
-  severity: CollectionIssueSeverity35$outboundSchema,
+  reason: DataReason39$outboundSchema,
+  severity: StatusSeverity39$outboundSchema,
   source: z.string(),
 });
 
-export function collectionIssue35ToJSON(
-  collectionIssue35: CollectionIssue35,
+export function dataCollectionIssue39ToJSON(
+  dataCollectionIssue39: DataCollectionIssue39,
 ): string {
   return JSON.stringify(
-    CollectionIssue35$outboundSchema.parse(collectionIssue35),
+    DataCollectionIssue39$outboundSchema.parse(dataCollectionIssue39),
   );
 }
 
 /** @internal */
-export const Health35$outboundSchema: z.ZodEnum<typeof Health35> = z.enum(
-  Health35,
-);
+export const DataHealth39$outboundSchema: z.ZodEnum<typeof DataHealth39> = z
+  .enum(DataHealth39);
 
 /** @internal */
-export const StatusLifecycle35$outboundSchema: z.ZodEnum<
-  typeof StatusLifecycle35
-> = z.enum(StatusLifecycle35);
+export const StatusLifecycle39$outboundSchema: z.ZodEnum<
+  typeof StatusLifecycle39
+> = z.enum(StatusLifecycle39);
 
 /** @internal */
-export type HeartbeatStatus35$Outbound = {
-  collectionIssues: Array<CollectionIssue35$Outbound>;
+export type ResourceHeartbeatStatus39$Outbound = {
+  collectionIssues: Array<DataCollectionIssue39$Outbound>;
   health: string;
   lifecycle: string;
   message?: string | null | undefined;
@@ -24745,42 +25039,42 @@ export type HeartbeatStatus35$Outbound = {
 };
 
 /** @internal */
-export const HeartbeatStatus35$outboundSchema: z.ZodType<
-  HeartbeatStatus35$Outbound,
-  HeartbeatStatus35
+export const ResourceHeartbeatStatus39$outboundSchema: z.ZodType<
+  ResourceHeartbeatStatus39$Outbound,
+  ResourceHeartbeatStatus39
 > = z.object({
-  collectionIssues: z.array(z.lazy(() => CollectionIssue35$outboundSchema)),
-  health: Health35$outboundSchema,
-  lifecycle: StatusLifecycle35$outboundSchema,
+  collectionIssues: z.array(z.lazy(() => DataCollectionIssue39$outboundSchema)),
+  health: DataHealth39$outboundSchema,
+  lifecycle: StatusLifecycle39$outboundSchema,
   message: z.nullable(z.string()).optional(),
   partial: z.boolean(),
   stale: z.boolean(),
 });
 
-export function heartbeatStatus35ToJSON(
-  heartbeatStatus35: HeartbeatStatus35,
+export function resourceHeartbeatStatus39ToJSON(
+  resourceHeartbeatStatus39: ResourceHeartbeatStatus39,
 ): string {
   return JSON.stringify(
-    HeartbeatStatus35$outboundSchema.parse(heartbeatStatus35),
+    ResourceHeartbeatStatus39$outboundSchema.parse(resourceHeartbeatStatus39),
   );
 }
 
 /** @internal */
-export type DataLocal8$Outbound = {
+export type DataLocal9$Outbound = {
   isDirectory?: boolean | null | undefined;
   modifiedAt?: string | null | undefined;
   path: string;
   pathExists: boolean;
   readonly?: boolean | null | undefined;
   secretMetadataListed: boolean;
-  status: HeartbeatStatus35$Outbound;
+  status: ResourceHeartbeatStatus39$Outbound;
   backend: "local";
 };
 
 /** @internal */
-export const DataLocal8$outboundSchema: z.ZodType<
-  DataLocal8$Outbound,
-  DataLocal8
+export const DataLocal9$outboundSchema: z.ZodType<
+  DataLocal9$Outbound,
+  DataLocal9
 > = z.object({
   isDirectory: z.nullable(z.boolean()).optional(),
   modifiedAt: z.nullable(z.date().transform(v => v.toISOString())).optional(),
@@ -24788,26 +25082,25 @@ export const DataLocal8$outboundSchema: z.ZodType<
   pathExists: z.boolean(),
   readonly: z.nullable(z.boolean()).optional(),
   secretMetadataListed: z.boolean(),
-  status: z.lazy(() => HeartbeatStatus35$outboundSchema),
+  status: z.lazy(() => ResourceHeartbeatStatus39$outboundSchema),
   backend: z.literal("local"),
 });
 
-export function dataLocal8ToJSON(dataLocal8: DataLocal8): string {
-  return JSON.stringify(DataLocal8$outboundSchema.parse(dataLocal8));
+export function dataLocal9ToJSON(dataLocal9: DataLocal9): string {
+  return JSON.stringify(DataLocal9$outboundSchema.parse(dataLocal9));
 }
 
 /** @internal */
-export const Reason34$outboundSchema: z.ZodEnum<typeof Reason34> = z.enum(
-  Reason34,
-);
+export const DataReason38$outboundSchema: z.ZodEnum<typeof DataReason38> = z
+  .enum(DataReason38);
 
 /** @internal */
-export const CollectionIssueSeverity34$outboundSchema: z.ZodEnum<
-  typeof CollectionIssueSeverity34
-> = z.enum(CollectionIssueSeverity34);
+export const StatusSeverity38$outboundSchema: z.ZodEnum<
+  typeof StatusSeverity38
+> = z.enum(StatusSeverity38);
 
 /** @internal */
-export type CollectionIssue34$Outbound = {
+export type DataCollectionIssue38$Outbound = {
   message: string;
   reason: string;
   severity: string;
@@ -24815,37 +25108,36 @@ export type CollectionIssue34$Outbound = {
 };
 
 /** @internal */
-export const CollectionIssue34$outboundSchema: z.ZodType<
-  CollectionIssue34$Outbound,
-  CollectionIssue34
+export const DataCollectionIssue38$outboundSchema: z.ZodType<
+  DataCollectionIssue38$Outbound,
+  DataCollectionIssue38
 > = z.object({
   message: z.string(),
-  reason: Reason34$outboundSchema,
-  severity: CollectionIssueSeverity34$outboundSchema,
+  reason: DataReason38$outboundSchema,
+  severity: StatusSeverity38$outboundSchema,
   source: z.string(),
 });
 
-export function collectionIssue34ToJSON(
-  collectionIssue34: CollectionIssue34,
+export function dataCollectionIssue38ToJSON(
+  dataCollectionIssue38: DataCollectionIssue38,
 ): string {
   return JSON.stringify(
-    CollectionIssue34$outboundSchema.parse(collectionIssue34),
+    DataCollectionIssue38$outboundSchema.parse(dataCollectionIssue38),
   );
 }
 
 /** @internal */
-export const Health34$outboundSchema: z.ZodEnum<typeof Health34> = z.enum(
-  Health34,
-);
+export const DataHealth38$outboundSchema: z.ZodEnum<typeof DataHealth38> = z
+  .enum(DataHealth38);
 
 /** @internal */
-export const StatusLifecycle34$outboundSchema: z.ZodEnum<
-  typeof StatusLifecycle34
-> = z.enum(StatusLifecycle34);
+export const StatusLifecycle38$outboundSchema: z.ZodEnum<
+  typeof StatusLifecycle38
+> = z.enum(StatusLifecycle38);
 
 /** @internal */
-export type HeartbeatStatus34$Outbound = {
-  collectionIssues: Array<CollectionIssue34$Outbound>;
+export type ResourceHeartbeatStatus38$Outbound = {
+  collectionIssues: Array<DataCollectionIssue38$Outbound>;
   health: string;
   lifecycle: string;
   message?: string | null | undefined;
@@ -24854,23 +25146,23 @@ export type HeartbeatStatus34$Outbound = {
 };
 
 /** @internal */
-export const HeartbeatStatus34$outboundSchema: z.ZodType<
-  HeartbeatStatus34$Outbound,
-  HeartbeatStatus34
+export const ResourceHeartbeatStatus38$outboundSchema: z.ZodType<
+  ResourceHeartbeatStatus38$Outbound,
+  ResourceHeartbeatStatus38
 > = z.object({
-  collectionIssues: z.array(z.lazy(() => CollectionIssue34$outboundSchema)),
-  health: Health34$outboundSchema,
-  lifecycle: StatusLifecycle34$outboundSchema,
+  collectionIssues: z.array(z.lazy(() => DataCollectionIssue38$outboundSchema)),
+  health: DataHealth38$outboundSchema,
+  lifecycle: StatusLifecycle38$outboundSchema,
   message: z.nullable(z.string()).optional(),
   partial: z.boolean(),
   stale: z.boolean(),
 });
 
-export function heartbeatStatus34ToJSON(
-  heartbeatStatus34: HeartbeatStatus34,
+export function resourceHeartbeatStatus38ToJSON(
+  resourceHeartbeatStatus38: ResourceHeartbeatStatus38,
 ): string {
   return JSON.stringify(
-    HeartbeatStatus34$outboundSchema.parse(heartbeatStatus34),
+    ResourceHeartbeatStatus38$outboundSchema.parse(resourceHeartbeatStatus38),
   );
 }
 
@@ -24879,7 +25171,7 @@ export type DataKubernetesSecret$Outbound = {
   namespace: string;
   prefix: string;
   secretMetadataListed: boolean;
-  status: HeartbeatStatus34$Outbound;
+  status: ResourceHeartbeatStatus38$Outbound;
   backend: "kubernetesSecret";
 };
 
@@ -24891,7 +25183,7 @@ export const DataKubernetesSecret$outboundSchema: z.ZodType<
   namespace: z.string(),
   prefix: z.string(),
   secretMetadataListed: z.boolean(),
-  status: z.lazy(() => HeartbeatStatus34$outboundSchema),
+  status: z.lazy(() => ResourceHeartbeatStatus38$outboundSchema),
   backend: z.literal("kubernetesSecret"),
 });
 
@@ -24904,17 +25196,16 @@ export function dataKubernetesSecretToJSON(
 }
 
 /** @internal */
-export const Reason33$outboundSchema: z.ZodEnum<typeof Reason33> = z.enum(
-  Reason33,
-);
+export const DataReason37$outboundSchema: z.ZodEnum<typeof DataReason37> = z
+  .enum(DataReason37);
 
 /** @internal */
-export const CollectionIssueSeverity33$outboundSchema: z.ZodEnum<
-  typeof CollectionIssueSeverity33
-> = z.enum(CollectionIssueSeverity33);
+export const StatusSeverity37$outboundSchema: z.ZodEnum<
+  typeof StatusSeverity37
+> = z.enum(StatusSeverity37);
 
 /** @internal */
-export type CollectionIssue33$Outbound = {
+export type DataCollectionIssue37$Outbound = {
   message: string;
   reason: string;
   severity: string;
@@ -24922,37 +25213,36 @@ export type CollectionIssue33$Outbound = {
 };
 
 /** @internal */
-export const CollectionIssue33$outboundSchema: z.ZodType<
-  CollectionIssue33$Outbound,
-  CollectionIssue33
+export const DataCollectionIssue37$outboundSchema: z.ZodType<
+  DataCollectionIssue37$Outbound,
+  DataCollectionIssue37
 > = z.object({
   message: z.string(),
-  reason: Reason33$outboundSchema,
-  severity: CollectionIssueSeverity33$outboundSchema,
+  reason: DataReason37$outboundSchema,
+  severity: StatusSeverity37$outboundSchema,
   source: z.string(),
 });
 
-export function collectionIssue33ToJSON(
-  collectionIssue33: CollectionIssue33,
+export function dataCollectionIssue37ToJSON(
+  dataCollectionIssue37: DataCollectionIssue37,
 ): string {
   return JSON.stringify(
-    CollectionIssue33$outboundSchema.parse(collectionIssue33),
+    DataCollectionIssue37$outboundSchema.parse(dataCollectionIssue37),
   );
 }
 
 /** @internal */
-export const Health33$outboundSchema: z.ZodEnum<typeof Health33> = z.enum(
-  Health33,
-);
+export const DataHealth37$outboundSchema: z.ZodEnum<typeof DataHealth37> = z
+  .enum(DataHealth37);
 
 /** @internal */
-export const StatusLifecycle33$outboundSchema: z.ZodEnum<
-  typeof StatusLifecycle33
-> = z.enum(StatusLifecycle33);
+export const StatusLifecycle37$outboundSchema: z.ZodEnum<
+  typeof StatusLifecycle37
+> = z.enum(StatusLifecycle37);
 
 /** @internal */
-export type HeartbeatStatus33$Outbound = {
-  collectionIssues: Array<CollectionIssue33$Outbound>;
+export type ResourceHeartbeatStatus37$Outbound = {
+  collectionIssues: Array<DataCollectionIssue37$Outbound>;
   health: string;
   lifecycle: string;
   message?: string | null | undefined;
@@ -24961,23 +25251,23 @@ export type HeartbeatStatus33$Outbound = {
 };
 
 /** @internal */
-export const HeartbeatStatus33$outboundSchema: z.ZodType<
-  HeartbeatStatus33$Outbound,
-  HeartbeatStatus33
+export const ResourceHeartbeatStatus37$outboundSchema: z.ZodType<
+  ResourceHeartbeatStatus37$Outbound,
+  ResourceHeartbeatStatus37
 > = z.object({
-  collectionIssues: z.array(z.lazy(() => CollectionIssue33$outboundSchema)),
-  health: Health33$outboundSchema,
-  lifecycle: StatusLifecycle33$outboundSchema,
+  collectionIssues: z.array(z.lazy(() => DataCollectionIssue37$outboundSchema)),
+  health: DataHealth37$outboundSchema,
+  lifecycle: StatusLifecycle37$outboundSchema,
   message: z.nullable(z.string()).optional(),
   partial: z.boolean(),
   stale: z.boolean(),
 });
 
-export function heartbeatStatus33ToJSON(
-  heartbeatStatus33: HeartbeatStatus33,
+export function resourceHeartbeatStatus37ToJSON(
+  resourceHeartbeatStatus37: ResourceHeartbeatStatus37,
 ): string {
   return JSON.stringify(
-    HeartbeatStatus33$outboundSchema.parse(heartbeatStatus33),
+    ResourceHeartbeatStatus37$outboundSchema.parse(resourceHeartbeatStatus37),
   );
 }
 
@@ -24998,7 +25288,7 @@ export type DataAzureKeyVault$Outbound = {
   skuName?: string | null | undefined;
   softDeleteEnabled: boolean;
   softDeleteRetentionDays: number;
-  status: HeartbeatStatus33$Outbound;
+  status: ResourceHeartbeatStatus37$Outbound;
   vaultUri?: string | null | undefined;
   backend: "azureKeyVault";
 };
@@ -25023,7 +25313,7 @@ export const DataAzureKeyVault$outboundSchema: z.ZodType<
   skuName: z.nullable(z.string()).optional(),
   softDeleteEnabled: z.boolean(),
   softDeleteRetentionDays: z.int(),
-  status: z.lazy(() => HeartbeatStatus33$outboundSchema),
+  status: z.lazy(() => ResourceHeartbeatStatus37$outboundSchema),
   vaultUri: z.nullable(z.string()).optional(),
   backend: z.literal("azureKeyVault"),
 });
@@ -25037,17 +25327,16 @@ export function dataAzureKeyVaultToJSON(
 }
 
 /** @internal */
-export const Reason32$outboundSchema: z.ZodEnum<typeof Reason32> = z.enum(
-  Reason32,
-);
+export const DataReason36$outboundSchema: z.ZodEnum<typeof DataReason36> = z
+  .enum(DataReason36);
 
 /** @internal */
-export const CollectionIssueSeverity32$outboundSchema: z.ZodEnum<
-  typeof CollectionIssueSeverity32
-> = z.enum(CollectionIssueSeverity32);
+export const StatusSeverity36$outboundSchema: z.ZodEnum<
+  typeof StatusSeverity36
+> = z.enum(StatusSeverity36);
 
 /** @internal */
-export type CollectionIssue32$Outbound = {
+export type DataCollectionIssue36$Outbound = {
   message: string;
   reason: string;
   severity: string;
@@ -25055,37 +25344,36 @@ export type CollectionIssue32$Outbound = {
 };
 
 /** @internal */
-export const CollectionIssue32$outboundSchema: z.ZodType<
-  CollectionIssue32$Outbound,
-  CollectionIssue32
+export const DataCollectionIssue36$outboundSchema: z.ZodType<
+  DataCollectionIssue36$Outbound,
+  DataCollectionIssue36
 > = z.object({
   message: z.string(),
-  reason: Reason32$outboundSchema,
-  severity: CollectionIssueSeverity32$outboundSchema,
+  reason: DataReason36$outboundSchema,
+  severity: StatusSeverity36$outboundSchema,
   source: z.string(),
 });
 
-export function collectionIssue32ToJSON(
-  collectionIssue32: CollectionIssue32,
+export function dataCollectionIssue36ToJSON(
+  dataCollectionIssue36: DataCollectionIssue36,
 ): string {
   return JSON.stringify(
-    CollectionIssue32$outboundSchema.parse(collectionIssue32),
+    DataCollectionIssue36$outboundSchema.parse(dataCollectionIssue36),
   );
 }
 
 /** @internal */
-export const Health32$outboundSchema: z.ZodEnum<typeof Health32> = z.enum(
-  Health32,
-);
+export const DataHealth36$outboundSchema: z.ZodEnum<typeof DataHealth36> = z
+  .enum(DataHealth36);
 
 /** @internal */
-export const StatusLifecycle32$outboundSchema: z.ZodEnum<
-  typeof StatusLifecycle32
-> = z.enum(StatusLifecycle32);
+export const StatusLifecycle36$outboundSchema: z.ZodEnum<
+  typeof StatusLifecycle36
+> = z.enum(StatusLifecycle36);
 
 /** @internal */
-export type HeartbeatStatus32$Outbound = {
-  collectionIssues: Array<CollectionIssue32$Outbound>;
+export type ResourceHeartbeatStatus36$Outbound = {
+  collectionIssues: Array<DataCollectionIssue36$Outbound>;
   health: string;
   lifecycle: string;
   message?: string | null | undefined;
@@ -25094,23 +25382,23 @@ export type HeartbeatStatus32$Outbound = {
 };
 
 /** @internal */
-export const HeartbeatStatus32$outboundSchema: z.ZodType<
-  HeartbeatStatus32$Outbound,
-  HeartbeatStatus32
+export const ResourceHeartbeatStatus36$outboundSchema: z.ZodType<
+  ResourceHeartbeatStatus36$Outbound,
+  ResourceHeartbeatStatus36
 > = z.object({
-  collectionIssues: z.array(z.lazy(() => CollectionIssue32$outboundSchema)),
-  health: Health32$outboundSchema,
-  lifecycle: StatusLifecycle32$outboundSchema,
+  collectionIssues: z.array(z.lazy(() => DataCollectionIssue36$outboundSchema)),
+  health: DataHealth36$outboundSchema,
+  lifecycle: StatusLifecycle36$outboundSchema,
   message: z.nullable(z.string()).optional(),
   partial: z.boolean(),
   stale: z.boolean(),
 });
 
-export function heartbeatStatus32ToJSON(
-  heartbeatStatus32: HeartbeatStatus32,
+export function resourceHeartbeatStatus36ToJSON(
+  resourceHeartbeatStatus36: ResourceHeartbeatStatus36,
 ): string {
   return JSON.stringify(
-    HeartbeatStatus32$outboundSchema.parse(heartbeatStatus32),
+    ResourceHeartbeatStatus36$outboundSchema.parse(resourceHeartbeatStatus36),
   );
 }
 
@@ -25120,7 +25408,7 @@ export type DataGcpSecretManager$Outbound = {
   prefix: string;
   projectId: string;
   secretMetadataListed: boolean;
-  status: HeartbeatStatus32$Outbound;
+  status: ResourceHeartbeatStatus36$Outbound;
   backend: "gcpSecretManager";
 };
 
@@ -25133,7 +25421,7 @@ export const DataGcpSecretManager$outboundSchema: z.ZodType<
   prefix: z.string(),
   projectId: z.string(),
   secretMetadataListed: z.boolean(),
-  status: z.lazy(() => HeartbeatStatus32$outboundSchema),
+  status: z.lazy(() => ResourceHeartbeatStatus36$outboundSchema),
   backend: z.literal("gcpSecretManager"),
 });
 
@@ -25146,17 +25434,16 @@ export function dataGcpSecretManagerToJSON(
 }
 
 /** @internal */
-export const Reason31$outboundSchema: z.ZodEnum<typeof Reason31> = z.enum(
-  Reason31,
-);
+export const DataReason35$outboundSchema: z.ZodEnum<typeof DataReason35> = z
+  .enum(DataReason35);
 
 /** @internal */
-export const CollectionIssueSeverity31$outboundSchema: z.ZodEnum<
-  typeof CollectionIssueSeverity31
-> = z.enum(CollectionIssueSeverity31);
+export const StatusSeverity35$outboundSchema: z.ZodEnum<
+  typeof StatusSeverity35
+> = z.enum(StatusSeverity35);
 
 /** @internal */
-export type CollectionIssue31$Outbound = {
+export type DataCollectionIssue35$Outbound = {
   message: string;
   reason: string;
   severity: string;
@@ -25164,37 +25451,36 @@ export type CollectionIssue31$Outbound = {
 };
 
 /** @internal */
-export const CollectionIssue31$outboundSchema: z.ZodType<
-  CollectionIssue31$Outbound,
-  CollectionIssue31
+export const DataCollectionIssue35$outboundSchema: z.ZodType<
+  DataCollectionIssue35$Outbound,
+  DataCollectionIssue35
 > = z.object({
   message: z.string(),
-  reason: Reason31$outboundSchema,
-  severity: CollectionIssueSeverity31$outboundSchema,
+  reason: DataReason35$outboundSchema,
+  severity: StatusSeverity35$outboundSchema,
   source: z.string(),
 });
 
-export function collectionIssue31ToJSON(
-  collectionIssue31: CollectionIssue31,
+export function dataCollectionIssue35ToJSON(
+  dataCollectionIssue35: DataCollectionIssue35,
 ): string {
   return JSON.stringify(
-    CollectionIssue31$outboundSchema.parse(collectionIssue31),
+    DataCollectionIssue35$outboundSchema.parse(dataCollectionIssue35),
   );
 }
 
 /** @internal */
-export const Health31$outboundSchema: z.ZodEnum<typeof Health31> = z.enum(
-  Health31,
-);
+export const DataHealth35$outboundSchema: z.ZodEnum<typeof DataHealth35> = z
+  .enum(DataHealth35);
 
 /** @internal */
-export const StatusLifecycle31$outboundSchema: z.ZodEnum<
-  typeof StatusLifecycle31
-> = z.enum(StatusLifecycle31);
+export const StatusLifecycle35$outboundSchema: z.ZodEnum<
+  typeof StatusLifecycle35
+> = z.enum(StatusLifecycle35);
 
 /** @internal */
-export type HeartbeatStatus31$Outbound = {
-  collectionIssues: Array<CollectionIssue31$Outbound>;
+export type ResourceHeartbeatStatus35$Outbound = {
+  collectionIssues: Array<DataCollectionIssue35$Outbound>;
   health: string;
   lifecycle: string;
   message?: string | null | undefined;
@@ -25203,23 +25489,23 @@ export type HeartbeatStatus31$Outbound = {
 };
 
 /** @internal */
-export const HeartbeatStatus31$outboundSchema: z.ZodType<
-  HeartbeatStatus31$Outbound,
-  HeartbeatStatus31
+export const ResourceHeartbeatStatus35$outboundSchema: z.ZodType<
+  ResourceHeartbeatStatus35$Outbound,
+  ResourceHeartbeatStatus35
 > = z.object({
-  collectionIssues: z.array(z.lazy(() => CollectionIssue31$outboundSchema)),
-  health: Health31$outboundSchema,
-  lifecycle: StatusLifecycle31$outboundSchema,
+  collectionIssues: z.array(z.lazy(() => DataCollectionIssue35$outboundSchema)),
+  health: DataHealth35$outboundSchema,
+  lifecycle: StatusLifecycle35$outboundSchema,
   message: z.nullable(z.string()).optional(),
   partial: z.boolean(),
   stale: z.boolean(),
 });
 
-export function heartbeatStatus31ToJSON(
-  heartbeatStatus31: HeartbeatStatus31,
+export function resourceHeartbeatStatus35ToJSON(
+  resourceHeartbeatStatus35: ResourceHeartbeatStatus35,
 ): string {
   return JSON.stringify(
-    HeartbeatStatus31$outboundSchema.parse(heartbeatStatus31),
+    ResourceHeartbeatStatus35$outboundSchema.parse(resourceHeartbeatStatus35),
   );
 }
 
@@ -25237,7 +25523,7 @@ export type DataAwsParameterStore$Outbound = {
   sampledSecureStringCount?: number | null | undefined;
   sampledStringCount?: number | null | undefined;
   sampledStringListCount?: number | null | undefined;
-  status: HeartbeatStatus31$Outbound;
+  status: ResourceHeartbeatStatus35$Outbound;
   backend: "awsParameterStore";
 };
 
@@ -25259,7 +25545,7 @@ export const DataAwsParameterStore$outboundSchema: z.ZodType<
   sampledSecureStringCount: z.nullable(z.int()).optional(),
   sampledStringCount: z.nullable(z.int()).optional(),
   sampledStringListCount: z.nullable(z.int()).optional(),
-  status: z.lazy(() => HeartbeatStatus31$outboundSchema),
+  status: z.lazy(() => ResourceHeartbeatStatus35$outboundSchema),
   backend: z.literal("awsParameterStore"),
 });
 
@@ -25272,11 +25558,484 @@ export function dataAwsParameterStoreToJSON(
 }
 
 /** @internal */
-export type SyncReconcileRequestDataUnion8$Outbound =
+export type SyncReconcileRequestDataUnion9$Outbound =
   | DataAwsParameterStore$Outbound
   | DataGcpSecretManager$Outbound
   | DataAzureKeyVault$Outbound
   | DataKubernetesSecret$Outbound
+  | DataLocal9$Outbound;
+
+/** @internal */
+export const SyncReconcileRequestDataUnion9$outboundSchema: z.ZodType<
+  SyncReconcileRequestDataUnion9$Outbound,
+  SyncReconcileRequestDataUnion9
+> = z.union([
+  z.lazy(() => DataAwsParameterStore$outboundSchema),
+  z.lazy(() => DataGcpSecretManager$outboundSchema),
+  z.lazy(() => DataAzureKeyVault$outboundSchema),
+  z.lazy(() => DataKubernetesSecret$outboundSchema),
+  z.lazy(() => DataLocal9$outboundSchema),
+]);
+
+export function syncReconcileRequestDataUnion9ToJSON(
+  syncReconcileRequestDataUnion9: SyncReconcileRequestDataUnion9,
+): string {
+  return JSON.stringify(
+    SyncReconcileRequestDataUnion9$outboundSchema.parse(
+      syncReconcileRequestDataUnion9,
+    ),
+  );
+}
+
+/** @internal */
+export type DataVault$Outbound = {
+  data:
+    | DataAwsParameterStore$Outbound
+    | DataGcpSecretManager$Outbound
+    | DataAzureKeyVault$Outbound
+    | DataKubernetesSecret$Outbound
+    | DataLocal9$Outbound;
+  resourceType: "vault";
+};
+
+/** @internal */
+export const DataVault$outboundSchema: z.ZodType<
+  DataVault$Outbound,
+  DataVault
+> = z.object({
+  data: z.union([
+    z.lazy(() => DataAwsParameterStore$outboundSchema),
+    z.lazy(() => DataGcpSecretManager$outboundSchema),
+    z.lazy(() => DataAzureKeyVault$outboundSchema),
+    z.lazy(() => DataKubernetesSecret$outboundSchema),
+    z.lazy(() => DataLocal9$outboundSchema),
+  ]),
+  resourceType: z.literal("vault"),
+});
+
+export function dataVaultToJSON(dataVault: DataVault): string {
+  return JSON.stringify(DataVault$outboundSchema.parse(dataVault));
+}
+
+/** @internal */
+export const DataReason34$outboundSchema: z.ZodEnum<typeof DataReason34> = z
+  .enum(DataReason34);
+
+/** @internal */
+export const StatusSeverity34$outboundSchema: z.ZodEnum<
+  typeof StatusSeverity34
+> = z.enum(StatusSeverity34);
+
+/** @internal */
+export type DataCollectionIssue34$Outbound = {
+  message: string;
+  reason: string;
+  severity: string;
+  source: string;
+};
+
+/** @internal */
+export const DataCollectionIssue34$outboundSchema: z.ZodType<
+  DataCollectionIssue34$Outbound,
+  DataCollectionIssue34
+> = z.object({
+  message: z.string(),
+  reason: DataReason34$outboundSchema,
+  severity: StatusSeverity34$outboundSchema,
+  source: z.string(),
+});
+
+export function dataCollectionIssue34ToJSON(
+  dataCollectionIssue34: DataCollectionIssue34,
+): string {
+  return JSON.stringify(
+    DataCollectionIssue34$outboundSchema.parse(dataCollectionIssue34),
+  );
+}
+
+/** @internal */
+export const DataHealth34$outboundSchema: z.ZodEnum<typeof DataHealth34> = z
+  .enum(DataHealth34);
+
+/** @internal */
+export const StatusLifecycle34$outboundSchema: z.ZodEnum<
+  typeof StatusLifecycle34
+> = z.enum(StatusLifecycle34);
+
+/** @internal */
+export type ResourceHeartbeatStatus34$Outbound = {
+  collectionIssues: Array<DataCollectionIssue34$Outbound>;
+  health: string;
+  lifecycle: string;
+  message?: string | null | undefined;
+  partial: boolean;
+  stale: boolean;
+};
+
+/** @internal */
+export const ResourceHeartbeatStatus34$outboundSchema: z.ZodType<
+  ResourceHeartbeatStatus34$Outbound,
+  ResourceHeartbeatStatus34
+> = z.object({
+  collectionIssues: z.array(z.lazy(() => DataCollectionIssue34$outboundSchema)),
+  health: DataHealth34$outboundSchema,
+  lifecycle: StatusLifecycle34$outboundSchema,
+  message: z.nullable(z.string()).optional(),
+  partial: z.boolean(),
+  stale: z.boolean(),
+});
+
+export function resourceHeartbeatStatus34ToJSON(
+  resourceHeartbeatStatus34: ResourceHeartbeatStatus34,
+): string {
+  return JSON.stringify(
+    ResourceHeartbeatStatus34$outboundSchema.parse(resourceHeartbeatStatus34),
+  );
+}
+
+/** @internal */
+export type DataLocal8$Outbound = {
+  name: string;
+  port?: number | null | undefined;
+  processRunning: boolean;
+  status: ResourceHeartbeatStatus34$Outbound;
+  version: string;
+  backend: "local";
+};
+
+/** @internal */
+export const DataLocal8$outboundSchema: z.ZodType<
+  DataLocal8$Outbound,
+  DataLocal8
+> = z.object({
+  name: z.string(),
+  port: z.nullable(z.int()).optional(),
+  processRunning: z.boolean(),
+  status: z.lazy(() => ResourceHeartbeatStatus34$outboundSchema),
+  version: z.string(),
+  backend: z.literal("local"),
+});
+
+export function dataLocal8ToJSON(dataLocal8: DataLocal8): string {
+  return JSON.stringify(DataLocal8$outboundSchema.parse(dataLocal8));
+}
+
+/** @internal */
+export const DataReason33$outboundSchema: z.ZodEnum<typeof DataReason33> = z
+  .enum(DataReason33);
+
+/** @internal */
+export const StatusSeverity33$outboundSchema: z.ZodEnum<
+  typeof StatusSeverity33
+> = z.enum(StatusSeverity33);
+
+/** @internal */
+export type DataCollectionIssue33$Outbound = {
+  message: string;
+  reason: string;
+  severity: string;
+  source: string;
+};
+
+/** @internal */
+export const DataCollectionIssue33$outboundSchema: z.ZodType<
+  DataCollectionIssue33$Outbound,
+  DataCollectionIssue33
+> = z.object({
+  message: z.string(),
+  reason: DataReason33$outboundSchema,
+  severity: StatusSeverity33$outboundSchema,
+  source: z.string(),
+});
+
+export function dataCollectionIssue33ToJSON(
+  dataCollectionIssue33: DataCollectionIssue33,
+): string {
+  return JSON.stringify(
+    DataCollectionIssue33$outboundSchema.parse(dataCollectionIssue33),
+  );
+}
+
+/** @internal */
+export const DataHealth33$outboundSchema: z.ZodEnum<typeof DataHealth33> = z
+  .enum(DataHealth33);
+
+/** @internal */
+export const StatusLifecycle33$outboundSchema: z.ZodEnum<
+  typeof StatusLifecycle33
+> = z.enum(StatusLifecycle33);
+
+/** @internal */
+export type ResourceHeartbeatStatus33$Outbound = {
+  collectionIssues: Array<DataCollectionIssue33$Outbound>;
+  health: string;
+  lifecycle: string;
+  message?: string | null | undefined;
+  partial: boolean;
+  stale: boolean;
+};
+
+/** @internal */
+export const ResourceHeartbeatStatus33$outboundSchema: z.ZodType<
+  ResourceHeartbeatStatus33$Outbound,
+  ResourceHeartbeatStatus33
+> = z.object({
+  collectionIssues: z.array(z.lazy(() => DataCollectionIssue33$outboundSchema)),
+  health: DataHealth33$outboundSchema,
+  lifecycle: StatusLifecycle33$outboundSchema,
+  message: z.nullable(z.string()).optional(),
+  partial: z.boolean(),
+  stale: z.boolean(),
+});
+
+export function resourceHeartbeatStatus33ToJSON(
+  resourceHeartbeatStatus33: ResourceHeartbeatStatus33,
+): string {
+  return JSON.stringify(
+    ResourceHeartbeatStatus33$outboundSchema.parse(resourceHeartbeatStatus33),
+  );
+}
+
+/** @internal */
+export type DataFlexibleServer$Outbound = {
+  serverName: string;
+  state?: string | null | undefined;
+  status: ResourceHeartbeatStatus33$Outbound;
+  version?: string | null | undefined;
+  backend: "flexibleServer";
+};
+
+/** @internal */
+export const DataFlexibleServer$outboundSchema: z.ZodType<
+  DataFlexibleServer$Outbound,
+  DataFlexibleServer
+> = z.object({
+  serverName: z.string(),
+  state: z.nullable(z.string()).optional(),
+  status: z.lazy(() => ResourceHeartbeatStatus33$outboundSchema),
+  version: z.nullable(z.string()).optional(),
+  backend: z.literal("flexibleServer"),
+});
+
+export function dataFlexibleServerToJSON(
+  dataFlexibleServer: DataFlexibleServer,
+): string {
+  return JSON.stringify(
+    DataFlexibleServer$outboundSchema.parse(dataFlexibleServer),
+  );
+}
+
+/** @internal */
+export const DataReason32$outboundSchema: z.ZodEnum<typeof DataReason32> = z
+  .enum(DataReason32);
+
+/** @internal */
+export const StatusSeverity32$outboundSchema: z.ZodEnum<
+  typeof StatusSeverity32
+> = z.enum(StatusSeverity32);
+
+/** @internal */
+export type DataCollectionIssue32$Outbound = {
+  message: string;
+  reason: string;
+  severity: string;
+  source: string;
+};
+
+/** @internal */
+export const DataCollectionIssue32$outboundSchema: z.ZodType<
+  DataCollectionIssue32$Outbound,
+  DataCollectionIssue32
+> = z.object({
+  message: z.string(),
+  reason: DataReason32$outboundSchema,
+  severity: StatusSeverity32$outboundSchema,
+  source: z.string(),
+});
+
+export function dataCollectionIssue32ToJSON(
+  dataCollectionIssue32: DataCollectionIssue32,
+): string {
+  return JSON.stringify(
+    DataCollectionIssue32$outboundSchema.parse(dataCollectionIssue32),
+  );
+}
+
+/** @internal */
+export const DataHealth32$outboundSchema: z.ZodEnum<typeof DataHealth32> = z
+  .enum(DataHealth32);
+
+/** @internal */
+export const StatusLifecycle32$outboundSchema: z.ZodEnum<
+  typeof StatusLifecycle32
+> = z.enum(StatusLifecycle32);
+
+/** @internal */
+export type ResourceHeartbeatStatus32$Outbound = {
+  collectionIssues: Array<DataCollectionIssue32$Outbound>;
+  health: string;
+  lifecycle: string;
+  message?: string | null | undefined;
+  partial: boolean;
+  stale: boolean;
+};
+
+/** @internal */
+export const ResourceHeartbeatStatus32$outboundSchema: z.ZodType<
+  ResourceHeartbeatStatus32$Outbound,
+  ResourceHeartbeatStatus32
+> = z.object({
+  collectionIssues: z.array(z.lazy(() => DataCollectionIssue32$outboundSchema)),
+  health: DataHealth32$outboundSchema,
+  lifecycle: StatusLifecycle32$outboundSchema,
+  message: z.nullable(z.string()).optional(),
+  partial: z.boolean(),
+  stale: z.boolean(),
+});
+
+export function resourceHeartbeatStatus32ToJSON(
+  resourceHeartbeatStatus32: ResourceHeartbeatStatus32,
+): string {
+  return JSON.stringify(
+    ResourceHeartbeatStatus32$outboundSchema.parse(resourceHeartbeatStatus32),
+  );
+}
+
+/** @internal */
+export type DataCloudSQL$Outbound = {
+  databaseVersion?: string | null | undefined;
+  instanceName: string;
+  state?: string | null | undefined;
+  status: ResourceHeartbeatStatus32$Outbound;
+  backend: "cloudSql";
+};
+
+/** @internal */
+export const DataCloudSQL$outboundSchema: z.ZodType<
+  DataCloudSQL$Outbound,
+  DataCloudSQL
+> = z.object({
+  databaseVersion: z.nullable(z.string()).optional(),
+  instanceName: z.string(),
+  state: z.nullable(z.string()).optional(),
+  status: z.lazy(() => ResourceHeartbeatStatus32$outboundSchema),
+  backend: z.literal("cloudSql"),
+});
+
+export function dataCloudSQLToJSON(dataCloudSQL: DataCloudSQL): string {
+  return JSON.stringify(DataCloudSQL$outboundSchema.parse(dataCloudSQL));
+}
+
+/** @internal */
+export const DataReason31$outboundSchema: z.ZodEnum<typeof DataReason31> = z
+  .enum(DataReason31);
+
+/** @internal */
+export const StatusSeverity31$outboundSchema: z.ZodEnum<
+  typeof StatusSeverity31
+> = z.enum(StatusSeverity31);
+
+/** @internal */
+export type DataCollectionIssue31$Outbound = {
+  message: string;
+  reason: string;
+  severity: string;
+  source: string;
+};
+
+/** @internal */
+export const DataCollectionIssue31$outboundSchema: z.ZodType<
+  DataCollectionIssue31$Outbound,
+  DataCollectionIssue31
+> = z.object({
+  message: z.string(),
+  reason: DataReason31$outboundSchema,
+  severity: StatusSeverity31$outboundSchema,
+  source: z.string(),
+});
+
+export function dataCollectionIssue31ToJSON(
+  dataCollectionIssue31: DataCollectionIssue31,
+): string {
+  return JSON.stringify(
+    DataCollectionIssue31$outboundSchema.parse(dataCollectionIssue31),
+  );
+}
+
+/** @internal */
+export const DataHealth31$outboundSchema: z.ZodEnum<typeof DataHealth31> = z
+  .enum(DataHealth31);
+
+/** @internal */
+export const StatusLifecycle31$outboundSchema: z.ZodEnum<
+  typeof StatusLifecycle31
+> = z.enum(StatusLifecycle31);
+
+/** @internal */
+export type ResourceHeartbeatStatus31$Outbound = {
+  collectionIssues: Array<DataCollectionIssue31$Outbound>;
+  health: string;
+  lifecycle: string;
+  message?: string | null | undefined;
+  partial: boolean;
+  stale: boolean;
+};
+
+/** @internal */
+export const ResourceHeartbeatStatus31$outboundSchema: z.ZodType<
+  ResourceHeartbeatStatus31$Outbound,
+  ResourceHeartbeatStatus31
+> = z.object({
+  collectionIssues: z.array(z.lazy(() => DataCollectionIssue31$outboundSchema)),
+  health: DataHealth31$outboundSchema,
+  lifecycle: StatusLifecycle31$outboundSchema,
+  message: z.nullable(z.string()).optional(),
+  partial: z.boolean(),
+  stale: z.boolean(),
+});
+
+export function resourceHeartbeatStatus31ToJSON(
+  resourceHeartbeatStatus31: ResourceHeartbeatStatus31,
+): string {
+  return JSON.stringify(
+    ResourceHeartbeatStatus31$outboundSchema.parse(resourceHeartbeatStatus31),
+  );
+}
+
+/** @internal */
+export type DataAurora$Outbound = {
+  clusterIdentifier: string;
+  endpoint?: string | null | undefined;
+  engineVersion?: string | null | undefined;
+  neverPauses: boolean;
+  serverlessCapacity?: number | null | undefined;
+  status: ResourceHeartbeatStatus31$Outbound;
+  backend: "aurora";
+};
+
+/** @internal */
+export const DataAurora$outboundSchema: z.ZodType<
+  DataAurora$Outbound,
+  DataAurora
+> = z.object({
+  clusterIdentifier: z.string(),
+  endpoint: z.nullable(z.string()).optional(),
+  engineVersion: z.nullable(z.string()).optional(),
+  neverPauses: z.boolean(),
+  serverlessCapacity: z.nullable(z.number()).optional(),
+  status: z.lazy(() => ResourceHeartbeatStatus31$outboundSchema),
+  backend: z.literal("aurora"),
+});
+
+export function dataAuroraToJSON(dataAurora: DataAurora): string {
+  return JSON.stringify(DataAurora$outboundSchema.parse(dataAurora));
+}
+
+/** @internal */
+export type SyncReconcileRequestDataUnion8$Outbound =
+  | DataAurora$Outbound
+  | DataCloudSQL$Outbound
+  | DataFlexibleServer$Outbound
   | DataLocal8$Outbound;
 
 /** @internal */
@@ -25284,10 +26043,9 @@ export const SyncReconcileRequestDataUnion8$outboundSchema: z.ZodType<
   SyncReconcileRequestDataUnion8$Outbound,
   SyncReconcileRequestDataUnion8
 > = z.union([
-  z.lazy(() => DataAwsParameterStore$outboundSchema),
-  z.lazy(() => DataGcpSecretManager$outboundSchema),
-  z.lazy(() => DataAzureKeyVault$outboundSchema),
-  z.lazy(() => DataKubernetesSecret$outboundSchema),
+  z.lazy(() => DataAurora$outboundSchema),
+  z.lazy(() => DataCloudSQL$outboundSchema),
+  z.lazy(() => DataFlexibleServer$outboundSchema),
   z.lazy(() => DataLocal8$outboundSchema),
 ]);
 
@@ -25302,47 +26060,44 @@ export function syncReconcileRequestDataUnion8ToJSON(
 }
 
 /** @internal */
-export type DataVault$Outbound = {
+export type DataPostgres$Outbound = {
   data:
-    | DataAwsParameterStore$Outbound
-    | DataGcpSecretManager$Outbound
-    | DataAzureKeyVault$Outbound
-    | DataKubernetesSecret$Outbound
+    | DataAurora$Outbound
+    | DataCloudSQL$Outbound
+    | DataFlexibleServer$Outbound
     | DataLocal8$Outbound;
-  resourceType: "vault";
+  resourceType: "postgres";
 };
 
 /** @internal */
-export const DataVault$outboundSchema: z.ZodType<
-  DataVault$Outbound,
-  DataVault
+export const DataPostgres$outboundSchema: z.ZodType<
+  DataPostgres$Outbound,
+  DataPostgres
 > = z.object({
   data: z.union([
-    z.lazy(() => DataAwsParameterStore$outboundSchema),
-    z.lazy(() => DataGcpSecretManager$outboundSchema),
-    z.lazy(() => DataAzureKeyVault$outboundSchema),
-    z.lazy(() => DataKubernetesSecret$outboundSchema),
+    z.lazy(() => DataAurora$outboundSchema),
+    z.lazy(() => DataCloudSQL$outboundSchema),
+    z.lazy(() => DataFlexibleServer$outboundSchema),
     z.lazy(() => DataLocal8$outboundSchema),
   ]),
-  resourceType: z.literal("vault"),
+  resourceType: z.literal("postgres"),
 });
 
-export function dataVaultToJSON(dataVault: DataVault): string {
-  return JSON.stringify(DataVault$outboundSchema.parse(dataVault));
+export function dataPostgresToJSON(dataPostgres: DataPostgres): string {
+  return JSON.stringify(DataPostgres$outboundSchema.parse(dataPostgres));
 }
 
 /** @internal */
-export const Reason30$outboundSchema: z.ZodEnum<typeof Reason30> = z.enum(
-  Reason30,
-);
+export const DataReason30$outboundSchema: z.ZodEnum<typeof DataReason30> = z
+  .enum(DataReason30);
 
 /** @internal */
-export const CollectionIssueSeverity30$outboundSchema: z.ZodEnum<
-  typeof CollectionIssueSeverity30
-> = z.enum(CollectionIssueSeverity30);
+export const StatusSeverity30$outboundSchema: z.ZodEnum<
+  typeof StatusSeverity30
+> = z.enum(StatusSeverity30);
 
 /** @internal */
-export type CollectionIssue30$Outbound = {
+export type DataCollectionIssue30$Outbound = {
   message: string;
   reason: string;
   severity: string;
@@ -25350,28 +26105,27 @@ export type CollectionIssue30$Outbound = {
 };
 
 /** @internal */
-export const CollectionIssue30$outboundSchema: z.ZodType<
-  CollectionIssue30$Outbound,
-  CollectionIssue30
+export const DataCollectionIssue30$outboundSchema: z.ZodType<
+  DataCollectionIssue30$Outbound,
+  DataCollectionIssue30
 > = z.object({
   message: z.string(),
-  reason: Reason30$outboundSchema,
-  severity: CollectionIssueSeverity30$outboundSchema,
+  reason: DataReason30$outboundSchema,
+  severity: StatusSeverity30$outboundSchema,
   source: z.string(),
 });
 
-export function collectionIssue30ToJSON(
-  collectionIssue30: CollectionIssue30,
+export function dataCollectionIssue30ToJSON(
+  dataCollectionIssue30: DataCollectionIssue30,
 ): string {
   return JSON.stringify(
-    CollectionIssue30$outboundSchema.parse(collectionIssue30),
+    DataCollectionIssue30$outboundSchema.parse(dataCollectionIssue30),
   );
 }
 
 /** @internal */
-export const Health30$outboundSchema: z.ZodEnum<typeof Health30> = z.enum(
-  Health30,
-);
+export const DataHealth30$outboundSchema: z.ZodEnum<typeof DataHealth30> = z
+  .enum(DataHealth30);
 
 /** @internal */
 export const StatusLifecycle30$outboundSchema: z.ZodEnum<
@@ -25379,8 +26133,8 @@ export const StatusLifecycle30$outboundSchema: z.ZodEnum<
 > = z.enum(StatusLifecycle30);
 
 /** @internal */
-export type HeartbeatStatus30$Outbound = {
-  collectionIssues: Array<CollectionIssue30$Outbound>;
+export type ResourceHeartbeatStatus30$Outbound = {
+  collectionIssues: Array<DataCollectionIssue30$Outbound>;
   health: string;
   lifecycle: string;
   message?: string | null | undefined;
@@ -25389,23 +26143,23 @@ export type HeartbeatStatus30$Outbound = {
 };
 
 /** @internal */
-export const HeartbeatStatus30$outboundSchema: z.ZodType<
-  HeartbeatStatus30$Outbound,
-  HeartbeatStatus30
+export const ResourceHeartbeatStatus30$outboundSchema: z.ZodType<
+  ResourceHeartbeatStatus30$Outbound,
+  ResourceHeartbeatStatus30
 > = z.object({
-  collectionIssues: z.array(z.lazy(() => CollectionIssue30$outboundSchema)),
-  health: Health30$outboundSchema,
+  collectionIssues: z.array(z.lazy(() => DataCollectionIssue30$outboundSchema)),
+  health: DataHealth30$outboundSchema,
   lifecycle: StatusLifecycle30$outboundSchema,
   message: z.nullable(z.string()).optional(),
   partial: z.boolean(),
   stale: z.boolean(),
 });
 
-export function heartbeatStatus30ToJSON(
-  heartbeatStatus30: HeartbeatStatus30,
+export function resourceHeartbeatStatus30ToJSON(
+  resourceHeartbeatStatus30: ResourceHeartbeatStatus30,
 ): string {
   return JSON.stringify(
-    HeartbeatStatus30$outboundSchema.parse(heartbeatStatus30),
+    ResourceHeartbeatStatus30$outboundSchema.parse(resourceHeartbeatStatus30),
   );
 }
 
@@ -25416,7 +26170,7 @@ export type DataLocal7$Outbound = {
   name: string;
   path: string;
   pathExists: boolean;
-  status: HeartbeatStatus30$Outbound;
+  status: ResourceHeartbeatStatus30$Outbound;
   backend: "local";
 };
 
@@ -25430,7 +26184,7 @@ export const DataLocal7$outboundSchema: z.ZodType<
   name: z.string(),
   path: z.string(),
   pathExists: z.boolean(),
-  status: z.lazy(() => HeartbeatStatus30$outboundSchema),
+  status: z.lazy(() => ResourceHeartbeatStatus30$outboundSchema),
   backend: z.literal("local"),
 });
 
@@ -25439,17 +26193,16 @@ export function dataLocal7ToJSON(dataLocal7: DataLocal7): string {
 }
 
 /** @internal */
-export const Reason29$outboundSchema: z.ZodEnum<typeof Reason29> = z.enum(
-  Reason29,
-);
+export const DataReason29$outboundSchema: z.ZodEnum<typeof DataReason29> = z
+  .enum(DataReason29);
 
 /** @internal */
-export const CollectionIssueSeverity29$outboundSchema: z.ZodEnum<
-  typeof CollectionIssueSeverity29
-> = z.enum(CollectionIssueSeverity29);
+export const StatusSeverity29$outboundSchema: z.ZodEnum<
+  typeof StatusSeverity29
+> = z.enum(StatusSeverity29);
 
 /** @internal */
-export type CollectionIssue29$Outbound = {
+export type DataCollectionIssue29$Outbound = {
   message: string;
   reason: string;
   severity: string;
@@ -25457,28 +26210,27 @@ export type CollectionIssue29$Outbound = {
 };
 
 /** @internal */
-export const CollectionIssue29$outboundSchema: z.ZodType<
-  CollectionIssue29$Outbound,
-  CollectionIssue29
+export const DataCollectionIssue29$outboundSchema: z.ZodType<
+  DataCollectionIssue29$Outbound,
+  DataCollectionIssue29
 > = z.object({
   message: z.string(),
-  reason: Reason29$outboundSchema,
-  severity: CollectionIssueSeverity29$outboundSchema,
+  reason: DataReason29$outboundSchema,
+  severity: StatusSeverity29$outboundSchema,
   source: z.string(),
 });
 
-export function collectionIssue29ToJSON(
-  collectionIssue29: CollectionIssue29,
+export function dataCollectionIssue29ToJSON(
+  dataCollectionIssue29: DataCollectionIssue29,
 ): string {
   return JSON.stringify(
-    CollectionIssue29$outboundSchema.parse(collectionIssue29),
+    DataCollectionIssue29$outboundSchema.parse(dataCollectionIssue29),
   );
 }
 
 /** @internal */
-export const Health29$outboundSchema: z.ZodEnum<typeof Health29> = z.enum(
-  Health29,
-);
+export const DataHealth29$outboundSchema: z.ZodEnum<typeof DataHealth29> = z
+  .enum(DataHealth29);
 
 /** @internal */
 export const StatusLifecycle29$outboundSchema: z.ZodEnum<
@@ -25486,8 +26238,8 @@ export const StatusLifecycle29$outboundSchema: z.ZodEnum<
 > = z.enum(StatusLifecycle29);
 
 /** @internal */
-export type HeartbeatStatus29$Outbound = {
-  collectionIssues: Array<CollectionIssue29$Outbound>;
+export type ResourceHeartbeatStatus29$Outbound = {
+  collectionIssues: Array<DataCollectionIssue29$Outbound>;
   health: string;
   lifecycle: string;
   message?: string | null | undefined;
@@ -25496,23 +26248,23 @@ export type HeartbeatStatus29$Outbound = {
 };
 
 /** @internal */
-export const HeartbeatStatus29$outboundSchema: z.ZodType<
-  HeartbeatStatus29$Outbound,
-  HeartbeatStatus29
+export const ResourceHeartbeatStatus29$outboundSchema: z.ZodType<
+  ResourceHeartbeatStatus29$Outbound,
+  ResourceHeartbeatStatus29
 > = z.object({
-  collectionIssues: z.array(z.lazy(() => CollectionIssue29$outboundSchema)),
-  health: Health29$outboundSchema,
+  collectionIssues: z.array(z.lazy(() => DataCollectionIssue29$outboundSchema)),
+  health: DataHealth29$outboundSchema,
   lifecycle: StatusLifecycle29$outboundSchema,
   message: z.nullable(z.string()).optional(),
   partial: z.boolean(),
   stale: z.boolean(),
 });
 
-export function heartbeatStatus29ToJSON(
-  heartbeatStatus29: HeartbeatStatus29,
+export function resourceHeartbeatStatus29ToJSON(
+  resourceHeartbeatStatus29: ResourceHeartbeatStatus29,
 ): string {
   return JSON.stringify(
-    HeartbeatStatus29$outboundSchema.parse(heartbeatStatus29),
+    ResourceHeartbeatStatus29$outboundSchema.parse(resourceHeartbeatStatus29),
   );
 }
 
@@ -25521,7 +26273,7 @@ export type DataAzureTable$Outbound = {
   endpoint?: string | null | undefined;
   resourceGroup?: string | null | undefined;
   signedIdentifierCount?: number | null | undefined;
-  status: HeartbeatStatus29$Outbound;
+  status: ResourceHeartbeatStatus29$Outbound;
   storageAccountKind?: string | null | undefined;
   storageAccountLocation?: string | null | undefined;
   storageAccountName: string;
@@ -25541,7 +26293,7 @@ export const DataAzureTable$outboundSchema: z.ZodType<
   endpoint: z.nullable(z.string()).optional(),
   resourceGroup: z.nullable(z.string()).optional(),
   signedIdentifierCount: z.nullable(z.int()).optional(),
-  status: z.lazy(() => HeartbeatStatus29$outboundSchema),
+  status: z.lazy(() => ResourceHeartbeatStatus29$outboundSchema),
   storageAccountKind: z.nullable(z.string()).optional(),
   storageAccountLocation: z.nullable(z.string()).optional(),
   storageAccountName: z.string(),
@@ -25558,17 +26310,16 @@ export function dataAzureTableToJSON(dataAzureTable: DataAzureTable): string {
 }
 
 /** @internal */
-export const Reason28$outboundSchema: z.ZodEnum<typeof Reason28> = z.enum(
-  Reason28,
-);
+export const DataReason28$outboundSchema: z.ZodEnum<typeof DataReason28> = z
+  .enum(DataReason28);
 
 /** @internal */
-export const CollectionIssueSeverity28$outboundSchema: z.ZodEnum<
-  typeof CollectionIssueSeverity28
-> = z.enum(CollectionIssueSeverity28);
+export const StatusSeverity28$outboundSchema: z.ZodEnum<
+  typeof StatusSeverity28
+> = z.enum(StatusSeverity28);
 
 /** @internal */
-export type CollectionIssue28$Outbound = {
+export type DataCollectionIssue28$Outbound = {
   message: string;
   reason: string;
   severity: string;
@@ -25576,28 +26327,27 @@ export type CollectionIssue28$Outbound = {
 };
 
 /** @internal */
-export const CollectionIssue28$outboundSchema: z.ZodType<
-  CollectionIssue28$Outbound,
-  CollectionIssue28
+export const DataCollectionIssue28$outboundSchema: z.ZodType<
+  DataCollectionIssue28$Outbound,
+  DataCollectionIssue28
 > = z.object({
   message: z.string(),
-  reason: Reason28$outboundSchema,
-  severity: CollectionIssueSeverity28$outboundSchema,
+  reason: DataReason28$outboundSchema,
+  severity: StatusSeverity28$outboundSchema,
   source: z.string(),
 });
 
-export function collectionIssue28ToJSON(
-  collectionIssue28: CollectionIssue28,
+export function dataCollectionIssue28ToJSON(
+  dataCollectionIssue28: DataCollectionIssue28,
 ): string {
   return JSON.stringify(
-    CollectionIssue28$outboundSchema.parse(collectionIssue28),
+    DataCollectionIssue28$outboundSchema.parse(dataCollectionIssue28),
   );
 }
 
 /** @internal */
-export const Health28$outboundSchema: z.ZodEnum<typeof Health28> = z.enum(
-  Health28,
-);
+export const DataHealth28$outboundSchema: z.ZodEnum<typeof DataHealth28> = z
+  .enum(DataHealth28);
 
 /** @internal */
 export const StatusLifecycle28$outboundSchema: z.ZodEnum<
@@ -25605,8 +26355,8 @@ export const StatusLifecycle28$outboundSchema: z.ZodEnum<
 > = z.enum(StatusLifecycle28);
 
 /** @internal */
-export type HeartbeatStatus28$Outbound = {
-  collectionIssues: Array<CollectionIssue28$Outbound>;
+export type ResourceHeartbeatStatus28$Outbound = {
+  collectionIssues: Array<DataCollectionIssue28$Outbound>;
   health: string;
   lifecycle: string;
   message?: string | null | undefined;
@@ -25615,23 +26365,23 @@ export type HeartbeatStatus28$Outbound = {
 };
 
 /** @internal */
-export const HeartbeatStatus28$outboundSchema: z.ZodType<
-  HeartbeatStatus28$Outbound,
-  HeartbeatStatus28
+export const ResourceHeartbeatStatus28$outboundSchema: z.ZodType<
+  ResourceHeartbeatStatus28$Outbound,
+  ResourceHeartbeatStatus28
 > = z.object({
-  collectionIssues: z.array(z.lazy(() => CollectionIssue28$outboundSchema)),
-  health: Health28$outboundSchema,
+  collectionIssues: z.array(z.lazy(() => DataCollectionIssue28$outboundSchema)),
+  health: DataHealth28$outboundSchema,
   lifecycle: StatusLifecycle28$outboundSchema,
   message: z.nullable(z.string()).optional(),
   partial: z.boolean(),
   stale: z.boolean(),
 });
 
-export function heartbeatStatus28ToJSON(
-  heartbeatStatus28: HeartbeatStatus28,
+export function resourceHeartbeatStatus28ToJSON(
+  resourceHeartbeatStatus28: ResourceHeartbeatStatus28,
 ): string {
   return JSON.stringify(
-    HeartbeatStatus28$outboundSchema.parse(heartbeatStatus28),
+    ResourceHeartbeatStatus28$outboundSchema.parse(resourceHeartbeatStatus28),
   );
 }
 
@@ -25652,7 +26402,7 @@ export type DataGcpFirestore$Outbound = {
   pointInTimeRecoveryEnablement?: string | null | undefined;
   projectId?: string | null | undefined;
   sourceInfoPresent: boolean;
-  status: HeartbeatStatus28$Outbound;
+  status: ResourceHeartbeatStatus28$Outbound;
   updateTime?: string | null | undefined;
   versionRetentionPeriod?: string | null | undefined;
   backend: "gcpFirestore";
@@ -25678,7 +26428,7 @@ export const DataGcpFirestore$outboundSchema: z.ZodType<
   pointInTimeRecoveryEnablement: z.nullable(z.string()).optional(),
   projectId: z.nullable(z.string()).optional(),
   sourceInfoPresent: z.boolean(),
-  status: z.lazy(() => HeartbeatStatus28$outboundSchema),
+  status: z.lazy(() => ResourceHeartbeatStatus28$outboundSchema),
   updateTime: z.nullable(z.string()).optional(),
   versionRetentionPeriod: z.nullable(z.string()).optional(),
   backend: z.literal("gcpFirestore"),
@@ -25712,17 +26462,16 @@ export function keySchemaToJSON(keySchema: KeySchema): string {
 }
 
 /** @internal */
-export const Reason27$outboundSchema: z.ZodEnum<typeof Reason27> = z.enum(
-  Reason27,
-);
+export const DataReason27$outboundSchema: z.ZodEnum<typeof DataReason27> = z
+  .enum(DataReason27);
 
 /** @internal */
-export const CollectionIssueSeverity27$outboundSchema: z.ZodEnum<
-  typeof CollectionIssueSeverity27
-> = z.enum(CollectionIssueSeverity27);
+export const StatusSeverity27$outboundSchema: z.ZodEnum<
+  typeof StatusSeverity27
+> = z.enum(StatusSeverity27);
 
 /** @internal */
-export type CollectionIssue27$Outbound = {
+export type DataCollectionIssue27$Outbound = {
   message: string;
   reason: string;
   severity: string;
@@ -25730,28 +26479,27 @@ export type CollectionIssue27$Outbound = {
 };
 
 /** @internal */
-export const CollectionIssue27$outboundSchema: z.ZodType<
-  CollectionIssue27$Outbound,
-  CollectionIssue27
+export const DataCollectionIssue27$outboundSchema: z.ZodType<
+  DataCollectionIssue27$Outbound,
+  DataCollectionIssue27
 > = z.object({
   message: z.string(),
-  reason: Reason27$outboundSchema,
-  severity: CollectionIssueSeverity27$outboundSchema,
+  reason: DataReason27$outboundSchema,
+  severity: StatusSeverity27$outboundSchema,
   source: z.string(),
 });
 
-export function collectionIssue27ToJSON(
-  collectionIssue27: CollectionIssue27,
+export function dataCollectionIssue27ToJSON(
+  dataCollectionIssue27: DataCollectionIssue27,
 ): string {
   return JSON.stringify(
-    CollectionIssue27$outboundSchema.parse(collectionIssue27),
+    DataCollectionIssue27$outboundSchema.parse(dataCollectionIssue27),
   );
 }
 
 /** @internal */
-export const Health27$outboundSchema: z.ZodEnum<typeof Health27> = z.enum(
-  Health27,
-);
+export const DataHealth27$outboundSchema: z.ZodEnum<typeof DataHealth27> = z
+  .enum(DataHealth27);
 
 /** @internal */
 export const StatusLifecycle27$outboundSchema: z.ZodEnum<
@@ -25759,8 +26507,8 @@ export const StatusLifecycle27$outboundSchema: z.ZodEnum<
 > = z.enum(StatusLifecycle27);
 
 /** @internal */
-export type HeartbeatStatus27$Outbound = {
-  collectionIssues: Array<CollectionIssue27$Outbound>;
+export type ResourceHeartbeatStatus27$Outbound = {
+  collectionIssues: Array<DataCollectionIssue27$Outbound>;
   health: string;
   lifecycle: string;
   message?: string | null | undefined;
@@ -25769,23 +26517,23 @@ export type HeartbeatStatus27$Outbound = {
 };
 
 /** @internal */
-export const HeartbeatStatus27$outboundSchema: z.ZodType<
-  HeartbeatStatus27$Outbound,
-  HeartbeatStatus27
+export const ResourceHeartbeatStatus27$outboundSchema: z.ZodType<
+  ResourceHeartbeatStatus27$Outbound,
+  ResourceHeartbeatStatus27
 > = z.object({
-  collectionIssues: z.array(z.lazy(() => CollectionIssue27$outboundSchema)),
-  health: Health27$outboundSchema,
+  collectionIssues: z.array(z.lazy(() => DataCollectionIssue27$outboundSchema)),
+  health: DataHealth27$outboundSchema,
   lifecycle: StatusLifecycle27$outboundSchema,
   message: z.nullable(z.string()).optional(),
   partial: z.boolean(),
   stale: z.boolean(),
 });
 
-export function heartbeatStatus27ToJSON(
-  heartbeatStatus27: HeartbeatStatus27,
+export function resourceHeartbeatStatus27ToJSON(
+  resourceHeartbeatStatus27: ResourceHeartbeatStatus27,
 ): string {
   return JSON.stringify(
-    HeartbeatStatus27$outboundSchema.parse(heartbeatStatus27),
+    ResourceHeartbeatStatus27$outboundSchema.parse(resourceHeartbeatStatus27),
   );
 }
 
@@ -25803,7 +26551,7 @@ export type DataAwsDynamoDb$Outbound = {
   restoreInProgress?: boolean | null | undefined;
   sseStatus?: string | null | undefined;
   sseType?: string | null | undefined;
-  status: HeartbeatStatus27$Outbound;
+  status: ResourceHeartbeatStatus27$Outbound;
   streamEnabled?: boolean | null | undefined;
   streamViewType?: string | null | undefined;
   tableArn?: string | null | undefined;
@@ -25832,7 +26580,7 @@ export const DataAwsDynamoDb$outboundSchema: z.ZodType<
   restoreInProgress: z.nullable(z.boolean()).optional(),
   sseStatus: z.nullable(z.string()).optional(),
   sseType: z.nullable(z.string()).optional(),
-  status: z.lazy(() => HeartbeatStatus27$outboundSchema),
+  status: z.lazy(() => ResourceHeartbeatStatus27$outboundSchema),
   streamEnabled: z.nullable(z.boolean()).optional(),
   streamViewType: z.nullable(z.string()).optional(),
   tableArn: z.nullable(z.string()).optional(),
@@ -25905,17 +26653,16 @@ export function dataKvToJSON(dataKv: DataKv): string {
 }
 
 /** @internal */
-export const Reason26$outboundSchema: z.ZodEnum<typeof Reason26> = z.enum(
-  Reason26,
-);
+export const DataReason26$outboundSchema: z.ZodEnum<typeof DataReason26> = z
+  .enum(DataReason26);
 
 /** @internal */
-export const CollectionIssueSeverity26$outboundSchema: z.ZodEnum<
-  typeof CollectionIssueSeverity26
-> = z.enum(CollectionIssueSeverity26);
+export const StatusSeverity26$outboundSchema: z.ZodEnum<
+  typeof StatusSeverity26
+> = z.enum(StatusSeverity26);
 
 /** @internal */
-export type CollectionIssue26$Outbound = {
+export type DataCollectionIssue26$Outbound = {
   message: string;
   reason: string;
   severity: string;
@@ -25923,28 +26670,27 @@ export type CollectionIssue26$Outbound = {
 };
 
 /** @internal */
-export const CollectionIssue26$outboundSchema: z.ZodType<
-  CollectionIssue26$Outbound,
-  CollectionIssue26
+export const DataCollectionIssue26$outboundSchema: z.ZodType<
+  DataCollectionIssue26$Outbound,
+  DataCollectionIssue26
 > = z.object({
   message: z.string(),
-  reason: Reason26$outboundSchema,
-  severity: CollectionIssueSeverity26$outboundSchema,
+  reason: DataReason26$outboundSchema,
+  severity: StatusSeverity26$outboundSchema,
   source: z.string(),
 });
 
-export function collectionIssue26ToJSON(
-  collectionIssue26: CollectionIssue26,
+export function dataCollectionIssue26ToJSON(
+  dataCollectionIssue26: DataCollectionIssue26,
 ): string {
   return JSON.stringify(
-    CollectionIssue26$outboundSchema.parse(collectionIssue26),
+    DataCollectionIssue26$outboundSchema.parse(dataCollectionIssue26),
   );
 }
 
 /** @internal */
-export const Health26$outboundSchema: z.ZodEnum<typeof Health26> = z.enum(
-  Health26,
-);
+export const DataHealth26$outboundSchema: z.ZodEnum<typeof DataHealth26> = z
+  .enum(DataHealth26);
 
 /** @internal */
 export const StatusLifecycle26$outboundSchema: z.ZodEnum<
@@ -25952,8 +26698,8 @@ export const StatusLifecycle26$outboundSchema: z.ZodEnum<
 > = z.enum(StatusLifecycle26);
 
 /** @internal */
-export type HeartbeatStatus26$Outbound = {
-  collectionIssues: Array<CollectionIssue26$Outbound>;
+export type ResourceHeartbeatStatus26$Outbound = {
+  collectionIssues: Array<DataCollectionIssue26$Outbound>;
   health: string;
   lifecycle: string;
   message?: string | null | undefined;
@@ -25962,23 +26708,23 @@ export type HeartbeatStatus26$Outbound = {
 };
 
 /** @internal */
-export const HeartbeatStatus26$outboundSchema: z.ZodType<
-  HeartbeatStatus26$Outbound,
-  HeartbeatStatus26
+export const ResourceHeartbeatStatus26$outboundSchema: z.ZodType<
+  ResourceHeartbeatStatus26$Outbound,
+  ResourceHeartbeatStatus26
 > = z.object({
-  collectionIssues: z.array(z.lazy(() => CollectionIssue26$outboundSchema)),
-  health: Health26$outboundSchema,
+  collectionIssues: z.array(z.lazy(() => DataCollectionIssue26$outboundSchema)),
+  health: DataHealth26$outboundSchema,
   lifecycle: StatusLifecycle26$outboundSchema,
   message: z.nullable(z.string()).optional(),
   partial: z.boolean(),
   stale: z.boolean(),
 });
 
-export function heartbeatStatus26ToJSON(
-  heartbeatStatus26: HeartbeatStatus26,
+export function resourceHeartbeatStatus26ToJSON(
+  resourceHeartbeatStatus26: ResourceHeartbeatStatus26,
 ): string {
   return JSON.stringify(
-    HeartbeatStatus26$outboundSchema.parse(heartbeatStatus26),
+    ResourceHeartbeatStatus26$outboundSchema.parse(resourceHeartbeatStatus26),
   );
 }
 
@@ -25987,7 +26733,7 @@ export type DataLocal6$Outbound = {
   name: string;
   path?: string | null | undefined;
   serviceStatus?: string | null | undefined;
-  status: HeartbeatStatus26$Outbound;
+  status: ResourceHeartbeatStatus26$Outbound;
   backend: "local";
 };
 
@@ -25999,7 +26745,7 @@ export const DataLocal6$outboundSchema: z.ZodType<
   name: z.string(),
   path: z.nullable(z.string()).optional(),
   serviceStatus: z.nullable(z.string()).optional(),
-  status: z.lazy(() => HeartbeatStatus26$outboundSchema),
+  status: z.lazy(() => ResourceHeartbeatStatus26$outboundSchema),
   backend: z.literal("local"),
 });
 
@@ -26008,17 +26754,16 @@ export function dataLocal6ToJSON(dataLocal6: DataLocal6): string {
 }
 
 /** @internal */
-export const Reason25$outboundSchema: z.ZodEnum<typeof Reason25> = z.enum(
-  Reason25,
-);
+export const DataReason25$outboundSchema: z.ZodEnum<typeof DataReason25> = z
+  .enum(DataReason25);
 
 /** @internal */
-export const CollectionIssueSeverity25$outboundSchema: z.ZodEnum<
-  typeof CollectionIssueSeverity25
-> = z.enum(CollectionIssueSeverity25);
+export const StatusSeverity25$outboundSchema: z.ZodEnum<
+  typeof StatusSeverity25
+> = z.enum(StatusSeverity25);
 
 /** @internal */
-export type CollectionIssue25$Outbound = {
+export type DataCollectionIssue25$Outbound = {
   message: string;
   reason: string;
   severity: string;
@@ -26026,28 +26771,27 @@ export type CollectionIssue25$Outbound = {
 };
 
 /** @internal */
-export const CollectionIssue25$outboundSchema: z.ZodType<
-  CollectionIssue25$Outbound,
-  CollectionIssue25
+export const DataCollectionIssue25$outboundSchema: z.ZodType<
+  DataCollectionIssue25$Outbound,
+  DataCollectionIssue25
 > = z.object({
   message: z.string(),
-  reason: Reason25$outboundSchema,
-  severity: CollectionIssueSeverity25$outboundSchema,
+  reason: DataReason25$outboundSchema,
+  severity: StatusSeverity25$outboundSchema,
   source: z.string(),
 });
 
-export function collectionIssue25ToJSON(
-  collectionIssue25: CollectionIssue25,
+export function dataCollectionIssue25ToJSON(
+  dataCollectionIssue25: DataCollectionIssue25,
 ): string {
   return JSON.stringify(
-    CollectionIssue25$outboundSchema.parse(collectionIssue25),
+    DataCollectionIssue25$outboundSchema.parse(dataCollectionIssue25),
   );
 }
 
 /** @internal */
-export const Health25$outboundSchema: z.ZodEnum<typeof Health25> = z.enum(
-  Health25,
-);
+export const DataHealth25$outboundSchema: z.ZodEnum<typeof DataHealth25> = z
+  .enum(DataHealth25);
 
 /** @internal */
 export const StatusLifecycle25$outboundSchema: z.ZodEnum<
@@ -26055,8 +26799,8 @@ export const StatusLifecycle25$outboundSchema: z.ZodEnum<
 > = z.enum(StatusLifecycle25);
 
 /** @internal */
-export type HeartbeatStatus25$Outbound = {
-  collectionIssues: Array<CollectionIssue25$Outbound>;
+export type ResourceHeartbeatStatus25$Outbound = {
+  collectionIssues: Array<DataCollectionIssue25$Outbound>;
   health: string;
   lifecycle: string;
   message?: string | null | undefined;
@@ -26065,23 +26809,23 @@ export type HeartbeatStatus25$Outbound = {
 };
 
 /** @internal */
-export const HeartbeatStatus25$outboundSchema: z.ZodType<
-  HeartbeatStatus25$Outbound,
-  HeartbeatStatus25
+export const ResourceHeartbeatStatus25$outboundSchema: z.ZodType<
+  ResourceHeartbeatStatus25$Outbound,
+  ResourceHeartbeatStatus25
 > = z.object({
-  collectionIssues: z.array(z.lazy(() => CollectionIssue25$outboundSchema)),
-  health: Health25$outboundSchema,
+  collectionIssues: z.array(z.lazy(() => DataCollectionIssue25$outboundSchema)),
+  health: DataHealth25$outboundSchema,
   lifecycle: StatusLifecycle25$outboundSchema,
   message: z.nullable(z.string()).optional(),
   partial: z.boolean(),
   stale: z.boolean(),
 });
 
-export function heartbeatStatus25ToJSON(
-  heartbeatStatus25: HeartbeatStatus25,
+export function resourceHeartbeatStatus25ToJSON(
+  resourceHeartbeatStatus25: ResourceHeartbeatStatus25,
 ): string {
   return JSON.stringify(
-    HeartbeatStatus25$outboundSchema.parse(heartbeatStatus25),
+    ResourceHeartbeatStatus25$outboundSchema.parse(resourceHeartbeatStatus25),
   );
 }
 
@@ -26115,7 +26859,7 @@ export type DataAzureServiceBus$Outbound = {
   resourceId?: string | null | undefined;
   scheduledMessageCount?: number | null | undefined;
   sizeInBytes?: number | null | undefined;
-  status: HeartbeatStatus25$Outbound;
+  status: ResourceHeartbeatStatus25$Outbound;
   transferDeadLetterMessageCount?: number | null | undefined;
   transferMessageCount?: number | null | undefined;
   updatedAt?: string | null | undefined;
@@ -26155,7 +26899,7 @@ export const DataAzureServiceBus$outboundSchema: z.ZodType<
   resourceId: z.nullable(z.string()).optional(),
   scheduledMessageCount: z.nullable(z.int()).optional(),
   sizeInBytes: z.nullable(z.int()).optional(),
-  status: z.lazy(() => HeartbeatStatus25$outboundSchema),
+  status: z.lazy(() => ResourceHeartbeatStatus25$outboundSchema),
   transferDeadLetterMessageCount: z.nullable(z.int()).optional(),
   transferMessageCount: z.nullable(z.int()).optional(),
   updatedAt: z.nullable(z.string()).optional(),
@@ -26171,17 +26915,16 @@ export function dataAzureServiceBusToJSON(
 }
 
 /** @internal */
-export const Reason24$outboundSchema: z.ZodEnum<typeof Reason24> = z.enum(
-  Reason24,
-);
+export const DataReason24$outboundSchema: z.ZodEnum<typeof DataReason24> = z
+  .enum(DataReason24);
 
 /** @internal */
-export const CollectionIssueSeverity24$outboundSchema: z.ZodEnum<
-  typeof CollectionIssueSeverity24
-> = z.enum(CollectionIssueSeverity24);
+export const StatusSeverity24$outboundSchema: z.ZodEnum<
+  typeof StatusSeverity24
+> = z.enum(StatusSeverity24);
 
 /** @internal */
-export type CollectionIssue24$Outbound = {
+export type DataCollectionIssue24$Outbound = {
   message: string;
   reason: string;
   severity: string;
@@ -26189,28 +26932,27 @@ export type CollectionIssue24$Outbound = {
 };
 
 /** @internal */
-export const CollectionIssue24$outboundSchema: z.ZodType<
-  CollectionIssue24$Outbound,
-  CollectionIssue24
+export const DataCollectionIssue24$outboundSchema: z.ZodType<
+  DataCollectionIssue24$Outbound,
+  DataCollectionIssue24
 > = z.object({
   message: z.string(),
-  reason: Reason24$outboundSchema,
-  severity: CollectionIssueSeverity24$outboundSchema,
+  reason: DataReason24$outboundSchema,
+  severity: StatusSeverity24$outboundSchema,
   source: z.string(),
 });
 
-export function collectionIssue24ToJSON(
-  collectionIssue24: CollectionIssue24,
+export function dataCollectionIssue24ToJSON(
+  dataCollectionIssue24: DataCollectionIssue24,
 ): string {
   return JSON.stringify(
-    CollectionIssue24$outboundSchema.parse(collectionIssue24),
+    DataCollectionIssue24$outboundSchema.parse(dataCollectionIssue24),
   );
 }
 
 /** @internal */
-export const Health24$outboundSchema: z.ZodEnum<typeof Health24> = z.enum(
-  Health24,
-);
+export const DataHealth24$outboundSchema: z.ZodEnum<typeof DataHealth24> = z
+  .enum(DataHealth24);
 
 /** @internal */
 export const StatusLifecycle24$outboundSchema: z.ZodEnum<
@@ -26218,8 +26960,8 @@ export const StatusLifecycle24$outboundSchema: z.ZodEnum<
 > = z.enum(StatusLifecycle24);
 
 /** @internal */
-export type HeartbeatStatus24$Outbound = {
-  collectionIssues: Array<CollectionIssue24$Outbound>;
+export type ResourceHeartbeatStatus24$Outbound = {
+  collectionIssues: Array<DataCollectionIssue24$Outbound>;
   health: string;
   lifecycle: string;
   message?: string | null | undefined;
@@ -26228,23 +26970,23 @@ export type HeartbeatStatus24$Outbound = {
 };
 
 /** @internal */
-export const HeartbeatStatus24$outboundSchema: z.ZodType<
-  HeartbeatStatus24$Outbound,
-  HeartbeatStatus24
+export const ResourceHeartbeatStatus24$outboundSchema: z.ZodType<
+  ResourceHeartbeatStatus24$Outbound,
+  ResourceHeartbeatStatus24
 > = z.object({
-  collectionIssues: z.array(z.lazy(() => CollectionIssue24$outboundSchema)),
-  health: Health24$outboundSchema,
+  collectionIssues: z.array(z.lazy(() => DataCollectionIssue24$outboundSchema)),
+  health: DataHealth24$outboundSchema,
   lifecycle: StatusLifecycle24$outboundSchema,
   message: z.nullable(z.string()).optional(),
   partial: z.boolean(),
   stale: z.boolean(),
 });
 
-export function heartbeatStatus24ToJSON(
-  heartbeatStatus24: HeartbeatStatus24,
+export function resourceHeartbeatStatus24ToJSON(
+  resourceHeartbeatStatus24: ResourceHeartbeatStatus24,
 ): string {
   return JSON.stringify(
-    HeartbeatStatus24$outboundSchema.parse(heartbeatStatus24),
+    ResourceHeartbeatStatus24$outboundSchema.parse(resourceHeartbeatStatus24),
   );
 }
 
@@ -26259,7 +27001,7 @@ export type DataGcpPubSub$Outbound = {
   schemaFirstRevisionId?: string | null | undefined;
   schemaLastRevisionId?: string | null | undefined;
   schemaName?: string | null | undefined;
-  status: HeartbeatStatus24$Outbound;
+  status: ResourceHeartbeatStatus24$Outbound;
   subscriptionAckDeadlineSeconds?: number | null | undefined;
   subscriptionDeadLetterMaxDeliveryAttempts?: number | null | undefined;
   subscriptionDeadLetterTopic?: string | null | undefined;
@@ -26301,7 +27043,7 @@ export const DataGcpPubSub$outboundSchema: z.ZodType<
   schemaFirstRevisionId: z.nullable(z.string()).optional(),
   schemaLastRevisionId: z.nullable(z.string()).optional(),
   schemaName: z.nullable(z.string()).optional(),
-  status: z.lazy(() => HeartbeatStatus24$outboundSchema),
+  status: z.lazy(() => ResourceHeartbeatStatus24$outboundSchema),
   subscriptionAckDeadlineSeconds: z.nullable(z.int()).optional(),
   subscriptionDeadLetterMaxDeliveryAttempts: z.nullable(z.int()).optional(),
   subscriptionDeadLetterTopic: z.nullable(z.string()).optional(),
@@ -26335,17 +27077,16 @@ export function dataGcpPubSubToJSON(dataGcpPubSub: DataGcpPubSub): string {
 }
 
 /** @internal */
-export const Reason23$outboundSchema: z.ZodEnum<typeof Reason23> = z.enum(
-  Reason23,
-);
+export const DataReason23$outboundSchema: z.ZodEnum<typeof DataReason23> = z
+  .enum(DataReason23);
 
 /** @internal */
-export const CollectionIssueSeverity23$outboundSchema: z.ZodEnum<
-  typeof CollectionIssueSeverity23
-> = z.enum(CollectionIssueSeverity23);
+export const StatusSeverity23$outboundSchema: z.ZodEnum<
+  typeof StatusSeverity23
+> = z.enum(StatusSeverity23);
 
 /** @internal */
-export type CollectionIssue23$Outbound = {
+export type DataCollectionIssue23$Outbound = {
   message: string;
   reason: string;
   severity: string;
@@ -26353,28 +27094,27 @@ export type CollectionIssue23$Outbound = {
 };
 
 /** @internal */
-export const CollectionIssue23$outboundSchema: z.ZodType<
-  CollectionIssue23$Outbound,
-  CollectionIssue23
+export const DataCollectionIssue23$outboundSchema: z.ZodType<
+  DataCollectionIssue23$Outbound,
+  DataCollectionIssue23
 > = z.object({
   message: z.string(),
-  reason: Reason23$outboundSchema,
-  severity: CollectionIssueSeverity23$outboundSchema,
+  reason: DataReason23$outboundSchema,
+  severity: StatusSeverity23$outboundSchema,
   source: z.string(),
 });
 
-export function collectionIssue23ToJSON(
-  collectionIssue23: CollectionIssue23,
+export function dataCollectionIssue23ToJSON(
+  dataCollectionIssue23: DataCollectionIssue23,
 ): string {
   return JSON.stringify(
-    CollectionIssue23$outboundSchema.parse(collectionIssue23),
+    DataCollectionIssue23$outboundSchema.parse(dataCollectionIssue23),
   );
 }
 
 /** @internal */
-export const Health23$outboundSchema: z.ZodEnum<typeof Health23> = z.enum(
-  Health23,
-);
+export const DataHealth23$outboundSchema: z.ZodEnum<typeof DataHealth23> = z
+  .enum(DataHealth23);
 
 /** @internal */
 export const StatusLifecycle23$outboundSchema: z.ZodEnum<
@@ -26382,8 +27122,8 @@ export const StatusLifecycle23$outboundSchema: z.ZodEnum<
 > = z.enum(StatusLifecycle23);
 
 /** @internal */
-export type HeartbeatStatus23$Outbound = {
-  collectionIssues: Array<CollectionIssue23$Outbound>;
+export type ResourceHeartbeatStatus23$Outbound = {
+  collectionIssues: Array<DataCollectionIssue23$Outbound>;
   health: string;
   lifecycle: string;
   message?: string | null | undefined;
@@ -26392,23 +27132,23 @@ export type HeartbeatStatus23$Outbound = {
 };
 
 /** @internal */
-export const HeartbeatStatus23$outboundSchema: z.ZodType<
-  HeartbeatStatus23$Outbound,
-  HeartbeatStatus23
+export const ResourceHeartbeatStatus23$outboundSchema: z.ZodType<
+  ResourceHeartbeatStatus23$Outbound,
+  ResourceHeartbeatStatus23
 > = z.object({
-  collectionIssues: z.array(z.lazy(() => CollectionIssue23$outboundSchema)),
-  health: Health23$outboundSchema,
+  collectionIssues: z.array(z.lazy(() => DataCollectionIssue23$outboundSchema)),
+  health: DataHealth23$outboundSchema,
   lifecycle: StatusLifecycle23$outboundSchema,
   message: z.nullable(z.string()).optional(),
   partial: z.boolean(),
   stale: z.boolean(),
 });
 
-export function heartbeatStatus23ToJSON(
-  heartbeatStatus23: HeartbeatStatus23,
+export function resourceHeartbeatStatus23ToJSON(
+  resourceHeartbeatStatus23: ResourceHeartbeatStatus23,
 ): string {
   return JSON.stringify(
-    HeartbeatStatus23$outboundSchema.parse(heartbeatStatus23),
+    ResourceHeartbeatStatus23$outboundSchema.parse(resourceHeartbeatStatus23),
   );
 }
 
@@ -26436,7 +27176,7 @@ export type DataAwsSqs$Outbound = {
   region?: string | null | undefined;
   sqsManagedSseEnabled?: boolean | null | undefined;
   sseEnabled?: boolean | null | undefined;
-  status: HeartbeatStatus23$Outbound;
+  status: ResourceHeartbeatStatus23$Outbound;
   visibilityTimeoutSeconds?: number | null | undefined;
   backend: "awsSqs";
 };
@@ -26468,7 +27208,7 @@ export const DataAwsSqs$outboundSchema: z.ZodType<
   region: z.nullable(z.string()).optional(),
   sqsManagedSseEnabled: z.nullable(z.boolean()).optional(),
   sseEnabled: z.nullable(z.boolean()).optional(),
-  status: z.lazy(() => HeartbeatStatus23$outboundSchema),
+  status: z.lazy(() => ResourceHeartbeatStatus23$outboundSchema),
   visibilityTimeoutSeconds: z.nullable(z.int()).optional(),
   backend: z.literal("awsSqs"),
 });
@@ -27178,17 +27918,16 @@ export function podCountsToJSON(podCounts: PodCounts): string {
 }
 
 /** @internal */
-export const Reason22$outboundSchema: z.ZodEnum<typeof Reason22> = z.enum(
-  Reason22,
-);
+export const DataReason22$outboundSchema: z.ZodEnum<typeof DataReason22> = z
+  .enum(DataReason22);
 
 /** @internal */
-export const CollectionIssueSeverity22$outboundSchema: z.ZodEnum<
-  typeof CollectionIssueSeverity22
-> = z.enum(CollectionIssueSeverity22);
+export const StatusSeverity22$outboundSchema: z.ZodEnum<
+  typeof StatusSeverity22
+> = z.enum(StatusSeverity22);
 
 /** @internal */
-export type CollectionIssue22$Outbound = {
+export type DataCollectionIssue22$Outbound = {
   message: string;
   reason: string;
   severity: string;
@@ -27196,28 +27935,27 @@ export type CollectionIssue22$Outbound = {
 };
 
 /** @internal */
-export const CollectionIssue22$outboundSchema: z.ZodType<
-  CollectionIssue22$Outbound,
-  CollectionIssue22
+export const DataCollectionIssue22$outboundSchema: z.ZodType<
+  DataCollectionIssue22$Outbound,
+  DataCollectionIssue22
 > = z.object({
   message: z.string(),
-  reason: Reason22$outboundSchema,
-  severity: CollectionIssueSeverity22$outboundSchema,
+  reason: DataReason22$outboundSchema,
+  severity: StatusSeverity22$outboundSchema,
   source: z.string(),
 });
 
-export function collectionIssue22ToJSON(
-  collectionIssue22: CollectionIssue22,
+export function dataCollectionIssue22ToJSON(
+  dataCollectionIssue22: DataCollectionIssue22,
 ): string {
   return JSON.stringify(
-    CollectionIssue22$outboundSchema.parse(collectionIssue22),
+    DataCollectionIssue22$outboundSchema.parse(dataCollectionIssue22),
   );
 }
 
 /** @internal */
-export const Health22$outboundSchema: z.ZodEnum<typeof Health22> = z.enum(
-  Health22,
-);
+export const DataHealth22$outboundSchema: z.ZodEnum<typeof DataHealth22> = z
+  .enum(DataHealth22);
 
 /** @internal */
 export const StatusLifecycle22$outboundSchema: z.ZodEnum<
@@ -27225,8 +27963,8 @@ export const StatusLifecycle22$outboundSchema: z.ZodEnum<
 > = z.enum(StatusLifecycle22);
 
 /** @internal */
-export type HeartbeatStatus22$Outbound = {
-  collectionIssues: Array<CollectionIssue22$Outbound>;
+export type ResourceHeartbeatStatus22$Outbound = {
+  collectionIssues: Array<DataCollectionIssue22$Outbound>;
   health: string;
   lifecycle: string;
   message?: string | null | undefined;
@@ -27235,23 +27973,23 @@ export type HeartbeatStatus22$Outbound = {
 };
 
 /** @internal */
-export const HeartbeatStatus22$outboundSchema: z.ZodType<
-  HeartbeatStatus22$Outbound,
-  HeartbeatStatus22
+export const ResourceHeartbeatStatus22$outboundSchema: z.ZodType<
+  ResourceHeartbeatStatus22$Outbound,
+  ResourceHeartbeatStatus22
 > = z.object({
-  collectionIssues: z.array(z.lazy(() => CollectionIssue22$outboundSchema)),
-  health: Health22$outboundSchema,
+  collectionIssues: z.array(z.lazy(() => DataCollectionIssue22$outboundSchema)),
+  health: DataHealth22$outboundSchema,
   lifecycle: StatusLifecycle22$outboundSchema,
   message: z.nullable(z.string()).optional(),
   partial: z.boolean(),
   stale: z.boolean(),
 });
 
-export function heartbeatStatus22ToJSON(
-  heartbeatStatus22: HeartbeatStatus22,
+export function resourceHeartbeatStatus22ToJSON(
+  resourceHeartbeatStatus22: ResourceHeartbeatStatus22,
 ): string {
   return JSON.stringify(
-    HeartbeatStatus22$outboundSchema.parse(heartbeatStatus22),
+    ResourceHeartbeatStatus22$outboundSchema.parse(resourceHeartbeatStatus22),
   );
 }
 
@@ -27266,7 +28004,7 @@ export type SyncReconcileRequestData1$Outbound = {
   nodeStatuses?: Array<NodeStatus$Outbound> | undefined;
   podCounts: PodCounts$Outbound;
   region?: string | null | undefined;
-  status: HeartbeatStatus22$Outbound;
+  status: ResourceHeartbeatStatus22$Outbound;
   version?: string | null | undefined;
 };
 
@@ -27286,7 +28024,7 @@ export const SyncReconcileRequestData1$outboundSchema: z.ZodType<
   nodeStatuses: z.array(z.lazy(() => NodeStatus$outboundSchema)).optional(),
   podCounts: z.lazy(() => PodCounts$outboundSchema),
   region: z.nullable(z.string()).optional(),
-  status: z.lazy(() => HeartbeatStatus22$outboundSchema),
+  status: z.lazy(() => ResourceHeartbeatStatus22$outboundSchema),
   version: z.nullable(z.string()).optional(),
 });
 
@@ -27341,17 +28079,16 @@ export function nodes4ToJSON(nodes4: Nodes4): string {
 }
 
 /** @internal */
-export const Reason21$outboundSchema: z.ZodEnum<typeof Reason21> = z.enum(
-  Reason21,
-);
+export const DataReason21$outboundSchema: z.ZodEnum<typeof DataReason21> = z
+  .enum(DataReason21);
 
 /** @internal */
-export const CollectionIssueSeverity21$outboundSchema: z.ZodEnum<
-  typeof CollectionIssueSeverity21
-> = z.enum(CollectionIssueSeverity21);
+export const StatusSeverity21$outboundSchema: z.ZodEnum<
+  typeof StatusSeverity21
+> = z.enum(StatusSeverity21);
 
 /** @internal */
-export type CollectionIssue21$Outbound = {
+export type DataCollectionIssue21$Outbound = {
   message: string;
   reason: string;
   severity: string;
@@ -27359,28 +28096,27 @@ export type CollectionIssue21$Outbound = {
 };
 
 /** @internal */
-export const CollectionIssue21$outboundSchema: z.ZodType<
-  CollectionIssue21$Outbound,
-  CollectionIssue21
+export const DataCollectionIssue21$outboundSchema: z.ZodType<
+  DataCollectionIssue21$Outbound,
+  DataCollectionIssue21
 > = z.object({
   message: z.string(),
-  reason: Reason21$outboundSchema,
-  severity: CollectionIssueSeverity21$outboundSchema,
+  reason: DataReason21$outboundSchema,
+  severity: StatusSeverity21$outboundSchema,
   source: z.string(),
 });
 
-export function collectionIssue21ToJSON(
-  collectionIssue21: CollectionIssue21,
+export function dataCollectionIssue21ToJSON(
+  dataCollectionIssue21: DataCollectionIssue21,
 ): string {
   return JSON.stringify(
-    CollectionIssue21$outboundSchema.parse(collectionIssue21),
+    DataCollectionIssue21$outboundSchema.parse(dataCollectionIssue21),
   );
 }
 
 /** @internal */
-export const Health21$outboundSchema: z.ZodEnum<typeof Health21> = z.enum(
-  Health21,
-);
+export const DataHealth21$outboundSchema: z.ZodEnum<typeof DataHealth21> = z
+  .enum(DataHealth21);
 
 /** @internal */
 export const StatusLifecycle21$outboundSchema: z.ZodEnum<
@@ -27388,8 +28124,8 @@ export const StatusLifecycle21$outboundSchema: z.ZodEnum<
 > = z.enum(StatusLifecycle21);
 
 /** @internal */
-export type HeartbeatStatus21$Outbound = {
-  collectionIssues: Array<CollectionIssue21$Outbound>;
+export type ResourceHeartbeatStatus21$Outbound = {
+  collectionIssues: Array<DataCollectionIssue21$Outbound>;
   health: string;
   lifecycle: string;
   message?: string | null | undefined;
@@ -27398,23 +28134,23 @@ export type HeartbeatStatus21$Outbound = {
 };
 
 /** @internal */
-export const HeartbeatStatus21$outboundSchema: z.ZodType<
-  HeartbeatStatus21$Outbound,
-  HeartbeatStatus21
+export const ResourceHeartbeatStatus21$outboundSchema: z.ZodType<
+  ResourceHeartbeatStatus21$Outbound,
+  ResourceHeartbeatStatus21
 > = z.object({
-  collectionIssues: z.array(z.lazy(() => CollectionIssue21$outboundSchema)),
-  health: Health21$outboundSchema,
+  collectionIssues: z.array(z.lazy(() => DataCollectionIssue21$outboundSchema)),
+  health: DataHealth21$outboundSchema,
   lifecycle: StatusLifecycle21$outboundSchema,
   message: z.nullable(z.string()).optional(),
   partial: z.boolean(),
   stale: z.boolean(),
 });
 
-export function heartbeatStatus21ToJSON(
-  heartbeatStatus21: HeartbeatStatus21,
+export function resourceHeartbeatStatus21ToJSON(
+  resourceHeartbeatStatus21: ResourceHeartbeatStatus21,
 ): string {
   return JSON.stringify(
-    HeartbeatStatus21$outboundSchema.parse(heartbeatStatus21),
+    ResourceHeartbeatStatus21$outboundSchema.parse(resourceHeartbeatStatus21),
   );
 }
 
@@ -27431,7 +28167,7 @@ export type DataLocal5$Outbound = {
   networkName?: string | null | undefined;
   nodes: Nodes4$Outbound;
   runningContainers?: number | null | undefined;
-  status: HeartbeatStatus21$Outbound;
+  status: ResourceHeartbeatStatus21$Outbound;
   trackedContainers?: number | null | undefined;
   backend: "local";
 };
@@ -27452,7 +28188,7 @@ export const DataLocal5$outboundSchema: z.ZodType<
   networkName: z.nullable(z.string()).optional(),
   nodes: z.lazy(() => Nodes4$outboundSchema),
   runningContainers: z.nullable(z.int()).optional(),
-  status: z.lazy(() => HeartbeatStatus21$outboundSchema),
+  status: z.lazy(() => ResourceHeartbeatStatus21$outboundSchema),
   trackedContainers: z.nullable(z.int()).optional(),
   backend: z.literal("local"),
 });
@@ -27509,6 +28245,84 @@ export function capacityBlockerUnion3ToJSON(
 ): string {
   return JSON.stringify(
     CapacityBlockerUnion3$outboundSchema.parse(capacityBlockerUnion3),
+  );
+}
+
+/** @internal */
+export type Blocker3$Outbound = {
+  reason: string;
+  replicaId: string;
+  schedulingMode: string;
+  state: string;
+  workloadName: string;
+};
+
+/** @internal */
+export const Blocker3$outboundSchema: z.ZodType<Blocker3$Outbound, Blocker3> = z
+  .object({
+    reason: z.string(),
+    replicaId: z.string(),
+    schedulingMode: z.string(),
+    state: z.string(),
+    workloadName: z.string(),
+  });
+
+export function blocker3ToJSON(blocker3: Blocker3): string {
+  return JSON.stringify(Blocker3$outboundSchema.parse(blocker3));
+}
+
+/** @internal */
+export const DrainProgressStatus3$outboundSchema: z.ZodEnum<
+  typeof DrainProgressStatus3
+> = z.enum(DrainProgressStatus3);
+
+/** @internal */
+export type DrainProgress3$Outbound = {
+  blockers?: Array<Blocker3$Outbound> | undefined;
+  drainDeadlineAt?: string | null | undefined;
+  drainRequestedAt?: string | null | undefined;
+  drainedAt?: string | null | undefined;
+  force: boolean;
+  machineId: string;
+  replicaCount: number;
+  stalled: boolean;
+  status: string;
+};
+
+/** @internal */
+export const DrainProgress3$outboundSchema: z.ZodType<
+  DrainProgress3$Outbound,
+  DrainProgress3
+> = z.object({
+  blockers: z.array(z.lazy(() => Blocker3$outboundSchema)).optional(),
+  drainDeadlineAt: z.nullable(z.string()).optional(),
+  drainRequestedAt: z.nullable(z.string()).optional(),
+  drainedAt: z.nullable(z.string()).optional(),
+  force: z.boolean(),
+  machineId: z.string(),
+  replicaCount: z.int(),
+  stalled: z.boolean(),
+  status: DrainProgressStatus3$outboundSchema,
+});
+
+export function drainProgress3ToJSON(drainProgress3: DrainProgress3): string {
+  return JSON.stringify(DrainProgress3$outboundSchema.parse(drainProgress3));
+}
+
+/** @internal */
+export type DrainProgressUnion3$Outbound = DrainProgress3$Outbound | any;
+
+/** @internal */
+export const DrainProgressUnion3$outboundSchema: z.ZodType<
+  DrainProgressUnion3$Outbound,
+  DrainProgressUnion3
+> = z.union([z.lazy(() => DrainProgress3$outboundSchema), z.any()]);
+
+export function drainProgressUnion3ToJSON(
+  drainProgressUnion3: DrainProgressUnion3,
+): string {
+  return JSON.stringify(
+    DrainProgressUnion3$outboundSchema.parse(drainProgressUnion3),
   );
 }
 
@@ -27602,6 +28416,7 @@ export type CapacityGroup3$Outbound = {
   capacityBlocker?: CapacityBlocker3$Outbound | any | null | undefined;
   currentMachines: number;
   desiredMachines: number;
+  drainProgress?: DrainProgress3$Outbound | any | null | undefined;
   groupId: string;
   instanceType?: string | null | undefined;
   maxMachines?: number | null | undefined;
@@ -27619,6 +28434,9 @@ export const CapacityGroup3$outboundSchema: z.ZodType<
   ).optional(),
   currentMachines: z.int(),
   desiredMachines: z.int(),
+  drainProgress: z.nullable(
+    z.union([z.lazy(() => DrainProgress3$outboundSchema), z.any()]),
+  ).optional(),
   groupId: z.string(),
   instanceType: z.nullable(z.string()).optional(),
   maxMachines: z.nullable(z.int()).optional(),
@@ -27746,17 +28564,16 @@ export function providerFleet3ToJSON(providerFleet3: ProviderFleet3): string {
 }
 
 /** @internal */
-export const Reason20$outboundSchema: z.ZodEnum<typeof Reason20> = z.enum(
-  Reason20,
-);
+export const DataReason20$outboundSchema: z.ZodEnum<typeof DataReason20> = z
+  .enum(DataReason20);
 
 /** @internal */
-export const CollectionIssueSeverity20$outboundSchema: z.ZodEnum<
-  typeof CollectionIssueSeverity20
-> = z.enum(CollectionIssueSeverity20);
+export const StatusSeverity20$outboundSchema: z.ZodEnum<
+  typeof StatusSeverity20
+> = z.enum(StatusSeverity20);
 
 /** @internal */
-export type CollectionIssue20$Outbound = {
+export type DataCollectionIssue20$Outbound = {
   message: string;
   reason: string;
   severity: string;
@@ -27764,28 +28581,27 @@ export type CollectionIssue20$Outbound = {
 };
 
 /** @internal */
-export const CollectionIssue20$outboundSchema: z.ZodType<
-  CollectionIssue20$Outbound,
-  CollectionIssue20
+export const DataCollectionIssue20$outboundSchema: z.ZodType<
+  DataCollectionIssue20$Outbound,
+  DataCollectionIssue20
 > = z.object({
   message: z.string(),
-  reason: Reason20$outboundSchema,
-  severity: CollectionIssueSeverity20$outboundSchema,
+  reason: DataReason20$outboundSchema,
+  severity: StatusSeverity20$outboundSchema,
   source: z.string(),
 });
 
-export function collectionIssue20ToJSON(
-  collectionIssue20: CollectionIssue20,
+export function dataCollectionIssue20ToJSON(
+  dataCollectionIssue20: DataCollectionIssue20,
 ): string {
   return JSON.stringify(
-    CollectionIssue20$outboundSchema.parse(collectionIssue20),
+    DataCollectionIssue20$outboundSchema.parse(dataCollectionIssue20),
   );
 }
 
 /** @internal */
-export const Health20$outboundSchema: z.ZodEnum<typeof Health20> = z.enum(
-  Health20,
-);
+export const DataHealth20$outboundSchema: z.ZodEnum<typeof DataHealth20> = z
+  .enum(DataHealth20);
 
 /** @internal */
 export const StatusLifecycle20$outboundSchema: z.ZodEnum<
@@ -27793,8 +28609,8 @@ export const StatusLifecycle20$outboundSchema: z.ZodEnum<
 > = z.enum(StatusLifecycle20);
 
 /** @internal */
-export type HeartbeatStatus20$Outbound = {
-  collectionIssues: Array<CollectionIssue20$Outbound>;
+export type ResourceHeartbeatStatus20$Outbound = {
+  collectionIssues: Array<DataCollectionIssue20$Outbound>;
   health: string;
   lifecycle: string;
   message?: string | null | undefined;
@@ -27803,23 +28619,23 @@ export type HeartbeatStatus20$Outbound = {
 };
 
 /** @internal */
-export const HeartbeatStatus20$outboundSchema: z.ZodType<
-  HeartbeatStatus20$Outbound,
-  HeartbeatStatus20
+export const ResourceHeartbeatStatus20$outboundSchema: z.ZodType<
+  ResourceHeartbeatStatus20$Outbound,
+  ResourceHeartbeatStatus20
 > = z.object({
-  collectionIssues: z.array(z.lazy(() => CollectionIssue20$outboundSchema)),
-  health: Health20$outboundSchema,
+  collectionIssues: z.array(z.lazy(() => DataCollectionIssue20$outboundSchema)),
+  health: DataHealth20$outboundSchema,
   lifecycle: StatusLifecycle20$outboundSchema,
   message: z.nullable(z.string()).optional(),
   partial: z.boolean(),
   stale: z.boolean(),
 });
 
-export function heartbeatStatus20ToJSON(
-  heartbeatStatus20: HeartbeatStatus20,
+export function resourceHeartbeatStatus20ToJSON(
+  resourceHeartbeatStatus20: ResourceHeartbeatStatus20,
 ): string {
   return JSON.stringify(
-    HeartbeatStatus20$outboundSchema.parse(heartbeatStatus20),
+    ResourceHeartbeatStatus20$outboundSchema.parse(resourceHeartbeatStatus20),
   );
 }
 
@@ -27833,7 +28649,7 @@ export type DataAzure2$Outbound = {
   nodes: Nodes3$Outbound;
   providerFleets: Array<ProviderFleet3$Outbound>;
   region?: string | null | undefined;
-  status: HeartbeatStatus20$Outbound;
+  status: ResourceHeartbeatStatus20$Outbound;
   backend: "azure";
 };
 
@@ -27852,7 +28668,7 @@ export const DataAzure2$outboundSchema: z.ZodType<
   nodes: z.lazy(() => Nodes3$outboundSchema),
   providerFleets: z.array(z.lazy(() => ProviderFleet3$outboundSchema)),
   region: z.nullable(z.string()).optional(),
-  status: z.lazy(() => HeartbeatStatus20$outboundSchema),
+  status: z.lazy(() => ResourceHeartbeatStatus20$outboundSchema),
   backend: z.literal("azure"),
 });
 
@@ -27908,6 +28724,84 @@ export function capacityBlockerUnion2ToJSON(
 ): string {
   return JSON.stringify(
     CapacityBlockerUnion2$outboundSchema.parse(capacityBlockerUnion2),
+  );
+}
+
+/** @internal */
+export type Blocker2$Outbound = {
+  reason: string;
+  replicaId: string;
+  schedulingMode: string;
+  state: string;
+  workloadName: string;
+};
+
+/** @internal */
+export const Blocker2$outboundSchema: z.ZodType<Blocker2$Outbound, Blocker2> = z
+  .object({
+    reason: z.string(),
+    replicaId: z.string(),
+    schedulingMode: z.string(),
+    state: z.string(),
+    workloadName: z.string(),
+  });
+
+export function blocker2ToJSON(blocker2: Blocker2): string {
+  return JSON.stringify(Blocker2$outboundSchema.parse(blocker2));
+}
+
+/** @internal */
+export const DrainProgressStatus2$outboundSchema: z.ZodEnum<
+  typeof DrainProgressStatus2
+> = z.enum(DrainProgressStatus2);
+
+/** @internal */
+export type DrainProgress2$Outbound = {
+  blockers?: Array<Blocker2$Outbound> | undefined;
+  drainDeadlineAt?: string | null | undefined;
+  drainRequestedAt?: string | null | undefined;
+  drainedAt?: string | null | undefined;
+  force: boolean;
+  machineId: string;
+  replicaCount: number;
+  stalled: boolean;
+  status: string;
+};
+
+/** @internal */
+export const DrainProgress2$outboundSchema: z.ZodType<
+  DrainProgress2$Outbound,
+  DrainProgress2
+> = z.object({
+  blockers: z.array(z.lazy(() => Blocker2$outboundSchema)).optional(),
+  drainDeadlineAt: z.nullable(z.string()).optional(),
+  drainRequestedAt: z.nullable(z.string()).optional(),
+  drainedAt: z.nullable(z.string()).optional(),
+  force: z.boolean(),
+  machineId: z.string(),
+  replicaCount: z.int(),
+  stalled: z.boolean(),
+  status: DrainProgressStatus2$outboundSchema,
+});
+
+export function drainProgress2ToJSON(drainProgress2: DrainProgress2): string {
+  return JSON.stringify(DrainProgress2$outboundSchema.parse(drainProgress2));
+}
+
+/** @internal */
+export type DrainProgressUnion2$Outbound = DrainProgress2$Outbound | any;
+
+/** @internal */
+export const DrainProgressUnion2$outboundSchema: z.ZodType<
+  DrainProgressUnion2$Outbound,
+  DrainProgressUnion2
+> = z.union([z.lazy(() => DrainProgress2$outboundSchema), z.any()]);
+
+export function drainProgressUnion2ToJSON(
+  drainProgressUnion2: DrainProgressUnion2,
+): string {
+  return JSON.stringify(
+    DrainProgressUnion2$outboundSchema.parse(drainProgressUnion2),
   );
 }
 
@@ -28001,6 +28895,7 @@ export type CapacityGroup2$Outbound = {
   capacityBlocker?: CapacityBlocker2$Outbound | any | null | undefined;
   currentMachines: number;
   desiredMachines: number;
+  drainProgress?: DrainProgress2$Outbound | any | null | undefined;
   groupId: string;
   instanceType?: string | null | undefined;
   maxMachines?: number | null | undefined;
@@ -28018,6 +28913,9 @@ export const CapacityGroup2$outboundSchema: z.ZodType<
   ).optional(),
   currentMachines: z.int(),
   desiredMachines: z.int(),
+  drainProgress: z.nullable(
+    z.union([z.lazy(() => DrainProgress2$outboundSchema), z.any()]),
+  ).optional(),
   groupId: z.string(),
   instanceType: z.nullable(z.string()).optional(),
   maxMachines: z.nullable(z.int()).optional(),
@@ -28145,17 +29043,16 @@ export function providerFleet2ToJSON(providerFleet2: ProviderFleet2): string {
 }
 
 /** @internal */
-export const Reason19$outboundSchema: z.ZodEnum<typeof Reason19> = z.enum(
-  Reason19,
-);
+export const DataReason19$outboundSchema: z.ZodEnum<typeof DataReason19> = z
+  .enum(DataReason19);
 
 /** @internal */
-export const CollectionIssueSeverity19$outboundSchema: z.ZodEnum<
-  typeof CollectionIssueSeverity19
-> = z.enum(CollectionIssueSeverity19);
+export const StatusSeverity19$outboundSchema: z.ZodEnum<
+  typeof StatusSeverity19
+> = z.enum(StatusSeverity19);
 
 /** @internal */
-export type CollectionIssue19$Outbound = {
+export type DataCollectionIssue19$Outbound = {
   message: string;
   reason: string;
   severity: string;
@@ -28163,28 +29060,27 @@ export type CollectionIssue19$Outbound = {
 };
 
 /** @internal */
-export const CollectionIssue19$outboundSchema: z.ZodType<
-  CollectionIssue19$Outbound,
-  CollectionIssue19
+export const DataCollectionIssue19$outboundSchema: z.ZodType<
+  DataCollectionIssue19$Outbound,
+  DataCollectionIssue19
 > = z.object({
   message: z.string(),
-  reason: Reason19$outboundSchema,
-  severity: CollectionIssueSeverity19$outboundSchema,
+  reason: DataReason19$outboundSchema,
+  severity: StatusSeverity19$outboundSchema,
   source: z.string(),
 });
 
-export function collectionIssue19ToJSON(
-  collectionIssue19: CollectionIssue19,
+export function dataCollectionIssue19ToJSON(
+  dataCollectionIssue19: DataCollectionIssue19,
 ): string {
   return JSON.stringify(
-    CollectionIssue19$outboundSchema.parse(collectionIssue19),
+    DataCollectionIssue19$outboundSchema.parse(dataCollectionIssue19),
   );
 }
 
 /** @internal */
-export const Health19$outboundSchema: z.ZodEnum<typeof Health19> = z.enum(
-  Health19,
-);
+export const DataHealth19$outboundSchema: z.ZodEnum<typeof DataHealth19> = z
+  .enum(DataHealth19);
 
 /** @internal */
 export const StatusLifecycle19$outboundSchema: z.ZodEnum<
@@ -28192,8 +29088,8 @@ export const StatusLifecycle19$outboundSchema: z.ZodEnum<
 > = z.enum(StatusLifecycle19);
 
 /** @internal */
-export type HeartbeatStatus19$Outbound = {
-  collectionIssues: Array<CollectionIssue19$Outbound>;
+export type ResourceHeartbeatStatus19$Outbound = {
+  collectionIssues: Array<DataCollectionIssue19$Outbound>;
   health: string;
   lifecycle: string;
   message?: string | null | undefined;
@@ -28202,23 +29098,23 @@ export type HeartbeatStatus19$Outbound = {
 };
 
 /** @internal */
-export const HeartbeatStatus19$outboundSchema: z.ZodType<
-  HeartbeatStatus19$Outbound,
-  HeartbeatStatus19
+export const ResourceHeartbeatStatus19$outboundSchema: z.ZodType<
+  ResourceHeartbeatStatus19$Outbound,
+  ResourceHeartbeatStatus19
 > = z.object({
-  collectionIssues: z.array(z.lazy(() => CollectionIssue19$outboundSchema)),
-  health: Health19$outboundSchema,
+  collectionIssues: z.array(z.lazy(() => DataCollectionIssue19$outboundSchema)),
+  health: DataHealth19$outboundSchema,
   lifecycle: StatusLifecycle19$outboundSchema,
   message: z.nullable(z.string()).optional(),
   partial: z.boolean(),
   stale: z.boolean(),
 });
 
-export function heartbeatStatus19ToJSON(
-  heartbeatStatus19: HeartbeatStatus19,
+export function resourceHeartbeatStatus19ToJSON(
+  resourceHeartbeatStatus19: ResourceHeartbeatStatus19,
 ): string {
   return JSON.stringify(
-    HeartbeatStatus19$outboundSchema.parse(heartbeatStatus19),
+    ResourceHeartbeatStatus19$outboundSchema.parse(resourceHeartbeatStatus19),
   );
 }
 
@@ -28232,7 +29128,7 @@ export type DataGcp2$Outbound = {
   nodes: Nodes2$Outbound;
   providerFleets: Array<ProviderFleet2$Outbound>;
   region?: string | null | undefined;
-  status: HeartbeatStatus19$Outbound;
+  status: ResourceHeartbeatStatus19$Outbound;
   backend: "gcp";
 };
 
@@ -28249,7 +29145,7 @@ export const DataGcp2$outboundSchema: z.ZodType<DataGcp2$Outbound, DataGcp2> = z
     nodes: z.lazy(() => Nodes2$outboundSchema),
     providerFleets: z.array(z.lazy(() => ProviderFleet2$outboundSchema)),
     region: z.nullable(z.string()).optional(),
-    status: z.lazy(() => HeartbeatStatus19$outboundSchema),
+    status: z.lazy(() => ResourceHeartbeatStatus19$outboundSchema),
     backend: z.literal("gcp"),
   });
 
@@ -28305,6 +29201,84 @@ export function capacityBlockerUnion1ToJSON(
 ): string {
   return JSON.stringify(
     CapacityBlockerUnion1$outboundSchema.parse(capacityBlockerUnion1),
+  );
+}
+
+/** @internal */
+export type Blocker1$Outbound = {
+  reason: string;
+  replicaId: string;
+  schedulingMode: string;
+  state: string;
+  workloadName: string;
+};
+
+/** @internal */
+export const Blocker1$outboundSchema: z.ZodType<Blocker1$Outbound, Blocker1> = z
+  .object({
+    reason: z.string(),
+    replicaId: z.string(),
+    schedulingMode: z.string(),
+    state: z.string(),
+    workloadName: z.string(),
+  });
+
+export function blocker1ToJSON(blocker1: Blocker1): string {
+  return JSON.stringify(Blocker1$outboundSchema.parse(blocker1));
+}
+
+/** @internal */
+export const DrainProgressStatus1$outboundSchema: z.ZodEnum<
+  typeof DrainProgressStatus1
+> = z.enum(DrainProgressStatus1);
+
+/** @internal */
+export type DrainProgress1$Outbound = {
+  blockers?: Array<Blocker1$Outbound> | undefined;
+  drainDeadlineAt?: string | null | undefined;
+  drainRequestedAt?: string | null | undefined;
+  drainedAt?: string | null | undefined;
+  force: boolean;
+  machineId: string;
+  replicaCount: number;
+  stalled: boolean;
+  status: string;
+};
+
+/** @internal */
+export const DrainProgress1$outboundSchema: z.ZodType<
+  DrainProgress1$Outbound,
+  DrainProgress1
+> = z.object({
+  blockers: z.array(z.lazy(() => Blocker1$outboundSchema)).optional(),
+  drainDeadlineAt: z.nullable(z.string()).optional(),
+  drainRequestedAt: z.nullable(z.string()).optional(),
+  drainedAt: z.nullable(z.string()).optional(),
+  force: z.boolean(),
+  machineId: z.string(),
+  replicaCount: z.int(),
+  stalled: z.boolean(),
+  status: DrainProgressStatus1$outboundSchema,
+});
+
+export function drainProgress1ToJSON(drainProgress1: DrainProgress1): string {
+  return JSON.stringify(DrainProgress1$outboundSchema.parse(drainProgress1));
+}
+
+/** @internal */
+export type DrainProgressUnion1$Outbound = DrainProgress1$Outbound | any;
+
+/** @internal */
+export const DrainProgressUnion1$outboundSchema: z.ZodType<
+  DrainProgressUnion1$Outbound,
+  DrainProgressUnion1
+> = z.union([z.lazy(() => DrainProgress1$outboundSchema), z.any()]);
+
+export function drainProgressUnion1ToJSON(
+  drainProgressUnion1: DrainProgressUnion1,
+): string {
+  return JSON.stringify(
+    DrainProgressUnion1$outboundSchema.parse(drainProgressUnion1),
   );
 }
 
@@ -28398,6 +29372,7 @@ export type CapacityGroup1$Outbound = {
   capacityBlocker?: CapacityBlocker1$Outbound | any | null | undefined;
   currentMachines: number;
   desiredMachines: number;
+  drainProgress?: DrainProgress1$Outbound | any | null | undefined;
   groupId: string;
   instanceType?: string | null | undefined;
   maxMachines?: number | null | undefined;
@@ -28415,6 +29390,9 @@ export const CapacityGroup1$outboundSchema: z.ZodType<
   ).optional(),
   currentMachines: z.int(),
   desiredMachines: z.int(),
+  drainProgress: z.nullable(
+    z.union([z.lazy(() => DrainProgress1$outboundSchema), z.any()]),
+  ).optional(),
   groupId: z.string(),
   instanceType: z.nullable(z.string()).optional(),
   maxMachines: z.nullable(z.int()).optional(),
@@ -28542,17 +29520,16 @@ export function providerFleet1ToJSON(providerFleet1: ProviderFleet1): string {
 }
 
 /** @internal */
-export const Reason18$outboundSchema: z.ZodEnum<typeof Reason18> = z.enum(
-  Reason18,
-);
+export const DataReason18$outboundSchema: z.ZodEnum<typeof DataReason18> = z
+  .enum(DataReason18);
 
 /** @internal */
-export const CollectionIssueSeverity18$outboundSchema: z.ZodEnum<
-  typeof CollectionIssueSeverity18
-> = z.enum(CollectionIssueSeverity18);
+export const StatusSeverity18$outboundSchema: z.ZodEnum<
+  typeof StatusSeverity18
+> = z.enum(StatusSeverity18);
 
 /** @internal */
-export type CollectionIssue18$Outbound = {
+export type DataCollectionIssue18$Outbound = {
   message: string;
   reason: string;
   severity: string;
@@ -28560,28 +29537,27 @@ export type CollectionIssue18$Outbound = {
 };
 
 /** @internal */
-export const CollectionIssue18$outboundSchema: z.ZodType<
-  CollectionIssue18$Outbound,
-  CollectionIssue18
+export const DataCollectionIssue18$outboundSchema: z.ZodType<
+  DataCollectionIssue18$Outbound,
+  DataCollectionIssue18
 > = z.object({
   message: z.string(),
-  reason: Reason18$outboundSchema,
-  severity: CollectionIssueSeverity18$outboundSchema,
+  reason: DataReason18$outboundSchema,
+  severity: StatusSeverity18$outboundSchema,
   source: z.string(),
 });
 
-export function collectionIssue18ToJSON(
-  collectionIssue18: CollectionIssue18,
+export function dataCollectionIssue18ToJSON(
+  dataCollectionIssue18: DataCollectionIssue18,
 ): string {
   return JSON.stringify(
-    CollectionIssue18$outboundSchema.parse(collectionIssue18),
+    DataCollectionIssue18$outboundSchema.parse(dataCollectionIssue18),
   );
 }
 
 /** @internal */
-export const Health18$outboundSchema: z.ZodEnum<typeof Health18> = z.enum(
-  Health18,
-);
+export const DataHealth18$outboundSchema: z.ZodEnum<typeof DataHealth18> = z
+  .enum(DataHealth18);
 
 /** @internal */
 export const StatusLifecycle18$outboundSchema: z.ZodEnum<
@@ -28589,8 +29565,8 @@ export const StatusLifecycle18$outboundSchema: z.ZodEnum<
 > = z.enum(StatusLifecycle18);
 
 /** @internal */
-export type HeartbeatStatus18$Outbound = {
-  collectionIssues: Array<CollectionIssue18$Outbound>;
+export type ResourceHeartbeatStatus18$Outbound = {
+  collectionIssues: Array<DataCollectionIssue18$Outbound>;
   health: string;
   lifecycle: string;
   message?: string | null | undefined;
@@ -28599,23 +29575,23 @@ export type HeartbeatStatus18$Outbound = {
 };
 
 /** @internal */
-export const HeartbeatStatus18$outboundSchema: z.ZodType<
-  HeartbeatStatus18$Outbound,
-  HeartbeatStatus18
+export const ResourceHeartbeatStatus18$outboundSchema: z.ZodType<
+  ResourceHeartbeatStatus18$Outbound,
+  ResourceHeartbeatStatus18
 > = z.object({
-  collectionIssues: z.array(z.lazy(() => CollectionIssue18$outboundSchema)),
-  health: Health18$outboundSchema,
+  collectionIssues: z.array(z.lazy(() => DataCollectionIssue18$outboundSchema)),
+  health: DataHealth18$outboundSchema,
   lifecycle: StatusLifecycle18$outboundSchema,
   message: z.nullable(z.string()).optional(),
   partial: z.boolean(),
   stale: z.boolean(),
 });
 
-export function heartbeatStatus18ToJSON(
-  heartbeatStatus18: HeartbeatStatus18,
+export function resourceHeartbeatStatus18ToJSON(
+  resourceHeartbeatStatus18: ResourceHeartbeatStatus18,
 ): string {
   return JSON.stringify(
-    HeartbeatStatus18$outboundSchema.parse(heartbeatStatus18),
+    ResourceHeartbeatStatus18$outboundSchema.parse(resourceHeartbeatStatus18),
   );
 }
 
@@ -28629,7 +29605,7 @@ export type DataAws2$Outbound = {
   nodes: Nodes1$Outbound;
   providerFleets: Array<ProviderFleet1$Outbound>;
   region?: string | null | undefined;
-  status: HeartbeatStatus18$Outbound;
+  status: ResourceHeartbeatStatus18$Outbound;
   backend: "aws";
 };
 
@@ -28646,7 +29622,7 @@ export const DataAws2$outboundSchema: z.ZodType<DataAws2$Outbound, DataAws2> = z
     nodes: z.lazy(() => Nodes1$outboundSchema),
     providerFleets: z.array(z.lazy(() => ProviderFleet1$outboundSchema)),
     region: z.nullable(z.string()).optional(),
-    status: z.lazy(() => HeartbeatStatus18$outboundSchema),
+    status: z.lazy(() => ResourceHeartbeatStatus18$outboundSchema),
     backend: z.literal("aws"),
   });
 
@@ -28961,17 +29937,16 @@ export function syncReconcileRequestEvent10ToJSON(
 }
 
 /** @internal */
-export const Reason17$outboundSchema: z.ZodEnum<typeof Reason17> = z.enum(
-  Reason17,
-);
+export const DataReason17$outboundSchema: z.ZodEnum<typeof DataReason17> = z
+  .enum(DataReason17);
 
 /** @internal */
-export const CollectionIssueSeverity17$outboundSchema: z.ZodEnum<
-  typeof CollectionIssueSeverity17
-> = z.enum(CollectionIssueSeverity17);
+export const StatusSeverity17$outboundSchema: z.ZodEnum<
+  typeof StatusSeverity17
+> = z.enum(StatusSeverity17);
 
 /** @internal */
-export type CollectionIssue17$Outbound = {
+export type DataCollectionIssue17$Outbound = {
   message: string;
   reason: string;
   severity: string;
@@ -28979,28 +29954,27 @@ export type CollectionIssue17$Outbound = {
 };
 
 /** @internal */
-export const CollectionIssue17$outboundSchema: z.ZodType<
-  CollectionIssue17$Outbound,
-  CollectionIssue17
+export const DataCollectionIssue17$outboundSchema: z.ZodType<
+  DataCollectionIssue17$Outbound,
+  DataCollectionIssue17
 > = z.object({
   message: z.string(),
-  reason: Reason17$outboundSchema,
-  severity: CollectionIssueSeverity17$outboundSchema,
+  reason: DataReason17$outboundSchema,
+  severity: StatusSeverity17$outboundSchema,
   source: z.string(),
 });
 
-export function collectionIssue17ToJSON(
-  collectionIssue17: CollectionIssue17,
+export function dataCollectionIssue17ToJSON(
+  dataCollectionIssue17: DataCollectionIssue17,
 ): string {
   return JSON.stringify(
-    CollectionIssue17$outboundSchema.parse(collectionIssue17),
+    DataCollectionIssue17$outboundSchema.parse(dataCollectionIssue17),
   );
 }
 
 /** @internal */
-export const Health17$outboundSchema: z.ZodEnum<typeof Health17> = z.enum(
-  Health17,
-);
+export const DataHealth17$outboundSchema: z.ZodEnum<typeof DataHealth17> = z
+  .enum(DataHealth17);
 
 /** @internal */
 export const StatusLifecycle17$outboundSchema: z.ZodEnum<
@@ -29008,8 +29982,8 @@ export const StatusLifecycle17$outboundSchema: z.ZodEnum<
 > = z.enum(StatusLifecycle17);
 
 /** @internal */
-export type HeartbeatStatus17$Outbound = {
-  collectionIssues: Array<CollectionIssue17$Outbound>;
+export type ResourceHeartbeatStatus17$Outbound = {
+  collectionIssues: Array<DataCollectionIssue17$Outbound>;
   health: string;
   lifecycle: string;
   message?: string | null | undefined;
@@ -29018,23 +29992,23 @@ export type HeartbeatStatus17$Outbound = {
 };
 
 /** @internal */
-export const HeartbeatStatus17$outboundSchema: z.ZodType<
-  HeartbeatStatus17$Outbound,
-  HeartbeatStatus17
+export const ResourceHeartbeatStatus17$outboundSchema: z.ZodType<
+  ResourceHeartbeatStatus17$Outbound,
+  ResourceHeartbeatStatus17
 > = z.object({
-  collectionIssues: z.array(z.lazy(() => CollectionIssue17$outboundSchema)),
-  health: Health17$outboundSchema,
+  collectionIssues: z.array(z.lazy(() => DataCollectionIssue17$outboundSchema)),
+  health: DataHealth17$outboundSchema,
   lifecycle: StatusLifecycle17$outboundSchema,
   message: z.nullable(z.string()).optional(),
   partial: z.boolean(),
   stale: z.boolean(),
 });
 
-export function heartbeatStatus17ToJSON(
-  heartbeatStatus17: HeartbeatStatus17,
+export function resourceHeartbeatStatus17ToJSON(
+  resourceHeartbeatStatus17: ResourceHeartbeatStatus17,
 ): string {
   return JSON.stringify(
-    HeartbeatStatus17$outboundSchema.parse(heartbeatStatus17),
+    ResourceHeartbeatStatus17$outboundSchema.parse(resourceHeartbeatStatus17),
   );
 }
 
@@ -29042,14 +30016,14 @@ export function heartbeatStatus17ToJSON(
 export type DataLocal4$Outbound = {
   commandSupported: boolean;
   daemonInstance?: DaemonInstance4$Outbound | any | null | undefined;
-  daemonName: string;
+  daemonName?: string | undefined;
   events: Array<SyncReconcileRequestEvent10$Outbound>;
   exitReason?: string | null | undefined;
   imagePathPresent: boolean;
   pid?: number | null | undefined;
   restartCount?: number | null | undefined;
   runtimeId: string;
-  status: HeartbeatStatus17$Outbound;
+  status: ResourceHeartbeatStatus17$Outbound;
   backend: "local";
 };
 
@@ -29062,14 +30036,14 @@ export const DataLocal4$outboundSchema: z.ZodType<
   daemonInstance: z.nullable(
     z.union([z.lazy(() => DaemonInstance4$outboundSchema), z.any()]),
   ).optional(),
-  daemonName: z.string(),
+  daemonName: z.string().optional(),
   events: z.array(z.lazy(() => SyncReconcileRequestEvent10$outboundSchema)),
   exitReason: z.nullable(z.string()).optional(),
   imagePathPresent: z.boolean(),
   pid: z.nullable(z.int()).optional(),
   restartCount: z.nullable(z.int()).optional(),
   runtimeId: z.string(),
-  status: z.lazy(() => HeartbeatStatus17$outboundSchema),
+  status: z.lazy(() => ResourceHeartbeatStatus17$outboundSchema),
   backend: z.literal("local"),
 });
 
@@ -29448,17 +30422,16 @@ export function replicas4ToJSON(replicas4: Replicas4): string {
 }
 
 /** @internal */
-export const Reason16$outboundSchema: z.ZodEnum<typeof Reason16> = z.enum(
-  Reason16,
-);
+export const DataReason16$outboundSchema: z.ZodEnum<typeof DataReason16> = z
+  .enum(DataReason16);
 
 /** @internal */
-export const CollectionIssueSeverity16$outboundSchema: z.ZodEnum<
-  typeof CollectionIssueSeverity16
-> = z.enum(CollectionIssueSeverity16);
+export const StatusSeverity16$outboundSchema: z.ZodEnum<
+  typeof StatusSeverity16
+> = z.enum(StatusSeverity16);
 
 /** @internal */
-export type CollectionIssue16$Outbound = {
+export type DataCollectionIssue16$Outbound = {
   message: string;
   reason: string;
   severity: string;
@@ -29466,28 +30439,27 @@ export type CollectionIssue16$Outbound = {
 };
 
 /** @internal */
-export const CollectionIssue16$outboundSchema: z.ZodType<
-  CollectionIssue16$Outbound,
-  CollectionIssue16
+export const DataCollectionIssue16$outboundSchema: z.ZodType<
+  DataCollectionIssue16$Outbound,
+  DataCollectionIssue16
 > = z.object({
   message: z.string(),
-  reason: Reason16$outboundSchema,
-  severity: CollectionIssueSeverity16$outboundSchema,
+  reason: DataReason16$outboundSchema,
+  severity: StatusSeverity16$outboundSchema,
   source: z.string(),
 });
 
-export function collectionIssue16ToJSON(
-  collectionIssue16: CollectionIssue16,
+export function dataCollectionIssue16ToJSON(
+  dataCollectionIssue16: DataCollectionIssue16,
 ): string {
   return JSON.stringify(
-    CollectionIssue16$outboundSchema.parse(collectionIssue16),
+    DataCollectionIssue16$outboundSchema.parse(dataCollectionIssue16),
   );
 }
 
 /** @internal */
-export const Health16$outboundSchema: z.ZodEnum<typeof Health16> = z.enum(
-  Health16,
-);
+export const DataHealth16$outboundSchema: z.ZodEnum<typeof DataHealth16> = z
+  .enum(DataHealth16);
 
 /** @internal */
 export const StatusLifecycle16$outboundSchema: z.ZodEnum<
@@ -29495,8 +30467,8 @@ export const StatusLifecycle16$outboundSchema: z.ZodEnum<
 > = z.enum(StatusLifecycle16);
 
 /** @internal */
-export type HeartbeatStatus16$Outbound = {
-  collectionIssues: Array<CollectionIssue16$Outbound>;
+export type ResourceHeartbeatStatus16$Outbound = {
+  collectionIssues: Array<DataCollectionIssue16$Outbound>;
   health: string;
   lifecycle: string;
   message?: string | null | undefined;
@@ -29505,23 +30477,23 @@ export type HeartbeatStatus16$Outbound = {
 };
 
 /** @internal */
-export const HeartbeatStatus16$outboundSchema: z.ZodType<
-  HeartbeatStatus16$Outbound,
-  HeartbeatStatus16
+export const ResourceHeartbeatStatus16$outboundSchema: z.ZodType<
+  ResourceHeartbeatStatus16$Outbound,
+  ResourceHeartbeatStatus16
 > = z.object({
-  collectionIssues: z.array(z.lazy(() => CollectionIssue16$outboundSchema)),
-  health: Health16$outboundSchema,
+  collectionIssues: z.array(z.lazy(() => DataCollectionIssue16$outboundSchema)),
+  health: DataHealth16$outboundSchema,
   lifecycle: StatusLifecycle16$outboundSchema,
   message: z.nullable(z.string()).optional(),
   partial: z.boolean(),
   stale: z.boolean(),
 });
 
-export function heartbeatStatus16ToJSON(
-  heartbeatStatus16: HeartbeatStatus16,
+export function resourceHeartbeatStatus16ToJSON(
+  resourceHeartbeatStatus16: ResourceHeartbeatStatus16,
 ): string {
   return JSON.stringify(
-    HeartbeatStatus16$outboundSchema.parse(heartbeatStatus16),
+    ResourceHeartbeatStatus16$outboundSchema.parse(resourceHeartbeatStatus16),
   );
 }
 
@@ -29610,7 +30582,7 @@ export type DataKubernetes3$Outbound = {
   pods: Array<Pod3$Outbound>;
   replicas: Replicas4$Outbound;
   restarts?: number | null | undefined;
-  status: HeartbeatStatus16$Outbound;
+  status: ResourceHeartbeatStatus16$Outbound;
   workload?: Workload3$Outbound | any | null | undefined;
   backend: "kubernetes";
 };
@@ -29631,7 +30603,7 @@ export const DataKubernetes3$outboundSchema: z.ZodType<
   pods: z.array(z.lazy(() => Pod3$outboundSchema)),
   replicas: z.lazy(() => Replicas4$outboundSchema),
   restarts: z.nullable(z.int()).optional(),
-  status: z.lazy(() => HeartbeatStatus16$outboundSchema),
+  status: z.lazy(() => ResourceHeartbeatStatus16$outboundSchema),
   workload: z.nullable(
     z.union([z.lazy(() => Workload3$outboundSchema), z.any()]),
   ).optional(),
@@ -29935,17 +30907,16 @@ export function syncReconcileRequestEvent8ToJSON(
 }
 
 /** @internal */
-export const Reason15$outboundSchema: z.ZodEnum<typeof Reason15> = z.enum(
-  Reason15,
-);
+export const DataReason15$outboundSchema: z.ZodEnum<typeof DataReason15> = z
+  .enum(DataReason15);
 
 /** @internal */
-export const CollectionIssueSeverity15$outboundSchema: z.ZodEnum<
-  typeof CollectionIssueSeverity15
-> = z.enum(CollectionIssueSeverity15);
+export const StatusSeverity15$outboundSchema: z.ZodEnum<
+  typeof StatusSeverity15
+> = z.enum(StatusSeverity15);
 
 /** @internal */
-export type CollectionIssue15$Outbound = {
+export type DataCollectionIssue15$Outbound = {
   message: string;
   reason: string;
   severity: string;
@@ -29953,28 +30924,27 @@ export type CollectionIssue15$Outbound = {
 };
 
 /** @internal */
-export const CollectionIssue15$outboundSchema: z.ZodType<
-  CollectionIssue15$Outbound,
-  CollectionIssue15
+export const DataCollectionIssue15$outboundSchema: z.ZodType<
+  DataCollectionIssue15$Outbound,
+  DataCollectionIssue15
 > = z.object({
   message: z.string(),
-  reason: Reason15$outboundSchema,
-  severity: CollectionIssueSeverity15$outboundSchema,
+  reason: DataReason15$outboundSchema,
+  severity: StatusSeverity15$outboundSchema,
   source: z.string(),
 });
 
-export function collectionIssue15ToJSON(
-  collectionIssue15: CollectionIssue15,
+export function dataCollectionIssue15ToJSON(
+  dataCollectionIssue15: DataCollectionIssue15,
 ): string {
   return JSON.stringify(
-    CollectionIssue15$outboundSchema.parse(collectionIssue15),
+    DataCollectionIssue15$outboundSchema.parse(dataCollectionIssue15),
   );
 }
 
 /** @internal */
-export const Health15$outboundSchema: z.ZodEnum<typeof Health15> = z.enum(
-  Health15,
-);
+export const DataHealth15$outboundSchema: z.ZodEnum<typeof DataHealth15> = z
+  .enum(DataHealth15);
 
 /** @internal */
 export const StatusLifecycle15$outboundSchema: z.ZodEnum<
@@ -29982,8 +30952,8 @@ export const StatusLifecycle15$outboundSchema: z.ZodEnum<
 > = z.enum(StatusLifecycle15);
 
 /** @internal */
-export type HeartbeatStatus15$Outbound = {
-  collectionIssues: Array<CollectionIssue15$Outbound>;
+export type ResourceHeartbeatStatus15$Outbound = {
+  collectionIssues: Array<DataCollectionIssue15$Outbound>;
   health: string;
   lifecycle: string;
   message?: string | null | undefined;
@@ -29992,23 +30962,23 @@ export type HeartbeatStatus15$Outbound = {
 };
 
 /** @internal */
-export const HeartbeatStatus15$outboundSchema: z.ZodType<
-  HeartbeatStatus15$Outbound,
-  HeartbeatStatus15
+export const ResourceHeartbeatStatus15$outboundSchema: z.ZodType<
+  ResourceHeartbeatStatus15$Outbound,
+  ResourceHeartbeatStatus15
 > = z.object({
-  collectionIssues: z.array(z.lazy(() => CollectionIssue15$outboundSchema)),
-  health: Health15$outboundSchema,
+  collectionIssues: z.array(z.lazy(() => DataCollectionIssue15$outboundSchema)),
+  health: DataHealth15$outboundSchema,
   lifecycle: StatusLifecycle15$outboundSchema,
   message: z.nullable(z.string()).optional(),
   partial: z.boolean(),
   stale: z.boolean(),
 });
 
-export function heartbeatStatus15ToJSON(
-  heartbeatStatus15: HeartbeatStatus15,
+export function resourceHeartbeatStatus15ToJSON(
+  resourceHeartbeatStatus15: ResourceHeartbeatStatus15,
 ): string {
   return JSON.stringify(
-    HeartbeatStatus15$outboundSchema.parse(heartbeatStatus15),
+    ResourceHeartbeatStatus15$outboundSchema.parse(resourceHeartbeatStatus15),
   );
 }
 
@@ -30018,7 +30988,7 @@ export type DataAzure1$Outbound = {
   capacityGroup: string;
   commandSupported: boolean;
   daemonInstances: Array<DaemonInstance3$Outbound>;
-  daemonName: string;
+  daemonName?: string | undefined;
   desiredMachines: number;
   events: Array<SyncReconcileRequestEvent8$Outbound>;
   healthyInstances: number;
@@ -30027,7 +30997,7 @@ export type DataAzure1$Outbound = {
   horizonStatusMessage?: string | null | undefined;
   horizonStatusReason?: string | null | undefined;
   latestUpdateTimestamp: string;
-  status: HeartbeatStatus15$Outbound;
+  status: ResourceHeartbeatStatus15$Outbound;
   unavailableInstances: number;
   backend: "azure";
 };
@@ -30041,7 +31011,7 @@ export const DataAzure1$outboundSchema: z.ZodType<
   capacityGroup: z.string(),
   commandSupported: z.boolean(),
   daemonInstances: z.array(z.lazy(() => DaemonInstance3$outboundSchema)),
-  daemonName: z.string(),
+  daemonName: z.string().optional(),
   desiredMachines: z.int(),
   events: z.array(z.lazy(() => SyncReconcileRequestEvent8$outboundSchema)),
   healthyInstances: z.int(),
@@ -30050,7 +31020,7 @@ export const DataAzure1$outboundSchema: z.ZodType<
   horizonStatusMessage: z.nullable(z.string()).optional(),
   horizonStatusReason: z.nullable(z.string()).optional(),
   latestUpdateTimestamp: z.string(),
-  status: z.lazy(() => HeartbeatStatus15$outboundSchema),
+  status: z.lazy(() => ResourceHeartbeatStatus15$outboundSchema),
   unavailableInstances: z.int(),
   backend: z.literal("azure"),
 });
@@ -30350,17 +31320,16 @@ export function syncReconcileRequestEvent7ToJSON(
 }
 
 /** @internal */
-export const Reason14$outboundSchema: z.ZodEnum<typeof Reason14> = z.enum(
-  Reason14,
-);
+export const DataReason14$outboundSchema: z.ZodEnum<typeof DataReason14> = z
+  .enum(DataReason14);
 
 /** @internal */
-export const CollectionIssueSeverity14$outboundSchema: z.ZodEnum<
-  typeof CollectionIssueSeverity14
-> = z.enum(CollectionIssueSeverity14);
+export const StatusSeverity14$outboundSchema: z.ZodEnum<
+  typeof StatusSeverity14
+> = z.enum(StatusSeverity14);
 
 /** @internal */
-export type CollectionIssue14$Outbound = {
+export type DataCollectionIssue14$Outbound = {
   message: string;
   reason: string;
   severity: string;
@@ -30368,28 +31337,27 @@ export type CollectionIssue14$Outbound = {
 };
 
 /** @internal */
-export const CollectionIssue14$outboundSchema: z.ZodType<
-  CollectionIssue14$Outbound,
-  CollectionIssue14
+export const DataCollectionIssue14$outboundSchema: z.ZodType<
+  DataCollectionIssue14$Outbound,
+  DataCollectionIssue14
 > = z.object({
   message: z.string(),
-  reason: Reason14$outboundSchema,
-  severity: CollectionIssueSeverity14$outboundSchema,
+  reason: DataReason14$outboundSchema,
+  severity: StatusSeverity14$outboundSchema,
   source: z.string(),
 });
 
-export function collectionIssue14ToJSON(
-  collectionIssue14: CollectionIssue14,
+export function dataCollectionIssue14ToJSON(
+  dataCollectionIssue14: DataCollectionIssue14,
 ): string {
   return JSON.stringify(
-    CollectionIssue14$outboundSchema.parse(collectionIssue14),
+    DataCollectionIssue14$outboundSchema.parse(dataCollectionIssue14),
   );
 }
 
 /** @internal */
-export const Health14$outboundSchema: z.ZodEnum<typeof Health14> = z.enum(
-  Health14,
-);
+export const DataHealth14$outboundSchema: z.ZodEnum<typeof DataHealth14> = z
+  .enum(DataHealth14);
 
 /** @internal */
 export const StatusLifecycle14$outboundSchema: z.ZodEnum<
@@ -30397,8 +31365,8 @@ export const StatusLifecycle14$outboundSchema: z.ZodEnum<
 > = z.enum(StatusLifecycle14);
 
 /** @internal */
-export type HeartbeatStatus14$Outbound = {
-  collectionIssues: Array<CollectionIssue14$Outbound>;
+export type ResourceHeartbeatStatus14$Outbound = {
+  collectionIssues: Array<DataCollectionIssue14$Outbound>;
   health: string;
   lifecycle: string;
   message?: string | null | undefined;
@@ -30407,23 +31375,23 @@ export type HeartbeatStatus14$Outbound = {
 };
 
 /** @internal */
-export const HeartbeatStatus14$outboundSchema: z.ZodType<
-  HeartbeatStatus14$Outbound,
-  HeartbeatStatus14
+export const ResourceHeartbeatStatus14$outboundSchema: z.ZodType<
+  ResourceHeartbeatStatus14$Outbound,
+  ResourceHeartbeatStatus14
 > = z.object({
-  collectionIssues: z.array(z.lazy(() => CollectionIssue14$outboundSchema)),
-  health: Health14$outboundSchema,
+  collectionIssues: z.array(z.lazy(() => DataCollectionIssue14$outboundSchema)),
+  health: DataHealth14$outboundSchema,
   lifecycle: StatusLifecycle14$outboundSchema,
   message: z.nullable(z.string()).optional(),
   partial: z.boolean(),
   stale: z.boolean(),
 });
 
-export function heartbeatStatus14ToJSON(
-  heartbeatStatus14: HeartbeatStatus14,
+export function resourceHeartbeatStatus14ToJSON(
+  resourceHeartbeatStatus14: ResourceHeartbeatStatus14,
 ): string {
   return JSON.stringify(
-    HeartbeatStatus14$outboundSchema.parse(heartbeatStatus14),
+    ResourceHeartbeatStatus14$outboundSchema.parse(resourceHeartbeatStatus14),
   );
 }
 
@@ -30433,7 +31401,7 @@ export type DataGcp1$Outbound = {
   capacityGroup: string;
   commandSupported: boolean;
   daemonInstances: Array<DaemonInstance2$Outbound>;
-  daemonName: string;
+  daemonName?: string | undefined;
   desiredMachines: number;
   events: Array<SyncReconcileRequestEvent7$Outbound>;
   healthyInstances: number;
@@ -30442,7 +31410,7 @@ export type DataGcp1$Outbound = {
   horizonStatusMessage?: string | null | undefined;
   horizonStatusReason?: string | null | undefined;
   latestUpdateTimestamp: string;
-  status: HeartbeatStatus14$Outbound;
+  status: ResourceHeartbeatStatus14$Outbound;
   unavailableInstances: number;
   backend: "gcp";
 };
@@ -30454,7 +31422,7 @@ export const DataGcp1$outboundSchema: z.ZodType<DataGcp1$Outbound, DataGcp1> = z
     capacityGroup: z.string(),
     commandSupported: z.boolean(),
     daemonInstances: z.array(z.lazy(() => DaemonInstance2$outboundSchema)),
-    daemonName: z.string(),
+    daemonName: z.string().optional(),
     desiredMachines: z.int(),
     events: z.array(z.lazy(() => SyncReconcileRequestEvent7$outboundSchema)),
     healthyInstances: z.int(),
@@ -30463,7 +31431,7 @@ export const DataGcp1$outboundSchema: z.ZodType<DataGcp1$Outbound, DataGcp1> = z
     horizonStatusMessage: z.nullable(z.string()).optional(),
     horizonStatusReason: z.nullable(z.string()).optional(),
     latestUpdateTimestamp: z.string(),
-    status: z.lazy(() => HeartbeatStatus14$outboundSchema),
+    status: z.lazy(() => ResourceHeartbeatStatus14$outboundSchema),
     unavailableInstances: z.int(),
     backend: z.literal("gcp"),
   });
@@ -30763,17 +31731,16 @@ export function syncReconcileRequestEvent6ToJSON(
 }
 
 /** @internal */
-export const Reason13$outboundSchema: z.ZodEnum<typeof Reason13> = z.enum(
-  Reason13,
-);
+export const DataReason13$outboundSchema: z.ZodEnum<typeof DataReason13> = z
+  .enum(DataReason13);
 
 /** @internal */
-export const CollectionIssueSeverity13$outboundSchema: z.ZodEnum<
-  typeof CollectionIssueSeverity13
-> = z.enum(CollectionIssueSeverity13);
+export const StatusSeverity13$outboundSchema: z.ZodEnum<
+  typeof StatusSeverity13
+> = z.enum(StatusSeverity13);
 
 /** @internal */
-export type CollectionIssue13$Outbound = {
+export type DataCollectionIssue13$Outbound = {
   message: string;
   reason: string;
   severity: string;
@@ -30781,28 +31748,27 @@ export type CollectionIssue13$Outbound = {
 };
 
 /** @internal */
-export const CollectionIssue13$outboundSchema: z.ZodType<
-  CollectionIssue13$Outbound,
-  CollectionIssue13
+export const DataCollectionIssue13$outboundSchema: z.ZodType<
+  DataCollectionIssue13$Outbound,
+  DataCollectionIssue13
 > = z.object({
   message: z.string(),
-  reason: Reason13$outboundSchema,
-  severity: CollectionIssueSeverity13$outboundSchema,
+  reason: DataReason13$outboundSchema,
+  severity: StatusSeverity13$outboundSchema,
   source: z.string(),
 });
 
-export function collectionIssue13ToJSON(
-  collectionIssue13: CollectionIssue13,
+export function dataCollectionIssue13ToJSON(
+  dataCollectionIssue13: DataCollectionIssue13,
 ): string {
   return JSON.stringify(
-    CollectionIssue13$outboundSchema.parse(collectionIssue13),
+    DataCollectionIssue13$outboundSchema.parse(dataCollectionIssue13),
   );
 }
 
 /** @internal */
-export const Health13$outboundSchema: z.ZodEnum<typeof Health13> = z.enum(
-  Health13,
-);
+export const DataHealth13$outboundSchema: z.ZodEnum<typeof DataHealth13> = z
+  .enum(DataHealth13);
 
 /** @internal */
 export const StatusLifecycle13$outboundSchema: z.ZodEnum<
@@ -30810,8 +31776,8 @@ export const StatusLifecycle13$outboundSchema: z.ZodEnum<
 > = z.enum(StatusLifecycle13);
 
 /** @internal */
-export type HeartbeatStatus13$Outbound = {
-  collectionIssues: Array<CollectionIssue13$Outbound>;
+export type ResourceHeartbeatStatus13$Outbound = {
+  collectionIssues: Array<DataCollectionIssue13$Outbound>;
   health: string;
   lifecycle: string;
   message?: string | null | undefined;
@@ -30820,23 +31786,23 @@ export type HeartbeatStatus13$Outbound = {
 };
 
 /** @internal */
-export const HeartbeatStatus13$outboundSchema: z.ZodType<
-  HeartbeatStatus13$Outbound,
-  HeartbeatStatus13
+export const ResourceHeartbeatStatus13$outboundSchema: z.ZodType<
+  ResourceHeartbeatStatus13$Outbound,
+  ResourceHeartbeatStatus13
 > = z.object({
-  collectionIssues: z.array(z.lazy(() => CollectionIssue13$outboundSchema)),
-  health: Health13$outboundSchema,
+  collectionIssues: z.array(z.lazy(() => DataCollectionIssue13$outboundSchema)),
+  health: DataHealth13$outboundSchema,
   lifecycle: StatusLifecycle13$outboundSchema,
   message: z.nullable(z.string()).optional(),
   partial: z.boolean(),
   stale: z.boolean(),
 });
 
-export function heartbeatStatus13ToJSON(
-  heartbeatStatus13: HeartbeatStatus13,
+export function resourceHeartbeatStatus13ToJSON(
+  resourceHeartbeatStatus13: ResourceHeartbeatStatus13,
 ): string {
   return JSON.stringify(
-    HeartbeatStatus13$outboundSchema.parse(heartbeatStatus13),
+    ResourceHeartbeatStatus13$outboundSchema.parse(resourceHeartbeatStatus13),
   );
 }
 
@@ -30846,7 +31812,7 @@ export type DataAws1$Outbound = {
   capacityGroup: string;
   commandSupported: boolean;
   daemonInstances: Array<DaemonInstance1$Outbound>;
-  daemonName: string;
+  daemonName?: string | undefined;
   desiredMachines: number;
   events: Array<SyncReconcileRequestEvent6$Outbound>;
   healthyInstances: number;
@@ -30855,7 +31821,7 @@ export type DataAws1$Outbound = {
   horizonStatusMessage?: string | null | undefined;
   horizonStatusReason?: string | null | undefined;
   latestUpdateTimestamp: string;
-  status: HeartbeatStatus13$Outbound;
+  status: ResourceHeartbeatStatus13$Outbound;
   unavailableInstances: number;
   backend: "aws";
 };
@@ -30867,7 +31833,7 @@ export const DataAws1$outboundSchema: z.ZodType<DataAws1$Outbound, DataAws1> = z
     capacityGroup: z.string(),
     commandSupported: z.boolean(),
     daemonInstances: z.array(z.lazy(() => DaemonInstance1$outboundSchema)),
-    daemonName: z.string(),
+    daemonName: z.string().optional(),
     desiredMachines: z.int(),
     events: z.array(z.lazy(() => SyncReconcileRequestEvent6$outboundSchema)),
     healthyInstances: z.int(),
@@ -30876,7 +31842,7 @@ export const DataAws1$outboundSchema: z.ZodType<DataAws1$Outbound, DataAws1> = z
     horizonStatusMessage: z.nullable(z.string()).optional(),
     horizonStatusReason: z.nullable(z.string()).optional(),
     latestUpdateTimestamp: z.string(),
-    status: z.lazy(() => HeartbeatStatus13$outboundSchema),
+    status: z.lazy(() => ResourceHeartbeatStatus13$outboundSchema),
     unavailableInstances: z.int(),
     backend: z.literal("aws"),
   });
@@ -31257,17 +32223,16 @@ export function memoryUnion5ToJSON(memoryUnion5: MemoryUnion5): string {
 }
 
 /** @internal */
-export const Reason12$outboundSchema: z.ZodEnum<typeof Reason12> = z.enum(
-  Reason12,
-);
+export const DataReason12$outboundSchema: z.ZodEnum<typeof DataReason12> = z
+  .enum(DataReason12);
 
 /** @internal */
-export const CollectionIssueSeverity12$outboundSchema: z.ZodEnum<
-  typeof CollectionIssueSeverity12
-> = z.enum(CollectionIssueSeverity12);
+export const StatusSeverity12$outboundSchema: z.ZodEnum<
+  typeof StatusSeverity12
+> = z.enum(StatusSeverity12);
 
 /** @internal */
-export type CollectionIssue12$Outbound = {
+export type DataCollectionIssue12$Outbound = {
   message: string;
   reason: string;
   severity: string;
@@ -31275,28 +32240,27 @@ export type CollectionIssue12$Outbound = {
 };
 
 /** @internal */
-export const CollectionIssue12$outboundSchema: z.ZodType<
-  CollectionIssue12$Outbound,
-  CollectionIssue12
+export const DataCollectionIssue12$outboundSchema: z.ZodType<
+  DataCollectionIssue12$Outbound,
+  DataCollectionIssue12
 > = z.object({
   message: z.string(),
-  reason: Reason12$outboundSchema,
-  severity: CollectionIssueSeverity12$outboundSchema,
+  reason: DataReason12$outboundSchema,
+  severity: StatusSeverity12$outboundSchema,
   source: z.string(),
 });
 
-export function collectionIssue12ToJSON(
-  collectionIssue12: CollectionIssue12,
+export function dataCollectionIssue12ToJSON(
+  dataCollectionIssue12: DataCollectionIssue12,
 ): string {
   return JSON.stringify(
-    CollectionIssue12$outboundSchema.parse(collectionIssue12),
+    DataCollectionIssue12$outboundSchema.parse(dataCollectionIssue12),
   );
 }
 
 /** @internal */
-export const Health12$outboundSchema: z.ZodEnum<typeof Health12> = z.enum(
-  Health12,
-);
+export const DataHealth12$outboundSchema: z.ZodEnum<typeof DataHealth12> = z
+  .enum(DataHealth12);
 
 /** @internal */
 export const StatusLifecycle12$outboundSchema: z.ZodEnum<
@@ -31304,8 +32268,8 @@ export const StatusLifecycle12$outboundSchema: z.ZodEnum<
 > = z.enum(StatusLifecycle12);
 
 /** @internal */
-export type HeartbeatStatus12$Outbound = {
-  collectionIssues: Array<CollectionIssue12$Outbound>;
+export type ResourceHeartbeatStatus12$Outbound = {
+  collectionIssues: Array<DataCollectionIssue12$Outbound>;
   health: string;
   lifecycle: string;
   message?: string | null | undefined;
@@ -31314,23 +32278,23 @@ export type HeartbeatStatus12$Outbound = {
 };
 
 /** @internal */
-export const HeartbeatStatus12$outboundSchema: z.ZodType<
-  HeartbeatStatus12$Outbound,
-  HeartbeatStatus12
+export const ResourceHeartbeatStatus12$outboundSchema: z.ZodType<
+  ResourceHeartbeatStatus12$Outbound,
+  ResourceHeartbeatStatus12
 > = z.object({
-  collectionIssues: z.array(z.lazy(() => CollectionIssue12$outboundSchema)),
-  health: Health12$outboundSchema,
+  collectionIssues: z.array(z.lazy(() => DataCollectionIssue12$outboundSchema)),
+  health: DataHealth12$outboundSchema,
   lifecycle: StatusLifecycle12$outboundSchema,
   message: z.nullable(z.string()).optional(),
   partial: z.boolean(),
   stale: z.boolean(),
 });
 
-export function heartbeatStatus12ToJSON(
-  heartbeatStatus12: HeartbeatStatus12,
+export function resourceHeartbeatStatus12ToJSON(
+  resourceHeartbeatStatus12: ResourceHeartbeatStatus12,
 ): string {
   return JSON.stringify(
-    HeartbeatStatus12$outboundSchema.parse(heartbeatStatus12),
+    ResourceHeartbeatStatus12$outboundSchema.parse(resourceHeartbeatStatus12),
   );
 }
 
@@ -31349,7 +32313,7 @@ export type DataLocal3$Outbound = {
   restartCount?: number | null | undefined;
   runtimeReachable: boolean;
   runtimeStatus?: string | null | undefined;
-  status: HeartbeatStatus12$Outbound;
+  status: ResourceHeartbeatStatus12$Outbound;
   backend: "local";
 };
 
@@ -31375,7 +32339,7 @@ export const DataLocal3$outboundSchema: z.ZodType<
   restartCount: z.nullable(z.int()).optional(),
   runtimeReachable: z.boolean(),
   runtimeStatus: z.nullable(z.string()).optional(),
-  status: z.lazy(() => HeartbeatStatus12$outboundSchema),
+  status: z.lazy(() => ResourceHeartbeatStatus12$outboundSchema),
   backend: z.literal("local"),
 });
 
@@ -31754,17 +32718,16 @@ export function replicas3ToJSON(replicas3: Replicas3): string {
 }
 
 /** @internal */
-export const Reason11$outboundSchema: z.ZodEnum<typeof Reason11> = z.enum(
-  Reason11,
-);
+export const DataReason11$outboundSchema: z.ZodEnum<typeof DataReason11> = z
+  .enum(DataReason11);
 
 /** @internal */
-export const CollectionIssueSeverity11$outboundSchema: z.ZodEnum<
-  typeof CollectionIssueSeverity11
-> = z.enum(CollectionIssueSeverity11);
+export const StatusSeverity11$outboundSchema: z.ZodEnum<
+  typeof StatusSeverity11
+> = z.enum(StatusSeverity11);
 
 /** @internal */
-export type CollectionIssue11$Outbound = {
+export type DataCollectionIssue11$Outbound = {
   message: string;
   reason: string;
   severity: string;
@@ -31772,28 +32735,27 @@ export type CollectionIssue11$Outbound = {
 };
 
 /** @internal */
-export const CollectionIssue11$outboundSchema: z.ZodType<
-  CollectionIssue11$Outbound,
-  CollectionIssue11
+export const DataCollectionIssue11$outboundSchema: z.ZodType<
+  DataCollectionIssue11$Outbound,
+  DataCollectionIssue11
 > = z.object({
   message: z.string(),
-  reason: Reason11$outboundSchema,
-  severity: CollectionIssueSeverity11$outboundSchema,
+  reason: DataReason11$outboundSchema,
+  severity: StatusSeverity11$outboundSchema,
   source: z.string(),
 });
 
-export function collectionIssue11ToJSON(
-  collectionIssue11: CollectionIssue11,
+export function dataCollectionIssue11ToJSON(
+  dataCollectionIssue11: DataCollectionIssue11,
 ): string {
   return JSON.stringify(
-    CollectionIssue11$outboundSchema.parse(collectionIssue11),
+    DataCollectionIssue11$outboundSchema.parse(dataCollectionIssue11),
   );
 }
 
 /** @internal */
-export const Health11$outboundSchema: z.ZodEnum<typeof Health11> = z.enum(
-  Health11,
-);
+export const DataHealth11$outboundSchema: z.ZodEnum<typeof DataHealth11> = z
+  .enum(DataHealth11);
 
 /** @internal */
 export const StatusLifecycle11$outboundSchema: z.ZodEnum<
@@ -31801,8 +32763,8 @@ export const StatusLifecycle11$outboundSchema: z.ZodEnum<
 > = z.enum(StatusLifecycle11);
 
 /** @internal */
-export type HeartbeatStatus11$Outbound = {
-  collectionIssues: Array<CollectionIssue11$Outbound>;
+export type ResourceHeartbeatStatus11$Outbound = {
+  collectionIssues: Array<DataCollectionIssue11$Outbound>;
   health: string;
   lifecycle: string;
   message?: string | null | undefined;
@@ -31811,23 +32773,23 @@ export type HeartbeatStatus11$Outbound = {
 };
 
 /** @internal */
-export const HeartbeatStatus11$outboundSchema: z.ZodType<
-  HeartbeatStatus11$Outbound,
-  HeartbeatStatus11
+export const ResourceHeartbeatStatus11$outboundSchema: z.ZodType<
+  ResourceHeartbeatStatus11$Outbound,
+  ResourceHeartbeatStatus11
 > = z.object({
-  collectionIssues: z.array(z.lazy(() => CollectionIssue11$outboundSchema)),
-  health: Health11$outboundSchema,
+  collectionIssues: z.array(z.lazy(() => DataCollectionIssue11$outboundSchema)),
+  health: DataHealth11$outboundSchema,
   lifecycle: StatusLifecycle11$outboundSchema,
   message: z.nullable(z.string()).optional(),
   partial: z.boolean(),
   stale: z.boolean(),
 });
 
-export function heartbeatStatus11ToJSON(
-  heartbeatStatus11: HeartbeatStatus11,
+export function resourceHeartbeatStatus11ToJSON(
+  resourceHeartbeatStatus11: ResourceHeartbeatStatus11,
 ): string {
   return JSON.stringify(
-    HeartbeatStatus11$outboundSchema.parse(heartbeatStatus11),
+    ResourceHeartbeatStatus11$outboundSchema.parse(resourceHeartbeatStatus11),
   );
 }
 
@@ -31919,7 +32881,7 @@ export type DataKubernetes2$Outbound = {
   pods: Array<Pod2$Outbound>;
   replicas: Replicas3$Outbound;
   restarts?: number | null | undefined;
-  status: HeartbeatStatus11$Outbound;
+  status: ResourceHeartbeatStatus11$Outbound;
   workload?: Workload2$Outbound | any | null | undefined;
   workloadKind: string;
   backend: "kubernetes";
@@ -31940,7 +32902,7 @@ export const DataKubernetes2$outboundSchema: z.ZodType<
   pods: z.array(z.lazy(() => Pod2$outboundSchema)),
   replicas: z.lazy(() => Replicas3$outboundSchema),
   restarts: z.nullable(z.int()).optional(),
-  status: z.lazy(() => HeartbeatStatus11$outboundSchema),
+  status: z.lazy(() => ResourceHeartbeatStatus11$outboundSchema),
   workload: z.nullable(
     z.union([z.lazy(() => Workload2$outboundSchema), z.any()]),
   ).optional(),
@@ -32335,17 +33297,16 @@ export const SchedulingMode$outboundSchema: z.ZodEnum<typeof SchedulingMode> = z
   .enum(SchedulingMode);
 
 /** @internal */
-export const Reason10$outboundSchema: z.ZodEnum<typeof Reason10> = z.enum(
-  Reason10,
-);
+export const DataReason10$outboundSchema: z.ZodEnum<typeof DataReason10> = z
+  .enum(DataReason10);
 
 /** @internal */
-export const CollectionIssueSeverity10$outboundSchema: z.ZodEnum<
-  typeof CollectionIssueSeverity10
-> = z.enum(CollectionIssueSeverity10);
+export const StatusSeverity10$outboundSchema: z.ZodEnum<
+  typeof StatusSeverity10
+> = z.enum(StatusSeverity10);
 
 /** @internal */
-export type CollectionIssue10$Outbound = {
+export type DataCollectionIssue10$Outbound = {
   message: string;
   reason: string;
   severity: string;
@@ -32353,28 +33314,27 @@ export type CollectionIssue10$Outbound = {
 };
 
 /** @internal */
-export const CollectionIssue10$outboundSchema: z.ZodType<
-  CollectionIssue10$Outbound,
-  CollectionIssue10
+export const DataCollectionIssue10$outboundSchema: z.ZodType<
+  DataCollectionIssue10$Outbound,
+  DataCollectionIssue10
 > = z.object({
   message: z.string(),
-  reason: Reason10$outboundSchema,
-  severity: CollectionIssueSeverity10$outboundSchema,
+  reason: DataReason10$outboundSchema,
+  severity: StatusSeverity10$outboundSchema,
   source: z.string(),
 });
 
-export function collectionIssue10ToJSON(
-  collectionIssue10: CollectionIssue10,
+export function dataCollectionIssue10ToJSON(
+  dataCollectionIssue10: DataCollectionIssue10,
 ): string {
   return JSON.stringify(
-    CollectionIssue10$outboundSchema.parse(collectionIssue10),
+    DataCollectionIssue10$outboundSchema.parse(dataCollectionIssue10),
   );
 }
 
 /** @internal */
-export const Health10$outboundSchema: z.ZodEnum<typeof Health10> = z.enum(
-  Health10,
-);
+export const DataHealth10$outboundSchema: z.ZodEnum<typeof DataHealth10> = z
+  .enum(DataHealth10);
 
 /** @internal */
 export const StatusLifecycle10$outboundSchema: z.ZodEnum<
@@ -32382,8 +33342,8 @@ export const StatusLifecycle10$outboundSchema: z.ZodEnum<
 > = z.enum(StatusLifecycle10);
 
 /** @internal */
-export type HeartbeatStatus10$Outbound = {
-  collectionIssues: Array<CollectionIssue10$Outbound>;
+export type ResourceHeartbeatStatus10$Outbound = {
+  collectionIssues: Array<DataCollectionIssue10$Outbound>;
   health: string;
   lifecycle: string;
   message?: string | null | undefined;
@@ -32392,23 +33352,23 @@ export type HeartbeatStatus10$Outbound = {
 };
 
 /** @internal */
-export const HeartbeatStatus10$outboundSchema: z.ZodType<
-  HeartbeatStatus10$Outbound,
-  HeartbeatStatus10
+export const ResourceHeartbeatStatus10$outboundSchema: z.ZodType<
+  ResourceHeartbeatStatus10$Outbound,
+  ResourceHeartbeatStatus10
 > = z.object({
-  collectionIssues: z.array(z.lazy(() => CollectionIssue10$outboundSchema)),
-  health: Health10$outboundSchema,
+  collectionIssues: z.array(z.lazy(() => DataCollectionIssue10$outboundSchema)),
+  health: DataHealth10$outboundSchema,
   lifecycle: StatusLifecycle10$outboundSchema,
   message: z.nullable(z.string()).optional(),
   partial: z.boolean(),
   stale: z.boolean(),
 });
 
-export function heartbeatStatus10ToJSON(
-  heartbeatStatus10: HeartbeatStatus10,
+export function resourceHeartbeatStatus10ToJSON(
+  resourceHeartbeatStatus10: ResourceHeartbeatStatus10,
 ): string {
   return JSON.stringify(
-    HeartbeatStatus10$outboundSchema.parse(heartbeatStatus10),
+    ResourceHeartbeatStatus10$outboundSchema.parse(resourceHeartbeatStatus10),
   );
 }
 
@@ -32423,7 +33383,7 @@ export type DataHorizonPlatform$Outbound = {
   replicaUnits: Array<ReplicaUnit$Outbound>;
   replicas: Replicas2$Outbound;
   schedulingMode: string;
-  status: HeartbeatStatus10$Outbound;
+  status: ResourceHeartbeatStatus10$Outbound;
   backend: "horizonPlatform";
 };
 
@@ -32443,7 +33403,7 @@ export const DataHorizonPlatform$outboundSchema: z.ZodType<
   replicaUnits: z.array(z.lazy(() => ReplicaUnit$outboundSchema)),
   replicas: z.lazy(() => Replicas2$outboundSchema),
   schedulingMode: SchedulingMode$outboundSchema,
-  status: z.lazy(() => HeartbeatStatus10$outboundSchema),
+  status: z.lazy(() => ResourceHeartbeatStatus10$outboundSchema),
   backend: z.literal("horizonPlatform"),
 });
 
@@ -32799,17 +33759,16 @@ export function processUnionToJSON(processUnion: ProcessUnion): string {
 }
 
 /** @internal */
-export const Reason9$outboundSchema: z.ZodEnum<typeof Reason9> = z.enum(
-  Reason9,
+export const DataReason9$outboundSchema: z.ZodEnum<typeof DataReason9> = z.enum(
+  DataReason9,
 );
 
 /** @internal */
-export const CollectionIssueSeverity9$outboundSchema: z.ZodEnum<
-  typeof CollectionIssueSeverity9
-> = z.enum(CollectionIssueSeverity9);
+export const StatusSeverity9$outboundSchema: z.ZodEnum<typeof StatusSeverity9> =
+  z.enum(StatusSeverity9);
 
 /** @internal */
-export type CollectionIssue9$Outbound = {
+export type DataCollectionIssue9$Outbound = {
   message: string;
   reason: string;
   severity: string;
@@ -32817,27 +33776,27 @@ export type CollectionIssue9$Outbound = {
 };
 
 /** @internal */
-export const CollectionIssue9$outboundSchema: z.ZodType<
-  CollectionIssue9$Outbound,
-  CollectionIssue9
+export const DataCollectionIssue9$outboundSchema: z.ZodType<
+  DataCollectionIssue9$Outbound,
+  DataCollectionIssue9
 > = z.object({
   message: z.string(),
-  reason: Reason9$outboundSchema,
-  severity: CollectionIssueSeverity9$outboundSchema,
+  reason: DataReason9$outboundSchema,
+  severity: StatusSeverity9$outboundSchema,
   source: z.string(),
 });
 
-export function collectionIssue9ToJSON(
-  collectionIssue9: CollectionIssue9,
+export function dataCollectionIssue9ToJSON(
+  dataCollectionIssue9: DataCollectionIssue9,
 ): string {
   return JSON.stringify(
-    CollectionIssue9$outboundSchema.parse(collectionIssue9),
+    DataCollectionIssue9$outboundSchema.parse(dataCollectionIssue9),
   );
 }
 
 /** @internal */
-export const Health9$outboundSchema: z.ZodEnum<typeof Health9> = z.enum(
-  Health9,
+export const DataHealth9$outboundSchema: z.ZodEnum<typeof DataHealth9> = z.enum(
+  DataHealth9,
 );
 
 /** @internal */
@@ -32846,8 +33805,8 @@ export const StatusLifecycle9$outboundSchema: z.ZodEnum<
 > = z.enum(StatusLifecycle9);
 
 /** @internal */
-export type HeartbeatStatus9$Outbound = {
-  collectionIssues: Array<CollectionIssue9$Outbound>;
+export type ResourceHeartbeatStatus9$Outbound = {
+  collectionIssues: Array<DataCollectionIssue9$Outbound>;
   health: string;
   lifecycle: string;
   message?: string | null | undefined;
@@ -32856,23 +33815,23 @@ export type HeartbeatStatus9$Outbound = {
 };
 
 /** @internal */
-export const HeartbeatStatus9$outboundSchema: z.ZodType<
-  HeartbeatStatus9$Outbound,
-  HeartbeatStatus9
+export const ResourceHeartbeatStatus9$outboundSchema: z.ZodType<
+  ResourceHeartbeatStatus9$Outbound,
+  ResourceHeartbeatStatus9
 > = z.object({
-  collectionIssues: z.array(z.lazy(() => CollectionIssue9$outboundSchema)),
-  health: Health9$outboundSchema,
+  collectionIssues: z.array(z.lazy(() => DataCollectionIssue9$outboundSchema)),
+  health: DataHealth9$outboundSchema,
   lifecycle: StatusLifecycle9$outboundSchema,
   message: z.nullable(z.string()).optional(),
   partial: z.boolean(),
   stale: z.boolean(),
 });
 
-export function heartbeatStatus9ToJSON(
-  heartbeatStatus9: HeartbeatStatus9,
+export function resourceHeartbeatStatus9ToJSON(
+  resourceHeartbeatStatus9: ResourceHeartbeatStatus9,
 ): string {
   return JSON.stringify(
-    HeartbeatStatus9$outboundSchema.parse(heartbeatStatus9),
+    ResourceHeartbeatStatus9$outboundSchema.parse(resourceHeartbeatStatus9),
   );
 }
 
@@ -32886,7 +33845,7 @@ export type DataLocal2$Outbound = {
   pid?: number | null | undefined;
   process?: Process$Outbound | any | null | undefined;
   readinessProbeOk?: boolean | null | undefined;
-  status: HeartbeatStatus9$Outbound;
+  status: ResourceHeartbeatStatus9$Outbound;
   triggerCount: number;
   backend: "local";
 };
@@ -32907,7 +33866,7 @@ export const DataLocal2$outboundSchema: z.ZodType<
   process: z.nullable(z.union([z.lazy(() => Process$outboundSchema), z.any()]))
     .optional(),
   readinessProbeOk: z.nullable(z.boolean()).optional(),
-  status: z.lazy(() => HeartbeatStatus9$outboundSchema),
+  status: z.lazy(() => ResourceHeartbeatStatus9$outboundSchema),
   triggerCount: z.int(),
   backend: z.literal("local"),
 });
@@ -33287,17 +34246,16 @@ export function replicas1ToJSON(replicas1: Replicas1): string {
 }
 
 /** @internal */
-export const Reason8$outboundSchema: z.ZodEnum<typeof Reason8> = z.enum(
-  Reason8,
+export const DataReason8$outboundSchema: z.ZodEnum<typeof DataReason8> = z.enum(
+  DataReason8,
 );
 
 /** @internal */
-export const CollectionIssueSeverity8$outboundSchema: z.ZodEnum<
-  typeof CollectionIssueSeverity8
-> = z.enum(CollectionIssueSeverity8);
+export const StatusSeverity8$outboundSchema: z.ZodEnum<typeof StatusSeverity8> =
+  z.enum(StatusSeverity8);
 
 /** @internal */
-export type CollectionIssue8$Outbound = {
+export type DataCollectionIssue8$Outbound = {
   message: string;
   reason: string;
   severity: string;
@@ -33305,27 +34263,27 @@ export type CollectionIssue8$Outbound = {
 };
 
 /** @internal */
-export const CollectionIssue8$outboundSchema: z.ZodType<
-  CollectionIssue8$Outbound,
-  CollectionIssue8
+export const DataCollectionIssue8$outboundSchema: z.ZodType<
+  DataCollectionIssue8$Outbound,
+  DataCollectionIssue8
 > = z.object({
   message: z.string(),
-  reason: Reason8$outboundSchema,
-  severity: CollectionIssueSeverity8$outboundSchema,
+  reason: DataReason8$outboundSchema,
+  severity: StatusSeverity8$outboundSchema,
   source: z.string(),
 });
 
-export function collectionIssue8ToJSON(
-  collectionIssue8: CollectionIssue8,
+export function dataCollectionIssue8ToJSON(
+  dataCollectionIssue8: DataCollectionIssue8,
 ): string {
   return JSON.stringify(
-    CollectionIssue8$outboundSchema.parse(collectionIssue8),
+    DataCollectionIssue8$outboundSchema.parse(dataCollectionIssue8),
   );
 }
 
 /** @internal */
-export const Health8$outboundSchema: z.ZodEnum<typeof Health8> = z.enum(
-  Health8,
+export const DataHealth8$outboundSchema: z.ZodEnum<typeof DataHealth8> = z.enum(
+  DataHealth8,
 );
 
 /** @internal */
@@ -33334,8 +34292,8 @@ export const StatusLifecycle8$outboundSchema: z.ZodEnum<
 > = z.enum(StatusLifecycle8);
 
 /** @internal */
-export type HeartbeatStatus8$Outbound = {
-  collectionIssues: Array<CollectionIssue8$Outbound>;
+export type ResourceHeartbeatStatus8$Outbound = {
+  collectionIssues: Array<DataCollectionIssue8$Outbound>;
   health: string;
   lifecycle: string;
   message?: string | null | undefined;
@@ -33344,23 +34302,23 @@ export type HeartbeatStatus8$Outbound = {
 };
 
 /** @internal */
-export const HeartbeatStatus8$outboundSchema: z.ZodType<
-  HeartbeatStatus8$Outbound,
-  HeartbeatStatus8
+export const ResourceHeartbeatStatus8$outboundSchema: z.ZodType<
+  ResourceHeartbeatStatus8$Outbound,
+  ResourceHeartbeatStatus8
 > = z.object({
-  collectionIssues: z.array(z.lazy(() => CollectionIssue8$outboundSchema)),
-  health: Health8$outboundSchema,
+  collectionIssues: z.array(z.lazy(() => DataCollectionIssue8$outboundSchema)),
+  health: DataHealth8$outboundSchema,
   lifecycle: StatusLifecycle8$outboundSchema,
   message: z.nullable(z.string()).optional(),
   partial: z.boolean(),
   stale: z.boolean(),
 });
 
-export function heartbeatStatus8ToJSON(
-  heartbeatStatus8: HeartbeatStatus8,
+export function resourceHeartbeatStatus8ToJSON(
+  resourceHeartbeatStatus8: ResourceHeartbeatStatus8,
 ): string {
   return JSON.stringify(
-    HeartbeatStatus8$outboundSchema.parse(heartbeatStatus8),
+    ResourceHeartbeatStatus8$outboundSchema.parse(resourceHeartbeatStatus8),
   );
 }
 
@@ -33452,7 +34410,7 @@ export type DataKubernetes1$Outbound = {
   pods: Array<Pod1$Outbound>;
   replicas: Replicas1$Outbound;
   restarts?: number | null | undefined;
-  status: HeartbeatStatus8$Outbound;
+  status: ResourceHeartbeatStatus8$Outbound;
   triggerCount: number;
   workload?: Workload1$Outbound | any | null | undefined;
   workloadKind: string;
@@ -33474,7 +34432,7 @@ export const DataKubernetes1$outboundSchema: z.ZodType<
   pods: z.array(z.lazy(() => Pod1$outboundSchema)),
   replicas: z.lazy(() => Replicas1$outboundSchema),
   restarts: z.nullable(z.int()).optional(),
-  status: z.lazy(() => HeartbeatStatus8$outboundSchema),
+  status: z.lazy(() => ResourceHeartbeatStatus8$outboundSchema),
   triggerCount: z.int(),
   workload: z.nullable(
     z.union([z.lazy(() => Workload1$outboundSchema), z.any()]),
@@ -33490,17 +34448,16 @@ export function dataKubernetes1ToJSON(
 }
 
 /** @internal */
-export const Reason7$outboundSchema: z.ZodEnum<typeof Reason7> = z.enum(
-  Reason7,
+export const DataReason7$outboundSchema: z.ZodEnum<typeof DataReason7> = z.enum(
+  DataReason7,
 );
 
 /** @internal */
-export const CollectionIssueSeverity7$outboundSchema: z.ZodEnum<
-  typeof CollectionIssueSeverity7
-> = z.enum(CollectionIssueSeverity7);
+export const StatusSeverity7$outboundSchema: z.ZodEnum<typeof StatusSeverity7> =
+  z.enum(StatusSeverity7);
 
 /** @internal */
-export type CollectionIssue7$Outbound = {
+export type DataCollectionIssue7$Outbound = {
   message: string;
   reason: string;
   severity: string;
@@ -33508,27 +34465,27 @@ export type CollectionIssue7$Outbound = {
 };
 
 /** @internal */
-export const CollectionIssue7$outboundSchema: z.ZodType<
-  CollectionIssue7$Outbound,
-  CollectionIssue7
+export const DataCollectionIssue7$outboundSchema: z.ZodType<
+  DataCollectionIssue7$Outbound,
+  DataCollectionIssue7
 > = z.object({
   message: z.string(),
-  reason: Reason7$outboundSchema,
-  severity: CollectionIssueSeverity7$outboundSchema,
+  reason: DataReason7$outboundSchema,
+  severity: StatusSeverity7$outboundSchema,
   source: z.string(),
 });
 
-export function collectionIssue7ToJSON(
-  collectionIssue7: CollectionIssue7,
+export function dataCollectionIssue7ToJSON(
+  dataCollectionIssue7: DataCollectionIssue7,
 ): string {
   return JSON.stringify(
-    CollectionIssue7$outboundSchema.parse(collectionIssue7),
+    DataCollectionIssue7$outboundSchema.parse(dataCollectionIssue7),
   );
 }
 
 /** @internal */
-export const Health7$outboundSchema: z.ZodEnum<typeof Health7> = z.enum(
-  Health7,
+export const DataHealth7$outboundSchema: z.ZodEnum<typeof DataHealth7> = z.enum(
+  DataHealth7,
 );
 
 /** @internal */
@@ -33537,8 +34494,8 @@ export const StatusLifecycle7$outboundSchema: z.ZodEnum<
 > = z.enum(StatusLifecycle7);
 
 /** @internal */
-export type HeartbeatStatus7$Outbound = {
-  collectionIssues: Array<CollectionIssue7$Outbound>;
+export type ResourceHeartbeatStatus7$Outbound = {
+  collectionIssues: Array<DataCollectionIssue7$Outbound>;
   health: string;
   lifecycle: string;
   message?: string | null | undefined;
@@ -33547,23 +34504,23 @@ export type HeartbeatStatus7$Outbound = {
 };
 
 /** @internal */
-export const HeartbeatStatus7$outboundSchema: z.ZodType<
-  HeartbeatStatus7$Outbound,
-  HeartbeatStatus7
+export const ResourceHeartbeatStatus7$outboundSchema: z.ZodType<
+  ResourceHeartbeatStatus7$Outbound,
+  ResourceHeartbeatStatus7
 > = z.object({
-  collectionIssues: z.array(z.lazy(() => CollectionIssue7$outboundSchema)),
-  health: Health7$outboundSchema,
+  collectionIssues: z.array(z.lazy(() => DataCollectionIssue7$outboundSchema)),
+  health: DataHealth7$outboundSchema,
   lifecycle: StatusLifecycle7$outboundSchema,
   message: z.nullable(z.string()).optional(),
   partial: z.boolean(),
   stale: z.boolean(),
 });
 
-export function heartbeatStatus7ToJSON(
-  heartbeatStatus7: HeartbeatStatus7,
+export function resourceHeartbeatStatus7ToJSON(
+  resourceHeartbeatStatus7: ResourceHeartbeatStatus7,
 ): string {
   return JSON.stringify(
-    HeartbeatStatus7$outboundSchema.parse(heartbeatStatus7),
+    ResourceHeartbeatStatus7$outboundSchema.parse(resourceHeartbeatStatus7),
   );
 }
 
@@ -33579,7 +34536,7 @@ export type DataAzureContainerApps1$Outbound = {
   provisioningState?: string | null | undefined;
   revision?: string | null | undefined;
   runningStatus?: string | null | undefined;
-  status: HeartbeatStatus7$Outbound;
+  status: ResourceHeartbeatStatus7$Outbound;
   backend: "azureContainerApps";
 };
 
@@ -33598,7 +34555,7 @@ export const DataAzureContainerApps1$outboundSchema: z.ZodType<
   provisioningState: z.nullable(z.string()).optional(),
   revision: z.nullable(z.string()).optional(),
   runningStatus: z.nullable(z.string()).optional(),
-  status: z.lazy(() => HeartbeatStatus7$outboundSchema),
+  status: z.lazy(() => ResourceHeartbeatStatus7$outboundSchema),
   backend: z.literal("azureContainerApps"),
 });
 
@@ -33611,17 +34568,16 @@ export function dataAzureContainerApps1ToJSON(
 }
 
 /** @internal */
-export const Reason6$outboundSchema: z.ZodEnum<typeof Reason6> = z.enum(
-  Reason6,
+export const DataReason6$outboundSchema: z.ZodEnum<typeof DataReason6> = z.enum(
+  DataReason6,
 );
 
 /** @internal */
-export const CollectionIssueSeverity6$outboundSchema: z.ZodEnum<
-  typeof CollectionIssueSeverity6
-> = z.enum(CollectionIssueSeverity6);
+export const StatusSeverity6$outboundSchema: z.ZodEnum<typeof StatusSeverity6> =
+  z.enum(StatusSeverity6);
 
 /** @internal */
-export type CollectionIssue6$Outbound = {
+export type DataCollectionIssue6$Outbound = {
   message: string;
   reason: string;
   severity: string;
@@ -33629,27 +34585,27 @@ export type CollectionIssue6$Outbound = {
 };
 
 /** @internal */
-export const CollectionIssue6$outboundSchema: z.ZodType<
-  CollectionIssue6$Outbound,
-  CollectionIssue6
+export const DataCollectionIssue6$outboundSchema: z.ZodType<
+  DataCollectionIssue6$Outbound,
+  DataCollectionIssue6
 > = z.object({
   message: z.string(),
-  reason: Reason6$outboundSchema,
-  severity: CollectionIssueSeverity6$outboundSchema,
+  reason: DataReason6$outboundSchema,
+  severity: StatusSeverity6$outboundSchema,
   source: z.string(),
 });
 
-export function collectionIssue6ToJSON(
-  collectionIssue6: CollectionIssue6,
+export function dataCollectionIssue6ToJSON(
+  dataCollectionIssue6: DataCollectionIssue6,
 ): string {
   return JSON.stringify(
-    CollectionIssue6$outboundSchema.parse(collectionIssue6),
+    DataCollectionIssue6$outboundSchema.parse(dataCollectionIssue6),
   );
 }
 
 /** @internal */
-export const Health6$outboundSchema: z.ZodEnum<typeof Health6> = z.enum(
-  Health6,
+export const DataHealth6$outboundSchema: z.ZodEnum<typeof DataHealth6> = z.enum(
+  DataHealth6,
 );
 
 /** @internal */
@@ -33658,8 +34614,8 @@ export const StatusLifecycle6$outboundSchema: z.ZodEnum<
 > = z.enum(StatusLifecycle6);
 
 /** @internal */
-export type HeartbeatStatus6$Outbound = {
-  collectionIssues: Array<CollectionIssue6$Outbound>;
+export type ResourceHeartbeatStatus6$Outbound = {
+  collectionIssues: Array<DataCollectionIssue6$Outbound>;
   health: string;
   lifecycle: string;
   message?: string | null | undefined;
@@ -33668,23 +34624,23 @@ export type HeartbeatStatus6$Outbound = {
 };
 
 /** @internal */
-export const HeartbeatStatus6$outboundSchema: z.ZodType<
-  HeartbeatStatus6$Outbound,
-  HeartbeatStatus6
+export const ResourceHeartbeatStatus6$outboundSchema: z.ZodType<
+  ResourceHeartbeatStatus6$Outbound,
+  ResourceHeartbeatStatus6
 > = z.object({
-  collectionIssues: z.array(z.lazy(() => CollectionIssue6$outboundSchema)),
-  health: Health6$outboundSchema,
+  collectionIssues: z.array(z.lazy(() => DataCollectionIssue6$outboundSchema)),
+  health: DataHealth6$outboundSchema,
   lifecycle: StatusLifecycle6$outboundSchema,
   message: z.nullable(z.string()).optional(),
   partial: z.boolean(),
   stale: z.boolean(),
 });
 
-export function heartbeatStatus6ToJSON(
-  heartbeatStatus6: HeartbeatStatus6,
+export function resourceHeartbeatStatus6ToJSON(
+  resourceHeartbeatStatus6: ResourceHeartbeatStatus6,
 ): string {
   return JSON.stringify(
-    HeartbeatStatus6$outboundSchema.parse(heartbeatStatus6),
+    ResourceHeartbeatStatus6$outboundSchema.parse(resourceHeartbeatStatus6),
   );
 }
 
@@ -33701,7 +34657,7 @@ export type DataGcpCloudRun$Outbound = {
   observedGeneration?: number | null | undefined;
   region?: string | null | undefined;
   service: string;
-  status: HeartbeatStatus6$Outbound;
+  status: ResourceHeartbeatStatus6$Outbound;
   trafficCount: number;
   uri?: string | null | undefined;
   urls: Array<string>;
@@ -33724,7 +34680,7 @@ export const DataGcpCloudRun$outboundSchema: z.ZodType<
   observedGeneration: z.nullable(z.int()).optional(),
   region: z.nullable(z.string()).optional(),
   service: z.string(),
-  status: z.lazy(() => HeartbeatStatus6$outboundSchema),
+  status: z.lazy(() => ResourceHeartbeatStatus6$outboundSchema),
   trafficCount: z.int(),
   uri: z.nullable(z.string()).optional(),
   urls: z.array(z.string()),
@@ -33738,17 +34694,16 @@ export function dataGcpCloudRunToJSON(
 }
 
 /** @internal */
-export const Reason5$outboundSchema: z.ZodEnum<typeof Reason5> = z.enum(
-  Reason5,
+export const DataReason5$outboundSchema: z.ZodEnum<typeof DataReason5> = z.enum(
+  DataReason5,
 );
 
 /** @internal */
-export const CollectionIssueSeverity5$outboundSchema: z.ZodEnum<
-  typeof CollectionIssueSeverity5
-> = z.enum(CollectionIssueSeverity5);
+export const StatusSeverity5$outboundSchema: z.ZodEnum<typeof StatusSeverity5> =
+  z.enum(StatusSeverity5);
 
 /** @internal */
-export type CollectionIssue5$Outbound = {
+export type DataCollectionIssue5$Outbound = {
   message: string;
   reason: string;
   severity: string;
@@ -33756,27 +34711,27 @@ export type CollectionIssue5$Outbound = {
 };
 
 /** @internal */
-export const CollectionIssue5$outboundSchema: z.ZodType<
-  CollectionIssue5$Outbound,
-  CollectionIssue5
+export const DataCollectionIssue5$outboundSchema: z.ZodType<
+  DataCollectionIssue5$Outbound,
+  DataCollectionIssue5
 > = z.object({
   message: z.string(),
-  reason: Reason5$outboundSchema,
-  severity: CollectionIssueSeverity5$outboundSchema,
+  reason: DataReason5$outboundSchema,
+  severity: StatusSeverity5$outboundSchema,
   source: z.string(),
 });
 
-export function collectionIssue5ToJSON(
-  collectionIssue5: CollectionIssue5,
+export function dataCollectionIssue5ToJSON(
+  dataCollectionIssue5: DataCollectionIssue5,
 ): string {
   return JSON.stringify(
-    CollectionIssue5$outboundSchema.parse(collectionIssue5),
+    DataCollectionIssue5$outboundSchema.parse(dataCollectionIssue5),
   );
 }
 
 /** @internal */
-export const Health5$outboundSchema: z.ZodEnum<typeof Health5> = z.enum(
-  Health5,
+export const DataHealth5$outboundSchema: z.ZodEnum<typeof DataHealth5> = z.enum(
+  DataHealth5,
 );
 
 /** @internal */
@@ -33785,8 +34740,8 @@ export const StatusLifecycle5$outboundSchema: z.ZodEnum<
 > = z.enum(StatusLifecycle5);
 
 /** @internal */
-export type HeartbeatStatus5$Outbound = {
-  collectionIssues: Array<CollectionIssue5$Outbound>;
+export type ResourceHeartbeatStatus5$Outbound = {
+  collectionIssues: Array<DataCollectionIssue5$Outbound>;
   health: string;
   lifecycle: string;
   message?: string | null | undefined;
@@ -33795,23 +34750,23 @@ export type HeartbeatStatus5$Outbound = {
 };
 
 /** @internal */
-export const HeartbeatStatus5$outboundSchema: z.ZodType<
-  HeartbeatStatus5$Outbound,
-  HeartbeatStatus5
+export const ResourceHeartbeatStatus5$outboundSchema: z.ZodType<
+  ResourceHeartbeatStatus5$Outbound,
+  ResourceHeartbeatStatus5
 > = z.object({
-  collectionIssues: z.array(z.lazy(() => CollectionIssue5$outboundSchema)),
-  health: Health5$outboundSchema,
+  collectionIssues: z.array(z.lazy(() => DataCollectionIssue5$outboundSchema)),
+  health: DataHealth5$outboundSchema,
   lifecycle: StatusLifecycle5$outboundSchema,
   message: z.nullable(z.string()).optional(),
   partial: z.boolean(),
   stale: z.boolean(),
 });
 
-export function heartbeatStatus5ToJSON(
-  heartbeatStatus5: HeartbeatStatus5,
+export function resourceHeartbeatStatus5ToJSON(
+  resourceHeartbeatStatus5: ResourceHeartbeatStatus5,
 ): string {
   return JSON.stringify(
-    HeartbeatStatus5$outboundSchema.parse(heartbeatStatus5),
+    ResourceHeartbeatStatus5$outboundSchema.parse(resourceHeartbeatStatus5),
   );
 }
 
@@ -33833,7 +34788,7 @@ export type DataAwsLambda$Outbound = {
   state?: string | null | undefined;
   stateReason?: string | null | undefined;
   stateReasonCode?: string | null | undefined;
-  status: HeartbeatStatus5$Outbound;
+  status: ResourceHeartbeatStatus5$Outbound;
   timeoutSeconds?: number | null | undefined;
   triggerCount: number;
   version?: string | null | undefined;
@@ -33861,7 +34816,7 @@ export const DataAwsLambda$outboundSchema: z.ZodType<
   state: z.nullable(z.string()).optional(),
   stateReason: z.nullable(z.string()).optional(),
   stateReasonCode: z.nullable(z.string()).optional(),
-  status: z.lazy(() => HeartbeatStatus5$outboundSchema),
+  status: z.lazy(() => ResourceHeartbeatStatus5$outboundSchema),
   timeoutSeconds: z.nullable(z.int()).optional(),
   triggerCount: z.int(),
   version: z.nullable(z.string()).optional(),
@@ -33933,17 +34888,16 @@ export function dataWorkerToJSON(dataWorker: DataWorker): string {
 }
 
 /** @internal */
-export const Reason4$outboundSchema: z.ZodEnum<typeof Reason4> = z.enum(
-  Reason4,
+export const DataReason4$outboundSchema: z.ZodEnum<typeof DataReason4> = z.enum(
+  DataReason4,
 );
 
 /** @internal */
-export const CollectionIssueSeverity4$outboundSchema: z.ZodEnum<
-  typeof CollectionIssueSeverity4
-> = z.enum(CollectionIssueSeverity4);
+export const StatusSeverity4$outboundSchema: z.ZodEnum<typeof StatusSeverity4> =
+  z.enum(StatusSeverity4);
 
 /** @internal */
-export type CollectionIssue4$Outbound = {
+export type DataCollectionIssue4$Outbound = {
   message: string;
   reason: string;
   severity: string;
@@ -33951,27 +34905,27 @@ export type CollectionIssue4$Outbound = {
 };
 
 /** @internal */
-export const CollectionIssue4$outboundSchema: z.ZodType<
-  CollectionIssue4$Outbound,
-  CollectionIssue4
+export const DataCollectionIssue4$outboundSchema: z.ZodType<
+  DataCollectionIssue4$Outbound,
+  DataCollectionIssue4
 > = z.object({
   message: z.string(),
-  reason: Reason4$outboundSchema,
-  severity: CollectionIssueSeverity4$outboundSchema,
+  reason: DataReason4$outboundSchema,
+  severity: StatusSeverity4$outboundSchema,
   source: z.string(),
 });
 
-export function collectionIssue4ToJSON(
-  collectionIssue4: CollectionIssue4,
+export function dataCollectionIssue4ToJSON(
+  dataCollectionIssue4: DataCollectionIssue4,
 ): string {
   return JSON.stringify(
-    CollectionIssue4$outboundSchema.parse(collectionIssue4),
+    DataCollectionIssue4$outboundSchema.parse(dataCollectionIssue4),
   );
 }
 
 /** @internal */
-export const Health4$outboundSchema: z.ZodEnum<typeof Health4> = z.enum(
-  Health4,
+export const DataHealth4$outboundSchema: z.ZodEnum<typeof DataHealth4> = z.enum(
+  DataHealth4,
 );
 
 /** @internal */
@@ -33980,8 +34934,8 @@ export const StatusLifecycle4$outboundSchema: z.ZodEnum<
 > = z.enum(StatusLifecycle4);
 
 /** @internal */
-export type HeartbeatStatus4$Outbound = {
-  collectionIssues: Array<CollectionIssue4$Outbound>;
+export type ResourceHeartbeatStatus4$Outbound = {
+  collectionIssues: Array<DataCollectionIssue4$Outbound>;
   health: string;
   lifecycle: string;
   message?: string | null | undefined;
@@ -33990,23 +34944,23 @@ export type HeartbeatStatus4$Outbound = {
 };
 
 /** @internal */
-export const HeartbeatStatus4$outboundSchema: z.ZodType<
-  HeartbeatStatus4$Outbound,
-  HeartbeatStatus4
+export const ResourceHeartbeatStatus4$outboundSchema: z.ZodType<
+  ResourceHeartbeatStatus4$Outbound,
+  ResourceHeartbeatStatus4
 > = z.object({
-  collectionIssues: z.array(z.lazy(() => CollectionIssue4$outboundSchema)),
-  health: Health4$outboundSchema,
+  collectionIssues: z.array(z.lazy(() => DataCollectionIssue4$outboundSchema)),
+  health: DataHealth4$outboundSchema,
   lifecycle: StatusLifecycle4$outboundSchema,
   message: z.nullable(z.string()).optional(),
   partial: z.boolean(),
   stale: z.boolean(),
 });
 
-export function heartbeatStatus4ToJSON(
-  heartbeatStatus4: HeartbeatStatus4,
+export function resourceHeartbeatStatus4ToJSON(
+  resourceHeartbeatStatus4: ResourceHeartbeatStatus4,
 ): string {
   return JSON.stringify(
-    HeartbeatStatus4$outboundSchema.parse(heartbeatStatus4),
+    ResourceHeartbeatStatus4$outboundSchema.parse(resourceHeartbeatStatus4),
   );
 }
 
@@ -34017,7 +34971,7 @@ export type DataLocal1$Outbound = {
   path: string;
   pathExists: boolean;
   readonly?: boolean | null | undefined;
-  status: HeartbeatStatus4$Outbound;
+  status: ResourceHeartbeatStatus4$Outbound;
   backend: "local";
 };
 
@@ -34031,7 +34985,7 @@ export const DataLocal1$outboundSchema: z.ZodType<
   path: z.string(),
   pathExists: z.boolean(),
   readonly: z.nullable(z.boolean()).optional(),
-  status: z.lazy(() => HeartbeatStatus4$outboundSchema),
+  status: z.lazy(() => ResourceHeartbeatStatus4$outboundSchema),
   backend: z.literal("local"),
 });
 
@@ -34040,17 +34994,16 @@ export function dataLocal1ToJSON(dataLocal1: DataLocal1): string {
 }
 
 /** @internal */
-export const Reason3$outboundSchema: z.ZodEnum<typeof Reason3> = z.enum(
-  Reason3,
+export const DataReason3$outboundSchema: z.ZodEnum<typeof DataReason3> = z.enum(
+  DataReason3,
 );
 
 /** @internal */
-export const CollectionIssueSeverity3$outboundSchema: z.ZodEnum<
-  typeof CollectionIssueSeverity3
-> = z.enum(CollectionIssueSeverity3);
+export const StatusSeverity3$outboundSchema: z.ZodEnum<typeof StatusSeverity3> =
+  z.enum(StatusSeverity3);
 
 /** @internal */
-export type CollectionIssue3$Outbound = {
+export type DataCollectionIssue3$Outbound = {
   message: string;
   reason: string;
   severity: string;
@@ -34058,27 +35011,27 @@ export type CollectionIssue3$Outbound = {
 };
 
 /** @internal */
-export const CollectionIssue3$outboundSchema: z.ZodType<
-  CollectionIssue3$Outbound,
-  CollectionIssue3
+export const DataCollectionIssue3$outboundSchema: z.ZodType<
+  DataCollectionIssue3$Outbound,
+  DataCollectionIssue3
 > = z.object({
   message: z.string(),
-  reason: Reason3$outboundSchema,
-  severity: CollectionIssueSeverity3$outboundSchema,
+  reason: DataReason3$outboundSchema,
+  severity: StatusSeverity3$outboundSchema,
   source: z.string(),
 });
 
-export function collectionIssue3ToJSON(
-  collectionIssue3: CollectionIssue3,
+export function dataCollectionIssue3ToJSON(
+  dataCollectionIssue3: DataCollectionIssue3,
 ): string {
   return JSON.stringify(
-    CollectionIssue3$outboundSchema.parse(collectionIssue3),
+    DataCollectionIssue3$outboundSchema.parse(dataCollectionIssue3),
   );
 }
 
 /** @internal */
-export const Health3$outboundSchema: z.ZodEnum<typeof Health3> = z.enum(
-  Health3,
+export const DataHealth3$outboundSchema: z.ZodEnum<typeof DataHealth3> = z.enum(
+  DataHealth3,
 );
 
 /** @internal */
@@ -34087,8 +35040,8 @@ export const StatusLifecycle3$outboundSchema: z.ZodEnum<
 > = z.enum(StatusLifecycle3);
 
 /** @internal */
-export type HeartbeatStatus3$Outbound = {
-  collectionIssues: Array<CollectionIssue3$Outbound>;
+export type ResourceHeartbeatStatus3$Outbound = {
+  collectionIssues: Array<DataCollectionIssue3$Outbound>;
   health: string;
   lifecycle: string;
   message?: string | null | undefined;
@@ -34097,23 +35050,23 @@ export type HeartbeatStatus3$Outbound = {
 };
 
 /** @internal */
-export const HeartbeatStatus3$outboundSchema: z.ZodType<
-  HeartbeatStatus3$Outbound,
-  HeartbeatStatus3
+export const ResourceHeartbeatStatus3$outboundSchema: z.ZodType<
+  ResourceHeartbeatStatus3$Outbound,
+  ResourceHeartbeatStatus3
 > = z.object({
-  collectionIssues: z.array(z.lazy(() => CollectionIssue3$outboundSchema)),
-  health: Health3$outboundSchema,
+  collectionIssues: z.array(z.lazy(() => DataCollectionIssue3$outboundSchema)),
+  health: DataHealth3$outboundSchema,
   lifecycle: StatusLifecycle3$outboundSchema,
   message: z.nullable(z.string()).optional(),
   partial: z.boolean(),
   stale: z.boolean(),
 });
 
-export function heartbeatStatus3ToJSON(
-  heartbeatStatus3: HeartbeatStatus3,
+export function resourceHeartbeatStatus3ToJSON(
+  resourceHeartbeatStatus3: ResourceHeartbeatStatus3,
 ): string {
   return JSON.stringify(
-    HeartbeatStatus3$outboundSchema.parse(heartbeatStatus3),
+    ResourceHeartbeatStatus3$outboundSchema.parse(resourceHeartbeatStatus3),
   );
 }
 
@@ -34143,7 +35096,7 @@ export type DataAzureBlob$Outbound = {
   secondaryLocation?: string | null | undefined;
   skuName?: string | null | undefined;
   skuTier?: string | null | undefined;
-  status: HeartbeatStatus3$Outbound;
+  status: ResourceHeartbeatStatus3$Outbound;
   statusOfPrimary?: string | null | undefined;
   statusOfSecondary?: string | null | undefined;
   storageAccountName?: string | null | undefined;
@@ -34180,7 +35133,7 @@ export const DataAzureBlob$outboundSchema: z.ZodType<
   secondaryLocation: z.nullable(z.string()).optional(),
   skuName: z.nullable(z.string()).optional(),
   skuTier: z.nullable(z.string()).optional(),
-  status: z.lazy(() => HeartbeatStatus3$outboundSchema),
+  status: z.lazy(() => ResourceHeartbeatStatus3$outboundSchema),
   statusOfPrimary: z.nullable(z.string()).optional(),
   statusOfSecondary: z.nullable(z.string()).optional(),
   storageAccountName: z.nullable(z.string()).optional(),
@@ -34193,17 +35146,16 @@ export function dataAzureBlobToJSON(dataAzureBlob: DataAzureBlob): string {
 }
 
 /** @internal */
-export const Reason2$outboundSchema: z.ZodEnum<typeof Reason2> = z.enum(
-  Reason2,
+export const DataReason2$outboundSchema: z.ZodEnum<typeof DataReason2> = z.enum(
+  DataReason2,
 );
 
 /** @internal */
-export const CollectionIssueSeverity2$outboundSchema: z.ZodEnum<
-  typeof CollectionIssueSeverity2
-> = z.enum(CollectionIssueSeverity2);
+export const StatusSeverity2$outboundSchema: z.ZodEnum<typeof StatusSeverity2> =
+  z.enum(StatusSeverity2);
 
 /** @internal */
-export type CollectionIssue2$Outbound = {
+export type DataCollectionIssue2$Outbound = {
   message: string;
   reason: string;
   severity: string;
@@ -34211,27 +35163,27 @@ export type CollectionIssue2$Outbound = {
 };
 
 /** @internal */
-export const CollectionIssue2$outboundSchema: z.ZodType<
-  CollectionIssue2$Outbound,
-  CollectionIssue2
+export const DataCollectionIssue2$outboundSchema: z.ZodType<
+  DataCollectionIssue2$Outbound,
+  DataCollectionIssue2
 > = z.object({
   message: z.string(),
-  reason: Reason2$outboundSchema,
-  severity: CollectionIssueSeverity2$outboundSchema,
+  reason: DataReason2$outboundSchema,
+  severity: StatusSeverity2$outboundSchema,
   source: z.string(),
 });
 
-export function collectionIssue2ToJSON(
-  collectionIssue2: CollectionIssue2,
+export function dataCollectionIssue2ToJSON(
+  dataCollectionIssue2: DataCollectionIssue2,
 ): string {
   return JSON.stringify(
-    CollectionIssue2$outboundSchema.parse(collectionIssue2),
+    DataCollectionIssue2$outboundSchema.parse(dataCollectionIssue2),
   );
 }
 
 /** @internal */
-export const Health2$outboundSchema: z.ZodEnum<typeof Health2> = z.enum(
-  Health2,
+export const DataHealth2$outboundSchema: z.ZodEnum<typeof DataHealth2> = z.enum(
+  DataHealth2,
 );
 
 /** @internal */
@@ -34240,8 +35192,8 @@ export const StatusLifecycle2$outboundSchema: z.ZodEnum<
 > = z.enum(StatusLifecycle2);
 
 /** @internal */
-export type HeartbeatStatus2$Outbound = {
-  collectionIssues: Array<CollectionIssue2$Outbound>;
+export type ResourceHeartbeatStatus2$Outbound = {
+  collectionIssues: Array<DataCollectionIssue2$Outbound>;
   health: string;
   lifecycle: string;
   message?: string | null | undefined;
@@ -34250,23 +35202,23 @@ export type HeartbeatStatus2$Outbound = {
 };
 
 /** @internal */
-export const HeartbeatStatus2$outboundSchema: z.ZodType<
-  HeartbeatStatus2$Outbound,
-  HeartbeatStatus2
+export const ResourceHeartbeatStatus2$outboundSchema: z.ZodType<
+  ResourceHeartbeatStatus2$Outbound,
+  ResourceHeartbeatStatus2
 > = z.object({
-  collectionIssues: z.array(z.lazy(() => CollectionIssue2$outboundSchema)),
-  health: Health2$outboundSchema,
+  collectionIssues: z.array(z.lazy(() => DataCollectionIssue2$outboundSchema)),
+  health: DataHealth2$outboundSchema,
   lifecycle: StatusLifecycle2$outboundSchema,
   message: z.nullable(z.string()).optional(),
   partial: z.boolean(),
   stale: z.boolean(),
 });
 
-export function heartbeatStatus2ToJSON(
-  heartbeatStatus2: HeartbeatStatus2,
+export function resourceHeartbeatStatus2ToJSON(
+  resourceHeartbeatStatus2: ResourceHeartbeatStatus2,
 ): string {
   return JSON.stringify(
-    HeartbeatStatus2$outboundSchema.parse(heartbeatStatus2),
+    ResourceHeartbeatStatus2$outboundSchema.parse(resourceHeartbeatStatus2),
   );
 }
 
@@ -34286,7 +35238,7 @@ export type DataGcpCloudStorage$Outbound = {
   retentionPolicyIsLocked?: boolean | null | undefined;
   softDeleteEffectiveTime?: string | null | undefined;
   softDeleteRetentionDurationSeconds?: string | null | undefined;
-  status: HeartbeatStatus2$Outbound;
+  status: ResourceHeartbeatStatus2$Outbound;
   storageClass?: string | null | undefined;
   uniformBucketLevelAccessEnabled?: boolean | null | undefined;
   uniformBucketLevelAccessLockedTime?: string | null | undefined;
@@ -34313,7 +35265,7 @@ export const DataGcpCloudStorage$outboundSchema: z.ZodType<
   retentionPolicyIsLocked: z.nullable(z.boolean()).optional(),
   softDeleteEffectiveTime: z.nullable(z.string()).optional(),
   softDeleteRetentionDurationSeconds: z.nullable(z.string()).optional(),
-  status: z.lazy(() => HeartbeatStatus2$outboundSchema),
+  status: z.lazy(() => ResourceHeartbeatStatus2$outboundSchema),
   storageClass: z.nullable(z.string()).optional(),
   uniformBucketLevelAccessEnabled: z.nullable(z.boolean()).optional(),
   uniformBucketLevelAccessLockedTime: z.nullable(z.string()).optional(),
@@ -34330,17 +35282,16 @@ export function dataGcpCloudStorageToJSON(
 }
 
 /** @internal */
-export const Reason1$outboundSchema: z.ZodEnum<typeof Reason1> = z.enum(
-  Reason1,
+export const DataReason1$outboundSchema: z.ZodEnum<typeof DataReason1> = z.enum(
+  DataReason1,
 );
 
 /** @internal */
-export const CollectionIssueSeverity1$outboundSchema: z.ZodEnum<
-  typeof CollectionIssueSeverity1
-> = z.enum(CollectionIssueSeverity1);
+export const StatusSeverity1$outboundSchema: z.ZodEnum<typeof StatusSeverity1> =
+  z.enum(StatusSeverity1);
 
 /** @internal */
-export type CollectionIssue1$Outbound = {
+export type DataCollectionIssue1$Outbound = {
   message: string;
   reason: string;
   severity: string;
@@ -34348,27 +35299,27 @@ export type CollectionIssue1$Outbound = {
 };
 
 /** @internal */
-export const CollectionIssue1$outboundSchema: z.ZodType<
-  CollectionIssue1$Outbound,
-  CollectionIssue1
+export const DataCollectionIssue1$outboundSchema: z.ZodType<
+  DataCollectionIssue1$Outbound,
+  DataCollectionIssue1
 > = z.object({
   message: z.string(),
-  reason: Reason1$outboundSchema,
-  severity: CollectionIssueSeverity1$outboundSchema,
+  reason: DataReason1$outboundSchema,
+  severity: StatusSeverity1$outboundSchema,
   source: z.string(),
 });
 
-export function collectionIssue1ToJSON(
-  collectionIssue1: CollectionIssue1,
+export function dataCollectionIssue1ToJSON(
+  dataCollectionIssue1: DataCollectionIssue1,
 ): string {
   return JSON.stringify(
-    CollectionIssue1$outboundSchema.parse(collectionIssue1),
+    DataCollectionIssue1$outboundSchema.parse(dataCollectionIssue1),
   );
 }
 
 /** @internal */
-export const Health1$outboundSchema: z.ZodEnum<typeof Health1> = z.enum(
-  Health1,
+export const DataHealth1$outboundSchema: z.ZodEnum<typeof DataHealth1> = z.enum(
+  DataHealth1,
 );
 
 /** @internal */
@@ -34377,8 +35328,8 @@ export const StatusLifecycle1$outboundSchema: z.ZodEnum<
 > = z.enum(StatusLifecycle1);
 
 /** @internal */
-export type HeartbeatStatus1$Outbound = {
-  collectionIssues: Array<CollectionIssue1$Outbound>;
+export type ResourceHeartbeatStatus1$Outbound = {
+  collectionIssues: Array<DataCollectionIssue1$Outbound>;
   health: string;
   lifecycle: string;
   message?: string | null | undefined;
@@ -34387,23 +35338,23 @@ export type HeartbeatStatus1$Outbound = {
 };
 
 /** @internal */
-export const HeartbeatStatus1$outboundSchema: z.ZodType<
-  HeartbeatStatus1$Outbound,
-  HeartbeatStatus1
+export const ResourceHeartbeatStatus1$outboundSchema: z.ZodType<
+  ResourceHeartbeatStatus1$Outbound,
+  ResourceHeartbeatStatus1
 > = z.object({
-  collectionIssues: z.array(z.lazy(() => CollectionIssue1$outboundSchema)),
-  health: Health1$outboundSchema,
+  collectionIssues: z.array(z.lazy(() => DataCollectionIssue1$outboundSchema)),
+  health: DataHealth1$outboundSchema,
   lifecycle: StatusLifecycle1$outboundSchema,
   message: z.nullable(z.string()).optional(),
   partial: z.boolean(),
   stale: z.boolean(),
 });
 
-export function heartbeatStatus1ToJSON(
-  heartbeatStatus1: HeartbeatStatus1,
+export function resourceHeartbeatStatus1ToJSON(
+  resourceHeartbeatStatus1: ResourceHeartbeatStatus1,
 ): string {
   return JSON.stringify(
-    HeartbeatStatus1$outboundSchema.parse(heartbeatStatus1),
+    ResourceHeartbeatStatus1$outboundSchema.parse(resourceHeartbeatStatus1),
   );
 }
 
@@ -34423,7 +35374,7 @@ export type DataAwsS3$Outbound = {
   publicAccessBlockPresent: boolean;
   region?: string | null | undefined;
   restrictPublicBuckets?: boolean | null | undefined;
-  status: HeartbeatStatus1$Outbound;
+  status: ResourceHeartbeatStatus1$Outbound;
   versioningEnabled?: boolean | null | undefined;
   versioningStatus?: string | null | undefined;
   backend: "awsS3";
@@ -34448,7 +35399,7 @@ export const DataAwsS3$outboundSchema: z.ZodType<
   publicAccessBlockPresent: z.boolean(),
   region: z.nullable(z.string()).optional(),
   restrictPublicBuckets: z.nullable(z.boolean()).optional(),
-  status: z.lazy(() => HeartbeatStatus1$outboundSchema),
+  status: z.lazy(() => ResourceHeartbeatStatus1$outboundSchema),
   versioningEnabled: z.nullable(z.boolean()).optional(),
   versioningStatus: z.nullable(z.string()).optional(),
   backend: z.literal("awsS3"),
@@ -34515,7 +35466,7 @@ export function dataStorageToJSON(dataStorage: DataStorage): string {
 }
 
 /** @internal */
-export type SyncReconcileRequestDataUnion15$Outbound =
+export type SyncReconcileRequestDataUnion16$Outbound =
   | DataStorage$Outbound
   | DataWorker$Outbound
   | DataContainer$Outbound
@@ -34524,6 +35475,7 @@ export type SyncReconcileRequestDataUnion15$Outbound =
   | DataKubernetesCluster$Outbound
   | DataQueue$Outbound
   | DataKv$Outbound
+  | DataPostgres$Outbound
   | DataVault$Outbound
   | DataServiceAccount$Outbound
   | DataNetwork$Outbound
@@ -34537,9 +35489,9 @@ export type SyncReconcileRequestDataUnion15$Outbound =
   | DataAzureServiceBusNamespace$Outbound;
 
 /** @internal */
-export const SyncReconcileRequestDataUnion15$outboundSchema: z.ZodType<
-  SyncReconcileRequestDataUnion15$Outbound,
-  SyncReconcileRequestDataUnion15
+export const SyncReconcileRequestDataUnion16$outboundSchema: z.ZodType<
+  SyncReconcileRequestDataUnion16$Outbound,
+  SyncReconcileRequestDataUnion16
 > = z.union([
   z.lazy(() => DataStorage$outboundSchema),
   z.lazy(() => DataWorker$outboundSchema),
@@ -34549,6 +35501,7 @@ export const SyncReconcileRequestDataUnion15$outboundSchema: z.ZodType<
   z.lazy(() => DataKubernetesCluster$outboundSchema),
   z.lazy(() => DataQueue$outboundSchema),
   z.lazy(() => DataKv$outboundSchema),
+  z.lazy(() => DataPostgres$outboundSchema),
   z.lazy(() => DataVault$outboundSchema),
   z.lazy(() => DataServiceAccount$outboundSchema),
   z.lazy(() => DataNetwork$outboundSchema),
@@ -34562,21 +35515,23 @@ export const SyncReconcileRequestDataUnion15$outboundSchema: z.ZodType<
   z.lazy(() => DataAzureServiceBusNamespace$outboundSchema),
 ]);
 
-export function syncReconcileRequestDataUnion15ToJSON(
-  syncReconcileRequestDataUnion15: SyncReconcileRequestDataUnion15,
+export function syncReconcileRequestDataUnion16ToJSON(
+  syncReconcileRequestDataUnion16: SyncReconcileRequestDataUnion16,
 ): string {
   return JSON.stringify(
-    SyncReconcileRequestDataUnion15$outboundSchema.parse(
-      syncReconcileRequestDataUnion15,
+    SyncReconcileRequestDataUnion16$outboundSchema.parse(
+      syncReconcileRequestDataUnion16,
     ),
   );
 }
 
 /** @internal */
-export const Format$outboundSchema: z.ZodEnum<typeof Format> = z.enum(Format);
+export const ResourceHeartbeatFormat$outboundSchema: z.ZodEnum<
+  typeof ResourceHeartbeatFormat
+> = z.enum(ResourceHeartbeatFormat);
 
 /** @internal */
-export type Raw$Outbound = {
+export type ResourceHeartbeatRaw$Outbound = {
   body: string;
   collectedAt: string;
   format: string;
@@ -34585,20 +35540,27 @@ export type Raw$Outbound = {
 };
 
 /** @internal */
-export const Raw$outboundSchema: z.ZodType<Raw$Outbound, Raw> = z.object({
+export const ResourceHeartbeatRaw$outboundSchema: z.ZodType<
+  ResourceHeartbeatRaw$Outbound,
+  ResourceHeartbeatRaw
+> = z.object({
   body: z.string(),
   collectedAt: z.date().transform(v => v.toISOString()),
-  format: Format$outboundSchema,
+  format: ResourceHeartbeatFormat$outboundSchema,
   source: z.string(),
   truncated: z.boolean(),
 });
 
-export function rawToJSON(raw: Raw): string {
-  return JSON.stringify(Raw$outboundSchema.parse(raw));
+export function resourceHeartbeatRawToJSON(
+  resourceHeartbeatRaw: ResourceHeartbeatRaw,
+): string {
+  return JSON.stringify(
+    ResourceHeartbeatRaw$outboundSchema.parse(resourceHeartbeatRaw),
+  );
 }
 
 /** @internal */
-export type Heartbeat$Outbound = {
+export type ResourceHeartbeat$Outbound = {
   backend: string;
   controllerPlatform: string;
   data:
@@ -34610,6 +35572,7 @@ export type Heartbeat$Outbound = {
     | DataKubernetesCluster$Outbound
     | DataQueue$Outbound
     | DataKv$Outbound
+    | DataPostgres$Outbound
     | DataVault$Outbound
     | DataServiceAccount$Outbound
     | DataNetwork$Outbound
@@ -34623,18 +35586,18 @@ export type Heartbeat$Outbound = {
     | DataAzureServiceBusNamespace$Outbound;
   deploymentId?: string | null | undefined;
   observedAt: string;
-  raw: Array<Raw$Outbound>;
+  raw: Array<ResourceHeartbeatRaw$Outbound>;
   resourceId: string;
   resourceType: string;
 };
 
 /** @internal */
-export const Heartbeat$outboundSchema: z.ZodType<
-  Heartbeat$Outbound,
-  Heartbeat
+export const ResourceHeartbeat$outboundSchema: z.ZodType<
+  ResourceHeartbeat$Outbound,
+  ResourceHeartbeat
 > = z.object({
-  backend: BackendEnum$outboundSchema,
-  controllerPlatform: HeartbeatControllerPlatform$outboundSchema,
+  backend: ResourceHeartbeatBackendEnum$outboundSchema,
+  controllerPlatform: ResourceHeartbeatControllerPlatform$outboundSchema,
   data: z.union([
     z.lazy(() => DataStorage$outboundSchema),
     z.lazy(() => DataWorker$outboundSchema),
@@ -34644,6 +35607,7 @@ export const Heartbeat$outboundSchema: z.ZodType<
     z.lazy(() => DataKubernetesCluster$outboundSchema),
     z.lazy(() => DataQueue$outboundSchema),
     z.lazy(() => DataKv$outboundSchema),
+    z.lazy(() => DataPostgres$outboundSchema),
     z.lazy(() => DataVault$outboundSchema),
     z.lazy(() => DataServiceAccount$outboundSchema),
     z.lazy(() => DataNetwork$outboundSchema),
@@ -34658,13 +35622,249 @@ export const Heartbeat$outboundSchema: z.ZodType<
   ]),
   deploymentId: z.nullable(z.string()).optional(),
   observedAt: z.date().transform(v => v.toISOString()),
-  raw: z.array(z.lazy(() => Raw$outboundSchema)),
+  raw: z.array(z.lazy(() => ResourceHeartbeatRaw$outboundSchema)),
   resourceId: z.string(),
   resourceType: z.string(),
 });
 
-export function heartbeatToJSON(heartbeat: Heartbeat): string {
-  return JSON.stringify(Heartbeat$outboundSchema.parse(heartbeat));
+export function resourceHeartbeatToJSON(
+  resourceHeartbeat: ResourceHeartbeat,
+): string {
+  return JSON.stringify(
+    ResourceHeartbeat$outboundSchema.parse(resourceHeartbeat),
+  );
+}
+
+/** @internal */
+export const ObservedInventoryBatchBackend$outboundSchema: z.ZodEnum<
+  typeof ObservedInventoryBatchBackend
+> = z.enum(ObservedInventoryBatchBackend);
+
+/** @internal */
+export const ObservedInventoryBatchControllerPlatform$outboundSchema: z.ZodEnum<
+  typeof ObservedInventoryBatchControllerPlatform
+> = z.enum(ObservedInventoryBatchControllerPlatform);
+
+/** @internal */
+export const ResourceReason$outboundSchema: z.ZodEnum<typeof ResourceReason> = z
+  .enum(ResourceReason);
+
+/** @internal */
+export const ResourceSeverity$outboundSchema: z.ZodEnum<
+  typeof ResourceSeverity
+> = z.enum(ResourceSeverity);
+
+/** @internal */
+export type ResourceCollectionIssue$Outbound = {
+  message: string;
+  reason: string;
+  severity: string;
+  source: string;
+};
+
+/** @internal */
+export const ResourceCollectionIssue$outboundSchema: z.ZodType<
+  ResourceCollectionIssue$Outbound,
+  ResourceCollectionIssue
+> = z.object({
+  message: z.string(),
+  reason: ResourceReason$outboundSchema,
+  severity: ResourceSeverity$outboundSchema,
+  source: z.string(),
+});
+
+export function resourceCollectionIssueToJSON(
+  resourceCollectionIssue: ResourceCollectionIssue,
+): string {
+  return JSON.stringify(
+    ResourceCollectionIssue$outboundSchema.parse(resourceCollectionIssue),
+  );
+}
+
+/** @internal */
+export type Counts$Outbound = {
+  current?: number | null | undefined;
+  desired?: number | null | undefined;
+  ready?: number | null | undefined;
+};
+
+/** @internal */
+export const Counts$outboundSchema: z.ZodType<Counts$Outbound, Counts> = z
+  .object({
+    current: z.nullable(z.int()).optional(),
+    desired: z.nullable(z.int()).optional(),
+    ready: z.nullable(z.int()).optional(),
+  });
+
+export function countsToJSON(counts: Counts): string {
+  return JSON.stringify(Counts$outboundSchema.parse(counts));
+}
+
+/** @internal */
+export type CountsUnion$Outbound = Counts$Outbound | any;
+
+/** @internal */
+export const CountsUnion$outboundSchema: z.ZodType<
+  CountsUnion$Outbound,
+  CountsUnion
+> = z.union([z.lazy(() => Counts$outboundSchema), z.any()]);
+
+export function countsUnionToJSON(countsUnion: CountsUnion): string {
+  return JSON.stringify(CountsUnion$outboundSchema.parse(countsUnion));
+}
+
+/** @internal */
+export const ResourceHealth$outboundSchema: z.ZodEnum<typeof ResourceHealth> = z
+  .enum(ResourceHealth);
+
+/** @internal */
+export const ResourceLifecycle$outboundSchema: z.ZodEnum<
+  typeof ResourceLifecycle
+> = z.enum(ResourceLifecycle);
+
+/** @internal */
+export const ResourceFormat$outboundSchema: z.ZodEnum<typeof ResourceFormat> = z
+  .enum(ResourceFormat);
+
+/** @internal */
+export type ResourceRaw$Outbound = {
+  body: string;
+  collectedAt: string;
+  format: string;
+  source: string;
+  truncated: boolean;
+};
+
+/** @internal */
+export const ResourceRaw$outboundSchema: z.ZodType<
+  ResourceRaw$Outbound,
+  ResourceRaw
+> = z.object({
+  body: z.string(),
+  collectedAt: z.date().transform(v => v.toISOString()),
+  format: ResourceFormat$outboundSchema,
+  source: z.string(),
+  truncated: z.boolean(),
+});
+
+export function resourceRawToJSON(resourceRaw: ResourceRaw): string {
+  return JSON.stringify(ResourceRaw$outboundSchema.parse(resourceRaw));
+}
+
+/** @internal */
+export type ResourceTypeHint$Outbound = string | any;
+
+/** @internal */
+export const ResourceTypeHint$outboundSchema: z.ZodType<
+  ResourceTypeHint$Outbound,
+  ResourceTypeHint
+> = z.union([z.string(), z.any()]);
+
+export function resourceTypeHintToJSON(
+  resourceTypeHint: ResourceTypeHint,
+): string {
+  return JSON.stringify(
+    ResourceTypeHint$outboundSchema.parse(resourceTypeHint),
+  );
+}
+
+/** @internal */
+export type ObservedInventoryBatchResource$Outbound = {
+  alienResourceId?: string | null | undefined;
+  attributes?: { [k: string]: any | null } | undefined;
+  collectionIssues?: Array<ResourceCollectionIssue$Outbound> | undefined;
+  counts?: Counts$Outbound | any | null | undefined;
+  deploymentId?: string | null | undefined;
+  displayName: string;
+  health: string;
+  labels?: { [k: string]: string } | undefined;
+  lifecycle: string;
+  message?: string | null | undefined;
+  namespace?: string | null | undefined;
+  partial: boolean;
+  providerKind: string;
+  providerStale: boolean;
+  raw?: Array<ResourceRaw$Outbound> | undefined;
+  rawIdentity: string;
+  region?: string | null | undefined;
+  resourceTypeHint?: string | any | null | undefined;
+  scope?: string | null | undefined;
+  version?: string | null | undefined;
+};
+
+/** @internal */
+export const ObservedInventoryBatchResource$outboundSchema: z.ZodType<
+  ObservedInventoryBatchResource$Outbound,
+  ObservedInventoryBatchResource
+> = z.object({
+  alienResourceId: z.nullable(z.string()).optional(),
+  attributes: z.record(z.string(), z.nullable(z.any())).optional(),
+  collectionIssues: z.array(
+    z.lazy(() => ResourceCollectionIssue$outboundSchema),
+  ).optional(),
+  counts: z.nullable(z.union([z.lazy(() => Counts$outboundSchema), z.any()]))
+    .optional(),
+  deploymentId: z.nullable(z.string()).optional(),
+  displayName: z.string(),
+  health: ResourceHealth$outboundSchema,
+  labels: z.record(z.string(), z.string()).optional(),
+  lifecycle: ResourceLifecycle$outboundSchema,
+  message: z.nullable(z.string()).optional(),
+  namespace: z.nullable(z.string()).optional(),
+  partial: z.boolean(),
+  providerKind: z.string(),
+  providerStale: z.boolean(),
+  raw: z.array(z.lazy(() => ResourceRaw$outboundSchema)).optional(),
+  rawIdentity: z.string(),
+  region: z.nullable(z.string()).optional(),
+  resourceTypeHint: z.nullable(z.union([z.string(), z.any()])).optional(),
+  scope: z.nullable(z.string()).optional(),
+  version: z.nullable(z.string()).optional(),
+});
+
+export function observedInventoryBatchResourceToJSON(
+  observedInventoryBatchResource: ObservedInventoryBatchResource,
+): string {
+  return JSON.stringify(
+    ObservedInventoryBatchResource$outboundSchema.parse(
+      observedInventoryBatchResource,
+    ),
+  );
+}
+
+/** @internal */
+export type ObservedInventoryBatch$Outbound = {
+  backend: string;
+  complete: boolean;
+  controllerPlatform: string;
+  inventoryScope: string;
+  observedAt: string;
+  resources: Array<ObservedInventoryBatchResource$Outbound>;
+  sourceKind: string;
+};
+
+/** @internal */
+export const ObservedInventoryBatch$outboundSchema: z.ZodType<
+  ObservedInventoryBatch$Outbound,
+  ObservedInventoryBatch
+> = z.object({
+  backend: ObservedInventoryBatchBackend$outboundSchema,
+  complete: z.boolean(),
+  controllerPlatform: ObservedInventoryBatchControllerPlatform$outboundSchema,
+  inventoryScope: z.string(),
+  observedAt: z.date().transform(v => v.toISOString()),
+  resources: z.array(
+    z.lazy(() => ObservedInventoryBatchResource$outboundSchema),
+  ),
+  sourceKind: z.string(),
+});
+
+export function observedInventoryBatchToJSON(
+  observedInventoryBatch: ObservedInventoryBatch,
+): string {
+  return JSON.stringify(
+    ObservedInventoryBatch$outboundSchema.parse(observedInventoryBatch),
+  );
 }
 
 /** @internal */
@@ -34674,7 +35874,10 @@ export type SyncReconcileRequest$Outbound = {
   state: SyncReconcileRequestState$Outbound;
   updateHeartbeat?: boolean | undefined;
   suggestedDelayMs?: number | undefined;
-  heartbeats?: Array<Heartbeat$Outbound> | undefined;
+  resourceHeartbeats?: Array<ResourceHeartbeat$Outbound> | undefined;
+  observedInventoryBatches?: Array<ObservedInventoryBatch$Outbound> | undefined;
+  capabilities?: Array<OperatorCapabilityReport$Outbound> | undefined;
+  operatorVersion?: string | undefined;
 };
 
 /** @internal */
@@ -34687,7 +35890,13 @@ export const SyncReconcileRequest$outboundSchema: z.ZodType<
   state: z.lazy(() => SyncReconcileRequestState$outboundSchema),
   updateHeartbeat: z.boolean().optional(),
   suggestedDelayMs: z.int().optional(),
-  heartbeats: z.array(z.lazy(() => Heartbeat$outboundSchema)).optional(),
+  resourceHeartbeats: z.array(z.lazy(() => ResourceHeartbeat$outboundSchema))
+    .optional(),
+  observedInventoryBatches: z.array(
+    z.lazy(() => ObservedInventoryBatch$outboundSchema),
+  ).optional(),
+  capabilities: z.array(OperatorCapabilityReport$outboundSchema).optional(),
+  operatorVersion: z.string().optional(),
 });
 
 export function syncReconcileRequestToJSON(

@@ -3,7 +3,7 @@ use alien_error::AlienError;
 // Re-export core traits and types
 pub use alien_context::AlienContext;
 pub use alien_core::{
-    Platform, ENV_ALIEN_BASE_PLATFORM, ENV_ALIEN_BINDINGS_MODE, ENV_ALIEN_DEPLOYMENT_TYPE,
+    Platform, ENV_ALIEN_BINDINGS_MODE, ENV_ALIEN_DEPLOYMENT_TYPE, ENV_OPERATOR_BASE_PLATFORM,
 };
 pub use bindings::Bindings;
 pub use error::{ErrorData, Result};

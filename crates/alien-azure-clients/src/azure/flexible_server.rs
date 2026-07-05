@@ -158,7 +158,11 @@ impl AzureFlexibleServerClient {
     pub fn new(client: Client, token_cache: AzureTokenCache) -> Self {
         let endpoint = token_cache.management_endpoint().to_string();
         Self {
-            base: AzureClientBase::with_client_config(client, endpoint, token_cache.config().clone()),
+            base: AzureClientBase::with_client_config(
+                client,
+                endpoint,
+                token_cache.config().clone(),
+            ),
             token_cache,
         }
     }
@@ -182,16 +186,19 @@ impl FlexibleServerApi for AzureFlexibleServerClient {
         server_name: &str,
         server: &FlexibleServer,
     ) -> Result<FlexibleServerOperationResult> {
-        let token = self.token_cache.get_bearer_token_with_scope(MANAGEMENT_SCOPE).await?;
+        let token = self
+            .token_cache
+            .get_bearer_token_with_scope(MANAGEMENT_SCOPE)
+            .await?;
         let url = self.base.build_url(
             &self.server_path(resource_group, server_name),
             Some(vec![("api-version", Self::API_VERSION.into())]),
         );
-        let body = serde_json::to_string(server)
-            .into_alien_error()
-            .context(ErrorData::SerializationError {
+        let body = serde_json::to_string(server).into_alien_error().context(
+            ErrorData::SerializationError {
                 message: format!("Failed to serialize Flexible Server: {server_name}"),
-            })?;
+            },
+        )?;
         let req = AzureRequestBuilder::new(Method::PUT, url)
             .content_type_json()
             .content_length(&body)
@@ -212,22 +219,36 @@ impl FlexibleServerApi for AzureFlexibleServerClient {
     }
 
     async fn get_server(&self, resource_group: &str, server_name: &str) -> Result<FlexibleServer> {
-        let token = self.token_cache.get_bearer_token_with_scope(MANAGEMENT_SCOPE).await?;
+        let token = self
+            .token_cache
+            .get_bearer_token_with_scope(MANAGEMENT_SCOPE)
+            .await?;
         let url = self.base.build_url(
             &self.server_path(resource_group, server_name),
             Some(vec![("api-version", Self::API_VERSION.into())]),
         );
-        let req = AzureRequestBuilder::new(Method::GET, url.clone()).content_length("").build()?;
+        let req = AzureRequestBuilder::new(Method::GET, url.clone())
+            .content_length("")
+            .build()?;
         let signed = self.base.sign_request(req, &token).await?;
-        let resp = self.base.execute_request(signed, "GetFlexibleServer", server_name).await?;
+        let resp = self
+            .base
+            .execute_request(signed, "GetFlexibleServer", server_name)
+            .await?;
         // The response already succeeded (execute_request returns Ok only on 2xx), so a body-read /
         // parse failure is a serialization problem, not an HTTP failure — don't fabricate a 502.
-        let body = resp.text().await.into_alien_error().context(ErrorData::SerializationError {
-            message: format!("Azure GetFlexibleServer: failed to read body for {server_name}"),
-        })?;
-        serde_json::from_str(&body).into_alien_error().context(ErrorData::SerializationError {
-            message: format!("Azure GetFlexibleServer: JSON parse error for {server_name}"),
-        })
+        let body = resp
+            .text()
+            .await
+            .into_alien_error()
+            .context(ErrorData::SerializationError {
+                message: format!("Azure GetFlexibleServer: failed to read body for {server_name}"),
+            })?;
+        serde_json::from_str(&body)
+            .into_alien_error()
+            .context(ErrorData::SerializationError {
+                message: format!("Azure GetFlexibleServer: JSON parse error for {server_name}"),
+            })
     }
 
     async fn delete_server(
@@ -235,12 +256,17 @@ impl FlexibleServerApi for AzureFlexibleServerClient {
         resource_group: &str,
         server_name: &str,
     ) -> Result<OperationResult<()>> {
-        let token = self.token_cache.get_bearer_token_with_scope(MANAGEMENT_SCOPE).await?;
+        let token = self
+            .token_cache
+            .get_bearer_token_with_scope(MANAGEMENT_SCOPE)
+            .await?;
         let url = self.base.build_url(
             &self.server_path(resource_group, server_name),
             Some(vec![("api-version", Self::API_VERSION.into())]),
         );
-        let req = AzureRequestBuilder::new(Method::DELETE, url).content_length("").build()?;
+        let req = AzureRequestBuilder::new(Method::DELETE, url)
+            .content_length("")
+            .build()?;
         let signed = self.base.sign_request(req, &token).await?;
         self.base
             .execute_request_with_long_running_support(signed, "DeleteFlexibleServer", server_name)
@@ -254,7 +280,10 @@ impl FlexibleServerApi for AzureFlexibleServerClient {
         configuration_name: &str,
         value: &str,
     ) -> Result<OperationResult<()>> {
-        let token = self.token_cache.get_bearer_token_with_scope(MANAGEMENT_SCOPE).await?;
+        let token = self
+            .token_cache
+            .get_bearer_token_with_scope(MANAGEMENT_SCOPE)
+            .await?;
         let url = self.base.build_url(
             &format!(
                 "{}/configurations/{}",
@@ -269,11 +298,11 @@ impl FlexibleServerApi for AzureFlexibleServerClient {
                 source: "user-override".to_string(),
             },
         };
-        let body = serde_json::to_string(&config)
-            .into_alien_error()
-            .context(ErrorData::SerializationError {
+        let body = serde_json::to_string(&config).into_alien_error().context(
+            ErrorData::SerializationError {
                 message: format!("Failed to serialize configuration {configuration_name}"),
-            })?;
+            },
+        )?;
         let req = AzureRequestBuilder::new(Method::PUT, url)
             .content_type_json()
             .content_length(&body)
@@ -281,7 +310,11 @@ impl FlexibleServerApi for AzureFlexibleServerClient {
             .build()?;
         let signed = self.base.sign_request(req, &token).await?;
         self.base
-            .execute_request_with_long_running_support(signed, "SetServerConfiguration", configuration_name)
+            .execute_request_with_long_running_support(
+                signed,
+                "SetServerConfiguration",
+                configuration_name,
+            )
             .await
     }
 
@@ -291,7 +324,10 @@ impl FlexibleServerApi for AzureFlexibleServerClient {
         server_name: &str,
         database_name: &str,
     ) -> Result<OperationResult<()>> {
-        let token = self.token_cache.get_bearer_token_with_scope(MANAGEMENT_SCOPE).await?;
+        let token = self
+            .token_cache
+            .get_bearer_token_with_scope(MANAGEMENT_SCOPE)
+            .await?;
         let url = self.base.build_url(
             &format!(
                 "{}/databases/{}",
@@ -312,7 +348,11 @@ impl FlexibleServerApi for AzureFlexibleServerClient {
             .build()?;
         let signed = self.base.sign_request(req, &token).await?;
         self.base
-            .execute_request_with_long_running_support(signed, "CreateFlexibleServerDatabase", database_name)
+            .execute_request_with_long_running_support(
+                signed,
+                "CreateFlexibleServerDatabase",
+                database_name,
+            )
             .await
     }
 }
@@ -332,8 +372,12 @@ mod tests {
                 version: "17".into(),
                 administrator_login: Some("alien".into()),
                 administrator_login_password: Some("secret".into()),
-                storage: FlexibleServerStorage { storage_size_gb: 32 },
-                backup: FlexibleServerBackup { backup_retention_days: 7 },
+                storage: FlexibleServerStorage {
+                    storage_size_gb: 32,
+                },
+                backup: FlexibleServerBackup {
+                    backup_retention_days: 7,
+                },
                 network: FlexibleServerNetwork {
                     public_network_access: "Disabled".into(),
                 },
@@ -350,8 +394,14 @@ mod tests {
         let json = serde_json::to_value(private_server()).unwrap();
         assert_eq!(json["properties"]["version"], "17");
         // private-only: public network access disabled.
-        assert_eq!(json["properties"]["network"]["publicNetworkAccess"], "Disabled");
-        assert_eq!(json["properties"]["highAvailability"]["mode"], "ZoneRedundant");
+        assert_eq!(
+            json["properties"]["network"]["publicNetworkAccess"],
+            "Disabled"
+        );
+        assert_eq!(
+            json["properties"]["highAvailability"]["mode"],
+            "ZoneRedundant"
+        );
         assert_eq!(json["properties"]["administratorLoginPassword"], "secret");
         // ARM's canonical storage key is `storageSizeGB` (capital GB); camelCase would
         // wrongly emit `storageSizeGb`. Pin both so a dropped rename regresses here.
@@ -371,7 +421,10 @@ mod tests {
         })
         .unwrap();
         assert_eq!(json["properties"]["source"], "user-override");
-        assert!(json["properties"]["value"].as_str().unwrap().contains("VECTOR"));
+        assert!(json["properties"]["value"]
+            .as_str()
+            .unwrap()
+            .contains("VECTOR"));
     }
 
     #[test]

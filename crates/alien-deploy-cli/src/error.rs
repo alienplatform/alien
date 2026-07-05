@@ -51,12 +51,12 @@ pub enum ErrorData {
     MaxStepsExceeded { max_steps: usize, operation: String },
 
     #[error(
-        code = "AGENT_SERVICE_ERROR",
-        message = "Agent service error: {message}",
+        code = "OPERATOR_SERVICE_ERROR",
+        message = "Operator service error: {message}",
         retryable = "false",
         internal = "false"
     )]
-    AgentServiceError { message: String },
+    OperatorServiceError { message: String },
 
     #[error(
         code = "HTTP_ERROR",

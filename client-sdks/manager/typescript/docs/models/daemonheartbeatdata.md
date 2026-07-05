@@ -13,11 +13,10 @@ const value: models.DaemonHeartbeatDataAws = {
   daemonInstances: [
     {
       name: "<value>",
-      ready: true,
+      ready: false,
       replicaId: "<id>",
     },
   ],
-  daemonName: "<value>",
   desiredMachines: 915980,
   events: [],
   healthyInstances: 401388,
@@ -25,11 +24,18 @@ const value: models.DaemonHeartbeatDataAws = {
   horizonStatus: "<value>",
   latestUpdateTimestamp: "<value>",
   status: {
-    collectionIssues: [],
-    health: "unknown",
-    lifecycle: "running",
+    collectionIssues: [
+      {
+        message: "<value>",
+        reason: "forbidden",
+        severity: "info",
+        source: "<value>",
+      },
+    ],
+    health: "unhealthy",
+    lifecycle: "deleting",
     partial: false,
-    stale: true,
+    stale: false,
   },
   unavailableInstances: 429918,
   backend: "aws",
@@ -46,11 +52,10 @@ const value: models.DaemonHeartbeatDataGcp = {
   daemonInstances: [
     {
       name: "<value>",
-      ready: true,
+      ready: false,
       replicaId: "<id>",
     },
   ],
-  daemonName: "<value>",
   desiredMachines: 550789,
   events: [],
   healthyInstances: 289674,
@@ -58,11 +63,18 @@ const value: models.DaemonHeartbeatDataGcp = {
   horizonStatus: "<value>",
   latestUpdateTimestamp: "<value>",
   status: {
-    collectionIssues: [],
-    health: "unknown",
-    lifecycle: "running",
+    collectionIssues: [
+      {
+        message: "<value>",
+        reason: "forbidden",
+        severity: "info",
+        source: "<value>",
+      },
+    ],
+    health: "unhealthy",
+    lifecycle: "deleting",
     partial: false,
-    stale: true,
+    stale: false,
   },
   unavailableInstances: 685429,
   backend: "gcp",
@@ -79,11 +91,10 @@ const value: models.DaemonHeartbeatDataAzure = {
   daemonInstances: [
     {
       name: "<value>",
-      ready: true,
+      ready: false,
       replicaId: "<id>",
     },
   ],
-  daemonName: "<value>",
   desiredMachines: 469652,
   events: [
     {
@@ -96,11 +107,18 @@ const value: models.DaemonHeartbeatDataAzure = {
   horizonStatus: "<value>",
   latestUpdateTimestamp: "<value>",
   status: {
-    collectionIssues: [],
-    health: "unknown",
-    lifecycle: "running",
+    collectionIssues: [
+      {
+        message: "<value>",
+        reason: "forbidden",
+        severity: "info",
+        source: "<value>",
+      },
+    ],
+    health: "unhealthy",
+    lifecycle: "deleting",
     partial: false,
-    stale: true,
+    stale: false,
   },
   unavailableInstances: 821001,
   backend: "azure",
@@ -123,11 +141,18 @@ const value: models.DaemonHeartbeatDataKubernetes = {
   pods: [],
   replicas: {},
   status: {
-    collectionIssues: [],
-    health: "unknown",
-    lifecycle: "running",
+    collectionIssues: [
+      {
+        message: "<value>",
+        reason: "forbidden",
+        severity: "info",
+        source: "<value>",
+      },
+    ],
+    health: "unhealthy",
+    lifecycle: "deleting",
     partial: false,
-    stale: true,
+    stale: false,
   },
   backend: "kubernetes",
 };
@@ -138,16 +163,22 @@ const value: models.DaemonHeartbeatDataKubernetes = {
 ```typescript
 const value: models.DaemonHeartbeatDataLocal = {
   commandSupported: true,
-  daemonName: "<value>",
   events: [],
   imagePathPresent: true,
   runtimeId: "<id>",
   status: {
-    collectionIssues: [],
-    health: "unknown",
-    lifecycle: "running",
+    collectionIssues: [
+      {
+        message: "<value>",
+        reason: "forbidden",
+        severity: "info",
+        source: "<value>",
+      },
+    ],
+    health: "unhealthy",
+    lifecycle: "deleting",
     partial: false,
-    stale: true,
+    stale: false,
   },
   backend: "local",
 };

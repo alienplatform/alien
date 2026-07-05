@@ -1,0 +1,18 @@
+{
+  "name": "package-layout-consumer",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Real npm consumer of the packed @alienplatform tarballs. run.ts rewrites `dependencies` and `overrides` on every run to point at the freshly packed tarballs in ../.tarballs; every other field here is committed and preserved.",
+  "devDependencies": {
+    "@types/node": "24.10.4",
+    "typescript": "5.8.3"
+  },
+  "dependencies": {
+    "@alienplatform/sdk": "file:../.tarballs/alienplatform-sdk-1.10.7.tgz"
+  },
+  "overrides": {
+    "@alienplatform/core": "file:../.tarballs/alienplatform-core-1.10.7.tgz",
+    "@alienplatform/sdk": "file:../.tarballs/alienplatform-sdk-1.10.7.tgz"
+  }
+}

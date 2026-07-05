@@ -21,7 +21,13 @@ required-features = ["openapi"]
 [features]
 default = ["sqlite"]
 sqlite = ["turso", "sea-query", "aegis"]
-openapi = ["utoipa", "alien-core/openapi", "alien-error/openapi", "alien-commands/openapi"]
+openapi = [
+    "utoipa",
+    "alien-core/openapi",
+    "alien-error/openapi",
+    "alien-commands/openapi",
+    "alien-deployment/openapi",
+]
 
 [dependencies]
 # Core Alien crates

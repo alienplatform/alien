@@ -29,13 +29,13 @@ pub struct TrackedDeployment {
     pub tracked_at: String,
 }
 
-/// Metadata for deployments managed by the local agent.
+/// Metadata for deployments managed by the local operator.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub struct TrackedLocalDeployment {
-    /// Data directory used by the local agent for runtime state.
+    /// Data directory used by the local operator for runtime state.
     pub data_dir: String,
-    /// Whether deploy installed the local agent as an OS service.
+    /// Whether deploy installed the local operator as an OS service.
     pub service_managed: bool,
 }
 

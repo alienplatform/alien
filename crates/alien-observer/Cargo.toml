@@ -1,0 +1,33 @@
+[package]
+name = "alien-observer"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+description.workspace = true
+license-file.workspace = true
+
+[features]
+default = []
+aws = ["dep:alien-aws-clients"]
+azure = ["dep:alien-azure-clients"]
+gcp = ["dep:alien-gcp-clients"]
+kubernetes = ["dep:alien-k8s-clients"]
+test-utils = ["alien-k8s-clients/test-utils"]
+
+[dependencies]
+alien-aws-clients = { workspace = true, optional = true }
+alien-azure-clients = { workspace = true, optional = true }
+alien-client-core = { workspace = true }
+alien-core = { workspace = true }
+alien-error = { workspace = true }
+alien-gcp-clients = { workspace = true, optional = true }
+alien-k8s-clients = { workspace = true, optional = true }
+async-trait = { workspace = true }
+chrono = { workspace = true }
+k8s-openapi = { version = "0.25.0", features = ["v1_33"] }
+serde = { workspace = true, features = ["derive"] }
+serde_json = { workspace = true }
+tracing = { workspace = true }
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["macros", "rt"] }

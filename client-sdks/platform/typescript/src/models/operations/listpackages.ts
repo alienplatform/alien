@@ -16,7 +16,7 @@ export const ListPackagesType = {
   Cli: "cli",
   Cloudformation: "cloudformation",
   Helm: "helm",
-  AgentImage: "agent-image",
+  OperatorImage: "operator-image",
   Terraform: "terraform",
 } as const;
 /**

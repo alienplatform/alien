@@ -9,7 +9,7 @@
 //! | alien-deploy-cli | `ManagerApiTransport`               | Manager API            |
 //! | alien-cli        | `ManagerApiTransport`               | Manager API            |
 //! | alien-terraform  | `ManagerApiTransport`               | Manager API            |
-//! | alien-agent      | `AgentTransport`                    | Local SQLite           |
+//! | alien-operator      | `OperatorTransport`                    | Local SQLite           |
 //!
 //! Lock acquire/release stays with the caller — only per-step reconcile is
 //! part of the trait.
@@ -17,7 +17,7 @@
 //! See [`crate::manager_api_transport`] for the shared `ManagerApiTransport`
 //! used by external callers (CLI, Terraform).
 
-use alien_core::{DeploymentConfig, DeploymentState, ResourceHeartbeat};
+use alien_core::{DeploymentConfig, DeploymentState, ObservedInventoryBatch, ResourceHeartbeat};
 use alien_error::AlienError;
 use async_trait::async_trait;
 
@@ -56,5 +56,6 @@ pub trait DeploymentLoopTransport: Send + Sync {
         update_heartbeat: bool,
         suggested_delay_ms: Option<u64>,
         heartbeats: Vec<ResourceHeartbeat>,
+        observed_inventory_batches: Vec<ObservedInventoryBatch>,
     ) -> Result<StepReconcileResult, AlienError>;
 }

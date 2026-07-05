@@ -44,7 +44,7 @@ jobs:
               - 'packages/**'
               - 'crates/alien-cli/**'
               - 'crates/alien-deploy-cli/**'
-              - 'crates/alien-agent/**'
+              - 'crates/alien-operator/**'
 
       - uses: pnpm/action-setup@v4
         with:
@@ -111,6 +111,9 @@ jobs:
           NODE_OPTIONS: "--max-old-space-size=8192"
         run: pnpm test:ts
 
+      - name: Validate package layout
+        run: pnpm validate:package-layout
+
       - name: Rust fast tests (non-cloud)
         env:
           AXIOM_OTLP_ENDPOINT: https://api.axiom.co/v1/logs
@@ -130,13 +133,13 @@ jobs:
 
       - name: Build all CLIs
         if: steps.changes.outputs.examples == 'true' || github.event_name == 'workflow_dispatch' || github.ref == 'refs/heads/main'
-        run: depot cargo build -p alien-cli -p alien-deploy-cli -p alien-agent
+        run: depot cargo build -p alien-cli -p alien-deploy-cli -p alien-operator
 
       - name: Build TypeScript packages
         if: steps.changes.outputs.examples == 'true' || github.event_name == 'workflow_dispatch' || github.ref == 'refs/heads/main'
         env:
           NODE_OPTIONS: "--max-old-space-size=4096"
-        run: pnpm build
+        run: pnpm build && pnpm -C packages/package-layout check
 
       - name: Run examples
         if: steps.changes.outputs.examples == 'true' || github.event_name == 'workflow_dispatch' || github.ref == 'refs/heads/main'

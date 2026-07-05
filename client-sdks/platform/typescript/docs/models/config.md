@@ -33,13 +33,13 @@ const value: models.ConfigHelm = {
 };
 ```
 
-### `models.ConfigAgentImage`
+### `models.ConfigOperatorImage`
 
 ```typescript
-const value: models.ConfigAgentImage = {
-  displayName: "Jack.Kemmer87",
+const value: models.ConfigOperatorImage = {
+  displayName: "Gilda_Gibson",
   name: "<value>",
-  type: "agent-image",
+  type: "operator-image",
 };
 ```
 

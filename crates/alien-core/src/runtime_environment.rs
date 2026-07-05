@@ -4,7 +4,7 @@ use std::collections::HashMap;
 
 pub const ENV_ALIEN_CURRENT_WORKER_BINDING_NAME: &str = "ALIEN_CURRENT_WORKER_BINDING_NAME";
 pub const ENV_ALIEN_CURRENT_CONTAINER_BINDING_NAME: &str = "ALIEN_CURRENT_CONTAINER_BINDING_NAME";
-pub const ENV_ALIEN_BASE_PLATFORM: &str = "ALIEN_BASE_PLATFORM";
+pub const ENV_OPERATOR_BASE_PLATFORM: &str = "OPERATOR_BASE_PLATFORM";
 pub const ENV_ALIEN_DEPLOYMENT_TYPE: &str = "ALIEN_DEPLOYMENT_TYPE";
 pub const ENV_ALIEN_LAMBDA_MODE: &str = "ALIEN_LAMBDA_MODE";
 pub const ENV_ALIEN_RUNTIME_SEND_OTLP: &str = "ALIEN_RUNTIME_SEND_OTLP";
@@ -185,7 +185,7 @@ pub fn standard_runtime_environment_plan(platform: Platform) -> Vec<RuntimeEnvir
             },
         ]),
         Platform::Kubernetes => entries.push(RuntimeEnvironmentEntry {
-            name: ENV_ALIEN_BASE_PLATFORM,
+            name: ENV_OPERATOR_BASE_PLATFORM,
             value: RuntimeEnvironmentValue::BasePlatform,
         }),
         Platform::Local | Platform::Test => {}
@@ -382,7 +382,7 @@ pub fn is_runtime_environment_contract_name(name: &str) -> bool {
         name,
         ENV_ALIEN_CURRENT_CONTAINER_BINDING_NAME
             | ENV_ALIEN_CURRENT_WORKER_BINDING_NAME
-            | ENV_ALIEN_BASE_PLATFORM
+            | ENV_OPERATOR_BASE_PLATFORM
             | ENV_ALIEN_DEPLOYMENT_TYPE
             | ENV_ALIEN_LAMBDA_MODE
             | ENV_ALIEN_RUNTIME_SEND_OTLP
@@ -478,7 +478,7 @@ mod tests {
             ENV_ALIEN_CURRENT_CONTAINER_BINDING_NAME
         ));
         assert!(is_reserved_runtime_environment_name(
-            ENV_ALIEN_BASE_PLATFORM
+            ENV_OPERATOR_BASE_PLATFORM
         ));
         assert!(is_reserved_runtime_environment_name(ENV_ALIEN_SECRETS));
         assert!(is_reserved_runtime_environment_name(
@@ -521,7 +521,7 @@ mod tests {
         let entries = standard_runtime_environment_plan(Platform::Kubernetes);
 
         assert!(entries.iter().any(|entry| {
-            entry.name == ENV_ALIEN_BASE_PLATFORM
+            entry.name == ENV_OPERATOR_BASE_PLATFORM
                 && entry.value == RuntimeEnvironmentValue::BasePlatform
         }));
     }

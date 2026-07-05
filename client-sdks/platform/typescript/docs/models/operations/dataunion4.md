@@ -17,7 +17,6 @@ const value: operations.DataAws1 = {
       replicaId: "<id>",
     },
   ],
-  daemonName: "<value>",
   desiredMachines: 896332,
   events: [
     {
@@ -56,7 +55,6 @@ const value: operations.DataGcp1 = {
   capacityGroup: "<value>",
   commandSupported: false,
   daemonInstances: [],
-  daemonName: "<value>",
   desiredMachines: 144012,
   events: [
     {
@@ -101,7 +99,6 @@ const value: operations.DataAzure1 = {
       replicaId: "<id>",
     },
   ],
-  daemonName: "<value>",
   desiredMachines: 583805,
   events: [],
   healthyInstances: 986297,
@@ -158,7 +155,6 @@ const value: operations.DataKubernetes3 = {
 ```typescript
 const value: operations.DataLocal4 = {
   commandSupported: true,
-  daemonName: "<value>",
   events: [
     {
       kind: "<value>",

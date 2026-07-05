@@ -108,7 +108,7 @@ pub struct KubernetesClusterOutputs {
     pub kubernetes_api_reachable: bool,
     pub namespace_ready: bool,
     pub rbac_ready: bool,
-    pub agent_ready: bool,
+    pub operator_ready: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub cloud_metadata_ready: Option<bool>,
     #[serde(skip_serializing_if = "Option::is_none")]

@@ -862,6 +862,8 @@ async fn create_deployment_task(
         pinned_release_id: None,
         environment_info: None,
         input_values: std::collections::HashMap::new(),
+        operator_scope: None,
+        operator_permission: None,
         setup_method: None,
         setup_metadata: None,
     };

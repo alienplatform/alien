@@ -1,0 +1,10 @@
+---
+source: crates/alien-cli/src/commands/whoami.rs
+expression: render_dev_whoami(&response)
+---
+Signed in as sa_01HXYZ
+Account Type serviceAccount
+Role workspace.member
+Scope future-type
+Workspace ID ws_4b21
+Workspace Name Acme Corp

@@ -11,15 +11,15 @@ let value: DataAzureContainerApps1 = {
     collectionIssues: [
       {
         message: "<value>",
-        reason: "collection-failed",
-        severity: "warning",
+        reason: "not-installed",
+        severity: "error",
         source: "<value>",
       },
     ],
-    health: "healthy",
-    lifecycle: "updating",
+    health: "unhealthy",
+    lifecycle: "stopped",
     partial: true,
-    stale: false,
+    stale: true,
   },
   backend: "azureContainerApps",
 };
@@ -27,17 +27,17 @@ let value: DataAzureContainerApps1 = {
 
 ## Fields
 
-| Field                                                    | Type                                                     | Required                                                 | Description                                              |
-| -------------------------------------------------------- | -------------------------------------------------------- | -------------------------------------------------------- | -------------------------------------------------------- |
-| `appName`                                                | *string*                                                 | :heavy_check_mark:                                       | N/A                                                      |
-| `cpu`                                                    | *number*                                                 | :heavy_minus_sign:                                       | N/A                                                      |
-| `environmentName`                                        | *string*                                                 | :heavy_minus_sign:                                       | N/A                                                      |
-| `ingressFqdn`                                            | *string*                                                 | :heavy_minus_sign:                                       | N/A                                                      |
-| `maxReplicas`                                            | *number*                                                 | :heavy_minus_sign:                                       | N/A                                                      |
-| `memory`                                                 | *string*                                                 | :heavy_minus_sign:                                       | N/A                                                      |
-| `minReplicas`                                            | *number*                                                 | :heavy_minus_sign:                                       | N/A                                                      |
-| `provisioningState`                                      | *string*                                                 | :heavy_minus_sign:                                       | N/A                                                      |
-| `revision`                                               | *string*                                                 | :heavy_minus_sign:                                       | N/A                                                      |
-| `runningStatus`                                          | *string*                                                 | :heavy_minus_sign:                                       | N/A                                                      |
-| `status`                                                 | [models.HeartbeatStatus7](../models/heartbeatstatus7.md) | :heavy_check_mark:                                       | N/A                                                      |
-| `backend`                                                | *"azureContainerApps"*                                   | :heavy_check_mark:                                       | N/A                                                      |
+| Field                                                                    | Type                                                                     | Required                                                                 | Description                                                              |
+| ------------------------------------------------------------------------ | ------------------------------------------------------------------------ | ------------------------------------------------------------------------ | ------------------------------------------------------------------------ |
+| `appName`                                                                | *string*                                                                 | :heavy_check_mark:                                                       | N/A                                                                      |
+| `cpu`                                                                    | *number*                                                                 | :heavy_minus_sign:                                                       | N/A                                                                      |
+| `environmentName`                                                        | *string*                                                                 | :heavy_minus_sign:                                                       | N/A                                                                      |
+| `ingressFqdn`                                                            | *string*                                                                 | :heavy_minus_sign:                                                       | N/A                                                                      |
+| `maxReplicas`                                                            | *number*                                                                 | :heavy_minus_sign:                                                       | N/A                                                                      |
+| `memory`                                                                 | *string*                                                                 | :heavy_minus_sign:                                                       | N/A                                                                      |
+| `minReplicas`                                                            | *number*                                                                 | :heavy_minus_sign:                                                       | N/A                                                                      |
+| `provisioningState`                                                      | *string*                                                                 | :heavy_minus_sign:                                                       | N/A                                                                      |
+| `revision`                                                               | *string*                                                                 | :heavy_minus_sign:                                                       | N/A                                                                      |
+| `runningStatus`                                                          | *string*                                                                 | :heavy_minus_sign:                                                       | N/A                                                                      |
+| `status`                                                                 | [models.ResourceHeartbeatStatus7](../models/resourceheartbeatstatus7.md) | :heavy_check_mark:                                                       | N/A                                                                      |
+| `backend`                                                                | *"azureContainerApps"*                                                   | :heavy_check_mark:                                                       | N/A                                                                      |

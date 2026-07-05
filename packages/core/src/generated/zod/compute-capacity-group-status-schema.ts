@@ -6,6 +6,7 @@
 import * as z from "zod";
 import { ComputeCapacityBlockerSchema } from "./compute-capacity-blocker-schema.js";
 import { ComputeCapacityRecommendationSchema } from "./compute-capacity-recommendation-schema.js";
+import { ComputeDrainProgressSchema } from "./compute-drain-progress-schema.js";
 
 export const ComputeCapacityGroupStatusSchema = z.object({
     get "capacityBlocker"(){
@@ -13,6 +14,9 @@ export const ComputeCapacityGroupStatusSchema = z.object({
               },
 "currentMachines": z.int().min(0),
 "desiredMachines": z.int().min(0),
+get "drainProgress"(){
+                return z.union([ComputeDrainProgressSchema, z.null()]).optional()
+              },
 "groupId": z.string(),
 "instanceType": z.string().nullish(),
 "maxMachines": z.int().min(0).nullish(),

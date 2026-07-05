@@ -134,8 +134,10 @@ impl AzureBuildController {
                 alien_core::ServiceAccount::RESOURCE_TYPE,
                 format!("{}-sa", config.get_permissions()),
             );
-            self.managed_identity_id =
-                Some(self.get_managed_identity_id(ctx, &service_account_ref).await?);
+            self.managed_identity_id = Some(
+                self.get_managed_identity_id(ctx, &service_account_ref)
+                    .await?,
+            );
         }
 
         emit_azure_build_heartbeat(ctx, &config.id, self);

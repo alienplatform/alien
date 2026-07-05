@@ -13,6 +13,7 @@ export type DeploymentReleaseInfo = {
    * Unique identifier for the release.
    */
   id: string;
+  version: string;
   gitMetadata?: GitMetadata | null | undefined;
   createdAt: Date;
 };
@@ -23,6 +24,7 @@ export const DeploymentReleaseInfo$inboundSchema: z.ZodType<
   unknown
 > = z.object({
   id: z.string(),
+  version: z.string(),
   gitMetadata: z.nullable(GitMetadata$inboundSchema).optional(),
   createdAt: z.iso.datetime({ offset: true }).transform(v => new Date(v)),
 });

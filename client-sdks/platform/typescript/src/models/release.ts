@@ -22,9 +22,10 @@ export type Release = {
    */
   id: string;
   projectId: string;
+  version: string;
   gitMetadata?: GitMetadata | null | undefined;
   createdAt: Date;
-  stack: StackByPlatform;
+  stack?: StackByPlatform | null | undefined;
   setupFingerprints: { [k: string]: SetupFingerprintInfo };
   rootDirectory?: string | null | undefined;
   workspaceId: string;
@@ -34,9 +35,10 @@ export type Release = {
 export const Release$inboundSchema: z.ZodType<Release, unknown> = z.object({
   id: z.string(),
   projectId: z.string(),
+  version: z.string(),
   gitMetadata: z.nullable(GitMetadata$inboundSchema).optional(),
   createdAt: z.iso.datetime({ offset: true }).transform(v => new Date(v)),
-  stack: StackByPlatform$inboundSchema,
+  stack: z.nullable(StackByPlatform$inboundSchema).optional(),
   setupFingerprints: z.record(z.string(), SetupFingerprintInfo$inboundSchema),
   rootDirectory: z.nullable(z.string()).optional(),
   workspaceId: z.string(),

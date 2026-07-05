@@ -12,8 +12,8 @@ let value: DataArtifactRegistry = {
     status: {
       collectionIssues: [],
       health: "unknown",
-      lifecycle: "stopping",
-      partial: false,
+      lifecycle: "creating",
+      partial: true,
       stale: false,
     },
     backend: "local",
@@ -26,5 +26,5 @@ let value: DataArtifactRegistry = {
 
 | Field                                    | Type                                     | Required                                 | Description                              |
 | ---------------------------------------- | ---------------------------------------- | ---------------------------------------- | ---------------------------------------- |
-| `data`                                   | *models.SyncReconcileRequestDataUnion12* | :heavy_check_mark:                       | N/A                                      |
+| `data`                                   | *models.SyncReconcileRequestDataUnion13* | :heavy_check_mark:                       | N/A                                      |
 | `resourceType`                           | *"artifact-registry"*                    | :heavy_check_mark:                       | N/A                                      |

@@ -5,7 +5,36 @@
 
 use serde::{Deserialize, Serialize};
 
-use crate::{DeploymentConfig, DeploymentState, ReleaseInfo};
+use crate::{
+    DeploymentConfig, DeploymentState, ObservedInventoryBatch, ReleaseInfo, ResourceHeartbeat,
+};
+
+/// State of an Operator capability as observed inside the environment.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
+#[serde(rename_all = "kebab-case")]
+pub enum OperatorCapabilityState {
+    /// The Operator has the permission or local facility needed for the capability.
+    Granted,
+    /// The environment explicitly denied the capability.
+    Denied,
+    /// The capability does not apply in this environment.
+    Unavailable,
+}
+
+/// Report-only Operator capability status.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
+#[serde(rename_all = "camelCase")]
+pub struct OperatorCapabilityReport {
+    /// Stable capability key, such as `k8s-workloads` or `logs`.
+    pub key: String,
+    /// Whether the capability is currently usable.
+    pub state: OperatorCapabilityState,
+    /// Optional human-readable detail from the Operator.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub detail: Option<String>,
+}
 
 /// Request sent by the agent to the manager during periodic sync.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -16,6 +45,26 @@ pub struct SyncRequest {
     /// Current deployment state as seen by the agent.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub current_state: Option<DeploymentState>,
+    /// Managed Alien resource status samples emitted by the Operator's deployment step.
+    #[serde(
+        default,
+        rename = "resourceHeartbeats",
+        skip_serializing_if = "Vec::is_empty"
+    )]
+    pub heartbeats: Vec<ResourceHeartbeat>,
+    /// Observed raw-resource inventory batches successfully read by the Operator.
+    #[serde(
+        default,
+        rename = "observedInventoryBatches",
+        skip_serializing_if = "Vec::is_empty"
+    )]
+    pub observed_inventory_batches: Vec<ObservedInventoryBatch>,
+    /// Report-only capabilities observed by the Operator.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub capabilities: Vec<OperatorCapabilityReport>,
+    /// Version of the Operator binary reporting this sync.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub operator_version: Option<String>,
 }
 
 /// Response from the manager to the agent sync request.
@@ -30,7 +79,7 @@ pub struct SyncResponse {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub current_state: Option<DeploymentState>,
     /// Target deployment the agent should converge toward.
-    /// None means no changes needed.
+    /// None means no changes needed or this is an observe-only deployment.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub target: Option<TargetDeployment>,
     /// Public URL for the commands API (e.g. `https://manager.example.com/v1`).
@@ -59,12 +108,19 @@ mod tests {
         let req = SyncRequest {
             deployment_id: "dep_abc123".to_string(),
             current_state: None,
+            heartbeats: Vec::new(),
+            observed_inventory_batches: Vec::new(),
+            capabilities: Vec::new(),
+            operator_version: None,
         };
 
         let json = serde_json::to_value(&req).unwrap();
         assert_eq!(json["deploymentId"], "dep_abc123");
         // current_state is None → should be omitted
         assert!(json.get("currentState").is_none());
+        assert!(json.get("resourceHeartbeats").is_none());
+        assert!(json.get("capabilities").is_none());
+        assert!(json.get("operatorVersion").is_none());
     }
 
     #[test]
@@ -73,6 +129,10 @@ mod tests {
         let req: SyncRequest = serde_json::from_str(json).unwrap();
         assert_eq!(req.deployment_id, "dep_xyz");
         assert!(req.current_state.is_none());
+        assert!(req.heartbeats.is_empty());
+        assert!(req.observed_inventory_batches.is_empty());
+        assert!(req.capabilities.is_empty());
+        assert!(req.operator_version.is_none());
     }
 
     #[test]
@@ -108,9 +168,91 @@ mod tests {
         let req: SyncRequest = serde_json::from_str(json).unwrap();
         assert_eq!(req.deployment_id, "dep_1");
         assert!(req.current_state.is_none());
+        assert!(req.heartbeats.is_empty());
+        assert!(req.capabilities.is_empty());
 
         // snake_case should NOT work
         let json = r#"{"deployment_id": "dep_1"}"#;
         assert!(serde_json::from_str::<SyncRequest>(json).is_err());
+    }
+
+    #[test]
+    fn test_sync_request_heartbeats_roundtrip() {
+        let json = serde_json::json!({
+            "deploymentId": "dep_1",
+            "resourceHeartbeats": [{
+                "deploymentId": "dep_1",
+                "resourceId": "api",
+                "resourceType": "container",
+                "controllerPlatform": "kubernetes",
+                "backend": "kubernetes",
+                "observedAt": "2026-01-01T00:00:00Z",
+                "data": {
+                    "resourceType": "container",
+                    "data": {
+                        "backend": "kubernetes",
+                        "status": {
+                            "health": "healthy",
+                            "lifecycle": "running",
+                            "message": null,
+                            "stale": false,
+                            "partial": false,
+                            "collectionIssues": []
+                        },
+                        "namespace": "default",
+                        "name": "api",
+                        "workloadKind": "deployment",
+                        "replicas": { "desired": 1, "current": 1, "ready": 1, "available": 1, "updated": null, "misscheduled": null },
+                        "restarts": 0,
+                        "cpu": null,
+                        "memory": null,
+                        "workload": null,
+                        "pods": [],
+                        "instances": [],
+                        "events": []
+                    }
+                },
+                "raw": []
+            }]
+        });
+
+        let req: SyncRequest = serde_json::from_value(json).unwrap();
+        assert_eq!(req.heartbeats.len(), 1);
+        assert_eq!(req.heartbeats[0].resource_id, "api");
+        assert!(req.capabilities.is_empty());
+
+        let serialized = serde_json::to_value(&req).unwrap();
+        assert_eq!(serialized["resourceHeartbeats"][0]["resourceId"], "api");
+    }
+
+    #[test]
+    fn test_sync_response_observe_only_state_roundtrip() {
+        let state = DeploymentState {
+            status: crate::DeploymentStatus::Running,
+            platform: crate::Platform::Kubernetes,
+            current_release: None,
+            target_release: None,
+            stack_state: None,
+            error: None,
+            environment_info: None,
+            runtime_metadata: None,
+            retry_requested: false,
+            protocol_version: crate::DEPLOYMENT_PROTOCOL_VERSION,
+        };
+        assert!(!state.has_desired());
+
+        let resp = SyncResponse {
+            current_state: Some(state),
+            target: None,
+            commands_url: None,
+        };
+
+        let serialized = serde_json::to_string(&resp).unwrap();
+        let deserialized: SyncResponse = serde_json::from_str(&serialized).unwrap();
+        let current_state = deserialized.current_state.unwrap();
+
+        assert_eq!(current_state.status, crate::DeploymentStatus::Running);
+        assert!(!current_state.has_desired());
+        assert!(deserialized.target.is_none());
     }
 }

@@ -16,7 +16,6 @@ let value: SyncReconcileResponseTarget = {
     },
   },
   releaseInfo: {
-    releaseId: "<id>",
     stack: {
       id: "<id>",
       resources: {

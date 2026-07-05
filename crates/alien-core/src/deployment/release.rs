@@ -12,8 +12,10 @@ use serde::{Deserialize, Serialize};
 #[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 #[serde(rename_all = "camelCase")]
 pub struct ReleaseInfo {
-    /// Release ID (e.g., rel_xyz)
-    pub release_id: String,
+    /// Release ID (e.g., rel_xyz). `None` for an observe deployment, which has no
+    /// Alien-assigned release — the platform resolves a release from `version`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub release_id: Option<String>,
     /// Version string (e.g., 2.1.0)
     #[serde(skip_serializing_if = "Option::is_none")]
     pub version: Option<String>,

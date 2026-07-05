@@ -1396,11 +1396,34 @@
           "deploymentId"
         ],
         "properties": {
+          "capabilities": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/OperatorCapabilityReport"
+            }
+          },
           "currentState": {
             "description": "Current deployment state as reported by the agent.\nWhen present, the manager updates the deployment record to reflect\nthe agent's progress (status, stack_state, etc.)."
           },
           "deploymentId": {
             "type": "string"
+          },
+          "observedInventoryBatches": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ObservedInventoryBatch"
+            }
+          },
+          "operatorVersion": {
+            "type": "string",
+            "nullable": true
+          },
+          "resourceHeartbeats": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ResourceHeartbeat"
+            },
+            "description": "Managed resource status samples emitted by pull-mode deployment steps."
           }
         }
       },
@@ -1592,6 +1615,40 @@
           }
         }
       },
+      "AuroraPostgresHeartbeatData": {
+        "type": "object",
+        "required": [
+          "status",
+          "clusterIdentifier",
+          "neverPauses"
+        ],
+        "properties": {
+          "clusterIdentifier": {
+            "type": "string"
+          },
+          "endpoint": {
+            "type": "string",
+            "nullable": true
+          },
+          "engineVersion": {
+            "type": "string",
+            "nullable": true
+          },
+          "neverPauses": {
+            "type": "boolean",
+            "description": "True when a `minCapacity: 0` instance has not reached 0 ACU over the observation\nwindow — it is silently paying always-on prices (auto-pause verification)."
+          },
+          "serverlessCapacity": {
+            "type": "number",
+            "format": "double",
+            "description": "Latest sampled `ServerlessDatabaseCapacity` (ACU).",
+            "nullable": true
+          },
+          "status": {
+            "$ref": "#/components/schemas/PostgresHeartbeatStatus"
+          }
+        }
+      },
       "AwsCodeBuildHeartbeatData": {
         "type": "object",
         "required": [
@@ -1754,7 +1811,6 @@
         "required": [
           "status",
           "horizonClusterId",
-          "daemonName",
           "horizonStatus",
           "capacityGroup",
           "desiredMachines",
@@ -3154,7 +3210,6 @@
         "required": [
           "status",
           "horizonClusterId",
-          "daemonName",
           "horizonStatus",
           "capacityGroup",
           "desiredMachines",
@@ -3227,6 +3282,29 @@
             "type": "integer",
             "format": "int32",
             "minimum": 0
+          }
+        }
+      },
+      "AzureFlexibleServerPostgresHeartbeatData": {
+        "type": "object",
+        "required": [
+          "status",
+          "serverName"
+        ],
+        "properties": {
+          "serverName": {
+            "type": "string"
+          },
+          "state": {
+            "type": "string",
+            "nullable": true
+          },
+          "status": {
+            "$ref": "#/components/schemas/PostgresHeartbeatStatus"
+          },
+          "version": {
+            "type": "string",
+            "nullable": true
           }
         }
       },
@@ -4034,6 +4112,10 @@
             "type": "string",
             "nullable": true
           },
+          "privateEndpointSubnetName": {
+            "type": "string",
+            "nullable": true
+          },
           "privateSubnetName": {
             "type": "string",
             "nullable": true
@@ -4463,6 +4545,10 @@
             "format": "int32",
             "minimum": 0
           },
+          "drainProgress": {
+            "$ref": "#/components/schemas/ComputeDrainProgress",
+            "nullable": true
+          },
           "groupId": {
             "type": "string"
           },
@@ -4636,6 +4722,87 @@
             "type": "boolean"
           }
         }
+      },
+      "ComputeDrainBlocker": {
+        "type": "object",
+        "required": [
+          "workloadName",
+          "replicaId",
+          "schedulingMode",
+          "state",
+          "reason"
+        ],
+        "properties": {
+          "reason": {
+            "type": "string"
+          },
+          "replicaId": {
+            "type": "string"
+          },
+          "schedulingMode": {
+            "type": "string"
+          },
+          "state": {
+            "type": "string"
+          },
+          "workloadName": {
+            "type": "string"
+          }
+        }
+      },
+      "ComputeDrainProgress": {
+        "type": "object",
+        "required": [
+          "machineId",
+          "status",
+          "replicaCount",
+          "force",
+          "stalled"
+        ],
+        "properties": {
+          "blockers": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ComputeDrainBlocker"
+            }
+          },
+          "drainDeadlineAt": {
+            "type": "string",
+            "nullable": true
+          },
+          "drainRequestedAt": {
+            "type": "string",
+            "nullable": true
+          },
+          "drainedAt": {
+            "type": "string",
+            "nullable": true
+          },
+          "force": {
+            "type": "boolean"
+          },
+          "machineId": {
+            "type": "string"
+          },
+          "replicaCount": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "stalled": {
+            "type": "boolean"
+          },
+          "status": {
+            "$ref": "#/components/schemas/ComputeDrainProgressStatus"
+          }
+        }
+      },
+      "ComputeDrainProgressStatus": {
+        "type": "string",
+        "enum": [
+          "draining",
+          "drained",
+          "terminating"
+        ]
       },
       "ComputePoolSelection": {
         "oneOf": [
@@ -5623,6 +5790,29 @@
           }
         }
       },
+      "GcpCloudSqlPostgresHeartbeatData": {
+        "type": "object",
+        "required": [
+          "status",
+          "instanceName"
+        ],
+        "properties": {
+          "databaseVersion": {
+            "type": "string",
+            "nullable": true
+          },
+          "instanceName": {
+            "type": "string"
+          },
+          "state": {
+            "type": "string",
+            "nullable": true
+          },
+          "status": {
+            "$ref": "#/components/schemas/PostgresHeartbeatStatus"
+          }
+        }
+      },
       "GcpCloudStorageHeartbeatData": {
         "type": "object",
         "required": [
@@ -5773,7 +5963,6 @@
         "required": [
           "status",
           "horizonClusterId",
-          "daemonName",
           "horizonStatus",
           "capacityGroup",
           "desiredMachines",
@@ -6536,8 +6725,21 @@
             "type": "string",
             "nullable": true
           },
+          "permission": {
+            "type": "string",
+            "nullable": true
+          },
           "platform": {
             "$ref": "#/components/schemas/Platform",
+            "nullable": true
+          },
+          "scope": {
+            "type": "string",
+            "nullable": true
+          },
+          "setupMethod": {
+            "type": "string",
+            "description": "Setup method that is registering this deployment, such as `manual` for\nrendered Operator manifests or `helm` for generated Helm installs.",
             "nullable": true
           },
           "stackSettings": {
@@ -8197,7 +8399,6 @@
         "type": "object",
         "required": [
           "status",
-          "daemonName",
           "runtimeId",
           "commandSupported",
           "imagePathPresent",
@@ -8286,6 +8487,35 @@
           "get",
           "delete"
         ]
+      },
+      "LocalPostgresHeartbeatData": {
+        "type": "object",
+        "required": [
+          "status",
+          "name",
+          "version",
+          "processRunning"
+        ],
+        "properties": {
+          "name": {
+            "type": "string"
+          },
+          "port": {
+            "type": "integer",
+            "format": "int32",
+            "minimum": 0,
+            "nullable": true
+          },
+          "processRunning": {
+            "type": "boolean"
+          },
+          "status": {
+            "$ref": "#/components/schemas/PostgresHeartbeatStatus"
+          },
+          "version": {
+            "type": "string"
+          }
+        }
       },
       "LocalQueueHeartbeatData": {
         "type": "object",
@@ -9087,6 +9317,11 @@
                 "description": "Name of the dedicated classic Application Gateway subnet within the VNet.",
                 "nullable": true
               },
+              "private_endpoint_subnet_name": {
+                "type": "string",
+                "description": "Name of the dedicated subnet that hosts Private Endpoints (e.g. for a\nPostgres Flexible Server). A Private Endpoint must not share the private\nsubnet, which is already claimed by the Container Apps environment's\n`infrastructure_subnet_id`. Required only when the stack contains a\nPostgres resource; otherwise unused.",
+                "nullable": true
+              },
               "private_subnet_name": {
                 "type": "string",
                 "description": "Name of the private subnet within the VNet"
@@ -9142,6 +9377,181 @@
           "unhealthy"
         ]
       },
+      "ObservedInventoryBatch": {
+        "type": "object",
+        "required": [
+          "sourceKind",
+          "inventoryScope",
+          "controllerPlatform",
+          "backend",
+          "observedAt",
+          "complete",
+          "resources"
+        ],
+        "properties": {
+          "backend": {
+            "$ref": "#/components/schemas/HeartbeatBackend",
+            "description": "Backend whose observer produced this snapshot."
+          },
+          "complete": {
+            "type": "boolean",
+            "description": "Whether this batch is a complete replacement for the scope. Complete\nbatches tombstone previously observed rows in the same scope when they\nare absent from `resources`."
+          },
+          "controllerPlatform": {
+            "$ref": "#/components/schemas/Platform",
+            "description": "Platform whose observer produced this snapshot."
+          },
+          "inventoryScope": {
+            "type": "string",
+            "description": "Stable scope for the provider list operation that produced this batch."
+          },
+          "observedAt": {
+            "type": "string",
+            "format": "date-time",
+            "description": "Time the inventory scope was observed."
+          },
+          "resources": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ObservedResourceSample"
+            }
+          },
+          "sourceKind": {
+            "type": "string",
+            "description": "Writer/source for this inventory pass, such as `operator` or\n`manager-observer`."
+          }
+        }
+      },
+      "ObservedResourceSample": {
+        "type": "object",
+        "required": [
+          "rawIdentity",
+          "providerKind",
+          "displayName",
+          "health",
+          "lifecycle",
+          "partial",
+          "providerStale"
+        ],
+        "properties": {
+          "alienResourceId": {
+            "type": "string",
+            "nullable": true
+          },
+          "attributes": {
+            "type": "object",
+            "additionalProperties": {
+              "$ref": "#/components/schemas/Value"
+            }
+          },
+          "collectionIssues": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/HeartbeatCollectionIssue"
+            }
+          },
+          "counts": {
+            "$ref": "#/components/schemas/ObservedCounts",
+            "nullable": true
+          },
+          "deploymentId": {
+            "type": "string",
+            "nullable": true
+          },
+          "displayName": {
+            "type": "string"
+          },
+          "health": {
+            "$ref": "#/components/schemas/ObservedHealth"
+          },
+          "labels": {
+            "type": "object",
+            "additionalProperties": {
+              "type": "string"
+            }
+          },
+          "lifecycle": {
+            "$ref": "#/components/schemas/ProviderLifecycleState"
+          },
+          "message": {
+            "type": "string",
+            "nullable": true
+          },
+          "namespace": {
+            "type": "string",
+            "nullable": true
+          },
+          "partial": {
+            "type": "boolean"
+          },
+          "providerKind": {
+            "type": "string",
+            "description": "Provider-native kind, such as `apps/v1/Deployment`,\n`AWS::S3::Bucket`, `storage.googleapis.com/Bucket`, or an Azure\nresource type."
+          },
+          "providerStale": {
+            "type": "boolean"
+          },
+          "raw": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/RawHeartbeatSnippet"
+            }
+          },
+          "rawIdentity": {
+            "type": "string",
+            "description": "Provider-native stable identity: Kubernetes object identity, cloud ARN,\nGCP full resource name, Azure resource id, etc."
+          },
+          "region": {
+            "type": "string",
+            "nullable": true
+          },
+          "resourceTypeHint": {
+            "$ref": "#/components/schemas/ResourceType",
+            "nullable": true
+          },
+          "scope": {
+            "type": "string",
+            "nullable": true
+          },
+          "version": {
+            "type": "string",
+            "description": "Release/version identity observed from the provider resource, when available.",
+            "nullable": true
+          }
+        }
+      },
+      "OperatorCapabilityReport": {
+        "type": "object",
+        "description": "Report-only Operator capability status.",
+        "required": [
+          "key",
+          "state"
+        ],
+        "properties": {
+          "detail": {
+            "type": "string",
+            "description": "Optional human-readable detail from the Operator.",
+            "nullable": true
+          },
+          "key": {
+            "type": "string",
+            "description": "Stable capability key, such as `k8s-workloads` or `logs`."
+          },
+          "state": {
+            "$ref": "#/components/schemas/OperatorCapabilityState",
+            "description": "Whether the capability is currently usable."
+          }
+        }
+      },
+      "OperatorCapabilityState": {
+        "type": "string",
+        "description": "State of an Operator capability as observed inside the environment.",
+        "enum": [
+          "granted",
+          "denied",
+          "unavailable"
+        ]
+      },
       "Platform": {
         "type": "string",
         "description": "Represents the target cloud platform.",
@@ -9153,6 +9563,136 @@
           "local",
           "test"
         ]
+      },
+      "PostgresHeartbeatData": {
+        "oneOf": [
+          {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/AuroraPostgresHeartbeatData",
+                "description": "AWS Aurora Serverless v2 backend."
+              },
+              {
+                "type": "object",
+                "required": [
+                  "backend"
+                ],
+                "properties": {
+                  "backend": {
+                    "type": "string",
+                    "enum": [
+                      "aurora"
+                    ]
+                  }
+                }
+              }
+            ],
+            "description": "AWS Aurora Serverless v2 backend."
+          },
+          {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/GcpCloudSqlPostgresHeartbeatData",
+                "description": "GCP Cloud SQL backend."
+              },
+              {
+                "type": "object",
+                "required": [
+                  "backend"
+                ],
+                "properties": {
+                  "backend": {
+                    "type": "string",
+                    "enum": [
+                      "cloudSql"
+                    ]
+                  }
+                }
+              }
+            ],
+            "description": "GCP Cloud SQL backend."
+          },
+          {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/AzureFlexibleServerPostgresHeartbeatData",
+                "description": "Azure Flexible Server backend."
+              },
+              {
+                "type": "object",
+                "required": [
+                  "backend"
+                ],
+                "properties": {
+                  "backend": {
+                    "type": "string",
+                    "enum": [
+                      "flexibleServer"
+                    ]
+                  }
+                }
+              }
+            ],
+            "description": "Azure Flexible Server backend."
+          },
+          {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/LocalPostgresHeartbeatData",
+                "description": "Local embedded Postgres backend."
+              },
+              {
+                "type": "object",
+                "required": [
+                  "backend"
+                ],
+                "properties": {
+                  "backend": {
+                    "type": "string",
+                    "enum": [
+                      "local"
+                    ]
+                  }
+                }
+              }
+            ],
+            "description": "Local embedded Postgres backend."
+          }
+        ]
+      },
+      "PostgresHeartbeatStatus": {
+        "type": "object",
+        "required": [
+          "health",
+          "lifecycle",
+          "stale",
+          "partial",
+          "collectionIssues"
+        ],
+        "properties": {
+          "collectionIssues": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/HeartbeatCollectionIssue"
+            }
+          },
+          "health": {
+            "$ref": "#/components/schemas/ObservedHealth"
+          },
+          "lifecycle": {
+            "$ref": "#/components/schemas/ProviderLifecycleState"
+          },
+          "message": {
+            "type": "string",
+            "nullable": true
+          },
+          "partial": {
+            "type": "boolean"
+          },
+          "stale": {
+            "type": "boolean"
+          }
+        }
       },
       "PresignedOperation": {
         "type": "string",
@@ -9462,10 +10002,26 @@
           "state"
         ],
         "properties": {
+          "capabilities": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/OperatorCapabilityReport"
+            }
+          },
           "deploymentId": {
             "type": "string"
           },
-          "heartbeats": {
+          "observedInventoryBatches": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ObservedInventoryBatch"
+            }
+          },
+          "operatorVersion": {
+            "type": "string",
+            "nullable": true
+          },
+          "resourceHeartbeats": {
             "type": "array",
             "items": {
               "$ref": "#/components/schemas/ResourceHeartbeat"
@@ -9727,7 +10283,8 @@
             }
           },
           "resourceId": {
-            "type": "string"
+            "type": "string",
+            "description": "Alien resource id, such as the `alien.Container` or `alien.Storage`\nresource id from the stack."
           },
           "resourceType": {
             "$ref": "#/components/schemas/ResourceType"
@@ -9876,6 +10433,24 @@
                 "type": "string",
                 "enum": [
                   "kv"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "required": [
+              "data",
+              "resourceType"
+            ],
+            "properties": {
+              "data": {
+                "$ref": "#/components/schemas/PostgresHeartbeatData"
+              },
+              "resourceType": {
+                "type": "string",
+                "enum": [
+                  "postgres"
                 ]
               }
             }

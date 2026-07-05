@@ -4,14 +4,27 @@
 
 import * as z from "zod/v4";
 import {
+  ObservedInventoryBatch,
+  ObservedInventoryBatch$Outbound,
+  ObservedInventoryBatch$outboundSchema,
+} from "./observedinventorybatch.js";
+import {
+  OperatorCapabilityReport,
+  OperatorCapabilityReport$Outbound,
+  OperatorCapabilityReport$outboundSchema,
+} from "./operatorcapabilityreport.js";
+import {
   ResourceHeartbeat,
   ResourceHeartbeat$Outbound,
   ResourceHeartbeat$outboundSchema,
 } from "./resourceheartbeat.js";
 
 export type ReconcileRequest = {
+  capabilities?: Array<OperatorCapabilityReport> | undefined;
   deploymentId: string;
-  heartbeats?: Array<ResourceHeartbeat> | undefined;
+  observedInventoryBatches?: Array<ObservedInventoryBatch> | undefined;
+  operatorVersion?: string | null | undefined;
+  resourceHeartbeats?: Array<ResourceHeartbeat> | undefined;
   session: string;
   state: any;
   suggestedDelayMs?: number | null | undefined;
@@ -20,8 +33,11 @@ export type ReconcileRequest = {
 
 /** @internal */
 export type ReconcileRequest$Outbound = {
+  capabilities?: Array<OperatorCapabilityReport$Outbound> | undefined;
   deploymentId: string;
-  heartbeats?: Array<ResourceHeartbeat$Outbound> | undefined;
+  observedInventoryBatches?: Array<ObservedInventoryBatch$Outbound> | undefined;
+  operatorVersion?: string | null | undefined;
+  resourceHeartbeats?: Array<ResourceHeartbeat$Outbound> | undefined;
   session: string;
   state: any;
   suggestedDelayMs?: number | null | undefined;
@@ -33,8 +49,12 @@ export const ReconcileRequest$outboundSchema: z.ZodType<
   ReconcileRequest$Outbound,
   ReconcileRequest
 > = z.object({
+  capabilities: z.array(OperatorCapabilityReport$outboundSchema).optional(),
   deploymentId: z.string(),
-  heartbeats: z.array(ResourceHeartbeat$outboundSchema).optional(),
+  observedInventoryBatches: z.array(ObservedInventoryBatch$outboundSchema)
+    .optional(),
+  operatorVersion: z.nullable(z.string()).optional(),
+  resourceHeartbeats: z.array(ResourceHeartbeat$outboundSchema).optional(),
   session: z.string(),
   state: z.any(),
   suggestedDelayMs: z.nullable(z.int()).optional(),

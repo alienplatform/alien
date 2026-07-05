@@ -4,7 +4,8 @@ Provisioning engine. Takes a desired state, compares it to current cloud state, 
 
 ## Controller Pattern
 
-Controllers are state machines. Each handler performs **one mutable operation**:
+Controllers are state machines. Each handler is a retry boundary. Prefer one
+externally durable mutating operation per handler:
 
 ```rust
 #[controller]
@@ -20,10 +21,14 @@ impl AwsMyResourceController {
 ```
 
 Principles:
-1. **One mutable operation per state** — enables proper retry on failure
-2. **Linear flow** — always proceed through all states, even if no-op
+1. **Retry-safe mutation boundary** — one durable remote mutation per handler by default
+2. **Stable phase order** — proceed through predictable phases, even if some are no-ops
 3. **Best-effort deletion** — succeed even if resource is already gone
 4. **Heartbeat in Ready** — verify resource exists on each heartbeat
+
+Composite controllers such as networks, exposed containers, and compute
+clusters may batch child operations only when the phase is idempotent,
+progress-tracked in controller state, or best-effort cleanup.
 
 ## Structure
 

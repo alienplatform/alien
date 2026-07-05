@@ -18,10 +18,10 @@ let value: DataAzureContainerApps2 = {
         source: "<value>",
       },
     ],
-    health: "unhealthy",
-    lifecycle: "deleting",
-    partial: true,
-    stale: true,
+    health: "healthy",
+    lifecycle: "updating",
+    partial: false,
+    stale: false,
   },
   backend: "azureContainerApps",
 };
@@ -36,5 +36,5 @@ let value: DataAzureContainerApps2 = {
 | `managedIdentityId`                                                | *string*                                                           | :heavy_minus_sign:                                                 | N/A                                                                |
 | `resourceGroupName`                                                | *string*                                                           | :heavy_check_mark:                                                 | N/A                                                                |
 | `resourcePrefix`                                                   | *string*                                                           | :heavy_minus_sign:                                                 | N/A                                                                |
-| `status`                                                           | [operations.DataStatus52](../../models/operations/datastatus52.md) | :heavy_check_mark:                                                 | N/A                                                                |
+| `status`                                                           | [operations.DataStatus56](../../models/operations/datastatus56.md) | :heavy_check_mark:                                                 | N/A                                                                |
 | `backend`                                                          | *"azureContainerApps"*                                             | :heavy_check_mark:                                                 | N/A                                                                |

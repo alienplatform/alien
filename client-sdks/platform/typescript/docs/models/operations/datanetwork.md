@@ -25,5 +25,5 @@ let value: DataNetwork = {
 
 | Field                    | Type                     | Required                 | Description              |
 | ------------------------ | ------------------------ | ------------------------ | ------------------------ |
-| `data`                   | *operations.DataUnion10* | :heavy_check_mark:       | N/A                      |
+| `data`                   | *operations.DataUnion11* | :heavy_check_mark:       | N/A                      |
 | `resourceType`           | *"network"*              | :heavy_check_mark:       | N/A                      |

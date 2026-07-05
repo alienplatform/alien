@@ -1,4 +1,3 @@
-use alien_azure_clients::AzureClientConfig;
 use alien_azure_clients::container_apps::{
     ManagedEnvironmentCertificate, ManagedEnvironmentCertificateKeyVaultProperties,
     ManagedEnvironmentCertificateProperties,
@@ -11,13 +10,14 @@ use alien_azure_clients::models::container_apps::{
     IdentitySettingsLifecycle, IngressTransport, RegistryCredentials, Scale, Secret, Template,
     TrafficWeight,
 };
+use alien_azure_clients::AzureClientConfig;
 use alien_client_core::ErrorData as CloudClientErrorData;
 use alien_core::{
-    AzureContainerAppsWorkerHeartbeatData, CertificateStatus, DnsRecordStatus, ENV_AZURE_CLIENT_ID,
-    HeartbeatBackend, ObservedHealth, Platform, ProviderLifecycleState, RemoteStackManagement,
+    AzureContainerAppsWorkerHeartbeatData, CertificateStatus, DnsRecordStatus, HeartbeatBackend,
+    ObservedHealth, Platform, ProviderLifecycleState, RemoteStackManagement,
     RemoteStackManagementOutputs, ResourceHeartbeat, ResourceHeartbeatData, ResourceOutputs,
     ResourceRef, ResourceStatus, Worker, WorkerHeartbeatData, WorkerOutputs,
-    WorkloadHeartbeatStatus,
+    WorkloadHeartbeatStatus, ENV_AZURE_CLIENT_ID,
 };
 use alien_error::{AlienError, Context, ContextError, IntoAlienError};
 use base64::Engine;
@@ -34,7 +34,7 @@ use crate::infra_requirements::azure_utils::{
     get_container_apps_environment_name, get_container_apps_environment_outputs,
     get_resource_group_name, is_azure_authorization_propagation_error,
 };
-use crate::worker::readiness_probe::{READINESS_PROBE_MAX_ATTEMPTS, run_readiness_probe};
+use crate::worker::readiness_probe::{run_readiness_probe, READINESS_PROBE_MAX_ATTEMPTS};
 use alien_macros::controller;
 
 /// Generates a deterministic Azure Container Apps name for a worker.
@@ -4605,15 +4605,15 @@ mod tests {
     use httpmock::MockServer;
     use rstest::rstest;
 
-    use super::{AZURE_RBAC_WAIT_POLL_SECS, current_unix_timestamp_secs, dns_name_from_url};
-    use crate::AzureWorkerState;
-    use crate::core::{MockPlatformServiceProvider, controller_test::SingleControllerExecutor};
+    use super::{current_unix_timestamp_secs, dns_name_from_url, AZURE_RBAC_WAIT_POLL_SECS};
+    use crate::core::{controller_test::SingleControllerExecutor, MockPlatformServiceProvider};
     use crate::error::ErrorData;
     use crate::infra_requirements::azure_utils::is_azure_authorization_propagation_error;
     use crate::worker::{
-        AzureWorkerController, fixtures::*,
-        readiness_probe::test_utils::create_readiness_probe_mock,
+        fixtures::*, readiness_probe::test_utils::create_readiness_probe_mock,
+        AzureWorkerController,
     };
+    use crate::AzureWorkerState;
 
     #[test]
     fn strips_scheme_and_path_from_dns_endpoint_url() {

@@ -89,6 +89,17 @@ pub struct HorizonAzureMachineImages {
     pub images: HashMap<HorizonMachineArchitecture, HorizonAzureMachineImage>,
 }
 
+/// Download artifact for one horizond release platform.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
+#[serde(rename_all = "camelCase")]
+pub struct HorizondArtifact {
+    /// HTTPS URL for the artifact.
+    pub url: String,
+    /// SHA-256 digest for the artifact payload.
+    pub sha256: String,
+}
+
 /// Horizon machine image catalog.
 ///
 /// Platform resolves concrete provider images from this catalog during rollout.
@@ -108,6 +119,8 @@ pub struct HorizonMachineImage {
     pub created_at: String,
     /// Base OS image metadata.
     pub base_image: HorizonMachineBaseImage,
+    /// Per-architecture horizond artifacts by release-platform key.
+    pub horizond_artifacts: HashMap<String, HorizondArtifact>,
     /// AWS image catalog.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub aws: Option<HorizonAwsMachineImages>,

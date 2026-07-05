@@ -16,25 +16,25 @@ let value: SyncReconcileRequestData2 = {
       {
         message: "<value>",
         reason: "timed-out",
-        severity: "info",
+        severity: "error",
         source: "<value>",
       },
     ],
-    health: "unhealthy",
-    lifecycle: "failed",
-    partial: false,
-    stale: false,
+    health: "degraded",
+    lifecycle: "deleting",
+    partial: true,
+    stale: true,
   },
 };
 ```
 
 ## Fields
 
-| Field                                                      | Type                                                       | Required                                                   | Description                                                |
-| ---------------------------------------------------------- | ---------------------------------------------------------- | ---------------------------------------------------------- | ---------------------------------------------------------- |
-| `location`                                                 | *string*                                                   | :heavy_minus_sign:                                         | N/A                                                        |
-| `managedTags`                                              | Record<string, *string*>                                   | :heavy_check_mark:                                         | N/A                                                        |
-| `name`                                                     | *string*                                                   | :heavy_check_mark:                                         | N/A                                                        |
-| `provisioningState`                                        | *string*                                                   | :heavy_minus_sign:                                         | N/A                                                        |
-| `resourceId`                                               | *string*                                                   | :heavy_minus_sign:                                         | N/A                                                        |
-| `status`                                                   | [models.HeartbeatStatus56](../models/heartbeatstatus56.md) | :heavy_check_mark:                                         | N/A                                                        |
+| Field                                                                      | Type                                                                       | Required                                                                   | Description                                                                |
+| -------------------------------------------------------------------------- | -------------------------------------------------------------------------- | -------------------------------------------------------------------------- | -------------------------------------------------------------------------- |
+| `location`                                                                 | *string*                                                                   | :heavy_minus_sign:                                                         | N/A                                                                        |
+| `managedTags`                                                              | Record<string, *string*>                                                   | :heavy_check_mark:                                                         | N/A                                                                        |
+| `name`                                                                     | *string*                                                                   | :heavy_check_mark:                                                         | N/A                                                                        |
+| `provisioningState`                                                        | *string*                                                                   | :heavy_minus_sign:                                                         | N/A                                                                        |
+| `resourceId`                                                               | *string*                                                                   | :heavy_minus_sign:                                                         | N/A                                                                        |
+| `status`                                                                   | [models.ResourceHeartbeatStatus60](../models/resourceheartbeatstatus60.md) | :heavy_check_mark:                                                         | N/A                                                                        |

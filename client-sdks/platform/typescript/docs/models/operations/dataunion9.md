@@ -3,90 +3,74 @@
 
 ## Supported Types
 
-### `operations.DataAwsIamRole1`
+### `operations.DataAwsParameterStore`
 
 ```typescript
-const value: operations.DataAwsIamRole1 = {
-  assumeRolePolicyPresent: false,
-  attachedPolicyCount: 410901,
-  attachedPolicyNames: [],
-  createDate: "<value>",
-  inlinePolicyCount: 846965,
-  inlinePolicyNames: [],
-  managedTagCount: 519428,
-  path: "/etc",
-  roleArn: "<value>",
-  roleId: "<id>",
-  roleName: "<value>",
-  stackPermissionsApplied: false,
+const value: operations.DataAwsParameterStore = {
+  accountId: "<id>",
+  parameterMetadataSampled: true,
+  prefix: "<value>",
+  region: "<value>",
   status: {
     collectionIssues: [],
-    health: "healthy",
-    lifecycle: "deleting",
+    health: "unknown",
+    lifecycle: "unknown",
     partial: true,
     stale: false,
   },
-  tagCount: 250500,
-  backend: "awsIamRole",
+  backend: "awsParameterStore",
 };
 ```
 
-### `operations.DataGcpServiceAccount1`
+### `operations.DataGcpSecretManager`
 
 ```typescript
-const value: operations.DataGcpServiceAccount1 = {
-  email: "Narciso53@hotmail.com",
-  projectBindingCount: 780560,
-  projectRoles: [
-    "<value 1>",
-    "<value 2>",
-  ],
-  serviceAccountBindingCount: 884958,
-  serviceAccountRoles: [
-    "<value 1>",
-    "<value 2>",
-    "<value 3>",
-  ],
-  status: {
-    collectionIssues: [
-      {
-        message: "<value>",
-        reason: "collection-failed",
-        severity: "error",
-        source: "<value>",
-      },
-    ],
-    health: "healthy",
-    lifecycle: "stopped",
-    partial: false,
-    stale: true,
-  },
-  backend: "gcpServiceAccount",
-};
-```
-
-### `operations.DataAzureManagedIdentity1`
-
-```typescript
-const value: operations.DataAzureManagedIdentity1 = {
-  customRoleDefinitionCount: 863031,
-  customRoleDefinitionIds: [
-    "<value 1>",
-    "<value 2>",
-    "<value 3>",
-  ],
+const value: operations.DataGcpSecretManager = {
   location: "<value>",
-  managedTagCount: 765674,
+  prefix: "<value>",
+  projectId: "<id>",
+  secretMetadataListed: true,
+  status: {
+    collectionIssues: [],
+    health: "degraded",
+    lifecycle: "stopping",
+    partial: true,
+    stale: false,
+  },
+  backend: "gcpSecretManager",
+};
+```
+
+### `operations.DataAzureKeyVault`
+
+```typescript
+const value: operations.DataAzureKeyVault = {
+  accessPolicyCount: 923246,
   name: "<value>",
-  resourceGroup: "<value>",
-  resourceId: "<id>",
-  roleAssignmentCount: 833585,
-  roleAssignmentIds: [
-    "<value 1>",
-    "<value 2>",
-    "<value 3>",
-  ],
-  stackPermissionsApplied: false,
+  privateEndpointConnectionCount: 319306,
+  publicNetworkAccess: "<value>",
+  rbacAuthorizationEnabled: true,
+  secretMetadataListed: false,
+  softDeleteEnabled: false,
+  softDeleteRetentionDays: 497787,
+  status: {
+    collectionIssues: [],
+    health: "degraded",
+    lifecycle: "creating",
+    partial: true,
+    stale: false,
+  },
+  backend: "azureKeyVault",
+};
+```
+
+### `operations.DataKubernetesSecret`
+
+```typescript
+const value: operations.DataKubernetesSecret = {
+  namespace: "<value>",
+  prefix: "<value>",
+  secretMetadataListed: false,
   status: {
     collectionIssues: [
       {
@@ -96,12 +80,12 @@ const value: operations.DataAzureManagedIdentity1 = {
         source: "<value>",
       },
     ],
-    health: "healthy",
-    lifecycle: "stopped",
-    partial: true,
+    health: "unknown",
+    lifecycle: "deleting",
+    partial: false,
     stale: false,
   },
-  backend: "azureManagedIdentity",
+  backend: "kubernetesSecret",
 };
 ```
 
@@ -109,21 +93,22 @@ const value: operations.DataAzureManagedIdentity1 = {
 
 ```typescript
 const value: operations.DataLocal9 = {
-  configured: false,
-  identity: "<value>",
+  path: "/usr/include",
+  pathExists: false,
+  secretMetadataListed: false,
   status: {
     collectionIssues: [
       {
         message: "<value>",
-        reason: "collection-failed",
-        severity: "error",
+        reason: "timed-out",
+        severity: "info",
         source: "<value>",
       },
     ],
-    health: "unhealthy",
-    lifecycle: "unknown",
+    health: "unknown",
+    lifecycle: "creating",
     partial: true,
-    stale: true,
+    stale: false,
   },
   backend: "local",
 };
