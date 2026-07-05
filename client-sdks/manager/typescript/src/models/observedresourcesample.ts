@@ -60,6 +60,10 @@ export type ObservedResourceSample = {
   region?: string | null | undefined;
   resourceTypeHint?: string | null | undefined;
   scope?: string | null | undefined;
+  /**
+   * Release/version identity observed from the provider resource, when available.
+   */
+  version?: string | null | undefined;
 };
 
 /** @internal */
@@ -83,6 +87,7 @@ export type ObservedResourceSample$Outbound = {
   region?: string | null | undefined;
   resourceTypeHint?: string | null | undefined;
   scope?: string | null | undefined;
+  version?: string | null | undefined;
 };
 
 /** @internal */
@@ -109,6 +114,7 @@ export const ObservedResourceSample$outboundSchema: z.ZodType<
   region: z.nullable(z.string()).optional(),
   resourceTypeHint: z.nullable(z.string()).optional(),
   scope: z.nullable(z.string()).optional(),
+  version: z.nullable(z.string()).optional(),
 });
 
 export function observedResourceSampleToJSON(

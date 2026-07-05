@@ -8713,6 +8713,35 @@ export type CapacityBlocker3 = {
 
 export type CapacityBlockerUnion3 = CapacityBlocker3 | any;
 
+export type Blocker3 = {
+  reason: string;
+  replicaId: string;
+  schedulingMode: string;
+  state: string;
+  workloadName: string;
+};
+
+export const DrainProgressStatus3 = {
+  Draining: "draining",
+  Drained: "drained",
+  Terminating: "terminating",
+} as const;
+export type DrainProgressStatus3 = ClosedEnum<typeof DrainProgressStatus3>;
+
+export type DrainProgress3 = {
+  blockers?: Array<Blocker3> | undefined;
+  drainDeadlineAt?: string | null | undefined;
+  drainRequestedAt?: string | null | undefined;
+  drainedAt?: string | null | undefined;
+  force: boolean;
+  machineId: string;
+  replicaCount: number;
+  stalled: boolean;
+  status: DrainProgressStatus3;
+};
+
+export type DrainProgressUnion3 = DrainProgress3 | any;
+
 export const UtilizationUnit3 = {
   Count: "count",
   Percent: "percent",
@@ -8743,6 +8772,7 @@ export type CapacityGroup3 = {
   capacityBlocker?: CapacityBlocker3 | any | null | undefined;
   currentMachines: number;
   desiredMachines: number;
+  drainProgress?: DrainProgress3 | any | null | undefined;
   groupId: string;
   instanceType?: string | null | undefined;
   maxMachines?: number | null | undefined;
@@ -8883,6 +8913,35 @@ export type CapacityBlocker2 = {
 
 export type CapacityBlockerUnion2 = CapacityBlocker2 | any;
 
+export type Blocker2 = {
+  reason: string;
+  replicaId: string;
+  schedulingMode: string;
+  state: string;
+  workloadName: string;
+};
+
+export const DrainProgressStatus2 = {
+  Draining: "draining",
+  Drained: "drained",
+  Terminating: "terminating",
+} as const;
+export type DrainProgressStatus2 = ClosedEnum<typeof DrainProgressStatus2>;
+
+export type DrainProgress2 = {
+  blockers?: Array<Blocker2> | undefined;
+  drainDeadlineAt?: string | null | undefined;
+  drainRequestedAt?: string | null | undefined;
+  drainedAt?: string | null | undefined;
+  force: boolean;
+  machineId: string;
+  replicaCount: number;
+  stalled: boolean;
+  status: DrainProgressStatus2;
+};
+
+export type DrainProgressUnion2 = DrainProgress2 | any;
+
 export const UtilizationUnit2 = {
   Count: "count",
   Percent: "percent",
@@ -8913,6 +8972,7 @@ export type CapacityGroup2 = {
   capacityBlocker?: CapacityBlocker2 | any | null | undefined;
   currentMachines: number;
   desiredMachines: number;
+  drainProgress?: DrainProgress2 | any | null | undefined;
   groupId: string;
   instanceType?: string | null | undefined;
   maxMachines?: number | null | undefined;
@@ -9053,6 +9113,35 @@ export type CapacityBlocker1 = {
 
 export type CapacityBlockerUnion1 = CapacityBlocker1 | any;
 
+export type Blocker1 = {
+  reason: string;
+  replicaId: string;
+  schedulingMode: string;
+  state: string;
+  workloadName: string;
+};
+
+export const DrainProgressStatus1 = {
+  Draining: "draining",
+  Drained: "drained",
+  Terminating: "terminating",
+} as const;
+export type DrainProgressStatus1 = ClosedEnum<typeof DrainProgressStatus1>;
+
+export type DrainProgress1 = {
+  blockers?: Array<Blocker1> | undefined;
+  drainDeadlineAt?: string | null | undefined;
+  drainRequestedAt?: string | null | undefined;
+  drainedAt?: string | null | undefined;
+  force: boolean;
+  machineId: string;
+  replicaCount: number;
+  stalled: boolean;
+  status: DrainProgressStatus1;
+};
+
+export type DrainProgressUnion1 = DrainProgress1 | any;
+
 export const UtilizationUnit1 = {
   Count: "count",
   Percent: "percent",
@@ -9083,6 +9172,7 @@ export type CapacityGroup1 = {
   capacityBlocker?: CapacityBlocker1 | any | null | undefined;
   currentMachines: number;
   desiredMachines: number;
+  drainProgress?: DrainProgress1 | any | null | undefined;
   groupId: string;
   instanceType?: string | null | undefined;
   maxMachines?: number | null | undefined;
@@ -28159,6 +28249,84 @@ export function capacityBlockerUnion3ToJSON(
 }
 
 /** @internal */
+export type Blocker3$Outbound = {
+  reason: string;
+  replicaId: string;
+  schedulingMode: string;
+  state: string;
+  workloadName: string;
+};
+
+/** @internal */
+export const Blocker3$outboundSchema: z.ZodType<Blocker3$Outbound, Blocker3> = z
+  .object({
+    reason: z.string(),
+    replicaId: z.string(),
+    schedulingMode: z.string(),
+    state: z.string(),
+    workloadName: z.string(),
+  });
+
+export function blocker3ToJSON(blocker3: Blocker3): string {
+  return JSON.stringify(Blocker3$outboundSchema.parse(blocker3));
+}
+
+/** @internal */
+export const DrainProgressStatus3$outboundSchema: z.ZodEnum<
+  typeof DrainProgressStatus3
+> = z.enum(DrainProgressStatus3);
+
+/** @internal */
+export type DrainProgress3$Outbound = {
+  blockers?: Array<Blocker3$Outbound> | undefined;
+  drainDeadlineAt?: string | null | undefined;
+  drainRequestedAt?: string | null | undefined;
+  drainedAt?: string | null | undefined;
+  force: boolean;
+  machineId: string;
+  replicaCount: number;
+  stalled: boolean;
+  status: string;
+};
+
+/** @internal */
+export const DrainProgress3$outboundSchema: z.ZodType<
+  DrainProgress3$Outbound,
+  DrainProgress3
+> = z.object({
+  blockers: z.array(z.lazy(() => Blocker3$outboundSchema)).optional(),
+  drainDeadlineAt: z.nullable(z.string()).optional(),
+  drainRequestedAt: z.nullable(z.string()).optional(),
+  drainedAt: z.nullable(z.string()).optional(),
+  force: z.boolean(),
+  machineId: z.string(),
+  replicaCount: z.int(),
+  stalled: z.boolean(),
+  status: DrainProgressStatus3$outboundSchema,
+});
+
+export function drainProgress3ToJSON(drainProgress3: DrainProgress3): string {
+  return JSON.stringify(DrainProgress3$outboundSchema.parse(drainProgress3));
+}
+
+/** @internal */
+export type DrainProgressUnion3$Outbound = DrainProgress3$Outbound | any;
+
+/** @internal */
+export const DrainProgressUnion3$outboundSchema: z.ZodType<
+  DrainProgressUnion3$Outbound,
+  DrainProgressUnion3
+> = z.union([z.lazy(() => DrainProgress3$outboundSchema), z.any()]);
+
+export function drainProgressUnion3ToJSON(
+  drainProgressUnion3: DrainProgressUnion3,
+): string {
+  return JSON.stringify(
+    DrainProgressUnion3$outboundSchema.parse(drainProgressUnion3),
+  );
+}
+
+/** @internal */
 export const UtilizationUnit3$outboundSchema: z.ZodEnum<
   typeof UtilizationUnit3
 > = z.enum(UtilizationUnit3);
@@ -28248,6 +28416,7 @@ export type CapacityGroup3$Outbound = {
   capacityBlocker?: CapacityBlocker3$Outbound | any | null | undefined;
   currentMachines: number;
   desiredMachines: number;
+  drainProgress?: DrainProgress3$Outbound | any | null | undefined;
   groupId: string;
   instanceType?: string | null | undefined;
   maxMachines?: number | null | undefined;
@@ -28265,6 +28434,9 @@ export const CapacityGroup3$outboundSchema: z.ZodType<
   ).optional(),
   currentMachines: z.int(),
   desiredMachines: z.int(),
+  drainProgress: z.nullable(
+    z.union([z.lazy(() => DrainProgress3$outboundSchema), z.any()]),
+  ).optional(),
   groupId: z.string(),
   instanceType: z.nullable(z.string()).optional(),
   maxMachines: z.nullable(z.int()).optional(),
@@ -28556,6 +28728,84 @@ export function capacityBlockerUnion2ToJSON(
 }
 
 /** @internal */
+export type Blocker2$Outbound = {
+  reason: string;
+  replicaId: string;
+  schedulingMode: string;
+  state: string;
+  workloadName: string;
+};
+
+/** @internal */
+export const Blocker2$outboundSchema: z.ZodType<Blocker2$Outbound, Blocker2> = z
+  .object({
+    reason: z.string(),
+    replicaId: z.string(),
+    schedulingMode: z.string(),
+    state: z.string(),
+    workloadName: z.string(),
+  });
+
+export function blocker2ToJSON(blocker2: Blocker2): string {
+  return JSON.stringify(Blocker2$outboundSchema.parse(blocker2));
+}
+
+/** @internal */
+export const DrainProgressStatus2$outboundSchema: z.ZodEnum<
+  typeof DrainProgressStatus2
+> = z.enum(DrainProgressStatus2);
+
+/** @internal */
+export type DrainProgress2$Outbound = {
+  blockers?: Array<Blocker2$Outbound> | undefined;
+  drainDeadlineAt?: string | null | undefined;
+  drainRequestedAt?: string | null | undefined;
+  drainedAt?: string | null | undefined;
+  force: boolean;
+  machineId: string;
+  replicaCount: number;
+  stalled: boolean;
+  status: string;
+};
+
+/** @internal */
+export const DrainProgress2$outboundSchema: z.ZodType<
+  DrainProgress2$Outbound,
+  DrainProgress2
+> = z.object({
+  blockers: z.array(z.lazy(() => Blocker2$outboundSchema)).optional(),
+  drainDeadlineAt: z.nullable(z.string()).optional(),
+  drainRequestedAt: z.nullable(z.string()).optional(),
+  drainedAt: z.nullable(z.string()).optional(),
+  force: z.boolean(),
+  machineId: z.string(),
+  replicaCount: z.int(),
+  stalled: z.boolean(),
+  status: DrainProgressStatus2$outboundSchema,
+});
+
+export function drainProgress2ToJSON(drainProgress2: DrainProgress2): string {
+  return JSON.stringify(DrainProgress2$outboundSchema.parse(drainProgress2));
+}
+
+/** @internal */
+export type DrainProgressUnion2$Outbound = DrainProgress2$Outbound | any;
+
+/** @internal */
+export const DrainProgressUnion2$outboundSchema: z.ZodType<
+  DrainProgressUnion2$Outbound,
+  DrainProgressUnion2
+> = z.union([z.lazy(() => DrainProgress2$outboundSchema), z.any()]);
+
+export function drainProgressUnion2ToJSON(
+  drainProgressUnion2: DrainProgressUnion2,
+): string {
+  return JSON.stringify(
+    DrainProgressUnion2$outboundSchema.parse(drainProgressUnion2),
+  );
+}
+
+/** @internal */
 export const UtilizationUnit2$outboundSchema: z.ZodEnum<
   typeof UtilizationUnit2
 > = z.enum(UtilizationUnit2);
@@ -28645,6 +28895,7 @@ export type CapacityGroup2$Outbound = {
   capacityBlocker?: CapacityBlocker2$Outbound | any | null | undefined;
   currentMachines: number;
   desiredMachines: number;
+  drainProgress?: DrainProgress2$Outbound | any | null | undefined;
   groupId: string;
   instanceType?: string | null | undefined;
   maxMachines?: number | null | undefined;
@@ -28662,6 +28913,9 @@ export const CapacityGroup2$outboundSchema: z.ZodType<
   ).optional(),
   currentMachines: z.int(),
   desiredMachines: z.int(),
+  drainProgress: z.nullable(
+    z.union([z.lazy(() => DrainProgress2$outboundSchema), z.any()]),
+  ).optional(),
   groupId: z.string(),
   instanceType: z.nullable(z.string()).optional(),
   maxMachines: z.nullable(z.int()).optional(),
@@ -28951,6 +29205,84 @@ export function capacityBlockerUnion1ToJSON(
 }
 
 /** @internal */
+export type Blocker1$Outbound = {
+  reason: string;
+  replicaId: string;
+  schedulingMode: string;
+  state: string;
+  workloadName: string;
+};
+
+/** @internal */
+export const Blocker1$outboundSchema: z.ZodType<Blocker1$Outbound, Blocker1> = z
+  .object({
+    reason: z.string(),
+    replicaId: z.string(),
+    schedulingMode: z.string(),
+    state: z.string(),
+    workloadName: z.string(),
+  });
+
+export function blocker1ToJSON(blocker1: Blocker1): string {
+  return JSON.stringify(Blocker1$outboundSchema.parse(blocker1));
+}
+
+/** @internal */
+export const DrainProgressStatus1$outboundSchema: z.ZodEnum<
+  typeof DrainProgressStatus1
+> = z.enum(DrainProgressStatus1);
+
+/** @internal */
+export type DrainProgress1$Outbound = {
+  blockers?: Array<Blocker1$Outbound> | undefined;
+  drainDeadlineAt?: string | null | undefined;
+  drainRequestedAt?: string | null | undefined;
+  drainedAt?: string | null | undefined;
+  force: boolean;
+  machineId: string;
+  replicaCount: number;
+  stalled: boolean;
+  status: string;
+};
+
+/** @internal */
+export const DrainProgress1$outboundSchema: z.ZodType<
+  DrainProgress1$Outbound,
+  DrainProgress1
+> = z.object({
+  blockers: z.array(z.lazy(() => Blocker1$outboundSchema)).optional(),
+  drainDeadlineAt: z.nullable(z.string()).optional(),
+  drainRequestedAt: z.nullable(z.string()).optional(),
+  drainedAt: z.nullable(z.string()).optional(),
+  force: z.boolean(),
+  machineId: z.string(),
+  replicaCount: z.int(),
+  stalled: z.boolean(),
+  status: DrainProgressStatus1$outboundSchema,
+});
+
+export function drainProgress1ToJSON(drainProgress1: DrainProgress1): string {
+  return JSON.stringify(DrainProgress1$outboundSchema.parse(drainProgress1));
+}
+
+/** @internal */
+export type DrainProgressUnion1$Outbound = DrainProgress1$Outbound | any;
+
+/** @internal */
+export const DrainProgressUnion1$outboundSchema: z.ZodType<
+  DrainProgressUnion1$Outbound,
+  DrainProgressUnion1
+> = z.union([z.lazy(() => DrainProgress1$outboundSchema), z.any()]);
+
+export function drainProgressUnion1ToJSON(
+  drainProgressUnion1: DrainProgressUnion1,
+): string {
+  return JSON.stringify(
+    DrainProgressUnion1$outboundSchema.parse(drainProgressUnion1),
+  );
+}
+
+/** @internal */
 export const UtilizationUnit1$outboundSchema: z.ZodEnum<
   typeof UtilizationUnit1
 > = z.enum(UtilizationUnit1);
@@ -29040,6 +29372,7 @@ export type CapacityGroup1$Outbound = {
   capacityBlocker?: CapacityBlocker1$Outbound | any | null | undefined;
   currentMachines: number;
   desiredMachines: number;
+  drainProgress?: DrainProgress1$Outbound | any | null | undefined;
   groupId: string;
   instanceType?: string | null | undefined;
   maxMachines?: number | null | undefined;
@@ -29057,6 +29390,9 @@ export const CapacityGroup1$outboundSchema: z.ZodType<
   ).optional(),
   currentMachines: z.int(),
   desiredMachines: z.int(),
+  drainProgress: z.nullable(
+    z.union([z.lazy(() => DrainProgress1$outboundSchema), z.any()]),
+  ).optional(),
   groupId: z.string(),
   instanceType: z.nullable(z.string()).optional(),
   maxMachines: z.nullable(z.int()).optional(),

@@ -268,6 +268,14 @@ pub struct Container {
     /// Command to override image default
     #[serde(skip_serializing_if = "Option::is_none")]
     pub command: Option<Vec<String>>,
+
+    /// Grace period in seconds for stopping replicas during updates, drains, and deletes.
+    ///
+    /// When omitted, the runtime backend applies its default. Valid values are
+    /// 1 second through 24 hours.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "openapi", schema(minimum = 1, maximum = 86400))]
+    pub stop_grace_period_seconds: Option<u32>,
 }
 
 impl Container {
@@ -593,6 +601,53 @@ mod tests {
         assert!(container.autoscaling.is_some());
         assert_eq!(container.ports.len(), 1);
         assert_eq!(container.ports[0].port, 8080);
+    }
+
+    #[test]
+    fn container_serializes_stop_grace_period_when_set() {
+        let container = Container::new("api".to_string())
+            .cluster("compute".to_string())
+            .code(ContainerCode::Image {
+                image: "myapp:latest".to_string(),
+            })
+            .cpu(ResourceSpec {
+                min: "0.5".to_string(),
+                desired: "1".to_string(),
+            })
+            .memory(ResourceSpec {
+                min: "512Mi".to_string(),
+                desired: "1Gi".to_string(),
+            })
+            .port(8080)
+            .permissions("container-execution".to_string())
+            .stop_grace_period_seconds(21_600)
+            .build();
+
+        let json = serde_json::to_value(&container).expect("container should serialize");
+        assert_eq!(json["stopGracePeriodSeconds"], 21_600);
+    }
+
+    #[test]
+    fn container_omits_stop_grace_period_when_absent() {
+        let container = Container::new("api".to_string())
+            .cluster("compute".to_string())
+            .code(ContainerCode::Image {
+                image: "myapp:latest".to_string(),
+            })
+            .cpu(ResourceSpec {
+                min: "0.5".to_string(),
+                desired: "1".to_string(),
+            })
+            .memory(ResourceSpec {
+                min: "512Mi".to_string(),
+                desired: "1Gi".to_string(),
+            })
+            .port(8080)
+            .permissions("container-execution".to_string())
+            .build();
+
+        let json = serde_json::to_value(&container).expect("container should serialize");
+        assert!(json.get("stopGracePeriodSeconds").is_none());
     }
 
     #[test]

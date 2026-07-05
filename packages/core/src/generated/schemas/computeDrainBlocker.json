@@ -1,0 +1,1 @@
+{"type":"object","required":["workloadName","replicaId","schedulingMode","state","reason"],"properties":{"reason":{"type":"string"},"replicaId":{"type":"string"},"schedulingMode":{"type":"string"},"state":{"type":"string"},"workloadName":{"type":"string"}},"x-readme-ref-name":"ComputeDrainBlocker"}

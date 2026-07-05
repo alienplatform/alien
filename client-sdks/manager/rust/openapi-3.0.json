@@ -4611,6 +4611,10 @@
             "format": "int32",
             "minimum": 0
           },
+          "drainProgress": {
+            "$ref": "#/components/schemas/ComputeDrainProgress",
+            "nullable": true
+          },
           "groupId": {
             "type": "string"
           },
@@ -4784,6 +4788,87 @@
             "type": "boolean"
           }
         }
+      },
+      "ComputeDrainBlocker": {
+        "type": "object",
+        "required": [
+          "workloadName",
+          "replicaId",
+          "schedulingMode",
+          "state",
+          "reason"
+        ],
+        "properties": {
+          "reason": {
+            "type": "string"
+          },
+          "replicaId": {
+            "type": "string"
+          },
+          "schedulingMode": {
+            "type": "string"
+          },
+          "state": {
+            "type": "string"
+          },
+          "workloadName": {
+            "type": "string"
+          }
+        }
+      },
+      "ComputeDrainProgress": {
+        "type": "object",
+        "required": [
+          "machineId",
+          "status",
+          "replicaCount",
+          "force",
+          "stalled"
+        ],
+        "properties": {
+          "blockers": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ComputeDrainBlocker"
+            }
+          },
+          "drainDeadlineAt": {
+            "type": "string",
+            "nullable": true
+          },
+          "drainRequestedAt": {
+            "type": "string",
+            "nullable": true
+          },
+          "drainedAt": {
+            "type": "string",
+            "nullable": true
+          },
+          "force": {
+            "type": "boolean"
+          },
+          "machineId": {
+            "type": "string"
+          },
+          "replicaCount": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "stalled": {
+            "type": "boolean"
+          },
+          "status": {
+            "$ref": "#/components/schemas/ComputeDrainProgressStatus"
+          }
+        }
+      },
+      "ComputeDrainProgressStatus": {
+        "type": "string",
+        "enum": [
+          "draining",
+          "drained",
+          "terminating"
+        ]
       },
       "ComputePoolSelection": {
         "oneOf": [
