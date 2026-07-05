@@ -328,10 +328,11 @@ fn platform_to_setup_policy_platform(
         Platform::Gcp => Ok(DeploymentSetupPolicyAllowedPlatformsItem::Gcp),
         Platform::Azure => Ok(DeploymentSetupPolicyAllowedPlatformsItem::Azure),
         Platform::Kubernetes => Ok(DeploymentSetupPolicyAllowedPlatformsItem::Kubernetes),
+        Platform::Machines => Ok(DeploymentSetupPolicyAllowedPlatformsItem::Machines),
         Platform::Local => Ok(DeploymentSetupPolicyAllowedPlatformsItem::Local),
         Platform::Test => Err(AlienError::new(ErrorData::ValidationError {
             field: "platforms".to_string(),
-            message: "`test` is not a deployment-link platform. Use aws, gcp, azure, kubernetes, or local.".to_string(),
+            message: "`test` is not a deployment-link platform. Use aws, gcp, azure, kubernetes, machines, or local.".to_string(),
         })),
     }
 }

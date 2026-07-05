@@ -399,6 +399,7 @@ async fn release_task_core(
         gcp: None,
         azure: None,
         kubernetes: None,
+        machines: None,
         local: None,
         test: None,
     };
@@ -494,6 +495,7 @@ async fn release_task_core(
             Platform::Gcp => stack_by_platform.gcp = Some(stack_json),
             Platform::Azure => stack_by_platform.azure = Some(stack_json),
             Platform::Kubernetes => stack_by_platform.kubernetes = Some(stack_json),
+            Platform::Machines => stack_by_platform.machines = Some(stack_json),
             Platform::Local => stack_by_platform.local = Some(stack_json),
             Platform::Test => stack_by_platform.test = Some(stack_json),
         }
@@ -935,6 +937,9 @@ fn auto_build_settings_for_platform(
         Platform::Azure => alien_build::settings::PlatformBuildSettings::Azure {},
         Platform::Kubernetes => alien_build::settings::PlatformBuildSettings::Kubernetes {
             base_platform: kubernetes_base_platform,
+        },
+        Platform::Machines => alien_build::settings::PlatformBuildSettings::Kubernetes {
+            base_platform: None,
         },
         Platform::Local => alien_build::settings::PlatformBuildSettings::Local {},
         Platform::Test => alien_build::settings::PlatformBuildSettings::Test {},
@@ -1411,7 +1416,7 @@ fn parse_kubernetes_base_platform(
 
     match parsed {
         Platform::Aws | Platform::Gcp | Platform::Azure => Ok(Some(parsed)),
-        Platform::Kubernetes | Platform::Local | Platform::Test => {
+        Platform::Kubernetes | Platform::Machines | Platform::Local | Platform::Test => {
             Err(AlienError::new(ErrorData::ValidationError {
                 field: "base-platform".to_string(),
                 message: "--base-platform must be one of: aws, gcp, azure".to_string(),
