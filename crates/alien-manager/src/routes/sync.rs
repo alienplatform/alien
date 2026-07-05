@@ -1033,7 +1033,7 @@ mod tests {
             operator_version: None,
             operator_os: None,
             operator_arch: None,
-            regime: None,
+            packaging: None,
             operator_image_repository: None,
             target_operator_version: None,
         }

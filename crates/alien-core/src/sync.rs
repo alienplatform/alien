@@ -356,7 +356,7 @@ mod tests {
         req.operator_version = Some("1.3.5".to_string());
         req.operator_os = Some("linux".to_string());
         req.operator_arch = Some("aarch64".to_string());
-        req.regime = Some(OperatorPackaging::Kubernetes);
+        req.packaging = Some(OperatorPackaging::Kubernetes);
         req.operator_image_repository = Some("ghcr.io/alien-dev/alien-operator".to_string());
         let json = serde_json::to_value(&req).unwrap();
         assert_eq!(json["operatorVersion"], "1.3.5");
@@ -369,7 +369,7 @@ mod tests {
         );
         let back: SyncRequest = serde_json::from_value(json).unwrap();
         assert_eq!(back.operator_version.as_deref(), Some("1.3.5"));
-        assert_eq!(back.regime, Some(OperatorPackaging::Kubernetes));
+        assert_eq!(back.packaging, Some(OperatorPackaging::Kubernetes));
     }
 
     /// Backward compat: an old operator omits the self-update fields; the
@@ -382,7 +382,7 @@ mod tests {
         assert!(req.operator_version.is_none());
         assert!(req.operator_os.is_none());
         assert!(req.operator_arch.is_none());
-        assert!(req.regime.is_none());
+        assert!(req.packaging.is_none());
         assert!(req.operator_update.is_none());
     }
 
