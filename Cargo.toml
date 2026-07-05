@@ -140,10 +140,10 @@ pin-project-lite = "0.2"
 poem = "3.1"
 poem-openapi = "5"
 port_check = "0.2"
-postgresql_embedded = "0.20"
+postgresql_embedded = { version = "0.20", default-features = false, features = ["rustls", "theseus"] }
 # `steampipe` is enabled only because the crate uses `serde_json` unconditionally while
 # gating the dependency behind that feature; we never use the steampipe namespace at runtime.
-postgresql_extensions = { version = "0.20", default-features = false, features = ["tokio", "native-tls", "portal-corp", "steampipe"] }
+postgresql_extensions = { version = "0.20", default-features = false, features = ["tokio", "rustls", "portal-corp", "steampipe"] }
 prost = "0.13"
 prost-types = "0.13"
 rand = "0.9"
