@@ -153,6 +153,7 @@ struct HostFacts<'a> {
     arch: &'a str,
     systemd_runtime_dir: &'a Path,
     systemctl_available: bool,
+    wireguard_available: bool,
 }
 
 pub async fn join_command(args: JoinArgs, embedded_config: Option<&DeployCliConfig>) -> Result<()> {
@@ -273,6 +274,15 @@ fn preflight_host(host: HostFacts<'_>) -> Result<MachineArch> {
         }));
     }
 
+    if !host.wireguard_available {
+        return Err(AlienError::new(ErrorData::ValidationError {
+            field: "wireguard".to_string(),
+            message:
+                "kernel WireGuard support is required; load or install the wireguard kernel module"
+                    .to_string(),
+        }));
+    }
+
     match host.arch {
         "x86_64" | "amd64" => Ok(MachineArch::X64),
         "aarch64" | "arm64" => Ok(MachineArch::Arm64),
@@ -289,7 +299,17 @@ fn current_host_facts() -> Result<HostFacts<'static>> {
         arch: std::env::consts::ARCH,
         systemd_runtime_dir: Path::new("/run/systemd/system"),
         systemctl_available: which::which("systemctl").is_ok(),
+        wireguard_available: wireguard_available(),
     })
+}
+
+fn wireguard_available() -> bool {
+    Path::new("/sys/module/wireguard").exists()
+        || Command::new("modprobe")
+            .arg("-n")
+            .arg("wireguard")
+            .status()
+            .is_ok_and(|status| status.success())
 }
 
 fn print_join_plan(plan: &JoinPlan) -> Result<()> {
@@ -869,6 +889,7 @@ mod tests {
             arch: "x86_64",
             systemd_runtime_dir,
             systemctl_available: true,
+            wireguard_available: true,
         }
     }
 
@@ -994,6 +1015,7 @@ mod tests {
             arch: "aarch64",
             systemd_runtime_dir: Path::new("/unused"),
             systemctl_available: true,
+            wireguard_available: false,
         };
 
         let error = preflight_host(host).expect_err("macOS should be rejected");
@@ -1009,9 +1031,27 @@ mod tests {
             arch: "aarch64",
             systemd_runtime_dir: dir.path(),
             systemctl_available: true,
+            wireguard_available: true,
         };
 
         assert_eq!(preflight_host(host).expect("supported"), MachineArch::Arm64);
+    }
+
+    #[test]
+    fn preflight_rejects_missing_wireguard() {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let host = HostFacts {
+            os: "linux",
+            arch: "x86_64",
+            systemd_runtime_dir: dir.path(),
+            systemctl_available: true,
+            wireguard_available: false,
+        };
+
+        let error = preflight_host(host).expect_err("wireguard should be required");
+
+        assert_eq!(error.code, "VALIDATION_ERROR");
+        assert!(error.message.contains("WireGuard"));
     }
 
     #[test]
