@@ -14,6 +14,10 @@ use sha2::{Digest, Sha256};
 use std::ffi::OsString;
 use std::fs::File;
 use std::path::{Path, PathBuf};
+use std::process::Command;
+
+const IP_FORWARDING_CONFIG: &str = "net.ipv4.ip_forward = 1\n";
+const IP_FORWARDING_SYSCTL: &str = "net.ipv4.ip_forward=1";
 
 #[derive(Args, Debug)]
 pub struct JoinArgs {
@@ -364,6 +368,7 @@ async fn install_join(request: JoinRequest) -> Result<()> {
     }
 
     let config_path = write_machine_config(&paths, &request, &manifest)?;
+    configure_ip_forwarding(&request.install_root)?;
     let state = MachineInstallState {
         bundle_version: manifest.version.clone(),
         service_label: manifest.service.label.clone(),
@@ -590,6 +595,64 @@ fn write_machine_config(
     );
     write_secret_file(&config_path, &toml::Value::Table(config).to_string())?;
     Ok(config_path)
+}
+
+fn configure_ip_forwarding(install_root: &Path) -> Result<()> {
+    let config_path = rooted_path(install_root, "etc/sysctl.d/99-alien-machine.conf");
+    let parent = config_path.parent().ok_or_else(|| {
+        AlienError::new(ErrorData::FileOperationFailed {
+            operation: "resolve".to_string(),
+            file_path: config_path.display().to_string(),
+            reason: "Failed to resolve sysctl configuration directory".to_string(),
+        })
+    })?;
+    std::fs::create_dir_all(parent)
+        .into_alien_error()
+        .context(ErrorData::FileOperationFailed {
+            operation: "create".to_string(),
+            file_path: parent.display().to_string(),
+            reason: "Failed to create sysctl configuration directory".to_string(),
+        })?;
+    std::fs::write(&config_path, IP_FORWARDING_CONFIG)
+        .into_alien_error()
+        .context(ErrorData::FileOperationFailed {
+            operation: "write".to_string(),
+            file_path: config_path.display().to_string(),
+            reason: "Failed to persist IPv4 forwarding configuration".to_string(),
+        })?;
+
+    if install_root == Path::new("/") {
+        apply_ip_forwarding_now()?;
+    }
+
+    Ok(())
+}
+
+fn apply_ip_forwarding_now() -> Result<()> {
+    let output = Command::new("sysctl")
+        .arg("-w")
+        .arg(IP_FORWARDING_SYSCTL)
+        .output()
+        .into_alien_error()
+        .context(ErrorData::ConfigurationError {
+            message: "Failed to run sysctl to enable IPv4 forwarding".to_string(),
+        })?;
+
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
+        return Err(AlienError::new(ErrorData::ConfigurationError {
+            message: format!(
+                "sysctl failed while enabling IPv4 forwarding: {}",
+                if stderr.is_empty() {
+                    output.status.to_string()
+                } else {
+                    stderr
+                }
+            ),
+        }));
+    }
+
+    Ok(())
 }
 
 fn write_secret_file(path: &Path, contents: &str) -> Result<()> {
@@ -1110,6 +1173,21 @@ mod tests {
         assert!(config.contains("capacity_group = \"gpu\""));
         assert!(config.contains("zone = \"rack-2\""));
         assert!(!config.contains("old-zone"));
+    }
+
+    #[test]
+    fn ip_forwarding_config_is_persisted_under_install_root() {
+        let root = tempfile::tempdir().expect("install root");
+        let config_path = root.path().join("etc/sysctl.d/99-alien-machine.conf");
+        std::fs::create_dir_all(config_path.parent().expect("parent")).expect("sysctl dir");
+        std::fs::write(&config_path, "net.ipv4.ip_forward = 0\n").expect("stale sysctl");
+
+        configure_ip_forwarding(root.path()).expect("configure forwarding");
+
+        assert_eq!(
+            std::fs::read_to_string(config_path).expect("sysctl config"),
+            IP_FORWARDING_CONFIG
+        );
     }
 
     #[test]
