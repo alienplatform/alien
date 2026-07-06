@@ -8,7 +8,7 @@ members = [
   "crates/alien-bindings-node",
   "crates/alien-cli",
   "crates/alien-cli-common",
-  "crates/alien-runtime",
+  "crates/alien-worker-runtime",
   "crates/alien-infra",
   "crates/alien-core",
   "crates/alien-build",
@@ -64,7 +64,7 @@ alien-commands-client = { path = "crates/alien-commands-client" }
 alien-bindings = { path = "crates/alien-bindings", version = "1.10.7", default-features = false }
 alien-worker-protocol = { path = "crates/alien-worker-protocol", version = "1.10.7" }
 alien-sdk = { path = "crates/alien-sdk", version = "1.10.7", default-features = false }
-alien-runtime = { path = "crates/alien-runtime", version = "1.10.7" }
+alien-worker-runtime = { path = "crates/alien-worker-runtime", version = "1.10.7" }
 dockdash = "0.2.0"
 alien-core = { path = "crates/alien-core", version = "1.10.7" }
 alien-infra = { path = "crates/alien-infra", version = "1.10.7" }

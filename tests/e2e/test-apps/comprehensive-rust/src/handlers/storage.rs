@@ -43,7 +43,7 @@ pub async fn test_storage(
         Utc::now().timestamp_millis()
     );
     let test_object_path = object_store::path::Path::from(test_object_path_str.clone());
-    let test_data = Bytes::from_static(b"Hello from alien-runtime storage test endpoint!");
+    let test_data = Bytes::from_static(b"Hello from alien-worker-runtime storage test endpoint!");
 
     let storage_instance = app_state
         .ctx

@@ -1,4 +1,4 @@
-//! Platform-specific event parsing for alien-runtime
+//! Platform-specific event parsing for alien-worker-runtime
 //!
 //! This module contains event parsing logic that converts platform-specific
 //! event formats (AWS Lambda events, GCP CloudEvents, Azure Dapr events) into

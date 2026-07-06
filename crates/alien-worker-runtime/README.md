@@ -1,4 +1,4 @@
-# alien-runtime
+# alien-worker-runtime
 
 In-container runtime — starts user code with injected bindings and routes requests via platform-specific transports.
 

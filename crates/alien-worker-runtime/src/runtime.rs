@@ -574,7 +574,7 @@ async fn start_application(
         cmd.env(key, value);
     }
 
-    // User applications launched by alien-runtime must use the transport and
+    // User applications launched by alien-worker-runtime must use the transport and
     // bindings selected by this runtime process. Apply these last so deployment
     // env or secrets cannot leave the child with a stale runtime contract.
     configure_application_runtime_env(&mut cmd, config);

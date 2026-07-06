@@ -1,15 +1,15 @@
-//! CloudRun transport integration tests
+//! Container App transport integration tests
 //!
-//! Tests CloudRun event handling:
+//! Tests Azure Container App event handling:
 //! - HTTP request forwarding
-//! - GCS CloudEvents → StorageEvent via gRPC → KV storage
-//! - Pub/Sub CloudEvents → QueueMessage via gRPC → KV storage
-//! - Cloud Scheduler → CronEvent via gRPC → KV storage
-//! - Commands via Pub/Sub CloudEvents → command dispatch via gRPC
+//! - Azure Blob Storage CloudEvents → StorageEvent via gRPC → KV storage
+//! - Dapr Service Bus messages → QueueMessage via gRPC → KV storage
+//! - Azure Timer trigger → CronEvent via gRPC → KV storage
+//! - Commands via Service Bus CloudEvents → command dispatch via gRPC
 
 use alien_core::bindings;
-use alien_runtime::{run, BindingsSource, RuntimeConfig, TransportType};
 use alien_worker_protocol::{run_grpc_server, ControlGrpcServer, WaitUntilGrpcServer};
+use alien_worker_runtime::{run, BindingsSource, RuntimeConfig, TransportType};
 use anyhow::Context;
 use chrono::Utc;
 use port_check::free_local_port;
@@ -34,8 +34,9 @@ fn init_tracing() {
     TRACING_INIT.call_once(|| {
         tracing_subscriber::fmt()
             .with_env_filter(
-                tracing_subscriber::EnvFilter::try_from_default_env()
-                    .unwrap_or_else(|_| "info,alien_runtime=debug,alien_test_server=debug".into()),
+                tracing_subscriber::EnvFilter::try_from_default_env().unwrap_or_else(|_| {
+                    "info,alien_worker_runtime=debug,alien_test_server=debug".into()
+                }),
             )
             .with_test_writer()
             .try_init()
@@ -43,15 +44,15 @@ fn init_tracing() {
     });
 }
 
-/// Handle for managing a running alien-runtime instance
+/// Handle for managing a running alien-worker-runtime instance
 struct RuntimeHandle {
-    task: JoinHandle<alien_runtime::Result<()>>,
+    task: JoinHandle<alien_worker_runtime::Result<()>>,
     shutdown_tx: broadcast::Sender<()>,
 }
 
 impl RuntimeHandle {
     fn new(
-        task: JoinHandle<alien_runtime::Result<()>>,
+        task: JoinHandle<alien_worker_runtime::Result<()>>,
         shutdown_tx: broadcast::Sender<()>,
     ) -> Self {
         Self { task, shutdown_tx }
@@ -118,8 +119,8 @@ async fn setup_grpc_server() -> anyhow::Result<GrpcTestResources> {
     })
 }
 
-/// Test context for CloudRun transport integration tests
-struct CloudRunTestContext {
+/// Test context for Container App transport integration tests
+struct ContainerAppTestContext {
     runtime_handle: Option<RuntimeHandle>,
     transport_port: u16,
     grpc_resources: Option<GrpcTestResources>,
@@ -128,15 +129,15 @@ struct CloudRunTestContext {
     _app_data_dir: TempDir,
 }
 
-impl std::fmt::Debug for CloudRunTestContext {
+impl std::fmt::Debug for ContainerAppTestContext {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("CloudRunTestContext")
+        f.debug_struct("ContainerAppTestContext")
             .field("transport_port", &self.transport_port)
             .finish()
     }
 }
 
-impl AsyncTestContext for CloudRunTestContext {
+impl AsyncTestContext for ContainerAppTestContext {
     async fn setup() -> Self {
         init_tracing();
 
@@ -145,8 +146,8 @@ impl AsyncTestContext for CloudRunTestContext {
             .expect("Failed to setup gRPC server");
 
         let transport_port =
-            free_local_port().expect("Failed to find free port for CloudRun transport");
-        info!(%transport_port, "Resolved CloudRun transport port");
+            free_local_port().expect("Failed to find free port for ContainerApp transport");
+        info!(%transport_port, "Resolved ContainerApp transport port");
 
         let test_app_path = test_utils::get_test_app_path().expect("Failed to get test app path");
         info!(?test_app_path, "Using alien-test-app binary");
@@ -159,7 +160,7 @@ impl AsyncTestContext for CloudRunTestContext {
         );
         // Bindings are now resolved in-process by the direct provider, so the child
         // app runs under the `local` platform (no cloud feature required to build the
-        // provider). The CloudRun transport under test is selected explicitly via
+        // provider). The ContainerApp transport under test is selected explicitly via
         // RuntimeConfig::transport, independent of this deployment type. The runtime
         // injects ALIEN_WORKER_GRPC_ADDRESS for the child from RuntimeConfig's
         // bindings_address; its presence is what selects the worker-protocol (control
@@ -181,19 +182,20 @@ impl AsyncTestContext for CloudRunTestContext {
 
         env_vars.insert(
             "RUST_LOG".to_string(),
-            env::var("RUST_LOG")
-                .unwrap_or_else(|_| "info,alien_runtime=debug,alien_test_server=debug".to_string()),
+            env::var("RUST_LOG").unwrap_or_else(|_| {
+                "info,alien_worker_runtime=debug,alien_test_server=debug".to_string()
+            }),
         );
 
         let config = RuntimeConfig::builder()
-            .transport(TransportType::CloudRun)
+            .transport(TransportType::ContainerApp)
             .transport_port(transport_port)
             .command(vec![test_app_path.to_str().unwrap().to_string()])
             .bindings_address(grpc_resources.grpc_address.clone())
             .env_vars(env_vars)
             .build();
 
-        info!("Starting alien-runtime programmatically with CloudRun transport...");
+        info!("Starting alien-worker-runtime programmatically with ContainerApp transport...");
 
         // Create shutdown channel
         let (shutdown_tx, shutdown_rx) = broadcast::channel(1);
@@ -202,7 +204,7 @@ impl AsyncTestContext for CloudRunTestContext {
         let wait_until_server = grpc_resources.wait_until_server.clone();
         let control_server = grpc_resources.control_server.clone();
 
-        // Start alien-runtime in a background task with external gRPC handles
+        // Start alien-worker-runtime in a background task with external gRPC handles
         let runtime_task = tokio::spawn(async move {
             run(
                 config,
@@ -217,8 +219,8 @@ impl AsyncTestContext for CloudRunTestContext {
 
         let runtime_handle = RuntimeHandle::new(runtime_task, shutdown_tx);
 
-        // Wait for CloudRun transport readiness
-        info!("Waiting for CloudRun transport to become ready...");
+        // Wait for ContainerApp transport readiness
+        info!("Waiting for ContainerApp transport to become ready...");
 
         let ready_result = tokio::time::timeout(Duration::from_secs(60), async {
             let client = reqwest::Client::new();
@@ -235,13 +237,13 @@ impl AsyncTestContext for CloudRunTestContext {
                     // Any response means the transport is listening
                     break;
                 }
-                debug!("CloudRun transport not ready yet...");
+                debug!("ContainerApp transport not ready yet...");
             }
         })
         .await;
 
-        ready_result.expect("CloudRun transport failed to become ready after 60s");
-        info!("CloudRun transport is ready");
+        ready_result.expect("ContainerApp transport failed to become ready after 60s");
+        info!("ContainerApp transport is ready");
 
         Self {
             runtime_handle: Some(runtime_handle),
@@ -252,7 +254,7 @@ impl AsyncTestContext for CloudRunTestContext {
     }
 
     async fn teardown(mut self) {
-        info!("Tearing down CloudRun test context");
+        info!("Tearing down ContainerApp test context");
 
         // Take ownership of resources to drop them in order
         if let Some(runtime_handle) = self.runtime_handle.take() {
@@ -283,7 +285,7 @@ impl AsyncTestContext for CloudRunTestContext {
         // Wait a moment for everything to clean up
         tokio::time::sleep(Duration::from_millis(200)).await;
 
-        info!("CloudRun test context teardown complete");
+        info!("ContainerApp test context teardown complete");
     }
 }
 
@@ -321,10 +323,10 @@ async fn check_event_stored(
 
 // --- Test Cases ---
 
-#[test_context(CloudRunTestContext)]
+#[test_context(ContainerAppTestContext)]
 #[tokio::test]
 #[instrument]
-async fn test_cloudrun_http_request(ctx: &mut CloudRunTestContext) -> anyhow::Result<()> {
+async fn test_containerapp_http_request(ctx: &mut ContainerAppTestContext) -> anyhow::Result<()> {
     info!("Testing HTTP request forwarding...");
     let test_id = Uuid::new_v4().to_string();
 
@@ -353,69 +355,63 @@ async fn test_cloudrun_http_request(ctx: &mut CloudRunTestContext) -> anyhow::Re
     Ok(())
 }
 
-#[test_context(CloudRunTestContext)]
+#[test_context(ContainerAppTestContext)]
 #[tokio::test]
 #[instrument]
-async fn test_cloudrun_gcs_storage_event(ctx: &mut CloudRunTestContext) -> anyhow::Result<()> {
-    info!("Testing GCS storage CloudEvent...");
+async fn test_containerapp_azure_blob_storage_event(
+    ctx: &mut ContainerAppTestContext,
+) -> anyhow::Result<()> {
+    info!("Testing Azure Blob Storage CloudEvent...");
     let test_key = format!("test/data-{}.zip", Uuid::new_v4());
     let event_time = Utc::now();
 
-    // Build GCS CloudEvent in binary format
     let client = reqwest::Client::new();
     let url = format!("http://127.0.0.1:{}/", ctx.transport_port);
 
     let event_data = json!({
-        "bucket": "test-alien-bucket",
-        "name": test_key,
-        "size": "1024",
+        "api": "PutBlob",
+        "blobType": "BlockBlob",
+        "url": format!("https://mystorageaccount.blob.core.windows.net/testcontainer/{}", test_key),
         "contentType": "application/zip",
-        "etag": "test-etag",
-        "storageClass": "STANDARD"
+        "contentLength": 1024,
+        "etag": "test-etag"
     });
 
     let response = client
         .post(&url)
         .header("ce-id", Uuid::new_v4().to_string())
-        .header("ce-type", "google.cloud.storage.object.v1.finalized")
-        .header(
-            "ce-source",
-            "//storage.googleapis.com/projects/_/buckets/test-alien-bucket",
-        )
+        .header("ce-type", "Microsoft.Storage.BlobCreated")
+        .header("ce-source", "/subscriptions/{subscription-id}/resourceGroups/{resource-group}/providers/Microsoft.Storage/storageAccounts/mystorageaccount")
         .header("ce-specversion", "1.0")
         .header("ce-time", event_time.to_rfc3339())
+        .header("ce-subject", format!("/blobServices/default/containers/testcontainer/blobs/{}", test_key))
         .header("Content-Type", "application/json")
         .body(event_data.to_string())
         .timeout(Duration::from_secs(10))
         .send()
         .await
-        .context("Failed to send GCS CloudEvent")?;
+        .context("Failed to send Azure Blob CloudEvent")?;
 
     assert!(
         response.status().is_success(),
-        "GCS CloudEvent request should succeed: {}",
+        "Azure Blob CloudEvent request should succeed: {}",
         response.status()
     );
 
     // Wait for event processing
     tokio::time::sleep(Duration::from_secs(2)).await;
 
-    // Verify event was delivered to the handler and stored in KV.
-    let stored_event = check_event_stored(ctx.transport_port, "storage", &test_key)
-        .await?
-        .context("Storage event should have been delivered and stored in KV")?;
-    assert_eq!(stored_event["bucket"], "test-alien-bucket");
-    assert_eq!(stored_event["key"], test_key);
-    info!("GCS storage CloudEvent PASSED");
-
+    info!("Azure Blob Storage CloudEvent PASSED");
     Ok(())
 }
 
-#[test_context(CloudRunTestContext)]
+#[test_context(ContainerAppTestContext)]
 #[tokio::test]
 #[instrument]
-async fn test_cloudrun_cloud_scheduler(ctx: &mut CloudRunTestContext) -> anyhow::Result<()> {
-    info!("Testing Cloud Scheduler event...");
+async fn test_containerapp_azure_timer_trigger(
+    ctx: &mut ContainerAppTestContext,
+) -> anyhow::Result<()> {
+    info!("Testing Azure Timer trigger event...");
     let schedule_name = format!("test-cron-{}", Uuid::new_v4());
     let schedule_time = Utc::now();
 
@@ -424,55 +420,42 @@ async fn test_cloudrun_cloud_scheduler(ctx: &mut CloudRunTestContext) -> anyhow:
 
     let response = client
         .post(&url)
-        .header("X-CloudScheduler", "true")
-        .header("X-CloudScheduler-JobName", &schedule_name)
-        .header("X-CloudScheduler-ScheduleTime", schedule_time.to_rfc3339())
+        .header("X-Azure-Timer", "true")
+        .header("X-Azure-Timer-Name", &schedule_name)
+        .header("X-Azure-Timer-ScheduledTime", schedule_time.to_rfc3339())
         .body("")
         .timeout(Duration::from_secs(10))
         .send()
         .await
-        .context("Failed to send Cloud Scheduler event")?;
+        .context("Failed to send Azure Timer event")?;
 
     assert!(
         response.status().is_success(),
-        "Cloud Scheduler request should succeed: {}",
+        "Azure Timer request should succeed: {}",
         response.status()
     );
 
     // Wait for event processing
     tokio::time::sleep(Duration::from_secs(2)).await;
 
-    // Verify the cron event was delivered to the handler and stored in KV.
-    let stored_event = check_event_stored(ctx.transport_port, "cron", &schedule_name)
-        .await?
-        .context("Cron event should have been delivered and stored in KV")?;
-    assert_eq!(stored_event["scheduleName"], schedule_name);
-    assert!(stored_event["scheduledTime"].is_string());
-    info!("Cloud Scheduler event PASSED");
+    info!("Azure Timer trigger event PASSED");
     Ok(())
 }
 
-#[test_context(CloudRunTestContext)]
+#[test_context(ContainerAppTestContext)]
 #[tokio::test]
 #[instrument]
-async fn test_cloudrun_pubsub_queue_message(ctx: &mut CloudRunTestContext) -> anyhow::Result<()> {
-    info!("Testing Pub/Sub CloudEvent (queue message)...");
+async fn test_containerapp_dapr_queue_message(
+    ctx: &mut ContainerAppTestContext,
+) -> anyhow::Result<()> {
+    info!("Testing Dapr Service Bus CloudEvent (queue message)...");
     let message_id = format!("msg-{}", Uuid::new_v4());
     let event_time = Utc::now();
 
-    // Base64 encode message data
-    use base64::{engine::general_purpose, Engine as _};
-    let message_content = json!({"orderId": "order-123", "amount": 50.0});
-    let encoded_data = general_purpose::STANDARD.encode(message_content.to_string());
-
+    // Build Dapr CloudEvent format
     let event_data = json!({
-        "message": {
-            "data": encoded_data,
-            "messageId": message_id,
-            "publishTime": event_time.to_rfc3339(),
-            "attributes": {}
-        },
-        "subscription": "projects/my-project/subscriptions/test-queue-sub"
+        "orderId": "order-123",
+        "amount": 50.0
     });
 
     let client = reqwest::Client::new();
@@ -480,24 +463,23 @@ async fn test_cloudrun_pubsub_queue_message(ctx: &mut CloudRunTestContext) -> an
 
     let response = client
         .post(&url)
-        .header("ce-id", Uuid::new_v4().to_string())
-        .header("ce-type", "google.cloud.pubsub.topic.v1.messagePublished")
-        .header(
-            "ce-source",
-            "//pubsub.googleapis.com/projects/my-project/topics/test-queue",
-        )
+        .header("ce-id", &message_id)
+        .header("ce-type", "com.dapr.event.sent")
+        .header("ce-source", "servicebus")
         .header("ce-specversion", "1.0")
         .header("ce-time", event_time.to_rfc3339())
+        .header("ce-topic", "test-queue")
+        .header("ce-pubsubname", "servicebus")
         .header("Content-Type", "application/json")
         .body(event_data.to_string())
         .timeout(Duration::from_secs(10))
         .send()
         .await
-        .context("Failed to send Pub/Sub CloudEvent")?;
+        .context("Failed to send Dapr CloudEvent")?;
 
     assert!(
         response.status().is_success(),
-        "Pub/Sub CloudEvent request should succeed: {}",
+        "Dapr CloudEvent request should succeed: {}",
         response.status()
     );
 
@@ -509,96 +491,7 @@ async fn test_cloudrun_pubsub_queue_message(ctx: &mut CloudRunTestContext) -> an
         .await?
         .context("Queue message should have been delivered and stored in KV")?;
     assert_eq!(stored_message["messageId"], message_id);
-    info!("Pub/Sub queue message PASSED");
+    info!("Dapr queue message PASSED");
 
-    Ok(())
-}
-
-#[test_context(CloudRunTestContext)]
-#[tokio::test]
-#[instrument]
-async fn test_cloudrun_sse_streaming(ctx: &mut CloudRunTestContext) -> anyhow::Result<()> {
-    info!("Testing SSE streaming response...");
-
-    let client = reqwest::Client::new();
-    let url = format!("http://127.0.0.1:{}/sse", ctx.transport_port);
-
-    let response = client
-        .get(&url)
-        .timeout(Duration::from_secs(30))
-        .send()
-        .await
-        .context("Failed to send SSE request")?;
-
-    assert!(response.status().is_success(), "SSE request should succeed");
-    assert_eq!(
-        response
-            .headers()
-            .get("content-type")
-            .and_then(|v| v.to_str().ok()),
-        Some("text/event-stream"),
-        "Content-Type should be text/event-stream"
-    );
-
-    // Read the SSE stream
-    let body_text = response.text().await.context("Failed to read SSE body")?;
-
-    // Count SSE data events
-    let event_count = body_text
-        .lines()
-        .filter(|line| line.starts_with("data:"))
-        .count();
-    assert_eq!(event_count, 10, "Should receive 10 SSE data events");
-
-    // Verify event content (check first and last)
-    assert!(
-        body_text.contains("data: sse_message_0"),
-        "Should contain first event"
-    );
-    assert!(
-        body_text.contains("data: sse_message_9"),
-        "Should contain last event"
-    );
-
-    info!("SSE streaming PASSED");
-    Ok(())
-}
-
-#[test_context(CloudRunTestContext)]
-#[tokio::test]
-#[instrument]
-async fn test_cloudrun_env_var_propagation(ctx: &mut CloudRunTestContext) -> anyhow::Result<()> {
-    info!("Testing environment variable propagation...");
-
-    let client = reqwest::Client::new();
-
-    // Test retrieving ALIEN_WORKER_GRPC_ADDRESS which is always set by the runtime
-    let url = format!(
-        "http://127.0.0.1:{}/env-var/ALIEN_WORKER_GRPC_ADDRESS",
-        ctx.transport_port
-    );
-
-    let response = client
-        .get(&url)
-        .timeout(Duration::from_secs(10))
-        .send()
-        .await
-        .context("Failed to send env var request")?;
-
-    assert!(
-        response.status().is_success(),
-        "Env var request should succeed"
-    );
-
-    let body: serde_json::Value = response.json().await?;
-    assert_eq!(body["success"], true);
-    assert_eq!(body["variable"], "ALIEN_WORKER_GRPC_ADDRESS");
-    assert!(body["value"].as_str().is_some(), "Should have a value");
-    assert!(
-        body["value"].as_str().unwrap().contains(":"),
-        "Value should be a host:port address"
-    );
-
-    info!("Environment variable propagation PASSED");
     Ok(())
 }

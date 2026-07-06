@@ -1,4 +1,4 @@
-//! Configuration for alien-runtime.
+//! Configuration for alien-worker-runtime.
 //!
 //! Configuration can be built from CLI arguments or programmatically via the builder.
 
@@ -33,7 +33,7 @@ pub enum LogExporter {
     /// No exporting - print to stdout/stderr (for Containers - orchestrator captures)
     None,
 
-    /// Send via OTLP (for Functions - alien-runtime is the capture boundary)
+    /// Send via OTLP (for Functions - alien-worker-runtime is the capture boundary)
     #[serde(rename_all = "camelCase")]
     Otlp {
         /// OTLP endpoint URL (e.g., "http://localhost:9090/v1/logs")
@@ -193,7 +193,7 @@ impl LogExporter {
         let service_name = env_vars
             .get("OTEL_SERVICE_NAME")
             .cloned()
-            .unwrap_or_else(|| "alien-runtime".to_string());
+            .unwrap_or_else(|| "alien-worker-runtime".to_string());
 
         LogExporter::Otlp {
             endpoint,
@@ -285,7 +285,7 @@ mod tests {
     fn test_config_from_cli() {
         clear_otlp_env_vars();
 
-        let cli = Cli::try_parse_from(["alien-runtime", "--", "bun", "index.ts"]).unwrap();
+        let cli = Cli::try_parse_from(["alien-worker-runtime", "--", "bun", "index.ts"]).unwrap();
         let config = RuntimeConfig::from_cli_struct(cli).unwrap();
 
         assert_eq!(config.transport, TransportType::Lambda);
@@ -318,7 +318,7 @@ mod tests {
         );
         std::env::set_var(ENV_ALIEN_RUNTIME_SEND_OTLP, "false");
 
-        let cli = Cli::try_parse_from(["alien-runtime", "--", "bun", "index.ts"]).unwrap();
+        let cli = Cli::try_parse_from(["alien-worker-runtime", "--", "bun", "index.ts"]).unwrap();
         let config = RuntimeConfig::from_cli_struct(cli).unwrap();
 
         assert!(matches!(config.log_exporter, LogExporter::None));

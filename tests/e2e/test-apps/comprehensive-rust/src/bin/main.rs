@@ -40,7 +40,7 @@ async fn main() -> anyhow::Result<()> {
 
     let args = Args::parse();
 
-    // Always use port 0 (dynamic) — the alien-runtime entrypoint binds to PORT=8080,
+    // Always use port 0 (dynamic) — the alien-worker-runtime entrypoint binds to PORT=8080,
     // so the user app must pick a free port and register it via register_http_server().
     let port: u16 = 0;
 

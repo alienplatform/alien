@@ -21,7 +21,7 @@ export const GrpcConnectionError = defineError({
     reason: z.string(),
   }),
   message: ({ endpoint, reason }) =>
-    `Failed to connect to alien-runtime at '${endpoint}': ${reason}`,
+    `Failed to connect to alien-worker-runtime at '${endpoint}': ${reason}`,
   retryable: true,
   internal: false,
   httpStatusCode: 503,

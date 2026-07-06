@@ -7,7 +7,7 @@ license-file.workspace = true
 # Alien crates
 alien-core = { workspace = true }
 alien-error = { workspace = true }
-alien-runtime = { workspace = true }
+alien-worker-runtime = { workspace = true }
 alien-bindings = { workspace = true }
 alien-worker-protocol = { workspace = true }
 

@@ -13,7 +13,7 @@ use tracing::{debug, info};
 /// Adds secrets vault for environment variable storage.
 ///
 /// Creates the "secrets" vault (if missing) and links it to all Workers, Daemons, and Containers.
-/// Secrets are synced during deployment and loaded by alien-runtime at startup.
+/// Secrets are synced during deployment and loaded by alien-worker-runtime at startup.
 ///
 /// Steps:
 /// 1. Add "secrets" vault resource (if not present)
@@ -71,7 +71,7 @@ impl StackMutation for SecretsVaultMutation {
         }
 
         // Step 2: Link the vault to all compute resources (Workers, Daemons, and Containers)
-        // This gives them the vault binding so alien-runtime can load secrets
+        // This gives them the vault binding so alien-worker-runtime can load secrets
         link_vault_to_compute_resources(&mut stack, secrets_vault_id)?;
 
         // Step 3: Add vault/data-read permission to all compute resource profiles
@@ -90,7 +90,7 @@ impl StackMutation for SecretsVaultMutation {
 /// Link the secrets vault to all compute resources (Workers, Daemons, and Containers)
 ///
 /// This ensures all source-based compute resources get the vault binding,
-/// allowing alien-runtime to load secrets at startup via ALIEN_SECRETS.
+/// allowing alien-worker-runtime to load secrets at startup via ALIEN_SECRETS.
 fn link_vault_to_compute_resources(stack: &mut Stack, vault_id: &str) -> Result<()> {
     let vault_ref = ResourceRef::new(Vault::RESOURCE_TYPE, vault_id);
     let mut linked_count = 0;
@@ -146,7 +146,7 @@ fn link_vault_to_compute_resources(stack: &mut Stack, vault_id: &str) -> Result<
 /// Add vault/data-read permission to all compute resource permission profiles
 ///
 /// Workers, Daemons, and Containers need to read secrets from the vault.
-/// This permission is added to their profiles, allowing alien-runtime to fetch secrets.
+/// This permission is added to their profiles, allowing alien-worker-runtime to fetch secrets.
 fn add_vault_read_permissions_to_compute_profiles(
     stack: &mut Stack,
     vault_name: &str,

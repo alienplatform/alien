@@ -1,4 +1,4 @@
-//! CLI argument parsing for alien-runtime.
+//! CLI argument parsing for alien-worker-runtime.
 
 use clap::{Parser, ValueEnum};
 use std::time::Duration;
@@ -8,7 +8,7 @@ use alien_error::AlienError;
 
 /// Alien Runtime - runs applications on any platform.
 #[derive(Parser, Debug)]
-#[command(name = "alien-runtime")]
+#[command(name = "alien-worker-runtime")]
 #[command(version, about, long_about = None)]
 pub struct Cli {
     /// Application command to run
@@ -183,7 +183,7 @@ mod tests {
 
     #[test]
     fn test_parse_basic() {
-        let cli = Cli::try_parse_from(["alien-runtime", "--", "bun", "index.ts"]).unwrap();
+        let cli = Cli::try_parse_from(["alien-worker-runtime", "--", "bun", "index.ts"]).unwrap();
         assert_eq!(cli.command, vec!["bun", "index.ts"]);
         assert_eq!(cli.transport, TransportType::Lambda);
     }
@@ -191,7 +191,7 @@ mod tests {
     #[test]
     fn test_parse_cloudrun() {
         let cli = Cli::try_parse_from([
-            "alien-runtime",
+            "alien-worker-runtime",
             "--transport",
             "cloud-run",
             "--cloudrun-port",
@@ -207,8 +207,8 @@ mod tests {
 
     #[test]
     fn test_parse_http_transport() {
-        let cli =
-            Cli::try_parse_from(["alien-runtime", "--transport", "http", "--", "app"]).unwrap();
+        let cli = Cli::try_parse_from(["alien-worker-runtime", "--transport", "http", "--", "app"])
+            .unwrap();
 
         assert_eq!(cli.transport, TransportType::Http);
         assert_eq!(cli.local_port, 8080);
@@ -217,13 +217,18 @@ mod tests {
     #[test]
     fn test_validate_commands_polling() {
         // Missing URL and deployment_id
-        let cli = Cli::try_parse_from(["alien-runtime", "--commands-polling-enabled", "--", "app"])
-            .unwrap();
+        let cli = Cli::try_parse_from([
+            "alien-worker-runtime",
+            "--commands-polling-enabled",
+            "--",
+            "app",
+        ])
+        .unwrap();
         assert!(cli.validate().is_err());
 
         // Missing deployment_id
         let cli = Cli::try_parse_from([
-            "alien-runtime",
+            "alien-worker-runtime",
             "--commands-polling-enabled",
             "--commands-polling-url",
             "http://example.com",
@@ -237,7 +242,7 @@ mod tests {
 
         // Missing target resource id
         let cli = Cli::try_parse_from([
-            "alien-runtime",
+            "alien-worker-runtime",
             "--commands-polling-enabled",
             "--commands-polling-url",
             "http://example.com",
@@ -255,7 +260,7 @@ mod tests {
 
         // Required fields present (token not required at config time)
         let cli = Cli::try_parse_from([
-            "alien-runtime",
+            "alien-worker-runtime",
             "--commands-polling-enabled",
             "--commands-polling-url",
             "http://example.com",

@@ -18,7 +18,7 @@ release = false
 publish = false
 
 [[package]]
-name = "alien-runtime"
+name = "alien-worker-runtime"
 release = false
 
 [[package]]

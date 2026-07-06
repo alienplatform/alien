@@ -1,5 +1,5 @@
 [package]
-name = "alien-runtime"
+name = "alien-worker-runtime"
 version.workspace = true
 edition.workspace = true
 authors.workspace = true
@@ -7,11 +7,11 @@ description.workspace = true
 license-file.workspace = true
 
 [[bin]]
-name = "alien-runtime"
+name = "alien-worker-runtime"
 path = "src/main.rs"
 
 [lib]
-name = "alien_runtime"
+name = "alien_worker_runtime"
 path = "src/lib.rs"
 
 [features]

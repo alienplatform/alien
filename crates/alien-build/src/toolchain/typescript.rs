@@ -473,9 +473,9 @@ impl Toolchain for TypeScriptToolchain {
         // Save updated cache
         cache_utils::save_cache(context.cache_store.as_deref(), &cache_key, &cache_paths).await?;
 
-        // Determine if we need alien-runtime in the image
+        // Determine if we need alien-worker-runtime in the image
         // Workers on local platform use embedded runtime in agent (no runtime in image)
-        // Everything else (containers on any platform, functions on cloud) needs alien-runtime
+        // Everything else (containers on any platform, functions on cloud) needs alien-worker-runtime
         let needs_runtime_in_image =
             context.is_container || context.runtime_platform_name != "local";
 
@@ -498,12 +498,12 @@ impl Toolchain for TypeScriptToolchain {
             });
         }
 
-        // Need alien-runtime in the image (containers or cloud functions)
-        // Use the universal alien-base image that includes alien-runtime with ENTRYPOINT
+        // Need alien-worker-runtime in the image (containers or cloud functions)
+        // Use the universal alien-base image that includes alien-worker-runtime with ENTRYPOINT
         let base_images = vec!["ghcr.io/alienplatform/alien-base:latest".to_string()];
 
-        // Runtime command: -- separator required by alien-runtime CLI, then application binary
-        // Base image ENTRYPOINT is ["/app/alien-runtime"] so CMD must start with "--"
+        // Runtime command: -- separator required by alien-worker-runtime CLI, then application binary
+        // Base image ENTRYPOINT is ["/app/alien-worker-runtime"] so CMD must start with "--"
         let runtime_command = vec!["--".to_string(), format!("./{}", binary_filename)];
 
         Ok(ToolchainOutput {

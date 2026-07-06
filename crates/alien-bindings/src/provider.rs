@@ -37,7 +37,7 @@ pub struct BindingsProvider {
 /// Environment-backed provider that defers cloud client configuration until the
 /// first binding is actually used.
 ///
-/// Long-running HTTP daemons can be wrapped by alien-runtime only for commands,
+/// Long-running HTTP daemons can be wrapped by alien-worker-runtime only for commands,
 /// logs, or future binding access. They should still start when no startup
 /// secret needs loading, even if cloud metadata is temporarily unavailable.
 ///

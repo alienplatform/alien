@@ -1,4 +1,4 @@
-//! Core types for alien-runtime.
+//! Core types for alien-worker-runtime.
 
 use bytes::Bytes;
 use chrono::{DateTime, Utc};

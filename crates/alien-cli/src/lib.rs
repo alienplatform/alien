@@ -268,7 +268,7 @@ pub fn setup_tracing() {
         });
 
     #[cfg(feature = "otlp")]
-    let otlp_layer = alien_runtime::init_otlp_logging().ok().flatten();
+    let otlp_layer = alien_worker_runtime::init_otlp_logging().ok().flatten();
 
     #[cfg(not(feature = "otlp"))]
     let _otlp_layer: Option<()> = None;

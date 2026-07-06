@@ -78,7 +78,7 @@ export async function runWorker(app?: unknown): Promise<void> {
       MissingEnvVarError.create({
         variable: "ALIEN_WORKER_GRPC_ADDRESS",
         description:
-          "This variable is set by alien-runtime when running inside the Alien environment.",
+          "This variable is set by alien-worker-runtime when running inside the Alien environment.",
       }),
     )
   }

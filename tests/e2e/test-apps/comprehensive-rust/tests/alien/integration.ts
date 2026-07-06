@@ -20,7 +20,7 @@ describe("Alien Test Server Integration Tests", () => {
       expect(response.status).toBe(200)
 
       const text = await response.text()
-      expect(text).toBe("Hello from alien-runtime test server!")
+      expect(text).toBe("Hello from alien-worker-runtime test server!")
     })
   })
 

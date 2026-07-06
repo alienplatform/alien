@@ -1,7 +1,7 @@
 #![cfg(test)]
 #![cfg(feature = "otlp")]
 
-use alien_runtime::{flush_otlp_logs, init_tracing};
+use alien_worker_runtime::{flush_otlp_logs, init_tracing};
 use std::{env, sync::Once, time::Duration};
 use tracing::{error, info, warn};
 use uuid::Uuid;
@@ -57,7 +57,7 @@ async fn test_otlp_logging_to_axiom() {
             axiom_token, axiom_dataset
         ),
     );
-    env::set_var("OTEL_SERVICE_NAME", "alien-runtime-test");
+    env::set_var("OTEL_SERVICE_NAME", "alien-worker-runtime-test");
     env::set_var("OTEL_SERVICE_VERSION", "test-1.0.0");
 
     // Initialize tracing with OTLP
@@ -214,7 +214,7 @@ async fn test_otlp_logging_to_axiom() {
 /// tests that initialize tracing.
 #[tokio::test]
 async fn test_zz_otlp_configuration() {
-    use alien_runtime::otlp::OtlpConfig;
+    use alien_worker_runtime::otlp::OtlpConfig;
 
     // Clear any existing OTLP environment variables
     env::remove_var("OTEL_EXPORTER_OTLP_ENDPOINT");
@@ -235,7 +235,7 @@ async fn test_zz_otlp_configuration() {
 
     let config = OtlpConfig::from_env().expect("Should have config");
     assert_eq!(config.endpoint, "http://localhost:4318");
-    assert_eq!(config.service_name, "alien-runtime");
+    assert_eq!(config.service_name, "alien-worker-runtime");
     assert!(config.headers.is_empty());
 
     // Test 3: Full configuration with headers
@@ -312,7 +312,7 @@ async fn test_alien_deployment_id_otlp_integration() {
             axiom_token, axiom_dataset
         ),
     );
-    env::set_var("OTEL_SERVICE_NAME", "alien-runtime-test-deployment");
+    env::set_var("OTEL_SERVICE_NAME", "alien-worker-runtime-test-deployment");
     env::set_var("ALIEN_DEPLOYMENT_ID", &deployment_id);
 
     // Initialize tracing with OTLP (uses call_once to ensure only first test initializes)
@@ -354,7 +354,7 @@ async fn test_alien_deployment_id_otlp_integration() {
 /// the global subscriber state, which would prevent other tests from using OTLP.
 #[tokio::test]
 async fn test_zz_otlp_not_configured() {
-    use alien_runtime::otlp::OtlpConfig;
+    use alien_worker_runtime::otlp::OtlpConfig;
 
     // Clear OTLP environment variables
     env::remove_var("OTEL_EXPORTER_OTLP_ENDPOINT");

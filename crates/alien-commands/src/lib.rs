@@ -9,7 +9,7 @@
 //!
 //! - **Core types**: Always available protocol types and serialization
 //! - **server**: Command server implementation for managers
-//! - **runtime**: Command envelope processing for alien-runtime
+//! - **runtime**: Command envelope processing for alien-worker-runtime
 //! - **receiver**: App-owned pull command receiver for Containers/Daemons
 //! - **openapi**: OpenAPI schema generation support
 

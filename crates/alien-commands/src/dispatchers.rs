@@ -102,7 +102,7 @@ mod platform_dispatchers {
             let function_name = self.function_name.clone();
 
             // Use async invocation to send the envelope to the Lambda function
-            // The Lambda function should have alien-runtime configured to handle command envelopes
+            // The Lambda function should have alien-worker-runtime configured to handle command envelopes
             let invoke_request = InvokeRequest::builder()
                 .function_name(function_name.clone())
                 .invocation_type(InvocationType::Event) // Async invocation

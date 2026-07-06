@@ -41,8 +41,8 @@ impl OtlpConfig {
             .or_else(|_| std::env::var("OTEL_EXPORTER_OTLP_ENDPOINT"))
             .ok()?;
 
-        let service_name =
-            std::env::var("OTEL_SERVICE_NAME").unwrap_or_else(|_| "alien-runtime".to_string());
+        let service_name = std::env::var("OTEL_SERVICE_NAME")
+            .unwrap_or_else(|_| "alien-worker-runtime".to_string());
 
         let service_version = std::env::var("OTEL_SERVICE_VERSION")
             .unwrap_or_else(|_| env!("CARGO_PKG_VERSION").to_string());
@@ -184,7 +184,7 @@ fn store_otlp_provider(provider: SdkLoggerProvider) {
 fn build_otlp_resource(config: &OtlpConfig) -> Resource {
     // Resource::builder() includes OTEL_RESOURCE_ATTRIBUTES and SDK-provided
     // telemetry attributes. Explicit runtime service attributes override env
-    // values for the keys owned by alien-runtime.
+    // values for the keys owned by alien-worker-runtime.
     let mut attributes = vec![
         KeyValue::new("service.name", config.service_name.clone()),
         KeyValue::new("service.version", config.service_version.clone()),
@@ -204,7 +204,7 @@ pub fn init_otlp_logging() -> Result<Option<()>> {
     if std::env::var("OTEL_EXPORTER_OTLP_ENDPOINT").is_ok()
         || std::env::var("OTEL_EXPORTER_OTLP_LOGS_ENDPOINT").is_ok()
     {
-        tracing::warn!("OTLP endpoint configured but alien-runtime was compiled without OTLP support. Rebuild with --features otlp to enable OTLP logging.");
+        tracing::warn!("OTLP endpoint configured but alien-worker-runtime was compiled without OTLP support. Rebuild with --features otlp to enable OTLP logging.");
     }
     *OTLP_PROVIDER.lock().expect("OTLP provider mutex poisoned") = None;
     Ok(None)
@@ -213,7 +213,7 @@ pub fn init_otlp_logging() -> Result<Option<()>> {
 /// Initialize OTLP logging when feature is disabled.
 #[cfg(not(feature = "otlp"))]
 pub fn init_otlp_logging_from_config(_config: OtlpConfig) -> Result<()> {
-    tracing::warn!("OTLP configuration provided but alien-runtime was compiled without OTLP support. Rebuild with --features otlp to enable OTLP logging.");
+    tracing::warn!("OTLP configuration provided but alien-worker-runtime was compiled without OTLP support. Rebuild with --features otlp to enable OTLP logging.");
     Ok(())
 }
 
@@ -404,7 +404,7 @@ mod tests {
 
         let config = OtlpConfig::from_env().expect("Should have config");
         assert_eq!(config.endpoint, "http://localhost:4318");
-        assert_eq!(config.service_name, "alien-runtime");
+        assert_eq!(config.service_name, "alien-worker-runtime");
         assert!(config.headers.is_empty());
     }
 

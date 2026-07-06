@@ -4029,7 +4029,7 @@ impl AzureWorkerController {
 
             Some(Dapr {
                 app_id: Some(container_app_name.to_string()),
-                app_port: Some(8080), // Port that alien-runtime listens on
+                app_port: Some(8080), // Port that alien-worker-runtime listens on
                 app_protocol: DaprAppProtocol::Http,
                 enable_api_logging: Some(false),
                 enabled: true,

@@ -174,7 +174,7 @@ async fn wait_for_control_server() -> Result<Arc<ControlGrpcServer>> {
     let cs = {
         let mut cs_opt = None;
         for _ in 0..60 {
-            if let Some(cs) = alien_runtime::get_control_server() {
+            if let Some(cs) = alien_worker_runtime::get_control_server() {
                 cs_opt = Some(cs);
                 break;
             }

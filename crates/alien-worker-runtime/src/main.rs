@@ -1,4 +1,4 @@
-use alien_runtime::{
+use alien_worker_runtime::{
     init_tracing, run, setup_shutdown_on_signals, BindingsSource, Result, RuntimeConfig,
 };
 use tracing::{error, info};

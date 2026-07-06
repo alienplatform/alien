@@ -391,7 +391,7 @@ jobs:
           echo "test_filter=$TEST_FILTER" >> $GITHUB_OUTPUT
           echo "network_mode=$NETWORK_MODE" >> $GITHUB_OUTPUT
 
-  # ── Build alien-runtime + alien-operator for needed architectures ─────
+  # ── Build alien-worker-runtime + alien-operator for needed architectures ─────
   # Combined into one cargo invocation per arch to share compilation of
   # common dependencies (tokio, reqwest, serde, platform clients, etc.).
 
@@ -415,11 +415,11 @@ jobs:
           targets: x86_64-unknown-linux-musl
           install-protoc: "true"
 
-      - name: Build alien-runtime + alien-operator (x86_64)
+      - name: Build alien-worker-runtime + alien-operator (x86_64)
         run: |
           PACKAGES=()
           if [ "${{ needs.compute-matrix.outputs.build_base_image }}" = "true" ]; then
-            PACKAGES+=("-p" "alien-runtime")
+            PACKAGES+=("-p" "alien-worker-runtime")
           fi
           if [ "${{ needs.compute-matrix.outputs.build_operator_image }}" = "true" ]; then
             PACKAGES+=("-p" "alien-operator")
@@ -429,8 +429,8 @@ jobs:
       - uses: actions/upload-artifact@v4
         if: needs.compute-matrix.outputs.build_base_image == 'true'
         with:
-          name: alien-runtime-x86_64
-          path: target/x86_64-unknown-linux-musl/release/alien-runtime
+          name: alien-worker-runtime-x86_64
+          path: target/x86_64-unknown-linux-musl/release/alien-worker-runtime
           retention-days: 1
 
       - uses: actions/upload-artifact@v4
@@ -460,11 +460,11 @@ jobs:
           targets: aarch64-unknown-linux-musl
           install-protoc: "true"
 
-      - name: Build alien-runtime + alien-operator (aarch64)
+      - name: Build alien-worker-runtime + alien-operator (aarch64)
         run: |
           PACKAGES=()
           if [ "${{ needs.compute-matrix.outputs.build_base_image }}" = "true" ]; then
-            PACKAGES+=("-p" "alien-runtime")
+            PACKAGES+=("-p" "alien-worker-runtime")
           fi
           if [ "${{ needs.compute-matrix.outputs.build_operator_image }}" = "true" ]; then
             PACKAGES+=("-p" "alien-operator")
@@ -474,8 +474,8 @@ jobs:
       - uses: actions/upload-artifact@v4
         if: needs.compute-matrix.outputs.build_base_image == 'true'
         with:
-          name: alien-runtime-aarch64
-          path: target/aarch64-unknown-linux-musl/release/alien-runtime
+          name: alien-worker-runtime-aarch64
+          path: target/aarch64-unknown-linux-musl/release/alien-worker-runtime
           retention-days: 1
 
       - uses: actions/upload-artifact@v4
@@ -503,13 +503,13 @@ jobs:
       - uses: actions/download-artifact@v4
         if: needs.build-x86_64.result == 'success'
         with:
-          name: alien-runtime-x86_64
+          name: alien-worker-runtime-x86_64
           path: target/x86_64-unknown-linux-musl/release/
 
       - uses: actions/download-artifact@v4
         if: needs.build-aarch64.result == 'success'
         with:
-          name: alien-runtime-aarch64
+          name: alien-worker-runtime-aarch64
           path: target/aarch64-unknown-linux-musl/release/
 
       - name: Ensure binary dirs exist and make executable
@@ -517,9 +517,9 @@ jobs:
           # Create placeholder dirs for skipped architectures so Dockerfile COPY doesn't fail
           mkdir -p target/x86_64-unknown-linux-musl/release target/aarch64-unknown-linux-musl/release
           # Create empty placeholder binaries for skipped architectures
-          [ ! -f target/x86_64-unknown-linux-musl/release/alien-runtime ] && touch target/x86_64-unknown-linux-musl/release/alien-runtime
-          [ ! -f target/aarch64-unknown-linux-musl/release/alien-runtime ] && touch target/aarch64-unknown-linux-musl/release/alien-runtime
-          chmod +x target/*/release/alien-runtime
+          [ ! -f target/x86_64-unknown-linux-musl/release/alien-worker-runtime ] && touch target/x86_64-unknown-linux-musl/release/alien-worker-runtime
+          [ ! -f target/aarch64-unknown-linux-musl/release/alien-worker-runtime ] && touch target/aarch64-unknown-linux-musl/release/alien-worker-runtime
+          chmod +x target/*/release/alien-worker-runtime
 
       - name: Compute Docker platforms
         id: platforms

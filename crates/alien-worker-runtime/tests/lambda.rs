@@ -54,8 +54,9 @@ fn init_tracing() {
     TRACING_INIT.call_once(|| {
         tracing_subscriber::fmt()
             .with_env_filter(
-                tracing_subscriber::EnvFilter::try_from_default_env()
-                    .unwrap_or_else(|_| "info,alien_runtime=debug,alien_test_server=debug".into()),
+                tracing_subscriber::EnvFilter::try_from_default_env().unwrap_or_else(|_| {
+                    "info,alien_worker_runtime=debug,alien_test_server=debug".into()
+                }),
             )
             .with_test_writer()
             .try_init()
@@ -225,7 +226,7 @@ fn kill_process_tree(child: &mut Child) {
     #[cfg(unix)]
     {
         // Kill the entire process group (negative PID)
-        // This ensures we kill cargo lambda watch AND alien-runtime AND alien-test-server
+        // This ensures we kill cargo lambda watch AND alien-worker-runtime AND alien-test-server
         let pgid = pid as i32;
         info!(pid, pgid, "Killing process group");
         unsafe {
@@ -341,19 +342,19 @@ impl AsyncTestContext for LambdaTestContext {
         let kv_binding = bindings::KvBinding::local(temp_dir_path.clone());
 
         // Build cargo lambda watch command
-        // Note: cargo lambda watch runs alien-runtime which spawns the test server
+        // Note: cargo lambda watch runs alien-worker-runtime which spawns the test server
         let mut lambda_cmd = StdCommand::new("cargo");
         lambda_cmd
             .arg("lambda")
             .arg("watch")
             .arg("--ignore-changes")
             .arg("-p")
-            .arg("alien-runtime")
+            .arg("alien-worker-runtime")
             .arg("--bin")
-            .arg("alien-runtime")
+            .arg("alien-worker-runtime")
             .arg(format!("--invoke-port={}", invoke_port))
             .arg("--")
-            // CLI arguments for alien-runtime
+            // CLI arguments for alien-worker-runtime
             .arg("--transport")
             .arg("lambda")
             .arg("--lambda-mode")
@@ -376,7 +377,7 @@ impl AsyncTestContext for LambdaTestContext {
             .env(
                 "RUST_LOG",
                 env::var("RUST_LOG").unwrap_or_else(|_| {
-                    "info,alien_runtime=debug,alien_test_server=debug".to_string()
+                    "info,alien_worker_runtime=debug,alien_test_server=debug".to_string()
                 }),
             )
             .stdout(Stdio::inherit())

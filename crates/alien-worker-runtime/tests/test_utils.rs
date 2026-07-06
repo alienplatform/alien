@@ -1,4 +1,4 @@
-//! Shared test utilities for alien-runtime integration tests.
+//! Shared test utilities for alien-worker-runtime integration tests.
 //!
 //! This module provides common functionality needed across multiple test files,
 //! with special focus on ensuring the alien-test-app binary is built only once

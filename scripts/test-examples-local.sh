@@ -118,7 +118,7 @@ pnpm -C "$EXAMPLES_DIR" install \
 # Ensure the @alienplatform/bindings native addon is available to deployed
 # workers. A Worker is a `bun build --compile` binary whose bindings loader
 # cannot walk the filesystem to find crates/alien-bindings-node; it resolves the
-# addon from ALIEN_BINDINGS_ADDON_PATH (loader step 1). alien-runtime spawns the
+# addon from ALIEN_BINDINGS_ADDON_PATH (loader step 1). alien-worker-runtime spawns the
 # worker without clearing the environment, so exporting the var here propagates
 # down to the worker child. Build the dev addon if it is missing (mirrors the
 # source-build fallback in packages/package-layout/run.ts).

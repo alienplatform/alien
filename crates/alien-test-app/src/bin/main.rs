@@ -1,6 +1,6 @@
 //! Alien Test App - Minimal test application for runtime testing.
 //!
-//! This application is used for testing the alien-runtime, alien-local, and dockdash crates.
+//! This application is used for testing the alien-worker-runtime, alien-local, and dockdash crates.
 //! It provides minimal functionality needed for core runtime testing:
 //! - HTTP server with health and inspect endpoints
 //! - Event handlers for storage and queue events
@@ -68,7 +68,7 @@ async fn main() {
 
     let args = Args::parse();
 
-    // Read port from PORT environment variable (set by alien-runtime)
+    // Read port from PORT environment variable (set by alien-worker-runtime)
     let port: u16 = std::env::var("PORT")
         .ok()
         .and_then(|p| p.parse().ok())

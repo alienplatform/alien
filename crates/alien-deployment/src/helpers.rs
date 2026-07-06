@@ -20,6 +20,11 @@ const OTEL_EXPORTER_OTLP_METRICS_ENDPOINT: &str = "OTEL_EXPORTER_OTLP_METRICS_EN
 const OTEL_EXPORTER_OTLP_HEADERS: &str = "OTEL_EXPORTER_OTLP_HEADERS";
 const OTEL_EXPORTER_OTLP_METRICS_HEADERS: &str = "OTEL_EXPORTER_OTLP_METRICS_HEADERS";
 const OTEL_SERVICE_NAME: &str = "OTEL_SERVICE_NAME";
+// These vault secret key strings keep the historical `__alien_runtime_otlp_*`
+// spelling on purpose. They are looked up by name in already-deployed stacks'
+// vaults; renaming them to match the `alien-worker-runtime` crate rename would
+// orphan the existing secrets on every live deployment. We deliberately take the
+// no-migration option and keep the wire keys stable (ALIEN-224).
 const RUNTIME_OTLP_LOGS_AUTH_HEADER_SECRET: &str = "__alien_runtime_otlp_logs_auth_header";
 const RUNTIME_OTLP_METRICS_AUTH_HEADER_SECRET: &str = "__alien_runtime_otlp_metrics_auth_header";
 
@@ -161,7 +166,7 @@ struct AlienSecretsConfig {
 ///
 /// For all compute resources (Workers and Containers built from source):
 /// - Plain variables: Injected directly into resource.environment
-/// - Secret variables: Keys are listed in ALIEN_SECRETS; alien-runtime loads
+/// - Secret variables: Keys are listed in ALIEN_SECRETS; alien-worker-runtime loads
 ///   the actual values from the "secrets" vault at startup.
 ///
 /// The secrets vault is a dependency of every compute resource (added by
@@ -225,10 +230,10 @@ fn otlp_injection_covers_containers_and_daemons(platform: Platform) -> bool {
 /// - `OTEL_RESOURCE_ATTRIBUTES`       — deployment-level resource attributes
 ///   such as `alien.deployment_id`, merged with any user-provided value.
 /// - `ALIEN_RUNTIME_SECRETS`          — workers and daemons only; points
-///   alien-runtime at runtime-owned vault secrets. These are not forwarded to
+///   alien-worker-runtime at runtime-owned vault secrets. These are not forwarded to
 ///   the child application process.
 /// - `OTEL_EXPORTER_OTLP_HEADERS` (and `..._METRICS_HEADERS`) — containers
-///   only; a container has no alien-runtime wrapper to resolve the vault
+///   only; a container has no alien-worker-runtime wrapper to resolve the vault
 ///   pointer, so its auth header goes in as the standard plain OTEL env var.
 pub fn inject_monitoring_environment_variables(
     stack: &mut Stack,
@@ -313,8 +318,8 @@ pub fn inject_monitoring_environment_variables(
             // The resource name (e.g. "agent" / "events") is the most useful
             // value for `service.name`: it identifies *which slot in the
             // stack* a log came from, which is the dimension users see in
-            // the dashboard's "Resource" column. Without this, alien-runtime
-            // falls back to the literal string "alien-runtime" and the
+            // the dashboard's "Resource" column. Without this, alien-worker-runtime
+            // falls back to the literal string "alien-worker-runtime" and the
             // column carries no per-row signal.
             //
             // We only set the env var if the user hasn't already pinned
@@ -404,7 +409,7 @@ fn parse_otel_resource_attributes(existing: Option<&str>) -> BTreeMap<String, St
 ///
 /// - Plain variables: inserted directly into resource.environment.
 /// - Secret variables: their keys are collected into ALIEN_SECRETS so
-///   alien-runtime can fetch them from the vault at startup.
+///   alien-worker-runtime can fetch them from the vault at startup.
 fn inject_into_compute_resource(
     resource_name: &str,
     resource_entry: &mut alien_core::ResourceEntry,
@@ -467,7 +472,7 @@ fn inject_into_environment(
         .collect();
 
     // If resource needs secrets, add ALIEN_SECRETS env var
-    // alien-runtime will load these from the vault at startup
+    // alien-worker-runtime will load these from the vault at startup
     if !secret_keys.is_empty() {
         let alien_secrets = AlienSecretsConfig {
             keys: secret_keys.clone(),

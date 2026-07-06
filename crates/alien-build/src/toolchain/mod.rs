@@ -31,7 +31,7 @@ pub struct ToolchainContext {
     /// Whether to build in debug mode (faster builds, larger binaries)
     pub debug_mode: bool,
     /// Whether this is building a Container resource (vs Worker)
-    /// Containers need alien-runtime in the image on all platforms for command support
+    /// Containers need alien-worker-runtime in the image on all platforms for command support
     pub is_container: bool,
 }
 

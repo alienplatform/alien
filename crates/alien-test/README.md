@@ -9,9 +9,9 @@ E2E test harness for cross-cloud deployment testing. Provides reusable building 
 cargo build -p alien-operator -p alien-deploy-cli
 
 # Build runtime base image (x86_64 for GCP/Azure, arm64 for AWS Lambda)
-docker buildx build -t alien-runtime:local --platform linux/amd64 \
-  -f crates/alien-runtime/Dockerfile .
-export ALIEN_OVERRIDE_BASE_IMAGE=alien-runtime:local
+docker buildx build -t alien-worker-runtime:local --platform linux/amd64 \
+  -f crates/alien-worker-runtime/Dockerfile .
+export ALIEN_OVERRIDE_BASE_IMAGE=alien-worker-runtime:local
 
 # Source test credentials
 set -a && source .env.test && set +a

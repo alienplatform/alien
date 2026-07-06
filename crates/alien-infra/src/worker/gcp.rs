@@ -4438,7 +4438,7 @@ impl GcpWorkerController {
         // Build container port
         let ports = vec![ContainerPort {
             name: Some("http1".to_string()),
-            // NOTE: This must match the alien-runtime port on alien-build/src/lib.rs
+            // NOTE: This must match the alien-worker-runtime port on alien-build/src/lib.rs
             container_port: Some(8080),
         }];
 

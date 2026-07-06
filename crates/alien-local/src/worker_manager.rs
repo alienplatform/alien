@@ -587,7 +587,7 @@ impl LocalWorkerManager {
     /// Starts a daemon runtime.
     ///
     /// Daemons use passthrough transport: there is no HTTP invocation proxy and no
-    /// worker URL. The process is still wrapped by alien-runtime so bindings,
+    /// worker URL. The process is still wrapped by alien-worker-runtime so bindings,
     /// commands polling, tracing, graceful shutdown, and log export behave the
     /// same as other local compute resources.
     pub async fn start_daemon(
@@ -740,7 +740,7 @@ impl LocalWorkerManager {
 
         // Build log exporter configuration
         // For local workers, we extract OTLP config from env_vars and pass directly
-        // This allows alien-runtime (running embedded) to send logs via OTLP
+        // This allows alien-worker-runtime (running embedded) to send logs via OTLP
         let log_exporter =
             if let Some(endpoint) = runtime_env_vars.get("OTEL_EXPORTER_OTLP_LOGS_ENDPOINT") {
                 let mut headers = HashMap::new();
@@ -757,18 +757,18 @@ impl LocalWorkerManager {
                     .cloned()
                     .unwrap_or_else(|| id.to_string());
 
-                alien_runtime::LogExporter::Otlp {
+                alien_worker_runtime::LogExporter::Otlp {
                     endpoint: endpoint.clone(),
                     headers,
                     service_name,
                 }
             } else {
                 // No OTLP config - shouldn't happen for workers, but fallback to None
-                alien_runtime::LogExporter::None
+                alien_worker_runtime::LogExporter::None
             };
 
-        let runtime_config = alien_runtime::RuntimeConfig::builder()
-            .transport(alien_runtime::TransportType::Local)
+        let runtime_config = alien_worker_runtime::RuntimeConfig::builder()
+            .transport(alien_worker_runtime::TransportType::Local)
             .transport_port(port)
             .bindings_address(bindings_address)
             .command(existing_metadata.runtime_command.clone())
@@ -782,13 +782,13 @@ impl LocalWorkerManager {
         // Create shutdown channel
         let (shutdown_tx, shutdown_rx) = tokio::sync::broadcast::channel(1);
 
-        // Spawn alien_runtime::run in tokio task with custom bindings provider
+        // Spawn alien_worker_runtime::run in tokio task with custom bindings provider
         let id_clone = id.to_string();
         let runtime_task: JoinHandle<crate::error::Result<()>> = tokio::spawn(async move {
-            alien_runtime::run(
+            alien_worker_runtime::run(
                 runtime_config,
                 shutdown_rx,
-                alien_runtime::BindingsSource::Provider(bindings_provider),
+                alien_worker_runtime::BindingsSource::Provider(bindings_provider),
             )
             .await
             .context(ErrorData::Other {
@@ -798,7 +798,7 @@ impl LocalWorkerManager {
             Ok(())
         });
 
-        // Wait for the HTTP transport to actually be ready. alien-runtime may
+        // Wait for the HTTP transport to actually be ready. alien-worker-runtime may
         // first wait for app HTTP registration and task subscription before it
         // opens the proxy listener.
         let max_wait = std::time::Duration::from_secs(60);
@@ -973,17 +973,17 @@ impl LocalWorkerManager {
                     .cloned()
                     .unwrap_or_else(|| id.to_string());
 
-                alien_runtime::LogExporter::Otlp {
+                alien_worker_runtime::LogExporter::Otlp {
                     endpoint: endpoint.clone(),
                     headers,
                     service_name,
                 }
             } else {
-                alien_runtime::LogExporter::None
+                alien_worker_runtime::LogExporter::None
             };
 
-        let runtime_config = alien_runtime::RuntimeConfig::builder()
-            .transport(alien_runtime::TransportType::Passthrough)
+        let runtime_config = alien_worker_runtime::RuntimeConfig::builder()
+            .transport(alien_worker_runtime::TransportType::Passthrough)
             .transport_port(0)
             .bindings_address(bindings_address)
             .command(existing_metadata.runtime_command.clone())
@@ -998,10 +998,10 @@ impl LocalWorkerManager {
 
         let id_clone = id.to_string();
         let runtime_task: JoinHandle<crate::error::Result<()>> = tokio::spawn(async move {
-            alien_runtime::run(
+            alien_worker_runtime::run(
                 runtime_config,
                 shutdown_rx,
-                alien_runtime::BindingsSource::Provider(bindings_provider),
+                alien_worker_runtime::BindingsSource::Provider(bindings_provider),
             )
             .await
             .context(ErrorData::Other {
