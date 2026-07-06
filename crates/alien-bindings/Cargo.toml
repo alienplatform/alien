@@ -9,7 +9,7 @@ license-file.workspace = true
 crate-type = ["rlib"]
 
 [features]
-default = ["grpc", "all-platforms"]
+default = ["all-platforms"]
 all-platforms = ["aws", "gcp", "azure", "kubernetes", "local", "test"]  # Convenience feature for all providers
 aws = ["object_store/aws", "dep:base64", "dep:alien-aws-clients", "alien-client-config/aws"]
 gcp = ["object_store/gcp", "dep:base64", "dep:alien-gcp-clients", "alien-client-config/gcp"]
@@ -17,12 +17,6 @@ azure = ["object_store/azure", "dep:base64", "dep:alien-azure-clients", "alien-c
 kubernetes = ["dep:alien-k8s-clients", "dep:k8s-openapi", "alien-client-config/kubernetes"]
 local = ["object_store/fs", "dep:oci-client", "dep:turso", "dep:sha2", "tokio/fs", "tokio/process", "alien-core/local"]
 test = []  # Test platform support - fast mock implementations without real cloud APIs
-# The worker app protocol (Control + WaitUntil gRPC) now lives in
-# alien-worker-protocol. The `grpc` feature here only pulls the app-side clients
-# (AlienContext / WaitUntilContext) and the tonic runtime they need. These two
-# modules move to alien-sdk in ALIEN-223 task 2, after which this feature and the
-# alien-worker-protocol dependency are dropped from alien-bindings entirely.
-grpc = ["dep:tonic", "dep:prost-types", "dep:tokio-stream", "dep:alien-worker-protocol"]
 openapi = ["dep:utoipa"]
 platform-sdk = ["dep:alien-platform-api"]  # Platform API access (for_remote_deployment)
 
@@ -61,12 +55,6 @@ sha2 = { workspace = true, optional = true }
 
 # AWS
 base64 = { workspace = true, optional = true }
-
-# gRPC (app-side worker-protocol clients only; server + protocol live in alien-worker-protocol)
-alien-worker-protocol = { workspace = true, optional = true }
-tonic = { workspace = true, optional = true }
-prost-types = { workspace = true, optional = true }
-tokio-stream = { workspace = true, optional = true }
 
 # Kubernetes
 k8s-openapi = { version = "0.25.0", features = ["v1_33"], optional = true }

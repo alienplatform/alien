@@ -1,4 +1,4 @@
-use crate::{
+use alien_bindings::{
     error::{ErrorData, Result},
     traits::Binding,
 };
