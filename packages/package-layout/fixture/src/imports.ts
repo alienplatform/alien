@@ -193,17 +193,13 @@ async function checkBindings(): Promise<void> {
 
   // The first operation against an unconfigured binding must throw
   // BINDING_NOT_CONFIGURED naming ALIEN_<NAME>_BINDING (bindings behavior
-  // contract). A local deployment context is supplied so the ONLY missing piece
-  // is the binding's own `ALIEN_<NAME>_BINDING` env var; `get` is the pinned
-  // first storage operation.
+  // contract). No deployment env is supplied: with no deployment type and no
+  // credentials, construction still succeeds and the missing-binding error must
+  // surface before any platform resolution. `get` is the pinned first storage
+  // operation.
   try {
-    const storageFactory = mod.storage as (
-      name: string,
-      options?: { env?: Record<string, string | undefined> },
-    ) => Record<string, unknown>
-    const handle = storageFactory("layout-fixture-probe", {
-      env: { ALIEN_DEPLOYMENT_TYPE: "local" },
-    })
+    const storageFactory = mod.storage as (name: string) => Record<string, unknown>
+    const handle = storageFactory("layout-fixture-probe")
     const firstOp = handle.get as ((key: string) => Promise<unknown>) | undefined
     if (typeof firstOp !== "function") {
       throw new Error("no first operation available to trigger BINDING_NOT_CONFIGURED yet")

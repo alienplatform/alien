@@ -15,9 +15,10 @@ import { AlienError, storage } from "../dist/index.js"
 const runtime = typeof Bun !== "undefined" ? "bun" : "node"
 
 async function main() {
-  // A clean-ish env: local deployment so BindingsHandle construction succeeds,
-  // but no ALIEN_FILES_BINDING so resolving the binding fails.
-  const files = storage("files", { env: { ALIEN_DEPLOYMENT_TYPE: "local" } })
+  // Zero binding env: no deployment type, no credentials, no ALIEN_FILES_BINDING.
+  // Construction must still succeed and the first op must report the missing
+  // binding before any platform/credential resolution.
+  const files = storage("files")
 
   try {
     await files.head("does-not-matter.txt")
