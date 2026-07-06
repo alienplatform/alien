@@ -181,7 +181,6 @@ dependencies = [
  "alien-gcp-clients",
  "alien-k8s-clients",
  "alien-platform-api",
- "async-stream",
  "async-trait",
  "axum 0.8.9",
  "base64 0.22.1",
@@ -193,8 +192,6 @@ dependencies = [
  "k8s-openapi",
  "object_store",
  "oci-client",
- "prost 0.13.5",
- "prost-types",
  "regex",
  "reqwest 0.12.28",
  "rstest",
@@ -206,10 +203,6 @@ dependencies = [
  "tempfile",
  "test-context",
  "tokio",
- "tokio-stream",
- "tonic",
- "tonic-build",
- "tonic-reflection",
  "tracing",
  "tracing-subscriber",
  "turso",
@@ -725,6 +718,7 @@ dependencies = [
  "alien-core",
  "alien-error",
  "alien-runtime",
+ "alien-worker-protocol",
  "async-trait",
  "bollard",
  "bytes",
@@ -967,6 +961,7 @@ dependencies = [
  "alien-commands",
  "alien-core",
  "alien-error",
+ "alien-worker-protocol",
  "anyhow",
  "async-trait",
  "aws_lambda_events 0.16.1",
@@ -1022,6 +1017,21 @@ name = "alien-sdk"
 version = "1.10.7"
 dependencies = [
  "alien-bindings",
+ "alien-core",
+ "alien-error",
+ "alien-worker-protocol",
+ "async-trait",
+ "chrono",
+ "futures",
+ "prost-types",
+ "serde",
+ "serde_json",
+ "tokio",
+ "tokio-stream",
+ "tonic",
+ "tracing",
+ "utoipa",
+ "uuid",
 ]
 
 [[package]]
@@ -1089,8 +1099,8 @@ dependencies = [
 name = "alien-test-app"
 version = "1.10.7"
 dependencies = [
- "alien-bindings",
  "alien-error",
+ "alien-sdk",
  "axum 0.8.9",
  "chrono",
  "clap",
@@ -1128,6 +1138,25 @@ dependencies = [
  "tracing-subscriber",
  "utoipa",
  "uuid",
+]
+
+[[package]]
+name = "alien-worker-protocol"
+version = "1.10.7"
+dependencies = [
+ "alien-error",
+ "async-stream",
+ "async-trait",
+ "prost 0.13.5",
+ "prost-types",
+ "serde",
+ "serde_json",
+ "tokio",
+ "tokio-stream",
+ "tonic",
+ "tonic-build",
+ "tonic-reflection",
+ "tracing",
 ]
 
 [[package]]

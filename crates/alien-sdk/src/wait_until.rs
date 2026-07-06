@@ -1,4 +1,4 @@
-use crate::{
+use alien_bindings::{
     error::{ErrorData, Result},
     traits::Binding,
 };
@@ -24,7 +24,7 @@ use uuid::Uuid;
 use utoipa::ToSchema;
 
 #[cfg(feature = "grpc")]
-use crate::grpc::wait_until_service::alien_bindings::wait_until::{
+use alien_worker_protocol::wait_until::{
     wait_until_service_client::WaitUntilServiceClient, NotifyDrainCompleteRequest,
     NotifyTaskRegisteredRequest, WaitForDrainSignalRequest,
 };
@@ -120,23 +120,10 @@ impl WaitUntilContext {
 
         #[cfg(feature = "grpc")]
         {
-            // Task 11 note: the worker-protocol drain channel is selected here by a
-            // raw check of ALIEN_BINDINGS_MODE == "grpc". Task 11 moves this selection
-            // onto the worker-protocol env; until then read the raw env value directly.
-            let use_worker_protocol_grpc = env_vars
-                .get(alien_core::ENV_ALIEN_BINDINGS_MODE)
-                .map(|mode| mode == "grpc")
-                .unwrap_or(false);
-
-            if use_worker_protocol_grpc {
-                // Require gRPC connection
-                let grpc_address =
-                    env_vars.get("ALIEN_BINDINGS_GRPC_ADDRESS").ok_or_else(|| {
-                        AlienError::new(ErrorData::EnvironmentVariableMissing {
-                            variable_name: "ALIEN_BINDINGS_GRPC_ADDRESS".to_string(),
-                        })
-                    })?;
-
+            // The worker-protocol drain channel is selected by the presence of the
+            // ALIEN_WORKER_GRPC_ADDRESS env var — the runtime sets it for the app it
+            // spawns. Without it, wait_until runs in-process.
+            if let Some(grpc_address) = env_vars.get(alien_core::ENV_ALIEN_WORKER_GRPC_ADDRESS) {
                 // Create gRPC client
                 let channel = Self::create_grpc_channel(grpc_address.clone()).await?;
                 let grpc_client = WaitUntilServiceClient::new(channel);

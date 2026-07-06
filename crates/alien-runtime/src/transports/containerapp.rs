@@ -9,10 +9,10 @@
 use std::net::SocketAddr;
 use std::sync::Arc;
 
-use alien_bindings::control::{
-    self, ArcCommand, CronEvent, QueueMessage as ProtoQueueMessage, StorageEvent, Task,
+use alien_worker_protocol::{
+    control::{self, ArcCommand, CronEvent, QueueMessage as ProtoQueueMessage, StorageEvent, Task},
+    ControlGrpcServer,
 };
-use alien_bindings::grpc::control_service::ControlGrpcServer;
 use axum::{
     body::{Body, Bytes},
     extract::State,

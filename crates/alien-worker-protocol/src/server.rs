@@ -1,17 +1,14 @@
 use crate::{
-    error::{ErrorData, Result},
-    grpc::{
-        control_service::{
-            alien_bindings::control::FILE_DESCRIPTOR_SET as CONTROL_FILE_DESCRIPTOR_SET,
-            ControlGrpcServer,
-        },
-        wait_until_service::{
-            alien_bindings::wait_until::FILE_DESCRIPTOR_SET as WAIT_UNTIL_FILE_DESCRIPTOR_SET,
-            WaitUntilGrpcServer,
-        },
-        MAX_GRPC_MESSAGE_SIZE,
+    control_service::{
+        alien_worker::control::FILE_DESCRIPTOR_SET as CONTROL_FILE_DESCRIPTOR_SET,
+        ControlGrpcServer,
     },
-    BindingsProviderApi,
+    error::{ErrorData, Result},
+    wait_until_service::{
+        alien_worker::wait_until::FILE_DESCRIPTOR_SET as WAIT_UNTIL_FILE_DESCRIPTOR_SET,
+        WaitUntilGrpcServer,
+    },
+    MAX_GRPC_MESSAGE_SIZE,
 };
 use alien_error::{Context, IntoAlienError};
 use std::sync::Arc;
@@ -28,19 +25,13 @@ pub struct GrpcServerHandles {
     pub readiness_receiver: oneshot::Receiver<()>,
 }
 
-/// Configures and runs the alien-bindings worker-protocol gRPC server.
+/// Configures and runs the worker app protocol gRPC server.
 ///
 /// This server hosts the worker-protocol services (Control + WaitUntil) that
 /// coordinate the runtime with the application it manages. The bindings
-/// themselves are now resolved in-process by the direct provider, so no
+/// themselves are resolved in-process by the runtime's direct provider, so no
 /// per-binding gRPC service is registered here.
-///
-/// The `provider` argument is retained for signature compatibility with the
-/// runtime callers; the worker-protocol services do not consult it.
-pub async fn run_grpc_server(
-    _provider: Arc<dyn BindingsProviderApi>,
-    addr_str: &str,
-) -> Result<GrpcServerHandles> {
+pub async fn run_grpc_server(addr_str: &str) -> Result<GrpcServerHandles> {
     let addr: std::net::SocketAddr =
         addr_str
             .parse()
@@ -53,19 +44,19 @@ pub async fn run_grpc_server(
     info!("Configuring gRPC server for {}", addr);
 
     // The worker-protocol gRPC server is unauthenticated by design — it's
-    // intra-machine IPC between alien-runtime and the application code it
+    // intra-machine IPC between the runtime and the application code it
     // manages, and they share a trust boundary. Binding to a non-loopback
     // address erases that assumption (think `0.0.0.0` from a misconfigured
-    // ALIEN_BINDINGS_ADDRESS, `--network=host` Docker, or shared-pod sidecar).
+    // ALIEN_WORKER_GRPC_ADDRESS, `--network=host` Docker, or shared-pod sidecar).
     // Make the misconfiguration loud at startup rather than silently exposing
     // the control/drain channel.
     if !addr.ip().is_loopback() {
         tracing::warn!(
             address = %addr,
-            "alien-runtime gRPC server is binding to a NON-LOOPBACK address. \
+            "worker-protocol gRPC server is binding to a NON-LOOPBACK address. \
             This exposes the worker-protocol server (Control, WaitUntil) to anyone who can \
             reach this network interface. The server has no authentication. Set \
-            ALIEN_BINDINGS_ADDRESS=127.0.0.1:51351 unless you have a specific reason to expose it."
+            ALIEN_WORKER_GRPC_ADDRESS=127.0.0.1:51351 unless you have a specific reason to expose it."
         );
     }
 

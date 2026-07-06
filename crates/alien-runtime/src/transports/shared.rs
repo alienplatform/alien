@@ -5,8 +5,8 @@
 //! - Commands envelope parsing and response submission
 //! - CloudEvents parsing from HTTP headers
 
-use alien_bindings::control::ArcCommand;
 use alien_commands::Envelope;
+use alien_worker_protocol::control::ArcCommand;
 use axum::{
     body::{Body, Bytes},
     http::{header, Request, Response, StatusCode},

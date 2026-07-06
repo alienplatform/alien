@@ -12,16 +12,16 @@ use tokio_stream::Stream;
 use tonic::{Request, Response, Status};
 use tracing::{debug, info, warn};
 
-pub mod alien_bindings {
+pub mod alien_worker {
     pub mod control {
-        tonic::include_proto!("alien_bindings.control");
+        tonic::include_proto!("alien_worker.control");
 
         pub const FILE_DESCRIPTOR_SET: &[u8] =
-            tonic::include_file_descriptor_set!("alien_bindings.control_descriptor");
+            tonic::include_file_descriptor_set!("alien_worker.control_descriptor");
     }
 }
 
-use alien_bindings::control::{
+use alien_worker::control::{
     control_service_server::{ControlService, ControlServiceServer},
     RegisterEventHandlerRequest, RegisterEventHandlerResponse, RegisterHttpServerRequest,
     RegisterHttpServerResponse, SendTaskResultRequest, SendTaskResultResponse, Task,
@@ -326,11 +326,11 @@ impl ControlService for ControlGrpcServer {
         let task_id = req.task_id;
 
         let (result, result_desc) = match req.result {
-            Some(alien_bindings::control::send_task_result_request::Result::Success(ref s)) => {
+            Some(alien_worker::control::send_task_result_request::Result::Success(ref s)) => {
                 let desc = format!("success, response_data_len={}", s.response_data.len());
                 (Ok(TaskResult::success(s.response_data.clone())), desc)
             }
-            Some(alien_bindings::control::send_task_result_request::Result::Error(ref e)) => {
+            Some(alien_worker::control::send_task_result_request::Result::Error(ref e)) => {
                 let desc = format!("error, code={}, message={}", e.code, e.message);
                 (
                     Ok(TaskResult::error(e.code.clone(), e.message.clone())),

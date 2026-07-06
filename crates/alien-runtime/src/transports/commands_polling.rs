@@ -5,10 +5,6 @@
 
 use std::{sync::Arc, time::Duration};
 
-use alien_bindings::grpc::control_service::{
-    alien_bindings::control::{task::Payload, ArcCommand, Task},
-    ControlGrpcServer,
-};
 use alien_commands::{
     runtime::submit_response,
     types::{
@@ -17,6 +13,10 @@ use alien_commands::{
 };
 use alien_core::ENV_ALIEN_COMMANDS_TARGET_RESOURCE_ID;
 use alien_error::{AlienError, Context, IntoAlienError};
+use alien_worker_protocol::{
+    control::{task::Payload, ArcCommand, Task},
+    ControlGrpcServer,
+};
 use reqwest::{Client, Url};
 use tracing::{debug, error, info, warn};
 

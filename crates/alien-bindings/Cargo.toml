@@ -9,7 +9,7 @@ license-file.workspace = true
 crate-type = ["rlib"]
 
 [features]
-default = ["grpc", "all-platforms"]
+default = ["all-platforms"]
 all-platforms = ["aws", "gcp", "azure", "kubernetes", "local", "test"]  # Convenience feature for all providers
 aws = ["object_store/aws", "dep:base64", "dep:alien-aws-clients", "alien-client-config/aws"]
 gcp = ["object_store/gcp", "dep:base64", "dep:alien-gcp-clients", "alien-client-config/gcp"]
@@ -17,7 +17,6 @@ azure = ["object_store/azure", "dep:base64", "dep:alien-azure-clients", "alien-c
 kubernetes = ["dep:alien-k8s-clients", "dep:k8s-openapi", "alien-client-config/kubernetes"]
 local = ["object_store/fs", "dep:oci-client", "dep:turso", "dep:sha2", "tokio/fs", "tokio/process", "alien-core/local"]
 test = []  # Test platform support - fast mock implementations without real cloud APIs
-grpc = ["dep:tonic", "dep:prost", "dep:prost-types", "dep:tokio-stream", "dep:tonic-reflection", "dep:async-stream"]
 openapi = ["dep:utoipa"]
 platform-sdk = ["dep:alien-platform-api"]  # Platform API access (for_remote_deployment)
 
@@ -57,14 +56,6 @@ sha2 = { workspace = true, optional = true }
 # AWS
 base64 = { workspace = true, optional = true }
 
-# gRPC
-tonic = { workspace = true, optional = true }
-prost = { workspace = true, optional = true }
-prost-types = { workspace = true, optional = true }
-tokio-stream = { workspace = true, optional = true }
-tonic-reflection = { workspace = true, optional = true }
-async-stream = { workspace = true, optional = true }
-
 # Kubernetes
 k8s-openapi = { version = "0.25.0", features = ["v1_33"], optional = true }
 
@@ -87,6 +78,3 @@ tracing-subscriber = { workspace = true }
 [target.'cfg(unix)'.dev-dependencies]
 container-registry = { workspace = true, features = ["test-support"] }
 sec = { workspace = true }
-
-[build-dependencies]
-tonic-build = { workspace = true }

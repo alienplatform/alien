@@ -7,15 +7,9 @@
 //! - Cloud Scheduler → CronEvent via gRPC → KV storage
 //! - Commands via Pub/Sub CloudEvents → command dispatch via gRPC
 
-use alien_bindings::{
-    grpc::{
-        control_service::ControlGrpcServer, run_grpc_server,
-        wait_until_service::WaitUntilGrpcServer,
-    },
-    BindingsProvider,
-};
-use alien_core::{bindings, ClientConfig};
+use alien_core::bindings;
 use alien_runtime::{run, BindingsSource, RuntimeConfig, TransportType};
+use alien_worker_protocol::{run_grpc_server, ControlGrpcServer, WaitUntilGrpcServer};
 use anyhow::Context;
 use chrono::Utc;
 use port_check::free_local_port;
@@ -72,7 +66,8 @@ impl RuntimeHandle {
 /// Holds gRPC server resources for tests
 struct GrpcTestResources {
     #[allow(dead_code)]
-    server_task: JoinHandle<Result<(), alien_error::AlienError<alien_bindings::error::ErrorData>>>,
+    server_task:
+        JoinHandle<Result<(), alien_error::AlienError<alien_worker_protocol::error::ErrorData>>>,
     grpc_address: String,
     #[allow(dead_code)]
     wait_until_server: Arc<WaitUntilGrpcServer>,
@@ -90,31 +85,10 @@ impl std::fmt::Debug for GrpcTestResources {
 }
 
 async fn setup_grpc_server() -> anyhow::Result<GrpcTestResources> {
+    // The worker-protocol gRPC server (Control + WaitUntil) needs no bindings
+    // provider — bindings are resolved in-process by the child app. This temp dir
+    // is just kept alive on the returned handle.
     let temp_data_dir = tempfile::tempdir().expect("Failed to create temp dir");
-    let temp_data_dir_path = temp_data_dir.path().to_str().unwrap().to_string();
-
-    // Create local bindings for storage and KV
-    let storage_binding = bindings::StorageBinding::local(temp_data_dir_path.clone());
-    let kv_binding = bindings::KvBinding::local(temp_data_dir_path.clone());
-
-    let client_config = ClientConfig::Local {
-        state_directory: temp_data_dir_path.clone(),
-    };
-
-    let mut bindings_map: HashMap<String, serde_json::Value> = HashMap::new();
-    bindings_map.insert(
-        "test-storage".to_string(),
-        serde_json::to_value(&storage_binding).expect("Failed to serialize storage binding"),
-    );
-    bindings_map.insert(
-        "test-kv".to_string(),
-        serde_json::to_value(&kv_binding).expect("Failed to serialize KV binding"),
-    );
-
-    let local_provider = Arc::new(
-        BindingsProvider::new(client_config, bindings_map)
-            .expect("Failed to create local provider"),
-    );
 
     let port = free_local_port().context("Failed to find free port for gRPC server")?;
     let addr = std::net::SocketAddr::from(([127, 0, 0, 1], port));
@@ -123,7 +97,7 @@ async fn setup_grpc_server() -> anyhow::Result<GrpcTestResources> {
 
     info!(grpc_address = %grpc_address, "Starting gRPC server");
 
-    let grpc_handles = run_grpc_server(local_provider, &server_addr_str)
+    let grpc_handles = run_grpc_server(&server_addr_str)
         .await
         .context("Failed to start gRPC server")?;
 
@@ -186,11 +160,11 @@ impl AsyncTestContext for CloudRunTestContext {
         // Bindings are now resolved in-process by the direct provider, so the child
         // app runs under the `local` platform (no cloud feature required to build the
         // provider). The CloudRun transport under test is selected explicitly via
-        // RuntimeConfig::transport, independent of this deployment type. The
-        // ALIEN_BINDINGS_MODE=grpc injection stays: it selects the worker-protocol
-        // (control + wait_until) gRPC channel that this test's server provides.
+        // RuntimeConfig::transport, independent of this deployment type. The runtime
+        // injects ALIEN_WORKER_GRPC_ADDRESS for the child from RuntimeConfig's
+        // bindings_address; its presence is what selects the worker-protocol (control
+        // + wait_until) gRPC channel that this test's server provides.
         env_vars.insert("ALIEN_DEPLOYMENT_TYPE".to_string(), "local".to_string());
-        env_vars.insert("ALIEN_BINDINGS_MODE".to_string(), "grpc".to_string());
 
         // The event handlers in alien-test-app persist events into the `test-kv`
         // binding and the read-back endpoints load it. With bindings resolved
@@ -597,9 +571,9 @@ async fn test_cloudrun_env_var_propagation(ctx: &mut CloudRunTestContext) -> any
 
     let client = reqwest::Client::new();
 
-    // Test retrieving ALIEN_BINDINGS_GRPC_ADDRESS which is always set by the runtime
+    // Test retrieving ALIEN_WORKER_GRPC_ADDRESS which is always set by the runtime
     let url = format!(
-        "http://127.0.0.1:{}/env-var/ALIEN_BINDINGS_GRPC_ADDRESS",
+        "http://127.0.0.1:{}/env-var/ALIEN_WORKER_GRPC_ADDRESS",
         ctx.transport_port
     );
 
@@ -617,7 +591,7 @@ async fn test_cloudrun_env_var_propagation(ctx: &mut CloudRunTestContext) -> any
 
     let body: serde_json::Value = response.json().await?;
     assert_eq!(body["success"], true);
-    assert_eq!(body["variable"], "ALIEN_BINDINGS_GRPC_ADDRESS");
+    assert_eq!(body["variable"], "ALIEN_WORKER_GRPC_ADDRESS");
     assert!(body["value"].as_str().is_some(), "Should have a value");
     assert!(
         body["value"].as_str().unwrap().contains(":"),

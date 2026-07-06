@@ -12,7 +12,7 @@
 use std::net::SocketAddr;
 use std::sync::Arc;
 
-use alien_bindings::grpc::control_service::ControlGrpcServer;
+use alien_worker_protocol::ControlGrpcServer;
 use axum::{
     body::Body,
     extract::State,

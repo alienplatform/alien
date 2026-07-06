@@ -6,23 +6,22 @@ Platform-agnostic binding abstractions for Alien applications. Defines traits fo
 
 - `traits.rs` — Binding trait definitions (`Storage`, `Kv`, `Vault`, `Queue`, `Build`, etc.)
 - `provider.rs` — `BindingsProvider`: holds all binding instances for a deployment, keyed by name
-- `alien_context.rs` — `AlienContext`: application-facing entry point (wraps `BindingsProvider`)
+- `bindings.rs` — `Bindings`: app-facing entry point over `BindingsProvider` (`storage`, `kv`, `queue`, `vault`)
 - `providers/` — Platform-specific implementations (AWS, GCP, Azure, Local, etc.)
-- `grpc/` — gRPC server + client for cross-process binding access (used by alien-runtime)
 
 ## Feature Flags
 
-- `grpc` — gRPC server/client for cross-process binding access
 - `openapi` — OpenAPI schema generation
 - Platform features: `aws`, `gcp`, `azure`, `kubernetes`, `local`, `test`
 
 ## Usage
 
 ```rust
-use alien_bindings::{get_platform_provider, Storage};
+use alien_bindings::Bindings;
+use object_store::path::Path;
 
-let provider = get_platform_provider()?;
-let storage = provider.load_storage("my-storage").await?;
+let bindings = Bindings::from_env()?;
+let storage = bindings.storage("files").await?;
 storage.put(&Path::from("hello.txt"), data.into()).await?;
 ```
 

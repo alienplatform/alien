@@ -1,6 +1,6 @@
 syntax = "proto3";
 
-package alien_bindings.wait_until;
+package alien_worker.wait_until;
 
 import "google/protobuf/duration.proto";
 

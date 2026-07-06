@@ -1,6 +1,6 @@
 syntax = "proto3";
 
-package alien_bindings.control;
+package alien_worker.control;
 
 import "google/protobuf/timestamp.proto";
 

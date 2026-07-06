@@ -13,14 +13,14 @@ use tokio::sync::{Mutex, RwLock};
 use tokio_stream::StreamExt as _;
 use tracing::{debug, error, info, warn};
 
-use crate::error::{ErrorData, Result};
-use crate::wait_until::WaitUntilContext;
-use crate::{BindingsProvider, BindingsProviderApi, WaitUntil};
+use crate::wait_until::{WaitUntil, WaitUntilContext};
+use alien_bindings::error::{ErrorData, Result};
+use alien_bindings::{BindingsProvider, BindingsProviderApi};
 use alien_core::{ENV_ALIEN_CURRENT_CONTAINER_BINDING_NAME, ENV_ALIEN_CURRENT_WORKER_BINDING_NAME};
 use alien_error::{AlienError, Context, IntoAlienError};
 
 #[cfg(feature = "grpc")]
-use crate::grpc::control_service::alien_bindings::control::{
+use alien_worker_protocol::control::{
     control_service_client::ControlServiceClient, send_task_result_request::Result as TaskResult,
     task::Payload as TaskPayload, RegisterEventHandlerRequest, RegisterHttpServerRequest,
     SendTaskResultRequest, Task, TaskError, TaskSuccess, WaitForTasksRequest,
@@ -165,10 +165,10 @@ impl AlienContext {
 
         let grpc_address = self
             .env_vars
-            .get("ALIEN_BINDINGS_GRPC_ADDRESS")
+            .get(alien_core::ENV_ALIEN_WORKER_GRPC_ADDRESS)
             .ok_or_else(|| {
                 AlienError::new(ErrorData::EnvironmentVariableMissing {
-                    variable_name: "ALIEN_BINDINGS_GRPC_ADDRESS".to_string(),
+                    variable_name: alien_core::ENV_ALIEN_WORKER_GRPC_ADDRESS.to_string(),
                 })
             })?;
 
@@ -790,7 +790,9 @@ impl AlienContext {
     }
 
     /// Gets the current worker binding if available.
-    pub async fn get_current_worker(&self) -> Result<Option<Arc<dyn crate::traits::Worker>>> {
+    pub async fn get_current_worker(
+        &self,
+    ) -> Result<Option<Arc<dyn alien_bindings::traits::Worker>>> {
         if let Some(current_worker_name) = self.env_vars.get(ENV_ALIEN_CURRENT_WORKER_BINDING_NAME)
         {
             Ok(Some(
@@ -816,7 +818,9 @@ impl AlienContext {
     ///     let callback_url = format!("{}/callback", public_url.unwrap_or(""));
     /// }
     /// ```
-    pub async fn get_current_container(&self) -> Result<Option<Arc<dyn crate::traits::Container>>> {
+    pub async fn get_current_container(
+        &self,
+    ) -> Result<Option<Arc<dyn alien_bindings::traits::Container>>> {
         if let Some(current_container_name) =
             self.env_vars.get(ENV_ALIEN_CURRENT_CONTAINER_BINDING_NAME)
         {

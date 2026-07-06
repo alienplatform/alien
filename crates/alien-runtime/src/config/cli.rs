@@ -19,10 +19,10 @@ pub struct Cli {
     #[arg(short, long, env = "ALIEN_TRANSPORT", default_value = "lambda")]
     pub transport: TransportType,
 
-    /// gRPC bindings address
+    /// Worker app protocol gRPC server address (Control + WaitUntil)
     #[arg(
         long,
-        env = "ALIEN_BINDINGS_ADDRESS",
+        env = "ALIEN_WORKER_GRPC_ADDRESS",
         default_value = "127.0.0.1:51351"
     )]
     pub bindings_address: String,

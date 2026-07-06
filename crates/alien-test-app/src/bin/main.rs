@@ -7,8 +7,8 @@
 //! - Commands for testing command invocation
 //! - Minimal bindings usage (Storage, KV)
 
-use alien_bindings::{AlienContext, ErrorData as BindingsErrorData};
 use alien_error::{Context, IntoAlienError};
+use alien_sdk::{AlienContext, ErrorData as BindingsErrorData};
 use axum::{
     extract::{Path, State},
     http::StatusCode,
@@ -302,7 +302,7 @@ const ALLOWED_ENV_VARS: &[&str] = &[
     "ALIEN_DEPLOYMENT_ID",
     "ALIEN_COMMANDS_POLLING_URL",
     "ALIEN_COMMANDS_POLLING_ENABLED",
-    "ALIEN_BINDINGS_GRPC_ADDRESS",
+    "ALIEN_WORKER_GRPC_ADDRESS",
     "PORT",
     "ALIEN_PLATFORM",
 ];

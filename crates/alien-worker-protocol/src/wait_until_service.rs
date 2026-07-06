@@ -1,5 +1,3 @@
-#![cfg(feature = "grpc")]
-
 use alien_error::AlienError;
 use async_trait::async_trait;
 use std::{collections::HashMap, sync::Arc};
@@ -8,15 +6,15 @@ use tonic::{Request, Response, Status};
 use tracing::{debug, info, warn};
 
 // Module for the generated gRPC code.
-pub mod alien_bindings {
+pub mod alien_worker {
     pub mod wait_until {
-        tonic::include_proto!("alien_bindings.wait_until");
+        tonic::include_proto!("alien_worker.wait_until");
         pub const FILE_DESCRIPTOR_SET: &[u8] =
-            tonic::include_file_descriptor_set!("alien_bindings.wait_until_descriptor");
+            tonic::include_file_descriptor_set!("alien_worker.wait_until_descriptor");
     }
 }
 
-use alien_bindings::wait_until::{
+use alien_worker::wait_until::{
     wait_until_service_server::{WaitUntilService, WaitUntilServiceServer},
     GetTaskCountRequest, GetTaskCountResponse, NotifyDrainCompleteRequest,
     NotifyDrainCompleteResponse, NotifyTaskRegisteredRequest, NotifyTaskRegisteredResponse,
