@@ -30,7 +30,7 @@
  * with `ENVIRONMENT_VARIABLE_MISSING` before it ever reaches the binding.
  */
 
-import { mkdtempSync } from "node:fs"
+import { mkdtempSync, rmSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 
@@ -49,9 +49,33 @@ export function bindingEnvVarName(bindingName: string): string {
   return `ALIEN_${bindingName.replace(/-/g, "_").toUpperCase()}_BINDING`
 }
 
+/**
+ * Every directory handed out by `makeTempDir` since the last `cleanupTempDirs`
+ * call, so a test file can remove exactly what it created without guessing at
+ * paths. A test file's own `afterAll(cleanupTempDirs)` clears this before the
+ * next file's tests run, so it's safe even if the runner shares this module
+ * instance across files (Bun's single-process test runner does; Vitest's
+ * per-file isolation doesn't, but the same call is a harmless no-op there).
+ */
+const createdDirs = new Set<string>()
+
 /** Create a fresh, empty temp directory for one binding's on-disk state. */
 export function makeTempDir(label: string): string {
-  return mkdtempSync(join(tmpdir(), `alien-bindings-test-${label}-`))
+  const dir = mkdtempSync(join(tmpdir(), `alien-bindings-test-${label}-`))
+  createdDirs.add(dir)
+  return dir
+}
+
+/**
+ * Remove every temp directory created via `makeTempDir` so far and forget
+ * them. Call from an `afterAll` in any test file that builds fixtures through
+ * this helper, so `os.tmpdir()` doesn't accumulate one directory per test run.
+ */
+export function cleanupTempDirs(): void {
+  for (const dir of createdDirs) {
+    rmSync(dir, { recursive: true, force: true })
+  }
+  createdDirs.clear()
 }
 
 /** An env map plus the temp directory backing it, for tests that want to inspect disk state. */

@@ -9,10 +9,10 @@
  */
 
 import { randomUUID } from "node:crypto"
-import { describe, expect, it } from "vitest"
+import { afterAll, describe, expect, it } from "vitest"
 import { queue } from "../src/index.js"
 import type { Queue } from "../src/index.js"
-import { localQueueBindingEnv, only } from "./helpers/local-binding-env.js"
+import { cleanupTempDirs, localQueueBindingEnv, only } from "./helpers/local-binding-env.js"
 
 function freshQueue(): Queue {
   const name = `queue-${randomUUID()}`
@@ -21,6 +21,10 @@ function freshQueue(): Queue {
 }
 
 describe("queue (local turso-backed provider)", () => {
+  afterAll(() => {
+    cleanupTempDirs()
+  })
+
   it("send(json) / receive() returns a typed json payload", async () => {
     const q = freshQueue()
     await q.send({ hello: "world", n: 1 })

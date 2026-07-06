@@ -6,10 +6,10 @@
  */
 
 import { randomUUID } from "node:crypto"
-import { describe, expect, it } from "vitest"
+import { afterAll, describe, expect, it } from "vitest"
 import { kv } from "../src/index.js"
 import type { Kv } from "../src/index.js"
-import { localKvBindingEnv } from "./helpers/local-binding-env.js"
+import { cleanupTempDirs, localKvBindingEnv } from "./helpers/local-binding-env.js"
 
 function freshKv(): Kv {
   const name = `kv-${randomUUID()}`
@@ -18,6 +18,10 @@ function freshKv(): Kv {
 }
 
 describe("kv (local turso-backed provider)", () => {
+  afterAll(() => {
+    cleanupTempDirs()
+  })
+
   it("round-trips a raw Buffer via get/set", async () => {
     const k = freshKv()
     await k.set("greeting", "hello")
@@ -71,7 +75,9 @@ describe("kv (local turso-backed provider)", () => {
     expect(await k.getText("short-lived")).toBe("value")
     expect(await k.exists("short-lived")).toBe(true)
 
-    await new Promise(resolve => setTimeout(resolve, 1300))
+    // Deliberately generous margin over the 1s ttl to avoid CI flakiness; the
+    // only slow test in this suite.
+    await new Promise(resolve => setTimeout(resolve, 2000))
 
     expect(await k.getText("short-lived")).toBeNull()
     expect(await k.exists("short-lived")).toBe(false)

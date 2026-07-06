@@ -14,6 +14,10 @@
  *
  * The specifier is kept external at build time (see tsdown.config.ts) so the
  * literal survives into `dist/native.js` for bun to resolve and embed.
+ *
+ * `bun build --compile` on this entry needs `--format=cjs` or the produced
+ * binary crashes on load (`__require is not defined`) — see
+ * `scripts/compile-smoke.ts` for the verified repro and required flag.
  */
 
 import addon from "./alien-bindings.node"

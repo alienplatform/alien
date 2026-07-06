@@ -10,11 +10,15 @@
  */
 
 import { randomUUID } from "node:crypto"
-import { describe, expect, it } from "vitest"
+import { afterAll, describe, expect, it } from "vitest"
 import { kv } from "../src/index.js"
-import { localKvBindingEnv } from "./helpers/local-binding-env.js"
+import { cleanupTempDirs, localKvBindingEnv } from "./helpers/local-binding-env.js"
 
 describe("env override isolation", () => {
+  afterAll(() => {
+    cleanupTempDirs()
+  })
+
   it("has no ALIEN_*_BINDING variables in process.env (test isolation precondition)", () => {
     const stray = Object.keys(process.env).filter(
       key => key.startsWith("ALIEN_") && key.endsWith("_BINDING"),

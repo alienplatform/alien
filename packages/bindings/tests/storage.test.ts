@@ -5,10 +5,10 @@
  */
 
 import { randomUUID } from "node:crypto"
-import { describe, expect, it } from "vitest"
+import { afterAll, describe, expect, it } from "vitest"
 import { storage } from "../src/index.js"
 import type { Storage } from "../src/index.js"
-import { localStorageBindingEnv } from "./helpers/local-binding-env.js"
+import { cleanupTempDirs, localStorageBindingEnv } from "./helpers/local-binding-env.js"
 
 function freshStorage(): Storage {
   const name = `storage-${randomUUID()}`
@@ -17,6 +17,10 @@ function freshStorage(): Storage {
 }
 
 describe("storage (local file-tree provider)", () => {
+  afterAll(() => {
+    cleanupTempDirs()
+  })
+
   it("round-trips a Buffer byte-exact, including zero bytes and arbitrary binary content", async () => {
     const s = freshStorage()
     const data = Buffer.from([0x00, 0x01, 0x02, 0xff, 0xfe, 0x00, 0x80, 0x7f, 0x00])

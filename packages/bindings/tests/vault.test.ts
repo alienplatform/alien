@@ -5,10 +5,10 @@
  */
 
 import { randomUUID } from "node:crypto"
-import { describe, expect, it } from "vitest"
+import { afterAll, describe, expect, it } from "vitest"
 import { AlienError, vault } from "../src/index.js"
 import type { Vault } from "../src/index.js"
-import { localVaultBindingEnv } from "./helpers/local-binding-env.js"
+import { cleanupTempDirs, localVaultBindingEnv } from "./helpers/local-binding-env.js"
 
 function freshVault(): Vault {
   const name = `vault-${randomUUID()}`
@@ -17,6 +17,10 @@ function freshVault(): Vault {
 }
 
 describe("vault (local secrets.json provider)", () => {
+  afterAll(() => {
+    cleanupTempDirs()
+  })
+
   it("put/get round-trips a string secret", async () => {
     const v = freshVault()
     await v.put("api-key", "sekrit")
