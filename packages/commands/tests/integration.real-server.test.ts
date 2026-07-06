@@ -137,14 +137,31 @@ async function startRealServer(): Promise<RealServer> {
 
   const stop = () =>
     new Promise<void>(resolve => {
-      if (proc.exitCode !== null) {
+      const finish = () => {
+        // Detach the pipes explicitly rather than relying on process exit to
+        // reclaim them — an undestroyed stream can keep the event loop (and
+        // vitest's worker↔main RPC) busy past teardown.
+        proc.stdout.destroy()
+        proc.stderr.destroy()
         resolve()
+      }
+
+      if (proc.exitCode !== null || proc.signalCode !== null) {
+        finish()
         return
       }
-      proc.on("exit", () => resolve())
-      // Closing stdin is the bin's graceful shutdown; kill as a hard fallback.
+
+      proc.once("exit", () => {
+        clearTimeout(killTimer)
+        finish()
+      })
+
+      // Closing stdin is the bin's graceful shutdown; SIGTERM backs it up in
+      // case the bin doesn't treat stdin-close as a shutdown signal, and
+      // SIGKILL is the hard fallback if it ignores both.
       proc.stdin.end()
-      setTimeout(() => proc.kill("SIGKILL"), 2_000)
+      proc.kill("SIGTERM")
+      const killTimer = setTimeout(() => proc.kill("SIGKILL"), 2_000)
     })
 
   return {
