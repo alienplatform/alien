@@ -141,6 +141,16 @@ jobs:
           NODE_OPTIONS: "--max-old-space-size=4096"
         run: pnpm build && pnpm -C packages/package-layout check
 
+      - name: Command twins real-wire integration
+        if: steps.changes.outputs.examples == 'true' || github.event_name == 'workflow_dispatch' || github.ref == 'refs/heads/main'
+        env:
+          NODE_OPTIONS: "--max-old-space-size=4096"
+        # Drives the TS command sender/receiver against the real Rust command
+        # server (test-command-server bin, test-utils feature). Cargo is already
+        # set up and warm from the Rust fast-tests step above; the suite fails
+        # loudly if the server can't build/start (no silent skip).
+        run: pnpm -C packages/commands test:integration
+
       - name: Run examples
         if: steps.changes.outputs.examples == 'true' || github.event_name == 'workflow_dispatch' || github.ref == 'refs/heads/main'
         env:
