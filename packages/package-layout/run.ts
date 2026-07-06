@@ -41,6 +41,7 @@ import {
   rmSync,
   writeFileSync,
 } from "node:fs"
+import { createRequire } from "node:module"
 import { dirname, join, relative } from "node:path"
 import { fileURLToPath } from "node:url"
 import {
@@ -377,9 +378,25 @@ function main(): void {
     )
   } else {
     console.log(
-      `[addon] no prebuild and no dev addon for '${triple}' — building one with \`npx napi build --platform --release\` in crates/alien-bindings-node (CI path)...`,
+      `[addon] no prebuild and no dev addon for '${triple}' — building one with \`napi build --platform --release\` in crates/alien-bindings-node (CI path)...`,
     )
-    const build = run("npx", ["napi", "build", "--platform", "--release"], bindingsNodeDir)
+    // crates/alien-bindings-node is not a pnpm workspace member, so it has no
+    // node_modules in CI — `npx napi` there would fall through to the npm
+    // registry. Resolve the napi CLI from this package's own devDependencies
+    // (installed by the root frozen-lockfile `pnpm install`) and spawn its bin
+    // directly with cwd set to the crate dir.
+    const napiRequire = createRequire(import.meta.url)
+    const napiPkgPath = napiRequire.resolve("@napi-rs/cli/package.json")
+    const napiPkg = JSON.parse(readFileSync(napiPkgPath, "utf8")) as {
+      bin: string | Record<string, string>
+    }
+    const napiBinRel = typeof napiPkg.bin === "string" ? napiPkg.bin : napiPkg.bin.napi
+    const napiBinPath = join(dirname(napiPkgPath), napiBinRel)
+    const build = run(
+      process.execPath,
+      [napiBinPath, "build", "--platform", "--release"],
+      bindingsNodeDir,
+    )
     if (build.status === 0 && existsSync(devAddonPath)) {
       addonPath = devAddonPath
       console.log(`[addon] built ${relative(scriptDir, devAddonPath)}.`)
