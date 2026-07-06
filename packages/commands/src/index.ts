@@ -31,14 +31,20 @@
 export { CommandsClient, TargetedCommands } from "./client.js"
 export type { CommandsClientConfig, InvokeOptions } from "./client.js"
 
-// Receiver: `createCommandReceiver`, `CommandReceiver`, and
-// `CommandReceiverConfigInvalidError` are added in the receiver task; the
-// index is laid out so those exports slot in beside the sender here.
+// Receiver
+export { createCommandReceiver } from "./receiver.js"
+export type {
+  CommandContext,
+  CommandHandler,
+  CommandReceiver,
+  CommandReceiverOptions,
+} from "./receiver.js"
 
-// Sender error set
+// Error set
 export {
   CommandCreationFailedError,
   CommandExpiredError,
+  CommandReceiverConfigInvalidError,
   CommandTimeoutError,
   DeploymentCommandError,
   ManagerHttpError,

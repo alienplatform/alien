@@ -111,6 +111,27 @@ export const ResponseDecodingFailedError = defineError({
 })
 
 /**
+ * Error thrown when the pull receiver's environment configuration is missing or
+ * invalid. Fails fast (synchronously, from `createCommandReceiver`) and names
+ * the offending variable in `context.envVar`.
+ *
+ * The Rust twin (`alien_commands::Receiver::from_env`) raises the identical code
+ * (`COMMAND_RECEIVER_CONFIG_INVALID`) for the same five variables, so the two
+ * receivers reject the same misconfigurations.
+ */
+export const CommandReceiverConfigInvalidError = defineError({
+  code: "COMMAND_RECEIVER_CONFIG_INVALID",
+  context: z.object({
+    envVar: z.string(),
+    reason: z.string(),
+  }),
+  message: ({ reason }) => `Command receiver configuration invalid: ${reason}`,
+  retryable: false,
+  internal: false,
+  httpStatusCode: 400,
+})
+
+/**
  * Error thrown when Manager returns an HTTP error.
  */
 export const ManagerHttpError = defineError({

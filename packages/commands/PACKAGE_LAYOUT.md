@@ -133,8 +133,18 @@ MAY depend on:
 
 ## DECIDED (task 08)
 
-The OPEN(08) sender-side type decisions, now pinned. (Receiver handler-context
-field types remain to be recorded by the receiver task.)
+The OPEN(08) type decisions, now pinned.
+
+- **`CommandReceiver` handler-context field types** (`CommandContext`, exported
+  from `"."`): `{ input: Uint8Array; signal: AbortSignal; deadline: Date;
+  commandId: string; attempt: number }`. `input` is the decoded param bytes
+  (byte-for-byte twin of the Rust `ctx.input`); `signal` is the twin of the Rust
+  `ctx.cancellation` token, firing at budget expiry; `deadline` is the effective
+  budget `min(envelope.deadline, leaseExpiresAt)`, always present. A
+  `CommandHandler` is `(ctx: CommandContext) => unknown | Promise<unknown>`; its
+  return value is the JSON success body. `createCommandReceiver()` returns a
+  `CommandReceiver` (`.handle` / `.run` / `.stop`); `.stop()` is the exposed
+  drain-and-return mechanism (twin of the Rust `ShutdownHandle`).
 
 - **`CommandsClient#target(name)` return type:** `TargetedCommands` — a class
   exported from `"."`, a thin sender bound to one `targetResourceId`. Its
@@ -149,11 +159,11 @@ field types remain to be recorded by the receiver task.)
   - response: generic `TResponse` (default `unknown`), the decoded success body.
 - **`InvokeOptions`:**
   `{ timeoutMs?: number; deadline?: Date; idempotencyKey?: string; targetResourceId?: string; pollIntervalMs?: number; maxPollIntervalMs?: number; pollBackoff?: number }`.
-  `timeoutMs` defaults to the client's `timeout`; polling knobs default to
+  `timeoutMs` defaults to the client's `timeoutMs`; polling knobs default to
   500ms / 5000ms / ×1.5.
 - **`CommandsClientConfig`:**
-  `{ managerUrl: string; deploymentId: string; token: string; timeout?: number; allowLocalStorage?: boolean }`
-  (`timeout` = default invoke timeout, 60000ms; `allowLocalStorage` gates the
+  `{ managerUrl: string; deploymentId: string; token: string; timeoutMs?: number; allowLocalStorage?: boolean }`
+  (`timeoutMs` = default invoke timeout, 60000ms; `allowLocalStorage` gates the
   `local` storage backend for dev).
 - **Exported sender-error set** (migrated from `@alienplatform/sdk/commands`,
   all `defineError` from `@alienplatform/core`): `CommandCreationFailedError`
