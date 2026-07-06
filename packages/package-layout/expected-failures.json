@@ -46,11 +46,5 @@
     "package": "@alienplatform/bindings-darwin-arm64",
     "reason": "per-platform prebuild package not present (expected one .node addon + manifest)",
     "owningTask": "04a"
-  },
-  {
-    "check": "compile",
-    "package": "bindings",
-    "reason": "bun build --compile of ./native entry fails (no per-platform prebuild staged; 04a)",
-    "owningTask": "04/04a"
   }
 ]

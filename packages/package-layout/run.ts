@@ -32,7 +32,15 @@
  */
 
 import { spawnSync } from "node:child_process"
-import { existsSync, mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs"
+import {
+  copyFileSync,
+  existsSync,
+  mkdirSync,
+  readFileSync,
+  readdirSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs"
 import { dirname, join, relative } from "node:path"
 import { fileURLToPath } from "node:url"
 import {
@@ -111,8 +119,12 @@ interface RunOutput {
   stderr: string
 }
 
-function run(command: string, args: string[], cwd: string): RunOutput {
-  const proc = spawnSync(command, args, { cwd, encoding: "utf8" })
+function run(command: string, args: string[], cwd: string, env?: NodeJS.ProcessEnv): RunOutput {
+  const proc = spawnSync(command, args, {
+    cwd,
+    encoding: "utf8",
+    env: env ? { ...process.env, ...env } : undefined,
+  })
   if (proc.error) {
     return { status: null, stdout: proc.stdout ?? "", stderr: String(proc.error) }
   }
@@ -315,6 +327,81 @@ function main(): void {
   }
 
   // -------------------------------------------------------------------------
+  // Step 3.5 — ensure a native addon exists for the host platform
+  // -------------------------------------------------------------------------
+  //
+  // The loader (packages/bindings/src/loader.ts) resolves the addon in order:
+  // an ALIEN_BINDINGS_ADDON_PATH override, the per-platform prebuild package
+  // (optionalDependencies — only injected at publish time by `napi
+  // prepublish`, task 04a; never present when packing straight from workspace
+  // source), then a locally-built dev `.node` found by walking up from the
+  // installed package looking for crates/alien-bindings-node. On a developer
+  // machine that walk reaches this repo's real crates/alien-bindings-node and
+  // finds the `.node` a developer built earlier, so the fixture passes
+  // without any help here. CI has neither: no prebuild (04a ships those) and
+  // no dev `.node` (gitignored, built per-machine) — so build one ourselves
+  // whenever nothing else would resolve, and hand its path to every
+  // subprocess via the override env var. Skipped (and logged) whenever an
+  // addon is already available, so local runs stay fast.
+
+  function hostTriple(): string {
+    const { platform, arch } = process
+    if (platform === "darwin" && arch === "arm64") return "darwin-arm64"
+    if (platform === "linux" && arch === "x64") return "linux-x64-gnu"
+    if (platform === "linux" && arch === "arm64") return "linux-arm64-gnu"
+    throw new Error(
+      `package-layout fixture has no native addon mapping for platform '${platform}' arch '${arch}'.`,
+    )
+  }
+
+  const repoRoot = dirname(packagesDir)
+  const bindingsNodeDir = join(repoRoot, "crates", "alien-bindings-node")
+  const triple = hostTriple()
+  const devAddonPath = join(bindingsNodeDir, `alien-bindings-node.${triple}.node`)
+  const prebuildInstalledDir = join(
+    fixtureDir,
+    "node_modules",
+    "@alienplatform",
+    `bindings-${triple}`,
+  )
+
+  let addonPath: string | undefined
+  if (existsSync(prebuildInstalledDir)) {
+    console.log(
+      `[addon] per-platform prebuild package installed for '${triple}' — no source build needed.`,
+    )
+  } else if (existsSync(devAddonPath)) {
+    addonPath = devAddonPath
+    console.log(
+      `[addon] using existing dev addon at ${relative(scriptDir, devAddonPath)} (fast path, no build).`,
+    )
+  } else {
+    console.log(
+      `[addon] no prebuild and no dev addon for '${triple}' — building one with \`npx napi build --platform --release\` in crates/alien-bindings-node (CI path)...`,
+    )
+    const build = run("npx", ["napi", "build", "--platform", "--release"], bindingsNodeDir)
+    if (build.status === 0 && existsSync(devAddonPath)) {
+      addonPath = devAddonPath
+      console.log(`[addon] built ${relative(scriptDir, devAddonPath)}.`)
+    } else {
+      console.error(
+        "[addon] source build failed; the runtime/compile checks below will fail to load the addon.",
+      )
+      record({
+        check: "addon-build",
+        package: "bindings",
+        status: "fail",
+        reason: "napi build --platform --release did not produce a .node for this host",
+        evidence: lastLine(build.stderr) || lastLine(build.stdout) || `exit ${build.status}`,
+      })
+    }
+  }
+
+  const addonEnv: NodeJS.ProcessEnv | undefined = addonPath
+    ? { ALIEN_BINDINGS_ADDON_PATH: addonPath }
+    : undefined
+
+  // -------------------------------------------------------------------------
   // Steps 4/5 — import check under Bun and Node
   // -------------------------------------------------------------------------
 
@@ -323,8 +410,8 @@ function main(): void {
   function runImportCheck(runtime: "bun" | "node"): void {
     const output =
       runtime === "bun"
-        ? run("bun", [IMPORTS_ENTRY], fixtureDir)
-        : run("node", ["--experimental-strip-types", IMPORTS_ENTRY], fixtureDir)
+        ? run("bun", [IMPORTS_ENTRY], fixtureDir, addonEnv)
+        : run("node", ["--experimental-strip-types", IMPORTS_ENTRY], fixtureDir, addonEnv)
 
     const lines = output.stdout.split("\n").filter(line => line.startsWith("##CHECK## "))
     if (lines.length === 0) {
@@ -548,26 +635,68 @@ function main(): void {
   // -------------------------------------------------------------------------
   // Step 8 — bun build --compile of the ./native embed entry
   // -------------------------------------------------------------------------
+  //
+  // The `./native` entry (bindings/src/native.ts) imports the addon through
+  // the literal `./alien-bindings.node` specifier so bun's compiler can stage
+  // it into the single-file binary — but only if that file is physically
+  // present next to the installed package's dist/native.js at build time
+  // (the staging contract task 13 owns in production; here we stage the
+  // addon `run.ts` itself resolved above). `--format=cjs` is required: a
+  // plain ESM `bun build --compile` of this entry embeds the addon but
+  // crashes on load with `ReferenceError: __require is not defined` — see
+  // packages/bindings/scripts/compile-smoke.ts for the verified repro.
 
   if (bunAvailable) {
     const compiledDir = join(fixtureDir, ".compiled")
     mkdirSync(compiledDir, { recursive: true })
     const outFile = join(compiledDir, "compile-entry-bin")
-    const built = run(
-      "bun",
-      ["build", "--compile", join("src", "compile-entry.ts"), "--outfile", outFile],
+    const stagedAddonPath = join(
       fixtureDir,
+      "node_modules",
+      "@alienplatform",
+      "bindings",
+      "dist",
+      "alien-bindings.node",
     )
-    if (built.status !== 0) {
+
+    if (addonPath) copyFileSync(addonPath, stagedAddonPath)
+
+    const built = addonPath
+      ? run(
+          "bun",
+          [
+            "build",
+            "--compile",
+            "--format=cjs",
+            join("src", "compile-entry.ts"),
+            "--outfile",
+            outFile,
+          ],
+          fixtureDir,
+        )
+      : undefined
+
+    if (!built) {
       record({
         check: "compile",
         package: "bindings",
         status: "fail",
-        reason:
-          "bun build --compile of ./native entry fails (no per-platform prebuild staged; 04a)",
+        reason: "no addon available to stage (see the addon-build failure above)",
+        evidence: `expected addon at ${stagedAddonPath}`,
+      })
+    } else if (built.status !== 0) {
+      record({
+        check: "compile",
+        package: "bindings",
+        status: "fail",
+        reason: "bun build --compile of ./native entry fails with the addon staged",
         evidence: lastLine(built.stderr) || lastLine(built.stdout) || `exit ${built.status}`,
       })
     } else {
+      // Remove the staged .node now: if the binary didn't truly embed it,
+      // running with the source file gone proves that (mirrors
+      // packages/bindings/scripts/compile-smoke.ts).
+      rmSync(stagedAddonPath, { force: true })
       const ran = run(outFile, [], fixtureDir)
       record({
         check: "compile",
@@ -604,12 +733,12 @@ function main(): void {
     readFileSync(join(scriptDir, "expected-failures.json"), "utf8"),
   ) as ExpectedFailureEntry[]
 
-  // The `bun build --compile` failure is only produced when bun runs. If bun is
-  // unavailable in this environment, drop that expectation so it is not counted
-  // stale (CI always has bun, so the committed list stays complete there).
-  const activeExpectations = bunAvailable
-    ? expectedFailures
-    : expectedFailures.filter(entry => !(entry.check === "compile" && entry.package === "bindings"))
+  // Every currently-expected failure applies regardless of runtime — the one
+  // entry that depended on `bunAvailable` (the `compile` check itself never
+  // running without bun) was removed once the fixture started staging a
+  // built addon and passing that check. Keep the name so a future
+  // bun-conditional expectation has an obvious place to slot back in.
+  const activeExpectations = expectedFailures
 
   // Computed from ALL results (pass and fail) — a divergence is defined by one
   // runtime passing while the other fails, so passes must stay in view.
