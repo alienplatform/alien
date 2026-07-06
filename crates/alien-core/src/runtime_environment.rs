@@ -23,6 +23,22 @@ pub const ENV_ALIEN_COMMANDS_TOKEN: &str = "ALIEN_COMMANDS_TOKEN";
 /// by runtime polling in a later ALIEN-219 task; declared here so it's
 /// reserved from day one.
 pub const ENV_ALIEN_COMMANDS_TARGET_RESOURCE_ID: &str = "ALIEN_COMMANDS_TARGET_RESOURCE_ID";
+/// Base URL of the deployment's manager. The client-side minting-backed
+/// credential resolver ([`alien-bindings`]) posts to `{ALIEN_MANAGER_URL}/v1/credentials/mint`
+/// when native cloud credentials are not available in the environment.
+/// Injected for deployed app processes by the manager (controller injection is
+/// tracked as an ALIEN-218 task-10/16 follow-up).
+pub const ENV_ALIEN_MANAGER_URL: &str = "ALIEN_MANAGER_URL";
+/// Deployment bearer token the minting resolver presents to the manager. Carries
+/// the deployment's token value; kept distinct from [`ENV_ALIEN_COMMANDS_TOKEN`]
+/// (which is worker-command-polling scoped and only injected for command-enabled
+/// workers) so the Container/Daemon lazy-bindings path has a deployment-wide
+/// credential of its own.
+pub const ENV_ALIEN_DEPLOYMENT_TOKEN: &str = "ALIEN_DEPLOYMENT_TOKEN";
+/// Service-account binding name the minting resolver asks the manager to mint
+/// credentials for (the deployment's own managed identity). Required by the mint
+/// request contract; the manager selects and injects it (task-10/16 follow-up).
+pub const ENV_ALIEN_DEPLOYMENT_SA_BINDING: &str = "ALIEN_DEPLOYMENT_SA_BINDING";
 pub const ENV_ALIEN_BINDINGS_ADDRESS: &str = "ALIEN_BINDINGS_ADDRESS";
 pub const ENV_ALIEN_BINDINGS_GRPC_ADDRESS: &str = "ALIEN_BINDINGS_GRPC_ADDRESS";
 pub const ENV_ALIEN_BINDINGS_MODE: &str = "ALIEN_BINDINGS_MODE";
@@ -418,6 +434,9 @@ pub fn is_reserved_runtime_environment_name(name: &str) -> bool {
                 | ENV_ALIEN_COMMANDS_TARGET_RESOURCE_ID
                 | ENV_ALIEN_DEPLOYMENT_ID
                 | ENV_ALIEN_DEPLOYMENT_NAME
+                | ENV_ALIEN_DEPLOYMENT_SA_BINDING
+                | ENV_ALIEN_DEPLOYMENT_TOKEN
+                | ENV_ALIEN_MANAGER_URL
                 | ENV_ALIEN_PUBLIC_ENDPOINTS_JSON
                 | ENV_ALIEN_RUNTIME_SECRETS
                 | ENV_ALIEN_SECRETS
@@ -494,6 +513,20 @@ mod tests {
             "ALIEN_BINDING_STORAGE_URL"
         ));
         assert!(!is_reserved_runtime_environment_name("USER_DEFINED"));
+    }
+
+    #[test]
+    fn reserves_minting_credential_resolver_names() {
+        assert!(is_reserved_runtime_environment_name(ENV_ALIEN_MANAGER_URL));
+        assert!(is_reserved_runtime_environment_name(
+            ENV_ALIEN_DEPLOYMENT_TOKEN
+        ));
+        assert!(is_reserved_runtime_environment_name(
+            ENV_ALIEN_DEPLOYMENT_SA_BINDING
+        ));
+        assert_eq!(ENV_ALIEN_MANAGER_URL, "ALIEN_MANAGER_URL");
+        assert_eq!(ENV_ALIEN_DEPLOYMENT_TOKEN, "ALIEN_DEPLOYMENT_TOKEN");
+        assert_eq!(ENV_ALIEN_DEPLOYMENT_SA_BINDING, "ALIEN_DEPLOYMENT_SA_BINDING");
     }
 
     #[test]
