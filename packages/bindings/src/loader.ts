@@ -131,10 +131,17 @@ export interface NativeAddon {
  * Map `process.platform` / `process.arch` to the napi triple used in both the
  * prebuild package name and the locally-built `.node` file name. Mirrors the
  * `optionalDependencies` set pinned in PACKAGE_LAYOUT.md.
+ *
+ * Exported for unit testing: accepts `platform`/`arch` explicitly (defaulting
+ * to the real `process` values) so every supported pair — and the unsupported
+ * case — can be exercised directly, without stubbing the `process` global.
  */
-function platformTriple(): string {
-  const { platform, arch } = process
+export function platformTriple(
+  platform: NodeJS.Platform = process.platform,
+  arch: NodeJS.Architecture = process.arch,
+): string {
   if (platform === "darwin" && arch === "arm64") return "darwin-arm64"
+  if (platform === "darwin" && arch === "x64") return "darwin-x64"
   if (platform === "linux" && arch === "x64") return "linux-x64-gnu"
   if (platform === "linux" && arch === "arm64") return "linux-arm64-gnu"
   throw new Error(

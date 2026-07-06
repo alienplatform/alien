@@ -35,6 +35,10 @@ bun run build:addon   # or: pnpm -C packages/bindings run build:addon
 `crates/alien-bindings-node` and drops the `.node` next to the crate, where the
 loader's dev fallback (step 3 above) finds it. Rebuild after changing any Rust
 in `alien-bindings` or `alien-bindings-node`. The built `.node` is gitignored.
+`build:addon` only builds for the host triple; on a Mac, cross-building the
+other mac triple (e.g. `darwin-x64` from an `arm64` host) needs an explicit
+`napi build --release --target x86_64-apple-darwin --cwd
+../../crates/alien-bindings-node`.
 
 To point the loader at an addon somewhere else, set `ALIEN_BINDINGS_ADDON_PATH`
 to its path (step 1).

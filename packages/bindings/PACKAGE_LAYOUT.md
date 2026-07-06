@@ -78,9 +78,10 @@ Only two entry points. Every condition carries `types`. No deep imports.
   legacy resolvers; declarations shipped.
 - `optionalDependencies` — the per-platform prebuild packages
   `@alienplatform/bindings-<platform>`. Initial set: `@alienplatform/bindings-darwin-arm64`,
-  `@alienplatform/bindings-linux-x64-gnu`, `@alienplatform/bindings-linux-arm64-gnu`. This
-  entry describes the **published** manifest only: `napi prepublish` injects it at publish
-  time (task 04a) from the `napi.triples` config in `crates/alien-bindings-node/package.json`,
+  `@alienplatform/bindings-darwin-x64`, `@alienplatform/bindings-linux-x64-gnu`,
+  `@alienplatform/bindings-linux-arm64-gnu`. This entry describes the **published**
+  manifest only: `napi prepublish` injects it at publish time (task 04a) from the
+  `napi.targets` config in `crates/alien-bindings-node/package.json`,
   which is the source of truth for the platform list. The workspace source manifest
   (`packages/bindings/package.json`) carries no `optionalDependencies` — adding the
   per-platform packages there would pin unpublished versions and break `pnpm install
