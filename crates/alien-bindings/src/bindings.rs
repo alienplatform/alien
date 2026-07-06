@@ -13,9 +13,12 @@ use std::sync::Arc;
 /// App-facing entry point for accessing bindings configured via `ALIEN_*_BINDING`
 /// environment variables.
 ///
-/// Construction is synchronous and only validates the platform and each configured
-/// binding's JSON shape (see [`BindingsProvider::from_env_lazy`]); cloud client
-/// configuration and each binding's backing client are resolved lazily, on first use.
+/// Construction is synchronous and only validates each configured binding's JSON
+/// shape (see [`BindingsProvider::from_env_deferred`]); the deployment platform,
+/// cloud client configuration, and each binding's backing client are resolved
+/// lazily, on first use. A first operation against a binding that is not
+/// configured reports `BINDING_NOT_CONFIGURED` before any platform resolution, so
+/// a zero-environment process still constructs and fails cleanly.
 ///
 /// # Examples
 ///
@@ -57,7 +60,7 @@ impl Bindings {
     /// (avoiding process-global state that's unsafe to share across parallel tests).
     pub fn from_env_map(env: HashMap<String, String>) -> Result<Self> {
         Ok(Self {
-            provider: BindingsProvider::from_env_lazy(env)?,
+            provider: BindingsProvider::from_env_deferred(env)?,
         })
     }
 
@@ -299,6 +302,31 @@ mod tests {
             .expect_err("missing binding should error");
 
         assert_eq!(error.code, "BINDING_NOT_CONFIGURED");
+        assert!(
+            error.to_string().contains("ALIEN_FILES_BINDING"),
+            "message should name the env var, got: {error}"
+        );
+    }
+
+    #[tokio::test]
+    async fn zero_env_construct_then_missing_binding_is_binding_not_configured() {
+        // The app-facing contract: with NO deployment type and NO credentials,
+        // construction must succeed and the FIRST op on a missing binding must
+        // report BINDING_NOT_CONFIGURED (naming ALIEN_<NAME>_BINDING) BEFORE any
+        // platform / client-config resolution. There is deliberately no
+        // ALIEN_DEPLOYMENT_TYPE in this environment.
+        let bindings = Bindings::from_env_map(HashMap::new())
+            .expect("zero-env construction must succeed (platform resolution deferred)");
+
+        let error = bindings
+            .storage("files")
+            .await
+            .expect_err("missing binding must error before any platform resolution");
+
+        assert_eq!(
+            error.code, "BINDING_NOT_CONFIGURED",
+            "expected the missing-binding error, not a platform/deployment error: {error}"
+        );
         assert!(
             error.to_string().contains("ALIEN_FILES_BINDING"),
             "message should name the env var, got: {error}"
