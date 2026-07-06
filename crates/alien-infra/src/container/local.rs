@@ -177,10 +177,15 @@ impl LocalContainerController {
             }
         }
 
-        // Build environment variables using EnvironmentVariableBuilder
-        // This populates binding env vars with HOST paths
+        // Build environment variables using EnvironmentVariableBuilder.
+        // Local containers run runtime-less (the app binary is the direct entrypoint), so they get
+        // the same env surface as any linked workload — standard Alien vars, the public-endpoint
+        // metadata, and linked-resource bindings (with HOST paths, rewritten to container paths
+        // below). The container's own self-binding and binding-name var are injected by the
+        // container manager at spawn, so there is no container "runtime" env plan here.
         let mut env_vars = EnvironmentVariableBuilder::try_new(&config.environment)?
-            .add_container_runtime_env_vars(ctx, &config.id)?
+            .add_standard_alien_env_vars(ctx)?
+            .add_current_resource_public_endpoint(ctx, &config.id)?
             .add_linked_resources(&config.links, ctx, &config.id)
             .await?
             .build();

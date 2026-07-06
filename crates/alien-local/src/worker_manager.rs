@@ -1,11 +1,14 @@
 use crate::error::{ErrorData, Result};
 use alien_error::{AlienError, Context, ContextError as _, IntoAlienError};
+use alien_worker_runtime::LogExporter;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::fs;
 use std::net::TcpListener;
 use std::path::PathBuf;
 use std::sync::Arc;
+use tokio::io::{AsyncBufReadExt, AsyncRead, BufReader};
+use tokio::process::Command;
 use tokio::sync::Mutex;
 use tokio::task::JoinHandle;
 use tracing::{debug, info, warn};
@@ -57,10 +60,14 @@ struct WorkerRuntime {
 
 #[derive(Debug)]
 struct DaemonRuntime {
-    /// Tokio task handle for the daemon (returns our local Result type)
+    /// Tokio task handle supervising the daemon's app process (returns our local Result type).
+    /// The supervised process is the app binary itself, spawned as a direct child of this
+    /// supervisor — there is no runtime wrapper between the supervisor and the app.
     task_handle: JoinHandle<crate::error::Result<()>>,
     /// Shutdown channel sender
     shutdown_tx: tokio::sync::broadcast::Sender<()>,
+    /// OS process id of the supervised app process (for heartbeats / process-tree checks).
+    pid: Option<u32>,
     /// When the daemon was started (used for monitoring)
     #[allow(dead_code)]
     started_at: chrono::DateTime<chrono::Utc>,
@@ -584,12 +591,15 @@ impl LocalWorkerManager {
         .await
     }
 
-    /// Starts a daemon runtime.
+    /// Starts a daemon under direct local supervision.
     ///
-    /// Daemons use passthrough transport: there is no HTTP invocation proxy and no
-    /// worker URL. The process is still wrapped by alien-worker-runtime so bindings,
-    /// commands polling, tracing, graceful shutdown, and log export behave the
-    /// same as other local compute resources.
+    /// The daemon's app binary is spawned as the MAIN process — a direct child of this
+    /// supervisor with no runtime wrapper. There is no gRPC bindings/control server, no
+    /// `ALIEN_TRANSPORT`, no `ALIEN_WORKER_GRPC_ADDRESS`, and no `ALIEN_SECRETS` marker in the
+    /// child environment: the controller resolves bindings and secrets into plain env vars
+    /// before start, and a command-enabled daemon runs its own app-owned receiver from the
+    /// injected `ALIEN_COMMANDS_*` config. The supervisor captures the child's stdout/stderr for
+    /// log export itself, and applies restart/health to the app process directly.
     pub async fn start_daemon(
         &self,
         id: &str,
@@ -950,83 +960,70 @@ impl LocalWorkerManager {
             runtime_only_binding_names,
             &resolved_bindings,
         );
-        let grpc_port = port_check::free_local_ipv4_port().ok_or_else(|| {
-            AlienError::new(ErrorData::Other {
-                message: "Failed to find free port for gRPC server".to_string(),
-            })
-        })?;
-        let bindings_address = format!("127.0.0.1:{}", grpc_port);
 
-        let log_exporter =
-            if let Some(endpoint) = runtime_env_vars.get("OTEL_EXPORTER_OTLP_LOGS_ENDPOINT") {
-                let mut headers = HashMap::new();
-                if let Some(headers_str) = runtime_env_vars.get("OTEL_EXPORTER_OTLP_HEADERS") {
-                    for header in headers_str.split(',') {
-                        if let Some((key, value)) = header.split_once('=') {
-                            headers.insert(key.trim().to_lowercase(), value.trim().to_string());
-                        }
-                    }
-                }
-
-                let service_name = runtime_env_vars
-                    .get("OTEL_SERVICE_NAME")
-                    .cloned()
-                    .unwrap_or_else(|| id.to_string());
-
-                alien_worker_runtime::LogExporter::Otlp {
-                    endpoint: endpoint.clone(),
-                    headers,
-                    service_name,
-                }
-            } else {
-                alien_worker_runtime::LogExporter::None
-            };
-
-        let runtime_config = alien_worker_runtime::RuntimeConfig::builder()
-            .transport(alien_worker_runtime::TransportType::Passthrough)
-            .transport_port(0)
-            .bindings_address(bindings_address)
-            .command(existing_metadata.runtime_command.clone())
-            .working_dir(PathBuf::from(&working_dir))
-            .env_vars(runtime_env_vars)
-            .log_exporter(log_exporter)
-            .build();
+        let log_exporter = log_exporter_from_env(&runtime_env_vars, id);
 
         Self::save_daemon_metadata_static(state_dir, &updated_metadata)?;
 
+        // Export the daemon's captured logs over OTLP when an endpoint is configured. The
+        // supervisor owns log export now — there is no runtime wrapper to do it.
+        if let Some(otlp_config) = log_exporter.to_otlp_config() {
+            alien_worker_runtime::otlp::init_otlp_logging_from_config(otlp_config).context(
+                ErrorData::Other {
+                    message: format!("Failed to initialize daemon log export for '{}'", id),
+                },
+            )?;
+        }
+
         let (shutdown_tx, shutdown_rx) = tokio::sync::broadcast::channel(1);
 
-        let id_clone = id.to_string();
-        let runtime_task: JoinHandle<crate::error::Result<()>> = tokio::spawn(async move {
-            alien_worker_runtime::run(
-                runtime_config,
-                shutdown_rx,
-                alien_worker_runtime::BindingsSource::Provider(bindings_provider),
-            )
-            .await
-            .context(ErrorData::Other {
-                message: format!("Runtime failed for daemon '{}'", id_clone),
-            })?;
+        // Spawn the app binary directly as the main process.
+        let mut child = spawn_daemon_child(
+            id,
+            &existing_metadata.runtime_command,
+            &working_dir,
+            &runtime_env_vars,
+        )?;
+        let pid = child.id();
 
-            Ok(())
+        // Capture stdout/stderr for log export (responsibility of the supervisor, not a wrapper).
+        if let Some(stdout) = child.stdout.take() {
+            let exporter = log_exporter.clone();
+            let daemon_id = id.to_string();
+            tokio::spawn(
+                async move { stream_daemon_output(stdout, true, exporter, daemon_id).await },
+            );
+        }
+        if let Some(stderr) = child.stderr.take() {
+            let exporter = log_exporter.clone();
+            let daemon_id = id.to_string();
+            tokio::spawn(
+                async move { stream_daemon_output(stderr, false, exporter, daemon_id).await },
+            );
+        }
+
+        let supervised_id = id.to_string();
+        let runtime_task: JoinHandle<crate::error::Result<()>> = tokio::spawn(async move {
+            supervise_daemon_process(supervised_id, child, shutdown_rx).await
         });
 
+        // Give an immediately-failing process a chance to surface its exit before we report success.
         tokio::time::sleep(std::time::Duration::from_millis(50)).await;
         if runtime_task.is_finished() {
             match runtime_task.await {
                 Ok(Ok(())) => {
                     return Err(AlienError::new(ErrorData::Other {
-                        message: format!("Runtime for daemon '{}' exited during startup", id),
+                        message: format!("Daemon '{}' process exited during startup", id),
                     }));
                 }
                 Ok(Err(e)) => {
                     return Err(e.context(ErrorData::Other {
-                        message: format!("Runtime for daemon '{}' failed during startup", id),
+                        message: format!("Daemon '{}' process failed during startup", id),
                     }));
                 }
                 Err(e) => {
                     return Err(AlienError::new(ErrorData::Other {
-                        message: format!("Runtime task for daemon '{}' panicked: {}", id, e),
+                        message: format!("Daemon supervision task for '{}' panicked: {}", id, e),
                     }));
                 }
             }
@@ -1038,12 +1035,13 @@ impl LocalWorkerManager {
             DaemonRuntime {
                 task_handle: runtime_task,
                 shutdown_tx,
+                pid,
                 started_at: chrono::Utc::now(),
                 metadata: updated_metadata,
             },
         );
 
-        info!(daemon_id = %id, "Daemon runtime started");
+        info!(daemon_id = %id, pid = ?pid, "Daemon started (direct supervision, no runtime wrapper)");
 
         Ok(())
     }
@@ -1244,6 +1242,15 @@ impl LocalWorkerManager {
     pub async fn is_daemon_running(&self, id: &str) -> bool {
         let daemons = self.daemons.lock().await;
         daemons.contains_key(id)
+    }
+
+    /// Returns the OS process id of a running daemon's app process, if known.
+    ///
+    /// The pid identifies the app binary the supervisor spawned directly (its own child), so a
+    /// caller can confirm the app runs as a direct child of the supervisor with no wrapper between.
+    pub async fn daemon_pid(&self, id: &str) -> Option<u32> {
+        let daemons = self.daemons.lock().await;
+        daemons.get(id).and_then(|runtime| runtime.pid)
     }
 
     /// Gets the URL of a running worker.
@@ -1718,6 +1725,165 @@ fn select_host_tarball(tarball_files: &[PathBuf]) -> Result<&PathBuf> {
                 ),
             })
         })
+}
+
+/// Builds the daemon's log-export sink from its resolved environment. An OTLP logs endpoint (with
+/// optional headers) turns on OTLP export; without one, captured output is only echoed locally.
+fn log_exporter_from_env(env_vars: &HashMap<String, String>, id: &str) -> LogExporter {
+    let Some(endpoint) = env_vars.get("OTEL_EXPORTER_OTLP_LOGS_ENDPOINT") else {
+        return LogExporter::None;
+    };
+
+    let mut headers = HashMap::new();
+    if let Some(headers_str) = env_vars.get("OTEL_EXPORTER_OTLP_HEADERS") {
+        for header in headers_str.split(',') {
+            if let Some((key, value)) = header.split_once('=') {
+                headers.insert(key.trim().to_lowercase(), value.trim().to_string());
+            }
+        }
+    }
+
+    let service_name = env_vars
+        .get("OTEL_SERVICE_NAME")
+        .cloned()
+        .unwrap_or_else(|| id.to_string());
+
+    LogExporter::Otlp {
+        endpoint: endpoint.clone(),
+        headers,
+        service_name,
+    }
+}
+
+/// Spawns the daemon's app binary as a direct child of the supervisor.
+///
+/// This is a plain process launch — no runtime wrapper, no injected `ALIEN_TRANSPORT` /
+/// `ALIEN_WORKER_GRPC_ADDRESS`. The env passed here is exactly what the app sees, minus the
+/// vault-load markers (`ALIEN_SECRETS` / `ALIEN_RUNTIME_SECRETS`) which the app must never receive
+/// on the local platform: bindings and secrets are already resolved into plain env vars upstream.
+fn spawn_daemon_child(
+    id: &str,
+    command: &[String],
+    working_dir: &str,
+    env_vars: &HashMap<String, String>,
+) -> Result<tokio::process::Child> {
+    if command.is_empty() {
+        return Err(AlienError::new(ErrorData::Other {
+            message: format!("Daemon '{}' has an empty entrypoint command", id),
+        }));
+    }
+
+    // Resolve a relative program path against the working dir. Windows' CreateProcessW does not
+    // resolve the executable relative to `current_dir`, only relative to the parent's cwd, so an
+    // absolute path is required there; joining is harmless on Unix.
+    let working_dir_path = PathBuf::from(working_dir);
+    let program = {
+        let raw = std::path::Path::new(&command[0]);
+        if raw.is_relative() {
+            working_dir_path.join(raw).to_string_lossy().to_string()
+        } else {
+            command[0].clone()
+        }
+    };
+
+    let mut cmd = Command::new(&program);
+    if command.len() > 1 {
+        cmd.args(&command[1..]);
+    }
+    cmd.current_dir(&working_dir_path);
+
+    for (key, value) in env_vars {
+        if key == alien_core::ENV_ALIEN_SECRETS || key == alien_core::ENV_ALIEN_RUNTIME_SECRETS {
+            continue;
+        }
+        cmd.env(key, value);
+    }
+
+    cmd.stdout(std::process::Stdio::piped());
+    cmd.stderr(std::process::Stdio::piped());
+
+    cmd.spawn().into_alien_error().context(ErrorData::Other {
+        message: format!("Failed to spawn daemon '{}' process ({})", id, program),
+    })
+}
+
+/// Streams a captured stdout/stderr pipe: echoes each line locally and, when OTLP export is on,
+/// emits it through the shared app-log exporter.
+async fn stream_daemon_output(
+    output: impl AsyncRead + Unpin,
+    is_stdout: bool,
+    log_exporter: LogExporter,
+    daemon_id: String,
+) {
+    let stream_name = if is_stdout { "stdout" } else { "stderr" };
+    let export_otlp = matches!(log_exporter, LogExporter::Otlp { .. });
+    let mut lines = BufReader::new(output).lines();
+
+    loop {
+        match lines.next_line().await {
+            Ok(Some(line)) => {
+                if is_stdout {
+                    println!("{}", line);
+                } else {
+                    eprintln!("{}", line);
+                }
+                if export_otlp {
+                    let timestamp_nanos = chrono::Utc::now().timestamp_nanos_opt().unwrap_or(0);
+                    alien_worker_runtime::emit_log(stream_name, &line, timestamp_nanos);
+                }
+            }
+            Ok(None) => break,
+            Err(e) => {
+                warn!(daemon_id = %daemon_id, stream = stream_name, error = %e, "Error reading daemon output");
+                break;
+            }
+        }
+    }
+}
+
+/// Supervises the daemon's app process: waits for either a shutdown signal or the process exit.
+///
+/// On shutdown the child is terminated and OTLP logs are flushed. A non-zero exit (or a wait
+/// error) is returned as an error so the monitor loop treats it as a crash and restarts. A clean
+/// exit returns `Ok(())`; the monitor still restarts it, since a daemon is expected to run forever.
+async fn supervise_daemon_process(
+    daemon_id: String,
+    mut child: tokio::process::Child,
+    mut shutdown_rx: tokio::sync::broadcast::Receiver<()>,
+) -> Result<()> {
+    tokio::select! {
+        status = child.wait() => {
+            match status {
+                Ok(status) if status.success() => {
+                    info!(daemon_id = %daemon_id, "Daemon process exited cleanly");
+                    Ok(())
+                }
+                Ok(status) => {
+                    let code = status.code().unwrap_or(-1);
+                    Err(AlienError::new(ErrorData::LocalProcessError {
+                        process_id: daemon_id.clone(),
+                        operation: "run".to_string(),
+                        reason: format!("Daemon process exited with code {}", code),
+                    }))
+                }
+                Err(e) => Err(e).into_alien_error().context(ErrorData::LocalProcessError {
+                    process_id: daemon_id.clone(),
+                    operation: "wait".to_string(),
+                    reason: "Failed to wait for daemon process".to_string(),
+                }),
+            }
+        }
+        _ = shutdown_rx.recv() => {
+            info!(daemon_id = %daemon_id, "Daemon shutdown signal received; terminating process");
+            if let Err(e) = child.kill().await {
+                warn!(daemon_id = %daemon_id, error = %e, "Failed to kill daemon process");
+            }
+            if let Err(e) = alien_worker_runtime::flush_otlp_logs().await {
+                warn!(daemon_id = %daemon_id, error = %e, "Failed to flush daemon logs");
+            }
+            Ok(())
+        }
+    }
 }
 
 #[cfg(test)]
