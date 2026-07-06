@@ -525,21 +525,19 @@ impl AlienManagerBuilder {
                 for binding_name in ["artifacts", "artifact-registry"] {
                     if let Ok(ar) = provider.load_artifact_registry(binding_name).await {
                         let prefix = ar.upstream_repository_prefix();
-                        if !prefix.is_empty() {
-                            info!(
-                                platform = %platform,
-                                binding_name = %binding_name,
-                                prefix = %prefix,
-                                "Registered artifact registry route"
-                            );
-                            routes.push(crate::routes::registry_proxy::RegistryRoute {
-                                prefix,
-                                platform: *platform,
-                                provider: provider.clone(),
-                                binding_name: binding_name.to_string(),
-                            });
-                            break;
-                        }
+                        info!(
+                            platform = %platform,
+                            binding_name = %binding_name,
+                            prefix = %prefix,
+                            "Registered artifact registry route"
+                        );
+                        routes.push(crate::routes::registry_proxy::RegistryRoute {
+                            prefix,
+                            platform: *platform,
+                            provider: provider.clone(),
+                            binding_name: binding_name.to_string(),
+                        });
+                        break;
                     }
                 }
             }
