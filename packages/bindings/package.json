@@ -23,6 +23,8 @@
     "build": "tsdown && tsc -p tsconfig.build.json --emitDeclarationOnly",
     "prepare": "npm run build",
     "test": "vitest run",
+    "test:bun": "bun run vitest run",
+    "test:compile": "node --experimental-strip-types scripts/compile-smoke.ts",
     "test:ts": "tsc --noEmit",
     "smoke": "node scripts/smoke-envelope.mjs",
     "format-and-lint": "biome check .",
