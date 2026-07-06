@@ -25,8 +25,12 @@ The worker gets an HTTPS endpoint in the customer's environment. Alien creates t
 ## Local development
 
 ```bash
+alien init basic-worker-rs
+cd basic-worker-rs
 alien dev
 ```
+
+Everything runs locally -- no cloud credentials needed.
 
 In a second terminal:
 
@@ -43,3 +47,10 @@ alien dev commands invoke \
 ```bash
 bun test
 ```
+
+## Learn more
+
+- [Quickstart guide](https://alien.dev/docs/quickstart)
+- [Remote Commands](https://alien.dev/docs/commands)
+- [External URLs](https://alien.dev/docs/external-urls)
+- [alien.dev](https://alien.dev) -- ship to your customer's cloud, keep it fully managed

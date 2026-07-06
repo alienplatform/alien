@@ -35,8 +35,12 @@ See [External URLs](https://alien.dev/docs/external-urls).
 ## Local development
 
 ```bash
+alien init webhook-api-ts
+cd webhook-api-ts
 alien dev
 ```
+
+Everything runs locally -- no cloud credentials needed.
 
 In a second terminal:
 
@@ -75,3 +79,4 @@ bun test
 - [External URLs](https://alien.dev/docs/external-urls)
 - [KV reference](https://alien.dev/docs/infrastructure/kv)
 - [Remote Commands](https://alien.dev/docs/commands)
+- [alien.dev](https://alien.dev) -- ship to your customer's cloud, keep it fully managed

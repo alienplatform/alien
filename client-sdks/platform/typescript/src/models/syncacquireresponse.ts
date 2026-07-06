@@ -5331,6 +5331,20 @@ export type SyncAcquireResponseHorizonMachineImageGcpUnion =
   | any;
 
 /**
+ * Downloadable horizond daemon artifact.
+ */
+export type SyncAcquireResponseHorizondArtifacts = {
+  /**
+   * Expected artifact sha256 checksum.
+   */
+  sha256: string;
+  /**
+   * Artifact URL.
+   */
+  url: string;
+};
+
+/**
  * Horizon machine image catalog.
  *
  * @remarks
@@ -5357,6 +5371,13 @@ export type SyncAcquireResponseHorizonMachineImage = {
    * Git commit SHA used to build the image.
    */
   gitSha: string;
+  /**
+   * Downloadable horizond artifacts keyed by runtime platform, such as `linux-amd64`.
+   */
+  horizondArtifacts?:
+    | { [k: string]: SyncAcquireResponseHorizondArtifacts }
+    | null
+    | undefined;
   /**
    * horizond daemon version baked into the image.
    */
@@ -5741,6 +5762,879 @@ export type SyncAcquireResponseEnvironmentVariables = {
    */
   variables: Array<SyncAcquireResponseVariable>;
 };
+
+/**
+ * Reference to a Kubernetes Secret
+ */
+export type SyncAcquireResponseDatabaseSecretRef6 = {
+  key: string;
+  name: string;
+};
+
+export type SyncAcquireResponseDatabase6 = {
+  /**
+   * Reference to a Kubernetes Secret
+   */
+  secretRef: SyncAcquireResponseDatabaseSecretRef6;
+};
+
+/**
+ * Represents a value that can be either a concrete value, a template expression,
+ *
+ * @remarks
+ * or a reference to a Kubernetes Secret
+ */
+export type SyncAcquireResponseDatabaseUnion5 =
+  | SyncAcquireResponseDatabase6
+  | any
+  | string;
+
+/**
+ * Reference to a Kubernetes Secret
+ */
+export type SyncAcquireResponseHostSecretRef4 = {
+  key: string;
+  name: string;
+};
+
+export type SyncAcquireResponseHost4 = {
+  /**
+   * Reference to a Kubernetes Secret
+   */
+  secretRef: SyncAcquireResponseHostSecretRef4;
+};
+
+/**
+ * Represents a value that can be either a concrete value, a template expression,
+ *
+ * @remarks
+ * or a reference to a Kubernetes Secret
+ */
+export type SyncAcquireResponseHostUnion4 =
+  | SyncAcquireResponseHost4
+  | any
+  | string;
+
+/**
+ * Reference to a Kubernetes Secret
+ */
+export type SyncAcquireResponsePortSecretRef5 = {
+  key: string;
+  name: string;
+};
+
+export type SyncAcquireResponsePort5 = {
+  /**
+   * Reference to a Kubernetes Secret
+   */
+  secretRef: SyncAcquireResponsePortSecretRef5;
+};
+
+/**
+ * Represents a value that can be either a concrete value, a template expression,
+ *
+ * @remarks
+ * or a reference to a Kubernetes Secret
+ */
+export type SyncAcquireResponsePortUnion5 =
+  | SyncAcquireResponsePort5
+  | number
+  | any;
+
+/**
+ * Reference to a Kubernetes Secret
+ */
+export type SyncAcquireResponseUsernameSecretRef5 = {
+  key: string;
+  name: string;
+};
+
+export type SyncAcquireResponseUsername5 = {
+  /**
+   * Reference to a Kubernetes Secret
+   */
+  secretRef: SyncAcquireResponseUsernameSecretRef5;
+};
+
+/**
+ * Represents a value that can be either a concrete value, a template expression,
+ *
+ * @remarks
+ * or a reference to a Kubernetes Secret
+ */
+export type SyncAcquireResponseUsernameUnion5 =
+  | SyncAcquireResponseUsername5
+  | any
+  | string;
+
+export const SyncAcquireResponseTypePostgres5 = {
+  Postgres: "postgres",
+} as const;
+export type SyncAcquireResponseTypePostgres5 = ClosedEnum<
+  typeof SyncAcquireResponseTypePostgres5
+>;
+
+/**
+ * Local embedded Postgres binding.
+ */
+export type SyncAcquireResponseExternalBindingsLocalPostgres = {
+  /**
+   * Represents a value that can be either a concrete value, a template expression,
+   *
+   * @remarks
+   * or a reference to a Kubernetes Secret
+   */
+  database?: SyncAcquireResponseDatabase6 | any | string | null | undefined;
+  /**
+   * Represents a value that can be either a concrete value, a template expression,
+   *
+   * @remarks
+   * or a reference to a Kubernetes Secret
+   */
+  host?: SyncAcquireResponseHost4 | any | string | null | undefined;
+  password: string;
+  /**
+   * Represents a value that can be either a concrete value, a template expression,
+   *
+   * @remarks
+   * or a reference to a Kubernetes Secret
+   */
+  port?: SyncAcquireResponsePort5 | number | any | null | undefined;
+  /**
+   * Represents a value that can be either a concrete value, a template expression,
+   *
+   * @remarks
+   * or a reference to a Kubernetes Secret
+   */
+  username?: SyncAcquireResponseUsername5 | any | string | null | undefined;
+  service: "local-postgres";
+  type: SyncAcquireResponseTypePostgres5;
+};
+
+/**
+ * Reference to a Kubernetes Secret
+ */
+export type SyncAcquireResponseDatabaseSecretRef5 = {
+  key: string;
+  name: string;
+};
+
+export type SyncAcquireResponseDatabase5 = {
+  /**
+   * Reference to a Kubernetes Secret
+   */
+  secretRef: SyncAcquireResponseDatabaseSecretRef5;
+};
+
+/**
+ * Represents a value that can be either a concrete value, a template expression,
+ *
+ * @remarks
+ * or a reference to a Kubernetes Secret
+ */
+export type SyncAcquireResponseDatabaseUnion4 =
+  | SyncAcquireResponseDatabase5
+  | any
+  | string;
+
+/**
+ * Reference to a Kubernetes Secret
+ */
+export type SyncAcquireResponseHostSecretRef3 = {
+  key: string;
+  name: string;
+};
+
+export type SyncAcquireResponseHost3 = {
+  /**
+   * Reference to a Kubernetes Secret
+   */
+  secretRef: SyncAcquireResponseHostSecretRef3;
+};
+
+/**
+ * Represents a value that can be either a concrete value, a template expression,
+ *
+ * @remarks
+ * or a reference to a Kubernetes Secret
+ */
+export type SyncAcquireResponseHostUnion3 =
+  | SyncAcquireResponseHost3
+  | any
+  | string;
+
+/**
+ * Reference to a Kubernetes Secret
+ */
+export type SyncAcquireResponsePortSecretRef4 = {
+  key: string;
+  name: string;
+};
+
+export type SyncAcquireResponsePort4 = {
+  /**
+   * Reference to a Kubernetes Secret
+   */
+  secretRef: SyncAcquireResponsePortSecretRef4;
+};
+
+/**
+ * Represents a value that can be either a concrete value, a template expression,
+ *
+ * @remarks
+ * or a reference to a Kubernetes Secret
+ */
+export type SyncAcquireResponsePortUnion4 =
+  | SyncAcquireResponsePort4
+  | number
+  | any;
+
+/**
+ * Reference to a Kubernetes Secret
+ */
+export type SyncAcquireResponseUsernameSecretRef4 = {
+  key: string;
+  name: string;
+};
+
+export type SyncAcquireResponseUsername4 = {
+  /**
+   * Reference to a Kubernetes Secret
+   */
+  secretRef: SyncAcquireResponseUsernameSecretRef4;
+};
+
+/**
+ * Represents a value that can be either a concrete value, a template expression,
+ *
+ * @remarks
+ * or a reference to a Kubernetes Secret
+ */
+export type SyncAcquireResponseUsernameUnion4 =
+  | SyncAcquireResponseUsername4
+  | any
+  | string;
+
+export const SyncAcquireResponseTypePostgres4 = {
+  Postgres: "postgres",
+} as const;
+export type SyncAcquireResponseTypePostgres4 = ClosedEnum<
+  typeof SyncAcquireResponseTypePostgres4
+>;
+
+/**
+ * Operator-provided / BYO database binding.
+ */
+export type SyncAcquireResponseExternalBindingsExternal = {
+  /**
+   * Represents a value that can be either a concrete value, a template expression,
+   *
+   * @remarks
+   * or a reference to a Kubernetes Secret
+   */
+  database?: SyncAcquireResponseDatabase5 | any | string | null | undefined;
+  /**
+   * Represents a value that can be either a concrete value, a template expression,
+   *
+   * @remarks
+   * or a reference to a Kubernetes Secret
+   */
+  host?: SyncAcquireResponseHost3 | any | string | null | undefined;
+  /**
+   * Connection password as a concrete value, never an unresolved `SecretRef`: the platform
+   *
+   * @remarks
+   * materializes the Kubernetes secret into the pod env. The cloud variants carry a secret
+   * locator instead.
+   */
+  password: string;
+  /**
+   * Represents a value that can be either a concrete value, a template expression,
+   *
+   * @remarks
+   * or a reference to a Kubernetes Secret
+   */
+  port?: SyncAcquireResponsePort4 | number | any | null | undefined;
+  /**
+   * Represents a value that can be either a concrete value, a template expression,
+   *
+   * @remarks
+   * or a reference to a Kubernetes Secret
+   */
+  username?: SyncAcquireResponseUsername4 | any | string | null | undefined;
+  service: "external";
+  type: SyncAcquireResponseTypePostgres4;
+};
+
+/**
+ * Reference to a Kubernetes Secret
+ */
+export type SyncAcquireResponseDatabaseSecretRef4 = {
+  key: string;
+  name: string;
+};
+
+export type SyncAcquireResponseDatabase4 = {
+  /**
+   * Reference to a Kubernetes Secret
+   */
+  secretRef: SyncAcquireResponseDatabaseSecretRef4;
+};
+
+/**
+ * Represents a value that can be either a concrete value, a template expression,
+ *
+ * @remarks
+ * or a reference to a Kubernetes Secret
+ */
+export type SyncAcquireResponseDatabaseUnion3 =
+  | SyncAcquireResponseDatabase4
+  | any
+  | string;
+
+/**
+ * Reference to a Kubernetes Secret
+ */
+export type SyncAcquireResponseHostSecretRef2 = {
+  key: string;
+  name: string;
+};
+
+export type SyncAcquireResponseHost2 = {
+  /**
+   * Reference to a Kubernetes Secret
+   */
+  secretRef: SyncAcquireResponseHostSecretRef2;
+};
+
+/**
+ * Represents a value that can be either a concrete value, a template expression,
+ *
+ * @remarks
+ * or a reference to a Kubernetes Secret
+ */
+export type SyncAcquireResponseHostUnion2 =
+  | SyncAcquireResponseHost2
+  | any
+  | string;
+
+/**
+ * Reference to a Kubernetes Secret
+ */
+export type SyncAcquireResponsePasswordSecretUriSecretRef = {
+  key: string;
+  name: string;
+};
+
+export type SyncAcquireResponsePasswordSecretUri = {
+  /**
+   * Reference to a Kubernetes Secret
+   */
+  secretRef: SyncAcquireResponsePasswordSecretUriSecretRef;
+};
+
+/**
+ * Represents a value that can be either a concrete value, a template expression,
+ *
+ * @remarks
+ * or a reference to a Kubernetes Secret
+ */
+export type SyncAcquireResponsePasswordSecretUriUnion =
+  | SyncAcquireResponsePasswordSecretUri
+  | any
+  | string;
+
+/**
+ * Reference to a Kubernetes Secret
+ */
+export type SyncAcquireResponsePortSecretRef3 = {
+  key: string;
+  name: string;
+};
+
+export type SyncAcquireResponsePort3 = {
+  /**
+   * Reference to a Kubernetes Secret
+   */
+  secretRef: SyncAcquireResponsePortSecretRef3;
+};
+
+/**
+ * Represents a value that can be either a concrete value, a template expression,
+ *
+ * @remarks
+ * or a reference to a Kubernetes Secret
+ */
+export type SyncAcquireResponsePortUnion3 =
+  | SyncAcquireResponsePort3
+  | number
+  | any;
+
+/**
+ * Reference to a Kubernetes Secret
+ */
+export type SyncAcquireResponseUsernameSecretRef3 = {
+  key: string;
+  name: string;
+};
+
+export type SyncAcquireResponseUsername3 = {
+  /**
+   * Reference to a Kubernetes Secret
+   */
+  secretRef: SyncAcquireResponseUsernameSecretRef3;
+};
+
+/**
+ * Represents a value that can be either a concrete value, a template expression,
+ *
+ * @remarks
+ * or a reference to a Kubernetes Secret
+ */
+export type SyncAcquireResponseUsernameUnion3 =
+  | SyncAcquireResponseUsername3
+  | any
+  | string;
+
+export const SyncAcquireResponseTypePostgres3 = {
+  Postgres: "postgres",
+} as const;
+export type SyncAcquireResponseTypePostgres3 = ClosedEnum<
+  typeof SyncAcquireResponseTypePostgres3
+>;
+
+/**
+ * Azure Flexible Server binding.
+ */
+export type SyncAcquireResponseExternalBindingsFlexibleServer = {
+  /**
+   * Represents a value that can be either a concrete value, a template expression,
+   *
+   * @remarks
+   * or a reference to a Kubernetes Secret
+   */
+  database?: SyncAcquireResponseDatabase4 | any | string | null | undefined;
+  /**
+   * Represents a value that can be either a concrete value, a template expression,
+   *
+   * @remarks
+   * or a reference to a Kubernetes Secret
+   */
+  host?: SyncAcquireResponseHost2 | any | string | null | undefined;
+  /**
+   * Represents a value that can be either a concrete value, a template expression,
+   *
+   * @remarks
+   * or a reference to a Kubernetes Secret
+   */
+  passwordSecretUri?:
+    | SyncAcquireResponsePasswordSecretUri
+    | any
+    | string
+    | null
+    | undefined;
+  /**
+   * Represents a value that can be either a concrete value, a template expression,
+   *
+   * @remarks
+   * or a reference to a Kubernetes Secret
+   */
+  port?: SyncAcquireResponsePort3 | number | any | null | undefined;
+  /**
+   * Represents a value that can be either a concrete value, a template expression,
+   *
+   * @remarks
+   * or a reference to a Kubernetes Secret
+   */
+  username?: SyncAcquireResponseUsername3 | any | string | null | undefined;
+  service: "flexible-server";
+  type: SyncAcquireResponseTypePostgres3;
+};
+
+/**
+ * Reference to a Kubernetes Secret
+ */
+export type SyncAcquireResponseDatabaseSecretRef3 = {
+  key: string;
+  name: string;
+};
+
+export type SyncAcquireResponseDatabase3 = {
+  /**
+   * Reference to a Kubernetes Secret
+   */
+  secretRef: SyncAcquireResponseDatabaseSecretRef3;
+};
+
+/**
+ * Represents a value that can be either a concrete value, a template expression,
+ *
+ * @remarks
+ * or a reference to a Kubernetes Secret
+ */
+export type SyncAcquireResponseDatabaseUnion2 =
+  | SyncAcquireResponseDatabase3
+  | any
+  | string;
+
+/**
+ * Reference to a Kubernetes Secret
+ */
+export type SyncAcquireResponseHostSecretRef1 = {
+  key: string;
+  name: string;
+};
+
+export type SyncAcquireResponseHost1 = {
+  /**
+   * Reference to a Kubernetes Secret
+   */
+  secretRef: SyncAcquireResponseHostSecretRef1;
+};
+
+/**
+ * Represents a value that can be either a concrete value, a template expression,
+ *
+ * @remarks
+ * or a reference to a Kubernetes Secret
+ */
+export type SyncAcquireResponseHostUnion1 =
+  | SyncAcquireResponseHost1
+  | any
+  | string;
+
+/**
+ * Reference to a Kubernetes Secret
+ */
+export type SyncAcquireResponsePasswordSecretNameSecretRef = {
+  key: string;
+  name: string;
+};
+
+export type SyncAcquireResponsePasswordSecretName = {
+  /**
+   * Reference to a Kubernetes Secret
+   */
+  secretRef: SyncAcquireResponsePasswordSecretNameSecretRef;
+};
+
+/**
+ * Represents a value that can be either a concrete value, a template expression,
+ *
+ * @remarks
+ * or a reference to a Kubernetes Secret
+ */
+export type SyncAcquireResponsePasswordSecretNameUnion =
+  | SyncAcquireResponsePasswordSecretName
+  | any
+  | string;
+
+/**
+ * Reference to a Kubernetes Secret
+ */
+export type SyncAcquireResponsePortSecretRef2 = {
+  key: string;
+  name: string;
+};
+
+export type SyncAcquireResponsePort2 = {
+  /**
+   * Reference to a Kubernetes Secret
+   */
+  secretRef: SyncAcquireResponsePortSecretRef2;
+};
+
+/**
+ * Represents a value that can be either a concrete value, a template expression,
+ *
+ * @remarks
+ * or a reference to a Kubernetes Secret
+ */
+export type SyncAcquireResponsePortUnion2 =
+  | SyncAcquireResponsePort2
+  | number
+  | any;
+
+/**
+ * Reference to a Kubernetes Secret
+ */
+export type SyncAcquireResponseUsernameSecretRef2 = {
+  key: string;
+  name: string;
+};
+
+export type SyncAcquireResponseUsername2 = {
+  /**
+   * Reference to a Kubernetes Secret
+   */
+  secretRef: SyncAcquireResponseUsernameSecretRef2;
+};
+
+/**
+ * Represents a value that can be either a concrete value, a template expression,
+ *
+ * @remarks
+ * or a reference to a Kubernetes Secret
+ */
+export type SyncAcquireResponseUsernameUnion2 =
+  | SyncAcquireResponseUsername2
+  | any
+  | string;
+
+export const SyncAcquireResponseTypePostgres2 = {
+  Postgres: "postgres",
+} as const;
+export type SyncAcquireResponseTypePostgres2 = ClosedEnum<
+  typeof SyncAcquireResponseTypePostgres2
+>;
+
+/**
+ * GCP Cloud SQL binding.
+ */
+export type SyncAcquireResponseExternalBindingsCloudSQL = {
+  /**
+   * Represents a value that can be either a concrete value, a template expression,
+   *
+   * @remarks
+   * or a reference to a Kubernetes Secret
+   */
+  database?: SyncAcquireResponseDatabase3 | any | string | null | undefined;
+  /**
+   * Represents a value that can be either a concrete value, a template expression,
+   *
+   * @remarks
+   * or a reference to a Kubernetes Secret
+   */
+  host?: SyncAcquireResponseHost1 | any | string | null | undefined;
+  /**
+   * Represents a value that can be either a concrete value, a template expression,
+   *
+   * @remarks
+   * or a reference to a Kubernetes Secret
+   */
+  passwordSecretName?:
+    | SyncAcquireResponsePasswordSecretName
+    | any
+    | string
+    | null
+    | undefined;
+  /**
+   * Represents a value that can be either a concrete value, a template expression,
+   *
+   * @remarks
+   * or a reference to a Kubernetes Secret
+   */
+  port?: SyncAcquireResponsePort2 | number | any | null | undefined;
+  /**
+   * Represents a value that can be either a concrete value, a template expression,
+   *
+   * @remarks
+   * or a reference to a Kubernetes Secret
+   */
+  username?: SyncAcquireResponseUsername2 | any | string | null | undefined;
+  service: "cloud-sql";
+  type: SyncAcquireResponseTypePostgres2;
+};
+
+/**
+ * Reference to a Kubernetes Secret
+ */
+export type SyncAcquireResponseClusterEndpointSecretRef = {
+  key: string;
+  name: string;
+};
+
+export type SyncAcquireResponseClusterEndpoint = {
+  /**
+   * Reference to a Kubernetes Secret
+   */
+  secretRef: SyncAcquireResponseClusterEndpointSecretRef;
+};
+
+/**
+ * Represents a value that can be either a concrete value, a template expression,
+ *
+ * @remarks
+ * or a reference to a Kubernetes Secret
+ */
+export type SyncAcquireResponseClusterEndpointUnion =
+  | SyncAcquireResponseClusterEndpoint
+  | any
+  | string;
+
+/**
+ * Reference to a Kubernetes Secret
+ */
+export type SyncAcquireResponseDatabaseSecretRef2 = {
+  key: string;
+  name: string;
+};
+
+export type SyncAcquireResponseDatabase2 = {
+  /**
+   * Reference to a Kubernetes Secret
+   */
+  secretRef: SyncAcquireResponseDatabaseSecretRef2;
+};
+
+/**
+ * Represents a value that can be either a concrete value, a template expression,
+ *
+ * @remarks
+ * or a reference to a Kubernetes Secret
+ */
+export type SyncAcquireResponseDatabaseUnion1 =
+  | SyncAcquireResponseDatabase2
+  | any
+  | string;
+
+/**
+ * Reference to a Kubernetes Secret
+ */
+export type SyncAcquireResponsePasswordSecretArnSecretRef = {
+  key: string;
+  name: string;
+};
+
+export type SyncAcquireResponsePasswordSecretArn = {
+  /**
+   * Reference to a Kubernetes Secret
+   */
+  secretRef: SyncAcquireResponsePasswordSecretArnSecretRef;
+};
+
+/**
+ * Represents a value that can be either a concrete value, a template expression,
+ *
+ * @remarks
+ * or a reference to a Kubernetes Secret
+ */
+export type SyncAcquireResponsePasswordSecretArnUnion =
+  | SyncAcquireResponsePasswordSecretArn
+  | any
+  | string;
+
+/**
+ * Reference to a Kubernetes Secret
+ */
+export type SyncAcquireResponsePortSecretRef1 = {
+  key: string;
+  name: string;
+};
+
+export type SyncAcquireResponsePort1 = {
+  /**
+   * Reference to a Kubernetes Secret
+   */
+  secretRef: SyncAcquireResponsePortSecretRef1;
+};
+
+/**
+ * Represents a value that can be either a concrete value, a template expression,
+ *
+ * @remarks
+ * or a reference to a Kubernetes Secret
+ */
+export type SyncAcquireResponsePortUnion1 =
+  | SyncAcquireResponsePort1
+  | number
+  | any;
+
+/**
+ * Reference to a Kubernetes Secret
+ */
+export type SyncAcquireResponseUsernameSecretRef1 = {
+  key: string;
+  name: string;
+};
+
+export type SyncAcquireResponseUsername1 = {
+  /**
+   * Reference to a Kubernetes Secret
+   */
+  secretRef: SyncAcquireResponseUsernameSecretRef1;
+};
+
+/**
+ * Represents a value that can be either a concrete value, a template expression,
+ *
+ * @remarks
+ * or a reference to a Kubernetes Secret
+ */
+export type SyncAcquireResponseUsernameUnion1 =
+  | SyncAcquireResponseUsername1
+  | any
+  | string;
+
+export const SyncAcquireResponseTypePostgres1 = {
+  Postgres: "postgres",
+} as const;
+export type SyncAcquireResponseTypePostgres1 = ClosedEnum<
+  typeof SyncAcquireResponseTypePostgres1
+>;
+
+/**
+ * AWS Aurora Serverless v2 binding.
+ */
+export type SyncAcquireResponseExternalBindingsAurora = {
+  /**
+   * Represents a value that can be either a concrete value, a template expression,
+   *
+   * @remarks
+   * or a reference to a Kubernetes Secret
+   */
+  clusterEndpoint?:
+    | SyncAcquireResponseClusterEndpoint
+    | any
+    | string
+    | null
+    | undefined;
+  /**
+   * Represents a value that can be either a concrete value, a template expression,
+   *
+   * @remarks
+   * or a reference to a Kubernetes Secret
+   */
+  database?: SyncAcquireResponseDatabase2 | any | string | null | undefined;
+  /**
+   * Represents a value that can be either a concrete value, a template expression,
+   *
+   * @remarks
+   * or a reference to a Kubernetes Secret
+   */
+  passwordSecretArn?:
+    | SyncAcquireResponsePasswordSecretArn
+    | any
+    | string
+    | null
+    | undefined;
+  /**
+   * Represents a value that can be either a concrete value, a template expression,
+   *
+   * @remarks
+   * or a reference to a Kubernetes Secret
+   */
+  port?: SyncAcquireResponsePort1 | number | any | null | undefined;
+  /**
+   * Represents a value that can be either a concrete value, a template expression,
+   *
+   * @remarks
+   * or a reference to a Kubernetes Secret
+   */
+  username?: SyncAcquireResponseUsername1 | any | string | null | undefined;
+  service: "aurora";
+  type: SyncAcquireResponseTypePostgres1;
+};
+
+/**
+ * Connection details for a Postgres database, one variant per backend.
+ */
+export type SyncAcquireResponseExternalBindingsUnion6 =
+  | SyncAcquireResponseExternalBindingsAurora
+  | SyncAcquireResponseExternalBindingsCloudSQL
+  | SyncAcquireResponseExternalBindingsFlexibleServer
+  | SyncAcquireResponseExternalBindingsExternal
+  | SyncAcquireResponseExternalBindingsLocalPostgres;
 
 /**
  * Reference to a Kubernetes Secret
@@ -6687,16 +7581,16 @@ export type SyncAcquireResponseConnectionUrlUnion =
 /**
  * Reference to a Kubernetes Secret
  */
-export type SyncAcquireResponseDatabaseSecretRef = {
+export type SyncAcquireResponseDatabaseSecretRef1 = {
   key: string;
   name: string;
 };
 
-export type SyncAcquireResponseDatabase = {
+export type SyncAcquireResponseDatabase1 = {
   /**
    * Reference to a Kubernetes Secret
    */
-  secretRef: SyncAcquireResponseDatabaseSecretRef;
+  secretRef: SyncAcquireResponseDatabaseSecretRef1;
 };
 
 /**
@@ -7622,7 +8516,7 @@ export type SyncAcquireResponseExternalBindingsUnion1 =
  * The binding type must match the resource type it's applied to.
  * Validated at runtime by the executor.
  */
-export type SyncAcquireResponseExternalBindingsUnion6 =
+export type SyncAcquireResponseExternalBindingsUnion7 =
   | SyncAcquireResponseExternalBindingsContainerAppsEnvironment
   | SyncAcquireResponseExternalBindingsS3
   | SyncAcquireResponseExternalBindingsBlob
@@ -7645,7 +8539,12 @@ export type SyncAcquireResponseExternalBindingsUnion6 =
   | SyncAcquireResponseExternalBindingsSecretManager
   | SyncAcquireResponseExternalBindingsKeyVault
   | SyncAcquireResponseExternalBindingsKubernetesSecret
-  | SyncAcquireResponseExternalBindingsLocalVault;
+  | SyncAcquireResponseExternalBindingsLocalVault
+  | SyncAcquireResponseExternalBindingsAurora
+  | SyncAcquireResponseExternalBindingsCloudSQL
+  | SyncAcquireResponseExternalBindingsFlexibleServer
+  | SyncAcquireResponseExternalBindingsExternal
+  | SyncAcquireResponseExternalBindingsLocalPostgres;
 
 export const SyncAcquireResponsePlatformKubernetes = {
   Kubernetes: "kubernetes",
@@ -8690,6 +9589,16 @@ export type SyncAcquireResponseNetworkByoVnetAzure = {
    */
   applicationGatewaySubnetName?: string | null | undefined;
   /**
+   * Name of the dedicated subnet that hosts Private Endpoints (e.g. for a
+   *
+   * @remarks
+   * Postgres Flexible Server). A Private Endpoint must not share the private
+   * subnet, which is already claimed by the Container Apps environment's
+   * `infrastructure_subnet_id`. Required only when the stack contains a
+   * Postgres resource; otherwise unused.
+   */
+  privateEndpointSubnetName?: string | null | undefined;
+  /**
    * Name of the private subnet within the VNet
    */
   privateSubnetName: string;
@@ -8952,7 +9861,12 @@ export type SyncAcquireResponseConfig = {
       | SyncAcquireResponseExternalBindingsSecretManager
       | SyncAcquireResponseExternalBindingsKeyVault
       | SyncAcquireResponseExternalBindingsKubernetesSecret
-      | SyncAcquireResponseExternalBindingsLocalVault;
+      | SyncAcquireResponseExternalBindingsLocalVault
+      | SyncAcquireResponseExternalBindingsAurora
+      | SyncAcquireResponseExternalBindingsCloudSQL
+      | SyncAcquireResponseExternalBindingsFlexibleServer
+      | SyncAcquireResponseExternalBindingsExternal
+      | SyncAcquireResponseExternalBindingsLocalPostgres;
   } | undefined;
   managementConfig?:
     | SyncAcquireResponseManagementConfigAzure
@@ -17296,6 +18210,26 @@ export function syncAcquireResponseHorizonMachineImageGcpUnionFromJSON(
 }
 
 /** @internal */
+export const SyncAcquireResponseHorizondArtifacts$inboundSchema: z.ZodType<
+  SyncAcquireResponseHorizondArtifacts,
+  unknown
+> = z.object({
+  sha256: z.string(),
+  url: z.string(),
+});
+
+export function syncAcquireResponseHorizondArtifactsFromJSON(
+  jsonString: string,
+): SafeParseResult<SyncAcquireResponseHorizondArtifacts, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) =>
+      SyncAcquireResponseHorizondArtifacts$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'SyncAcquireResponseHorizondArtifacts' from JSON`,
+  );
+}
+
+/** @internal */
 export const SyncAcquireResponseHorizonMachineImage$inboundSchema: z.ZodType<
   SyncAcquireResponseHorizonMachineImage,
   unknown
@@ -17322,6 +18256,12 @@ export const SyncAcquireResponseHorizonMachineImage$inboundSchema: z.ZodType<
     ]),
   ).optional(),
   gitSha: z.string(),
+  horizondArtifacts: z.nullable(
+    z.record(
+      z.string(),
+      z.lazy(() => SyncAcquireResponseHorizondArtifacts$inboundSchema),
+    ),
+  ).optional(),
   horizondVersion: z.string(),
   machineImageVersion: z.string(),
 });
@@ -17631,6 +18571,1714 @@ export function syncAcquireResponseEnvironmentVariablesFromJSON(
         JSON.parse(x),
       ),
     `Failed to parse 'SyncAcquireResponseEnvironmentVariables' from JSON`,
+  );
+}
+
+/** @internal */
+export const SyncAcquireResponseDatabaseSecretRef6$inboundSchema: z.ZodType<
+  SyncAcquireResponseDatabaseSecretRef6,
+  unknown
+> = z.object({
+  key: z.string(),
+  name: z.string(),
+});
+
+export function syncAcquireResponseDatabaseSecretRef6FromJSON(
+  jsonString: string,
+): SafeParseResult<SyncAcquireResponseDatabaseSecretRef6, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) =>
+      SyncAcquireResponseDatabaseSecretRef6$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'SyncAcquireResponseDatabaseSecretRef6' from JSON`,
+  );
+}
+
+/** @internal */
+export const SyncAcquireResponseDatabase6$inboundSchema: z.ZodType<
+  SyncAcquireResponseDatabase6,
+  unknown
+> = z.object({
+  secretRef: z.lazy(() => SyncAcquireResponseDatabaseSecretRef6$inboundSchema),
+});
+
+export function syncAcquireResponseDatabase6FromJSON(
+  jsonString: string,
+): SafeParseResult<SyncAcquireResponseDatabase6, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => SyncAcquireResponseDatabase6$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'SyncAcquireResponseDatabase6' from JSON`,
+  );
+}
+
+/** @internal */
+export const SyncAcquireResponseDatabaseUnion5$inboundSchema: z.ZodType<
+  SyncAcquireResponseDatabaseUnion5,
+  unknown
+> = z.union([
+  z.lazy(() => SyncAcquireResponseDatabase6$inboundSchema),
+  z.any(),
+  z.string(),
+]);
+
+export function syncAcquireResponseDatabaseUnion5FromJSON(
+  jsonString: string,
+): SafeParseResult<SyncAcquireResponseDatabaseUnion5, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => SyncAcquireResponseDatabaseUnion5$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'SyncAcquireResponseDatabaseUnion5' from JSON`,
+  );
+}
+
+/** @internal */
+export const SyncAcquireResponseHostSecretRef4$inboundSchema: z.ZodType<
+  SyncAcquireResponseHostSecretRef4,
+  unknown
+> = z.object({
+  key: z.string(),
+  name: z.string(),
+});
+
+export function syncAcquireResponseHostSecretRef4FromJSON(
+  jsonString: string,
+): SafeParseResult<SyncAcquireResponseHostSecretRef4, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => SyncAcquireResponseHostSecretRef4$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'SyncAcquireResponseHostSecretRef4' from JSON`,
+  );
+}
+
+/** @internal */
+export const SyncAcquireResponseHost4$inboundSchema: z.ZodType<
+  SyncAcquireResponseHost4,
+  unknown
+> = z.object({
+  secretRef: z.lazy(() => SyncAcquireResponseHostSecretRef4$inboundSchema),
+});
+
+export function syncAcquireResponseHost4FromJSON(
+  jsonString: string,
+): SafeParseResult<SyncAcquireResponseHost4, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => SyncAcquireResponseHost4$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'SyncAcquireResponseHost4' from JSON`,
+  );
+}
+
+/** @internal */
+export const SyncAcquireResponseHostUnion4$inboundSchema: z.ZodType<
+  SyncAcquireResponseHostUnion4,
+  unknown
+> = z.union([
+  z.lazy(() => SyncAcquireResponseHost4$inboundSchema),
+  z.any(),
+  z.string(),
+]);
+
+export function syncAcquireResponseHostUnion4FromJSON(
+  jsonString: string,
+): SafeParseResult<SyncAcquireResponseHostUnion4, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => SyncAcquireResponseHostUnion4$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'SyncAcquireResponseHostUnion4' from JSON`,
+  );
+}
+
+/** @internal */
+export const SyncAcquireResponsePortSecretRef5$inboundSchema: z.ZodType<
+  SyncAcquireResponsePortSecretRef5,
+  unknown
+> = z.object({
+  key: z.string(),
+  name: z.string(),
+});
+
+export function syncAcquireResponsePortSecretRef5FromJSON(
+  jsonString: string,
+): SafeParseResult<SyncAcquireResponsePortSecretRef5, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => SyncAcquireResponsePortSecretRef5$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'SyncAcquireResponsePortSecretRef5' from JSON`,
+  );
+}
+
+/** @internal */
+export const SyncAcquireResponsePort5$inboundSchema: z.ZodType<
+  SyncAcquireResponsePort5,
+  unknown
+> = z.object({
+  secretRef: z.lazy(() => SyncAcquireResponsePortSecretRef5$inboundSchema),
+});
+
+export function syncAcquireResponsePort5FromJSON(
+  jsonString: string,
+): SafeParseResult<SyncAcquireResponsePort5, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => SyncAcquireResponsePort5$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'SyncAcquireResponsePort5' from JSON`,
+  );
+}
+
+/** @internal */
+export const SyncAcquireResponsePortUnion5$inboundSchema: z.ZodType<
+  SyncAcquireResponsePortUnion5,
+  unknown
+> = z.union([
+  z.lazy(() => SyncAcquireResponsePort5$inboundSchema),
+  z.int(),
+  z.any(),
+]);
+
+export function syncAcquireResponsePortUnion5FromJSON(
+  jsonString: string,
+): SafeParseResult<SyncAcquireResponsePortUnion5, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => SyncAcquireResponsePortUnion5$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'SyncAcquireResponsePortUnion5' from JSON`,
+  );
+}
+
+/** @internal */
+export const SyncAcquireResponseUsernameSecretRef5$inboundSchema: z.ZodType<
+  SyncAcquireResponseUsernameSecretRef5,
+  unknown
+> = z.object({
+  key: z.string(),
+  name: z.string(),
+});
+
+export function syncAcquireResponseUsernameSecretRef5FromJSON(
+  jsonString: string,
+): SafeParseResult<SyncAcquireResponseUsernameSecretRef5, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) =>
+      SyncAcquireResponseUsernameSecretRef5$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'SyncAcquireResponseUsernameSecretRef5' from JSON`,
+  );
+}
+
+/** @internal */
+export const SyncAcquireResponseUsername5$inboundSchema: z.ZodType<
+  SyncAcquireResponseUsername5,
+  unknown
+> = z.object({
+  secretRef: z.lazy(() => SyncAcquireResponseUsernameSecretRef5$inboundSchema),
+});
+
+export function syncAcquireResponseUsername5FromJSON(
+  jsonString: string,
+): SafeParseResult<SyncAcquireResponseUsername5, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => SyncAcquireResponseUsername5$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'SyncAcquireResponseUsername5' from JSON`,
+  );
+}
+
+/** @internal */
+export const SyncAcquireResponseUsernameUnion5$inboundSchema: z.ZodType<
+  SyncAcquireResponseUsernameUnion5,
+  unknown
+> = z.union([
+  z.lazy(() => SyncAcquireResponseUsername5$inboundSchema),
+  z.any(),
+  z.string(),
+]);
+
+export function syncAcquireResponseUsernameUnion5FromJSON(
+  jsonString: string,
+): SafeParseResult<SyncAcquireResponseUsernameUnion5, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => SyncAcquireResponseUsernameUnion5$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'SyncAcquireResponseUsernameUnion5' from JSON`,
+  );
+}
+
+/** @internal */
+export const SyncAcquireResponseTypePostgres5$inboundSchema: z.ZodEnum<
+  typeof SyncAcquireResponseTypePostgres5
+> = z.enum(SyncAcquireResponseTypePostgres5);
+
+/** @internal */
+export const SyncAcquireResponseExternalBindingsLocalPostgres$inboundSchema:
+  z.ZodType<SyncAcquireResponseExternalBindingsLocalPostgres, unknown> = z
+    .object({
+      database: z.nullable(
+        z.union([
+          z.lazy(() => SyncAcquireResponseDatabase6$inboundSchema),
+          z.any(),
+          z.string(),
+        ]),
+      ).optional(),
+      host: z.nullable(
+        z.union([
+          z.lazy(() => SyncAcquireResponseHost4$inboundSchema),
+          z.any(),
+          z.string(),
+        ]),
+      ).optional(),
+      password: z.string(),
+      port: z.nullable(
+        z.union([
+          z.lazy(() => SyncAcquireResponsePort5$inboundSchema),
+          z.int(),
+          z.any(),
+        ]),
+      ).optional(),
+      username: z.nullable(
+        z.union([
+          z.lazy(() => SyncAcquireResponseUsername5$inboundSchema),
+          z.any(),
+          z.string(),
+        ]),
+      ).optional(),
+      service: z.literal("local-postgres"),
+      type: SyncAcquireResponseTypePostgres5$inboundSchema,
+    });
+
+export function syncAcquireResponseExternalBindingsLocalPostgresFromJSON(
+  jsonString: string,
+): SafeParseResult<
+  SyncAcquireResponseExternalBindingsLocalPostgres,
+  SDKValidationError
+> {
+  return safeParse(
+    jsonString,
+    (x) =>
+      SyncAcquireResponseExternalBindingsLocalPostgres$inboundSchema.parse(
+        JSON.parse(x),
+      ),
+    `Failed to parse 'SyncAcquireResponseExternalBindingsLocalPostgres' from JSON`,
+  );
+}
+
+/** @internal */
+export const SyncAcquireResponseDatabaseSecretRef5$inboundSchema: z.ZodType<
+  SyncAcquireResponseDatabaseSecretRef5,
+  unknown
+> = z.object({
+  key: z.string(),
+  name: z.string(),
+});
+
+export function syncAcquireResponseDatabaseSecretRef5FromJSON(
+  jsonString: string,
+): SafeParseResult<SyncAcquireResponseDatabaseSecretRef5, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) =>
+      SyncAcquireResponseDatabaseSecretRef5$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'SyncAcquireResponseDatabaseSecretRef5' from JSON`,
+  );
+}
+
+/** @internal */
+export const SyncAcquireResponseDatabase5$inboundSchema: z.ZodType<
+  SyncAcquireResponseDatabase5,
+  unknown
+> = z.object({
+  secretRef: z.lazy(() => SyncAcquireResponseDatabaseSecretRef5$inboundSchema),
+});
+
+export function syncAcquireResponseDatabase5FromJSON(
+  jsonString: string,
+): SafeParseResult<SyncAcquireResponseDatabase5, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => SyncAcquireResponseDatabase5$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'SyncAcquireResponseDatabase5' from JSON`,
+  );
+}
+
+/** @internal */
+export const SyncAcquireResponseDatabaseUnion4$inboundSchema: z.ZodType<
+  SyncAcquireResponseDatabaseUnion4,
+  unknown
+> = z.union([
+  z.lazy(() => SyncAcquireResponseDatabase5$inboundSchema),
+  z.any(),
+  z.string(),
+]);
+
+export function syncAcquireResponseDatabaseUnion4FromJSON(
+  jsonString: string,
+): SafeParseResult<SyncAcquireResponseDatabaseUnion4, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => SyncAcquireResponseDatabaseUnion4$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'SyncAcquireResponseDatabaseUnion4' from JSON`,
+  );
+}
+
+/** @internal */
+export const SyncAcquireResponseHostSecretRef3$inboundSchema: z.ZodType<
+  SyncAcquireResponseHostSecretRef3,
+  unknown
+> = z.object({
+  key: z.string(),
+  name: z.string(),
+});
+
+export function syncAcquireResponseHostSecretRef3FromJSON(
+  jsonString: string,
+): SafeParseResult<SyncAcquireResponseHostSecretRef3, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => SyncAcquireResponseHostSecretRef3$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'SyncAcquireResponseHostSecretRef3' from JSON`,
+  );
+}
+
+/** @internal */
+export const SyncAcquireResponseHost3$inboundSchema: z.ZodType<
+  SyncAcquireResponseHost3,
+  unknown
+> = z.object({
+  secretRef: z.lazy(() => SyncAcquireResponseHostSecretRef3$inboundSchema),
+});
+
+export function syncAcquireResponseHost3FromJSON(
+  jsonString: string,
+): SafeParseResult<SyncAcquireResponseHost3, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => SyncAcquireResponseHost3$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'SyncAcquireResponseHost3' from JSON`,
+  );
+}
+
+/** @internal */
+export const SyncAcquireResponseHostUnion3$inboundSchema: z.ZodType<
+  SyncAcquireResponseHostUnion3,
+  unknown
+> = z.union([
+  z.lazy(() => SyncAcquireResponseHost3$inboundSchema),
+  z.any(),
+  z.string(),
+]);
+
+export function syncAcquireResponseHostUnion3FromJSON(
+  jsonString: string,
+): SafeParseResult<SyncAcquireResponseHostUnion3, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => SyncAcquireResponseHostUnion3$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'SyncAcquireResponseHostUnion3' from JSON`,
+  );
+}
+
+/** @internal */
+export const SyncAcquireResponsePortSecretRef4$inboundSchema: z.ZodType<
+  SyncAcquireResponsePortSecretRef4,
+  unknown
+> = z.object({
+  key: z.string(),
+  name: z.string(),
+});
+
+export function syncAcquireResponsePortSecretRef4FromJSON(
+  jsonString: string,
+): SafeParseResult<SyncAcquireResponsePortSecretRef4, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => SyncAcquireResponsePortSecretRef4$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'SyncAcquireResponsePortSecretRef4' from JSON`,
+  );
+}
+
+/** @internal */
+export const SyncAcquireResponsePort4$inboundSchema: z.ZodType<
+  SyncAcquireResponsePort4,
+  unknown
+> = z.object({
+  secretRef: z.lazy(() => SyncAcquireResponsePortSecretRef4$inboundSchema),
+});
+
+export function syncAcquireResponsePort4FromJSON(
+  jsonString: string,
+): SafeParseResult<SyncAcquireResponsePort4, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => SyncAcquireResponsePort4$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'SyncAcquireResponsePort4' from JSON`,
+  );
+}
+
+/** @internal */
+export const SyncAcquireResponsePortUnion4$inboundSchema: z.ZodType<
+  SyncAcquireResponsePortUnion4,
+  unknown
+> = z.union([
+  z.lazy(() => SyncAcquireResponsePort4$inboundSchema),
+  z.int(),
+  z.any(),
+]);
+
+export function syncAcquireResponsePortUnion4FromJSON(
+  jsonString: string,
+): SafeParseResult<SyncAcquireResponsePortUnion4, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => SyncAcquireResponsePortUnion4$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'SyncAcquireResponsePortUnion4' from JSON`,
+  );
+}
+
+/** @internal */
+export const SyncAcquireResponseUsernameSecretRef4$inboundSchema: z.ZodType<
+  SyncAcquireResponseUsernameSecretRef4,
+  unknown
+> = z.object({
+  key: z.string(),
+  name: z.string(),
+});
+
+export function syncAcquireResponseUsernameSecretRef4FromJSON(
+  jsonString: string,
+): SafeParseResult<SyncAcquireResponseUsernameSecretRef4, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) =>
+      SyncAcquireResponseUsernameSecretRef4$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'SyncAcquireResponseUsernameSecretRef4' from JSON`,
+  );
+}
+
+/** @internal */
+export const SyncAcquireResponseUsername4$inboundSchema: z.ZodType<
+  SyncAcquireResponseUsername4,
+  unknown
+> = z.object({
+  secretRef: z.lazy(() => SyncAcquireResponseUsernameSecretRef4$inboundSchema),
+});
+
+export function syncAcquireResponseUsername4FromJSON(
+  jsonString: string,
+): SafeParseResult<SyncAcquireResponseUsername4, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => SyncAcquireResponseUsername4$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'SyncAcquireResponseUsername4' from JSON`,
+  );
+}
+
+/** @internal */
+export const SyncAcquireResponseUsernameUnion4$inboundSchema: z.ZodType<
+  SyncAcquireResponseUsernameUnion4,
+  unknown
+> = z.union([
+  z.lazy(() => SyncAcquireResponseUsername4$inboundSchema),
+  z.any(),
+  z.string(),
+]);
+
+export function syncAcquireResponseUsernameUnion4FromJSON(
+  jsonString: string,
+): SafeParseResult<SyncAcquireResponseUsernameUnion4, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => SyncAcquireResponseUsernameUnion4$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'SyncAcquireResponseUsernameUnion4' from JSON`,
+  );
+}
+
+/** @internal */
+export const SyncAcquireResponseTypePostgres4$inboundSchema: z.ZodEnum<
+  typeof SyncAcquireResponseTypePostgres4
+> = z.enum(SyncAcquireResponseTypePostgres4);
+
+/** @internal */
+export const SyncAcquireResponseExternalBindingsExternal$inboundSchema:
+  z.ZodType<SyncAcquireResponseExternalBindingsExternal, unknown> = z.object({
+    database: z.nullable(
+      z.union([
+        z.lazy(() => SyncAcquireResponseDatabase5$inboundSchema),
+        z.any(),
+        z.string(),
+      ]),
+    ).optional(),
+    host: z.nullable(
+      z.union([
+        z.lazy(() => SyncAcquireResponseHost3$inboundSchema),
+        z.any(),
+        z.string(),
+      ]),
+    ).optional(),
+    password: z.string(),
+    port: z.nullable(
+      z.union([
+        z.lazy(() => SyncAcquireResponsePort4$inboundSchema),
+        z.int(),
+        z.any(),
+      ]),
+    ).optional(),
+    username: z.nullable(
+      z.union([
+        z.lazy(() => SyncAcquireResponseUsername4$inboundSchema),
+        z.any(),
+        z.string(),
+      ]),
+    ).optional(),
+    service: z.literal("external"),
+    type: SyncAcquireResponseTypePostgres4$inboundSchema,
+  });
+
+export function syncAcquireResponseExternalBindingsExternalFromJSON(
+  jsonString: string,
+): SafeParseResult<
+  SyncAcquireResponseExternalBindingsExternal,
+  SDKValidationError
+> {
+  return safeParse(
+    jsonString,
+    (x) =>
+      SyncAcquireResponseExternalBindingsExternal$inboundSchema.parse(
+        JSON.parse(x),
+      ),
+    `Failed to parse 'SyncAcquireResponseExternalBindingsExternal' from JSON`,
+  );
+}
+
+/** @internal */
+export const SyncAcquireResponseDatabaseSecretRef4$inboundSchema: z.ZodType<
+  SyncAcquireResponseDatabaseSecretRef4,
+  unknown
+> = z.object({
+  key: z.string(),
+  name: z.string(),
+});
+
+export function syncAcquireResponseDatabaseSecretRef4FromJSON(
+  jsonString: string,
+): SafeParseResult<SyncAcquireResponseDatabaseSecretRef4, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) =>
+      SyncAcquireResponseDatabaseSecretRef4$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'SyncAcquireResponseDatabaseSecretRef4' from JSON`,
+  );
+}
+
+/** @internal */
+export const SyncAcquireResponseDatabase4$inboundSchema: z.ZodType<
+  SyncAcquireResponseDatabase4,
+  unknown
+> = z.object({
+  secretRef: z.lazy(() => SyncAcquireResponseDatabaseSecretRef4$inboundSchema),
+});
+
+export function syncAcquireResponseDatabase4FromJSON(
+  jsonString: string,
+): SafeParseResult<SyncAcquireResponseDatabase4, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => SyncAcquireResponseDatabase4$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'SyncAcquireResponseDatabase4' from JSON`,
+  );
+}
+
+/** @internal */
+export const SyncAcquireResponseDatabaseUnion3$inboundSchema: z.ZodType<
+  SyncAcquireResponseDatabaseUnion3,
+  unknown
+> = z.union([
+  z.lazy(() => SyncAcquireResponseDatabase4$inboundSchema),
+  z.any(),
+  z.string(),
+]);
+
+export function syncAcquireResponseDatabaseUnion3FromJSON(
+  jsonString: string,
+): SafeParseResult<SyncAcquireResponseDatabaseUnion3, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => SyncAcquireResponseDatabaseUnion3$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'SyncAcquireResponseDatabaseUnion3' from JSON`,
+  );
+}
+
+/** @internal */
+export const SyncAcquireResponseHostSecretRef2$inboundSchema: z.ZodType<
+  SyncAcquireResponseHostSecretRef2,
+  unknown
+> = z.object({
+  key: z.string(),
+  name: z.string(),
+});
+
+export function syncAcquireResponseHostSecretRef2FromJSON(
+  jsonString: string,
+): SafeParseResult<SyncAcquireResponseHostSecretRef2, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => SyncAcquireResponseHostSecretRef2$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'SyncAcquireResponseHostSecretRef2' from JSON`,
+  );
+}
+
+/** @internal */
+export const SyncAcquireResponseHost2$inboundSchema: z.ZodType<
+  SyncAcquireResponseHost2,
+  unknown
+> = z.object({
+  secretRef: z.lazy(() => SyncAcquireResponseHostSecretRef2$inboundSchema),
+});
+
+export function syncAcquireResponseHost2FromJSON(
+  jsonString: string,
+): SafeParseResult<SyncAcquireResponseHost2, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => SyncAcquireResponseHost2$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'SyncAcquireResponseHost2' from JSON`,
+  );
+}
+
+/** @internal */
+export const SyncAcquireResponseHostUnion2$inboundSchema: z.ZodType<
+  SyncAcquireResponseHostUnion2,
+  unknown
+> = z.union([
+  z.lazy(() => SyncAcquireResponseHost2$inboundSchema),
+  z.any(),
+  z.string(),
+]);
+
+export function syncAcquireResponseHostUnion2FromJSON(
+  jsonString: string,
+): SafeParseResult<SyncAcquireResponseHostUnion2, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => SyncAcquireResponseHostUnion2$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'SyncAcquireResponseHostUnion2' from JSON`,
+  );
+}
+
+/** @internal */
+export const SyncAcquireResponsePasswordSecretUriSecretRef$inboundSchema:
+  z.ZodType<SyncAcquireResponsePasswordSecretUriSecretRef, unknown> = z.object({
+    key: z.string(),
+    name: z.string(),
+  });
+
+export function syncAcquireResponsePasswordSecretUriSecretRefFromJSON(
+  jsonString: string,
+): SafeParseResult<
+  SyncAcquireResponsePasswordSecretUriSecretRef,
+  SDKValidationError
+> {
+  return safeParse(
+    jsonString,
+    (x) =>
+      SyncAcquireResponsePasswordSecretUriSecretRef$inboundSchema.parse(
+        JSON.parse(x),
+      ),
+    `Failed to parse 'SyncAcquireResponsePasswordSecretUriSecretRef' from JSON`,
+  );
+}
+
+/** @internal */
+export const SyncAcquireResponsePasswordSecretUri$inboundSchema: z.ZodType<
+  SyncAcquireResponsePasswordSecretUri,
+  unknown
+> = z.object({
+  secretRef: z.lazy(() =>
+    SyncAcquireResponsePasswordSecretUriSecretRef$inboundSchema
+  ),
+});
+
+export function syncAcquireResponsePasswordSecretUriFromJSON(
+  jsonString: string,
+): SafeParseResult<SyncAcquireResponsePasswordSecretUri, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) =>
+      SyncAcquireResponsePasswordSecretUri$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'SyncAcquireResponsePasswordSecretUri' from JSON`,
+  );
+}
+
+/** @internal */
+export const SyncAcquireResponsePasswordSecretUriUnion$inboundSchema: z.ZodType<
+  SyncAcquireResponsePasswordSecretUriUnion,
+  unknown
+> = z.union([
+  z.lazy(() => SyncAcquireResponsePasswordSecretUri$inboundSchema),
+  z.any(),
+  z.string(),
+]);
+
+export function syncAcquireResponsePasswordSecretUriUnionFromJSON(
+  jsonString: string,
+): SafeParseResult<
+  SyncAcquireResponsePasswordSecretUriUnion,
+  SDKValidationError
+> {
+  return safeParse(
+    jsonString,
+    (x) =>
+      SyncAcquireResponsePasswordSecretUriUnion$inboundSchema.parse(
+        JSON.parse(x),
+      ),
+    `Failed to parse 'SyncAcquireResponsePasswordSecretUriUnion' from JSON`,
+  );
+}
+
+/** @internal */
+export const SyncAcquireResponsePortSecretRef3$inboundSchema: z.ZodType<
+  SyncAcquireResponsePortSecretRef3,
+  unknown
+> = z.object({
+  key: z.string(),
+  name: z.string(),
+});
+
+export function syncAcquireResponsePortSecretRef3FromJSON(
+  jsonString: string,
+): SafeParseResult<SyncAcquireResponsePortSecretRef3, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => SyncAcquireResponsePortSecretRef3$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'SyncAcquireResponsePortSecretRef3' from JSON`,
+  );
+}
+
+/** @internal */
+export const SyncAcquireResponsePort3$inboundSchema: z.ZodType<
+  SyncAcquireResponsePort3,
+  unknown
+> = z.object({
+  secretRef: z.lazy(() => SyncAcquireResponsePortSecretRef3$inboundSchema),
+});
+
+export function syncAcquireResponsePort3FromJSON(
+  jsonString: string,
+): SafeParseResult<SyncAcquireResponsePort3, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => SyncAcquireResponsePort3$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'SyncAcquireResponsePort3' from JSON`,
+  );
+}
+
+/** @internal */
+export const SyncAcquireResponsePortUnion3$inboundSchema: z.ZodType<
+  SyncAcquireResponsePortUnion3,
+  unknown
+> = z.union([
+  z.lazy(() => SyncAcquireResponsePort3$inboundSchema),
+  z.int(),
+  z.any(),
+]);
+
+export function syncAcquireResponsePortUnion3FromJSON(
+  jsonString: string,
+): SafeParseResult<SyncAcquireResponsePortUnion3, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => SyncAcquireResponsePortUnion3$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'SyncAcquireResponsePortUnion3' from JSON`,
+  );
+}
+
+/** @internal */
+export const SyncAcquireResponseUsernameSecretRef3$inboundSchema: z.ZodType<
+  SyncAcquireResponseUsernameSecretRef3,
+  unknown
+> = z.object({
+  key: z.string(),
+  name: z.string(),
+});
+
+export function syncAcquireResponseUsernameSecretRef3FromJSON(
+  jsonString: string,
+): SafeParseResult<SyncAcquireResponseUsernameSecretRef3, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) =>
+      SyncAcquireResponseUsernameSecretRef3$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'SyncAcquireResponseUsernameSecretRef3' from JSON`,
+  );
+}
+
+/** @internal */
+export const SyncAcquireResponseUsername3$inboundSchema: z.ZodType<
+  SyncAcquireResponseUsername3,
+  unknown
+> = z.object({
+  secretRef: z.lazy(() => SyncAcquireResponseUsernameSecretRef3$inboundSchema),
+});
+
+export function syncAcquireResponseUsername3FromJSON(
+  jsonString: string,
+): SafeParseResult<SyncAcquireResponseUsername3, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => SyncAcquireResponseUsername3$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'SyncAcquireResponseUsername3' from JSON`,
+  );
+}
+
+/** @internal */
+export const SyncAcquireResponseUsernameUnion3$inboundSchema: z.ZodType<
+  SyncAcquireResponseUsernameUnion3,
+  unknown
+> = z.union([
+  z.lazy(() => SyncAcquireResponseUsername3$inboundSchema),
+  z.any(),
+  z.string(),
+]);
+
+export function syncAcquireResponseUsernameUnion3FromJSON(
+  jsonString: string,
+): SafeParseResult<SyncAcquireResponseUsernameUnion3, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => SyncAcquireResponseUsernameUnion3$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'SyncAcquireResponseUsernameUnion3' from JSON`,
+  );
+}
+
+/** @internal */
+export const SyncAcquireResponseTypePostgres3$inboundSchema: z.ZodEnum<
+  typeof SyncAcquireResponseTypePostgres3
+> = z.enum(SyncAcquireResponseTypePostgres3);
+
+/** @internal */
+export const SyncAcquireResponseExternalBindingsFlexibleServer$inboundSchema:
+  z.ZodType<SyncAcquireResponseExternalBindingsFlexibleServer, unknown> = z
+    .object({
+      database: z.nullable(
+        z.union([
+          z.lazy(() => SyncAcquireResponseDatabase4$inboundSchema),
+          z.any(),
+          z.string(),
+        ]),
+      ).optional(),
+      host: z.nullable(
+        z.union([
+          z.lazy(() => SyncAcquireResponseHost2$inboundSchema),
+          z.any(),
+          z.string(),
+        ]),
+      ).optional(),
+      passwordSecretUri: z.nullable(
+        z.union([
+          z.lazy(() => SyncAcquireResponsePasswordSecretUri$inboundSchema),
+          z.any(),
+          z.string(),
+        ]),
+      ).optional(),
+      port: z.nullable(
+        z.union([
+          z.lazy(() => SyncAcquireResponsePort3$inboundSchema),
+          z.int(),
+          z.any(),
+        ]),
+      ).optional(),
+      username: z.nullable(
+        z.union([
+          z.lazy(() => SyncAcquireResponseUsername3$inboundSchema),
+          z.any(),
+          z.string(),
+        ]),
+      ).optional(),
+      service: z.literal("flexible-server"),
+      type: SyncAcquireResponseTypePostgres3$inboundSchema,
+    });
+
+export function syncAcquireResponseExternalBindingsFlexibleServerFromJSON(
+  jsonString: string,
+): SafeParseResult<
+  SyncAcquireResponseExternalBindingsFlexibleServer,
+  SDKValidationError
+> {
+  return safeParse(
+    jsonString,
+    (x) =>
+      SyncAcquireResponseExternalBindingsFlexibleServer$inboundSchema.parse(
+        JSON.parse(x),
+      ),
+    `Failed to parse 'SyncAcquireResponseExternalBindingsFlexibleServer' from JSON`,
+  );
+}
+
+/** @internal */
+export const SyncAcquireResponseDatabaseSecretRef3$inboundSchema: z.ZodType<
+  SyncAcquireResponseDatabaseSecretRef3,
+  unknown
+> = z.object({
+  key: z.string(),
+  name: z.string(),
+});
+
+export function syncAcquireResponseDatabaseSecretRef3FromJSON(
+  jsonString: string,
+): SafeParseResult<SyncAcquireResponseDatabaseSecretRef3, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) =>
+      SyncAcquireResponseDatabaseSecretRef3$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'SyncAcquireResponseDatabaseSecretRef3' from JSON`,
+  );
+}
+
+/** @internal */
+export const SyncAcquireResponseDatabase3$inboundSchema: z.ZodType<
+  SyncAcquireResponseDatabase3,
+  unknown
+> = z.object({
+  secretRef: z.lazy(() => SyncAcquireResponseDatabaseSecretRef3$inboundSchema),
+});
+
+export function syncAcquireResponseDatabase3FromJSON(
+  jsonString: string,
+): SafeParseResult<SyncAcquireResponseDatabase3, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => SyncAcquireResponseDatabase3$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'SyncAcquireResponseDatabase3' from JSON`,
+  );
+}
+
+/** @internal */
+export const SyncAcquireResponseDatabaseUnion2$inboundSchema: z.ZodType<
+  SyncAcquireResponseDatabaseUnion2,
+  unknown
+> = z.union([
+  z.lazy(() => SyncAcquireResponseDatabase3$inboundSchema),
+  z.any(),
+  z.string(),
+]);
+
+export function syncAcquireResponseDatabaseUnion2FromJSON(
+  jsonString: string,
+): SafeParseResult<SyncAcquireResponseDatabaseUnion2, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => SyncAcquireResponseDatabaseUnion2$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'SyncAcquireResponseDatabaseUnion2' from JSON`,
+  );
+}
+
+/** @internal */
+export const SyncAcquireResponseHostSecretRef1$inboundSchema: z.ZodType<
+  SyncAcquireResponseHostSecretRef1,
+  unknown
+> = z.object({
+  key: z.string(),
+  name: z.string(),
+});
+
+export function syncAcquireResponseHostSecretRef1FromJSON(
+  jsonString: string,
+): SafeParseResult<SyncAcquireResponseHostSecretRef1, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => SyncAcquireResponseHostSecretRef1$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'SyncAcquireResponseHostSecretRef1' from JSON`,
+  );
+}
+
+/** @internal */
+export const SyncAcquireResponseHost1$inboundSchema: z.ZodType<
+  SyncAcquireResponseHost1,
+  unknown
+> = z.object({
+  secretRef: z.lazy(() => SyncAcquireResponseHostSecretRef1$inboundSchema),
+});
+
+export function syncAcquireResponseHost1FromJSON(
+  jsonString: string,
+): SafeParseResult<SyncAcquireResponseHost1, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => SyncAcquireResponseHost1$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'SyncAcquireResponseHost1' from JSON`,
+  );
+}
+
+/** @internal */
+export const SyncAcquireResponseHostUnion1$inboundSchema: z.ZodType<
+  SyncAcquireResponseHostUnion1,
+  unknown
+> = z.union([
+  z.lazy(() => SyncAcquireResponseHost1$inboundSchema),
+  z.any(),
+  z.string(),
+]);
+
+export function syncAcquireResponseHostUnion1FromJSON(
+  jsonString: string,
+): SafeParseResult<SyncAcquireResponseHostUnion1, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => SyncAcquireResponseHostUnion1$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'SyncAcquireResponseHostUnion1' from JSON`,
+  );
+}
+
+/** @internal */
+export const SyncAcquireResponsePasswordSecretNameSecretRef$inboundSchema:
+  z.ZodType<SyncAcquireResponsePasswordSecretNameSecretRef, unknown> = z.object(
+    {
+      key: z.string(),
+      name: z.string(),
+    },
+  );
+
+export function syncAcquireResponsePasswordSecretNameSecretRefFromJSON(
+  jsonString: string,
+): SafeParseResult<
+  SyncAcquireResponsePasswordSecretNameSecretRef,
+  SDKValidationError
+> {
+  return safeParse(
+    jsonString,
+    (x) =>
+      SyncAcquireResponsePasswordSecretNameSecretRef$inboundSchema.parse(
+        JSON.parse(x),
+      ),
+    `Failed to parse 'SyncAcquireResponsePasswordSecretNameSecretRef' from JSON`,
+  );
+}
+
+/** @internal */
+export const SyncAcquireResponsePasswordSecretName$inboundSchema: z.ZodType<
+  SyncAcquireResponsePasswordSecretName,
+  unknown
+> = z.object({
+  secretRef: z.lazy(() =>
+    SyncAcquireResponsePasswordSecretNameSecretRef$inboundSchema
+  ),
+});
+
+export function syncAcquireResponsePasswordSecretNameFromJSON(
+  jsonString: string,
+): SafeParseResult<SyncAcquireResponsePasswordSecretName, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) =>
+      SyncAcquireResponsePasswordSecretName$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'SyncAcquireResponsePasswordSecretName' from JSON`,
+  );
+}
+
+/** @internal */
+export const SyncAcquireResponsePasswordSecretNameUnion$inboundSchema:
+  z.ZodType<SyncAcquireResponsePasswordSecretNameUnion, unknown> = z.union([
+    z.lazy(() => SyncAcquireResponsePasswordSecretName$inboundSchema),
+    z.any(),
+    z.string(),
+  ]);
+
+export function syncAcquireResponsePasswordSecretNameUnionFromJSON(
+  jsonString: string,
+): SafeParseResult<
+  SyncAcquireResponsePasswordSecretNameUnion,
+  SDKValidationError
+> {
+  return safeParse(
+    jsonString,
+    (x) =>
+      SyncAcquireResponsePasswordSecretNameUnion$inboundSchema.parse(
+        JSON.parse(x),
+      ),
+    `Failed to parse 'SyncAcquireResponsePasswordSecretNameUnion' from JSON`,
+  );
+}
+
+/** @internal */
+export const SyncAcquireResponsePortSecretRef2$inboundSchema: z.ZodType<
+  SyncAcquireResponsePortSecretRef2,
+  unknown
+> = z.object({
+  key: z.string(),
+  name: z.string(),
+});
+
+export function syncAcquireResponsePortSecretRef2FromJSON(
+  jsonString: string,
+): SafeParseResult<SyncAcquireResponsePortSecretRef2, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => SyncAcquireResponsePortSecretRef2$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'SyncAcquireResponsePortSecretRef2' from JSON`,
+  );
+}
+
+/** @internal */
+export const SyncAcquireResponsePort2$inboundSchema: z.ZodType<
+  SyncAcquireResponsePort2,
+  unknown
+> = z.object({
+  secretRef: z.lazy(() => SyncAcquireResponsePortSecretRef2$inboundSchema),
+});
+
+export function syncAcquireResponsePort2FromJSON(
+  jsonString: string,
+): SafeParseResult<SyncAcquireResponsePort2, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => SyncAcquireResponsePort2$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'SyncAcquireResponsePort2' from JSON`,
+  );
+}
+
+/** @internal */
+export const SyncAcquireResponsePortUnion2$inboundSchema: z.ZodType<
+  SyncAcquireResponsePortUnion2,
+  unknown
+> = z.union([
+  z.lazy(() => SyncAcquireResponsePort2$inboundSchema),
+  z.int(),
+  z.any(),
+]);
+
+export function syncAcquireResponsePortUnion2FromJSON(
+  jsonString: string,
+): SafeParseResult<SyncAcquireResponsePortUnion2, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => SyncAcquireResponsePortUnion2$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'SyncAcquireResponsePortUnion2' from JSON`,
+  );
+}
+
+/** @internal */
+export const SyncAcquireResponseUsernameSecretRef2$inboundSchema: z.ZodType<
+  SyncAcquireResponseUsernameSecretRef2,
+  unknown
+> = z.object({
+  key: z.string(),
+  name: z.string(),
+});
+
+export function syncAcquireResponseUsernameSecretRef2FromJSON(
+  jsonString: string,
+): SafeParseResult<SyncAcquireResponseUsernameSecretRef2, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) =>
+      SyncAcquireResponseUsernameSecretRef2$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'SyncAcquireResponseUsernameSecretRef2' from JSON`,
+  );
+}
+
+/** @internal */
+export const SyncAcquireResponseUsername2$inboundSchema: z.ZodType<
+  SyncAcquireResponseUsername2,
+  unknown
+> = z.object({
+  secretRef: z.lazy(() => SyncAcquireResponseUsernameSecretRef2$inboundSchema),
+});
+
+export function syncAcquireResponseUsername2FromJSON(
+  jsonString: string,
+): SafeParseResult<SyncAcquireResponseUsername2, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => SyncAcquireResponseUsername2$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'SyncAcquireResponseUsername2' from JSON`,
+  );
+}
+
+/** @internal */
+export const SyncAcquireResponseUsernameUnion2$inboundSchema: z.ZodType<
+  SyncAcquireResponseUsernameUnion2,
+  unknown
+> = z.union([
+  z.lazy(() => SyncAcquireResponseUsername2$inboundSchema),
+  z.any(),
+  z.string(),
+]);
+
+export function syncAcquireResponseUsernameUnion2FromJSON(
+  jsonString: string,
+): SafeParseResult<SyncAcquireResponseUsernameUnion2, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => SyncAcquireResponseUsernameUnion2$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'SyncAcquireResponseUsernameUnion2' from JSON`,
+  );
+}
+
+/** @internal */
+export const SyncAcquireResponseTypePostgres2$inboundSchema: z.ZodEnum<
+  typeof SyncAcquireResponseTypePostgres2
+> = z.enum(SyncAcquireResponseTypePostgres2);
+
+/** @internal */
+export const SyncAcquireResponseExternalBindingsCloudSQL$inboundSchema:
+  z.ZodType<SyncAcquireResponseExternalBindingsCloudSQL, unknown> = z.object({
+    database: z.nullable(
+      z.union([
+        z.lazy(() => SyncAcquireResponseDatabase3$inboundSchema),
+        z.any(),
+        z.string(),
+      ]),
+    ).optional(),
+    host: z.nullable(
+      z.union([
+        z.lazy(() => SyncAcquireResponseHost1$inboundSchema),
+        z.any(),
+        z.string(),
+      ]),
+    ).optional(),
+    passwordSecretName: z.nullable(
+      z.union([
+        z.lazy(() => SyncAcquireResponsePasswordSecretName$inboundSchema),
+        z.any(),
+        z.string(),
+      ]),
+    ).optional(),
+    port: z.nullable(
+      z.union([
+        z.lazy(() => SyncAcquireResponsePort2$inboundSchema),
+        z.int(),
+        z.any(),
+      ]),
+    ).optional(),
+    username: z.nullable(
+      z.union([
+        z.lazy(() => SyncAcquireResponseUsername2$inboundSchema),
+        z.any(),
+        z.string(),
+      ]),
+    ).optional(),
+    service: z.literal("cloud-sql"),
+    type: SyncAcquireResponseTypePostgres2$inboundSchema,
+  });
+
+export function syncAcquireResponseExternalBindingsCloudSQLFromJSON(
+  jsonString: string,
+): SafeParseResult<
+  SyncAcquireResponseExternalBindingsCloudSQL,
+  SDKValidationError
+> {
+  return safeParse(
+    jsonString,
+    (x) =>
+      SyncAcquireResponseExternalBindingsCloudSQL$inboundSchema.parse(
+        JSON.parse(x),
+      ),
+    `Failed to parse 'SyncAcquireResponseExternalBindingsCloudSQL' from JSON`,
+  );
+}
+
+/** @internal */
+export const SyncAcquireResponseClusterEndpointSecretRef$inboundSchema:
+  z.ZodType<SyncAcquireResponseClusterEndpointSecretRef, unknown> = z.object({
+    key: z.string(),
+    name: z.string(),
+  });
+
+export function syncAcquireResponseClusterEndpointSecretRefFromJSON(
+  jsonString: string,
+): SafeParseResult<
+  SyncAcquireResponseClusterEndpointSecretRef,
+  SDKValidationError
+> {
+  return safeParse(
+    jsonString,
+    (x) =>
+      SyncAcquireResponseClusterEndpointSecretRef$inboundSchema.parse(
+        JSON.parse(x),
+      ),
+    `Failed to parse 'SyncAcquireResponseClusterEndpointSecretRef' from JSON`,
+  );
+}
+
+/** @internal */
+export const SyncAcquireResponseClusterEndpoint$inboundSchema: z.ZodType<
+  SyncAcquireResponseClusterEndpoint,
+  unknown
+> = z.object({
+  secretRef: z.lazy(() =>
+    SyncAcquireResponseClusterEndpointSecretRef$inboundSchema
+  ),
+});
+
+export function syncAcquireResponseClusterEndpointFromJSON(
+  jsonString: string,
+): SafeParseResult<SyncAcquireResponseClusterEndpoint, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) =>
+      SyncAcquireResponseClusterEndpoint$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'SyncAcquireResponseClusterEndpoint' from JSON`,
+  );
+}
+
+/** @internal */
+export const SyncAcquireResponseClusterEndpointUnion$inboundSchema: z.ZodType<
+  SyncAcquireResponseClusterEndpointUnion,
+  unknown
+> = z.union([
+  z.lazy(() => SyncAcquireResponseClusterEndpoint$inboundSchema),
+  z.any(),
+  z.string(),
+]);
+
+export function syncAcquireResponseClusterEndpointUnionFromJSON(
+  jsonString: string,
+): SafeParseResult<
+  SyncAcquireResponseClusterEndpointUnion,
+  SDKValidationError
+> {
+  return safeParse(
+    jsonString,
+    (x) =>
+      SyncAcquireResponseClusterEndpointUnion$inboundSchema.parse(
+        JSON.parse(x),
+      ),
+    `Failed to parse 'SyncAcquireResponseClusterEndpointUnion' from JSON`,
+  );
+}
+
+/** @internal */
+export const SyncAcquireResponseDatabaseSecretRef2$inboundSchema: z.ZodType<
+  SyncAcquireResponseDatabaseSecretRef2,
+  unknown
+> = z.object({
+  key: z.string(),
+  name: z.string(),
+});
+
+export function syncAcquireResponseDatabaseSecretRef2FromJSON(
+  jsonString: string,
+): SafeParseResult<SyncAcquireResponseDatabaseSecretRef2, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) =>
+      SyncAcquireResponseDatabaseSecretRef2$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'SyncAcquireResponseDatabaseSecretRef2' from JSON`,
+  );
+}
+
+/** @internal */
+export const SyncAcquireResponseDatabase2$inboundSchema: z.ZodType<
+  SyncAcquireResponseDatabase2,
+  unknown
+> = z.object({
+  secretRef: z.lazy(() => SyncAcquireResponseDatabaseSecretRef2$inboundSchema),
+});
+
+export function syncAcquireResponseDatabase2FromJSON(
+  jsonString: string,
+): SafeParseResult<SyncAcquireResponseDatabase2, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => SyncAcquireResponseDatabase2$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'SyncAcquireResponseDatabase2' from JSON`,
+  );
+}
+
+/** @internal */
+export const SyncAcquireResponseDatabaseUnion1$inboundSchema: z.ZodType<
+  SyncAcquireResponseDatabaseUnion1,
+  unknown
+> = z.union([
+  z.lazy(() => SyncAcquireResponseDatabase2$inboundSchema),
+  z.any(),
+  z.string(),
+]);
+
+export function syncAcquireResponseDatabaseUnion1FromJSON(
+  jsonString: string,
+): SafeParseResult<SyncAcquireResponseDatabaseUnion1, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => SyncAcquireResponseDatabaseUnion1$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'SyncAcquireResponseDatabaseUnion1' from JSON`,
+  );
+}
+
+/** @internal */
+export const SyncAcquireResponsePasswordSecretArnSecretRef$inboundSchema:
+  z.ZodType<SyncAcquireResponsePasswordSecretArnSecretRef, unknown> = z.object({
+    key: z.string(),
+    name: z.string(),
+  });
+
+export function syncAcquireResponsePasswordSecretArnSecretRefFromJSON(
+  jsonString: string,
+): SafeParseResult<
+  SyncAcquireResponsePasswordSecretArnSecretRef,
+  SDKValidationError
+> {
+  return safeParse(
+    jsonString,
+    (x) =>
+      SyncAcquireResponsePasswordSecretArnSecretRef$inboundSchema.parse(
+        JSON.parse(x),
+      ),
+    `Failed to parse 'SyncAcquireResponsePasswordSecretArnSecretRef' from JSON`,
+  );
+}
+
+/** @internal */
+export const SyncAcquireResponsePasswordSecretArn$inboundSchema: z.ZodType<
+  SyncAcquireResponsePasswordSecretArn,
+  unknown
+> = z.object({
+  secretRef: z.lazy(() =>
+    SyncAcquireResponsePasswordSecretArnSecretRef$inboundSchema
+  ),
+});
+
+export function syncAcquireResponsePasswordSecretArnFromJSON(
+  jsonString: string,
+): SafeParseResult<SyncAcquireResponsePasswordSecretArn, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) =>
+      SyncAcquireResponsePasswordSecretArn$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'SyncAcquireResponsePasswordSecretArn' from JSON`,
+  );
+}
+
+/** @internal */
+export const SyncAcquireResponsePasswordSecretArnUnion$inboundSchema: z.ZodType<
+  SyncAcquireResponsePasswordSecretArnUnion,
+  unknown
+> = z.union([
+  z.lazy(() => SyncAcquireResponsePasswordSecretArn$inboundSchema),
+  z.any(),
+  z.string(),
+]);
+
+export function syncAcquireResponsePasswordSecretArnUnionFromJSON(
+  jsonString: string,
+): SafeParseResult<
+  SyncAcquireResponsePasswordSecretArnUnion,
+  SDKValidationError
+> {
+  return safeParse(
+    jsonString,
+    (x) =>
+      SyncAcquireResponsePasswordSecretArnUnion$inboundSchema.parse(
+        JSON.parse(x),
+      ),
+    `Failed to parse 'SyncAcquireResponsePasswordSecretArnUnion' from JSON`,
+  );
+}
+
+/** @internal */
+export const SyncAcquireResponsePortSecretRef1$inboundSchema: z.ZodType<
+  SyncAcquireResponsePortSecretRef1,
+  unknown
+> = z.object({
+  key: z.string(),
+  name: z.string(),
+});
+
+export function syncAcquireResponsePortSecretRef1FromJSON(
+  jsonString: string,
+): SafeParseResult<SyncAcquireResponsePortSecretRef1, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => SyncAcquireResponsePortSecretRef1$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'SyncAcquireResponsePortSecretRef1' from JSON`,
+  );
+}
+
+/** @internal */
+export const SyncAcquireResponsePort1$inboundSchema: z.ZodType<
+  SyncAcquireResponsePort1,
+  unknown
+> = z.object({
+  secretRef: z.lazy(() => SyncAcquireResponsePortSecretRef1$inboundSchema),
+});
+
+export function syncAcquireResponsePort1FromJSON(
+  jsonString: string,
+): SafeParseResult<SyncAcquireResponsePort1, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => SyncAcquireResponsePort1$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'SyncAcquireResponsePort1' from JSON`,
+  );
+}
+
+/** @internal */
+export const SyncAcquireResponsePortUnion1$inboundSchema: z.ZodType<
+  SyncAcquireResponsePortUnion1,
+  unknown
+> = z.union([
+  z.lazy(() => SyncAcquireResponsePort1$inboundSchema),
+  z.int(),
+  z.any(),
+]);
+
+export function syncAcquireResponsePortUnion1FromJSON(
+  jsonString: string,
+): SafeParseResult<SyncAcquireResponsePortUnion1, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => SyncAcquireResponsePortUnion1$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'SyncAcquireResponsePortUnion1' from JSON`,
+  );
+}
+
+/** @internal */
+export const SyncAcquireResponseUsernameSecretRef1$inboundSchema: z.ZodType<
+  SyncAcquireResponseUsernameSecretRef1,
+  unknown
+> = z.object({
+  key: z.string(),
+  name: z.string(),
+});
+
+export function syncAcquireResponseUsernameSecretRef1FromJSON(
+  jsonString: string,
+): SafeParseResult<SyncAcquireResponseUsernameSecretRef1, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) =>
+      SyncAcquireResponseUsernameSecretRef1$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'SyncAcquireResponseUsernameSecretRef1' from JSON`,
+  );
+}
+
+/** @internal */
+export const SyncAcquireResponseUsername1$inboundSchema: z.ZodType<
+  SyncAcquireResponseUsername1,
+  unknown
+> = z.object({
+  secretRef: z.lazy(() => SyncAcquireResponseUsernameSecretRef1$inboundSchema),
+});
+
+export function syncAcquireResponseUsername1FromJSON(
+  jsonString: string,
+): SafeParseResult<SyncAcquireResponseUsername1, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => SyncAcquireResponseUsername1$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'SyncAcquireResponseUsername1' from JSON`,
+  );
+}
+
+/** @internal */
+export const SyncAcquireResponseUsernameUnion1$inboundSchema: z.ZodType<
+  SyncAcquireResponseUsernameUnion1,
+  unknown
+> = z.union([
+  z.lazy(() => SyncAcquireResponseUsername1$inboundSchema),
+  z.any(),
+  z.string(),
+]);
+
+export function syncAcquireResponseUsernameUnion1FromJSON(
+  jsonString: string,
+): SafeParseResult<SyncAcquireResponseUsernameUnion1, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => SyncAcquireResponseUsernameUnion1$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'SyncAcquireResponseUsernameUnion1' from JSON`,
+  );
+}
+
+/** @internal */
+export const SyncAcquireResponseTypePostgres1$inboundSchema: z.ZodEnum<
+  typeof SyncAcquireResponseTypePostgres1
+> = z.enum(SyncAcquireResponseTypePostgres1);
+
+/** @internal */
+export const SyncAcquireResponseExternalBindingsAurora$inboundSchema: z.ZodType<
+  SyncAcquireResponseExternalBindingsAurora,
+  unknown
+> = z.object({
+  clusterEndpoint: z.nullable(
+    z.union([
+      z.lazy(() => SyncAcquireResponseClusterEndpoint$inboundSchema),
+      z.any(),
+      z.string(),
+    ]),
+  ).optional(),
+  database: z.nullable(
+    z.union([
+      z.lazy(() => SyncAcquireResponseDatabase2$inboundSchema),
+      z.any(),
+      z.string(),
+    ]),
+  ).optional(),
+  passwordSecretArn: z.nullable(
+    z.union([
+      z.lazy(() => SyncAcquireResponsePasswordSecretArn$inboundSchema),
+      z.any(),
+      z.string(),
+    ]),
+  ).optional(),
+  port: z.nullable(
+    z.union([
+      z.lazy(() => SyncAcquireResponsePort1$inboundSchema),
+      z.int(),
+      z.any(),
+    ]),
+  ).optional(),
+  username: z.nullable(
+    z.union([
+      z.lazy(() => SyncAcquireResponseUsername1$inboundSchema),
+      z.any(),
+      z.string(),
+    ]),
+  ).optional(),
+  service: z.literal("aurora"),
+  type: SyncAcquireResponseTypePostgres1$inboundSchema,
+});
+
+export function syncAcquireResponseExternalBindingsAuroraFromJSON(
+  jsonString: string,
+): SafeParseResult<
+  SyncAcquireResponseExternalBindingsAurora,
+  SDKValidationError
+> {
+  return safeParse(
+    jsonString,
+    (x) =>
+      SyncAcquireResponseExternalBindingsAurora$inboundSchema.parse(
+        JSON.parse(x),
+      ),
+    `Failed to parse 'SyncAcquireResponseExternalBindingsAurora' from JSON`,
+  );
+}
+
+/** @internal */
+export const SyncAcquireResponseExternalBindingsUnion6$inboundSchema: z.ZodType<
+  SyncAcquireResponseExternalBindingsUnion6,
+  unknown
+> = z.union([
+  z.lazy(() => SyncAcquireResponseExternalBindingsAurora$inboundSchema),
+  z.lazy(() => SyncAcquireResponseExternalBindingsCloudSQL$inboundSchema),
+  z.lazy(() => SyncAcquireResponseExternalBindingsFlexibleServer$inboundSchema),
+  z.lazy(() => SyncAcquireResponseExternalBindingsExternal$inboundSchema),
+  z.lazy(() => SyncAcquireResponseExternalBindingsLocalPostgres$inboundSchema),
+]);
+
+export function syncAcquireResponseExternalBindingsUnion6FromJSON(
+  jsonString: string,
+): SafeParseResult<
+  SyncAcquireResponseExternalBindingsUnion6,
+  SDKValidationError
+> {
+  return safeParse(
+    jsonString,
+    (x) =>
+      SyncAcquireResponseExternalBindingsUnion6$inboundSchema.parse(
+        JSON.parse(x),
+      ),
+    `Failed to parse 'SyncAcquireResponseExternalBindingsUnion6' from JSON`,
   );
 }
 
@@ -19561,40 +22209,40 @@ export function syncAcquireResponseConnectionUrlUnionFromJSON(
 }
 
 /** @internal */
-export const SyncAcquireResponseDatabaseSecretRef$inboundSchema: z.ZodType<
-  SyncAcquireResponseDatabaseSecretRef,
+export const SyncAcquireResponseDatabaseSecretRef1$inboundSchema: z.ZodType<
+  SyncAcquireResponseDatabaseSecretRef1,
   unknown
 > = z.object({
   key: z.string(),
   name: z.string(),
 });
 
-export function syncAcquireResponseDatabaseSecretRefFromJSON(
+export function syncAcquireResponseDatabaseSecretRef1FromJSON(
   jsonString: string,
-): SafeParseResult<SyncAcquireResponseDatabaseSecretRef, SDKValidationError> {
+): SafeParseResult<SyncAcquireResponseDatabaseSecretRef1, SDKValidationError> {
   return safeParse(
     jsonString,
     (x) =>
-      SyncAcquireResponseDatabaseSecretRef$inboundSchema.parse(JSON.parse(x)),
-    `Failed to parse 'SyncAcquireResponseDatabaseSecretRef' from JSON`,
+      SyncAcquireResponseDatabaseSecretRef1$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'SyncAcquireResponseDatabaseSecretRef1' from JSON`,
   );
 }
 
 /** @internal */
-export const SyncAcquireResponseDatabase$inboundSchema: z.ZodType<
-  SyncAcquireResponseDatabase,
+export const SyncAcquireResponseDatabase1$inboundSchema: z.ZodType<
+  SyncAcquireResponseDatabase1,
   unknown
 > = z.object({
-  secretRef: z.lazy(() => SyncAcquireResponseDatabaseSecretRef$inboundSchema),
+  secretRef: z.lazy(() => SyncAcquireResponseDatabaseSecretRef1$inboundSchema),
 });
 
-export function syncAcquireResponseDatabaseFromJSON(
+export function syncAcquireResponseDatabase1FromJSON(
   jsonString: string,
-): SafeParseResult<SyncAcquireResponseDatabase, SDKValidationError> {
+): SafeParseResult<SyncAcquireResponseDatabase1, SDKValidationError> {
   return safeParse(
     jsonString,
-    (x) => SyncAcquireResponseDatabase$inboundSchema.parse(JSON.parse(x)),
-    `Failed to parse 'SyncAcquireResponseDatabase' from JSON`,
+    (x) => SyncAcquireResponseDatabase1$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'SyncAcquireResponseDatabase1' from JSON`,
   );
 }
 
@@ -21421,8 +24069,8 @@ export function syncAcquireResponseExternalBindingsUnion1FromJSON(
 }
 
 /** @internal */
-export const SyncAcquireResponseExternalBindingsUnion6$inboundSchema: z.ZodType<
-  SyncAcquireResponseExternalBindingsUnion6,
+export const SyncAcquireResponseExternalBindingsUnion7$inboundSchema: z.ZodType<
+  SyncAcquireResponseExternalBindingsUnion7,
   unknown
 > = z.union([
   z.lazy(() =>
@@ -21466,21 +24114,32 @@ export const SyncAcquireResponseExternalBindingsUnion6$inboundSchema: z.ZodType<
     ),
     z.lazy(() => SyncAcquireResponseExternalBindingsLocalVault$inboundSchema),
   ]),
+  z.union([
+    z.lazy(() => SyncAcquireResponseExternalBindingsAurora$inboundSchema),
+    z.lazy(() => SyncAcquireResponseExternalBindingsCloudSQL$inboundSchema),
+    z.lazy(() =>
+      SyncAcquireResponseExternalBindingsFlexibleServer$inboundSchema
+    ),
+    z.lazy(() => SyncAcquireResponseExternalBindingsExternal$inboundSchema),
+    z.lazy(() =>
+      SyncAcquireResponseExternalBindingsLocalPostgres$inboundSchema
+    ),
+  ]),
 ]);
 
-export function syncAcquireResponseExternalBindingsUnion6FromJSON(
+export function syncAcquireResponseExternalBindingsUnion7FromJSON(
   jsonString: string,
 ): SafeParseResult<
-  SyncAcquireResponseExternalBindingsUnion6,
+  SyncAcquireResponseExternalBindingsUnion7,
   SDKValidationError
 > {
   return safeParse(
     jsonString,
     (x) =>
-      SyncAcquireResponseExternalBindingsUnion6$inboundSchema.parse(
+      SyncAcquireResponseExternalBindingsUnion7$inboundSchema.parse(
         JSON.parse(x),
       ),
-    `Failed to parse 'SyncAcquireResponseExternalBindingsUnion6' from JSON`,
+    `Failed to parse 'SyncAcquireResponseExternalBindingsUnion7' from JSON`,
   );
 }
 
@@ -23247,6 +25906,7 @@ export const SyncAcquireResponseNetworkByoVnetAzure$inboundSchema: z.ZodType<
   unknown
 > = z.object({
   application_gateway_subnet_name: z.nullable(z.string()).optional(),
+  private_endpoint_subnet_name: z.nullable(z.string()).optional(),
   private_subnet_name: z.string(),
   public_subnet_name: z.string(),
   type: SyncAcquireResponseTypeByoVnetAzure$inboundSchema,
@@ -23254,6 +25914,7 @@ export const SyncAcquireResponseNetworkByoVnetAzure$inboundSchema: z.ZodType<
 }).transform((v) => {
   return remap$(v, {
     "application_gateway_subnet_name": "applicationGatewaySubnetName",
+    "private_endpoint_subnet_name": "privateEndpointSubnetName",
     "private_subnet_name": "privateSubnetName",
     "public_subnet_name": "publicSubnetName",
     "vnet_resource_id": "vnetResourceId",
@@ -23552,6 +26213,17 @@ export const SyncAcquireResponseConfig$inboundSchema: z.ZodType<
         ),
         z.lazy(() =>
           SyncAcquireResponseExternalBindingsLocalVault$inboundSchema
+        ),
+      ]),
+      z.union([
+        z.lazy(() => SyncAcquireResponseExternalBindingsAurora$inboundSchema),
+        z.lazy(() => SyncAcquireResponseExternalBindingsCloudSQL$inboundSchema),
+        z.lazy(() =>
+          SyncAcquireResponseExternalBindingsFlexibleServer$inboundSchema
+        ),
+        z.lazy(() => SyncAcquireResponseExternalBindingsExternal$inboundSchema),
+        z.lazy(() =>
+          SyncAcquireResponseExternalBindingsLocalPostgres$inboundSchema
         ),
       ]),
     ]),

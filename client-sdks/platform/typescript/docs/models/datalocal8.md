@@ -6,36 +6,27 @@
 import { DataLocal8 } from "@alienplatform/platform-api/models";
 
 let value: DataLocal8 = {
-  path: "/usr/local/src",
-  pathExists: true,
-  secretMetadataListed: false,
+  name: "<value>",
+  processRunning: false,
   status: {
-    collectionIssues: [
-      {
-        message: "<value>",
-        reason: "not-installed",
-        severity: "error",
-        source: "<value>",
-      },
-    ],
-    health: "unknown",
-    lifecycle: "failed",
-    partial: false,
-    stale: true,
+    collectionIssues: [],
+    health: "unhealthy",
+    lifecycle: "deleted",
+    partial: true,
+    stale: false,
   },
+  version: "<value>",
   backend: "local",
 };
 ```
 
 ## Fields
 
-| Field                                                                                         | Type                                                                                          | Required                                                                                      | Description                                                                                   |
-| --------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------- |
-| `isDirectory`                                                                                 | *boolean*                                                                                     | :heavy_minus_sign:                                                                            | N/A                                                                                           |
-| `modifiedAt`                                                                                  | [Date](https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/Date) | :heavy_minus_sign:                                                                            | N/A                                                                                           |
-| `path`                                                                                        | *string*                                                                                      | :heavy_check_mark:                                                                            | N/A                                                                                           |
-| `pathExists`                                                                                  | *boolean*                                                                                     | :heavy_check_mark:                                                                            | N/A                                                                                           |
-| `readonly`                                                                                    | *boolean*                                                                                     | :heavy_minus_sign:                                                                            | N/A                                                                                           |
-| `secretMetadataListed`                                                                        | *boolean*                                                                                     | :heavy_check_mark:                                                                            | N/A                                                                                           |
-| `status`                                                                                      | [models.HeartbeatStatus35](../models/heartbeatstatus35.md)                                    | :heavy_check_mark:                                                                            | N/A                                                                                           |
-| `backend`                                                                                     | *"local"*                                                                                     | :heavy_check_mark:                                                                            | N/A                                                                                           |
+| Field                                                      | Type                                                       | Required                                                   | Description                                                |
+| ---------------------------------------------------------- | ---------------------------------------------------------- | ---------------------------------------------------------- | ---------------------------------------------------------- |
+| `name`                                                     | *string*                                                   | :heavy_check_mark:                                         | N/A                                                        |
+| `port`                                                     | *number*                                                   | :heavy_minus_sign:                                         | N/A                                                        |
+| `processRunning`                                           | *boolean*                                                  | :heavy_check_mark:                                         | N/A                                                        |
+| `status`                                                   | [models.HeartbeatStatus34](../models/heartbeatstatus34.md) | :heavy_check_mark:                                         | N/A                                                        |
+| `version`                                                  | *string*                                                   | :heavy_check_mark:                                         | N/A                                                        |
+| `backend`                                                  | *"local"*                                                  | :heavy_check_mark:                                         | N/A                                                        |

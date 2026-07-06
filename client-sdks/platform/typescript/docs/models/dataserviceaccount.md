@@ -28,12 +28,12 @@ let value: DataServiceAccount = {
         {
           message: "<value>",
           reason: "not-installed",
-          severity: "warning",
+          severity: "error",
           source: "<value>",
         },
       ],
-      health: "healthy",
-      lifecycle: "stopped",
+      health: "unknown",
+      lifecycle: "deleting",
       partial: true,
       stale: false,
     },
@@ -45,7 +45,7 @@ let value: DataServiceAccount = {
 
 ## Fields
 
-| Field                                   | Type                                    | Required                                | Description                             |
-| --------------------------------------- | --------------------------------------- | --------------------------------------- | --------------------------------------- |
-| `data`                                  | *models.SyncReconcileRequestDataUnion9* | :heavy_check_mark:                      | N/A                                     |
-| `resourceType`                          | *"service-account"*                     | :heavy_check_mark:                      | N/A                                     |
+| Field                                    | Type                                     | Required                                 | Description                              |
+| ---------------------------------------- | ---------------------------------------- | ---------------------------------------- | ---------------------------------------- |
+| `data`                                   | *models.SyncReconcileRequestDataUnion10* | :heavy_check_mark:                       | N/A                                      |
+| `resourceType`                           | *"service-account"*                      | :heavy_check_mark:                       | N/A                                      |

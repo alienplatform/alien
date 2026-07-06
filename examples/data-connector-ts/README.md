@@ -21,6 +21,8 @@ Query databases behind the customer's firewall. Connection credentials stay in t
 ## Local development
 
 ```bash
+alien init data-connector-ts
+cd data-connector-ts
 alien dev
 ```
 
@@ -65,3 +67,4 @@ bun test
 - [Patterns: Remote Worker](https://alien.dev/docs/patterns#remote-worker)
 - [Vault reference](https://alien.dev/docs/infrastructure/vault)
 - [Remote Commands](https://alien.dev/docs/commands)
+- [alien.dev](https://alien.dev) -- ship to your customer's cloud, keep it fully managed

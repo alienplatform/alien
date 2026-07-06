@@ -174,6 +174,7 @@ export type { HeartbeatCollectionIssue } from "./heartbeat-collection-issue-sche
 export type { HeartbeatIssueSeverity } from "./heartbeat-issue-severity-schema.js";
 export type { HeartbeatsMode } from "./heartbeats-mode-schema.js";
 export type { HorizonContainerHeartbeatData } from "./horizon-container-heartbeat-data-schema.js";
+export type { HorizonHorizondArtifact } from "./horizon-horizond-artifact-schema.js";
 export type { HorizonWorkloadSchedulingMode } from "./horizon-workload-scheduling-mode-schema.js";
 export type { HttpMethod } from "./http-method-schema.js";
 export type { ImportSourceKind } from "./import-source-kind-schema.js";
@@ -518,6 +519,7 @@ export { HeartbeatCollectionIssueSchema } from "./heartbeat-collection-issue-sch
 export { HeartbeatIssueSeveritySchema } from "./heartbeat-issue-severity-schema.js";
 export { HeartbeatsModeSchema } from "./heartbeats-mode-schema.js";
 export { HorizonContainerHeartbeatDataSchema } from "./horizon-container-heartbeat-data-schema.js";
+export { HorizonHorizondArtifactSchema } from "./horizon-horizond-artifact-schema.js";
 export { HorizonWorkloadSchedulingModeSchema } from "./horizon-workload-scheduling-mode-schema.js";
 export { HttpMethodSchema } from "./http-method-schema.js";
 export { ImportSourceKindSchema } from "./import-source-kind-schema.js";

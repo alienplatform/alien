@@ -12,9 +12,12 @@ The app builds with the included Dockerfile (Next.js [standalone output](https:/
 
 ## Local development
 
-Run the Next.js dev server directly:
+Scaffold the template, then run the Next.js dev server directly:
 
 ```bash
+alien init nextjs-app
+cd nextjs-app
+
 npm install
 npm run dev
 ```
@@ -41,3 +44,4 @@ Alien builds the container image from the Dockerfile, pushes it, and provisions 
 - [Quickstart guide](https://alien.dev/docs/quickstart) -- build a worker, test locally, send remote commands
 - [How Alien Works](https://alien.dev/docs/how-alien-works) -- stacks, isolated areas, push vs pull
 - [Stacks](https://alien.dev/docs/stacks) -- workers, storage, queues, vaults
+- [alien.dev](https://alien.dev) -- ship to your customer's cloud, keep it fully managed

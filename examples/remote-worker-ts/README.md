@@ -32,6 +32,8 @@ Your Cloud                          Customer's Cloud
 ## Local development
 
 ```bash
+alien init remote-worker-ts
+cd remote-worker-ts
 alien dev
 ```
 
@@ -89,3 +91,4 @@ See [From Local to AWS](https://alien.dev/docs/quickstart/from-local-to-aws) to 
 - [Patterns: Remote Worker](https://alien.dev/docs/patterns#remote-worker)
 - [Remote Commands](https://alien.dev/docs/commands)
 - [Stacks](https://alien.dev/docs/stacks)
+- [alien.dev](https://alien.dev) -- ship to your customer's cloud, keep it fully managed

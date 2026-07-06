@@ -1,13 +1,13 @@
-# SyncReconcileResponseDatabaseSecretRef
+# SyncAcquireResponseClusterEndpointSecretRef
 
 Reference to a Kubernetes Secret
 
 ## Example Usage
 
 ```typescript
-import { SyncReconcileResponseDatabaseSecretRef } from "@alienplatform/platform-api/models";
+import { SyncAcquireResponseClusterEndpointSecretRef } from "@alienplatform/platform-api/models";
 
-let value: SyncReconcileResponseDatabaseSecretRef = {
+let value: SyncAcquireResponseClusterEndpointSecretRef = {
   key: "<key>",
   name: "<value>",
 };

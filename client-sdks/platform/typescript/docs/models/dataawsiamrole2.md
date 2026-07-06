@@ -11,8 +11,8 @@ let value: DataAwsIamRole2 = {
     collectionIssues: [
       {
         message: "<value>",
-        reason: "not-installed",
-        severity: "info",
+        reason: "forbidden",
+        severity: "warning",
         source: "<value>",
       },
     ],
@@ -32,5 +32,5 @@ let value: DataAwsIamRole2 = {
 | `managementPermissionsApplied`                             | *boolean*                                                  | :heavy_check_mark:                                         | N/A                                                        |
 | `roleArn`                                                  | *string*                                                   | :heavy_minus_sign:                                         | N/A                                                        |
 | `roleName`                                                 | *string*                                                   | :heavy_minus_sign:                                         | N/A                                                        |
-| `status`                                                   | [models.HeartbeatStatus43](../models/heartbeatstatus43.md) | :heavy_check_mark:                                         | N/A                                                        |
+| `status`                                                   | [models.HeartbeatStatus47](../models/heartbeatstatus47.md) | :heavy_check_mark:                                         | N/A                                                        |
 | `backend`                                                  | *"awsIamRole"*                                             | :heavy_check_mark:                                         | N/A                                                        |

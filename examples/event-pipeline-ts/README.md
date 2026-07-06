@@ -30,8 +30,12 @@ React to things happening in the customer's environment -- queue messages, file 
 ## Local development
 
 ```bash
+alien init event-pipeline-ts
+cd event-pipeline-ts
 alien dev
 ```
+
+Everything runs locally -- queue, storage, and KV on your machine, no cloud credentials needed.
 
 In a second terminal:
 
@@ -66,3 +70,4 @@ bun test
 - [Events & Triggers](https://alien.dev/docs/infrastructure/worker/events-and-triggers)
 - [Queue reference](https://alien.dev/docs/infrastructure/queue)
 - [Storage reference](https://alien.dev/docs/infrastructure/storage)
+- [alien.dev](https://alien.dev) -- ship to your customer's cloud, keep it fully managed

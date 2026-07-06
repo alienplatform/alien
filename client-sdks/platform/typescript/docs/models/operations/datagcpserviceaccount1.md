@@ -22,15 +22,15 @@ let value: DataGcpServiceAccount1 = {
     collectionIssues: [
       {
         message: "<value>",
-        reason: "collection-failed",
-        severity: "error",
+        reason: "not-installed",
+        severity: "info",
         source: "<value>",
       },
     ],
-    health: "healthy",
+    health: "degraded",
     lifecycle: "stopped",
-    partial: false,
-    stale: true,
+    partial: true,
+    stale: false,
   },
   backend: "gcpServiceAccount",
 };
@@ -52,6 +52,6 @@ let value: DataGcpServiceAccount1 = {
 | `projectRoles`                                                     | *string*[]                                                         | :heavy_check_mark:                                                 | N/A                                                                |
 | `serviceAccountBindingCount`                                       | *number*                                                           | :heavy_check_mark:                                                 | N/A                                                                |
 | `serviceAccountRoles`                                              | *string*[]                                                         | :heavy_check_mark:                                                 | N/A                                                                |
-| `status`                                                           | [operations.DataStatus37](../../models/operations/datastatus37.md) | :heavy_check_mark:                                                 | N/A                                                                |
+| `status`                                                           | [operations.DataStatus41](../../models/operations/datastatus41.md) | :heavy_check_mark:                                                 | N/A                                                                |
 | `uniqueId`                                                         | *string*                                                           | :heavy_minus_sign:                                                 | N/A                                                                |
 | `backend`                                                          | *"gcpServiceAccount"*                                              | :heavy_check_mark:                                                 | N/A                                                                |

@@ -14,15 +14,15 @@ let value: DataServiceActivation = {
       collectionIssues: [
         {
           message: "<value>",
-          reason: "collection-failed",
+          reason: "api-unavailable",
           severity: "error",
           source: "<value>",
         },
       ],
-      health: "healthy",
-      lifecycle: "deleted",
-      partial: false,
-      stale: false,
+      health: "unhealthy",
+      lifecycle: "stopped",
+      partial: true,
+      stale: true,
     },
     backend: "gcpServiceUsage",
   },
@@ -34,5 +34,5 @@ let value: DataServiceActivation = {
 
 | Field                                    | Type                                     | Required                                 | Description                              |
 | ---------------------------------------- | ---------------------------------------- | ---------------------------------------- | ---------------------------------------- |
-| `data`                                   | *models.SyncReconcileRequestDataUnion14* | :heavy_check_mark:                       | N/A                                      |
+| `data`                                   | *models.SyncReconcileRequestDataUnion15* | :heavy_check_mark:                       | N/A                                      |
 | `resourceType`                           | *"service_activation"*                   | :heavy_check_mark:                       | N/A                                      |

@@ -14,8 +14,8 @@ let value: DataGcpCloudBuild = {
     collectionIssues: [
       {
         message: "<value>",
-        reason: "api-unavailable",
-        severity: "error",
+        reason: "collection-failed",
+        severity: "info",
         source: "<value>",
       },
     ],
@@ -37,5 +37,5 @@ let value: DataGcpCloudBuild = {
 | `location`                                                 | *string*                                                   | :heavy_check_mark:                                         | N/A                                                        |
 | `projectId`                                                | *string*                                                   | :heavy_check_mark:                                         | N/A                                                        |
 | `serviceAccount`                                           | *string*                                                   | :heavy_minus_sign:                                         | N/A                                                        |
-| `status`                                                   | [models.HeartbeatStatus51](../models/heartbeatstatus51.md) | :heavy_check_mark:                                         | N/A                                                        |
+| `status`                                                   | [models.HeartbeatStatus55](../models/heartbeatstatus55.md) | :heavy_check_mark:                                         | N/A                                                        |
 | `backend`                                                  | *"gcpCloudBuild"*                                          | :heavy_check_mark:                                         | N/A                                                        |

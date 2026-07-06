@@ -16,14 +16,14 @@ let value: SyncReconcileRequestData2 = {
       {
         message: "<value>",
         reason: "timed-out",
-        severity: "info",
+        severity: "error",
         source: "<value>",
       },
     ],
-    health: "unhealthy",
-    lifecycle: "failed",
-    partial: false,
-    stale: false,
+    health: "degraded",
+    lifecycle: "deleting",
+    partial: true,
+    stale: true,
   },
 };
 ```
@@ -37,4 +37,4 @@ let value: SyncReconcileRequestData2 = {
 | `name`                                                     | *string*                                                   | :heavy_check_mark:                                         | N/A                                                        |
 | `provisioningState`                                        | *string*                                                   | :heavy_minus_sign:                                         | N/A                                                        |
 | `resourceId`                                               | *string*                                                   | :heavy_minus_sign:                                         | N/A                                                        |
-| `status`                                                   | [models.HeartbeatStatus56](../models/heartbeatstatus56.md) | :heavy_check_mark:                                         | N/A                                                        |
+| `status`                                                   | [models.HeartbeatStatus60](../models/heartbeatstatus60.md) | :heavy_check_mark:                                         | N/A                                                        |

@@ -1,0 +1,1 @@
+{"type":"object","description":"Downloadable horizond daemon artifact.","required":["url","sha256"],"properties":{"sha256":{"type":"string","description":"Expected artifact sha256 checksum."},"url":{"type":"string","description":"Artifact URL."}},"x-readme-ref-name":"HorizonHorizondArtifact"}

@@ -1,0 +1,87 @@
+name: Vantage Kubernetes Agent
+
+on:
+  workflow_dispatch:
+    inputs:
+      install_eks:
+        description: "Install on shared EKS test cluster"
+        type: boolean
+        default: true
+      install_aks:
+        description: "Install on shared AKS test cluster"
+        type: boolean
+        default: true
+
+permissions:
+  contents: read
+
+jobs:
+  install:
+    environment: e2e-tests
+    runs-on: depot-ubuntu-24.04-arm
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_wrapper: false
+
+      - uses: azure/setup-helm@v4
+
+      - name: Install Kubernetes auth helpers
+        run: |
+          set -euo pipefail
+
+          sudo apt-get update
+          sudo apt-get install -y awscli curl unzip
+
+          case "$(uname -m)" in
+            aarch64|arm64) K8S_ARCH=arm64; KUBELOGIN_ARCH=arm64 ;;
+            x86_64|amd64) K8S_ARCH=amd64; KUBELOGIN_ARCH=amd64 ;;
+            *) echo "Unsupported architecture: $(uname -m)" >&2; exit 1 ;;
+          esac
+
+          curl -fsSLo kubectl "https://dl.k8s.io/release/v1.30.0/bin/linux/${K8S_ARCH}/kubectl"
+          chmod +x kubectl
+          sudo mv kubectl /usr/local/bin/kubectl
+
+          curl -fsSL -o /tmp/kubelogin.zip "https://github.com/Azure/kubelogin/releases/download/v0.2.17/kubelogin-linux-${KUBELOGIN_ARCH}.zip"
+          unzip -q /tmp/kubelogin.zip -d /tmp/kubelogin
+          sudo install -m 0755 "/tmp/kubelogin/bin/linux_${KUBELOGIN_ARCH}/kubelogin" /usr/local/bin/kubelogin
+
+      - name: Terraform init
+        working-directory: infra/test
+        run: terraform init
+        env:
+          TF_TOKEN_app_terraform_io: ${{ secrets.TF_API_TOKEN }}
+
+      - name: Generate E2E environment
+        run: ./scripts/gen-env-test.sh
+        env:
+          TF_TOKEN_app_terraform_io: ${{ secrets.TF_API_TOKEN }}
+          AXIOM_TOKEN: unused
+          NGROK_AUTHTOKEN: unused
+
+      - name: Install Vantage Kubernetes Agent
+        env:
+          VANTAGE_KUBERNETES_AGENT_TOKEN: ${{ secrets.VANTAGE_KUBERNETES_AGENT_TOKEN }}
+          INSTALL_EKS: ${{ inputs.install_eks }}
+          INSTALL_AKS: ${{ inputs.install_aks }}
+        run: |
+          set -euo pipefail
+
+          args=(--env-file .env.test)
+          if [ "$INSTALL_EKS" = "true" ]; then
+            args+=(--eks)
+          fi
+          if [ "$INSTALL_AKS" = "true" ]; then
+            args+=(--aks)
+          fi
+
+          if [ "${#args[@]}" -eq 2 ]; then
+            echo "::error::Select at least one cluster to install"
+            exit 1
+          fi
+
+          ./scripts/install-vantage-kubernetes-agent.sh "${args[@]}"

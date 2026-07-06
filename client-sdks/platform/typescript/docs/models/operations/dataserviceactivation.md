@@ -34,5 +34,5 @@ let value: DataServiceActivation = {
 
 | Field                    | Type                     | Required                 | Description              |
 | ------------------------ | ------------------------ | ------------------------ | ------------------------ |
-| `data`                   | *operations.DataUnion14* | :heavy_check_mark:       | N/A                      |
+| `data`                   | *operations.DataUnion15* | :heavy_check_mark:       | N/A                      |
 | `resourceType`           | *"service_activation"*   | :heavy_check_mark:       | N/A                      |

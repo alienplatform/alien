@@ -945,6 +945,16 @@ export type ManagerRetryResponseNetworkByoVnetAzure3 = {
    */
   applicationGatewaySubnetName?: string | null | undefined;
   /**
+   * Name of the dedicated subnet that hosts Private Endpoints (e.g. for a
+   *
+   * @remarks
+   * Postgres Flexible Server). A Private Endpoint must not share the private
+   * subnet, which is already claimed by the Container Apps environment's
+   * `infrastructure_subnet_id`. Required only when the stack contains a
+   * Postgres resource; otherwise unused.
+   */
+  privateEndpointSubnetName?: string | null | undefined;
+  /**
    * Name of the private subnet within the VNet
    */
   privateSubnetName: string;
@@ -2060,6 +2070,16 @@ export type ManagerRetryResponseNetworkByoVnetAzure2 = {
    */
   applicationGatewaySubnetName?: string | null | undefined;
   /**
+   * Name of the dedicated subnet that hosts Private Endpoints (e.g. for a
+   *
+   * @remarks
+   * Postgres Flexible Server). A Private Endpoint must not share the private
+   * subnet, which is already claimed by the Container Apps environment's
+   * `infrastructure_subnet_id`. Required only when the stack contains a
+   * Postgres resource; otherwise unused.
+   */
+  privateEndpointSubnetName?: string | null | undefined;
+  /**
    * Name of the private subnet within the VNet
    */
   privateSubnetName: string;
@@ -3169,6 +3189,16 @@ export type ManagerRetryResponseNetworkByoVnetAzure1 = {
    * Name of the dedicated classic Application Gateway subnet within the VNet.
    */
   applicationGatewaySubnetName?: string | null | undefined;
+  /**
+   * Name of the dedicated subnet that hosts Private Endpoints (e.g. for a
+   *
+   * @remarks
+   * Postgres Flexible Server). A Private Endpoint must not share the private
+   * subnet, which is already claimed by the Container Apps environment's
+   * `infrastructure_subnet_id`. Required only when the stack contains a
+   * Postgres resource; otherwise unused.
+   */
+  privateEndpointSubnetName?: string | null | undefined;
   /**
    * Name of the private subnet within the VNet
    */
@@ -5056,6 +5086,7 @@ export const ManagerRetryResponseNetworkByoVnetAzure3$inboundSchema: z.ZodType<
   unknown
 > = z.object({
   application_gateway_subnet_name: z.nullable(z.string()).optional(),
+  private_endpoint_subnet_name: z.nullable(z.string()).optional(),
   private_subnet_name: z.string(),
   public_subnet_name: z.string(),
   type: ManagerRetryResponseTypeByoVnetAzure3$inboundSchema,
@@ -5063,6 +5094,7 @@ export const ManagerRetryResponseNetworkByoVnetAzure3$inboundSchema: z.ZodType<
 }).transform((v) => {
   return remap$(v, {
     "application_gateway_subnet_name": "applicationGatewaySubnetName",
+    "private_endpoint_subnet_name": "privateEndpointSubnetName",
     "private_subnet_name": "privateSubnetName",
     "public_subnet_name": "publicSubnetName",
     "vnet_resource_id": "vnetResourceId",
@@ -6916,6 +6948,7 @@ export const ManagerRetryResponseNetworkByoVnetAzure2$inboundSchema: z.ZodType<
   unknown
 > = z.object({
   application_gateway_subnet_name: z.nullable(z.string()).optional(),
+  private_endpoint_subnet_name: z.nullable(z.string()).optional(),
   private_subnet_name: z.string(),
   public_subnet_name: z.string(),
   type: ManagerRetryResponseTypeByoVnetAzure2$inboundSchema,
@@ -6923,6 +6956,7 @@ export const ManagerRetryResponseNetworkByoVnetAzure2$inboundSchema: z.ZodType<
 }).transform((v) => {
   return remap$(v, {
     "application_gateway_subnet_name": "applicationGatewaySubnetName",
+    "private_endpoint_subnet_name": "privateEndpointSubnetName",
     "private_subnet_name": "privateSubnetName",
     "public_subnet_name": "publicSubnetName",
     "vnet_resource_id": "vnetResourceId",
@@ -8771,6 +8805,7 @@ export const ManagerRetryResponseNetworkByoVnetAzure1$inboundSchema: z.ZodType<
   unknown
 > = z.object({
   application_gateway_subnet_name: z.nullable(z.string()).optional(),
+  private_endpoint_subnet_name: z.nullable(z.string()).optional(),
   private_subnet_name: z.string(),
   public_subnet_name: z.string(),
   type: ManagerRetryResponseTypeByoVnetAzure1$inboundSchema,
@@ -8778,6 +8813,7 @@ export const ManagerRetryResponseNetworkByoVnetAzure1$inboundSchema: z.ZodType<
 }).transform((v) => {
   return remap$(v, {
     "application_gateway_subnet_name": "applicationGatewaySubnetName",
+    "private_endpoint_subnet_name": "privateEndpointSubnetName",
     "private_subnet_name": "privateSubnetName",
     "public_subnet_name": "publicSubnetName",
     "vnet_resource_id": "vnetResourceId",

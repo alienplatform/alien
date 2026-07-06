@@ -89,6 +89,17 @@ pub struct HorizonAzureMachineImages {
     pub images: HashMap<HorizonMachineArchitecture, HorizonAzureMachineImage>,
 }
 
+/// Downloadable horizond daemon artifact.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
+#[serde(rename_all = "camelCase")]
+pub struct HorizonHorizondArtifact {
+    /// Artifact URL.
+    pub url: String,
+    /// Expected artifact sha256 checksum.
+    pub sha256: String,
+}
+
 /// Horizon machine image catalog.
 ///
 /// Platform resolves concrete provider images from this catalog during rollout.
@@ -108,6 +119,9 @@ pub struct HorizonMachineImage {
     pub created_at: String,
     /// Base OS image metadata.
     pub base_image: HorizonMachineBaseImage,
+    /// Downloadable horizond artifacts keyed by runtime platform, such as `linux-amd64`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub horizond_artifacts: Option<HashMap<String, HorizonHorizondArtifact>>,
     /// AWS image catalog.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub aws: Option<HorizonAwsMachineImages>,
@@ -156,4 +170,79 @@ pub enum ComputeBackend {
     // Kubernetes(KubernetesCredentials),
     // /// AWS ECS Fargate (serverless containers)
     // EcsFargate,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{HorizonHorizondArtifact, HorizonMachineImage};
+
+    #[test]
+    fn horizon_machine_image_accepts_missing_horizond_artifacts() {
+        let manifest = r#"
+        {
+          "channel": "prod",
+          "machineImageVersion": "0.1.42+8f12c0ac91e7.123",
+          "horizondVersion": "0.1.42",
+          "gitSha": "8f12c0ac91e7e2d9e7cbdd6b66c5708da233bb75",
+          "createdAt": "2026-07-04T16:53:00Z",
+          "baseImage": {
+            "name": "flatcar",
+            "version": "stable-current"
+          }
+        }
+        "#;
+
+        let image: HorizonMachineImage =
+            serde_json::from_str(manifest).expect("manifest should deserialize");
+
+        assert_eq!(image.channel, "prod");
+        assert_eq!(image.horizond_version, "0.1.42");
+        assert!(image.horizond_artifacts.is_none());
+    }
+
+    #[test]
+    fn horizon_machine_image_round_trips_horizond_artifacts() {
+        let manifest = r#"
+        {
+          "channel": "prod",
+          "machineImageVersion": "0.1.42+8f12c0ac91e7.123",
+          "horizondVersion": "0.1.42",
+          "gitSha": "8f12c0ac91e7e2d9e7cbdd6b66c5708da233bb75",
+          "createdAt": "2026-07-04T16:53:00Z",
+          "baseImage": {
+            "name": "flatcar",
+            "version": "stable-current"
+          },
+          "horizondArtifacts": {
+            "linux-amd64": {
+              "url": "https://releases.alien.dev/horizon/horizond/0.1.42/horizond-linux-amd64",
+              "sha256": "6f1d4f6ab4cf4313d8b14f9b84f8f0da1e3c2e5f8c03fdc9a6d1f6e6bb83c8b9"
+            }
+          }
+        }
+        "#;
+
+        let image: HorizonMachineImage =
+            serde_json::from_str(manifest).expect("manifest should deserialize");
+
+        let artifacts = image
+            .horizond_artifacts
+            .as_ref()
+            .expect("manifest should contain horizond artifacts");
+        assert_eq!(
+            artifacts.get("linux-amd64"),
+            Some(&HorizonHorizondArtifact {
+                url: "https://releases.alien.dev/horizon/horizond/0.1.42/horizond-linux-amd64"
+                    .to_string(),
+                sha256: "6f1d4f6ab4cf4313d8b14f9b84f8f0da1e3c2e5f8c03fdc9a6d1f6e6bb83c8b9"
+                    .to_string(),
+            })
+        );
+
+        let serialized = serde_json::to_value(&image).expect("manifest should serialize");
+        assert_eq!(
+            serialized["horizondArtifacts"]["linux-amd64"]["sha256"],
+            "6f1d4f6ab4cf4313d8b14f9b84f8f0da1e3c2e5f8c03fdc9a6d1f6e6bb83c8b9"
+        );
+    }
 }

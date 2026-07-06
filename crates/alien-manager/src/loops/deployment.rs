@@ -87,6 +87,7 @@ fn synthesize_byo_horizon_machine_image() -> Option<alien_core::HorizonMachineIm
             name: "byo".to_string(),
             version: "byo".to_string(),
         },
+        horizond_artifacts: None,
         aws: Some(HorizonAwsMachineImages { amis }),
         gcp: None,
         azure: None,

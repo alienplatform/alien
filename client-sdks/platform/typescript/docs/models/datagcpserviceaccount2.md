@@ -12,8 +12,8 @@ let value: DataGcpServiceAccount2 = {
     collectionIssues: [
       {
         message: "<value>",
-        reason: "timed-out",
-        severity: "info",
+        reason: "collection-failed",
+        severity: "warning",
         source: "<value>",
       },
     ],
@@ -34,5 +34,5 @@ let value: DataGcpServiceAccount2 = {
 | `roleBound`                                                | *boolean*                                                  | :heavy_check_mark:                                         | N/A                                                        |
 | `serviceAccountEmail`                                      | *string*                                                   | :heavy_minus_sign:                                         | N/A                                                        |
 | `serviceAccountUniqueId`                                   | *string*                                                   | :heavy_minus_sign:                                         | N/A                                                        |
-| `status`                                                   | [models.HeartbeatStatus44](../models/heartbeatstatus44.md) | :heavy_check_mark:                                         | N/A                                                        |
+| `status`                                                   | [models.HeartbeatStatus48](../models/heartbeatstatus48.md) | :heavy_check_mark:                                         | N/A                                                        |
 | `backend`                                                  | *"gcpServiceAccount"*                                      | :heavy_check_mark:                                         | N/A                                                        |

@@ -13,15 +13,15 @@ let value: DataAzureContainerApps2 = {
     collectionIssues: [
       {
         message: "<value>",
-        reason: "not-installed",
+        reason: "timed-out",
         severity: "info",
         source: "<value>",
       },
     ],
-    health: "unhealthy",
-    lifecycle: "deleting",
-    partial: true,
-    stale: true,
+    health: "healthy",
+    lifecycle: "updating",
+    partial: false,
+    stale: false,
   },
   backend: "azureContainerApps",
 };
@@ -36,5 +36,5 @@ let value: DataAzureContainerApps2 = {
 | `managedIdentityId`                                        | *string*                                                   | :heavy_minus_sign:                                         | N/A                                                        |
 | `resourceGroupName`                                        | *string*                                                   | :heavy_check_mark:                                         | N/A                                                        |
 | `resourcePrefix`                                           | *string*                                                   | :heavy_minus_sign:                                         | N/A                                                        |
-| `status`                                                   | [models.HeartbeatStatus52](../models/heartbeatstatus52.md) | :heavy_check_mark:                                         | N/A                                                        |
+| `status`                                                   | [models.HeartbeatStatus56](../models/heartbeatstatus56.md) | :heavy_check_mark:                                         | N/A                                                        |
 | `backend`                                                  | *"azureContainerApps"*                                     | :heavy_check_mark:                                         | N/A                                                        |

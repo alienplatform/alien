@@ -15,13 +15,13 @@ let value: DataBuild = {
       collectionIssues: [
         {
           message: "<value>",
-          reason: "timed-out",
-          severity: "warning",
+          reason: "api-unavailable",
+          severity: "error",
           source: "<value>",
         },
       ],
-      health: "healthy",
-      lifecycle: "failed",
+      health: "degraded",
+      lifecycle: "unknown",
       partial: false,
       stale: true,
     },
@@ -35,5 +35,5 @@ let value: DataBuild = {
 
 | Field                    | Type                     | Required                 | Description              |
 | ------------------------ | ------------------------ | ------------------------ | ------------------------ |
-| `data`                   | *operations.DataUnion13* | :heavy_check_mark:       | N/A                      |
+| `data`                   | *operations.DataUnion14* | :heavy_check_mark:       | N/A                      |
 | `resourceType`           | *"build"*                | :heavy_check_mark:       | N/A                      |

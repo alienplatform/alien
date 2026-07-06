@@ -18,8 +18,8 @@ let value: DataAwsVpc = {
     collectionIssues: [
       {
         message: "<value>",
-        reason: "collection-failed",
-        severity: "warning",
+        reason: "timed-out",
+        severity: "info",
         source: "<value>",
       },
     ],
@@ -45,7 +45,7 @@ let value: DataAwsVpc = {
 | `publicSubnetIds`                                          | *string*[]                                                 | :heavy_check_mark:                                         | N/A                                                        |
 | `routeTableCount`                                          | *number*                                                   | :heavy_check_mark:                                         | N/A                                                        |
 | `securityGroupId`                                          | *string*                                                   | :heavy_minus_sign:                                         | N/A                                                        |
-| `status`                                                   | [models.HeartbeatStatus40](../models/heartbeatstatus40.md) | :heavy_check_mark:                                         | N/A                                                        |
+| `status`                                                   | [models.HeartbeatStatus44](../models/heartbeatstatus44.md) | :heavy_check_mark:                                         | N/A                                                        |
 | `vpcId`                                                    | *string*                                                   | :heavy_minus_sign:                                         | N/A                                                        |
 | `vpcState`                                                 | *string*                                                   | :heavy_minus_sign:                                         | N/A                                                        |
 | `backend`                                                  | *"awsVpc"*                                                 | :heavy_check_mark:                                         | N/A                                                        |

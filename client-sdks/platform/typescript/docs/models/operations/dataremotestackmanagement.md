@@ -32,5 +32,5 @@ let value: DataRemoteStackManagement = {
 
 | Field                       | Type                        | Required                    | Description                 |
 | --------------------------- | --------------------------- | --------------------------- | --------------------------- |
-| `data`                      | *operations.DataUnion11*    | :heavy_check_mark:          | N/A                         |
+| `data`                      | *operations.DataUnion12*    | :heavy_check_mark:          | N/A                         |
 | `resourceType`              | *"remote-stack-management"* | :heavy_check_mark:          | N/A                         |

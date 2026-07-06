@@ -177,6 +177,7 @@ use utoipa::OpenApi;
     AzureServiceBusNamespaceImportData,
     AzureStorageAccountImportData,
     AzureFlexibleServerPostgresImportData,
+    HorizonHorizondArtifact,
 )))]
 struct ApiDoc;
 

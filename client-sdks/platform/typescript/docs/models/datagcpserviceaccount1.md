@@ -27,10 +27,10 @@ let value: DataGcpServiceAccount1 = {
         source: "<value>",
       },
     ],
-    health: "degraded",
+    health: "healthy",
     lifecycle: "stopped",
-    partial: true,
-    stale: false,
+    partial: false,
+    stale: true,
   },
   backend: "gcpServiceAccount",
 };
@@ -52,6 +52,6 @@ let value: DataGcpServiceAccount1 = {
 | `projectRoles`                                             | *string*[]                                                 | :heavy_check_mark:                                         | N/A                                                        |
 | `serviceAccountBindingCount`                               | *number*                                                   | :heavy_check_mark:                                         | N/A                                                        |
 | `serviceAccountRoles`                                      | *string*[]                                                 | :heavy_check_mark:                                         | N/A                                                        |
-| `status`                                                   | [models.HeartbeatStatus37](../models/heartbeatstatus37.md) | :heavy_check_mark:                                         | N/A                                                        |
+| `status`                                                   | [models.HeartbeatStatus41](../models/heartbeatstatus41.md) | :heavy_check_mark:                                         | N/A                                                        |
 | `uniqueId`                                                 | *string*                                                   | :heavy_minus_sign:                                         | N/A                                                        |
 | `backend`                                                  | *"gcpServiceAccount"*                                      | :heavy_check_mark:                                         | N/A                                                        |

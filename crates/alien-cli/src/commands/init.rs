@@ -42,17 +42,17 @@ const KNOWN_TEMPLATES: &[(&str, &str)] = &[
         "Execute tool calls in your customer's cloud. The AI worker pattern.",
     ),
     (
-        "basic-function-ts",
-        "The simplest Alien function, in TypeScript.",
+        "basic-worker-ts",
+        "The simplest Alien worker, in TypeScript.",
     ),
-    ("basic-function-rs", "The simplest Alien function, in Rust."),
+    ("basic-worker-rs", "The simplest Alien worker, in Rust."),
     (
         "data-connector-ts",
-        "Query private databases behind the customer's firewall.",
+        "Query private databases behind the customer's firewall. Credentials stay in their cloud.",
     ),
     (
         "event-pipeline-ts",
-        "Process events from queues, storage, and cron.",
+        "Process events from queues, storage changes, and cron schedules.",
     ),
     (
         "webhook-api-ts",
@@ -61,6 +61,10 @@ const KNOWN_TEMPLATES: &[(&str, &str)] = &[
     (
         "nextjs-app",
         "Deploy a Next.js app as a single container in the customer's cloud.",
+    ),
+    (
+        "github-agent",
+        "Full app: a GitHub integration agent with a Next.js dashboard.",
     ),
 ];
 

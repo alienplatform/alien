@@ -3,110 +3,70 @@
 
 ## Supported Types
 
-### `models.DataAwsEcr`
+### `models.DataAwsIamRole2`
 
 ```typescript
-const value: models.DataAwsEcr = {
-  region: "<value>",
-  registryId: "<id>",
-  registryUri: "https://mindless-bench.com",
-  repositories: [
-    {
-      createdAt: 8040.15,
-      kmsKeyPresent: true,
-      registryId: "<id>",
-      repositoryArn: "<value>",
-      repositoryName: "<value>",
-      repositoryUri: "https://glossy-disclosure.info",
-    },
-  ],
-  repositoriesTruncated: true,
-  repositoryCount: 980949,
-  repositoryPrefix: "<value>",
+const value: models.DataAwsIamRole2 = {
+  managementPermissionsApplied: true,
   status: {
-    collectionIssues: [],
-    health: "unknown",
-    lifecycle: "stopped",
-    partial: false,
-    stale: false,
-  },
-  backend: "awsEcr",
-};
-```
-
-### `models.DataGcpArtifactRegistry`
-
-```typescript
-const value: models.DataGcpArtifactRegistry = {
-  cleanupPolicyCount: 150101,
-  iamBindingCount: 410292,
-  iamPolicyEtagPresent: true,
-  iamRoles: [],
-  kmsKeyNamePresent: true,
-  labelCount: 560331,
-  location: "<value>",
-  projectId: "<id>",
-  repositoryId: "<id>",
-  status: {
-    collectionIssues: [],
+    collectionIssues: [
+      {
+        message: "<value>",
+        reason: "forbidden",
+        severity: "warning",
+        source: "<value>",
+      },
+    ],
     health: "degraded",
-    lifecycle: "stopped",
-    partial: false,
-    stale: false,
-  },
-  backend: "gcpArtifactRegistry",
-};
-```
-
-### `models.DataAzureContainerRegistry`
-
-```typescript
-const value: models.DataAzureContainerRegistry = {
-  adminUserEnabled: false,
-  anonymousPullEnabled: true,
-  dataEndpointHostNames: [
-    "<value 1>",
-    "<value 2>",
-  ],
-  encryptionKeyIdentifierPresent: false,
-  encryptionKeyVaultUriPresent: false,
-  ipRuleCount: 806238,
-  location: "<value>",
-  managedTagCount: 395726,
-  name: "<value>",
-  networkRuleBypassOptions: "<value>",
-  policiesPresent: true,
-  policyCount: 284832,
-  privateEndpointConnectionCount: 849232,
-  publicNetworkAccess: "<value>",
-  resourceGroup: "<value>",
-  skuName: "<value>",
-  status: {
-    collectionIssues: [],
-    health: "unhealthy",
-    lifecycle: "failed",
+    lifecycle: "stopping",
     partial: true,
     stale: false,
   },
-  zoneRedundancy: "<value>",
-  backend: "azureContainerRegistry",
+  backend: "awsIamRole",
 };
 ```
 
-### `models.DataLocal10`
+### `models.DataGcpServiceAccount2`
 
 ```typescript
-const value: models.DataLocal10 = {
-  reachable: true,
-  registryUrl: "https://white-doorpost.biz/",
+const value: models.DataGcpServiceAccount2 = {
+  impersonationGranted: false,
+  roleBound: false,
   status: {
-    collectionIssues: [],
-    health: "unknown",
-    lifecycle: "stopping",
+    collectionIssues: [
+      {
+        message: "<value>",
+        reason: "collection-failed",
+        severity: "warning",
+        source: "<value>",
+      },
+    ],
+    health: "healthy",
+    lifecycle: "deleted",
     partial: false,
     stale: false,
   },
-  backend: "local",
+  backend: "gcpServiceAccount",
+};
+```
+
+### `models.DataAzureManagedIdentity2`
+
+```typescript
+const value: models.DataAzureManagedIdentity2 = {
+  roleAssignmentIds: [
+    "<value 1>",
+    "<value 2>",
+    "<value 3>",
+  ],
+  status: {
+    collectionIssues: [],
+    health: "healthy",
+    lifecycle: "creating",
+    partial: true,
+    stale: false,
+  },
+  backend: "azureManagedIdentity",
 };
 ```
 

@@ -1,29 +1,27 @@
 # BYOC Database
 
-A multi-container vector database example that runs in the customer's cloud. Demonstrates the BYOC (Bring Your Own Cloud) pattern with stateless containers and durable object storage.
+A zero-disk vector database that runs in the customer's cloud. This is the BYOC (Bring Your Own Cloud) pattern for data infrastructure: you control the releases, the customer owns the data. All containers are stateless -- object storage is the only source of truth, so the same code deploys unchanged to AWS S3, GCP Cloud Storage, Azure Blob Storage, or the local filesystem.
 
 ## Architecture
 
-- **Writer**: Handles vector upsert operations, writes segments to object storage
-- **Reader**: Handles vector similarity queries, reads from object storage
-- **Router**: nginx-based routing to writer/reader based on endpoint
-- **Storage**: Durable object storage for vectors and metadata
+- **Writer**: handles vector upserts, writes segments to object storage
+- **Reader**: handles similarity queries, reads from object storage
+- **Router**: nginx, routes requests to writer or reader by endpoint
+- **Storage**: durable object storage for vectors and metadata
 
-The key insight: **coordination via ETags on object storage**. No distributed locks, no consensus protocols. When multiple writers compete to update metadata, ETag-based optimistic locking ensures consistency.
+Coordination happens through ETags on object storage. There are no distributed locks and no consensus protocols: when multiple writers compete to update metadata, ETag-based optimistic locking ensures consistency. Kill any container and restart it -- the data is still there, because no container ever held state.
 
-## Local Development
+## Local development
 
 ```bash
-# Install dependencies
-npm install
+git clone https://github.com/alienplatform/alien
+cd alien/examples/byoc-database
 
-# Run in dev mode
+npm install
 alien dev
 ```
 
-The stack starts on `http://localhost:8080`.
-
-## API Usage
+Everything runs locally -- object storage on the filesystem, no cloud credentials needed. The database listens on `http://localhost:8080`.
 
 ### Upsert vectors
 
@@ -48,6 +46,7 @@ curl -X POST http://localhost:8080/api/v1/namespaces/demo/query \
 ```
 
 Response:
+
 ```json
 {
   "results": [
@@ -57,41 +56,28 @@ Response:
 }
 ```
 
-## Testing
+## Running tests
 
 ```bash
 npm test
 ```
 
-Tests verify:
-- Vector upsert and query operations
-- Data persistence across container restarts
-- Namespace isolation
-- Dimension validation
-- Error handling
+Tests cover upsert and query operations, data persistence across container restarts, namespace isolation, dimension validation, and error handling.
 
-## Key Concepts for Presenters
-
-**This is BYOC**: We control the releases, the customer owns the data.
-
-**Three containers**: Writer, reader, router. All stateless. Object storage is the source of truth.
-
-**Restart resilience**: Kill the reader, query again, same data. No state migration needed.
-
-**ETag-based coordination**: No Zookeeper, no etcd, no DynamoDB locks. Just object storage primitives.
-
-**Platform agnostic**: Same code deploys to AWS S3, GCP Cloud Storage, Azure Blob, or local filesystem.
-
-## Production Considerations
+## Production considerations
 
 This example simplifies several things for clarity:
 
-1. **Index caching**: Production would cache vector indexes in memory and invalidate on segment changes
-2. **Buffered writes**: Production would buffer vectors and flush in larger batches
-3. **Segment compaction**: Production would merge small segments to optimize query performance
-4. **Distributed queries**: Production would shard namespaces and query in parallel
-5. **Authentication**: Production would add API authentication and authorization
+1. **Index caching**: production would cache vector indexes in memory and invalidate on segment changes
+2. **Buffered writes**: production would buffer vectors and flush in larger batches
+3. **Segment compaction**: production would merge small segments to optimize query performance
+4. **Distributed queries**: production would shard namespaces and query in parallel
+5. **Authentication**: production would add API authentication and authorization
 
-The fundamentals remain: stateless containers + ETag-based coordination on object storage.
+The fundamentals remain: stateless containers plus ETag-based coordination on object storage.
 
+## Learn more
 
+- [How Alien Works](https://alien.dev/docs/how-alien-works)
+- [Storage reference](https://alien.dev/docs/infrastructure/storage)
+- [alien.dev](https://alien.dev) -- ship to your customer's cloud, keep it fully managed
