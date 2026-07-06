@@ -22,12 +22,13 @@ the same wire protocol.
 | Export | Kind | Signature sketch | Notes |
 |---|---|---|---|
 | `CommandsClient` | class | `new CommandsClient({ managerUrl, deploymentId, token })` | Sender. Constructor options `{ managerUrl: string; deploymentId: string; token: string }`. |
-| `CommandsClient#target` | method | `.target(name: string)` | Scopes the client to a target command-capable resource. Return type OPEN (task 08). |
-| `CommandsClient#invoke` | method | `.invoke(name: string, input, options?)` | Invokes a command and resolves to its response. `input`/`options`/response types OPEN (task 08). |
-| `createCommandReceiver` | function | `createCommandReceiver(): CommandReceiver` | Constructs the pull receiver from environment configuration. |
-| `CommandReceiver` | type | receiver handle | `.handle(name: string, handler)` registers a handler; `.run(): Promise<void>` leases and dispatches. Handler context `{ input, signal, deadline, commandId, attempt }`. Concrete field types OPEN (task 08). |
+| `CommandsClient#target` | method | `.target(name: string)` | Scopes the client to a target command-capable resource. Return type: `TargetedCommands` — DECIDED(08). |
+| `CommandsClient#invoke` | method | `.invoke(name: string, input, options?)` | Invokes a command and resolves to its response. types DECIDED(08) — see the DECIDED(08) section. |
+| `createCommandReceiver` | function | `createCommandReceiver(options?: CommandReceiverOptions): CommandReceiver` | Constructs the pull receiver from environment configuration. |
+| `CommandReceiverOptions` | type | constructor options | `{ env?, fetch?, pollIntervalMs?, leaseSeconds?, maxLeases? }`. Every field has a production default; the three tuning knobs exist mainly for tests. **DECIDED(08).** |
+| `CommandReceiver` | type | receiver handle | `.handle(name: string, handler)` registers a handler; `.run(): Promise<void>` leases and dispatches. Handler context `{ input, signal, deadline, commandId, attempt }`. Field types DECIDED(08) — see the DECIDED(08) section. |
 | `CommandReceiverConfigInvalidError` | error | `defineError({ code: "COMMAND_RECEIVER_CONFIG_INVALID", context: { … } })` | Thrown when receiver env config is empty/invalid. Context names the offending variable — any of the five in the receiver environment contract below. **DECIDED(09).** |
-| sender error types | error | migrated from the current `@alienplatform/sdk/commands` error set | The final exported sender-error set is OPEN (task 08); migration source is the existing `@alienplatform/sdk/commands` errors. |
+| sender error types | error | migrated from the current `@alienplatform/sdk/commands` error set | Sender-error set DECIDED(08) — the seven migrated errors; see the DECIDED(08) section. |
 | shared error primitives | re-export | `AlienError`, `defineError` (from `@alienplatform/core`) | Re-exported for consumer error handling. |
 
 ### Receiver environment contract
@@ -103,6 +104,15 @@ MAY depend on:
   handler threw/rejected, including a response-serialization failure), and
   `HANDLER_TIMEOUT` (budget expiry, above). A params-decode failure is
   submitted under the decode error's own code, not a receiver-specific one.
+- **DECIDED(09) — twin-pinned.** Envelope decode failures — malformed inline
+  base64 params, and storage-mode params missing `storageGetRequest` — are
+  submitted as `INVALID_ENVELOPE`, the identical code the Rust twin's
+  `decode_params_bytes` returns for the same two failures
+  (`crates/alien-commands/src/runtime/mod.rs`). The TypeScript receiver's
+  inline base64 decode is strict (canonical alphabet and padding only,
+  matching the Rust `base64` crate's `STANDARD` engine), not the lenient
+  `Buffer.from(str, "base64")` default, so both receivers reject the same
+  malformed envelopes.
 - **DECIDED(09).** Delivery is at-least-once: a lease that expires without a
   submitted response is redelivered. The handler context's `attempt` field
   carries the delivery attempt starting at 1 (greater than 1 means
@@ -120,9 +130,9 @@ MAY depend on:
   command-polling defaults.
 - **DECIDED(09).** `ctx.input` is the decoded command param bytes: the same
   bytes the params envelope carries after decode, prior to any
-  handler-side parsing. The concrete TypeScript context field types remain
-  OPEN (task 08); only this byte-for-byte encoding identity between the
-  Rust and TypeScript receivers is pinned here.
+  handler-side parsing. The concrete TypeScript context field types are now
+  DECIDED(08) (see the DECIDED(08) section); the byte-for-byte encoding
+  identity between the Rust and TypeScript receivers remains pinned here.
 - **DECIDED(09).** A successful handler response body is the JSON encoding
   of the handler's return value (`JSON.stringify`-equivalent), submitted as
   the command's success response payload.
@@ -130,6 +140,62 @@ MAY depend on:
   `min(envelope deadline, lease expiry)` — not the raw envelope deadline, and
   it is always present while a lease is held. The TypeScript receiver must
   expose the same value; anything else diverges the twins' timeout behavior.
+
+## DECIDED (task 08)
+
+The OPEN(08) type decisions, now pinned.
+
+- **`CommandReceiver` handler-context field types** (`CommandContext`, exported
+  from `"."`): `{ input: Uint8Array; signal: AbortSignal; deadline: Date;
+  commandId: string; attempt: number }`. `input` is the decoded param bytes
+  (byte-for-byte twin of the Rust `ctx.input`); `signal` is the twin of the Rust
+  `ctx.cancellation` token, firing at budget expiry; `deadline` is the effective
+  budget `min(envelope.deadline, leaseExpiresAt)`, always present. A
+  `CommandHandler` is `(ctx: CommandContext) => unknown | Promise<unknown>`; its
+  return value is the JSON success body. `createCommandReceiver()` returns a
+  `CommandReceiver` (`.handle` / `.run` / `.stop`); `.stop()` is the exposed
+  drain-and-return mechanism (twin of the Rust `ShutdownHandle`).
+
+- **`CommandReceiverOptions`** (constructor options for `createCommandReceiver`,
+  exported from `"."`): `{ env?: Record<string, string | undefined>; fetch?:
+  typeof fetch; pollIntervalMs?: number; leaseSeconds?: number; maxLeases?:
+  number }`. `env` defaults to `process.env`; `fetch` defaults to the global
+  `fetch`; the three tuning knobs default to the DECIDED(09) production
+  values (5000ms poll / 60s lease / 10 max leases) and exist mainly so tests
+  can drive the lease loop fast and inject a stub `fetch`.
+
+- **`InvalidEnvelopeError`** (`defineError`, exported from `"."`): code
+  `INVALID_ENVELOPE`, context `{ field?: string; reason: string }`. Thrown by
+  the receiver for envelope decode failures — malformed inline base64 params
+  and storage-mode params missing `storageGetRequest` — matching the Rust
+  twin's `ErrorData::InvalidEnvelope` code (DECIDED(09), twin-pinned above).
+
+- **`CommandsClient#target(name)` return type:** `TargetedCommands` — a class
+  exported from `"."`, a thin sender bound to one `targetResourceId`. Its
+  `.invoke(name, input, options?)` mirrors `CommandsClient#invoke` and presets
+  `targetResourceId`; the builder's target overrides any
+  `options.targetResourceId` (builder wins — same rule as the Rust
+  `TargetedCommands`).
+- **`CommandsClient#invoke` signature:**
+  `invoke<TResponse = unknown>(command: string, input: unknown, options?: InvokeOptions): Promise<TResponse>`.
+  - `input`: `unknown`, JSON-serialized to the inline `BodySpec` (string inputs
+    pass through, everything else is `JSON.stringify`-ed once).
+  - response: generic `TResponse` (default `unknown`), the decoded success body.
+- **`InvokeOptions`:**
+  `{ timeoutMs?: number; deadline?: Date; idempotencyKey?: string; targetResourceId?: string; pollIntervalMs?: number; maxPollIntervalMs?: number; pollBackoff?: number }`.
+  `timeoutMs` defaults to the client's `timeoutMs`; polling knobs default to
+  500ms / 5000ms / ×1.5.
+- **`CommandsClientConfig`:**
+  `{ managerUrl: string; deploymentId: string; token: string; timeoutMs?: number; allowLocalStorage?: boolean }`
+  (`timeoutMs` = default invoke timeout, 60000ms; `allowLocalStorage` gates the
+  `local` storage backend for dev).
+- **Exported sender-error set** (migrated from `@alienplatform/sdk/commands`,
+  all `defineError` from `@alienplatform/core`): `CommandCreationFailedError`
+  (`COMMAND_CREATION_FAILED`), `CommandTimeoutError` (`COMMAND_TIMEOUT`),
+  `DeploymentCommandError` (`DEPLOYMENT_COMMAND_ERROR`), `CommandExpiredError`
+  (`COMMAND_EXPIRED`), `StorageOperationFailedError`
+  (`STORAGE_OPERATION_FAILED`), `ResponseDecodingFailedError`
+  (`RESPONSE_DECODING_FAILED`), `ManagerHttpError` (`MANAGER_HTTP_ERROR`).
 
 ## Status
 

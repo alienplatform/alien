@@ -55,6 +55,14 @@ test-utils = [
     "alien-bindings/local",
 ]
 
+# Standalone test command server for the TypeScript integration suite. Only
+# built when `test-utils` is enabled (it reuses `TestCommandServer`); never part
+# of a normal build.
+[[bin]]
+name = "test-command-server"
+path = "src/bin/test-command-server.rs"
+required-features = ["test-utils"]
+
 [dependencies]
 # Core dependencies (always available)
 serde = { workspace = true, features = ["derive"] }

@@ -10,11 +10,13 @@
   },
   "dependencies": {
     "@alienplatform/sdk": "file:../.tarballs/alienplatform-sdk-1.10.7.tgz",
-    "@alienplatform/bindings": "file:../.tarballs/alienplatform-bindings-1.10.7.tgz"
+    "@alienplatform/bindings": "file:../.tarballs/alienplatform-bindings-1.10.7.tgz",
+    "@alienplatform/commands": "file:../.tarballs/alienplatform-commands-1.10.7.tgz"
   },
   "overrides": {
     "@alienplatform/core": "file:../.tarballs/alienplatform-core-1.10.7.tgz",
     "@alienplatform/sdk": "file:../.tarballs/alienplatform-sdk-1.10.7.tgz",
-    "@alienplatform/bindings": "file:../.tarballs/alienplatform-bindings-1.10.7.tgz"
+    "@alienplatform/bindings": "file:../.tarballs/alienplatform-bindings-1.10.7.tgz",
+    "@alienplatform/commands": "file:../.tarballs/alienplatform-commands-1.10.7.tgz"
   }
 }
