@@ -47,11 +47,19 @@ pub struct BindingsProvider {
 /// otherwise the original `from_env` error is surfaced unchanged.
 pub struct LazyEnvBindingsProvider {
     env: HashMap<String, String>,
+    /// Deployment platform parsed at construction on the runtime path
+    /// ([`BindingsProvider::from_env_lazy`] validates it eagerly and `select`
+    /// reuses it instead of re-parsing `env` on first use). `None` on the
+    /// app-facing deferred path ([`BindingsProvider::from_env_deferred`]),
+    /// which must construct with zero environment; `select` then resolves the
+    /// platform on first use of a configured binding.
+    platform: Option<Platform>,
     /// Binding names present in `env`, parsed at construction. Kept separately
     /// from the fully-resolved [`BindingsProvider`] so the app-facing kinds can
     /// answer "is this binding configured?" without first resolving the platform
     /// or cloud client config. Parsing here also makes malformed binding JSON
-    /// fail fast at construction.
+    /// fail fast at construction, and `select` reuses the parse instead of
+    /// re-parsing `env` on first use.
     bindings: HashMap<String, serde_json::Value>,
     /// The credential resolution strategy, decided once on first use.
     resolver: OnceCell<CredentialResolver>,
@@ -160,11 +168,12 @@ impl BindingsProvider {
     pub fn from_env_lazy(env: HashMap<String, String>) -> Result<LazyEnvBindingsProvider> {
         // Runtime path: validate the deployment platform eagerly so a
         // misconfigured worker fails at startup, not on first binding use.
-        crate::get_platform_from_env(&env)?;
+        let platform = crate::get_platform_from_env(&env)?;
         let bindings = Self::parse_bindings_from_env(&env)?;
 
         Ok(LazyEnvBindingsProvider {
             env,
+            platform: Some(platform),
             bindings,
             resolver: OnceCell::new(),
         })
@@ -190,6 +199,9 @@ impl BindingsProvider {
 
         Ok(LazyEnvBindingsProvider {
             env,
+            // Deferred contract: platform resolution happens on first use of a
+            // configured binding, never at construction.
+            platform: None,
             bindings,
             resolver: OnceCell::new(),
         })
@@ -478,18 +490,25 @@ impl LazyEnvBindingsProvider {
     ///    `ALIEN_DEPLOYMENT_TOKEN`) is present → mint.
     /// 3. Else → surface the original `from_env` error unchanged.
     async fn select(&self) -> Result<CredentialResolver> {
-        let platform = crate::get_platform_from_env(&self.env)?;
-        let bindings = BindingsProvider::parse_bindings_from_env(&self.env)?;
-
+        // Binding JSON (and, on the `from_env_lazy` path, the platform) was
+        // already parsed and validated at construction; `env` cannot have
+        // changed since, so re-parsing would just repeat that work for the
+        // same result. On the `from_env_deferred` path the platform was
+        // deliberately not resolved at construction, so resolve it now.
+        let platform = match self.platform {
+            Some(platform) => platform,
+            None => crate::get_platform_from_env(&self.env)?,
+        };
         match BindingsProvider::client_config_from_env(platform, &self.env).await {
             Ok(client_config) => Ok(CredentialResolver::Static(Arc::new(BindingsProvider::new(
                 client_config,
-                bindings,
+                self.bindings.clone(),
             )?))),
             Err(from_env_error) => match MintingCredentialSource::from_env(&self.env)? {
-                Some(source) => Ok(CredentialResolver::Minting(Box::new(
-                    MintingResolver::new(source, bindings),
-                ))),
+                Some(source) => Ok(CredentialResolver::Minting(Box::new(MintingResolver::new(
+                    source,
+                    self.bindings.clone(),
+                )))),
                 // No mint contract: the environment simply couldn't produce
                 // credentials. Preserve the exact original error.
                 None => Err(from_env_error),

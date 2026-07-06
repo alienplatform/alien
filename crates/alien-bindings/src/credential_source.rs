@@ -13,6 +13,75 @@
 //! `expiresAt` refresh hint. The minted config is cached and re-minted on
 //! access once it passes the refresh threshold, with a single-flight guard so a
 //! burst of concurrent binding loads triggers at most one mint.
+//!
+//! # Bootstrapping an external app
+//!
+//! An externally-deployed app process (Container/Daemon) never receives a
+//! native cloud identity of its own — it has no IAM role, no metadata service,
+//! nothing [`crate::provider::LazyEnvBindingsProvider`]'s native path can read.
+//! What it does get, injected by the manager at deploy time, is a *deployment
+//! token*: proof of which deployment it is, good for asking the manager to
+//! mint short-lived credentials on its behalf. That handoff is carried by
+//! three env vars, all required together (see [`MintingCredentialSource::from_env`]):
+//!
+//! - `ALIEN_MANAGER_URL` — base URL of the deployment's manager; the mint
+//!   endpoint is `{ALIEN_MANAGER_URL}/v1/credentials/mint`.
+//! - `ALIEN_DEPLOYMENT_TOKEN` — bearer token scoped to this deployment (or its
+//!   deployment group). Sent as `Authorization: Bearer …`; never logged.
+//! - `ALIEN_DEPLOYMENT_SERVICE_ACCOUNT` — the service-account binding to mint
+//!   credentials for (`bindingName` in the request body).
+//!
+//! `ALIEN_DEPLOYMENT_ID` (`deploymentId` in the request body) is reused from
+//! the existing deployment-identity contract rather than duplicated.
+//!
+//! Controller injection of these three vars for Container/Daemon processes is
+//! a follow-up (ALIEN-218 tasks 10/16); until it lands, the gate below is
+//! simply absent and every process falls through to whatever error its native
+//! resolution already produced.
+//!
+//! # Selection order
+//!
+//! [`crate::provider::LazyEnvBindingsProvider`] decides its strategy once, on
+//! first binding use, in a fixed order:
+//!
+//! 1. **Native/projected identity** — `ClientConfig::from_env` succeeds (an
+//!    IAM role, workload identity, metadata service, or explicit static
+//!    credentials in the environment). Used as-is; minting is never attempted.
+//! 2. **Mint** — native resolution failed, but the mint gate
+//!    (`ALIEN_MANAGER_URL` + `ALIEN_DEPLOYMENT_TOKEN`) is present. Falls back
+//!    to this module.
+//! 3. **Original error** — native resolution failed and no mint gate is
+//!    present. The original `from_env` error is surfaced unchanged; there is
+//!    nothing left to fall back to.
+//!
+//! # Refresh semantics
+//!
+//! A minted [`ClientConfig`] is cached under its server-declared `expiresAt`
+//! and treated as stale once `now >= expiresAt - 300s`
+//! ([`REFRESH_SKEW_SECONDS`]) — the credential is re-minted *before* it would
+//! actually expire, not after. Re-minting happens lazily, only on access
+//! ([`MintingResolver::provider`]); there is no background timer.
+//!
+//! Two properties make this safe under concurrency and manager failures:
+//!
+//! - **Single-flight**: concurrent callers that observe a stale/empty cache
+//!   contend on one lock; only the first re-mints, the rest observe the
+//!   now-fresh cache after it releases. A burst of concurrent binding loads
+//!   never produces a burst of mint calls.
+//! - **Fail-closed**: if a mint call errors, that error propagates to the
+//!   caller instead of serving the stale provider. Availability suffers (a
+//!   manager blip can break every binding load), but no caller is ever handed
+//!   credentials past their declared expiry.
+//!
+//! # Static/local mode
+//!
+//! Tests and local development don't need any of this: when
+//! `ClientConfig::from_env` resolves directly (e.g. `ALIEN_DEPLOYMENT_TYPE=local`
+//! with a `state_directory`), selection stops at step 1 above and this module
+//! is never touched. The fake-mint-server tests in this file, and the
+//! `mints_when_native_config_unavailable` / `native_config_wins_and_never_mints`
+//! tests in `crate::provider`, exercise both sides of that boundary without
+//! needing a real manager or real cloud credentials.
 
 use std::collections::HashMap;
 use std::fmt;
@@ -35,6 +104,14 @@ use crate::provider::BindingsProvider;
 /// Re-mint credentials once they are within this many seconds of their
 /// server-declared expiry. Gives in-flight work a safety margin so it never
 /// races a hard expiry, and absorbs modest client/server clock skew.
+///
+/// This margin is only safe from a per-call "mint storm" (re-minting on every
+/// access instead of every refresh window) because the manager clamps minted
+/// lifetimes to `[900, 3600]` seconds (`MIN_DURATION_SECONDS` /
+/// `MAX_DURATION_SECONDS` in `crates/alien-manager/src/routes/credentials.rs`).
+/// A 900s floor minus this 300s skew still leaves a 600s window of cache
+/// hits between mints; if the server ever granted shorter-lived credentials
+/// than the skew, every access would re-mint.
 const REFRESH_SKEW_SECONDS: i64 = 300;
 
 /// Timeout for a single mint HTTP request. The mint endpoint impersonates a
@@ -266,6 +343,10 @@ impl MintingResolver {
             return Ok(provider);
         }
 
+        // Fail closed: if the mint call errors, this returns the error to the
+        // caller rather than serving a stale/expired provider. That trades
+        // availability (a manager blip can break every binding load) for never
+        // handing out credentials past their declared expiry.
         let minted = self.source.mint().await?;
         let provider = Arc::new(BindingsProvider::new(
             minted.client_config,
