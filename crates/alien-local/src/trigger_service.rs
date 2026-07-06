@@ -23,14 +23,14 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Duration;
 
-use alien_bindings::grpc::control::{
-    self, CronEvent as ProtoCronEvent, QueueMessage as ProtoQueueMessage,
-    StorageEvent as ProtoStorageEvent, Task,
-};
-use alien_bindings::grpc::control_service::ControlGrpcServer;
 use alien_bindings::traits::{BindingsProviderApi, MessagePayload, Queue};
 use alien_core::WorkerTrigger;
 use alien_error::{AlienError, Context, IntoAlienError};
+use alien_worker_protocol::control::{
+    self, CronEvent as ProtoCronEvent, QueueMessage as ProtoQueueMessage,
+    StorageEvent as ProtoStorageEvent, Task,
+};
+use alien_worker_protocol::ControlGrpcServer;
 use chrono::Utc;
 use prost_types::Timestamp;
 use tokio::sync::broadcast;

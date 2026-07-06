@@ -42,9 +42,11 @@ pub const ENV_ALIEN_DEPLOYMENT_TOKEN: &str = "ALIEN_DEPLOYMENT_TOKEN";
 /// Deliberately does **not** end in `_BINDING`: names matching `ALIEN_*_BINDING`
 /// are parsed as resource-binding JSON by the provider, which this is not.
 pub const ENV_ALIEN_DEPLOYMENT_SERVICE_ACCOUNT: &str = "ALIEN_DEPLOYMENT_SERVICE_ACCOUNT";
-pub const ENV_ALIEN_BINDINGS_ADDRESS: &str = "ALIEN_BINDINGS_ADDRESS";
-pub const ENV_ALIEN_BINDINGS_GRPC_ADDRESS: &str = "ALIEN_BINDINGS_GRPC_ADDRESS";
-pub const ENV_ALIEN_BINDINGS_MODE: &str = "ALIEN_BINDINGS_MODE";
+/// Address of the worker app protocol gRPC server. The runtime binds its
+/// Control + WaitUntil services here and injects the same value for the
+/// application it spawns; the app connects as the gRPC client. Presence of this
+/// variable is what selects the worker-protocol gRPC channel in the app SDK.
+pub const ENV_ALIEN_WORKER_GRPC_ADDRESS: &str = "ALIEN_WORKER_GRPC_ADDRESS";
 pub const ENV_AWS_ACCOUNT_ID: &str = "AWS_ACCOUNT_ID";
 pub const ENV_AWS_REGION: &str = "AWS_REGION";
 pub const ENV_AZURE_CLIENT_ID: &str = "AZURE_CLIENT_ID";
@@ -427,9 +429,7 @@ pub fn is_reserved_runtime_environment_name(name: &str) -> bool {
     is_runtime_environment_contract_name(name)
         || matches!(
             name,
-            ENV_ALIEN_BINDINGS_ADDRESS
-                | ENV_ALIEN_BINDINGS_GRPC_ADDRESS
-                | ENV_ALIEN_BINDINGS_MODE
+            ENV_ALIEN_WORKER_GRPC_ADDRESS
                 | ENV_ALIEN_COMMANDS_POLLING_ENABLED
                 | ENV_ALIEN_COMMANDS_POLLING_INTERVAL_SECS
                 | ENV_ALIEN_COMMANDS_POLLING_URL
@@ -509,6 +509,10 @@ mod tests {
             ENV_OPERATOR_BASE_PLATFORM
         ));
         assert!(is_reserved_runtime_environment_name(ENV_ALIEN_SECRETS));
+        assert!(is_reserved_runtime_environment_name(
+            ENV_ALIEN_WORKER_GRPC_ADDRESS
+        ));
+        assert_eq!(ENV_ALIEN_WORKER_GRPC_ADDRESS, "ALIEN_WORKER_GRPC_ADDRESS");
         assert!(is_reserved_runtime_environment_name(
             "ALIEN_STORAGE_BINDING"
         ));

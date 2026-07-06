@@ -10,18 +10,13 @@
 
 use std::{collections::HashMap, process::Stdio, sync::Arc};
 
-use alien_bindings::{
-    grpc::{
-        control_service::ControlGrpcServer, run_grpc_server,
-        wait_until_service::WaitUntilGrpcServer,
-    },
-    BindingsProvider,
-};
+use alien_bindings::BindingsProvider;
 use alien_core::{
-    ENV_ALIEN_BINDINGS_GRPC_ADDRESS, ENV_ALIEN_BINDINGS_MODE, ENV_ALIEN_RUNTIME_SECRETS,
-    ENV_ALIEN_SECRETS, ENV_ALIEN_TRANSPORT,
+    ENV_ALIEN_RUNTIME_SECRETS, ENV_ALIEN_SECRETS, ENV_ALIEN_TRANSPORT,
+    ENV_ALIEN_WORKER_GRPC_ADDRESS,
 };
 use alien_error::{AlienError, Context};
+use alien_worker_protocol::{run_grpc_server, ControlGrpcServer, WaitUntilGrpcServer};
 use reqwest::Url;
 use serde::Deserialize;
 use tokio::{
@@ -494,13 +489,13 @@ async fn start_grpc_server(
             )
         };
 
-    let handles = run_grpc_server(provider.clone(), address).await.context(
-        ErrorData::BindingsOperationFailed {
+    let handles = run_grpc_server(address)
+        .await
+        .context(ErrorData::BindingsOperationFailed {
             address: address.to_string(),
             provider: None,
             message: "Failed to start gRPC server".to_string(),
-        },
-    )?;
+        })?;
 
     // Wait for server ready
     match handles.readiness_receiver.await {
@@ -695,12 +690,14 @@ fn configure_application_runtime_env(cmd: &mut Command, config: &RuntimeConfig) 
 }
 
 fn application_runtime_env(config: &RuntimeConfig) -> Vec<(&'static str, String)> {
+    // Setting ALIEN_WORKER_GRPC_ADDRESS is what selects the worker-protocol gRPC
+    // channel in the app SDK — its presence is the mode switch, so no separate
+    // mode flag is injected.
     let mut env = vec![
         (
-            ENV_ALIEN_BINDINGS_GRPC_ADDRESS,
+            ENV_ALIEN_WORKER_GRPC_ADDRESS,
             config.bindings_address.clone(),
         ),
-        (ENV_ALIEN_BINDINGS_MODE, "grpc".to_string()),
         (
             ENV_ALIEN_TRANSPORT,
             application_transport_env_value(config.transport).to_string(),
@@ -862,9 +859,7 @@ pub fn setup_shutdown_on_signals() -> (broadcast::Sender<()>, broadcast::Receive
 mod tests {
     use std::collections::HashMap;
 
-    use alien_core::{
-        ENV_ALIEN_BINDINGS_GRPC_ADDRESS, ENV_ALIEN_BINDINGS_MODE, ENV_ALIEN_TRANSPORT,
-    };
+    use alien_core::{ENV_ALIEN_TRANSPORT, ENV_ALIEN_WORKER_GRPC_ADDRESS};
 
     use super::{application_runtime_env, RuntimeConfig, TransportType};
 
@@ -882,10 +877,9 @@ mod tests {
             .collect::<HashMap<_, _>>();
 
         assert_eq!(
-            env.get(ENV_ALIEN_BINDINGS_GRPC_ADDRESS),
+            env.get(ENV_ALIEN_WORKER_GRPC_ADDRESS),
             Some(&"127.0.0.1:60000".to_string())
         );
-        assert_eq!(env.get(ENV_ALIEN_BINDINGS_MODE), Some(&"grpc".to_string()));
         assert_eq!(
             env.get(ENV_ALIEN_TRANSPORT),
             Some(&"passthrough".to_string())

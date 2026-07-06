@@ -25,7 +25,8 @@ local = ["alien-bindings/local"]
 
 [dependencies]
 alien-commands = { workspace = true, default-features = false, features = ["runtime"] }
-alien-bindings = { workspace = true, default-features = false, features = ["grpc"] }
+alien-bindings = { workspace = true, default-features = false }
+alien-worker-protocol = { workspace = true }
 alien-core = { workspace = true }
 alien-error = { workspace = true }
 async-trait = { workspace = true }
@@ -69,7 +70,7 @@ strip-ansi-escapes = { workspace = true }
 
 [dev-dependencies]
 port_check = { workspace = true }
-alien-bindings = { workspace = true, features = ["grpc", "local"] }
+alien-bindings = { workspace = true, features = ["local"] }
 alien-core = { workspace = true }
 alien-commands = { workspace = true, features = ["test-utils"] }
 tokio = { workspace = true, features = ["macros", "rt-multi-thread", "time", "signal"] }

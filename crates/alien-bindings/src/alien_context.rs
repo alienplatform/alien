@@ -20,7 +20,7 @@ use alien_core::{ENV_ALIEN_CURRENT_CONTAINER_BINDING_NAME, ENV_ALIEN_CURRENT_WOR
 use alien_error::{AlienError, Context, IntoAlienError};
 
 #[cfg(feature = "grpc")]
-use crate::grpc::control_service::alien_bindings::control::{
+use alien_worker_protocol::control::{
     control_service_client::ControlServiceClient, send_task_result_request::Result as TaskResult,
     task::Payload as TaskPayload, RegisterEventHandlerRequest, RegisterHttpServerRequest,
     SendTaskResultRequest, Task, TaskError, TaskSuccess, WaitForTasksRequest,
@@ -165,10 +165,10 @@ impl AlienContext {
 
         let grpc_address = self
             .env_vars
-            .get("ALIEN_BINDINGS_GRPC_ADDRESS")
+            .get(alien_core::ENV_ALIEN_WORKER_GRPC_ADDRESS)
             .ok_or_else(|| {
                 AlienError::new(ErrorData::EnvironmentVariableMissing {
-                    variable_name: "ALIEN_BINDINGS_GRPC_ADDRESS".to_string(),
+                    variable_name: alien_core::ENV_ALIEN_WORKER_GRPC_ADDRESS.to_string(),
                 })
             })?;
 

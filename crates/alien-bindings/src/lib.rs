@@ -2,9 +2,7 @@ use alien_error::AlienError;
 
 // Re-export core traits and types
 pub use alien_context::AlienContext;
-pub use alien_core::{
-    Platform, ENV_ALIEN_BINDINGS_MODE, ENV_ALIEN_DEPLOYMENT_TYPE, ENV_OPERATOR_BASE_PLATFORM,
-};
+pub use alien_core::{Platform, ENV_ALIEN_DEPLOYMENT_TYPE, ENV_OPERATOR_BASE_PLATFORM};
 pub use bindings::Bindings;
 pub use error::{ErrorData, Result};
 pub use provider::BindingsProvider;
@@ -19,8 +17,6 @@ pub use wait_until::{DrainConfig, DrainResponse, WaitUntil, WaitUntilContext};
 
 pub mod bindings;
 pub mod error;
-#[cfg(feature = "grpc")]
-pub mod grpc;
 pub mod providers;
 pub mod traits;
 // Re-export presigned types from alien-core
@@ -33,13 +29,6 @@ pub mod http_client;
 pub mod provider;
 
 mod wait_until;
-
-#[cfg(feature = "grpc")]
-pub use grpc::control;
-#[cfg(feature = "grpc")]
-pub use grpc::control_service::ControlGrpcServer;
-#[cfg(feature = "grpc")]
-pub use grpc::GrpcServerHandles;
 
 /// Gets the current platform from the ALIEN_DEPLOYMENT_TYPE environment variable.
 /// This is used by the runtime to determine which platform-specific implementations to use.
