@@ -78,15 +78,15 @@ export class AlienContext implements AlienBindingsProvider {
   /**
    * Create a context from environment variables.
    *
-   * Reads the ALIEN_BINDINGS_GRPC_ADDRESS environment variable.
+   * Reads the ALIEN_WORKER_GRPC_ADDRESS environment variable.
    */
   static async fromEnv(): Promise<AlienContext> {
-    const address = process.env.ALIEN_BINDINGS_GRPC_ADDRESS
+    const address = process.env.ALIEN_WORKER_GRPC_ADDRESS
 
     if (!address) {
       throw new AlienError(
         InvalidBindingConfigError.create({
-          message: "ALIEN_BINDINGS_GRPC_ADDRESS environment variable is not set",
+          message: "ALIEN_WORKER_GRPC_ADDRESS environment variable is not set",
           suggestion:
             "Make sure you're running inside an Alien worker or set the variable manually",
         }),

@@ -6,11 +6,13 @@ set -e
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PACKAGE_DIR="$(dirname "$SCRIPT_DIR")"
-PROTO_DIR="$PACKAGE_DIR/../../crates/alien-bindings/proto"
+# The worker app protocol (Control + WaitUntil) is the only proto surface that
+# still has source .proto files; it lives in alien-worker-protocol. The remaining
+# generated clients (storage, kv, queue, ...) have no source protos in-tree, so we
+# regenerate over the worker-protocol outputs in place rather than wiping OUT_DIR.
+PROTO_DIR="$PACKAGE_DIR/../../crates/alien-worker-protocol/proto"
 OUT_DIR="$PACKAGE_DIR/src/generated"
 
-# Clean and create output directory
-rm -rf "$OUT_DIR"
 mkdir -p "$OUT_DIR"
 
 # Find protoc - prefer system installation

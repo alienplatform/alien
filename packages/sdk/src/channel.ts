@@ -15,7 +15,7 @@ const DEFAULT_CHANNEL_OPTIONS: ChannelOptions = {
 }
 
 /** Environment variable containing the gRPC endpoint */
-const GRPC_ENDPOINT_VAR = "ALIEN_BINDINGS_GRPC_ADDRESS"
+const GRPC_ENDPOINT_VAR = "ALIEN_WORKER_GRPC_ADDRESS"
 
 /** Cached channels by address */
 const channelCache = new Map<string, Channel>()
