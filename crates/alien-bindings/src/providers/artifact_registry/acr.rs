@@ -373,4 +373,20 @@ mod tests {
 
         assert_eq!(registry.upstream_repository_prefix(), "");
     }
+
+    #[tokio::test]
+    async fn new_uses_configured_repository_prefix() {
+        let binding = ArtifactRegistryBinding::Acr(AcrArtifactRegistryBinding {
+            registry_name: BindingValue::Value("registrytest".to_string()),
+            resource_group_name: BindingValue::Value("rg-test".to_string()),
+            repository_prefix: Some(BindingValue::Value("team-a".to_string())),
+        });
+
+        let registry =
+            AcrArtifactRegistry::new("artifact-registry".to_string(), binding, &test_config())
+                .await
+                .expect("configured repository_prefix should initialize");
+
+        assert_eq!(registry.upstream_repository_prefix(), "team-a");
+    }
 }
