@@ -5,6 +5,7 @@ use crate::error::{ErrorData, Result};
 use crate::output;
 use alien_core::embedded_config::DeployCliConfig;
 use alien_error::{AlienError, Context, IntoAlienError};
+use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine as _};
 use clap::Args;
 use flate2::read::GzDecoder;
 use reqwest::Url;
@@ -22,6 +23,7 @@ const IP_FORWARDING_CONFIG: &str = "net.ipv4.ip_forward = 1\n";
 const IP_FORWARDING_SYSCTL: &str = "net.ipv4.ip_forward=1";
 const DEFAULT_REGISTRATION_TIMEOUT_SECONDS: u64 = 120;
 const REGISTRATION_POLL_INTERVAL_MS: u64 = 1_000;
+const WRAPPED_JOIN_TOKEN_PREFIX: &str = "aj1_";
 
 #[derive(Args, Debug)]
 pub struct JoinArgs {
@@ -94,6 +96,14 @@ struct JoinRequest {
     token: String,
     plan: JoinPlan,
     install_root: PathBuf,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct WrappedJoinToken {
+    join_token: String,
+    control_plane_url: String,
+    cluster_id: String,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
@@ -265,13 +275,16 @@ fn build_join_request(
     host: HostFacts<'_>,
 ) -> Result<JoinRequest> {
     let (token, token_source) = resolve_join_token(args)?;
+    let wrapped_token = parse_wrapped_join_token(&token)?;
     let bundle_url = resolve_bundle_url(args, embedded_config)?;
-    let control_plane_url = resolve_control_plane_url(args)?;
-    let cluster_id = resolve_required_arg("cluster-id", args.cluster_id.as_deref())?;
+    let control_plane_url = resolve_control_plane_url(args, wrapped_token.as_ref())?;
+    let cluster_id = resolve_cluster_id(args, wrapped_token.as_ref())?;
     let arch = preflight_host(host)?;
 
     Ok(JoinRequest {
-        token,
+        token: wrapped_token
+            .map(|wrapped| wrapped.join_token)
+            .unwrap_or(token),
         install_root: args.install_root.clone(),
         plan: JoinPlan {
             token_source,
@@ -304,6 +317,28 @@ fn resolve_join_token(args: &JoinArgs) -> Result<(String, TokenSource)> {
     }))
 }
 
+fn parse_wrapped_join_token(token: &str) -> Result<Option<WrappedJoinToken>> {
+    let Some(encoded) = token.strip_prefix(WRAPPED_JOIN_TOKEN_PREFIX) else {
+        return Ok(None);
+    };
+    let json = URL_SAFE_NO_PAD.decode(encoded).map_err(|e| {
+        AlienError::new(ErrorData::ValidationError {
+            field: "token".to_string(),
+            message: format!("wrapped join token is not valid base64url: {e}"),
+        })
+    })?;
+    let wrapped: WrappedJoinToken = serde_json::from_slice(&json).map_err(|e| {
+        AlienError::new(ErrorData::ValidationError {
+            field: "token".to_string(),
+            message: format!("wrapped join token is not valid JSON: {e}"),
+        })
+    })?;
+    normalize_non_empty("token.joinToken", &wrapped.join_token)?;
+    validate_control_plane_url(&wrapped.control_plane_url)?;
+    normalize_non_empty("token.clusterId", &wrapped.cluster_id)?;
+    Ok(Some(wrapped))
+}
+
 fn resolve_bundle_url(
     args: &JoinArgs,
     embedded_config: Option<&DeployCliConfig>,
@@ -321,8 +356,28 @@ fn resolve_bundle_url(
         })
 }
 
-fn resolve_control_plane_url(args: &JoinArgs) -> Result<String> {
-    let url = resolve_required_arg("control-plane-url", args.control_plane_url.as_deref())?;
+fn resolve_control_plane_url(
+    args: &JoinArgs,
+    wrapped_token: Option<&WrappedJoinToken>,
+) -> Result<String> {
+    let url = args
+        .control_plane_url
+        .as_deref()
+        .map(|value| normalize_non_empty("control-plane-url", value))
+        .transpose()?
+        .or_else(|| wrapped_token.map(|token| token.control_plane_url.clone()))
+        .ok_or_else(|| {
+            AlienError::new(ErrorData::ValidationError {
+                field: "control-plane-url".to_string(),
+                message:
+                    "--control-plane-url is required when --token is not a wrapped Machines join token"
+                        .to_string(),
+            })
+        })?;
+    validate_control_plane_url(&url)
+}
+
+fn validate_control_plane_url(url: &str) -> Result<String> {
     let parsed = Url::parse(&url).map_err(|e| {
         AlienError::new(ErrorData::ValidationError {
             field: "control-plane-url".to_string(),
@@ -330,7 +385,7 @@ fn resolve_control_plane_url(args: &JoinArgs) -> Result<String> {
         })
     })?;
     match parsed.scheme() {
-        "http" | "https" => Ok(url),
+        "http" | "https" => Ok(url.to_string()),
         scheme => Err(AlienError::new(ErrorData::ValidationError {
             field: "control-plane-url".to_string(),
             message: format!("unsupported URL scheme '{scheme}'"),
@@ -338,14 +393,18 @@ fn resolve_control_plane_url(args: &JoinArgs) -> Result<String> {
     }
 }
 
-fn resolve_required_arg(field: &str, value: Option<&str>) -> Result<String> {
-    value
-        .map(|value| normalize_non_empty(field, value))
+fn resolve_cluster_id(args: &JoinArgs, wrapped_token: Option<&WrappedJoinToken>) -> Result<String> {
+    args.cluster_id
+        .as_deref()
+        .map(|value| normalize_non_empty("cluster-id", value))
         .transpose()?
+        .or_else(|| wrapped_token.map(|token| token.cluster_id.clone()))
         .ok_or_else(|| {
             AlienError::new(ErrorData::ValidationError {
-                field: field.to_string(),
-                message: format!("--{field} is required"),
+                field: "cluster-id".to_string(),
+                message:
+                    "--cluster-id is required when --token is not a wrapped Machines join token"
+                        .to_string(),
             })
         })
 }
@@ -1491,6 +1550,18 @@ mod tests {
         }
     }
 
+    fn wrapped_join_token(join_token: &str, control_plane_url: &str, cluster_id: &str) -> String {
+        let payload = serde_json::json!({
+            "joinToken": join_token,
+            "controlPlaneUrl": control_plane_url,
+            "clusterId": cluster_id,
+        });
+        format!(
+            "{WRAPPED_JOIN_TOKEN_PREFIX}{}",
+            URL_SAFE_NO_PAD.encode(payload.to_string())
+        )
+    }
+
     fn test_manifest() -> MachineBundleManifest {
         MachineBundleManifest {
             version: "2026-07-05".to_string(),
@@ -1596,6 +1667,85 @@ mod tests {
         assert_eq!(plan.control_plane_url, "https://control.example.com");
         assert_eq!(plan.cluster_id, "cluster-123");
         assert_eq!(plan.arch, MachineArch::X64);
+    }
+
+    #[test]
+    fn join_request_uses_context_from_wrapped_join_token() {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let wrapped = wrapped_join_token(
+            "hj_raw_secret",
+            "https://horizon.example.com",
+            "cluster-from-token",
+        );
+        let args = JoinArgs {
+            token: Some(wrapped),
+            control_plane_url: None,
+            cluster_id: None,
+            dry_run: true,
+            ..test_join_args()
+        };
+
+        let request = build_join_request(&args, None, linux_host(dir.path()))
+            .expect("join request should resolve from wrapped token");
+
+        assert_eq!(request.token, "hj_raw_secret");
+        assert_eq!(
+            request.plan.control_plane_url,
+            "https://horizon.example.com"
+        );
+        assert_eq!(request.plan.cluster_id, "cluster-from-token");
+    }
+
+    #[test]
+    fn explicit_context_overrides_wrapped_join_token_context() {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let wrapped = wrapped_join_token(
+            "hj_raw_secret",
+            "https://horizon.example.com",
+            "cluster-from-token",
+        );
+        let args = JoinArgs {
+            token: Some(wrapped),
+            control_plane_url: Some("https://override.example.com".to_string()),
+            cluster_id: Some("cluster-override".to_string()),
+            dry_run: true,
+            ..test_join_args()
+        };
+
+        let request = build_join_request(&args, None, linux_host(dir.path()))
+            .expect("join request should resolve");
+
+        assert_eq!(request.token, "hj_raw_secret");
+        assert_eq!(
+            request.plan.control_plane_url,
+            "https://override.example.com"
+        );
+        assert_eq!(request.plan.cluster_id, "cluster-override");
+    }
+
+    #[test]
+    fn raw_join_token_requires_explicit_context() {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let args = JoinArgs {
+            control_plane_url: None,
+            cluster_id: None,
+            dry_run: true,
+            ..test_join_args()
+        };
+
+        let error = build_join_request(&args, None, linux_host(dir.path()))
+            .expect_err("raw join token needs explicit context");
+
+        assert_eq!(error.code, "VALIDATION_ERROR");
+        assert!(error.message.contains("--control-plane-url"));
+    }
+
+    #[test]
+    fn malformed_wrapped_join_token_is_rejected() {
+        let error = parse_wrapped_join_token("aj1_not-valid-base64!!!")
+            .expect_err("wrapped token should be rejected");
+
+        assert_eq!(error.code, "VALIDATION_ERROR");
     }
 
     #[test]
