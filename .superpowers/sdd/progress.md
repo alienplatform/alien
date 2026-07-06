@@ -1,2 +1,0 @@
-ALIEN-222 (10) ledger. SPEED MODE: single implementer, one review, direct push.
-223 FOLLOW-UP QUEUED (missed ticket scope, found on full-text reread): delete TransportType::Passthrough + runtime passthrough paths (ALIEN_TRANSPORT Worker-only: lambda|cloud-run|container-app|http|local); fix lambda test rot per ticket Watch-out (binding JSON tag local-kv, test-kv naming, check_event_stored shape, cron handler). Land AFTER 222 push (file overlap in runtime_environment.rs).
