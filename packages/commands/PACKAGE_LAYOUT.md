@@ -131,6 +131,38 @@ MAY depend on:
   it is always present while a lease is held. The TypeScript receiver must
   expose the same value; anything else diverges the twins' timeout behavior.
 
+## DECIDED (task 08)
+
+The OPEN(08) sender-side type decisions, now pinned. (Receiver handler-context
+field types remain to be recorded by the receiver task.)
+
+- **`CommandsClient#target(name)` return type:** `TargetedCommands` — a class
+  exported from `"."`, a thin sender bound to one `targetResourceId`. Its
+  `.invoke(name, input, options?)` mirrors `CommandsClient#invoke` and presets
+  `targetResourceId`; the builder's target overrides any
+  `options.targetResourceId` (builder wins — same rule as the Rust
+  `TargetedCommands`).
+- **`CommandsClient#invoke` signature:**
+  `invoke<TResponse = unknown>(command: string, input: unknown, options?: InvokeOptions): Promise<TResponse>`.
+  - `input`: `unknown`, JSON-serialized to the inline `BodySpec` (string inputs
+    pass through, everything else is `JSON.stringify`-ed once).
+  - response: generic `TResponse` (default `unknown`), the decoded success body.
+- **`InvokeOptions`:**
+  `{ timeoutMs?: number; deadline?: Date; idempotencyKey?: string; targetResourceId?: string; pollIntervalMs?: number; maxPollIntervalMs?: number; pollBackoff?: number }`.
+  `timeoutMs` defaults to the client's `timeout`; polling knobs default to
+  500ms / 5000ms / ×1.5.
+- **`CommandsClientConfig`:**
+  `{ managerUrl: string; deploymentId: string; token: string; timeout?: number; allowLocalStorage?: boolean }`
+  (`timeout` = default invoke timeout, 60000ms; `allowLocalStorage` gates the
+  `local` storage backend for dev).
+- **Exported sender-error set** (migrated from `@alienplatform/sdk/commands`,
+  all `defineError` from `@alienplatform/core`): `CommandCreationFailedError`
+  (`COMMAND_CREATION_FAILED`), `CommandTimeoutError` (`COMMAND_TIMEOUT`),
+  `DeploymentCommandError` (`DEPLOYMENT_COMMAND_ERROR`), `CommandExpiredError`
+  (`COMMAND_EXPIRED`), `StorageOperationFailedError`
+  (`STORAGE_OPERATION_FAILED`), `ResponseDecodingFailedError`
+  (`RESPONSE_DECODING_FAILED`), `ManagerHttpError` (`MANAGER_HTTP_ERROR`).
+
 ## Status
 
 - Package implemented in task 08 (TypeScript — pure protocol sender + pull
