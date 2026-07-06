@@ -16,10 +16,10 @@ let value: DataAwsIamRole2 = {
         source: "<value>",
       },
     ],
-    health: "unknown",
+    health: "degraded",
     lifecycle: "stopping",
     partial: true,
-    stale: true,
+    stale: false,
   },
   backend: "awsIamRole",
 };
@@ -32,5 +32,5 @@ let value: DataAwsIamRole2 = {
 | `managementPermissionsApplied`                                     | *boolean*                                                          | :heavy_check_mark:                                                 | N/A                                                                |
 | `roleArn`                                                          | *string*                                                           | :heavy_minus_sign:                                                 | N/A                                                                |
 | `roleName`                                                         | *string*                                                           | :heavy_minus_sign:                                                 | N/A                                                                |
-| `status`                                                           | [operations.DataStatus47](../../models/operations/datastatus47.md) | :heavy_check_mark:                                                 | N/A                                                                |
+| `status`                                                           | [operations.DataStatus49](../../models/operations/datastatus49.md) | :heavy_check_mark:                                                 | N/A                                                                |
 | `backend`                                                          | *"awsIamRole"*                                                     | :heavy_check_mark:                                                 | N/A                                                                |

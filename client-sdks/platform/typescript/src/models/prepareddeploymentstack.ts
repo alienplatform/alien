@@ -151,6 +151,7 @@ export const PreparedDeploymentStackStackPlatform = {
   Gcp: "gcp",
   Azure: "azure",
   Kubernetes: "kubernetes",
+  Machines: "machines",
   Local: "local",
   Test: "test",
 } as const;
@@ -1444,6 +1445,7 @@ export const PreparedDeploymentStackSupportedPlatform = {
   Gcp: "gcp",
   Azure: "azure",
   Kubernetes: "kubernetes",
+  Machines: "machines",
   Local: "local",
   Test: "test",
 } as const;

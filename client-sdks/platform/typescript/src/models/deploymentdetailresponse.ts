@@ -82,6 +82,7 @@ export const DeploymentDetailResponsePlatform = {
   Gcp: "gcp",
   Azure: "azure",
   Kubernetes: "kubernetes",
+  Machines: "machines",
   Local: "local",
   Test: "test",
 } as const;
@@ -387,6 +388,37 @@ export type DeploymentDetailResponseCustomDomains = {
   domain: string;
 };
 
+export const DeploymentDetailResponseModeLoadBalancer = {
+  LoadBalancer: "loadBalancer",
+} as const;
+export type DeploymentDetailResponseModeLoadBalancer = ClosedEnum<
+  typeof DeploymentDetailResponseModeLoadBalancer
+>;
+
+export type DeploymentDetailResponsePublicEndpointTargetLoadBalancer = {
+  /**
+   * DNS name or URL for the external load balancer.
+   */
+  cnameTarget: string;
+  mode: DeploymentDetailResponseModeLoadBalancer;
+};
+
+export const DeploymentDetailResponseModeMachineAddresses = {
+  MachineAddresses: "machineAddresses",
+} as const;
+export type DeploymentDetailResponseModeMachineAddresses = ClosedEnum<
+  typeof DeploymentDetailResponseModeMachineAddresses
+>;
+
+export type DeploymentDetailResponsePublicEndpointTargetMachineAddresses = {
+  mode: DeploymentDetailResponseModeMachineAddresses;
+};
+
+export type DeploymentDetailResponsePublicEndpointTargetUnion =
+  | DeploymentDetailResponsePublicEndpointTargetLoadBalancer
+  | DeploymentDetailResponsePublicEndpointTargetMachineAddresses
+  | any;
+
 /**
  * Domain configuration for the stack.
  *
@@ -401,6 +433,12 @@ export type DeploymentDetailResponseDomains = {
    */
   customDomains?:
     | { [k: string]: DeploymentDetailResponseCustomDomains }
+    | null
+    | undefined;
+  publicEndpointTarget?:
+    | DeploymentDetailResponsePublicEndpointTargetLoadBalancer
+    | DeploymentDetailResponsePublicEndpointTargetMachineAddresses
+    | any
     | null
     | undefined;
 };
@@ -1353,6 +1391,7 @@ export const DeploymentDetailResponseStackStatePlatform = {
   Gcp: "gcp",
   Azure: "azure",
   Kubernetes: "kubernetes",
+  Machines: "machines",
   Local: "local",
   Test: "test",
 } as const;
@@ -1386,6 +1425,7 @@ export const DeploymentDetailResponseControllerPlatformEnum = {
   Gcp: "gcp",
   Azure: "azure",
   Kubernetes: "kubernetes",
+  Machines: "machines",
   Local: "local",
   Test: "test",
 } as const;
@@ -1797,6 +1837,7 @@ export const DeploymentDetailResponsePreparedStackPlatform = {
   Gcp: "gcp",
   Azure: "azure",
   Kubernetes: "kubernetes",
+  Machines: "machines",
   Local: "local",
   Test: "test",
 } as const;
@@ -3105,6 +3146,7 @@ export const DeploymentDetailResponseSupportedPlatform = {
   Gcp: "gcp",
   Azure: "azure",
   Kubernetes: "kubernetes",
+  Machines: "machines",
   Local: "local",
   Test: "test",
 } as const;
@@ -4045,6 +4087,93 @@ export function deploymentDetailResponseCustomDomainsFromJSON(
 }
 
 /** @internal */
+export const DeploymentDetailResponseModeLoadBalancer$inboundSchema: z.ZodEnum<
+  typeof DeploymentDetailResponseModeLoadBalancer
+> = z.enum(DeploymentDetailResponseModeLoadBalancer);
+
+/** @internal */
+export const DeploymentDetailResponsePublicEndpointTargetLoadBalancer$inboundSchema:
+  z.ZodType<DeploymentDetailResponsePublicEndpointTargetLoadBalancer, unknown> =
+    z.object({
+      cnameTarget: z.string(),
+      mode: DeploymentDetailResponseModeLoadBalancer$inboundSchema,
+    });
+
+export function deploymentDetailResponsePublicEndpointTargetLoadBalancerFromJSON(
+  jsonString: string,
+): SafeParseResult<
+  DeploymentDetailResponsePublicEndpointTargetLoadBalancer,
+  SDKValidationError
+> {
+  return safeParse(
+    jsonString,
+    (x) =>
+      DeploymentDetailResponsePublicEndpointTargetLoadBalancer$inboundSchema
+        .parse(JSON.parse(x)),
+    `Failed to parse 'DeploymentDetailResponsePublicEndpointTargetLoadBalancer' from JSON`,
+  );
+}
+
+/** @internal */
+export const DeploymentDetailResponseModeMachineAddresses$inboundSchema:
+  z.ZodEnum<typeof DeploymentDetailResponseModeMachineAddresses> = z.enum(
+    DeploymentDetailResponseModeMachineAddresses,
+  );
+
+/** @internal */
+export const DeploymentDetailResponsePublicEndpointTargetMachineAddresses$inboundSchema:
+  z.ZodType<
+    DeploymentDetailResponsePublicEndpointTargetMachineAddresses,
+    unknown
+  > = z.object({
+    mode: DeploymentDetailResponseModeMachineAddresses$inboundSchema,
+  });
+
+export function deploymentDetailResponsePublicEndpointTargetMachineAddressesFromJSON(
+  jsonString: string,
+): SafeParseResult<
+  DeploymentDetailResponsePublicEndpointTargetMachineAddresses,
+  SDKValidationError
+> {
+  return safeParse(
+    jsonString,
+    (x) =>
+      DeploymentDetailResponsePublicEndpointTargetMachineAddresses$inboundSchema
+        .parse(JSON.parse(x)),
+    `Failed to parse 'DeploymentDetailResponsePublicEndpointTargetMachineAddresses' from JSON`,
+  );
+}
+
+/** @internal */
+export const DeploymentDetailResponsePublicEndpointTargetUnion$inboundSchema:
+  z.ZodType<DeploymentDetailResponsePublicEndpointTargetUnion, unknown> = z
+    .union([
+      z.lazy(() =>
+        DeploymentDetailResponsePublicEndpointTargetLoadBalancer$inboundSchema
+      ),
+      z.lazy(() =>
+        DeploymentDetailResponsePublicEndpointTargetMachineAddresses$inboundSchema
+      ),
+      z.any(),
+    ]);
+
+export function deploymentDetailResponsePublicEndpointTargetUnionFromJSON(
+  jsonString: string,
+): SafeParseResult<
+  DeploymentDetailResponsePublicEndpointTargetUnion,
+  SDKValidationError
+> {
+  return safeParse(
+    jsonString,
+    (x) =>
+      DeploymentDetailResponsePublicEndpointTargetUnion$inboundSchema.parse(
+        JSON.parse(x),
+      ),
+    `Failed to parse 'DeploymentDetailResponsePublicEndpointTargetUnion' from JSON`,
+  );
+}
+
+/** @internal */
 export const DeploymentDetailResponseDomains$inboundSchema: z.ZodType<
   DeploymentDetailResponseDomains,
   unknown
@@ -4054,6 +4183,17 @@ export const DeploymentDetailResponseDomains$inboundSchema: z.ZodType<
       z.string(),
       z.lazy(() => DeploymentDetailResponseCustomDomains$inboundSchema),
     ),
+  ).optional(),
+  publicEndpointTarget: z.nullable(
+    z.union([
+      z.lazy(() =>
+        DeploymentDetailResponsePublicEndpointTargetLoadBalancer$inboundSchema
+      ),
+      z.lazy(() =>
+        DeploymentDetailResponsePublicEndpointTargetMachineAddresses$inboundSchema
+      ),
+      z.any(),
+    ]),
   ).optional(),
 });
 

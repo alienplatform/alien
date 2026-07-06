@@ -20,6 +20,7 @@ let value: CreateProjectResponse = {
     gcp: "mgr_enxscjrqiiu2lrc672hwwuc5",
     azure: "mgr_enxscjrqiiu2lrc672hwwuc5",
     kubernetes: "mgr_enxscjrqiiu2lrc672hwwuc5",
+    machines: "mgr_enxscjrqiiu2lrc672hwwuc5",
     local: "mgr_enxscjrqiiu2lrc672hwwuc5",
   },
   createdAt: new Date("2025-02-17T03:23:19.814Z"),

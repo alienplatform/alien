@@ -7,18 +7,35 @@ import { ResourceHeartbeatDataComputeCluster } from "@alienplatform/manager-api/
 
 let value: ResourceHeartbeatDataComputeCluster = {
   data: {
-    dockerAvailable: true,
+    capacityGroups: [],
+    machines: [
+      {
+        capacityGroup: "<value>",
+        drainForce: true,
+        lastHeartbeat: "<value>",
+        machineId: "<id>",
+        replicaCount: 818208,
+        status: "<value>",
+        zone: "<value>",
+      },
+    ],
     name: "<value>",
-    networkAvailable: false,
     nodes: {},
     status: {
-      collectionIssues: [],
+      collectionIssues: [
+        {
+          message: "<value>",
+          reason: "forbidden",
+          severity: "info",
+          source: "<value>",
+        },
+      ],
       health: "unhealthy",
-      lifecycle: "stopped",
-      partial: false,
-      stale: true,
+      lifecycle: "creating",
+      partial: true,
+      stale: false,
     },
-    backend: "local",
+    backend: "machines",
   },
   resourceType: "compute-cluster",
 };

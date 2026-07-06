@@ -4669,6 +4669,27 @@
           {
             "allOf": [
               {
+                "$ref": "#/components/schemas/MachinesComputeClusterHeartbeatData"
+              },
+              {
+                "type": "object",
+                "required": [
+                  "backend"
+                ],
+                "properties": {
+                  "backend": {
+                    "type": "string",
+                    "enum": [
+                      "machines"
+                    ]
+                  }
+                }
+              }
+            ]
+          },
+          {
+            "allOf": [
+              {
                 "$ref": "#/components/schemas/LocalComputeClusterHeartbeatData"
               },
               {
@@ -5231,6 +5252,27 @@
           {
             "allOf": [
               {
+                "$ref": "#/components/schemas/MachinesDaemonHeartbeatData"
+              },
+              {
+                "type": "object",
+                "required": [
+                  "backend"
+                ],
+                "properties": {
+                  "backend": {
+                    "type": "string",
+                    "enum": [
+                      "machines"
+                    ]
+                  }
+                }
+              }
+            ]
+          },
+          {
+            "allOf": [
+              {
                 "$ref": "#/components/schemas/KubernetesDaemonHeartbeatData"
               },
               {
@@ -5467,6 +5509,11 @@
             "additionalProperties": {
               "$ref": "#/components/schemas/CustomDomainConfig"
             },
+            "nullable": true
+          },
+          "publicEndpointTarget": {
+            "$ref": "#/components/schemas/PublicEndpointTargetSettings",
+            "description": "Public endpoint DNS target selection for machines deployments.\n\nWhen omitted, machines deployments publish healthy machine public\naddresses directly. Use `LoadBalancer` when an external load balancer\nfronts the machines and Alien should publish a CNAME to that target.",
             "nullable": true
           }
         }
@@ -6731,6 +6778,11 @@
           },
           "platform": {
             "$ref": "#/components/schemas/Platform",
+            "nullable": true
+          },
+          "publicSubdomain": {
+            "type": "string",
+            "description": "Optional generated-domain subdomain to use for this deployment.",
             "nullable": true
           },
           "scope": {
@@ -8787,6 +8839,207 @@
           }
         }
       },
+      "MachinesComputeClusterHeartbeatData": {
+        "type": "object",
+        "required": [
+          "status",
+          "nodes",
+          "name",
+          "capacityGroups",
+          "machines"
+        ],
+        "properties": {
+          "backendClusterId": {
+            "type": "string",
+            "nullable": true
+          },
+          "capacityGroups": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ComputeCapacityGroupStatus"
+            }
+          },
+          "cpu": {
+            "$ref": "#/components/schemas/MetricSample",
+            "nullable": true
+          },
+          "machines": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/MachinesComputeMachineStatus"
+            }
+          },
+          "memory": {
+            "$ref": "#/components/schemas/MetricSample",
+            "nullable": true
+          },
+          "name": {
+            "type": "string"
+          },
+          "nodes": {
+            "$ref": "#/components/schemas/ObservedCounts"
+          },
+          "status": {
+            "$ref": "#/components/schemas/ComputeClusterHeartbeatStatus"
+          }
+        }
+      },
+      "MachinesComputeMachineStatus": {
+        "type": "object",
+        "required": [
+          "machineId",
+          "status",
+          "capacityGroup",
+          "zone",
+          "lastHeartbeat",
+          "replicaCount",
+          "drainForce"
+        ],
+        "properties": {
+          "capacityGroup": {
+            "type": "string"
+          },
+          "cpuCores": {
+            "type": "number",
+            "format": "double",
+            "nullable": true
+          },
+          "drainBlockers": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ComputeDrainBlocker"
+            }
+          },
+          "drainDeadlineAt": {
+            "type": "string",
+            "nullable": true
+          },
+          "drainForce": {
+            "type": "boolean"
+          },
+          "drainRequestedAt": {
+            "type": "string",
+            "nullable": true
+          },
+          "drainedAt": {
+            "type": "string",
+            "nullable": true
+          },
+          "horizondVersion": {
+            "type": "string",
+            "nullable": true
+          },
+          "lastHeartbeat": {
+            "type": "string"
+          },
+          "machineId": {
+            "type": "string"
+          },
+          "memoryBytes": {
+            "type": "integer",
+            "format": "int64",
+            "nullable": true
+          },
+          "overlayIp": {
+            "type": "string",
+            "nullable": true
+          },
+          "publicIp": {
+            "type": "string",
+            "nullable": true
+          },
+          "replicaCount": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "status": {
+            "type": "string"
+          },
+          "zone": {
+            "type": "string"
+          }
+        }
+      },
+      "MachinesDaemonHeartbeatData": {
+        "type": "object",
+        "required": [
+          "status",
+          "horizonClusterId",
+          "horizonStatus",
+          "capacityGroup",
+          "desiredMachines",
+          "assignedMachines",
+          "healthyInstances",
+          "unavailableInstances",
+          "commandSupported",
+          "latestUpdateTimestamp",
+          "daemonInstances",
+          "events"
+        ],
+        "properties": {
+          "assignedMachines": {
+            "type": "integer",
+            "format": "int32",
+            "minimum": 0
+          },
+          "capacityGroup": {
+            "type": "string"
+          },
+          "commandSupported": {
+            "type": "boolean"
+          },
+          "daemonInstances": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ManagedRuntimeUnitStatus"
+            }
+          },
+          "daemonName": {
+            "type": "string"
+          },
+          "desiredMachines": {
+            "type": "integer",
+            "format": "int32",
+            "minimum": 0
+          },
+          "events": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ManagedRuntimeEventSnapshot"
+            }
+          },
+          "healthyInstances": {
+            "type": "integer",
+            "format": "int32",
+            "minimum": 0
+          },
+          "horizonClusterId": {
+            "type": "string"
+          },
+          "horizonStatus": {
+            "type": "string"
+          },
+          "horizonStatusMessage": {
+            "type": "string",
+            "nullable": true
+          },
+          "horizonStatusReason": {
+            "type": "string",
+            "nullable": true
+          },
+          "latestUpdateTimestamp": {
+            "type": "string"
+          },
+          "status": {
+            "$ref": "#/components/schemas/WorkloadHeartbeatStatus"
+          },
+          "unavailableInstances": {
+            "type": "integer",
+            "format": "int32",
+            "minimum": 0
+          }
+        }
+      },
       "ManagedRuntimeEventInvolvedObject": {
         "type": "object",
         "properties": {
@@ -9560,6 +9813,7 @@
           "gcp",
           "azure",
           "kubernetes",
+          "machines",
           "local",
           "test"
         ]
@@ -9835,6 +10089,46 @@
           "deleted",
           "failed"
         ]
+      },
+      "PublicEndpointTargetSettings": {
+        "oneOf": [
+          {
+            "type": "object",
+            "description": "Publish DNS records directly to healthy machine public IP addresses.",
+            "required": [
+              "mode"
+            ],
+            "properties": {
+              "mode": {
+                "type": "string",
+                "enum": [
+                  "machineAddresses"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "description": "Publish a CNAME record to an external load balancer.",
+            "required": [
+              "cnameTarget",
+              "mode"
+            ],
+            "properties": {
+              "cnameTarget": {
+                "type": "string",
+                "description": "DNS name or URL for the external load balancer."
+              },
+              "mode": {
+                "type": "string",
+                "enum": [
+                  "loadBalancer"
+                ]
+              }
+            }
+          }
+        ],
+        "description": "DNS target mode for public endpoints."
       },
       "QueueHeartbeatData": {
         "oneOf": [
@@ -10960,6 +11254,7 @@
           "gcp": {},
           "kubernetes": {},
           "local": {},
+          "machines": {},
           "test": {}
         }
       },

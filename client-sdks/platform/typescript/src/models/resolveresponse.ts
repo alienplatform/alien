@@ -16,6 +16,7 @@ export const ManagerCloud = {
   Gcp: "gcp",
   Azure: "azure",
   Kubernetes: "kubernetes",
+  Machines: "machines",
   Local: "local",
   Test: "test",
 } as const;
@@ -32,6 +33,7 @@ export const ResolveResponsePlatformEnum = {
   Gcp: "gcp",
   Azure: "azure",
   Kubernetes: "kubernetes",
+  Machines: "machines",
   Local: "local",
   Test: "test",
 } as const;

@@ -71,9 +71,12 @@ impl AcrArtifactRegistry {
         let azure_token_cache = AzureTokenCache::new(azure_config.clone());
 
         let repository_prefix = match config.repository_prefix {
-            Some(bv) => bv
-                .into_value(&binding_name, "repository_prefix")
-                .unwrap_or_default(),
+            Some(bv) => bv.into_value(&binding_name, "repository_prefix").context(
+                ErrorData::BindingConfigInvalid {
+                    binding_name: binding_name.clone(),
+                    reason: "Failed to extract repository_prefix from binding".to_string(),
+                },
+            )?,
             None => String::new(),
         };
 
@@ -312,5 +315,62 @@ impl ArtifactRegistry for AcrArtifactRegistry {
     async fn delete_repository(&self, _repo_id: &str) -> Result<()> {
         // ACR repositories are implicit (created on push). Nothing to delete.
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use alien_core::bindings::{AcrArtifactRegistryBinding, ArtifactRegistryBinding, BindingValue};
+    use alien_core::AzureCredentials;
+
+    fn test_config() -> AzureClientConfig {
+        AzureClientConfig {
+            subscription_id: "sub-test".to_string(),
+            tenant_id: "tenant-test".to_string(),
+            region: Some("eastus".to_string()),
+            credentials: AzureCredentials::AccessToken {
+                token: "token-test".to_string(),
+            },
+            service_overrides: None,
+        }
+    }
+
+    #[tokio::test]
+    async fn new_fails_when_configured_repository_prefix_cannot_be_resolved() {
+        let binding = ArtifactRegistryBinding::Acr(AcrArtifactRegistryBinding {
+            registry_name: BindingValue::Value("registrytest".to_string()),
+            resource_group_name: BindingValue::Value("rg-test".to_string()),
+            repository_prefix: Some(BindingValue::expression(serde_json::json!({
+                "ref": "repositoryPrefix"
+            }))),
+        });
+
+        let result =
+            AcrArtifactRegistry::new("artifact-registry".to_string(), binding, &test_config())
+                .await;
+        let Err(error) = result else {
+            panic!("configured repository_prefix resolution failure should fail initialization");
+        };
+
+        assert!(error
+            .to_string()
+            .contains("Failed to extract repository_prefix from binding"));
+    }
+
+    #[tokio::test]
+    async fn new_uses_empty_repository_prefix_when_repository_prefix_is_omitted() {
+        let binding = ArtifactRegistryBinding::Acr(AcrArtifactRegistryBinding {
+            registry_name: BindingValue::Value("registrytest".to_string()),
+            resource_group_name: BindingValue::Value("rg-test".to_string()),
+            repository_prefix: None,
+        });
+
+        let registry =
+            AcrArtifactRegistry::new("artifact-registry".to_string(), binding, &test_config())
+                .await
+                .expect("omitted repository_prefix should initialize");
+
+        assert_eq!(registry.upstream_repository_prefix(), "");
     }
 }

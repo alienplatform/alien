@@ -32,6 +32,7 @@ pub enum PlatformBuildSettings {
         /// the same default image architecture as the cluster node pool.
         base_platform: Option<Platform>,
     },
+    Machines {},
     Local {},
     Test {},
 }
@@ -48,6 +49,7 @@ impl PlatformBuildSettings {
             PlatformBuildSettings::Gcp { .. } => Platform::Gcp,
             PlatformBuildSettings::Azure { .. } => Platform::Azure,
             PlatformBuildSettings::Kubernetes { .. } => Platform::Kubernetes,
+            PlatformBuildSettings::Machines { .. } => Platform::Machines,
             PlatformBuildSettings::Local { .. } => Platform::Local,
             PlatformBuildSettings::Test { .. } => Platform::Test,
         }
@@ -60,6 +62,7 @@ impl PlatformBuildSettings {
             PlatformBuildSettings::Aws { .. }
             | PlatformBuildSettings::Gcp { .. }
             | PlatformBuildSettings::Azure { .. }
+            | PlatformBuildSettings::Machines { .. }
             | PlatformBuildSettings::Local { .. }
             | PlatformBuildSettings::Test { .. } => None,
         }
@@ -177,5 +180,14 @@ mod tests {
         assert_eq!(settings.runtime_platform(), Platform::Kubernetes);
         assert_eq!(settings.platform(), Platform::Kubernetes);
         assert_eq!(settings.base_platform(), Some(Platform::Gcp));
+    }
+
+    #[test]
+    fn machines_keeps_machines_runtime_platform() {
+        let settings = settings(PlatformBuildSettings::Machines {});
+
+        assert_eq!(settings.platform.runtime_platform(), Platform::Machines);
+        assert_eq!(settings.platform.platform(), Platform::Machines);
+        assert_eq!(settings.get_targets(), BinaryTarget::LINUX.to_vec());
     }
 }

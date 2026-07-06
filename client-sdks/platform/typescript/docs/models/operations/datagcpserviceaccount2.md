@@ -12,15 +12,15 @@ let value: DataGcpServiceAccount2 = {
     collectionIssues: [
       {
         message: "<value>",
-        reason: "not-installed",
-        severity: "error",
+        reason: "timed-out",
+        severity: "warning",
         source: "<value>",
       },
     ],
-    health: "degraded",
-    lifecycle: "stopping",
-    partial: true,
-    stale: true,
+    health: "healthy",
+    lifecycle: "deleted",
+    partial: false,
+    stale: false,
   },
   backend: "gcpServiceAccount",
 };
@@ -34,5 +34,5 @@ let value: DataGcpServiceAccount2 = {
 | `roleBound`                                                        | *boolean*                                                          | :heavy_check_mark:                                                 | N/A                                                                |
 | `serviceAccountEmail`                                              | *string*                                                           | :heavy_minus_sign:                                                 | N/A                                                                |
 | `serviceAccountUniqueId`                                           | *string*                                                           | :heavy_minus_sign:                                                 | N/A                                                                |
-| `status`                                                           | [operations.DataStatus48](../../models/operations/datastatus48.md) | :heavy_check_mark:                                                 | N/A                                                                |
+| `status`                                                           | [operations.DataStatus50](../../models/operations/datastatus50.md) | :heavy_check_mark:                                                 | N/A                                                                |
 | `backend`                                                          | *"gcpServiceAccount"*                                              | :heavy_check_mark:                                                 | N/A                                                                |

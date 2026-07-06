@@ -8,7 +8,7 @@ import { ObservedInventoryBatch } from "@alienplatform/platform-api/models";
 let value: ObservedInventoryBatch = {
   backend: "kubernetes",
   complete: false,
-  controllerPlatform: "local",
+  controllerPlatform: "machines",
   inventoryScope: "<value>",
   observedAt: new Date("2024-09-10T06:27:56.143Z"),
   resources: [

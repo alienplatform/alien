@@ -223,6 +223,10 @@ export type UpdateProjectDefaultManagers = {
   /**
    * Unique identifier for a default private manager.
    */
+  machines?: string | null | undefined;
+  /**
+   * Unique identifier for a default private manager.
+   */
   local?: string | null | undefined;
 };
 
@@ -493,6 +497,7 @@ export type UpdateProjectDefaultManagers$Outbound = {
   gcp?: string | null | undefined;
   azure?: string | null | undefined;
   kubernetes?: string | null | undefined;
+  machines?: string | null | undefined;
   local?: string | null | undefined;
 };
 
@@ -505,6 +510,7 @@ export const UpdateProjectDefaultManagers$outboundSchema: z.ZodType<
   gcp: z.nullable(z.string()).optional(),
   azure: z.nullable(z.string()).optional(),
   kubernetes: z.nullable(z.string()).optional(),
+  machines: z.nullable(z.string()).optional(),
   local: z.nullable(z.string()).optional(),
 });
 

@@ -7,11 +7,11 @@ Filter by cloud provider. Joins against the parent deployment.
 ```typescript
 import { ListDebugSessionsProvider } from "@alienplatform/platform-api/models/operations";
 
-let value: ListDebugSessionsProvider = "gcp";
+let value: ListDebugSessionsProvider = "azure";
 ```
 
 ## Values
 
 ```typescript
-"aws" | "gcp" | "azure" | "kubernetes" | "local" | "test"
+"aws" | "gcp" | "azure" | "kubernetes" | "machines" | "local" | "test"
 ```

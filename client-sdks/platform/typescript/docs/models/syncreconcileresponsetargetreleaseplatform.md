@@ -7,11 +7,11 @@ Represents the target cloud platform.
 ```typescript
 import { SyncReconcileResponseTargetReleasePlatform } from "@alienplatform/platform-api/models";
 
-let value: SyncReconcileResponseTargetReleasePlatform = "gcp";
+let value: SyncReconcileResponseTargetReleasePlatform = "azure";
 ```
 
 ## Values
 
 ```typescript
-"aws" | "gcp" | "azure" | "kubernetes" | "local" | "test"
+"aws" | "gcp" | "azure" | "kubernetes" | "machines" | "local" | "test"
 ```

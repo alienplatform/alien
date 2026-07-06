@@ -23,6 +23,10 @@ export type InitializeRequest = {
   name?: string | null | undefined;
   permission?: string | null | undefined;
   platform?: PlatformEnum | null | undefined;
+  /**
+   * Optional generated-domain subdomain to use for this deployment.
+   */
+  publicSubdomain?: string | null | undefined;
   scope?: string | null | undefined;
   /**
    * Setup method that is registering this deployment, such as `manual` for
@@ -41,6 +45,7 @@ export type InitializeRequest$Outbound = {
   name?: string | null | undefined;
   permission?: string | null | undefined;
   platform?: string | null | undefined;
+  publicSubdomain?: string | null | undefined;
   scope?: string | null | undefined;
   setupMethod?: string | null | undefined;
   stackSettings?: StackSettings$Outbound | null | undefined;
@@ -56,6 +61,7 @@ export const InitializeRequest$outboundSchema: z.ZodType<
   name: z.nullable(z.string()).optional(),
   permission: z.nullable(z.string()).optional(),
   platform: z.nullable(PlatformEnum$outboundSchema).optional(),
+  publicSubdomain: z.nullable(z.string()).optional(),
   scope: z.nullable(z.string()).optional(),
   setupMethod: z.nullable(z.string()).optional(),
   stackSettings: z.nullable(StackSettings$outboundSchema).optional(),

@@ -166,6 +166,11 @@ impl ClientConfigExt for ClientConfig {
                 message: "Kubernetes support is not enabled in this build".to_string(),
                 errors: None,
             })),
+            Platform::Machines => Err(AlienError::new(ErrorData::InvalidClientConfig {
+                message: "Machines deployments do not use local cloud client configuration"
+                    .to_string(),
+                errors: None,
+            })),
             Platform::Test => Ok(ClientConfig::Test),
             Platform::Local => {
                 // Local platform reads state directory from ALIEN_LOCAL_STATE_DIRECTORY

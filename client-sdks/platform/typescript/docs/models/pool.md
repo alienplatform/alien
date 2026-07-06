@@ -43,8 +43,8 @@ let value: Pool = {
       machine: "<value>",
       profile: {
         cpu: "<value>",
-        memoryBytes: 325948,
-        ephemeralStorageBytes: 794662,
+        memoryBytes: 718877,
+        ephemeralStorageBytes: 953830,
       },
       recommended: true,
     },
@@ -54,13 +54,13 @@ let value: Pool = {
 
 ## Fields
 
-| Field                                            | Type                                             | Required                                         | Description                                      |
-| ------------------------------------------------ | ------------------------------------------------ | ------------------------------------------------ | ------------------------------------------------ |
-| `poolId`                                         | *string*                                         | :heavy_check_mark:                               | N/A                                              |
-| `workloads`                                      | *string*[]                                       | :heavy_check_mark:                               | N/A                                              |
-| `requirements`                                   | [models.Requirements](../models/requirements.md) | :heavy_check_mark:                               | N/A                                              |
-| `scale`                                          | *models.Scale*                                   | :heavy_check_mark:                               | N/A                                              |
-| `selected`                                       | *models.Selected*                                | :heavy_check_mark:                               | N/A                                              |
-| `recommended`                                    | *models.Recommended*                             | :heavy_check_mark:                               | N/A                                              |
-| `machines`                                       | [models.Machine](../models/machine.md)[]         | :heavy_check_mark:                               | N/A                                              |
-| `errors`                                         | *string*[]                                       | :heavy_minus_sign:                               | N/A                                              |
+| Field                                                                              | Type                                                                               | Required                                                                           | Description                                                                        |
+| ---------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------- |
+| `poolId`                                                                           | *string*                                                                           | :heavy_check_mark:                                                                 | N/A                                                                                |
+| `workloads`                                                                        | *string*[]                                                                         | :heavy_check_mark:                                                                 | N/A                                                                                |
+| `requirements`                                                                     | [models.Requirements](../models/requirements.md)                                   | :heavy_check_mark:                                                                 | N/A                                                                                |
+| `scale`                                                                            | *models.Scale*                                                                     | :heavy_check_mark:                                                                 | N/A                                                                                |
+| `selected`                                                                         | *models.Selected*                                                                  | :heavy_check_mark:                                                                 | N/A                                                                                |
+| `recommended`                                                                      | *models.Recommended*                                                               | :heavy_check_mark:                                                                 | N/A                                                                                |
+| `machines`                                                                         | [models.DeploymentComputePlanMachine](../models/deploymentcomputeplanmachine.md)[] | :heavy_check_mark:                                                                 | N/A                                                                                |
+| `errors`                                                                           | *string*[]                                                                         | :heavy_minus_sign:                                                                 | N/A                                                                                |

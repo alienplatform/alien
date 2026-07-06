@@ -3,12 +3,12 @@
 
 ## Supported Types
 
-### `operations.DaemonInstanceCpu`
+### `operations.CpuDaemonInstance4`
 
 ```typescript
-const value: operations.DaemonInstanceCpu = {
-  unit: "bytes",
-  value: 4886.5,
+const value: operations.CpuDaemonInstance4 = {
+  unit: "milliseconds",
+  value: 3027.48,
 };
 ```
 

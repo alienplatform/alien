@@ -63,6 +63,8 @@ pub enum DebugSessionResponse {
     PushTunnel(PushTunnelDebugSession),
     /// Runtime shell/exec session via an agent-hosted process tunnel.
     RuntimeTunnel(RuntimeTunnelDebugSession),
+    /// Remote shell/exec session via a control-plane attach WebSocket.
+    RemoteExec(RemoteExecDebugSession),
 }
 
 impl DebugSessionResponse {
@@ -76,6 +78,7 @@ impl DebugSessionResponse {
             Self::Pending(_) => None,
             Self::PushTunnel(p) => p.expires_at.as_deref(),
             Self::RuntimeTunnel(p) => p.expires_at.as_deref(),
+            Self::RemoteExec(p) => p.expires_at.as_deref(),
         }
     }
 }
@@ -114,6 +117,24 @@ pub struct RuntimeTunnelDebugSession {
     /// Runtime frame protocol version.
     pub protocol_version: u32,
     /// RFC3339 expiry.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub expires_at: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RemoteExecDebugSession {
+    /// Control-plane session id.
+    pub session_id: String,
+    /// Deployment runtime platform label.
+    pub platform: String,
+    /// Absolute HTTP(S) or WS(S) URL the CLI should attach to.
+    pub attach_url: String,
+    /// Bearer the CLI presents on the WebSocket upgrade.
+    pub client_token: String,
+    /// Whether the remote session was created with a TTY.
+    pub tty: bool,
+    /// RFC3339 expiry, if the control plane returns one.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub expires_at: Option<String>,
 }

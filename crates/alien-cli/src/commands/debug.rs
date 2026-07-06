@@ -95,6 +95,14 @@ pub struct DebugShellArgs {
     /// Deployment ID (`dep_...`), deployment name, or `<group>/<name>`.
     pub deployment: String,
 
+    /// Container or daemon resource ID to attach to.
+    #[arg(long)]
+    pub resource: Option<String>,
+
+    /// Machine ID to attach to directly.
+    #[arg(long, conflicts_with = "resource")]
+    pub machine: Option<String>,
+
     /// Emit errors as JSON.
     #[arg(long)]
     pub json: bool,
@@ -104,6 +112,14 @@ pub struct DebugShellArgs {
 pub struct DebugExecArgs {
     /// Deployment ID (`dep_...`), deployment name, or `<group>/<name>`.
     pub deployment: String,
+
+    /// Container or daemon resource ID to attach to.
+    #[arg(long)]
+    pub resource: Option<String>,
+
+    /// Machine ID to attach to directly.
+    #[arg(long, conflicts_with = "resource")]
+    pub machine: Option<String>,
 
     /// Timeout in seconds for the remote command.
     #[arg(long, default_value_t = 120)]
@@ -126,14 +142,27 @@ struct CreateDebugSessionRequest {
     deployment_id: String,
     /// Requested session kind.
     kind: DebugSessionKind,
+    /// Optional container or daemon resource ID to attach to.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    resource: Option<String>,
+    /// Optional machine ID to attach to directly.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    machine: Option<String>,
+    /// Optional command for runtimes that create the remote process during
+    /// session creation.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    command: Option<Vec<String>>,
+    /// Whether the requested runtime session needs a TTY.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    tty: Option<bool>,
 }
 
 // Wire types live in `alien-debug-session` so the manager (push mode) and
 // the agent (pull mode) can produce identical payloads. The CLI only
 // consumes — no provider-specific knowledge needed here.
 use alien_core::debug_session::{
-    DebugCredFile, DebugSessionKind, DebugSessionResponse, RuntimeAgentFrame, RuntimeClientFrame,
-    RuntimeTunnelDebugSession,
+    DebugCredFile, DebugSessionKind, DebugSessionResponse, RemoteExecDebugSession,
+    RuntimeAgentFrame, RuntimeClientFrame, RuntimeTunnelDebugSession,
 };
 
 /// Top-level entry for `alien debug`.
@@ -164,8 +193,18 @@ pub async fn debug_task(args: DebugArgs, ctx: ExecutionMode) -> Result<()> {
     // No CLI-side caching: every invocation asks the manager to create-or-
     // reuse a session. The manager controls session lifetime, token rotation,
     // and registry eviction.
-    let session =
-        request_debug_session(&manager, &deployment_id, DebugSessionKind::Context).await?;
+    let session = request_debug_session(
+        &manager,
+        CreateDebugSessionRequest {
+            deployment_id: deployment_id.clone(),
+            kind: DebugSessionKind::Context,
+            resource: None,
+            machine: None,
+            command: None,
+            tty: None,
+        },
+    )
+    .await?;
     let session = resolve_pending_session(&manager, session).await?;
     exec_with_session(deployment, session, &args.cmd).await
 }
@@ -193,18 +232,30 @@ async fn runtime_shell_task(args: DebugShellArgs, ctx: ExecutionMode) -> Result<
         .resolve_manager_metadata_only(&project_link.project_id, "aws")
         .await?;
     let deployment_id = resolve_deployment_id(&manager, &args.deployment, ctx.is_dev()).await?;
-    let session =
-        request_debug_session(&manager, &deployment_id, DebugSessionKind::RuntimeShell).await?;
+    let session = request_debug_session(
+        &manager,
+        CreateDebugSessionRequest {
+            deployment_id: deployment_id.clone(),
+            kind: DebugSessionKind::RuntimeShell,
+            resource: args.resource.clone(),
+            machine: args.machine.clone(),
+            command: None,
+            tty: Some(true),
+        },
+    )
+    .await?;
     let session = resolve_pending_session(&manager, session).await?;
-    let DebugSessionResponse::RuntimeTunnel(tunnel) = session else {
-        return Err(AlienError::new(ErrorData::ApiRequestFailed {
+    match session {
+        DebugSessionResponse::RuntimeTunnel(tunnel) => {
+            run_runtime_shell(tunnel, &args.deployment).await
+        }
+        DebugSessionResponse::RemoteExec(session) => run_remote_exec_attach(session).await,
+        _ => Err(AlienError::new(ErrorData::ApiRequestFailed {
             message: "Manager returned a non-runtime debug session for `alien debug shell`"
                 .to_string(),
             url: None,
-        }));
-    };
-
-    run_runtime_shell(tunnel, &args.deployment).await
+        })),
+    }
 }
 
 async fn runtime_exec_task(args: DebugExecArgs, ctx: ExecutionMode) -> Result<()> {
@@ -213,18 +264,30 @@ async fn runtime_exec_task(args: DebugExecArgs, ctx: ExecutionMode) -> Result<()
         .resolve_manager_metadata_only(&project_link.project_id, "aws")
         .await?;
     let deployment_id = resolve_deployment_id(&manager, &args.deployment, ctx.is_dev()).await?;
-    let session =
-        request_debug_session(&manager, &deployment_id, DebugSessionKind::RuntimeExec).await?;
+    let session = request_debug_session(
+        &manager,
+        CreateDebugSessionRequest {
+            deployment_id: deployment_id.clone(),
+            kind: DebugSessionKind::RuntimeExec,
+            resource: args.resource.clone(),
+            machine: args.machine.clone(),
+            command: Some(args.cmd.clone()),
+            tty: Some(false),
+        },
+    )
+    .await?;
     let session = resolve_pending_session(&manager, session).await?;
-    let DebugSessionResponse::RuntimeTunnel(tunnel) = session else {
-        return Err(AlienError::new(ErrorData::ApiRequestFailed {
+    match session {
+        DebugSessionResponse::RuntimeTunnel(tunnel) => {
+            run_runtime_exec(tunnel, args.cmd, args.timeout_seconds, args.json).await
+        }
+        DebugSessionResponse::RemoteExec(session) => run_remote_exec_attach(session).await,
+        _ => Err(AlienError::new(ErrorData::ApiRequestFailed {
             message: "Manager returned a non-runtime debug session for `alien debug exec`"
                 .to_string(),
             url: None,
-        }));
-    };
-
-    run_runtime_exec(tunnel, args.cmd, args.timeout_seconds, args.json).await
+        })),
+    }
 }
 
 async fn run_runtime_shell(
@@ -544,6 +607,181 @@ fn runtime_ws_url(tunnel: &RuntimeTunnelDebugSession) -> Result<String> {
     ))
 }
 
+async fn run_remote_exec_attach(session: RemoteExecDebugSession) -> Result<()> {
+    let ws_url = remote_exec_ws_url(&session)?;
+    let (socket, _) = connect_async(ws_url.as_str())
+        .await
+        .into_alien_error()
+        .context(ErrorData::ApiRequestFailed {
+            message: "Failed to dial remote exec session".to_string(),
+            url: Some(session.attach_url.clone()),
+        })?;
+    let (mut sink, mut stream) = socket.split();
+
+    let _raw_guard = if session.tty && std::io::stdin().is_terminal() {
+        crossterm::terminal::enable_raw_mode()
+            .into_alien_error()
+            .context(ErrorData::CliInteractionFailed {
+                message: "Failed to enable terminal raw mode".to_string(),
+            })?;
+        Some(RawModeGuard)
+    } else {
+        None
+    };
+
+    let (input_tx, mut input_rx) = mpsc::channel::<Message>(128);
+    spawn_remote_exec_stdin_forwarder(input_tx.clone());
+    if session.tty {
+        send_remote_exec_resize_frame(&input_tx).await;
+        spawn_remote_exec_resize_forwarder(input_tx.clone());
+    }
+    drop(input_tx);
+
+    let writer = tokio::spawn(async move {
+        while let Some(outgoing) = input_rx.recv().await {
+            if sink.send(outgoing).await.is_err() {
+                break;
+            }
+        }
+        let _ = sink.close().await;
+    });
+
+    let mut exit_code = 255;
+    while let Some(incoming) = stream.next().await {
+        match incoming
+            .into_alien_error()
+            .context(ErrorData::ApiRequestFailed {
+                message: "Remote exec session read failed".to_string(),
+                url: Some(session.attach_url.clone()),
+            })? {
+            Message::Binary(bytes) => {
+                std::io::stdout()
+                    .write_all(&bytes)
+                    .into_alien_error()
+                    .context(ErrorData::CliInteractionFailed {
+                        message: "Failed to write remote exec output".to_string(),
+                    })?;
+                std::io::stdout().flush().into_alien_error().context(
+                    ErrorData::CliInteractionFailed {
+                        message: "Failed to flush remote exec output".to_string(),
+                    },
+                )?;
+            }
+            Message::Text(text) => {
+                if let Some(code) = parse_remote_exec_exit_code(&text) {
+                    exit_code = code;
+                    break;
+                }
+                std::io::stdout()
+                    .write_all(text.as_str().as_bytes())
+                    .into_alien_error()
+                    .context(ErrorData::CliInteractionFailed {
+                        message: "Failed to write remote exec text output".to_string(),
+                    })?;
+                std::io::stdout().flush().into_alien_error().context(
+                    ErrorData::CliInteractionFailed {
+                        message: "Failed to flush remote exec text output".to_string(),
+                    },
+                )?;
+            }
+            Message::Close(_) => break,
+            Message::Ping(_) | Message::Pong(_) | Message::Frame(_) => {}
+        }
+    }
+    writer.abort();
+    if exit_code != 0 {
+        std::process::exit(exit_code);
+    }
+    Ok(())
+}
+
+fn remote_exec_ws_url(session: &RemoteExecDebugSession) -> Result<String> {
+    let mut url = url::Url::parse(&session.attach_url)
+        .into_alien_error()
+        .context(ErrorData::ApiRequestFailed {
+            message: "Invalid remote exec attach URL".to_string(),
+            url: Some(session.attach_url.clone()),
+        })?;
+    let scheme = match url.scheme() {
+        "https" => "wss",
+        "http" => "ws",
+        "wss" => "wss",
+        "ws" => "ws",
+        other => {
+            return Err(AlienError::new(ErrorData::ApiRequestFailed {
+                message: format!("Unsupported remote exec attach URL scheme: {other}"),
+                url: Some(session.attach_url.clone()),
+            }))
+        }
+    };
+    url.set_scheme(scheme).map_err(|_| {
+        AlienError::new(ErrorData::ApiRequestFailed {
+            message: "Failed to set remote exec WebSocket URL scheme".to_string(),
+            url: Some(session.attach_url.clone()),
+        })
+    })?;
+    url.query_pairs_mut()
+        .append_pair("token", &session.client_token);
+    Ok(url.to_string())
+}
+
+fn spawn_remote_exec_stdin_forwarder(input_tx: mpsc::Sender<Message>) {
+    std::thread::spawn(move || {
+        let mut stdin = std::io::stdin();
+        let mut buffer = [0u8; 16 * 1024];
+        loop {
+            match stdin.read(&mut buffer) {
+                Ok(0) => return,
+                Ok(n) => {
+                    if input_tx
+                        .blocking_send(Message::Binary(buffer[..n].to_vec().into()))
+                        .is_err()
+                    {
+                        return;
+                    }
+                }
+                Err(_) => return,
+            }
+        }
+    });
+}
+
+#[cfg(unix)]
+fn spawn_remote_exec_resize_forwarder(input_tx: mpsc::Sender<Message>) {
+    tokio::spawn(async move {
+        let Ok(mut signal) =
+            tokio::signal::unix::signal(tokio::signal::unix::SignalKind::window_change())
+        else {
+            return;
+        };
+        while signal.recv().await.is_some() {
+            send_remote_exec_resize_frame(&input_tx).await;
+        }
+    });
+}
+
+#[cfg(not(unix))]
+fn spawn_remote_exec_resize_forwarder(_input_tx: mpsc::Sender<Message>) {}
+
+async fn send_remote_exec_resize_frame(input_tx: &mpsc::Sender<Message>) {
+    if let Ok((cols, rows)) = crossterm::terminal::size() {
+        let frame = serde_json::json!({
+            "type": "resize",
+            "cols": cols,
+            "rows": rows,
+        });
+        let _ = input_tx.send(Message::Text(frame.to_string().into())).await;
+    }
+}
+
+fn parse_remote_exec_exit_code(text: &str) -> Option<i32> {
+    let value: serde_json::Value = serde_json::from_str(text).ok()?;
+    if value["type"].as_str()? != "exit" {
+        return None;
+    }
+    value["exitCode"].as_i64().map(|code| code as i32)
+}
+
 struct RawModeGuard;
 
 impl Drop for RawModeGuard {
@@ -661,19 +899,13 @@ async fn resolve_deployment_id(
 /// `POST /v1/debug/sessions` — request a debug session for the given deployment.
 async fn request_debug_session(
     manager: &ManagerContext,
-    deployment_id: &str,
-    kind: DebugSessionKind,
+    request_body: CreateDebugSessionRequest,
 ) -> Result<DebugSessionResponse> {
     let url = format!(
         "{}{}",
         manager.manager_url.trim_end_matches('/'),
         DEBUG_SESSIONS_PATH
     );
-
-    let request_body = CreateDebugSessionRequest {
-        deployment_id: deployment_id.to_string(),
-        kind,
-    };
 
     let response = manager
         .http_client
@@ -846,6 +1078,14 @@ async fn exec_with_session(
             return Err(AlienError::new(ErrorData::ApiRequestFailed {
                 message:
                     "Runtime debug sessions must be used through `alien debug shell` or `alien debug exec`."
+                        .to_string(),
+                url: None,
+            }));
+        }
+        DebugSessionResponse::RemoteExec(_) => {
+            return Err(AlienError::new(ErrorData::ApiRequestFailed {
+                message:
+                    "Remote exec sessions must be used through `alien debug shell` or `alien debug exec`."
                         .to_string(),
                 url: None,
             }));
@@ -1187,4 +1427,60 @@ fn shell_echo_block(text: &str) -> String {
         })
         .collect::<Vec<_>>()
         .join("\n")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn remote_exec_session(attach_url: &str, token: &str) -> RemoteExecDebugSession {
+        RemoteExecDebugSession {
+            session_id: "exec_test".to_string(),
+            platform: "machines".to_string(),
+            attach_url: attach_url.to_string(),
+            client_token: token.to_string(),
+            tty: true,
+            expires_at: None,
+        }
+    }
+
+    #[test]
+    fn remote_exec_ws_url_converts_https_and_appends_token() {
+        let session = remote_exec_session(
+            "https://control.example.test/v1/exec/sessions/exec_1/attach",
+            "hec_token",
+        );
+
+        assert_eq!(
+            remote_exec_ws_url(&session).unwrap(),
+            "wss://control.example.test/v1/exec/sessions/exec_1/attach?token=hec_token"
+        );
+    }
+
+    #[test]
+    fn remote_exec_ws_url_preserves_existing_query() {
+        let session = remote_exec_session(
+            "http://control.example.test/v1/exec/sessions/exec_1/attach?trace=1",
+            "hec token",
+        );
+
+        assert_eq!(
+            remote_exec_ws_url(&session).unwrap(),
+            "ws://control.example.test/v1/exec/sessions/exec_1/attach?trace=1&token=hec+token"
+        );
+    }
+
+    #[test]
+    fn parse_remote_exec_exit_code_reads_exit_frame() {
+        assert_eq!(
+            parse_remote_exec_exit_code(
+                &serde_json::json!({"type": "exit", "exitCode": 42}).to_string()
+            ),
+            Some(42)
+        );
+        assert_eq!(
+            parse_remote_exec_exit_code(&serde_json::json!({"type": "stdout"}).to_string()),
+            None
+        );
+    }
 }

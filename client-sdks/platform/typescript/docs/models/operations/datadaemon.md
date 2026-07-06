@@ -26,18 +26,18 @@ let value: DataDaemon = {
       collectionIssues: [
         {
           message: "<value>",
-          reason: "collection-failed",
-          severity: "info",
+          reason: "not-installed",
+          severity: "warning",
           source: "<value>",
         },
       ],
-      health: "degraded",
+      health: "unknown",
       lifecycle: "running",
       partial: false,
-      stale: true,
+      stale: false,
     },
     unavailableInstances: 431179,
-    backend: "gcp",
+    backend: "azure",
   },
   resourceType: "daemon",
 };

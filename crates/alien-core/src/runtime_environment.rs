@@ -188,7 +188,7 @@ pub fn standard_runtime_environment_plan(platform: Platform) -> Vec<RuntimeEnvir
             name: ENV_OPERATOR_BASE_PLATFORM,
             value: RuntimeEnvironmentValue::BasePlatform,
         }),
-        Platform::Local | Platform::Test => {}
+        Platform::Machines | Platform::Local | Platform::Test => {}
     }
 
     entries
@@ -266,7 +266,7 @@ pub fn worker_transport_runtime_environment_plan(
             name: ENV_ALIEN_TRANSPORT,
             value: RuntimeEnvironmentValue::Literal("container-app"),
         }],
-        Platform::Kubernetes => vec![RuntimeEnvironmentEntry {
+        Platform::Kubernetes | Platform::Machines => vec![RuntimeEnvironmentEntry {
             name: ENV_ALIEN_TRANSPORT,
             value: RuntimeEnvironmentValue::Literal("http"),
         }],

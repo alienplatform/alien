@@ -7,11 +7,11 @@ Represents the target cloud platform.
 ```typescript
 import { EventControllerPlatformEnum } from "@alienplatform/platform-api/models";
 
-let value: EventControllerPlatformEnum = "aws";
+let value: EventControllerPlatformEnum = "gcp";
 ```
 
 ## Values
 
 ```typescript
-"aws" | "gcp" | "azure" | "kubernetes" | "local" | "test"
+"aws" | "gcp" | "azure" | "kubernetes" | "machines" | "local" | "test"
 ```
