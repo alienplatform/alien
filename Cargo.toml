@@ -4,6 +4,7 @@ members = [
   "crates/alien-commands-client",
   "crates/alien-sdk",
   "crates/alien-bindings",
+  "crates/alien-worker-protocol",
   "crates/alien-bindings-node",
   "crates/alien-cli",
   "crates/alien-cli-common",
@@ -61,6 +62,7 @@ license-file = "LICENSE.md"
 alien-commands = { path = "crates/alien-commands", version = "1.10.7", default-features = false }
 alien-commands-client = { path = "crates/alien-commands-client" }
 alien-bindings = { path = "crates/alien-bindings", version = "1.10.7", default-features = false }
+alien-worker-protocol = { path = "crates/alien-worker-protocol", version = "1.10.7" }
 alien-sdk = { path = "crates/alien-sdk", version = "1.10.7", default-features = false }
 alien-runtime = { path = "crates/alien-runtime", version = "1.10.7" }
 dockdash = "0.2.0"

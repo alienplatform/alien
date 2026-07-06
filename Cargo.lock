@@ -1129,6 +1129,25 @@ dependencies = [
 ]
 
 [[package]]
+name = "alien-worker-protocol"
+version = "1.10.7"
+dependencies = [
+ "alien-error",
+ "async-stream",
+ "async-trait",
+ "prost 0.13.5",
+ "prost-types",
+ "serde",
+ "serde_json",
+ "tokio",
+ "tokio-stream",
+ "tonic",
+ "tonic-build",
+ "tonic-reflection",
+ "tracing",
+]
+
+[[package]]
 name = "allocator-api2"
 version = "0.2.21"
 source = "registry+https://github.com/rust-lang/crates.io-index"
