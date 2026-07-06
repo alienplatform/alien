@@ -239,6 +239,7 @@ run();
 * [revokeJoinToken](docs/sdks/machines/README.md#revokejointoken)
 * [listInventory](docs/sdks/machines/README.md#listinventory)
 * [drainMachine](docs/sdks/machines/README.md#drainmachine)
+* [cancelMachineDrain](docs/sdks/machines/README.md#cancelmachinedrain)
 * [removeMachine](docs/sdks/machines/README.md#removemachine)
 
 ### [Managers](docs/sdks/managers/README.md)
@@ -409,6 +410,7 @@ To read more about standalone functions, check [FUNCTIONS.md](./FUNCTIONS.md).
 - [`domainsRefresh`](docs/sdks/domains/README.md#refresh) - Refresh workspace domain verification.
 - [`eventsGet`](docs/sdks/events/README.md#get) - Retrieve an event by ID.
 - [`eventsList`](docs/sdks/events/README.md#list) - Retrieve all events.
+- [`machinesCancelMachineDrain`](docs/sdks/machines/README.md#cancelmachinedrain)
 - [`machinesDrainMachine`](docs/sdks/machines/README.md#drainmachine)
 - [`machinesListInventory`](docs/sdks/machines/README.md#listinventory)
 - [`machinesListJoinTokens`](docs/sdks/machines/README.md#listjointokens)

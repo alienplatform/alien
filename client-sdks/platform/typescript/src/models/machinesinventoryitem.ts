@@ -7,15 +7,28 @@ import { safeParse } from "../lib/schemas.js";
 import { Result as SafeParseResult } from "../types/fp.js";
 import { SDKValidationError } from "./errors/sdkvalidationerror.js";
 import {
+  MachinesCapacityMetric,
+  MachinesCapacityMetric$inboundSchema,
+} from "./machinescapacitymetric.js";
+import {
   MachinesDrainBlocker,
   MachinesDrainBlocker$inboundSchema,
 } from "./machinesdrainblocker.js";
+
+export type Storage = {
+  allocated: number;
+  systemReserve: number;
+  total: number;
+};
 
 export type MachinesInventoryItem = {
   machineId: string;
   status: string;
   capacityGroup: string;
   zone: string;
+  cpu: MachinesCapacityMetric;
+  memory: MachinesCapacityMetric;
+  storage?: Storage | null | undefined;
   drainBlockers: Array<MachinesDrainBlocker>;
   drainDeadlineAt?: string | null | undefined;
   drainForce: boolean;
@@ -29,6 +42,23 @@ export type MachinesInventoryItem = {
 };
 
 /** @internal */
+export const Storage$inboundSchema: z.ZodType<Storage, unknown> = z.object({
+  allocated: z.number(),
+  systemReserve: z.number(),
+  total: z.number(),
+});
+
+export function storageFromJSON(
+  jsonString: string,
+): SafeParseResult<Storage, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => Storage$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'Storage' from JSON`,
+  );
+}
+
+/** @internal */
 export const MachinesInventoryItem$inboundSchema: z.ZodType<
   MachinesInventoryItem,
   unknown
@@ -37,6 +67,9 @@ export const MachinesInventoryItem$inboundSchema: z.ZodType<
   status: z.string(),
   capacityGroup: z.string(),
   zone: z.string(),
+  cpu: MachinesCapacityMetric$inboundSchema,
+  memory: MachinesCapacityMetric$inboundSchema,
+  storage: z.nullable(z.lazy(() => Storage$inboundSchema)).optional(),
   drainBlockers: z.array(MachinesDrainBlocker$inboundSchema),
   drainDeadlineAt: z.nullable(z.string()).optional(),
   drainForce: z.boolean(),

@@ -17,3 +17,4 @@ const value: models.CpuDaemonInstance4 = {
 ```typescript
 const value: any = "<value>";
 ```
+

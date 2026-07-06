@@ -19,7 +19,6 @@ let value: CliOutputs = {
     alienSha: "<value>",
     horizonSha: "<value>",
     platformSha: "<value>",
-    sourceAgentBinarySha256: "<value>",
     sourceCliBinarySha256: "<value>",
   },
 };

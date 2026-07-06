@@ -12,6 +12,8 @@ export type MachinesDrainBlocker = {
   workloadId?: string | null | undefined;
   workloadName?: string | null | undefined;
   replicaId?: string | null | undefined;
+  schedulingMode?: string | null | undefined;
+  state?: string | null | undefined;
 };
 
 /** @internal */
@@ -23,6 +25,8 @@ export const MachinesDrainBlocker$inboundSchema: z.ZodType<
   workloadId: z.nullable(z.string()).optional(),
   workloadName: z.nullable(z.string()).optional(),
   replicaId: z.nullable(z.string()).optional(),
+  schedulingMode: z.nullable(z.string()).optional(),
+  state: z.nullable(z.string()).optional(),
 });
 
 export function machinesDrainBlockerFromJSON(

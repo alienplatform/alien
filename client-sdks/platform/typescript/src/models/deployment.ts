@@ -350,6 +350,37 @@ export type DeploymentCustomDomains = {
   domain: string;
 };
 
+export const DeploymentModeLoadBalancer = {
+  LoadBalancer: "loadBalancer",
+} as const;
+export type DeploymentModeLoadBalancer = ClosedEnum<
+  typeof DeploymentModeLoadBalancer
+>;
+
+export type DeploymentPublicEndpointTargetLoadBalancer = {
+  /**
+   * DNS name or URL for the external load balancer.
+   */
+  cnameTarget: string;
+  mode: DeploymentModeLoadBalancer;
+};
+
+export const DeploymentModeMachineAddresses = {
+  MachineAddresses: "machineAddresses",
+} as const;
+export type DeploymentModeMachineAddresses = ClosedEnum<
+  typeof DeploymentModeMachineAddresses
+>;
+
+export type DeploymentPublicEndpointTargetMachineAddresses = {
+  mode: DeploymentModeMachineAddresses;
+};
+
+export type DeploymentPublicEndpointTargetUnion =
+  | DeploymentPublicEndpointTargetLoadBalancer
+  | DeploymentPublicEndpointTargetMachineAddresses
+  | any;
+
 /**
  * Domain configuration for the stack.
  *
@@ -363,6 +394,12 @@ export type DeploymentDomains = {
    * Custom domain configuration per resource ID.
    */
   customDomains?: { [k: string]: DeploymentCustomDomains } | null | undefined;
+  publicEndpointTarget?:
+    | DeploymentPublicEndpointTargetLoadBalancer
+    | DeploymentPublicEndpointTargetMachineAddresses
+    | any
+    | null
+    | undefined;
 };
 
 export type DeploymentDomainsUnion = DeploymentDomains | any;
@@ -3795,12 +3832,99 @@ export function deploymentCustomDomainsFromJSON(
 }
 
 /** @internal */
+export const DeploymentModeLoadBalancer$inboundSchema: z.ZodEnum<
+  typeof DeploymentModeLoadBalancer
+> = z.enum(DeploymentModeLoadBalancer);
+
+/** @internal */
+export const DeploymentPublicEndpointTargetLoadBalancer$inboundSchema:
+  z.ZodType<DeploymentPublicEndpointTargetLoadBalancer, unknown> = z.object({
+    cnameTarget: z.string(),
+    mode: DeploymentModeLoadBalancer$inboundSchema,
+  });
+
+export function deploymentPublicEndpointTargetLoadBalancerFromJSON(
+  jsonString: string,
+): SafeParseResult<
+  DeploymentPublicEndpointTargetLoadBalancer,
+  SDKValidationError
+> {
+  return safeParse(
+    jsonString,
+    (x) =>
+      DeploymentPublicEndpointTargetLoadBalancer$inboundSchema.parse(
+        JSON.parse(x),
+      ),
+    `Failed to parse 'DeploymentPublicEndpointTargetLoadBalancer' from JSON`,
+  );
+}
+
+/** @internal */
+export const DeploymentModeMachineAddresses$inboundSchema: z.ZodEnum<
+  typeof DeploymentModeMachineAddresses
+> = z.enum(DeploymentModeMachineAddresses);
+
+/** @internal */
+export const DeploymentPublicEndpointTargetMachineAddresses$inboundSchema:
+  z.ZodType<DeploymentPublicEndpointTargetMachineAddresses, unknown> = z.object(
+    {
+      mode: DeploymentModeMachineAddresses$inboundSchema,
+    },
+  );
+
+export function deploymentPublicEndpointTargetMachineAddressesFromJSON(
+  jsonString: string,
+): SafeParseResult<
+  DeploymentPublicEndpointTargetMachineAddresses,
+  SDKValidationError
+> {
+  return safeParse(
+    jsonString,
+    (x) =>
+      DeploymentPublicEndpointTargetMachineAddresses$inboundSchema.parse(
+        JSON.parse(x),
+      ),
+    `Failed to parse 'DeploymentPublicEndpointTargetMachineAddresses' from JSON`,
+  );
+}
+
+/** @internal */
+export const DeploymentPublicEndpointTargetUnion$inboundSchema: z.ZodType<
+  DeploymentPublicEndpointTargetUnion,
+  unknown
+> = z.union([
+  z.lazy(() => DeploymentPublicEndpointTargetLoadBalancer$inboundSchema),
+  z.lazy(() => DeploymentPublicEndpointTargetMachineAddresses$inboundSchema),
+  z.any(),
+]);
+
+export function deploymentPublicEndpointTargetUnionFromJSON(
+  jsonString: string,
+): SafeParseResult<DeploymentPublicEndpointTargetUnion, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) =>
+      DeploymentPublicEndpointTargetUnion$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'DeploymentPublicEndpointTargetUnion' from JSON`,
+  );
+}
+
+/** @internal */
 export const DeploymentDomains$inboundSchema: z.ZodType<
   DeploymentDomains,
   unknown
 > = z.object({
   customDomains: z.nullable(
     z.record(z.string(), z.lazy(() => DeploymentCustomDomains$inboundSchema)),
+  ).optional(),
+  publicEndpointTarget: z.nullable(
+    z.union([
+      z.lazy(() => DeploymentPublicEndpointTargetLoadBalancer$inboundSchema),
+      z.lazy(() =>
+        DeploymentPublicEndpointTargetMachineAddresses$inboundSchema
+      ),
+      z.any(),
+    ]),
   ).optional(),
 });
 

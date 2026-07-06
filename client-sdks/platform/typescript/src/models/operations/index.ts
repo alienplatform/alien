@@ -3,6 +3,7 @@
  */
 
 export * from "./addworkspacemember.js";
+export * from "./cancelmachinesmachinedrain.js";
 export * from "./cancelmanagersetup.js";
 export * from "./cancelpackage.js";
 export * from "./createapikey.js";

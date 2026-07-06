@@ -71,3 +71,4 @@ const value: models.SyncAcquireResponseExternalBindingsUnion6 = {
   type: "postgres",
 };
 ```
+

@@ -18,6 +18,7 @@ let value: Project = {
     gcp: "mgr_enxscjrqiiu2lrc672hwwuc5",
     azure: "mgr_enxscjrqiiu2lrc672hwwuc5",
     kubernetes: "mgr_enxscjrqiiu2lrc672hwwuc5",
+    machines: "mgr_enxscjrqiiu2lrc672hwwuc5",
     local: "mgr_enxscjrqiiu2lrc672hwwuc5",
   },
   createdAt: new Date("2026-08-21T20:51:53.791Z"),

@@ -202,6 +202,38 @@ export type PersistImportedDeploymentRequestCustomDomains = {
   domain: string;
 };
 
+export const PersistImportedDeploymentRequestModeLoadBalancer = {
+  LoadBalancer: "loadBalancer",
+} as const;
+export type PersistImportedDeploymentRequestModeLoadBalancer = ClosedEnum<
+  typeof PersistImportedDeploymentRequestModeLoadBalancer
+>;
+
+export type PersistImportedDeploymentRequestPublicEndpointTargetLoadBalancer = {
+  /**
+   * DNS name or URL for the external load balancer.
+   */
+  cnameTarget: string;
+  mode: PersistImportedDeploymentRequestModeLoadBalancer;
+};
+
+export const PersistImportedDeploymentRequestModeMachineAddresses = {
+  MachineAddresses: "machineAddresses",
+} as const;
+export type PersistImportedDeploymentRequestModeMachineAddresses = ClosedEnum<
+  typeof PersistImportedDeploymentRequestModeMachineAddresses
+>;
+
+export type PersistImportedDeploymentRequestPublicEndpointTargetMachineAddresses =
+  {
+    mode: PersistImportedDeploymentRequestModeMachineAddresses;
+  };
+
+export type PersistImportedDeploymentRequestPublicEndpointTargetUnion =
+  | PersistImportedDeploymentRequestPublicEndpointTargetLoadBalancer
+  | PersistImportedDeploymentRequestPublicEndpointTargetMachineAddresses
+  | any;
+
 /**
  * Domain configuration for the stack.
  *
@@ -216,6 +248,12 @@ export type PersistImportedDeploymentRequestDomains = {
    */
   customDomains?:
     | { [k: string]: PersistImportedDeploymentRequestCustomDomains }
+    | null
+    | undefined;
+  publicEndpointTarget?:
+    | PersistImportedDeploymentRequestPublicEndpointTargetLoadBalancer
+    | PersistImportedDeploymentRequestPublicEndpointTargetMachineAddresses
+    | any
     | null
     | undefined;
 };
@@ -3533,9 +3571,111 @@ export function persistImportedDeploymentRequestCustomDomainsToJSON(
 }
 
 /** @internal */
+export const PersistImportedDeploymentRequestModeLoadBalancer$outboundSchema:
+  z.ZodEnum<typeof PersistImportedDeploymentRequestModeLoadBalancer> = z.enum(
+    PersistImportedDeploymentRequestModeLoadBalancer,
+  );
+
+/** @internal */
+export type PersistImportedDeploymentRequestPublicEndpointTargetLoadBalancer$Outbound =
+  {
+    cnameTarget: string;
+    mode: string;
+  };
+
+/** @internal */
+export const PersistImportedDeploymentRequestPublicEndpointTargetLoadBalancer$outboundSchema:
+  z.ZodType<
+    PersistImportedDeploymentRequestPublicEndpointTargetLoadBalancer$Outbound,
+    PersistImportedDeploymentRequestPublicEndpointTargetLoadBalancer
+  > = z.object({
+    cnameTarget: z.string(),
+    mode: PersistImportedDeploymentRequestModeLoadBalancer$outboundSchema,
+  });
+
+export function persistImportedDeploymentRequestPublicEndpointTargetLoadBalancerToJSON(
+  persistImportedDeploymentRequestPublicEndpointTargetLoadBalancer:
+    PersistImportedDeploymentRequestPublicEndpointTargetLoadBalancer,
+): string {
+  return JSON.stringify(
+    PersistImportedDeploymentRequestPublicEndpointTargetLoadBalancer$outboundSchema
+      .parse(persistImportedDeploymentRequestPublicEndpointTargetLoadBalancer),
+  );
+}
+
+/** @internal */
+export const PersistImportedDeploymentRequestModeMachineAddresses$outboundSchema:
+  z.ZodEnum<typeof PersistImportedDeploymentRequestModeMachineAddresses> = z
+    .enum(PersistImportedDeploymentRequestModeMachineAddresses);
+
+/** @internal */
+export type PersistImportedDeploymentRequestPublicEndpointTargetMachineAddresses$Outbound =
+  {
+    mode: string;
+  };
+
+/** @internal */
+export const PersistImportedDeploymentRequestPublicEndpointTargetMachineAddresses$outboundSchema:
+  z.ZodType<
+    PersistImportedDeploymentRequestPublicEndpointTargetMachineAddresses$Outbound,
+    PersistImportedDeploymentRequestPublicEndpointTargetMachineAddresses
+  > = z.object({
+    mode: PersistImportedDeploymentRequestModeMachineAddresses$outboundSchema,
+  });
+
+export function persistImportedDeploymentRequestPublicEndpointTargetMachineAddressesToJSON(
+  persistImportedDeploymentRequestPublicEndpointTargetMachineAddresses:
+    PersistImportedDeploymentRequestPublicEndpointTargetMachineAddresses,
+): string {
+  return JSON.stringify(
+    PersistImportedDeploymentRequestPublicEndpointTargetMachineAddresses$outboundSchema
+      .parse(
+        persistImportedDeploymentRequestPublicEndpointTargetMachineAddresses,
+      ),
+  );
+}
+
+/** @internal */
+export type PersistImportedDeploymentRequestPublicEndpointTargetUnion$Outbound =
+  | PersistImportedDeploymentRequestPublicEndpointTargetLoadBalancer$Outbound
+  | PersistImportedDeploymentRequestPublicEndpointTargetMachineAddresses$Outbound
+  | any;
+
+/** @internal */
+export const PersistImportedDeploymentRequestPublicEndpointTargetUnion$outboundSchema:
+  z.ZodType<
+    PersistImportedDeploymentRequestPublicEndpointTargetUnion$Outbound,
+    PersistImportedDeploymentRequestPublicEndpointTargetUnion
+  > = z.union([
+    z.lazy(() =>
+      PersistImportedDeploymentRequestPublicEndpointTargetLoadBalancer$outboundSchema
+    ),
+    z.lazy(() =>
+      PersistImportedDeploymentRequestPublicEndpointTargetMachineAddresses$outboundSchema
+    ),
+    z.any(),
+  ]);
+
+export function persistImportedDeploymentRequestPublicEndpointTargetUnionToJSON(
+  persistImportedDeploymentRequestPublicEndpointTargetUnion:
+    PersistImportedDeploymentRequestPublicEndpointTargetUnion,
+): string {
+  return JSON.stringify(
+    PersistImportedDeploymentRequestPublicEndpointTargetUnion$outboundSchema
+      .parse(persistImportedDeploymentRequestPublicEndpointTargetUnion),
+  );
+}
+
+/** @internal */
 export type PersistImportedDeploymentRequestDomains$Outbound = {
   customDomains?:
     | { [k: string]: PersistImportedDeploymentRequestCustomDomains$Outbound }
+    | null
+    | undefined;
+  publicEndpointTarget?:
+    | PersistImportedDeploymentRequestPublicEndpointTargetLoadBalancer$Outbound
+    | PersistImportedDeploymentRequestPublicEndpointTargetMachineAddresses$Outbound
+    | any
     | null
     | undefined;
 };
@@ -3552,6 +3692,17 @@ export const PersistImportedDeploymentRequestDomains$outboundSchema: z.ZodType<
         PersistImportedDeploymentRequestCustomDomains$outboundSchema
       ),
     ),
+  ).optional(),
+  publicEndpointTarget: z.nullable(
+    z.union([
+      z.lazy(() =>
+        PersistImportedDeploymentRequestPublicEndpointTargetLoadBalancer$outboundSchema
+      ),
+      z.lazy(() =>
+        PersistImportedDeploymentRequestPublicEndpointTargetMachineAddresses$outboundSchema
+      ),
+      z.any(),
+    ]),
   ).optional(),
 });
 

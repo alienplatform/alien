@@ -191,9 +191,9 @@ export type DeploymentInfoBuildInfo = {
    */
   platformSha: string;
   /**
-   * SHA256 checksum of the source companion agent binary shipped with the CLI package.
+   * SHA256 checksum of the source companion agent binary shipped with the CLI package, when present.
    */
-  sourceAgentBinarySha256: string;
+  sourceAgentBinarySha256?: string | null | undefined;
   /**
    * SHA256 checksum of the source deploy CLI binary before white-label config is appended.
    */
@@ -884,7 +884,7 @@ export const DeploymentInfoBuildInfo$inboundSchema: z.ZodType<
   alienSha: z.string(),
   horizonSha: z.string(),
   platformSha: z.string(),
-  sourceAgentBinarySha256: z.string(),
+  sourceAgentBinarySha256: z.nullable(z.string()).optional(),
   sourceCliBinarySha256: z.string(),
 });
 

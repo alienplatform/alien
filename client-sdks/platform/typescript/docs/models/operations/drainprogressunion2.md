@@ -20,3 +20,4 @@ const value: operations.DrainProgress2 = {
 ```typescript
 const value: any = "<value>";
 ```
+

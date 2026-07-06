@@ -183,6 +183,37 @@ export type ManagerRetryResponseCustomDomains3 = {
   domain: string;
 };
 
+export const ManagerRetryResponseModeLoadBalancer3 = {
+  LoadBalancer: "loadBalancer",
+} as const;
+export type ManagerRetryResponseModeLoadBalancer3 = ClosedEnum<
+  typeof ManagerRetryResponseModeLoadBalancer3
+>;
+
+export type ManagerRetryResponsePublicEndpointTargetLoadBalancer3 = {
+  /**
+   * DNS name or URL for the external load balancer.
+   */
+  cnameTarget: string;
+  mode: ManagerRetryResponseModeLoadBalancer3;
+};
+
+export const ManagerRetryResponseModeMachineAddresses3 = {
+  MachineAddresses: "machineAddresses",
+} as const;
+export type ManagerRetryResponseModeMachineAddresses3 = ClosedEnum<
+  typeof ManagerRetryResponseModeMachineAddresses3
+>;
+
+export type ManagerRetryResponsePublicEndpointTargetMachineAddresses3 = {
+  mode: ManagerRetryResponseModeMachineAddresses3;
+};
+
+export type ManagerRetryResponsePublicEndpointTargetUnion3 =
+  | ManagerRetryResponsePublicEndpointTargetLoadBalancer3
+  | ManagerRetryResponsePublicEndpointTargetMachineAddresses3
+  | any;
+
 /**
  * Domain configuration for the stack.
  *
@@ -197,6 +228,12 @@ export type ManagerRetryResponseDomains3 = {
    */
   customDomains?:
     | { [k: string]: ManagerRetryResponseCustomDomains3 }
+    | null
+    | undefined;
+  publicEndpointTarget?:
+    | ManagerRetryResponsePublicEndpointTargetLoadBalancer3
+    | ManagerRetryResponsePublicEndpointTargetMachineAddresses3
+    | any
     | null
     | undefined;
 };
@@ -1308,6 +1345,37 @@ export type ManagerRetryResponseCustomDomains2 = {
   domain: string;
 };
 
+export const ManagerRetryResponseModeLoadBalancer2 = {
+  LoadBalancer: "loadBalancer",
+} as const;
+export type ManagerRetryResponseModeLoadBalancer2 = ClosedEnum<
+  typeof ManagerRetryResponseModeLoadBalancer2
+>;
+
+export type ManagerRetryResponsePublicEndpointTargetLoadBalancer2 = {
+  /**
+   * DNS name or URL for the external load balancer.
+   */
+  cnameTarget: string;
+  mode: ManagerRetryResponseModeLoadBalancer2;
+};
+
+export const ManagerRetryResponseModeMachineAddresses2 = {
+  MachineAddresses: "machineAddresses",
+} as const;
+export type ManagerRetryResponseModeMachineAddresses2 = ClosedEnum<
+  typeof ManagerRetryResponseModeMachineAddresses2
+>;
+
+export type ManagerRetryResponsePublicEndpointTargetMachineAddresses2 = {
+  mode: ManagerRetryResponseModeMachineAddresses2;
+};
+
+export type ManagerRetryResponsePublicEndpointTargetUnion2 =
+  | ManagerRetryResponsePublicEndpointTargetLoadBalancer2
+  | ManagerRetryResponsePublicEndpointTargetMachineAddresses2
+  | any;
+
 /**
  * Domain configuration for the stack.
  *
@@ -1322,6 +1390,12 @@ export type ManagerRetryResponseDomains2 = {
    */
   customDomains?:
     | { [k: string]: ManagerRetryResponseCustomDomains2 }
+    | null
+    | undefined;
+  publicEndpointTarget?:
+    | ManagerRetryResponsePublicEndpointTargetLoadBalancer2
+    | ManagerRetryResponsePublicEndpointTargetMachineAddresses2
+    | any
     | null
     | undefined;
 };
@@ -2428,6 +2502,37 @@ export type ManagerRetryResponseCustomDomains1 = {
   domain: string;
 };
 
+export const ManagerRetryResponseModeLoadBalancer1 = {
+  LoadBalancer: "loadBalancer",
+} as const;
+export type ManagerRetryResponseModeLoadBalancer1 = ClosedEnum<
+  typeof ManagerRetryResponseModeLoadBalancer1
+>;
+
+export type ManagerRetryResponsePublicEndpointTargetLoadBalancer1 = {
+  /**
+   * DNS name or URL for the external load balancer.
+   */
+  cnameTarget: string;
+  mode: ManagerRetryResponseModeLoadBalancer1;
+};
+
+export const ManagerRetryResponseModeMachineAddresses1 = {
+  MachineAddresses: "machineAddresses",
+} as const;
+export type ManagerRetryResponseModeMachineAddresses1 = ClosedEnum<
+  typeof ManagerRetryResponseModeMachineAddresses1
+>;
+
+export type ManagerRetryResponsePublicEndpointTargetMachineAddresses1 = {
+  mode: ManagerRetryResponseModeMachineAddresses1;
+};
+
+export type ManagerRetryResponsePublicEndpointTargetUnion1 =
+  | ManagerRetryResponsePublicEndpointTargetLoadBalancer1
+  | ManagerRetryResponsePublicEndpointTargetMachineAddresses1
+  | any;
+
 /**
  * Domain configuration for the stack.
  *
@@ -2442,6 +2547,12 @@ export type ManagerRetryResponseDomains1 = {
    */
   customDomains?:
     | { [k: string]: ManagerRetryResponseCustomDomains1 }
+    | null
+    | undefined;
+  publicEndpointTarget?:
+    | ManagerRetryResponsePublicEndpointTargetLoadBalancer1
+    | ManagerRetryResponsePublicEndpointTargetMachineAddresses1
+    | any
     | null
     | undefined;
 };
@@ -3826,6 +3937,92 @@ export function managerRetryResponseCustomDomains3FromJSON(
 }
 
 /** @internal */
+export const ManagerRetryResponseModeLoadBalancer3$inboundSchema: z.ZodEnum<
+  typeof ManagerRetryResponseModeLoadBalancer3
+> = z.enum(ManagerRetryResponseModeLoadBalancer3);
+
+/** @internal */
+export const ManagerRetryResponsePublicEndpointTargetLoadBalancer3$inboundSchema:
+  z.ZodType<ManagerRetryResponsePublicEndpointTargetLoadBalancer3, unknown> = z
+    .object({
+      cnameTarget: z.string(),
+      mode: ManagerRetryResponseModeLoadBalancer3$inboundSchema,
+    });
+
+export function managerRetryResponsePublicEndpointTargetLoadBalancer3FromJSON(
+  jsonString: string,
+): SafeParseResult<
+  ManagerRetryResponsePublicEndpointTargetLoadBalancer3,
+  SDKValidationError
+> {
+  return safeParse(
+    jsonString,
+    (x) =>
+      ManagerRetryResponsePublicEndpointTargetLoadBalancer3$inboundSchema.parse(
+        JSON.parse(x),
+      ),
+    `Failed to parse 'ManagerRetryResponsePublicEndpointTargetLoadBalancer3' from JSON`,
+  );
+}
+
+/** @internal */
+export const ManagerRetryResponseModeMachineAddresses3$inboundSchema: z.ZodEnum<
+  typeof ManagerRetryResponseModeMachineAddresses3
+> = z.enum(ManagerRetryResponseModeMachineAddresses3);
+
+/** @internal */
+export const ManagerRetryResponsePublicEndpointTargetMachineAddresses3$inboundSchema:
+  z.ZodType<
+    ManagerRetryResponsePublicEndpointTargetMachineAddresses3,
+    unknown
+  > = z.object({
+    mode: ManagerRetryResponseModeMachineAddresses3$inboundSchema,
+  });
+
+export function managerRetryResponsePublicEndpointTargetMachineAddresses3FromJSON(
+  jsonString: string,
+): SafeParseResult<
+  ManagerRetryResponsePublicEndpointTargetMachineAddresses3,
+  SDKValidationError
+> {
+  return safeParse(
+    jsonString,
+    (x) =>
+      ManagerRetryResponsePublicEndpointTargetMachineAddresses3$inboundSchema
+        .parse(JSON.parse(x)),
+    `Failed to parse 'ManagerRetryResponsePublicEndpointTargetMachineAddresses3' from JSON`,
+  );
+}
+
+/** @internal */
+export const ManagerRetryResponsePublicEndpointTargetUnion3$inboundSchema:
+  z.ZodType<ManagerRetryResponsePublicEndpointTargetUnion3, unknown> = z.union([
+    z.lazy(() =>
+      ManagerRetryResponsePublicEndpointTargetLoadBalancer3$inboundSchema
+    ),
+    z.lazy(() =>
+      ManagerRetryResponsePublicEndpointTargetMachineAddresses3$inboundSchema
+    ),
+    z.any(),
+  ]);
+
+export function managerRetryResponsePublicEndpointTargetUnion3FromJSON(
+  jsonString: string,
+): SafeParseResult<
+  ManagerRetryResponsePublicEndpointTargetUnion3,
+  SDKValidationError
+> {
+  return safeParse(
+    jsonString,
+    (x) =>
+      ManagerRetryResponsePublicEndpointTargetUnion3$inboundSchema.parse(
+        JSON.parse(x),
+      ),
+    `Failed to parse 'ManagerRetryResponsePublicEndpointTargetUnion3' from JSON`,
+  );
+}
+
+/** @internal */
 export const ManagerRetryResponseDomains3$inboundSchema: z.ZodType<
   ManagerRetryResponseDomains3,
   unknown
@@ -3835,6 +4032,17 @@ export const ManagerRetryResponseDomains3$inboundSchema: z.ZodType<
       z.string(),
       z.lazy(() => ManagerRetryResponseCustomDomains3$inboundSchema),
     ),
+  ).optional(),
+  publicEndpointTarget: z.nullable(
+    z.union([
+      z.lazy(() =>
+        ManagerRetryResponsePublicEndpointTargetLoadBalancer3$inboundSchema
+      ),
+      z.lazy(() =>
+        ManagerRetryResponsePublicEndpointTargetMachineAddresses3$inboundSchema
+      ),
+      z.any(),
+    ]),
   ).optional(),
 });
 
@@ -5688,6 +5896,92 @@ export function managerRetryResponseCustomDomains2FromJSON(
 }
 
 /** @internal */
+export const ManagerRetryResponseModeLoadBalancer2$inboundSchema: z.ZodEnum<
+  typeof ManagerRetryResponseModeLoadBalancer2
+> = z.enum(ManagerRetryResponseModeLoadBalancer2);
+
+/** @internal */
+export const ManagerRetryResponsePublicEndpointTargetLoadBalancer2$inboundSchema:
+  z.ZodType<ManagerRetryResponsePublicEndpointTargetLoadBalancer2, unknown> = z
+    .object({
+      cnameTarget: z.string(),
+      mode: ManagerRetryResponseModeLoadBalancer2$inboundSchema,
+    });
+
+export function managerRetryResponsePublicEndpointTargetLoadBalancer2FromJSON(
+  jsonString: string,
+): SafeParseResult<
+  ManagerRetryResponsePublicEndpointTargetLoadBalancer2,
+  SDKValidationError
+> {
+  return safeParse(
+    jsonString,
+    (x) =>
+      ManagerRetryResponsePublicEndpointTargetLoadBalancer2$inboundSchema.parse(
+        JSON.parse(x),
+      ),
+    `Failed to parse 'ManagerRetryResponsePublicEndpointTargetLoadBalancer2' from JSON`,
+  );
+}
+
+/** @internal */
+export const ManagerRetryResponseModeMachineAddresses2$inboundSchema: z.ZodEnum<
+  typeof ManagerRetryResponseModeMachineAddresses2
+> = z.enum(ManagerRetryResponseModeMachineAddresses2);
+
+/** @internal */
+export const ManagerRetryResponsePublicEndpointTargetMachineAddresses2$inboundSchema:
+  z.ZodType<
+    ManagerRetryResponsePublicEndpointTargetMachineAddresses2,
+    unknown
+  > = z.object({
+    mode: ManagerRetryResponseModeMachineAddresses2$inboundSchema,
+  });
+
+export function managerRetryResponsePublicEndpointTargetMachineAddresses2FromJSON(
+  jsonString: string,
+): SafeParseResult<
+  ManagerRetryResponsePublicEndpointTargetMachineAddresses2,
+  SDKValidationError
+> {
+  return safeParse(
+    jsonString,
+    (x) =>
+      ManagerRetryResponsePublicEndpointTargetMachineAddresses2$inboundSchema
+        .parse(JSON.parse(x)),
+    `Failed to parse 'ManagerRetryResponsePublicEndpointTargetMachineAddresses2' from JSON`,
+  );
+}
+
+/** @internal */
+export const ManagerRetryResponsePublicEndpointTargetUnion2$inboundSchema:
+  z.ZodType<ManagerRetryResponsePublicEndpointTargetUnion2, unknown> = z.union([
+    z.lazy(() =>
+      ManagerRetryResponsePublicEndpointTargetLoadBalancer2$inboundSchema
+    ),
+    z.lazy(() =>
+      ManagerRetryResponsePublicEndpointTargetMachineAddresses2$inboundSchema
+    ),
+    z.any(),
+  ]);
+
+export function managerRetryResponsePublicEndpointTargetUnion2FromJSON(
+  jsonString: string,
+): SafeParseResult<
+  ManagerRetryResponsePublicEndpointTargetUnion2,
+  SDKValidationError
+> {
+  return safeParse(
+    jsonString,
+    (x) =>
+      ManagerRetryResponsePublicEndpointTargetUnion2$inboundSchema.parse(
+        JSON.parse(x),
+      ),
+    `Failed to parse 'ManagerRetryResponsePublicEndpointTargetUnion2' from JSON`,
+  );
+}
+
+/** @internal */
 export const ManagerRetryResponseDomains2$inboundSchema: z.ZodType<
   ManagerRetryResponseDomains2,
   unknown
@@ -5697,6 +5991,17 @@ export const ManagerRetryResponseDomains2$inboundSchema: z.ZodType<
       z.string(),
       z.lazy(() => ManagerRetryResponseCustomDomains2$inboundSchema),
     ),
+  ).optional(),
+  publicEndpointTarget: z.nullable(
+    z.union([
+      z.lazy(() =>
+        ManagerRetryResponsePublicEndpointTargetLoadBalancer2$inboundSchema
+      ),
+      z.lazy(() =>
+        ManagerRetryResponsePublicEndpointTargetMachineAddresses2$inboundSchema
+      ),
+      z.any(),
+    ]),
   ).optional(),
 });
 
@@ -7545,6 +7850,92 @@ export function managerRetryResponseCustomDomains1FromJSON(
 }
 
 /** @internal */
+export const ManagerRetryResponseModeLoadBalancer1$inboundSchema: z.ZodEnum<
+  typeof ManagerRetryResponseModeLoadBalancer1
+> = z.enum(ManagerRetryResponseModeLoadBalancer1);
+
+/** @internal */
+export const ManagerRetryResponsePublicEndpointTargetLoadBalancer1$inboundSchema:
+  z.ZodType<ManagerRetryResponsePublicEndpointTargetLoadBalancer1, unknown> = z
+    .object({
+      cnameTarget: z.string(),
+      mode: ManagerRetryResponseModeLoadBalancer1$inboundSchema,
+    });
+
+export function managerRetryResponsePublicEndpointTargetLoadBalancer1FromJSON(
+  jsonString: string,
+): SafeParseResult<
+  ManagerRetryResponsePublicEndpointTargetLoadBalancer1,
+  SDKValidationError
+> {
+  return safeParse(
+    jsonString,
+    (x) =>
+      ManagerRetryResponsePublicEndpointTargetLoadBalancer1$inboundSchema.parse(
+        JSON.parse(x),
+      ),
+    `Failed to parse 'ManagerRetryResponsePublicEndpointTargetLoadBalancer1' from JSON`,
+  );
+}
+
+/** @internal */
+export const ManagerRetryResponseModeMachineAddresses1$inboundSchema: z.ZodEnum<
+  typeof ManagerRetryResponseModeMachineAddresses1
+> = z.enum(ManagerRetryResponseModeMachineAddresses1);
+
+/** @internal */
+export const ManagerRetryResponsePublicEndpointTargetMachineAddresses1$inboundSchema:
+  z.ZodType<
+    ManagerRetryResponsePublicEndpointTargetMachineAddresses1,
+    unknown
+  > = z.object({
+    mode: ManagerRetryResponseModeMachineAddresses1$inboundSchema,
+  });
+
+export function managerRetryResponsePublicEndpointTargetMachineAddresses1FromJSON(
+  jsonString: string,
+): SafeParseResult<
+  ManagerRetryResponsePublicEndpointTargetMachineAddresses1,
+  SDKValidationError
+> {
+  return safeParse(
+    jsonString,
+    (x) =>
+      ManagerRetryResponsePublicEndpointTargetMachineAddresses1$inboundSchema
+        .parse(JSON.parse(x)),
+    `Failed to parse 'ManagerRetryResponsePublicEndpointTargetMachineAddresses1' from JSON`,
+  );
+}
+
+/** @internal */
+export const ManagerRetryResponsePublicEndpointTargetUnion1$inboundSchema:
+  z.ZodType<ManagerRetryResponsePublicEndpointTargetUnion1, unknown> = z.union([
+    z.lazy(() =>
+      ManagerRetryResponsePublicEndpointTargetLoadBalancer1$inboundSchema
+    ),
+    z.lazy(() =>
+      ManagerRetryResponsePublicEndpointTargetMachineAddresses1$inboundSchema
+    ),
+    z.any(),
+  ]);
+
+export function managerRetryResponsePublicEndpointTargetUnion1FromJSON(
+  jsonString: string,
+): SafeParseResult<
+  ManagerRetryResponsePublicEndpointTargetUnion1,
+  SDKValidationError
+> {
+  return safeParse(
+    jsonString,
+    (x) =>
+      ManagerRetryResponsePublicEndpointTargetUnion1$inboundSchema.parse(
+        JSON.parse(x),
+      ),
+    `Failed to parse 'ManagerRetryResponsePublicEndpointTargetUnion1' from JSON`,
+  );
+}
+
+/** @internal */
 export const ManagerRetryResponseDomains1$inboundSchema: z.ZodType<
   ManagerRetryResponseDomains1,
   unknown
@@ -7554,6 +7945,17 @@ export const ManagerRetryResponseDomains1$inboundSchema: z.ZodType<
       z.string(),
       z.lazy(() => ManagerRetryResponseCustomDomains1$inboundSchema),
     ),
+  ).optional(),
+  publicEndpointTarget: z.nullable(
+    z.union([
+      z.lazy(() =>
+        ManagerRetryResponsePublicEndpointTargetLoadBalancer1$inboundSchema
+      ),
+      z.lazy(() =>
+        ManagerRetryResponsePublicEndpointTargetMachineAddresses1$inboundSchema
+      ),
+      z.any(),
+    ]),
   ).optional(),
 });
 

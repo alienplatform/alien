@@ -539,3 +539,4 @@ const value: models.ResourceHeartbeatDataAzureServiceBusNamespace = {
   resourceType: "azure_service_bus_namespace",
 };
 ```
+

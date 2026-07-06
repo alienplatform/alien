@@ -548,3 +548,4 @@ const value: models.DataAzureServiceBusNamespace = {
   resourceType: "azure_service_bus_namespace",
 };
 ```
+

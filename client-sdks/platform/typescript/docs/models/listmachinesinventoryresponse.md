@@ -12,6 +12,16 @@ let value: ListMachinesInventoryResponse = {
       status: "<value>",
       capacityGroup: "<value>",
       zone: "<value>",
+      cpu: {
+        allocated: 9516.82,
+        systemReserve: 7650.68,
+        total: 9994.17,
+      },
+      memory: {
+        allocated: 4854.69,
+        systemReserve: 2953.4,
+        total: 9773.24,
+      },
       drainBlockers: [
         {
           reason: "<value>",
@@ -19,7 +29,7 @@ let value: ListMachinesInventoryResponse = {
       ],
       drainForce: false,
       lastHeartbeat: "<value>",
-      replicaCount: 999417,
+      replicaCount: 716534,
     },
   ],
 };
