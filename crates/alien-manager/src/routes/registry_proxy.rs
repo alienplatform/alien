@@ -84,7 +84,7 @@ impl RegistryRoutingTable {
     pub fn resolve(&self, repo_name: &str) -> Option<&RegistryRoute> {
         self.routes.iter().find(|r| {
             if r.prefix.is_empty() {
-                // Empty prefix = catch-all fallback (local registry).
+                // Empty prefix = catch-all; construction rejects more than one.
                 true
             } else {
                 repo_name.starts_with(&r.prefix)
