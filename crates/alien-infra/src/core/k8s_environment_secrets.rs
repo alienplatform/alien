@@ -58,31 +58,43 @@ fn secret_checksum(secret_vars: &[&EnvironmentVariable]) -> String {
     format!("{:x}", hasher.finalize())
 }
 
-pub async fn reconcile_environment_secret(
-    resource_kind: &str,
+/// Pure derivation of the per-workload environment Secret plan from the
+/// deployment env snapshot: the Secret name (`{workload}-env`), the checksum
+/// that rolls pods (and drives update detection when only secret values
+/// change), and the keys the workload manifest renders as secretKeyRefs.
+///
+/// Returns `None` when no Secret-typed env vars target the resource.
+pub fn environment_secret_plan(
     resource_id: &str,
     workload_name: &str,
-    namespace: &str,
-    ctx: &ResourceControllerContext<'_>,
-) -> Result<Option<KubernetesEnvSecretPlan>> {
-    let secret_vars = applicable_secret_environment_variables(
-        resource_id,
-        &ctx.deployment_config.environment_variables.variables,
-    );
+    variables: &[EnvironmentVariable],
+) -> Option<KubernetesEnvSecretPlan> {
+    let secret_vars = applicable_secret_environment_variables(resource_id, variables);
     if secret_vars.is_empty() {
-        return Ok(None);
+        return None;
     }
 
-    let secret_name = format!("{workload_name}-env");
-    let checksum = secret_checksum(&secret_vars);
-    let keys = secret_vars
-        .iter()
-        .map(|var| var.name.clone())
-        .collect::<Vec<_>>();
+    Some(KubernetesEnvSecretPlan {
+        secret_name: format!("{workload_name}-env"),
+        checksum: secret_checksum(&secret_vars),
+        keys: secret_vars
+            .iter()
+            .map(|var| var.name.clone())
+            .collect::<Vec<_>>(),
+    })
+}
 
-    let mut secret = Secret {
+/// Builds the typed Kubernetes Secret manifest holding the plan's key/value
+/// pairs, stamped with the plan checksum.
+fn environment_secret_manifest(
+    plan: &KubernetesEnvSecretPlan,
+    resource_id: &str,
+    namespace: &str,
+    secret_vars: &[&EnvironmentVariable],
+) -> Secret {
+    Secret {
         metadata: ObjectMeta {
-            name: Some(secret_name.clone()),
+            name: Some(plan.secret_name.clone()),
             namespace: Some(namespace.to_string()),
             labels: Some(BTreeMap::from([
                 ("managed-by".to_string(), "runtime".to_string()),
@@ -90,7 +102,7 @@ pub async fn reconcile_environment_secret(
             ])),
             annotations: Some(BTreeMap::from([(
                 "env-secret-checksum".to_string(),
-                checksum.clone(),
+                plan.checksum.clone(),
             )])),
             ..Default::default()
         },
@@ -102,7 +114,24 @@ pub async fn reconcile_environment_secret(
                 .collect(),
         ),
         ..Default::default()
+    }
+}
+
+pub async fn reconcile_environment_secret(
+    resource_kind: &str,
+    resource_id: &str,
+    workload_name: &str,
+    namespace: &str,
+    ctx: &ResourceControllerContext<'_>,
+) -> Result<Option<KubernetesEnvSecretPlan>> {
+    let variables = &ctx.deployment_config.environment_variables.variables;
+    let Some(plan) = environment_secret_plan(resource_id, workload_name, variables) else {
+        return Ok(None);
     };
+
+    let secret_vars = applicable_secret_environment_variables(resource_id, variables);
+    let mut secret = environment_secret_manifest(&plan, resource_id, namespace, &secret_vars);
+    let secret_name = plan.secret_name.clone();
 
     let kubernetes_config = ctx.get_kubernetes_config()?;
     let secrets_client = ctx
@@ -145,9 +174,112 @@ pub async fn reconcile_environment_secret(
         }
     }
 
-    Ok(Some(KubernetesEnvSecretPlan {
-        secret_name,
-        checksum,
-        keys,
-    }))
+    Ok(Some(plan))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use alien_core::ENV_ALIEN_COMMANDS_TOKEN;
+
+    fn secret_var(name: &str, value: &str, targets: Option<Vec<&str>>) -> EnvironmentVariable {
+        EnvironmentVariable {
+            name: name.to_string(),
+            value: value.to_string(),
+            var_type: EnvironmentVariableType::Secret,
+            target_resources: targets
+                .map(|targets| targets.into_iter().map(str::to_string).collect()),
+        }
+    }
+
+    fn plain_var(name: &str, value: &str) -> EnvironmentVariable {
+        EnvironmentVariable {
+            name: name.to_string(),
+            value: value.to_string(),
+            var_type: EnvironmentVariableType::Plain,
+            target_resources: None,
+        }
+    }
+
+    #[test]
+    fn plan_is_none_without_applicable_secrets() {
+        let variables = vec![
+            plain_var("APP_ENV", "prod"),
+            secret_var("OTHER_SECRET", "v", Some(vec!["other"])),
+        ];
+
+        assert!(environment_secret_plan("web", "web", &variables).is_none());
+    }
+
+    #[test]
+    fn plan_collects_applicable_secret_keys_and_checksum() {
+        let variables = vec![
+            plain_var("APP_ENV", "prod"),
+            secret_var("APP_SECRET", "s3cret", None),
+            secret_var(ENV_ALIEN_COMMANDS_TOKEN, "tok", Some(vec!["web"])),
+            secret_var("OTHER_SECRET", "v", Some(vec!["other"])),
+        ];
+
+        let plan = environment_secret_plan("web", "web", &variables).expect("plan");
+
+        assert_eq!(plan.secret_name, "web-env");
+        assert_eq!(
+            plan.keys,
+            vec![
+                "APP_SECRET".to_string(),
+                ENV_ALIEN_COMMANDS_TOKEN.to_string()
+            ]
+        );
+        assert!(!plan.checksum.is_empty());
+    }
+
+    #[test]
+    fn plan_checksum_changes_only_when_secret_values_change() {
+        let before = vec![secret_var("APP_SECRET", "v1", None)];
+        let unchanged = vec![secret_var("APP_SECRET", "v1", None)];
+        let rotated = vec![secret_var("APP_SECRET", "v2", None)];
+
+        let plan_before = environment_secret_plan("web", "web", &before).expect("plan");
+        let plan_unchanged = environment_secret_plan("web", "web", &unchanged).expect("plan");
+        let plan_rotated = environment_secret_plan("web", "web", &rotated).expect("plan");
+
+        assert_eq!(plan_before.checksum, plan_unchanged.checksum);
+        assert_ne!(
+            plan_before.checksum, plan_rotated.checksum,
+            "rotating a secret value must change the checksum that rolls pods"
+        );
+    }
+
+    #[test]
+    fn secret_manifest_is_a_typed_opaque_secret_with_values_and_checksum() {
+        let variables = vec![
+            secret_var("APP_SECRET", "s3cret", None),
+            secret_var(ENV_ALIEN_COMMANDS_TOKEN, "tok", Some(vec!["web"])),
+        ];
+        let plan = environment_secret_plan("web", "web", &variables).expect("plan");
+        let secret_vars = applicable_secret_environment_variables("web", &variables);
+
+        let secret = environment_secret_manifest(&plan, "web", "test-ns", &secret_vars);
+
+        assert_eq!(secret.metadata.name.as_deref(), Some("web-env"));
+        assert_eq!(secret.metadata.namespace.as_deref(), Some("test-ns"));
+        assert_eq!(secret.type_.as_deref(), Some("Opaque"));
+        assert_eq!(
+            secret
+                .metadata
+                .annotations
+                .as_ref()
+                .and_then(|annotations| annotations.get("env-secret-checksum")),
+            Some(&plan.checksum)
+        );
+        let data = secret.data.expect("secret data");
+        assert_eq!(
+            data.get("APP_SECRET"),
+            Some(&ByteString(b"s3cret".to_vec()))
+        );
+        assert_eq!(
+            data.get(ENV_ALIEN_COMMANDS_TOKEN),
+            Some(&ByteString(b"tok".to_vec()))
+        );
+    }
 }

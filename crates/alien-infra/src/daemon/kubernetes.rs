@@ -3,7 +3,7 @@ use std::time::Duration;
 use tracing::{debug, info};
 
 use crate::core::{
-    kubernetes_branded_resource_labels, kubernetes_runtime_pod_labels,
+    environment_secret_plan, kubernetes_branded_resource_labels, kubernetes_runtime_pod_labels,
     reconcile_environment_secret, EnvironmentVariableBuilder, KubernetesEnvSecretPlan,
     ResourceControllerContext,
 };
@@ -31,6 +31,12 @@ pub struct KubernetesDaemonController {
     pub(crate) daemon_set_name: Option<String>,
     /// The namespace where resources are deployed.
     pub(crate) namespace: Option<String>,
+    /// Checksum of the environment Secret applied last (create/update).
+    /// Secret-typed env vars never enter the resource config on Kubernetes,
+    /// so `needs_update` compares this against the current snapshot to catch
+    /// secret rotations.
+    #[serde(default)]
+    pub(crate) env_secret_checksum: Option<String>,
 }
 
 #[controller]
@@ -81,6 +87,7 @@ impl KubernetesDaemonController {
         let env_secret_plan =
             reconcile_environment_secret("daemon", &config.id, &daemon_set_name, &namespace, ctx)
                 .await?;
+        self.env_secret_checksum = env_secret_plan.as_ref().map(|plan| plan.checksum.clone());
 
         let daemonset = self
             .build_daemonset(
@@ -252,6 +259,7 @@ impl KubernetesDaemonController {
         let env_secret_plan =
             reconcile_environment_secret("daemon", &config.id, daemon_set_name, namespace, ctx)
                 .await?;
+        self.env_secret_checksum = env_secret_plan.as_ref().map(|plan| plan.checksum.clone());
 
         let mut new_daemonset = self
             .build_daemonset(
@@ -426,6 +434,25 @@ impl KubernetesDaemonController {
     );
     terminal_state!(state = Deleted, status = ResourceStatus::Deleted);
 
+    /// Secret-typed env vars never enter the resource config on Kubernetes
+    /// (they're projected via secretKeyRef), so config diffing alone cannot
+    /// see secret rotations. Schedule an update when the snapshot-derived
+    /// env-secret checksum drifts from the one applied last; the update
+    /// re-reconciles the Secret and rolls pods via the checksum annotation.
+    fn needs_update(&self, ctx: &ResourceControllerContext<'_>) -> Result<bool> {
+        let Some(daemon_set_name) = self.daemon_set_name.as_ref() else {
+            return Ok(false);
+        };
+        let config = ctx.desired_resource_config::<Daemon>()?;
+        let current_checksum = environment_secret_plan(
+            &config.id,
+            daemon_set_name,
+            &ctx.deployment_config.environment_variables.variables,
+        )
+        .map(|plan| plan.checksum);
+        Ok(current_checksum != self.env_secret_checksum)
+    }
+
     fn build_outputs(&self) -> Option<ResourceOutputs> {
         self.daemon_set_name.as_ref().map(|daemon_set_name| {
             ResourceOutputs::new(DaemonOutputs {
@@ -514,8 +541,8 @@ impl KubernetesDaemonController {
         // Command-enabled Daemons no longer get `ALIEN_TRANSPORT=passthrough`.
         // Their receiver config (`ALIEN_COMMANDS_*`) is injected per-resource into
         // `config.environment` by the manager/operator snapshot (ALIEN-222); the
-        // `ALIEN_COMMANDS_TOKEN` Secret flows through the same ALIEN_SECRETS →
-        // secretKeyRef path as any other resource secret (handled below).
+        // `ALIEN_COMMANDS_TOKEN` Secret is projected via secretKeyRef like any
+        // other resource secret (handled below).
 
         let (env_map, bindings) = env_builder.build_with_bindings();
 
@@ -574,10 +601,13 @@ impl KubernetesDaemonController {
         }
 
         for (key, value) in env_map {
-            // When an env Secret plan exists, the runtime reads its secrets from
-            // the mounted secretKeyRefs, so the ALIEN_SECRETS vault-load pointer is
-            // redundant and dropped (matches the container controller).
-            if key == ENV_ALIEN_SECRETS && env_secret_plan.is_some() {
+            // Kubernetes Daemons never load secrets at runtime: Secret-typed
+            // env vars are projected as secretKeyRefs above, and the
+            // ALIEN_SECRETS vault-load pointer must never reach the manifest.
+            // Deployment-level injection no longer emits it for K8s
+            // Containers/Daemons; this strip also covers configs injected by
+            // older managers (matches the container controller).
+            if key == ENV_ALIEN_SECRETS {
                 continue;
             }
             if !env_vars.iter().any(|ev| ev.name == key) {
@@ -693,4 +723,228 @@ async fn create_registry_pull_secret(
         deployment_token,
     )
     .await
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::core::kubernetes_manifest_test_support::{
+        secret_env_var, KubernetesManifestTestHarness,
+    };
+    use crate::core::{environment_secret_plan, ResourceController};
+    use alien_core::{
+        Resource, ENV_ALIEN_COMMANDS_POLLING_ENABLED, ENV_ALIEN_COMMANDS_POLLING_URL,
+        ENV_ALIEN_COMMANDS_TOKEN, ENV_ALIEN_LAMBDA_MODE, ENV_ALIEN_RUNTIME_SEND_OTLP,
+        ENV_ALIEN_TRANSPORT, ENV_ALIEN_WORKER_GRPC_ADDRESS,
+    };
+    use k8s_openapi::api::core::v1::EnvVar;
+
+    fn manifest_test_daemon(environment: &[(&str, &str)]) -> Daemon {
+        let mut config = Daemon::new("agent".to_string())
+            .code(DaemonCode::Image {
+                image: "registry.example.com/agent:1".to_string(),
+            })
+            .permissions("default".to_string())
+            .build();
+        for (name, value) in environment {
+            config
+                .environment
+                .insert(name.to_string(), value.to_string());
+        }
+        config
+    }
+
+    fn manifest_test_controller() -> KubernetesDaemonController {
+        KubernetesDaemonController {
+            daemon_set_name: Some("agent".to_string()),
+            namespace: Some("test-ns".to_string()),
+            ..Default::default()
+        }
+    }
+
+    fn daemonset_env(daemonset: &DaemonSet) -> Vec<EnvVar> {
+        daemonset
+            .spec
+            .as_ref()
+            .expect("daemonset spec")
+            .template
+            .spec
+            .as_ref()
+            .expect("pod spec")
+            .containers[0]
+            .env
+            .clone()
+            .expect("container env")
+    }
+
+    fn pod_checksum_annotation(daemonset: &DaemonSet) -> Option<String> {
+        daemonset
+            .spec
+            .as_ref()
+            .expect("daemonset spec")
+            .template
+            .metadata
+            .as_ref()
+            .and_then(|metadata| metadata.annotations.as_ref())
+            .and_then(|annotations| annotations.get("env-secret-checksum"))
+            .cloned()
+    }
+
+    fn assert_secret_key_ref(env: &[EnvVar], name: &str, secret_name: &str) {
+        let var = env
+            .iter()
+            .find(|var| var.name == name)
+            .unwrap_or_else(|| panic!("env var '{name}' missing from manifest"));
+        assert_eq!(var.value, None, "'{name}' must not carry an inline value");
+        let secret_key_ref = var
+            .value_from
+            .as_ref()
+            .and_then(|source| source.secret_key_ref.as_ref())
+            .unwrap_or_else(|| panic!("'{name}' must be a secretKeyRef"));
+        assert_eq!(secret_key_ref.name, secret_name);
+        assert_eq!(secret_key_ref.key, name);
+        assert_eq!(secret_key_ref.optional, Some(false));
+    }
+
+    #[tokio::test]
+    async fn daemonset_manifest_projects_secrets_and_never_carries_alien_secrets() {
+        let variables = vec![
+            secret_env_var("APP_SECRET", "s3cret", None),
+            secret_env_var(
+                ENV_ALIEN_COMMANDS_TOKEN,
+                "receiver-token",
+                Some(vec!["agent"]),
+            ),
+        ];
+        // Simulate a config injected by an older manager that still collapsed
+        // secrets: the pointer must be stripped from the manifest regardless.
+        let config = manifest_test_daemon(&[
+            ("APP_ENV", "prod"),
+            (
+                ENV_ALIEN_SECRETS,
+                "{\"keys\":[\"APP_SECRET\"],\"hash\":\"legacy\"}",
+            ),
+        ]);
+        let plan = environment_secret_plan("agent", "agent", &variables).expect("plan");
+        let harness = KubernetesManifestTestHarness::new(Resource::new(config.clone()), variables);
+        let controller = manifest_test_controller();
+
+        let daemonset = controller
+            .build_daemonset(
+                &config,
+                "agent",
+                "test-ns",
+                "agent-sa",
+                None,
+                Some(&plan),
+                &harness.ctx(),
+            )
+            .await
+            .expect("daemonset manifest");
+
+        let env = daemonset_env(&daemonset);
+
+        // App secret and the command receiver token are native projections.
+        assert_secret_key_ref(&env, "APP_SECRET", "agent-env");
+        assert_secret_key_ref(&env, ENV_ALIEN_COMMANDS_TOKEN, "agent-env");
+
+        // The runtime vault-load pointer never reaches the manifest.
+        assert!(
+            !env.iter().any(|var| var.name == ENV_ALIEN_SECRETS),
+            "ALIEN_SECRETS must not appear in a Kubernetes DaemonSet manifest"
+        );
+
+        // Plain vars still flow through.
+        let app_env = env
+            .iter()
+            .find(|var| var.name == "APP_ENV")
+            .expect("plain APP_ENV");
+        assert_eq!(app_env.value.as_deref(), Some("prod"));
+
+        // No worker-era runtime env leaks into Daemon manifests.
+        for name in [
+            ENV_ALIEN_TRANSPORT,
+            ENV_ALIEN_WORKER_GRPC_ADDRESS,
+            ENV_ALIEN_RUNTIME_SEND_OTLP,
+            ENV_ALIEN_LAMBDA_MODE,
+            ENV_ALIEN_COMMANDS_POLLING_ENABLED,
+            ENV_ALIEN_COMMANDS_POLLING_URL,
+        ] {
+            assert!(
+                !env.iter().any(|var| var.name == name),
+                "worker-era env var '{name}' must not appear in a Daemon manifest"
+            );
+        }
+
+        // The pod template carries the checksum that rolls pods on rotation.
+        assert_eq!(pod_checksum_annotation(&daemonset), Some(plan.checksum));
+    }
+
+    #[tokio::test]
+    async fn daemonset_secret_rotation_changes_the_rendered_pod_template() {
+        let config = manifest_test_daemon(&[]);
+        let controller = manifest_test_controller();
+
+        let mut daemonsets = Vec::new();
+        for value in ["v1", "v1", "v2"] {
+            let variables = vec![secret_env_var("APP_SECRET", value, None)];
+            let plan = environment_secret_plan("agent", "agent", &variables).expect("plan");
+            let harness =
+                KubernetesManifestTestHarness::new(Resource::new(config.clone()), variables);
+            let daemonset = controller
+                .build_daemonset(
+                    &config,
+                    "agent",
+                    "test-ns",
+                    "agent-sa",
+                    None,
+                    Some(&plan),
+                    &harness.ctx(),
+                )
+                .await
+                .expect("daemonset manifest");
+            daemonsets.push(daemonset);
+        }
+
+        assert_eq!(
+            daemonsets[0].spec.as_ref().expect("spec").template,
+            daemonsets[1].spec.as_ref().expect("spec").template,
+            "identical secret values must render an identical pod template"
+        );
+        assert_ne!(
+            pod_checksum_annotation(&daemonsets[0]),
+            pod_checksum_annotation(&daemonsets[2]),
+            "rotating a secret value must change the pod template (rollout)"
+        );
+    }
+
+    #[test]
+    fn needs_update_detects_env_secret_rotation() {
+        let config = manifest_test_daemon(&[]);
+        let original = vec![secret_env_var("APP_SECRET", "v1", None)];
+        let original_checksum = environment_secret_plan("agent", "agent", &original)
+            .expect("plan")
+            .checksum;
+
+        let mut controller = manifest_test_controller();
+        controller.env_secret_checksum = Some(original_checksum);
+
+        let harness =
+            KubernetesManifestTestHarness::new(Resource::new(config.clone()), original.clone());
+        assert!(!controller
+            .needs_update(&harness.ctx())
+            .expect("needs_update"));
+
+        let rotated = vec![secret_env_var("APP_SECRET", "v2", None)];
+        let harness = KubernetesManifestTestHarness::new(Resource::new(config.clone()), rotated);
+        assert!(controller
+            .needs_update(&harness.ctx())
+            .expect("needs_update"));
+
+        controller.env_secret_checksum = None;
+        let harness = KubernetesManifestTestHarness::new(Resource::new(config), vec![]);
+        assert!(!controller
+            .needs_update(&harness.ctx())
+            .expect("needs_update"));
+    }
 }

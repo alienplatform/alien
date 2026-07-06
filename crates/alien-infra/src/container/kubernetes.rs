@@ -3,7 +3,7 @@ use std::time::Duration;
 use tracing::{debug, info};
 
 use crate::core::{
-    kubernetes_branded_resource_labels, kubernetes_runtime_pod_labels,
+    environment_secret_plan, kubernetes_branded_resource_labels, kubernetes_runtime_pod_labels,
     reconcile_environment_secret, EnvironmentVariableBuilder, KubernetesEnvSecretPlan,
     ResourceController, ResourceControllerContext,
 };
@@ -95,6 +95,12 @@ pub struct KubernetesContainerController {
     pub(crate) container_id: Option<String>,
     /// Public endpoint route/certificate state.
     pub(crate) public_endpoint: KubernetesPublicEndpointState,
+    /// Checksum of the environment Secret applied last (create/update).
+    /// Secret-typed env vars never enter the resource config on Kubernetes,
+    /// so `needs_update` compares this against the current snapshot to catch
+    /// secret rotations.
+    #[serde(default)]
+    pub(crate) env_secret_checksum: Option<String>,
 }
 
 #[controller]
@@ -144,6 +150,7 @@ impl KubernetesContainerController {
         let env_secret_plan = self
             .reconcile_environment_secret(config, &container_name, &namespace, ctx)
             .await?;
+        self.env_secret_checksum = env_secret_plan.as_ref().map(|plan| plan.checksum.clone());
         self.reconcile_internal_service(config, &container_name, &namespace, ctx)
             .await?;
 
@@ -624,6 +631,7 @@ impl KubernetesContainerController {
         let env_secret_plan = self
             .reconcile_environment_secret(config, workload_name, namespace, ctx)
             .await?;
+        self.env_secret_checksum = env_secret_plan.as_ref().map(|plan| plan.checksum.clone());
         self.service_port = first_declared_container_port(config);
         self.reconcile_internal_service(config, workload_name, namespace, ctx)
             .await?;
@@ -1067,6 +1075,25 @@ impl KubernetesContainerController {
         }
     }
 
+    /// Secret-typed env vars never enter the resource config on Kubernetes
+    /// (they're projected via secretKeyRef), so config diffing alone cannot
+    /// see secret rotations. Schedule an update when the snapshot-derived
+    /// env-secret checksum drifts from the one applied last; the update
+    /// re-reconciles the Secret and rolls pods via the checksum annotation.
+    fn needs_update(&self, ctx: &ResourceControllerContext<'_>) -> Result<bool> {
+        let Some(workload_name) = self.workload_name.as_ref() else {
+            return Ok(false);
+        };
+        let config = ctx.desired_resource_config::<Container>()?;
+        let current_checksum = environment_secret_plan(
+            &config.id,
+            workload_name,
+            &ctx.deployment_config.environment_variables.variables,
+        )
+        .map(|plan| plan.checksum);
+        Ok(current_checksum != self.env_secret_checksum)
+    }
+
     fn get_binding_params(&self) -> Result<Option<serde_json::Value>> {
         use alien_core::{BindingValue, KubernetesContainerBinding};
 
@@ -1123,6 +1150,7 @@ mod output_tests {
             service_port: Some(3000),
             container_id: Some("container".to_string()),
             public_endpoint,
+            env_secret_checksum: None,
             _internal_stay_count: None,
         };
 
@@ -1158,6 +1186,7 @@ mod output_tests {
             service_port: Some(3000),
             container_id: Some("container".to_string()),
             public_endpoint,
+            env_secret_checksum: None,
             _internal_stay_count: None,
         };
 
@@ -1189,6 +1218,7 @@ impl KubernetesContainerController {
             service_port: Some(80),
             container_id: Some("test-container".to_string()),
             public_endpoint: KubernetesPublicEndpointState::default(),
+            env_secret_checksum: None,
             _internal_stay_count: None,
         }
     }
@@ -1554,7 +1584,13 @@ impl KubernetesContainerController {
 
         // Add all remaining env vars from the builder (includes user vars + injected vars)
         for (key, value) in env_map {
-            if key == ENV_ALIEN_SECRETS && env_secret_plan.is_some() {
+            // Kubernetes Containers never load secrets at runtime: Secret-typed
+            // env vars are projected as secretKeyRefs above, and the
+            // ALIEN_SECRETS vault-load pointer must never reach the manifest.
+            // Deployment-level injection no longer emits it for K8s
+            // Containers/Daemons; this strip also covers configs injected by
+            // older managers.
+            if key == ENV_ALIEN_SECRETS {
                 continue;
             }
             // Skip if already added as a secret ref
@@ -1903,6 +1939,7 @@ mod tests {
             service_port: Some(3000),
             container_id: Some("api".to_string()),
             public_endpoint: KubernetesPublicEndpointState::default(),
+            env_secret_checksum: None,
             _internal_stay_count: None,
         };
 
@@ -1917,5 +1954,285 @@ mod tests {
         assert_eq!(ports.len(), 1);
         assert_eq!(ports[0].port, 3000);
         assert_eq!(ports[0].target_port, Some(IntOrString::Int(3000)));
+    }
+
+    // ── Typed manifest tests (ALIEN-227) ────────────────────────────
+    //
+    // These build the actual k8s-openapi objects the controller submits and
+    // assert on the typed fields — no string snapshots.
+
+    use crate::core::environment_secret_plan;
+    use crate::core::kubernetes_manifest_test_support::{
+        secret_env_var, KubernetesManifestTestHarness,
+    };
+    use alien_core::{
+        Resource, ENV_ALIEN_COMMANDS_POLLING_ENABLED, ENV_ALIEN_COMMANDS_POLLING_URL,
+        ENV_ALIEN_COMMANDS_TOKEN, ENV_ALIEN_LAMBDA_MODE, ENV_ALIEN_RUNTIME_SEND_OTLP,
+        ENV_ALIEN_TRANSPORT, ENV_ALIEN_WORKER_GRPC_ADDRESS,
+    };
+    use k8s_openapi::api::core::v1::EnvVar;
+
+    fn manifest_test_container(environment: &[(&str, &str)], stateful: bool) -> Container {
+        let mut config = Container::new("web".to_string())
+            .code(ContainerCode::Image {
+                image: "registry.example.com/web:1".to_string(),
+            })
+            .cpu(alien_core::ResourceSpec {
+                min: "100m".to_string(),
+                desired: "500m".to_string(),
+            })
+            .memory(alien_core::ResourceSpec {
+                min: "128Mi".to_string(),
+                desired: "512Mi".to_string(),
+            })
+            .stateful(stateful)
+            .permissions("default".to_string())
+            .build();
+        for (name, value) in environment {
+            config
+                .environment
+                .insert(name.to_string(), value.to_string());
+        }
+        config
+    }
+
+    fn manifest_test_controller() -> KubernetesContainerController {
+        KubernetesContainerController {
+            workload_name: Some("web".to_string()),
+            namespace: Some("test-ns".to_string()),
+            service_name: Some("web".to_string()),
+            container_id: Some("web".to_string()),
+            ..Default::default()
+        }
+    }
+
+    fn deployment_env(deployment: &Deployment) -> Vec<EnvVar> {
+        deployment
+            .spec
+            .as_ref()
+            .expect("deployment spec")
+            .template
+            .spec
+            .as_ref()
+            .expect("pod spec")
+            .containers[0]
+            .env
+            .clone()
+            .expect("container env")
+    }
+
+    fn pod_checksum_annotation(template: &PodTemplateSpec) -> Option<String> {
+        template
+            .metadata
+            .as_ref()
+            .and_then(|metadata| metadata.annotations.as_ref())
+            .and_then(|annotations| annotations.get("env-secret-checksum"))
+            .cloned()
+    }
+
+    fn assert_secret_key_ref(env: &[EnvVar], name: &str, secret_name: &str) {
+        let var = env
+            .iter()
+            .find(|var| var.name == name)
+            .unwrap_or_else(|| panic!("env var '{name}' missing from manifest"));
+        assert_eq!(var.value, None, "'{name}' must not carry an inline value");
+        let secret_key_ref = var
+            .value_from
+            .as_ref()
+            .and_then(|source| source.secret_key_ref.as_ref())
+            .unwrap_or_else(|| panic!("'{name}' must be a secretKeyRef"));
+        assert_eq!(secret_key_ref.name, secret_name);
+        assert_eq!(secret_key_ref.key, name);
+        assert_eq!(secret_key_ref.optional, Some(false));
+    }
+
+    #[tokio::test]
+    async fn deployment_manifest_projects_secrets_and_never_carries_alien_secrets() {
+        let variables = vec![
+            secret_env_var("APP_SECRET", "s3cret", None),
+            secret_env_var(
+                ENV_ALIEN_COMMANDS_TOKEN,
+                "receiver-token",
+                Some(vec!["web"]),
+            ),
+        ];
+        // Simulate a config injected by an older manager that still collapsed
+        // secrets: the pointer must be stripped from the manifest regardless.
+        let config = manifest_test_container(
+            &[
+                ("APP_ENV", "prod"),
+                (
+                    ENV_ALIEN_SECRETS,
+                    "{\"keys\":[\"APP_SECRET\"],\"hash\":\"legacy\"}",
+                ),
+            ],
+            false,
+        );
+        let plan = environment_secret_plan("web", "web", &variables).expect("plan");
+        let harness = KubernetesManifestTestHarness::new(Resource::new(config.clone()), variables);
+        let controller = manifest_test_controller();
+
+        let deployment = controller
+            .build_deployment(
+                &config,
+                "web",
+                "test-ns",
+                "web-sa",
+                None,
+                Some(&plan),
+                &harness.ctx(),
+            )
+            .await
+            .expect("deployment manifest");
+
+        let env = deployment_env(&deployment);
+
+        // App secret and the command receiver token are native projections.
+        assert_secret_key_ref(&env, "APP_SECRET", "web-env");
+        assert_secret_key_ref(&env, ENV_ALIEN_COMMANDS_TOKEN, "web-env");
+
+        // The runtime vault-load pointer never reaches the manifest.
+        assert!(
+            !env.iter().any(|var| var.name == ENV_ALIEN_SECRETS),
+            "ALIEN_SECRETS must not appear in a Kubernetes Container manifest"
+        );
+
+        // Plain vars still flow through.
+        let app_env = env
+            .iter()
+            .find(|var| var.name == "APP_ENV")
+            .expect("plain APP_ENV");
+        assert_eq!(app_env.value.as_deref(), Some("prod"));
+
+        // No worker-era runtime env leaks into Container manifests.
+        for name in [
+            ENV_ALIEN_TRANSPORT,
+            ENV_ALIEN_WORKER_GRPC_ADDRESS,
+            ENV_ALIEN_RUNTIME_SEND_OTLP,
+            ENV_ALIEN_LAMBDA_MODE,
+            ENV_ALIEN_COMMANDS_POLLING_ENABLED,
+            ENV_ALIEN_COMMANDS_POLLING_URL,
+        ] {
+            assert!(
+                !env.iter().any(|var| var.name == name),
+                "worker-era env var '{name}' must not appear in a Container manifest"
+            );
+        }
+
+        // The pod template carries the checksum that rolls pods on rotation.
+        assert_eq!(
+            pod_checksum_annotation(&deployment.spec.expect("spec").template),
+            Some(plan.checksum.clone())
+        );
+    }
+
+    #[tokio::test]
+    async fn statefulset_manifest_projects_secrets_and_stamps_checksum() {
+        let variables = vec![secret_env_var("APP_SECRET", "s3cret", None)];
+        let config = manifest_test_container(&[], true);
+        let plan = environment_secret_plan("web", "web", &variables).expect("plan");
+        let harness = KubernetesManifestTestHarness::new(Resource::new(config.clone()), variables);
+        let controller = manifest_test_controller();
+
+        let statefulset = controller
+            .build_statefulset(
+                &config,
+                "web",
+                "test-ns",
+                "web-sa",
+                None,
+                Some(&plan),
+                &harness.ctx(),
+            )
+            .await
+            .expect("statefulset manifest");
+
+        let spec = statefulset.spec.expect("statefulset spec");
+        let env = spec.template.spec.as_ref().expect("pod spec").containers[0]
+            .env
+            .clone()
+            .expect("container env");
+        assert_secret_key_ref(&env, "APP_SECRET", "web-env");
+        assert!(!env.iter().any(|var| var.name == ENV_ALIEN_SECRETS));
+        assert_eq!(
+            pod_checksum_annotation(&spec.template),
+            Some(plan.checksum.clone())
+        );
+    }
+
+    #[tokio::test]
+    async fn secret_rotation_changes_the_rendered_pod_template() {
+        let config = manifest_test_container(&[], false);
+        let controller = manifest_test_controller();
+
+        let mut templates = Vec::new();
+        for value in ["v1", "v1", "v2"] {
+            let variables = vec![secret_env_var("APP_SECRET", value, None)];
+            let plan = environment_secret_plan("web", "web", &variables).expect("plan");
+            let harness =
+                KubernetesManifestTestHarness::new(Resource::new(config.clone()), variables);
+            let deployment = controller
+                .build_deployment(
+                    &config,
+                    "web",
+                    "test-ns",
+                    "web-sa",
+                    None,
+                    Some(&plan),
+                    &harness.ctx(),
+                )
+                .await
+                .expect("deployment manifest");
+            templates.push(deployment.spec.expect("spec").template);
+        }
+
+        assert_eq!(
+            templates[0], templates[1],
+            "identical secret values must render an identical pod template"
+        );
+        assert_ne!(
+            pod_checksum_annotation(&templates[0]),
+            pod_checksum_annotation(&templates[2]),
+            "rotating a secret value must change the pod template (rollout)"
+        );
+    }
+
+    #[test]
+    fn needs_update_detects_env_secret_rotation() {
+        let config = manifest_test_container(&[], false);
+        let original = vec![secret_env_var("APP_SECRET", "v1", None)];
+        let original_checksum = environment_secret_plan("web", "web", &original)
+            .expect("plan")
+            .checksum;
+
+        let mut controller = manifest_test_controller();
+        controller.env_secret_checksum = Some(original_checksum);
+
+        // Same snapshot: no drift.
+        let harness =
+            KubernetesManifestTestHarness::new(Resource::new(config.clone()), original.clone());
+        assert!(!controller
+            .needs_update(&harness.ctx())
+            .expect("needs_update"));
+
+        // Rotated value: drift → update.
+        let rotated = vec![secret_env_var("APP_SECRET", "v2", None)];
+        let harness = KubernetesManifestTestHarness::new(Resource::new(config.clone()), rotated);
+        assert!(controller
+            .needs_update(&harness.ctx())
+            .expect("needs_update"));
+
+        // All secrets removed: drift → update (Secret refs must go away).
+        let harness = KubernetesManifestTestHarness::new(Resource::new(config.clone()), vec![]);
+        assert!(controller
+            .needs_update(&harness.ctx())
+            .expect("needs_update"));
+
+        // Never had secrets, still none: no drift.
+        controller.env_secret_checksum = None;
+        let harness = KubernetesManifestTestHarness::new(Resource::new(config), vec![]);
+        assert!(!controller
+            .needs_update(&harness.ctx())
+            .expect("needs_update"));
     }
 }

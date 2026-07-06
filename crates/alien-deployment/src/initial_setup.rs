@@ -56,7 +56,7 @@ pub async fn handle_initial_setup(
     // ALIEN_SECRETS is always safe to inject. Secret values are synced to the
     // vault below, between the step where the vault becomes Running and the
     // step where compute resources start.
-    crate::helpers::inject_environment_variables(&mut target_stack, &config)?;
+    crate::helpers::inject_environment_variables(&mut target_stack, &config, current.platform)?;
 
     // Inject OTLP monitoring env vars if monitoring is configured
     if let Some(monitoring) = &config.monitoring {

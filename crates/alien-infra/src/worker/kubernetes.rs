@@ -1157,6 +1157,92 @@ mod tests {
         let result = kubernetes_service_account_name(&long_prefix, "reader");
         assert!(result.len() <= 63);
     }
+
+    // ── ALIEN-227 Worker-unaffected proof ────────────────────────────
+    //
+    // Kubernetes Containers/Daemons no longer receive the ALIEN_SECRETS
+    // vault-load pointer (secrets are projected via secretKeyRef instead).
+    // Workers still ship the runtime wrapper, so their manifests must keep
+    // the injected pointer until the worker runtime path is reworked.
+
+    use crate::core::environment_secret_plan;
+    use crate::core::kubernetes_manifest_test_support::{
+        secret_env_var, KubernetesManifestTestHarness,
+    };
+    use alien_core::{Resource, ENV_ALIEN_SECRETS};
+
+    #[tokio::test]
+    async fn worker_manifest_keeps_alien_secrets_pointer() {
+        let alien_secrets_pointer = "{\"keys\":[\"APP_SECRET\"],\"hash\":\"test-hash\"}";
+        let mut config = Worker::new("api".to_string())
+            .code(WorkerCode::Image {
+                image: "registry.example.com/api:1".to_string(),
+            })
+            .permissions("default".to_string())
+            .build();
+        config.environment.insert(
+            ENV_ALIEN_SECRETS.to_string(),
+            alien_secrets_pointer.to_string(),
+        );
+
+        let variables = vec![secret_env_var("APP_SECRET", "s3cret", None)];
+        let plan = environment_secret_plan("api", "api", &variables).expect("plan");
+        let harness = KubernetesManifestTestHarness::new(Resource::new(config.clone()), variables);
+        let controller = KubernetesWorkerController {
+            deployment_name: Some("api".to_string()),
+            namespace: Some("test-ns".to_string()),
+            service_name: Some("api".to_string()),
+            worker_id: Some("api".to_string()),
+            ..Default::default()
+        };
+
+        let deployment = controller
+            .build_deployment(
+                &config,
+                "api",
+                "test-ns",
+                "api-sa",
+                None,
+                Some(&plan),
+                &harness.ctx(),
+            )
+            .await
+            .expect("worker deployment manifest");
+
+        let env = deployment
+            .spec
+            .as_ref()
+            .expect("deployment spec")
+            .template
+            .spec
+            .as_ref()
+            .expect("pod spec")
+            .containers[0]
+            .env
+            .clone()
+            .expect("container env");
+
+        // The wrapper's vault-load pointer stays intact.
+        let pointer = env
+            .iter()
+            .find(|var| var.name == ENV_ALIEN_SECRETS)
+            .expect("worker manifest keeps ALIEN_SECRETS");
+        assert_eq!(pointer.value.as_deref(), Some(alien_secrets_pointer));
+
+        // The secretKeyRef projection also renders (workers get both today).
+        let projected = env
+            .iter()
+            .find(|var| var.name == "APP_SECRET")
+            .expect("worker manifest projects the secret");
+        assert_eq!(
+            projected
+                .value_from
+                .as_ref()
+                .and_then(|source| source.secret_key_ref.as_ref())
+                .map(|secret_key_ref| secret_key_ref.name.as_str()),
+            Some("api-env")
+        );
+    }
 }
 
 // ---------------------------------------------------------------------------

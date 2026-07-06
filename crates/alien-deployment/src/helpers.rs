@@ -164,15 +164,21 @@ struct AlienSecretsConfig {
 
 /// Inject environment variables into stack functions and containers.
 ///
-/// For all compute resources (Workers and Containers built from source):
+/// For all compute resources (Workers, Containers, and Daemons):
 /// - Plain variables: Injected directly into resource.environment
-/// - Secret variables: Keys are listed in ALIEN_SECRETS; alien-worker-runtime loads
-///   the actual values from the "secrets" vault at startup.
+/// - Secret variables: Delivery depends on the platform and resource kind —
+///   see `platform_projects_secret_env`. Where no native projection exists,
+///   the keys are listed in ALIEN_SECRETS and alien-worker-runtime loads the
+///   actual values from the "secrets" vault at startup.
 ///
 /// The secrets vault is a dependency of every compute resource (added by
 /// `SecretsVaultMutation`). The executor won't start a function until its
 /// vault dependency is Running, so ALIEN_SECRETS is always safe to inject.
-pub fn inject_environment_variables(stack: &mut Stack, config: &DeploymentConfig) -> Result<()> {
+pub fn inject_environment_variables(
+    stack: &mut Stack,
+    config: &DeploymentConfig,
+    platform: Platform,
+) -> Result<()> {
     info!("Injecting environment variables into compute resources");
 
     let snapshot = &config.environment_variables;
@@ -184,7 +190,7 @@ pub fn inject_environment_variables(stack: &mut Stack, config: &DeploymentConfig
             || resource_type == alien_core::Container::RESOURCE_TYPE
             || resource_type == alien_core::Daemon::RESOURCE_TYPE
         {
-            inject_into_compute_resource(resource_name, resource_entry, snapshot)?;
+            inject_into_compute_resource(resource_name, resource_entry, snapshot, platform)?;
         }
     }
 
@@ -408,15 +414,23 @@ fn parse_otel_resource_attributes(existing: Option<&str>) -> BTreeMap<String, St
 /// Inject environment variables into a compute resource (Worker, Container, or Daemon).
 ///
 /// - Plain variables: inserted directly into resource.environment.
-/// - Secret variables: their keys are collected into ALIEN_SECRETS so
-///   alien-worker-runtime can fetch them from the vault at startup.
+/// - Secret variables: collapsed into ALIEN_SECRETS so alien-worker-runtime
+///   can fetch them from the vault at startup, unless the platform projects
+///   them natively (see `platform_projects_secret_env`).
 fn inject_into_compute_resource(
     resource_name: &str,
     resource_entry: &mut alien_core::ResourceEntry,
     snapshot: &EnvironmentVariablesSnapshot,
+    platform: Platform,
 ) -> Result<()> {
     if let Some(worker) = resource_entry.config.downcast_mut::<alien_core::Worker>() {
-        inject_into_environment(resource_name, "worker", &mut worker.environment, snapshot)
+        inject_into_environment(
+            resource_name,
+            "worker",
+            &mut worker.environment,
+            snapshot,
+            platform,
+        )
     } else if let Some(container) = resource_entry
         .config
         .downcast_mut::<alien_core::Container>()
@@ -426,9 +440,16 @@ fn inject_into_compute_resource(
             "container",
             &mut container.environment,
             snapshot,
+            platform,
         )
     } else if let Some(daemon) = resource_entry.config.downcast_mut::<alien_core::Daemon>() {
-        inject_into_environment(resource_name, "daemon", &mut daemon.environment, snapshot)
+        inject_into_environment(
+            resource_name,
+            "daemon",
+            &mut daemon.environment,
+            snapshot,
+            platform,
+        )
     } else {
         Err(AlienError::new(ErrorData::InternalError {
             message: format!(
@@ -439,11 +460,28 @@ fn inject_into_compute_resource(
     }
 }
 
+/// Whether the platform delivers Secret-typed env vars to this compute kind
+/// natively, making the ALIEN_SECRETS vault-load pointer unnecessary.
+///
+/// Kubernetes Containers and Daemons run the application image directly —
+/// there is no runtime wrapper to resolve ALIEN_SECRETS. Their controllers
+/// project each applicable secret as a `valueFrom.secretKeyRef` against a
+/// per-workload Kubernetes Secret (`{workload}-env`) and roll pods via a
+/// checksum annotation when secret values change.
+///
+/// Workers still ship the runtime wrapper on every platform and keep the
+/// ALIEN_SECRETS pointer. Local Container/Daemon secret delivery is separate
+/// work (ALIEN-226) and intentionally still collapses here.
+fn platform_projects_secret_env(platform: Platform, resource_type: &str) -> bool {
+    platform == Platform::Kubernetes && matches!(resource_type, "container" | "daemon")
+}
+
 fn inject_into_environment(
     resource_name: &str,
     resource_type: &str,
     environment: &mut HashMap<String, String>,
     snapshot: &EnvironmentVariablesSnapshot,
+    platform: Platform,
 ) -> Result<()> {
     // Filter variables that apply to this resource
     let applicable_vars: Vec<&EnvironmentVariable> = snapshot
@@ -470,6 +508,21 @@ fn inject_into_environment(
         .filter(|v| v.var_type == EnvironmentVariableType::Secret)
         .map(|v| v.name.clone())
         .collect();
+
+    if platform_projects_secret_env(platform, resource_type) {
+        // The platform controller projects these secrets natively (Kubernetes
+        // secretKeyRef); injecting ALIEN_SECRETS here would leak a dangling
+        // vault-load pointer into the workload manifest.
+        if !secret_keys.is_empty() {
+            debug!(
+                "Skipping ALIEN_SECRETS for {} '{}': {} secret keys are projected by the platform",
+                resource_type,
+                resource_name,
+                secret_keys.len()
+            );
+        }
+        return Ok(());
+    }
 
     // If resource needs secrets, add ALIEN_SECRETS env var
     // alien-worker-runtime will load these from the vault at startup
@@ -1005,7 +1058,7 @@ mod tests {
         let config = make_config(snapshot);
         let mut stack = make_single_function_stack("worker");
 
-        inject_environment_variables(&mut stack, &config).unwrap();
+        inject_environment_variables(&mut stack, &config, Platform::Test).unwrap();
 
         let func = stack
             .resources
@@ -1026,8 +1079,8 @@ mod tests {
         assert_eq!(parsed.hash, "test-hash");
 
         // Secret values NOT injected as plain env vars
-        assert!(func.environment.get("SECRET_TOKEN").is_none());
-        assert!(func.environment.get("SECRET_KEY").is_none());
+        assert!(!func.environment.contains_key("SECRET_TOKEN"));
+        assert!(!func.environment.contains_key("SECRET_KEY"));
     }
 
     #[test]
@@ -1036,7 +1089,7 @@ mod tests {
         let config = make_config(snapshot);
         let mut stack = make_single_function_stack("worker");
 
-        inject_environment_variables(&mut stack, &config).unwrap();
+        inject_environment_variables(&mut stack, &config, Platform::Test).unwrap();
 
         let func = stack
             .resources
@@ -1047,7 +1100,7 @@ mod tests {
             .unwrap();
 
         assert_eq!(func.environment.get("APP_ENV").unwrap(), "prod");
-        assert!(func.environment.get(ENV_ALIEN_SECRETS).is_none());
+        assert!(!func.environment.contains_key(ENV_ALIEN_SECRETS));
     }
 
     #[test]
@@ -1062,7 +1115,7 @@ mod tests {
         let config = make_config(snapshot);
         let mut stack = make_single_function_stack("worker");
 
-        inject_environment_variables(&mut stack, &config).unwrap();
+        inject_environment_variables(&mut stack, &config, Platform::Test).unwrap();
 
         let func = stack
             .resources
@@ -1073,7 +1126,68 @@ mod tests {
             .unwrap();
 
         // Secret targeted at "other-fn" should NOT produce ALIEN_SECRETS on "worker"
-        assert!(func.environment.get(ENV_ALIEN_SECRETS).is_none());
+        assert!(!func.environment.contains_key(ENV_ALIEN_SECRETS));
+    }
+
+    #[test]
+    fn kubernetes_projects_container_and_daemon_secrets_worker_keeps_pointer() {
+        let snapshot = make_snapshot(&[("APP_ENV", "prod")], &[("APP_SECRET", "s3cret")]);
+        let config = make_config(snapshot);
+        let mut stack = make_compute_stack();
+
+        inject_environment_variables(&mut stack, &config, Platform::Kubernetes).unwrap();
+
+        // Worker still ships the runtime wrapper: it keeps the vault-load
+        // pointer on Kubernetes (ALIEN-227 leaves Workers untouched).
+        let worker_env = resource_env(&stack, "worker");
+        let pointer: AlienSecretsConfig = serde_json::from_str(
+            worker_env
+                .get(ENV_ALIEN_SECRETS)
+                .expect("worker keeps ALIEN_SECRETS on Kubernetes"),
+        )
+        .unwrap();
+        assert_eq!(pointer.keys, vec!["APP_SECRET".to_string()]);
+        assert_eq!(pointer.hash, "test-hash");
+
+        // Container and Daemon secrets are projected natively (secretKeyRef)
+        // by the Kubernetes controllers: no pointer, no raw value here.
+        for id in ["web", "agent"] {
+            let env = resource_env(&stack, id);
+            assert!(
+                !env.contains_key(ENV_ALIEN_SECRETS),
+                "'{id}' must not get ALIEN_SECRETS on Kubernetes"
+            );
+            assert!(
+                !env.contains_key("APP_SECRET"),
+                "'{id}' must not get the raw secret value"
+            );
+            assert_eq!(
+                env.get("APP_ENV").unwrap(),
+                "prod",
+                "'{id}' still gets plain vars"
+            );
+        }
+    }
+
+    #[test]
+    fn non_kubernetes_platforms_still_collapse_secrets_for_all_compute() {
+        // Local Container/Daemon secret delivery is separate work (ALIEN-226);
+        // off Kubernetes, every compute resource keeps the ALIEN_SECRETS pointer.
+        for platform in [Platform::Local, Platform::Test, Platform::Aws] {
+            let snapshot = make_snapshot(&[], &[("APP_SECRET", "s3cret")]);
+            let config = make_config(snapshot);
+            let mut stack = make_compute_stack();
+
+            inject_environment_variables(&mut stack, &config, platform).unwrap();
+
+            for id in ["worker", "web", "agent"] {
+                let env = resource_env(&stack, id);
+                assert!(
+                    env.contains_key(ENV_ALIEN_SECRETS),
+                    "{platform:?}: '{id}' keeps ALIEN_SECRETS"
+                );
+            }
+        }
     }
 
     #[test]
