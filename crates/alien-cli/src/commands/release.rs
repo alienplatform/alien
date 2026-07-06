@@ -25,7 +25,12 @@ use std::time::Instant;
 use tracing::info;
 
 #[derive(Parser, Debug, Clone)]
+// The root command sets `version` + `propagate_version`, which pushes an
+// auto-generated `--version` flag into every subcommand. This command owns a
+// semantic `--version <value>` arg (the release version), so suppress the
+// auto flag here to avoid a clap name collision (panics in debug builds).
 #[command(
+    disable_version_flag = true,
     about = "Push images and create a release",
     long_about = "Push built images to a container registry and create a new release on the Alien platform. By default, retrieves registry credentials from the platform's manager. Use override flags for custom registries (e.g., deploying the manager itself).",
     after_help = "EXAMPLES:
