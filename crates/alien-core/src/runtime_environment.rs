@@ -23,6 +23,19 @@ pub const ENV_ALIEN_COMMANDS_TOKEN: &str = "ALIEN_COMMANDS_TOKEN";
 /// by runtime polling in a later ALIEN-219 task; declared here so it's
 /// reserved from day one.
 pub const ENV_ALIEN_COMMANDS_TARGET_RESOURCE_ID: &str = "ALIEN_COMMANDS_TARGET_RESOURCE_ID";
+/// Base URL of the command server API an app-owned pull `Receiver`
+/// (Container/Daemon) leases commands from. Pinned by the receiver contract
+/// (ALIEN-221) — the TypeScript receiver reads the same variable. Missing or
+/// invalid values fail fast with `COMMAND_RECEIVER_CONFIG_INVALID`. Injection
+/// is wired by a later ALIEN-221 task; declared here so it's reserved from
+/// day one.
+pub const ENV_ALIEN_COMMANDS_URL: &str = "ALIEN_COMMANDS_URL";
+/// Type of the command target a pull `Receiver` leases for (`container` |
+/// `daemon`). Lease requests require a typed target and a receiver must not
+/// guess it (the worker runtime hardcodes `worker`; a Container/Daemon
+/// receiver gets its type injected). Companion to
+/// [`ENV_ALIEN_COMMANDS_TARGET_RESOURCE_ID`]; ALIEN-221.
+pub const ENV_ALIEN_COMMANDS_TARGET_RESOURCE_TYPE: &str = "ALIEN_COMMANDS_TARGET_RESOURCE_TYPE";
 /// Base URL of the deployment's manager. The client-side minting-backed
 /// credential resolver ([`alien-bindings`]) posts to `{ALIEN_MANAGER_URL}/v1/credentials/mint`
 /// when native cloud credentials are not available in the environment.
@@ -435,6 +448,8 @@ pub fn is_reserved_runtime_environment_name(name: &str) -> bool {
                 | ENV_ALIEN_COMMANDS_POLLING_URL
                 | ENV_ALIEN_COMMANDS_TOKEN
                 | ENV_ALIEN_COMMANDS_TARGET_RESOURCE_ID
+                | ENV_ALIEN_COMMANDS_TARGET_RESOURCE_TYPE
+                | ENV_ALIEN_COMMANDS_URL
                 | ENV_ALIEN_DEPLOYMENT_ID
                 | ENV_ALIEN_DEPLOYMENT_NAME
                 | ENV_ALIEN_DEPLOYMENT_SERVICE_ACCOUNT
@@ -546,6 +561,21 @@ mod tests {
         assert_eq!(
             ENV_ALIEN_COMMANDS_TARGET_RESOURCE_ID,
             "ALIEN_COMMANDS_TARGET_RESOURCE_ID"
+        );
+    }
+
+    #[test]
+    fn reserves_command_receiver_names() {
+        assert!(is_reserved_runtime_environment_name(
+            ENV_ALIEN_COMMANDS_URL
+        ));
+        assert!(is_reserved_runtime_environment_name(
+            ENV_ALIEN_COMMANDS_TARGET_RESOURCE_TYPE
+        ));
+        assert_eq!(ENV_ALIEN_COMMANDS_URL, "ALIEN_COMMANDS_URL");
+        assert_eq!(
+            ENV_ALIEN_COMMANDS_TARGET_RESOURCE_TYPE,
+            "ALIEN_COMMANDS_TARGET_RESOURCE_TYPE"
         );
     }
 
