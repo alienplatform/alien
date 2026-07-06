@@ -127,17 +127,15 @@ impl crate::traits::Vault for AwsParameterStoreVault {
                 .maybe_next_token(next_token.clone())
                 .build();
 
-            let response = self
-                .client
-                .describe_parameters(request)
-                .await
-                .context(ErrorData::CloudPlatformError {
+            let response = self.client.describe_parameters(request).await.context(
+                ErrorData::CloudPlatformError {
                     message: format!(
                         "Failed to describe parameters for vault prefix '{}'",
                         self.vault_prefix
                     ),
                     resource_id: None,
-                })?;
+                },
+            )?;
 
             for parameter in response.parameters.unwrap_or_default() {
                 if let Some(name) = parameter.name {

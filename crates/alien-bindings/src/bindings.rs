@@ -223,7 +223,10 @@ mod tests {
             .send("jobs", MessagePayload::Text("retry".to_string()))
             .await
             .expect("send should succeed");
-        let first = queue.receive("jobs", 1).await.expect("receive should succeed");
+        let first = queue
+            .receive("jobs", 1)
+            .await
+            .expect("receive should succeed");
         assert_eq!(first.len(), 1);
         assert!(
             queue
@@ -237,7 +240,10 @@ mod tests {
             .nack("jobs", &first[0].receipt_handle)
             .await
             .expect("nack should succeed");
-        let redelivered = queue.receive("jobs", 1).await.expect("receive should succeed");
+        let redelivered = queue
+            .receive("jobs", 1)
+            .await
+            .expect("receive should succeed");
         assert_eq!(redelivered.len(), 1, "nacked message must be redelivered");
 
         // purge: clears everything, in flight or visible.

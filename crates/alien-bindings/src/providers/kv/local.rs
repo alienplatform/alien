@@ -312,7 +312,11 @@ impl Kv for LocalKv {
                 )
                 .await
                 .into_alien_error()
-                .context(kv_error("scan_prefix", prefix, "failed to scan prefix"))?;
+                .context(kv_error(
+                    "scan_prefix",
+                    prefix,
+                    "failed to scan prefix",
+                ))?;
 
                 let mut matching = Vec::new();
                 for row in &rows {

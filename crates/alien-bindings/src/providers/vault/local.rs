@@ -208,6 +208,10 @@ mod tests {
         vault.delete_secret("drop").await.expect("delete drop");
 
         let names = vault.list_secrets().await.expect("list should succeed");
-        assert_eq!(names, vec!["keep".to_string()], "deleted secret must be gone");
+        assert_eq!(
+            names,
+            vec!["keep".to_string()],
+            "deleted secret must be gone"
+        );
     }
 }

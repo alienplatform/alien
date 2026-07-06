@@ -217,7 +217,9 @@ impl Queue for AzureServiceBusQueue {
         Err(alien_error::AlienError::new(
             ErrorData::OperationNotSupported {
                 operation: "queue.purge".to_string(),
-                reason: "Azure Service Bus purge is not supported by the Service Bus data-plane client".to_string(),
+                reason:
+                    "Azure Service Bus purge is not supported by the Service Bus data-plane client"
+                        .to_string(),
             },
         ))
     }

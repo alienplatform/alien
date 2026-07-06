@@ -157,11 +157,7 @@ impl LocalStore {
 
         let db_path = data_dir.join(spec.db_filename);
         let db = open_database(&db_path, spec.binding_type).await?;
-        let store = Self {
-            data_dir,
-            db,
-            spec,
-        };
+        let store = Self { data_dir, db, spec };
         let conn = store.connect().await?;
 
         // Create the shared meta table + marker and read it back FIRST.
@@ -240,12 +236,12 @@ impl LocalStore {
                 binding_type: self.spec.binding_type.to_string(),
                 reason: "failed to open store connection".to_string(),
             })?;
-        conn.busy_timeout(BUSY_TIMEOUT)
-            .into_alien_error()
-            .context(ErrorData::BindingSetupFailed {
+        conn.busy_timeout(BUSY_TIMEOUT).into_alien_error().context(
+            ErrorData::BindingSetupFailed {
                 binding_type: self.spec.binding_type.to_string(),
                 reason: "failed to set busy_timeout".to_string(),
-            })?;
+            },
+        )?;
         Ok(conn)
     }
 
@@ -288,13 +284,13 @@ mod tests {
 
         // Seed a file with only meta + a FOREIGN format marker (no provider table).
         {
-            let db = open_database(&db_path, "test store").await.expect("seed open");
+            let db = open_database(&db_path, "test store")
+                .await
+                .expect("seed open");
             let conn = db.connect().expect("seed connect");
-            conn.execute_batch(
-                "CREATE TABLE meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);",
-            )
-            .await
-            .expect("seed meta table");
+            conn.execute_batch("CREATE TABLE meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);")
+                .await
+                .expect("seed meta table");
             conn.execute(
                 "INSERT INTO meta (key, value) VALUES ('format', 'teststore.v2')",
                 (),
@@ -318,7 +314,9 @@ mod tests {
         );
 
         // The provider table must NOT have been created by the rejected open.
-        let db = open_database(&db_path, "test store").await.expect("verify open");
+        let db = open_database(&db_path, "test store")
+            .await
+            .expect("verify open");
         let conn = db.connect().expect("verify connect");
         let rows = query_all(
             &conn,
