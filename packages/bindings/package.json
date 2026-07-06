@@ -54,10 +54,5 @@
   },
   "dependencies": {
     "@alienplatform/core": "workspace:^"
-  },
-  "optionalDependencies": {
-    "@alienplatform/bindings-darwin-arm64": "1.10.7",
-    "@alienplatform/bindings-linux-x64-gnu": "1.10.7",
-    "@alienplatform/bindings-linux-arm64-gnu": "1.10.7"
   }
 }

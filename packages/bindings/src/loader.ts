@@ -7,6 +7,12 @@
  *      a dev/test-only escape hatch and is never set in published installs.
  *   2. The per-platform prebuild package from `optionalDependencies`
  *      (`@alienplatform/bindings-<triple>`) — how end users get the addon.
+ *      `optionalDependencies` only exists in the *published* manifest: `napi
+ *      prepublish` injects it at publish time (task 04a) from the `napi.triples`
+ *      config in `crates/alien-bindings-node/package.json`. The workspace source
+ *      manifest carries no `optionalDependencies`, so this path is a no-op
+ *      (module-not-found) in every dev/test checkout — expected, and why step 3
+ *      exists below.
  *   3. Dev fallback: the locally-built addon under
  *      `crates/alien-bindings-node/alien-bindings-node.<triple>.node`, located by
  *      walking up from this module. This lets the repo run against a
