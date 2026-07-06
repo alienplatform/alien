@@ -566,9 +566,7 @@ mod tests {
 
     #[test]
     fn reserves_command_receiver_names() {
-        assert!(is_reserved_runtime_environment_name(
-            ENV_ALIEN_COMMANDS_URL
-        ));
+        assert!(is_reserved_runtime_environment_name(ENV_ALIEN_COMMANDS_URL));
         assert!(is_reserved_runtime_environment_name(
             ENV_ALIEN_COMMANDS_TARGET_RESOURCE_TYPE
         ));

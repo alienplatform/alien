@@ -1,2 +1,17 @@
 // Re-export all commands types from alien-core
 pub use alien_core::commands_types::*;
+
+/// Default interval between lease polls, in seconds.
+///
+/// Shared by every pull-side poller of the commands protocol (the worker
+/// runtime's `commands_polling` transport and the app-owned `Receiver`).
+pub const DEFAULT_POLL_INTERVAL_SECS: u64 = 5;
+
+/// Default maximum number of leases requested per poll.
+pub const DEFAULT_MAX_LEASES: usize = 10;
+
+/// Default lease duration requested per poll, in seconds.
+///
+/// There is no lease-renew call in the protocol: a command's execution
+/// budget is `min(envelope.deadline, lease_expires_at)`.
+pub const DEFAULT_LEASE_SECONDS: u64 = 60;
