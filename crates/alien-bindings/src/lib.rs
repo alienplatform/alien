@@ -28,6 +28,7 @@ pub mod presigned {
     pub use alien_core::presigned::*;
 }
 pub mod alien_context;
+mod credential_source;
 pub mod http_client;
 pub mod provider;
 
