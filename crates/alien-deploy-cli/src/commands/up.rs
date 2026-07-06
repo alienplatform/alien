@@ -299,7 +299,7 @@ mod tests {
     fn machines_join_guidance_prints_future_join_command() {
         assert_eq!(
             machines_join_command("alien-deploy"),
-            "sudo alien-deploy join --token <join-token> --control-plane-url <control-plane-url> --cluster-id <cluster-id>"
+            "sudo alien-deploy join --token <join-token>"
         );
     }
 
@@ -1071,9 +1071,7 @@ pub async fn up_command(args: UpArgs, embedded_config: Option<&DeployCliConfig>)
 }
 
 fn machines_join_command(cli_name: &str) -> String {
-    format!(
-        "sudo {cli_name} join --token <join-token> --control-plane-url <control-plane-url> --cluster-id <cluster-id>"
-    )
+    format!("sudo {cli_name} join --token <join-token>")
 }
 
 /// Resolved deployment info before manager connection.
