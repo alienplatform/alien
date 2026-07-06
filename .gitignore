@@ -56,3 +56,4 @@ rustc-ice-*.txt
 .codex/
 
 .pnpm-store
+.superpowers/
