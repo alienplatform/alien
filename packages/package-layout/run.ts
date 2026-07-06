@@ -563,7 +563,8 @@ function main(): void {
         check: "compile",
         package: "bindings",
         status: "fail",
-        reason: "bun build --compile of ./native entry fails (bindings package not installed)",
+        reason:
+          "bun build --compile of ./native entry fails (no per-platform prebuild staged; 04a)",
         evidence: lastLine(built.stderr) || lastLine(built.stdout) || `exit ${built.status}`,
       })
     } else {

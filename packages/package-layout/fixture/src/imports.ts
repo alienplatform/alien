@@ -14,10 +14,11 @@
  * `expected-failures.json`. This file always exits 0: a crash with no output is
  * how `run.ts` detects an unexpected, un-reported failure.
  *
- * Today only `@alienplatform/sdk` (+ its transitive `@alienplatform/core`) is
- * installed, so the `@alienplatform/bindings` (task 04), `@alienplatform/commands`
- * (task 08), and `./worker-runtime` (task 03) checks report `fail` and `run.ts`
- * marks them `[expected]`.
+ * `@alienplatform/sdk`, its transitive `@alienplatform/core`, and
+ * `@alienplatform/bindings` are installed and their checks must PASS. Only
+ * `@alienplatform/commands` (task 08) and `./worker-runtime` (task 03) are not
+ * yet installed, so those checks report `fail` and `run.ts` marks them
+ * `[expected]`.
  */
 
 interface CheckLine {
@@ -139,7 +140,7 @@ async function checkSdkWorkerRuntime(): Promise<void> {
   }
 }
 
-// --- @alienplatform/bindings — package OPEN until task 04 --------------------
+// --- @alienplatform/bindings — installed; per-platform prebuilds open (04a) --
 // Public surface table + the shared error primitives re-export (AlienError,
 // defineError from @alienplatform/core) pinned by the bindings contract.
 const BINDINGS_EXPORTS = [
