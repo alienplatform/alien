@@ -3,6 +3,7 @@
 use alien_bindings::traits::ImpersonationRequest;
 use alien_bindings::ServiceAccountInfo;
 use alien_core::ClientConfig;
+use alien_error::ContextError;
 use axum::{
     extract::{Json, State},
     http::HeaderMap,
@@ -14,8 +15,10 @@ use chrono::{SecondsFormat, Utc};
 use serde::{Deserialize, Serialize};
 use tracing::info;
 
+use crate::auth::Subject;
 use crate::error::ErrorData;
 use crate::ids::sha256_hash;
+use crate::traits::DeploymentRecord;
 
 use super::{auth, AppState};
 
@@ -40,11 +43,23 @@ pub struct ResolveCredentialsRequest {
     pub deployment_id: String,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Serialize)]
 #[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 #[serde(rename_all = "camelCase")]
 pub struct ResolveCredentialsResponse {
-    pub client_config: serde_json::Value,
+    pub client_config: ClientConfig,
+}
+
+/// Manual `Debug`: `ClientConfig` carries live credentials. Never let a
+/// `{:?}` of this response (log line, panic message, test failure output)
+/// print them — even indirectly through `serde_json::Value`, which has no
+/// redaction of its own once the typed config is serialized.
+impl std::fmt::Debug for ResolveCredentialsResponse {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("ResolveCredentialsResponse")
+            .field("client_config", &"<redacted>")
+            .finish()
+    }
 }
 
 /// Request body for `POST /v1/credentials/mint`.
@@ -73,17 +88,36 @@ pub struct MintCredentialsRequest {
 }
 
 /// Response body for `POST /v1/credentials/mint`.
-#[derive(Debug, Serialize)]
+#[derive(Serialize)]
 #[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 #[serde(rename_all = "camelCase")]
 pub struct MintCredentialsResponse {
     /// Minted platform client configuration (carries the short-lived creds).
-    pub client_config: serde_json::Value,
+    pub client_config: ClientConfig,
     /// Credential expiry as an RFC3339 timestamp (now + clamped duration).
+    ///
+    /// This is server-computed (`now + clamped duration`), not read back from
+    /// the provider — for lazily-resolved configs (e.g. GCP, where the
+    /// resolver doesn't always round-trip an authoritative expiry) it is
+    /// nominal rather than provider truth. Treat it as a refresh hint: fetch
+    /// new credentials at or before this time, don't rely on it to prove the
+    /// underlying credential is still valid at that exact instant.
     pub expires_at: String,
     /// Human-readable identity the credentials act as (role ARN, SA email,
     /// managed-identity client id, or `platform:account` for the local path).
     pub principal: String,
+}
+
+/// Manual `Debug`: see [`ResolveCredentialsResponse`]'s impl — same reasoning,
+/// same secret-bearing field.
+impl std::fmt::Debug for MintCredentialsResponse {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("MintCredentialsResponse")
+            .field("client_config", &"<redacted>")
+            .field("expires_at", &self.expires_at)
+            .field("principal", &self.principal)
+            .finish()
+    }
 }
 
 // --- Router ---
@@ -113,38 +147,66 @@ async fn resolve_credentials(
     headers: HeaderMap,
     Json(req): Json<ResolveCredentialsRequest>,
 ) -> Response {
-    let subject = match auth::require_auth(&state, &headers).await {
-        Ok(s) => s,
-        Err(e) => return e.into_response(),
-    };
-    // Get the deployment, then authorize on the loaded entity (Pattern 2 of
-    // authorization-guidelines.md).
-    let deployment = match state
-        .deployment_store
-        .get_deployment(&subject, &req.deployment_id)
-        .await
+    let (_subject, deployment) = match authorize_deployment(
+        &state,
+        &headers,
+        &req.deployment_id,
+        "resolve credentials for",
+    )
+    .await
     {
-        Ok(Some(d)) => d,
-        Ok(None) => return ErrorData::not_found_deployment(&req.deployment_id).into_response(),
-        Err(e) => return e.into_response(),
+        Ok(pair) => pair,
+        Err(response) => return response,
     };
-
-    if !state.authz.can_act_on_deployment(&subject, &deployment) {
-        return ErrorData::forbidden("Cannot resolve credentials for this deployment")
-            .into_response();
-    }
 
     // Resolve credentials
     match state.credential_resolver.resolve(&deployment).await {
-        Ok(client_config) => {
-            let config_value = serde_json::to_value(&client_config).unwrap_or_default();
-            Json(ResolveCredentialsResponse {
-                client_config: config_value,
-            })
-            .into_response()
-        }
+        Ok(client_config) => Json(ResolveCredentialsResponse { client_config }).into_response(),
         Err(e) => e.into_response(),
     }
+}
+
+// --- Shared auth/load plumbing ---
+
+/// Load the deployment and authorize the subject on it. Shared by
+/// `resolve_credentials` and `mint_credentials`, which both need "valid
+/// bearer, deployment exists, subject can act on it" before doing anything
+/// endpoint-specific. `action` only affects the forbidden-response wording
+/// (e.g. `"mint credentials for"`).
+///
+/// `can_act_on_deployment` is `can_read_deployment` under the hood: a
+/// Workspace/Project-scoped token passes unconditionally, a
+/// DeploymentGroup-scoped token passes for any deployment in its group, and a
+/// Deployment-scoped token passes only for its own deployment. So a
+/// deployment-group token can mint/resolve for every deployment in its group
+/// — an inherited grant, not a bug (see the DG-token matrix test).
+async fn authorize_deployment(
+    state: &AppState,
+    headers: &HeaderMap,
+    deployment_id: &str,
+    action: &str,
+) -> std::result::Result<(Subject, DeploymentRecord), Response> {
+    let subject = auth::require_auth(state, headers)
+        .await
+        .map_err(|e| e.into_response())?;
+
+    let deployment = match state
+        .deployment_store
+        .get_deployment(&subject, deployment_id)
+        .await
+    {
+        Ok(Some(d)) => d,
+        Ok(None) => return Err(ErrorData::not_found_deployment(deployment_id).into_response()),
+        Err(e) => return Err(e.into_response()),
+    };
+
+    if !state.authz.can_act_on_deployment(&subject, &deployment) {
+        return Err(
+            ErrorData::forbidden(format!("Cannot {action} this deployment")).into_response(),
+        );
+    }
+
+    Ok((subject, deployment))
 }
 
 // --- Mint handler ---
@@ -166,27 +228,25 @@ async fn mint_credentials(
     headers: HeaderMap,
     Json(req): Json<MintCredentialsRequest>,
 ) -> Response {
-    // Auth: valid bearer required (401 otherwise).
-    let subject = match auth::require_auth(&state, &headers).await {
-        Ok(s) => s,
-        Err(e) => return e.into_response(),
-    };
+    // Auth + load + authorize (401 / 404 / 403). See `authorize_deployment`
+    // for the scope semantics — notably that DeploymentGroup/Project/Workspace
+    // scoped tokens all inherit mint access, not just the deployment's own
+    // token.
+    let (_subject, deployment) =
+        match authorize_deployment(&state, &headers, &req.deployment_id, "mint credentials for")
+            .await
+        {
+            Ok(pair) => pair,
+            Err(response) => return response,
+        };
 
-    // Load the deployment, then authorize on the loaded entity. A deployment
-    // token whose scope doesn't match this deployment fails `can_act_on_...`
-    // (403); a workspace-admin token passes.
-    let deployment = match state
-        .deployment_store
-        .get_deployment(&subject, &req.deployment_id)
-        .await
-    {
-        Ok(Some(d)) => d,
-        Ok(None) => return ErrorData::not_found_deployment(&req.deployment_id).into_response(),
-        Err(e) => return e.into_response(),
-    };
-
-    if !state.authz.can_act_on_deployment(&subject, &deployment) {
-        return ErrorData::forbidden("Cannot mint credentials for this deployment").into_response();
+    if let Some(response) = validate_sts_session_component("bindingName", &req.binding_name) {
+        return response;
+    }
+    if let Some(resource_id) = req.resource_id.as_deref() {
+        if let Some(response) = validate_sts_session_component("resourceId", resource_id) {
+            return response;
+        }
     }
 
     let platform = deployment.platform;
@@ -215,9 +275,22 @@ async fn mint_credentials(
                 }
             };
 
+            // `.context(...)` preserves the source error's code/retryable/
+            // http_status_code/chain instead of flattening it into a bare
+            // "internal error: {message}" string — same idiom the local
+            // (resolver) path gets for free via `e.into_response()`.
             let info = match service_account.get_info().await {
                 Ok(info) => info,
-                Err(e) => return ErrorData::internal(e.message).into_response(),
+                Err(e) => {
+                    return e
+                        .context(ErrorData::InternalError {
+                            message: format!(
+                                "Failed to get service-account info for binding '{}'",
+                                req.binding_name
+                            ),
+                        })
+                        .into_response()
+                }
             };
 
             let impersonated = match service_account
@@ -229,7 +302,16 @@ async fn mint_credentials(
                 .await
             {
                 Ok(config) => config,
-                Err(e) => return ErrorData::internal(e.message).into_response(),
+                Err(e) => {
+                    return e
+                        .context(ErrorData::InternalError {
+                            message: format!(
+                                "Failed to impersonate service-account binding '{}'",
+                                req.binding_name
+                            ),
+                        })
+                        .into_response()
+                }
             };
 
             (impersonated, principal_from_info(&info), "impersonation")
@@ -242,14 +324,6 @@ async fn mint_credentials(
                 Err(e) => return e.into_response(),
             }
         };
-
-    let config_value = match serde_json::to_value(&client_config) {
-        Ok(value) => value,
-        Err(e) => {
-            return ErrorData::internal(format!("Failed to serialize client config: {e}"))
-                .into_response()
-        }
-    };
 
     let expires_at = (Utc::now() + chrono::Duration::seconds(duration_seconds as i64))
         .to_rfc3339_opts(SecondsFormat::Secs, true);
@@ -268,7 +342,7 @@ async fn mint_credentials(
     );
 
     Json(MintCredentialsResponse {
-        client_config: config_value,
+        client_config,
         expires_at,
         principal,
     })
@@ -300,9 +374,15 @@ fn mint_session_name(deployment_id: &str, resource_id: Option<&str>) -> String {
 
 /// Truncate a session name to [`MAX_SESSION_NAME_LEN`] with a hash suffix.
 ///
-/// Inputs are ASCII (`alien-mint-`, deployment/resource ids), so byte slicing
-/// is safe. The suffix is the first 8 hex chars of the SHA-256 of the full raw
-/// name, keeping the result deterministic and collision-resistant.
+/// The suffix is the first 8 hex chars of the SHA-256 of the full raw name,
+/// keeping the result deterministic and collision-resistant.
+///
+/// Callers today only pass STS-safe-charset (hence ASCII) input — see
+/// [`validate_sts_session_component`] — but this walks the cut point back to
+/// the nearest `char` boundary regardless, as defense in depth against any
+/// future caller that isn't validated the same way. Byte-slicing a
+/// multi-byte-straddling index panics; there is no excuse to let that surface
+/// here again.
 fn truncate_session_name(raw: &str) -> String {
     if raw.len() <= MAX_SESSION_NAME_LEN {
         return raw.to_string();
@@ -310,8 +390,37 @@ fn truncate_session_name(raw: &str) -> String {
     let suffix = sha256_hash(raw);
     let suffix = &suffix[..8];
     // prefix + '-' + 8-char suffix == MAX_SESSION_NAME_LEN
-    let prefix_len = MAX_SESSION_NAME_LEN - 1 - suffix.len();
+    let mut prefix_len = MAX_SESSION_NAME_LEN - 1 - suffix.len();
+    while prefix_len > 0 && !raw.is_char_boundary(prefix_len) {
+        prefix_len -= 1;
+    }
     format!("{}-{}", &raw[..prefix_len], suffix)
+}
+
+/// STS `RoleSessionName` safe charset: `[A-Za-z0-9_+=,.@-]`. AWS STS rejects
+/// anything outside this set, and folding caller-controlled text into the
+/// session name without checking it first is how [`truncate_session_name`]
+/// used to panic on non-ASCII input. Validating up front turns that into a
+/// clean 400 and forecloses weird strings from ever reaching the audit log.
+///
+/// Returns `Some(response)` (a 400) when `value` is invalid, `None` when it's
+/// fine — an `Option` rather than `Result<(), Response>` because the `Ok`
+/// side carries no data and clippy (rightly) flags a `Result` whose only
+/// payload is a fat `Response` in the `Err` arm.
+fn validate_sts_session_component(field: &str, value: &str) -> Option<Response> {
+    let is_safe = value
+        .chars()
+        .all(|c| c.is_ascii_alphanumeric() || matches!(c, '_' | '+' | '=' | ',' | '.' | '@' | '-'));
+    if is_safe {
+        None
+    } else {
+        Some(
+            ErrorData::bad_request(format!(
+                "{field} contains characters outside the STS session-name charset (allowed: A-Z a-z 0-9 _ + = , . @ -)"
+            ))
+            .into_response(),
+        )
+    }
 }
 
 /// Derive a principal string from an impersonated service account's identity.
@@ -337,7 +446,8 @@ fn principal_from_client_config(config: &ClientConfig) -> String {
 mod tests {
     use super::{
         clamp_duration, mint_session_name, principal_from_client_config, principal_from_info,
-        truncate_session_name, MAX_SESSION_NAME_LEN,
+        truncate_session_name, MintCredentialsResponse, ResolveCredentialsResponse,
+        MAX_SESSION_NAME_LEN,
     };
     use alien_bindings::ServiceAccountInfo;
     use alien_bindings::{
@@ -409,6 +519,22 @@ mod tests {
     }
 
     #[test]
+    fn truncate_session_name_multibyte_input_does_not_panic_on_boundary() {
+        // 'é' is 2 bytes in UTF-8. 40 repetitions is an 80-byte string whose
+        // deterministic prefix cut (byte 55, per MAX_SESSION_NAME_LEN) lands
+        // mid-character. This must not panic regardless of what upstream
+        // validation does — defense in depth for future callers of this
+        // helper.
+        let raw = "é".repeat(40);
+        let truncated = truncate_session_name(&raw);
+        assert!(
+            truncated.len() <= MAX_SESSION_NAME_LEN,
+            "got {} bytes: {truncated}",
+            truncated.len()
+        );
+    }
+
+    #[test]
     fn principal_from_info_extracts_platform_identity() {
         assert_eq!(
             principal_from_info(&ServiceAccountInfo::Aws(AwsServiceAccountInfo {
@@ -432,6 +558,44 @@ mod tests {
             })),
             "client-abc"
         );
+    }
+
+    #[test]
+    fn mint_response_debug_redacts_client_config() {
+        let secret_config = ClientConfig::Aws(Box::new(AwsClientConfig {
+            account_id: "123456789012".to_string(),
+            region: "us-east-1".to_string(),
+            credentials: AwsCredentials::AccessKeys {
+                access_key_id: "AKIA_SECRET".to_string(),
+                secret_access_key: "TOP_SECRET_KEY_MATERIAL".to_string(),
+                session_token: Some("TOP_SECRET_SESSION_TOKEN".to_string()),
+            },
+            service_overrides: None,
+        }));
+
+        let mint_response = MintCredentialsResponse {
+            client_config: secret_config.clone(),
+            expires_at: "2026-01-01T00:00:00Z".to_string(),
+            principal: "arn:aws:iam::123:role/r".to_string(),
+        };
+        let mint_debug = format!("{:?}", mint_response);
+        assert!(
+            mint_debug.contains("<redacted>"),
+            "expected redaction marker: {mint_debug}"
+        );
+        assert!(!mint_debug.contains("TOP_SECRET_KEY_MATERIAL"));
+        assert!(!mint_debug.contains("TOP_SECRET_SESSION_TOKEN"));
+
+        let resolve_response = ResolveCredentialsResponse {
+            client_config: secret_config,
+        };
+        let resolve_debug = format!("{:?}", resolve_response);
+        assert!(
+            resolve_debug.contains("<redacted>"),
+            "expected redaction marker: {resolve_debug}"
+        );
+        assert!(!resolve_debug.contains("TOP_SECRET_KEY_MATERIAL"));
+        assert!(!resolve_debug.contains("TOP_SECRET_SESSION_TOKEN"));
     }
 
     #[test]

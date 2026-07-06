@@ -28,8 +28,8 @@ use alien_bindings::error::{ErrorData as BindingErrorData, Result as BindingResu
 use alien_bindings::traits::{
     AwsServiceAccountInfo, Binding, ImpersonationRequest, ServiceAccount, ServiceAccountInfo,
 };
-use alien_bindings::{providers::kv::local::LocalKv, providers::storage::local::LocalStorage};
 use alien_bindings::BindingsProviderApi;
+use alien_bindings::{providers::kv::local::LocalKv, providers::storage::local::LocalStorage};
 use alien_commands::dispatchers::NullCommandDispatcher;
 use alien_commands::server::{CommandDispatcher, CommandRegistry, CommandServer};
 use alien_commands::InMemoryCommandRegistry;
@@ -234,6 +234,10 @@ struct Fixture {
     /// cross-deployment access is denied.
     token_b: String,
     admin_token: String,
+    /// A deployment-group token scoped to the group both deployments belong
+    /// to. Documents that group scope inherits mint access for every
+    /// deployment in the group, not just one.
+    group_token: String,
     /// The last impersonation request the fake service account received
     /// (only populated on the managed path).
     captured: Arc<Mutex<Option<ImpersonationRequest>>>,
@@ -314,6 +318,15 @@ async fn build(
     let (_deployment_b, token_b) =
         create_deployment(&deployment_store, &token_store, &dg.id, "deploy-b").await;
 
+    let group_token = mint_token(
+        &token_store,
+        TokenType::DeploymentGroup,
+        "ax_dg_",
+        Some(dg.id.clone()),
+        None,
+    )
+    .await;
+
     let auth_validator: Arc<dyn AuthValidator> = Arc::new(
         alien_manager::providers::token_db_validator::TokenDbValidator::new(token_store.clone()),
     );
@@ -363,6 +376,7 @@ async fn build(
         token_a,
         token_b,
         admin_token,
+        group_token,
         captured,
     }
 }
@@ -442,8 +456,7 @@ async fn post_mint(
     bearer: Option<&str>,
     body: serde_json::Value,
 ) -> (StatusCode, serde_json::Value) {
-    let router =
-        alien_manager::routes::credentials::router().with_state(fixture.state.clone());
+    let router = alien_manager::routes::credentials::router().with_state(fixture.state.clone());
 
     let mut req = Request::builder()
         .method("POST")
@@ -454,7 +467,9 @@ async fn post_mint(
         req = req.header(header::AUTHORIZATION, format!("Bearer {}", token));
     }
 
-    let request = req.body(Body::from(serde_json::to_vec(&body).unwrap())).unwrap();
+    let request = req
+        .body(Body::from(serde_json::to_vec(&body).unwrap()))
+        .unwrap();
     let response = router.oneshot(request).await.unwrap();
     let status = response.status();
     let bytes = to_bytes(response.into_body(), 1024 * 1024).await.unwrap();
@@ -495,8 +510,7 @@ async fn deployment_token_for_its_deployment_mints_200() {
         "principal is the impersonated role"
     );
     let expires_at = json["expiresAt"].as_str().expect("expiresAt is a string");
-    chrono::DateTime::parse_from_rfc3339(expires_at)
-        .expect("expiresAt must be RFC3339");
+    chrono::DateTime::parse_from_rfc3339(expires_at).expect("expiresAt must be RFC3339");
 }
 
 #[tokio::test]
@@ -533,6 +547,23 @@ async fn garbage_bearer_is_unauthorized() {
 }
 
 #[tokio::test]
+async fn deployment_group_token_can_mint_for_deployment_in_its_group() {
+    // Documents the inherited grant: a deployment-group-scoped (`ax_dg_`)
+    // token is not pinned to one deployment id like a deployment token is —
+    // `can_act_on_deployment` (== `can_read_deployment`) passes for any
+    // deployment whose deployment_group_id matches the token's scope.
+    let fixture = impersonation_fixture().await;
+    let (status, json) = post_mint(
+        &fixture,
+        Some(&fixture.group_token),
+        mint_body(&fixture.deployment_a),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "body = {json:#}");
+    assert!(json["clientConfig"].is_object());
+}
+
+#[tokio::test]
 async fn admin_token_mints_200() {
     let fixture = impersonation_fixture().await;
     let (status, json) = post_mint(
@@ -557,8 +588,17 @@ async fn duration_is_clamped_to_the_allowed_window() {
     body["durationSeconds"] = serde_json::json!(10);
     let (status, _) = post_mint(&fixture, Some(&fixture.token_a), body).await;
     assert_eq!(status, StatusCode::OK);
-    let captured = fixture.captured.lock().unwrap().clone().expect("impersonated");
-    assert_eq!(captured.duration_seconds, Some(900), "clamped up to the floor");
+    let captured = fixture
+        .captured
+        .lock()
+        .unwrap()
+        .clone()
+        .expect("impersonated");
+    assert_eq!(
+        captured.duration_seconds,
+        Some(900),
+        "clamped up to the floor"
+    );
 
     // Above the ceiling -> 3600.
     let fixture = impersonation_fixture().await;
@@ -566,7 +606,12 @@ async fn duration_is_clamped_to_the_allowed_window() {
     body["durationSeconds"] = serde_json::json!(999_999);
     let (status, _) = post_mint(&fixture, Some(&fixture.token_a), body).await;
     assert_eq!(status, StatusCode::OK);
-    let captured = fixture.captured.lock().unwrap().clone().expect("impersonated");
+    let captured = fixture
+        .captured
+        .lock()
+        .unwrap()
+        .clone()
+        .expect("impersonated");
     assert_eq!(
         captured.duration_seconds,
         Some(3600),
@@ -582,7 +627,12 @@ async fn duration_is_clamped_to_the_allowed_window() {
     )
     .await;
     assert_eq!(status, StatusCode::OK);
-    let captured = fixture.captured.lock().unwrap().clone().expect("impersonated");
+    let captured = fixture
+        .captured
+        .lock()
+        .unwrap()
+        .clone()
+        .expect("impersonated");
     assert_eq!(captured.duration_seconds, Some(3600), "default duration");
 }
 
@@ -594,7 +644,12 @@ async fn session_name_is_scoped_to_deployment_and_resource() {
     let (status, _) = post_mint(&fixture, Some(&fixture.token_a), body).await;
     assert_eq!(status, StatusCode::OK);
 
-    let captured = fixture.captured.lock().unwrap().clone().expect("impersonated");
+    let captured = fixture
+        .captured
+        .lock()
+        .unwrap()
+        .clone()
+        .expect("impersonated");
     assert_eq!(
         captured.session_name,
         Some(format!("alien-mint-{}-api", fixture.deployment_a)),
@@ -649,6 +704,19 @@ async fn unknown_binding_returns_400() {
         "deploymentId": fixture.deployment_a,
         "bindingName": "does-not-exist",
     });
+    let (status, json) = post_mint(&fixture, Some(&fixture.token_a), body).await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "body = {json:#}");
+}
+
+#[tokio::test]
+async fn non_ascii_resource_id_is_rejected_with_400_not_panic() {
+    // Reproduces the reviewer's finding: a resourceId straddling a
+    // multi-byte UTF-8 boundary at the truncation cut point used to panic
+    // inside `truncate_session_name`'s byte slicing. STS would reject this
+    // charset anyway, so it must come back as a clean 400.
+    let fixture = impersonation_fixture().await;
+    let mut body = mint_body(&fixture.deployment_a);
+    body["resourceId"] = serde_json::json!("é".repeat(10));
     let (status, json) = post_mint(&fixture, Some(&fixture.token_a), body).await;
     assert_eq!(status, StatusCode::BAD_REQUEST, "body = {json:#}");
 }
