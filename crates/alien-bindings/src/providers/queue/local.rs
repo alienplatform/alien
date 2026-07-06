@@ -61,8 +61,8 @@ static QUEUE_SPEC: StoreSpec = StoreSpec {
 
 /// Local disk-persisted queue on turso (`localqueue.v1`).
 ///
-/// Implements the `Queue` trait (send/receive/ack) plus inherent `nack` and
-/// `purge`. Messages survive process restarts, and multiple `LocalQueue`
+/// Implements the `Queue` trait (send/receive/ack/nack/purge). Messages
+/// survive process restarts, and multiple `LocalQueue`
 /// handles — including handles in different OS processes — can safely share
 /// one data directory.
 #[derive(Debug)]

@@ -1,0 +1,42 @@
+[package]
+name = "alien-bindings-node"
+version.workspace = true
+edition = "2021"
+description = "Node-API (napi-rs) addon exposing alien-bindings storage/kv/queue/vault to JavaScript"
+license-file.workspace = true
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[features]
+# Mirror alien-bindings' platform features, minus `grpc`. The addon is a pure
+# argument/error translation layer; it forwards every provider feature to
+# alien-bindings and never enables the gRPC stack.
+default = ["all-platforms"]
+all-platforms = ["aws", "gcp", "azure", "kubernetes", "local", "test"]
+aws = ["alien-bindings/aws"]
+gcp = ["alien-bindings/gcp"]
+azure = ["alien-bindings/azure"]
+kubernetes = ["alien-bindings/kubernetes"]
+local = ["alien-bindings/local"]
+test = ["alien-bindings/test"]
+
+[dependencies]
+# alien-bindings is declared `default-features = false` in the workspace manifest,
+# so the gRPC feature is never pulled in transitively; platform features are
+# forwarded explicitly above.
+alien-bindings = { workspace = true }
+alien-error = { workspace = true }
+futures = { workspace = true }
+napi = { workspace = true }
+napi-derive = { workspace = true }
+object_store = { workspace = true }
+serde = { workspace = true, features = ["derive"] }
+serde_json = { workspace = true }
+
+[build-dependencies]
+napi-build = { workspace = true }
+
+[dev-dependencies]
+chrono = { workspace = true }
+tempfile = { workspace = true }

@@ -4,6 +4,7 @@ members = [
   "crates/alien-commands-client",
   "crates/alien-sdk",
   "crates/alien-bindings",
+  "crates/alien-bindings-node",
   "crates/alien-cli",
   "crates/alien-cli-common",
   "crates/alien-runtime",

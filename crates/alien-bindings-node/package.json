@@ -1,0 +1,22 @@
+{
+  "name": "@alienplatform/bindings-node",
+  "version": "0.0.0",
+  "private": true,
+  "description": "napi-rs addon exposing alien-bindings storage/kv/queue/vault to JavaScript",
+  "napi": {
+    "name": "alien-bindings-node",
+    "package": {
+      "name": "@alienplatform/bindings"
+    },
+    "triples": {
+      "additional": [
+        "aarch64-apple-darwin",
+        "x86_64-unknown-linux-gnu",
+        "aarch64-unknown-linux-gnu"
+      ]
+    }
+  },
+  "devDependencies": {
+    "@napi-rs/cli": "^2.18.4"
+  }
+}
