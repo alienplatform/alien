@@ -305,18 +305,18 @@ async fn check_event_stored(
         .await
         .context("Failed to check event storage")?;
 
-    if !response.status().is_success() {
+    if response.status() == reqwest::StatusCode::NOT_FOUND {
         return Ok(None);
     }
+    anyhow::ensure!(
+        response.status().is_success(),
+        "Event read-back endpoint returned {}",
+        response.status()
+    );
 
+    // The test app returns the stored record directly (no `{found, event}` wrapper).
     let body: serde_json::Value = response.json().await?;
-    if body["found"].as_bool().unwrap_or(false) {
-        Ok(body["event"]
-            .as_object()
-            .map(|o| serde_json::Value::Object(o.clone())))
-    } else {
-        Ok(None)
-    }
+    Ok(Some(body))
 }
 
 // --- Test Cases ---
@@ -484,14 +484,12 @@ async fn test_containerapp_dapr_queue_message(
     // Wait for event processing
     tokio::time::sleep(Duration::from_secs(2)).await;
 
-    // Verify message was stored
-    let stored_message = check_event_stored(ctx.transport_port, "queue", &message_id).await?;
-    if let Some(msg) = stored_message {
-        assert_eq!(msg["messageId"], message_id);
-        info!("Dapr queue message PASSED");
-    } else {
-        info!("Dapr queue message processed (no handler registered)");
-    }
+    // Verify message was delivered to the handler and stored in KV.
+    let stored_message = check_event_stored(ctx.transport_port, "queue", &message_id)
+        .await?
+        .context("Queue message should have been delivered and stored in KV")?;
+    assert_eq!(stored_message["messageId"], message_id);
+    info!("Dapr queue message PASSED");
 
     Ok(())
 }

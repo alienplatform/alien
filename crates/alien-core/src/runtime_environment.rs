@@ -311,7 +311,13 @@ pub fn worker_transport_runtime_environment_plan(
         }],
         Platform::Local | Platform::Test => vec![RuntimeEnvironmentEntry {
             name: ENV_ALIEN_TRANSPORT,
-            value: RuntimeEnvironmentValue::Literal("passthrough"),
+            // Local/Test Workers run under the runtime's `local` transport (the
+            // in-process HTTP invocation proxy the worker manager selects via
+            // `TransportType::Local`). The env-plan value now matches that reality,
+            // so `ALIEN_TRANSPORT` for Workers is exactly the transport set
+            // `lambda | cloud-run | container-app | http | local`. `passthrough`
+            // is a non-Worker signal (Daemons/build pods), never a Worker value.
+            value: RuntimeEnvironmentValue::Literal("local"),
         }],
     }
 }
@@ -347,6 +353,9 @@ pub fn worker_runtime_environment_contract(
         .add_current_worker_binding(worker_id)
 }
 
+/// Transport plan for non-Worker runtime workloads (build pods, daemons) that run
+/// under the runtime wrapper but have no invocation proxy. `passthrough` is a
+/// non-Worker signal only — Workers use `lambda|cloud-run|container-app|http|local`.
 pub fn passthrough_transport_runtime_environment_plan() -> [RuntimeEnvironmentEntry; 1] {
     [RuntimeEnvironmentEntry {
         name: ENV_ALIEN_TRANSPORT,
@@ -677,15 +686,24 @@ mod tests {
     }
 
     #[test]
-    fn worker_local_transport_still_uses_passthrough() {
-        // Guard against over-cutting: the Worker transport signal is a separate
-        // concern and must stay `passthrough` on Local/Test.
+    fn worker_local_transport_uses_local_proxy() {
+        // Local/Test Workers run under `TransportType::Local` (the worker manager
+        // selects it), so the env-plan transport value must be `local` — never
+        // `passthrough`, which is a non-Worker (Daemon/build-pod) signal. This
+        // keeps the Worker `ALIEN_TRANSPORT` set to lambda|cloud-run|container-app|http|local.
         for platform in [Platform::Local, Platform::Test] {
             let entries = worker_transport_runtime_environment_plan(platform);
             assert!(entries.iter().any(|entry| {
                 entry.name == ENV_ALIEN_TRANSPORT
-                    && entry.value == RuntimeEnvironmentValue::Literal("passthrough")
+                    && entry.value == RuntimeEnvironmentValue::Literal("local")
             }));
+            assert!(
+                !entries.iter().any(|entry| {
+                    entry.name == ENV_ALIEN_TRANSPORT
+                        && entry.value == RuntimeEnvironmentValue::Literal("passthrough")
+                }),
+                "Worker transport must not be passthrough on {platform:?}"
+            );
         }
     }
 }

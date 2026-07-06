@@ -37,6 +37,8 @@ use uuid::Uuid;
 
 mod test_utils;
 
+use alien_core::bindings;
+
 // Commands testing imports
 use alien_commands::{
     server::CommandDispatcher,
@@ -332,18 +334,11 @@ impl AsyncTestContext for LambdaTestContext {
         let test_app_path = test_utils::get_test_app_path().expect("Failed to get test app path");
         info!(?test_app_path, "Using alien-test-app binary");
 
-        // Create local storage binding JSON (uses serde tag "service" and camelCase fields)
-        let storage_binding = serde_json::json!({
-            "service": "local",
-            "storageUrl": null,
-            "dataDir": temp_dir_path
-        });
-
-        // Create local KV binding JSON (uses serde tag "service" and camelCase fields)
-        let kv_binding = serde_json::json!({
-            "service": "local",
-            "dataDir": temp_dir_path
-        });
+        // Build binding JSON from the real `alien_core::bindings` types so the serde
+        // tags (`local-storage`, `local-kv`) and camelCase fields match exactly what
+        // the SDK deserializes — hand-written JSON drifted (wrong `local` tag).
+        let storage_binding = bindings::StorageBinding::local(temp_dir_path.clone());
+        let kv_binding = bindings::KvBinding::local(temp_dir_path.clone());
 
         // Build cargo lambda watch command
         // Note: cargo lambda watch runs alien-runtime which spawns the test server
@@ -369,8 +364,14 @@ impl AsyncTestContext for LambdaTestContext {
             // Environment variables for local bindings
             .env("ALIEN_DEPLOYMENT_TYPE", "local")
             .env("ALIEN_LOCAL_STATE_DIRECTORY", &temp_dir_path)
-            .env("ALIEN_TEST_STORAGE_BINDING", storage_binding.to_string())
-            .env("ALIEN_TEST_ALIEN_KV_BINDING", kv_binding.to_string())
+            .env(
+                bindings::binding_env_var_name("test-storage"),
+                serde_json::to_string(&storage_binding).expect("serialize storage binding"),
+            )
+            .env(
+                bindings::binding_env_var_name("test-kv"),
+                serde_json::to_string(&kv_binding).expect("serialize test-kv binding"),
+            )
             .env("ALIEN_SKIP_WAIT_UNTIL_EXTENSION", "1")
             .env(
                 "RUST_LOG",
@@ -520,7 +521,10 @@ async fn invoke_lambda_with_json(
         .context("Lambda invocation failed after retries")
 }
 
-/// Check if an event was stored in KV via the new /events/* endpoints
+/// Check if an event was stored in KV via the `/events/*` read-back endpoints.
+///
+/// The test app returns the stored event record directly (200 with the JSON
+/// body) or 404 when the key is absent — there is no `{found, event}` wrapper.
 async fn check_event_stored(
     invoke_port: u16,
     event_type: &str,
@@ -539,18 +543,17 @@ async fn check_event_stored(
         .await
         .context("Failed to check event storage")?;
 
-    if !response.status().is_success() {
+    if response.status() == reqwest::StatusCode::NOT_FOUND {
         return Ok(None);
     }
+    anyhow::ensure!(
+        response.status().is_success(),
+        "Event read-back endpoint returned {}",
+        response.status()
+    );
 
     let body: serde_json::Value = response.json().await?;
-    if body["found"].as_bool().unwrap_or(false) {
-        Ok(body["event"]
-            .as_object()
-            .map(|o| serde_json::Value::Object(o.clone())))
-    } else {
-        Ok(None)
-    }
+    Ok(Some(body))
 }
 
 // --- Test Cases ---

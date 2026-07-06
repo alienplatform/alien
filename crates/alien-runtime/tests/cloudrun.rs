@@ -305,18 +305,18 @@ async fn check_event_stored(
         .await
         .context("Failed to check event storage")?;
 
-    if !response.status().is_success() {
+    if response.status() == reqwest::StatusCode::NOT_FOUND {
         return Ok(None);
     }
+    anyhow::ensure!(
+        response.status().is_success(),
+        "Event read-back endpoint returned {}",
+        response.status()
+    );
 
+    // The test app returns the stored record directly (no `{found, event}` wrapper).
     let body: serde_json::Value = response.json().await?;
-    if body["found"].as_bool().unwrap_or(false) {
-        Ok(body["event"]
-            .as_object()
-            .map(|o| serde_json::Value::Object(o.clone())))
-    } else {
-        Ok(None)
-    }
+    Ok(Some(body))
 }
 
 // --- Test Cases ---
@@ -400,16 +400,13 @@ async fn test_cloudrun_gcs_storage_event(ctx: &mut CloudRunTestContext) -> anyho
     // Wait for event processing
     tokio::time::sleep(Duration::from_secs(2)).await;
 
-    // Verify event was stored
-    let stored_event = check_event_stored(ctx.transport_port, "storage", &test_key).await?;
-    if let Some(event) = stored_event {
-        assert_eq!(event["bucket"], "test-alien-bucket");
-        assert_eq!(event["key"], test_key);
-        info!("GCS storage CloudEvent PASSED");
-    } else {
-        // Event handler might not be registered, which is OK for this test
-        info!("GCS storage CloudEvent processed (no handler registered)");
-    }
+    // Verify event was delivered to the handler and stored in KV.
+    let stored_event = check_event_stored(ctx.transport_port, "storage", &test_key)
+        .await?
+        .context("Storage event should have been delivered and stored in KV")?;
+    assert_eq!(stored_event["bucket"], "test-alien-bucket");
+    assert_eq!(stored_event["key"], test_key);
+    info!("GCS storage CloudEvent PASSED");
 
     Ok(())
 }
@@ -445,6 +442,12 @@ async fn test_cloudrun_cloud_scheduler(ctx: &mut CloudRunTestContext) -> anyhow:
     // Wait for event processing
     tokio::time::sleep(Duration::from_secs(2)).await;
 
+    // Verify the cron event was delivered to the handler and stored in KV.
+    let stored_event = check_event_stored(ctx.transport_port, "cron", &schedule_name)
+        .await?
+        .context("Cron event should have been delivered and stored in KV")?;
+    assert_eq!(stored_event["scheduleName"], schedule_name);
+    assert!(stored_event["scheduledTime"].is_string());
     info!("Cloud Scheduler event PASSED");
     Ok(())
 }
@@ -501,14 +504,12 @@ async fn test_cloudrun_pubsub_queue_message(ctx: &mut CloudRunTestContext) -> an
     // Wait for event processing
     tokio::time::sleep(Duration::from_secs(2)).await;
 
-    // Verify message was stored
-    let stored_message = check_event_stored(ctx.transport_port, "queue", &message_id).await?;
-    if let Some(msg) = stored_message {
-        assert_eq!(msg["messageId"], message_id);
-        info!("Pub/Sub queue message PASSED");
-    } else {
-        info!("Pub/Sub queue message processed (no handler registered)");
-    }
+    // Verify message was delivered to the handler and stored in KV.
+    let stored_message = check_event_stored(ctx.transport_port, "queue", &message_id)
+        .await?
+        .context("Queue message should have been delivered and stored in KV")?;
+    assert_eq!(stored_message["messageId"], message_id);
+    info!("Pub/Sub queue message PASSED");
 
     Ok(())
 }
