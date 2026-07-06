@@ -400,7 +400,13 @@ jobs:
           path: packages/bindings/npm/${{ matrix.triple }}/alien-bindings-node.${{ matrix.triple }}.node
 
   publish-bindings:
-    needs: [prepare, build-addon]
+    needs: [prepare, build-addon, publish-npm]
+    # publish-npm skips on dry_run, so a bare `needs` would cascade-skip the
+    # dry-run path this job deliberately supports. On a real release, wait for
+    # publish-npm to succeed: the wrapper's package.json pins
+    # `@alienplatform/core: ^<release>`, so publishing it while core's publish
+    # failed leaves every `npm install @alienplatform/bindings` ETARGET-broken.
+    if: always() && needs.build-addon.result == 'success' && (inputs.dry_run || needs.publish-npm.result == 'success')
     runs-on: depot-ubuntu-24.04-arm-4
     timeout-minutes: 30
     steps:

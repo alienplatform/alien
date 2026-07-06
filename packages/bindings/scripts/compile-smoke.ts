@@ -49,18 +49,10 @@ import { copyFileSync, existsSync, mkdtempSync, rmSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { dirname, join } from "node:path"
 import { fileURLToPath } from "node:url"
+import { platformTriple } from "../src/loader.ts"
 
 const scriptDir = dirname(fileURLToPath(import.meta.url))
 const packageDir = dirname(scriptDir)
-
-/** Map `process.platform`/`process.arch` to the napi triple (mirrors `src/loader.ts`). */
-function platformTriple(): string {
-  const { platform, arch } = process
-  if (platform === "darwin" && arch === "arm64") return "darwin-arm64"
-  if (platform === "linux" && arch === "x64") return "linux-x64-gnu"
-  if (platform === "linux" && arch === "arm64") return "linux-arm64-gnu"
-  throw new Error(`compile-smoke has no native addon for platform '${platform}' arch '${arch}'.`)
-}
 
 /** Walk up from `packageDir` looking for the locally-built dev addon (mirrors `src/loader.ts`). */
 function findLocalAddon(triple: string): string {
