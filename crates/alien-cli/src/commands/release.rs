@@ -27,6 +27,7 @@ use tracing::info;
 #[derive(Parser, Debug, Clone)]
 #[command(
     about = "Push images and create a release",
+    disable_version_flag = true,
     long_about = "Push built images to a container registry and create a new release on the Alien platform. By default, retrieves registry credentials from the platform's manager. Use override flags for custom registries (e.g., deploying the manager itself).",
     after_help = "EXAMPLES:
     # Standard release (auto-discovers platforms from manager config)
@@ -1017,7 +1018,11 @@ fn auto_build_target_group_key(settings: &alien_build::settings::BuildSettings) 
 
 /// Load a built stack from .alien/build/{platform}/stack.json
 fn load_built_stack(output_dir: &PathBuf, platform: &str) -> Result<Stack> {
-    let stack_file = output_dir.join("build").join(platform).join("stack.json");
+    let build_platform = build_artifact_platform(platform);
+    let stack_file = output_dir
+        .join("build")
+        .join(build_platform)
+        .join("stack.json");
 
     if !stack_file.exists() {
         return Err(AlienError::new(ErrorData::FileOperationFailed {
@@ -1048,6 +1053,14 @@ fn load_built_stack(output_dir: &PathBuf, platform: &str) -> Result<Stack> {
             })?;
 
     Ok(stack)
+}
+
+fn build_artifact_platform(platform: &str) -> &str {
+    if platform.eq_ignore_ascii_case(Platform::Machines.as_str()) {
+        Platform::Kubernetes.as_str()
+    } else {
+        platform
+    }
 }
 
 /// Create push settings from manual CLI arguments
@@ -1939,6 +1952,11 @@ mod tests {
             settings.targets,
             Some(alien_core::BinaryTarget::LINUX.to_vec())
         );
+    }
+
+    #[test]
+    fn machines_release_reads_kubernetes_build_artifacts() {
+        assert_eq!(build_artifact_platform("machines"), "kubernetes");
     }
 
     #[test]

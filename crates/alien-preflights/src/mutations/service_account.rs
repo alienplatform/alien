@@ -26,9 +26,13 @@ impl StackMutation for ServiceAccountMutation {
     fn should_run(
         &self,
         stack: &Stack,
-        _stack_state: &StackState,
+        stack_state: &StackState,
         _config: &DeploymentConfig,
     ) -> bool {
+        if stack_state.platform == Platform::Machines {
+            return false;
+        }
+
         // Run if stack has permission profiles
         !stack.permissions.profiles.is_empty()
     }
@@ -199,5 +203,28 @@ mod tests {
         assert!(global
             .iter()
             .any(|permission| permission.id() == "build/execute"));
+    }
+
+    #[test]
+    fn skips_machines_platform() {
+        let stack = Stack::new("test-stack".to_string())
+            .permissions(
+                alien_core::PermissionsConfig::default()
+                    .with_profile("execution", PermissionProfile::new()),
+            )
+            .build();
+        let stack_state = StackState::new(Platform::Machines);
+        let config = DeploymentConfig::builder()
+            .stack_settings(Default::default())
+            .environment_variables(alien_core::EnvironmentVariablesSnapshot {
+                variables: Vec::new(),
+                hash: "empty".to_string(),
+                created_at: "2026-07-06T00:00:00Z".to_string(),
+            })
+            .allow_frozen_changes(false)
+            .external_bindings(Default::default())
+            .build();
+
+        assert!(!ServiceAccountMutation.should_run(&stack, &stack_state, &config));
     }
 }

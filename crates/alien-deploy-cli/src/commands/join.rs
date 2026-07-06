@@ -192,10 +192,12 @@ struct MachineBundleRegistration {
     timeout_seconds: Option<u64>,
 }
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct MachineInstallState {
     bundle_version: String,
+    #[serde(default)]
+    bundle_url: Option<String>,
     service_label: String,
     executable_path: PathBuf,
     config_path: PathBuf,
@@ -429,6 +431,16 @@ async fn install_join(request: JoinRequest) -> Result<()> {
 
     output::step(1, 6, "Resolving machine bundle");
     let manifest = download_manifest(&request.plan.bundle_url).await?;
+    if let Some(state) = existing_joined_machine(&paths, &request, &manifest)? {
+        output::success("Machine is already joined");
+        output::info(&format!("  Service: {}", state.service_label));
+        output::info(&format!("  Bundle:  {}", state.bundle_version));
+        if let Some(machine_id) = state.machine_id {
+            output::label_value("Machine", &machine_id);
+        }
+        return Ok(());
+    }
+
     let artifact = select_bundle_artifact(&manifest, request.plan.arch)?;
     let artifact_url = resolve_artifact_url(&request.plan.bundle_url, &artifact.url)?;
 
@@ -517,6 +529,7 @@ async fn install_join(request: JoinRequest) -> Result<()> {
         .transpose()?;
     let mut state = MachineInstallState {
         bundle_version: manifest.version.clone(),
+        bundle_url: Some(request.plan.bundle_url.clone()),
         service_label: manifest.service.label.clone(),
         executable_path: executable_path.clone(),
         config_path: config_path.clone(),
@@ -546,6 +559,67 @@ async fn install_join(request: JoinRequest) -> Result<()> {
     output::info(&format!("  Service: {}", state.service_label));
     output::info(&format!("  Bundle:  {}", state.bundle_version));
     Ok(())
+}
+
+fn existing_joined_machine(
+    paths: &InstallPaths,
+    request: &JoinRequest,
+    manifest: &MachineBundleManifest,
+) -> Result<Option<MachineInstallState>> {
+    let state_path = install_state_path(paths);
+    if !state_path.exists() {
+        return Ok(None);
+    }
+
+    let state = read_install_state(&state_path)?;
+    if !install_state_matches_request(&state, request, manifest) {
+        return Ok(None);
+    }
+
+    let Some(machine_id) = state.machine_id.as_deref() else {
+        return Ok(None);
+    };
+    if machine_id.trim().is_empty() {
+        return Ok(None);
+    }
+
+    if let Some(machine_id_path) = &state.machine_id_path {
+        match read_secret_string(machine_id_path, "machine id") {
+            Ok(stored_machine_id) if stored_machine_id == machine_id => {}
+            _ => {
+                return Ok(None);
+            }
+        }
+    }
+
+    if machine_service_status(&state.service_label)? != ServiceStatus::Running {
+        return Ok(None);
+    }
+
+    Ok(Some(state))
+}
+
+fn install_state_matches_request(
+    state: &MachineInstallState,
+    request: &JoinRequest,
+    manifest: &MachineBundleManifest,
+) -> bool {
+    state.bundle_version == manifest.version
+        && state.bundle_url.as_deref() == Some(request.plan.bundle_url.as_str())
+        && state.service_label == manifest.service.label
+        && state.control_plane_url.as_deref() == Some(request.plan.control_plane_url.as_str())
+        && state.cluster_id.as_deref() == Some(request.plan.cluster_id.as_str())
+}
+
+fn machine_service_status(service_label: &str) -> Result<ServiceStatus> {
+    let manager = native_service_manager()?;
+    let label = parse_service_label(service_label)?;
+    manager
+        .status(ServiceStatusCtx { label })
+        .into_alien_error()
+        .context(ErrorData::OperatorServiceError {
+            message: "Failed to inspect machine service status".to_string(),
+        })
 }
 
 async fn download_manifest(url: &str) -> Result<MachineBundleManifest> {
@@ -784,7 +858,14 @@ fn write_machine_config(
             }
         }
     }
-    write_secret_file(&config_path, &toml::Value::Table(config).to_string())?;
+    let config_text =
+        toml::to_string(&config)
+            .into_alien_error()
+            .context(ErrorData::JsonError {
+                operation: "serialize machine config".to_string(),
+                reason: "Failed to serialize machine configuration as TOML".to_string(),
+            })?;
+    write_secret_file(&config_path, &config_text)?;
     Ok(config_path)
 }
 
@@ -1074,6 +1155,16 @@ async fn uninstall_joined_machine(install_root: &Path, purge: bool) -> Result<()
             message: "Failed to uninstall machine service".to_string(),
         })?;
 
+    match request_machine_leave(&state).await {
+        Ok(true) => output::info("Machine removed from control plane"),
+        Ok(false) => output::info(
+            "Control-plane leave skipped; installed machine state is missing credentials",
+        ),
+        Err(error) => output::warn(&format!(
+            "Could not remove machine from control plane before uninstall: {error}"
+        )),
+    }
+
     remove_file_if_exists(&state.join_token_path)?;
     if let Some(machine_token_path) = &state.machine_token_path {
         remove_file_if_exists(machine_token_path)?;
@@ -1100,6 +1191,13 @@ async fn uninstall_joined_machine(install_root: &Path, purge: bool) -> Result<()
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 struct MachineDrainRequest<'a> {
+    cluster_id: &'a str,
+    machine_id: &'a str,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct MachineLeaveRequest<'a> {
     cluster_id: &'a str,
     machine_id: &'a str,
 }
@@ -1136,6 +1234,45 @@ async fn request_machine_drain(state: &MachineInstallState) -> Result<bool> {
         return Err(AlienError::new(ErrorData::HttpError {
             operation: "POST".to_string(),
             url: drain_url.to_string(),
+            reason: format!("server returned {}", response.status()),
+        }));
+    }
+
+    Ok(true)
+}
+
+async fn request_machine_leave(state: &MachineInstallState) -> Result<bool> {
+    let (Some(control_plane_url), Some(cluster_id), Some(machine_id), Some(machine_token_path)) = (
+        state.control_plane_url.as_deref(),
+        state.cluster_id.as_deref(),
+        state.machine_id.as_deref(),
+        state.machine_token_path.as_deref(),
+    ) else {
+        return Ok(false);
+    };
+
+    let machine_token = read_secret_string(machine_token_path, "machine token")?;
+    let leave_url = control_plane_endpoint(control_plane_url, "leave")?;
+    let response = reqwest::Client::new()
+        .post(leave_url.clone())
+        .header("Authorization", format!("Machine {machine_token}"))
+        .json(&MachineLeaveRequest {
+            cluster_id,
+            machine_id,
+        })
+        .send()
+        .await
+        .into_alien_error()
+        .context(ErrorData::HttpError {
+            operation: "POST".to_string(),
+            url: leave_url.to_string(),
+            reason: "Failed to remove machine from control plane".to_string(),
+        })?;
+
+    if !response.status().is_success() {
+        return Err(AlienError::new(ErrorData::HttpError {
+            operation: "POST".to_string(),
+            url: leave_url.to_string(),
             reason: format!("server returned {}", response.status()),
         }));
     }
@@ -1678,6 +1815,15 @@ mod tests {
         let config_path = write_machine_config(&paths, &request, &manifest).expect("write config");
 
         let config = std::fs::read_to_string(config_path).expect("config");
+        let parsed: toml::Table = toml::from_str(&config).expect("config should be valid TOML");
+        assert_eq!(
+            parsed.get("capacityGroup").and_then(toml::Value::as_str),
+            Some("general")
+        );
+        assert_eq!(
+            parsed.get("apiUrl").and_then(toml::Value::as_str),
+            Some("https://control.example.com")
+        );
         assert!(config.contains("capacityGroup = \"general\""));
         assert!(config.contains("zone = \"rack-1\""));
         assert!(config.contains("apiUrl = \"https://control.example.com\""));
@@ -1781,6 +1927,7 @@ mod tests {
         let paths = install_paths(root.path());
         let first = MachineInstallState {
             bundle_version: "old".to_string(),
+            bundle_url: Some("https://old.example.com/manifest.json".to_string()),
             service_label: "dev.alien.old".to_string(),
             executable_path: PathBuf::from("/old/bin"),
             config_path: PathBuf::from("/old/config.toml"),
@@ -1793,6 +1940,7 @@ mod tests {
         };
         let second = MachineInstallState {
             bundle_version: "new".to_string(),
+            bundle_url: Some("https://packages.example.com/manifest.json".to_string()),
             service_label: "dev.alien.new".to_string(),
             executable_path: PathBuf::from("/new/bin"),
             config_path: PathBuf::from("/new/config.toml"),
@@ -1809,6 +1957,10 @@ mod tests {
         let stored = read_install_state(&install_state_path(&paths)).expect("read state");
 
         assert_eq!(stored.bundle_version, "new");
+        assert_eq!(
+            stored.bundle_url.as_deref(),
+            Some("https://packages.example.com/manifest.json")
+        );
         assert_eq!(stored.service_label, "dev.alien.new");
         assert_eq!(stored.executable_path, PathBuf::from("/new/bin"));
         assert_eq!(stored.config_path, PathBuf::from("/new/config.toml"));
@@ -1826,10 +1978,59 @@ mod tests {
     }
 
     #[test]
+    fn install_state_match_requires_same_bundle_and_cluster() {
+        let root = tempfile::tempdir().expect("install root");
+        let manifest = test_manifest();
+        let request = build_join_request(
+            &JoinArgs {
+                install_root: root.path().to_path_buf(),
+                ..test_join_args()
+            },
+            None,
+            linux_host(root.path()),
+        )
+        .expect("request");
+        let state = MachineInstallState {
+            bundle_version: manifest.version.clone(),
+            bundle_url: Some(request.plan.bundle_url.clone()),
+            service_label: manifest.service.label.clone(),
+            executable_path: PathBuf::from("/bundle/bin/machine"),
+            config_path: PathBuf::from("/etc/machine-service/machine.toml"),
+            join_token_path: PathBuf::from("/var/lib/machine-service/join-token"),
+            machine_id_path: Some(PathBuf::from("/var/lib/machine-service/machine-id")),
+            machine_token_path: Some(PathBuf::from("/var/lib/machine-service/machine-token")),
+            control_plane_url: Some(request.plan.control_plane_url.clone()),
+            cluster_id: Some(request.plan.cluster_id.clone()),
+            machine_id: Some("machine-123".to_string()),
+        };
+
+        assert!(install_state_matches_request(&state, &request, &manifest));
+
+        let mut wrong_cluster = state.clone();
+        wrong_cluster.cluster_id = Some("other-cluster".to_string());
+        assert!(!install_state_matches_request(
+            &wrong_cluster,
+            &request,
+            &manifest
+        ));
+
+        let mut old_state_without_bundle_url = state;
+        old_state_without_bundle_url.bundle_url = None;
+        assert!(!install_state_matches_request(
+            &old_state_without_bundle_url,
+            &request,
+            &manifest
+        ));
+    }
+
+    #[test]
     fn control_plane_endpoint_preserves_base_path() {
         let endpoint =
             control_plane_endpoint("https://control.example.com/api", "drain").expect("endpoint");
         assert_eq!(endpoint.as_str(), "https://control.example.com/api/drain");
+        let endpoint =
+            control_plane_endpoint("https://control.example.com/api", "leave").expect("endpoint");
+        assert_eq!(endpoint.as_str(), "https://control.example.com/api/leave");
     }
 
     #[tokio::test]
