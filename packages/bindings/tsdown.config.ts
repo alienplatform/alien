@@ -8,9 +8,13 @@ export default defineConfig({
   dts: false,
   hash: false,
   ignoreWatch: ".turbo",
-  // Bundle all dependencies so `./native` is self-contained for bun --compile.
-  noExternal: [/.*/],
-  // ...but never bundle the native addon: the `./alien-bindings.node` specifier
-  // in native.ts must survive into the output as a literal so bun can embed it.
+  // `@alienplatform/core` is a declared runtime dependency and MUST stay
+  // external: bundling a copy would give `dist` its own `AlienError` class, so
+  // `err instanceof AlienError` would fail across the package boundary. Only
+  // `zod` is bundled — it is a devDependency used solely to build the error
+  // definitions, so it must not leak into the runtime dependency set.
+  noExternal: [/^zod(\/|$)/],
+  // Never bundle the native addon: the `./alien-bindings.node` specifier in
+  // native.ts must survive into the output as a literal so bun can embed it.
   external: [/\.node$/],
 })
