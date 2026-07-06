@@ -297,21 +297,25 @@ jobs:
             target: aarch64-apple-darwin
             triple: darwin-arm64
             smoke: true
+            expect_arch: arm64
           - runner: depot-macos-15
             os: macos
             target: x86_64-apple-darwin
             triple: darwin-x64
             smoke: false
+            expect_arch: x86_64
           - runner: depot-ubuntu-24.04-16
             os: linux
             target: x86_64-unknown-linux-gnu
             triple: linux-x64-gnu
             smoke: true
+            expect_arch: x86-64
           - runner: depot-ubuntu-24.04-arm-16
             os: linux
             target: aarch64-unknown-linux-gnu
             triple: linux-arm64-gnu
             smoke: false
+            expect_arch: aarch64
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 60
     env:
@@ -321,9 +325,10 @@ jobs:
         with:
           ref: ${{ inputs.dry_run && github.sha || format('v{0}', needs.prepare.outputs.version) }}
 
-      # Rust toolchain: Linux via the shared composite; macOS mirrors the native
-      # darwin binary job (dtolnay + depot + sccache + brew protoc). The addon
-      # depends on alien-bindings, whose build.rs needs protoc.
+      # Rust toolchain: Linux via the shared composite; macOS uses dtolnay +
+      # brew protoc directly (plain `napi build`, not `depot cargo`, so no
+      # Depot/sccache setup here). The addon depends on alien-bindings, whose
+      # build.rs needs protoc.
       - name: Setup Rust (linux)
         if: matrix.os == 'linux'
         uses: ./.github/actions/setup-rust
@@ -338,14 +343,6 @@ jobs:
       - name: Configure git credentials for cargo (macos)
         if: matrix.os == 'macos'
         run: git config --global url."https://x-access-token:${{ secrets.REPO_ACCESS_TOKEN }}@github.com/".insteadOf "https://github.com/"
-
-      - name: Setup Depot (macos)
-        if: matrix.os == 'macos'
-        uses: depot/setup-action@v1
-
-      - name: Install sccache (macos)
-        if: matrix.os == 'macos'
-        uses: mozilla-actions/sccache-action@v0.0.9
 
       - name: Install protoc (macos)
         if: matrix.os == 'macos'
@@ -382,6 +379,10 @@ jobs:
         run: |
           cp "crates/alien-bindings-node/alien-bindings-node.${{ matrix.triple }}.node" \
             "packages/bindings/npm/${{ matrix.triple }}/alien-bindings-node.${{ matrix.triple }}.node"
+
+      # Closes the wrong-arch hole on the two legs the smoke step doesn't cover.
+      - name: Assert staged binary architecture
+        run: file "packages/bindings/npm/${{ matrix.triple }}/alien-bindings-node.${{ matrix.triple }}.node" | grep -q "${{ matrix.expect_arch }}"
 
       # Smoke (ticket requirement): a published-shape install with NO build
       # toolchain must load the prebuilt .node and run a real local op. darwin-x64
