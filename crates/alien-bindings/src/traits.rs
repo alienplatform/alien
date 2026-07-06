@@ -402,6 +402,13 @@ pub trait Vault: Binding {
     /// Returned names are in the vault's own namespace (any provider-specific
     /// prefix is stripped), so each name can be passed straight back to
     /// [`Vault::get_secret`].
+    ///
+    /// Implementations backed by a flat namespace (a single string prefix
+    /// with no reserved separator, e.g. `"{vault_prefix}-{secret_name}"`)
+    /// cannot implement this safely with a prefix/`BeginsWith` scan: a vault
+    /// named `"app"` would also match a sibling vault named `"app-prod"`,
+    /// aliasing across vaults. Such providers should return
+    /// `OperationNotSupported` rather than list under this hazard.
     async fn list_secrets(&self) -> Result<Vec<String>>;
 }
 
