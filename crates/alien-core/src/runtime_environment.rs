@@ -38,7 +38,10 @@ pub const ENV_ALIEN_DEPLOYMENT_TOKEN: &str = "ALIEN_DEPLOYMENT_TOKEN";
 /// Service-account binding name the minting resolver asks the manager to mint
 /// credentials for (the deployment's own managed identity). Required by the mint
 /// request contract; the manager selects and injects it (task-10/16 follow-up).
-pub const ENV_ALIEN_DEPLOYMENT_SA_BINDING: &str = "ALIEN_DEPLOYMENT_SA_BINDING";
+///
+/// Deliberately does **not** end in `_BINDING`: names matching `ALIEN_*_BINDING`
+/// are parsed as resource-binding JSON by the provider, which this is not.
+pub const ENV_ALIEN_DEPLOYMENT_SERVICE_ACCOUNT: &str = "ALIEN_DEPLOYMENT_SERVICE_ACCOUNT";
 pub const ENV_ALIEN_BINDINGS_ADDRESS: &str = "ALIEN_BINDINGS_ADDRESS";
 pub const ENV_ALIEN_BINDINGS_GRPC_ADDRESS: &str = "ALIEN_BINDINGS_GRPC_ADDRESS";
 pub const ENV_ALIEN_BINDINGS_MODE: &str = "ALIEN_BINDINGS_MODE";
@@ -434,7 +437,7 @@ pub fn is_reserved_runtime_environment_name(name: &str) -> bool {
                 | ENV_ALIEN_COMMANDS_TARGET_RESOURCE_ID
                 | ENV_ALIEN_DEPLOYMENT_ID
                 | ENV_ALIEN_DEPLOYMENT_NAME
-                | ENV_ALIEN_DEPLOYMENT_SA_BINDING
+                | ENV_ALIEN_DEPLOYMENT_SERVICE_ACCOUNT
                 | ENV_ALIEN_DEPLOYMENT_TOKEN
                 | ENV_ALIEN_MANAGER_URL
                 | ENV_ALIEN_PUBLIC_ENDPOINTS_JSON
@@ -522,11 +525,17 @@ mod tests {
             ENV_ALIEN_DEPLOYMENT_TOKEN
         ));
         assert!(is_reserved_runtime_environment_name(
-            ENV_ALIEN_DEPLOYMENT_SA_BINDING
+            ENV_ALIEN_DEPLOYMENT_SERVICE_ACCOUNT
         ));
         assert_eq!(ENV_ALIEN_MANAGER_URL, "ALIEN_MANAGER_URL");
         assert_eq!(ENV_ALIEN_DEPLOYMENT_TOKEN, "ALIEN_DEPLOYMENT_TOKEN");
-        assert_eq!(ENV_ALIEN_DEPLOYMENT_SA_BINDING, "ALIEN_DEPLOYMENT_SA_BINDING");
+        assert_eq!(
+            ENV_ALIEN_DEPLOYMENT_SERVICE_ACCOUNT,
+            "ALIEN_DEPLOYMENT_SERVICE_ACCOUNT"
+        );
+        // Must not match the `ALIEN_*_BINDING` resource-binding pattern, or the
+        // provider would try to parse its value as binding JSON.
+        assert!(!ENV_ALIEN_DEPLOYMENT_SERVICE_ACCOUNT.ends_with("_BINDING"));
     }
 
     #[test]
