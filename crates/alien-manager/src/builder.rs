@@ -558,14 +558,13 @@ impl AlienManagerBuilder {
                 }
             }
 
-            let routing_table = Arc::new(crate::routes::registry_proxy::RegistryRoutingTable::new(
-                routes,
-            ));
-            if let Err(e) = routing_table.validate() {
-                return Err(AlienError::new(ErrorData::ServerInitFailed {
-                    reason: format!("Artifact registry configuration error: {}", e),
-                }));
-            }
+            let routing_table = Arc::new(
+                crate::routes::registry_proxy::RegistryRoutingTable::new(routes).map_err(|e| {
+                    AlienError::new(ErrorData::ServerInitFailed {
+                        reason: format!("Artifact registry configuration error: {}", e),
+                    })
+                })?,
+            );
 
             self.server_bindings = Some(ServerBindings {
                 kv,
