@@ -77,6 +77,34 @@ importers:
 
   packages/alien-cli-npm: {}
 
+  packages/bindings:
+    dependencies:
+      '@alienplatform/core':
+        specifier: link:../core
+        version: link:../core
+    devDependencies:
+      '@alienplatform/typescript-config':
+        specifier: link:../config-typescript
+        version: link:../config-typescript
+      '@biomejs/biome':
+        specifier: ^1.9.4
+        version: 1.9.4
+      '@types/node':
+        specifier: ^24.0.15
+        version: 24.10.4
+      tsdown:
+        specifier: ^0.13.0
+        version: 0.13.5(typescript@5.8.3)
+      typescript:
+        specifier: ^5.8.3
+        version: 5.8.3
+      vitest:
+        specifier: ^3.1.4
+        version: 3.2.4(@types/node@24.10.4)(jiti@2.6.1)(lightningcss@1.31.1)(msw@2.12.7(@types/node@24.10.4)(typescript@5.8.3))(tsx@4.21.0)
+      zod:
+        specifier: 4.3.2
+        version: 4.3.2
+
   packages/config-typescript: {}
 
   packages/core:
