@@ -213,6 +213,7 @@ locals {
         ]
         applicationGatewaySubnetId   = azurerm_subnet.default_network_appgw.id
         applicationGatewaySubnetName = azurerm_subnet.default_network_appgw.name
+        privateEndpointSubnetName    = azurerm_subnet.default_network_pe.name
         natGatewayId                 = azurerm_nat_gateway.default_network_nat.id
         networkSecurityGroupId       = azurerm_network_security_group.default_network_workload.id
         isByoVnet                    = false
@@ -551,6 +552,19 @@ resource "azurerm_subnet" "default_network_alb" {
     }
   }
 
+  depends_on = [
+    azurerm_resource_group.default_resource_group
+  ]
+}
+
+resource "azurerm_subnet" "default_network_pe" {
+  name                 = "${local.resource_prefix}-default_network-pe"
+  resource_group_name  = var.azure_resource_group_name
+  virtual_network_name = azurerm_virtual_network.default_network.name
+  address_prefixes = [
+    cidrsubnet(tolist(azurerm_virtual_network.default_network.address_space)[0], 8, 4)
+  ]
+  private_endpoint_network_policies = "Disabled"
   depends_on = [
     azurerm_resource_group.default_resource_group
   ]
@@ -977,6 +991,7 @@ resource "terraform_data" "deployment_registration" {
     azurerm_subnet.default_network_private,
     azurerm_subnet.default_network_appgw,
     azurerm_subnet.default_network_alb,
+    azurerm_subnet.default_network_pe,
     azurerm_public_ip.default_network_nat_pip,
     azurerm_nat_gateway.default_network_nat,
     azurerm_nat_gateway_public_ip_association.default_network_nat,
