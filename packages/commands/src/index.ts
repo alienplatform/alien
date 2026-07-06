@@ -47,6 +47,7 @@ export {
   CommandReceiverConfigInvalidError,
   CommandTimeoutError,
   DeploymentCommandError,
+  InvalidEnvelopeError,
   ManagerHttpError,
   ResponseDecodingFailedError,
   StorageOperationFailedError,

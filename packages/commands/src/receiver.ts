@@ -37,7 +37,7 @@
 import { AlienError } from "@alienplatform/core"
 import {
   CommandReceiverConfigInvalidError,
-  ResponseDecodingFailedError,
+  InvalidEnvelopeError,
   StorageOperationFailedError,
 } from "./errors.js"
 import type {
@@ -290,7 +290,7 @@ class PullCommandReceiver implements CommandReceiver {
   }
 
   private async acquireLeases(): Promise<LeaseInfo[]> {
-    const endpoint = `${this.config.url.replace(/\/+$/, "")}/commands/leases`
+    const endpoint = buildLeaseEndpoint(this.config.url)
     const response = await this.fetchImpl(endpoint, {
       method: "POST",
       headers: {
@@ -402,6 +402,20 @@ class PullCommandReceiver implements CommandReceiver {
     request: PresignedRequest,
     bytes: Uint8Array,
   ): Promise<void> {
+    // Same expiration guard as decodeParamsBytes' download path: an upload
+    // presigned request that expired before we could use it fails loudly
+    // rather than attempting (and possibly succeeding against) a stale URL.
+    const expiration = new Date(request.expiration)
+    if (Date.now() > expiration.getTime()) {
+      throw new AlienError(
+        StorageOperationFailedError.create({
+          operation: "upload",
+          url: request.backend.type === "http" ? request.backend.url : "local",
+          reason: `Presigned request expired at ${expiration.toISOString()}`,
+        }),
+      )
+    }
+
     if (request.backend.type === "http") {
       const res = await this.fetchImpl(request.backend.url, {
         method: request.backend.method,
@@ -420,7 +434,17 @@ class PullCommandReceiver implements CommandReceiver {
       return
     }
 
-    // Local backend (dev only).
+    // Local backend (dev only). Same traversal guard as decodeParamsBytes'
+    // local download path.
+    if (request.backend.filePath.includes("..")) {
+      throw new AlienError(
+        StorageOperationFailedError.create({
+          operation: "upload",
+          url: `local://${request.backend.filePath}`,
+          reason: "Path traversal not allowed in local storage paths",
+        }),
+      )
+    }
     const { writeFile } = await import("node:fs/promises")
     await writeFile(request.backend.filePath, bytes)
   }
@@ -455,6 +479,54 @@ export function commandBudget(deadline: string | undefined, leaseExpiresAt: stri
   }
   const envelopeDeadline = new Date(deadline)
   return envelopeDeadline.getTime() < lease.getTime() ? envelopeDeadline : lease
+}
+
+/**
+ * Build the `/commands/leases` endpoint from the configured base URL.
+ *
+ * Twin of the Rust receiver's `acquire_leases`, which parses the base as a
+ * `Url` and appends segments via `path_segments_mut()` — that mutates only
+ * the path, leaving any query string untouched and correctly ordered after
+ * the appended segments (M1). The naive string approach this replaced
+ * (`url.replace(/\/+$/, "") + "/commands/leases"`) corrupted any base URL
+ * carrying a query string, e.g. `https://h/v1?token=x` became
+ * `https://h/v1?token=x/commands/leases` instead of
+ * `https://h/v1/commands/leases?token=x`.
+ *
+ * `path_segments_mut()` fails (and the Rust receiver raises
+ * `COMMAND_RECEIVER_CONFIG_INVALID`) for a base that cannot be a hierarchical
+ * URL — in practice, anything that isn't HTTP(S). This mirrors that check.
+ */
+export function buildLeaseEndpoint(baseUrl: string): string {
+  let url: URL
+  try {
+    url = new URL(baseUrl)
+  } catch {
+    throw new AlienError(
+      CommandReceiverConfigInvalidError.create({
+        envVar: ENV_ALIEN_COMMANDS_URL,
+        reason: `${ENV_ALIEN_COMMANDS_URL} '${baseUrl}' must be an HTTP(S) URL with a path`,
+      }),
+    )
+  }
+  if (url.protocol !== "http:" && url.protocol !== "https:") {
+    throw new AlienError(
+      CommandReceiverConfigInvalidError.create({
+        envVar: ENV_ALIEN_COMMANDS_URL,
+        reason: `${ENV_ALIEN_COMMANDS_URL} '${baseUrl}' must be an HTTP(S) URL with a path`,
+      }),
+    )
+  }
+
+  // `pop_if_empty` equivalent: a trailing slash produces a trailing empty
+  // path segment; drop exactly one so we don't double up the separator.
+  const segments = url.pathname.split("/")
+  if (segments[segments.length - 1] === "") {
+    segments.pop()
+  }
+  segments.push("commands", "leases")
+  url.pathname = segments.join("/")
+  return url.toString()
 }
 
 /**
@@ -528,15 +600,14 @@ export async function decodeParamsBytes(
 ): Promise<Uint8Array> {
   const params = envelope.params
   if (params.mode === "inline") {
-    return base64ToBytes(params.inlineBase64)
+    return decodeInlineParamsBase64(params.inlineBase64)
   }
 
   // Storage mode: download from the presigned request.
   if (!params.storageGetRequest) {
     throw new AlienError(
-      ResponseDecodingFailedError.create({
-        commandId: envelope.commandId,
-        command: envelope.command,
+      InvalidEnvelopeError.create({
+        field: "params.storageGetRequest",
         reason: "Storage params missing storageGetRequest",
       }),
     )
@@ -601,6 +672,34 @@ function bytesToInlineBody(bytes: Uint8Array): BodySpec {
 
 function base64ToBytes(base64: string): Uint8Array {
   return new Uint8Array(Buffer.from(base64, "base64"))
+}
+
+/**
+ * Canonical base64 (RFC 4648 §4): 4-char groups from the standard alphabet,
+ * with correct padding on the final group. `Buffer.from(str, "base64")` is
+ * lenient by design — it silently skips invalid characters and tolerates
+ * missing/incorrect padding instead of failing — so untrusted wire input
+ * needs this check in front of it to fail loudly instead of decoding to
+ * truncated garbage bytes.
+ */
+const STRICT_BASE64_PATTERN = /^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/
+
+/**
+ * Decode inline command params bytes, matching the Rust twin's strict
+ * `base64::engine::general_purpose::STANDARD` decode: any input outside the
+ * canonical alphabet/padding fails with `INVALID_ENVELOPE`
+ * (DECIDED(09) — twin-pinned; see `PACKAGE_LAYOUT.md`).
+ */
+function decodeInlineParamsBase64(inlineBase64: string): Uint8Array {
+  if (!STRICT_BASE64_PATTERN.test(inlineBase64)) {
+    throw new AlienError(
+      InvalidEnvelopeError.create({
+        field: "params.inlineBase64",
+        reason: "Failed to decode base64 params",
+      }),
+    )
+  }
+  return base64ToBytes(inlineBase64)
 }
 
 function bytesToBase64(bytes: Uint8Array): string {

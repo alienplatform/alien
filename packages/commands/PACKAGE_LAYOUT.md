@@ -24,7 +24,8 @@ the same wire protocol.
 | `CommandsClient` | class | `new CommandsClient({ managerUrl, deploymentId, token })` | Sender. Constructor options `{ managerUrl: string; deploymentId: string; token: string }`. |
 | `CommandsClient#target` | method | `.target(name: string)` | Scopes the client to a target command-capable resource. Return type OPEN (task 08). |
 | `CommandsClient#invoke` | method | `.invoke(name: string, input, options?)` | Invokes a command and resolves to its response. `input`/`options`/response types OPEN (task 08). |
-| `createCommandReceiver` | function | `createCommandReceiver(): CommandReceiver` | Constructs the pull receiver from environment configuration. |
+| `createCommandReceiver` | function | `createCommandReceiver(options?: CommandReceiverOptions): CommandReceiver` | Constructs the pull receiver from environment configuration. |
+| `CommandReceiverOptions` | type | constructor options | `{ env?, fetch?, pollIntervalMs?, leaseSeconds?, maxLeases? }`. Every field has a production default; the three tuning knobs exist mainly for tests. **DECIDED(08).** |
 | `CommandReceiver` | type | receiver handle | `.handle(name: string, handler)` registers a handler; `.run(): Promise<void>` leases and dispatches. Handler context `{ input, signal, deadline, commandId, attempt }`. Concrete field types OPEN (task 08). |
 | `CommandReceiverConfigInvalidError` | error | `defineError({ code: "COMMAND_RECEIVER_CONFIG_INVALID", context: { … } })` | Thrown when receiver env config is empty/invalid. Context names the offending variable — any of the five in the receiver environment contract below. **DECIDED(09).** |
 | sender error types | error | migrated from the current `@alienplatform/sdk/commands` error set | The final exported sender-error set is OPEN (task 08); migration source is the existing `@alienplatform/sdk/commands` errors. |
@@ -103,6 +104,15 @@ MAY depend on:
   handler threw/rejected, including a response-serialization failure), and
   `HANDLER_TIMEOUT` (budget expiry, above). A params-decode failure is
   submitted under the decode error's own code, not a receiver-specific one.
+- **DECIDED(09) — twin-pinned.** Envelope decode failures — malformed inline
+  base64 params, and storage-mode params missing `storageGetRequest` — are
+  submitted as `INVALID_ENVELOPE`, the identical code the Rust twin's
+  `decode_params_bytes` returns for the same two failures
+  (`crates/alien-commands/src/runtime/mod.rs`). The TypeScript receiver's
+  inline base64 decode is strict (canonical alphabet and padding only,
+  matching the Rust `base64` crate's `STANDARD` engine), not the lenient
+  `Buffer.from(str, "base64")` default, so both receivers reject the same
+  malformed envelopes.
 - **DECIDED(09).** Delivery is at-least-once: a lease that expires without a
   submitted response is redelivered. The handler context's `attempt` field
   carries the delivery attempt starting at 1 (greater than 1 means
@@ -145,6 +155,20 @@ The OPEN(08) type decisions, now pinned.
   return value is the JSON success body. `createCommandReceiver()` returns a
   `CommandReceiver` (`.handle` / `.run` / `.stop`); `.stop()` is the exposed
   drain-and-return mechanism (twin of the Rust `ShutdownHandle`).
+
+- **`CommandReceiverOptions`** (constructor options for `createCommandReceiver`,
+  exported from `"."`): `{ env?: Record<string, string | undefined>; fetch?:
+  typeof fetch; pollIntervalMs?: number; leaseSeconds?: number; maxLeases?:
+  number }`. `env` defaults to `process.env`; `fetch` defaults to the global
+  `fetch`; the three tuning knobs default to the DECIDED(09) production
+  values (5000ms poll / 60s lease / 10 max leases) and exist mainly so tests
+  can drive the lease loop fast and inject a stub `fetch`.
+
+- **`InvalidEnvelopeError`** (`defineError`, exported from `"."`): code
+  `INVALID_ENVELOPE`, context `{ field?: string; reason: string }`. Thrown by
+  the receiver for envelope decode failures — malformed inline base64 params
+  and storage-mode params missing `storageGetRequest` — matching the Rust
+  twin's `ErrorData::InvalidEnvelope` code (DECIDED(09), twin-pinned above).
 
 - **`CommandsClient#target(name)` return type:** `TargetedCommands` — a class
   exported from `"."`, a thin sender bound to one `targetResourceId`. Its

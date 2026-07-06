@@ -446,6 +446,175 @@ describe("CommandReceiver.run", () => {
     expect(leasePolls()).toBe(after)
   })
 
+  it("submits INVALID_ENVELOPE for malformed inline base64 params (twin of Rust's decode_params_bytes)", async () => {
+    server = await openServer()
+    const env = envelope({
+      baseUrl: server.baseUrl,
+      params: { mode: "inline", inlineBase64: "not-valid-base64!!" },
+    })
+    const serve = leaseOnce([lease(env)])
+    route = req => serve(req) ?? { status: 200 }
+
+    const r = createCommandReceiver({
+      env: { ...FULL_ENV, ALIEN_COMMANDS_URL: `${server.baseUrl}/v1/` },
+      pollIntervalMs: 5,
+    })
+    r.handle("echo", () => ({ ok: true }))
+    receiverStop = () => r.stop()
+    running = r.run()
+
+    await waitFor(() => submitBody("cmd_1") !== undefined)
+    const body = submitBody("cmd_1") as Extract<CommandResponse, { status: "error" }>
+    expect(body.status).toBe("error")
+    expect(body.code).toBe("INVALID_ENVELOPE")
+  })
+
+  it("submits INVALID_ENVELOPE when storage params are missing storageGetRequest (twin-pinned)", async () => {
+    server = await openServer()
+    const env = envelope({
+      baseUrl: server.baseUrl,
+      params: { mode: "storage" },
+    })
+    const serve = leaseOnce([lease(env)])
+    route = req => serve(req) ?? { status: 200 }
+
+    const r = createCommandReceiver({
+      env: { ...FULL_ENV, ALIEN_COMMANDS_URL: `${server.baseUrl}/v1/` },
+      pollIntervalMs: 5,
+    })
+    r.handle("echo", () => ({ ok: true }))
+    receiverStop = () => r.stop()
+    running = r.run()
+
+    await waitFor(() => submitBody("cmd_1") !== undefined)
+    const body = submitBody("cmd_1") as Extract<CommandResponse, { status: "error" }>
+    expect(body.status).toBe("error")
+    expect(body.code).toBe("INVALID_ENVELOPE")
+  })
+
+  it("sends the lease POST with typed target, defaults, and bearer auth (mirrors Rust's lease_request_carries_typed_target_and_defaults)", async () => {
+    server = await openServer()
+    const env = envelope({ baseUrl: server.baseUrl })
+    const serve = leaseOnce([lease(env)])
+    route = req => serve(req) ?? { status: 200 }
+
+    const r = createCommandReceiver({
+      env: { ...FULL_ENV, ALIEN_COMMANDS_URL: `${server.baseUrl}/v1/` },
+      pollIntervalMs: 5,
+    })
+    r.handle("echo", () => ({ ok: true }))
+    receiverStop = () => r.stop()
+    running = r.run()
+
+    await waitFor(() => submitBody("cmd_1") !== undefined)
+
+    const leaseReq = server.requests.find(
+      req => req.method === "POST" && req.path === "/v1/commands/leases",
+    )
+    expect(leaseReq).toBeDefined()
+    expect(leaseReq?.body).toEqual({
+      deploymentId: "dep-123",
+      target: { resourceId: "agent", resourceType: "daemon" },
+      maxLeases: 10,
+      leaseSeconds: 60,
+    })
+    expect(leaseReq?.headers.authorization).toBe("Bearer tok")
+  })
+
+  it("builds the lease endpoint from a query-string base URL without corrupting path/query (M1 — mirrors Rust's path_segments_mut)", async () => {
+    server = await openServer()
+    const env = envelope({ baseUrl: server.baseUrl })
+
+    let leaseServed = false
+    let capturedLeasePath: string | undefined
+    route = req => {
+      if (req.method === "POST" && req.path.startsWith("/v1/commands/leases")) {
+        capturedLeasePath = req.path
+        if (leaseServed) return { json: { leases: [] } }
+        leaseServed = true
+        return { json: { leases: [lease(env)] } }
+      }
+      if (req.method === "PUT") return { status: 200 }
+      return { status: 404 }
+    }
+
+    const r = createCommandReceiver({
+      env: { ...FULL_ENV, ALIEN_COMMANDS_URL: `${server.baseUrl}/v1?token=abc` },
+      pollIntervalMs: 5,
+    })
+    r.handle("echo", () => ({ ok: true }))
+    receiverStop = () => r.stop()
+    running = r.run()
+
+    await waitFor(() => submitBody("cmd_1") !== undefined)
+    expect(capturedLeasePath).toBe("/v1/commands/leases?token=abc")
+  })
+
+  it("rejects an expired presigned upload before attempting the PUT (M2)", async () => {
+    server = await openServer()
+    const env = envelope({ baseUrl: server.baseUrl })
+    env.responseHandling.maxInlineBytes = 5 // force overflow to storage
+    env.responseHandling.storageUploadRequest.expiration = new Date(
+      Date.now() - 60_000,
+    ).toISOString()
+    const serve = leaseOnce([lease(env)])
+    route = req => serve(req) ?? { status: 200 }
+
+    const big = { payload: "x".repeat(64) }
+    const r = createCommandReceiver({
+      env: { ...FULL_ENV, ALIEN_COMMANDS_URL: `${server.baseUrl}/v1/` },
+      pollIntervalMs: 5,
+    })
+    r.handle("echo", () => big)
+    receiverStop = () => r.stop()
+    running = r.run()
+
+    await waitFor(
+      () =>
+        (server?.requests.filter(req => req.method === "POST" && req.path === "/v1/commands/leases")
+          .length ?? 0) >= 1,
+    )
+    // No ack path exists for this failure — give the (rejected) submit attempt
+    // time to run, then assert it never reached the storage PUT.
+    await new Promise(res => setTimeout(res, 60))
+
+    const upload = server.requests.find(req => req.method === "PUT" && req.path === "/storage-put")
+    expect(upload).toBeUndefined()
+    expect(submitBody("cmd_1")).toBeUndefined()
+  })
+
+  it("rejects a path-traversal local upload backend before writing (M2)", async () => {
+    server = await openServer()
+    const env = envelope({ baseUrl: server.baseUrl })
+    env.responseHandling.maxInlineBytes = 5 // force overflow to storage
+    env.responseHandling.storageUploadRequest = {
+      backend: { type: "local", filePath: "../evil.json", operation: "put" },
+      expiration: new Date(Date.now() + 3_600_000).toISOString(),
+      operation: "put",
+      path: "resp-path",
+    }
+    const serve = leaseOnce([lease(env)])
+    route = req => serve(req) ?? { status: 200 }
+
+    const big = { payload: "x".repeat(64) }
+    const r = createCommandReceiver({
+      env: { ...FULL_ENV, ALIEN_COMMANDS_URL: `${server.baseUrl}/v1/` },
+      pollIntervalMs: 5,
+    })
+    r.handle("echo", () => big)
+    receiverStop = () => r.stop()
+    running = r.run()
+
+    await waitFor(
+      () =>
+        (server?.requests.filter(req => req.method === "POST" && req.path === "/v1/commands/leases")
+          .length ?? 0) >= 1,
+    )
+    await new Promise(res => setTimeout(res, 60))
+
+    expect(submitBody("cmd_1")).toBeUndefined()
+  })
+
   it("does not submit twice when the submit fails (no ack → redelivery)", async () => {
     server = await openServer()
     const env = envelope({ baseUrl: server.baseUrl })

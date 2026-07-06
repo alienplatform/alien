@@ -111,6 +111,28 @@ export const ResponseDecodingFailedError = defineError({
 })
 
 /**
+ * Error thrown when a command envelope (or a param/response body it carries)
+ * fails to decode or validate — malformed inline base64, a storage-mode body
+ * missing its presigned request, or an envelope that fails schema validation.
+ *
+ * The Rust twin (`alien_commands::error::ErrorData::InvalidEnvelope`) raises
+ * the identical code (`INVALID_ENVELOPE`) for the same failures, so envelope
+ * decode failures are twin-pinned across both receivers (see
+ * `PACKAGE_LAYOUT.md` DECIDED(09)).
+ */
+export const InvalidEnvelopeError = defineError({
+  code: "INVALID_ENVELOPE",
+  context: z.object({
+    field: z.string().optional(),
+    reason: z.string(),
+  }),
+  message: ({ reason }) => `Invalid command envelope: ${reason}`,
+  retryable: false,
+  internal: false,
+  httpStatusCode: 400,
+})
+
+/**
  * Error thrown when the pull receiver's environment configuration is missing or
  * invalid. Fails fast (synchronously, from `createCommandReceiver`) and names
  * the offending variable in `context.envVar`.
