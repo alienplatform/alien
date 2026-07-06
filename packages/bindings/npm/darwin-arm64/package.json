@@ -1,0 +1,15 @@
+{
+  "name": "@alienplatform/bindings-darwin-arm64",
+  "version": "0.0.0",
+  "cpu": [
+    "arm64"
+  ],
+  "main": "alien-bindings-node.darwin-arm64.node",
+  "files": [
+    "alien-bindings-node.darwin-arm64.node"
+  ],
+  "description": "napi-rs addon exposing alien-bindings storage/kv/queue/vault to JavaScript",
+  "os": [
+    "darwin"
+  ]
+}
