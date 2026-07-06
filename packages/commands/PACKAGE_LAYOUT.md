@@ -22,13 +22,13 @@ the same wire protocol.
 | Export | Kind | Signature sketch | Notes |
 |---|---|---|---|
 | `CommandsClient` | class | `new CommandsClient({ managerUrl, deploymentId, token })` | Sender. Constructor options `{ managerUrl: string; deploymentId: string; token: string }`. |
-| `CommandsClient#target` | method | `.target(name: string)` | Scopes the client to a target command-capable resource. Return type OPEN (task 08). |
-| `CommandsClient#invoke` | method | `.invoke(name: string, input, options?)` | Invokes a command and resolves to its response. `input`/`options`/response types OPEN (task 08). |
+| `CommandsClient#target` | method | `.target(name: string)` | Scopes the client to a target command-capable resource. Return type: `TargetedCommands` — DECIDED(08). |
+| `CommandsClient#invoke` | method | `.invoke(name: string, input, options?)` | Invokes a command and resolves to its response. types DECIDED(08) — see the DECIDED(08) section. |
 | `createCommandReceiver` | function | `createCommandReceiver(options?: CommandReceiverOptions): CommandReceiver` | Constructs the pull receiver from environment configuration. |
 | `CommandReceiverOptions` | type | constructor options | `{ env?, fetch?, pollIntervalMs?, leaseSeconds?, maxLeases? }`. Every field has a production default; the three tuning knobs exist mainly for tests. **DECIDED(08).** |
-| `CommandReceiver` | type | receiver handle | `.handle(name: string, handler)` registers a handler; `.run(): Promise<void>` leases and dispatches. Handler context `{ input, signal, deadline, commandId, attempt }`. Concrete field types OPEN (task 08). |
+| `CommandReceiver` | type | receiver handle | `.handle(name: string, handler)` registers a handler; `.run(): Promise<void>` leases and dispatches. Handler context `{ input, signal, deadline, commandId, attempt }`. Field types DECIDED(08) — see the DECIDED(08) section. |
 | `CommandReceiverConfigInvalidError` | error | `defineError({ code: "COMMAND_RECEIVER_CONFIG_INVALID", context: { … } })` | Thrown when receiver env config is empty/invalid. Context names the offending variable — any of the five in the receiver environment contract below. **DECIDED(09).** |
-| sender error types | error | migrated from the current `@alienplatform/sdk/commands` error set | The final exported sender-error set is OPEN (task 08); migration source is the existing `@alienplatform/sdk/commands` errors. |
+| sender error types | error | migrated from the current `@alienplatform/sdk/commands` error set | Sender-error set DECIDED(08) — the seven migrated errors; see the DECIDED(08) section. |
 | shared error primitives | re-export | `AlienError`, `defineError` (from `@alienplatform/core`) | Re-exported for consumer error handling. |
 
 ### Receiver environment contract
@@ -130,9 +130,9 @@ MAY depend on:
   command-polling defaults.
 - **DECIDED(09).** `ctx.input` is the decoded command param bytes: the same
   bytes the params envelope carries after decode, prior to any
-  handler-side parsing. The concrete TypeScript context field types remain
-  OPEN (task 08); only this byte-for-byte encoding identity between the
-  Rust and TypeScript receivers is pinned here.
+  handler-side parsing. The concrete TypeScript context field types are now
+  DECIDED(08) (see the DECIDED(08) section); the byte-for-byte encoding
+  identity between the Rust and TypeScript receivers remains pinned here.
 - **DECIDED(09).** A successful handler response body is the JSON encoding
   of the handler's return value (`JSON.stringify`-equivalent), submitted as
   the command's success response payload.
