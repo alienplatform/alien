@@ -1,0 +1,142 @@
+/**
+ * Fixture builder for the local-provider binding env vars, matching EXACTLY
+ * the JSON shapes `alien-local` (and the Rust `alien-core::bindings` types)
+ * write for `ALIEN_<NAME>_BINDING`:
+ *
+ * - Storage: `crates/alien-core/src/bindings/storage.rs::LocalStorageBinding`
+ *   → `{"service":"local-storage","storagePath":"<dir>"}`
+ * - Kv: `crates/alien-core/src/bindings/kv.rs::LocalKvBinding`
+ *   → `{"service":"local-kv","dataDir":"<dir>","keyPrefix"?:"<prefix>"}`
+ * - Queue: `crates/alien-core/src/bindings/queue.rs::LocalQueueBinding`
+ *   → `{"service":"local-queue","queuePath":"<dir>"}` — a *directory*; the
+ *     `localqueue.v1` sqlite file (`localqueue.sqlite`) is created inside it
+ *     (see the doc comment on `LocalQueueBinding::queue_path` and
+ *     `crates/alien-bindings/src/providers/local_store.rs::LocalStore::open`).
+ * - Vault: `crates/alien-core/src/bindings/vault.rs::LocalVaultBinding`
+ *   → `{"service":"local-vault","vaultName":"<name>","dataDir":"<dir>"}` —
+ *     secrets live at `<dir>/secrets.json`
+ *     (see `crates/alien-bindings/src/providers/vault/local.rs`).
+ *
+ * Cross-checked against `crates/alien-local/src/local_bindings_provider.rs`
+ * (which extracts exactly these fields from the parsed binding) and against
+ * `crates/alien-bindings/src/bindings.rs`'s own `#[cfg(test)]` fixtures, which
+ * build the identical JSON by hand.
+ *
+ * Every builder also folds in `ALIEN_DEPLOYMENT_TYPE=local`: resolving an
+ * already-*configured* binding (as opposed to reporting it missing) runs the
+ * full `BindingsProvider::from_env` path, which resolves the deployment
+ * platform eagerly (see `crates/alien-bindings/src/provider.rs`
+ * `LazyEnvBindingsProvider::provider`). Without it every real operation fails
+ * with `ENVIRONMENT_VARIABLE_MISSING` before it ever reaches the binding.
+ */
+
+import { mkdtempSync } from "node:fs"
+import { tmpdir } from "node:os"
+import { join } from "node:path"
+
+/** The env var every binding operation needs in addition to its own JSON. */
+export const LOCAL_DEPLOYMENT_ENV: Record<string, string> = {
+  ALIEN_DEPLOYMENT_TYPE: "local",
+}
+
+/**
+ * Derive the `ALIEN_<NAME>_BINDING` env var name for `bindingName`, mirroring
+ * `alien_core::bindings::binding_env_var_name` (uppercase, `-` → `_`).
+ *
+ * `bindingEnvVarName("my-files") === "ALIEN_MY_FILES_BINDING"`.
+ */
+export function bindingEnvVarName(bindingName: string): string {
+  return `ALIEN_${bindingName.replace(/-/g, "_").toUpperCase()}_BINDING`
+}
+
+/** Create a fresh, empty temp directory for one binding's on-disk state. */
+export function makeTempDir(label: string): string {
+  return mkdtempSync(join(tmpdir(), `alien-bindings-test-${label}-`))
+}
+
+/** An env map plus the temp directory backing it, for tests that want to inspect disk state. */
+export interface LocalBindingFixture {
+  env: Record<string, string>
+  dir: string
+}
+
+/** Build the env for a `local-storage` binding rooted at a fresh temp dir. */
+export function localStorageBindingEnv(
+  bindingName: string,
+  dir = makeTempDir(`storage-${bindingName}`),
+): LocalBindingFixture {
+  return {
+    dir,
+    env: {
+      ...LOCAL_DEPLOYMENT_ENV,
+      [bindingEnvVarName(bindingName)]: JSON.stringify({
+        service: "local-storage",
+        storagePath: dir,
+      }),
+    },
+  }
+}
+
+/** Build the env for a `local-kv` binding rooted at a fresh temp dir. */
+export function localKvBindingEnv(
+  bindingName: string,
+  options: { dir?: string; keyPrefix?: string } = {},
+): LocalBindingFixture {
+  const dir = options.dir ?? makeTempDir(`kv-${bindingName}`)
+  const binding: Record<string, unknown> = { service: "local-kv", dataDir: dir }
+  if (options.keyPrefix !== undefined) binding.keyPrefix = options.keyPrefix
+
+  return {
+    dir,
+    env: {
+      ...LOCAL_DEPLOYMENT_ENV,
+      [bindingEnvVarName(bindingName)]: JSON.stringify(binding),
+    },
+  }
+}
+
+/** Build the env for a `local-queue` binding rooted at a fresh temp dir. */
+export function localQueueBindingEnv(
+  bindingName: string,
+  dir = makeTempDir(`queue-${bindingName}`),
+): LocalBindingFixture {
+  return {
+    dir,
+    env: {
+      ...LOCAL_DEPLOYMENT_ENV,
+      [bindingEnvVarName(bindingName)]: JSON.stringify({
+        service: "local-queue",
+        queuePath: dir,
+      }),
+    },
+  }
+}
+
+/** Build the env for a `local-vault` binding rooted at a fresh temp dir. */
+export function localVaultBindingEnv(
+  bindingName: string,
+  vaultName: string,
+  dir = makeTempDir(`vault-${bindingName}`),
+): LocalBindingFixture {
+  return {
+    dir,
+    env: {
+      ...LOCAL_DEPLOYMENT_ENV,
+      [bindingEnvVarName(bindingName)]: JSON.stringify({
+        service: "local-vault",
+        vaultName,
+        dataDir: dir,
+      }),
+    },
+  }
+}
+
+/** Return the sole element of `items`, throwing (with a useful message) if there isn't exactly one. */
+export function only<T>(items: T[]): T {
+  if (items.length !== 1) {
+    throw new Error(`expected exactly one item, got ${items.length}: ${JSON.stringify(items)}`)
+  }
+  const [item] = items
+  if (item === undefined) throw new Error("unreachable: length check above guarantees an element")
+  return item
+}

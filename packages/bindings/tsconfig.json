@@ -1,9 +1,7 @@
 {
   "extends": "@alienplatform/typescript-config/base.json",
   "compilerOptions": {
-    "outDir": "./dist",
-    "rootDir": "./src",
     "allowArbitraryExtensions": true
   },
-  "include": ["src/**/*"]
+  "include": ["src/**/*", "tests/**/*", "scripts/**/*.ts"]
 }
