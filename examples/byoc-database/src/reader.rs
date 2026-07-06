@@ -1,6 +1,8 @@
 use crate::{
     error::{Error, Result},
-    models::{NamespaceMetadata, QueryRequest, QueryResponse, QueryResult, Segment, Vector},
+    models::{
+        NamespaceMetadata, QueryRequest, QueryResponse, QueryResult, Segment, StatsResponse, Vector,
+    },
 };
 use alien_sdk::Storage;
 use object_store::{path::Path, GetOptions, GetResultPayload};
@@ -108,6 +110,27 @@ impl Reader {
         );
 
         Ok(QueryResponse { results })
+    }
+
+    /// Row counts for a namespace: number of segments and total vectors
+    /// across them. Backs the `stats` command handler (ALIEN-221 example),
+    /// invoked through the app-owned pull command receiver rather than an
+    /// HTTP route.
+    pub async fn stats(&self, namespace: &str) -> Result<StatsResponse> {
+        let metadata_path = Path::from(format!("{}/metadata.json", namespace));
+        let metadata = self.read_metadata(&metadata_path).await?;
+
+        let mut vector_count = 0usize;
+        for segment_id in &metadata.segments {
+            let segment = self.read_segment(namespace, segment_id).await?;
+            vector_count += segment.vectors.len();
+        }
+
+        Ok(StatsResponse {
+            namespace: namespace.to_string(),
+            segment_count: metadata.segments.len(),
+            vector_count,
+        })
     }
 
     /// Read metadata from storage

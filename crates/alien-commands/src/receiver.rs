@@ -23,9 +23,28 @@
 //!
 //! Every command runs under a budget of `min(envelope.deadline,
 //! lease_expires_at)` — there is no lease-renew call. When the budget
-//! expires the handler future is aborted (dropped), `ctx.cancellation` is
-//! cancelled for any cooperative work the handler spawned, and a
-//! `HANDLER_TIMEOUT` error response is submitted.
+//! expires the handler *future* is aborted (dropped), `ctx.cancellation` is
+//! cancelled, and a `HANDLER_TIMEOUT` error response is submitted.
+//!
+//! Dropping the handler future does not, by itself, stop any background work
+//! the handler spawned onto its own tasks (`tokio::spawn`, detached I/O,
+//! etc.) — those keep running unless they observe `ctx.cancellation`
+//! themselves. Handlers that spawn such work should race it against
+//! `ctx.cancellation.cancelled()`, e.g.:
+//!
+//! ```no_run
+//! # use alien_commands::Context;
+//! # async fn handle(ctx: Context) -> alien_commands::receiver::HandlerResult<()> {
+//! tokio::select! {
+//!     result = do_cooperative_work() => { result?; }
+//!     _ = ctx.cancellation.cancelled() => {
+//!         // budget expired: stop cleanly instead of leaking work.
+//!     }
+//! }
+//! # Ok(())
+//! # }
+//! # async fn do_cooperative_work() -> alien_commands::receiver::HandlerResult<()> { Ok(()) }
+//! ```
 //!
 //! # At-least-once delivery
 //!
@@ -35,10 +54,14 @@
 //!
 //! # Shutdown
 //!
-//! [`Receiver::run`] returns after [`ShutdownHandle::shutdown`] is called:
-//! no new leases are acquired once draining starts, and in-flight commands
-//! finish within their budgets. Wire the handle to your process signal
-//! handling (e.g. `tokio::signal::ctrl_c`) as needed.
+//! [`Receiver::run`] returns after [`ShutdownHandle::shutdown`] is called.
+//! Worded precisely: no new lease poll *starts* once draining begins (this is
+//! checked at the top of each poll-loop iteration) — a poll already in
+//! flight when shutdown is raised still completes, and any leases it returns
+//! are dispatched and drained like the rest of the batch. Every in-flight
+//! command finishes within its own budget before `run` returns, and no
+//! command created after shutdown is ever leased. Wire the handle to your
+//! process signal handling (e.g. `tokio::signal::ctrl_c`) as needed.
 
 use std::collections::HashMap;
 use std::future::Future;
@@ -134,8 +157,11 @@ impl Context {
 pub struct ShutdownHandle(CancellationToken);
 
 impl ShutdownHandle {
-    /// Signal the receiver to stop: no new leases are acquired, in-flight
-    /// commands drain within their budgets, then [`Receiver::run`] returns.
+    /// Signal the receiver to stop: no new lease poll starts once draining
+    /// begins (a poll already in flight still completes and its leases are
+    /// processed), in-flight commands drain within their budgets, then
+    /// [`Receiver::run`] returns. See the module docs' "Shutdown" section
+    /// for the precise semantics.
     pub fn shutdown(&self) {
         self.0.cancel();
     }
@@ -269,9 +295,11 @@ impl Receiver {
     /// Polls `POST {url}/commands/leases` every poll interval, dispatches
     /// each leased command to its handler concurrently, and submits
     /// responses. Transient lease errors are logged and retried on the next
-    /// interval. Returns after [`ShutdownHandle::shutdown`]: draining stops
-    /// new leases and waits for in-flight commands (each bounded by its own
-    /// budget).
+    /// interval. Returns after [`ShutdownHandle::shutdown`]: no new lease
+    /// poll starts once draining begins (a poll already in flight still
+    /// completes and its leases are processed), and every in-flight command
+    /// is awaited, each bounded by its own budget. See the module docs'
+    /// "Shutdown" section for the precise semantics.
     pub async fn run(&self) -> Result<()> {
         info!(
             url = %self.url,

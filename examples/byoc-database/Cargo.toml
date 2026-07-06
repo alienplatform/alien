@@ -9,6 +9,12 @@ edition = "2021"
 # binding client)
 alien-sdk = { workspace = true, default-features = false, features = ["all-platforms"] }
 
+# App-owned pull command receiver (ALIEN-221): lets the reader container lease
+# and handle commands (e.g. `stats`) addressed to it directly, alongside its
+# HTTP API. Light feature only — no axum/object_store/cloud-client deps beyond
+# what alien-sdk already pulls in.
+alien-commands = { workspace = true, default-features = false, features = ["receiver"] }
+
 # Error handling
 thiserror = { workspace = true }
 
