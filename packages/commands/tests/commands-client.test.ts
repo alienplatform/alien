@@ -5,6 +5,9 @@
  * would. Runs identically under Node (`vitest run`) and Bun (`bun test`).
  */
 
+import { writeFile } from "node:fs/promises"
+import { tmpdir } from "node:os"
+import { join } from "node:path"
 import { AlienError } from "@alienplatform/core"
 import { afterEach, describe, expect, it } from "vitest"
 import { CommandsClient } from "../src/client.js"
@@ -210,6 +213,117 @@ describe("CommandsClient.invoke", () => {
 
     const result = await client(server.baseUrl).invoke("fetch-big", {}, FAST_POLL)
     expect(result).toEqual(stored)
+  })
+})
+
+describe("CommandsClient storage decode edge cases", () => {
+  /** Build a status stub that answers with a storage-mode success body. */
+  function storageStatus(bodyOverrides: Record<string, unknown>) {
+    return {
+      commandId: "cmd_1",
+      state: "SUCCEEDED",
+      attempt: 1,
+      target: { resourceId: "container-1", resourceType: "container" },
+      response: {
+        status: "success",
+        response: { mode: "storage", size: 10, ...bodyOverrides },
+      },
+    }
+  }
+
+  it("reads a local-backend storage response when allowLocalStorage is set", async () => {
+    const stored = { local: true, n: 5 }
+    const filePath = join(tmpdir(), `alien-cmd-decode-${Date.now()}.json`)
+    await writeFile(filePath, JSON.stringify(stored), "utf-8")
+
+    server = await startStubServer((req): RouteResult => {
+      if (req.method === "POST") return { json: createResponse() }
+      return {
+        json: storageStatus({
+          storageGetRequest: {
+            backend: { type: "local", filePath, operation: "get" },
+            expiration: new Date(Date.now() + 60_000).toISOString(),
+            operation: "get",
+            path: "local-blob",
+          },
+        }),
+      }
+    })
+
+    const result = await client(server.baseUrl, true).invoke("read-local", {}, FAST_POLL)
+    expect(result).toEqual(stored)
+  })
+
+  it("refuses the local backend when allowLocalStorage is false", async () => {
+    server = await startStubServer((req): RouteResult => {
+      if (req.method === "POST") return { json: createResponse() }
+      return {
+        json: storageStatus({
+          storageGetRequest: {
+            backend: { type: "local", filePath: "/tmp/whatever.json", operation: "get" },
+            expiration: new Date(Date.now() + 60_000).toISOString(),
+            operation: "get",
+            path: "local-blob",
+          },
+        }),
+      }
+    })
+
+    const err = await client(server.baseUrl, false)
+      .invoke("read-local", {}, FAST_POLL)
+      .catch((e: unknown) => e)
+    expect((err as AlienError).code).toBe("STORAGE_OPERATION_FAILED")
+    expect((err as AlienError).context).toMatchObject({
+      reason: expect.stringContaining("not enabled"),
+    })
+  })
+
+  it("rejects an expired presigned storage request", async () => {
+    server = await startStubServer((req): RouteResult => {
+      if (req.method === "POST") return { json: createResponse() }
+      return {
+        json: storageStatus({
+          storageGetRequest: {
+            backend: { type: "http", url: `${server?.baseUrl}/blob`, method: "GET", headers: {} },
+            expiration: new Date(Date.now() - 1_000).toISOString(),
+            operation: "get",
+            path: "blob",
+          },
+        }),
+      }
+    })
+
+    const err = await client(server.baseUrl)
+      .invoke("fetch-expired", {}, FAST_POLL)
+      .catch((e: unknown) => e)
+    expect((err as AlienError).code).toBe("STORAGE_OPERATION_FAILED")
+    expect((err as AlienError).context).toMatchObject({
+      reason: expect.stringContaining("expired"),
+    })
+  })
+
+  it("guards against path traversal in a local storage path", async () => {
+    server = await startStubServer((req): RouteResult => {
+      if (req.method === "POST") return { json: createResponse() }
+      return {
+        json: storageStatus({
+          storageGetRequest: {
+            backend: { type: "local", filePath: "../../etc/passwd", operation: "get" },
+            expiration: new Date(Date.now() + 60_000).toISOString(),
+            operation: "get",
+            path: "local-blob",
+          },
+        }),
+      }
+    })
+
+    const err = await client(server.baseUrl, true)
+      .invoke("traverse", {}, FAST_POLL)
+      .catch((e: unknown) => e)
+    expect((err as AlienError).code).toBe("STORAGE_OPERATION_FAILED")
+    expect((err as AlienError).context).toMatchObject({
+      reason: expect.stringContaining("Path traversal"),
+    })
   })
 })
 

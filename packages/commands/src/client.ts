@@ -43,7 +43,7 @@ export interface CommandsClientConfig {
   /** Bearer token (deployment token or workspace token). */
   token: string
   /** Default invoke timeout in milliseconds (default: 60000). */
-  timeout?: number
+  timeoutMs?: number
   /** Allow reading local files for storage responses (default: false, local dev only). */
   allowLocalStorage?: boolean
 }
@@ -52,7 +52,7 @@ export interface CommandsClientConfig {
  * Per-invoke options.
  */
 export interface InvokeOptions {
-  /** Wall-clock timeout in milliseconds (default: the client's `timeout`). */
+  /** Wall-clock timeout in milliseconds (default: the client's `timeoutMs`). */
   timeoutMs?: number
   /** Optional server-side deadline for command completion. */
   deadline?: Date
@@ -266,7 +266,7 @@ export class CommandsClient {
     this.managerUrl = config.managerUrl.replace(/\/+$/, "")
     this.deploymentId = config.deploymentId
     this.token = config.token
-    this.defaultTimeout = config.timeout ?? 60_000
+    this.defaultTimeout = config.timeoutMs ?? 60_000
     this.allowLocalStorage = config.allowLocalStorage ?? false
   }
 
