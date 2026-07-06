@@ -15,7 +15,7 @@
  * and the Bun canary, and wired as the dedicated `test:integration` script.
  */
 
-import { type ChildProcessWithoutNullStreams, execFileSync, spawn } from "node:child_process"
+import { type ChildProcessWithoutNullStreams, spawn } from "node:child_process"
 import { existsSync } from "node:fs"
 import { fileURLToPath } from "node:url"
 import { AlienError } from "@alienplatform/core"
@@ -37,25 +37,63 @@ const TOKEN = "test-token"
 let serverBinPath = ""
 
 /**
+ * Run the cargo build asynchronously and collect its JSON artifact stream.
+ *
+ * Deliberately NOT `execFileSync`: a cold CI build (compile + link) can take
+ * minutes, and a synchronous spawn blocks this worker's event loop for that
+ * whole duration — vitest's worker↔main RPC misses its heartbeats and reports
+ * a spurious `[vitest-worker]: Timeout calling "onTaskUpdate"` unhandled error
+ * even though every test passes. No `*Sync` child-process calls anywhere in
+ * this suite; the event loop stays responsive and only the generous
+ * `hookTimeout` bounds the build.
+ */
+function runCargoBuild(): Promise<string> {
+  return new Promise<string>((resolve, reject) => {
+    const proc = spawn(
+      CARGO,
+      [
+        "build",
+        "-p",
+        "alien-commands",
+        "--features",
+        "test-utils",
+        "--bin",
+        "test-command-server",
+        "--message-format=json",
+      ],
+      { cwd: WORKSPACE_ROOT, stdio: ["ignore", "pipe", "pipe"] },
+    )
+
+    let stdout = ""
+    let stderr = ""
+    proc.stdout.setEncoding("utf-8")
+    proc.stdout.on("data", (chunk: string) => {
+      stdout += chunk
+    })
+    proc.stderr.setEncoding("utf-8")
+    proc.stderr.on("data", (chunk: string) => {
+      stderr += chunk
+    })
+    proc.on("error", err => {
+      reject(new Error(`failed to spawn cargo: ${err.message}`))
+    })
+    proc.on("close", code => {
+      if (code === 0) {
+        resolve(stdout)
+      } else {
+        reject(new Error(`cargo build failed with exit code ${code}. stderr:\n${stderr}`))
+      }
+    })
+  })
+}
+
+/**
  * Build the test-command-server bin once and resolve its executable path from
  * cargo's JSON artifact stream. Fails loudly (throws) if cargo is missing or the
  * build fails — the whole suite is meaningless without the real server.
  */
-beforeAll(() => {
-  const stdout = execFileSync(
-    CARGO,
-    [
-      "build",
-      "-p",
-      "alien-commands",
-      "--features",
-      "test-utils",
-      "--bin",
-      "test-command-server",
-      "--message-format=json",
-    ],
-    { cwd: WORKSPACE_ROOT, encoding: "utf-8", maxBuffer: 64 * 1024 * 1024 },
-  )
+beforeAll(async () => {
+  const stdout = await runCargoBuild()
 
   for (const line of stdout.split("\n")) {
     if (!line.trim()) continue
