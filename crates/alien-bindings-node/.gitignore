@@ -1,0 +1,4 @@
+# Prebuilt native binaries — produced by `napi build`, assembled into per-platform
+# npm packages in a later task; never committed.
+*.node
+node_modules/
