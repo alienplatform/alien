@@ -30,16 +30,12 @@ export const queue = factories.queue
 /** Resolve the vault binding named `name`. */
 export const vault = factories.vault
 
-export {
-  AlienError,
-  BindingNotConfiguredError,
-  defineError,
-  unwrapNapiError,
-} from "./errors.js"
+export { AlienError, BindingNotConfiguredError, defineError } from "./errors.js"
 
 export type {
   BindingOptions,
   Kv,
+  KvScanItem,
   KvScanResult,
   KvSetOptions,
   ObjectMeta,

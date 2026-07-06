@@ -106,6 +106,7 @@ function makeStorage(handle: () => Promise<RawStorageHandle>): Storage {
 
 function makeKv(handle: () => Promise<RawKvHandle>): Kv {
   return {
+    get: key => guard(handle, raw => raw.get(key)),
     getText: key =>
       guard(handle, async raw => {
         const value = await raw.get(key)
@@ -125,12 +126,23 @@ function makeKv(handle: () => Promise<RawKvHandle>): Kv {
           options?.ifNotExists ?? null,
         ),
       ),
+    setJson: (key, value, options?: KvSetOptions) =>
+      guard(handle, raw =>
+        raw.put(
+          key,
+          Buffer.from(JSON.stringify(value), "utf8"),
+          options?.ttl ?? null,
+          options?.ifNotExists ?? null,
+        ),
+      ),
     delete: key => guard(handle, raw => raw.delete(key)),
     exists: key => guard(handle, raw => raw.exists(key)),
+    // The napi scan already returns each key with its value bytes; pass them
+    // straight through rather than dropping the values.
     scan: (prefix, limit, cursor): Promise<KvScanResult> =>
       guard(handle, async raw => {
         const result = await raw.scan(prefix, limit ?? null, cursor ?? null)
-        return { keys: result.items.map(item => item.key), nextCursor: result.nextCursor }
+        return { items: result.items, nextCursor: result.nextCursor }
       }),
   }
 }

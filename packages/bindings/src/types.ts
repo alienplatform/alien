@@ -75,16 +75,29 @@ export interface KvSetOptions {
   ifNotExists?: boolean
 }
 
+/** A single key-value pair returned by a scan. */
+export interface KvScanItem {
+  /** The key. */
+  key: string
+  /** The raw value bytes. */
+  value: Buffer
+}
+
 /** A page of scan results. */
 export interface KvScanResult {
-  /** Keys found on this page. */
-  keys: string[]
+  /**
+   * Key-value pairs found on this page. Values are returned alongside their
+   * keys (the provider already reads them), so a scan needs no follow-up `get`.
+   */
+  items: KvScanItem[]
   /** Opaque cursor for the next page, or `undefined` when exhausted. */
   nextCursor?: string
 }
 
 /** A resolved key-value binding. */
 export interface Kv {
+  /** Get the raw value bytes for `key`, or `null` if absent/expired. */
+  get(key: string): Promise<Buffer | null>
   /** Get the value for `key` as UTF-8 text, or `null` if absent/expired. */
   getText(key: string): Promise<string | null>
   /** Get the value for `key` parsed as JSON, or `null` if absent/expired. */
@@ -94,6 +107,12 @@ export interface Kv {
    * created and `false` when the key already existed; otherwise `true`.
    */
   set(key: string, value: string, options?: KvSetOptions): Promise<boolean>
+  /**
+   * Set `key` to `value` serialized as JSON (via `JSON.stringify`). With
+   * `ifNotExists`, resolves `true` when created and `false` when the key already
+   * existed; otherwise `true`.
+   */
+  setJson(key: string, value: unknown, options?: KvSetOptions): Promise<boolean>
   /** Delete `key` (no error if absent). */
   delete(key: string): Promise<void>
   /** Check whether `key` exists. */
