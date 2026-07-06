@@ -1,3 +1,19 @@
+//! BYOC database example: writer/reader containers over durable object
+//! storage (see the crate README for the architecture).
+//!
+//! ## Command receiver gating (ALIEN-221)
+//!
+//! The reader container also demonstrates the app-owned pull command
+//! receiver (`alien_commands::Receiver`): it registers a `stats` handler and
+//! leases commands for itself alongside serving its HTTP API. Because the
+//! receiver's environment (`ALIEN_COMMANDS_URL` and friends) isn't injected
+//! by the platform until a later task, [`spawn_command_receiver`] treats a
+//! missing/invalid receiver environment as "not configured" rather than a
+//! fatal error: it logs and returns, leaving the HTTP API fully functional.
+//! This keeps the example runnable today and automatically picks up real
+//! command leasing once the platform wires injection — no code change
+//! needed here.
+
 mod error;
 mod handlers;
 mod models;
@@ -7,6 +23,7 @@ mod writer;
 use crate::{
     error::{Error, Result},
     handlers::{health, query, upsert, ReaderState, WriterState},
+    models::StatsRequest,
     reader::Reader,
     writer::Writer,
 };
@@ -117,6 +134,12 @@ async fn main() -> Result<()> {
         }
         Mode::Reader => {
             let reader = Arc::new(Reader::new(storage));
+
+            // Spawns as a background task and returns immediately; see the
+            // module doc note above for why a missing receiver environment
+            // is not fatal here.
+            spawn_command_receiver(reader.clone());
+
             let state = ReaderState { reader };
 
             Router::new()
@@ -144,4 +167,44 @@ async fn main() -> Result<()> {
         .map_err(|e| Error::Generic(format!("Server error: {}", e)))?;
 
     Ok(())
+}
+
+/// Registers the `stats` command handler and starts the pull command
+/// receiver as a background task, alongside the axum server started by
+/// `main`.
+///
+/// Gated (see the module doc note): if the receiver's environment
+/// (`ALIEN_COMMANDS_URL` and friends) is absent or invalid,
+/// `Receiver::from_env()` returns an error, which is logged and swallowed
+/// here rather than propagated — the container keeps running its HTTP API
+/// either way. This keeps the example runnable before the platform wires
+/// receiver-env injection for this resource (a later ALIEN-221 task); once
+/// injection lands, the same container starts leasing commands with no
+/// code change.
+fn spawn_command_receiver(reader: Arc<Reader>) {
+    let mut receiver = match alien_commands::Receiver::from_env() {
+        Ok(receiver) => receiver,
+        Err(error) => {
+            tracing::info!(
+                %error,
+                "Command receiver environment not configured; skipping receiver startup"
+            );
+            return;
+        }
+    };
+
+    receiver.handle("stats", move |ctx| {
+        let reader = reader.clone();
+        async move {
+            let request: StatsRequest = ctx.input_json()?;
+            let stats = reader.stats(&request.namespace).await?;
+            Ok(stats)
+        }
+    });
+
+    tokio::spawn(async move {
+        if let Err(error) = receiver.run().await {
+            tracing::error!(%error, "Command receiver stopped with an error");
+        }
+    });
 }

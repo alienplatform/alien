@@ -156,7 +156,7 @@ pub async fn decode_params_bytes(envelope: &Envelope) -> Result<Vec<u8>> {
 /// This function implements the complete command response submission protocol:
 /// - Small responses (≤ maxInlineBytes) are submitted inline as base64
 /// - Large responses are uploaded to storage first, then submitted with storage reference
-#[cfg(feature = "runtime")]
+#[cfg(any(feature = "runtime", feature = "receiver"))]
 pub async fn submit_response(envelope: &Envelope, response: CommandResponse) -> Result<()> {
     use reqwest::Client;
     use std::time::Duration;
@@ -311,7 +311,7 @@ pub fn create_test_error(code: &str, message: &str) -> CommandResponse {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use alien_bindings::presigned::PresignedRequest;
+    use alien_core::presigned::{PresignedOperation, PresignedRequest};
     use chrono::Utc;
 
     fn create_test_envelope() -> Envelope {
@@ -334,7 +334,7 @@ mod tests {
                     "https://storage.example.com/upload".to_string(),
                     "PUT".to_string(),
                     std::collections::HashMap::new(),
-                    alien_bindings::presigned::PresignedOperation::Put,
+                    PresignedOperation::Put,
                     "test-path".to_string(),
                     Utc::now() + chrono::Duration::hours(1),
                 ),
@@ -473,7 +473,7 @@ mod tests {
                     "https://storage.example.com/upload".to_string(),
                     "PUT".to_string(),
                     std::collections::HashMap::new(),
-                    alien_bindings::presigned::PresignedOperation::Put,
+                    PresignedOperation::Put,
                     "test-path".to_string(),
                     Utc::now() + chrono::Duration::hours(1),
                 ),

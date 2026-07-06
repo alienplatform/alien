@@ -102,6 +102,22 @@ pub enum ErrorData {
         resource_id: String,
     },
 
+    /// Pull command receiver configuration from the environment is missing
+    /// or invalid (e.g. a required `ALIEN_COMMANDS_*` variable is absent).
+    #[error(
+        code = "COMMAND_RECEIVER_CONFIG_INVALID",
+        message = "Command receiver configuration invalid: {message}",
+        retryable = "false",
+        internal = "false",
+        http_status_code = 400
+    )]
+    CommandReceiverConfigInvalid {
+        /// Human-readable description of what is missing or invalid
+        message: String,
+        /// Environment variable that is missing or invalid
+        env_var: String,
+    },
+
     /// Invalid state transition attempted on command.
     #[error(
         code = "INVALID_STATE_TRANSITION",

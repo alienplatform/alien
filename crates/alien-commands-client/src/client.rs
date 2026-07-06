@@ -254,6 +254,22 @@ impl CommandsClient {
         }
     }
 
+    /// Scope this client to one target command-capable resource: every
+    /// `invoke`/`invoke_with_options`/`create` call made through the
+    /// returned builder presets `target_resource_id` to `resource_id`,
+    /// mirroring the TypeScript `.target(name).invoke(...)` shorthand.
+    ///
+    /// If the caller also passes an [`InvokeOptions`] with its own
+    /// `target_resource_id` set, the builder's target silently wins —
+    /// passing two different targets is a programmer error, not a runtime
+    /// conflict this builder tries to detect.
+    pub fn target(&self, resource_id: impl Into<String>) -> TargetedCommands<'_> {
+        TargetedCommands {
+            client: self,
+            resource_id: resource_id.into(),
+        }
+    }
+
     /// Create a command without waiting for the result. Returns the command ID.
     pub async fn create<P: Serialize>(
         &self,
@@ -264,26 +280,7 @@ impl CommandsClient {
         let params_json = serde_json::to_vec(&params)?;
         let params_base64 = general_purpose::STANDARD.encode(&params_json);
 
-        let mut body = serde_json::json!({
-            "deploymentId": self.deployment_id,
-            "command": command,
-            "params": {
-                "mode": "inline",
-                "inlineBase64": params_base64,
-            },
-        });
-
-        if let Some(opts) = options {
-            if let Some(deadline) = opts.deadline {
-                body["deadline"] = serde_json::Value::String(deadline.to_rfc3339());
-            }
-            if let Some(ref key) = opts.idempotency_key {
-                body["idempotencyKey"] = serde_json::Value::String(key.clone());
-            }
-            if let Some(ref target) = opts.target_resource_id {
-                body["targetResourceId"] = serde_json::Value::String(target.clone());
-            }
-        }
+        let body = self.build_create_body(command, &params_base64, options);
 
         let url = format!("{}/commands", self.manager_url);
         let resp = self.http_client.post(&url).json(&body).send().await?;
@@ -447,6 +444,98 @@ impl CommandsClient {
             }),
         }
     }
+
+    /// Build the JSON body `create` sends. Pure (no I/O) so the body shape —
+    /// including a builder-preset `targetResourceId` — is directly
+    /// unit-testable.
+    fn build_create_body(
+        &self,
+        command: &str,
+        params_base64: &str,
+        options: Option<&InvokeOptions>,
+    ) -> serde_json::Value {
+        let mut body = serde_json::json!({
+            "deploymentId": self.deployment_id,
+            "command": command,
+            "params": {
+                "mode": "inline",
+                "inlineBase64": params_base64,
+            },
+        });
+
+        if let Some(opts) = options {
+            if let Some(deadline) = opts.deadline {
+                body["deadline"] = serde_json::Value::String(deadline.to_rfc3339());
+            }
+            if let Some(ref key) = opts.idempotency_key {
+                body["idempotencyKey"] = serde_json::Value::String(key.clone());
+            }
+            if let Some(ref target) = opts.target_resource_id {
+                body["targetResourceId"] = serde_json::Value::String(target.clone());
+            }
+        }
+
+        body
+    }
+}
+
+/// A [`CommandsClient`] scoped to one target command-capable resource.
+///
+/// Obtained via [`CommandsClient::target`]; borrows the client rather than
+/// cloning it (the client is not `Clone` and doesn't need to be for this —
+/// the builder is just a thin wrapper that presets one field).
+pub struct TargetedCommands<'a> {
+    client: &'a CommandsClient,
+    resource_id: String,
+}
+
+impl TargetedCommands<'_> {
+    /// Invoke a command against this builder's target and wait for the result.
+    pub async fn invoke<P: Serialize, R: DeserializeOwned>(
+        &self,
+        command: &str,
+        params: P,
+    ) -> Result<R, CommandError> {
+        self.invoke_with_options(command, params, None).await
+    }
+
+    /// Invoke a command against this builder's target with options, and wait
+    /// for the result.
+    pub async fn invoke_with_options<P: Serialize, R: DeserializeOwned>(
+        &self,
+        command: &str,
+        params: P,
+        options: Option<InvokeOptions>,
+    ) -> Result<R, CommandError> {
+        self.client
+            .invoke_with_options(command, params, Some(self.preset(options)))
+            .await
+    }
+
+    /// Create a command against this builder's target without waiting for
+    /// the result. Returns the command ID.
+    pub async fn create<P: Serialize>(
+        &self,
+        command: &str,
+        params: P,
+        options: Option<InvokeOptions>,
+    ) -> Result<String, CommandError> {
+        let options = self.preset(options);
+        self.client.create(command, params, Some(&options)).await
+    }
+
+    /// Preset `target_resource_id` to this builder's resource id, overwriting
+    /// any value already set on `options` (see [`CommandsClient::target`]).
+    fn preset(&self, options: Option<InvokeOptions>) -> InvokeOptions {
+        let mut options = options.unwrap_or(InvokeOptions {
+            timeout: None,
+            deadline: None,
+            idempotency_key: None,
+            target_resource_id: None,
+        });
+        options.target_resource_id = Some(self.resource_id.clone());
+        options
+    }
 }
 
 #[cfg(test)]
@@ -492,5 +581,49 @@ mod target_tests {
         let target = status.target.expect("target field should be present");
         assert_eq!(target.resource_id, "worker-7");
         assert_eq!(target.resource_type, alien_core::CommandTargetType::Worker);
+    }
+
+    /// ALIEN-221: `CommandsClient::target(...)` presets `target_resource_id`
+    /// on an otherwise-empty options value.
+    #[test]
+    fn target_builder_presets_target_resource_id() {
+        let client = CommandsClient::new("http://localhost:9090", "dep_123", "token");
+        let targeted = client.target("worker-9");
+
+        let options = targeted.preset(None);
+
+        assert_eq!(options.target_resource_id.as_deref(), Some("worker-9"));
+    }
+
+    /// ALIEN-221: the builder's target wins over an explicit
+    /// `target_resource_id` the caller already set on `InvokeOptions` — a
+    /// conflict here is a programmer error, not something this builder
+    /// tries to reconcile at runtime (see `CommandsClient::target` docs).
+    #[test]
+    fn target_builder_overrides_conflicting_explicit_target() {
+        let client = CommandsClient::new("http://localhost:9090", "dep_123", "token");
+        let targeted = client.target("worker-9");
+
+        let options = targeted.preset(Some(InvokeOptions {
+            timeout: None,
+            deadline: None,
+            idempotency_key: None,
+            target_resource_id: Some("worker-other".to_string()),
+        }));
+
+        assert_eq!(options.target_resource_id.as_deref(), Some("worker-9"));
+    }
+
+    /// ALIEN-221: the target builder's preset ends up in the actual JSON
+    /// body `create()` sends, as `targetResourceId`.
+    #[test]
+    fn target_builder_presets_field_in_create_request_body() {
+        let client = CommandsClient::new("http://localhost:9090", "dep_123", "token");
+        let targeted = client.target("worker-9");
+        let options = targeted.preset(None);
+
+        let body = client.build_create_body("generate-report", "e30=", Some(&options));
+
+        assert_eq!(body["targetResourceId"], "worker-9");
     }
 }

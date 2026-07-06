@@ -10,6 +10,7 @@
 //! - **Core types**: Always available protocol types and serialization
 //! - **server**: Command server implementation for managers
 //! - **runtime**: Command envelope processing for alien-runtime
+//! - **receiver**: App-owned pull command receiver for Containers/Daemons
 //! - **openapi**: OpenAPI schema generation support
 
 pub mod error;
@@ -24,8 +25,11 @@ pub mod dispatchers;
 #[cfg(feature = "server")]
 pub mod server;
 
-#[cfg(feature = "runtime")]
+#[cfg(any(feature = "runtime", feature = "receiver"))]
 pub mod runtime;
+
+#[cfg(feature = "receiver")]
+pub mod receiver;
 
 #[cfg(feature = "test-utils")]
 pub mod test_utils;
@@ -40,8 +44,11 @@ pub use types::{
 #[cfg(feature = "server")]
 pub use server::{create_axum_router, CommandRegistry, CommandServer, InMemoryCommandRegistry};
 
-#[cfg(feature = "runtime")]
+#[cfg(any(feature = "runtime", feature = "receiver"))]
 pub use runtime::{decode_params, parse_envelope, submit_response};
+
+#[cfg(feature = "receiver")]
+pub use receiver::{Context, Receiver, ShutdownHandle};
 
 /// Default inline size limit in bytes (150 KB)
 /// This is the most conservative platform limit (Azure Service Bus Standard at 256KB)
