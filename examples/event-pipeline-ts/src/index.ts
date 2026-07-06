@@ -1,16 +1,27 @@
 import { command, kv, onCronEvent, onQueueMessage, onStorageEvent, queue } from "@alienplatform/sdk"
+import type { Kv } from "@alienplatform/sdk"
+
+/** Iterate every key under a prefix, following the scan cursor across pages. */
+async function* scanAll(store: Kv, prefix: string) {
+  let cursor: string | undefined
+  do {
+    const page = await store.scan(prefix, undefined, cursor)
+    for (const item of page.items) yield item
+    cursor = page.nextCursor
+  } while (cursor)
+}
 
 // --- Event Handlers ---
 
 // Process messages from the inbox queue
 onQueueMessage("*", async message => {
-  const ev = await kv("events")
+  const ev = kv("events")
   const payload =
     typeof message.payload === "string"
       ? message.payload
       : new TextDecoder().decode(message.payload as Uint8Array)
 
-  await ev.set(`queue:${message.id}`, {
+  await ev.setJson(`queue:${message.id}`, {
     type: "queue",
     source: message.source,
     payload,
@@ -20,10 +31,10 @@ onQueueMessage("*", async message => {
 
 // React to new files in storage
 onStorageEvent("*", async event => {
-  const ev = await kv("events")
+  const ev = kv("events")
   const key = event.objectKey.replace(/\//g, "_")
 
-  await ev.set(`storage:${key}`, {
+  await ev.setJson(`storage:${key}`, {
     type: "storage",
     bucket: event.bucketName,
     objectKey: event.objectKey,
@@ -35,9 +46,9 @@ onStorageEvent("*", async event => {
 
 // Run on a schedule (every hour)
 onCronEvent("*", async event => {
-  const ev = await kv("events")
+  const ev = kv("events")
 
-  await ev.set(`cron:${Date.now()}`, {
+  await ev.setJson(`cron:${Date.now()}`, {
     type: "cron",
     schedule: event.scheduleName,
     scheduledTime: event.timestamp,
@@ -48,11 +59,11 @@ onCronEvent("*", async event => {
 // --- Commands for querying processed events ---
 
 command("get-events", async ({ type, limit }: { type?: string; limit?: number }) => {
-  const ev = await kv("events")
+  const ev = kv("events")
   const prefix = type ? `${type}:` : ""
   const results: { key: string; value: unknown }[] = []
 
-  for await (const entry of ev.scan(prefix)) {
+  for await (const entry of scanAll(ev, prefix)) {
     results.push({
       key: entry.key,
       value: JSON.parse(new TextDecoder().decode(entry.value)),
@@ -64,14 +75,14 @@ command("get-events", async ({ type, limit }: { type?: string; limit?: number })
 })
 
 command("get-stats", async () => {
-  const ev = await kv("events")
+  const ev = kv("events")
   let queueCount = 0
   let storageCount = 0
   let cronCount = 0
 
-  for await (const _ of ev.scan("queue:")) queueCount++
-  for await (const _ of ev.scan("storage:")) storageCount++
-  for await (const _ of ev.scan("cron:")) cronCount++
+  for await (const _ of scanAll(ev, "queue:")) queueCount++
+  for await (const _ of scanAll(ev, "storage:")) storageCount++
+  for await (const _ of scanAll(ev, "cron:")) cronCount++
 
   return { queue: queueCount, storage: storageCount, cron: cronCount }
 })
@@ -79,7 +90,7 @@ command("get-stats", async () => {
 // --- Send a test message (useful during development) ---
 
 command("send-test-message", async ({ message }: { message: string }) => {
-  const q = await queue("inbox")
-  await q.send("test", message)
+  const q = queue("inbox")
+  await q.send(message)
   return { sent: true }
 })

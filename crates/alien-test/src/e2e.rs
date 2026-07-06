@@ -293,6 +293,18 @@ pub fn exclusion_reason(
     match binding {
         Binding::Worker => Some("Worker binding test app endpoint not yet implemented"),
         Binding::Container => Some("Container binding requires managed container infrastructure"),
+        // The TypeScript comprehensive app's surface is storage/kv/queue/vault
+        // (ALIEN-214: the manager/controller-internal build, artifact-registry,
+        // and service-account flows were split out of the TS SDK and are not
+        // reachable through any handler the TS app can serve). The Rust
+        // comprehensive app still exercises these bindings.
+        Binding::Build | Binding::ArtifactRegistry | Binding::ServiceAccount
+            if app == TestApp::ComprehensiveTs =>
+        {
+            Some(
+                "TS comprehensive app has no build/artifact-registry/service-account handlers post-ALIEN-214 SDK split",
+            )
+        }
         Binding::Build => Some("Build binding not yet stable across all platforms"),
         Binding::ServiceAccount if platform == Platform::Local => {
             Some("Local service account binding not yet wired up")
@@ -1377,6 +1389,69 @@ mod tests {
         assert_eq!(
             DistributionFlow::TerraformOnpremHelmPull.kubernetes_base_platform(),
             None
+        );
+    }
+
+    #[test]
+    fn ts_app_excludes_manager_internal_bindings_on_every_platform() {
+        for platform in [
+            Platform::Aws,
+            Platform::Gcp,
+            Platform::Azure,
+            Platform::Kubernetes,
+            Platform::Local,
+        ] {
+            for model in [DeploymentModel::Push, DeploymentModel::Pull] {
+                for binding in [
+                    Binding::Build,
+                    Binding::ArtifactRegistry,
+                    Binding::ServiceAccount,
+                ] {
+                    assert!(
+                        exclusion_reason(platform, model, binding, TestApp::ComprehensiveTs)
+                            .is_some(),
+                        "expected {:?}/{:?} to be excluded for the TS app on {:?}/{:?}",
+                        binding,
+                        TestApp::ComprehensiveTs,
+                        platform,
+                        model
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn rust_app_keeps_service_account_and_artifact_registry_coverage() {
+        // The Rust comprehensive app still serves these handlers, so only the
+        // pre-existing, platform-specific exclusions should apply to it.
+        assert!(
+            exclusion_reason(
+                Platform::Aws,
+                DeploymentModel::Push,
+                Binding::ArtifactRegistry,
+                TestApp::ComprehensiveRust
+            )
+            .is_none()
+        );
+        assert!(
+            exclusion_reason(
+                Platform::Aws,
+                DeploymentModel::Push,
+                Binding::ServiceAccount,
+                TestApp::ComprehensiveRust
+            )
+            .is_none()
+        );
+        // Local service account remains excluded regardless of app.
+        assert!(
+            exclusion_reason(
+                Platform::Local,
+                DeploymentModel::Pull,
+                Binding::ServiceAccount,
+                TestApp::ComprehensiveRust
+            )
+            .is_some()
         );
     }
 }

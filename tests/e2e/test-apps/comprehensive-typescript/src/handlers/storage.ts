@@ -7,16 +7,16 @@ const app = new Hono()
 app.post("/storage-test/:bindingName", async c => {
   const bindingName = c.req.param("bindingName")
   try {
-    const s = await storage(bindingName)
+    const s = storage(bindingName)
     const testKey = `test-${Date.now()}.txt`
     const content = "test content from e2e"
 
     // 1. Put
-    await s.put(testKey, content)
+    await s.put(testKey, new TextEncoder().encode(content))
 
     // 2. Get and verify
     const retrieved = await s.get(testKey)
-    const retrievedContent = new TextDecoder().decode(retrieved.data)
+    const retrievedContent = new TextDecoder().decode(retrieved)
     if (retrievedContent !== content) {
       return c.json({ success: false, error: "Data verification failed" }, 500)
     }

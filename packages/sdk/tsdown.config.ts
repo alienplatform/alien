@@ -1,7 +1,7 @@
 import { defineConfig } from "tsdown"
 
 export default defineConfig({
-  entry: ["src/index.ts", "src/commands/index.ts"],
+  entry: ["src/index.ts", "src/worker-runtime/index.ts"],
   // Use tsc for declaration files instead of tsdown's built-in dts.
   // With two entry points that share types, tsdown's rolldown-based dts
   // generation code-splits the .d.ts output, putting shared types into

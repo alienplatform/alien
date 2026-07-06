@@ -29,10 +29,7 @@ describe("remote-worker-ts", () => {
     expect(names).toContain("write-file")
   })
 
-  // TypeScript binding access is unavailable between the binding-gRPC deletion
-  // (ALIEN-217) and the direct-bindings addon (ALIEN-214/215) — unskip when
-  // @alienplatform/bindings lands.
-  it.skip("should write and read a file", async () => {
+  it("should write and read a file", async () => {
     await deployment.invokeCommand("execute-tool", {
       tool: "write-file",
       params: { path: "hello.txt", content: "Hello!" },

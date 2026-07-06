@@ -28,11 +28,8 @@ describe("data-connector-ts", () => {
     await deployment?.destroy()
   })
 
-  // TypeScript binding access is unavailable between the binding-gRPC deletion
-  // (ALIEN-217) and the direct-bindings addon (ALIEN-214/215) — unskip when
-  // @alienplatform/bindings lands. This command hits the vault binding
-  // unconditionally via getConnectionConfig().
-  it.skip("should test connection using vault credentials", async () => {
+  // This command hits the vault binding unconditionally via getConnectionConfig().
+  it("should test connection using vault credentials", async () => {
     const result = await deployment.invokeCommand("test-connection", {})
     expect(result.connected).toBe(true)
     expect(result.database).toBe("warehouse")
@@ -41,11 +38,8 @@ describe("data-connector-ts", () => {
     expect(result).not.toHaveProperty("password")
   })
 
-  // TypeScript binding access is unavailable between the binding-gRPC deletion
-  // (ALIEN-217) and the direct-bindings addon (ALIEN-214/215) — unskip when
-  // @alienplatform/bindings lands. This command hits the vault binding
-  // unconditionally via getConnectionConfig().
-  it.skip("should query data", async () => {
+  // This command hits the vault binding unconditionally via getConnectionConfig().
+  it("should query data", async () => {
     const result = await deployment.invokeCommand("query", {
       sql: "SELECT * FROM users",
     })
@@ -54,11 +48,8 @@ describe("data-connector-ts", () => {
     expect(result.cached).toBe(false)
   })
 
-  // TypeScript binding access is unavailable between the binding-gRPC deletion
-  // (ALIEN-217) and the direct-bindings addon (ALIEN-214/215) — unskip when
-  // @alienplatform/bindings lands. This command hits the kv binding when
-  // useCache is set.
-  it.skip("should cache query results", async () => {
+  // This command hits the kv binding when useCache is set.
+  it("should cache query results", async () => {
     // First query populates cache
     await deployment.invokeCommand("query", {
       sql: "SELECT * FROM orders",

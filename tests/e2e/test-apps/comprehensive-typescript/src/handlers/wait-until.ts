@@ -11,8 +11,11 @@ app.post("/wait-until-test", async c => {
   waitUntil(
     (async () => {
       await new Promise(resolve => setTimeout(resolve, delayMs || 1000))
-      const s = await storage(storageBindingName || "alien-storage")
-      await s.put(`wait-until-${testId}.txt`, testData || "background-task-done")
+      const s = storage(storageBindingName || "alien-storage")
+      await s.put(
+        `wait-until-${testId}.txt`,
+        new TextEncoder().encode(testData || "background-task-done"),
+      )
     })(),
   )
 
@@ -23,18 +26,11 @@ app.get("/wait-until-verify/:testId/:storageBindingName", async c => {
   const testId = c.req.param("testId")
   const storageBindingName = c.req.param("storageBindingName")
   try {
-    const s = await storage(storageBindingName)
-    const exists = await s.exists(`wait-until-${testId}.txt`)
-    if (!exists) {
-      return c.json({
-        success: false,
-        testId,
-        backgroundTaskCompleted: false,
-        message: "File not found yet",
-      })
-    }
+    const s = storage(storageBindingName)
+    // Storage has no `exists`; a missing object surfaces as a thrown NotFound
+    // from `get`, which the catch below maps to "not completed yet".
     const result = await s.get(`wait-until-${testId}.txt`)
-    const fileContent = new TextDecoder().decode(result.data)
+    const fileContent = new TextDecoder().decode(result)
     return c.json({
       success: true,
       testId,

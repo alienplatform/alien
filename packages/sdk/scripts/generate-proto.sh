@@ -11,7 +11,8 @@ PACKAGE_DIR="$(dirname "$SCRIPT_DIR")"
 # generated clients (storage, kv, queue, ...) have no source protos in-tree, so we
 # regenerate over the worker-protocol outputs in place rather than wiping OUT_DIR.
 PROTO_DIR="$PACKAGE_DIR/../../crates/alien-worker-protocol/proto"
-OUT_DIR="$PACKAGE_DIR/src/generated"
+# Worker protocol clients are confined to the ./worker-runtime subpath.
+OUT_DIR="$PACKAGE_DIR/src/worker-runtime/generated"
 
 mkdir -p "$OUT_DIR"
 

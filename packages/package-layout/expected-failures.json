@@ -1,23 +1,5 @@
 [
   {
-    "check": "import-error-reexports",
-    "package": "sdk",
-    "reason": "facade root is missing pinned error re-exports",
-    "owningTask": "03"
-  },
-  {
-    "check": "import-worker-runtime",
-    "package": "sdk",
-    "reason": "subpath ./worker-runtime is not exported",
-    "owningTask": "03"
-  },
-  {
-    "check": "typecheck",
-    "package": "sdk",
-    "reason": "cannot find module '@alienplatform/sdk/worker-runtime'",
-    "owningTask": "03"
-  },
-  {
     "check": "packed-contents",
     "package": "@alienplatform/bindings-darwin-arm64",
     "reason": "per-platform prebuild addon not staged locally (release matrix: built natively on the macOS runner)",

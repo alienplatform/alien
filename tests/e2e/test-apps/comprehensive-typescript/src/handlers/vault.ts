@@ -7,12 +7,12 @@ const app = new Hono()
 app.post("/vault-test/:bindingName", async c => {
   const bindingName = c.req.param("bindingName")
   try {
-    const v = await vault(bindingName)
+    const v = vault(bindingName)
     const testKey = `test-secret-${Date.now()}`
     const testValue = "test-secret-value"
 
     // 1. Set secret
-    await v.set(testKey, testValue)
+    await v.put(testKey, testValue)
 
     // 2. Wait for propagation
     await new Promise(resolve => setTimeout(resolve, 500))
@@ -52,7 +52,7 @@ app.post("/vault-test/:bindingName", async c => {
 
 app.get("/managed-secret", async c => {
   try {
-    const v = await vault("secrets")
+    const v = vault("secrets")
     const value = await v.get("MANAGED_TEST_SECRET")
     return c.json({ exists: !!value, value })
   } catch (error: unknown) {

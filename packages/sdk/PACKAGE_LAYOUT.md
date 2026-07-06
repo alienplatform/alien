@@ -120,6 +120,35 @@ must not continue to export `./commands`.
   `onQueueMessage`, `waitUntil`) is protocol-only at the facade; the Worker runtime
   wiring lives behind `./worker-runtime`.
 
+## Decisions (task 03)
+
+Task 03 owns the signatures the contract left open; recorded here as executed.
+
+- **DECIDED(03)** `command(name, handler): void`, `onStorageEvent(bucket, handler,
+  options?): () => void`, `onCronEvent(schedule, handler): () => void`,
+  `onQueueMessage(queue, handler): () => void`, `waitUntil(promise): void`. These
+  are protocol-only registrars in `src/worker-runtime/registry.ts` (no gRPC); the
+  facade root re-exports them. State is held on `globalThis` under a
+  `Symbol.for` key so the facade bundle and the `./worker-runtime` bundle share
+  one registry.
+- **DECIDED(03)** `runWorker(app?: unknown): Promise<void>` (in `./worker-runtime`).
+  `app` is the user module's default export (an object with a `fetch` method for
+  HTTP apps) or `undefined`. `runWorker` connects over
+  `ALIEN_WORKER_GRPC_ADDRESS`, serves the HTTP handler and registers its port,
+  registers the app's handlers, then runs the task-dispatch loop, draining
+  `waitUntil` on shutdown. The generated bootstrap is ~8 lines: import the user
+  module, `runWorker(userModule).catch(...)`.
+- **DECIDED(03)** `getPostgresConnection` / `PostgresConnection` are **DELETED from
+  the SDK**. Neither pinned export list admits a connection-only Postgres helper;
+  the logic is inlined into its sole consumer, the comprehensive-typescript e2e
+  test-app (`tests/e2e/test-apps/comprehensive-typescript/src/handlers/postgres.ts`,
+  local/external variants only — cloud secret resolution is not exercised there).
+- **DECIDED(03)** `AlienContext.forRemoteDeployment(deploymentId, token)` is
+  **deferred to task 17**. `AlienContext` is deleted from the public surface and
+  no remote-bindings protocol exists to implement it cheaply atop current code;
+  introducing one is out of scope for the facade split. The docs pin remains for
+  17 to satisfy when the remote-bindings entry lands.
+
 ## Status
 
 - The split is executed in task 03 (with cleanup of deleted names in task 17).

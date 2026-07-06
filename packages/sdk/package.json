@@ -4,12 +4,12 @@
   "type": "module",
   "exports": {
     ".": {
-      "import": "./dist/index.js",
-      "types": "./dist/index.d.ts"
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
     },
-    "./commands": {
-      "import": "./dist/commands/index.js",
-      "types": "./dist/commands/index.d.ts"
+    "./worker-runtime": {
+      "types": "./dist/worker-runtime/index.d.ts",
+      "import": "./dist/worker-runtime/index.js"
     }
   },
   "scripts": {
@@ -22,11 +22,11 @@
     "format-and-lint:fix": "biome check . --write"
   },
   "sideEffects": false,
-  "keywords": ["alien", "sdk", "bindings", "commands", "grpc"],
+  "keywords": ["alien", "sdk", "worker", "bindings"],
   "author": "Alien Software, Inc. <hi@alien.dev>",
   "license": "FSL-1.1-Apache-2.0",
   "homepage": "https://alien.dev",
-  "description": "TypeScript SDK for Alien — runtime bindings, command handlers, and command invocation",
+  "description": "TypeScript SDK for Alien Worker apps — handler APIs and re-exported binding factories",
   "repository": {
     "type": "git",
     "url": "https://github.com/alienplatform/alien.git",
@@ -37,11 +37,7 @@
   },
   "devDependencies": {
     "@alienplatform/typescript-config": "workspace:^",
-    "@aws-sdk/client-secrets-manager": "^3.0.0",
-    "@azure/identity": "^4.0.0",
-    "@azure/keyvault-secrets": "^4.0.0",
     "@biomejs/biome": "^1.9.4",
-    "@google-cloud/secret-manager": "^5.0.0",
     "@types/node": "^24.0.15",
     "ts-proto": "^2.7.0",
     "tsdown": "^0.13.0",
@@ -49,34 +45,12 @@
     "vitest": "^3.1.4"
   },
   "dependencies": {
+    "@alienplatform/bindings": "workspace:^",
     "@alienplatform/core": "workspace:^",
     "@bufbuild/protobuf": "^2.5.3",
     "@grpc/grpc-js": "^1.13.4",
-    "long": "^5.3.2",
     "nice-grpc": "^2.1.11",
     "nice-grpc-common": "^2.0.2",
-    "protobufjs": "^7.5.3",
-    "ts-pattern": "^5.7.1",
     "zod": "4.3.2"
-  },
-  "peerDependencies": {
-    "@aws-sdk/client-secrets-manager": "^3.0.0",
-    "@azure/identity": "^4.0.0",
-    "@azure/keyvault-secrets": "^4.0.0",
-    "@google-cloud/secret-manager": "^5.0.0"
-  },
-  "peerDependenciesMeta": {
-    "@aws-sdk/client-secrets-manager": {
-      "optional": true
-    },
-    "@azure/identity": {
-      "optional": true
-    },
-    "@azure/keyvault-secrets": {
-      "optional": true
-    },
-    "@google-cloud/secret-manager": {
-      "optional": true
-    }
   }
 }

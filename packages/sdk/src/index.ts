@@ -1,160 +1,62 @@
 /**
- * @alienplatform/sdk - TypeScript SDK for Alien bindings.
+ * `@alienplatform/sdk` — the ergonomic facade for Alien Worker apps.
  *
- * This package provides type-safe access to Alien resources including
- * Storage, KV, Queue, Vault, Build, ArtifactRegistry, Worker, and ServiceAccount.
+ * It provides the Worker handler APIs (`command`, `onStorageEvent`,
+ * `onCronEvent`, `onQueueMessage`, `waitUntil`) and re-exports the app-facing
+ * binding factories (`storage`, `kv`, `queue`, `vault`) from
+ * `@alienplatform/bindings`, so a Worker author installs one package.
+ *
+ * Worker protocol dependencies (nice-grpc, generated Worker protocol clients)
+ * are confined to the `@alienplatform/sdk/worker-runtime` subpath; the runtime
+ * bootstrap `runWorker` lives there. Importing and constructing bindings from
+ * this facade does no I/O and needs no deployment or credentials.
  *
  * @example
  * ```typescript
- * // Global convenience functions (most common usage)
- * import { storage, kv, onStorageEvent, waitUntil } from "@alienplatform/sdk"
+ * import { command, kv, storage, waitUntil } from "@alienplatform/sdk"
  *
- * const bucket = storage("my-bucket")
- * await bucket.put("hello.txt", "Hello, World!")
- *
- * // Or use AlienContext for more control
- * import { AlienContext } from "@alienplatform/sdk"
- *
- * const ctx = AlienContext.fromEnv()
- * const bucket = ctx.storage("my-bucket")
+ * command("greet", async ({ name }: { name: string }) => {
+ *   const store = kv("greetings")
+ *   await store.set(name, `Hello, ${name}!`)
+ *   return { ok: true }
+ * })
  * ```
  *
  * @packageDocumentation
  */
 
 // ============================================================================
-// Main Entry Point
-// ============================================================================
-
-export { AlienContext } from "./context.js"
-
-// ============================================================================
-// Global Convenience Bindings
+// Worker handler APIs (protocol-only registrars; the runtime wiring lives
+// behind ./worker-runtime)
 // ============================================================================
 
 export {
-  // Binding accessors
-  storage,
-  kv,
-  queue,
-  vault,
-  build,
-  artifactRegistry,
-  worker,
-  serviceAccount,
-  // Event handlers
+  command,
   onStorageEvent,
   onCronEvent,
   onQueueMessage,
-  // WaitUntil
   waitUntil,
-} from "./global.js"
+} from "./worker-runtime/registry.js"
 
-// Event types - StorageEvent, QueueMessage, ScheduledEvent come from @alienplatform/core
-// CronEvent and QueueMessageEvent are bindings-specific extensions
 export type {
   StorageEvent,
   StorageEventType,
-  QueueMessage,
-  ScheduledEvent,
   CronEvent,
+  QueueMessage,
   QueueMessageEvent,
-} from "./events.js"
+  ScheduledEvent,
+} from "./worker-runtime/registry.js"
 
 // ============================================================================
-// Binding Classes (for advanced usage)
+// Binding factories — re-exported from @alienplatform/bindings
 // ============================================================================
 
-export { Storage } from "./bindings/storage.js"
-export { Kv } from "./bindings/kv.js"
-export { Queue } from "./bindings/queue.js"
-export { Vault } from "./bindings/vault.js"
-export { Build } from "./bindings/build.js"
-export { ArtifactRegistry } from "./bindings/artifact-registry.js"
-export { WorkerBinding } from "./bindings/worker.js"
-export { ServiceAccount } from "./bindings/service-account.js"
-
-// Postgres is connection-only (no gRPC service): a function that resolves connection
-// details for a linked database, not a channel-backed binding class.
-export { getPostgresConnection, type PostgresConnection } from "./bindings/postgres.js"
+export { storage, kv, queue, vault } from "@alienplatform/bindings"
+export type { Storage, Kv, Queue, Vault } from "@alienplatform/bindings"
 
 // ============================================================================
-// Types
+// Errors — re-exported from @alienplatform/bindings and @alienplatform/core
 // ============================================================================
 
-export type {
-  // Storage
-  StorageGetOptions,
-  StoragePutOptions,
-  StorageObjectMeta,
-  StorageGetResult,
-  StorageListResult,
-  SignedUrlOptions,
-  SignedUrlResult,
-  // KV
-  KvPutOptions,
-  KvScanResult,
-  // Queue
-  ReceivedQueueMessage,
-  // Build (BuildStatus and ComputeType come from @alienplatform/core)
-  BuildStartConfig,
-  BuildExecution,
-  // Artifact Registry
-  ArtifactRegistryPermissions,
-  RepositoryInfo,
-  ArtifactRegistryCredentials,
-  RegistryAuthMethod,
-  ComputeServiceType,
-  AwsCrossAccountAccess,
-  GcpCrossAccountAccess,
-  CrossAccountAccess,
-  CrossAccountPermissions,
-  // Worker
-  WorkerInvokeRequest,
-  WorkerInvokeResponse,
-  // Service Account
-  ServiceAccountInfo,
-  AwsServiceAccountInfo,
-  GcpServiceAccountInfo,
-  AzureServiceAccountInfo,
-  ImpersonationRequest,
-  // Configuration
-  AlienBindingsConfig,
-  AlienBindingsProvider,
-} from "./types.js"
-
-// ============================================================================
-// Errors
-// ============================================================================
-
-export {
-  GrpcConnectionError,
-  GrpcCallError,
-  BindingNotFoundError,
-  ContextNotInitializedError,
-  MissingEnvVarError,
-  StorageObjectNotFoundError,
-  StoragePreconditionError,
-  StorageObjectExistsError,
-  KvKeyNotFoundError,
-  KvInvalidKeyError,
-  KvInvalidValueError,
-  SecretNotFoundError,
-  QueueOperationError,
-  EventHandlerAlreadyRegisteredError,
-  CommandAlreadyRegisteredError,
-  InvalidBindingConfigError,
-  PostgresSecretResolutionError,
-} from "./errors.js"
-
-// ============================================================================
-// Commands
-// ============================================================================
-
-export { command, runCommand, getCommands, type CommandDefinition } from "./commands.js"
-
-// ============================================================================
-// Re-export from core for convenience
-// ============================================================================
-
-// Note: BuildStatus, ComputeType are re-exported via types.ts
+export { BindingNotConfiguredError } from "@alienplatform/bindings"
+export { AlienError } from "@alienplatform/core"

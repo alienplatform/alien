@@ -1,5 +1,5 @@
 /**
- * gRPC channel management for the Alien bindings SDK.
+ * gRPC channel management for the Alien Worker runtime.
  */
 
 import { AlienError } from "@alienplatform/core"
@@ -14,7 +14,7 @@ const DEFAULT_CHANNEL_OPTIONS: ChannelOptions = {
   "grpc.max_receive_message_length": 128 * 1024 * 1024,
 }
 
-/** Environment variable containing the gRPC endpoint */
+/** Environment variable containing the Worker protocol gRPC endpoint */
 const GRPC_ENDPOINT_VAR = "ALIEN_WORKER_GRPC_ADDRESS"
 
 /** Cached channels by address */
@@ -42,9 +42,6 @@ export function getGrpcEndpoint(): string {
 
 /**
  * Create a gRPC channel to the specified address.
- *
- * @param address - The gRPC server address
- * @returns The created channel
  */
 export async function createGrpcChannel(address: string): Promise<Channel> {
   try {
@@ -61,9 +58,6 @@ export async function createGrpcChannel(address: string): Promise<Channel> {
 
 /**
  * Get or create a cached gRPC channel to the specified address.
- *
- * @param address - The gRPC server address
- * @returns The cached or newly created channel
  */
 export async function getOrCreateChannel(address: string): Promise<Channel> {
   let channel = channelCache.get(address)
@@ -75,8 +69,8 @@ export async function getOrCreateChannel(address: string): Promise<Channel> {
 }
 
 /**
- * Get a gRPC channel to the alien-runtime using the default env var.
- * The channel is cached for reuse across all bindings.
+ * Get a gRPC channel to the runtime using the default env var.
+ * The channel is cached for reuse.
  */
 export async function getChannel(): Promise<Channel> {
   const endpoint = getGrpcEndpoint()
@@ -85,7 +79,6 @@ export async function getChannel(): Promise<Channel> {
 
 /**
  * Close all cached gRPC channels.
- * This should be called when shutting down the application.
  */
 export function closeChannel(): void {
   for (const channel of channelCache.values()) {

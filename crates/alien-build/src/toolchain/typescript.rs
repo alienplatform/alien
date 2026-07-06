@@ -14,64 +14,21 @@ use tracing::{error, info};
 
 /// Bootstrap wrapper template for TypeScript applications.
 ///
-/// This wrapper:
-/// 1. Imports the user's module
-/// 2. Detects if the default export has a `fetch` method (Hono, Elysia, etc.)
-/// 3. If so, starts Bun.serve() and registers with the runtime
-/// 4. Enters the event loop via ctx.run()
+/// This wrapper imports the user's module (which registers command/event
+/// handlers as an import side effect) and hands its default export to
+/// `runWorker`. `runWorker` (in `@alienplatform/sdk/worker-runtime`) owns the
+/// Worker protocol wiring: it connects to the runtime, detects an HTTP `fetch`
+/// handler and serves it (registering the port), then registers the app's
+/// handlers and enters the task-dispatch loop — draining `waitUntil` work on
+/// shutdown.
 const BOOTSTRAP_TEMPLATE: &str = r#"/**
  * Alien Bootstrap - Auto-generated wrapper for TypeScript applications.
  * DO NOT EDIT - This file is generated during the build process.
  */
 import * as userModule from "__USER_ENTRY__"
-import { AlienContext } from "@alienplatform/sdk"
+import { runWorker } from "@alienplatform/sdk/worker-runtime"
 
-async function __alienBootstrap() {
-  // Create context from environment (connects to runtime via gRPC)
-  const ctx = await AlienContext.fromEnv()
-
-  // Detect default export with fetch method (Hono, Elysia, Express adapter, etc.)
-  const defaultExport = userModule?.default ?? userModule
-  const hasFetchHandler = defaultExport && typeof defaultExport === "object" && "fetch" in defaultExport
-  const isPassthrough = process.env.ALIEN_TRANSPORT === "passthrough"
-  const listenPort = isPassthrough ? Number(process.env.PORT ?? "3000") : 0
-
-  if (!Number.isInteger(listenPort) || listenPort < 0 || listenPort > 65535) {
-    throw new Error(`Invalid PORT value for Alien HTTP server: ${process.env.PORT}`)
-  }
-
-  if (hasFetchHandler) {
-    const fetchHandler = typeof defaultExport.fetch === "function"
-      ? defaultExport.fetch.bind(defaultExport)
-      : defaultExport.fetch
-
-    const server = Bun.serve({
-      fetch: fetchHandler,
-      hostname: isPassthrough ? "0.0.0.0" : "127.0.0.1",
-      port: listenPort,
-      idleTimeout: 255, // Max value (seconds) — prevent Bun from closing idle connections during slow operations
-    })
-
-    await ctx.registerHttpServer(server.port)
-  } else {
-    // No HTTP framework — start a minimal server so the runtime knows we're alive.
-    // Commands and event handlers are delivered via gRPC, but the runtime still
-    // needs an HTTP port to probe readiness and route health checks.
-    const server = Bun.serve({
-      fetch: () => new Response("ok"),
-      hostname: isPassthrough ? "0.0.0.0" : "127.0.0.1",
-      port: listenPort,
-      idleTimeout: 255,
-    })
-
-    await ctx.registerHttpServer(server.port)
-  }
-
-  // Enter the event loop (handles events, commands, and keeps process alive)
-  await ctx.run()
-}
-
-__alienBootstrap().catch((error) => {
+runWorker(userModule).catch((error) => {
   console.error("Alien bootstrap error:", error)
   process.exit(1)
 })
@@ -243,10 +200,12 @@ impl TypeScriptToolchain {
         ))
     }
 
-    /// Generate the bootstrap wrapper file that handles automatic HTTP server registration.
+    /// Generate the bootstrap wrapper file that hands the user's module to `runWorker`.
     ///
-    /// The wrapper imports the user's module, detects `export default` with a `fetch` method,
-    /// starts Bun.serve(), registers with the runtime, and enters the event loop.
+    /// The wrapper imports the user's module and calls `runWorker` from
+    /// `@alienplatform/sdk/worker-runtime`, which detects an `export default` with
+    /// a `fetch` method, starts Bun.serve(), registers with the runtime, and
+    /// enters the event loop.
     async fn generate_bootstrap_wrapper(
         &self,
         _src_dir: &Path,

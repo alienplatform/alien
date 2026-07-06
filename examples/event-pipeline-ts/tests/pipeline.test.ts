@@ -1,10 +1,15 @@
 import { type Deployment, deploy } from "@alienplatform/testing"
 import { afterAll, beforeAll, describe, expect, it } from "vitest"
 
-// TypeScript binding access is unavailable between the binding-gRPC deletion
-// (ALIEN-217) and the direct-bindings addon (ALIEN-214/215) — unskip when
-// @alienplatform/bindings lands. Every test in this file drives commands that
-// hit the kv or queue bindings.
+// The facade split (ALIEN-214) and the kv/vault/storage bindings are proven by
+// the data-connector-ts and remote-worker-ts suites. This suite additionally
+// drives the LOCAL QUEUE binding, which is opened concurrently by two processes
+// (the worker via the direct-bindings addon and the runtime's LocalTriggerService
+// poller). The local queue provider's turso multi-process WAL fails that
+// concurrent open ("Binding setup failed for type 'local queue': failed to open
+// local store database"). That is a @alienplatform/bindings local-queue-provider
+// defect (ALIEN-215), not the SDK facade — unskip once the provider tolerates the
+// concurrent open. The app code below already uses the direct-bindings API.
 describe.skip("event-pipeline-ts", () => {
   let deployment: Deployment
 

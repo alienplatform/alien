@@ -43,6 +43,8 @@ build_filters=()
 if [[ "${ALIEN_EXAMPLES_REUSE_BUILT_PACKAGES:-}" != "true" ]]; then
   build_filters+=(--filter @alienplatform/platform-api)
   build_filters+=(--filter @alienplatform/core)
+  build_filters+=(--filter @alienplatform/bindings)
+  build_filters+=(--filter @alienplatform/commands)
   build_filters+=(--filter @alienplatform/sdk)
   build_filters+=(--filter @alienplatform/testing)
 else
@@ -64,6 +66,12 @@ else
   fi
   if package_needs_build "packages/core" "dist/index.js" "dist/index.d.ts"; then
     build_filters+=(--filter @alienplatform/core)
+  fi
+  if package_needs_build "packages/bindings" "dist/index.js" "dist/index.d.ts"; then
+    build_filters+=(--filter @alienplatform/bindings)
+  fi
+  if package_needs_build "packages/commands" "dist/index.js" "dist/index.d.ts"; then
+    build_filters+=(--filter @alienplatform/commands)
   fi
   if package_needs_build "packages/sdk" "dist/index.js" "dist/index.d.ts"; then
     build_filters+=(--filter @alienplatform/sdk)
@@ -92,6 +100,8 @@ packageJson.pnpm.overrides = {
   ...(packageJson.pnpm.overrides || {}),
   "@alienplatform/platform-api": `file:${path.join(rootDir, "client-sdks/platform/typescript")}`,
   "@alienplatform/core": `file:${path.join(rootDir, "packages/core")}`,
+  "@alienplatform/bindings": `file:${path.join(rootDir, "packages/bindings")}`,
+  "@alienplatform/commands": `file:${path.join(rootDir, "packages/commands")}`,
   "@alienplatform/sdk": `file:${path.join(rootDir, "packages/sdk")}`,
   "@alienplatform/testing": `file:${path.join(rootDir, "packages/testing")}`
 };
@@ -104,5 +114,45 @@ pnpm -C "$EXAMPLES_DIR" install \
   --no-frozen-lockfile \
   --config.link-workspace-packages=false \
   --config.prefer-workspace-packages=false
+
+# Ensure the @alienplatform/bindings native addon is available to deployed
+# workers. A Worker is a `bun build --compile` binary whose bindings loader
+# cannot walk the filesystem to find crates/alien-bindings-node; it resolves the
+# addon from ALIEN_BINDINGS_ADDON_PATH (loader step 1). alien-runtime spawns the
+# worker without clearing the environment, so exporting the var here propagates
+# down to the worker child. Build the dev addon if it is missing (mirrors the
+# source-build fallback in packages/package-layout/run.ts).
+host_triple() {
+  local os arch
+  os="$(uname -s)"
+  arch="$(uname -m)"
+  case "$os/$arch" in
+    Darwin/arm64) echo "darwin-arm64" ;;
+    Darwin/x86_64) echo "darwin-x64" ;;
+    Linux/x86_64) echo "linux-x64-gnu" ;;
+    Linux/aarch64) echo "linux-arm64-gnu" ;;
+    *) echo "unsupported" ;;
+  esac
+}
+
+TRIPLE="$(host_triple)"
+if [[ "$TRIPLE" == "unsupported" ]]; then
+  echo "[addon] WARNING: no native addon mapping for $(uname -s)/$(uname -m); binding ops in workers will fail." >&2
+else
+  BINDINGS_NODE_DIR="$ROOT_DIR/crates/alien-bindings-node"
+  DEV_ADDON="$BINDINGS_NODE_DIR/alien-bindings-node.$TRIPLE.node"
+  if [[ ! -e "$DEV_ADDON" ]]; then
+    echo "[addon] no dev addon for '$TRIPLE' — building with \`napi build --platform --release\`..."
+    pnpm --filter @alienplatform/bindings run build:addon
+  else
+    echo "[addon] using existing dev addon at $DEV_ADDON"
+  fi
+  if [[ -e "$DEV_ADDON" ]]; then
+    export ALIEN_BINDINGS_ADDON_PATH="$DEV_ADDON"
+    echo "[addon] ALIEN_BINDINGS_ADDON_PATH=$ALIEN_BINDINGS_ADDON_PATH"
+  else
+    echo "[addon] WARNING: addon build did not produce $DEV_ADDON; binding ops in workers will fail." >&2
+  fi
+fi
 
 pnpm -C "$EXAMPLES_DIR" test:projects

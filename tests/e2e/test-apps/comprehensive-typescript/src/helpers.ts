@@ -1,4 +1,15 @@
 import { AlienError } from "@alienplatform/core"
+import type { Kv } from "@alienplatform/sdk"
+
+/** Iterate every key under a prefix, following the KV scan cursor across pages. */
+export async function* scanAll(store: Kv, prefix: string) {
+  let cursor: string | undefined
+  do {
+    const page = await store.scan(prefix, undefined, cursor)
+    for (const item of page.items) yield item
+    cursor = page.nextCursor
+  } while (cursor)
+}
 
 /**
  * Wrap an arbitrary error as a 500-level `AlienErrorOptions` (the external
