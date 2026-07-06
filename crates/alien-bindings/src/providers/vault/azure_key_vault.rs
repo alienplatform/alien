@@ -96,4 +96,17 @@ impl crate::traits::Vault for AzureKeyVault {
 
         Ok(())
     }
+
+    async fn list_secrets(&self) -> Result<Vec<String>> {
+        // Azure Key Vault list is GET /secrets. The alien-azure-clients
+        // KeyVaultSecretsApi wrapper does not expose it, so this fails
+        // explicitly rather than guessing.
+        Err(alien_error::AlienError::new(
+            ErrorData::OperationNotSupported {
+                operation: "vault.list_secrets".to_string(),
+                reason: "Azure Key Vault list is not exposed by the Key Vault secrets client"
+                    .to_string(),
+            },
+        ))
+    }
 }

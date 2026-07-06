@@ -177,4 +177,33 @@ impl Queue for GcpPubSubQueue {
                 reason: "Failed to acknowledge message".to_string(),
             })
     }
+
+    async fn nack(&self, _queue: &str, receipt_handle: &str) -> Result<()> {
+        // Pub/Sub nack = ModifyAckDeadline(deadline=0): drop the lease so the
+        // message is immediately eligible for redelivery.
+        let req = ModifyAckDeadlineRequest {
+            ack_ids: vec![receipt_handle.to_string()],
+            ack_deadline_seconds: 0,
+        };
+
+        self.client
+            .modify_ack_deadline(self.subscription.clone(), req)
+            .await
+            .context(ErrorData::BindingSetupFailed {
+                binding_type: "queue.pubsub".to_string(),
+                reason: "Failed to nack message".to_string(),
+            })
+    }
+
+    async fn purge(&self, _queue: &str) -> Result<()> {
+        // Pub/Sub purge is a subscription Seek to the current time. The
+        // alien-gcp-clients PubSubApi wrapper does not expose Seek, so this
+        // fails explicitly.
+        Err(alien_error::AlienError::new(
+            ErrorData::OperationNotSupported {
+                operation: "queue.purge".to_string(),
+                reason: "GCP Pub/Sub purge requires subscription Seek, which the Pub/Sub client does not expose".to_string(),
+            },
+        ))
+    }
 }

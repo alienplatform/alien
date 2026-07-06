@@ -396,6 +396,13 @@ pub trait Vault: Binding {
 
     /// Deletes a secret by name.
     async fn delete_secret(&self, secret_name: &str) -> Result<()>;
+
+    /// Lists the names of all secrets stored in this vault.
+    ///
+    /// Returned names are in the vault's own namespace (any provider-specific
+    /// prefix is stripped), so each name can be passed straight back to
+    /// [`Vault::get_secret`].
+    async fn list_secrets(&self) -> Result<Vec<String>>;
 }
 
 /// TLS mode used when building a Postgres connection string.
@@ -669,6 +676,14 @@ pub trait Queue: Binding {
 
     /// Acknowledge a message using its receipt handle (idempotent)
     async fn ack(&self, queue: &str, receipt_handle: &str) -> Result<()>;
+
+    /// Negative-acknowledge a message: release its lease so it becomes
+    /// immediately available for redelivery, without waiting out the
+    /// visibility timeout. Receipt-handle rules mirror [`Queue::ack`].
+    async fn nack(&self, queue: &str, receipt_handle: &str) -> Result<()>;
+
+    /// Delete every message in the queue, whether visible or in flight.
+    async fn purge(&self, queue: &str) -> Result<()>;
 }
 
 /// Request for invoking a function directly

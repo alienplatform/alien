@@ -42,6 +42,12 @@ pub struct BindingsProvider {
 #[derive(Debug)]
 pub struct LazyEnvBindingsProvider {
     env: HashMap<String, String>,
+    /// Binding names present in `env`, parsed at construction. Kept separately
+    /// from the fully-resolved [`BindingsProvider`] so the app-facing kinds can
+    /// answer "is this binding configured?" without first resolving the platform
+    /// or cloud client config. Parsing here also makes malformed binding JSON
+    /// fail fast at construction.
+    bindings: HashMap<String, serde_json::Value>,
     provider: OnceCell<BindingsProvider>,
 }
 
@@ -110,11 +116,39 @@ impl BindingsProvider {
     /// are loaded only if application code asks for a binding or runtime-owned
     /// startup secrets need to be fetched.
     pub fn from_env_lazy(env: HashMap<String, String>) -> Result<LazyEnvBindingsProvider> {
+        // Runtime path: validate the deployment platform eagerly so a
+        // misconfigured worker fails at startup, not on first binding use.
         crate::get_platform_from_env(&env)?;
-        Self::parse_bindings_from_env(&env)?;
+        let bindings = Self::parse_bindings_from_env(&env)?;
 
         Ok(LazyEnvBindingsProvider {
             env,
+            bindings,
+            provider: OnceCell::new(),
+        })
+    }
+
+    /// Creates an environment-backed provider that defers *all* platform and
+    /// cloud-client-config resolution to the first use of a *configured*
+    /// binding.
+    ///
+    /// This is the app-facing (napi / [`crate::Bindings`]) path. Its contract:
+    /// constructing with zero environment must succeed, and the first operation
+    /// against a binding that has no `ALIEN_<NAME>_BINDING` must report
+    /// [`ErrorData::BindingNotConfigured`] *before* any platform or credential
+    /// resolution — a missing binding is an application error, not a deployment
+    /// misconfiguration. Binding JSON is still parsed here, so malformed config
+    /// fails fast at construction.
+    ///
+    /// Contrast with [`Self::from_env_lazy`], which eagerly validates the
+    /// deployment platform so long-running runtime processes fail fast at
+    /// startup.
+    pub fn from_env_deferred(env: HashMap<String, String>) -> Result<LazyEnvBindingsProvider> {
+        let bindings = Self::parse_bindings_from_env(&env)?;
+
+        Ok(LazyEnvBindingsProvider {
+            env,
+            bindings,
             provider: OnceCell::new(),
         })
     }
@@ -382,15 +416,40 @@ impl LazyEnvBindingsProvider {
             .get_or_try_init(|| async { BindingsProvider::from_env(self.env.clone()).await })
             .await
     }
+
+    /// Fail fast with [`ErrorData::BindingNotConfigured`] when `binding_name`
+    /// has no `ALIEN_<NAME>_BINDING` entry, *before* any platform / cloud
+    /// client-config resolution. This is what lets a zero-env app construct
+    /// bindings and get a clean BINDING_NOT_CONFIGURED (not a deployment error)
+    /// on the first op against a missing binding. A binding that *is* present
+    /// falls through to normal resolution, so an existing binding on a cloud
+    /// platform without credentials still surfaces the client-config error.
+    ///
+    /// Called at the entry of every `load_*` method below, app-facing or not:
+    /// `parse_binding` (in [`BindingsProvider`]) would return the identical
+    /// `not_configured` error for a missing name once resolution reaches it,
+    /// so this guard only *reorders* that error ahead of platform/credential
+    /// resolution — it never changes which bindings succeed or fail. Keeping
+    /// it uniform means a newly added `load_*` method can't silently regress
+    /// the zero-env contract by omission.
+    fn ensure_binding_present(&self, binding_name: &str) -> Result<()> {
+        if self.bindings.contains_key(binding_name) {
+            Ok(())
+        } else {
+            Err(AlienError::new(ErrorData::not_configured(binding_name)))
+        }
+    }
 }
 
 #[async_trait]
 impl BindingsProviderApi for LazyEnvBindingsProvider {
     async fn load_storage(&self, binding_name: &str) -> Result<Arc<dyn Storage>> {
+        self.ensure_binding_present(binding_name)?;
         self.provider().await?.load_storage(binding_name).await
     }
 
     async fn load_build(&self, binding_name: &str) -> Result<Arc<dyn Build>> {
+        self.ensure_binding_present(binding_name)?;
         self.provider().await?.load_build(binding_name).await
     }
 
@@ -398,6 +457,7 @@ impl BindingsProviderApi for LazyEnvBindingsProvider {
         &self,
         binding_name: &str,
     ) -> Result<Arc<dyn ArtifactRegistry>> {
+        self.ensure_binding_present(binding_name)?;
         self.provider()
             .await?
             .load_artifact_registry(binding_name)
@@ -405,30 +465,37 @@ impl BindingsProviderApi for LazyEnvBindingsProvider {
     }
 
     async fn load_vault(&self, binding_name: &str) -> Result<Arc<dyn Vault>> {
+        self.ensure_binding_present(binding_name)?;
         self.provider().await?.load_vault(binding_name).await
     }
 
     async fn load_kv(&self, binding_name: &str) -> Result<Arc<dyn Kv>> {
+        self.ensure_binding_present(binding_name)?;
         self.provider().await?.load_kv(binding_name).await
     }
 
     async fn load_postgres(&self, binding_name: &str) -> Result<Arc<dyn Postgres>> {
+        self.ensure_binding_present(binding_name)?;
         self.provider().await?.load_postgres(binding_name).await
     }
 
     async fn load_queue(&self, binding_name: &str) -> Result<Arc<dyn Queue>> {
+        self.ensure_binding_present(binding_name)?;
         self.provider().await?.load_queue(binding_name).await
     }
 
     async fn load_worker(&self, binding_name: &str) -> Result<Arc<dyn Worker>> {
+        self.ensure_binding_present(binding_name)?;
         self.provider().await?.load_worker(binding_name).await
     }
 
     async fn load_container(&self, binding_name: &str) -> Result<Arc<dyn Container>> {
+        self.ensure_binding_present(binding_name)?;
         self.provider().await?.load_container(binding_name).await
     }
 
     async fn load_service_account(&self, binding_name: &str) -> Result<Arc<dyn ServiceAccount>> {
+        self.ensure_binding_present(binding_name)?;
         self.provider()
             .await?
             .load_service_account(binding_name)

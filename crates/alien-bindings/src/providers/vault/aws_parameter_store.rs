@@ -1,5 +1,8 @@
 use crate::error::{ErrorData, Result};
-use alien_aws_clients::ssm::{GetParameterRequest, PutParameterRequest, SsmApi, SsmClient};
+use alien_aws_clients::ssm::{
+    DescribeParametersRequest, GetParameterRequest, ParameterStringFilter, PutParameterRequest,
+    SsmApi, SsmClient,
+};
 use alien_error::Context;
 use async_trait::async_trait;
 use std::sync::Arc;
@@ -103,5 +106,51 @@ impl crate::traits::Vault for AwsParameterStoreVault {
             })?;
 
         Ok(())
+    }
+
+    /// List secret names by enumerating SSM parameters whose name begins with
+    /// this vault's `{vault_prefix}-` and stripping that prefix back off, so
+    /// each returned name round-trips through [`Self::get_secret`].
+    async fn list_secrets(&self) -> Result<Vec<String>> {
+        let name_prefix = format!("{}-", self.vault_prefix);
+        let filter = ParameterStringFilter::builder()
+            .key("Name".to_string())
+            .option("BeginsWith".to_string())
+            .values(vec![name_prefix.clone()])
+            .build();
+
+        let mut names = Vec::new();
+        let mut next_token: Option<String> = None;
+        loop {
+            let request = DescribeParametersRequest::builder()
+                .parameter_filters(vec![filter.clone()])
+                .maybe_next_token(next_token.clone())
+                .build();
+
+            let response = self.client.describe_parameters(request).await.context(
+                ErrorData::CloudPlatformError {
+                    message: format!(
+                        "Failed to describe parameters for vault prefix '{}'",
+                        self.vault_prefix
+                    ),
+                    resource_id: None,
+                },
+            )?;
+
+            for parameter in response.parameters.unwrap_or_default() {
+                if let Some(name) = parameter.name {
+                    if let Some(secret_name) = name.strip_prefix(&name_prefix) {
+                        names.push(secret_name.to_string());
+                    }
+                }
+            }
+
+            next_token = response.next_token;
+            if next_token.is_none() {
+                break;
+            }
+        }
+
+        Ok(names)
     }
 }

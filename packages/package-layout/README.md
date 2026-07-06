@@ -43,10 +43,10 @@ Every transitive `@alienplatform/*` package is pinned to a packed tarball via
 
 ## Expected-failure semantics
 
-Most of the pinned surface is not implemented yet: `@alienplatform/bindings`
-(task 04), its per-platform prebuilds (task 04a), `@alienplatform/commands`
-(task 08), and the sdk `./worker-runtime` subpath (task 03). The fixture is
-**designed to run today** and fail only on those not-yet-landed pieces.
+Most of the pinned surface is not implemented yet: `@alienplatform/bindings`'s
+per-platform prebuilds (task 04a), `@alienplatform/commands` (task 08), and the
+sdk `./worker-runtime` subpath (task 03). The fixture is **designed to run
+today** and fail only on those not-yet-landed pieces.
 
 - Each discrete check reports `PASS`, `[expected]`, or `FAIL` with an evidence
   line.
@@ -66,14 +66,14 @@ Most of the pinned surface is not implemented yet: `@alienplatform/bindings`
 
 | Step | Proves |
 |---|---|
-| `pack` | Each publishable package (`sdk`, `core`) produces a tarball; `bindings`/`commands` are `[expected]` absent (04/08). |
+| `pack` | Each publishable package (`sdk`, `core`, `bindings`) produces a tarball; `commands` is `[expected]` absent (08). |
 | `write-manifest` | The consumer manifest is rewritten to `file:` the packed tarballs with `overrides` pinning every transitive `@alienplatform/*`. |
 | `install` / `install-resolution` | `npm install` succeeds and `@alienplatform/{sdk,core}` resolve to the **tarballs**, not the registry. |
-| `import` (bun + node) | The pinned surfaces import under both runtimes, including each contract's pinned error re-exports (`AlienError`/`defineError`; `BindingNotConfiguredError`; `CommandReceiverConfigInvalidError`). The sdk facade's error re-exports (03), `./worker-runtime` (03), `@alienplatform/bindings` (04), and `@alienplatform/commands` (08) are `[expected]` missing. |
-| `error-code` (bun + node) | `BINDING_NOT_CONFIGURED` / `COMMAND_RECEIVER_CONFIG_INVALID` are asserted by their `code` field once the packages exist; `[expected]` until 04/08. |
+| `import` (bun + node) | The pinned surfaces import under both runtimes, including each contract's pinned error re-exports (`AlienError`/`defineError`; `BindingNotConfiguredError`; `CommandReceiverConfigInvalidError`). The sdk facade's error re-exports (03), `./worker-runtime` (03), and `@alienplatform/commands` (08) are `[expected]` missing. |
+| `error-code` (bun + node) | `BINDING_NOT_CONFIGURED` / `COMMAND_RECEIVER_CONFIG_INVALID` are asserted by their `code` field once the packages exist; `[expected]` until 08 for commands. |
 | `typecheck` | The consumer typechecks under NodeNext/strict against the shipped declarations; only the not-yet-landed module specifiers are `[expected]` unresolved. |
 | `packed-contents` | Each tarball's file list matches an **exact** expected set — see the note below. Required artifacts (`dist/*.js`, `package.json`, `PACKAGE_LAYOUT.md` for the contract packages) must be present, and any file outside the set fails the run. The per-platform prebuild's exact `.node`+manifest shape is `[expected]` until 04a. |
-| `compile` | `bun build --compile` of the pinned `./native` embed entry produces a runnable single-file binary; `[expected]` to fail until 04/04a. |
+| `compile` | `bun build --compile` of the pinned `./native` embed entry produces a runnable single-file binary; `[expected]` to fail until 04a stages a per-platform `.node` prebuild. |
 | `validator` | The static layout validator in `packages/scripts` still passes. |
 
 ### Note on the `packed-contents` expected set

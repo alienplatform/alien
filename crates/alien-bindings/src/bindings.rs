@@ -13,9 +13,12 @@ use std::sync::Arc;
 /// App-facing entry point for accessing bindings configured via `ALIEN_*_BINDING`
 /// environment variables.
 ///
-/// Construction is synchronous and only validates the platform and each configured
-/// binding's JSON shape (see [`BindingsProvider::from_env_lazy`]); cloud client
-/// configuration and each binding's backing client are resolved lazily, on first use.
+/// Construction is synchronous and only validates each configured binding's JSON
+/// shape (see [`BindingsProvider::from_env_deferred`]); the deployment platform,
+/// cloud client configuration, and each binding's backing client are resolved
+/// lazily, on first use. A first operation against a binding that is not
+/// configured reports `BINDING_NOT_CONFIGURED` before any platform resolution, so
+/// a zero-environment process still constructs and fails cleanly.
 ///
 /// # Examples
 ///
@@ -47,13 +50,17 @@ impl Bindings {
         Self::from_env_map(std::env::vars().collect())
     }
 
-    /// Sync-constructs `Bindings` from an explicit environment map. Shared by `from_env`
-    /// and by this module's tests, which inject `ALIEN_*_BINDING` variables this way
-    /// instead of mutating the real process environment (process-global state that's
-    /// unsafe to share across parallel tests).
-    fn from_env_map(env: HashMap<String, String>) -> Result<Self> {
+    /// Sync-constructs `Bindings` from an explicit environment map instead of the process
+    /// environment.
+    ///
+    /// This is public for embedders that resolve bindings from a caller-supplied map rather
+    /// than `std::env` — notably the napi addon, which merges `std::env::vars()` with
+    /// per-call overrides before constructing `Bindings`. It is also what `from_env`
+    /// delegates to and what this module's tests use to inject `ALIEN_*_BINDING` variables
+    /// (avoiding process-global state that's unsafe to share across parallel tests).
+    pub fn from_env_map(env: HashMap<String, String>) -> Result<Self> {
         Ok(Self {
-            provider: BindingsProvider::from_env_lazy(env)?,
+            provider: BindingsProvider::from_env_deferred(env)?,
         })
     }
 
@@ -194,6 +201,64 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn queue_nack_and_purge_reachable_through_trait_object() {
+        // The point of promoting nack/purge onto the Queue trait: they must be
+        // callable on the `Arc<dyn Queue>` the app-facing API hands back.
+        let temp_dir = TempDir::new().expect("tempdir");
+        let json = format!(
+            r#"{{"service":"local-queue","queuePath":"{}"}}"#,
+            temp_dir.path().join("queue.db").display()
+        );
+        let env = with_binding(base_env(), "jobs", &json);
+        let bindings = Bindings::from_env_map(env).expect("valid env should construct Bindings");
+
+        let queue = bindings
+            .queue("jobs")
+            .await
+            .expect("queue binding should load");
+
+        // nack: an in-flight message under the default lease is hidden, but a
+        // nack makes it immediately redeliverable.
+        queue
+            .send("jobs", MessagePayload::Text("retry".to_string()))
+            .await
+            .expect("send should succeed");
+        let first = queue
+            .receive("jobs", 1)
+            .await
+            .expect("receive should succeed");
+        assert_eq!(first.len(), 1);
+        assert!(
+            queue
+                .receive("jobs", 1)
+                .await
+                .expect("receive should succeed")
+                .is_empty(),
+            "in-flight message must be hidden before nack"
+        );
+        queue
+            .nack("jobs", &first[0].receipt_handle)
+            .await
+            .expect("nack should succeed");
+        let redelivered = queue
+            .receive("jobs", 1)
+            .await
+            .expect("receive should succeed");
+        assert_eq!(redelivered.len(), 1, "nacked message must be redelivered");
+
+        // purge: clears everything, in flight or visible.
+        queue.purge("jobs").await.expect("purge should succeed");
+        assert!(
+            queue
+                .receive("jobs", 1)
+                .await
+                .expect("receive should succeed")
+                .is_empty(),
+            "purge must empty the queue"
+        );
+    }
+
+    #[tokio::test]
     async fn vault_delegates_to_local_provider_and_performs_real_io() {
         let temp_dir = TempDir::new().expect("tempdir");
         let json = format!(
@@ -217,6 +282,19 @@ mod tests {
             .await
             .expect("get_secret should succeed");
         assert_eq!(value, "sekrit");
+
+        // list_secrets must be reachable through the `Arc<dyn Vault>` surface
+        // and return the stored names.
+        vault
+            .set_secret("db-url", "postgres://…")
+            .await
+            .expect("set_secret should succeed");
+        let mut names = vault
+            .list_secrets()
+            .await
+            .expect("list_secrets should succeed");
+        names.sort();
+        assert_eq!(names, vec!["api-key".to_string(), "db-url".to_string()]);
     }
 
     #[tokio::test]
@@ -234,6 +312,39 @@ mod tests {
             error.to_string().contains("ALIEN_FILES_BINDING"),
             "message should name the env var, got: {error}"
         );
+    }
+
+    #[tokio::test]
+    async fn zero_env_construct_then_missing_binding_is_binding_not_configured() {
+        // The app-facing contract: with NO deployment type and NO credentials,
+        // construction must succeed and the FIRST op on a missing binding must
+        // report BINDING_NOT_CONFIGURED (naming ALIEN_<NAME>_BINDING) BEFORE any
+        // platform / client-config resolution. There is deliberately no
+        // ALIEN_DEPLOYMENT_TYPE in this environment. Table test over all four
+        // app-facing kinds so a future kind added to `Bindings` without wiring
+        // `ensure_binding_present` into its `load_*` method fails this test
+        // instead of silently regressing to ENVIRONMENT_VARIABLE_MISSING.
+        for kind in ["storage", "kv", "queue", "vault"] {
+            let bindings = Bindings::from_env_map(HashMap::new())
+                .expect("zero-env construction must succeed (platform resolution deferred)");
+
+            let error = match kind {
+                "storage" => bindings.storage("x").await.unwrap_err(),
+                "kv" => bindings.kv("x").await.unwrap_err(),
+                "queue" => bindings.queue("x").await.unwrap_err(),
+                "vault" => bindings.vault("x").await.unwrap_err(),
+                other => unreachable!("unhandled kind in table test: {other}"),
+            };
+
+            assert_eq!(
+                error.code, "BINDING_NOT_CONFIGURED",
+                "{kind}: expected the missing-binding error, not a platform/deployment error: {error}"
+            );
+            assert!(
+                error.to_string().contains("ALIEN_X_BINDING"),
+                "{kind}: message should name the env var, got: {error}"
+            );
+        }
     }
 
     #[test]

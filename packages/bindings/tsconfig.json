@@ -1,0 +1,7 @@
+{
+  "extends": "@alienplatform/typescript-config/base.json",
+  "compilerOptions": {
+    "allowArbitraryExtensions": true
+  },
+  "include": ["src/**/*", "tests/**/*", "scripts/**/*.ts"]
+}

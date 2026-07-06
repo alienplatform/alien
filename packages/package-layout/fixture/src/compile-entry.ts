@@ -7,10 +7,10 @@
  * "Exports map"). Unlike `imports.ts`, this uses a STATIC import on purpose:
  * `bun build --compile` only follows statically analyzable imports.
  *
- * Until task 04 ships `@alienplatform/bindings` and task 04a ships the
- * per-platform `.node` prebuilds, this specifier does not resolve, so both the
- * fixture typecheck and the `bun build --compile` step fail — `run.ts` marks
- * those `[expected]`.
+ * `@alienplatform/bindings` ships this specifier today, but until task 04a
+ * ships the per-platform `.node` prebuilds the packed tarball has no addon
+ * staged next to `native.js`, so the `bun build --compile` step fails —
+ * `run.ts` marks that `[expected]`.
  */
 
 import { storage } from "@alienplatform/bindings/native"

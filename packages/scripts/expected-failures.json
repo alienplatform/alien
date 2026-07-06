@@ -31,12 +31,6 @@
   },
   {
     "check": "package-not-implemented",
-    "package": "bindings",
-    "reason": "package not yet implemented (only PACKAGE_LAYOUT.md present)",
-    "owningTask": "04"
-  },
-  {
-    "check": "package-not-implemented",
     "package": "commands",
     "reason": "package not yet implemented (only PACKAGE_LAYOUT.md present)",
     "owningTask": "08"

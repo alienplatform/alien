@@ -169,6 +169,40 @@ impl crate::traits::Vault for KubernetesSecretVault {
                 resource_id: None,
             })
     }
+
+    /// List secret names by selecting the Secret resources this vault manages
+    /// (via the `managed-by`/`vault-prefix` labels set in [`Self::set_secret`])
+    /// and stripping the `{vault_prefix}-` resource-name prefix back off.
+    async fn list_secrets(&self) -> Result<Vec<String>> {
+        // Match the labels set in set_secret exactly: vault-prefix is stored
+        // with the vault's raw (un-sanitized) prefix.
+        let label_selector = format!("managed-by=operator,vault-prefix={}", self.vault_prefix);
+
+        let list = self
+            .client
+            .list_secrets(&self.namespace, Some(label_selector), None)
+            .await
+            .context(ErrorData::CloudPlatformError {
+                message: format!(
+                    "Failed to list secrets for vault prefix '{}'",
+                    self.vault_prefix
+                ),
+                resource_id: None,
+            })?;
+
+        // Resource names are the sanitized `{vault_prefix}-{secret}`; strip the
+        // sanitized prefix so results round-trip through get_secret.
+        let name_prefix = self.secret_resource_name("");
+
+        let names = list
+            .items
+            .into_iter()
+            .filter_map(|secret| secret.metadata.name)
+            .filter_map(|name| name.strip_prefix(&name_prefix).map(str::to_string))
+            .collect();
+
+        Ok(names)
+    }
 }
 
 #[cfg(test)]
