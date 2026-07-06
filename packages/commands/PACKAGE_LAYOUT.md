@@ -126,6 +126,10 @@ MAY depend on:
 - **DECIDED(09).** A successful handler response body is the JSON encoding
   of the handler's return value (`JSON.stringify`-equivalent), submitted as
   the command's success response payload.
+- **DECIDED(09).** The handler context's `deadline` is the effective budget —
+  `min(envelope deadline, lease expiry)` — not the raw envelope deadline, and
+  it is always present while a lease is held. The TypeScript receiver must
+  expose the same value; anything else diverges the twins' timeout behavior.
 
 ## Status
 
