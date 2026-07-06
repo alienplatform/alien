@@ -1,0 +1,5 @@
+# Per-platform prebuild skeletons: only the manifest + README are committed.
+# The .node addon is staged into each dir at build/publish time (locally by
+# `bun run build:addon`, in CI by `cp` in the build-addon/publish-bindings
+# jobs) and must never be committed.
+*/*.node

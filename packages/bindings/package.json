@@ -21,6 +21,7 @@
   },
   "scripts": {
     "build": "tsdown && tsc -p tsconfig.build.json --emitDeclarationOnly",
+    "build:addon": "napi build --platform --release --cwd ../../crates/alien-bindings-node",
     "prepare": "npm run build",
     "test": "vitest run",
     "test:bun": "BUN_EXPECTED=1 bun test",
@@ -46,6 +47,7 @@
   "devDependencies": {
     "@alienplatform/typescript-config": "workspace:^",
     "@biomejs/biome": "^1.9.4",
+    "@napi-rs/cli": "^3.0.0",
     "@types/node": "^24.0.15",
     "tsdown": "^0.13.0",
     "typescript": "^5.8.3",

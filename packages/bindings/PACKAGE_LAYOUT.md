@@ -77,15 +77,18 @@ Only two entry points. Every condition carries `types`. No deep imports.
 - `"exports"` and per-condition `"types"` exactly as above; `"types"` top-level for
   legacy resolvers; declarations shipped.
 - `optionalDependencies` — the per-platform prebuild packages
-  `@alienplatform/bindings-<platform>`. Initial set: `@alienplatform/bindings-darwin-arm64`,
-  `@alienplatform/bindings-linux-x64-gnu`, `@alienplatform/bindings-linux-arm64-gnu`. This
-  entry describes the **published** manifest only: `napi prepublish` injects it at publish
-  time (task 04a) from the `napi.triples` config in `crates/alien-bindings-node/package.json`,
-  which is the source of truth for the platform list. The workspace source manifest
-  (`packages/bindings/package.json`) carries no `optionalDependencies` — adding the
-  per-platform packages there would pin unpublished versions and break `pnpm install
-  --frozen-lockfile` before task 04a publishes them. The final platform list is OPEN
-  (task 04a).
+  `@alienplatform/bindings-<platform>`. Shipped set: `@alienplatform/bindings-darwin-arm64`,
+  `@alienplatform/bindings-darwin-x64`, `@alienplatform/bindings-linux-x64-gnu`,
+  `@alienplatform/bindings-linux-arm64-gnu`. This entry describes the **published**
+  manifest only: `scripts/inject-optional-deps.mjs` injects it at publish time,
+  pinning each entry to the wrapper's own release version, from its own `TRIPLES`
+  const — chosen over `napi prepublish`, which rewrites/regenerates more than
+  needed. `TRIPLES` must mirror the `napi.targets` config in
+  `crates/alien-bindings-node/package.json`, which is the source of truth for the
+  release build matrix (the per-triple legs in the release workflow). The
+  workspace source manifest (`packages/bindings/package.json`) carries no
+  `optionalDependencies` — adding the per-platform packages there would pin
+  unpublished versions and break `pnpm install --frozen-lockfile` before release.
 - `description` and `keywords`.
 - Support note: Bun ≥ 1.0.23 and Node ≥ 18 (Node-API / napi-rs addon).
 - `dependencies`: `@alienplatform/core` (errors) only.

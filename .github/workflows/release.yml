@@ -77,7 +77,15 @@ jobs:
         if: ${{ !inputs.dry_run }}
         run: |
           VERSION="${{ steps.bump.outputs.version }}"
-          for pkg in packages/core packages/sdk packages/testing client-sdks/platform/typescript client-sdks/manager/typescript; do
+          # The bindings addon ships as a wrapper + per-platform prebuild packages
+          # (crate manifest, wrapper, and each npm/<triple> skeleton) that must all
+          # carry the release version BEFORE the native build on the runners, so the
+          # loader embeds it and publish injects matching optionalDependencies.
+          for pkg in packages/core packages/sdk packages/testing \
+            client-sdks/platform/typescript client-sdks/manager/typescript \
+            packages/bindings crates/alien-bindings-node \
+            packages/bindings/npm/darwin-arm64 packages/bindings/npm/darwin-x64 \
+            packages/bindings/npm/linux-x64-gnu packages/bindings/npm/linux-arm64-gnu; do
             node -e "
               const fs = require('fs');
               const path = '${pkg}/package.json';
@@ -93,7 +101,10 @@ jobs:
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
           git add Cargo.toml packages/core/package.json packages/sdk/package.json packages/testing/package.json \
-            client-sdks/platform/typescript/package.json client-sdks/manager/typescript/package.json
+            client-sdks/platform/typescript/package.json client-sdks/manager/typescript/package.json \
+            packages/bindings/package.json crates/alien-bindings-node/package.json \
+            packages/bindings/npm/darwin-arm64/package.json packages/bindings/npm/darwin-x64/package.json \
+            packages/bindings/npm/linux-x64-gnu/package.json packages/bindings/npm/linux-arm64-gnu/package.json
           git commit -m "chore: release v${VERSION}"
           git tag "v${VERSION}"
           git push
@@ -262,6 +273,207 @@ jobs:
           npm install
           npm run build
           npm publish --access public
+
+  # ─── Native addon prebuilds (@alienplatform/bindings) ──────────────
+  #
+  # The bindings addon publishes as a thin wrapper plus per-platform prebuild
+  # packages (`@alienplatform/bindings-<triple>`) that carry a compiled `.node`,
+  # so `npm install @alienplatform/bindings` needs no Rust toolchain. Each triple
+  # builds on its native runner (darwin-x64 cross-builds on the arm mac — same
+  # toolchain via `--target`). Unlike the other build/publish jobs, build-addon
+  # and publish-bindings also run on dry_run (checking out the untagged HEAD and
+  # publishing with `--dry-run`) so a maintainer can validate the whole
+  # build → smoke → publish path — including the linux halves that can't run
+  # pre-merge — without cutting a real release.
+
+  build-addon:
+    needs: prepare
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: depot-macos-15
+            os: macos
+            target: aarch64-apple-darwin
+            triple: darwin-arm64
+            smoke: true
+            expect_arch: arm64
+          - runner: depot-macos-15
+            os: macos
+            target: x86_64-apple-darwin
+            triple: darwin-x64
+            smoke: false
+            expect_arch: x86_64
+          - runner: depot-ubuntu-24.04-16
+            os: linux
+            target: x86_64-unknown-linux-gnu
+            triple: linux-x64-gnu
+            smoke: true
+            expect_arch: x86-64
+          - runner: depot-ubuntu-24.04-arm-16
+            os: linux
+            target: aarch64-unknown-linux-gnu
+            triple: linux-arm64-gnu
+            smoke: false
+            expect_arch: aarch64
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 60
+    env:
+      CARGO_INCREMENTAL: "0"
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.dry_run && github.sha || format('v{0}', needs.prepare.outputs.version) }}
+
+      # Rust toolchain: Linux via the shared composite; macOS uses dtolnay +
+      # brew protoc directly (plain `napi build`, not `depot cargo`, so no
+      # Depot/sccache setup here). The addon depends on alien-bindings, whose
+      # build.rs needs protoc.
+      - name: Setup Rust (linux)
+        if: matrix.os == 'linux'
+        uses: ./.github/actions/setup-rust
+        with:
+          depot-project-id: ${{ vars.DEPOT_PROJECT_ID }}
+          repo-access-token: ${{ secrets.REPO_ACCESS_TOKEN }}
+          install-protoc: "true"
+
+      - uses: dtolnay/rust-toolchain@nightly
+        if: matrix.os == 'macos'
+
+      - name: Configure git credentials for cargo (macos)
+        if: matrix.os == 'macos'
+        run: git config --global url."https://x-access-token:${{ secrets.REPO_ACCESS_TOKEN }}@github.com/".insteadOf "https://github.com/"
+
+      - name: Install protoc (macos)
+        if: matrix.os == 'macos'
+        run: brew install protobuf
+
+      - name: Add cross target (darwin-x64)
+        if: matrix.target == 'x86_64-apple-darwin'
+        run: rustup target add x86_64-apple-darwin
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10.11.0
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+
+      - uses: oven-sh/setup-bun@v2
+        if: matrix.smoke
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Build addon (${{ matrix.triple }})
+        env:
+          CARGO_NET_GIT_FETCH_WITH_CLI: "true"
+        run: |
+          pnpm --filter @alienplatform/bindings exec napi build \
+            --platform --release --target ${{ matrix.target }} \
+            --cwd "$GITHUB_WORKSPACE/crates/alien-bindings-node"
+
+      - name: Stage addon into platform package
+        run: |
+          cp "crates/alien-bindings-node/alien-bindings-node.${{ matrix.triple }}.node" \
+            "packages/bindings/npm/${{ matrix.triple }}/alien-bindings-node.${{ matrix.triple }}.node"
+
+      # Closes the wrong-arch hole on the two legs the smoke step doesn't cover.
+      - name: Assert staged binary architecture
+        run: file "packages/bindings/npm/${{ matrix.triple }}/alien-bindings-node.${{ matrix.triple }}.node" | grep -q "${{ matrix.expect_arch }}"
+
+      # Smoke (ticket requirement): a published-shape install with NO build
+      # toolchain must load the prebuilt .node and run a real local op. darwin-x64
+      # can't execute on the arm mac, and linux-arm64 has no darwin/linux-x64
+      # host here, so the two natively-executable halves are smoked.
+      - name: Smoke prebuild (no toolchain)
+        if: matrix.smoke
+        run: bash scripts/smoke-addon-prebuild.sh "${{ matrix.triple }}"
+
+      - name: Upload addon artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: addon-${{ matrix.triple }}
+          retention-days: 1
+          path: packages/bindings/npm/${{ matrix.triple }}/alien-bindings-node.${{ matrix.triple }}.node
+
+  publish-bindings:
+    needs: [prepare, build-addon, publish-npm]
+    # publish-npm skips on dry_run, so a bare `needs` would cascade-skip the
+    # dry-run path this job deliberately supports. On a real release, wait for
+    # publish-npm to succeed: the wrapper's package.json pins
+    # `@alienplatform/core: ^<release>`, so publishing it while core's publish
+    # failed leaves every `npm install @alienplatform/bindings` ETARGET-broken.
+    if: always() && needs.build-addon.result == 'success' && (inputs.dry_run || needs.publish-npm.result == 'success')
+    runs-on: depot-ubuntu-24.04-arm-4
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.dry_run && github.sha || format('v{0}', needs.prepare.outputs.version) }}
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10.11.0
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+          registry-url: https://registry.npmjs.org
+
+      - name: Validate npm auth
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+        run: npm whoami
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Download addon artifacts
+        uses: actions/download-artifact@v4
+        with:
+          pattern: addon-*
+          path: ./addons
+          merge-multiple: false
+
+      - name: Stage addons into platform packages
+        run: |
+          for triple in darwin-arm64 darwin-x64 linux-x64-gnu linux-arm64-gnu; do
+            cp "./addons/addon-${triple}/alien-bindings-node.${triple}.node" \
+              "packages/bindings/npm/${triple}/alien-bindings-node.${triple}.node"
+          done
+
+      - name: Build wrapper
+        run: pnpm --filter @alienplatform/bindings build
+
+      # Platform packages publish FIRST so an install of the wrapper can never
+      # race ahead of the optionalDependencies it pins.
+      - name: Publish platform prebuild packages (first)
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+        run: |
+          DRY=""
+          if [ "${{ inputs.dry_run }}" = "true" ]; then DRY="--dry-run"; fi
+          for triple in darwin-arm64 darwin-x64 linux-x64-gnu linux-arm64-gnu; do
+            echo "Publishing @alienplatform/bindings-${triple}..."
+            ( cd "packages/bindings/npm/${triple}" && npm publish --access public $DRY )
+          done
+
+      # Inject exact-version optionalDependencies explicitly (see the script) —
+      # more deterministic and reviewable than `napi prepublish`.
+      - name: Inject optionalDependencies into the wrapper
+        run: node packages/bindings/scripts/inject-optional-deps.mjs
+
+      - name: Publish wrapper (last)
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+        run: |
+          DRY=""
+          if [ "${{ inputs.dry_run }}" = "true" ]; then DRY="--dry-run"; fi
+          pnpm --filter @alienplatform/bindings publish --access public --no-git-checks $DRY
 
   # ─── Binary builds (4 targets, all parallel) ───────────────────────
 
