@@ -214,7 +214,29 @@ impl TestDeployment {
         }
     }
 
+    /// Build a commands client for this deployment.
+    fn commands_client(&self) -> alien_commands_client::CommandsClient {
+        use alien_commands_client::{CommandsClient, CommandsClientConfig};
+        use std::time::Duration;
+
+        CommandsClient::with_config(
+            &format!("{}/v1", self.manager.url),
+            &self.id,
+            &self.manager.admin_token,
+            CommandsClientConfig {
+                allow_local_storage: true,
+                timeout: Duration::from_secs(120),
+                ..Default::default()
+            },
+        )
+    }
+
     /// Invoke a command on the deployment and return the JSON result.
+    ///
+    /// No explicit target: the server resolves the target via single-target
+    /// shorthand, which only works when the deployment has exactly one
+    /// command-capable resource. With two or more, this must fail — the
+    /// routing E2E asserts exactly that.
     ///
     /// Uses the commands protocol:
     /// 1. `POST /v1/commands` — create the command (inline or storage mode)
@@ -226,21 +248,22 @@ impl TestDeployment {
         name: &str,
         params: Value,
     ) -> Result<Value, Box<dyn std::error::Error>> {
-        use alien_commands_client::{CommandsClient, CommandsClientConfig};
-        use std::time::Duration;
+        self.commands_client()
+            .invoke::<Value, Value>(name, params)
+            .await
+            .map_err(|e| Box::new(e) as Box<dyn std::error::Error>)
+    }
 
-        let client = CommandsClient::with_config(
-            &format!("{}/v1", self.manager.url),
-            &self.id,
-            &self.manager.admin_token,
-            CommandsClientConfig {
-                allow_local_storage: true,
-                timeout: Duration::from_secs(120),
-                ..Default::default()
-            },
-        );
-
-        client
+    /// Invoke a command addressed to one specific command-capable resource,
+    /// mirroring the TypeScript `.target(name).invoke(...)` shorthand.
+    pub async fn invoke_command_on_target(
+        &self,
+        target_resource_id: &str,
+        name: &str,
+        params: Value,
+    ) -> Result<Value, Box<dyn std::error::Error>> {
+        self.commands_client()
+            .target(target_resource_id)
             .invoke::<Value, Value>(name, params)
             .await
             .map_err(|e| Box::new(e) as Box<dyn std::error::Error>)

@@ -29,4 +29,23 @@ app.post("/queue-test/:bindingName", async c => {
   }
 })
 
+// Send-only: the platform queue trigger is the only consumer of this queue, so
+// delivery proves the trigger invoked the app's onQueueMessage handler (which
+// records the message in KV for read-back via /events/list).
+app.post("/queue-send/:bindingName", async c => {
+  const bindingName = c.req.param("bindingName")
+  try {
+    const { marker } = (await c.req.json()) as { marker: string }
+    if (!marker) {
+      return c.json({ success: false, error: "Missing marker" }, 400)
+    }
+    const q = queue(bindingName)
+    await q.send({ marker })
+    return c.json({ success: true, bindingName })
+  } catch (error: unknown) {
+    const alienError = await toExternalOperationError(error, "queue-send")
+    return c.json({ success: false, error: alienError.message, code: alienError.code }, 500)
+  }
+})
+
 export default app

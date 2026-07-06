@@ -135,6 +135,9 @@ pub enum TestApp {
     ComprehensiveRust,
     ComprehensiveTs,
     FullStackMicroservices,
+    /// Worker + Daemon registering overlapping command names, routed by target
+    /// (`examples/command-routing-ts`).
+    CommandRoutingTs,
 }
 
 impl std::fmt::Display for TestApp {
@@ -143,6 +146,7 @@ impl std::fmt::Display for TestApp {
             TestApp::ComprehensiveRust => write!(f, "comprehensive-rust"),
             TestApp::ComprehensiveTs => write!(f, "comprehensive-ts"),
             TestApp::FullStackMicroservices => write!(f, "full-stack-microservices"),
+            TestApp::CommandRoutingTs => write!(f, "command-routing-ts"),
         }
     }
 }
@@ -178,8 +182,12 @@ pub enum Binding {
     Inspect,
     /// Managed secret retrieval from the internal `secrets` vault (cloud only)
     ManagedSecret,
-    /// Event handler verification
-    Events,
+    /// Queue trigger delivery: a send-only message must reach `on_queue_message`
+    QueueEvent,
+    /// Storage trigger delivery: an object write must reach `on_storage_event`
+    StorageEvent,
+    /// Cron trigger delivery: the schedule must fire `on_cron_event`
+    CronEvent,
     /// Build execution (CodeBuild, Cloud Build, ACA Jobs)
     Build,
     /// Artifact registry (ECR, GAR, ACR)
@@ -205,7 +213,9 @@ impl std::fmt::Display for Binding {
             Binding::Environment => write!(f, "environment"),
             Binding::Inspect => write!(f, "inspect"),
             Binding::ManagedSecret => write!(f, "managed-secret"),
-            Binding::Events => write!(f, "events"),
+            Binding::QueueEvent => write!(f, "queue-event"),
+            Binding::StorageEvent => write!(f, "storage-event"),
+            Binding::CronEvent => write!(f, "cron-event"),
             Binding::Build => write!(f, "build"),
             Binding::ArtifactRegistry => write!(f, "artifact-registry"),
             Binding::ServiceAccount => write!(f, "service-account"),
@@ -238,7 +248,9 @@ pub fn supported_bindings(platform: Platform, model: DeploymentModel) -> Vec<Bin
         Platform::Aws | Platform::Gcp | Platform::Azure => {
             bindings.push(Binding::Kv);
             bindings.push(Binding::Queue);
-            bindings.push(Binding::Events);
+            bindings.push(Binding::QueueEvent);
+            bindings.push(Binding::StorageEvent);
+            bindings.push(Binding::CronEvent);
             bindings.push(Binding::Build);
             bindings.push(Binding::ArtifactRegistry);
             bindings.push(Binding::ServiceAccount);
@@ -256,7 +268,9 @@ pub fn supported_bindings(platform: Platform, model: DeploymentModel) -> Vec<Bin
         Platform::Local => {
             bindings.push(Binding::Kv);
             bindings.push(Binding::Queue);
-            bindings.push(Binding::Events);
+            bindings.push(Binding::QueueEvent);
+            bindings.push(Binding::StorageEvent);
+            bindings.push(Binding::CronEvent);
             bindings.push(Binding::ArtifactRegistry);
             bindings.push(Binding::ServiceAccount);
             // Only the embedded Local controller ships in this repo, so Postgres is
@@ -333,6 +347,7 @@ pub(crate) fn test_app_path(app: TestApp) -> &'static str {
         TestApp::ComprehensiveRust => "test-apps/comprehensive-rust",
         TestApp::ComprehensiveTs => "test-apps/comprehensive-typescript",
         TestApp::FullStackMicroservices => "../../examples/full-stack-microservices",
+        TestApp::CommandRoutingTs => "../../examples/command-routing-ts",
     }
 }
 
@@ -345,7 +360,7 @@ fn deployment_environment_variables(
     app: TestApp,
 ) -> Option<Vec<alien_manager_api::types::EnvironmentVariable>> {
     match app {
-        TestApp::ComprehensiveRust | TestApp::ComprehensiveTs => None,
+        TestApp::ComprehensiveRust | TestApp::ComprehensiveTs | TestApp::CommandRoutingTs => None,
         TestApp::FullStackMicroservices => {
             Some(vec![alien_manager_api::types::EnvironmentVariable {
                 name: "APP_SECRET".to_string(),
@@ -1328,6 +1343,22 @@ pub async fn run_alien_deploy_up(
 // Platform availability
 // ---------------------------------------------------------------------------
 
+/// Whether a kubeconfig is available for plain Kubernetes pull E2E:
+/// `KUBECONFIG` is set or the default `~/.kube/config` exists.
+fn kubeconfig_available() -> bool {
+    if std::env::var_os("KUBECONFIG").is_some() {
+        return true;
+    }
+    std::env::var_os("HOME")
+        .map(|home| {
+            std::path::Path::new(&home)
+                .join(".kube")
+                .join("config")
+                .exists()
+        })
+        .unwrap_or(false)
+}
+
 /// Check if a platform is available and supported for the given deployment model and app.
 pub fn is_platform_available(
     config: &TestConfig,
@@ -1346,8 +1377,16 @@ pub fn is_platform_available(
                     || config.has_platform(Platform::Azure))
         }
         Platform::Kubernetes => {
-            // Kubernetes only supports pull (container) model
+            // Kubernetes only supports pull (container) model. The plain
+            // (non-distribution) flow installs the generated Helm agent into
+            // the cluster of the ambient kubeconfig and pushes built images to
+            // a cloud registry, so both must be present. Distribution flows
+            // provision their own clusters and do not consult this gate.
             model == DeploymentModel::Pull
+                && kubeconfig_available()
+                && (config.has_platform(Platform::Aws)
+                    || config.has_platform(Platform::Gcp)
+                    || config.has_platform(Platform::Azure))
         }
         Platform::Aws | Platform::Gcp | Platform::Azure => {
             // Cloud platforms support both push and pull models.
@@ -1393,6 +1432,60 @@ mod tests {
     }
 
     #[test]
+    fn event_delivery_bindings_cover_every_trigger_capable_platform() {
+        // Trigger delivery must be proven wherever the platform wires
+        // queue/storage/schedule triggers: the three clouds and Local.
+        for platform in [
+            Platform::Aws,
+            Platform::Gcp,
+            Platform::Azure,
+            Platform::Local,
+        ] {
+            for model in [DeploymentModel::Push, DeploymentModel::Pull] {
+                let supported = supported_bindings(platform, model);
+                for binding in [
+                    Binding::QueueEvent,
+                    Binding::StorageEvent,
+                    Binding::CronEvent,
+                ] {
+                    assert!(
+                        supported.contains(&binding),
+                        "expected {:?} in supported bindings for {:?}/{:?}",
+                        binding,
+                        platform,
+                        model
+                    );
+                    assert!(
+                        exclusion_reason(platform, model, binding, TestApp::ComprehensiveRust)
+                            .is_none(),
+                        "{:?} must not be excluded for the Rust app on {:?}/{:?}",
+                        binding,
+                        platform,
+                        model
+                    );
+                    assert!(
+                        exclusion_reason(platform, model, binding, TestApp::ComprehensiveTs)
+                            .is_none(),
+                        "{:?} must not be excluded for the TS app on {:?}/{:?}",
+                        binding,
+                        platform,
+                        model
+                    );
+                }
+            }
+        }
+        // Kubernetes worker deployments don't wire triggers in this repo.
+        let k8s = supported_bindings(Platform::Kubernetes, DeploymentModel::Pull);
+        for binding in [
+            Binding::QueueEvent,
+            Binding::StorageEvent,
+            Binding::CronEvent,
+        ] {
+            assert!(!k8s.contains(&binding));
+        }
+    }
+
+    #[test]
     fn ts_app_excludes_manager_internal_bindings_on_every_platform() {
         for platform in [
             Platform::Aws,
@@ -1425,34 +1518,28 @@ mod tests {
     fn rust_app_keeps_service_account_and_artifact_registry_coverage() {
         // The Rust comprehensive app still serves these handlers, so only the
         // pre-existing, platform-specific exclusions should apply to it.
-        assert!(
-            exclusion_reason(
-                Platform::Aws,
-                DeploymentModel::Push,
-                Binding::ArtifactRegistry,
-                TestApp::ComprehensiveRust
-            )
-            .is_none()
-        );
-        assert!(
-            exclusion_reason(
-                Platform::Aws,
-                DeploymentModel::Push,
-                Binding::ServiceAccount,
-                TestApp::ComprehensiveRust
-            )
-            .is_none()
-        );
+        assert!(exclusion_reason(
+            Platform::Aws,
+            DeploymentModel::Push,
+            Binding::ArtifactRegistry,
+            TestApp::ComprehensiveRust
+        )
+        .is_none());
+        assert!(exclusion_reason(
+            Platform::Aws,
+            DeploymentModel::Push,
+            Binding::ServiceAccount,
+            TestApp::ComprehensiveRust
+        )
+        .is_none());
         // Local service account remains excluded regardless of app.
-        assert!(
-            exclusion_reason(
-                Platform::Local,
-                DeploymentModel::Pull,
-                Binding::ServiceAccount,
-                TestApp::ComprehensiveRust
-            )
-            .is_some()
-        );
+        assert!(exclusion_reason(
+            Platform::Local,
+            DeploymentModel::Pull,
+            Binding::ServiceAccount,
+            TestApp::ComprehensiveRust
+        )
+        .is_some());
     }
 }
 

@@ -1,6 +1,7 @@
 pub mod bindings;
 pub mod commands;
 pub mod lifecycle;
+pub mod routing;
 pub mod runner;
 
 /// Define a test-context wrapper struct that runs `e2e::setup()` on setup

@@ -69,3 +69,28 @@ async fn pull_local_comprehensive_ts(ctx: &mut LocalPullTypeScript) {
         .await
         .expect("command checks failed");
 }
+
+// ---------------------------------------------------------------------------
+// Local: target-scoped command routing (Worker + Daemon, overlapping names)
+// ---------------------------------------------------------------------------
+//
+// One deployment, TWO command-capable resources that both register `status`:
+// Worker `api` (push) and Daemon `indexer-daemon` (pull receiver, runtime-less
+// under direct supervision). Also covers the Local Daemon direct entrypoint:
+// the daemon process must come up, lease its own commands (and only its own),
+// and use in-process bindings.
+
+e2e_test_context!(
+    LocalPullCommandRouting,
+    Platform::Local,
+    DeploymentModel::Pull,
+    TestApp::CommandRoutingTs
+);
+
+#[test_context(LocalPullCommandRouting)]
+#[tokio::test]
+async fn pull_local_command_routing_ts(ctx: &mut LocalPullCommandRouting) {
+    common::routing::check_command_routing(&ctx.ctx.deployment)
+        .await
+        .expect("command routing checks failed");
+}

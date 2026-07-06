@@ -40,6 +40,12 @@ async fn check_distribution_deployment(ctx: &mut alien_test::TestContext) {
                 panic!("full-stack microservices checks failed: {error:#}");
             }
         }
+        TestApp::CommandRoutingTs => {
+            if let Err(error) = common::routing::check_command_routing(&ctx.deployment).await {
+                dump_kubernetes_debug(ctx, &error).await;
+                panic!("command routing checks failed: {error:#}");
+            }
+        }
     }
 }
 
@@ -224,7 +230,9 @@ async fn check_full_stack_microservices(ctx: &mut alien_test::TestContext) -> an
             && job_status == Some("processed")
             && artifact_key.is_some()
         {
-            return Ok(());
+            // The queue-driven pipeline worked; now prove the worker
+            // Container's pull-receiver command handler runs too.
+            return check_full_stack_worker_commands(ctx, issue_id).await;
         }
 
         last_issue = Some(issue);
@@ -237,6 +245,51 @@ async fn check_full_stack_microservices(ctx: &mut alien_test::TestContext) -> an
             .map(|value| value.to_string())
             .unwrap_or_else(|| "<none>".to_string())
     ))
+}
+
+/// Invoke the full-stack `worker` Container's pull-receiver command.
+///
+/// `reprocess` is registered by services/worker via `createCommandReceiver()`
+/// — a Container leasing its own commands over outbound HTTPS, with no
+/// runtime in front of it. The response fields are produced inside that
+/// handler, so a valid response proves the receiver executed the user code.
+///
+/// The deployment has exactly ONE command-capable resource, so both the
+/// explicit target and the untargeted single-target-inference form must
+/// reach the same handler.
+async fn check_full_stack_worker_commands(
+    ctx: &alien_test::TestContext,
+    issue_id: &str,
+) -> anyhow::Result<()> {
+    let targeted = ctx
+        .deployment
+        .invoke_command_on_target(
+            "worker",
+            "reprocess",
+            serde_json::json!({ "issueId": issue_id }),
+        )
+        .await
+        .map_err(|e| anyhow!("reprocess → worker invocation failed: {e}"))?;
+    if targeted.get("requeued").and_then(Value::as_bool) != Some(true)
+        || targeted.get("issueId").and_then(Value::as_str) != Some(issue_id)
+    {
+        return Err(anyhow!(
+            "targeted reprocess did not run the worker receiver handler: {targeted:?}"
+        ));
+    }
+
+    let inferred = ctx
+        .deployment
+        .invoke_command("reprocess", serde_json::json!({ "issueId": issue_id }))
+        .await
+        .map_err(|e| anyhow!("untargeted reprocess (single-target inference) failed: {e}"))?;
+    if inferred.get("requeued").and_then(Value::as_bool) != Some(true) {
+        return Err(anyhow!(
+            "inferred-target reprocess did not run the worker receiver handler: {inferred:?}"
+        ));
+    }
+
+    Ok(())
 }
 
 async fn dump_kubernetes_debug(ctx: &alien_test::TestContext, error: &anyhow::Error) {

@@ -79,3 +79,58 @@ pub async fn test_queue(
         success: true,
     }))
 }
+
+#[derive(serde::Serialize, serde::Deserialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
+#[serde(rename_all = "camelCase")]
+pub struct QueueSendRequest {
+    /// Unique marker embedded in the payload so the test can find the exact
+    /// message record the queue-trigger handler wrote to KV.
+    pub marker: String,
+}
+
+#[cfg_attr(feature = "openapi", utoipa::path(
+    post,
+    path = "/queue-send/{binding_name}",
+    tag = "queue",
+    params(("binding_name" = String, Path, description = "Queue binding name")),
+    responses(
+        (status = 200, description = "Message enqueued", body = QueueTestResponse),
+        (status = 400, description = "Binding not found", body = AlienError),
+        (status = 500, description = "Queue operation failed", body = AlienError),
+    ),
+    operation_id = "send_queue_message",
+    summary = "Enqueue a message without consuming it",
+    description = "Send-only: the platform queue trigger is the only consumer, so delivery proves the trigger invoked the app's on_queue_message handler"
+))]
+#[cfg_attr(not(feature = "openapi"), allow(unused))]
+pub async fn send_queue_message(
+    State(app_state): State<AppState>,
+    Path(binding_name): Path<String>,
+    Json(request): Json<QueueSendRequest>,
+) -> Result<Json<QueueTestResponse>> {
+    info!(%binding_name, marker = %request.marker, "Received queue send-only request");
+
+    let queue = app_state
+        .ctx
+        .get_bindings()
+        .load_queue(&binding_name)
+        .await
+        .context(ErrorData::BindingNotFound {
+            binding_name: binding_name.clone(),
+        })?;
+
+    let payload = MessagePayload::Json(serde_json::json!({ "marker": request.marker }));
+    queue
+        .send(&binding_name, payload)
+        .await
+        .into_alien_error()
+        .context(ErrorData::QueueOperationFailed {
+            operation: "Failed to send trigger test message".to_string(),
+        })?;
+
+    Ok(Json(QueueTestResponse {
+        binding_name,
+        success: true,
+    }))
+}

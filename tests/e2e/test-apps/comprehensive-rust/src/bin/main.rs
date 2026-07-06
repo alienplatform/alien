@@ -378,6 +378,10 @@ fn build_router(app_state: AppState) -> Router {
             post(handlers::storage::test_storage),
         )
         .route(
+            "/storage-write/{binding_name}",
+            post(handlers::storage::write_storage_object),
+        )
+        .route(
             "/build-test/{binding_name}",
             post(handlers::build::test_build),
         )
@@ -389,6 +393,10 @@ fn build_router(app_state: AppState) -> Router {
         .route(
             "/queue-test/{binding_name}",
             post(handlers::queue::test_queue),
+        )
+        .route(
+            "/queue-send/{binding_name}",
+            post(handlers::queue::send_queue_message),
         )
         .route(
             "/vault-test/{binding_name}",
