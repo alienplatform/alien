@@ -387,6 +387,26 @@ pub fn container_runtime_environment_contract(
         .add_current_container_binding(container_id)
 }
 
+pub fn daemon_runtime_environment_plan(platform: Platform) -> Vec<RuntimeEnvironmentEntry> {
+    // Daemons run runtime-less under direct supervision (ALIEN-226): they receive
+    // the standard platform-identity vars only. Unlike Containers they carry no
+    // self-binding var (`ALIEN_CURRENT_CONTAINER_BINDING_NAME`), and unlike
+    // Workers no transport var — the old `ALIEN_TRANSPORT=passthrough` signal is
+    // retired (ALIEN-222). Command-enabled Daemons get their pull-receiver config
+    // (`ALIEN_COMMANDS_*`) injected per-resource by the manager/operator
+    // controllers, not from this static plan.
+    standard_runtime_environment_plan(platform)
+}
+
+pub fn daemon_runtime_environment_contract(
+    platform: Platform,
+    links: &[ResourceRef],
+) -> RuntimeEnvironmentPlan {
+    RuntimeEnvironmentPlan::new()
+        .add_scalar_entries(daemon_runtime_environment_plan(platform))
+        .add_linked_bindings(links)
+}
+
 pub fn render_runtime_environment_entries<R>(
     entries: impl IntoIterator<Item = RuntimeEnvironmentEntry>,
     renderer: &R,
@@ -681,6 +701,42 @@ mod tests {
                     .iter()
                     .any(|entry| entry.name == ENV_ALIEN_CURRENT_CONTAINER_BINDING_NAME),
                 "container plan for {platform:?} must still declare the binding-name var"
+            );
+        }
+    }
+
+    #[test]
+    fn daemon_environment_is_standard_identity_only() {
+        // ALIEN-226/222: Daemons run runtime-less under direct supervision. Their
+        // env plan is the standard platform-identity set — no transport var, no
+        // self-binding var. Receiver config is injected per-resource, not here.
+        for platform in [
+            Platform::Local,
+            Platform::Kubernetes,
+            Platform::Aws,
+            Platform::Gcp,
+            Platform::Azure,
+            Platform::Test,
+        ] {
+            let entries = daemon_runtime_environment_plan(platform);
+            assert!(
+                !entries
+                    .iter()
+                    .any(|entry| entry.name == ENV_ALIEN_TRANSPORT),
+                "daemon plan for {platform:?} must not set ALIEN_TRANSPORT"
+            );
+            assert!(
+                !entries
+                    .iter()
+                    .any(|entry| entry.name == ENV_ALIEN_CURRENT_CONTAINER_BINDING_NAME),
+                "daemon plan for {platform:?} must not set the container self-binding var"
+            );
+            // The standard deployment-type identity var is always present.
+            assert!(
+                entries
+                    .iter()
+                    .any(|entry| entry.name == ENV_ALIEN_DEPLOYMENT_TYPE),
+                "daemon plan for {platform:?} must declare ALIEN_DEPLOYMENT_TYPE"
             );
         }
     }

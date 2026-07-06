@@ -540,7 +540,7 @@ impl KubernetesDaemonController {
         };
 
         let env_builder = EnvironmentVariableBuilder::try_new(&config.environment)?
-            .add_standard_alien_env_vars(ctx)?
+            .add_daemon_runtime_env_vars(ctx)?
             .add_linked_resources(&config.links, ctx, &config.id)
             .await?;
 

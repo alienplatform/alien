@@ -2,7 +2,7 @@ use crate::core::{state_utils::StackResourceStateExt, ResourceControllerContext}
 use crate::error::{ErrorData, Result};
 use alien_core::{
     bindings::serialize_binding_as_env_var, container_runtime_environment_contract,
-    kubernetes_base_platform_runtime_environment_plan,
+    daemon_runtime_environment_contract, kubernetes_base_platform_runtime_environment_plan,
     passthrough_transport_runtime_environment_plan, public_url_host,
     render_runtime_environment_entries, render_runtime_environment_plan,
     standard_runtime_environment_plan, validate_prepared_runtime_environment_map,
@@ -314,6 +314,36 @@ impl EnvironmentVariableBuilder {
         Ok(self)
     }
 
+    /// Add the complete scalar runtime environment for a Daemon.
+    ///
+    /// Daemons run runtime-less under direct supervision (ALIEN-226): the
+    /// contract is the standard platform-identity set only — no transport var,
+    /// no self-binding var. Command-enabled Daemons receive their pull-receiver
+    /// config (`ALIEN_COMMANDS_*`) per-resource through `config.environment`,
+    /// not from this plan.
+    pub fn add_daemon_runtime_env_vars(
+        mut self,
+        ctx: &ResourceControllerContext<'_>,
+    ) -> Result<Self> {
+        let renderer = ControllerRuntimeEnvironmentRenderer {
+            ctx,
+            current_container_id: None,
+            current_worker_id: None,
+        };
+        let plan = daemon_runtime_environment_contract(ctx.platform, &[]);
+        for (name, value) in render_runtime_environment_plan(&plan, &renderer).map_err(|error| {
+            AlienError::new(ErrorData::ResourceConfigInvalid {
+                message: error.to_string(),
+                resource_id: None,
+            })
+        })? {
+            self.env_vars.insert(name, value);
+        }
+        self.add_kubernetes_base_platform_env_vars(ctx, &renderer)?;
+
+        Ok(self)
+    }
+
     fn add_kubernetes_base_platform_env_vars(
         &mut self,
         ctx: &ResourceControllerContext<'_>,
@@ -578,6 +608,58 @@ mod tests {
         assert_eq!(env_vars.len(), 1);
         assert_eq!(env_vars.get("FOO"), Some(&"bar".to_string()));
         assert_eq!(bindings.len(), 0);
+    }
+
+    /// Executable form of the ALIEN-229 Done-when grep: neither the Container
+    /// nor the Daemon compute env plan may inject any retired worker/binding env
+    /// var on any platform. Fails loudly if a forbidden name reappears in either
+    /// static plan (the controller manifest tests guard the rendered manifests).
+    #[test]
+    fn forbidden_env_absent_from_container_and_daemon_plans() {
+        use alien_core::{
+            container_runtime_environment_plan, daemon_runtime_environment_plan, Platform,
+            ENV_ALIEN_COMMANDS_POLLING_ENABLED, ENV_ALIEN_COMMANDS_POLLING_INTERVAL_SECS,
+            ENV_ALIEN_COMMANDS_POLLING_URL,
+        };
+
+        // Retired worker-runtime / lazy-binding signals. Command-capable
+        // Container/Daemon receivers use the `ALIEN_COMMANDS_*` contract instead;
+        // none of these may leak into a compute env plan. The `*_POLLING_*`
+        // trio is the Worker-only polling transport contract (see
+        // alien-worker-runtime's `CommandsPolling`) and must never appear on
+        // the pull-based Container/Daemon receiver plans either.
+        const FORBIDDEN: &[&str] = &[
+            "ALIEN_TRANSPORT",
+            "ALIEN_WORKER_GRPC_ADDRESS",
+            "ALIEN_BINDINGS_MODE",
+            "ALIEN_BINDINGS_GRPC_ADDRESS",
+            "ALIEN_BINDINGS_ADDRESS",
+            "ALIEN_SECRETS",
+            ENV_ALIEN_COMMANDS_POLLING_ENABLED,
+            ENV_ALIEN_COMMANDS_POLLING_URL,
+            ENV_ALIEN_COMMANDS_POLLING_INTERVAL_SECS,
+        ];
+
+        for platform in [
+            Platform::Local,
+            Platform::Kubernetes,
+            Platform::Aws,
+            Platform::Gcp,
+            Platform::Azure,
+            Platform::Test,
+        ] {
+            for (label, entries) in [
+                ("container", container_runtime_environment_plan(platform)),
+                ("daemon", daemon_runtime_environment_plan(platform)),
+            ] {
+                for forbidden in FORBIDDEN {
+                    assert!(
+                        !entries.iter().any(|entry| entry.name == *forbidden),
+                        "{label} plan for {platform:?} must not inject forbidden env var {forbidden}"
+                    );
+                }
+            }
+        }
     }
 
     #[test]

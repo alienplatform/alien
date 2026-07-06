@@ -118,7 +118,7 @@ impl LocalDaemonController {
         info!(daemon_id = %config.id, "Starting daemon runtime");
 
         let mut env_builder = EnvironmentVariableBuilder::try_new(&config.environment)?
-            .add_standard_alien_env_vars(ctx)?
+            .add_daemon_runtime_env_vars(ctx)?
             .add_current_resource_public_endpoint(ctx, &config.id)?
             .add_linked_resources(&config.links, ctx, &config.id)
             .await?;

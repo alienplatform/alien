@@ -320,7 +320,7 @@ impl Receiver {
                 Ok(leases) => {
                     for lease in leases {
                         let handler = self.handlers.get(&lease.envelope.command).cloned();
-                        in_flight.spawn(process_lease(handler, lease));
+                        in_flight.spawn(process_lease(handler, lease, self.target.clone()));
                     }
                 }
                 Err(e) => {
@@ -444,18 +444,35 @@ fn command_budget(
     deadline.map_or(lease_expires_at, |d| d.min(lease_expires_at))
 }
 
+/// Handler-status label for a produced response: `"success"` for a success
+/// response, otherwise the error code (`UNKNOWN_COMMAND` / `HANDLER_ERROR` /
+/// `HANDLER_TIMEOUT` / a params-decode code). Twin of the TypeScript
+/// receiver's `commandResponseStatus`.
+fn command_response_status(response: &CommandResponse) -> &str {
+    match response {
+        CommandResponse::Success { .. } => "success",
+        CommandResponse::Error { code, .. } => code,
+    }
+}
+
 /// Process one leased command end to end: execute (or reject) it and submit
 /// the response through the envelope's response-handling flow.
-async fn process_lease(handler: Option<BoxedHandler>, lease: LeaseInfo) {
+///
+/// Emits one structured `Command processed` observability event carrying the
+/// pinned receiver fields — command id, lease id, target resource id/type,
+/// attempt, deadline, handler status, submit-response status. The TypeScript
+/// twin (`processLease`) logs the same field set.
+async fn process_lease(handler: Option<BoxedHandler>, lease: LeaseInfo, target: CommandTarget) {
     let LeaseInfo {
+        lease_id,
         lease_expires_at,
         command_id,
         attempt,
         envelope,
-        ..
     } = lease;
+    let deadline = envelope.deadline;
 
-    info!(
+    debug!(
         command_id = %command_id,
         command = %envelope.command,
         attempt = attempt,
@@ -463,18 +480,32 @@ async fn process_lease(handler: Option<BoxedHandler>, lease: LeaseInfo) {
     );
 
     let response = execute_lease(handler, &envelope, lease_expires_at, attempt).await;
-    let outcome = if response.is_success() {
-        "success"
-    } else {
-        "error"
+    let handler_status = command_response_status(&response).to_string();
+
+    let submit_status = match submit_response(&envelope, response).await {
+        Ok(()) => "submitted",
+        Err(e) => {
+            error!(
+                command_id = %command_id,
+                lease_id = %lease_id,
+                error = %e,
+                "Failed to submit command response"
+            );
+            "failed"
+        }
     };
 
-    if let Err(e) = submit_response(&envelope, response).await {
-        error!(command_id = %command_id, error = %e, "Failed to submit command response");
-        return;
-    }
-
-    debug!(command_id = %command_id, outcome = outcome, "Command response submitted");
+    info!(
+        command_id = %command_id,
+        lease_id = %lease_id,
+        target_resource_id = %target.resource_id,
+        target_resource_type = %target.resource_type.as_str(),
+        attempt = attempt,
+        deadline = deadline.map(|d| d.to_rfc3339()),
+        handler_status = %handler_status,
+        submit_status = %submit_status,
+        "Command processed"
+    );
 }
 
 /// Execute a leased command under its budget and produce the response to
@@ -744,6 +775,197 @@ mod tests {
             .input_json::<serde_json::Value>()
             .expect_err("invalid JSON must fail");
         assert_eq!(err.code, "SERIALIZATION_FAILED");
+    }
+
+    #[test]
+    fn command_response_status_labels_success_and_error_codes() {
+        assert_eq!(
+            command_response_status(&CommandResponse::success(b"{}")),
+            "success"
+        );
+        assert_eq!(
+            command_response_status(&CommandResponse::error(ERROR_CODE_UNKNOWN_COMMAND, "x")),
+            ERROR_CODE_UNKNOWN_COMMAND
+        );
+        assert_eq!(
+            command_response_status(&CommandResponse::error(ERROR_CODE_HANDLER_ERROR, "boom")),
+            ERROR_CODE_HANDLER_ERROR
+        );
+        assert_eq!(
+            command_response_status(&CommandResponse::error(ERROR_CODE_HANDLER_TIMEOUT, "late")),
+            ERROR_CODE_HANDLER_TIMEOUT
+        );
+    }
+
+    #[tokio::test]
+    async fn process_lease_emits_command_processed_with_pinned_fields() {
+        use std::io::Write;
+        use tracing_subscriber::fmt::MakeWriter;
+
+        #[derive(Clone)]
+        struct BufWriter(Arc<std::sync::Mutex<Vec<u8>>>);
+        impl Write for BufWriter {
+            fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+                self.0.lock().expect("lock").extend_from_slice(buf);
+                Ok(buf.len())
+            }
+            fn flush(&mut self) -> std::io::Result<()> {
+                Ok(())
+            }
+        }
+        impl<'a> MakeWriter<'a> for BufWriter {
+            type Writer = BufWriter;
+            fn make_writer(&'a self) -> Self::Writer {
+                self.clone()
+            }
+        }
+
+        // Submit target is an unroutable local port: the submit fails fast
+        // (connection refused, no DNS, offline) so `submit_status` is "failed"
+        // while the completion event still fires with every pinned field.
+        let deadline = Utc::now() + ChronoDuration::seconds(30);
+        let mut envelope = test_envelope("echo", Some(deadline));
+        envelope.response_handling.submit_response_url =
+            "http://127.0.0.1:1/v1/commands/cmd_1/response".to_string();
+        let lease = LeaseInfo {
+            lease_id: "lease_obs".to_string(),
+            lease_expires_at: Utc::now() + ChronoDuration::seconds(60),
+            command_id: envelope.command_id.clone(),
+            attempt: 2,
+            envelope,
+        };
+        let handler =
+            box_handler(|_ctx: Context| async move { Ok(serde_json::json!({ "ok": true })) });
+        let target = CommandTarget::new("agent", CommandTargetType::Daemon);
+
+        let buf = Arc::new(std::sync::Mutex::new(Vec::<u8>::new()));
+        let subscriber = tracing_subscriber::fmt()
+            .with_writer(BufWriter(buf.clone()))
+            .with_ansi(false)
+            .finish();
+        {
+            let _guard = tracing::subscriber::set_default(subscriber);
+            process_lease(Some(handler), lease, target).await;
+        }
+
+        let logs = String::from_utf8(buf.lock().expect("lock").clone()).expect("utf8");
+        assert!(logs.contains("Command processed"), "logs: {logs}");
+        assert!(logs.contains("command_id"), "command id field: {logs}");
+        assert!(logs.contains("lease_obs"), "lease id value: {logs}");
+        assert!(
+            logs.contains("target_resource_id"),
+            "target id field: {logs}"
+        );
+        // Wire value (lowercase, TS twin's `"daemon"`), not Rust Debug's `Daemon`.
+        assert!(
+            logs.contains("target_resource_type=daemon"),
+            "target type must render the wire value, not Debug: {logs}"
+        );
+        assert!(
+            !logs.contains("target_resource_type=Daemon"),
+            "target type must not render Debug's capitalized variant: {logs}"
+        );
+        assert!(logs.contains("attempt=2"), "attempt value: {logs}");
+        // ISO-8601 string (TS twin's bare `deadline.toISOString()`-equivalent),
+        // not Debug's `Some(2026-...)`.
+        let expected_deadline = format!("deadline=\"{}\"", deadline.to_rfc3339());
+        assert!(
+            logs.contains(&expected_deadline),
+            "deadline must render as a bare ISO-8601 string, got: {logs}"
+        );
+        assert!(
+            !logs.contains("deadline=Some"),
+            "deadline must not render Debug's Some(..) wrapper: {logs}"
+        );
+        assert!(
+            logs.contains("handler_status=success"),
+            "handler status: {logs}"
+        );
+        assert!(
+            logs.contains("submit_status=failed"),
+            "submit status: {logs}"
+        );
+    }
+
+    #[tokio::test]
+    async fn process_lease_emits_command_processed_for_handler_error() {
+        use std::io::Write;
+        use tracing_subscriber::fmt::MakeWriter;
+
+        #[derive(Clone)]
+        struct BufWriter(Arc<std::sync::Mutex<Vec<u8>>>);
+        impl Write for BufWriter {
+            fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+                self.0.lock().expect("lock").extend_from_slice(buf);
+                Ok(buf.len())
+            }
+            fn flush(&mut self) -> std::io::Result<()> {
+                Ok(())
+            }
+        }
+        impl<'a> MakeWriter<'a> for BufWriter {
+            type Writer = BufWriter;
+            fn make_writer(&'a self) -> Self::Writer {
+                self.clone()
+            }
+        }
+
+        // Submit target is an unroutable local port (same trick as the
+        // success-path test above): the submit fails fast so this test stays
+        // deterministic and network-free.
+        //
+        // No deadline on the envelope: the completion event's `deadline` field
+        // must be entirely absent (tracing's `Option<T>: Value` skips `None`),
+        // matching the TS twin's bare-string-or-`null` semantics for the
+        // no-deadline case.
+        let mut envelope = test_envelope("burn", None);
+        envelope.target = CommandTarget::new("worker-1", CommandTargetType::Container);
+        envelope.response_handling.submit_response_url =
+            "http://127.0.0.1:1/v1/commands/cmd_1/response".to_string();
+        let lease = LeaseInfo {
+            lease_id: "lease_err".to_string(),
+            lease_expires_at: Utc::now() + ChronoDuration::seconds(60),
+            command_id: envelope.command_id.clone(),
+            attempt: 1,
+            envelope,
+        };
+        let handler = box_handler(|_ctx: Context| async move {
+            Err::<serde_json::Value, HandlerError>("database on fire".into())
+        });
+        let target = CommandTarget::new("worker-1", CommandTargetType::Container);
+
+        let buf = Arc::new(std::sync::Mutex::new(Vec::<u8>::new()));
+        let subscriber = tracing_subscriber::fmt()
+            .with_writer(BufWriter(buf.clone()))
+            .with_ansi(false)
+            .finish();
+        {
+            let _guard = tracing::subscriber::set_default(subscriber);
+            process_lease(Some(handler), lease, target).await;
+        }
+
+        let logs = String::from_utf8(buf.lock().expect("lock").clone()).expect("utf8");
+        assert!(logs.contains("Command processed"), "logs: {logs}");
+        assert!(
+            logs.contains("target_resource_type=container"),
+            "target type must render the wire value: {logs}"
+        );
+        assert!(
+            logs.contains(&format!("handler_status={ERROR_CODE_HANDLER_ERROR}")),
+            "handler status must be the non-success error code: {logs}"
+        );
+        assert!(
+            !logs.contains("handler_status=success"),
+            "handler status must not be success: {logs}"
+        );
+        assert!(
+            logs.contains("submit_status=failed"),
+            "submit status: {logs}"
+        );
+        assert!(
+            !logs.contains("deadline="),
+            "absent deadline must not appear as a field at all: {logs}"
+        );
     }
 
     #[tokio::test]

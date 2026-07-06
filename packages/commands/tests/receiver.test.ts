@@ -7,7 +7,7 @@
  */
 
 import { AlienError } from "@alienplatform/core"
-import { afterEach, describe, expect, it } from "vitest"
+import { afterEach, describe, expect, it, vi } from "vitest"
 import type { CommandResponse, Envelope, LeaseInfo } from "../src/protocol.js"
 import { createCommandReceiver } from "../src/receiver.js"
 import type { CommandContext } from "../src/receiver.js"
@@ -256,6 +256,45 @@ describe("CommandReceiver.run", () => {
     expect(body.status).toBe("error")
     expect(body.code).toBe("UNKNOWN_COMMAND")
     expect(body.message).toContain("nobody-home")
+  })
+
+  it("emits a structured 'Command processed' log with the pinned observability fields", async () => {
+    const infoSpy = vi.spyOn(console, "info").mockImplementation(() => {})
+    try {
+      server = await openServer()
+      const env = envelope({ baseUrl: server.baseUrl, attempt: 2 })
+      const serve = leaseOnce([lease(env, { leaseId: "lease_obs", attempt: 2 })])
+      route = req => serve(req) ?? { status: 200 }
+
+      const r = createCommandReceiver({
+        env: { ...FULL_ENV, ALIEN_COMMANDS_URL: `${server.baseUrl}/v1/` },
+        pollIntervalMs: 5,
+      })
+      r.handle("echo", () => ({ ok: true }))
+      receiverStop = () => r.stop()
+      running = r.run()
+
+      await waitFor(() => submitBody("cmd_1") !== undefined)
+      // The completion log fires after submit, inside processLease; give the
+      // microtask a beat to flush before asserting.
+      await waitFor(() => infoSpy.mock.calls.some(c => String(c[0]).includes("Command processed")))
+      r.stop()
+      await running
+
+      const line = infoSpy.mock.calls
+        .map(c => String(c[0]))
+        .find(l => l.includes("Command processed"))
+      expect(line).toBeDefined()
+      expect(line).toContain('"commandId":"cmd_1"')
+      expect(line).toContain('"leaseId":"lease_obs"')
+      expect(line).toContain('"targetResourceId":"agent"')
+      expect(line).toContain('"targetResourceType":"daemon"')
+      expect(line).toContain('"attempt":2')
+      expect(line).toContain('"handlerStatus":"success"')
+      expect(line).toContain('"submitStatus":"submitted"')
+    } finally {
+      infoSpy.mockRestore()
+    }
   })
 
   it("maps a throwing handler to HANDLER_ERROR", async () => {

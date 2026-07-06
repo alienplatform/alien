@@ -113,3 +113,4 @@ tokio = { workspace = true, features = ["full"], optional = true }
 tokio = { workspace = true, features = ["full", "test-util"] }
 tokio-test = "0.4"
 temp-env = { workspace = true }
+tracing-subscriber = { workspace = true }

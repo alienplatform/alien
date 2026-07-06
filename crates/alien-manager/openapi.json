@@ -1675,6 +1675,41 @@
           }
         }
       },
+      "AwsClientConfig": {
+        "type": "object",
+        "description": "AWS client configuration",
+        "required": [
+          "accountId",
+          "region",
+          "credentials"
+        ],
+        "properties": {
+          "accountId": {
+            "type": "string",
+            "description": "The AWS Account ID."
+          },
+          "credentials": {
+            "$ref": "#/components/schemas/AwsCredentials",
+            "description": "AWS authentication credentials."
+          },
+          "region": {
+            "type": "string",
+            "description": "The AWS region."
+          },
+          "serviceOverrides": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/AwsServiceOverrides",
+                "description": "Service endpoint overrides for testing"
+              }
+            ]
+          }
+        },
+        "additionalProperties": false
+      },
       "AwsCodeBuildHeartbeatData": {
         "type": "object",
         "required": [
@@ -1868,6 +1903,140 @@
             "$ref": "#/components/schemas/ComputeClusterHeartbeatStatus"
           }
         }
+      },
+      "AwsCredentials": {
+        "oneOf": [
+          {
+            "type": "object",
+            "description": "Static direct access keys.",
+            "required": [
+              "access_key_id",
+              "secret_access_key",
+              "type"
+            ],
+            "properties": {
+              "access_key_id": {
+                "type": "string",
+                "description": "AWS Access Key ID"
+              },
+              "secret_access_key": {
+                "type": "string",
+                "description": "AWS Secret Access Key"
+              },
+              "session_token": {
+                "type": [
+                  "string",
+                  "null"
+                ],
+                "description": "Optional AWS Session Token"
+              },
+              "type": {
+                "type": "string",
+                "enum": [
+                  "accessKeys"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "description": "Temporary AWS session credentials with an expiration time.",
+            "required": [
+              "access_key_id",
+              "secret_access_key",
+              "session_token",
+              "expires_at",
+              "type"
+            ],
+            "properties": {
+              "access_key_id": {
+                "type": "string",
+                "description": "AWS Access Key ID"
+              },
+              "expires_at": {
+                "type": "string",
+                "description": "Credential expiration as an RFC3339 timestamp"
+              },
+              "secret_access_key": {
+                "type": "string",
+                "description": "AWS Secret Access Key"
+              },
+              "session_token": {
+                "type": "string",
+                "description": "AWS Session Token"
+              },
+              "type": {
+                "type": "string",
+                "enum": [
+                  "sessionCredentials"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "description": "AWS Instance Metadata Service credentials.",
+            "required": [
+              "type"
+            ],
+            "properties": {
+              "endpoint": {
+                "type": [
+                  "string",
+                  "null"
+                ],
+                "description": "Optional IMDS endpoint override"
+              },
+              "type": {
+                "type": "string",
+                "enum": [
+                  "imds"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "description": "AWS profile credentials loaded via the AWS CLI.",
+            "required": [
+              "name",
+              "type"
+            ],
+            "properties": {
+              "name": {
+                "type": "string",
+                "description": "AWS profile name"
+              },
+              "type": {
+                "type": "string",
+                "enum": [
+                  "profile"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "description": "Web Identity Token for OIDC authentication",
+            "required": [
+              "config",
+              "type"
+            ],
+            "properties": {
+              "config": {
+                "$ref": "#/components/schemas/AwsWebIdentityConfig",
+                "description": "Web identity configuration"
+              },
+              "type": {
+                "type": "string",
+                "enum": [
+                  "webIdentity"
+                ]
+              }
+            }
+          }
+        ],
+        "description": "Supported AWS authentication methods"
       },
       "AwsCustomCertificateConfig": {
         "type": "object",
@@ -2691,6 +2860,26 @@
           }
         }
       },
+      "AwsServiceOverrides": {
+        "type": "object",
+        "description": "Service endpoint overrides for testing AWS services",
+        "required": [
+          "endpoints"
+        ],
+        "properties": {
+          "endpoints": {
+            "type": "object",
+            "description": "Override endpoints for specific AWS services\nKey is the service name (e.g., \"lambda\", \"s3\"), value is the base URL",
+            "additionalProperties": {
+              "type": "string"
+            },
+            "propertyNames": {
+              "type": "string"
+            }
+          }
+        },
+        "additionalProperties": false
+      },
       "AwsSqsQueueHeartbeatData": {
         "type": "object",
         "required": [
@@ -2932,6 +3121,40 @@
           }
         }
       },
+      "AwsWebIdentityConfig": {
+        "type": "object",
+        "description": "Configuration for AWS Web Identity Token authentication",
+        "required": [
+          "roleArn",
+          "webIdentityTokenFile"
+        ],
+        "properties": {
+          "durationSeconds": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32",
+            "description": "Optional duration for the assumed role credentials (in seconds)"
+          },
+          "roleArn": {
+            "type": "string",
+            "description": "The ARN of the role to assume"
+          },
+          "sessionName": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Optional session name for the assumed role session"
+          },
+          "webIdentityTokenFile": {
+            "type": "string",
+            "description": "The path to the web identity token file"
+          }
+        },
+        "additionalProperties": false
+      },
       "AzureBlobStorageHeartbeatData": {
         "type": "object",
         "required": [
@@ -3114,6 +3337,48 @@
             ]
           }
         }
+      },
+      "AzureClientConfig": {
+        "type": "object",
+        "description": "Azure client configuration",
+        "required": [
+          "subscriptionId",
+          "tenantId",
+          "credentials"
+        ],
+        "properties": {
+          "credentials": {
+            "$ref": "#/components/schemas/AzureCredentials",
+            "description": "Azure authentication credentials."
+          },
+          "region": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Azure region for resources."
+          },
+          "serviceOverrides": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/AzureServiceOverrides",
+                "description": "Service endpoint overrides for testing"
+              }
+            ]
+          },
+          "subscriptionId": {
+            "type": "string",
+            "description": "The Azure Subscription ID where resources will be deployed."
+          },
+          "tenantId": {
+            "type": "string",
+            "description": "The customer's Azure Tenant ID."
+          }
+        },
+        "additionalProperties": false
       },
       "AzureComputeClusterHeartbeatData": {
         "type": "object",
@@ -3591,6 +3856,148 @@
             "type": "string"
           }
         }
+      },
+      "AzureCredentials": {
+        "oneOf": [
+          {
+            "type": "object",
+            "description": "Service principal with client secret",
+            "required": [
+              "client_id",
+              "client_secret",
+              "type"
+            ],
+            "properties": {
+              "client_id": {
+                "type": "string",
+                "description": "The client ID (application ID)"
+              },
+              "client_secret": {
+                "type": "string",
+                "description": "The client secret"
+              },
+              "type": {
+                "type": "string",
+                "enum": [
+                  "servicePrincipal"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "description": "Direct access token",
+            "required": [
+              "token",
+              "type"
+            ],
+            "properties": {
+              "token": {
+                "type": "string",
+                "description": "The bearer token to use for authentication"
+              },
+              "type": {
+                "type": "string",
+                "enum": [
+                  "accessToken"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "description": "Azure VM IMDS managed identity.",
+            "required": [
+              "client_id",
+              "type"
+            ],
+            "properties": {
+              "client_id": {
+                "type": "string",
+                "description": "The client ID of the user-assigned managed identity"
+              },
+              "identity_endpoint": {
+                "type": [
+                  "string",
+                  "null"
+                ],
+                "description": "Optional IMDS endpoint override"
+              },
+              "type": {
+                "type": "string",
+                "enum": [
+                  "vmManagedIdentity"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "description": "Azure AD Workload Identity (federated identity)",
+            "required": [
+              "client_id",
+              "tenant_id",
+              "federated_token_file",
+              "authority_host",
+              "type"
+            ],
+            "properties": {
+              "authority_host": {
+                "type": "string",
+                "description": "The authority host URL"
+              },
+              "client_id": {
+                "type": "string",
+                "description": "The client ID of the managed identity or application"
+              },
+              "federated_token_file": {
+                "type": "string",
+                "description": "Path to the federated token file"
+              },
+              "tenant_id": {
+                "type": "string",
+                "description": "The tenant ID for authentication"
+              },
+              "type": {
+                "type": "string",
+                "enum": [
+                  "workloadIdentity"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "description": "Azure Managed Identity (Container Apps / App Service)\nUses IDENTITY_ENDPOINT + IDENTITY_HEADER injected by the platform",
+            "required": [
+              "client_id",
+              "identity_endpoint",
+              "identity_header",
+              "type"
+            ],
+            "properties": {
+              "client_id": {
+                "type": "string",
+                "description": "The client ID of the user-assigned managed identity"
+              },
+              "identity_endpoint": {
+                "type": "string",
+                "description": "The identity endpoint URL (from IDENTITY_ENDPOINT env var)"
+              },
+              "identity_header": {
+                "type": "string",
+                "description": "The identity header secret (from IDENTITY_HEADER env var)"
+              },
+              "type": {
+                "type": "string",
+                "enum": [
+                  "managedIdentity"
+                ]
+              }
+            }
+          }
+        ],
+        "description": "Represents Azure authentication credentials"
       },
       "AzureCustomCertificateConfig": {
         "type": "object",
@@ -4446,6 +4853,26 @@
           }
         }
       },
+      "AzureServiceOverrides": {
+        "type": "object",
+        "description": "Service endpoint overrides for testing Azure services",
+        "required": [
+          "endpoints"
+        ],
+        "properties": {
+          "endpoints": {
+            "type": "object",
+            "description": "Override endpoints for specific Azure services\nKey is the service name (e.g., \"management\", \"storage\", \"containerApps\"), value is the base URL",
+            "additionalProperties": {
+              "type": "string"
+            },
+            "propertyNames": {
+              "type": "string"
+            }
+          }
+        },
+        "additionalProperties": false
+      },
       "AzureStorageAccountEndpoints": {
         "type": "object",
         "properties": {
@@ -5016,6 +5443,136 @@
             "type": "boolean"
           }
         }
+      },
+      "ClientConfig": {
+        "oneOf": [
+          {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/AwsClientConfig"
+              },
+              {
+                "type": "object",
+                "required": [
+                  "platform"
+                ],
+                "properties": {
+                  "platform": {
+                    "type": "string",
+                    "enum": [
+                      "aws"
+                    ]
+                  }
+                }
+              }
+            ]
+          },
+          {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/GcpClientConfig"
+              },
+              {
+                "type": "object",
+                "required": [
+                  "platform"
+                ],
+                "properties": {
+                  "platform": {
+                    "type": "string",
+                    "enum": [
+                      "gcp"
+                    ]
+                  }
+                }
+              }
+            ]
+          },
+          {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/AzureClientConfig"
+              },
+              {
+                "type": "object",
+                "required": [
+                  "platform"
+                ],
+                "properties": {
+                  "platform": {
+                    "type": "string",
+                    "enum": [
+                      "azure"
+                    ]
+                  }
+                }
+              }
+            ]
+          },
+          {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/KubernetesClientConfig"
+              },
+              {
+                "type": "object",
+                "required": [
+                  "platform"
+                ],
+                "properties": {
+                  "platform": {
+                    "type": "string",
+                    "enum": [
+                      "kubernetes"
+                    ]
+                  }
+                }
+              }
+            ]
+          },
+          {
+            "type": "object",
+            "required": [
+              "kubernetes",
+              "cloud",
+              "platform"
+            ],
+            "properties": {
+              "cloud": {
+                "type": "object"
+              },
+              "kubernetes": {
+                "$ref": "#/components/schemas/KubernetesClientConfig"
+              },
+              "platform": {
+                "type": "string",
+                "enum": [
+                  "kubernetesCloud"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "required": [
+              "state_directory",
+              "platform"
+            ],
+            "properties": {
+              "platform": {
+                "type": "string",
+                "enum": [
+                  "local"
+                ]
+              },
+              "state_directory": {
+                "type": "string",
+                "description": "State directory for local resources and deployment state"
+              }
+            }
+          }
+        ],
+        "description": "Configuration for different cloud platform clients"
       },
       "CommandPayloadResponse": {
         "type": "object",
@@ -6569,6 +7126,48 @@
           }
         }
       },
+      "GcpClientConfig": {
+        "type": "object",
+        "description": "GCP client configuration",
+        "required": [
+          "projectId",
+          "region",
+          "credentials"
+        ],
+        "properties": {
+          "credentials": {
+            "$ref": "#/components/schemas/GcpCredentials",
+            "description": "GCP authentication credentials."
+          },
+          "projectId": {
+            "type": "string",
+            "description": "The GCP Project ID."
+          },
+          "projectNumber": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The GCP project number (numeric). Resolved at runtime via Resource Manager API.\nUsed in IAM condition expressions where resource.name uses project number."
+          },
+          "region": {
+            "type": "string",
+            "description": "The GCP region for resources."
+          },
+          "serviceOverrides": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/GcpServiceOverrides",
+                "description": "Service endpoint overrides for testing"
+              }
+            ]
+          }
+        },
+        "additionalProperties": false
+      },
       "GcpCloudBuildHeartbeatData": {
         "type": "object",
         "required": [
@@ -6909,6 +7508,186 @@
           }
         }
       },
+      "GcpCredentials": {
+        "oneOf": [
+          {
+            "type": "object",
+            "description": "Use an already-minted OAuth2 access token.",
+            "required": [
+              "token",
+              "type"
+            ],
+            "properties": {
+              "token": {
+                "type": "string"
+              },
+              "type": {
+                "type": "string",
+                "enum": [
+                  "accessToken"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "description": "Use a refreshable service account impersonation source.",
+            "required": [
+              "source",
+              "config",
+              "type"
+            ],
+            "properties": {
+              "config": {
+                "$ref": "#/components/schemas/GcpImpersonationConfig",
+                "description": "Service account impersonation request."
+              },
+              "source": {
+                "type": "object",
+                "description": "Source configuration used to call IAMCredentials."
+              },
+              "type": {
+                "type": "string",
+                "enum": [
+                  "impersonatedServiceAccount"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "description": "Use a full Service Account JSON key (as string). A short-lived JWT will\nbe created and exchanged for a bearer token automatically.",
+            "required": [
+              "json",
+              "type"
+            ],
+            "properties": {
+              "json": {
+                "type": "string"
+              },
+              "type": {
+                "type": "string",
+                "enum": [
+                  "serviceAccountKey"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "description": "Use GCP metadata server for authentication (for instances running on GCP)",
+            "required": [
+              "type"
+            ],
+            "properties": {
+              "type": {
+                "type": "string",
+                "enum": [
+                  "serviceMetadata"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "description": "Use projected service account token (for Kubernetes workload identity)",
+            "required": [
+              "token_file",
+              "service_account_email",
+              "type"
+            ],
+            "properties": {
+              "service_account_email": {
+                "type": "string",
+                "description": "Service account email"
+              },
+              "token_file": {
+                "type": "string",
+                "description": "Path to the projected service account token"
+              },
+              "type": {
+                "type": "string",
+                "enum": [
+                  "projectedServiceAccount"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "description": "Use an external account credential configuration.",
+            "required": [
+              "audience",
+              "subject_token_type",
+              "token_url",
+              "credential_source_file",
+              "type"
+            ],
+            "properties": {
+              "audience": {
+                "type": "string",
+                "description": "Workload identity audience."
+              },
+              "credential_source_file": {
+                "type": "string",
+                "description": "Path to the subject token file."
+              },
+              "service_account_impersonation_url": {
+                "type": [
+                  "string",
+                  "null"
+                ],
+                "description": "Optional service account impersonation URL."
+              },
+              "subject_token_type": {
+                "type": "string",
+                "description": "Subject token type for STS token exchange."
+              },
+              "token_url": {
+                "type": "string",
+                "description": "STS token exchange URL."
+              },
+              "type": {
+                "type": "string",
+                "enum": [
+                  "externalAccount"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "description": "Use gcloud Application Default Credentials (authorized_user).\nExchanges refresh_token for an access_token via Google's OAuth2 endpoint.",
+            "required": [
+              "client_id",
+              "client_secret",
+              "refresh_token",
+              "type"
+            ],
+            "properties": {
+              "client_id": {
+                "type": "string",
+                "description": "OAuth2 client ID"
+              },
+              "client_secret": {
+                "type": "string",
+                "description": "OAuth2 client secret"
+              },
+              "refresh_token": {
+                "type": "string",
+                "description": "OAuth2 refresh token"
+              },
+              "type": {
+                "type": "string",
+                "enum": [
+                  "authorizedUser"
+                ]
+              }
+            }
+          }
+        ],
+        "description": "Authentication options for talking to GCP APIs."
+      },
       "GcpCustomCertificateConfig": {
         "type": "object",
         "required": [
@@ -7110,6 +7889,59 @@
             ]
           }
         }
+      },
+      "GcpImpersonationConfig": {
+        "type": "object",
+        "description": "Configuration for GCP service account impersonation",
+        "required": [
+          "serviceAccountEmail",
+          "scopes"
+        ],
+        "properties": {
+          "delegates": {
+            "type": [
+              "array",
+              "null"
+            ],
+            "items": {
+              "type": "string"
+            },
+            "description": "Optional sequence of service accounts in a delegation chain"
+          },
+          "lifetime": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Optional desired lifetime duration of the access token (max 3600s)"
+          },
+          "scopes": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "The OAuth 2.0 scopes that define the access token's permissions"
+          },
+          "serviceAccountEmail": {
+            "type": "string",
+            "description": "The email of the service account to impersonate"
+          },
+          "targetProjectId": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Optional target project ID override. When provided, the impersonated config\nuses this project ID instead of inheriting the caller's project."
+          },
+          "targetRegion": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Optional target region override. When provided, the impersonated config\nuses this region instead of inheriting the caller's region."
+          }
+        },
+        "additionalProperties": false
       },
       "GcpManagementConfig": {
         "type": "object",
@@ -7494,6 +8326,26 @@
             ]
           }
         }
+      },
+      "GcpServiceOverrides": {
+        "type": "object",
+        "description": "Service endpoint overrides for testing GCP services",
+        "required": [
+          "endpoints"
+        ],
+        "properties": {
+          "endpoints": {
+            "type": "object",
+            "description": "Override endpoints for specific GCP services\nKey is the service name (e.g., \"cloudrun\", \"storage\"), value is the base URL",
+            "additionalProperties": {
+              "type": "string"
+            },
+            "propertyNames": {
+              "type": "string"
+            }
+          }
+        },
+        "additionalProperties": false
       },
       "GcpServiceUsageActivationHeartbeatData": {
         "type": "object",
@@ -8112,6 +8964,196 @@
           }
         ],
         "description": "Certificate publication or reference mode for Kubernetes public endpoints."
+      },
+      "KubernetesClientConfig": {
+        "oneOf": [
+          {
+            "type": "object",
+            "description": "Use in-cluster configuration (service account tokens, etc.)",
+            "required": [
+              "mode"
+            ],
+            "properties": {
+              "additional_headers": {
+                "type": [
+                  "object",
+                  "null"
+                ],
+                "description": "Additional headers to include in requests",
+                "additionalProperties": {
+                  "type": "string"
+                },
+                "propertyNames": {
+                  "type": "string"
+                }
+              },
+              "mode": {
+                "type": "string",
+                "enum": [
+                  "inCluster"
+                ]
+              },
+              "namespace": {
+                "type": [
+                  "string",
+                  "null"
+                ],
+                "description": "The namespace to operate in"
+              }
+            }
+          },
+          {
+            "type": "object",
+            "description": "Use kubeconfig file for configuration",
+            "required": [
+              "mode"
+            ],
+            "properties": {
+              "additional_headers": {
+                "type": [
+                  "object",
+                  "null"
+                ],
+                "description": "Additional headers to include in requests",
+                "additionalProperties": {
+                  "type": "string"
+                },
+                "propertyNames": {
+                  "type": "string"
+                }
+              },
+              "cluster": {
+                "type": [
+                  "string",
+                  "null"
+                ],
+                "description": "Cluster name to use (optional, defaults to context's cluster)"
+              },
+              "context": {
+                "type": [
+                  "string",
+                  "null"
+                ],
+                "description": "Context name to use (optional, defaults to current-context)"
+              },
+              "kubeconfig_path": {
+                "type": [
+                  "string",
+                  "null"
+                ],
+                "description": "Path to kubeconfig file (optional, defaults to standard locations)"
+              },
+              "mode": {
+                "type": "string",
+                "enum": [
+                  "kubeconfig"
+                ]
+              },
+              "namespace": {
+                "type": [
+                  "string",
+                  "null"
+                ],
+                "description": "The namespace to operate in"
+              },
+              "user": {
+                "type": [
+                  "string",
+                  "null"
+                ],
+                "description": "User name to use (optional, defaults to context's user)"
+              }
+            }
+          },
+          {
+            "type": "object",
+            "description": "Manual configuration with explicit values",
+            "required": [
+              "server_url",
+              "additional_headers",
+              "mode"
+            ],
+            "properties": {
+              "additional_headers": {
+                "type": "object",
+                "description": "Additional headers to include in requests",
+                "additionalProperties": {
+                  "type": "string"
+                },
+                "propertyNames": {
+                  "type": "string"
+                }
+              },
+              "certificate_authority_data": {
+                "type": [
+                  "string",
+                  "null"
+                ],
+                "description": "The cluster certificate authority data (base64 encoded)"
+              },
+              "client_certificate_data": {
+                "type": [
+                  "string",
+                  "null"
+                ],
+                "description": "Client certificate data (base64 encoded) for mutual TLS"
+              },
+              "client_key_data": {
+                "type": [
+                  "string",
+                  "null"
+                ],
+                "description": "Client key data (base64 encoded) for mutual TLS"
+              },
+              "insecure_skip_tls_verify": {
+                "type": [
+                  "boolean",
+                  "null"
+                ],
+                "description": "Skip TLS verification (insecure)"
+              },
+              "mode": {
+                "type": "string",
+                "enum": [
+                  "manual"
+                ]
+              },
+              "namespace": {
+                "type": [
+                  "string",
+                  "null"
+                ],
+                "description": "The namespace to operate in"
+              },
+              "password": {
+                "type": [
+                  "string",
+                  "null"
+                ],
+                "description": "Password for basic authentication"
+              },
+              "server_url": {
+                "type": "string",
+                "description": "The Kubernetes cluster server URL"
+              },
+              "token": {
+                "type": [
+                  "string",
+                  "null"
+                ],
+                "description": "Bearer token for authentication"
+              },
+              "username": {
+                "type": [
+                  "string",
+                  "null"
+                ],
+                "description": "Username for basic authentication"
+              }
+            }
+          }
+        ],
+        "description": "Configuration mode for Kubernetes access"
       },
       "KubernetesCloudReference": {
         "type": "object",
@@ -12006,7 +13048,9 @@
           "clientConfig"
         ],
         "properties": {
-          "clientConfig": {}
+          "clientConfig": {
+            "$ref": "#/components/schemas/ClientConfig"
+          }
         }
       },
       "ResourceEntry": {

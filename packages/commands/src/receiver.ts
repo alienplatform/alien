@@ -317,12 +317,28 @@ class PullCommandReceiver implements CommandReceiver {
    */
   private async processLease(lease: LeaseInfo): Promise<void> {
     const response = await this.executeLease(lease)
+    const handlerStatus = commandResponseStatus(response)
+    let submitStatus: SubmitStatus = "submitted"
     try {
       await this.submitResponse(lease.envelope, response)
     } catch (error) {
       // No ack: the lease will expire and the command is redelivered.
+      submitStatus = "failed"
       logError(`Failed to submit response for command '${lease.commandId}'`, error)
     }
+
+    // One structured observability line per command, carrying the pinned
+    // receiver fields. Twin of the Rust receiver's `Command processed` event.
+    logCommandProcessed({
+      commandId: lease.commandId,
+      leaseId: lease.leaseId,
+      targetResourceId: this.config.resourceId,
+      targetResourceType: this.config.resourceType,
+      attempt: lease.attempt,
+      deadline: lease.envelope.deadline ?? null,
+      handlerStatus,
+      submitStatus,
+    })
   }
 
   /**
@@ -704,6 +720,35 @@ function decodeInlineParamsBase64(inlineBase64: string): Uint8Array {
 
 function bytesToBase64(bytes: Uint8Array): string {
   return Buffer.from(bytes).toString("base64")
+}
+
+/** Submit-response outcome label for the `Command processed` observability line. */
+type SubmitStatus = "submitted" | "failed"
+
+/**
+ * Handler-status label for a produced response: `"success"` for a success
+ * response, otherwise the error code (`UNKNOWN_COMMAND` / `HANDLER_ERROR` /
+ * `HANDLER_TIMEOUT` / a params-decode code). Twin of the Rust receiver's
+ * `command_response_status`.
+ */
+function commandResponseStatus(response: CommandResponse): string {
+  return response.status === "success" ? "success" : response.code
+}
+
+/** The pinned per-command observability fields (twin of the Rust event). */
+interface CommandProcessedFields {
+  commandId: string
+  leaseId: string
+  targetResourceId: string
+  targetResourceType: CommandTargetType
+  attempt: number
+  deadline: string | null
+  handlerStatus: string
+  submitStatus: SubmitStatus
+}
+
+function logCommandProcessed(fields: CommandProcessedFields): void {
+  console.info(`[command-receiver] Command processed ${JSON.stringify(fields)}`)
 }
 
 function logWarn(message: string, error: unknown): void {
