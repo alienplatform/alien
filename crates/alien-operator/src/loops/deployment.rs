@@ -87,9 +87,15 @@ impl DeploymentLoopTransport for OperatorTransport {
 
         let enriched_config = match config {
             Some(config) => Some(
-                enrich_config(config, &self.operator_config, self.platform, &self.db, stack)
-                    .await
-                    .map_err(|e| e.into_generic())?,
+                enrich_config(
+                    config,
+                    &self.operator_config,
+                    self.platform,
+                    &self.db,
+                    stack,
+                )
+                .await
+                .map_err(|e| e.into_generic())?,
             ),
             None => None,
         };
@@ -346,7 +352,7 @@ async fn enrich_config(
             // receiving POLLING_ENABLED=true would crash at startup (the
             // runtime fail-fast-requires the target id once polling is on) and
             // would otherwise run a pointless polling loop. Container/Daemon
-            // receiver env is separate, not-yet-landed work.
+            // receiver env is wired separately, below.
             //
             // SECURITY: The sync token is reused as the commands polling token.
             // This means deployed application code has access to the operator's sync token.
@@ -355,10 +361,16 @@ async fn enrich_config(
             // See: security/04-CRITICAL-sync-token-reused-as-commands-token.md
             if let Some(stack) = stack {
                 vars.extend(
-                    stack.worker_command_polling_env_vars(
-                        &commands_url,
-                        Some(&sync_config.token),
-                    ),
+                    stack.worker_command_polling_env_vars(&commands_url, Some(&sync_config.token)),
+                );
+                // Container/Daemon command receiver env (ALIEN_COMMANDS_URL/TOKEN/
+                // TARGET_RESOURCE_ID/TARGET_RESOURCE_TYPE), scoped per resource.
+                // Container/Daemon always deliver via Pull (ALIEN-219); the operator
+                // only ever manages K8s/Local, so this block already covers every
+                // platform it serves. Reuses the operator sync token, matching the
+                // worker polling token handling above (same security TODO applies).
+                vars.extend(
+                    stack.receiver_command_env_vars(&commands_url, Some(&sync_config.token)),
                 );
             }
 
@@ -604,15 +616,9 @@ mod tests {
             .add(worker_off, alien_core::ResourceLifecycle::Live)
             .build();
 
-        let enriched = enrich_config(
-            config,
-            &operator_config,
-            Platform::Local,
-            &db,
-            Some(&stack),
-        )
-        .await
-        .unwrap();
+        let enriched = enrich_config(config, &operator_config, Platform::Local, &db, Some(&stack))
+            .await
+            .unwrap();
 
         let polling_var_names = [
             alien_core::ENV_ALIEN_COMMANDS_POLLING_ENABLED,
@@ -642,8 +648,7 @@ mod tests {
                 .collect();
             assert_eq!(scoped.len(), 4, "expected quartet for {worker_id}");
             assert!(scoped.iter().any(|var| {
-                var.name == alien_core::ENV_ALIEN_COMMANDS_POLLING_ENABLED
-                    && var.value == "true"
+                var.name == alien_core::ENV_ALIEN_COMMANDS_POLLING_ENABLED && var.value == "true"
             }));
             assert!(scoped
                 .iter()
@@ -654,6 +659,106 @@ mod tests {
             assert!(scoped.iter().any(|var| {
                 var.name == alien_core::ENV_ALIEN_COMMANDS_TARGET_RESOURCE_ID
                     && var.value == worker_id
+            }));
+        }
+    }
+
+    #[tokio::test]
+    async fn enrich_config_scopes_receiver_env_per_command_enabled_container_and_daemon() {
+        let temp_dir = tempfile::tempdir().unwrap();
+        let encryption_key = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
+        let db = OperatorDb::new(temp_dir.path().to_str().unwrap(), encryption_key)
+            .await
+            .unwrap();
+        db.set_deployment_id("dep_local").await.unwrap();
+
+        let config = test_deployment_config();
+        let operator_config = OperatorConfig::builder()
+            .platform(Platform::Local)
+            .agent_name("local-runner")
+            .maybe_sync(Some(SyncConfig {
+                url: "https://manager.example.com".parse().unwrap(),
+                token: "ax_dep_test".to_string(),
+            }))
+            .encryption_key(encryption_key)
+            .build();
+
+        let container = alien_core::Container::new("container-a".to_string())
+            .code(alien_core::ContainerCode::Image {
+                image: "container:latest".to_string(),
+            })
+            .cpu(alien_core::ResourceSpec {
+                min: "0.5".to_string(),
+                desired: "1".to_string(),
+            })
+            .memory(alien_core::ResourceSpec {
+                min: "512Mi".to_string(),
+                desired: "1Gi".to_string(),
+            })
+            .port(8080)
+            .permissions("container-execution".to_string())
+            .commands_enabled(true)
+            .build();
+        let daemon = alien_core::Daemon::new("daemon-b".to_string())
+            .code(alien_core::DaemonCode::Image {
+                image: "daemon:latest".to_string(),
+            })
+            .permissions("daemon-execution".to_string())
+            .commands_enabled(true)
+            .build();
+        let stack = alien_core::Stack::new("operator-receiver-stack".to_string())
+            .add(container, alien_core::ResourceLifecycle::Live)
+            .add(daemon, alien_core::ResourceLifecycle::Live)
+            .build();
+
+        let enriched = enrich_config(config, &operator_config, Platform::Local, &db, Some(&stack))
+            .await
+            .unwrap();
+
+        let receiver_names = [
+            alien_core::ENV_ALIEN_COMMANDS_URL,
+            alien_core::ENV_ALIEN_COMMANDS_TOKEN,
+            alien_core::ENV_ALIEN_COMMANDS_TARGET_RESOURCE_ID,
+            alien_core::ENV_ALIEN_COMMANDS_TARGET_RESOURCE_TYPE,
+        ];
+        let receiver_vars: Vec<_> = enriched
+            .environment_variables
+            .variables
+            .iter()
+            .filter(|var| receiver_names.contains(&var.name.as_str()))
+            .collect();
+
+        assert!(receiver_vars.iter().all(|var| {
+            var.target_resources == Some(vec!["container-a".to_string()])
+                || var.target_resources == Some(vec!["daemon-b".to_string()])
+        }));
+
+        for (resource_id, expected_type) in [("container-a", "container"), ("daemon-b", "daemon")] {
+            let scoped: Vec<_> = receiver_vars
+                .iter()
+                .filter(|var| var.target_resources == Some(vec![resource_id.to_string()]))
+                .collect();
+            assert_eq!(
+                scoped.len(),
+                4,
+                "expected 4 receiver vars for {resource_id}"
+            );
+            // Same commands URL the operator derives for polling: the sync URL
+            // (a parsed `Url`, hence trailing slash) with `/v1` appended.
+            assert!(scoped
+                .iter()
+                .any(|var| var.name == alien_core::ENV_ALIEN_COMMANDS_URL
+                    && var.value == "https://manager.example.com//v1"));
+            assert!(scoped.iter().any(|var| {
+                var.name == alien_core::ENV_ALIEN_COMMANDS_TOKEN && var.value == "ax_dep_test"
+            }));
+            assert!(scoped.iter().any(|var| {
+                var.name == alien_core::ENV_ALIEN_COMMANDS_TARGET_RESOURCE_TYPE
+                    && var.value == expected_type
+            }));
+            assert!(scoped.iter().any(|var| {
+                var.name == alien_core::ENV_ALIEN_COMMANDS_TARGET_RESOURCE_ID
+                    && var.value == resource_id
             }));
         }
     }

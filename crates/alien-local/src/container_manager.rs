@@ -11,7 +11,7 @@
 //! - Streams container logs to dev command
 
 use crate::error::{ErrorData, Result};
-use alien_core::ENV_ALIEN_COMMANDS_POLLING_URL;
+use alien_core::{ENV_ALIEN_COMMANDS_POLLING_URL, ENV_ALIEN_COMMANDS_URL};
 use alien_error::{AlienError, Context, IntoAlienError};
 use bollard::container::{
     Config, CreateContainerOptions, ListContainersOptions, LogOutput, LogsOptions,
@@ -31,6 +31,29 @@ use tracing::{debug, info, warn};
 
 /// Default Docker network name for Alien containers.
 const NETWORK_NAME: &str = "deployment-network";
+
+/// Alien-injected dev-server URLs whose `localhost` must be rewritten to
+/// `host.docker.internal` so a container running inside Docker can reach the
+/// host. User-provided env vars are left untouched (they may intentionally use
+/// localhost). Includes the command receiver base URL (`ALIEN_COMMANDS_URL`)
+/// alongside the worker polling URL — both point at the local manager.
+const DEV_SERVER_URL_VARS: &[&str] = &[
+    "OTEL_EXPORTER_OTLP_LOGS_ENDPOINT",
+    ENV_ALIEN_COMMANDS_POLLING_URL,
+    ENV_ALIEN_COMMANDS_URL,
+];
+
+/// Rewrite `://localhost:` to `://host.docker.internal:` for the known
+/// Alien-injected dev-server URL env vars only.
+fn rewrite_dev_server_localhost_urls(env_vars: &mut HashMap<String, String>) {
+    for key in DEV_SERVER_URL_VARS {
+        if let Some(value) = env_vars.get_mut(*key) {
+            if value.contains("http://localhost:") || value.contains("https://localhost:") {
+                *value = value.replace("://localhost:", "://host.docker.internal:");
+            }
+        }
+    }
+}
 
 /// Allocates a host port, preferring a saved port if available.
 ///
@@ -522,21 +545,7 @@ impl LocalContainerManager {
         // We also need to rewrite localhost URLs to host.docker.internal for built-in
         // dev server URLs since containers run inside Docker and can't reach host via localhost.
         let mut env_vars = config.env_vars.clone();
-
-        // Rewrite localhost URLs to host.docker.internal ONLY for known dev-server URLs
-        // Don't rewrite user-provided env vars (they might intentionally use localhost)
-        const DEV_SERVER_VARS: &[&str] = &[
-            "OTEL_EXPORTER_OTLP_LOGS_ENDPOINT",
-            ENV_ALIEN_COMMANDS_POLLING_URL,
-        ];
-
-        for key in DEV_SERVER_VARS {
-            if let Some(value) = env_vars.get_mut(*key) {
-                if value.contains("http://localhost:") || value.contains("https://localhost:") {
-                    *value = value.replace("://localhost:", "://host.docker.internal:");
-                }
-            }
-        }
+        rewrite_dev_server_localhost_urls(&mut env_vars);
 
         // Inject the current container binding so the container can discover its own URLs.
         {
@@ -1083,5 +1092,49 @@ impl LocalContainerManager {
         }
 
         Ok(metadata_list)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn rewrites_localhost_for_command_receiver_and_polling_urls() {
+        let mut env = HashMap::new();
+        env.insert(
+            ENV_ALIEN_COMMANDS_URL.to_string(),
+            "http://localhost:8080/v1".to_string(),
+        );
+        env.insert(
+            ENV_ALIEN_COMMANDS_POLLING_URL.to_string(),
+            "http://localhost:8080/v1".to_string(),
+        );
+        // A user var pointing at localhost must be left alone.
+        env.insert(
+            "USER_API_URL".to_string(),
+            "http://localhost:9000".to_string(),
+        );
+        // A non-localhost receiver URL must be left as-is.
+        env.insert(
+            "OTEL_EXPORTER_OTLP_LOGS_ENDPOINT".to_string(),
+            "https://otel.example.test/v1/logs".to_string(),
+        );
+
+        rewrite_dev_server_localhost_urls(&mut env);
+
+        assert_eq!(
+            env[ENV_ALIEN_COMMANDS_URL],
+            "http://host.docker.internal:8080/v1"
+        );
+        assert_eq!(
+            env[ENV_ALIEN_COMMANDS_POLLING_URL],
+            "http://host.docker.internal:8080/v1"
+        );
+        assert_eq!(env["USER_API_URL"], "http://localhost:9000");
+        assert_eq!(
+            env["OTEL_EXPORTER_OTLP_LOGS_ENDPOINT"],
+            "https://otel.example.test/v1/logs"
+        );
     }
 }

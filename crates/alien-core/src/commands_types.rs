@@ -280,6 +280,19 @@ pub enum CommandTargetType {
     Daemon,
 }
 
+impl CommandTargetType {
+    /// Returns the lowercase wire string for this target type
+    /// (`worker`/`container`/`daemon`), matching the serde representation and
+    /// the `ALIEN_COMMANDS_TARGET_RESOURCE_TYPE` receiver env contract.
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            CommandTargetType::Worker => "worker",
+            CommandTargetType::Container => "container",
+            CommandTargetType::Daemon => "daemon",
+        }
+    }
+}
+
 /// How a command is delivered to its target resource.
 ///
 /// This is a Commands-protocol-specific concept and is intentionally distinct
@@ -776,6 +789,13 @@ mod tests {
             serde_json::from_str::<CommandTargetType>("\"daemon\"").unwrap(),
             CommandTargetType::Daemon
         );
+    }
+
+    #[test]
+    fn test_command_target_type_as_str_matches_wire() {
+        assert_eq!(CommandTargetType::Worker.as_str(), "worker");
+        assert_eq!(CommandTargetType::Container.as_str(), "container");
+        assert_eq!(CommandTargetType::Daemon.as_str(), "daemon");
     }
 
     #[test]

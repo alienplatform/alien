@@ -149,8 +149,8 @@ impl Stack {
     /// run a pointless polling loop.
     ///
     /// Container/Daemon command targets are out of scope here: their commands
-    /// receiver env injection lands with the controller wiring (a separate,
-    /// not-yet-landed slice), so this only covers polling Workers.
+    /// receiver env injection is handled by [`Self::receiver_command_env_vars`]
+    /// below, so this only covers polling Workers.
     pub fn worker_command_polling_env_vars(
         &self,
         polling_url: &str,
@@ -185,6 +185,77 @@ impl Stack {
                         target_resources: scope.clone(),
                     });
                 }
+                vars.push(crate::EnvironmentVariable {
+                    name: crate::ENV_ALIEN_COMMANDS_TARGET_RESOURCE_ID.to_string(),
+                    value: target.resource_id,
+                    var_type: crate::EnvironmentVariableType::Plain,
+                    target_resources: scope,
+                });
+                vars
+            })
+            .collect()
+    }
+
+    /// Returns the command *receiver* environment variables for each
+    /// command-enabled Container and Daemon in this stack, scoped via
+    /// `target_resources` so every var reaches only its own resource.
+    ///
+    /// This is the receiver-side sibling of [`Self::worker_command_polling_env_vars`].
+    /// Workers *poll* (the quartet above); Containers and Daemons run the
+    /// pull *receiver*, which reads a fixed contract of vars (PACKAGE_LAYOUT
+    /// DECIDED(09), ALIEN-221/222):
+    ///   - `ALIEN_COMMANDS_URL` (Plain) — base receiver URL
+    ///   - `ALIEN_COMMANDS_TOKEN` (Secret, only if a token is present)
+    ///   - `ALIEN_COMMANDS_TARGET_RESOURCE_ID` (Plain) — this resource's id
+    ///   - `ALIEN_COMMANDS_TARGET_RESOURCE_TYPE` (Plain) — `container`/`daemon`
+    ///
+    /// `ALIEN_DEPLOYMENT_ID` is intentionally NOT emitted here: the manager and
+    /// operator already inject it deployment-wide (`target_resources: None`), so
+    /// it reaches every Container/Daemon via that path — re-scoping it per
+    /// resource would be redundant. This mirrors the worker helper, which also
+    /// relies on the deployment-wide `ALIEN_DEPLOYMENT_ID`.
+    ///
+    /// Workers are excluded here (they get the polling quartet instead), and a
+    /// commands-disabled Container/Daemon is never a `command_targets()` entry,
+    /// so it receives nothing — the receiver fail-fasts on a partial config, so
+    /// a deployment-wide flag would crash it at startup.
+    pub fn receiver_command_env_vars(
+        &self,
+        commands_url: &str,
+        commands_token: Option<&str>,
+    ) -> Vec<crate::EnvironmentVariable> {
+        use crate::commands_types::CommandTargetType;
+
+        self.command_targets()
+            .into_iter()
+            .filter(|target| {
+                matches!(
+                    target.resource_type,
+                    CommandTargetType::Container | CommandTargetType::Daemon
+                )
+            })
+            .flat_map(|target| {
+                let scope = Some(vec![target.resource_id.clone()]);
+                let mut vars = vec![crate::EnvironmentVariable {
+                    name: crate::ENV_ALIEN_COMMANDS_URL.to_string(),
+                    value: commands_url.to_string(),
+                    var_type: crate::EnvironmentVariableType::Plain,
+                    target_resources: scope.clone(),
+                }];
+                if let Some(token) = commands_token {
+                    vars.push(crate::EnvironmentVariable {
+                        name: crate::ENV_ALIEN_COMMANDS_TOKEN.to_string(),
+                        value: token.to_string(),
+                        var_type: crate::EnvironmentVariableType::Secret,
+                        target_resources: scope.clone(),
+                    });
+                }
+                vars.push(crate::EnvironmentVariable {
+                    name: crate::ENV_ALIEN_COMMANDS_TARGET_RESOURCE_TYPE.to_string(),
+                    value: target.resource_type.as_str().to_string(),
+                    var_type: crate::EnvironmentVariableType::Plain,
+                    target_resources: scope.clone(),
+                });
                 vars.push(crate::EnvironmentVariable {
                     name: crate::ENV_ALIEN_COMMANDS_TARGET_RESOURCE_ID.to_string(),
                     value: target.resource_id,
@@ -820,5 +891,169 @@ mod tests {
         assert!(!vars
             .iter()
             .any(|v| v.name == crate::ENV_ALIEN_COMMANDS_TOKEN));
+    }
+
+    #[test]
+    fn receiver_command_env_vars_scopes_contract_per_container_and_daemon() {
+        let container_a = Container::new("container-a".to_string())
+            .code(ContainerCode::Image {
+                image: "container:latest".to_string(),
+            })
+            .cpu(ResourceSpec {
+                min: "0.5".to_string(),
+                desired: "1".to_string(),
+            })
+            .memory(ResourceSpec {
+                min: "512Mi".to_string(),
+                desired: "1Gi".to_string(),
+            })
+            .port(8080)
+            .permissions("container-execution".to_string())
+            .commands_enabled(true)
+            .build();
+
+        let daemon_b = Daemon::new("daemon-b".to_string())
+            .code(DaemonCode::Image {
+                image: "daemon:latest".to_string(),
+            })
+            .permissions("daemon-execution".to_string())
+            .commands_enabled(true)
+            .build();
+
+        // Commands-DISABLED container: must receive NONE of the receiver vars.
+        let container_off = Container::new("container-off".to_string())
+            .code(ContainerCode::Image {
+                image: "container:latest".to_string(),
+            })
+            .cpu(ResourceSpec {
+                min: "0.5".to_string(),
+                desired: "1".to_string(),
+            })
+            .memory(ResourceSpec {
+                min: "512Mi".to_string(),
+                desired: "1Gi".to_string(),
+            })
+            .port(8080)
+            .permissions("container-execution".to_string())
+            .build();
+
+        // Commands-enabled Worker: gets the polling quartet, NOT the receiver
+        // contract — it must never be a receiver scope target.
+        let worker_enabled = Worker::new("worker-c".to_string())
+            .code(WorkerCode::Image {
+                image: "worker:latest".to_string(),
+            })
+            .permissions("execution".to_string())
+            .commands_enabled(true)
+            .build();
+
+        let stack = Stack::new("receiver-env-stack".to_string())
+            .add(container_a, ResourceLifecycle::Live)
+            .add(daemon_b, ResourceLifecycle::Live)
+            .add(container_off, ResourceLifecycle::Live)
+            .add(worker_enabled, ResourceLifecycle::Live)
+            .build();
+
+        let vars = stack.receiver_command_env_vars("https://cmd.example.test/v1", Some("tok"));
+
+        // Every var is scoped to exactly one command-enabled Container/Daemon —
+        // nothing is deployment-wide, and neither the disabled container nor the
+        // Worker is ever a scope target.
+        assert!(vars.iter().all(|v| {
+            v.target_resources == Some(vec!["container-a".to_string()])
+                || v.target_resources == Some(vec!["daemon-b".to_string()])
+        }));
+
+        // No polling vars and no ALIEN_DEPLOYMENT_ID leak in (deployment-wide).
+        assert!(!vars.iter().any(|v| {
+            v.name == crate::ENV_ALIEN_COMMANDS_POLLING_ENABLED
+                || v.name == crate::ENV_ALIEN_COMMANDS_POLLING_URL
+                || v.name == crate::ENV_ALIEN_DEPLOYMENT_ID
+        }));
+
+        for (resource_id, expected_type) in [("container-a", "container"), ("daemon-b", "daemon")] {
+            let scoped: Vec<_> = vars
+                .iter()
+                .filter(|v| v.target_resources == Some(vec![resource_id.to_string()]))
+                .collect();
+            assert_eq!(
+                scoped.len(),
+                4,
+                "expected 4 receiver vars for {resource_id}"
+            );
+            assert!(scoped.iter().any(|v| {
+                v.name == crate::ENV_ALIEN_COMMANDS_URL
+                    && v.value == "https://cmd.example.test/v1"
+                    && v.var_type == crate::EnvironmentVariableType::Plain
+            }));
+            assert!(scoped.iter().any(|v| {
+                v.name == crate::ENV_ALIEN_COMMANDS_TOKEN
+                    && v.value == "tok"
+                    && v.var_type == crate::EnvironmentVariableType::Secret
+            }));
+            assert!(scoped.iter().any(|v| {
+                v.name == crate::ENV_ALIEN_COMMANDS_TARGET_RESOURCE_ID && v.value == resource_id
+            }));
+            assert!(scoped.iter().any(|v| {
+                v.name == crate::ENV_ALIEN_COMMANDS_TARGET_RESOURCE_TYPE
+                    && v.value == expected_type
+                    && v.var_type == crate::EnvironmentVariableType::Plain
+            }));
+        }
+    }
+
+    #[test]
+    fn receiver_command_env_vars_omits_token_when_absent() {
+        let container = Container::new("container-a".to_string())
+            .code(ContainerCode::Image {
+                image: "container:latest".to_string(),
+            })
+            .cpu(ResourceSpec {
+                min: "0.5".to_string(),
+                desired: "1".to_string(),
+            })
+            .memory(ResourceSpec {
+                min: "512Mi".to_string(),
+                desired: "1Gi".to_string(),
+            })
+            .port(8080)
+            .permissions("container-execution".to_string())
+            .commands_enabled(true)
+            .build();
+
+        let stack = Stack::new("receiver-no-token-stack".to_string())
+            .add(container, ResourceLifecycle::Live)
+            .build();
+
+        let vars = stack.receiver_command_env_vars("https://cmd.example.test/v1", None);
+
+        assert_eq!(vars.len(), 3);
+        assert!(!vars
+            .iter()
+            .any(|v| v.name == crate::ENV_ALIEN_COMMANDS_TOKEN));
+        assert!(vars
+            .iter()
+            .any(|v| v.name == crate::ENV_ALIEN_COMMANDS_TARGET_RESOURCE_TYPE
+                && v.value == "container"));
+    }
+
+    #[test]
+    fn receiver_command_env_vars_empty_without_command_targets() {
+        let worker = Worker::new("worker-only".to_string())
+            .code(WorkerCode::Image {
+                image: "worker:latest".to_string(),
+            })
+            .permissions("execution".to_string())
+            .commands_enabled(true)
+            .build();
+
+        let stack = Stack::new("receiver-worker-only-stack".to_string())
+            .add(worker, ResourceLifecycle::Live)
+            .build();
+
+        // Only a Worker target exists → receiver helper yields nothing.
+        assert!(stack
+            .receiver_command_env_vars("https://cmd.example.test/v1", Some("tok"))
+            .is_empty());
     }
 }

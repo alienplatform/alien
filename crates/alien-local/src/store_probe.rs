@@ -100,9 +100,12 @@ mod tests {
             .await
             .expect("build db");
         let conn = db.connect().expect("connect");
-        conn.execute("CREATE TABLE meta (key TEXT PRIMARY KEY, value TEXT NOT NULL)", ())
-            .await
-            .expect("create meta");
+        conn.execute(
+            "CREATE TABLE meta (key TEXT PRIMARY KEY, value TEXT NOT NULL)",
+            (),
+        )
+        .await
+        .expect("create meta");
         if let Some(format) = format {
             conn.execute(
                 "INSERT INTO meta (key, value) VALUES ('format', ?1)",

@@ -116,9 +116,10 @@ impl LocalDaemonController {
             .add_linked_resources(&config.links, ctx, &config.id)
             .await?;
 
-        if config.commands_enabled {
-            env_builder = env_builder.add_passthrough_transport_env_vars();
-        }
+        // Command-enabled Daemons no longer get `ALIEN_TRANSPORT=passthrough`.
+        // Their receiver config (`ALIEN_COMMANDS_*`) is injected per-resource into
+        // `config.environment` by the manager/operator snapshot (ALIEN-222) and
+        // flows in through `EnvironmentVariableBuilder::try_new(&config.environment)`.
 
         if let Some(endpoint) = config.public_endpoints.first() {
             env_builder = env_builder.add_env_var("PORT".to_string(), endpoint.port.to_string());

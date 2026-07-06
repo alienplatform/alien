@@ -1830,6 +1830,54 @@ mod tests {
     }
 
     #[test]
+    fn command_receiver_token_flows_through_secret_plan_scoped_per_resource() {
+        // ALIEN-222: the receiver's `ALIEN_COMMANDS_TOKEN` is a Secret-kind env
+        // var scoped per Container/Daemon. `applicable_secret_environment_variables`
+        // is what drives `KubernetesEnvSecretPlan.keys` → each key rendered as a
+        // `secretKeyRef` in the container/daemon manifests. This asserts the token
+        // reaches exactly its own resource and never a sibling — the same
+        // machinery for both container and daemon controllers.
+        let vars = vec![
+            alien_core::EnvironmentVariable {
+                name: alien_core::ENV_ALIEN_COMMANDS_TOKEN.to_string(),
+                value: "tok-container".to_string(),
+                var_type: alien_core::EnvironmentVariableType::Secret,
+                target_resources: Some(vec!["api-container".to_string()]),
+            },
+            alien_core::EnvironmentVariable {
+                name: alien_core::ENV_ALIEN_COMMANDS_TOKEN.to_string(),
+                value: "tok-daemon".to_string(),
+                var_type: alien_core::EnvironmentVariableType::Secret,
+                target_resources: Some(vec!["log-daemon".to_string()]),
+            },
+            // Plain receiver vars must NOT be selected as secrets.
+            alien_core::EnvironmentVariable {
+                name: alien_core::ENV_ALIEN_COMMANDS_URL.to_string(),
+                value: "https://cmd.example.test/v1".to_string(),
+                var_type: alien_core::EnvironmentVariableType::Plain,
+                target_resources: Some(vec!["api-container".to_string()]),
+            },
+        ];
+
+        let container_secrets = applicable_secret_environment_variables("api-container", &vars);
+        assert_eq!(container_secrets.len(), 1);
+        assert_eq!(
+            container_secrets[0].name,
+            alien_core::ENV_ALIEN_COMMANDS_TOKEN
+        );
+        assert_eq!(container_secrets[0].value, "tok-container");
+
+        let daemon_secrets = applicable_secret_environment_variables("log-daemon", &vars);
+        assert_eq!(daemon_secrets.len(), 1);
+        assert_eq!(daemon_secrets[0].value, "tok-daemon");
+
+        // A resource with no scoped receiver token gets no secret keys — the
+        // commands_enabled=false / non-receiver case yields an empty plan.
+        let other = applicable_secret_environment_variables("worker-main", &vars);
+        assert!(other.is_empty());
+    }
+
+    #[test]
     fn internal_service_uses_declared_container_ports() {
         let config = Container::new("api".to_string())
             .code(ContainerCode::Image {

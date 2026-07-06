@@ -26,9 +26,9 @@ pub const ENV_ALIEN_COMMANDS_TARGET_RESOURCE_ID: &str = "ALIEN_COMMANDS_TARGET_R
 /// Base URL of the command server API an app-owned pull `Receiver`
 /// (Container/Daemon) leases commands from. Pinned by the receiver contract
 /// (ALIEN-221) — the TypeScript receiver reads the same variable. Missing or
-/// invalid values fail fast with `COMMAND_RECEIVER_CONFIG_INVALID`. Injection
-/// is wired by a later ALIEN-221 task; declared here so it's reserved from
-/// day one.
+/// invalid values fail fast with `COMMAND_RECEIVER_CONFIG_INVALID`. Injected
+/// by the manager and operator controllers, scoped per command-enabled
+/// resource.
 pub const ENV_ALIEN_COMMANDS_URL: &str = "ALIEN_COMMANDS_URL";
 /// Type of the command target a pull `Receiver` leases for (`container` |
 /// `daemon`). Lease requests require a typed target and a receiver must not
@@ -44,9 +44,9 @@ pub const ENV_ALIEN_COMMANDS_TARGET_RESOURCE_TYPE: &str = "ALIEN_COMMANDS_TARGET
 pub const ENV_ALIEN_MANAGER_URL: &str = "ALIEN_MANAGER_URL";
 /// Deployment bearer token the minting resolver presents to the manager. Carries
 /// the deployment's token value; kept distinct from [`ENV_ALIEN_COMMANDS_TOKEN`]
-/// (which is worker-command-polling scoped and only injected for command-enabled
-/// workers) so the Container/Daemon lazy-bindings path has a deployment-wide
-/// credential of its own.
+/// (which is command-polling/receiver scoped and injected for command-enabled
+/// Workers as well as Container/Daemon receivers) so the Container/Daemon
+/// lazy-bindings path has a deployment-wide credential of its own.
 pub const ENV_ALIEN_DEPLOYMENT_TOKEN: &str = "ALIEN_DEPLOYMENT_TOKEN";
 /// Service-account binding name the minting resolver asks the manager to mint
 /// credentials for (the deployment's own managed identity). Required by the mint
@@ -356,7 +356,10 @@ pub fn passthrough_transport_runtime_environment_plan() -> [RuntimeEnvironmentEn
 
 pub fn container_runtime_environment_plan(platform: Platform) -> Vec<RuntimeEnvironmentEntry> {
     let mut entries = standard_runtime_environment_plan(platform);
-    entries.extend(passthrough_transport_runtime_environment_plan());
+    // Containers no longer receive `ALIEN_TRANSPORT=passthrough`. Command-enabled
+    // Containers run the pull receiver, configured per-resource by the controllers
+    // via the `ALIEN_COMMANDS_*` receiver contract (ALIEN-222); the old passthrough
+    // transport signal is retired.
     entries.push(RuntimeEnvironmentEntry {
         name: ENV_ALIEN_CURRENT_CONTAINER_BINDING_NAME,
         value: RuntimeEnvironmentValue::CurrentContainerBindingName,
@@ -641,5 +644,48 @@ mod tests {
             entry.name == ENV_ALIEN_TRANSPORT
                 && entry.value == RuntimeEnvironmentValue::Literal("http")
         }));
+    }
+
+    #[test]
+    fn container_environment_no_longer_injects_passthrough_transport() {
+        // ALIEN-222: command-enabled Containers run the pull receiver
+        // (`ALIEN_COMMANDS_*`), so the old `ALIEN_TRANSPORT=passthrough` signal
+        // is retired from the container plan on every platform.
+        for platform in [
+            Platform::Local,
+            Platform::Kubernetes,
+            Platform::Aws,
+            Platform::Gcp,
+            Platform::Azure,
+            Platform::Test,
+        ] {
+            let entries = container_runtime_environment_plan(platform);
+            assert!(
+                !entries
+                    .iter()
+                    .any(|entry| entry.name == ENV_ALIEN_TRANSPORT),
+                "container plan for {platform:?} must not set ALIEN_TRANSPORT"
+            );
+            // The container binding-name var is still present.
+            assert!(
+                entries
+                    .iter()
+                    .any(|entry| entry.name == ENV_ALIEN_CURRENT_CONTAINER_BINDING_NAME),
+                "container plan for {platform:?} must still declare the binding-name var"
+            );
+        }
+    }
+
+    #[test]
+    fn worker_local_transport_still_uses_passthrough() {
+        // Guard against over-cutting: the Worker transport signal is a separate
+        // concern and must stay `passthrough` on Local/Test.
+        for platform in [Platform::Local, Platform::Test] {
+            let entries = worker_transport_runtime_environment_plan(platform);
+            assert!(entries.iter().any(|entry| {
+                entry.name == ENV_ALIEN_TRANSPORT
+                    && entry.value == RuntimeEnvironmentValue::Literal("passthrough")
+            }));
+        }
     }
 }

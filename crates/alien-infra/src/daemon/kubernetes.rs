@@ -3,7 +3,8 @@ use std::time::Duration;
 use tracing::{debug, info};
 
 use crate::core::{
-    kubernetes_branded_resource_labels, kubernetes_runtime_pod_labels, EnvironmentVariableBuilder,
+    kubernetes_branded_resource_labels, kubernetes_runtime_pod_labels,
+    reconcile_environment_secret, EnvironmentVariableBuilder, KubernetesEnvSecretPlan,
     ResourceControllerContext,
 };
 use crate::error::{ErrorData, Result};
@@ -14,7 +15,7 @@ use crate::kubernetes_workload_heartbeat::{
 use alien_client_core::ErrorData as CloudClientErrorData;
 use alien_core::{
     kubernetes_resource_name, kubernetes_service_account_name, Daemon, DaemonCode, DaemonOutputs,
-    ResourceOutputs, ResourceStatus,
+    ResourceOutputs, ResourceStatus, ENV_ALIEN_SECRETS,
 };
 use alien_error::{AlienError, Context, ContextError};
 use alien_macros::controller;
@@ -72,6 +73,15 @@ impl KubernetesDaemonController {
             .service_provider
             .get_kubernetes_deployment_client(kubernetes_config)
             .await?;
+
+        // Reconcile the per-resource env Secret (creates/updates `{daemon}-env`)
+        // for any Secret-kind env var scoped to this Daemon — notably the
+        // command receiver's `ALIEN_COMMANDS_TOKEN`. Matches the container path:
+        // each key is rendered as a `secretKeyRef` in the DaemonSet manifest.
+        let env_secret_plan =
+            reconcile_environment_secret("daemon", &config.id, &daemon_set_name, &namespace, ctx)
+                .await?;
+
         let daemonset = self
             .build_daemonset(
                 config,
@@ -79,6 +89,7 @@ impl KubernetesDaemonController {
                 &namespace,
                 &service_account_name,
                 image_pull_secret_name.as_deref(),
+                env_secret_plan.as_ref(),
                 ctx,
             )
             .await?;
@@ -236,6 +247,12 @@ impl KubernetesDaemonController {
             None
         };
 
+        // Reconcile the env Secret so token/secret changes propagate on update
+        // and the pod-template checksum annotation rolls the DaemonSet.
+        let env_secret_plan =
+            reconcile_environment_secret("daemon", &config.id, daemon_set_name, namespace, ctx)
+                .await?;
+
         let mut new_daemonset = self
             .build_daemonset(
                 config,
@@ -243,6 +260,7 @@ impl KubernetesDaemonController {
                 namespace,
                 &service_account_name,
                 image_pull_secret_name.as_deref(),
+                env_secret_plan.as_ref(),
                 ctx,
             )
             .await?;
@@ -473,6 +491,7 @@ impl KubernetesDaemonController {
         namespace: &str,
         service_account_name: &str,
         image_pull_secret_name: Option<&str>,
+        env_secret_plan: Option<&KubernetesEnvSecretPlan>,
         ctx: &ResourceControllerContext<'_>,
     ) -> Result<DaemonSet> {
         let selector_labels = self.build_labels(daemon_set_name);
@@ -487,18 +506,41 @@ impl KubernetesDaemonController {
             }
         };
 
-        let mut env_builder = EnvironmentVariableBuilder::try_new(&config.environment)?
+        let env_builder = EnvironmentVariableBuilder::try_new(&config.environment)?
             .add_standard_alien_env_vars(ctx)?
             .add_linked_resources(&config.links, ctx, &config.id)
             .await?;
 
-        if config.commands_enabled {
-            env_builder = env_builder.add_passthrough_transport_env_vars();
-        }
+        // Command-enabled Daemons no longer get `ALIEN_TRANSPORT=passthrough`.
+        // Their receiver config (`ALIEN_COMMANDS_*`) is injected per-resource into
+        // `config.environment` by the manager/operator snapshot (ALIEN-222); the
+        // `ALIEN_COMMANDS_TOKEN` Secret flows through the same ALIEN_SECRETS →
+        // secretKeyRef path as any other resource secret (handled below).
 
         let (env_map, bindings) = env_builder.build_with_bindings();
 
         let mut env_vars = Vec::new();
+
+        // Secret-kind env vars scoped to this Daemon (e.g. ALIEN_COMMANDS_TOKEN)
+        // are rendered as secretKeyRefs into the `{daemon}-env` Secret, mirroring
+        // the container controller.
+        if let Some(plan) = env_secret_plan {
+            for key in &plan.keys {
+                env_vars.push(EnvVar {
+                    name: key.clone(),
+                    value: None,
+                    value_from: Some(k8s_openapi::api::core::v1::EnvVarSource {
+                        secret_key_ref: Some(k8s_openapi::api::core::v1::SecretKeySelector {
+                            name: plan.secret_name.clone(),
+                            key: key.clone(),
+                            optional: Some(false),
+                        }),
+                        ..Default::default()
+                    }),
+                });
+            }
+        }
+
         for (binding_name, binding_json) in bindings {
             if let Ok(extraction) = crate::core::k8s_secret_bindings::extract_binding_secrets(
                 &binding_name,
@@ -532,6 +574,12 @@ impl KubernetesDaemonController {
         }
 
         for (key, value) in env_map {
+            // When an env Secret plan exists, the runtime reads its secrets from
+            // the mounted secretKeyRefs, so the ALIEN_SECRETS vault-load pointer is
+            // redundant and dropped (matches the container controller).
+            if key == ENV_ALIEN_SECRETS && env_secret_plan.is_some() {
+                continue;
+            }
             if !env_vars.iter().any(|ev| ev.name == key) {
                 env_vars.push(EnvVar {
                     name: key,
@@ -563,6 +611,11 @@ impl KubernetesDaemonController {
         };
 
         let pod_labels = kubernetes_runtime_pod_labels(ctx, labels.clone());
+        // Roll pods when the env Secret changes (e.g. token rotation) by stamping
+        // its checksum onto the pod template — matches the container controller.
+        let pod_annotations = env_secret_plan.map(|plan| {
+            BTreeMap::from([("env-secret-checksum".to_string(), plan.checksum.clone())])
+        });
 
         Ok(DaemonSet {
             metadata: ObjectMeta {
@@ -579,6 +632,7 @@ impl KubernetesDaemonController {
                 template: PodTemplateSpec {
                     metadata: Some(ObjectMeta {
                         labels: Some(pod_labels),
+                        annotations: pod_annotations,
                         ..Default::default()
                     }),
                     spec: Some(pod_spec),

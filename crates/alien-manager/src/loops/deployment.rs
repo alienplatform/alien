@@ -784,10 +784,11 @@ impl DeploymentLoop {
             target_resources: None,
         });
 
-        // 3. Commands configuration — only inject polling for K8s/Local.
+        // 3a. Worker command polling — only inject for K8s/Local.
         // Cloud workers (Lambda, Cloud Run, Container Apps) receive commands via
-        // platform-native push (InvokeFunction, Pub/Sub, Service Bus) — no polling needed,
-        // regardless of deployment model. K8s/Local run as containers that must poll.
+        // platform-native push (InvokeFunction, Pub/Sub, Service Bus) — no polling
+        // needed, regardless of deployment model. K8s/Local run as containers that
+        // must poll. This gate is WORKER-push-specific.
         let needs_polling = matches!(
             deployment.platform,
             alien_core::Platform::Kubernetes | alien_core::Platform::Local
@@ -801,6 +802,23 @@ impl DeploymentLoop {
                 deployment_stack,
             ));
         }
+
+        // 3b. Container/Daemon command receiver env — injected on EVERY platform.
+        // Unlike workers, Containers and Daemons always deliver commands via Pull
+        // (ALIEN-219 delivery rule: Container/Daemon → Pull regardless of platform),
+        // so the receiver contract must reach them everywhere, not just K8s/Local.
+        // The `needs_polling` gate above is deliberately NOT applied here: its
+        // justification (cloud *workers* use platform-native push) does not hold
+        // for Container/Daemon receivers. The snapshot reaches Container/Daemon env
+        // on any platform through the platform-independent per-resource dispatch in
+        // `alien-deployment::inject_into_environment` (Container/Daemon downcast).
+        // Empty when the stack declares no command-enabled Container/Daemon targets.
+        let commands_base = self.config.commands_base_url();
+        vars.extend(commands_receiver_env_vars(
+            commands_base,
+            deployment.deployment_token.as_deref(),
+            deployment_stack,
+        ));
 
         // 4. User-provided environment variables from the deployment record.
         if let Some(ref user_vars) = deployment.user_environment_variables {
@@ -852,8 +870,8 @@ impl DeploymentLoop {
 /// startup (the runtime fail-fast-requires the target id once polling is on)
 /// and would otherwise run a pointless polling loop. The commands token comes
 /// from the deployment record — the manager is the sole injector of
-/// `ALIEN_COMMANDS_TOKEN`. Container/Daemon receiver env is separate,
-/// not-yet-landed work.
+/// `ALIEN_COMMANDS_TOKEN`. Container/Daemon receiver env is wired separately,
+/// below.
 fn commands_polling_env_vars(
     commands_base_url: String,
     deployment_token: Option<&str>,
@@ -861,6 +879,24 @@ fn commands_polling_env_vars(
 ) -> Vec<EnvironmentVariable> {
     deployment_stack
         .map(|stack| stack.worker_command_polling_env_vars(&commands_base_url, deployment_token))
+        .unwrap_or_default()
+}
+
+/// Builds the command *receiver* environment variables (`ALIEN_COMMANDS_URL`,
+/// `ALIEN_COMMANDS_TOKEN`, `ALIEN_COMMANDS_TARGET_RESOURCE_ID`,
+/// `ALIEN_COMMANDS_TARGET_RESOURCE_TYPE`), each scoped via `target_resources` to a
+/// single command-enabled Container or Daemon. Unlike the worker polling quartet,
+/// this is injected on every platform: Container/Daemon always deliver via Pull
+/// (ALIEN-219). `ALIEN_DEPLOYMENT_ID` is not re-emitted here — it is already
+/// injected deployment-wide above. The commands token comes from the deployment
+/// record — the manager is the sole injector of `ALIEN_COMMANDS_TOKEN`.
+fn commands_receiver_env_vars(
+    commands_base_url: String,
+    deployment_token: Option<&str>,
+    deployment_stack: Option<&alien_core::Stack>,
+) -> Vec<EnvironmentVariable> {
+    deployment_stack
+        .map(|stack| stack.receiver_command_env_vars(&commands_base_url, deployment_token))
         .unwrap_or_default()
 }
 
@@ -929,15 +965,16 @@ fn failed_state_for_credential_error(
 #[cfg(test)]
 mod tests {
     use super::{
-        active_work_statuses, commands_polling_env_vars, get_or_create_local_bindings_provider,
-        has_remote_stack_management_outputs, manager_candidate_statuses,
-        needs_provision_capability, parse_status, retryable_failed_statuses,
-        should_wait_for_credential_handoff,
+        active_work_statuses, commands_polling_env_vars, commands_receiver_env_vars,
+        get_or_create_local_bindings_provider, has_remote_stack_management_outputs,
+        manager_candidate_statuses, needs_provision_capability, parse_status,
+        retryable_failed_statuses, should_wait_for_credential_handoff,
     };
     use alien_core::{
-        DeploymentStatus, Platform, RemoteStackManagement, RemoteStackManagementOutputs, Resource,
-        ResourceLifecycle, ResourceOutputs, ResourceStatus, Stack, StackResourceState,
-        StackSettings, StackState, Worker, WorkerCode,
+        Container, ContainerCode, Daemon, DaemonCode, DeploymentStatus, Platform,
+        RemoteStackManagement, RemoteStackManagementOutputs, Resource, ResourceLifecycle,
+        ResourceOutputs, ResourceSpec, ResourceStatus, Stack, StackResourceState, StackSettings,
+        StackState, Worker, WorkerCode,
     };
     use alien_deployment::loop_contract::{classify_status, LoopOperation};
     use chrono::Utc;
@@ -1339,12 +1376,11 @@ mod tests {
                 v.name == alien_core::ENV_ALIEN_COMMANDS_POLLING_URL
                     && v.value == "https://manager.example.test/v1"
             }));
-            assert!(scoped
-                .iter()
-                .any(|v| v.name == alien_core::ENV_ALIEN_COMMANDS_TOKEN && v.value == "ax_dep_test"));
+            assert!(scoped.iter().any(
+                |v| v.name == alien_core::ENV_ALIEN_COMMANDS_TOKEN && v.value == "ax_dep_test"
+            ));
             assert!(scoped.iter().any(|v| {
-                v.name == alien_core::ENV_ALIEN_COMMANDS_TARGET_RESOURCE_ID
-                    && v.value == worker_id
+                v.name == alien_core::ENV_ALIEN_COMMANDS_TARGET_RESOURCE_ID && v.value == worker_id
             }));
         }
     }
@@ -1352,6 +1388,115 @@ mod tests {
     #[test]
     fn commands_polling_env_vars_empty_without_stack() {
         let vars = commands_polling_env_vars(
+            "https://manager.example.test/v1".to_string(),
+            Some("ax_dep_test"),
+            None,
+        );
+
+        assert!(vars.is_empty());
+    }
+
+    fn command_container(id: &str, commands_enabled: bool) -> Container {
+        let builder = Container::new(id.to_string())
+            .code(ContainerCode::Image {
+                image: "container:latest".to_string(),
+            })
+            .cpu(ResourceSpec {
+                min: "0.5".to_string(),
+                desired: "1".to_string(),
+            })
+            .memory(ResourceSpec {
+                min: "512Mi".to_string(),
+                desired: "1Gi".to_string(),
+            })
+            .port(8080)
+            .permissions("container-execution".to_string());
+        if commands_enabled {
+            builder.commands_enabled(true).build()
+        } else {
+            builder.build()
+        }
+    }
+
+    #[test]
+    fn commands_receiver_env_vars_scopes_contract_per_command_enabled_container_and_daemon() {
+        let container = command_container("container-a", true);
+        let daemon = Daemon::new("daemon-b".to_string())
+            .code(DaemonCode::Image {
+                image: "daemon:latest".to_string(),
+            })
+            .permissions("daemon-execution".to_string())
+            .commands_enabled(true)
+            .build();
+        // Commands-disabled container: must get NOTHING.
+        let container_off = command_container("container-off", false);
+        // Commands-enabled worker: gets the polling quartet, never the receiver
+        // contract — must not be a receiver scope target.
+        let worker = Worker::new("worker-c".to_string())
+            .code(WorkerCode::Image {
+                image: "worker:latest".to_string(),
+            })
+            .permissions("execution".to_string())
+            .commands_enabled(true)
+            .build();
+        let stack = Stack::new("manager-receiver-stack".to_string())
+            .add(container, ResourceLifecycle::Live)
+            .add(daemon, ResourceLifecycle::Live)
+            .add(container_off, ResourceLifecycle::Live)
+            .add(worker, ResourceLifecycle::Live)
+            .build();
+
+        let vars = commands_receiver_env_vars(
+            "https://manager.example.test/v1".to_string(),
+            Some("ax_dep_test"),
+            Some(&stack),
+        );
+
+        // Every var scoped to exactly one command-enabled Container/Daemon; the
+        // disabled container and the worker are never scope targets.
+        assert!(vars.iter().all(|v| {
+            v.target_resources == Some(vec!["container-a".to_string()])
+                || v.target_resources == Some(vec!["daemon-b".to_string()])
+        }));
+        // No polling leakage and no deployment-wide DEPLOYMENT_ID re-emitted here.
+        assert!(!vars.iter().any(|v| {
+            v.name == alien_core::ENV_ALIEN_COMMANDS_POLLING_ENABLED
+                || v.name == alien_core::ENV_ALIEN_DEPLOYMENT_ID
+        }));
+
+        for (resource_id, expected_type) in [("container-a", "container"), ("daemon-b", "daemon")] {
+            let scoped: Vec<_> = vars
+                .iter()
+                .filter(|v| v.target_resources == Some(vec![resource_id.to_string()]))
+                .collect();
+            assert_eq!(
+                scoped.len(),
+                4,
+                "expected 4 receiver vars for {resource_id}"
+            );
+            assert!(scoped.iter().any(|v| {
+                v.name == alien_core::ENV_ALIEN_COMMANDS_URL
+                    && v.value == "https://manager.example.test/v1"
+            }));
+            assert!(scoped
+                .iter()
+                .any(|v| v.name == alien_core::ENV_ALIEN_COMMANDS_TOKEN
+                    && v.value == "ax_dep_test"
+                    && v.var_type == alien_core::EnvironmentVariableType::Secret));
+            assert!(scoped.iter().any(|v| {
+                v.name == alien_core::ENV_ALIEN_COMMANDS_TARGET_RESOURCE_ID
+                    && v.value == resource_id
+            }));
+            assert!(scoped.iter().any(|v| {
+                v.name == alien_core::ENV_ALIEN_COMMANDS_TARGET_RESOURCE_TYPE
+                    && v.value == expected_type
+            }));
+        }
+    }
+
+    #[test]
+    fn commands_receiver_env_vars_empty_without_stack() {
+        let vars = commands_receiver_env_vars(
             "https://manager.example.test/v1".to_string(),
             Some("ax_dep_test"),
             None,
