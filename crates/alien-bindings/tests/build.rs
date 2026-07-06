@@ -764,7 +764,7 @@ async fn test_build_with_different_compute_types(#[case] ctx: impl BuildTestCont
 // #[cfg_attr(feature = "azure", case::azure(AzureProviderBuildTestContext::setup().await))]
 // #[cfg_attr(feature = "gcp", case::gcp(GcpProviderBuildTestContext::setup().await))]
 // #[cfg_attr(feature = "kubernetes", case::kubernetes(KubernetesProviderBuildTestContext::setup().await))]
-#[cfg(any(feature = "local", feature = "grpc", feature = "aws"))]
+#[cfg(any(feature = "local", feature = "aws"))]
 #[tokio::test]
 #[ignore]
 async fn test_build_with_monitoring_to_axiom(#[case] ctx: impl BuildTestContext) {
