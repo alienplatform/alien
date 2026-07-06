@@ -66,7 +66,10 @@ pub struct FlexibleServerStorage {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct FlexibleServerBackup {
-    pub backup_retention_days: u16,
+    /// Optional on reads: a server mid-deletion reports an empty `backup` object. Omitted from
+    /// requests when `None` rather than fabricating a retention value.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub backup_retention_days: Option<u16>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -376,7 +379,7 @@ mod tests {
                     storage_size_gb: 32,
                 },
                 backup: FlexibleServerBackup {
-                    backup_retention_days: 7,
+                    backup_retention_days: Some(7),
                 },
                 network: FlexibleServerNetwork {
                     public_network_access: "Disabled".into(),
@@ -446,5 +449,19 @@ mod tests {
         assert_eq!(server.properties.state.as_deref(), Some("Ready"));
         assert_eq!(server.properties.network.public_network_access, "Disabled");
         assert_eq!(server.properties.storage.storage_size_gb, 32);
+    }
+
+    #[test]
+    fn server_deserializes_dropping_response_with_empty_backup() {
+        // Azure deletes servers asynchronously and reports `backup: {}` mid-deletion (observed
+        // live); a caller polling `get_server` after `delete_server` sees this partial document
+        // until the API returns 404, so it must still parse.
+        let body = r#"{"location":"eastus","sku":{"name":"Standard_B1ms","tier":"Burstable"},
+            "properties":{"version":"17","storage":{"storageSizeGB":32},
+            "backup":{},"network":{"publicNetworkAccess":"Disabled"},
+            "state":"Dropping"}}"#;
+        let server: FlexibleServer = serde_json::from_str(body).unwrap();
+        assert_eq!(server.properties.state.as_deref(), Some("Dropping"));
+        assert_eq!(server.properties.backup.backup_retention_days, None);
     }
 }
