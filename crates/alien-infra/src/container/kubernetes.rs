@@ -1506,14 +1506,19 @@ impl KubernetesContainerController {
         env_secret_plan: Option<&KubernetesEnvSecretPlan>,
         ctx: &ResourceControllerContext<'_>,
     ) -> Result<PodSpec> {
-        // Determine the container image
+        // Determine the container image. Source-built containers are
+        // supported: `alien build` compiles the source, `alien release`
+        // pushes it, and the controller receives a registry image whose
+        // compiled binary is the direct entrypoint. Reaching here with
+        // unbuilt source means the build step was skipped.
         let image = match &config.code {
             ContainerCode::Image { image } => image.clone(),
             ContainerCode::Source { .. } => {
                 return Err(AlienError::new(ErrorData::ResourceControllerConfigError {
                     resource_id: config.id.clone(),
-                    message: "Source-based containers not yet supported in Kubernetes platform"
-                        .to_string(),
+                    message:
+                        "Container still has unbuilt source code. Run 'alien build' first; it compiles the source into an image the controller can deploy."
+                            .to_string(),
                 }));
             }
         };

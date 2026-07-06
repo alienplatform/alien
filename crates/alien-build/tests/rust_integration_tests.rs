@@ -139,7 +139,7 @@ async fn test_rust_workspace_build(
     );
 
     let stack = stack_with_permissions(stack_name)
-        .add(func_with_workspace, ResourceLifecycle::Frozen)
+        .add(func_with_workspace, ResourceLifecycle::Live)
         .build();
 
     let settings = BuildSettings {
@@ -222,7 +222,7 @@ async fn test_rust_toolchain_invalid_project() {
     );
 
     let stack = stack_with_permissions("test-stack")
-        .add(func_with_invalid_rust, ResourceLifecycle::Frozen)
+        .add(func_with_invalid_rust, ResourceLifecycle::Live)
         .build();
 
     let temp_output_dir = tempdir().expect("Failed to create temp output dir");
@@ -299,7 +299,7 @@ async fn test_real_cargo_init_project() {
     );
 
     let stack = stack_with_permissions("test-stack")
-        .add(func_with_cargo_project, ResourceLifecycle::Frozen)
+        .add(func_with_cargo_project, ResourceLifecycle::Live)
         .build();
 
     let settings = BuildSettings {

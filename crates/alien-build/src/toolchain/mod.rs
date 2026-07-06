@@ -12,6 +12,33 @@ pub mod docker;
 pub mod rust;
 pub mod typescript;
 
+/// The kind of compute workload a source build is for.
+///
+/// The kind determines the image shape: only Worker images bundle
+/// `alien-worker-runtime`; Container and Daemon images run the compiled
+/// binary directly as the image entrypoint (no wrapper, no `--` separator).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum WorkloadKind {
+    /// Task-dispatch workload that runs behind `alien-worker-runtime`.
+    Worker,
+    /// Long-running containerized service; its binary is the image entrypoint.
+    Container,
+    /// Long-lived native process (DaemonSet on Kubernetes, host process on
+    /// Local); its binary is the image entrypoint.
+    Daemon,
+}
+
+impl WorkloadKind {
+    /// Lowercase resource-type name used in events, logs, and cache keys.
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Self::Worker => "worker",
+            Self::Container => "container",
+            Self::Daemon => "daemon",
+        }
+    }
+}
+
 /// Context provided to toolchains during build operations
 #[derive(Debug)]
 pub struct ToolchainContext {
@@ -30,9 +57,29 @@ pub struct ToolchainContext {
     pub runtime_platform_name: String,
     /// Whether to build in debug mode (faster builds, larger binaries)
     pub debug_mode: bool,
-    /// Whether this is building a Container resource (vs Worker)
-    /// Containers need alien-worker-runtime in the image on all platforms for command support
-    pub is_container: bool,
+    /// Which compute workload this build is for (decides the image shape).
+    pub workload: WorkloadKind,
+}
+
+impl ToolchainContext {
+    /// Whether the image must bundle `alien-worker-runtime`.
+    ///
+    /// Only Worker images include the runtime, and only on non-local
+    /// platforms — on Local the runtime is embedded in the co-located agent,
+    /// which runs the extracted binary itself.
+    pub fn needs_worker_runtime_in_image(&self) -> bool {
+        self.workload == WorkloadKind::Worker && self.runtime_platform_name != "local"
+    }
+
+    /// Whether the built binary is extracted from the image and run directly
+    /// as a host process (Local Workers under the agent's embedded runtime and
+    /// Local Daemons), rather than being executed inside a container.
+    ///
+    /// Containers always run under Docker/Kubernetes, even on Local.
+    pub fn runs_as_host_process(&self) -> bool {
+        self.runtime_platform_name == "local"
+            && matches!(self.workload, WorkloadKind::Worker | WorkloadKind::Daemon)
+    }
 }
 
 /// Specification for a file to add to an OCI layer
@@ -87,8 +134,99 @@ pub enum ImageBuildStrategy {
 pub struct ToolchainOutput {
     /// Strategy for building the OCI image
     pub build_strategy: ImageBuildStrategy,
-    /// Runtime command for the container
+    /// Image `ENTRYPOINT` override. `Some` replaces (and clears any `CMD`
+    /// from) the base image — used by Container/Daemon source images whose
+    /// compiled binary is the direct entrypoint. `None` keeps the base
+    /// image's entrypoint (e.g. alien-base's `/app/alien-worker-runtime`).
+    pub entrypoint: Option<Vec<String>>,
+    /// Image `CMD` for the container
     pub runtime_command: Vec<String>,
+}
+
+/// Base image for Worker source images. It bundles `alien-worker-runtime`
+/// with `ENTRYPOINT ["/app/alien-worker-runtime"]`; the Worker image's CMD is
+/// `["--", "./<binary>"]` (the `--` separator is required by the runtime CLI).
+pub(crate) const WORKER_BASE_IMAGES: &[&str] = &["ghcr.io/alienplatform/alien-base:latest"];
+
+/// Base images for Container/Daemon source images, in fallback order: a plain
+/// glibc userland (the same Wolfi base that alien-base builds on) with no
+/// runtime and no entrypoint. The compiled binary is set as the direct
+/// entrypoint. TypeScript binaries produced by `bun build --compile` are
+/// glibc-linked, so `FROM scratch` is not an option here.
+pub(crate) const DIRECT_BASE_IMAGES: &[&str] = &[
+    "cgr.dev/chainguard/wolfi-base:latest",
+    "docker.io/chainguard/wolfi-base:latest",
+];
+
+/// Assemble the [`ToolchainOutput`] for a compiled single-binary workload.
+///
+/// The image shape depends on the workload kind and platform:
+/// - Worker on a non-local platform: alien-base image (runtime entrypoint) with
+///   CMD `["--", "./<binary>"]`.
+/// - Local Worker / local Daemon: from-scratch image; the binary is extracted
+///   and run as a host process by the agent, so no userland is needed.
+/// - Container (all platforms) / non-local Daemon: Wolfi base image with the
+///   binary as the direct `ENTRYPOINT` — no runtime, no `--` separator.
+///
+/// `extra_layers` (e.g. a Rust project's `vendor/` assets) are appended after
+/// the binary layer on the from-scratch path and flattened into
+/// `files_to_package` on the base-image paths.
+pub(crate) fn image_output_for_binary(
+    context: &ToolchainContext,
+    binary_path: PathBuf,
+    binary_filename: &str,
+    extra_layers: Vec<LayerSpec>,
+) -> ToolchainOutput {
+    let binary_file = FileSpec {
+        host_path: binary_path,
+        container_path: format!("./{}", binary_filename),
+        mode: Some(0o755), // Executable
+    };
+
+    if context.runs_as_host_process() {
+        // Local Worker/Daemon: the agent extracts the image and runs the
+        // binary directly (Workers under the agent's embedded runtime).
+        let mut layers = vec![LayerSpec {
+            files: vec![binary_file],
+            description: "Application binary".to_string(),
+        }];
+        layers.extend(extra_layers);
+
+        return ToolchainOutput {
+            build_strategy: ImageBuildStrategy::FromScratch { layers },
+            entrypoint: None,
+            runtime_command: vec![format!("./{}", binary_filename)],
+        };
+    }
+
+    let mut files_to_package = vec![binary_file];
+    files_to_package.extend(extra_layers.into_iter().flat_map(|layer| layer.files));
+
+    if context.needs_worker_runtime_in_image() {
+        // Worker: run behind alien-worker-runtime. The base image ENTRYPOINT is
+        // ["/app/alien-worker-runtime"], so CMD must start with the "--"
+        // separator followed by the application binary.
+        return ToolchainOutput {
+            build_strategy: ImageBuildStrategy::FromBaseImage {
+                base_images: WORKER_BASE_IMAGES.iter().map(|s| s.to_string()).collect(),
+                files_to_package,
+            },
+            entrypoint: None,
+            runtime_command: vec!["--".to_string(), format!("./{}", binary_filename)],
+        };
+    }
+
+    // Container / non-local Daemon: the compiled binary IS the entrypoint.
+    // The explicit entrypoint also clears any entrypoint/CMD inherited from
+    // the base image (including a user-supplied --override-base-image).
+    ToolchainOutput {
+        build_strategy: ImageBuildStrategy::FromBaseImage {
+            base_images: DIRECT_BASE_IMAGES.iter().map(|s| s.to_string()).collect(),
+            files_to_package,
+        },
+        entrypoint: Some(vec![format!("/app/{}", binary_filename)]),
+        runtime_command: vec![],
+    }
 }
 
 /// Trait for implementing programming language toolchains
@@ -193,6 +331,137 @@ mod tests {
         let mut file = NamedTempFile::new().expect("temp file");
         file.write_all(bytes).expect("write header");
         file
+    }
+
+    fn context(workload: WorkloadKind, platform: &str) -> ToolchainContext {
+        ToolchainContext {
+            src_dir: PathBuf::from("/src"),
+            build_dir: PathBuf::from("/build"),
+            cache_store: None,
+            cache_prefix: "test".to_string(),
+            build_target: BinaryTarget::LinuxX64,
+            runtime_platform_name: platform.to_string(),
+            debug_mode: false,
+            workload,
+        }
+    }
+
+    fn binary_output(workload: WorkloadKind, platform: &str) -> ToolchainOutput {
+        image_output_for_binary(
+            &context(workload, platform),
+            PathBuf::from("/build/app"),
+            "app",
+            vec![],
+        )
+    }
+
+    #[test]
+    fn worker_cloud_image_bundles_runtime_with_separator_cmd() {
+        let output = binary_output(WorkloadKind::Worker, "aws");
+
+        match &output.build_strategy {
+            ImageBuildStrategy::FromBaseImage { base_images, .. } => {
+                assert_eq!(
+                    base_images,
+                    &vec!["ghcr.io/alienplatform/alien-base:latest".to_string()],
+                    "Worker images must build on alien-base (runtime entrypoint)"
+                );
+            }
+            other => panic!("Worker cloud image should build from alien-base, got {other:?}"),
+        }
+        assert_eq!(output.entrypoint, None, "keep the runtime entrypoint");
+        assert_eq!(
+            output.runtime_command,
+            vec!["--".to_string(), "./app".to_string()],
+            "Worker CMD needs the runtime CLI's -- separator"
+        );
+    }
+
+    #[test]
+    fn local_worker_and_daemon_are_from_scratch_host_binaries() {
+        for workload in [WorkloadKind::Worker, WorkloadKind::Daemon] {
+            let output = binary_output(workload, "local");
+
+            assert!(
+                matches!(
+                    output.build_strategy,
+                    ImageBuildStrategy::FromScratch { .. }
+                ),
+                "local {} should package from scratch (agent runs the binary)",
+                workload.as_str()
+            );
+            assert_eq!(output.entrypoint, None);
+            assert_eq!(output.runtime_command, vec!["./app".to_string()]);
+        }
+    }
+
+    #[test]
+    fn containers_and_cloud_daemons_get_direct_entrypoint_without_runtime() {
+        for (workload, platform) in [
+            (WorkloadKind::Container, "local"),
+            (WorkloadKind::Container, "aws"),
+            (WorkloadKind::Container, "kubernetes"),
+            (WorkloadKind::Daemon, "kubernetes"),
+        ] {
+            let output = binary_output(workload, platform);
+
+            match &output.build_strategy {
+                ImageBuildStrategy::FromBaseImage { base_images, .. } => {
+                    assert!(
+                        base_images
+                            .iter()
+                            .all(|image| image.contains("wolfi-base")),
+                        "{} on {platform} must not include alien-worker-runtime; got {base_images:?}",
+                        workload.as_str()
+                    );
+                }
+                other => panic!(
+                    "{} on {platform} should build from a plain base image, got {other:?}",
+                    workload.as_str()
+                ),
+            }
+            assert_eq!(
+                output.entrypoint,
+                Some(vec!["/app/app".to_string()]),
+                "{} on {platform}: the compiled binary IS the entrypoint",
+                workload.as_str()
+            );
+            assert!(
+                output.runtime_command.is_empty(),
+                "{} on {platform}: no CMD, no `--` separator",
+                workload.as_str()
+            );
+        }
+    }
+
+    #[test]
+    fn direct_entrypoint_images_flatten_extra_layers_into_packaged_files() {
+        let output = image_output_for_binary(
+            &context(WorkloadKind::Daemon, "kubernetes"),
+            PathBuf::from("/build/agent"),
+            "agent",
+            vec![LayerSpec {
+                files: vec![FileSpec {
+                    host_path: PathBuf::from("/src/vendor"),
+                    container_path: "./vendor".to_string(),
+                    mode: None,
+                }],
+                description: "Vendor assets".to_string(),
+            }],
+        );
+
+        match &output.build_strategy {
+            ImageBuildStrategy::FromBaseImage {
+                files_to_package, ..
+            } => {
+                let paths: Vec<&str> = files_to_package
+                    .iter()
+                    .map(|f| f.container_path.as_str())
+                    .collect();
+                assert_eq!(paths, vec!["./agent", "./vendor"]);
+            }
+            other => panic!("expected FromBaseImage, got {other:?}"),
+        }
     }
 
     #[test]

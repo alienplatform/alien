@@ -1,0 +1,405 @@
+//! ALIEN-225 image-shape and native-binding build tests.
+//!
+//! Asserts the final build model on real `bun build --compile` outputs:
+//!
+//! - Worker source images bundle `alien-worker-runtime` (the base image's
+//!   entrypoint) with `CMD ["--", "./<bin>"]`;
+//! - Container/Daemon source images set the compiled binary as the DIRECT
+//!   image entrypoint — no runtime, no `--` separator, no CMD;
+//! - a compiled TypeScript binary with a staged native bindings addon
+//!   actually RUNS and round-trips a real local kv binding (the
+//!   compile-smoke pattern from `packages/bindings/scripts/compile-smoke.ts`,
+//!   exercised through the real `TypeScriptToolchain` staging path).
+//!
+//! The image-shape test needs network access to pull base images (the same
+//! requirement as the existing `typescript_integration_tests`). The binding
+//! test needs the bindings package dist (`pnpm --dir packages/bindings run
+//! build`) and the dev addon (`pnpm exec napi build --platform --release` in
+//! `crates/alien-bindings-node`).
+
+use alien_build::build_stack;
+use alien_build::settings::{BuildSettings, PlatformBuildSettings};
+use alien_build::toolchain::typescript::TypeScriptToolchain;
+use alien_build::toolchain::{ImageBuildStrategy, Toolchain, ToolchainContext, WorkloadKind};
+use alien_core::permissions::PermissionProfile;
+use alien_core::{
+    BinaryTarget, Container, ContainerCode, Daemon, DaemonCode, ResourceLifecycle, Worker,
+    WorkerCode,
+};
+use dockdash::Image;
+use std::path::{Path, PathBuf};
+use std::process::Command;
+use tempfile::tempdir;
+
+fn workspace_root() -> PathBuf {
+    workspace_root::get_workspace_root()
+}
+
+fn bun_available() -> bool {
+    Command::new("bun").arg("--version").output().is_ok()
+}
+
+/// Write a minimal TypeScript project (`package.json` + `index.ts`).
+fn write_project(dir: &Path, name: &str, entry_source: &str) {
+    std::fs::create_dir_all(dir).expect("create project dir");
+    std::fs::write(
+        dir.join("package.json"),
+        serde_json::to_string_pretty(&serde_json::json!({
+            "name": name,
+            "version": "1.0.0",
+            "main": "./index.ts",
+        }))
+        .unwrap(),
+    )
+    .expect("write package.json");
+    std::fs::write(dir.join("index.ts"), entry_source).expect("write index.ts");
+}
+
+/// Link the built `@alienplatform/sdk` into the project's node_modules —
+/// required by the generated Worker bootstrap.
+fn install_sdk_package(project_dir: &Path) {
+    link_workspace_package(project_dir, "packages/sdk", "@alienplatform/sdk");
+}
+
+/// Link the built `@alienplatform/bindings` into the project's node_modules.
+fn install_bindings_package(project_dir: &Path) {
+    link_workspace_package(project_dir, "packages/bindings", "@alienplatform/bindings");
+}
+
+/// Symlink a real workspace package into the app's node_modules (the shape a
+/// pnpm-linked install produces). Node/bun resolution follows the symlink to
+/// the real location, so the package's own workspace node_modules resolve its
+/// transitive dependencies.
+fn link_workspace_package(project_dir: &Path, workspace_rel: &str, package_name: &str) {
+    let src = workspace_root().join(workspace_rel);
+    assert!(
+        src.join("dist").is_dir(),
+        "{} has no dist/ — run pnpm install (workspace prepare builds it) first",
+        src.display()
+    );
+    let dest = project_dir.join("node_modules").join(package_name);
+    std::fs::create_dir_all(dest.parent().expect("scope dir")).expect("create node_modules");
+    #[cfg(unix)]
+    std::os::unix::fs::symlink(&src, &dest).expect("link workspace package");
+    #[cfg(not(unix))]
+    panic!("these tests require a unix host");
+}
+
+fn find_image_tarball(output_dir: &Path, resource_name: &str, target: BinaryTarget) -> PathBuf {
+    let prefix = format!("{resource_name}-");
+    for entry in std::fs::read_dir(output_dir).expect("read build output dir") {
+        let path = entry.expect("dir entry").path();
+        let name = path
+            .file_name()
+            .and_then(|n| n.to_str())
+            .unwrap_or_default();
+        if path.is_dir() && name.starts_with(&prefix) {
+            let tarball = path.join(format!("{}.oci.tar", target.runtime_platform_id()));
+            assert!(
+                tarball.is_file(),
+                "expected OCI tarball at {}",
+                tarball.display()
+            );
+            return tarball;
+        }
+    }
+    panic!(
+        "no image directory with prefix '{prefix}' in {}",
+        output_dir.display()
+    );
+}
+
+/// One TS stack with a Worker, a Container, and a Daemon, all built from
+/// source for linux-x64; asserts the OCI image metadata per compute type.
+#[tokio::test]
+async fn typescript_source_image_shapes_per_compute_type() {
+    if !bun_available() {
+        eprintln!("Skipping typescript_source_image_shapes_per_compute_type: bun not available");
+        return;
+    }
+    std::env::set_var("ALIEN_SKIP_DEPENDENCY_INSTALL", "1");
+    tracing_subscriber::fmt::try_init().ok();
+
+    let src_root = tempdir().expect("temp src dir");
+
+    // Worker: needs a default export and the SDK for the generated bootstrap.
+    let worker_dir = src_root.path().join("worker-app");
+    write_project(
+        &worker_dir,
+        "worker-app",
+        "export default { name: 'worker-app' };",
+    );
+    install_sdk_package(&worker_dir);
+
+    // Container/Daemon: plain apps, compiled directly (no bootstrap, no SDK).
+    let container_dir = src_root.path().join("container-app");
+    write_project(
+        &container_dir,
+        "container-app",
+        "console.log('container-app up');",
+    );
+    let daemon_dir = src_root.path().join("daemon-app");
+    write_project(&daemon_dir, "daemon-app", "console.log('daemon-app up');");
+
+    let worker = Worker::new("shape-worker".to_string())
+        .code(WorkerCode::Source {
+            src: worker_dir.to_string_lossy().into_owned(),
+            toolchain: alien_core::ToolchainConfig::TypeScript {
+                binary_name: Some("worker-bin".to_string()),
+            },
+        })
+        .memory_mb(512)
+        .timeout_seconds(60)
+        .permissions("execution".to_string())
+        .build();
+    let container = Container::new("shape-container".to_string())
+        .code(ContainerCode::Source {
+            src: container_dir.to_string_lossy().into_owned(),
+            toolchain: alien_core::ToolchainConfig::TypeScript {
+                binary_name: Some("container-bin".to_string()),
+            },
+        })
+        .cpu(alien_core::ResourceSpec {
+            min: "0.5".to_string(),
+            desired: "1".to_string(),
+        })
+        .memory(alien_core::ResourceSpec {
+            min: "512Mi".to_string(),
+            desired: "1Gi".to_string(),
+        })
+        .permissions("execution".to_string())
+        .build();
+    let daemon = Daemon::new("shape-daemon".to_string())
+        .code(DaemonCode::Source {
+            src: daemon_dir.to_string_lossy().into_owned(),
+            toolchain: alien_core::ToolchainConfig::TypeScript {
+                binary_name: Some("daemon-bin".to_string()),
+            },
+        })
+        .permissions("execution".to_string())
+        .build();
+
+    let stack = alien_core::Stack::new("shape-stack".to_string())
+        .permission("execution", PermissionProfile::new())
+        .add(worker, ResourceLifecycle::Live)
+        .add(container, ResourceLifecycle::Live)
+        .add(daemon, ResourceLifecycle::Live)
+        .build();
+
+    let output_dir = tempdir().expect("temp output dir");
+    let target = BinaryTarget::LinuxX64;
+    let settings = BuildSettings {
+        output_directory: output_dir.path().to_string_lossy().into_owned(),
+        platform: PlatformBuildSettings::Test {},
+        targets: Some(vec![target]),
+        cache_url: None,
+        override_base_image: None,
+        debug_mode: false,
+    };
+
+    build_stack(stack, &settings)
+        .await
+        .expect("stack build should succeed");
+
+    let platform_dir = output_dir.path().join("build").join("test");
+
+    // Worker image: alien-base entrypoint (the runtime) + separator CMD.
+    let worker_tarball = find_image_tarball(&platform_dir, "shape-worker", target);
+    let worker_meta = Image::from_tarball(&worker_tarball)
+        .expect("worker image should load")
+        .get_metadata()
+        .expect("worker image metadata");
+    // The published alien-base:latest still carries the pre-rename
+    // `/app/alien-runtime` entrypoint (ALIEN-224 renamed the binary; the base
+    // image is republished by the release pipeline). Accept both spellings —
+    // the contract under test is that Worker images keep the base image's
+    // runtime entrypoint.
+    let worker_entrypoint = worker_meta
+        .entrypoint
+        .as_deref()
+        .expect("Worker images must keep the runtime entrypoint");
+    assert_eq!(worker_entrypoint.len(), 1);
+    assert!(
+        worker_entrypoint[0] == "/app/alien-worker-runtime"
+            || worker_entrypoint[0] == "/app/alien-runtime",
+        "Worker entrypoint must be the runtime binary, got {worker_entrypoint:?}"
+    );
+    assert_eq!(
+        worker_meta.cmd.as_deref(),
+        Some(&["--".to_string(), "./worker-bin".to_string()][..]),
+        "Worker CMD must be the -- separator plus the app binary"
+    );
+
+    // Container/Daemon images: the compiled binary IS the entrypoint.
+    for (resource, binary) in [
+        ("shape-container", "container-bin"),
+        ("shape-daemon", "daemon-bin"),
+    ] {
+        let tarball = find_image_tarball(&platform_dir, resource, target);
+        let meta = Image::from_tarball(&tarball)
+            .unwrap_or_else(|e| panic!("{resource} image should load: {e}"))
+            .get_metadata()
+            .unwrap_or_else(|e| panic!("{resource} image metadata: {e}"));
+        assert_eq!(
+            meta.entrypoint.as_deref(),
+            Some(&[format!("/app/{binary}")][..]),
+            "{resource}: the compiled binary must be the direct entrypoint"
+        );
+        assert!(
+            meta.cmd.as_deref().is_none_or(|cmd| cmd.is_empty()),
+            "{resource}: no CMD and no -- separator, got {:?}",
+            meta.cmd
+        );
+        assert!(
+            meta.entrypoint
+                .iter()
+                .flatten()
+                .chain(meta.cmd.iter().flatten())
+                .all(|part| !part.contains("alien-worker-runtime") && part != "--"),
+            "{resource}: direct images must not reference the runtime or the separator"
+        );
+    }
+}
+
+/// Compile a TypeScript app that uses `@alienplatform/bindings/native`
+/// through the real toolchain (which stages the target addon from the app's
+/// installed prebuild package), then RUN the produced binary from a
+/// different directory — with the staged addon cleaned up, proving the addon
+/// is embedded — and assert a real local-kv put/get round-trip.
+#[tokio::test]
+async fn compiled_typescript_binary_runs_local_binding() {
+    if !bun_available() {
+        eprintln!("Skipping compiled_typescript_binary_runs_local_binding: bun not available");
+        return;
+    }
+    std::env::set_var("ALIEN_SKIP_DEPENDENCY_INSTALL", "1");
+    tracing_subscriber::fmt::try_init().ok();
+
+    let host_target = BinaryTarget::current_os();
+    let host_triple = match host_target {
+        BinaryTarget::LinuxX64 => "linux-x64-gnu",
+        BinaryTarget::LinuxArm64 => "linux-arm64-gnu",
+        BinaryTarget::DarwinArm64 => "darwin-arm64",
+        BinaryTarget::WindowsX64 => {
+            eprintln!("Skipping compiled_typescript_binary_runs_local_binding: no windows addon");
+            return;
+        }
+    };
+
+    // The dev addon must exist; the test wires it into the app's node_modules
+    // as the TARGET prebuild package (@alienplatform/bindings-<triple>), so
+    // the toolchain exercises the npm-install staging source.
+    let addon_file_name = format!("alien-bindings-node.{host_triple}.node");
+    let dev_addon = workspace_root()
+        .join("crates/alien-bindings-node")
+        .join(&addon_file_name);
+    assert!(
+        dev_addon.is_file(),
+        "dev addon missing at {} — build it with `pnpm exec napi build --platform --release` in crates/alien-bindings-node",
+        dev_addon.display()
+    );
+
+    let value = "hello-from-alien-build";
+    let app_source = format!(
+        r#"import {{ kv }} from "@alienplatform/bindings/native"
+
+async function main() {{
+  const store = kv("smoke-kv")
+  await store.set("smoke-key", "{value}")
+  const got = await store.getText("smoke-key")
+  if (got !== "{value}") {{
+    console.error(`MISMATCH: got ${{JSON.stringify(got)}}`)
+    process.exit(1)
+  }}
+  console.log(`OK ${{got}}`)
+}}
+
+main().catch((err) => {{
+  console.error("UNEXPECTED", err)
+  process.exit(1)
+}})
+"#
+    );
+
+    let src_root = tempdir().expect("temp src dir");
+    let app_dir = src_root.path().join("bindings-app");
+    write_project(&app_dir, "bindings-app", &app_source);
+    install_bindings_package(&app_dir);
+
+    // Install the prebuild package for the host triple, backed by the dev addon.
+    let prebuild_dir = app_dir
+        .join("node_modules")
+        .join(format!("@alienplatform/bindings-{host_triple}"));
+    std::fs::create_dir_all(&prebuild_dir).expect("create prebuild dir");
+    std::fs::copy(&dev_addon, prebuild_dir.join(&addon_file_name)).expect("install prebuild");
+
+    // Build as a local Daemon: direct compile of the user entry, from-scratch
+    // image, binary left in build_dir — runnable on the host.
+    let build_dir = tempdir().expect("temp build dir");
+    let toolchain = TypeScriptToolchain {
+        binary_name: Some("bindings-app".to_string()),
+    };
+    let context = ToolchainContext {
+        src_dir: app_dir.clone(),
+        build_dir: build_dir.path().to_path_buf(),
+        cache_store: None,
+        cache_prefix: "bindings-smoke".to_string(),
+        build_target: host_target,
+        runtime_platform_name: "local".to_string(),
+        debug_mode: false,
+        workload: WorkloadKind::Daemon,
+    };
+
+    let output = toolchain
+        .build(&context)
+        .await
+        .expect("toolchain build should succeed");
+    assert!(
+        matches!(
+            output.build_strategy,
+            ImageBuildStrategy::FromScratch { .. }
+        ),
+        "local daemons package from scratch"
+    );
+    assert_eq!(output.entrypoint, None);
+    assert_eq!(output.runtime_command, vec!["./bindings-app".to_string()]);
+
+    // The staged addon must be cleaned up after the build; the binary must
+    // carry its own embedded copy.
+    let staged = app_dir.join("node_modules/@alienplatform/bindings/dist/alien-bindings.node");
+    assert!(
+        !staged.exists(),
+        "staged addon should be cleaned up after the build"
+    );
+
+    // RUN the compiled binary from an unrelated cwd against a real local kv.
+    let binary = build_dir.path().join("bindings-app");
+    assert!(binary.is_file(), "compiled binary should exist");
+    let kv_data_dir = tempdir().expect("kv data dir");
+    let run_cwd = tempdir().expect("run cwd");
+    let output = Command::new(&binary)
+        .current_dir(run_cwd.path())
+        .env("ALIEN_DEPLOYMENT_TYPE", "local")
+        .env(
+            "ALIEN_SMOKE_KV_BINDING",
+            serde_json::json!({
+                "service": "local-kv",
+                "dataDir": kv_data_dir.path().to_string_lossy(),
+            })
+            .to_string(),
+        )
+        .output()
+        .expect("compiled binary should execute");
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        output.status.success(),
+        "compiled binary failed (status {:?})\nstdout: {stdout}\nstderr: {stderr}",
+        output.status
+    );
+    assert!(
+        stdout.contains(&format!("OK {value}")),
+        "expected kv round-trip output, got\nstdout: {stdout}\nstderr: {stderr}"
+    );
+}

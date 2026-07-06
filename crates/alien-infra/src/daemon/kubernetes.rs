@@ -523,12 +523,18 @@ impl KubernetesDaemonController {
     ) -> Result<DaemonSet> {
         let selector_labels = self.build_labels(daemon_set_name);
         let labels = self.workload_labels(ctx, &config.id, selector_labels.clone());
+        // Source-built daemons are supported: `alien build` compiles the
+        // source into an image whose compiled binary is the direct
+        // entrypoint, deployed here as a DaemonSet. Reaching here with
+        // unbuilt source means the build step was skipped.
         let image = match &config.code {
             DaemonCode::Image { image } => image.clone(),
             DaemonCode::Source { .. } => {
                 return Err(AlienError::new(ErrorData::ResourceControllerConfigError {
                     resource_id: config.id.clone(),
-                    message: "Source-based daemons are not yet supported on Kubernetes".to_string(),
+                    message:
+                        "Daemon still has unbuilt source code. Run 'alien build' first; it compiles the source into an image the controller can deploy."
+                            .to_string(),
                 }));
             }
         };

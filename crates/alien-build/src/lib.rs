@@ -334,8 +334,7 @@ pub async fn build_stack(mut stack: Stack, settings: &BuildSettings) -> Result<S
                                 &stack_id,
                                 &settings,
                                 &output_dir,
-                                false, // is_container = false for Worker resources
-                                "worker",
+                                toolchain::WorkloadKind::Worker,
                                 &[],
                             ) => result,
                             _ = cancel_token.cancelled() => {
@@ -501,8 +500,7 @@ pub async fn build_stack(mut stack: Stack, settings: &BuildSettings) -> Result<S
                                 &stack_id,
                                 &settings,
                                 &output_dir,
-                                false, // is_container = false for Daemon resources
-                                "daemon",
+                                toolchain::WorkloadKind::Daemon,
                                 &[],
                             ) => result,
                             _ = cancel_token.cancelled() => {
@@ -710,8 +708,7 @@ pub async fn build_stack(mut stack: Stack, settings: &BuildSettings) -> Result<S
                                 &stack_id,
                                 &settings,
                                 &output_dir,
-                                true, // is_container = true for Container resources
-                                "container",
+                                toolchain::WorkloadKind::Container,
                                 &related_resources,
                             ) => result,
                             _ = cancel_token.cancelled() => {
@@ -1771,7 +1768,7 @@ async fn finalize_artifact_dir(
 /// `build_output_dir/resource_name/{target}.oci.tar`
 #[alien_event(AlienEvent::BuildingResource {
     resource_name: resource_name.to_string(),
-    resource_type: resource_type.to_string(),
+    resource_type: workload.as_str().to_string(),
     related_resources: related_resources.to_vec(),
 })]
 async fn build_resource(
@@ -1781,8 +1778,7 @@ async fn build_resource(
     stack_id: &str,
     settings: &BuildSettings,
     build_output_dir: &Path,
-    is_container: bool,
-    resource_type: &str,
+    workload: toolchain::WorkloadKind,
     related_resources: &[String],
 ) -> Result<String> {
     let resource_started = Instant::now();
@@ -1796,8 +1792,38 @@ async fn build_resource(
         targets
     );
 
+    // Validate the source directory before the artifact-cache hash walks it,
+    // so a missing or invalid project fails with a clear config error instead
+    // of an I/O error from the hasher. The per-toolchain checks mirror the
+    // toolchains' own validation (same error shape, just earlier).
+    if !Path::new(src).is_dir() {
+        return Err(AlienError::new(ErrorData::InvalidResourceConfig {
+            resource_id: resource_name.to_string(),
+            reason: format!("Source directory '{}' not found", src),
+        }));
+    }
+    match toolchain_config {
+        ToolchainConfig::Rust { binary_name } => {
+            if !toolchain::rust::RustToolchain::is_rust_project(Path::new(src)) {
+                return Err(AlienError::new(ErrorData::InvalidResourceConfig {
+                    resource_id: binary_name.clone(),
+                    reason: "Source directory does not contain Cargo.toml".to_string(),
+                }));
+            }
+        }
+        ToolchainConfig::TypeScript { .. } => {
+            if !toolchain::typescript::TypeScriptToolchain::is_typescript_project(Path::new(src)) {
+                return Err(AlienError::new(ErrorData::InvalidResourceConfig {
+                    resource_id: "typescript-project".to_string(),
+                    reason: "Source directory does not contain package.json".to_string(),
+                }));
+            }
+        }
+        ToolchainConfig::Docker { .. } => {}
+    }
+
     let artifact_cache_key =
-        compute_source_artifact_cache_key(src, toolchain_config, settings, &targets, is_container)
+        compute_source_artifact_cache_key(src, toolchain_config, settings, &targets, workload)
             .await?;
 
     if let Some(cached_dir) = find_cached_artifact_dir(
@@ -1859,7 +1885,7 @@ async fn build_resource(
                     &settings,
                     &target,
                     &target_output_path,
-                    is_container,
+                    workload,
                 )
                 .await?;
 
@@ -1916,10 +1942,10 @@ async fn compute_source_artifact_cache_key(
     toolchain_config: &alien_core::ToolchainConfig,
     settings: &BuildSettings,
     targets: &[BinaryTarget],
-    is_container: bool,
+    workload: toolchain::WorkloadKind,
 ) -> Result<String> {
     let mut hasher = Sha256::new();
-    hasher.update(b"alien-build-artifact-cache-v1");
+    hasher.update(b"alien-build-artifact-cache-v2");
     hasher.update(src.as_bytes());
     hasher.update(
         serde_json::to_vec(toolchain_config)
@@ -1929,14 +1955,16 @@ async fn compute_source_artifact_cache_key(
             })?,
     );
     // Source artifact bytes are platform-independent for equivalent target sets.
-    // The actual differences are target triples, debug/release mode, container
-    // packaging, base image, and whether the runtime is packaged into the image.
-    // This lets e.g. GCP and Azure reuse the same linux-x64 artifacts.
-    let needs_runtime_in_image =
-        is_container || settings.platform.runtime_platform() != Platform::Local;
-    hasher.update(needs_runtime_in_image.to_string().as_bytes());
+    // The actual differences are target triples, debug/release mode, workload
+    // kind (which decides the image shape: runtime for Workers, direct
+    // entrypoint for Containers/Daemons), base image, and whether the built
+    // binary runs as a host process. This lets e.g. GCP and Azure reuse the
+    // same linux-x64 artifacts.
+    let host_process = workload != toolchain::WorkloadKind::Container
+        && settings.platform.runtime_platform() == Platform::Local;
+    hasher.update(host_process.to_string().as_bytes());
     hasher.update(settings.debug_mode.to_string().as_bytes());
-    hasher.update(is_container.to_string().as_bytes());
+    hasher.update(workload.as_str().as_bytes());
     if let Some(override_base_image) = &settings.override_base_image {
         hasher.update(override_base_image.as_bytes());
     }
@@ -2350,7 +2378,7 @@ async fn build_target_to_file(
     settings: &BuildSettings,
     target: &BinaryTarget,
     output_path: &Path,
-    is_container: bool,
+    workload: toolchain::WorkloadKind,
 ) -> Result<String> {
     info!(
         "Starting toolchain build for resource: {} (target: {})",
@@ -2397,7 +2425,7 @@ async fn build_target_to_file(
         build_target: *target,
         runtime_platform_name: settings.platform.runtime_platform().as_str().to_string(),
         debug_mode: settings.debug_mode,
-        is_container,
+        workload,
     };
 
     // Create and run toolchain
@@ -2497,12 +2525,26 @@ async fn build_target_to_file(
 
                     let app_layer = app_layer_builder.build().await.map_dockdash_err()?;
 
-                    let image_builder = DockDashImage::builder()
+                    let mut image_builder = DockDashImage::builder()
                         .from(base_image)
                         .platform(target.oci_os(), &target.to_dockdash_arch())
                         .pull_policy(PullPolicy::Always)
-                        .layer(app_layer)
-                        .cmd(toolchain_output.runtime_command.clone()); // Set CMD from toolchain
+                        .layer(app_layer);
+
+                    // Direct-entrypoint images (source-built Containers/Daemons)
+                    // override the base image's entrypoint with the compiled
+                    // binary and carry no CMD — there is no runtime wrapper and
+                    // no `--` separator. Worker images keep the base image's
+                    // alien-worker-runtime entrypoint and set CMD.
+                    if let Some(entrypoint) = &toolchain_output.entrypoint {
+                        image_builder = image_builder.entrypoint(entrypoint.clone());
+                        if !toolchain_output.runtime_command.is_empty() {
+                            image_builder =
+                                image_builder.cmd(toolchain_output.runtime_command.clone());
+                        }
+                    } else {
+                        image_builder = image_builder.cmd(toolchain_output.runtime_command.clone());
+                    }
 
                     build_result = image_builder
                         .output_to(output_path.to_path_buf())
@@ -2618,6 +2660,9 @@ async fn build_target_to_file(
                 .platform(target.oci_os(), &target.to_dockdash_arch())
                 .working_dir("/app") // Set working directory so ./app resolves correctly
                 .cmd(toolchain_output.runtime_command.clone()); // Set CMD from toolchain
+            if let Some(entrypoint) = &toolchain_output.entrypoint {
+                image_builder = image_builder.entrypoint(entrypoint.clone());
+            }
 
             for layer in all_layers {
                 image_builder = image_builder.layer(layer);
@@ -3517,7 +3562,7 @@ mod tests {
             &toolchain,
             &gcp,
             &targets,
-            true,
+            crate::toolchain::WorkloadKind::Container,
         )
         .await
         .unwrap();
@@ -3526,7 +3571,7 @@ mod tests {
             &toolchain,
             &azure,
             &targets,
-            true,
+            crate::toolchain::WorkloadKind::Container,
         )
         .await
         .unwrap();
@@ -3581,7 +3626,7 @@ mod tests {
             &toolchain,
             &settings,
             &targets,
-            true,
+            crate::toolchain::WorkloadKind::Container,
         )
         .await
         .unwrap();
@@ -3593,7 +3638,7 @@ mod tests {
             &toolchain,
             &settings,
             &targets,
-            true,
+            crate::toolchain::WorkloadKind::Container,
         )
         .await
         .unwrap();
@@ -3722,7 +3767,7 @@ mod tests {
                 build_target: target,
                 runtime_platform_name: "aws".to_string(),
                 debug_mode: false,
-                is_container: true,
+                workload: crate::toolchain::WorkloadKind::Container,
             };
             toolchain
                 .build(&context)
@@ -3858,7 +3903,7 @@ mod tests {
             build_target: BinaryTarget::LinuxArm64,
             runtime_platform_name: "aws".to_string(),
             debug_mode: false,
-            is_container: true,
+            workload: crate::toolchain::WorkloadKind::Container,
         };
         toolchain
             .build(&context)
@@ -3992,7 +4037,7 @@ mod tests {
                 build_target: target,
                 runtime_platform_name: "aws".to_string(),
                 debug_mode: false,
-                is_container: true,
+                workload: crate::toolchain::WorkloadKind::Container,
             };
             toolchain
                 .build(&context)

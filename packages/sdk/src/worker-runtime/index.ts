@@ -86,20 +86,20 @@ export async function runWorker(app?: unknown): Promise<void> {
   const channel = await getOrCreateChannel(address)
   const instanceId = generateInstanceId()
 
-  // Serve the HTTP handler (or a minimal readiness server) and register the port.
-  const isPassthrough = process.env.ALIEN_TRANSPORT === "passthrough"
-  const listenPort = isPassthrough ? Number(process.env.PORT ?? "3000") : 0
-  if (!Number.isInteger(listenPort) || listenPort < 0 || listenPort > 65535) {
-    throw new Error(`Invalid PORT value for Alien HTTP server: ${process.env.PORT}`)
-  }
-
+  // Serve the HTTP handler (or a minimal readiness server) and register the
+  // port. Workers always listen on loopback with a dynamic port:
+  // alien-worker-runtime is co-located (same container or host), proxies all
+  // external traffic, and learns the port via RegisterHttpServer. Nothing else
+  // may reach this server, so 127.0.0.1 is the only correct interface.
+  // (Passthrough transport is a non-Worker concern — Daemons and build pods —
+  // and those binaries no longer run through runWorker.)
   const fetchHandler = resolveFetchHandler(app)
   const server = Bun.serve({
     // No HTTP framework — a minimal server so the runtime can probe readiness
     // and route health checks. Commands and events are delivered over gRPC.
     fetch: fetchHandler ?? (() => new Response("ok")),
-    hostname: isPassthrough ? "0.0.0.0" : "127.0.0.1",
-    port: listenPort,
+    hostname: "127.0.0.1",
+    port: 0,
     idleTimeout: 255,
   })
 

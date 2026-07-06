@@ -86,12 +86,17 @@ impl LocalContainerController {
                 })
             })?;
 
-        // Determine the image
+        // Determine the image. Source-built containers are supported: `alien
+        // build` compiles the source and rewrites `code` to an image whose
+        // compiled binary is the direct entrypoint. Reaching the controller
+        // with unbuilt source means the build step was skipped.
         let image = match &config.code {
             ContainerCode::Image { image } => image.clone(),
             ContainerCode::Source { .. } => {
                 return Err(AlienError::new(ErrorData::ResourceConfigInvalid {
-                    message: "Local platform does not support building from source. Use pre-built images.".to_string(),
+                    message:
+                        "Container still has unbuilt source code. Run 'alien build' first; it compiles the source into an image the controller can run."
+                            .to_string(),
                     resource_id: Some(config.id.clone()),
                 }));
             }

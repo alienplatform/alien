@@ -51,11 +51,17 @@ impl LocalDaemonController {
                 })
             })?;
 
+        // Source-built daemons are supported: `alien build` compiles the
+        // source and rewrites `code` to an image whose binary this controller
+        // extracts and runs. Reaching here with unbuilt source means the
+        // build step was skipped.
         let image_ref = match &config.code {
             DaemonCode::Image { image } => image.clone(),
             DaemonCode::Source { .. } => {
                 return Err(AlienError::new(ErrorData::ResourceConfigInvalid {
-                    message: "Local platform does not support building daemon source code directly. Build the image first and use DaemonCode::Image.".to_string(),
+                    message:
+                        "Daemon still has unbuilt source code. Run 'alien build' first; it compiles the source into an image the controller can extract and run."
+                            .to_string(),
                     resource_id: Some(config.id.clone()),
                 }));
             }
