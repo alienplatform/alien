@@ -28,11 +28,5 @@
     "package": "sdk",
     "reason": "generated binding-service proto client shipped in the package",
     "owningTask": "03/17"
-  },
-  {
-    "check": "package-not-implemented",
-    "package": "commands",
-    "reason": "package not yet implemented (only PACKAGE_LAYOUT.md present)",
-    "owningTask": "08"
   }
 ]

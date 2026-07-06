@@ -1,11 +1,5 @@
 [
   {
-    "check": "pack",
-    "package": "commands",
-    "reason": "publishable package not present (nothing to pack)",
-    "owningTask": "08"
-  },
-  {
     "check": "import-error-reexports",
     "package": "sdk",
     "reason": "facade root is missing pinned error re-exports",
@@ -18,28 +12,10 @@
     "owningTask": "03"
   },
   {
-    "check": "import",
-    "package": "commands",
-    "reason": "cannot import @alienplatform/commands (package not installed)",
-    "owningTask": "08"
-  },
-  {
-    "check": "error-code",
-    "package": "commands",
-    "reason": "cannot assert COMMAND_RECEIVER_CONFIG_INVALID (commands package not installed)",
-    "owningTask": "08"
-  },
-  {
     "check": "typecheck",
     "package": "sdk",
     "reason": "cannot find module '@alienplatform/sdk/worker-runtime'",
     "owningTask": "03"
-  },
-  {
-    "check": "typecheck",
-    "package": "commands",
-    "reason": "cannot find module '@alienplatform/commands'",
-    "owningTask": "08"
   },
   {
     "check": "packed-contents",
