@@ -10,7 +10,12 @@
  *   3. Dev fallback: the locally-built addon under
  *      `crates/alien-bindings-node/alien-bindings-node.<triple>.node`, located by
  *      walking up from this module. This lets the repo run against a
- *      `napi build`-produced `.node` without publishing a prebuild.
+ *      `napi build`-produced `.node` without publishing a prebuild. Before
+ *      trusting this addon, its `version()` is compared against this
+ *      package's own `package.json` version; a mismatch (a stale local build
+ *      left over from an earlier checkout) is logged and rejected rather than
+ *      loaded, falling through to the same "cannot load" error as if no addon
+ *      had been found at all.
  *
  * Loading is deferred: `loadAddon()` is only called on the first binding
  * operation (see `factories.ts`), never at module import. That is what makes the
@@ -148,6 +153,24 @@ function findLocalAddon(triple: string): string | undefined {
   }
 }
 
+/** This package's own `version` field, read from `package.json` at the package root. */
+function packageVersion(): string {
+  const dir = dirname(fileURLToPath(import.meta.url))
+  const packageJson = require(join(dir, "..", "package.json")) as { version: string }
+  return packageJson.version
+}
+
+/**
+ * True when a locally-built addon's reported `version()` doesn't match the
+ * installed `@alienplatform/bindings` package version — i.e. it's a stale
+ * build left over from an earlier checkout (ABI/version skew) and must not
+ * be trusted. Exported for unit testing; the file-walk and native `require`
+ * around it are exercised only by the loader's integration behavior.
+ */
+export function isStaleLocalAddon(actualVersion: string, expectedVersion: string): boolean {
+  return actualVersion !== expectedVersion
+}
+
 let cached: NativeAddon | undefined
 
 /**
@@ -175,8 +198,19 @@ export function loadAddon(): NativeAddon {
 
   const local = findLocalAddon(triple)
   if (local) {
-    cached = require(local) as NativeAddon
-    return cached
+    const addon = require(local) as NativeAddon
+    const expected = packageVersion()
+    const actual = addon.version()
+    if (!isStaleLocalAddon(actual, expected)) {
+      cached = addon
+      return cached
+    }
+    // Stale locally-built addon (ABI/version skew) — warn and fall through to
+    // the standard "cannot load" error below rather than serving a mismatched
+    // binary.
+    console.warn(
+      `@alienplatform/bindings: ignoring stale locally-built addon at '${local}' (version '${actual}', expected '${expected}'). Rebuild it with \`napi build --platform\` in crates/alien-bindings-node.`,
+    )
   }
 
   throw new Error(

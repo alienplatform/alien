@@ -320,23 +320,31 @@ mod tests {
         // construction must succeed and the FIRST op on a missing binding must
         // report BINDING_NOT_CONFIGURED (naming ALIEN_<NAME>_BINDING) BEFORE any
         // platform / client-config resolution. There is deliberately no
-        // ALIEN_DEPLOYMENT_TYPE in this environment.
-        let bindings = Bindings::from_env_map(HashMap::new())
-            .expect("zero-env construction must succeed (platform resolution deferred)");
+        // ALIEN_DEPLOYMENT_TYPE in this environment. Table test over all four
+        // app-facing kinds so a future kind added to `Bindings` without wiring
+        // `ensure_binding_present` into its `load_*` method fails this test
+        // instead of silently regressing to ENVIRONMENT_VARIABLE_MISSING.
+        for kind in ["storage", "kv", "queue", "vault"] {
+            let bindings = Bindings::from_env_map(HashMap::new())
+                .expect("zero-env construction must succeed (platform resolution deferred)");
 
-        let error = bindings
-            .storage("files")
-            .await
-            .expect_err("missing binding must error before any platform resolution");
+            let error = match kind {
+                "storage" => bindings.storage("x").await.unwrap_err(),
+                "kv" => bindings.kv("x").await.unwrap_err(),
+                "queue" => bindings.queue("x").await.unwrap_err(),
+                "vault" => bindings.vault("x").await.unwrap_err(),
+                other => unreachable!("unhandled kind in table test: {other}"),
+            };
 
-        assert_eq!(
-            error.code, "BINDING_NOT_CONFIGURED",
-            "expected the missing-binding error, not a platform/deployment error: {error}"
-        );
-        assert!(
-            error.to_string().contains("ALIEN_FILES_BINDING"),
-            "message should name the env var, got: {error}"
-        );
+            assert_eq!(
+                error.code, "BINDING_NOT_CONFIGURED",
+                "{kind}: expected the missing-binding error, not a platform/deployment error: {error}"
+            );
+            assert!(
+                error.to_string().contains("ALIEN_X_BINDING"),
+                "{kind}: message should name the env var, got: {error}"
+            );
+        }
     }
 
     #[test]

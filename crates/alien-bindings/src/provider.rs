@@ -424,6 +424,14 @@ impl LazyEnvBindingsProvider {
     /// on the first op against a missing binding. A binding that *is* present
     /// falls through to normal resolution, so an existing binding on a cloud
     /// platform without credentials still surfaces the client-config error.
+    ///
+    /// Called at the entry of every `load_*` method below, app-facing or not:
+    /// `parse_binding` (in [`BindingsProvider`]) would return the identical
+    /// `not_configured` error for a missing name once resolution reaches it,
+    /// so this guard only *reorders* that error ahead of platform/credential
+    /// resolution — it never changes which bindings succeed or fail. Keeping
+    /// it uniform means a newly added `load_*` method can't silently regress
+    /// the zero-env contract by omission.
     fn ensure_binding_present(&self, binding_name: &str) -> Result<()> {
         if self.bindings.contains_key(binding_name) {
             Ok(())
@@ -441,6 +449,7 @@ impl BindingsProviderApi for LazyEnvBindingsProvider {
     }
 
     async fn load_build(&self, binding_name: &str) -> Result<Arc<dyn Build>> {
+        self.ensure_binding_present(binding_name)?;
         self.provider().await?.load_build(binding_name).await
     }
 
@@ -448,6 +457,7 @@ impl BindingsProviderApi for LazyEnvBindingsProvider {
         &self,
         binding_name: &str,
     ) -> Result<Arc<dyn ArtifactRegistry>> {
+        self.ensure_binding_present(binding_name)?;
         self.provider()
             .await?
             .load_artifact_registry(binding_name)
@@ -465,6 +475,7 @@ impl BindingsProviderApi for LazyEnvBindingsProvider {
     }
 
     async fn load_postgres(&self, binding_name: &str) -> Result<Arc<dyn Postgres>> {
+        self.ensure_binding_present(binding_name)?;
         self.provider().await?.load_postgres(binding_name).await
     }
 
@@ -474,14 +485,17 @@ impl BindingsProviderApi for LazyEnvBindingsProvider {
     }
 
     async fn load_worker(&self, binding_name: &str) -> Result<Arc<dyn Worker>> {
+        self.ensure_binding_present(binding_name)?;
         self.provider().await?.load_worker(binding_name).await
     }
 
     async fn load_container(&self, binding_name: &str) -> Result<Arc<dyn Container>> {
+        self.ensure_binding_present(binding_name)?;
         self.provider().await?.load_container(binding_name).await
     }
 
     async fn load_service_account(&self, binding_name: &str) -> Result<Arc<dyn ServiceAccount>> {
+        self.ensure_binding_present(binding_name)?;
         self.provider()
             .await?
             .load_service_account(binding_name)
