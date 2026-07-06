@@ -60,9 +60,15 @@ export class Deployment {
   }
 
   /**
-   * Invoke a command on the deployment
+   * Invoke a command on the deployment.
+   *
+   * Pass `options.target` to route the command to a specific command-capable
+   * resource by id. This is required when more than one resource (e.g. a Worker
+   * and a Daemon) registers a handler under the same command name — the target
+   * disambiguates which one runs. When omitted, the server routes by its default
+   * rules.
    */
-  async invokeCommand(name: string, params: any): Promise<any> {
+  async invokeCommand(name: string, params: any, options?: { target?: string }): Promise<any> {
     const token = this.apiKey ?? ""
     const arc = new CommandsClient({
       managerUrl: this.commandsUrl,
@@ -71,6 +77,9 @@ export class Deployment {
       allowLocalStorage: this.platform === "local",
     })
 
+    if (options?.target) {
+      return arc.target(options.target).invoke(name, params)
+    }
     return arc.invoke(name, params)
   }
 

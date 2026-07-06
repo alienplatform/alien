@@ -21,7 +21,7 @@ const startupTimeoutMs = Number(process.env.STARTUP_TIMEOUT_SECONDS ?? "180") * 
 
 const db = new pg.Pool({ connectionString: databaseUrl })
 const redis = new Redis(redisUrl, { maxRetriesPerRequest: 3 })
-const files = await storage(filesBucket)
+const files = storage(filesBucket)
 
 const sleep = (ms: number) => new Promise(resolve => setTimeout(resolve, ms))
 
@@ -127,7 +127,7 @@ app.post("/issues/:id/files", async c => {
 
   const fileId = randomUUID()
   const objectKey = `issues/${id}/${fileId}-${payload.filename}`
-  await files.put(objectKey, payload.content, { contentType: "text/plain; charset=utf-8" })
+  await files.put(objectKey, new TextEncoder().encode(payload.content))
   const result = await db.query(
     "insert into issue_files (id, issue_id, object_key, filename) values ($1, $2, $3, $4) returning *",
     [fileId, id, objectKey, payload.filename],
@@ -144,7 +144,7 @@ app.get("/files/:fileId", async c => {
     return c.json({ error: "file not found" }, 404)
   }
 
-  const object = await files.getText(result.rows[0].object_key)
+  const object = new TextDecoder().decode(await files.get(result.rows[0].object_key))
   return c.json({ filename: result.rows[0].filename, content: object })
 })
 

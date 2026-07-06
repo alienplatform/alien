@@ -53,6 +53,7 @@ const worker = new alien.Container("worker")
   })
   .cpu(0.25)
   .memory("512Mi")
+  .commandsEnabled(true)
   .environment({
     DATABASE_URL: "postgres://app:app@postgres:5432/app?sslmode=disable",
     REDIS_URL: "redis://redis:6379",

@@ -10,4 +10,6 @@ packages:
   - endpoint-agent
   - full-stack-microservices
   - full-stack-microservices/services/*
+  - command-routing-ts
+  - command-routing-ts/services/*
   - github-agent/packages/remote-agent

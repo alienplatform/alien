@@ -86,7 +86,7 @@ interface DeployOptions {
 The returned `Deployment` supports:
 
 - `deployment.url`
-- `deployment.invokeCommand(name, params)`
+- `deployment.invokeCommand(name, params, { target? })` — optional `target` routes to a specific resource by id
 - `deployment.setExternalSecret(vault, key, value)`
 - `deployment.upgrade(options)` for cloud mode
 - `deployment.destroy()`

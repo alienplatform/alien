@@ -1,5 +1,14 @@
-import { command, kv, onCronEvent, onQueueMessage, onStorageEvent, queue } from "@alienplatform/sdk"
+import {
+  command,
+  kv,
+  onCronEvent,
+  onQueueMessage,
+  onStorageEvent,
+  queue,
+  waitUntil,
+} from "@alienplatform/sdk"
 import type { Kv } from "@alienplatform/sdk"
+import { Hono } from "hono"
 
 /** Iterate every key under a prefix, following the scan cursor across pages. */
 async function* scanAll(store: Kv, prefix: string) {
@@ -94,3 +103,44 @@ command("send-test-message", async ({ message }: { message: string }) => {
   await q.send(message)
   return { sent: true }
 })
+
+// --- HTTP surface ---
+// The same Worker also serves HTTP. A Worker can expose an HTTP app (this
+// default export), react to triggers (the handlers above), and answer commands
+// all from one deployment.
+
+const app = new Hono()
+
+app.get("/health", c => c.json({ status: "ok" }))
+
+// Enqueue a message over HTTP. The response returns as soon as the message is
+// queued; the audit-log write is handed to `waitUntil`, so it runs in the
+// background after the response is sent instead of blocking the caller.
+app.post("/ingest", async c => {
+  const { message } = await c.req.json<{ message: string }>()
+  const q = queue("inbox")
+  await q.send(message)
+
+  waitUntil(
+    kv("events").setJson(`audit:${Date.now()}`, {
+      type: "http-ingest",
+      message,
+      at: new Date().toISOString(),
+    }),
+  )
+
+  return c.json({ queued: true })
+})
+
+app.get("/stats", async c => {
+  const ev = kv("events")
+  let queueCount = 0
+  let storageCount = 0
+  let cronCount = 0
+  for await (const _ of scanAll(ev, "queue:")) queueCount++
+  for await (const _ of scanAll(ev, "storage:")) storageCount++
+  for await (const _ of scanAll(ev, "cron:")) cronCount++
+  return c.json({ queue: queueCount, storage: storageCount, cron: cronCount })
+})
+
+export default app

@@ -1,7 +1,18 @@
 import { command, kv } from "@alienplatform/sdk"
+import type { Kv } from "@alienplatform/sdk"
 import { Hono } from "hono"
 
 const app = new Hono()
+
+/** Iterate every key/value under a prefix, following the scan cursor across pages. */
+async function* scanAll(store: Kv, prefix: string) {
+  let cursor: string | undefined
+  do {
+    const page = await store.scan(prefix, undefined, cursor)
+    for (const item of page.items) yield item
+    cursor = page.nextCursor
+  } while (cursor)
+}
 
 // --- Webhook endpoints ---
 // These receive callbacks from external services (GitHub, Stripe, Slack, etc.)
@@ -11,7 +22,7 @@ const app = new Hono()
 app.post("/webhooks/:source", async c => {
   const source = c.req.param("source")
   const body = await c.req.json()
-  const ev = await kv("events")
+  const ev = kv("events")
 
   const event = {
     source,
@@ -21,17 +32,17 @@ app.post("/webhooks/:source", async c => {
   }
 
   const key = `${source}:${Date.now()}`
-  await ev.set(key, event)
+  await ev.setJson(key, event)
 
   return c.json({ received: true, key })
 })
 
 app.get("/webhooks/:source/recent", async c => {
   const source = c.req.param("source")
-  const ev = await kv("events")
+  const ev = kv("events")
   const results: { key: string; value: unknown }[] = []
 
-  for await (const entry of ev.scan(`${source}:`)) {
+  for await (const entry of scanAll(ev, `${source}:`)) {
     results.push({
       key: entry.key,
       value: JSON.parse(new TextDecoder().decode(entry.value)),
@@ -48,11 +59,11 @@ app.get("/health", c => c.json({ status: "ok" }))
 // Query stored events from your control plane.
 
 command("get-events", async ({ source, limit }: { source?: string; limit?: number }) => {
-  const ev = await kv("events")
+  const ev = kv("events")
   const prefix = source ? `${source}:` : ""
   const results: { key: string; value: unknown }[] = []
 
-  for await (const entry of ev.scan(prefix)) {
+  for await (const entry of scanAll(ev, prefix)) {
     results.push({
       key: entry.key,
       value: JSON.parse(new TextDecoder().decode(entry.value)),
@@ -64,12 +75,12 @@ command("get-events", async ({ source, limit }: { source?: string; limit?: numbe
 })
 
 command("get-stats", async ({ sources }: { sources: string[] }) => {
-  const ev = await kv("events")
+  const ev = kv("events")
   const counts: Record<string, number> = {}
 
   for (const source of sources) {
     let count = 0
-    for await (const _ of ev.scan(`${source}:`)) count++
+    for await (const _ of scanAll(ev, `${source}:`)) count++
     counts[source] = count
   }
 
