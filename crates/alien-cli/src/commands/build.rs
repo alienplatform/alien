@@ -326,9 +326,7 @@ pub async fn build_task(args: &BuildArgs) -> Result<Vec<BuildOutput>> {
             "gcp" => PlatformBuildSettings::Gcp {},
             "azure" => PlatformBuildSettings::Azure {},
             "kubernetes" => PlatformBuildSettings::Kubernetes { base_platform },
-            "machines" => PlatformBuildSettings::Kubernetes {
-                base_platform: None,
-            },
+            "machines" => PlatformBuildSettings::Machines {},
             "local" => PlatformBuildSettings::Local {},
             _ => {
                 return Err(AlienError::new(ErrorData::ValidationError {

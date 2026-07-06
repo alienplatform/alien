@@ -939,9 +939,7 @@ fn auto_build_settings_for_platform(
         Platform::Kubernetes => alien_build::settings::PlatformBuildSettings::Kubernetes {
             base_platform: kubernetes_base_platform,
         },
-        Platform::Machines => alien_build::settings::PlatformBuildSettings::Kubernetes {
-            base_platform: None,
-        },
+        Platform::Machines => alien_build::settings::PlatformBuildSettings::Machines {},
         Platform::Local => alien_build::settings::PlatformBuildSettings::Local {},
         Platform::Test => alien_build::settings::PlatformBuildSettings::Test {},
     };
@@ -1018,11 +1016,7 @@ fn auto_build_target_group_key(settings: &alien_build::settings::BuildSettings) 
 
 /// Load a built stack from .alien/build/{platform}/stack.json
 fn load_built_stack(output_dir: &PathBuf, platform: &str) -> Result<Stack> {
-    let build_platform = build_artifact_platform(platform);
-    let stack_file = output_dir
-        .join("build")
-        .join(build_platform)
-        .join("stack.json");
+    let stack_file = output_dir.join("build").join(platform).join("stack.json");
 
     if !stack_file.exists() {
         return Err(AlienError::new(ErrorData::FileOperationFailed {
@@ -1053,14 +1047,6 @@ fn load_built_stack(output_dir: &PathBuf, platform: &str) -> Result<Stack> {
             })?;
 
     Ok(stack)
-}
-
-fn build_artifact_platform(platform: &str) -> &str {
-    if platform.eq_ignore_ascii_case(Platform::Machines.as_str()) {
-        Platform::Kubernetes.as_str()
-    } else {
-        platform
-    }
 }
 
 /// Create push settings from manual CLI arguments
@@ -1955,8 +1941,19 @@ mod tests {
     }
 
     #[test]
-    fn machines_release_reads_kubernetes_build_artifacts() {
-        assert_eq!(build_artifact_platform("machines"), "kubernetes");
+    fn machines_release_auto_build_uses_machines_platform() {
+        let temp = tempfile::tempdir().unwrap();
+        let settings = auto_build_settings_for_platform(
+            "machines",
+            &temp.path().join(".alien"),
+            None,
+            None,
+            None,
+        )
+        .unwrap();
+
+        assert_eq!(settings.platform.runtime_platform(), Platform::Machines);
+        assert_eq!(settings.targets, None);
     }
 
     #[test]
