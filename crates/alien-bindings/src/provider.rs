@@ -1909,6 +1909,28 @@ mod tests {
         assert_eq!(error.code, "CLIENT_CONFIG_INVALID");
     }
 
+    /// The construction-time binding-JSON parse is load-bearing: `select`
+    /// reuses it instead of re-parsing `env` on first use, so malformed JSON
+    /// must fail at construction — for BOTH lazy constructors.
+    #[test]
+    fn malformed_binding_json_fails_at_construction_for_both_lazy_constructors() {
+        let env = HashMap::from([
+            (
+                ENV_ALIEN_DEPLOYMENT_TYPE.to_string(),
+                Platform::Aws.as_str().to_string(),
+            ),
+            ("ALIEN_FILES_BINDING".to_string(), "not-json".to_string()),
+        ]);
+
+        let error = BindingsProvider::from_env_lazy(env.clone())
+            .expect_err("from_env_lazy must reject malformed binding JSON at construction");
+        assert_eq!(error.code, "BINDING_CONFIG_INVALID");
+
+        let error = BindingsProvider::from_env_deferred(env)
+            .expect_err("from_env_deferred must reject malformed binding JSON at construction");
+        assert_eq!(error.code, "BINDING_CONFIG_INVALID");
+    }
+
     // Building the KubernetesCloud client config requires kubernetes support
     // to be compiled in; without the feature, `from_env` rejects the config.
     #[cfg(feature = "kubernetes")]
