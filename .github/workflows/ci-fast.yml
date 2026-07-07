@@ -114,6 +114,10 @@ jobs:
       - name: Validate package layout
         run: pnpm validate:package-layout
 
+      - name: Build bindings dev addon (used by compiled-binary binding tests)
+        working-directory: crates/alien-bindings-node
+        run: pnpm exec napi build --platform --release
+
       - name: Rust fast tests (non-cloud)
         env:
           AXIOM_OTLP_ENDPOINT: https://api.axiom.co/v1/logs
