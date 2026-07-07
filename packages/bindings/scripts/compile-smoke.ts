@@ -46,31 +46,14 @@
  */
 
 import { spawnSync } from "node:child_process"
-import { copyFileSync, existsSync, mkdtempSync, rmSync } from "node:fs"
+import { copyFileSync, mkdtempSync, rmSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { dirname, join } from "node:path"
 import { fileURLToPath } from "node:url"
-import { platformTriple } from "../src/loader.ts"
+import { findLocalAddon, platformTriple } from "../src/loader.ts"
 
 const scriptDir = dirname(fileURLToPath(import.meta.url))
 const packageDir = dirname(scriptDir)
-
-/** Walk up from `packageDir` looking for the locally-built dev addon (mirrors `src/loader.ts`). */
-function findLocalAddon(triple: string): string {
-  const fileName = `alien-bindings-node.${triple}.node`
-  let dir = packageDir
-  for (;;) {
-    const candidate = join(dir, "crates", "alien-bindings-node", fileName)
-    if (existsSync(candidate)) return candidate
-    const parent = dirname(dir)
-    if (parent === dir) {
-      throw new Error(
-        `Could not find ${fileName} by walking up from ${packageDir}. Build it first: \`npx napi build --platform --release\` in crates/alien-bindings-node.`,
-      )
-    }
-    dir = parent
-  }
-}
 
 function run(command: string, args: string[], cwd: string, env?: NodeJS.ProcessEnv) {
   console.log(`$ ${command} ${args.join(" ")}`)
@@ -91,7 +74,12 @@ function main() {
   // 2. Stage the locally-built dev addon next to dist/native.js, per the
   // staging contract documented in src/native.ts.
   const triple = platformTriple()
-  const localAddon = findLocalAddon(triple)
+  const localAddon = findLocalAddon(triple, packageDir)
+  if (!localAddon) {
+    throw new Error(
+      `Could not find alien-bindings-node.${triple}.node by walking up from ${packageDir}. Build it first: \`npx napi build --platform --release\` in crates/alien-bindings-node.`,
+    )
+  }
   const stagedAddon = join(packageDir, "dist", "alien-bindings.node")
   copyFileSync(localAddon, stagedAddon)
   console.log(`staged ${localAddon} -> ${stagedAddon}`)

@@ -189,12 +189,17 @@ export function platformTriple(
 }
 
 /**
- * Walk up from this module looking for the locally-built addon under
- * `crates/alien-bindings-node`. Repo-internal dev/test only.
+ * Walk up from `startDir` (default: this module's directory) looking for the
+ * locally-built addon under `crates/alien-bindings-node`, returning its path or
+ * `undefined` if the walk reaches the filesystem root without finding it.
+ * Repo-internal dev/test only. Also reused by `scripts/compile-smoke.ts`.
  */
-function findLocalAddon(triple: string): string | undefined {
+export function findLocalAddon(
+  triple: string,
+  startDir: string = dirname(fileURLToPath(import.meta.url)),
+): string | undefined {
   const fileName = `alien-bindings-node.${triple}.node`
-  let dir = dirname(fileURLToPath(import.meta.url))
+  let dir = startDir
   // Bounded walk to the filesystem root.
   for (;;) {
     const candidate = join(dir, "crates", "alien-bindings-node", fileName)
