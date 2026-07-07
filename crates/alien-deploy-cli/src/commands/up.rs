@@ -304,6 +304,15 @@ mod tests {
     }
 
     #[test]
+    fn machines_deploy_defaults_to_pull_model() {
+        let args = UpArgs::parse_from(["alien-deploy", "--platform", "machines"]);
+        let settings =
+            load_stack_settings(&args, Platform::Machines, None).expect("settings should load");
+
+        assert_eq!(settings.deployment_model, DeploymentModel::Pull);
+    }
+
+    #[test]
     fn local_tracking_uses_service_data_dir_by_default() {
         let args = UpArgs::parse_from(["alien-deploy", "--platform", "local"]);
         let local = local_tracking_metadata(&args, Platform::Local)
@@ -1500,10 +1509,9 @@ fn load_stack_settings(
 ) -> Result<StackSettings> {
     let mut settings = StackSettings::default();
     settings.deployment_model = match platform {
-        Platform::Aws | Platform::Gcp | Platform::Azure | Platform::Machines | Platform::Test => {
-            DeploymentModel::Push
-        }
+        Platform::Aws | Platform::Gcp | Platform::Azure | Platform::Test => DeploymentModel::Push,
         Platform::Kubernetes | Platform::Local => DeploymentModel::Pull,
+        Platform::Machines => DeploymentModel::Pull,
     };
 
     if let Some(config) = deploy_config {
