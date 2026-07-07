@@ -1424,7 +1424,7 @@ async fn update_agent_metadata_partial_update_preserves_others() {
         .await
         .unwrap();
 
-    // Agent upgraded to 1.4.0; OS/arch/regime/repo didn't change, so the
+    // Agent upgraded to 1.4.0; OS/arch/packaging/repo didn't change, so the
     // handler only forwards operator_version this time (hypothetically — the
     // real agent always sends all fields, but the contract supports
     // partial updates).
@@ -1449,5 +1449,5 @@ async fn update_agent_metadata_partial_update_preserves_others() {
     assert_eq!(fetched.operator_version.as_deref(), Some("1.4.0"), "version updated");
     assert_eq!(fetched.operator_os.as_deref(), Some("linux"), "os preserved");
     assert_eq!(fetched.operator_arch.as_deref(), Some("aarch64"), "arch preserved");
-    assert_eq!(fetched.packaging.as_deref(), Some("kubernetes"), "regime preserved");
+    assert_eq!(fetched.packaging.as_deref(), Some("kubernetes"), "packaging preserved");
 }

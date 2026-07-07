@@ -42,22 +42,22 @@ pub(crate) enum Deployments {
     WorkspaceId,
     /// Project this deployment belongs to. Always `"default"` in this store.
     ProjectId,
-    // Agent self-update inventory. Populated by the sync handler from the
+    // Operator self-update inventory. Populated by the sync handler from the
     // matching SyncRequest fields on every /v1/sync.
-    /// Agent binary version (e.g. `"1.3.5"`). NULL until first sync.
-    AgentVersion,
+    /// Operator binary version (e.g. `"1.3.5"`). NULL until first sync.
+    OperatorVersion,
     /// `linux` / `macos` / `windows`. NULL until first sync.
-    AgentOs,
+    OperatorOs,
     /// `x86_64` / `aarch64`. NULL until first sync.
-    AgentArch,
-    /// Supervisor regime — `os-service` / `kubernetes`. NULL until first sync.
-    Regime,
-    /// Image repository the agent was pulled from (no tag), reported on
+    OperatorArch,
+    /// Supervisor packaging — `os-service` / `kubernetes`. NULL until first sync.
+    Packaging,
+    /// Image repository the operator was pulled from (no tag), reported on
     /// each sync. Drives the dashboard's pin-version registry display.
-    AgentImageRepository,
-    /// Pinned target agent version. NULL = no pin. When set ≠ AgentVersion,
+    OperatorImageRepository,
+    /// Pinned target operator version. NULL = no pin. When set ≠ OperatorVersion,
     /// sync handler emits `operator_target` to drive an upgrade.
-    TargetAgentVersion,
+    TargetOperatorVersion,
 }
 
 #[derive(Iden, Clone, Copy)]
@@ -337,16 +337,16 @@ pub async fn run_migrations(db: &SqliteDatabase) -> Result<(), AlienError> {
         "ALTER TABLE releases ADD COLUMN project_id TEXT NOT NULL DEFAULT 'default'",
         "ALTER TABLE deployment_groups ADD COLUMN workspace_id TEXT NOT NULL DEFAULT 'default'",
         "ALTER TABLE deployment_groups ADD COLUMN project_id TEXT NOT NULL DEFAULT 'default'",
-        // Agent self-update inventory: populated by the sync handler from
+        // Operator self-update inventory: populated by the sync handler from
         // the new SyncRequest fields on every /v1/sync.
         "ALTER TABLE deployments ADD COLUMN operator_version TEXT",
         "ALTER TABLE deployments ADD COLUMN operator_os TEXT",
         "ALTER TABLE deployments ADD COLUMN operator_arch TEXT",
-        "ALTER TABLE deployments ADD COLUMN regime TEXT",
-        // Image repository the agent was pulled from, reported on sync.
+        "ALTER TABLE deployments ADD COLUMN packaging TEXT",
+        // Image repository the operator was pulled from, reported on sync.
         // Surfaced in the dashboard pin-version UI so admins see the registry.
         "ALTER TABLE deployments ADD COLUMN operator_image_repository TEXT",
-        // Pinned target agent version. Sync handler reads this on every
+        // Pinned target operator version. Sync handler reads this on every
         // request and emits operator_target when it differs from the agent's
         // reported version. Drives the manager-directed upgrade flow.
         "ALTER TABLE deployments ADD COLUMN target_operator_version TEXT",

@@ -1,4 +1,4 @@
-//! Agent self-update actuator (Kubernetes regime). When `/v1/sync` returns
+//! Agent self-update actuator (Kubernetes packaging). When `/v1/sync` returns
 //! `operator_target.helm`, this module reconciles a Helm-runner Job that runs
 //! `helm upgrade --reuse-values` to flip the agent's image tag (and any other
 //! values overrides the manager sent).
@@ -14,7 +14,7 @@
 //! `/api/v1/...`) using the in-pod ServiceAccount token, avoiding a dependency
 //! on `alien-k8s-clients`.
 //!
-//! `os-service` regime is not in this MVP — the wire carries
+//! `os-service` packaging is not in this MVP — the wire carries
 //! `operator_target.binary` for it, but the actuator is unimplemented and this
 //! module logs + skips that path (its failure reporting lands with that work).
 

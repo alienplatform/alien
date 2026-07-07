@@ -169,7 +169,7 @@ pub struct AgentSyncResponse {
     pub commands_url: Option<String>,
     /// Desired agent self-update target. The payload carries either `binary`
     /// (OS-service flow) or `helm` (Kubernetes flow); the agent picks the
-    /// one matching its regime.
+    /// one matching its packaging.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub operator_target: Option<serde_json::Value>,
 }
@@ -1081,7 +1081,7 @@ async fn agent_sync(
     }
 
     // Persist the agent self-update inventory the agent reported on this sync
-    // (`operator_version`, `operator_os`, `operator_arch`, `regime`). Runs on every
+    // (`operator_version`, `operator_os`, `operator_arch`, `packaging`). Runs on every
     // sync regardless of whether the agent reported a state change, so the
     // manager has a fleet-wide view of which version each host is on. Old
     // agents that don't send these fields are no-ops.
@@ -1390,7 +1390,7 @@ async fn agent_sync(
 }
 
 /// Build `OperatorTarget` when `deployment.target_operator_version` is set AND
-/// differs from what the agent just reported. The regime field controls
+/// differs from what the agent just reported. The packaging field controls
 /// which sub-target (`binary` for os-service, `helm` for kubernetes) gets
 /// populated.
 ///
@@ -1401,13 +1401,13 @@ async fn agent_sync(
 fn build_operator_target(
     deployment: &crate::traits::DeploymentRecord,
     reported_version: Option<&str>,
-    regime: Option<&str>,
+    packaging: Option<&str>,
 ) -> Option<alien_core::sync::OperatorTarget> {
     let target_version = deployment.target_operator_version.as_deref()?;
     if reported_version == Some(target_version) {
         return None;
     }
-    let helm = (regime == Some("kubernetes")).then(|| alien_core::sync::OperatorHelmTarget {
+    let helm = (packaging == Some("kubernetes")).then(|| alien_core::sync::OperatorHelmTarget {
         // Agent reads chart_repo/chart_version directly; when empty it falls
         // back to its `ALIEN_AGENT_CHART_REF` / `ALIEN_AGENT_CHART_VERSION`
         // env vars (injected by the chart at install time). Leaving blank

@@ -159,14 +159,14 @@ impl SqliteDeploymentStore {
         Deployments::Error,
         Deployments::WorkspaceId,
         Deployments::ProjectId,
-        // Agent self-update inventory:
-        Deployments::AgentVersion,
-        Deployments::AgentOs,
-        Deployments::AgentArch,
-        Deployments::Regime,
-        Deployments::AgentImageRepository,
+        // Operator self-update inventory:
+        Deployments::OperatorVersion,
+        Deployments::OperatorOs,
+        Deployments::OperatorArch,
+        Deployments::Packaging,
+        Deployments::OperatorImageRepository,
         // Manager-driven upgrade target:
-        Deployments::TargetAgentVersion,
+        Deployments::TargetOperatorVersion,
     ];
 
     fn parse_deployment(row: &turso::Row) -> Result<DeploymentRecord, AlienError> {
@@ -237,7 +237,7 @@ impl SqliteDeploymentStore {
             project_id: p
                 .optional_string(26, "project_id")?
                 .unwrap_or_else(|| "default".to_string()),
-            // Agent self-update inventory; indices match DEPLOYMENT_COLUMNS order.
+            // Operator self-update inventory; indices match DEPLOYMENT_COLUMNS order.
             operator_version: p.optional_string(27, "operator_version")?,
             operator_os: p.optional_string(28, "operator_os")?,
             operator_arch: p.optional_string(29, "operator_arch")?,
@@ -510,7 +510,7 @@ impl DeploymentStore for SqliteDeploymentStore {
             created_at: now,
             updated_at: None,
             error: None,
-            // Agent self-update inventory — NULL until the agent's first sync.
+            // Operator self-update inventory — NULL until the agent's first sync.
             operator_version: None,
             operator_os: None,
             operator_arch: None,
@@ -680,7 +680,7 @@ impl DeploymentStore for SqliteDeploymentStore {
             created_at: now,
             updated_at: None,
             error: None,
-            // Agent self-update inventory — NULL until the agent's first sync.
+            // Operator self-update inventory — NULL until the agent's first sync.
             operator_version: None,
             operator_os: None,
             operator_arch: None,
@@ -969,19 +969,19 @@ impl DeploymentStore for SqliteDeploymentStore {
             let mut q = Query::update();
             q.table(Deployments::Table);
             if let Some(v) = operator_version {
-                q.value(Deployments::AgentVersion, v);
+                q.value(Deployments::OperatorVersion, v);
             }
             if let Some(v) = operator_os {
-                q.value(Deployments::AgentOs, v);
+                q.value(Deployments::OperatorOs, v);
             }
             if let Some(v) = operator_arch {
-                q.value(Deployments::AgentArch, v);
+                q.value(Deployments::OperatorArch, v);
             }
             if let Some(v) = packaging {
-                q.value(Deployments::Regime, v);
+                q.value(Deployments::Packaging, v);
             }
             if let Some(v) = operator_image_repository {
-                q.value(Deployments::AgentImageRepository, v);
+                q.value(Deployments::OperatorImageRepository, v);
             }
             q.and_where(Expr::col(Deployments::Id).eq(id))
                 .to_string(SqliteQueryBuilder)
@@ -1012,9 +1012,9 @@ impl DeploymentStore for SqliteDeploymentStore {
             let mut q = Query::update();
             q.table(Deployments::Table);
             match target_operator_version {
-                Some(v) => q.value(Deployments::TargetAgentVersion, v),
+                Some(v) => q.value(Deployments::TargetOperatorVersion, v),
                 // sea_query treats `Option::<&str>::None` as SQL NULL.
-                None => q.value(Deployments::TargetAgentVersion, Option::<&str>::None),
+                None => q.value(Deployments::TargetOperatorVersion, Option::<&str>::None),
             };
             q.and_where(Expr::col(Deployments::Id).eq(id))
                 .to_string(SqliteQueryBuilder)

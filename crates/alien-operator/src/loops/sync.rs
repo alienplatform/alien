@@ -175,7 +175,7 @@ async fn sync_with_manager(
 
     // Report the outcome of any in-flight self-update so the manager can show a
     // truthful failed/in-progress state instead of inferring from a stalled
-    // version. Kubernetes regime only; None otherwise.
+    // version. Kubernetes packaging only; None otherwise.
     let operator_update = crate::loops::operator_upgrade::current_update_report().await;
 
     let sync_request = SyncRequest {
@@ -469,7 +469,7 @@ fn is_uninitialized_deployment_state(state: &alien_core::DeploymentState) -> boo
         && state.runtime_metadata.is_none()
 }
 
-/// Detect the agent's supervisor regime. `KUBERNETES_SERVICE_HOST` is the
+/// Detect the agent's supervisor packaging. `KUBERNETES_SERVICE_HOST` is the
 /// kubelet-injected signal and takes precedence over any other hint; outside
 /// k8s the agent is supervised as a native OS service via the launcher.
 fn detect_operator_packaging() -> OperatorPackaging {

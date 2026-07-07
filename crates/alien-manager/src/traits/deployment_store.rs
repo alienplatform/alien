@@ -370,7 +370,7 @@ pub trait DeploymentStore: Send + Sync {
     ) -> Result<(), AlienError>;
 
     /// Persist the agent self-update inventory reported on a `SyncRequest`
-    /// (`operator_version`, `operator_os`, `operator_arch`, `regime`, image repo).
+    /// (`operator_version`, `operator_os`, `operator_arch`, `packaging`, image repo).
     /// Called on every agent sync — alongside the heartbeat update — so the
     /// manager has a fleet-wide view of which version + registry each host
     /// is on and can decide whether to send an `operator_target` in the
@@ -383,7 +383,7 @@ pub trait DeploymentStore: Send + Sync {
         operator_version: Option<&str>,
         operator_os: Option<&str>,
         operator_arch: Option<&str>,
-        regime: Option<&str>,
+        packaging: Option<&str>,
         operator_image_repository: Option<&str>,
     ) -> Result<(), AlienError>;
 

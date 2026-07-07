@@ -83,7 +83,7 @@ pub struct SyncRequest {
     /// tag), e.g. `ghcr.io/alien-dev/alien-operator`. The chart injects this via
     /// `ALIEN_OPERATOR_IMAGE_REPOSITORY` (= `.Values.runtime.image.repository`),
     /// so admins can see the supply-chain link before pinning a new tag.
-    /// Optional and Kubernetes-only — the os-service regime fills the same role
+    /// Optional and Kubernetes-only — the os-service packaging fills the same role
     /// with its launcher manifest URL.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub operator_image_repository: Option<String>,
@@ -95,7 +95,7 @@ pub struct SyncRequest {
     pub operator_update: Option<OperatorUpdateReport>,
 }
 
-/// Supervisor regime for an operator. Drives which `operator_target` payload
+/// Supervisor packaging for an operator. Drives which `operator_target` payload
 /// (`binary` vs `helm`) the manager sends and how the operator actuates the
 /// upgrade.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -176,7 +176,7 @@ pub struct SyncResponse {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub commands_url: Option<String>,
     /// Desired operator self-update target. The operator acts on whichever
-    /// payload matches its regime: `binary` for `os-service`, `helm` for
+    /// payload matches its packaging: `binary` for `os-service`, `helm` for
     /// `kubernetes`. None means no upgrade pending.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub operator_target: Option<OperatorTarget>,
@@ -184,7 +184,7 @@ pub struct SyncResponse {
 
 /// Desired operator upgrade payload, sent by the manager on the sync exchange.
 ///
-/// The operator reads `binary` or `helm` depending on its regime. The manager is
+/// The operator reads `binary` or `helm` depending on its packaging. The manager is
 /// the single source of truth for the target version per deployment per channel,
 /// and on Kubernetes also for the full desired values.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -195,10 +195,10 @@ pub struct OperatorTarget {
     /// The operator should refuse the upgrade if its own version is older than
     /// this — used by the manager to enforce a floor on incremental migrations.
     pub min_supported_version: String,
-    /// OS-service actuation payload. Present iff the deployment's regime is `os-service`.
+    /// OS-service actuation payload. Present iff the deployment's packaging is `os-service`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub binary: Option<OperatorBinaryTarget>,
-    /// Kubernetes actuation payload. Present iff the deployment's regime is `kubernetes`.
+    /// Kubernetes actuation payload. Present iff the deployment's packaging is `kubernetes`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub helm: Option<OperatorHelmTarget>,
 }
@@ -396,7 +396,7 @@ mod tests {
     }
 
     #[test]
-    fn test_operator_regime_kebab_case() {
+    fn test_operator_packaging_kebab_case() {
         assert_eq!(
             serde_json::to_value(OperatorPackaging::OsService).unwrap(),
             serde_json::json!("os-service")
