@@ -70,15 +70,14 @@ export interface InvokeOptions {
 }
 
 /**
- * Base64 encode data.
+ * Serialize `data` (JSON-stringifying anything that isn't already a string) and
+ * base64-encode it. This is the one place the send-side serialize decision
+ * lives. `@alienplatform/commands` is a Node-only package — the receiver decodes
+ * with `Buffer` too — so this uses `Buffer` directly rather than branching on a
+ * browser `btoa`.
  */
-function base64Encode(data: string | Record<string, unknown>): string {
+function base64Encode(data: unknown): string {
   const json = typeof data === "string" ? data : JSON.stringify(data)
-  if (typeof btoa !== "undefined") {
-    // Browser
-    return btoa(json)
-  }
-  // Node.js
   return Buffer.from(json, "utf-8").toString("base64")
 }
 
@@ -98,11 +97,10 @@ function base64Decode(encoded: string): string {
  * Create an inline body spec. Always sends inline — the server handles storage
  * decisions transparently (auto-promoting to blob if needed).
  */
-function createBodySpec(data: string | Record<string, unknown>): BodySpec {
-  const json = typeof data === "string" ? data : JSON.stringify(data)
+function createBodySpec(data: unknown): BodySpec {
   return {
     mode: "inline",
-    inlineBase64: base64Encode(json),
+    inlineBase64: base64Encode(data),
   }
 }
 
@@ -267,7 +265,7 @@ export class CommandsClient {
     const body = {
       deploymentId: this.deploymentId,
       command,
-      params: createBodySpec(input as string | Record<string, unknown>),
+      params: createBodySpec(input),
       deadline: options?.deadline?.toISOString(),
       idempotencyKey: options?.idempotencyKey,
       targetResourceId: options?.targetResourceId,
