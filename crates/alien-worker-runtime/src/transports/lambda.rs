@@ -408,6 +408,71 @@ impl Service<LambdaRequest> for BufferedAdapter {
 // Runtime launchers
 // ============================================================================
 
+/// Drive a Lambda runtime future to completion, registering the wait_until
+/// extension (unless disabled) and running both concurrently. Shared by the
+/// streaming and buffered launchers, which differ only in how `svc` (and thus
+/// `lambda_runtime_future`) is built and in the label used for error messages.
+async fn drive_lambda_runtime<E: std::fmt::Display>(
+    lambda_runtime_future: impl std::future::Future<Output = std::result::Result<(), E>>,
+    request_done_receiver: UnboundedReceiver<()>,
+    runtime_label: &str,
+) -> Result<()> {
+    // Register the wait_until extension only if not running in cargo lambda
+    let wait_until_extension_future = if should_register_wait_until_extension() {
+        Some(
+            wait_until_extension::WaitUntilExtension::create_and_register(request_done_receiver)
+                .await
+                .map_err(|e| {
+                    AlienError::new(ErrorData::TransportStartupFailed {
+                        transport_name: "Lambda".to_string(),
+                        message: format!("Failed to register wait_until extension: {}", e),
+                        address: None,
+                    })
+                })?,
+        )
+    } else {
+        info!("Skipping wait_until extension registration");
+        None
+    };
+
+    // Run Lambda runtime, optionally with extension
+    match wait_until_extension_future {
+        Some(extension_future) => {
+            tokio::try_join!(
+                async move {
+                    lambda_runtime_future.await.map_err(|e| {
+                        AlienError::new(ErrorData::TransportStartupFailed {
+                            transport_name: "Lambda".to_string(),
+                            message: format!("{} runtime execution failed: {}", runtime_label, e),
+                            address: None,
+                        })
+                    })
+                },
+                async move {
+                    extension_future.await.map_err(|e| {
+                        AlienError::new(ErrorData::TransportStartupFailed {
+                            transport_name: "Lambda".to_string(),
+                            message: format!("Wait until extension execution failed: {}", e),
+                            address: None,
+                        })
+                    })
+                }
+            )?;
+        }
+        None => {
+            lambda_runtime_future.await.map_err(|e| {
+                AlienError::new(ErrorData::TransportStartupFailed {
+                    transport_name: "Lambda".to_string(),
+                    message: format!("{} runtime execution failed: {}", runtime_label, e),
+                    address: None,
+                })
+            })?;
+        }
+    }
+
+    Ok(())
+}
+
 /// Launch Lambda **streaming** runtime.
 async fn run_streaming(
     handler: StreamingAdapter,
@@ -443,62 +508,7 @@ async fn run_streaming(
             }
         });
 
-    // Register the wait_until extension only if not running in cargo lambda
-    let wait_until_extension_future = if should_register_wait_until_extension() {
-        Some(
-            wait_until_extension::WaitUntilExtension::create_and_register(request_done_receiver)
-                .await
-                .map_err(|e| {
-                    AlienError::new(ErrorData::TransportStartupFailed {
-                        transport_name: "Lambda".to_string(),
-                        message: format!("Failed to register wait_until extension: {}", e),
-                        address: None,
-                    })
-                })?,
-        )
-    } else {
-        info!("Skipping wait_until extension registration");
-        None
-    };
-
-    // Run Lambda runtime, optionally with extension
-    let lambda_runtime_future = lambda::run(svc);
-
-    match wait_until_extension_future {
-        Some(extension_future) => {
-            tokio::try_join!(
-                async move {
-                    lambda_runtime_future.await.map_err(|e| {
-                        AlienError::new(ErrorData::TransportStartupFailed {
-                            transport_name: "Lambda".to_string(),
-                            message: format!("Streaming runtime execution failed: {}", e),
-                            address: None,
-                        })
-                    })
-                },
-                async move {
-                    extension_future.await.map_err(|e| {
-                        AlienError::new(ErrorData::TransportStartupFailed {
-                            transport_name: "Lambda".to_string(),
-                            message: format!("Wait until extension execution failed: {}", e),
-                            address: None,
-                        })
-                    })
-                }
-            )?;
-        }
-        None => {
-            lambda_runtime_future.await.map_err(|e| {
-                AlienError::new(ErrorData::TransportStartupFailed {
-                    transport_name: "Lambda".to_string(),
-                    message: format!("Streaming runtime execution failed: {}", e),
-                    address: None,
-                })
-            })?;
-        }
-    }
-
-    Ok(())
+    drive_lambda_runtime(lambda::run(svc), request_done_receiver, "Streaming").await
 }
 
 /// Launch Lambda **buffered** runtime.
@@ -510,62 +520,7 @@ async fn run_buffered(
         .map_request(event_to_request)
         .service(adapter);
 
-    // Register the wait_until extension only if not running in cargo lambda
-    let wait_until_extension_future = if should_register_wait_until_extension() {
-        Some(
-            wait_until_extension::WaitUntilExtension::create_and_register(request_done_receiver)
-                .await
-                .map_err(|e| {
-                    AlienError::new(ErrorData::TransportStartupFailed {
-                        transport_name: "Lambda".to_string(),
-                        message: format!("Failed to register wait_until extension: {}", e),
-                        address: None,
-                    })
-                })?,
-        )
-    } else {
-        info!("Skipping wait_until extension registration");
-        None
-    };
-
-    // Run Lambda runtime, optionally with extension
-    let lambda_runtime_future = lambda::run(svc);
-
-    match wait_until_extension_future {
-        Some(extension_future) => {
-            tokio::try_join!(
-                async move {
-                    lambda_runtime_future.await.map_err(|e| {
-                        AlienError::new(ErrorData::TransportStartupFailed {
-                            transport_name: "Lambda".to_string(),
-                            message: format!("Buffered runtime execution failed: {}", e),
-                            address: None,
-                        })
-                    })
-                },
-                async move {
-                    extension_future.await.map_err(|e| {
-                        AlienError::new(ErrorData::TransportStartupFailed {
-                            transport_name: "Lambda".to_string(),
-                            message: format!("Wait until extension execution failed: {}", e),
-                            address: None,
-                        })
-                    })
-                }
-            )?;
-        }
-        None => {
-            lambda_runtime_future.await.map_err(|e| {
-                AlienError::new(ErrorData::TransportStartupFailed {
-                    transport_name: "Lambda".to_string(),
-                    message: format!("Buffered runtime execution failed: {}", e),
-                    address: None,
-                })
-            })?;
-        }
-    }
-
-    Ok(())
+    drive_lambda_runtime(lambda::run(svc), request_done_receiver, "Buffered").await
 }
 
 // ============================================================================
@@ -715,6 +670,31 @@ fn sqs_record_to_task(
     })
 }
 
+/// Send an event task with the standard event timeout, logging an error on
+/// either a non-success result or a transport failure. Shared by the S3,
+/// SQS, and CloudWatch handlers, which differ only in the task built and the
+/// `desc` used in log messages.
+async fn send_event_task(state: &LambdaState, task: Task, desc: &str) {
+    match state
+        .control_server
+        .send_task(task, super::shared::EVENT_TASK_TIMEOUT)
+        .await
+    {
+        Ok(result) => {
+            if !result.success {
+                error!(
+                    error_code = ?result.error_code,
+                    error_message = ?result.error_message,
+                    "Application failed to process {}", desc
+                );
+            }
+        }
+        Err(e) => {
+            error!(error = %e, "Failed to send {}", desc);
+        }
+    }
+}
+
 async fn handle_s3_event(state: &LambdaState, request_id: &str, s3_event: S3Event) {
     for record in s3_event.records {
         let task = match s3_record_to_task(request_id, record) {
@@ -725,24 +705,7 @@ async fn handle_s3_event(state: &LambdaState, request_id: &str, s3_event: S3Even
             }
         };
 
-        match state
-            .control_server
-            .send_task(task, std::time::Duration::from_secs(300))
-            .await
-        {
-            Ok(result) => {
-                if !result.success {
-                    error!(
-                        error_code = ?result.error_code,
-                        error_message = ?result.error_message,
-                        "Application failed to process storage event"
-                    );
-                }
-            }
-            Err(e) => {
-                error!(error = %e, "Failed to send storage event");
-            }
-        }
+        send_event_task(state, task, "storage event").await;
     }
 }
 
@@ -764,24 +727,7 @@ async fn handle_sqs_event(state: &LambdaState, request_id: &str, sqs_event: SqsE
             }
         };
 
-        match state
-            .control_server
-            .send_task(task, std::time::Duration::from_secs(300))
-            .await
-        {
-            Ok(result) => {
-                if !result.success {
-                    error!(
-                        error_code = ?result.error_code,
-                        error_message = ?result.error_message,
-                        "Application failed to process queue message"
-                    );
-                }
-            }
-            Err(e) => {
-                error!(error = %e, "Failed to send queue message event");
-            }
-        }
+        send_event_task(state, task, "queue message").await;
     }
 }
 
@@ -802,24 +748,7 @@ async fn handle_cloudwatch_event(state: &LambdaState, request_id: &str, cw_event
         })),
     };
 
-    match state
-        .control_server
-        .send_task(task, std::time::Duration::from_secs(300))
-        .await
-    {
-        Ok(result) => {
-            if !result.success {
-                error!(
-                    error_code = ?result.error_code,
-                    error_message = ?result.error_message,
-                    "Application failed to process cron event"
-                );
-            }
-        }
-        Err(e) => {
-            error!(error = %e, "Failed to send cron event");
-        }
-    }
+    send_event_task(state, task, "cron event").await;
 }
 
 async fn handle_command(state: &LambdaState, envelope: &alien_commands::types::Envelope) {
