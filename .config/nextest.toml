@@ -9,6 +9,25 @@ lambda-tests = { max-threads = 1 }
 # resource conflicts and credential race conditions (env vars are process-global).
 e2e-tests = { max-threads = 1 }
 
+# Fast lane (CI): the non-cloud, non-integration subset run on every push in
+# ci-fast.yml and ci-fork.yml. Defining the exclusion set here as a
+# `default-filter` keeps it in ONE place — both workflows just pass
+# `--profile fast` instead of hand-syncing a `--filter-expr`. Command-line
+# filtersets (`-E`) still intersect with this, and custom profiles inherit the
+# serial `test-group` overrides below from `profile.default`.
+[profile.fast]
+default-filter = """
+    not binary_id(alien-build::build_integration_tests) \
+    and not binary_id(alien-build::rust_integration_tests) \
+    and not binary_id(alien-build::typescript_integration_tests) \
+    and not binary_id(alien-worker-runtime::lambda) \
+    and not binary_id(alien-test::distribution) \
+    and not binary_id(alien-test::pull) \
+    and not binary_id(alien-test::push) \
+    and not binary_id(alien-test::kubernetes) \
+    and not binary_id(alien-manager::registry_proxy_cloud_test)
+"""
+
 [[profile.default.overrides]]
 # Apply this rule to tests in the 'build_push_tests.rs' file
 filter = 'test(~build_push_tests::)'
