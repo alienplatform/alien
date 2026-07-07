@@ -115,8 +115,11 @@ jobs:
         run: pnpm validate:package-layout
 
       - name: Build bindings dev addon (used by compiled-binary binding tests)
+        # alien-bindings-node is not a pnpm workspace member; resolve the napi
+        # CLI from package-layout's devDependencies (root frozen-lockfile
+        # install), matching the fixture's own CI recipe in run.ts.
         working-directory: crates/alien-bindings-node
-        run: pnpm exec napi build --platform --release
+        run: ../../packages/package-layout/node_modules/.bin/napi build --platform --release
 
       - name: Rust fast tests (non-cloud)
         env:
