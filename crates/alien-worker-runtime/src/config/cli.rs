@@ -150,9 +150,9 @@ pub enum TransportType {
     Http,
     /// Local Platform - simple HTTP proxy (for VMs, edge, bare metal)
     Local,
-    /// Passthrough - non-Worker workloads (build pods, daemons) that run under the
-    /// runtime wrapper with no invocation proxy; the app handles any HTTP directly.
-    /// Not a Worker transport value.
+    /// Passthrough - build pods, the only non-Worker workloads still run under the
+    /// runtime wrapper, with no invocation proxy; the app handles any HTTP directly.
+    /// Daemons run runtime-less (ALIEN-226). Not a Worker transport value.
     Passthrough,
 }
 

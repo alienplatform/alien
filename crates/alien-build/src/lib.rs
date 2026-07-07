@@ -449,8 +449,9 @@ pub async fn build_stack(mut stack: Stack, settings: &BuildSettings) -> Result<S
     }
 
     // Build all daemons in parallel with fail-fast behavior.
-    // Daemons are long-lived native subprocesses (TransportType::Passthrough);
-    // their build path mirrors workers: produce an OCI tarball per target,
+    // Daemons are long-lived native subprocesses that run runtime-less under
+    // direct supervision (ALIEN-226; no runtime wrapper, no transport env).
+    // Their build path mirrors workers: produce an OCI tarball per target,
     // then rewrite the resource's `code` to `DaemonCode::Image` so the local
     // platform's LocalDaemonController can hand the path to extract_daemon_image.
     if !daemons_to_build.is_empty() {

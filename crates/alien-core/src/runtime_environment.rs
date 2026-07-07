@@ -353,9 +353,10 @@ pub fn worker_runtime_environment_contract(
         .add_current_worker_binding(worker_id)
 }
 
-/// Transport plan for non-Worker runtime workloads (build pods, daemons) that run
-/// under the runtime wrapper but have no invocation proxy. `passthrough` is a
-/// non-Worker signal only — Workers use `lambda|cloud-run|container-app|http|local`.
+/// Transport plan for build pods, the only remaining workloads that run under
+/// the runtime wrapper without an invocation proxy. Daemons run runtime-less
+/// under direct supervision (ALIEN-226) and never receive this. `passthrough`
+/// is a non-Worker signal only — Workers use `lambda|cloud-run|container-app|http|local`.
 pub fn passthrough_transport_runtime_environment_plan() -> [RuntimeEnvironmentEntry; 1] {
     [RuntimeEnvironmentEntry {
         name: ENV_ALIEN_TRANSPORT,
@@ -745,7 +746,7 @@ mod tests {
     fn worker_local_transport_uses_local_proxy() {
         // Local/Test Workers run under `TransportType::Local` (the worker manager
         // selects it), so the env-plan transport value must be `local` — never
-        // `passthrough`, which is a non-Worker (Daemon/build-pod) signal. This
+        // `passthrough`, which is a non-Worker (build-pod) signal. This
         // keeps the Worker `ALIEN_TRANSPORT` set to lambda|cloud-run|container-app|http|local.
         for platform in [Platform::Local, Platform::Test] {
             let entries = worker_transport_runtime_environment_plan(platform);
