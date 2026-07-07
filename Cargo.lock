@@ -85,7 +85,7 @@ dependencies = [
 
 [[package]]
 name = "alien-aws-clients"
-version = "1.11.1"
+version = "1.11.2"
 dependencies = [
  "alien-aws-clients",
  "alien-client-core",
@@ -127,7 +127,7 @@ dependencies = [
 
 [[package]]
 name = "alien-azure-clients"
-version = "1.11.1"
+version = "1.11.2"
 dependencies = [
  "alien-client-core",
  "alien-core",
@@ -170,7 +170,7 @@ dependencies = [
 
 [[package]]
 name = "alien-bindings"
-version = "1.11.1"
+version = "1.11.2"
 dependencies = [
  "alien-aws-clients",
  "alien-azure-clients",
@@ -214,7 +214,7 @@ dependencies = [
 
 [[package]]
 name = "alien-bindings-node"
-version = "1.11.1"
+version = "1.11.2"
 dependencies = [
  "alien-bindings",
  "alien-error",
@@ -231,7 +231,7 @@ dependencies = [
 
 [[package]]
 name = "alien-build"
-version = "1.11.1"
+version = "1.11.2"
 dependencies = [
  "alien-build",
  "alien-core",
@@ -265,7 +265,7 @@ dependencies = [
 
 [[package]]
 name = "alien-cli"
-version = "1.11.1"
+version = "1.11.2"
 dependencies = [
  "alien-bindings",
  "alien-build",
@@ -335,7 +335,7 @@ dependencies = [
 
 [[package]]
 name = "alien-cli-common"
-version = "1.11.1"
+version = "1.11.2"
 dependencies = [
  "alien-core",
  "alien-deployment",
@@ -349,7 +349,7 @@ dependencies = [
 
 [[package]]
 name = "alien-client-config"
-version = "1.11.1"
+version = "1.11.2"
 dependencies = [
  "alien-aws-clients",
  "alien-azure-clients",
@@ -367,7 +367,7 @@ dependencies = [
 
 [[package]]
 name = "alien-client-core"
-version = "1.11.1"
+version = "1.11.2"
 dependencies = [
  "alien-error",
  "anyhow",
@@ -386,7 +386,7 @@ dependencies = [
 
 [[package]]
 name = "alien-cloudformation"
-version = "1.11.1"
+version = "1.11.2"
 dependencies = [
  "alien-core",
  "alien-error",
@@ -401,7 +401,7 @@ dependencies = [
 
 [[package]]
 name = "alien-commands"
-version = "1.11.1"
+version = "1.11.2"
 dependencies = [
  "alien-aws-clients",
  "alien-azure-clients",
@@ -438,7 +438,7 @@ dependencies = [
 
 [[package]]
 name = "alien-commands-client"
-version = "1.11.1"
+version = "1.11.2"
 dependencies = [
  "alien-core",
  "base64 0.22.1",
@@ -453,7 +453,7 @@ dependencies = [
 
 [[package]]
 name = "alien-core"
-version = "1.11.1"
+version = "1.11.2"
 dependencies = [
  "alien-error",
  "alien-macros",
@@ -484,7 +484,7 @@ dependencies = [
 
 [[package]]
 name = "alien-deploy-cli"
-version = "1.11.1"
+version = "1.11.2"
 dependencies = [
  "alien-cli-common",
  "alien-core",
@@ -527,7 +527,7 @@ dependencies = [
 
 [[package]]
 name = "alien-deployment"
-version = "1.11.1"
+version = "1.11.2"
 dependencies = [
  "alien-aws-clients",
  "alien-azure-clients",
@@ -558,7 +558,7 @@ dependencies = [
 
 [[package]]
 name = "alien-error"
-version = "1.11.1"
+version = "1.11.2"
 dependencies = [
  "alien-error-derive",
  "anyhow",
@@ -571,7 +571,7 @@ dependencies = [
 
 [[package]]
 name = "alien-error-derive"
-version = "1.11.1"
+version = "1.11.2"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -581,7 +581,7 @@ dependencies = [
 
 [[package]]
 name = "alien-gcp-clients"
-version = "1.11.1"
+version = "1.11.2"
 dependencies = [
  "alien-client-core",
  "alien-core",
@@ -614,7 +614,7 @@ dependencies = [
 
 [[package]]
 name = "alien-helm"
-version = "1.11.1"
+version = "1.11.2"
 dependencies = [
  "alien-core",
  "alien-error",
@@ -628,7 +628,7 @@ dependencies = [
 
 [[package]]
 name = "alien-infra"
-version = "1.11.1"
+version = "1.11.2"
 dependencies = [
  "alien-aws-clients",
  "alien-azure-clients",
@@ -688,7 +688,7 @@ dependencies = [
 
 [[package]]
 name = "alien-k8s-clients"
-version = "1.11.1"
+version = "1.11.2"
 dependencies = [
  "alien-client-core",
  "alien-core",
@@ -717,7 +717,7 @@ dependencies = [
 
 [[package]]
 name = "alien-local"
-version = "1.11.1"
+version = "1.11.2"
 dependencies = [
  "alien-bindings",
  "alien-build",
@@ -759,7 +759,7 @@ dependencies = [
 
 [[package]]
 name = "alien-macros"
-version = "1.11.1"
+version = "1.11.2"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -768,7 +768,7 @@ dependencies = [
 
 [[package]]
 name = "alien-manager"
-version = "1.11.1"
+version = "1.11.2"
 dependencies = [
  "aegis",
  "alien-bindings",
@@ -827,7 +827,7 @@ dependencies = [
 
 [[package]]
 name = "alien-manager-api"
-version = "1.11.1"
+version = "1.11.2"
 dependencies = [
  "alien-error",
  "chrono",
@@ -844,7 +844,7 @@ dependencies = [
 
 [[package]]
 name = "alien-observer"
-version = "1.11.1"
+version = "1.11.2"
 dependencies = [
  "alien-aws-clients",
  "alien-azure-clients",
@@ -864,7 +864,7 @@ dependencies = [
 
 [[package]]
 name = "alien-operator"
-version = "1.11.1"
+version = "1.11.2"
 dependencies = [
  "aegis",
  "alien-client-config",
@@ -908,7 +908,7 @@ dependencies = [
 
 [[package]]
 name = "alien-permissions"
-version = "1.11.1"
+version = "1.11.2"
 dependencies = [
  "alien-core",
  "alien-error",
@@ -927,7 +927,7 @@ dependencies = [
 
 [[package]]
 name = "alien-platform-api"
-version = "1.11.1"
+version = "1.11.2"
 dependencies = [
  "alien-error",
  "chrono",
@@ -944,7 +944,7 @@ dependencies = [
 
 [[package]]
 name = "alien-preflights"
-version = "1.11.1"
+version = "1.11.2"
 dependencies = [
  "alien-core",
  "alien-error",
@@ -961,7 +961,7 @@ dependencies = [
 
 [[package]]
 name = "alien-sdk"
-version = "1.11.1"
+version = "1.11.2"
 dependencies = [
  "alien-bindings",
  "alien-core",
@@ -983,7 +983,7 @@ dependencies = [
 
 [[package]]
 name = "alien-terraform"
-version = "1.11.1"
+version = "1.11.2"
 dependencies = [
  "alien-core",
  "alien-error",
@@ -998,7 +998,7 @@ dependencies = [
 
 [[package]]
 name = "alien-test"
-version = "1.11.1"
+version = "1.11.2"
 dependencies = [
  "alien-aws-clients",
  "alien-azure-clients",
@@ -1044,7 +1044,7 @@ dependencies = [
 
 [[package]]
 name = "alien-test-app"
-version = "1.11.1"
+version = "1.11.2"
 dependencies = [
  "alien-error",
  "alien-sdk",
@@ -1089,7 +1089,7 @@ dependencies = [
 
 [[package]]
 name = "alien-worker-protocol"
-version = "1.11.1"
+version = "1.11.2"
 dependencies = [
  "alien-error",
  "async-stream",
@@ -1108,7 +1108,7 @@ dependencies = [
 
 [[package]]
 name = "alien-worker-runtime"
-version = "1.11.1"
+version = "1.11.2"
 dependencies = [
  "alien-bindings",
  "alien-commands",
