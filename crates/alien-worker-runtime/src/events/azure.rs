@@ -1,6 +1,6 @@
 use crate::error::{Error, ErrorData};
 use alien_core::{MessagePayload, QueueMessage, StorageEvent, StorageEventType, StorageEvents};
-use alien_error::{AlienError, Context, IntoAlienError};
+use alien_error::AlienError;
 use base64::{engine::general_purpose, Engine};
 use cloudevents::AttributesReader;
 use cloudevents::{event::ExtensionValue, Data, Event};
@@ -225,52 +225,8 @@ pub fn azure_storage_cloudevent_to_storage_events(event: Event) -> Result<Storag
         })
     })?;
 
-    let expected_content_type = event.datacontenttype();
-
-    let storage_data: AzureBlobStorageData = match data {
-        Data::Json(value) => serde_json::from_value(value.clone())
-            .into_alien_error()
-            .context(ErrorData::EventProcessingFailed {
-                event_type: event_type_str.to_string(),
-                reason: "Failed to decode JSON CloudEvent data".to_string(),
-            })?,
-        Data::Binary(bytes) => {
-            if expected_content_type == Some("application/json") {
-                serde_json::from_slice(bytes.as_slice())
-                    .into_alien_error()
-                    .context(ErrorData::EventProcessingFailed {
-                        event_type: event_type_str.to_string(),
-                        reason: "Failed to parse JSON from binary CloudEvent data".to_string(),
-                    })?
-            } else {
-                return Err(AlienError::new(ErrorData::EventProcessingFailed {
-                    event_type: event_type_str.to_string(),
-                    reason: format!(
-                        "Unsupported binary CloudEvent data content type: {:?}",
-                        expected_content_type
-                    ),
-                }));
-            }
-        }
-        Data::String(s) => {
-            if expected_content_type == Some("application/json") {
-                serde_json::from_str(s.as_str())
-                    .into_alien_error()
-                    .context(ErrorData::EventProcessingFailed {
-                        event_type: event_type_str.to_string(),
-                        reason: "Failed to parse JSON from string CloudEvent data".to_string(),
-                    })?
-            } else {
-                return Err(AlienError::new(ErrorData::EventProcessingFailed {
-                    event_type: event_type_str.to_string(),
-                    reason: format!(
-                        "Unsupported string CloudEvent data content type: {:?}",
-                        expected_content_type
-                    ),
-                }));
-            }
-        }
-    };
+    let storage_data: AzureBlobStorageData =
+        super::decode_cloudevent_data(data, event.datacontenttype(), event_type_str)?;
 
     // Determine event type
     let alien_event_type = match event_type_str {
@@ -285,18 +241,27 @@ pub fn azure_storage_cloudevent_to_storage_events(event: Event) -> Result<Storag
         }
     };
 
-    // Parse blob URL to extract bucket and object key
+    // Parse blob URL to extract bucket and object key.
+    // URL format: https://{account}.blob.core.windows.net/{container}/{blob},
+    // so a valid blob URL has at least 5 slash-separated parts. A
+    // container-only URL (4 parts) must error instead of yielding an empty
+    // object key.
     let url_parts = storage_data.url.split('/').collect::<Vec<&str>>();
-    if url_parts.len() < 4 {
+    if url_parts.len() < 5 {
         return Err(AlienError::new(ErrorData::EventProcessingFailed {
             event_type: event_type_str.to_string(),
             reason: format!("Invalid blob URL format: {}", storage_data.url),
         }));
     }
 
-    // URL format: https://{account}.blob.core.windows.net/{container}/{blob}
     let bucket_name = url_parts[3].to_string(); // container name
     let object_key = url_parts[4..].join("/"); // blob path (may contain slashes)
+    if bucket_name.is_empty() || object_key.is_empty() {
+        return Err(AlienError::new(ErrorData::EventProcessingFailed {
+            event_type: event_type_str.to_string(),
+            reason: format!("Invalid blob URL format: {}", storage_data.url),
+        }));
+    }
 
     // Extract subject for additional context (like region) - currently unused
     let _subject = event.subject().unwrap_or("");
@@ -513,6 +478,58 @@ mod tests {
         assert_eq!(event.size, Some(30699));
         assert_eq!(event.etag, Some("0x8D76C39E4407333".to_string()));
         assert_eq!(event.content_type, Some("image/png".to_string()));
+    }
+
+    /// A blob URL without a blob path (container only) must error instead of
+    /// producing a storage event with an empty object key.
+    #[test]
+    fn test_azure_container_only_blob_url_is_rejected() {
+        let event_time = parse_datetime("2024-11-18T15:13:39.4589254Z");
+
+        let event_data = json!({
+            "api": "PutBlockList",
+            "contentType": "image/png",
+            "contentLength": 30699,
+            "url": "https://teststorage.blob.core.windows.net/test-container",
+        });
+
+        let cloud_event = EventBuilderV10::new()
+            .id("container-only-url")
+            .ty("Microsoft.Storage.BlobCreated")
+            .source("/subscriptions/sub-id/resourceGroups/rg/providers/Microsoft.Storage/storageAccounts/teststorage")
+            .time(event_time)
+            .data("application/json", event_data)
+            .build()
+            .unwrap();
+
+        let error = azure_storage_cloudevent_to_storage_events(cloud_event)
+            .expect_err("container-only blob URL should be rejected");
+        match &error.error {
+            Some(ErrorData::EventProcessingFailed { event_type, reason }) => {
+                assert_eq!(event_type, "Microsoft.Storage.BlobCreated");
+                assert!(
+                    reason.contains("Invalid blob URL format"),
+                    "unexpected reason: {reason}"
+                );
+            }
+            other => panic!("Expected EventProcessingFailed error, got {:?}", other),
+        }
+
+        // A trailing slash (empty blob path) must be rejected too.
+        let event_data = json!({
+            "api": "PutBlockList",
+            "url": "https://teststorage.blob.core.windows.net/test-container/",
+        });
+        let cloud_event = EventBuilderV10::new()
+            .id("trailing-slash-url")
+            .ty("Microsoft.Storage.BlobCreated")
+            .source("/subscriptions/sub-id")
+            .time(event_time)
+            .data("application/json", event_data)
+            .build()
+            .unwrap();
+        azure_storage_cloudevent_to_storage_events(cloud_event)
+            .expect_err("blob URL with empty blob path should be rejected");
     }
 
     #[test]

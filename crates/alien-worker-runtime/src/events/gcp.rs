@@ -4,7 +4,7 @@ use alien_error::{AlienError, Context, IntoAlienError};
 use base64::{engine::general_purpose, Engine};
 use chrono::{DateTime, Utc};
 use cloudevents::AttributesReader;
-use cloudevents::{Data, Event};
+use cloudevents::Event;
 use serde::de::{self, Visitor};
 use serde::{Deserialize, Deserializer, Serialize};
 use std::collections::HashMap;
@@ -231,52 +231,8 @@ pub fn pubsub_cloudevent_to_queue_messages(event: Event) -> Result<Vec<QueueMess
         })
     })?;
 
-    let expected_content_type = event.datacontenttype();
-
-    let pubsub_data: PubSubCloudEventData = match data {
-        Data::Json(value) => serde_json::from_value(value.clone())
-            .into_alien_error()
-            .context(ErrorData::EventProcessingFailed {
-                event_type: event_type_str.to_string(),
-                reason: "Failed to decode JSON CloudEvent data".to_string(),
-            })?,
-        Data::Binary(bytes) => {
-            if expected_content_type == Some("application/json") {
-                serde_json::from_slice(bytes.as_slice())
-                    .into_alien_error()
-                    .context(ErrorData::EventProcessingFailed {
-                        event_type: event_type_str.to_string(),
-                        reason: "Failed to parse JSON from binary CloudEvent data".to_string(),
-                    })?
-            } else {
-                return Err(AlienError::new(ErrorData::EventProcessingFailed {
-                    event_type: event_type_str.to_string(),
-                    reason: format!(
-                        "Unsupported binary CloudEvent data content type: {:?}",
-                        expected_content_type
-                    ),
-                }));
-            }
-        }
-        Data::String(s) => {
-            if expected_content_type == Some("application/json") {
-                serde_json::from_str(s.as_str())
-                    .into_alien_error()
-                    .context(ErrorData::EventProcessingFailed {
-                        event_type: event_type_str.to_string(),
-                        reason: "Failed to parse JSON from string CloudEvent data".to_string(),
-                    })?
-            } else {
-                return Err(AlienError::new(ErrorData::EventProcessingFailed {
-                    event_type: event_type_str.to_string(),
-                    reason: format!(
-                        "Unsupported string CloudEvent data content type: {:?}",
-                        expected_content_type
-                    ),
-                }));
-            }
-        }
-    };
+    let pubsub_data: PubSubCloudEventData =
+        super::decode_cloudevent_data(data, event.datacontenttype(), event_type_str)?;
 
     // Decode base64 message data
     let message_bytes = general_purpose::STANDARD
@@ -349,52 +305,8 @@ pub fn storage_cloudevent_to_storage_events(event: Event) -> Result<StorageEvent
         })
     })?;
 
-    let expected_content_type = event.datacontenttype();
-
-    let storage_object_data: StorageObjectData = match data {
-        Data::Json(value) => serde_json::from_value(value.clone())
-            .into_alien_error()
-            .context(ErrorData::EventProcessingFailed {
-                event_type: event_type_str.to_string(),
-                reason: "Failed to decode JSON CloudEvent data".to_string(),
-            })?,
-        Data::Binary(bytes) => {
-            if expected_content_type == Some("application/json") {
-                serde_json::from_slice(bytes.as_slice())
-                    .into_alien_error()
-                    .context(ErrorData::EventProcessingFailed {
-                        event_type: event_type_str.to_string(),
-                        reason: "Failed to parse JSON from binary CloudEvent data".to_string(),
-                    })?
-            } else {
-                return Err(AlienError::new(ErrorData::EventProcessingFailed {
-                    event_type: event_type_str.to_string(),
-                    reason: format!(
-                        "Unsupported binary CloudEvent data content type: {:?}",
-                        expected_content_type
-                    ),
-                }));
-            }
-        }
-        Data::String(s) => {
-            if expected_content_type == Some("application/json") {
-                serde_json::from_str(s.as_str())
-                    .into_alien_error()
-                    .context(ErrorData::EventProcessingFailed {
-                        event_type: event_type_str.to_string(),
-                        reason: "Failed to parse JSON from string CloudEvent data".to_string(),
-                    })?
-            } else {
-                return Err(AlienError::new(ErrorData::EventProcessingFailed {
-                    event_type: event_type_str.to_string(),
-                    reason: format!(
-                        "Unsupported string CloudEvent data content type: {:?}",
-                        expected_content_type
-                    ),
-                }));
-            }
-        }
-    };
+    let storage_object_data: StorageObjectData =
+        super::decode_cloudevent_data(data, event.datacontenttype(), event_type_str)?;
 
     let alien_event_type = match event_type_str {
         "google.cloud.storage.object.v1.finalized" => StorageEventType::Created,
