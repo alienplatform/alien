@@ -10,7 +10,7 @@
 
 import { kv } from "@alienplatform/bindings"
 import { createCommandReceiver } from "@alienplatform/commands"
-import { scanAll } from "../../shared/scan-all"
+import { countDocs, searchIndex } from "../../../shared/scan-all"
 
 const RESOURCE = "indexer-daemon"
 const index = kv("index")
@@ -20,12 +20,6 @@ const SEED_DOCS: Record<string, string> = {
   commands: "Invoke commands on a deployment by target resource id",
   bindings: "Storage, kv, queue, and vault bindings run in-process",
   daemons: "A daemon is a resident process that leases commands",
-}
-
-async function countDocuments(): Promise<number> {
-  let count = 0
-  for await (const _ of scanAll(index, "doc:")) count++
-  return count
 }
 
 // Background work that justifies this being a daemon: keep the shared index
@@ -53,21 +47,14 @@ receiver.handle("status", async () => ({
   resource: RESOURCE,
   role: "daemon",
   model: "pull",
-  documents: await countDocuments(),
+  documents: await countDocs(index),
   at: new Date().toISOString(),
 }))
 
 // Overlapping command #2: `search`, reading the index this daemon maintains.
 receiver.handle("search", async ctx => {
   const { term } = JSON.parse(new TextDecoder().decode(ctx.input)) as { term: string }
-  const hits: string[] = []
-  for await (const entry of scanAll(index, "doc:")) {
-    const text = new TextDecoder().decode(entry.value)
-    if (text.toLowerCase().includes(term.toLowerCase())) {
-      hits.push(entry.key.slice("doc:".length))
-    }
-  }
-  return { resource: RESOURCE, term, hits }
+  return { resource: RESOURCE, term, hits: await searchIndex(index, term) }
 })
 
 console.log(`${RESOURCE} leasing commands`)
