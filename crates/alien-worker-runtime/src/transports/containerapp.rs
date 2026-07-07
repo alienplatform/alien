@@ -263,8 +263,8 @@ async fn handle_raw_dapr_message(body_bytes: &Bytes, state: &TransportState) -> 
     let message_id = json_value
         .get("id")
         .and_then(|v| v.as_str())
-        .unwrap_or(&uuid::Uuid::new_v4().to_string())
-        .to_string();
+        .map(str::to_string)
+        .unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
 
     let source = json_value
         .get("topic")
