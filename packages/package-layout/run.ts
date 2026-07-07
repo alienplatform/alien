@@ -49,6 +49,8 @@ import {
   type Violation,
   applyExpectedFailures,
   exitCodeFor,
+  expectedFailureKey,
+  isMainModule,
 } from "../scripts/validate-package-layout.ts"
 
 /** One reported check. Failing ones are reconciled against expected-failures.json. */
@@ -145,31 +147,40 @@ function escapeRegExp(text: string): string {
   return text.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")
 }
 
-function isMainModule(): boolean {
-  return typeof process.argv[1] === "string" && import.meta.url === `file://${process.argv[1]}`
-}
-
 // ---------------------------------------------------------------------------
 // Everything below is imperative: filesystem I/O, subprocess spawning, and
-// process.exit. Gated behind main() so importing this module is side-effect
-// free (see the file-level doc comment above).
+// process.exit. Each step is a function taking the shared `Ctx` and returning
+// its own CheckResult[]; `main()` threads the context through them in order and
+// reconciles the concatenated results. This whole section runs only when this
+// file is the program entry point, so importing the module is side-effect free
+// (see the file-level doc comment above).
 // ---------------------------------------------------------------------------
 
-function main(): void {
+/**
+ * Shared state threaded through every step. Paths and `bunAvailable` are
+ * computed once up front; `tarballs`, `addonPath`, and `addonEnv` are filled in
+ * by earlier steps (pack, ensure-addon) and read by later ones (manifest,
+ * import, compile).
+ */
+interface Ctx {
+  scriptDir: string
+  packagesDir: string
+  tarballsDir: string
+  fixtureDir: string
+  repoRoot: string
+  validatorPath: string
+  bunAvailable: boolean
+  /** name -> absolute tarball path, for packages that packed successfully. */
+  tarballs: Map<string, string>
+  /** Resolved dev-addon path, when one had to be located or built for this host. */
+  addonPath?: string
+  /** Env carrying ALIEN_BINDINGS_ADDON_PATH for subprocesses, when `addonPath` is set. */
+  addonEnv?: NodeJS.ProcessEnv
+}
+
+function createContext(): Ctx {
   const scriptDir = dirname(fileURLToPath(import.meta.url))
   const packagesDir = join(scriptDir, "..")
-  const tarballsDir = join(scriptDir, ".tarballs")
-  const fixtureDir = join(scriptDir, "fixture")
-  const validatorPath = join(packagesDir, "scripts", "validate-package-layout.ts")
-
-  const results: CheckResult[] = []
-  function record(result: CheckResult): void {
-    results.push(result)
-  }
-
-  // -------------------------------------------------------------------------
-  // Environment
-  // -------------------------------------------------------------------------
 
   const bunAvailable = run("bun", ["--version"], scriptDir).status === 0
   if (!bunAvailable) {
@@ -179,15 +190,28 @@ function main(): void {
     )
   }
 
-  // -------------------------------------------------------------------------
-  // Step 1 — pack the publishable packages
-  // -------------------------------------------------------------------------
+  return {
+    scriptDir,
+    packagesDir,
+    tarballsDir: join(scriptDir, ".tarballs"),
+    fixtureDir: join(scriptDir, "fixture"),
+    repoRoot: dirname(packagesDir),
+    validatorPath: join(packagesDir, "scripts", "validate-package-layout.ts"),
+    bunAvailable,
+    tarballs: new Map<string, string>(),
+  }
+}
+
+// -------------------------------------------------------------------------
+// Step 1 — pack the publishable packages
+// -------------------------------------------------------------------------
+
+function packPackages(ctx: Ctx): CheckResult[] {
+  const { scriptDir, packagesDir, tarballsDir, tarballs } = ctx
+  const results: CheckResult[] = []
 
   rmSync(tarballsDir, { recursive: true, force: true })
   mkdirSync(tarballsDir, { recursive: true })
-
-  /** name -> absolute tarball path, for packages that packed successfully. */
-  const tarballs = new Map<string, string>()
 
   const PACK_TARGETS: { name: string; owningReason: string }[] = [
     { name: "sdk", owningReason: "" },
@@ -207,7 +231,7 @@ function main(): void {
   for (const target of PACK_TARGETS) {
     const pkgDir = join(packagesDir, target.name)
     if (!existsSync(join(pkgDir, "package.json"))) {
-      record({
+      results.push({
         check: "pack",
         package: target.name,
         status: "fail",
@@ -220,7 +244,7 @@ function main(): void {
     const packed = run("pnpm", ["pack", "--pack-destination", tarballsDir], pkgDir)
     const tarball = findTarball(target.name)
     if (packed.status !== 0 || !tarball) {
-      record({
+      results.push({
         check: "pack",
         package: target.name,
         status: "fail",
@@ -230,7 +254,7 @@ function main(): void {
       continue
     }
     tarballs.set(target.name, tarball)
-    record({
+    results.push({
       check: "pack",
       package: target.name,
       status: "pass",
@@ -239,9 +263,15 @@ function main(): void {
     })
   }
 
-  // -------------------------------------------------------------------------
-  // Step 2 — rewrite the consumer manifest to file: the tarballs
-  // -------------------------------------------------------------------------
+  return results
+}
+
+// -------------------------------------------------------------------------
+// Step 2 — rewrite the consumer manifest to file: the tarballs
+// -------------------------------------------------------------------------
+
+function writeManifest(ctx: Ctx): CheckResult[] {
+  const { fixtureDir, tarballs } = ctx
 
   // Direct dependencies the consumer imports; overrides pin every transitive
   // @alienplatform/* to a packed tarball so npm never reaches the registry for one.
@@ -272,17 +302,24 @@ function main(): void {
   fixtureManifest.dependencies = dependencies
   fixtureManifest.overrides = overrides
   writeFileSync(fixtureManifestPath, `${JSON.stringify(fixtureManifest, null, 2)}\n`)
-  record({
-    check: "write-manifest",
-    package: "fixture",
-    status: "pass",
-    reason: "ok",
-    evidence: `deps=[${Object.keys(dependencies).join(", ")}] overrides=[${Object.keys(overrides).join(", ")}]`,
-  })
+  return [
+    {
+      check: "write-manifest",
+      package: "fixture",
+      status: "pass",
+      reason: "ok",
+      evidence: `deps=[${Object.keys(dependencies).join(", ")}] overrides=[${Object.keys(overrides).join(", ")}]`,
+    },
+  ]
+}
 
-  // -------------------------------------------------------------------------
-  // Step 3 — npm install the consumer, assert tarball resolution
-  // -------------------------------------------------------------------------
+// -------------------------------------------------------------------------
+// Step 3 — npm install the consumer, assert tarball resolution
+// -------------------------------------------------------------------------
+
+function installConsumer(ctx: Ctx): CheckResult[] {
+  const { fixtureDir, tarballs } = ctx
+  const results: CheckResult[] = []
 
   // Force a clean resolution against the freshly rewritten manifest.
   rmSync(join(fixtureDir, "node_modules"), { recursive: true, force: true })
@@ -290,74 +327,81 @@ function main(): void {
 
   const install = run("npm", ["install", "--no-audit", "--no-fund"], fixtureDir)
   if (install.status !== 0) {
-    record({
+    results.push({
       check: "install",
       package: "fixture",
       status: "fail",
       reason: "npm install failed",
       evidence: lastLine(install.stderr) || lastLine(install.stdout) || `exit ${install.status}`,
     })
-  } else {
-    record({
-      check: "install",
-      package: "fixture",
-      status: "pass",
-      reason: "ok",
-      evidence: lastLine(install.stdout),
+    return results
+  }
+
+  results.push({
+    check: "install",
+    package: "fixture",
+    status: "pass",
+    reason: "ok",
+    evidence: lastLine(install.stdout),
+  })
+
+  const lockPath = join(fixtureDir, "package-lock.json")
+  const lock = JSON.parse(readFileSync(lockPath, "utf8")) as {
+    packages?: Record<string, { resolved?: string }>
+  }
+  const lockPackages = lock.packages ?? {}
+  for (const name of ["sdk", "core"]) {
+    if (!tarballs.has(name)) continue
+    const entry = lockPackages[`node_modules/@alienplatform/${name}`]
+    const resolved = entry?.resolved ?? "<not installed>"
+    results.push({
+      check: "install-resolution",
+      package: name,
+      status: resolved.startsWith("file:") ? "pass" : "fail",
+      reason: resolved.startsWith("file:")
+        ? "ok"
+        : "transitive @alienplatform package did not resolve to the packed tarball",
+      evidence: `node_modules/@alienplatform/${name} -> ${resolved}`,
     })
-
-    const lockPath = join(fixtureDir, "package-lock.json")
-    const lock = JSON.parse(readFileSync(lockPath, "utf8")) as {
-      packages?: Record<string, { resolved?: string }>
-    }
-    const lockPackages = lock.packages ?? {}
-    for (const name of ["sdk", "core"]) {
-      if (!tarballs.has(name)) continue
-      const entry = lockPackages[`node_modules/@alienplatform/${name}`]
-      const resolved = entry?.resolved ?? "<not installed>"
-      record({
-        check: "install-resolution",
-        package: name,
-        status: resolved.startsWith("file:") ? "pass" : "fail",
-        reason: resolved.startsWith("file:")
-          ? "ok"
-          : "transitive @alienplatform package did not resolve to the packed tarball",
-        evidence: `node_modules/@alienplatform/${name} -> ${resolved}`,
-      })
-    }
   }
 
-  // -------------------------------------------------------------------------
-  // Step 3.5 — ensure a native addon exists for the host platform
-  // -------------------------------------------------------------------------
-  //
-  // The loader (packages/bindings/src/loader.ts) resolves the addon in order:
-  // an ALIEN_BINDINGS_ADDON_PATH override, the per-platform prebuild package
-  // (optionalDependencies — only injected at publish time by `napi
-  // prepublish` in the release pipeline (.github/workflows/release.yml);
-  // never present when packing straight from workspace
-  // source), then a locally-built dev `.node` found by walking up from the
-  // installed package looking for crates/alien-bindings-node. On a developer
-  // machine that walk reaches this repo's real crates/alien-bindings-node and
-  // finds the `.node` a developer built earlier, so the fixture passes
-  // without any help here. CI has neither: no prebuild (04a ships those) and
-  // no dev `.node` (gitignored, built per-machine) — so build one ourselves
-  // whenever nothing else would resolve, and hand its path to every
-  // subprocess via the override env var. Skipped (and logged) whenever an
-  // addon is already available, so local runs stay fast.
+  return results
+}
 
-  function hostTriple(): string {
-    const { platform, arch } = process
-    if (platform === "darwin" && arch === "arm64") return "darwin-arm64"
-    if (platform === "darwin" && arch === "x64") return "darwin-x64"
-    if (platform === "linux" && arch === "x64") return "linux-x64-gnu"
-    if (platform === "linux" && arch === "arm64") return "linux-arm64-gnu"
-    throw new Error(
-      `package-layout fixture has no native addon mapping for platform '${platform}' arch '${arch}'.`,
-    )
-  }
+// -------------------------------------------------------------------------
+// Step 3.5 — ensure a native addon exists for the host platform
+// -------------------------------------------------------------------------
+//
+// The loader (packages/bindings/src/loader.ts) resolves the addon in order:
+// an ALIEN_BINDINGS_ADDON_PATH override, the per-platform prebuild package
+// (optionalDependencies — only injected at publish time by `napi
+// prepublish` in the release pipeline (.github/workflows/release.yml);
+// never present when packing straight from workspace
+// source), then a locally-built dev `.node` found by walking up from the
+// installed package looking for crates/alien-bindings-node. On a developer
+// machine that walk reaches this repo's real crates/alien-bindings-node and
+// finds the `.node` a developer built earlier, so the fixture passes
+// without any help here. CI has neither: no prebuild (04a ships those) and
+// no dev `.node` (gitignored, built per-machine) — so build one ourselves
+// whenever nothing else would resolve, and hand its path to every
+// subprocess via the override env var. Skipped (and logged) whenever an
+// addon is already available, so local runs stay fast.
 
-  const repoRoot = dirname(packagesDir)
+function hostTriple(): string {
+  const { platform, arch } = process
+  if (platform === "darwin" && arch === "arm64") return "darwin-arm64"
+  if (platform === "darwin" && arch === "x64") return "darwin-x64"
+  if (platform === "linux" && arch === "x64") return "linux-x64-gnu"
+  if (platform === "linux" && arch === "arm64") return "linux-arm64-gnu"
+  throw new Error(
+    `package-layout fixture has no native addon mapping for platform '${platform}' arch '${arch}'.`,
+  )
+}
+
+function ensureAddon(ctx: Ctx): CheckResult[] {
+  const { scriptDir, packagesDir, fixtureDir, repoRoot } = ctx
+  const results: CheckResult[] = []
+
   const bindingsNodeDir = join(repoRoot, "crates", "alien-bindings-node")
   const triple = hostTriple()
   const devAddonPath = join(bindingsNodeDir, `alien-bindings-node.${triple}.node`)
@@ -368,13 +412,12 @@ function main(): void {
     `bindings-${triple}`,
   )
 
-  let addonPath: string | undefined
   if (existsSync(prebuildInstalledDir)) {
     console.log(
       `[addon] per-platform prebuild package installed for '${triple}' — no source build needed.`,
     )
   } else if (existsSync(devAddonPath)) {
-    addonPath = devAddonPath
+    ctx.addonPath = devAddonPath
     console.log(
       `[addon] using existing dev addon at ${relative(scriptDir, devAddonPath)} (fast path, no build).`,
     )
@@ -400,13 +443,13 @@ function main(): void {
       bindingsNodeDir,
     )
     if (build.status === 0 && existsSync(devAddonPath)) {
-      addonPath = devAddonPath
+      ctx.addonPath = devAddonPath
       console.log(`[addon] built ${relative(scriptDir, devAddonPath)}.`)
     } else {
       console.error(
         "[addon] source build failed; the runtime/compile checks below will fail to load the addon.",
       )
-      record({
+      results.push({
         check: "addon-build",
         package: "bindings",
         status: "fail",
@@ -416,14 +459,18 @@ function main(): void {
     }
   }
 
-  const addonEnv: NodeJS.ProcessEnv | undefined = addonPath
-    ? { ALIEN_BINDINGS_ADDON_PATH: addonPath }
-    : undefined
+  ctx.addonEnv = ctx.addonPath ? { ALIEN_BINDINGS_ADDON_PATH: ctx.addonPath } : undefined
 
-  // -------------------------------------------------------------------------
-  // Steps 4/5 — import check under Bun and Node
-  // -------------------------------------------------------------------------
+  return results
+}
 
+// -------------------------------------------------------------------------
+// Steps 4/5 — import check under Bun and Node
+// -------------------------------------------------------------------------
+
+function runImportChecks(ctx: Ctx): CheckResult[] {
+  const { fixtureDir, bunAvailable, addonEnv } = ctx
+  const results: CheckResult[] = []
   const IMPORTS_ENTRY = join("src", "imports.ts")
 
   function runImportCheck(runtime: "bun" | "node"): void {
@@ -434,7 +481,7 @@ function main(): void {
 
     const lines = output.stdout.split("\n").filter(line => line.startsWith("##CHECK## "))
     if (lines.length === 0) {
-      record({
+      results.push({
         check: `${runtime}-imports`,
         package: "fixture",
         status: "fail",
@@ -447,7 +494,7 @@ function main(): void {
 
     for (const line of lines) {
       const parsed = JSON.parse(line.slice("##CHECK## ".length)) as CheckResult
-      record({
+      results.push({
         check: parsed.check,
         package: parsed.package,
         status: parsed.status,
@@ -461,63 +508,76 @@ function main(): void {
   if (bunAvailable) runImportCheck("bun")
   runImportCheck("node")
 
-  // -------------------------------------------------------------------------
-  // Step 6 — tsc typecheck of the consumer
-  // -------------------------------------------------------------------------
+  return results
+}
+
+// -------------------------------------------------------------------------
+// Step 6 — tsc typecheck of the consumer
+// -------------------------------------------------------------------------
+
+function typecheckConsumer(ctx: Ctx): CheckResult[] {
+  const { fixtureDir } = ctx
 
   const tscBin = join(fixtureDir, "node_modules", "typescript", "bin", "tsc")
   if (!existsSync(tscBin)) {
-    record({
-      check: "typecheck",
-      package: "fixture",
-      status: "fail",
-      reason: "typescript is not installed in the consumer (install step failed?)",
-      evidence: tscBin,
-    })
-  } else {
-    const tsc = run("node", [tscBin, "--noEmit", "-p", "tsconfig.json"], fixtureDir)
-    if (tsc.status === 0) {
-      record({
+    return [
+      {
+        check: "typecheck",
+        package: "fixture",
+        status: "fail",
+        reason: "typescript is not installed in the consumer (install step failed?)",
+        evidence: tscBin,
+      },
+    ]
+  }
+
+  const tsc = run("node", [tscBin, "--noEmit", "-p", "tsconfig.json"], fixtureDir)
+  if (tsc.status === 0) {
+    return [
+      {
         check: "typecheck",
         package: "fixture",
         status: "pass",
         reason: "ok",
         evidence: "tsc --noEmit reported no errors",
-      })
-    } else {
-      const errorLines = tsc.stdout.split("\n").filter(line => /error TS\d+/.test(line))
-      for (const line of errorLines) {
-        record({
-          check: "typecheck",
-          package: "fixture",
-          status: "fail",
-          reason: "unexpected typecheck error",
-          evidence: line.trim(),
-        })
-      }
-    }
+      },
+    ]
   }
 
-  // -------------------------------------------------------------------------
-  // Step 7 — packed-contents check
-  // -------------------------------------------------------------------------
+  const errorLines = tsc.stdout.split("\n").filter(line => /error TS\d+/.test(line))
+  return errorLines.map(line => ({
+    check: "typecheck",
+    package: "fixture",
+    status: "fail" as const,
+    reason: "unexpected typecheck error",
+    evidence: line.trim(),
+  }))
+}
 
-  function tarEntries(tarball: string): string[] {
-    const listed = run("tar", ["-tzf", tarball], scriptDir)
-    return listed.stdout
-      .split("\n")
-      .map(line => line.trim())
-      .filter(line => line.length > 0)
-  }
+// -------------------------------------------------------------------------
+// Step 7 — packed-contents check
+// -------------------------------------------------------------------------
 
-  // Hard denylist: never allowed in a packed tarball, regardless of `files` or
-  // EXTRA_SHIPPED_TODAY. Catches regressions even if an .npmignore is deleted.
-  const HARD_DENYLIST_PATTERNS: RegExp[] = [
-    /(^|\/)node_modules\//,
-    /(^|\/)\.env$/,
-    /\.tgz$/,
-    /(^|\/)\.turbo\//,
-  ]
+// Hard denylist: never allowed in a packed tarball, regardless of `files` or
+// EXTRA_SHIPPED_TODAY. Catches regressions even if an .npmignore is deleted.
+const HARD_DENYLIST_PATTERNS: RegExp[] = [
+  /(^|\/)node_modules\//,
+  /(^|\/)\.env$/,
+  /\.tgz$/,
+  /(^|\/)\.turbo\//,
+]
+
+function tarEntries(tarball: string, cwd: string): string[] {
+  const listed = run("tar", ["-tzf", tarball], cwd)
+  return listed.stdout
+    .split("\n")
+    .map(line => line.trim())
+    .filter(line => line.length > 0)
+}
+
+function packedContents(ctx: Ctx): CheckResult[] {
+  const { scriptDir, packagesDir, tarballsDir, tarballs } = ctx
+  const results: CheckResult[] = []
 
   // Intended publish set for every publishable package: manifest, docs, license,
   // contract file, and built output. When a manifest carries a `files` allowlist,
@@ -568,7 +628,7 @@ function main(): void {
   for (const name of ["sdk", "core"]) {
     const tarball = tarballs.get(name)
     if (!tarball) continue
-    const entries = tarEntries(tarball).map(entry => entry.replace(/^package\//, ""))
+    const entries = tarEntries(tarball, scriptDir).map(entry => entry.replace(/^package\//, ""))
 
     // Required artifacts must be present…
     const hasManifest = entries.includes("package.json")
@@ -605,7 +665,7 @@ function main(): void {
       )
     }
 
-    record({
+    results.push({
       check: "packed-contents",
       package: name,
       status: problems.length === 0 ? "pass" : "fail",
@@ -658,7 +718,7 @@ function main(): void {
     const npmDir = join(bindingsNpmDir, prebuildTriple)
     const manifestPath = join(npmDir, "package.json")
     if (!existsSync(manifestPath)) {
-      record({
+      results.push({
         check: "packed-contents",
         package: pkgName,
         status: "fail",
@@ -670,7 +730,7 @@ function main(): void {
     const manifest = JSON.parse(readFileSync(manifestPath, "utf8")) as PrebuildManifest
     const stagedAddon = join(npmDir, manifest.main)
     if (!existsSync(stagedAddon)) {
-      record({
+      results.push({
         check: "packed-contents",
         package: pkgName,
         status: "fail",
@@ -687,7 +747,7 @@ function main(): void {
         entry.startsWith(`alienplatform-bindings-${prebuildTriple}-`) && entry.endsWith(".tgz"),
     )
     if (packed.status !== 0 || !tarballName) {
-      record({
+      results.push({
         check: "packed-contents",
         package: pkgName,
         status: "fail",
@@ -696,7 +756,7 @@ function main(): void {
       })
       continue
     }
-    const entries = tarEntries(join(tarballsDir, tarballName)).map(entry =>
+    const entries = tarEntries(join(tarballsDir, tarballName), scriptDir).map(entry =>
       entry.replace(/^package\//, ""),
     )
     const nodeFiles = entries.filter(entry => entry.endsWith(".node"))
@@ -720,7 +780,7 @@ function main(): void {
       problems.push(`ships hard-denylisted file(s): ${denylisted.slice(0, 5).join(", ")}`)
     }
 
-    record({
+    results.push({
       check: "packed-contents",
       package: pkgName,
       status: problems.length === 0 ? "pass" : "fail",
@@ -732,106 +792,124 @@ function main(): void {
     })
   }
 
-  // -------------------------------------------------------------------------
-  // Step 8 — bun build --compile of the ./native embed entry
-  // -------------------------------------------------------------------------
-  //
-  // The `./native` entry (bindings/src/native.ts) imports the addon through
-  // the literal `./alien-bindings.node` specifier so bun's compiler can stage
-  // it into the single-file binary — but only if that file is physically
-  // present next to the installed package's dist/native.js at build time
-  // (in production `alien build`'s TypeScript toolchain owns that staging,
-  // see packages/bindings/PACKAGE_LAYOUT.md; here we stage the
-  // addon `run.ts` itself resolved above). `--format=cjs` is required: a
-  // plain ESM `bun build --compile` of this entry embeds the addon but
-  // crashes on load with `ReferenceError: __require is not defined` — see
-  // packages/bindings/scripts/compile-smoke.ts for the verified repro.
+  return results
+}
 
-  if (bunAvailable) {
-    const compiledDir = join(fixtureDir, ".compiled")
-    mkdirSync(compiledDir, { recursive: true })
-    const outFile = join(compiledDir, "compile-entry-bin")
-    const stagedAddonPath = join(
-      fixtureDir,
-      "node_modules",
-      "@alienplatform",
-      "bindings",
-      "dist",
-      "alien-bindings.node",
-    )
+// -------------------------------------------------------------------------
+// Step 8 — bun build --compile of the ./native embed entry
+// -------------------------------------------------------------------------
+//
+// The `./native` entry (bindings/src/native.ts) imports the addon through
+// the literal `./alien-bindings.node` specifier so bun's compiler can stage
+// it into the single-file binary — but only if that file is physically
+// present next to the installed package's dist/native.js at build time
+// (in production `alien build`'s TypeScript toolchain owns that staging,
+// see packages/bindings/PACKAGE_LAYOUT.md; here we stage the
+// addon `run.ts` itself resolved above). `--format=cjs` is required: a
+// plain ESM `bun build --compile` of this entry embeds the addon but
+// crashes on load with `ReferenceError: __require is not defined` — see
+// packages/bindings/scripts/compile-smoke.ts for the verified repro.
 
-    if (addonPath) copyFileSync(addonPath, stagedAddonPath)
+function compileNativeEmbed(ctx: Ctx): CheckResult[] {
+  const { fixtureDir, bunAvailable, addonPath } = ctx
+  if (!bunAvailable) return []
 
-    const built = addonPath
-      ? run(
-          "bun",
-          [
-            "build",
-            "--compile",
-            "--format=cjs",
-            join("src", "compile-entry.ts"),
-            "--outfile",
-            outFile,
-          ],
-          fixtureDir,
-        )
-      : undefined
+  const compiledDir = join(fixtureDir, ".compiled")
+  mkdirSync(compiledDir, { recursive: true })
+  const outFile = join(compiledDir, "compile-entry-bin")
+  const stagedAddonPath = join(
+    fixtureDir,
+    "node_modules",
+    "@alienplatform",
+    "bindings",
+    "dist",
+    "alien-bindings.node",
+  )
 
-    if (!built) {
-      record({
+  if (addonPath) copyFileSync(addonPath, stagedAddonPath)
+
+  const built = addonPath
+    ? run(
+        "bun",
+        [
+          "build",
+          "--compile",
+          "--format=cjs",
+          join("src", "compile-entry.ts"),
+          "--outfile",
+          outFile,
+        ],
+        fixtureDir,
+      )
+    : undefined
+
+  if (!built) {
+    return [
+      {
         check: "compile",
         package: "bindings",
         status: "fail",
         reason: "no addon available to stage (see the addon-build failure above)",
         evidence: `expected addon at ${stagedAddonPath}`,
-      })
-    } else if (built.status !== 0) {
-      record({
+      },
+    ]
+  }
+  if (built.status !== 0) {
+    return [
+      {
         check: "compile",
         package: "bindings",
         status: "fail",
         reason: "bun build --compile of ./native entry fails with the addon staged",
         evidence: lastLine(built.stderr) || lastLine(built.stdout) || `exit ${built.status}`,
-      })
-    } else {
-      // Remove the staged .node now: if the binary didn't truly embed it,
-      // running with the source file gone proves that (mirrors
-      // packages/bindings/scripts/compile-smoke.ts).
-      rmSync(stagedAddonPath, { force: true })
-      const ran = run(outFile, [], fixtureDir)
-      record({
-        check: "compile",
-        package: "bindings",
-        status: ran.status === 0 ? "pass" : "fail",
-        reason: ran.status === 0 ? "ok" : "compiled binary exited non-zero",
-        evidence: ran.status === 0 ? lastLine(ran.stdout) : lastLine(ran.stderr),
-      })
-    }
+      },
+    ]
   }
 
-  // -------------------------------------------------------------------------
-  // Step 9 — invoke the static validator
-  // -------------------------------------------------------------------------
+  // Remove the staged .node now: if the binary didn't truly embed it,
+  // running with the source file gone proves that (mirrors
+  // packages/bindings/scripts/compile-smoke.ts).
+  rmSync(stagedAddonPath, { force: true })
+  const ran = run(outFile, [], fixtureDir)
+  return [
+    {
+      check: "compile",
+      package: "bindings",
+      status: ran.status === 0 ? "pass" : "fail",
+      reason: ran.status === 0 ? "ok" : "compiled binary exited non-zero",
+      evidence: ran.status === 0 ? lastLine(ran.stdout) : lastLine(ran.stderr),
+    },
+  ]
+}
 
-  const validator = run("node", ["--experimental-strip-types", validatorPath], scriptDir)
-  record({
-    check: "validator",
-    package: "layout",
-    status: validator.status === 0 ? "pass" : "fail",
-    reason:
-      validator.status === 0
-        ? "ok"
-        : "packages/scripts validator reported unexpected failures or stale expectations",
-    evidence:
-      lastLine(validator.stdout) || lastLine(validator.stderr) || `exit ${validator.status}`,
-  })
+// -------------------------------------------------------------------------
+// Step 9 — invoke the static validator
+// -------------------------------------------------------------------------
 
-  // -------------------------------------------------------------------------
-  // Reconcile against expected-failures.json and report
-  // -------------------------------------------------------------------------
+function runValidator(ctx: Ctx): CheckResult[] {
+  const validator = run("node", ["--experimental-strip-types", ctx.validatorPath], ctx.scriptDir)
+  return [
+    {
+      check: "validator",
+      package: "layout",
+      status: validator.status === 0 ? "pass" : "fail",
+      reason:
+        validator.status === 0
+          ? "ok"
+          : "packages/scripts validator reported unexpected failures or stale expectations",
+      evidence:
+        lastLine(validator.stdout) || lastLine(validator.stderr) || `exit ${validator.status}`,
+    },
+  ]
+}
 
+// -------------------------------------------------------------------------
+// Reconcile against expected-failures.json and report
+// -------------------------------------------------------------------------
+
+function reconcileAndReport(ctx: Ctx, results: CheckResult[]): number {
   const expectedFailures = JSON.parse(
-    readFileSync(join(scriptDir, "expected-failures.json"), "utf8"),
+    readFileSync(join(ctx.scriptDir, "expected-failures.json"), "utf8"),
   ) as ExpectedFailureEntry[]
 
   // Every currently-expected failure applies regardless of runtime — the one
@@ -861,10 +939,7 @@ function main(): void {
 
   const filtered = applyExpectedFailures(violations, activeExpectations)
 
-  function expectationKey(entry: { check: string; package: string; reason: string }): string {
-    return `${entry.check}::${entry.package}::${entry.reason}`
-  }
-  const expectedKeys = new Map(activeExpectations.map(entry => [expectationKey(entry), entry]))
+  const expectedKeys = new Map(activeExpectations.map(entry => [expectedFailureKey(entry), entry]))
 
   console.log("")
   console.log("package-layout fixture — step results")
@@ -879,7 +954,7 @@ function main(): void {
       console.log(`  PASS       ${result.check} package=${result.package} — ${result.evidence}`)
       continue
     }
-    const entry = expectedKeys.get(expectationKey(result))
+    const entry = expectedKeys.get(expectedFailureKey(result))
     if (entry) {
       expectedCount += 1
       console.log(
@@ -920,9 +995,27 @@ function main(): void {
     )
   }
 
-  process.exit(exitCode)
+  return exitCode
 }
 
-if (isMainModule()) {
+function main(): void {
+  const ctx = createContext()
+
+  const results: CheckResult[] = [
+    ...packPackages(ctx),
+    ...writeManifest(ctx),
+    ...installConsumer(ctx),
+    ...ensureAddon(ctx),
+    ...runImportChecks(ctx),
+    ...typecheckConsumer(ctx),
+    ...packedContents(ctx),
+    ...compileNativeEmbed(ctx),
+    ...runValidator(ctx),
+  ]
+
+  process.exit(reconcileAndReport(ctx, results))
+}
+
+if (isMainModule(import.meta.url)) {
   main()
 }

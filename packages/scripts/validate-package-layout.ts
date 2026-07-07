@@ -372,7 +372,8 @@ export function checkExportsTypes(
   return violations
 }
 
-function expectedFailureKey(entry: {
+/** Stable identity for a violation/expected-failure: `check::package::reason`. */
+export function expectedFailureKey(entry: {
   check: string
   package: string
   reason: string
@@ -525,10 +526,16 @@ function main(): void {
   process.exit(exitCodeFor(result))
 }
 
-function isMainModule(): boolean {
-  return typeof process.argv[1] === "string" && import.meta.url === `file://${process.argv[1]}`
+/**
+ * True when `moduleUrl` (the caller's `import.meta.url`) is the process entry
+ * point rather than an imported dependency. Callers must pass their own
+ * `import.meta.url` — it is module-scoped, so a shared helper cannot read it
+ * for them.
+ */
+export function isMainModule(moduleUrl: string): boolean {
+  return typeof process.argv[1] === "string" && moduleUrl === `file://${process.argv[1]}`
 }
 
-if (isMainModule()) {
+if (isMainModule(import.meta.url)) {
   main()
 }
