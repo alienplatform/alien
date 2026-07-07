@@ -8,7 +8,7 @@ import { GetManagerManagementConfigRequest } from "@alienplatform/platform-api/m
 let value: GetManagerManagementConfigRequest = {
   id: "mgr_enxscjrqiiu2lrc672hwwuc5",
   workspace: "my-workspace",
-  platform: "local",
+  platform: "machines",
 };
 ```
 

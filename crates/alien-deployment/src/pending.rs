@@ -1,7 +1,7 @@
 use crate::{
     DeploymentConfig, DeploymentState, DeploymentStatus, DeploymentStepResult, ErrorData, Result,
 };
-use alien_core::{ClientConfig, Platform, Stack, StackState};
+use alien_core::{ClientConfig, EnvironmentInfo, Platform, Stack, StackState};
 use alien_error::AlienError;
 use alien_error::Context;
 use tracing::info;
@@ -35,20 +35,9 @@ pub async fn handle_pending(
     // Step 2: Collect environment information. Kubernetes deployments may run
     // on base cloud infrastructure; collect the base cloud environment while
     // keeping the deployment stack platform as Kubernetes.
-    let (environment_platform, environment_client_config) =
-        environment_collection_context(current.platform, config.base_platform, &client_config)?;
     let environment_info =
-        crate::helpers::collect_environment_info(environment_platform, &environment_client_config)
-            .await
-            .context(ErrorData::EnvironmentInfoCollectionFailed {
-                platform: format!("{:?}", environment_platform),
-                reason: "Failed to collect cloud environment details".to_string(),
-            })?;
-
-    info!(
-        "Collected environment info for platform {:?}",
-        environment_platform
-    );
+        collect_deployment_environment_info(current.platform, config.base_platform, &client_config)
+            .await?;
 
     // Step 3: Run deployment-time preflights (compile-time + mutations + runtime checks)
     // Store the mutated stack for use in subsequent phases (InitialSetup, Provisioning)
@@ -94,7 +83,7 @@ pub async fn handle_pending(
     next.status = DeploymentStatus::InitialSetup;
     next.stack_state = Some(stack_state);
     next.error = None;
-    next.environment_info = Some(environment_info);
+    next.environment_info = environment_info;
     next.runtime_metadata = Some(runtime_metadata);
     // Error handled in DeploymentStepResult
 
@@ -105,6 +94,37 @@ pub async fn handle_pending(
         heartbeats: vec![],
         observed_inventory_batches: vec![],
     })
+}
+
+fn should_collect_environment_info(platform: Platform) -> bool {
+    !matches!(platform, Platform::Machines)
+}
+
+async fn collect_deployment_environment_info(
+    platform: Platform,
+    base_platform: Option<Platform>,
+    client_config: &ClientConfig,
+) -> Result<Option<EnvironmentInfo>> {
+    if !should_collect_environment_info(platform) {
+        return Ok(None);
+    }
+
+    let (environment_platform, environment_client_config) =
+        environment_collection_context(platform, base_platform, client_config)?;
+    let environment_info =
+        crate::helpers::collect_environment_info(environment_platform, &environment_client_config)
+            .await
+            .context(ErrorData::EnvironmentInfoCollectionFailed {
+                platform: format!("{:?}", environment_platform),
+                reason: "Failed to collect cloud environment details".to_string(),
+            })?;
+
+    info!(
+        "Collected environment info for platform {:?}",
+        environment_platform
+    );
+
+    Ok(Some(environment_info))
 }
 
 fn environment_collection_context(
@@ -150,5 +170,15 @@ mod tests {
 
         assert_eq!(platform, Platform::Test);
         assert!(matches!(config, ClientConfig::Test));
+    }
+
+    #[tokio::test]
+    async fn machines_skips_environment_collection() {
+        let environment_info =
+            collect_deployment_environment_info(Platform::Machines, None, &ClientConfig::Test)
+                .await
+                .expect("machines should not require a cloud client config");
+
+        assert!(environment_info.is_none());
     }
 }

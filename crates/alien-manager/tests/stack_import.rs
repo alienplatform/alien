@@ -188,7 +188,9 @@ async fn make_fixture_for_platform(platform: Platform, seeded_stack: Option<Stac
         http_client: reqwest::Client::new(),
         credential_cache: Arc::new(CredentialCache::new()),
         pull_validation_cache: Arc::new(PullValidationCache::new()),
-        registry_routing_table: Arc::new(RegistryRoutingTable::new(vec![])),
+        registry_routing_table: Arc::new(
+            RegistryRoutingTable::new(vec![]).expect("empty routing table should build"),
+        ),
         import_registry: Arc::new(alien_infra::ImporterRegistry::built_in()),
     };
 
@@ -840,6 +842,7 @@ async fn native_deployment_blocks_imported_name() {
                 stack_settings: StackSettings::default(),
                 stack_state: None,
                 environment_variables: None,
+                public_subdomain: None,
                 input_values: Default::default(),
                 deployment_token: None,
             },

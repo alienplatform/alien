@@ -466,6 +466,35 @@ mod tests {
         assert_eq!(converted[1].var_type, EnvironmentVariableType::Secret);
         assert_eq!(converted[1].target_resources, Some(vec!["api".to_string()]));
     }
+
+    #[test]
+    fn release_version_flag_parses_when_root_version_is_propagated() {
+        Cli::command()
+            .try_get_matches_from([
+                "alien",
+                "release",
+                "--no-stack",
+                "--version",
+                "1.2.3",
+                "--project",
+                "demo",
+            ])
+            .expect("release --version should parse");
+    }
+
+    #[test]
+    fn dev_release_version_flag_parses_when_root_version_is_propagated() {
+        Cli::command()
+            .try_get_matches_from([
+                "alien",
+                "dev",
+                "release",
+                "--no-stack",
+                "--version",
+                "1.2.3",
+            ])
+            .expect("dev release --version should parse");
+    }
 }
 
 async fn serve_task(args: ServeArgs) -> Result<()> {

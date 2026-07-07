@@ -33,6 +33,9 @@ pub struct DeployCliConfig {
     /// Exact agent binary URL to install for local pull-model deployments.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub agent_binary_url: Option<String>,
+    /// Machine bootstrap bundle manifest URL used by `alien-deploy join`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub machine_bundle_url: Option<String>,
     /// Branded environment variable that contains the deployment token.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub token_env_var: Option<String>,
@@ -185,6 +188,9 @@ mod tests {
             default_platform: Some("aws".into()),
             api_base_url: Some("https://api.example.com".into()),
             agent_binary_url: Some("https://packages.example.com/acme/agent".into()),
+            machine_bundle_url: Some(
+                "https://packages.example.com/acme/machine-bundle.json".into(),
+            ),
             token_env_var: Some("ACME_DEPLOYMENT_TOKEN".into()),
             name: Some("acme-deploy".into()),
         };
@@ -201,6 +207,7 @@ mod tests {
         assert_eq!(loaded.default_platform, config.default_platform);
         assert_eq!(loaded.api_base_url, config.api_base_url);
         assert_eq!(loaded.agent_binary_url, config.agent_binary_url);
+        assert_eq!(loaded.machine_bundle_url, config.machine_bundle_url);
         assert_eq!(loaded.token_env_var, config.token_env_var);
         assert_eq!(loaded.display_name, config.display_name);
         assert_eq!(loaded.name, config.name);

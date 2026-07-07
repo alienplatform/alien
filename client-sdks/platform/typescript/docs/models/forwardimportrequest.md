@@ -12,7 +12,7 @@ let value: ForwardImportRequest = {
     deploymentName: "<value>",
     resourcePrefix: "<value>",
     releaseId: "rel_WbhQgksrawSKIpEN0NAssHX9",
-    platform: "kubernetes",
+    platform: "machines",
     region: "<value>",
     setupTarget: "<value>",
     setupImportFormatVersion: 171752,

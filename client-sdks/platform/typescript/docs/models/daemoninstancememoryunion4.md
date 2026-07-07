@@ -3,12 +3,12 @@
 
 ## Supported Types
 
-### `models.DaemonInstanceMemory`
+### `models.MemoryDaemonInstance4`
 
 ```typescript
-const value: models.DaemonInstanceMemory = {
-  unit: "milliseconds",
-  value: 7327.24,
+const value: models.MemoryDaemonInstance4 = {
+  unit: "cores",
+  value: 8012.17,
 };
 ```
 

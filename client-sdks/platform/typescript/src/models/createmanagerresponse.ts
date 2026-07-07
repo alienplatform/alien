@@ -188,6 +188,37 @@ export type CreateManagerResponseCustomDomains3 = {
   domain: string;
 };
 
+export const CreateManagerResponseModeLoadBalancer3 = {
+  LoadBalancer: "loadBalancer",
+} as const;
+export type CreateManagerResponseModeLoadBalancer3 = ClosedEnum<
+  typeof CreateManagerResponseModeLoadBalancer3
+>;
+
+export type CreateManagerResponsePublicEndpointTargetLoadBalancer3 = {
+  /**
+   * DNS name or URL for the external load balancer.
+   */
+  cnameTarget: string;
+  mode: CreateManagerResponseModeLoadBalancer3;
+};
+
+export const CreateManagerResponseModeMachineAddresses3 = {
+  MachineAddresses: "machineAddresses",
+} as const;
+export type CreateManagerResponseModeMachineAddresses3 = ClosedEnum<
+  typeof CreateManagerResponseModeMachineAddresses3
+>;
+
+export type CreateManagerResponsePublicEndpointTargetMachineAddresses3 = {
+  mode: CreateManagerResponseModeMachineAddresses3;
+};
+
+export type CreateManagerResponsePublicEndpointTargetUnion3 =
+  | CreateManagerResponsePublicEndpointTargetLoadBalancer3
+  | CreateManagerResponsePublicEndpointTargetMachineAddresses3
+  | any;
+
 /**
  * Domain configuration for the stack.
  *
@@ -202,6 +233,12 @@ export type CreateManagerResponseDomains3 = {
    */
   customDomains?:
     | { [k: string]: CreateManagerResponseCustomDomains3 }
+    | null
+    | undefined;
+  publicEndpointTarget?:
+    | CreateManagerResponsePublicEndpointTargetLoadBalancer3
+    | CreateManagerResponsePublicEndpointTargetMachineAddresses3
+    | any
     | null
     | undefined;
 };
@@ -1321,6 +1358,37 @@ export type CreateManagerResponseCustomDomains2 = {
   domain: string;
 };
 
+export const CreateManagerResponseModeLoadBalancer2 = {
+  LoadBalancer: "loadBalancer",
+} as const;
+export type CreateManagerResponseModeLoadBalancer2 = ClosedEnum<
+  typeof CreateManagerResponseModeLoadBalancer2
+>;
+
+export type CreateManagerResponsePublicEndpointTargetLoadBalancer2 = {
+  /**
+   * DNS name or URL for the external load balancer.
+   */
+  cnameTarget: string;
+  mode: CreateManagerResponseModeLoadBalancer2;
+};
+
+export const CreateManagerResponseModeMachineAddresses2 = {
+  MachineAddresses: "machineAddresses",
+} as const;
+export type CreateManagerResponseModeMachineAddresses2 = ClosedEnum<
+  typeof CreateManagerResponseModeMachineAddresses2
+>;
+
+export type CreateManagerResponsePublicEndpointTargetMachineAddresses2 = {
+  mode: CreateManagerResponseModeMachineAddresses2;
+};
+
+export type CreateManagerResponsePublicEndpointTargetUnion2 =
+  | CreateManagerResponsePublicEndpointTargetLoadBalancer2
+  | CreateManagerResponsePublicEndpointTargetMachineAddresses2
+  | any;
+
 /**
  * Domain configuration for the stack.
  *
@@ -1335,6 +1403,12 @@ export type CreateManagerResponseDomains2 = {
    */
   customDomains?:
     | { [k: string]: CreateManagerResponseCustomDomains2 }
+    | null
+    | undefined;
+  publicEndpointTarget?:
+    | CreateManagerResponsePublicEndpointTargetLoadBalancer2
+    | CreateManagerResponsePublicEndpointTargetMachineAddresses2
+    | any
     | null
     | undefined;
 };
@@ -2449,6 +2523,37 @@ export type CreateManagerResponseCustomDomains1 = {
   domain: string;
 };
 
+export const CreateManagerResponseModeLoadBalancer1 = {
+  LoadBalancer: "loadBalancer",
+} as const;
+export type CreateManagerResponseModeLoadBalancer1 = ClosedEnum<
+  typeof CreateManagerResponseModeLoadBalancer1
+>;
+
+export type CreateManagerResponsePublicEndpointTargetLoadBalancer1 = {
+  /**
+   * DNS name or URL for the external load balancer.
+   */
+  cnameTarget: string;
+  mode: CreateManagerResponseModeLoadBalancer1;
+};
+
+export const CreateManagerResponseModeMachineAddresses1 = {
+  MachineAddresses: "machineAddresses",
+} as const;
+export type CreateManagerResponseModeMachineAddresses1 = ClosedEnum<
+  typeof CreateManagerResponseModeMachineAddresses1
+>;
+
+export type CreateManagerResponsePublicEndpointTargetMachineAddresses1 = {
+  mode: CreateManagerResponseModeMachineAddresses1;
+};
+
+export type CreateManagerResponsePublicEndpointTargetUnion1 =
+  | CreateManagerResponsePublicEndpointTargetLoadBalancer1
+  | CreateManagerResponsePublicEndpointTargetMachineAddresses1
+  | any;
+
 /**
  * Domain configuration for the stack.
  *
@@ -2463,6 +2568,12 @@ export type CreateManagerResponseDomains1 = {
    */
   customDomains?:
     | { [k: string]: CreateManagerResponseCustomDomains1 }
+    | null
+    | undefined;
+  publicEndpointTarget?:
+    | CreateManagerResponsePublicEndpointTargetLoadBalancer1
+    | CreateManagerResponsePublicEndpointTargetMachineAddresses1
+    | any
     | null
     | undefined;
 };
@@ -3855,6 +3966,94 @@ export function createManagerResponseCustomDomains3FromJSON(
 }
 
 /** @internal */
+export const CreateManagerResponseModeLoadBalancer3$inboundSchema: z.ZodEnum<
+  typeof CreateManagerResponseModeLoadBalancer3
+> = z.enum(CreateManagerResponseModeLoadBalancer3);
+
+/** @internal */
+export const CreateManagerResponsePublicEndpointTargetLoadBalancer3$inboundSchema:
+  z.ZodType<CreateManagerResponsePublicEndpointTargetLoadBalancer3, unknown> = z
+    .object({
+      cnameTarget: z.string(),
+      mode: CreateManagerResponseModeLoadBalancer3$inboundSchema,
+    });
+
+export function createManagerResponsePublicEndpointTargetLoadBalancer3FromJSON(
+  jsonString: string,
+): SafeParseResult<
+  CreateManagerResponsePublicEndpointTargetLoadBalancer3,
+  SDKValidationError
+> {
+  return safeParse(
+    jsonString,
+    (x) =>
+      CreateManagerResponsePublicEndpointTargetLoadBalancer3$inboundSchema
+        .parse(JSON.parse(x)),
+    `Failed to parse 'CreateManagerResponsePublicEndpointTargetLoadBalancer3' from JSON`,
+  );
+}
+
+/** @internal */
+export const CreateManagerResponseModeMachineAddresses3$inboundSchema:
+  z.ZodEnum<typeof CreateManagerResponseModeMachineAddresses3> = z.enum(
+    CreateManagerResponseModeMachineAddresses3,
+  );
+
+/** @internal */
+export const CreateManagerResponsePublicEndpointTargetMachineAddresses3$inboundSchema:
+  z.ZodType<
+    CreateManagerResponsePublicEndpointTargetMachineAddresses3,
+    unknown
+  > = z.object({
+    mode: CreateManagerResponseModeMachineAddresses3$inboundSchema,
+  });
+
+export function createManagerResponsePublicEndpointTargetMachineAddresses3FromJSON(
+  jsonString: string,
+): SafeParseResult<
+  CreateManagerResponsePublicEndpointTargetMachineAddresses3,
+  SDKValidationError
+> {
+  return safeParse(
+    jsonString,
+    (x) =>
+      CreateManagerResponsePublicEndpointTargetMachineAddresses3$inboundSchema
+        .parse(JSON.parse(x)),
+    `Failed to parse 'CreateManagerResponsePublicEndpointTargetMachineAddresses3' from JSON`,
+  );
+}
+
+/** @internal */
+export const CreateManagerResponsePublicEndpointTargetUnion3$inboundSchema:
+  z.ZodType<CreateManagerResponsePublicEndpointTargetUnion3, unknown> = z.union(
+    [
+      z.lazy(() =>
+        CreateManagerResponsePublicEndpointTargetLoadBalancer3$inboundSchema
+      ),
+      z.lazy(() =>
+        CreateManagerResponsePublicEndpointTargetMachineAddresses3$inboundSchema
+      ),
+      z.any(),
+    ],
+  );
+
+export function createManagerResponsePublicEndpointTargetUnion3FromJSON(
+  jsonString: string,
+): SafeParseResult<
+  CreateManagerResponsePublicEndpointTargetUnion3,
+  SDKValidationError
+> {
+  return safeParse(
+    jsonString,
+    (x) =>
+      CreateManagerResponsePublicEndpointTargetUnion3$inboundSchema.parse(
+        JSON.parse(x),
+      ),
+    `Failed to parse 'CreateManagerResponsePublicEndpointTargetUnion3' from JSON`,
+  );
+}
+
+/** @internal */
 export const CreateManagerResponseDomains3$inboundSchema: z.ZodType<
   CreateManagerResponseDomains3,
   unknown
@@ -3864,6 +4063,17 @@ export const CreateManagerResponseDomains3$inboundSchema: z.ZodType<
       z.string(),
       z.lazy(() => CreateManagerResponseCustomDomains3$inboundSchema),
     ),
+  ).optional(),
+  publicEndpointTarget: z.nullable(
+    z.union([
+      z.lazy(() =>
+        CreateManagerResponsePublicEndpointTargetLoadBalancer3$inboundSchema
+      ),
+      z.lazy(() =>
+        CreateManagerResponsePublicEndpointTargetMachineAddresses3$inboundSchema
+      ),
+      z.any(),
+    ]),
   ).optional(),
 });
 
@@ -5739,6 +5949,94 @@ export function createManagerResponseCustomDomains2FromJSON(
 }
 
 /** @internal */
+export const CreateManagerResponseModeLoadBalancer2$inboundSchema: z.ZodEnum<
+  typeof CreateManagerResponseModeLoadBalancer2
+> = z.enum(CreateManagerResponseModeLoadBalancer2);
+
+/** @internal */
+export const CreateManagerResponsePublicEndpointTargetLoadBalancer2$inboundSchema:
+  z.ZodType<CreateManagerResponsePublicEndpointTargetLoadBalancer2, unknown> = z
+    .object({
+      cnameTarget: z.string(),
+      mode: CreateManagerResponseModeLoadBalancer2$inboundSchema,
+    });
+
+export function createManagerResponsePublicEndpointTargetLoadBalancer2FromJSON(
+  jsonString: string,
+): SafeParseResult<
+  CreateManagerResponsePublicEndpointTargetLoadBalancer2,
+  SDKValidationError
+> {
+  return safeParse(
+    jsonString,
+    (x) =>
+      CreateManagerResponsePublicEndpointTargetLoadBalancer2$inboundSchema
+        .parse(JSON.parse(x)),
+    `Failed to parse 'CreateManagerResponsePublicEndpointTargetLoadBalancer2' from JSON`,
+  );
+}
+
+/** @internal */
+export const CreateManagerResponseModeMachineAddresses2$inboundSchema:
+  z.ZodEnum<typeof CreateManagerResponseModeMachineAddresses2> = z.enum(
+    CreateManagerResponseModeMachineAddresses2,
+  );
+
+/** @internal */
+export const CreateManagerResponsePublicEndpointTargetMachineAddresses2$inboundSchema:
+  z.ZodType<
+    CreateManagerResponsePublicEndpointTargetMachineAddresses2,
+    unknown
+  > = z.object({
+    mode: CreateManagerResponseModeMachineAddresses2$inboundSchema,
+  });
+
+export function createManagerResponsePublicEndpointTargetMachineAddresses2FromJSON(
+  jsonString: string,
+): SafeParseResult<
+  CreateManagerResponsePublicEndpointTargetMachineAddresses2,
+  SDKValidationError
+> {
+  return safeParse(
+    jsonString,
+    (x) =>
+      CreateManagerResponsePublicEndpointTargetMachineAddresses2$inboundSchema
+        .parse(JSON.parse(x)),
+    `Failed to parse 'CreateManagerResponsePublicEndpointTargetMachineAddresses2' from JSON`,
+  );
+}
+
+/** @internal */
+export const CreateManagerResponsePublicEndpointTargetUnion2$inboundSchema:
+  z.ZodType<CreateManagerResponsePublicEndpointTargetUnion2, unknown> = z.union(
+    [
+      z.lazy(() =>
+        CreateManagerResponsePublicEndpointTargetLoadBalancer2$inboundSchema
+      ),
+      z.lazy(() =>
+        CreateManagerResponsePublicEndpointTargetMachineAddresses2$inboundSchema
+      ),
+      z.any(),
+    ],
+  );
+
+export function createManagerResponsePublicEndpointTargetUnion2FromJSON(
+  jsonString: string,
+): SafeParseResult<
+  CreateManagerResponsePublicEndpointTargetUnion2,
+  SDKValidationError
+> {
+  return safeParse(
+    jsonString,
+    (x) =>
+      CreateManagerResponsePublicEndpointTargetUnion2$inboundSchema.parse(
+        JSON.parse(x),
+      ),
+    `Failed to parse 'CreateManagerResponsePublicEndpointTargetUnion2' from JSON`,
+  );
+}
+
+/** @internal */
 export const CreateManagerResponseDomains2$inboundSchema: z.ZodType<
   CreateManagerResponseDomains2,
   unknown
@@ -5748,6 +6046,17 @@ export const CreateManagerResponseDomains2$inboundSchema: z.ZodType<
       z.string(),
       z.lazy(() => CreateManagerResponseCustomDomains2$inboundSchema),
     ),
+  ).optional(),
+  publicEndpointTarget: z.nullable(
+    z.union([
+      z.lazy(() =>
+        CreateManagerResponsePublicEndpointTargetLoadBalancer2$inboundSchema
+      ),
+      z.lazy(() =>
+        CreateManagerResponsePublicEndpointTargetMachineAddresses2$inboundSchema
+      ),
+      z.any(),
+    ]),
   ).optional(),
 });
 
@@ -7618,6 +7927,94 @@ export function createManagerResponseCustomDomains1FromJSON(
 }
 
 /** @internal */
+export const CreateManagerResponseModeLoadBalancer1$inboundSchema: z.ZodEnum<
+  typeof CreateManagerResponseModeLoadBalancer1
+> = z.enum(CreateManagerResponseModeLoadBalancer1);
+
+/** @internal */
+export const CreateManagerResponsePublicEndpointTargetLoadBalancer1$inboundSchema:
+  z.ZodType<CreateManagerResponsePublicEndpointTargetLoadBalancer1, unknown> = z
+    .object({
+      cnameTarget: z.string(),
+      mode: CreateManagerResponseModeLoadBalancer1$inboundSchema,
+    });
+
+export function createManagerResponsePublicEndpointTargetLoadBalancer1FromJSON(
+  jsonString: string,
+): SafeParseResult<
+  CreateManagerResponsePublicEndpointTargetLoadBalancer1,
+  SDKValidationError
+> {
+  return safeParse(
+    jsonString,
+    (x) =>
+      CreateManagerResponsePublicEndpointTargetLoadBalancer1$inboundSchema
+        .parse(JSON.parse(x)),
+    `Failed to parse 'CreateManagerResponsePublicEndpointTargetLoadBalancer1' from JSON`,
+  );
+}
+
+/** @internal */
+export const CreateManagerResponseModeMachineAddresses1$inboundSchema:
+  z.ZodEnum<typeof CreateManagerResponseModeMachineAddresses1> = z.enum(
+    CreateManagerResponseModeMachineAddresses1,
+  );
+
+/** @internal */
+export const CreateManagerResponsePublicEndpointTargetMachineAddresses1$inboundSchema:
+  z.ZodType<
+    CreateManagerResponsePublicEndpointTargetMachineAddresses1,
+    unknown
+  > = z.object({
+    mode: CreateManagerResponseModeMachineAddresses1$inboundSchema,
+  });
+
+export function createManagerResponsePublicEndpointTargetMachineAddresses1FromJSON(
+  jsonString: string,
+): SafeParseResult<
+  CreateManagerResponsePublicEndpointTargetMachineAddresses1,
+  SDKValidationError
+> {
+  return safeParse(
+    jsonString,
+    (x) =>
+      CreateManagerResponsePublicEndpointTargetMachineAddresses1$inboundSchema
+        .parse(JSON.parse(x)),
+    `Failed to parse 'CreateManagerResponsePublicEndpointTargetMachineAddresses1' from JSON`,
+  );
+}
+
+/** @internal */
+export const CreateManagerResponsePublicEndpointTargetUnion1$inboundSchema:
+  z.ZodType<CreateManagerResponsePublicEndpointTargetUnion1, unknown> = z.union(
+    [
+      z.lazy(() =>
+        CreateManagerResponsePublicEndpointTargetLoadBalancer1$inboundSchema
+      ),
+      z.lazy(() =>
+        CreateManagerResponsePublicEndpointTargetMachineAddresses1$inboundSchema
+      ),
+      z.any(),
+    ],
+  );
+
+export function createManagerResponsePublicEndpointTargetUnion1FromJSON(
+  jsonString: string,
+): SafeParseResult<
+  CreateManagerResponsePublicEndpointTargetUnion1,
+  SDKValidationError
+> {
+  return safeParse(
+    jsonString,
+    (x) =>
+      CreateManagerResponsePublicEndpointTargetUnion1$inboundSchema.parse(
+        JSON.parse(x),
+      ),
+    `Failed to parse 'CreateManagerResponsePublicEndpointTargetUnion1' from JSON`,
+  );
+}
+
+/** @internal */
 export const CreateManagerResponseDomains1$inboundSchema: z.ZodType<
   CreateManagerResponseDomains1,
   unknown
@@ -7627,6 +8024,17 @@ export const CreateManagerResponseDomains1$inboundSchema: z.ZodType<
       z.string(),
       z.lazy(() => CreateManagerResponseCustomDomains1$inboundSchema),
     ),
+  ).optional(),
+  publicEndpointTarget: z.nullable(
+    z.union([
+      z.lazy(() =>
+        CreateManagerResponsePublicEndpointTargetLoadBalancer1$inboundSchema
+      ),
+      z.lazy(() =>
+        CreateManagerResponsePublicEndpointTargetMachineAddresses1$inboundSchema
+      ),
+      z.any(),
+    ]),
   ).optional(),
 });
 

@@ -1,6 +1,6 @@
 use crate::error::{ErrorData, Result};
 use crate::resource::{ResourceDefinition, ResourceOutputsDefinition, ResourceRef, ResourceType};
-use crate::{PublicEndpointOutput, WorkerPublicEndpoint};
+use crate::{PublicEndpointOutput, WorkerPublicEndpoint, APEX_HOST_LABEL};
 use alien_error::AlienError;
 use bon::Builder;
 use serde::{Deserialize, Serialize};
@@ -209,6 +209,7 @@ impl Worker {
 
     fn validate_public_endpoints(&self) -> Result<()> {
         let mut endpoint_names = std::collections::HashSet::new();
+        let mut apex_endpoint_name: Option<&str> = None;
         for endpoint in &self.public_endpoints {
             endpoint.validate_for_resource(&self.id)?;
             if !endpoint_names.insert(endpoint.name.as_str()) {
@@ -216,6 +217,18 @@ impl Worker {
                     resource_id: self.id.clone(),
                     reason: format!("duplicate public endpoint name '{}'", endpoint.name),
                 }));
+            }
+            if endpoint.host_label.as_deref() == Some(APEX_HOST_LABEL) {
+                if let Some(existing_name) = apex_endpoint_name {
+                    return Err(AlienError::new(ErrorData::InvalidResourceUpdate {
+                        resource_id: self.id.clone(),
+                        reason: format!(
+                            "only one apex public endpoint is allowed per resource; '{}' already uses hostLabel '@'",
+                            existing_name
+                        ),
+                    }));
+                }
+                apex_endpoint_name = Some(endpoint.name.as_str());
             }
         }
 
@@ -740,5 +753,27 @@ mod tests {
 
         assert_eq!(worker.public_endpoints[0].name, "api");
         assert_eq!(worker.commands_enabled, true);
+    }
+
+    #[test]
+    fn worker_rejects_multiple_apex_public_endpoints() {
+        let worker = Worker::new("apex-worker".to_string())
+            .code(WorkerCode::Image {
+                image: "test-image".to_string(),
+            })
+            .permissions("execution".to_string())
+            .public_endpoint(WorkerPublicEndpoint {
+                name: "api".to_string(),
+                host_label: Some(APEX_HOST_LABEL.to_string()),
+                wildcard_subdomains: false,
+            })
+            .public_endpoint(WorkerPublicEndpoint {
+                name: "admin".to_string(),
+                host_label: Some(APEX_HOST_LABEL.to_string()),
+                wildcard_subdomains: false,
+            })
+            .build();
+
+        assert!(worker.validate_public_endpoints().is_err());
     }
 }

@@ -424,6 +424,7 @@ pub async fn build_and_post_release_simple(
         gcp: None,
         azure: None,
         kubernetes: None,
+        machines: None,
         local: Some(stack_json),
         test: None,
     };

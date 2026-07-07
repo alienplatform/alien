@@ -27,6 +27,7 @@ export const ImportSourcePlatform = {
   Gcp: "gcp",
   Azure: "azure",
   Kubernetes: "kubernetes",
+  Machines: "machines",
   Local: "local",
   Test: "test",
 } as const;
@@ -172,6 +173,37 @@ export type ImportSourceCustomDomains = {
   domain: string;
 };
 
+export const ImportSourceModeLoadBalancer = {
+  LoadBalancer: "loadBalancer",
+} as const;
+export type ImportSourceModeLoadBalancer = ClosedEnum<
+  typeof ImportSourceModeLoadBalancer
+>;
+
+export type ImportSourcePublicEndpointTargetLoadBalancer = {
+  /**
+   * DNS name or URL for the external load balancer.
+   */
+  cnameTarget: string;
+  mode: ImportSourceModeLoadBalancer;
+};
+
+export const ImportSourceModeMachineAddresses = {
+  MachineAddresses: "machineAddresses",
+} as const;
+export type ImportSourceModeMachineAddresses = ClosedEnum<
+  typeof ImportSourceModeMachineAddresses
+>;
+
+export type ImportSourcePublicEndpointTargetMachineAddresses = {
+  mode: ImportSourceModeMachineAddresses;
+};
+
+export type ImportSourcePublicEndpointTargetUnion =
+  | ImportSourcePublicEndpointTargetLoadBalancer
+  | ImportSourcePublicEndpointTargetMachineAddresses
+  | any;
+
 /**
  * Domain configuration for the stack.
  *
@@ -185,6 +217,12 @@ export type ImportSourceDomains = {
    * Custom domain configuration per resource ID.
    */
   customDomains?: { [k: string]: ImportSourceCustomDomains } | null | undefined;
+  publicEndpointTarget?:
+    | ImportSourcePublicEndpointTargetLoadBalancer
+    | ImportSourcePublicEndpointTargetMachineAddresses
+    | any
+    | null
+    | undefined;
 };
 
 export type ImportSourceDomainsUnion = ImportSourceDomains | any;
@@ -1630,9 +1668,103 @@ export function importSourceCustomDomainsToJSON(
 }
 
 /** @internal */
+export const ImportSourceModeLoadBalancer$outboundSchema: z.ZodEnum<
+  typeof ImportSourceModeLoadBalancer
+> = z.enum(ImportSourceModeLoadBalancer);
+
+/** @internal */
+export type ImportSourcePublicEndpointTargetLoadBalancer$Outbound = {
+  cnameTarget: string;
+  mode: string;
+};
+
+/** @internal */
+export const ImportSourcePublicEndpointTargetLoadBalancer$outboundSchema:
+  z.ZodType<
+    ImportSourcePublicEndpointTargetLoadBalancer$Outbound,
+    ImportSourcePublicEndpointTargetLoadBalancer
+  > = z.object({
+    cnameTarget: z.string(),
+    mode: ImportSourceModeLoadBalancer$outboundSchema,
+  });
+
+export function importSourcePublicEndpointTargetLoadBalancerToJSON(
+  importSourcePublicEndpointTargetLoadBalancer:
+    ImportSourcePublicEndpointTargetLoadBalancer,
+): string {
+  return JSON.stringify(
+    ImportSourcePublicEndpointTargetLoadBalancer$outboundSchema.parse(
+      importSourcePublicEndpointTargetLoadBalancer,
+    ),
+  );
+}
+
+/** @internal */
+export const ImportSourceModeMachineAddresses$outboundSchema: z.ZodEnum<
+  typeof ImportSourceModeMachineAddresses
+> = z.enum(ImportSourceModeMachineAddresses);
+
+/** @internal */
+export type ImportSourcePublicEndpointTargetMachineAddresses$Outbound = {
+  mode: string;
+};
+
+/** @internal */
+export const ImportSourcePublicEndpointTargetMachineAddresses$outboundSchema:
+  z.ZodType<
+    ImportSourcePublicEndpointTargetMachineAddresses$Outbound,
+    ImportSourcePublicEndpointTargetMachineAddresses
+  > = z.object({
+    mode: ImportSourceModeMachineAddresses$outboundSchema,
+  });
+
+export function importSourcePublicEndpointTargetMachineAddressesToJSON(
+  importSourcePublicEndpointTargetMachineAddresses:
+    ImportSourcePublicEndpointTargetMachineAddresses,
+): string {
+  return JSON.stringify(
+    ImportSourcePublicEndpointTargetMachineAddresses$outboundSchema.parse(
+      importSourcePublicEndpointTargetMachineAddresses,
+    ),
+  );
+}
+
+/** @internal */
+export type ImportSourcePublicEndpointTargetUnion$Outbound =
+  | ImportSourcePublicEndpointTargetLoadBalancer$Outbound
+  | ImportSourcePublicEndpointTargetMachineAddresses$Outbound
+  | any;
+
+/** @internal */
+export const ImportSourcePublicEndpointTargetUnion$outboundSchema: z.ZodType<
+  ImportSourcePublicEndpointTargetUnion$Outbound,
+  ImportSourcePublicEndpointTargetUnion
+> = z.union([
+  z.lazy(() => ImportSourcePublicEndpointTargetLoadBalancer$outboundSchema),
+  z.lazy(() => ImportSourcePublicEndpointTargetMachineAddresses$outboundSchema),
+  z.any(),
+]);
+
+export function importSourcePublicEndpointTargetUnionToJSON(
+  importSourcePublicEndpointTargetUnion: ImportSourcePublicEndpointTargetUnion,
+): string {
+  return JSON.stringify(
+    ImportSourcePublicEndpointTargetUnion$outboundSchema.parse(
+      importSourcePublicEndpointTargetUnion,
+    ),
+  );
+}
+
+/** @internal */
 export type ImportSourceDomains$Outbound = {
   customDomains?:
     | { [k: string]: ImportSourceCustomDomains$Outbound }
+    | null
+    | undefined;
+  publicEndpointTarget?:
+    | ImportSourcePublicEndpointTargetLoadBalancer$Outbound
+    | ImportSourcePublicEndpointTargetMachineAddresses$Outbound
+    | any
     | null
     | undefined;
 };
@@ -1647,6 +1779,15 @@ export const ImportSourceDomains$outboundSchema: z.ZodType<
       z.string(),
       z.lazy(() => ImportSourceCustomDomains$outboundSchema),
     ),
+  ).optional(),
+  publicEndpointTarget: z.nullable(
+    z.union([
+      z.lazy(() => ImportSourcePublicEndpointTargetLoadBalancer$outboundSchema),
+      z.lazy(() =>
+        ImportSourcePublicEndpointTargetMachineAddresses$outboundSchema
+      ),
+      z.any(),
+    ]),
   ).optional(),
 });
 

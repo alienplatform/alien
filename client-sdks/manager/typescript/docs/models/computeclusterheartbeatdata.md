@@ -9,8 +9,8 @@
 const value: models.ComputeClusterHeartbeatDataAws = {
   capacityGroups: [
     {
-      currentMachines: 902187,
-      desiredMachines: 772214,
+      currentMachines: 799180,
+      desiredMachines: 987548,
       groupId: "<id>",
     },
   ],
@@ -25,11 +25,18 @@ const value: models.ComputeClusterHeartbeatDataAws = {
     },
   ],
   status: {
-    collectionIssues: [],
+    collectionIssues: [
+      {
+        message: "<value>",
+        reason: "forbidden",
+        severity: "info",
+        source: "<value>",
+      },
+    ],
     health: "unhealthy",
-    lifecycle: "stopped",
-    partial: false,
-    stale: true,
+    lifecycle: "creating",
+    partial: true,
+    stale: false,
   },
   backend: "aws",
 };
@@ -51,11 +58,18 @@ const value: models.ComputeClusterHeartbeatDataGcp = {
     },
   ],
   status: {
-    collectionIssues: [],
+    collectionIssues: [
+      {
+        message: "<value>",
+        reason: "forbidden",
+        severity: "info",
+        source: "<value>",
+      },
+    ],
     health: "unhealthy",
-    lifecycle: "stopped",
-    partial: false,
-    stale: true,
+    lifecycle: "creating",
+    partial: true,
+    stale: false,
   },
   backend: "gcp",
 };
@@ -77,13 +91,52 @@ const value: models.ComputeClusterHeartbeatDataAzure = {
     },
   ],
   status: {
-    collectionIssues: [],
+    collectionIssues: [
+      {
+        message: "<value>",
+        reason: "forbidden",
+        severity: "info",
+        source: "<value>",
+      },
+    ],
     health: "unhealthy",
-    lifecycle: "stopped",
-    partial: false,
-    stale: true,
+    lifecycle: "creating",
+    partial: true,
+    stale: false,
   },
   backend: "azure",
+};
+```
+
+### `models.ComputeClusterHeartbeatDataMachines`
+
+```typescript
+const value: models.ComputeClusterHeartbeatDataMachines = {
+  capacityGroups: [
+    {
+      currentMachines: 799180,
+      desiredMachines: 987548,
+      groupId: "<id>",
+    },
+  ],
+  machines: [],
+  name: "<value>",
+  nodes: {},
+  status: {
+    collectionIssues: [
+      {
+        message: "<value>",
+        reason: "forbidden",
+        severity: "info",
+        source: "<value>",
+      },
+    ],
+    health: "unhealthy",
+    lifecycle: "creating",
+    partial: true,
+    stale: false,
+  },
+  backend: "machines",
 };
 ```
 
@@ -96,11 +149,18 @@ const value: models.ComputeClusterHeartbeatDataLocal = {
   networkAvailable: true,
   nodes: {},
   status: {
-    collectionIssues: [],
+    collectionIssues: [
+      {
+        message: "<value>",
+        reason: "forbidden",
+        severity: "info",
+        source: "<value>",
+      },
+    ],
     health: "unhealthy",
-    lifecycle: "stopped",
-    partial: false,
-    stale: true,
+    lifecycle: "creating",
+    partial: true,
+    stale: false,
   },
   backend: "local",
 };

@@ -11,5 +11,5 @@ let value: DrainProgressStatus3 = "drained";
 ## Values
 
 ```typescript
-"draining" | "drained" | "terminating";
+"draining" | "drained" | "terminating"
 ```

@@ -26,6 +26,7 @@ export const ListDebugSessionsProvider = {
   Gcp: "gcp",
   Azure: "azure",
   Kubernetes: "kubernetes",
+  Machines: "machines",
   Local: "local",
   Test: "test",
 } as const;

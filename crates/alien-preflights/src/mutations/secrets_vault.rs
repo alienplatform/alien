@@ -4,8 +4,8 @@ use crate::error::Result;
 use crate::StackMutation;
 use alien_core::permissions::{PermissionProfile, PermissionSetReference};
 use alien_core::{
-    Container, Daemon, DeploymentConfig, RemoteStackManagement, ResourceEntry, ResourceLifecycle,
-    ResourceRef, Stack, StackState, Vault, Worker,
+    Container, Daemon, DeploymentConfig, Platform, RemoteStackManagement, ResourceEntry,
+    ResourceLifecycle, ResourceRef, Stack, StackState, Vault, Worker,
 };
 use async_trait::async_trait;
 use tracing::{debug, info};
@@ -30,10 +30,15 @@ impl StackMutation for SecretsVaultMutation {
 
     fn should_run(
         &self,
-        _stack: &Stack,
-        _stack_state: &StackState,
-        _config: &DeploymentConfig,
+        stack: &Stack,
+        stack_state: &StackState,
+        config: &DeploymentConfig,
     ) -> bool {
+        if stack_state.platform == Platform::Machines {
+            return stack.resources.contains_key("secrets")
+                || config.external_bindings.has("secrets");
+        }
+
         // Always run to ensure vault permissions are added to all profiles
         // even if the vault resource already exists (idempotent)
         true
@@ -378,6 +383,61 @@ mod tests {
         assert!(vault_permissions
             .iter()
             .any(|p| p.id() == "vault/data-read"));
+    }
+
+    #[tokio::test]
+    async fn test_skips_machines_without_explicit_secrets_vault() {
+        let container = Container::new("test-container".to_string())
+            .code(ContainerCode::Image {
+                image: "test:latest".to_string(),
+            })
+            .cpu(ResourceSpec {
+                min: "1".to_string(),
+                desired: "1".to_string(),
+            })
+            .memory(ResourceSpec {
+                min: "1Gi".to_string(),
+                desired: "1Gi".to_string(),
+            })
+            .port(8080)
+            .permissions("test-profile".to_string())
+            .build();
+
+        let mut resources = IndexMap::new();
+        resources.insert(
+            "test-container".to_string(),
+            ResourceEntry {
+                config: alien_core::Resource::new(container),
+                lifecycle: ResourceLifecycle::Live,
+                dependencies: Vec::new(),
+                remote_access: false,
+            },
+        );
+
+        let mut profiles = IndexMap::new();
+        profiles.insert("test-profile".to_string(), PermissionProfile::new());
+
+        let stack = Stack {
+            id: "test-stack".to_string(),
+            resources,
+            permissions: PermissionsConfig {
+                profiles,
+                management: ManagementPermissions::Auto,
+            },
+            supported_platforms: None,
+            inputs: vec![],
+        };
+
+        let stack_state = StackState::new(Platform::Machines);
+        let config = DeploymentConfig::builder()
+            .stack_settings(StackSettings::default())
+            .environment_variables(empty_env_snapshot())
+            .allow_frozen_changes(false)
+            .external_bindings(ExternalBindings::default())
+            .build();
+        let mutation = SecretsVaultMutation;
+
+        assert!(!mutation.should_run(&stack, &stack_state, &config));
     }
 
     #[tokio::test]

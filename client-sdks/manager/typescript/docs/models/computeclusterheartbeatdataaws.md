@@ -8,8 +8,8 @@ import { ComputeClusterHeartbeatDataAws } from "@alienplatform/manager-api/model
 let value: ComputeClusterHeartbeatDataAws = {
   capacityGroups: [
     {
-      currentMachines: 902187,
-      desiredMachines: 772214,
+      currentMachines: 799180,
+      desiredMachines: 987548,
       groupId: "<id>",
     },
   ],
@@ -24,11 +24,18 @@ let value: ComputeClusterHeartbeatDataAws = {
     },
   ],
   status: {
-    collectionIssues: [],
+    collectionIssues: [
+      {
+        message: "<value>",
+        reason: "forbidden",
+        severity: "info",
+        source: "<value>",
+      },
+    ],
     health: "unhealthy",
-    lifecycle: "stopped",
-    partial: false,
-    stale: true,
+    lifecycle: "creating",
+    partial: true,
+    stale: false,
   },
   backend: "aws",
 };

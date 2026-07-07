@@ -1695,6 +1695,7 @@ pub fn render_single_card(card: &DevDeploymentCard) -> String {
         Platform::Gcp => "GCP",
         Platform::Azure => "Azure",
         Platform::Kubernetes => "K8s",
+        Platform::Machines => "Machines",
         Platform::Local => "Local",
         Platform::Test => "Test",
     });

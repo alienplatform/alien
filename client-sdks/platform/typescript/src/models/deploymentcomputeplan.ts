@@ -109,7 +109,7 @@ export type DeploymentComputePlanProfile = {
   gpu?: ProfileGpu | null | undefined;
 };
 
-export type Machine = {
+export type DeploymentComputePlanMachine = {
   machine: string;
   profile: DeploymentComputePlanProfile;
   recommended: boolean;
@@ -122,7 +122,7 @@ export type Pool = {
   scale: ScaleFixed | ScaleAutoscale;
   selected: SelectedFixed | SelectedAutoscale;
   recommended: RecommendedFixed | RecommendedAutoscale;
-  machines: Array<Machine>;
+  machines: Array<DeploymentComputePlanMachine>;
   errors?: Array<string> | undefined;
 };
 
@@ -434,19 +434,22 @@ export function deploymentComputePlanProfileFromJSON(
 }
 
 /** @internal */
-export const Machine$inboundSchema: z.ZodType<Machine, unknown> = z.object({
+export const DeploymentComputePlanMachine$inboundSchema: z.ZodType<
+  DeploymentComputePlanMachine,
+  unknown
+> = z.object({
   machine: z.string(),
   profile: z.lazy(() => DeploymentComputePlanProfile$inboundSchema),
   recommended: z.boolean(),
 });
 
-export function machineFromJSON(
+export function deploymentComputePlanMachineFromJSON(
   jsonString: string,
-): SafeParseResult<Machine, SDKValidationError> {
+): SafeParseResult<DeploymentComputePlanMachine, SDKValidationError> {
   return safeParse(
     jsonString,
-    (x) => Machine$inboundSchema.parse(JSON.parse(x)),
-    `Failed to parse 'Machine' from JSON`,
+    (x) => DeploymentComputePlanMachine$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'DeploymentComputePlanMachine' from JSON`,
   );
 }
 
@@ -467,7 +470,7 @@ export const Pool$inboundSchema: z.ZodType<Pool, unknown> = z.object({
     z.lazy(() => RecommendedFixed$inboundSchema),
     z.lazy(() => RecommendedAutoscale$inboundSchema),
   ]),
-  machines: z.array(z.lazy(() => Machine$inboundSchema)),
+  machines: z.array(z.lazy(() => DeploymentComputePlanMachine$inboundSchema)),
   errors: z.array(z.string()).optional(),
 });
 

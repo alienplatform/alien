@@ -279,7 +279,7 @@ impl TestConfig {
                 Platform::Aws | Platform::Gcp | Platform::Azure => {
                     Ok(Some(NetworkSettings::UseDefault))
                 }
-                Platform::Kubernetes | Platform::Local | Platform::Test => Ok(None),
+                Platform::Kubernetes | Platform::Local | Platform::Machines | Platform::Test => Ok(None),
             },
             E2eNetworkMode::Create => match platform {
                 Platform::Aws | Platform::Gcp | Platform::Azure => {
@@ -288,13 +288,13 @@ impl TestConfig {
                         availability_zones: 2,
                     }))
                 }
-                Platform::Kubernetes | Platform::Local | Platform::Test => Ok(None),
+                Platform::Kubernetes | Platform::Local | Platform::Machines | Platform::Test => Ok(None),
             },
             E2eNetworkMode::Existing => match platform {
                 Platform::Aws | Platform::Gcp | Platform::Azure => {
                     self.e2e_existing_network_settings(platform).map(Some)
                 }
-                Platform::Kubernetes | Platform::Local | Platform::Test => Ok(None),
+                Platform::Kubernetes | Platform::Local | Platform::Machines | Platform::Test => Ok(None),
             },
         }
     }
@@ -508,7 +508,7 @@ impl TestConfig {
                 )
                 .ok(),
             }),
-            Platform::Kubernetes | Platform::Local | Platform::Test => {
+            Platform::Kubernetes | Platform::Local | Platform::Machines | Platform::Test => {
                 bail!("ALIEN_E2E_NETWORK_MODE=existing is not supported for {platform:?}")
             }
         }

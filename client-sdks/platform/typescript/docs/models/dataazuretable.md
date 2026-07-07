@@ -10,18 +10,18 @@ let value: DataAzureTable = {
     collectionIssues: [
       {
         message: "<value>",
-        reason: "not-installed",
+        reason: "api-unavailable",
         severity: "warning",
         source: "<value>",
       },
     ],
-    health: "healthy",
-    lifecycle: "scaling",
-    partial: false,
-    stale: true,
+    health: "degraded",
+    lifecycle: "unknown",
+    partial: true,
+    stale: false,
   },
   storageAccountName: "<value>",
-  tableExists: true,
+  tableExists: false,
   tableName: "<value>",
   backend: "azureTable",
 };
@@ -34,7 +34,7 @@ let value: DataAzureTable = {
 | `endpoint`                                                                 | *string*                                                                   | :heavy_minus_sign:                                                         | N/A                                                                        |
 | `resourceGroup`                                                            | *string*                                                                   | :heavy_minus_sign:                                                         | N/A                                                                        |
 | `signedIdentifierCount`                                                    | *number*                                                                   | :heavy_minus_sign:                                                         | N/A                                                                        |
-| `status`                                                                   | [models.ResourceHeartbeatStatus29](../models/resourceheartbeatstatus29.md) | :heavy_check_mark:                                                         | N/A                                                                        |
+| `status`                                                                   | [models.ResourceHeartbeatStatus31](../models/resourceheartbeatstatus31.md) | :heavy_check_mark:                                                         | N/A                                                                        |
 | `storageAccountKind`                                                       | *string*                                                                   | :heavy_minus_sign:                                                         | N/A                                                                        |
 | `storageAccountLocation`                                                   | *string*                                                                   | :heavy_minus_sign:                                                         | N/A                                                                        |
 | `storageAccountName`                                                       | *string*                                                                   | :heavy_check_mark:                                                         | N/A                                                                        |

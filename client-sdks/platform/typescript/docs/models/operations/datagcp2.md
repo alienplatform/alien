@@ -20,15 +20,15 @@ let value: DataGcp2 = {
     collectionIssues: [
       {
         message: "<value>",
-        reason: "forbidden",
-        severity: "error",
+        reason: "collection-failed",
+        severity: "warning",
         source: "<value>",
       },
     ],
-    health: "healthy",
-    lifecycle: "deleted",
-    partial: false,
-    stale: true,
+    health: "unknown",
+    lifecycle: "failed",
+    partial: true,
+    stale: false,
   },
   backend: "gcp",
 };
@@ -46,5 +46,5 @@ let value: DataGcp2 = {
 | `nodes`                                                                  | [operations.Nodes2](../../models/operations/nodes2.md)                   | :heavy_check_mark:                                                       | N/A                                                                      |
 | `providerFleets`                                                         | [operations.ProviderFleet2](../../models/operations/providerfleet2.md)[] | :heavy_check_mark:                                                       | N/A                                                                      |
 | `region`                                                                 | *string*                                                                 | :heavy_minus_sign:                                                       | N/A                                                                      |
-| `status`                                                                 | [operations.DataStatus19](../../models/operations/datastatus19.md)       | :heavy_check_mark:                                                       | N/A                                                                      |
+| `status`                                                                 | [operations.DataStatus20](../../models/operations/datastatus20.md)       | :heavy_check_mark:                                                       | N/A                                                                      |
 | `backend`                                                                | *"gcp"*                                                                  | :heavy_check_mark:                                                       | N/A                                                                      |

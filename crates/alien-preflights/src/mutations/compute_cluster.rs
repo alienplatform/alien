@@ -615,7 +615,7 @@ fn build_categorized_capacity_groups(
             scale_policy: None,
             nested_virtualization: None,
         }]),
-        Platform::Kubernetes | Platform::Test => Ok(vec![CapacityGroup {
+        Platform::Kubernetes | Platform::Machines | Platform::Test => Ok(vec![CapacityGroup {
             group_id: "general".to_string(),
             instance_type: None,
             profile: Some(MachineProfile {

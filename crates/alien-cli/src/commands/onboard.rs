@@ -328,10 +328,11 @@ fn platform_to_setup_policy_platform(
         Platform::Gcp => Ok(DeploymentSetupPolicyAllowedPlatformsItem::Gcp),
         Platform::Azure => Ok(DeploymentSetupPolicyAllowedPlatformsItem::Azure),
         Platform::Kubernetes => Ok(DeploymentSetupPolicyAllowedPlatformsItem::Kubernetes),
+        Platform::Machines => Ok(DeploymentSetupPolicyAllowedPlatformsItem::Machines),
         Platform::Local => Ok(DeploymentSetupPolicyAllowedPlatformsItem::Local),
         Platform::Test => Err(AlienError::new(ErrorData::ValidationError {
             field: "platforms".to_string(),
-            message: "`test` is not a deployment-link platform. Use aws, gcp, azure, kubernetes, or local.".to_string(),
+            message: "`test` is not a deployment-link platform. Use aws, gcp, azure, kubernetes, machines, or local.".to_string(),
         })),
     }
 }
@@ -376,11 +377,19 @@ async fn fetch_active_release_stack_inputs(
         (Platform::Gcp, stack_by_platform.gcp.as_ref()),
         (Platform::Azure, stack_by_platform.azure.as_ref()),
         (Platform::Kubernetes, stack_by_platform.kubernetes.as_ref()),
+        (Platform::Machines, stack_by_platform.machines.as_ref()),
         (Platform::Local, stack_by_platform.local.as_ref()),
     ];
+    active_release_stack_inputs_from_values(&stack_values)
+}
+
+#[cfg(feature = "platform")]
+fn active_release_stack_inputs_from_values(
+    stack_values: &[(Platform, Option<&serde_json::Value>)],
+) -> Result<ActiveReleaseStackInputs> {
     let mut inputs_by_platform = Vec::new();
     for (platform, stack_value) in stack_values
-        .into_iter()
+        .iter()
         .filter_map(|(platform, stack)| stack.map(|stack_value| (platform, stack_value)))
     {
         let stack: Stack = serde_json::from_value(stack_value.clone()).map_err(|error| {
@@ -389,7 +398,7 @@ async fn fetch_active_release_stack_inputs(
                 message: format!("Failed to parse release stack input metadata: {error}"),
             })
         })?;
-        inputs_by_platform.push((platform, stack.inputs));
+        inputs_by_platform.push((platform.clone(), stack.inputs));
     }
 
     Ok(ActiveReleaseStackInputs {
@@ -915,6 +924,7 @@ async fn onboard_standalone(args: OnboardArgs, ctx: ExecutionMode, name: String)
 #[cfg(all(test, feature = "platform"))]
 mod tests {
     use super::*;
+    use serde_json::json;
 
     fn input(id: &str, kind: StackInputKind, required: bool) -> StackInputDefinition {
         StackInputDefinition {
@@ -942,6 +952,34 @@ mod tests {
             platforms: Some(platforms),
             ..input(id, kind, required)
         }
+    }
+
+    fn minimal_stack() -> serde_json::Value {
+        json!({
+            "id": "test-stack",
+            "resources": {},
+            "inputs": []
+        })
+    }
+
+    #[test]
+    fn active_release_stack_inputs_include_machines_platform() {
+        let machines_stack = minimal_stack();
+        let stack_values = [(Platform::Machines, Some(&machines_stack))];
+
+        let inputs = active_release_stack_inputs_from_values(&stack_values).unwrap();
+
+        assert_eq!(inputs.supported_platforms, vec![Platform::Machines]);
+    }
+
+    #[test]
+    fn select_onboard_platforms_accepts_machines_when_supported() {
+        let requested = vec!["machines".to_string()];
+        let supported = vec![Platform::Machines];
+
+        let selected = select_onboard_platforms(&requested, &supported, true).unwrap();
+
+        assert_eq!(selected, vec![Platform::Machines]);
     }
 
     #[test]

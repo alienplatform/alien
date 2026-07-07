@@ -299,8 +299,8 @@ pub trait ArtifactRegistry: Binding {
     /// - ECR: `"alien-e2e"` — flat repo prefix; also the routable repo name
     ///   for the shared deployment-image repository
     /// - GAR: `"my-project/alien-e2e"` — project/repo structure
-    /// - ACR: `"alien-e2e"` — images pushed into this repository prefix;
-    ///   principal pull access is granted on the parent registry
+    /// - ACR: `"alien-e2e"` when configured, or `""` for registry-root
+    ///   repositories; principal pull access is granted on the parent registry
     /// - Local: `"artifacts"` or similar — cross-account not supported
     ///
     /// An empty return value indicates the platform has no shared

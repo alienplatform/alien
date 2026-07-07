@@ -74,9 +74,12 @@ impl AcrArtifactRegistry {
         let azure_token_cache = AzureTokenCache::new(azure_config.clone());
 
         let repository_prefix = match config.repository_prefix {
-            Some(bv) => bv
-                .into_value(&binding_name, "repository_prefix")
-                .unwrap_or_default(),
+            Some(bv) => bv.into_value(&binding_name, "repository_prefix").context(
+                ErrorData::config_invalid(
+                    &binding_name,
+                    "Failed to extract repository_prefix from binding",
+                ),
+            )?,
             None => String::new(),
         };
 
@@ -87,6 +90,14 @@ impl AcrArtifactRegistry {
             azure_token_cache,
             http_client: client,
         })
+    }
+
+    fn routable_repository_name(&self, repo_name: &str) -> String {
+        if self.repository_prefix.is_empty() {
+            repo_name.to_string()
+        } else {
+            format!("{}/{}", self.repository_prefix, repo_name)
+        }
     }
 }
 
@@ -105,10 +116,11 @@ impl ArtifactRegistry for AcrArtifactRegistry {
     async fn create_repository(&self, repo_name: &str) -> Result<RepositoryResponse> {
         // ACR repositories are created implicitly on first push.
         // The ACR resource itself is provisioned by alien-infra.
-        let repository_uri = format!("{}/{}", self.registry_endpoint, repo_name);
+        let routable_name = self.routable_repository_name(repo_name);
+        let repository_uri = format!("{}/{}", self.registry_endpoint, routable_name);
 
         Ok(RepositoryResponse {
-            name: repo_name.to_string(),
+            name: routable_name,
             uri: Some(repository_uri),
             created_at: None,
         })
@@ -315,5 +327,87 @@ impl ArtifactRegistry for AcrArtifactRegistry {
     async fn delete_repository(&self, _repo_id: &str) -> Result<()> {
         // ACR repositories are implicit (created on push). Nothing to delete.
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use alien_core::bindings::{AcrArtifactRegistryBinding, ArtifactRegistryBinding, BindingValue};
+    use alien_core::AzureCredentials;
+
+    fn test_config() -> AzureClientConfig {
+        AzureClientConfig {
+            subscription_id: "sub-test".to_string(),
+            tenant_id: "tenant-test".to_string(),
+            region: Some("eastus".to_string()),
+            credentials: AzureCredentials::AccessToken {
+                token: "token-test".to_string(),
+            },
+            service_overrides: None,
+        }
+    }
+
+    #[tokio::test]
+    async fn new_fails_when_configured_repository_prefix_cannot_be_resolved() {
+        let binding = ArtifactRegistryBinding::Acr(AcrArtifactRegistryBinding {
+            registry_name: BindingValue::Value("registrytest".to_string()),
+            resource_group_name: BindingValue::Value("rg-test".to_string()),
+            repository_prefix: Some(BindingValue::expression(serde_json::json!({
+                "ref": "repositoryPrefix"
+            }))),
+        });
+
+        let result =
+            AcrArtifactRegistry::new("artifact-registry".to_string(), binding, &test_config())
+                .await;
+        let Err(error) = result else {
+            panic!("configured repository_prefix resolution failure should fail initialization");
+        };
+
+        assert!(error
+            .to_string()
+            .contains("Failed to extract repository_prefix from binding"));
+    }
+
+    #[tokio::test]
+    async fn new_uses_empty_repository_prefix_when_repository_prefix_is_omitted() {
+        let binding = ArtifactRegistryBinding::Acr(AcrArtifactRegistryBinding {
+            registry_name: BindingValue::Value("registrytest".to_string()),
+            resource_group_name: BindingValue::Value("rg-test".to_string()),
+            repository_prefix: None,
+        });
+
+        let registry =
+            AcrArtifactRegistry::new("artifact-registry".to_string(), binding, &test_config())
+                .await
+                .expect("omitted repository_prefix should initialize");
+
+        assert_eq!(registry.upstream_repository_prefix(), "");
+    }
+
+    #[tokio::test]
+    async fn new_uses_configured_repository_prefix_for_routable_names() {
+        let binding = ArtifactRegistryBinding::Acr(AcrArtifactRegistryBinding {
+            registry_name: BindingValue::Value("registrytest".to_string()),
+            resource_group_name: BindingValue::Value("rg-test".to_string()),
+            repository_prefix: Some(BindingValue::Value("team-a".to_string())),
+        });
+
+        let registry =
+            AcrArtifactRegistry::new("artifact-registry".to_string(), binding, &test_config())
+                .await
+                .expect("configured repository_prefix should initialize");
+        let repository = registry
+            .create_repository("worker")
+            .await
+            .expect("ACR repository response should be implicit");
+
+        assert_eq!(registry.upstream_repository_prefix(), "team-a");
+        assert_eq!(repository.name, "team-a/worker");
+        assert_eq!(
+            repository.uri,
+            Some("registrytest.azurecr.io/team-a/worker".to_string())
+        );
     }
 }

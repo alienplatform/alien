@@ -27,13 +27,13 @@ let value: DataServiceAccount = {
       collectionIssues: [
         {
           message: "<value>",
-          reason: "timed-out",
-          severity: "warning",
+          reason: "not-installed",
+          severity: "error",
           source: "<value>",
         },
       ],
-      health: "healthy",
-      lifecycle: "stopped",
+      health: "unknown",
+      lifecycle: "deleting",
       partial: true,
       stale: false,
     },

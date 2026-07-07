@@ -20,15 +20,15 @@ let value: DataAzure2 = {
     collectionIssues: [
       {
         message: "<value>",
-        reason: "collection-failed",
+        reason: "api-unavailable",
         severity: "warning",
         source: "<value>",
       },
     ],
-    health: "degraded",
-    lifecycle: "running",
+    health: "healthy",
+    lifecycle: "deleting",
     partial: true,
-    stale: false,
+    stale: true,
   },
   backend: "azure",
 };
@@ -46,5 +46,5 @@ let value: DataAzure2 = {
 | `nodes`                                                                  | [operations.Nodes3](../../models/operations/nodes3.md)                   | :heavy_check_mark:                                                       | N/A                                                                      |
 | `providerFleets`                                                         | [operations.ProviderFleet3](../../models/operations/providerfleet3.md)[] | :heavy_check_mark:                                                       | N/A                                                                      |
 | `region`                                                                 | *string*                                                                 | :heavy_minus_sign:                                                       | N/A                                                                      |
-| `status`                                                                 | [operations.DataStatus20](../../models/operations/datastatus20.md)       | :heavy_check_mark:                                                       | N/A                                                                      |
+| `status`                                                                 | [operations.DataStatus21](../../models/operations/datastatus21.md)       | :heavy_check_mark:                                                       | N/A                                                                      |
 | `backend`                                                                | *"azure"*                                                                | :heavy_check_mark:                                                       | N/A                                                                      |

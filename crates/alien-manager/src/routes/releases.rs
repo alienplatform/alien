@@ -35,6 +35,8 @@ pub struct StackByPlatform {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub kubernetes: Option<serde_json::Value>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    pub machines: Option<serde_json::Value>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub local: Option<serde_json::Value>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub test: Option<serde_json::Value>,
@@ -128,6 +130,7 @@ fn record_to_response(
         gcp: None,
         azure: None,
         kubernetes: None,
+        machines: None,
         local: None,
         test: None,
     };
@@ -144,6 +147,7 @@ fn record_to_response(
             Platform::Gcp => sbp.gcp = Some(v),
             Platform::Azure => sbp.azure = Some(v),
             Platform::Kubernetes => sbp.kubernetes = Some(v),
+            Platform::Machines => sbp.machines = Some(v),
             Platform::Local => sbp.local = Some(v),
             Platform::Test => sbp.test = Some(v),
         }
@@ -177,11 +181,12 @@ fn record_to_response(
 fn parse_stacks_from_request(
     stack: &StackByPlatform,
 ) -> std::result::Result<HashMap<Platform, Stack>, alien_error::AlienError<ErrorData>> {
-    let platforms: [(Platform, &Option<serde_json::Value>); 6] = [
+    let platforms: [(Platform, &Option<serde_json::Value>); 7] = [
         (Platform::Aws, &stack.aws),
         (Platform::Gcp, &stack.gcp),
         (Platform::Azure, &stack.azure),
         (Platform::Kubernetes, &stack.kubernetes),
+        (Platform::Machines, &stack.machines),
         (Platform::Local, &stack.local),
         (Platform::Test, &stack.test),
     ];

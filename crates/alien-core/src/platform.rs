@@ -9,6 +9,7 @@ pub enum Platform {
     Gcp,
     Azure,
     Kubernetes,
+    Machines,
     Local,
     Test,
 }
@@ -20,6 +21,7 @@ impl Platform {
         Platform::Gcp,
         Platform::Azure,
         Platform::Kubernetes,
+        Platform::Machines,
         Platform::Local,
     ];
 
@@ -30,6 +32,7 @@ impl Platform {
             Platform::Gcp => "gcp",
             Platform::Azure => "azure",
             Platform::Kubernetes => "kubernetes",
+            Platform::Machines => "machines",
             Platform::Local => "local",
             Platform::Test => "test",
         }
@@ -51,6 +54,7 @@ impl std::str::FromStr for Platform {
             "gcp" => Ok(Platform::Gcp),
             "azure" => Ok(Platform::Azure),
             "kubernetes" => Ok(Platform::Kubernetes),
+            "machines" => Ok(Platform::Machines),
             "local" => Ok(Platform::Local),
             "test" => Ok(Platform::Test),
             _ => Err(format!("'{}' is not a valid platform", s)),

@@ -84,7 +84,7 @@ pub struct UpArgs {
     #[arg(long, env = "ALIEN_BASE_URL")]
     pub base_url: Option<String>,
 
-    /// Target platform (aws, gcp, azure)
+    /// Target platform (aws, gcp, azure, kubernetes, machines, local)
     #[arg(long)]
     pub platform: Option<String>,
 
@@ -95,6 +95,10 @@ pub struct UpArgs {
     /// Deployment name (for tracking)
     #[arg(long)]
     pub name: Option<String>,
+
+    /// Optional generated-domain subdomain for this deployment.
+    #[arg(long)]
+    pub subdomain: Option<String>,
 
     /// Encryption key for operator database (required for pull model)
     #[arg(long, env = "OPERATOR_ENCRYPTION_KEY")]
@@ -170,7 +174,9 @@ pub struct UpArgs {
 struct DeployConfigFile {
     /// Deployment name.
     name: Option<String>,
-    /// Target platform: aws, gcp, azure, kubernetes, or local.
+    /// Optional generated-domain subdomain.
+    public_subdomain: Option<String>,
+    /// Target platform: aws, gcp, azure, kubernetes, machines, or local.
     platform: Option<String>,
     /// Base cloud platform when `platform = "kubernetes"`.
     base_platform: Option<String>,
@@ -284,8 +290,17 @@ mod tests {
     #[test]
     fn pull_model_platforms_do_not_require_install_context() {
         assert!(!requires_install_context(Platform::Kubernetes));
+        assert!(!requires_install_context(Platform::Machines));
         assert!(!requires_install_context(Platform::Local));
         assert!(!requires_install_context(Platform::Test));
+    }
+
+    #[test]
+    fn machines_join_guidance_prints_future_join_command() {
+        assert_eq!(
+            machines_join_command("alien-deploy"),
+            "sudo alien-deploy join --token <join-token>"
+        );
     }
 
     #[test]
@@ -316,6 +331,49 @@ mod tests {
 
         assert_eq!(local.data_dir, "/tmp/alien-foreground-state");
         assert!(!local.service_managed);
+    }
+
+    #[test]
+    fn public_subdomain_flag_is_validated() {
+        let args = UpArgs::parse_from(["alien-deploy", "--platform", "aws", "--subdomain", "fr"]);
+        let subdomain = resolve_public_subdomain(&args, None)
+            .expect("valid subdomain should parse")
+            .expect("subdomain should be present");
+        assert_eq!(subdomain, "fr");
+
+        let args = UpArgs::parse_from(["alien-deploy", "--platform", "aws", "--subdomain", "API"]);
+        let error = resolve_public_subdomain(&args, None).expect_err("uppercase should fail");
+        assert_eq!(error.code, "VALIDATION_ERROR");
+    }
+
+    #[test]
+    fn public_subdomain_flag_overrides_config() {
+        let mut file = tempfile::NamedTempFile::new().expect("temp config should be created");
+        writeln!(
+            file,
+            r#"
+name = "prod"
+platform = "aws"
+publicSubdomain = "old"
+"#
+        )
+        .expect("config should be written");
+
+        let args = UpArgs::parse_from([
+            "alien-deploy",
+            "--config",
+            file.path().to_str().expect("temp path should be UTF-8"),
+            "--subdomain",
+            "fr",
+        ]);
+        let config = load_deploy_config(&args)
+            .expect("config should load")
+            .expect("config should exist");
+
+        let subdomain = resolve_public_subdomain(&args, Some(&config))
+            .expect("subdomain should parse")
+            .expect("subdomain should be present");
+        assert_eq!(subdomain, "fr");
     }
 
     #[test]
@@ -436,6 +494,29 @@ api = "https://old.example.test"
     }
 
     #[test]
+    fn public_endpoint_flag_accepts_machines_platform() {
+        let args = UpArgs::parse_from([
+            "alien-deploy",
+            "--platform",
+            "machines",
+            "--public-endpoint",
+            "gateway.api=https://gateway.example.test",
+        ]);
+
+        let public_endpoints = load_public_endpoints(&args, Platform::Machines, None)
+            .expect("machines should accept external public endpoints")
+            .expect("public endpoints should exist");
+
+        assert_eq!(
+            public_endpoints
+                .get("gateway")
+                .and_then(|endpoints| endpoints.get("api"))
+                .map(String::as_str),
+            Some("https://gateway.example.test")
+        );
+    }
+
+    #[test]
     fn public_endpoint_names_must_be_declared() {
         let daemon = alien_core::Daemon::new("gateway".to_string())
             .code(alien_core::DaemonCode::Image {
@@ -540,6 +621,7 @@ machine = "m8i.xlarge"
             gcp: Some(serde_json::json!({ "id": "gcp-stack" })),
             azure: Some(serde_json::json!({ "id": "azure-stack" })),
             kubernetes: Some(serde_json::json!({ "id": "kubernetes-stack" })),
+            machines: None,
             local: None,
             test: None,
         };
@@ -763,6 +845,7 @@ pub async fn up_command(args: UpArgs, embedded_config: Option<&DeployCliConfig>)
     let platform_str = resolved.platform;
     let base_platform_str = resolved.base_platform;
     let name = resolved.name;
+    let public_subdomain = resolved.public_subdomain;
 
     let platform = Platform::from_str(&platform_str).map_err(|e| {
         AlienError::new(ErrorData::ValidationError {
@@ -794,6 +877,7 @@ pub async fn up_command(args: UpArgs, embedded_config: Option<&DeployCliConfig>)
         "gcp" => "Google Cloud",
         "azure" => "Azure",
         "kubernetes" => "Kubernetes",
+        "machines" => "Your machines",
         "local" => "Local",
         other => other,
     };
@@ -842,6 +926,9 @@ pub async fn up_command(args: UpArgs, embedded_config: Option<&DeployCliConfig>)
     }
     output::label_value("Manager", &manager_url);
     output::label_value("Name", &name);
+    if let Some(public_subdomain) = public_subdomain.as_ref() {
+        output::label_value("Public subdomain", public_subdomain);
+    }
     if let Some(public_endpoints) = public_endpoints.as_ref() {
         let endpoint_count: usize = public_endpoints.values().map(HashMap::len).sum();
         output::label_value("Public endpoints", &endpoint_count.to_string());
@@ -860,6 +947,7 @@ pub async fn up_command(args: UpArgs, embedded_config: Option<&DeployCliConfig>)
         platform,
         base_platform,
         &name,
+        public_subdomain,
         &stack_settings,
         stack_input_values,
     )
@@ -966,6 +1054,11 @@ pub async fn up_command(args: UpArgs, embedded_config: Option<&DeployCliConfig>)
             let mut p = progress.lock().unwrap_or_else(|e| e.into_inner());
             p.finish();
         }
+        (Platform::Machines, _) => {
+            output::success("Deployment registered.");
+            output::label_value("Join command", &machines_join_command(banner_title));
+            output::info("Create a join token for this deployment, then run the command on each machine you want to add.");
+        }
         (Platform::Test, _) => {
             output::info("Test platform — no deployment action needed.");
         }
@@ -975,6 +1068,10 @@ pub async fn up_command(args: UpArgs, embedded_config: Option<&DeployCliConfig>)
     output::success(&format!("Deployment '{}' is active.", name));
 
     Ok(())
+}
+
+fn machines_join_command(cli_name: &str) -> String {
+    format!("sudo {cli_name} join --token <join-token>")
 }
 
 /// Resolved deployment info before manager connection.
@@ -987,6 +1084,7 @@ struct ResolvedInfo {
     platform: String,
     base_platform: Option<String>,
     name: String,
+    public_subdomain: Option<String>,
 }
 
 fn requires_install_context(platform: Platform) -> bool {
@@ -1002,6 +1100,7 @@ fn release_stack_value_for_platform(
         Platform::Gcp => stack.gcp,
         Platform::Azure => stack.azure,
         Platform::Kubernetes => stack.kubernetes,
+        Platform::Machines => stack.machines,
         Platform::Local => stack.local,
         Platform::Test => stack.test,
     }
@@ -1126,7 +1225,7 @@ fn parse_base_platform(
 
     match parsed {
         Platform::Aws | Platform::Gcp | Platform::Azure => Ok(Some(parsed)),
-        Platform::Kubernetes | Platform::Local | Platform::Test => {
+        Platform::Kubernetes | Platform::Machines | Platform::Local | Platform::Test => {
             Err(AlienError::new(ErrorData::ValidationError {
                 field: "base-platform".to_string(),
                 message: "--base-platform must be one of: aws, gcp, azure".to_string(),
@@ -1195,12 +1294,16 @@ fn load_public_endpoints(
     }
 
     match platform {
-        Platform::Local => Ok(Some(public_endpoints)),
-        Platform::Aws | Platform::Gcp | Platform::Azure | Platform::Kubernetes | Platform::Test => {
+        Platform::Local | Platform::Machines => Ok(Some(public_endpoints)),
+        Platform::Aws
+        | Platform::Gcp
+        | Platform::Azure
+        | Platform::Kubernetes
+        | Platform::Test => {
             Err(AlienError::new(ErrorData::ValidationError {
                 field: "public-endpoint".to_string(),
                 message: format!(
-                    "--public-endpoint is currently supported only for local pull-model deployments, got '{}'",
+                    "--public-endpoint is currently supported only for local or machines deployments, got '{}'",
                     platform.as_str()
                 ),
             }))
@@ -1243,6 +1346,7 @@ fn resolve_deployment_info(
                 platform,
                 base_platform,
                 name: name.clone(),
+                public_subdomain: resolve_public_subdomain(args, deploy_config)?,
             });
         }
     }
@@ -1262,7 +1366,7 @@ fn resolve_deployment_info(
             AlienError::new(ErrorData::ValidationError {
                 field: "platform".to_string(),
                 message:
-                    "--platform is required for new deployments. Choose from: aws, gcp, azure."
+                    "--platform is required for new deployments. Choose from: aws, gcp, azure, kubernetes, machines, local."
                         .to_string(),
             })
         })?;
@@ -1296,7 +1400,48 @@ fn resolve_deployment_info(
         platform,
         base_platform,
         name,
+        public_subdomain: resolve_public_subdomain(args, deploy_config)?,
     })
+}
+
+fn resolve_public_subdomain(
+    args: &UpArgs,
+    deploy_config: Option<&DeployConfigFile>,
+) -> Result<Option<String>> {
+    let value = args
+        .subdomain
+        .as_ref()
+        .or_else(|| deploy_config.and_then(|config| config.public_subdomain.as_ref()))
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty());
+    if let Some(value) = value.as_ref() {
+        validate_public_subdomain(value)?;
+    }
+    Ok(value)
+}
+
+fn validate_public_subdomain(value: &str) -> Result<()> {
+    let valid_len = !value.is_empty() && value.len() <= 63;
+    let valid_label = value
+        .chars()
+        .all(|ch| ch.is_ascii_lowercase() || ch.is_ascii_digit() || ch == '-')
+        && value
+            .as_bytes()
+            .first()
+            .is_some_and(|ch| ch.is_ascii_lowercase() || ch.is_ascii_digit())
+        && value
+            .as_bytes()
+            .last()
+            .is_some_and(|ch| ch.is_ascii_lowercase() || ch.is_ascii_digit());
+    if !valid_len || !valid_label || matches!(value, "api" | "www") {
+        return Err(AlienError::new(ErrorData::ValidationError {
+            field: "subdomain".to_string(),
+            message:
+                "Use a lowercase DNS label: letters, numbers, hyphens, no leading or trailing hyphen, not api or www."
+                    .to_string(),
+        }));
+    }
+    Ok(())
 }
 
 fn resolve_token(args: &UpArgs, embedded_config: Option<&DeployCliConfig>) -> Result<String> {
@@ -1355,7 +1500,9 @@ fn load_stack_settings(
 ) -> Result<StackSettings> {
     let mut settings = StackSettings::default();
     settings.deployment_model = match platform {
-        Platform::Aws | Platform::Gcp | Platform::Azure | Platform::Test => DeploymentModel::Push,
+        Platform::Aws | Platform::Gcp | Platform::Azure | Platform::Machines | Platform::Test => {
+            DeploymentModel::Push
+        }
         Platform::Kubernetes | Platform::Local => DeploymentModel::Pull,
     };
 
@@ -1922,6 +2069,7 @@ async fn initialize_deployment(
     platform: Platform,
     base_platform: Option<Platform>,
     name: &str,
+    public_subdomain: Option<String>,
     stack_settings: &StackSettings,
     input_values: HashMap<String, serde_json::Value>,
 ) -> Result<InitResult> {
@@ -1929,6 +2077,7 @@ async fn initialize_deployment(
         name: Some(name.to_string()),
         platform: Some(sdk_platform(platform)),
         base_platform: base_platform.map(sdk_platform),
+        public_subdomain,
         stack_settings: Some(sdk_stack_settings(stack_settings)?),
         input_values: input_values.into_iter().collect(),
         scope: None,
@@ -1959,6 +2108,7 @@ fn sdk_platform(platform: Platform) -> alien_manager_api::types::Platform {
         Platform::Gcp => alien_manager_api::types::Platform::Gcp,
         Platform::Azure => alien_manager_api::types::Platform::Azure,
         Platform::Kubernetes => alien_manager_api::types::Platform::Kubernetes,
+        Platform::Machines => alien_manager_api::types::Platform::Machines,
         Platform::Local => alien_manager_api::types::Platform::Local,
         Platform::Test => alien_manager_api::types::Platform::Test,
     }

@@ -59,15 +59,15 @@ const value: models.DataAzureServiceBus = {
     collectionIssues: [
       {
         message: "<value>",
-        reason: "collection-failed",
-        severity: "error",
+        reason: "timed-out",
+        severity: "info",
         source: "<value>",
       },
     ],
-    health: "unknown",
-    lifecycle: "scaling",
-    partial: false,
-    stale: false,
+    health: "degraded",
+    lifecycle: "deleting",
+    partial: true,
+    stale: true,
   },
   backend: "azureServiceBus",
 };

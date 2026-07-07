@@ -10,18 +10,18 @@ let value: DataAzureTable = {
     collectionIssues: [
       {
         message: "<value>",
-        reason: "api-unavailable",
-        severity: "warning",
+        reason: "forbidden",
+        severity: "info",
         source: "<value>",
       },
     ],
-    health: "degraded",
-    lifecycle: "unknown",
-    partial: true,
-    stale: false,
+    health: "healthy",
+    lifecycle: "scaling",
+    partial: false,
+    stale: true,
   },
   storageAccountName: "<value>",
-  tableExists: false,
+  tableExists: true,
   tableName: "<value>",
   backend: "azureTable",
 };
@@ -34,7 +34,7 @@ let value: DataAzureTable = {
 | `endpoint`                                                         | *string*                                                           | :heavy_minus_sign:                                                 | N/A                                                                |
 | `resourceGroup`                                                    | *string*                                                           | :heavy_minus_sign:                                                 | N/A                                                                |
 | `signedIdentifierCount`                                            | *number*                                                           | :heavy_minus_sign:                                                 | N/A                                                                |
-| `status`                                                           | [operations.DataStatus29](../../models/operations/datastatus29.md) | :heavy_check_mark:                                                 | N/A                                                                |
+| `status`                                                           | [operations.DataStatus31](../../models/operations/datastatus31.md) | :heavy_check_mark:                                                 | N/A                                                                |
 | `storageAccountKind`                                               | *string*                                                           | :heavy_minus_sign:                                                 | N/A                                                                |
 | `storageAccountLocation`                                           | *string*                                                           | :heavy_minus_sign:                                                 | N/A                                                                |
 | `storageAccountName`                                               | *string*                                                           | :heavy_check_mark:                                                 | N/A                                                                |

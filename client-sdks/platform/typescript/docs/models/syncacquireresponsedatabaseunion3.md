@@ -28,3 +28,4 @@ const value: models.SyncAcquireResponseDatabase4 = {
   },
 };
 ```
+

@@ -85,7 +85,7 @@ dependencies = [
 
 [[package]]
 name = "alien-aws-clients"
-version = "1.10.7"
+version = "1.11.1"
 dependencies = [
  "alien-aws-clients",
  "alien-client-core",
@@ -127,7 +127,7 @@ dependencies = [
 
 [[package]]
 name = "alien-azure-clients"
-version = "1.10.7"
+version = "1.11.1"
 dependencies = [
  "alien-client-core",
  "alien-core",
@@ -170,7 +170,7 @@ dependencies = [
 
 [[package]]
 name = "alien-bindings"
-version = "1.10.7"
+version = "1.11.1"
 dependencies = [
  "alien-aws-clients",
  "alien-azure-clients",
@@ -214,7 +214,7 @@ dependencies = [
 
 [[package]]
 name = "alien-bindings-node"
-version = "1.10.7"
+version = "1.11.1"
 dependencies = [
  "alien-bindings",
  "alien-error",
@@ -231,7 +231,7 @@ dependencies = [
 
 [[package]]
 name = "alien-build"
-version = "1.10.7"
+version = "1.11.1"
 dependencies = [
  "alien-build",
  "alien-core",
@@ -265,7 +265,7 @@ dependencies = [
 
 [[package]]
 name = "alien-cli"
-version = "1.10.7"
+version = "1.11.1"
 dependencies = [
  "alien-bindings",
  "alien-build",
@@ -335,7 +335,7 @@ dependencies = [
 
 [[package]]
 name = "alien-cli-common"
-version = "1.10.7"
+version = "1.11.1"
 dependencies = [
  "alien-core",
  "alien-deployment",
@@ -349,7 +349,7 @@ dependencies = [
 
 [[package]]
 name = "alien-client-config"
-version = "1.10.7"
+version = "1.11.1"
 dependencies = [
  "alien-aws-clients",
  "alien-azure-clients",
@@ -367,7 +367,7 @@ dependencies = [
 
 [[package]]
 name = "alien-client-core"
-version = "1.10.7"
+version = "1.11.1"
 dependencies = [
  "alien-error",
  "anyhow",
@@ -386,7 +386,7 @@ dependencies = [
 
 [[package]]
 name = "alien-cloudformation"
-version = "1.10.7"
+version = "1.11.1"
 dependencies = [
  "alien-core",
  "alien-error",
@@ -401,7 +401,7 @@ dependencies = [
 
 [[package]]
 name = "alien-commands"
-version = "1.10.7"
+version = "1.11.1"
 dependencies = [
  "alien-aws-clients",
  "alien-azure-clients",
@@ -438,7 +438,7 @@ dependencies = [
 
 [[package]]
 name = "alien-commands-client"
-version = "1.10.7"
+version = "1.11.1"
 dependencies = [
  "alien-core",
  "base64 0.22.1",
@@ -453,7 +453,7 @@ dependencies = [
 
 [[package]]
 name = "alien-core"
-version = "1.10.7"
+version = "1.11.1"
 dependencies = [
  "alien-error",
  "alien-macros",
@@ -484,7 +484,7 @@ dependencies = [
 
 [[package]]
 name = "alien-deploy-cli"
-version = "1.10.7"
+version = "1.11.1"
 dependencies = [
  "alien-cli-common",
  "alien-core",
@@ -498,17 +498,22 @@ dependencies = [
  "async-trait",
  "aws-config",
  "aws-sdk-cloudformation",
+ "base64 0.22.1",
  "chrono",
  "clap",
  "dirs 6.0.0",
+ "flate2",
  "fs2",
  "getrandom 0.2.17",
+ "hex",
  "hostname 0.4.2",
  "libc",
  "reqwest 0.12.28",
  "serde",
  "serde_json",
  "service-manager",
+ "sha2 0.10.9",
+ "tar",
  "tempfile",
  "tokio",
  "toml 0.8.23",
@@ -522,7 +527,7 @@ dependencies = [
 
 [[package]]
 name = "alien-deployment"
-version = "1.10.7"
+version = "1.11.1"
 dependencies = [
  "alien-aws-clients",
  "alien-azure-clients",
@@ -553,7 +558,7 @@ dependencies = [
 
 [[package]]
 name = "alien-error"
-version = "1.10.7"
+version = "1.11.1"
 dependencies = [
  "alien-error-derive",
  "anyhow",
@@ -566,7 +571,7 @@ dependencies = [
 
 [[package]]
 name = "alien-error-derive"
-version = "1.10.7"
+version = "1.11.1"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -576,7 +581,7 @@ dependencies = [
 
 [[package]]
 name = "alien-gcp-clients"
-version = "1.10.7"
+version = "1.11.1"
 dependencies = [
  "alien-client-core",
  "alien-core",
@@ -609,7 +614,7 @@ dependencies = [
 
 [[package]]
 name = "alien-helm"
-version = "1.10.7"
+version = "1.11.1"
 dependencies = [
  "alien-core",
  "alien-error",
@@ -623,7 +628,7 @@ dependencies = [
 
 [[package]]
 name = "alien-infra"
-version = "1.10.7"
+version = "1.11.1"
 dependencies = [
  "alien-aws-clients",
  "alien-azure-clients",
@@ -683,7 +688,7 @@ dependencies = [
 
 [[package]]
 name = "alien-k8s-clients"
-version = "1.10.7"
+version = "1.11.1"
 dependencies = [
  "alien-client-core",
  "alien-core",
@@ -712,7 +717,7 @@ dependencies = [
 
 [[package]]
 name = "alien-local"
-version = "1.10.7"
+version = "1.11.1"
 dependencies = [
  "alien-bindings",
  "alien-build",
@@ -754,7 +759,7 @@ dependencies = [
 
 [[package]]
 name = "alien-macros"
-version = "1.10.7"
+version = "1.11.1"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -763,7 +768,7 @@ dependencies = [
 
 [[package]]
 name = "alien-manager"
-version = "1.10.7"
+version = "1.11.1"
 dependencies = [
  "aegis",
  "alien-bindings",
@@ -822,7 +827,7 @@ dependencies = [
 
 [[package]]
 name = "alien-manager-api"
-version = "1.10.7"
+version = "1.11.1"
 dependencies = [
  "alien-error",
  "chrono",
@@ -839,7 +844,7 @@ dependencies = [
 
 [[package]]
 name = "alien-observer"
-version = "1.10.7"
+version = "1.11.1"
 dependencies = [
  "alien-aws-clients",
  "alien-azure-clients",
@@ -859,7 +864,7 @@ dependencies = [
 
 [[package]]
 name = "alien-operator"
-version = "1.10.7"
+version = "1.11.1"
 dependencies = [
  "aegis",
  "alien-client-config",
@@ -903,7 +908,7 @@ dependencies = [
 
 [[package]]
 name = "alien-permissions"
-version = "1.10.7"
+version = "1.11.1"
 dependencies = [
  "alien-core",
  "alien-error",
@@ -922,7 +927,7 @@ dependencies = [
 
 [[package]]
 name = "alien-platform-api"
-version = "1.10.7"
+version = "1.11.1"
 dependencies = [
  "alien-error",
  "chrono",
@@ -939,7 +944,7 @@ dependencies = [
 
 [[package]]
 name = "alien-preflights"
-version = "1.10.7"
+version = "1.11.1"
 dependencies = [
  "alien-core",
  "alien-error",
@@ -956,7 +961,7 @@ dependencies = [
 
 [[package]]
 name = "alien-sdk"
-version = "1.10.7"
+version = "1.11.1"
 dependencies = [
  "alien-bindings",
  "alien-core",
@@ -978,7 +983,7 @@ dependencies = [
 
 [[package]]
 name = "alien-terraform"
-version = "1.10.7"
+version = "1.11.1"
 dependencies = [
  "alien-core",
  "alien-error",
@@ -993,7 +998,7 @@ dependencies = [
 
 [[package]]
 name = "alien-test"
-version = "1.10.7"
+version = "1.11.1"
 dependencies = [
  "alien-aws-clients",
  "alien-azure-clients",
@@ -1039,7 +1044,7 @@ dependencies = [
 
 [[package]]
 name = "alien-test-app"
-version = "1.10.7"
+version = "1.11.1"
 dependencies = [
  "alien-error",
  "alien-sdk",
@@ -1084,7 +1089,7 @@ dependencies = [
 
 [[package]]
 name = "alien-worker-protocol"
-version = "1.10.7"
+version = "1.11.1"
 dependencies = [
  "alien-error",
  "async-stream",
@@ -1103,7 +1108,7 @@ dependencies = [
 
 [[package]]
 name = "alien-worker-runtime"
-version = "1.10.7"
+version = "1.11.1"
 dependencies = [
  "alien-bindings",
  "alien-commands",
@@ -3199,9 +3204,9 @@ checksum = "49fb0c6640b4507ebd99ff67677009e381ba5eee1d14df78de4a3d16eb123c39"
 
 [[package]]
 name = "ctor"
-version = "1.0.7"
+version = "1.0.8"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "01334b89b69ff726750c5ce5073fc8bd860e99aa9a8fc5ca11b04730e3aee97a"
+checksum = "fb22e947478ccf9dc44d8922042c677a63fbb88f2cb468521d1145816e5087cb"
 
 [[package]]
 name = "ctr"
@@ -7489,6 +7494,7 @@ version = "0.11.16"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "2f4bfc015262b9df63c8845072ce59068853ff5872180c2ce2f13038b970e560"
 dependencies = [
+ "aws-lc-rs",
  "bytes",
  "getrandom 0.4.3",
  "lru-slab",
@@ -7913,13 +7919,12 @@ dependencies = [
  "http-body-util",
  "hyper 1.10.1",
  "hyper-rustls 0.27.9",
- "hyper-tls",
  "hyper-util",
  "js-sys",
  "log",
- "native-tls",
  "percent-encoding",
  "pin-project-lite",
+ "quinn",
  "rustls 0.23.41",
  "rustls-pki-types",
  "rustls-platform-verifier",
@@ -7928,7 +7933,6 @@ dependencies = [
  "serde_urlencoded",
  "sync_wrapper",
  "tokio",
- "tokio-native-tls",
  "tokio-rustls 0.26.4",
  "tokio-util",
  "tower",
@@ -9132,8 +9136,8 @@ dependencies = [
  "indexmap 2.14.0",
  "log",
  "memchr",
- "native-tls",
  "percent-encoding",
+ "rustls 0.23.41",
  "serde",
  "serde_json",
  "sha2 0.10.9",
@@ -9143,6 +9147,7 @@ dependencies = [
  "tokio-stream",
  "tracing",
  "url",
+ "webpki-roots 1.0.8",
 ]
 
 [[package]]
@@ -10248,9 +10253,9 @@ dependencies = [
 
 [[package]]
 name = "turso_sdk_kit"
-version = "0.7.0-pre.17"
+version = "0.7.0-pre.18"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "6ecb12e8bfb7d14b1636537d0d5b266cbf06e51b38eb51fc13a8fc2575e61e31"
+checksum = "ebb7f13561dadb97fb576e3a05f8cc072b81f8cbb5336103d49ebda38089e273"
 dependencies = [
  "bindgen",
  "env_logger",
@@ -10276,9 +10281,9 @@ dependencies = [
 
 [[package]]
 name = "turso_sync_engine"
-version = "0.7.0-pre.17"
+version = "0.7.0-pre.18"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "1fecd94cac87afde8966ebadd83cd0d4b90d888206e25a7894fe1b51251985f7"
+checksum = "ecbc491080af86a273f520c5ff0595366e8324c2b3d0620eabfccf35c039ded5"
 dependencies = [
  "base64 0.22.1",
  "bytes",
@@ -10298,9 +10303,9 @@ dependencies = [
 
 [[package]]
 name = "turso_sync_sdk_kit"
-version = "0.7.0-pre.17"
+version = "0.7.0-pre.18"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "75465ffd4cbad0b27d348a521876d7ba4555a943866e3c6b82366669b05673a0"
+checksum = "722ecf45be0c3a988fe31c9a8c5832b7eeda05b531a838b77fd1d3c70633b8f1"
 dependencies = [
  "bindgen",
  "env_logger",

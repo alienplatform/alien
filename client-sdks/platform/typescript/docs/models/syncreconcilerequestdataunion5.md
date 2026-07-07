@@ -41,7 +41,7 @@ const value: models.DataGcp2 = {
       {
         message: "<value>",
         reason: "not-installed",
-        severity: "warning",
+        severity: "info",
         source: "<value>",
       },
     ],
@@ -72,17 +72,49 @@ const value: models.DataAzure2 = {
     collectionIssues: [
       {
         message: "<value>",
-        reason: "not-installed",
-        severity: "info",
+        reason: "api-unavailable",
+        severity: "warning",
         source: "<value>",
       },
     ],
-    health: "degraded",
-    lifecycle: "running",
+    health: "healthy",
+    lifecycle: "deleting",
     partial: true,
-    stale: false,
+    stale: true,
   },
   backend: "azure",
+};
+```
+
+### `models.DataMachines2`
+
+```typescript
+const value: models.DataMachines2 = {
+  capacityGroups: [
+    {
+      currentMachines: 818927,
+      desiredMachines: 925900,
+      groupId: "<id>",
+    },
+  ],
+  machines: [],
+  name: "<value>",
+  nodes: {},
+  status: {
+    collectionIssues: [
+      {
+        message: "<value>",
+        reason: "api-unavailable",
+        severity: "warning",
+        source: "<value>",
+      },
+    ],
+    health: "unhealthy",
+    lifecycle: "failed",
+    partial: false,
+    stale: false,
+  },
+  backend: "machines",
 };
 ```
 

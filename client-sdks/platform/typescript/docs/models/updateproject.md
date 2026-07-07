@@ -16,6 +16,7 @@ let value: UpdateProject = {
     gcp: "mgr_enxscjrqiiu2lrc672hwwuc5",
     azure: "mgr_enxscjrqiiu2lrc672hwwuc5",
     kubernetes: "mgr_enxscjrqiiu2lrc672hwwuc5",
+    machines: "mgr_enxscjrqiiu2lrc672hwwuc5",
     local: "mgr_enxscjrqiiu2lrc672hwwuc5",
   },
 };

@@ -13,14 +13,14 @@ let value: DataAzureServiceBusNamespace = {
       collectionIssues: [
         {
           message: "<value>",
-          reason: "collection-failed",
-          severity: "warning",
+          reason: "not-installed",
+          severity: "info",
           source: "<value>",
         },
       ],
-      health: "healthy",
+      health: "unknown",
       lifecycle: "running",
-      partial: true,
+      partial: false,
       stale: true,
     },
   },

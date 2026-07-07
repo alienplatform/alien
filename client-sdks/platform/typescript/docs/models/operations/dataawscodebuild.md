@@ -14,13 +14,13 @@ let value: DataAwsCodeBuild = {
     collectionIssues: [
       {
         message: "<value>",
-        reason: "api-unavailable",
-        severity: "error",
+        reason: "not-installed",
+        severity: "info",
         source: "<value>",
       },
     ],
-    health: "degraded",
-    lifecycle: "unknown",
+    health: "healthy",
+    lifecycle: "failed",
     partial: false,
     stale: true,
   },
@@ -51,6 +51,6 @@ let value: DataAwsCodeBuild = {
 | `s3LogsStatus`                                                     | *string*                                                           | :heavy_minus_sign:                                                 | N/A                                                                |
 | `serviceRolePresent`                                               | *boolean*                                                          | :heavy_check_mark:                                                 | N/A                                                                |
 | `sourceType`                                                       | *string*                                                           | :heavy_minus_sign:                                                 | N/A                                                                |
-| `status`                                                           | [operations.DataStatus54](../../models/operations/datastatus54.md) | :heavy_check_mark:                                                 | N/A                                                                |
+| `status`                                                           | [operations.DataStatus56](../../models/operations/datastatus56.md) | :heavy_check_mark:                                                 | N/A                                                                |
 | `timeoutInMinutes`                                                 | *number*                                                           | :heavy_minus_sign:                                                 | N/A                                                                |
 | `backend`                                                          | *"awsCodeBuild"*                                                   | :heavy_check_mark:                                                 | N/A                                                                |

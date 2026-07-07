@@ -8,6 +8,7 @@ import { AwsComputeClusterHeartbeatDataSchema } from "./aws-compute-cluster-hear
 import { AzureComputeClusterHeartbeatDataSchema } from "./azure-compute-cluster-heartbeat-data-schema.js";
 import { GcpComputeClusterHeartbeatDataSchema } from "./gcp-compute-cluster-heartbeat-data-schema.js";
 import { LocalComputeClusterHeartbeatDataSchema } from "./local-compute-cluster-heartbeat-data-schema.js";
+import { MachinesComputeClusterHeartbeatDataSchema } from "./machines-compute-cluster-heartbeat-data-schema.js";
 
 export const ComputeClusterHeartbeatDataSchema = z.union([z.lazy(() => AwsComputeClusterHeartbeatDataSchema).and(z.object({
     "backend": z.enum(["aws"])
@@ -15,6 +16,8 @@ export const ComputeClusterHeartbeatDataSchema = z.union([z.lazy(() => AwsComput
     "backend": z.enum(["gcp"])
     })), z.lazy(() => AzureComputeClusterHeartbeatDataSchema).and(z.object({
     "backend": z.enum(["azure"])
+    })), z.lazy(() => MachinesComputeClusterHeartbeatDataSchema).and(z.object({
+    "backend": z.enum(["machines"])
     })), z.lazy(() => LocalComputeClusterHeartbeatDataSchema).and(z.object({
     "backend": z.enum(["local"])
     }))])

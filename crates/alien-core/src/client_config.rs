@@ -633,6 +633,9 @@ pub enum ClientConfig {
         /// State directory for local resources and deployment state
         state_directory: String,
     },
+    /// Machines platform - uses Horizon-backed controllers without cloud credentials.
+    #[serde(skip)]
+    Machines,
     /// Test platform - uses mock controllers without real cloud APIs
     #[serde(skip)]
     Test,
@@ -648,6 +651,7 @@ impl ClientConfig {
             ClientConfig::Kubernetes(_) => Platform::Kubernetes,
             ClientConfig::KubernetesCloud { .. } => Platform::Kubernetes,
             ClientConfig::Local { .. } => Platform::Local,
+            ClientConfig::Machines => Platform::Machines,
             ClientConfig::Test => Platform::Test,
         }
     }

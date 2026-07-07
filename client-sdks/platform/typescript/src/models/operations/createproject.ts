@@ -392,6 +392,10 @@ export type CreateProjectDefaultManagers = {
   /**
    * Unique identifier for a default private manager.
    */
+  machines?: string | null | undefined;
+  /**
+   * Unique identifier for a default private manager.
+   */
   local?: string | null | undefined;
 };
 
@@ -918,6 +922,7 @@ export const CreateProjectDefaultManagers$inboundSchema: z.ZodType<
   gcp: z.nullable(z.string()).optional(),
   azure: z.nullable(z.string()).optional(),
   kubernetes: z.nullable(z.string()).optional(),
+  machines: z.nullable(z.string()).optional(),
   local: z.nullable(z.string()).optional(),
 });
 
