@@ -419,58 +419,7 @@ pub fn parse_cloudevent_from_http(
     headers: &axum::http::HeaderMap,
     body: &Bytes,
 ) -> std::result::Result<cloudevents::Event, String> {
-    // Try structured format first (JSON body)
-    if let Some(content_type) = headers.get(header::CONTENT_TYPE) {
-        if content_type
-            .to_str()
-            .map(|s| s.contains("application/cloudevents+json"))
-            .unwrap_or(false)
-        {
-            return serde_json::from_slice(body).map_err(|e| format!("JSON parse error: {}", e));
-        }
-    }
-
-    // Try binary format (headers + body)
-    let mut builder = cloudevents::EventBuilderV10::new();
-
-    // Required attributes
-    let id = headers
-        .get("ce-id")
-        .and_then(|v| v.to_str().ok())
-        .ok_or("Missing ce-id header")?;
-    let source = headers
-        .get("ce-source")
-        .and_then(|v| v.to_str().ok())
-        .ok_or("Missing ce-source header")?;
-    let ty = headers
-        .get("ce-type")
-        .and_then(|v| v.to_str().ok())
-        .ok_or("Missing ce-type header")?;
-
-    builder = builder.id(id).source(source).ty(ty);
-
-    // Optional time
-    if let Some(time) = headers.get("ce-time").and_then(|v| v.to_str().ok()) {
-        if let Ok(dt) = chrono::DateTime::parse_from_rfc3339(time) {
-            builder = builder.time(dt.with_timezone(&Utc));
-        }
-    }
-
-    // Data content type and data
-    let data_content_type = headers
-        .get("content-type")
-        .and_then(|v| v.to_str().ok())
-        .unwrap_or("application/json");
-
-    if data_content_type.contains("json") {
-        let json_data: serde_json::Value =
-            serde_json::from_slice(body).map_err(|e| format!("JSON data parse error: {}", e))?;
-        builder = builder.data(data_content_type, json_data);
-    } else {
-        builder = builder.data(data_content_type, body.to_vec());
-    }
-
-    builder.build().map_err(|e| format!("Build error: {}", e))
+    parse_cloudevent_from_http_impl(headers, body, false)
 }
 
 /// Parse CloudEvent with Dapr extension headers.
@@ -479,6 +428,14 @@ pub fn parse_cloudevent_from_http(
 pub fn parse_cloudevent_from_http_with_extensions(
     headers: &axum::http::HeaderMap,
     body: &Bytes,
+) -> std::result::Result<cloudevents::Event, String> {
+    parse_cloudevent_from_http_impl(headers, body, true)
+}
+
+fn parse_cloudevent_from_http_impl(
+    headers: &axum::http::HeaderMap,
+    body: &Bytes,
+    include_extensions: bool,
 ) -> std::result::Result<cloudevents::Event, String> {
     // Try structured format first (JSON body)
     if let Some(content_type) = headers.get(header::CONTENT_TYPE) {
@@ -518,14 +475,17 @@ pub fn parse_cloudevent_from_http_with_extensions(
     }
 
     // Extensions (Dapr-specific)
-    for (name, value) in headers.iter() {
-        let name_str = name.as_str();
-        if name_str.starts_with("ce-")
-            && !["ce-id", "ce-source", "ce-type", "ce-time", "ce-specversion"].contains(&name_str)
-        {
-            if let Ok(v) = value.to_str() {
-                let ext_name = name_str.trim_start_matches("ce-");
-                builder = builder.extension(ext_name, v.to_string());
+    if include_extensions {
+        for (name, value) in headers.iter() {
+            let name_str = name.as_str();
+            if name_str.starts_with("ce-")
+                && !["ce-id", "ce-source", "ce-type", "ce-time", "ce-specversion"]
+                    .contains(&name_str)
+            {
+                if let Ok(v) = value.to_str() {
+                    let ext_name = name_str.trim_start_matches("ce-");
+                    builder = builder.extension(ext_name, v.to_string());
+                }
             }
         }
     }
