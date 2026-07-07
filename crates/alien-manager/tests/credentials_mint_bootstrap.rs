@@ -160,7 +160,9 @@ async fn build() -> Fixture {
         http_client: reqwest::Client::new(),
         credential_cache: Arc::new(CredentialCache::new()),
         pull_validation_cache: Arc::new(PullValidationCache::new()),
-        registry_routing_table: Arc::new(RegistryRoutingTable::new(vec![])),
+        registry_routing_table: Arc::new(
+            RegistryRoutingTable::new(vec![]).expect("empty routing table is unambiguous"),
+        ),
         import_registry: Arc::new(alien_infra::ImporterRegistry::built_in()),
     };
 
@@ -188,6 +190,7 @@ async fn create_deployment(
                 platform: Platform::Local,
                 base_platform: None,
                 stack_settings: StackSettings::default(),
+                public_subdomain: None,
                 stack_state: None,
                 environment_variables: None,
                 input_values: Default::default(),
