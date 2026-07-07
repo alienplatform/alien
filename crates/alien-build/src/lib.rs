@@ -1329,6 +1329,7 @@ pub async fn push_stack(
                         }));
                     }
 
+                    let artifact_push_started = Instant::now();
                     let result = tokio::select! {
                         result = push_resource_images(
                             &display_resource_name,
@@ -1347,7 +1348,15 @@ pub async fn push_stack(
                     };
 
                     match &result {
-                        Ok(image_uri) => info!("Successfully pushed {} '{}' to: {}", target.resource_type, resource_name, image_uri),
+                        Ok(image_uri) => info!(
+                            resource = resource_name.as_str(),
+                            push_secs = format!("{:.2}", artifact_push_started.elapsed().as_secs_f64()).as_str(),
+                            "Successfully pushed {} '{}' in {:.2}s to: {}",
+                            target.resource_type,
+                            resource_name,
+                            artifact_push_started.elapsed().as_secs_f64(),
+                            image_uri
+                        ),
                         Err(e) => info!("Failed to push {} '{}': {}", target.resource_type, resource_name, e),
                     }
 
@@ -1822,26 +1831,53 @@ async fn build_resource(
         ToolchainConfig::Docker { .. } => {}
     }
 
+    let cache_key_started = Instant::now();
     let artifact_cache_key =
         compute_source_artifact_cache_key(src, toolchain_config, settings, &targets, workload)
             .await?;
+    let cache_key_secs = cache_key_started.elapsed().as_secs_f64();
 
-    if let Some(cached_dir) = find_cached_artifact_dir(
+    let platform_name = settings.platform.runtime_platform().as_str();
+    let lookup_started = Instant::now();
+    let cached_dir = find_cached_artifact_dir(
         build_output_dir,
         resource_name,
         &targets,
         &artifact_cache_key,
     )
-    .await?
-    {
+    .await?;
+    let lookup_secs = lookup_started.elapsed().as_secs_f64();
+
+    if let Some(cached_dir) = cached_dir {
         info!(
-            "Reusing cached build artifacts for resource '{}' at {} after {:.2}s",
+            resource = resource_name,
+            platform = platform_name,
+            artifact_cache = "HIT",
+            cache_key = &artifact_cache_key[..12],
+            key_secs = format!("{cache_key_secs:.2}").as_str(),
+            lookup_secs = format!("{lookup_secs:.2}").as_str(),
+            "Artifact cache HIT for resource '{}' on platform '{}': reusing {} (skipping {} target build(s))",
             resource_name,
+            platform_name,
             cached_dir.display(),
-            resource_started.elapsed().as_secs_f64()
+            targets.len()
         );
         return Ok(cached_dir.to_string_lossy().into_owned());
     }
+
+    info!(
+        resource = resource_name,
+        platform = platform_name,
+        artifact_cache = "MISS",
+        cache_key = &artifact_cache_key[..12],
+        key_secs = format!("{cache_key_secs:.2}").as_str(),
+        lookup_secs = format!("{lookup_secs:.2}").as_str(),
+        "Artifact cache MISS for resource '{}' on platform '{}': building {} target(s): {:?}",
+        resource_name,
+        platform_name,
+        targets.len(),
+        targets
+    );
 
     // Build into a unique staging directory so concurrent builds do not race on
     // the same path before the hashed output is finalized.
@@ -1870,6 +1906,7 @@ async fn build_resource(
 
             tokio::spawn(async move {
                 info!("Building for target: {:?}", target);
+                let target_started = Instant::now();
 
                 // Create target-specific output path
                 // Always use target ID in filename for consistency
@@ -1890,9 +1927,14 @@ async fn build_resource(
                 .await?;
 
                 info!(
-                    "Successfully built target {} for resource '{}' at: {}",
+                    resource = resource_name.as_str(),
+                    platform = settings.platform.runtime_platform().as_str(),
+                    target = target.runtime_platform_id(),
+                    target_secs = format!("{:.2}", target_started.elapsed().as_secs_f64()).as_str(),
+                    "Successfully built target {} for resource '{}' in {:.2}s at: {}",
                     target.runtime_platform_id(),
                     resource_name,
+                    target_started.elapsed().as_secs_f64(),
                     target_output_path.display()
                 );
 
@@ -2003,6 +2045,33 @@ async fn hash_rust_build_input_graph(src_dir: &Path, hasher: &mut Sha256) -> Res
             },
         )?;
         hasher.update(lockfile_bytes);
+    }
+
+    // Workspace-level toolchain configuration changes the produced binary even
+    // when no package source changes: rust-toolchain pins the compiler,
+    // .cargo/config.toml can change rustflags, linker, or profile settings.
+    // These live at the workspace root, outside the per-package directories
+    // hashed below, so hash them explicitly. Absent files contribute nothing,
+    // which keeps existing cache keys stable for projects without them.
+    for toolchain_file in [
+        "rust-toolchain.toml",
+        "rust-toolchain",
+        ".cargo/config.toml",
+        ".cargo/config",
+    ] {
+        let path = metadata.workspace_root.join(toolchain_file);
+        if path.is_file() {
+            let contents = fs::read(&path).await.into_alien_error().context(
+                ErrorData::FileOperationFailed {
+                    operation: "read file".to_string(),
+                    file_path: path.display().to_string(),
+                    reason: "Failed to read toolchain config file for build cache key".to_string(),
+                },
+            )?;
+            hasher.update(b"toolchain-config-file");
+            hasher.update(toolchain_file.as_bytes());
+            hasher.update(contents);
+        }
     }
 
     let local_package_ids = local_cargo_package_ids(&metadata);
@@ -3644,6 +3713,255 @@ mod tests {
         .unwrap();
 
         assert_ne!(first_key, second_key);
+    }
+
+    #[tokio::test]
+    async fn rust_source_artifact_cache_key_includes_workspace_toolchain_files() {
+        // Toolchain files live at the workspace root, not inside the member's
+        // package directory, so this must use a real `[workspace]` layout —
+        // otherwise package_dir == workspace_root and hash_source_directory
+        // picks the files up as ordinary source, masking a broken/deleted
+        // workspace-root hashing loop.
+        let workspace_dir = tempdir().unwrap();
+        let app_dir = workspace_dir.path().join("app");
+        std::fs::create_dir_all(app_dir.join("src")).unwrap();
+        std::fs::write(
+            workspace_dir.path().join("Cargo.toml"),
+            "[workspace]\nmembers = [\"app\"]\nresolver = \"2\"\n",
+        )
+        .unwrap();
+        std::fs::write(
+            app_dir.join("Cargo.toml"),
+            "[package]\nname = \"app\"\nversion = \"0.1.0\"\nedition = \"2021\"\n",
+        )
+        .unwrap();
+        std::fs::write(app_dir.join("src/main.rs"), "fn main() {}\n").unwrap();
+
+        let toolchain = ToolchainConfig::Rust {
+            binary_name: "app".to_string(),
+        };
+        let targets = vec![BinaryTarget::LinuxX64];
+        let settings = BuildSettings {
+            output_directory: workspace_dir
+                .path()
+                .join("out")
+                .to_string_lossy()
+                .into_owned(),
+            platform: PlatformBuildSettings::Gcp {},
+            targets: Some(targets.clone()),
+            cache_url: None,
+            override_base_image: None,
+            debug_mode: false,
+        };
+
+        let key = |dir: &Path| {
+            let dir = dir.to_str().unwrap().to_string();
+            let toolchain = toolchain.clone();
+            let settings = settings.clone();
+            let targets = targets.clone();
+            async move {
+                compute_source_artifact_cache_key(
+                    &dir,
+                    &toolchain,
+                    &settings,
+                    &targets,
+                    crate::toolchain::WorkloadKind::Container,
+                )
+                .await
+                .unwrap()
+            }
+        };
+
+        let without_toolchain_file = key(&app_dir).await;
+
+        std::fs::write(
+            workspace_dir.path().join("rust-toolchain.toml"),
+            "[toolchain]\nchannel = \"1.84.0\"\n",
+        )
+        .unwrap();
+        let with_pinned_toolchain = key(&app_dir).await;
+        assert_ne!(
+            without_toolchain_file, with_pinned_toolchain,
+            "pinning the compiler via a workspace-root rust-toolchain.toml must invalidate the artifact cache key"
+        );
+
+        std::fs::write(
+            workspace_dir.path().join("rust-toolchain.toml"),
+            "[toolchain]\nchannel = \"1.85.0\"\n",
+        )
+        .unwrap();
+        let with_changed_toolchain = key(&app_dir).await;
+        assert_ne!(
+            with_pinned_toolchain, with_changed_toolchain,
+            "changing the content of the workspace-root rust-toolchain.toml must invalidate the artifact cache key"
+        );
+
+        std::fs::create_dir_all(workspace_dir.path().join(".cargo")).unwrap();
+        std::fs::write(
+            workspace_dir.path().join(".cargo/config.toml"),
+            "[build]\nrustflags = [\"-C\", \"target-cpu=native\"]\n",
+        )
+        .unwrap();
+        let with_cargo_config = key(&app_dir).await;
+        assert_ne!(
+            with_changed_toolchain, with_cargo_config,
+            "changing rustflags via workspace-root .cargo/config.toml must invalidate the artifact cache key"
+        );
+    }
+
+    #[tokio::test]
+    async fn source_artifact_cache_key_differs_across_target_triples() {
+        let src_dir = tempdir().unwrap();
+        std::fs::create_dir_all(src_dir.path().join("src")).unwrap();
+        std::fs::write(
+            src_dir.path().join("Cargo.toml"),
+            "[package]\nname = \"app\"\nversion = \"0.1.0\"\nedition = \"2021\"\n",
+        )
+        .unwrap();
+        std::fs::write(src_dir.path().join("src/main.rs"), "fn main() {}\n").unwrap();
+
+        let toolchain = ToolchainConfig::Rust {
+            binary_name: "app".to_string(),
+        };
+        let key_for = |targets: Vec<BinaryTarget>| {
+            let dir = src_dir.path().to_str().unwrap().to_string();
+            let out = src_dir.path().join("out").to_string_lossy().into_owned();
+            let toolchain = toolchain.clone();
+            async move {
+                let settings = BuildSettings {
+                    output_directory: out,
+                    platform: PlatformBuildSettings::Gcp {},
+                    targets: Some(targets.clone()),
+                    cache_url: None,
+                    override_base_image: None,
+                    debug_mode: false,
+                };
+                compute_source_artifact_cache_key(
+                    &dir,
+                    &toolchain,
+                    &settings,
+                    &targets,
+                    crate::toolchain::WorkloadKind::Container,
+                )
+                .await
+                .unwrap()
+            }
+        };
+
+        let x64_key = key_for(vec![BinaryTarget::LinuxX64]).await;
+        let arm64_key = key_for(vec![BinaryTarget::LinuxArm64]).await;
+        assert_ne!(
+            x64_key, arm64_key,
+            "different target triples must not share build artifacts"
+        );
+    }
+
+    /// Reuse invariant, end to end at the cache layer: after one platform's build
+    /// produces artifacts, an equivalent-target build for another platform finds
+    /// them (one build total), while a build for a different triple misses even
+    /// though the tarball file exists (two builds total).
+    #[tokio::test]
+    async fn equivalent_platform_build_reuses_artifact_but_differing_triple_rebuilds() {
+        let src_dir = tempdir().unwrap();
+        std::fs::create_dir_all(src_dir.path().join("src")).unwrap();
+        std::fs::write(
+            src_dir.path().join("Cargo.toml"),
+            "[package]\nname = \"app\"\nversion = \"0.1.0\"\nedition = \"2021\"\n",
+        )
+        .unwrap();
+        std::fs::write(src_dir.path().join("src/main.rs"), "fn main() {}\n").unwrap();
+
+        let toolchain = ToolchainConfig::Rust {
+            binary_name: "app".to_string(),
+        };
+        let out_root = tempdir().unwrap();
+        let settings_for =
+            |platform: PlatformBuildSettings, targets: &[BinaryTarget]| BuildSettings {
+                output_directory: out_root.path().to_string_lossy().into_owned(),
+                platform,
+                targets: Some(targets.to_vec()),
+                cache_url: None,
+                override_base_image: None,
+                debug_mode: false,
+            };
+        let x64 = vec![BinaryTarget::LinuxX64];
+        let arm64 = vec![BinaryTarget::LinuxArm64];
+
+        // "First build" (gcp, linux-x64): produce the hashed artifact directory
+        // exactly as build_resource finalizes it.
+        let gcp_key = compute_source_artifact_cache_key(
+            src_dir.path().to_str().unwrap(),
+            &toolchain,
+            &settings_for(PlatformBuildSettings::Gcp {}, &x64),
+            &x64,
+            crate::toolchain::WorkloadKind::Container,
+        )
+        .await
+        .unwrap();
+        let gcp_dir = out_root.path().join("build").join("gcp");
+        let artifact_dir = gcp_dir.join("app-12345678");
+        fs::create_dir_all(&artifact_dir).await.unwrap();
+        fs::write(artifact_dir.join("linux-x64.oci.tar"), b"oci")
+            .await
+            .unwrap();
+        // Also stage an arm64 tarball so the differing-triple case below is
+        // decided by the cache key, not by a missing target file.
+        fs::write(artifact_dir.join("linux-arm64.oci.tar"), b"oci")
+            .await
+            .unwrap();
+        write_artifact_cache_metadata(&artifact_dir, &gcp_key)
+            .await
+            .unwrap();
+
+        // "Second build" (azure, same source, same linux-x64 target): the key
+        // matches and the sibling-platform lookup finds the gcp artifacts, so
+        // no second compile happens.
+        let azure_key = compute_source_artifact_cache_key(
+            src_dir.path().to_str().unwrap(),
+            &toolchain,
+            &settings_for(PlatformBuildSettings::Azure {}, &x64),
+            &x64,
+            crate::toolchain::WorkloadKind::Container,
+        )
+        .await
+        .unwrap();
+        assert_eq!(gcp_key, azure_key, "equivalent platforms must share keys");
+
+        let azure_dir = out_root.path().join("build").join("azure");
+        fs::create_dir_all(&azure_dir).await.unwrap();
+        let reused = find_cached_artifact_dir(&azure_dir, "app", &x64, &azure_key)
+            .await
+            .unwrap();
+        assert_eq!(
+            reused,
+            Some(artifact_dir.clone()),
+            "same inputs + equivalent targets must reuse the one built artifact"
+        );
+
+        // "Third build" (aws, linux-arm64): the tarball file exists, but the
+        // key differs, so the lookup misses and a real build would run.
+        let aws_key = compute_source_artifact_cache_key(
+            src_dir.path().to_str().unwrap(),
+            &toolchain,
+            &settings_for(
+                PlatformBuildSettings::Aws {
+                    managing_account_id: None,
+                },
+                &arm64,
+            ),
+            &arm64,
+            crate::toolchain::WorkloadKind::Container,
+        )
+        .await
+        .unwrap();
+        assert_ne!(gcp_key, aws_key);
+
+        let aws_dir = out_root.path().join("build").join("aws");
+        fs::create_dir_all(&aws_dir).await.unwrap();
+        let miss = find_cached_artifact_dir(&aws_dir, "app", &arm64, &aws_key)
+            .await
+            .unwrap();
+        assert_eq!(miss, None, "a differing triple must trigger its own build");
     }
 
     #[tokio::test]
