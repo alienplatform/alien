@@ -136,10 +136,16 @@ async fn handle_request(
         .map(|s| s.to_string());
 
     // Check for Dapr messages: input bindings POST to /{component-name},
-    // pubsub delivers with dapr-content-type header or /pubsub/ path.
+    // pubsub delivers with dapr-content-type header or /pubsub/ path. Dapr also
+    // wraps Service Bus pub/sub deliveries as a bare CloudEvent whose `ce-type`
+    // is the fixed value "com.dapr.event.sent" (see
+    // `events::azure::dapr_cloudevent_to_queue_messages`), with no other
+    // Dapr-specific header or path marker present — that must route here too,
+    // not fall through to the blob-only CloudEvent handler.
     let is_dapr = request.headers().get("dapr-content-type").is_some()
         || path.contains("/pubsub/")
-        || path.starts_with("/servicebus-");
+        || path.starts_with("/servicebus-")
+        || ce_type.as_deref() == Some("com.dapr.event.sent");
 
     if is_timer_trigger {
         return handle_timer_trigger(request, &state).await;
