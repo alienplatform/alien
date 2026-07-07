@@ -127,21 +127,59 @@ export interface NativeAddon {
   version(): string
 }
 
+/** The Linux C library a prebuild is compiled against. */
+export type LinuxLibc = "gnu" | "musl"
+
+/**
+ * Detect the Linux C library (glibc vs musl) of the current process, using the
+ * same signal as napi-rs's generated loader: a glibc runtime reports a
+ * `glibcVersionRuntime` in its process report; a musl runtime (Alpine, etc.)
+ * does not. Falls back to the Alpine marker file when the report is
+ * unavailable.
+ *
+ * Only meaningful on Linux — `platformTriple` consults the result solely on the
+ * `linux` branch, so the value returned on other platforms is unused.
+ */
+export function detectLinuxLibc(): LinuxLibc {
+  const report =
+    typeof process.report?.getReport === "function"
+      ? (process.report.getReport() as { header?: { glibcVersionRuntime?: string } })
+      : undefined
+  if (report?.header) {
+    // glibc runtimes populate this field; musl runtimes leave it absent.
+    return report.header.glibcVersionRuntime ? "gnu" : "musl"
+  }
+  // Process report unavailable: Alpine ships this marker and has no glibc.
+  return existsSync("/etc/alpine-release") ? "musl" : "gnu"
+}
+
 /**
  * Map `process.platform` / `process.arch` to the napi triple used in both the
  * prebuild package name and the locally-built `.node` file name. Mirrors the
  * `optionalDependencies` set pinned in PACKAGE_LAYOUT.md.
  *
- * Exported for unit testing: accepts `platform`/`arch` explicitly (defaulting
- * to the real `process` values) so every supported pair — and the unsupported
- * case — can be exercised directly, without stubbing the `process` global.
+ * Only glibc Linux prebuilds are published (`…-gnu`; see PACKAGE_LAYOUT.md), so
+ * a musl host (Alpine and friends) has no addon: this throws a clear
+ * unsupported-platform error naming musl rather than silently selecting the
+ * glibc triple, which would otherwise fail to resolve — or, worse, load a glibc
+ * `.node` into a musl process and crash on the first binding call.
+ *
+ * Exported for unit testing: accepts `platform`/`arch`/`libc` explicitly
+ * (defaulting to the detected values) so every supported pair — and the
+ * unsupported cases — can be exercised directly, without stubbing `process`.
  */
 export function platformTriple(
   platform: NodeJS.Platform = process.platform,
   arch: NodeJS.Architecture = process.arch,
+  libc: LinuxLibc = platform === "linux" ? detectLinuxLibc() : "gnu",
 ): string {
   if (platform === "darwin" && arch === "arm64") return "darwin-arm64"
   if (platform === "darwin" && arch === "x64") return "darwin-x64"
+  if (platform === "linux" && libc === "musl") {
+    throw new Error(
+      `@alienplatform/bindings has no native addon for musl-based Linux (arch '${arch}'). Prebuilds are published for glibc Linux only (the '…-gnu' triples); run on a glibc-based image (for example debian- or ubuntu-slim) instead.`,
+    )
+  }
   if (platform === "linux" && arch === "x64") return "linux-x64-gnu"
   if (platform === "linux" && arch === "arm64") return "linux-arm64-gnu"
   throw new Error(
