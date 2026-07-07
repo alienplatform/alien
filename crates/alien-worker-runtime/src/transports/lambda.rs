@@ -573,10 +573,11 @@ async fn run_buffered(
 // ============================================================================
 
 /// A non-HTTP Lambda event, classified once for both response modes.
+/// Payloads are boxed to keep the enum small.
 enum TaskEvent {
-    S3(S3Event),
-    Sqs(SqsEvent),
-    CloudWatch(CloudWatchEvent),
+    S3(Box<S3Event>),
+    Sqs(Box<SqsEvent>),
+    CloudWatch(Box<CloudWatchEvent>),
     Command(Box<alien_commands::types::Envelope>),
 }
 
@@ -606,19 +607,19 @@ fn classify_event(event: LambdaRequest) -> ClassifiedEvent {
 
     if let Ok(s3_event) = serde_json::from_slice::<S3Event>(&body_bytes) {
         if !s3_event.records.is_empty() {
-            return ClassifiedEvent::Task(TaskEvent::S3(s3_event));
+            return ClassifiedEvent::Task(TaskEvent::S3(Box::new(s3_event)));
         }
     }
 
     if let Ok(sqs_event) = serde_json::from_slice::<SqsEvent>(&body_bytes) {
         if !sqs_event.records.is_empty() {
-            return ClassifiedEvent::Task(TaskEvent::Sqs(sqs_event));
+            return ClassifiedEvent::Task(TaskEvent::Sqs(Box::new(sqs_event)));
         }
     }
 
     if let Ok(cw_event) = serde_json::from_slice::<CloudWatchEvent>(&body_bytes) {
         if cw_event.source.is_some() {
-            return ClassifiedEvent::Task(TaskEvent::CloudWatch(cw_event));
+            return ClassifiedEvent::Task(TaskEvent::CloudWatch(Box::new(cw_event)));
         }
     }
 
@@ -633,10 +634,10 @@ fn classify_event(event: LambdaRequest) -> ClassifiedEvent {
 /// the (always empty 200) response is constructed per mode by the caller.
 async fn dispatch_task_event(state: &LambdaState, request_id: &str, event: TaskEvent) {
     match event {
-        TaskEvent::S3(s3_event) => handle_s3_event(state, request_id, s3_event).await,
-        TaskEvent::Sqs(sqs_event) => handle_sqs_event(state, request_id, sqs_event).await,
+        TaskEvent::S3(s3_event) => handle_s3_event(state, request_id, *s3_event).await,
+        TaskEvent::Sqs(sqs_event) => handle_sqs_event(state, request_id, *sqs_event).await,
         TaskEvent::CloudWatch(cw_event) => {
-            handle_cloudwatch_event(state, request_id, cw_event).await
+            handle_cloudwatch_event(state, request_id, *cw_event).await
         }
         TaskEvent::Command(envelope) => handle_command(state, &envelope).await,
     }
