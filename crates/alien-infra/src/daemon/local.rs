@@ -4,14 +4,16 @@ use std::path::PathBuf;
 use std::time::Duration;
 use tracing::{debug, info};
 
-use crate::core::{environment_variables::EnvironmentVariableBuilder, ResourceControllerContext};
+use crate::core::{
+    applicable_secret_environment_variables, environment_variables::EnvironmentVariableBuilder,
+    ResourceControllerContext,
+};
 use crate::error::{ErrorData, Result};
 use alien_core::{
-    Daemon, DaemonCode, DaemonHeartbeatData, DaemonOutputs, EnvironmentVariable,
-    EnvironmentVariableType, HeartbeatBackend, LocalDaemonHeartbeatData, LocalRuntimeUnitKind,
-    LocalRuntimeUnitStatus, ObservedHealth, Platform, Postgres, ProviderLifecycleState,
-    ResourceHeartbeat, ResourceHeartbeatData, ResourceOutputs, ResourceStatus,
-    WorkloadHeartbeatStatus,
+    Daemon, DaemonCode, DaemonHeartbeatData, DaemonOutputs, HeartbeatBackend,
+    LocalDaemonHeartbeatData, LocalRuntimeUnitKind, LocalRuntimeUnitStatus, ObservedHealth,
+    Platform, Postgres, ProviderLifecycleState, ResourceHeartbeat, ResourceHeartbeatData,
+    ResourceOutputs, ResourceStatus, WorkloadHeartbeatStatus,
 };
 use alien_error::{AlienError, Context};
 use alien_macros::controller;
@@ -306,31 +308,6 @@ impl LocalDaemonController {
             })
         })
     }
-}
-
-fn matches_environment_target(resource_id: &str, target_resources: &Option<Vec<String>>) -> bool {
-    match target_resources {
-        None => true,
-        Some(patterns) if patterns.is_empty() => false,
-        Some(patterns) => patterns.iter().any(|pattern| {
-            if let Some(prefix) = pattern.strip_suffix('*') {
-                resource_id.starts_with(prefix)
-            } else {
-                resource_id == pattern
-            }
-        }),
-    }
-}
-
-fn applicable_secret_environment_variables<'a>(
-    resource_id: &str,
-    variables: &'a [EnvironmentVariable],
-) -> Vec<&'a EnvironmentVariable> {
-    variables
-        .iter()
-        .filter(|var| var.var_type == EnvironmentVariableType::Secret)
-        .filter(|var| matches_environment_target(resource_id, &var.target_resources))
-        .collect()
 }
 
 fn local_daemon_public_url(ctx: &ResourceControllerContext<'_>, config: &Daemon) -> Option<String> {
