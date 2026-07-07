@@ -7,10 +7,11 @@
  * NOT probe the filesystem or resolve a prebuild package — the addon must
  * already be staged next to the built `native.js`.
  *
- * Staging contract (produced by `alien build`, task 13): before this module is
- * bundled and compiled, the correct per-platform addon is copied next to
- * `dist/native.js` as `alien-bindings.node`. Task 13 owns that copy step; this
- * module only consumes the staged file.
+ * Staging contract (produced by `alien build`'s TypeScript toolchain; see
+ * PACKAGE_LAYOUT.md): before this module is bundled and compiled, the correct
+ * per-platform addon is copied next to `dist/native.js` as
+ * `alien-bindings.node`. The build owns that copy step; this module only
+ * consumes the staged file.
  *
  * The specifier is kept external at build time (see tsdown.config.ts) so the
  * literal survives into `dist/native.js` for bun to resolve and embed.

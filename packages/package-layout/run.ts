@@ -5,8 +5,8 @@
  * import correctly on Bun and Node, honoring the pinned surfaces in
  * packages/{sdk,bindings,commands}/PACKAGE_LAYOUT.md. Discrete steps:
  *
- *   1. pnpm pack each existing publishable package (sdk, core; bindings/commands
- *      when they land) into .tarballs/.
+ *   1. pnpm pack each publishable package (sdk, core, bindings, commands)
+ *      into .tarballs/.
  *   2. Rewrite the consumer's `dependencies` + `overrides` to file: those tarballs
  *      (every transitive @alienplatform/* pinned to a tarball, never npm).
  *   3. npm install the consumer (npm, not pnpm — a real consumer) and assert the
@@ -334,7 +334,8 @@ function main(): void {
   // The loader (packages/bindings/src/loader.ts) resolves the addon in order:
   // an ALIEN_BINDINGS_ADDON_PATH override, the per-platform prebuild package
   // (optionalDependencies — only injected at publish time by `napi
-  // prepublish`, task 04a; never present when packing straight from workspace
+  // prepublish` in the release pipeline (.github/workflows/release.yml);
+  // never present when packing straight from workspace
   // source), then a locally-built dev `.node` found by walking up from the
   // installed package looking for crates/alien-bindings-node. On a developer
   // machine that walk reaches this repo's real crates/alien-bindings-node and
@@ -464,14 +465,6 @@ function main(): void {
   // Step 6 — tsc typecheck of the consumer
   // -------------------------------------------------------------------------
 
-  // Modules that are legitimately unresolvable today, with the task that lands them.
-  const EXPECTED_MISSING_MODULES: Record<string, { package: string }> = {
-    "@alienplatform/bindings": { package: "bindings" },
-    "@alienplatform/bindings/native": { package: "bindings" },
-    "@alienplatform/commands": { package: "commands" },
-    "@alienplatform/sdk/worker-runtime": { package: "sdk" },
-  }
-
   const tscBin = join(fixtureDir, "node_modules", "typescript", "bin", "tsc")
   if (!existsSync(tscBin)) {
     record({
@@ -493,30 +486,14 @@ function main(): void {
       })
     } else {
       const errorLines = tsc.stdout.split("\n").filter(line => /error TS\d+/.test(line))
-      const seenMissing = new Set<string>()
       for (const line of errorLines) {
-        const missing = line.match(/Cannot find module '([^']+)'/)
-        const moduleName = missing?.[1]
-        const known = moduleName ? EXPECTED_MISSING_MODULES[moduleName] : undefined
-        if (moduleName && known) {
-          if (seenMissing.has(moduleName)) continue
-          seenMissing.add(moduleName)
-          record({
-            check: "typecheck",
-            package: known.package,
-            status: "fail",
-            reason: `cannot find module '${moduleName}'`,
-            evidence: line.trim(),
-          })
-        } else {
-          record({
-            check: "typecheck",
-            package: "fixture",
-            status: "fail",
-            reason: "unexpected typecheck error",
-            evidence: line.trim(),
-          })
-        }
+        record({
+          check: "typecheck",
+          package: "fixture",
+          status: "fail",
+          reason: "unexpected typecheck error",
+          evidence: line.trim(),
+        })
       }
     }
   }
@@ -556,7 +533,8 @@ function main(): void {
   // Files OUTSIDE the intended publish set that sdk/core ship TODAY, because no
   // publishable manifest carries a `files` allowlist yet. Listed explicitly — not
   // a silent allowance: anything not named here fails the run. Tightening the
-  // manifests (adding `files` and dropping these entries) is owned by tasks 03/17.
+  // manifests (adding `files` and dropping these entries) is still pending for
+  // sdk/core; see packages/sdk/PACKAGE_LAYOUT.md.
   const EXTRA_SHIPPED_TODAY: Record<string, RegExp[]> = {
     sdk: [/^AGENTS\.md$/, /^scripts\//, /^src\//, /^tsconfig\.json$/, /^tsdown\.config\.ts$/],
     core: [
@@ -762,7 +740,8 @@ function main(): void {
   // the literal `./alien-bindings.node` specifier so bun's compiler can stage
   // it into the single-file binary — but only if that file is physically
   // present next to the installed package's dist/native.js at build time
-  // (the staging contract task 13 owns in production; here we stage the
+  // (in production `alien build`'s TypeScript toolchain owns that staging,
+  // see packages/bindings/PACKAGE_LAYOUT.md; here we stage the
   // addon `run.ts` itself resolved above). `--format=cjs` is required: a
   // plain ESM `bun build --compile` of this entry embeds the addon but
   // crashes on load with `ReferenceError: __require is not defined` — see
@@ -904,7 +883,7 @@ function main(): void {
     if (entry) {
       expectedCount += 1
       console.log(
-        `  [expected] ${result.check} package=${result.package} (task ${entry.owningTask}): ${result.reason}`,
+        `  [expected] ${result.check} package=${result.package} (owner: ${entry.owningTask}): ${result.reason}`,
       )
       console.log(`             evidence: ${result.evidence}`)
     } else {
@@ -925,7 +904,7 @@ function main(): void {
   for (const staleEntry of filtered.stale) {
     console.error(
       `  STALE      ${staleEntry.check} package=${staleEntry.package}: "${staleEntry.reason}" ` +
-        `(task ${staleEntry.owningTask}) is listed in expected-failures.json but never occurred — remove it or fix the check.`,
+        `(owner: ${staleEntry.owningTask}) is listed in expected-failures.json but never occurred — remove it or fix the check.`,
     )
   }
 

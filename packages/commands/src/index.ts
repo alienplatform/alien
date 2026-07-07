@@ -2,8 +2,8 @@
  * `@alienplatform/commands` — the public command package for TypeScript.
  *
  * Pure `fetch` over the command wire protocol: the command **sender**
- * ({@link CommandsClient}, with {@link CommandsClient.target}) and — added in a
- * follow-up task — the non-Worker pull **receiver** (`createCommandReceiver`).
+ * ({@link CommandsClient}, with {@link CommandsClient.target}) and the
+ * non-Worker pull **receiver** (`createCommandReceiver`).
  * No native code, no gRPC, no bindings.
  *
  * @example

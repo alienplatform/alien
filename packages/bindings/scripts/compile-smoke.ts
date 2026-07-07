@@ -1,7 +1,7 @@
 /**
  * `bun build --compile` smoke test for the `./native` static-embed entry.
  *
- * This protects the Worker/Container build path: `alien build` (task 13) will
+ * This protects the Worker/Container build path: `alien build` will
  * bundle a user's app that imports `@alienplatform/bindings/native`, stage the
  * per-platform `.node` next to the bundled `native.js`, then run
  * `bun build --compile` to produce a single-file executable. This script
@@ -38,10 +38,11 @@
  * This matters beyond this script: `packages/package-layout/run.ts`'s own
  * "compile" step (`bun build --compile src/compile-entry.ts`) does NOT pass
  * `--format=cjs` either. It is currently masked by an unrelated
- * expected-failure ("bindings package not installed" — task 04a). Once that
- * prebuild lands and the expected-failure entry is removed, that check will
- * hit this exact `__require` crash unless `--format=cjs` is added there too.
- * Flagged for whoever owns that follow-up (see task-4-report.md).
+ * expected-failure ("bindings package not installed" — the prebuilds only
+ * exist in release builds, see .github/workflows/release.yml). Once the
+ * prebuild is present and the expected-failure entry is removed, that check
+ * will hit this exact `__require` crash unless `--format=cjs` is added there
+ * too.
  */
 
 import { spawnSync } from "node:child_process"

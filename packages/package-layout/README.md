@@ -43,17 +43,17 @@ Every transitive `@alienplatform/*` package is pinned to a packed tarball via
 
 ## Expected-failure semantics
 
-Most of the pinned surface is not implemented yet: `@alienplatform/bindings`'s
-per-platform prebuilds (task 04a), `@alienplatform/commands` (task 08), and the
-sdk `./worker-runtime` subpath (task 03). The fixture is **designed to run
-today** and fail only on those not-yet-landed pieces.
+Some checks cannot pass in a plain workspace checkout — e.g. the
+`@alienplatform/bindings` per-platform prebuild addons are only staged by the
+release pipeline (`.github/workflows/release.yml`). The fixture is **designed
+to run today** and fail only on those pieces.
 
 - Each discrete check reports `PASS`, `[expected]`, or `FAIL` with an evidence
   line.
 - Every failure that is expected right now is listed in
-  [`expected-failures.json`](./expected-failures.json) with the owning task, using
-  the same `{ check, package, reason, owningTask }` shape as the static validator
-  in [`packages/scripts`](../scripts/expected-failures.json).
+  [`expected-failures.json`](./expected-failures.json) with its owning in-repo
+  anchor, using the same `{ check, package, reason, owningTask }` shape as the
+  static validator in [`packages/scripts`](../scripts/expected-failures.json).
 - The run exits `0` **only** when the actual failure set matches that list exactly
   — zero unexpected failures **and** zero stale expectations (an expectation that
   no longer occurs fails the run too, so the list cannot silently rot). This reuses

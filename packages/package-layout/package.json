@@ -18,6 +18,7 @@
     "test": "vitest run"
   },
   "devDependencies": {
+    "@alienplatform/scripts": "workspace:^",
     "@napi-rs/cli": "^3.0.0",
     "@types/node": "^24.0.15",
     "vitest": "^3.1.4"

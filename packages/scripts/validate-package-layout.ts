@@ -2,12 +2,10 @@
  * Static validator enforcing the TypeScript package layout boundaries pinned in
  * packages/{sdk,bindings,commands}/PACKAGE_LAYOUT.md.
  *
- * Runs today against the real tree: bindings/commands don't exist yet, and the
- * sdk package still has several PACKAGE_LAYOUT.md violations on purpose (the
- * split is executed by later tasks). Every failure that is expected right now
- * is listed in expected-failures.json with the owning task; the run exits 0
- * only when the actual failure set matches that list exactly (no unexpected
- * failures, no stale expectations).
+ * Runs against the real tree. Any failure that is expected right now is
+ * listed in expected-failures.json with its owning in-repo anchor; the run
+ * exits 0 only when the actual failure set matches that list exactly (no
+ * unexpected failures, no stale expectations).
  */
 
 import { type Dirent, existsSync, readFileSync, readdirSync } from "node:fs"
@@ -25,6 +23,7 @@ export interface ExpectedFailureEntry {
   check: string
   package: string
   reason: string
+  /** In-repo anchor (file or contract section) that owns fixing this failure. */
   owningTask: string
 }
 

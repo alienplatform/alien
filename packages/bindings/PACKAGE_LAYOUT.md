@@ -68,7 +68,8 @@ Only two entry points. Every condition carries `types`. No deep imports.
 - `./native` — static-embed entry for `bun build --compile`. It imports the
   platform `.node` addon through a statically analyzable specifier so the compiler
   can stage it. The subpath name `./native` is pinned here; it is consumed by
-  task 13's compile staging and produced by task 04's addon.
+  `alien build`'s compile staging and backed by the napi addon in
+  `crates/alien-bindings-node`.
 
 ## Manifest requirements
 
@@ -118,7 +119,8 @@ MAY depend on:
 
 ## Status
 
-- Package implemented in task 04 (TypeScript wrapper + napi-rs addon over
-  `alien-bindings`).
-- Per-platform prebuilds and the final `optionalDependencies` list in task 04a.
+- Package implemented: TypeScript wrapper + napi-rs addon over
+  `alien-bindings` (`crates/alien-bindings-node`).
+- Per-platform prebuilds and the final `optionalDependencies` list are
+  produced by the release pipeline (`.github/workflows/release.yml`).
 - This file is the contract; it defines no runtime code.

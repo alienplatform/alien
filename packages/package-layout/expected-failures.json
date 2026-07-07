@@ -3,24 +3,24 @@
     "check": "packed-contents",
     "package": "@alienplatform/bindings-darwin-arm64",
     "reason": "per-platform prebuild addon not staged locally (release matrix: built natively on the macOS runner)",
-    "owningTask": "04a"
+    "owningTask": ".github/workflows/release.yml (prebuild matrix)"
   },
   {
     "check": "packed-contents",
     "package": "@alienplatform/bindings-darwin-x64",
     "reason": "per-platform prebuild addon not staged locally (release matrix: cross-compiled on the macOS runner via --target x86_64-apple-darwin)",
-    "owningTask": "04a"
+    "owningTask": ".github/workflows/release.yml (prebuild matrix)"
   },
   {
     "check": "packed-contents",
     "package": "@alienplatform/bindings-linux-x64-gnu",
     "reason": "per-platform prebuild addon not staged locally (release matrix: built natively on the linux-x64 runner)",
-    "owningTask": "04a"
+    "owningTask": ".github/workflows/release.yml (prebuild matrix)"
   },
   {
     "check": "packed-contents",
     "package": "@alienplatform/bindings-linux-arm64-gnu",
     "reason": "per-platform prebuild addon not staged locally (release matrix: built natively on the linux-arm64 runner)",
-    "owningTask": "04a"
+    "owningTask": ".github/workflows/release.yml (prebuild matrix)"
   }
 ]

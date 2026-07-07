@@ -186,6 +186,9 @@ importers:
 
   packages/package-layout:
     devDependencies:
+      '@alienplatform/scripts':
+        specifier: workspace:^
+        version: link:../scripts
       '@napi-rs/cli':
         specifier: ^3.0.0
         version: 3.7.2(@emnapi/core@1.11.1)(@emnapi/runtime@1.11.1)(@types/node@24.10.4)
