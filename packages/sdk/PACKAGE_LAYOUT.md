@@ -29,9 +29,9 @@ in [`@alienplatform/bindings`](../bindings/PACKAGE_LAYOUT.md).
 | Export | Kind | Signature sketch | Notes |
 |---|---|---|---|
 | `command` | function | `command(name, handler): void` | Register a Worker command handler. |
-| `onStorageEvent` | function | Worker storage-event handler registrar | Signature owned by task 03. |
-| `onCronEvent` | function | Worker cron-event handler registrar | Signature owned by task 03. |
-| `onQueueMessage` | function | Worker queue-message handler registrar | Signature owned by task 03. |
+| `onStorageEvent` | function | Worker storage-event handler registrar | Signature pinned by `src/worker-runtime`. |
+| `onCronEvent` | function | Worker cron-event handler registrar | Signature pinned by `src/worker-runtime`. |
+| `onQueueMessage` | function | Worker queue-message handler registrar | Signature pinned by `src/worker-runtime`. |
 | `waitUntil` | function | `waitUntil(promise): void` | Extend Worker task lifetime past the response. |
 | handler types | type | `StorageEvent`, `StorageEventType`, `CronEvent`, `QueueMessage`, `QueueMessageEvent`, `ScheduledEvent` | The event/handler types for the APIs above. |
 | `storage`, `kv`, `queue`, `vault` | function | re-export from `@alienplatform/bindings` | Facade re-export of the binding factories. |
@@ -51,7 +51,7 @@ Recorded here as contract; execution is tasks 03/17. These names must be gone fr
 - gRPC-era binding errors that the direct bindings package replaces:
   `GrpcConnectionError`, `GrpcCallError`, `BindingNotFoundError` (superseded by
   `BINDING_NOT_CONFIGURED` in `@alienplatform/bindings`).
-- `getPostgresConnection` / `PostgresConnection` — destination is **OPEN (task 03)**;
+- `getPostgresConnection` / `PostgresConnection` — destination is **OPEN**;
   this file does not decide where Postgres connection resolution moves.
 
 ## Subpaths
@@ -62,7 +62,7 @@ The **only** location for `nice-grpc` and the generated Worker protocol clients.
 exports:
 
 - `runWorker` — the Worker bootstrap contract. The name `runWorker` is pinned here;
-  its signature is owned by task 03.
+  its signature is pinned by `src/worker-runtime`.
 - Worker protocol client internals consumed by generated Worker bootstraps.
 
 Generated Worker bootstraps import this exact subpath (tasks 03/13 depend on it).
@@ -70,7 +70,7 @@ Generated Worker bootstraps import this exact subpath (tasks 03/13 depend on it)
 ### `./commands` — DELETED
 
 The old `./commands` subpath is removed. Its `CommandsClient` functionality moves to
-[`@alienplatform/commands`](../commands/PACKAGE_LAYOUT.md) (task 08). The package
+[`@alienplatform/commands`](../commands/PACKAGE_LAYOUT.md). The package
 must not continue to export `./commands`.
 
 ## Exports map
@@ -120,7 +120,7 @@ must not continue to export `./commands`.
   `onQueueMessage`, `waitUntil`) is protocol-only at the facade; the Worker runtime
   wiring lives behind `./worker-runtime`.
 
-## Decisions (task 03)
+## Decisions
 
 Task 03 owns the signatures the contract left open; recorded here as executed.
 
@@ -144,12 +144,14 @@ Task 03 owns the signatures the contract left open; recorded here as executed.
   test-app (`tests/e2e/test-apps/comprehensive-typescript/src/handlers/postgres.ts`,
   local/external variants only — cloud secret resolution is not exercised there).
 - **DECIDED(03)** `AlienContext.forRemoteDeployment(deploymentId, token)` is
-  **deferred to task 17**. `AlienContext` is deleted from the public surface and
+  **deferred** (tracked by the packed-contents allowances in
+  `packages/package-layout/run.ts`). `AlienContext` is deleted from the public surface and
   no remote-bindings protocol exists to implement it cheaply atop current code;
   introducing one is out of scope for the facade split. The docs pin remains for
   17 to satisfy when the remote-bindings entry lands.
 
 ## Status
 
-- The split is executed in task 03 (with cleanup of deleted names in task 17).
+- The split is executed (manifest `files` tightening still pending; see
+  `packages/package-layout/run.ts` EXTRA_SHIPPED_TODAY).
 - This file is the contract; it defines no runtime code.

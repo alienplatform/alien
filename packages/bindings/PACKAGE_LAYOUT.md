@@ -26,10 +26,10 @@ its own.
 | `kv` | function | `kv(name: string): Kv` | Factory. |
 | `queue` | function | `queue(name: string): Queue` | Factory. |
 | `vault` | function | `vault(name: string): Vault` | Factory. |
-| `Storage` | type | resource handle | Instance type returned by `storage()`. Operation method signatures OPEN (task 04) — mirror the Rust `alien-bindings` storage handle. |
-| `Kv` | type | resource handle | Instance type returned by `kv()`. Method signatures OPEN (task 04). |
-| `Queue` | type | resource handle | Instance type returned by `queue()`. Method signatures OPEN (task 04). |
-| `Vault` | type | resource handle | Instance type returned by `vault()`. Method signatures OPEN (task 04). |
+| `Storage` | type | resource handle | Instance type returned by `storage()`. Operation method signatures mirror the Rust `alien-bindings` storage handle. |
+| `Kv` | type | resource handle | Instance type returned by `kv()`. Method signatures mirror the Rust handle. |
+| `Queue` | type | resource handle | Instance type returned by `queue()`. Method signatures mirror the Rust handle. |
+| `Vault` | type | resource handle | Instance type returned by `vault()`. Method signatures mirror the Rust handle. |
 | `BindingNotConfiguredError` | error | `defineError({ code: "BINDING_NOT_CONFIGURED", context: { binding, envVar } })` | Thrown on the first operation against an unconfigured binding. `binding` is the binding name; `envVar` is `ALIEN_<NAME>_BINDING`. |
 | shared error primitives | re-export | `AlienError`, `defineError` (from `@alienplatform/core`) | Re-exported so consumers handle bindings errors without a direct `@alienplatform/core` import. |
 

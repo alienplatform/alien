@@ -36,7 +36,7 @@ the same wire protocol.
 All five variables below are required; an empty, missing, or invalid value
 fails fast with `COMMAND_RECEIVER_CONFIG_INVALID`, naming the specific
 variable. **DECIDED(09)** — the Rust receiver (`alien_commands::Receiver`)
-reads the identical names; task 08's TypeScript receiver must match them
+reads the identical names; the TypeScript receiver (`src/receiver.ts`) must match them
 exactly so the two are behavior-identical twins.
 
 | Env var | Requirement | DECIDED(09) |
@@ -141,7 +141,7 @@ MAY depend on:
   it is always present while a lease is held. The TypeScript receiver must
   expose the same value; anything else diverges the twins' timeout behavior.
 
-## DECIDED (task 08)
+## DECIDED
 
 The OPEN(08) type decisions, now pinned.
 
@@ -199,7 +199,7 @@ The OPEN(08) type decisions, now pinned.
 
 ## Status
 
-- Package implemented in task 08 (TypeScript — pure protocol sender + pull
+- Package implemented (TypeScript — pure protocol sender + pull
   receiver).
-- Rust twin `alien-commands` in task 09.
+- Rust twin: `crates/alien-commands`.
 - This file is the contract; it defines no runtime code.

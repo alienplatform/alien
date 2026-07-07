@@ -14,11 +14,9 @@
  * `expected-failures.json`. This file always exits 0: a crash with no output is
  * how `run.ts` detects an unexpected, un-reported failure.
  *
- * `@alienplatform/sdk`, its transitive `@alienplatform/core`, and
- * `@alienplatform/bindings` are installed and their checks must PASS. Only
- * `@alienplatform/commands` (task 08) and `./worker-runtime` (task 03) are not
- * yet installed, so those checks report `fail` and `run.ts` marks them
- * `[expected]`.
+ * The installed `@alienplatform/*` packages' checks must PASS. Any surface
+ * that cannot resolve reports `fail`, and `run.ts` reconciles it against
+ * expected-failures.json.
  */
 
 interface CheckLine {
@@ -57,9 +55,9 @@ const SDK_FACADE_EXPORTS = [
 ] as const
 
 // The sdk contract's "error re-exports" row: BindingNotConfiguredError (from
-// @alienplatform/bindings) and AlienError (from @alienplatform/core). These
-// arrive with task 03's facade re-export of the bindings package, so today
-// they are a separate [expected] check rather than part of the main surface.
+// @alienplatform/bindings) and AlienError (from @alienplatform/core), pinned
+// by packages/sdk/PACKAGE_LAYOUT.md. Kept as a separate check (distinct from
+// the main surface) so a regression names the re-export row precisely.
 const SDK_FACADE_ERROR_REEXPORTS = ["BindingNotConfiguredError", "AlienError"] as const
 
 async function checkSdk(): Promise<void> {
@@ -102,7 +100,7 @@ async function checkSdk(): Promise<void> {
   })
 }
 
-// --- @alienplatform/sdk/worker-runtime — subpath OPEN until task 03 ----------
+// --- @alienplatform/sdk/worker-runtime — pinned subpath ---------------------
 // Uses its own `check` name (distinct from the facade's "import"/"import-error-
 // reexports") so per-package results stay one-assertion-per-key: run.ts's
 // runtime-divergence check groups by check+package to compare Bun vs Node, and
@@ -226,7 +224,7 @@ async function checkBindings(): Promise<void> {
   }
 }
 
-// --- @alienplatform/commands — package OPEN until task 08 -------------------
+// --- @alienplatform/commands — pinned surface -------------------------------
 const COMMANDS_EXPORTS = [
   "CommandsClient",
   "createCommandReceiver",
