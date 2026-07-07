@@ -9,10 +9,7 @@
 use std::net::SocketAddr;
 use std::sync::Arc;
 
-use alien_worker_protocol::{
-    control::{self, ArcCommand, CronEvent, QueueMessage as ProtoQueueMessage, StorageEvent, Task},
-    ControlGrpcServer,
-};
+use alien_worker_protocol::ControlGrpcServer;
 use axum::{
     body::{Body, Bytes},
     extract::State,
@@ -24,14 +21,14 @@ use axum::{
 use chrono::Utc;
 use cloudevents::AttributesReader;
 use http_body_util::BodyExt;
-use prost_types::Timestamp;
 use tokio::net::TcpListener;
 use tokio::sync::broadcast;
 use tracing::{debug, error, info, warn};
 
 use super::shared::{
-    create_forward_client, envelope_to_command, forward_http_request,
-    parse_cloudevent_from_http_with_extensions, try_parse_envelope,
+    create_forward_client, dispatch_queue_messages, envelope_to_command, forward_http_request,
+    handle_command, parse_cloudevent_from_http_with_extensions, send_cron_event,
+    send_queue_message, send_storage_events,
 };
 use crate::error::{ErrorData, Result};
 use crate::events::azure::{
@@ -184,47 +181,7 @@ async fn handle_timer_trigger(request: Request<Body>, state: &TransportState) ->
 
     info!(schedule_name = %schedule_name, "Azure Timer trigger received");
 
-    let task = Task {
-        task_id: uuid::Uuid::new_v4().to_string(),
-        payload: Some(control::task::Payload::CronEvent(CronEvent {
-            schedule_name: schedule_name.clone(),
-            scheduled_time: Some(Timestamp {
-                seconds: schedule_time.timestamp(),
-                nanos: schedule_time.timestamp_subsec_nanos() as i32,
-            }),
-        })),
-    };
-
-    match state
-        .control_server
-        .send_task(task, std::time::Duration::from_secs(300))
-        .await
-    {
-        Ok(result) => {
-            if result.success {
-                StatusCode::OK.into_response()
-            } else {
-                error!(
-                    error_code = ?result.error_code,
-                    error_message = ?result.error_message,
-                    "Application failed to process cron event"
-                );
-                (
-                    StatusCode::INTERNAL_SERVER_ERROR,
-                    "Application failed to process event",
-                )
-                    .into_response()
-            }
-        }
-        Err(e) => {
-            error!(error = %e, "Failed to send cron event to application");
-            (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                "Failed to communicate with application",
-            )
-                .into_response()
-        }
-    }
+    send_cron_event(schedule_name, schedule_time, &state.control_server).await
 }
 
 /// Handle Dapr messages (input bindings and pub/sub from Service Bus)
@@ -254,31 +211,7 @@ async fn handle_dapr_message(request: Request<Body>, state: &TransportState) -> 
 
     // Process as Dapr CloudEvent (Service Bus message)
     match dapr_cloudevent_to_queue_messages(cloud_event) {
-        Ok(queue_messages) => {
-            for qm in queue_messages {
-                // Check if this is a command envelope
-                if let Some(envelope) = try_parse_envelope(&qm) {
-                    match envelope_to_command(&envelope).await {
-                        Some(command) => {
-                            if let Err(e) = handle_command(&envelope, &command, state).await {
-                                error!(error = %e, "Failed to handle command");
-                            }
-                        }
-                        None => {
-                            error!(command_id = %envelope.command_id, "Failed to decode command params");
-                        }
-                    }
-                } else {
-                    // Regular queue message
-                    if let Err(e) = send_queue_message(&qm, state).await {
-                        error!(error = %e, "Failed to send queue message");
-                        return (StatusCode::INTERNAL_SERVER_ERROR, "Failed to process event")
-                            .into_response();
-                    }
-                }
-            }
-            StatusCode::OK.into_response()
-        }
+        Ok(queue_messages) => dispatch_queue_messages(queue_messages, &state.control_server).await,
         Err(e) => {
             error!(error = %e, "Failed to parse Dapr CloudEvent");
             (StatusCode::BAD_REQUEST, "Invalid Dapr event").into_response()
@@ -306,7 +239,8 @@ async fn handle_raw_dapr_message(body_bytes: &Bytes, state: &TransportState) -> 
             info!(command_id = %envelope.command_id, "Received command via Dapr input binding");
             match envelope_to_command(&envelope).await {
                 Some(command) => {
-                    if let Err(e) = handle_command(&envelope, &command, state).await {
+                    if let Err(e) = handle_command(&envelope, &command, &state.control_server).await
+                    {
                         error!(error = %e, "Failed to handle command");
                     }
                     return StatusCode::OK.into_response();
@@ -333,51 +267,23 @@ async fn handle_raw_dapr_message(body_bytes: &Bytes, state: &TransportState) -> 
         .unwrap_or("unknown")
         .to_string();
 
-    let now = Utc::now();
-
-    let task = Task {
-        task_id: message_id.clone(),
-        payload: Some(control::task::Payload::QueueMessage(ProtoQueueMessage {
-            id: message_id.clone(),
-            source,
-            payload: json_value.to_string().into_bytes(),
-            receipt_handle: String::new(),
-            attempt_count: 1,
-            timestamp: Some(Timestamp {
-                seconds: now.timestamp(),
-                nanos: now.timestamp_subsec_nanos() as i32,
-            }),
-            attributes: std::collections::HashMap::new(),
-        })),
+    let qm = alien_core::QueueMessage {
+        id: message_id,
+        payload: alien_core::MessagePayload::Json(json_value),
+        receipt_handle: String::new(),
+        timestamp: Utc::now(),
+        source,
+        attributes: std::collections::HashMap::new(),
+        attempt_count: None,
     };
 
-    match state
-        .control_server
-        .send_task(task, std::time::Duration::from_secs(300))
-        .await
-    {
-        Ok(result) => {
-            if !result.success {
-                error!(
-                    error_code = ?result.error_code,
-                    error_message = ?result.error_message,
-                    "Application failed to process Dapr message"
-                );
-                return (
-                    StatusCode::INTERNAL_SERVER_ERROR,
-                    "Application failed to process message",
-                )
-                    .into_response();
-            }
-        }
-        Err(e) => {
-            error!(error = %e, "Failed to send raw Dapr message to application");
-            return (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                "Failed to communicate with application",
-            )
-                .into_response();
-        }
+    if let Err(e) = send_queue_message(&qm, &state.control_server).await {
+        error!(error = %e, "Failed to send raw Dapr message to application");
+        return (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "Failed to process message",
+        )
+            .into_response();
     }
 
     StatusCode::OK.into_response()
@@ -426,149 +332,10 @@ async fn handle_azure_storage_cloudevent(
     let event_type = cloud_event.ty().to_string();
 
     match azure_storage_cloudevent_to_storage_events(cloud_event) {
-        Ok(storage_events) => {
-            for se in storage_events.0 {
-                let task = Task {
-                    task_id: uuid::Uuid::new_v4().to_string(),
-                    payload: Some(control::task::Payload::StorageEvent(StorageEvent {
-                        bucket: se.bucket_name,
-                        key: se.object_key,
-                        size: se.size.unwrap_or(0),
-                        event_type: format!("{:?}", se.event_type),
-                        content_type: se.content_type.unwrap_or_default(),
-                        timestamp: Some(Timestamp {
-                            seconds: se.timestamp.timestamp(),
-                            nanos: se.timestamp.timestamp_subsec_nanos() as i32,
-                        }),
-                        etag: se.etag.unwrap_or_default(),
-                        region: se.region.unwrap_or_default(),
-                        version_id: se.version_id.unwrap_or_default(),
-                        current_tier: se.current_tier.unwrap_or_default(),
-                        metadata: se.metadata,
-                    })),
-                };
-
-                match state
-                    .control_server
-                    .send_task(task, std::time::Duration::from_secs(300))
-                    .await
-                {
-                    Ok(result) => {
-                        if !result.success {
-                            error!(
-                                error_code = ?result.error_code,
-                                error_message = ?result.error_message,
-                                "Application failed to process storage event"
-                            );
-                            return (
-                                StatusCode::INTERNAL_SERVER_ERROR,
-                                "Application failed to process event",
-                            )
-                                .into_response();
-                        }
-                    }
-                    Err(e) => {
-                        error!(error = %e, "Failed to send storage event to application");
-                        return (
-                            StatusCode::INTERNAL_SERVER_ERROR,
-                            "Failed to communicate with application",
-                        )
-                            .into_response();
-                    }
-                }
-            }
-            StatusCode::OK.into_response()
-        }
+        Ok(storage_events) => send_storage_events(storage_events, &state.control_server).await,
         Err(e) => {
             error!(error = %e, event_type = %event_type, "Failed to parse Azure storage CloudEvent");
             (StatusCode::BAD_REQUEST, "Invalid storage event").into_response()
         }
-    }
-}
-
-/// Handle a command
-async fn handle_command(
-    envelope: &alien_commands::Envelope,
-    command: &ArcCommand,
-    state: &TransportState,
-) -> std::result::Result<(), String> {
-    let task = Task {
-        task_id: command.command_id.clone(),
-        payload: Some(control::task::Payload::ArcCommand(command.clone())),
-    };
-
-    let command_response = match state
-        .control_server
-        .send_task(task, std::time::Duration::from_secs(300))
-        .await
-    {
-        Ok(result) => {
-            if result.success {
-                alien_commands::CommandResponse::success(&result.response_data)
-            } else {
-                alien_commands::CommandResponse::error(
-                    result.error_code.unwrap_or_else(|| "UNKNOWN".to_string()),
-                    result
-                        .error_message
-                        .unwrap_or_else(|| "Unknown error".to_string()),
-                )
-            }
-        }
-        Err(e) => alien_commands::CommandResponse::error(
-            "PROCESSING_FAILED",
-            format!("Command processing failed: {}", e),
-        ),
-    };
-
-    alien_commands::runtime::submit_response(envelope, command_response)
-        .await
-        .map_err(|e| format!("Failed to submit response: {}", e))
-}
-
-/// Send a queue message to the application
-async fn send_queue_message(
-    qm: &alien_core::QueueMessage,
-    state: &TransportState,
-) -> std::result::Result<(), String> {
-    let payload_bytes = match &qm.payload {
-        alien_core::MessagePayload::Json(v) => v.to_string().into_bytes(),
-        alien_core::MessagePayload::Text(s) => s.clone().into_bytes(),
-    };
-
-    let task = Task {
-        task_id: qm.id.clone(),
-        payload: Some(control::task::Payload::QueueMessage(ProtoQueueMessage {
-            id: qm.id.clone(),
-            source: qm.source.clone(),
-            payload: payload_bytes,
-            receipt_handle: qm.receipt_handle.clone(),
-            attempt_count: qm.attempt_count.unwrap_or(1),
-            timestamp: Some(Timestamp {
-                seconds: qm.timestamp.timestamp(),
-                nanos: qm.timestamp.timestamp_subsec_nanos() as i32,
-            }),
-            attributes: qm.attributes.clone(),
-        })),
-    };
-
-    match state
-        .control_server
-        .send_task(task, std::time::Duration::from_secs(300))
-        .await
-    {
-        Ok(result) => {
-            if result.success {
-                Ok(())
-            } else {
-                Err(format!(
-                    "Application failed to process queue message: {} - {}",
-                    result.error_code.unwrap_or_else(|| "UNKNOWN".to_string()),
-                    result
-                        .error_message
-                        .unwrap_or_else(|| "No error message".to_string())
-                ))
-            }
-        }
-        Err(e) => Err(format!("Failed to send queue message: {}", e)),
     }
 }

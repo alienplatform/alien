@@ -5,19 +5,42 @@
 //! - Commands envelope parsing and response submission
 //! - CloudEvents parsing from HTTP headers
 
+use std::time::Duration;
+
 use alien_commands::Envelope;
-use alien_worker_protocol::control::ArcCommand;
+use alien_worker_protocol::{
+    control::{
+        self, ArcCommand, CronEvent, QueueMessage as ProtoQueueMessage,
+        StorageEvent as ProtoStorageEvent, Task,
+    },
+    ControlGrpcServer,
+};
 use axum::{
     body::{Body, Bytes},
     http::{header, Request, Response, StatusCode},
     response::IntoResponse,
 };
-use chrono::Utc;
+use chrono::{DateTime, Utc};
 use cloudevents::EventBuilder;
 use futures_util::TryStreamExt;
 use http_body_util::BodyExt;
 use prost_types::Timestamp;
-use tracing::error;
+use tracing::{debug, error};
+
+/// Timeout for one command round-trip through the app (`send_task`).
+///
+/// 300 seconds, matching the queue/storage/cron `send_task` timeout and the
+/// forward client's read timeout. The Cloud Run transport previously used
+/// 120s — a value inherited from the Lambda transport, where the 180s
+/// function timeout forces headroom to submit an error response before the
+/// platform kills the invocation. Cloud Run and Container Apps have no such
+/// cap, so commands get the full task window; the transport still bounds the
+/// wait, so a hung handler yields an error response instead of leasing
+/// forever.
+pub(crate) const COMMAND_TASK_TIMEOUT: Duration = Duration::from_secs(300);
+
+/// Timeout for event (queue/storage/cron) `send_task` round-trips.
+pub(crate) const EVENT_TASK_TIMEOUT: Duration = Duration::from_secs(300);
 
 /// Create a shared reqwest client for forwarding HTTP requests.
 ///
@@ -137,6 +160,233 @@ pub fn try_parse_envelope(qm: &alien_core::QueueMessage) -> Option<Envelope> {
     Some(envelope)
 }
 
+/// Handle a command: send it to the app over gRPC and submit the response
+/// (success or error) back to the manager.
+pub(crate) async fn handle_command(
+    envelope: &Envelope,
+    command: &ArcCommand,
+    control_server: &ControlGrpcServer,
+) -> std::result::Result<(), String> {
+    let command_id = &command.command_id;
+    let command_name = &command.command_name;
+
+    tracing::info!(command_id = %command_id, command = %command_name, "Command received");
+
+    let task = Task {
+        task_id: command.command_id.clone(),
+        payload: Some(control::task::Payload::ArcCommand(command.clone())),
+    };
+
+    debug!(command_id = %command_id, "Sending command task to application via gRPC");
+    let command_response = match control_server.send_task(task, COMMAND_TASK_TIMEOUT).await {
+        Ok(result) => {
+            debug!(
+                command_id = %command_id,
+                success = result.success,
+                response_size = result.response_data.len(),
+                "Received command result from application"
+            );
+            if result.success {
+                alien_commands::CommandResponse::success(&result.response_data)
+            } else {
+                alien_commands::CommandResponse::error(
+                    result.error_code.unwrap_or_else(|| "UNKNOWN".to_string()),
+                    result
+                        .error_message
+                        .unwrap_or_else(|| "Unknown error".to_string()),
+                )
+            }
+        }
+        Err(e) => {
+            error!(command_id = %command_id, error = %e, "Command task failed — send_task error");
+            alien_commands::CommandResponse::error(
+                "PROCESSING_FAILED",
+                format!("Command processing failed: {}", e),
+            )
+        }
+    };
+
+    debug!(command_id = %command_id, "Submitting command response to manager");
+    alien_commands::runtime::submit_response(envelope, command_response)
+        .await
+        .map_err(|e| {
+            error!(command_id = %command_id, error = %e, "Failed to submit command response");
+            format!("Failed to submit response: {}", e)
+        })?;
+    debug!(command_id = %command_id, "Command response submitted successfully");
+    Ok(())
+}
+
+/// Send a queue message to the application.
+pub(crate) async fn send_queue_message(
+    qm: &alien_core::QueueMessage,
+    control_server: &ControlGrpcServer,
+) -> std::result::Result<(), String> {
+    let payload_bytes = match &qm.payload {
+        alien_core::MessagePayload::Json(v) => v.to_string().into_bytes(),
+        alien_core::MessagePayload::Text(s) => s.clone().into_bytes(),
+    };
+
+    let task = Task {
+        task_id: qm.id.clone(),
+        payload: Some(control::task::Payload::QueueMessage(ProtoQueueMessage {
+            id: qm.id.clone(),
+            source: qm.source.clone(),
+            payload: payload_bytes,
+            receipt_handle: qm.receipt_handle.clone(),
+            attempt_count: qm.attempt_count.unwrap_or(1),
+            timestamp: Some(Timestamp {
+                seconds: qm.timestamp.timestamp(),
+                nanos: qm.timestamp.timestamp_subsec_nanos() as i32,
+            }),
+            attributes: qm.attributes.clone(),
+        })),
+    };
+
+    match control_server.send_task(task, EVENT_TASK_TIMEOUT).await {
+        Ok(result) => {
+            if result.success {
+                Ok(())
+            } else {
+                Err(format!(
+                    "Application failed to process queue message: {} - {}",
+                    result.error_code.unwrap_or_else(|| "UNKNOWN".to_string()),
+                    result
+                        .error_message
+                        .unwrap_or_else(|| "No error message".to_string())
+                ))
+            }
+        }
+        Err(e) => Err(format!("Failed to send queue message: {}", e)),
+    }
+}
+
+/// Dispatch parsed queue messages to the app: command envelopes go through
+/// the command path (decode params, send, submit response), everything else
+/// is delivered as a regular queue message.
+pub(crate) async fn dispatch_queue_messages(
+    queue_messages: Vec<alien_core::QueueMessage>,
+    control_server: &ControlGrpcServer,
+) -> Response<Body> {
+    for qm in queue_messages {
+        if let Some(envelope) = try_parse_envelope(&qm) {
+            match envelope_to_command(&envelope).await {
+                Some(command) => {
+                    if let Err(e) = handle_command(&envelope, &command, control_server).await {
+                        error!(error = %e, "Failed to handle command");
+                    }
+                }
+                None => {
+                    error!(command_id = %envelope.command_id, "Failed to decode command params");
+                }
+            }
+        } else if let Err(e) = send_queue_message(&qm, control_server).await {
+            error!(error = %e, "Failed to send queue message");
+            return (StatusCode::INTERNAL_SERVER_ERROR, "Failed to process event").into_response();
+        }
+    }
+    StatusCode::OK.into_response()
+}
+
+/// Send converted storage events to the application, one task per event.
+pub(crate) async fn send_storage_events(
+    storage_events: alien_core::StorageEvents,
+    control_server: &ControlGrpcServer,
+) -> Response<Body> {
+    for se in storage_events.0 {
+        let task = Task {
+            task_id: uuid::Uuid::new_v4().to_string(),
+            payload: Some(control::task::Payload::StorageEvent(ProtoStorageEvent {
+                bucket: se.bucket_name,
+                key: se.object_key,
+                size: se.size.unwrap_or(0),
+                event_type: format!("{:?}", se.event_type),
+                content_type: se.content_type.unwrap_or_default(),
+                timestamp: Some(Timestamp {
+                    seconds: se.timestamp.timestamp(),
+                    nanos: se.timestamp.timestamp_subsec_nanos() as i32,
+                }),
+                etag: se.etag.unwrap_or_default(),
+                region: se.region.unwrap_or_default(),
+                version_id: se.version_id.unwrap_or_default(),
+                current_tier: se.current_tier.unwrap_or_default(),
+                metadata: se.metadata,
+            })),
+        };
+
+        match control_server.send_task(task, EVENT_TASK_TIMEOUT).await {
+            Ok(result) => {
+                if !result.success {
+                    error!(
+                        error_code = ?result.error_code,
+                        error_message = ?result.error_message,
+                        "Application failed to process storage event"
+                    );
+                    return (
+                        StatusCode::INTERNAL_SERVER_ERROR,
+                        "Application failed to process event",
+                    )
+                        .into_response();
+                }
+            }
+            Err(e) => {
+                error!(error = %e, "Failed to send storage event to application");
+                return (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    "Failed to communicate with application",
+                )
+                    .into_response();
+            }
+        }
+    }
+    StatusCode::OK.into_response()
+}
+
+/// Send a cron event to the application.
+pub(crate) async fn send_cron_event(
+    schedule_name: String,
+    schedule_time: DateTime<Utc>,
+    control_server: &ControlGrpcServer,
+) -> Response<Body> {
+    let task = Task {
+        task_id: uuid::Uuid::new_v4().to_string(),
+        payload: Some(control::task::Payload::CronEvent(CronEvent {
+            schedule_name,
+            scheduled_time: Some(Timestamp {
+                seconds: schedule_time.timestamp(),
+                nanos: schedule_time.timestamp_subsec_nanos() as i32,
+            }),
+        })),
+    };
+
+    match control_server.send_task(task, EVENT_TASK_TIMEOUT).await {
+        Ok(result) => {
+            if result.success {
+                StatusCode::OK.into_response()
+            } else {
+                error!(
+                    error_code = ?result.error_code,
+                    error_message = ?result.error_message,
+                    "Application failed to process cron event"
+                );
+                (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    "Application failed to process event",
+                )
+                    .into_response()
+            }
+        }
+        Err(e) => {
+            error!(error = %e, "Failed to send cron event to application");
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "Failed to communicate with application",
+            )
+                .into_response()
+        }
+    }
+}
+
 /// Convert an Envelope into an ArcCommand, fetching storage params if needed.
 pub async fn envelope_to_command(envelope: &Envelope) -> Option<ArcCommand> {
     let params_bytes = alien_commands::runtime::decode_params_bytes(envelope)
@@ -159,49 +409,6 @@ pub async fn envelope_to_command(envelope: &Envelope) -> Option<ArcCommand> {
             .url()
             .to_string(),
         response_url: envelope.response_handling.submit_response_url.clone(),
-    })
-}
-
-/// Try to parse a queue message as a command envelope (legacy sync API).
-///
-/// WARNING: Returns empty params for storage mode. Prefer `try_parse_envelope`
-/// + `envelope_to_command` for proper storage param support.
-pub fn try_parse_arc_envelope(qm: &alien_core::QueueMessage) -> Option<ArcCommand> {
-    let envelope = try_parse_envelope(qm)?;
-
-    let params_bytes = match &envelope.params {
-        alien_commands::BodySpec::Inline { inline_base64 } => {
-            use base64::{engine::general_purpose, Engine as _};
-            general_purpose::STANDARD.decode(inline_base64).ok()?
-        }
-        alien_commands::BodySpec::Storage {
-            storage_get_request,
-            ..
-        } => {
-            if storage_get_request.is_some() {
-                vec![]
-            } else {
-                return None;
-            }
-        }
-    };
-
-    Some(ArcCommand {
-        command_id: envelope.command_id,
-        command_name: envelope.command,
-        params: params_bytes,
-        attempt: envelope.attempt,
-        deadline: envelope.deadline.map(|dt| Timestamp {
-            seconds: dt.timestamp(),
-            nanos: dt.timestamp_subsec_nanos() as i32,
-        }),
-        max_inline_bytes: envelope.response_handling.max_inline_bytes,
-        storage_upload_url: envelope
-            .response_handling
-            .storage_upload_request
-            .url()
-            .to_string(),
-        response_url: envelope.response_handling.submit_response_url,
     })
 }
 
