@@ -9,7 +9,8 @@
  * `runWorker` connects to the runtime over the Worker protocol
  * (`ALIEN_WORKER_GRPC_ADDRESS`), serves the app's HTTP handler (if any) and
  * registers its port, then registers the app's handlers and dispatches Worker
- * tasks to them — draining `waitUntil` background work on shutdown.
+ * tasks to them. Each `waitUntil` background task is reported to the runtime as
+ * it is registered (graceful drain-on-shutdown is a planned future feature).
  */
 
 import { AlienError } from "@alienplatform/core"
@@ -66,7 +67,8 @@ function resolveFetchHandler(
  * 2. Serves the app's HTTP `fetch` handler (or a minimal readiness server) and
  *    registers the port with the runtime.
  * 3. Registers the app's handlers and enters the task-dispatch loop, keeping the
- *    process alive and draining `waitUntil` work on shutdown.
+ *    process alive and reporting `waitUntil` background tasks to the runtime as
+ *    they are registered.
  *
  * @param app - The user module's default export (an object with a `fetch`
  *   method for HTTP apps), or `undefined` for handler-only Workers.
@@ -105,7 +107,9 @@ export async function runWorker(app?: unknown): Promise<void> {
 
   await registerHttpServer(channel, server.port)
 
-  // Wire waitUntil drain coordination.
+  // Report each waitUntil background task to the runtime as it is registered.
+  // Graceful drain-on-shutdown (waiting for tracked tasks before exit) is a
+  // planned future feature — see wait-until-manager.ts.
   const waitUntilManager = new WaitUntilManager(channel, instanceId)
   waitUntilManager.install()
 
@@ -131,11 +135,6 @@ async function registerHttpServer(
 // Protocol internals for generated bootstraps / advanced use.
 export { EventLoop } from "./event-loop.js"
 export { WaitUntilManager } from "./wait-until-manager.js"
-export {
-  createGrpcChannel,
-  getChannel,
-  getGrpcEndpoint,
-  getOrCreateChannel,
-} from "./channel.js"
+export { createGrpcChannel, getGrpcEndpoint, getOrCreateChannel } from "./channel.js"
 export { ControlServiceDefinition } from "./generated/control.js"
 export { WaitUntilServiceDefinition } from "./generated/wait_until.js"

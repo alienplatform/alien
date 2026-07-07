@@ -93,13 +93,6 @@ export class EventLoop {
     }
   }
 
-  /**
-   * Stop the event loop.
-   */
-  stop(): void {
-    this.running = false
-  }
-
   private async processTasks(): Promise<void> {
     const stream = this.client.waitForTasks({ applicationId: this.applicationId })
     for await (const task of stream) {

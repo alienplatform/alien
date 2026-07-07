@@ -14,11 +14,7 @@ import { GrpcCallError } from "./errors.js"
 /**
  * Convert a gRPC error to an AlienError with proper chaining.
  */
-export async function grpcErrorToAlienError(
-  error: unknown,
-  service: string,
-  method: string,
-): Promise<AlienError<any>> {
+export async function grpcErrorToAlienError(error: unknown, service: string, method: string) {
   const baseError = await AlienError.from(error)
 
   if (error && typeof error === "object" && "code" in error) {

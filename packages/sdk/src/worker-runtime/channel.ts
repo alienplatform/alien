@@ -76,20 +76,3 @@ export async function getChannel(): Promise<Channel> {
   const endpoint = getGrpcEndpoint()
   return await getOrCreateChannel(endpoint)
 }
-
-/**
- * Close all cached gRPC channels.
- */
-export function closeChannel(): void {
-  for (const channel of channelCache.values()) {
-    channel.close()
-  }
-  channelCache.clear()
-}
-
-/**
- * Reset the cached channels (useful for testing).
- */
-export function resetChannel(): void {
-  channelCache.clear()
-}

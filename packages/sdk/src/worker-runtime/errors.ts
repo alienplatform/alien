@@ -60,18 +60,3 @@ export const MissingEnvVarError = defineError({
   internal: false,
   httpStatusCode: 500,
 })
-
-/**
- * Error thrown when the Worker runtime configuration is invalid.
- */
-export const InvalidBindingConfigError = defineError({
-  code: "INVALID_BINDING_CONFIG",
-  context: z.object({
-    message: z.string(),
-    suggestion: z.string().optional(),
-  }),
-  message: ({ message, suggestion }) => (suggestion ? `${message}. ${suggestion}` : message),
-  retryable: false,
-  internal: false,
-  httpStatusCode: 400,
-})
