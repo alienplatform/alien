@@ -65,12 +65,12 @@ pub(crate) fn decode_cloudevent_data<T: serde::de::DeserializeOwned>(
         }
         Data::String(s) => {
             if content_type == Some("application/json") {
-                serde_json::from_str(s.as_str())
-                    .into_alien_error()
-                    .context(ErrorData::EventProcessingFailed {
+                serde_json::from_str(s.as_str()).into_alien_error().context(
+                    ErrorData::EventProcessingFailed {
                         event_type: event_type.to_string(),
                         reason: "Failed to parse JSON from string CloudEvent data".to_string(),
-                    })
+                    },
+                )
             } else {
                 Err(AlienError::new(ErrorData::EventProcessingFailed {
                     event_type: event_type.to_string(),

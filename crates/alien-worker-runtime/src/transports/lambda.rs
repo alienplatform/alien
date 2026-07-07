@@ -26,9 +26,8 @@ use aws_lambda_events::{
 };
 use bytes::Bytes;
 use futures_util::future::BoxFuture;
-use http_body::{Body as HttpBody, SizeHint};
+use http_body::Body as HttpBody;
 use http_body_util::{combinators::BoxBody, BodyExt, Full};
-use hyper::body::Frame;
 use lambda_http::{
     aws_lambda_events::apigw::ApiGatewayV2httpResponse,
     http::{header::SET_COOKIE, Response},
@@ -199,34 +198,8 @@ pub fn lambda_streaming_body(bytes: Vec<u8>) -> BoxBody<Bytes, crate::error::Err
 // Body adapters for streaming
 // ============================================================================
 
-pin_project! {
-    pub struct AlienBodyAdapter {
-        #[pin]
-        inner: BoxBody<Bytes, crate::error::Error>,
-        request_id: String,
-    }
-}
-
-impl HttpBody for AlienBodyAdapter {
-    type Data = Bytes;
-    type Error = crate::error::Error;
-
-    fn poll_frame(
-        self: Pin<&mut Self>,
-        cx: &mut Context<'_>,
-    ) -> Poll<Option<std::result::Result<Frame<Self::Data>, Self::Error>>> {
-        let this = self.project();
-        this.inner.poll_frame(cx)
-    }
-
-    fn size_hint(&self) -> SizeHint {
-        self.inner.size_hint()
-    }
-
-    fn is_end_stream(&self) -> bool {
-        self.inner.is_end_stream()
-    }
-}
+/// Response body type for the streaming mode.
+type StreamingBody = BoxBody<Bytes, crate::error::Error>;
 
 pin_project! {
     pub struct BodyStream<B> {
@@ -356,7 +329,7 @@ struct StreamingAdapter {
 }
 
 impl Service<LambdaRequest> for StreamingAdapter {
-    type Response = Response<AlienBodyAdapter>;
+    type Response = Response<StreamingBody>;
     type Error = LambdaError;
     type Future = BoxFuture<'static, std::result::Result<Self::Response, Self::Error>>;
 
@@ -447,7 +420,7 @@ async fn run_streaming(
     let svc = lambda_runtime::tower::ServiceBuilder::new()
         .map_request(event_to_request)
         .service(handler)
-        .map_response(|res: Response<AlienBodyAdapter>| {
+        .map_response(|res: Response<StreamingBody>| {
             let (parts, body) = res.into_parts();
 
             let cookies: Vec<_> = parts
@@ -596,105 +569,159 @@ async fn run_buffered(
 }
 
 // ============================================================================
-// Event handlers - Streaming mode
+// Event classification and shared handlers (both modes)
 // ============================================================================
 
-/// Handle a Lambda event (streaming mode)
-async fn handle_streaming_event(
-    state: &LambdaState,
-    request_id: &str,
-    event: LambdaRequest,
-) -> std::result::Result<Response<AlienBodyAdapter>, LambdaError> {
-    debug!(request_id = %request_id, "Handling Lambda event (streaming)");
+/// A non-HTTP Lambda event, classified once for both response modes.
+enum TaskEvent {
+    S3(S3Event),
+    Sqs(SqsEvent),
+    CloudWatch(CloudWatchEvent),
+    Command(Box<alien_commands::types::Envelope>),
+}
 
-    // Get body bytes
-    let body_bytes = match event.body() {
+/// The outcome of classifying an incoming Lambda event.
+enum ClassifiedEvent {
+    /// A recognized event payload, dispatched to the app as a Task.
+    Task(TaskEvent),
+    /// Not a recognized event payload: forward as an HTTP request to the app.
+    Http(Box<LambdaRequest>),
+}
+
+/// Extract the raw body bytes from a Lambda request.
+fn event_body_bytes(event: &LambdaRequest) -> Vec<u8> {
+    match event.body() {
         LambdaBody::Empty => vec![],
         LambdaBody::Text(s) => s.as_bytes().to_vec(),
         LambdaBody::Binary(b) => b.to_vec(),
-    };
-
-    // Try to parse as S3 event
-    if let Ok(s3_event) = serde_json::from_slice::<S3Event>(&body_bytes) {
-        if !s3_event.records.is_empty() {
-            handle_s3_event_streaming(state, request_id, s3_event).await;
-            return Ok(Response::builder()
-                .status(200)
-                .body(AlienBodyAdapter {
-                    inner: lambda_streaming_body(vec![]),
-                    request_id: request_id.to_string(),
-                })
-                .unwrap());
-        }
     }
-
-    // Try to parse as SQS event
-    if let Ok(sqs_event) = serde_json::from_slice::<SqsEvent>(&body_bytes) {
-        if !sqs_event.records.is_empty() {
-            return handle_sqs_event_streaming(state, request_id, sqs_event).await;
-        }
-    }
-
-    // Try to parse as CloudWatch scheduled event
-    if let Ok(cw_event) = serde_json::from_slice::<CloudWatchEvent>(&body_bytes) {
-        if cw_event.source.is_some() {
-            handle_cloudwatch_event_streaming(state, request_id, cw_event).await;
-            return Ok(Response::builder()
-                .status(200)
-                .body(AlienBodyAdapter {
-                    inner: lambda_streaming_body(vec![]),
-                    request_id: request_id.to_string(),
-                })
-                .unwrap());
-        }
-    }
-
-    // Try to parse as command envelope
-    if let Ok(envelope) = serde_json::from_slice::<alien_commands::types::Envelope>(&body_bytes) {
-        return handle_command_streaming(state, request_id, envelope).await;
-    }
-
-    // Default: forward as HTTP request
-    forward_http_request_streaming(state, request_id, event).await
 }
 
-async fn handle_s3_event_streaming(state: &LambdaState, request_id: &str, s3_event: S3Event) {
+/// Classify an incoming Lambda event by trying each known payload shape in
+/// order (S3, SQS, CloudWatch schedule, command envelope), falling back to
+/// HTTP forwarding. Classification is identical for buffered and streaming
+/// modes; only response construction differs per mode.
+fn classify_event(event: LambdaRequest) -> ClassifiedEvent {
+    let body_bytes = event_body_bytes(&event);
+
+    if let Ok(s3_event) = serde_json::from_slice::<S3Event>(&body_bytes) {
+        if !s3_event.records.is_empty() {
+            return ClassifiedEvent::Task(TaskEvent::S3(s3_event));
+        }
+    }
+
+    if let Ok(sqs_event) = serde_json::from_slice::<SqsEvent>(&body_bytes) {
+        if !sqs_event.records.is_empty() {
+            return ClassifiedEvent::Task(TaskEvent::Sqs(sqs_event));
+        }
+    }
+
+    if let Ok(cw_event) = serde_json::from_slice::<CloudWatchEvent>(&body_bytes) {
+        if cw_event.source.is_some() {
+            return ClassifiedEvent::Task(TaskEvent::CloudWatch(cw_event));
+        }
+    }
+
+    if let Ok(envelope) = serde_json::from_slice::<alien_commands::types::Envelope>(&body_bytes) {
+        return ClassifiedEvent::Task(TaskEvent::Command(Box::new(envelope)));
+    }
+
+    ClassifiedEvent::Http(Box::new(event))
+}
+
+/// Dispatch a classified non-HTTP event to the app. Shared by both modes;
+/// the (always empty 200) response is constructed per mode by the caller.
+async fn dispatch_task_event(state: &LambdaState, request_id: &str, event: TaskEvent) {
+    match event {
+        TaskEvent::S3(s3_event) => handle_s3_event(state, request_id, s3_event).await,
+        TaskEvent::Sqs(sqs_event) => handle_sqs_event(state, request_id, sqs_event).await,
+        TaskEvent::CloudWatch(cw_event) => {
+            handle_cloudwatch_event(state, request_id, cw_event).await
+        }
+        TaskEvent::Command(envelope) => handle_command(state, &envelope).await,
+    }
+}
+
+/// Build the StorageEvent task for one S3 record via the canonical
+/// `events::s3_event_record_to_storage_event` conversion, which maps S3 event
+/// names (ObjectCreated:Put → created) and extracts size, etag, region,
+/// version id, and timestamp. Both buffered and streaming modes route through
+/// this, so buffered tasks carry the full field set.
+fn s3_record_to_task(
+    request_id: &str,
+    record: aws_lambda_events::s3::S3EventRecord,
+) -> Result<Task> {
+    let storage_event = crate::events::s3_event_record_to_storage_event(record)?;
+
+    let event_type_str = serde_json::to_value(&storage_event.event_type)
+        .ok()
+        .and_then(|v| v.as_str().map(String::from))
+        .unwrap_or_else(|| "unknown".to_string());
+
+    Ok(Task {
+        task_id: format!("{}-{}", request_id, storage_event.object_key),
+        payload: Some(Payload::StorageEvent(StorageEvent {
+            bucket: storage_event.bucket_name,
+            key: storage_event.object_key,
+            event_type: event_type_str,
+            size: storage_event.size.unwrap_or(0),
+            content_type: storage_event.content_type.unwrap_or_default(),
+            timestamp: Some(prost_types::Timestamp {
+                seconds: storage_event.timestamp.timestamp(),
+                nanos: storage_event.timestamp.timestamp_subsec_nanos() as i32,
+            }),
+            etag: storage_event.etag.unwrap_or_default(),
+            region: storage_event.region.unwrap_or_default(),
+            version_id: storage_event.version_id.unwrap_or_default(),
+            current_tier: storage_event.current_tier.unwrap_or_default(),
+            metadata: storage_event.metadata,
+        })),
+    })
+}
+
+/// Build the QueueMessage task for one SQS record via the canonical
+/// `events::sqs_message_to_queue_message` conversion, which extracts
+/// timestamp, attempt_count, source, and attributes. Both buffered and
+/// streaming modes route through this, so buffered tasks carry the full
+/// field set.
+fn sqs_record_to_task(
+    request_id: &str,
+    record: aws_lambda_events::sqs::SqsMessage,
+) -> Result<Task> {
+    let queue_msg = crate::events::sqs_message_to_queue_message(record)?;
+
+    let timestamp = Some(prost_types::Timestamp {
+        seconds: queue_msg.timestamp.timestamp(),
+        nanos: queue_msg.timestamp.timestamp_subsec_nanos() as i32,
+    });
+
+    let payload_bytes = match &queue_msg.payload {
+        alien_core::MessagePayload::Json(v) => serde_json::to_vec(v).unwrap_or_default(),
+        alien_core::MessagePayload::Text(s) => s.as_bytes().to_vec(),
+    };
+
+    Ok(Task {
+        task_id: format!("{}-{}", request_id, queue_msg.id),
+        payload: Some(Payload::QueueMessage(QueueMessage {
+            id: queue_msg.id,
+            payload: payload_bytes,
+            receipt_handle: queue_msg.receipt_handle,
+            source: queue_msg.source,
+            attempt_count: queue_msg.attempt_count.unwrap_or(1),
+            timestamp,
+            attributes: queue_msg.attributes,
+        })),
+    })
+}
+
+async fn handle_s3_event(state: &LambdaState, request_id: &str, s3_event: S3Event) {
     for record in s3_event.records {
-        // Use the canonical conversion function from events/aws.rs which properly
-        // maps S3 event names (ObjectCreated:Put → Created) and extracts all fields.
-        let storage_event = match crate::events::s3_event_record_to_storage_event(record) {
-            Ok(ev) => ev,
+        let task = match s3_record_to_task(request_id, record) {
+            Ok(task) => task,
             Err(e) => {
                 error!(error = %e, "Failed to parse S3 event record");
                 continue;
             }
-        };
-
-        let event_type_str = serde_json::to_value(&storage_event.event_type)
-            .ok()
-            .and_then(|v| v.as_str().map(String::from))
-            .unwrap_or_else(|| "unknown".to_string());
-
-        info!(bucket = %storage_event.bucket_name, key = %storage_event.object_key, event_type = %event_type_str, "S3 event");
-
-        let task = Task {
-            task_id: format!("{}-{}", request_id, storage_event.object_key),
-            payload: Some(Payload::StorageEvent(StorageEvent {
-                bucket: storage_event.bucket_name,
-                key: storage_event.object_key,
-                event_type: event_type_str,
-                size: storage_event.size.unwrap_or(0),
-                content_type: storage_event.content_type.unwrap_or_default(),
-                timestamp: Some(prost_types::Timestamp {
-                    seconds: storage_event.timestamp.timestamp(),
-                    nanos: storage_event.timestamp.timestamp_subsec_nanos() as i32,
-                }),
-                etag: storage_event.etag.unwrap_or_default(),
-                region: storage_event.region.unwrap_or_default(),
-                version_id: storage_event.version_id.unwrap_or_default(),
-                current_tier: storage_event.current_tier.unwrap_or_default(),
-                metadata: storage_event.metadata,
-            })),
         };
 
         match state
@@ -718,52 +745,22 @@ async fn handle_s3_event_streaming(state: &LambdaState, request_id: &str, s3_eve
     }
 }
 
-async fn handle_sqs_event_streaming(
-    state: &LambdaState,
-    request_id: &str,
-    sqs_event: SqsEvent,
-) -> std::result::Result<Response<AlienBodyAdapter>, LambdaError> {
+async fn handle_sqs_event(state: &LambdaState, request_id: &str, sqs_event: SqsEvent) {
     for record in sqs_event.records {
         // Check if body is a command envelope before converting
         if let Some(ref body) = record.body {
             if let Ok(envelope) = serde_json::from_str::<alien_commands::types::Envelope>(body) {
-                return handle_command_streaming(state, request_id, envelope).await;
+                handle_command(state, &envelope).await;
+                return;
             }
         }
 
-        // Use the canonical conversion function from events/aws.rs which properly
-        // extracts timestamp, attempt_count, source, and attributes.
-        let queue_msg = match crate::events::sqs_message_to_queue_message(record) {
-            Ok(msg) => msg,
+        let task = match sqs_record_to_task(request_id, record) {
+            Ok(task) => task,
             Err(e) => {
                 error!(error = %e, "Failed to parse SQS message");
                 continue;
             }
-        };
-
-        info!(message_id = %queue_msg.id, source = %queue_msg.source, "SQS message");
-
-        let timestamp = Some(prost_types::Timestamp {
-            seconds: queue_msg.timestamp.timestamp(),
-            nanos: queue_msg.timestamp.timestamp_subsec_nanos() as i32,
-        });
-
-        let payload_bytes = match &queue_msg.payload {
-            alien_core::MessagePayload::Json(v) => serde_json::to_vec(v).unwrap_or_default(),
-            alien_core::MessagePayload::Text(s) => s.as_bytes().to_vec(),
-        };
-
-        let task = Task {
-            task_id: format!("{}-{}", request_id, queue_msg.id),
-            payload: Some(Payload::QueueMessage(QueueMessage {
-                id: queue_msg.id,
-                payload: payload_bytes,
-                receipt_handle: queue_msg.receipt_handle,
-                source: queue_msg.source,
-                attempt_count: queue_msg.attempt_count.unwrap_or(1),
-                timestamp,
-                attributes: queue_msg.attributes,
-            })),
         };
 
         match state
@@ -785,21 +782,9 @@ async fn handle_sqs_event_streaming(
             }
         }
     }
-
-    Ok(Response::builder()
-        .status(200)
-        .body(AlienBodyAdapter {
-            inner: lambda_streaming_body(vec![]),
-            request_id: request_id.to_string(),
-        })
-        .unwrap())
 }
 
-async fn handle_cloudwatch_event_streaming(
-    state: &LambdaState,
-    request_id: &str,
-    cw_event: CloudWatchEvent,
-) {
+async fn handle_cloudwatch_event(state: &LambdaState, request_id: &str, cw_event: CloudWatchEvent) {
     let schedule_name = cw_event.resources.first().cloned().unwrap_or_default();
     let scheduled_time = Some(prost_types::Timestamp {
         seconds: cw_event.time.timestamp(),
@@ -836,18 +821,14 @@ async fn handle_cloudwatch_event_streaming(
     }
 }
 
-async fn handle_command_streaming(
-    state: &LambdaState,
-    request_id: &str,
-    envelope: alien_commands::types::Envelope,
-) -> std::result::Result<Response<AlienBodyAdapter>, LambdaError> {
+async fn handle_command(state: &LambdaState, envelope: &alien_commands::types::Envelope) {
     let command_id = envelope.command_id.clone();
     let command_name = envelope.command.clone();
 
     info!(command_id = %command_id, command = %command_name, "Command received via Lambda");
 
     // Decode params
-    let params = alien_commands::runtime::decode_params_bytes(&envelope)
+    let params = alien_commands::runtime::decode_params_bytes(envelope)
         .await
         .unwrap_or_default();
 
@@ -900,7 +881,7 @@ async fn handle_command_streaming(
             };
 
             debug!(command_id = %command_id, "Submitting command response to manager");
-            if let Err(e) = submit_response(&envelope, command_response).await {
+            if let Err(e) = submit_response(envelope, command_response).await {
                 error!(command_id = %command_id, error = %e, "Failed to submit command response");
             } else {
                 debug!(command_id = %command_id, "Command response submitted successfully");
@@ -909,39 +890,17 @@ async fn handle_command_streaming(
         Err(e) => {
             error!(command_id = %command_id, error = %e, "Command task failed — send_task error");
             let command_response = CommandResponse::error("HANDLER_ERROR", &e);
-            let _ = submit_response(&envelope, command_response).await;
+            let _ = submit_response(envelope, command_response).await;
         }
     }
-
-    Ok(Response::builder()
-        .status(200)
-        .body(AlienBodyAdapter {
-            inner: lambda_streaming_body(vec![]),
-            request_id: request_id.to_string(),
-        })
-        .unwrap())
 }
 
-async fn forward_http_request_streaming(
-    state: &LambdaState,
-    request_id: &str,
+/// Forward a Lambda request to the app's local HTTP server. Shared by both
+/// modes; only the response handling (streamed vs buffered) is mode-specific.
+async fn forward_to_app(
+    app_port: u16,
     event: LambdaRequest,
-) -> std::result::Result<Response<AlienBodyAdapter>, LambdaError> {
-    let Some(app_port) = state.app_http_port else {
-        warn!("No app HTTP port registered, returning 503");
-        return Ok(Response::builder()
-            .status(503)
-            .body(AlienBodyAdapter {
-                inner: lambda_streaming_body(b"App HTTP server not registered".to_vec()),
-                request_id: request_id.to_string(),
-            })
-            .unwrap());
-    };
-
-    let method = event.method().to_string();
-    let uri = event.uri().to_string();
-    debug!(request_id = %request_id, method = %method, uri = %uri, app_port = app_port, "Forwarding to app");
-
+) -> std::result::Result<reqwest::Response, reqwest::Error> {
     let client = reqwest::Client::new();
     let path_and_query = event
         .uri()
@@ -963,15 +922,63 @@ async fn forward_http_request_streaming(
     }
 
     // Copy body
-    let body_bytes = match event.body() {
-        LambdaBody::Empty => vec![],
-        LambdaBody::Text(s) => s.as_bytes().to_vec(),
-        LambdaBody::Binary(b) => b.to_vec(),
+    req = req.body(event_body_bytes(&event));
+
+    req.send().await
+}
+
+// ============================================================================
+// Event handlers - Streaming mode
+// ============================================================================
+
+/// Empty 200 response for the streaming mode.
+fn empty_streaming_response() -> Response<StreamingBody> {
+    Response::builder()
+        .status(200)
+        .body(lambda_streaming_body(vec![]))
+        .unwrap()
+}
+
+/// Handle a Lambda event (streaming mode)
+async fn handle_streaming_event(
+    state: &LambdaState,
+    request_id: &str,
+    event: LambdaRequest,
+) -> std::result::Result<Response<StreamingBody>, LambdaError> {
+    debug!(request_id = %request_id, "Handling Lambda event (streaming)");
+
+    match classify_event(event) {
+        ClassifiedEvent::Task(task_event) => {
+            dispatch_task_event(state, request_id, task_event).await;
+            Ok(empty_streaming_response())
+        }
+        ClassifiedEvent::Http(event) => {
+            forward_http_request_streaming(state, request_id, *event).await
+        }
+    }
+}
+
+async fn forward_http_request_streaming(
+    state: &LambdaState,
+    request_id: &str,
+    event: LambdaRequest,
+) -> std::result::Result<Response<StreamingBody>, LambdaError> {
+    let Some(app_port) = state.app_http_port else {
+        warn!("No app HTTP port registered, returning 503");
+        return Ok(Response::builder()
+            .status(503)
+            .body(lambda_streaming_body(
+                b"App HTTP server not registered".to_vec(),
+            ))
+            .unwrap());
     };
-    req = req.body(body_bytes);
+
+    let method = event.method().to_string();
+    let uri = event.uri().to_string();
+    debug!(request_id = %request_id, method = %method, uri = %uri, app_port = app_port, "Forwarding to app");
 
     // Send request and stream response
-    match req.send().await {
+    match forward_to_app(app_port, event).await {
         Ok(resp) => {
             let status = resp.status().as_u16();
             let response_headers = resp.headers().clone();
@@ -997,21 +1004,15 @@ async fn forward_http_request_streaming(
                 builder = builder.header(name.as_str(), value.as_bytes());
             }
 
-            Ok(builder
-                .body(AlienBodyAdapter {
-                    inner: stream_body,
-                    request_id: request_id.to_string(),
-                })
-                .unwrap())
+            Ok(builder.body(stream_body).unwrap())
         }
         Err(e) => {
             error!(error = %e, "Failed to forward request to app");
             Ok(Response::builder()
                 .status(502)
-                .body(AlienBodyAdapter {
-                    inner: lambda_streaming_body(format!("Failed to forward: {}", e).into_bytes()),
-                    request_id: request_id.to_string(),
-                })
+                .body(lambda_streaming_body(
+                    format!("Failed to forward: {}", e).into_bytes(),
+                ))
                 .unwrap())
         }
     }
@@ -1029,271 +1030,18 @@ async fn handle_buffered_event(
 ) -> std::result::Result<ApiGatewayV2httpResponse, LambdaError> {
     debug!(request_id = %request_id, "Handling Lambda event (buffered)");
 
-    // Get body bytes
-    let body_bytes = match event.body() {
-        LambdaBody::Empty => vec![],
-        LambdaBody::Text(s) => s.as_bytes().to_vec(),
-        LambdaBody::Binary(b) => b.to_vec(),
-    };
-
-    // Try to parse as S3 event
-    if let Ok(s3_event) = serde_json::from_slice::<S3Event>(&body_bytes) {
-        if !s3_event.records.is_empty() {
-            return handle_s3_event_buffered(state, request_id, s3_event).await;
+    match classify_event(event) {
+        ClassifiedEvent::Task(task_event) => {
+            dispatch_task_event(state, request_id, task_event).await;
+            Ok(ApiGatewayV2httpResponse {
+                status_code: 200,
+                ..Default::default()
+            })
+        }
+        ClassifiedEvent::Http(event) => {
+            forward_http_request_buffered(state, request_id, *event).await
         }
     }
-
-    // Try to parse as SQS event
-    if let Ok(sqs_event) = serde_json::from_slice::<SqsEvent>(&body_bytes) {
-        if !sqs_event.records.is_empty() {
-            return handle_sqs_event_buffered(state, request_id, sqs_event).await;
-        }
-    }
-
-    // Try to parse as CloudWatch scheduled event
-    if let Ok(cw_event) = serde_json::from_slice::<CloudWatchEvent>(&body_bytes) {
-        if cw_event.source.is_some() {
-            return handle_cloudwatch_event_buffered(state, request_id, cw_event).await;
-        }
-    }
-
-    // Try to parse as command envelope
-    if let Ok(envelope) = serde_json::from_slice::<alien_commands::types::Envelope>(&body_bytes) {
-        return handle_command_buffered(state, request_id, envelope).await;
-    }
-
-    // Default: forward as HTTP request
-    forward_http_request_buffered(state, request_id, event).await
-}
-
-async fn handle_s3_event_buffered(
-    state: &LambdaState,
-    request_id: &str,
-    s3_event: S3Event,
-) -> std::result::Result<ApiGatewayV2httpResponse, LambdaError> {
-    for record in s3_event.records {
-        let bucket = record.s3.bucket.name.unwrap_or_default();
-        let key = record.s3.object.key.unwrap_or_default();
-        let event_type = record.event_name.unwrap_or_default();
-        let size = record.s3.object.size.unwrap_or(0) as u64;
-
-        info!(bucket = %bucket, key = %key, event_type = %event_type, "S3 event");
-
-        let task = Task {
-            task_id: format!("{}-{}", request_id, key),
-            payload: Some(Payload::StorageEvent(StorageEvent {
-                bucket: bucket.clone(),
-                key,
-                event_type,
-                size,
-                content_type: String::new(),
-                timestamp: None,
-                etag: String::new(),
-                region: String::new(),
-                version_id: String::new(),
-                current_tier: String::new(),
-                metadata: std::collections::HashMap::new(),
-            })),
-        };
-
-        match state
-            .control_server
-            .send_task(task, std::time::Duration::from_secs(300))
-            .await
-        {
-            Ok(result) => {
-                if !result.success {
-                    error!(
-                        error_code = ?result.error_code,
-                        error_message = ?result.error_message,
-                        "Application failed to process storage event"
-                    );
-                }
-            }
-            Err(e) => {
-                error!(error = %e, "Failed to send storage event");
-            }
-        }
-    }
-
-    Ok(ApiGatewayV2httpResponse {
-        status_code: 200,
-        ..Default::default()
-    })
-}
-
-async fn handle_sqs_event_buffered(
-    state: &LambdaState,
-    request_id: &str,
-    sqs_event: SqsEvent,
-) -> std::result::Result<ApiGatewayV2httpResponse, LambdaError> {
-    for record in sqs_event.records {
-        let message_id = record.message_id.unwrap_or_default();
-        let body = record.body.unwrap_or_default();
-        let receipt_handle = record.receipt_handle.unwrap_or_default();
-        let source = record.event_source_arn.unwrap_or_default();
-
-        // Check if body is a command envelope
-        if let Ok(envelope) = serde_json::from_str::<alien_commands::types::Envelope>(&body) {
-            return handle_command_buffered(state, request_id, envelope).await;
-        }
-
-        info!(message_id = %message_id, source = %source, "SQS message");
-
-        let task = Task {
-            task_id: format!("{}-{}", request_id, message_id),
-            payload: Some(Payload::QueueMessage(QueueMessage {
-                id: message_id,
-                payload: body.into_bytes(),
-                receipt_handle,
-                source,
-                attempt_count: 1,
-                timestamp: None,
-                attributes: std::collections::HashMap::new(),
-            })),
-        };
-
-        match state
-            .control_server
-            .send_task(task, std::time::Duration::from_secs(300))
-            .await
-        {
-            Ok(result) => {
-                if !result.success {
-                    error!(
-                        error_code = ?result.error_code,
-                        error_message = ?result.error_message,
-                        "Application failed to process queue message"
-                    );
-                }
-            }
-            Err(e) => {
-                error!(error = %e, "Failed to send queue message event");
-            }
-        }
-    }
-
-    Ok(ApiGatewayV2httpResponse {
-        status_code: 200,
-        ..Default::default()
-    })
-}
-
-async fn handle_cloudwatch_event_buffered(
-    state: &LambdaState,
-    request_id: &str,
-    cw_event: CloudWatchEvent,
-) -> std::result::Result<ApiGatewayV2httpResponse, LambdaError> {
-    let schedule_name = cw_event.resources.first().cloned().unwrap_or_default();
-    let scheduled_time = Some(prost_types::Timestamp {
-        seconds: cw_event.time.timestamp(),
-        nanos: cw_event.time.timestamp_subsec_nanos() as i32,
-    });
-
-    info!(schedule = %schedule_name, time = ?scheduled_time, "CloudWatch scheduled event");
-
-    let task = Task {
-        task_id: request_id.to_string(),
-        payload: Some(Payload::CronEvent(CronEvent {
-            schedule_name,
-            scheduled_time,
-        })),
-    };
-
-    match state
-        .control_server
-        .send_task(task, std::time::Duration::from_secs(300))
-        .await
-    {
-        Ok(result) => {
-            if !result.success {
-                error!(
-                    error_code = ?result.error_code,
-                    error_message = ?result.error_message,
-                    "Application failed to process cron event"
-                );
-            }
-        }
-        Err(e) => {
-            error!(error = %e, "Failed to send cron event");
-        }
-    }
-
-    Ok(ApiGatewayV2httpResponse {
-        status_code: 200,
-        ..Default::default()
-    })
-}
-
-async fn handle_command_buffered(
-    state: &LambdaState,
-    _request_id: &str,
-    envelope: alien_commands::types::Envelope,
-) -> std::result::Result<ApiGatewayV2httpResponse, LambdaError> {
-    let command_id = envelope.command_id.clone();
-    let command_name = envelope.command.clone();
-
-    info!(command_id = %command_id, command = %command_name, "Command received");
-
-    // Decode params
-    let params = alien_commands::runtime::decode_params_bytes(&envelope)
-        .await
-        .unwrap_or_default();
-
-    let task = Task {
-        task_id: command_id.clone(),
-        payload: Some(Payload::ArcCommand(ArcCommand {
-            command_id: command_id.clone(),
-            command_name,
-            params,
-            attempt: envelope.attempt,
-            deadline: envelope.deadline.map(|d| prost_types::Timestamp {
-                seconds: d.timestamp(),
-                nanos: d.timestamp_subsec_nanos() as i32,
-            }),
-            response_url: envelope.response_handling.submit_response_url.clone(),
-            storage_upload_url: envelope.response_handling.storage_upload_request.url(),
-            max_inline_bytes: envelope.response_handling.max_inline_bytes,
-        })),
-    };
-
-    // Send task and wait for result
-    match state
-        .control_server
-        .send_task(task, std::time::Duration::from_secs(300))
-        .await
-    {
-        Ok(result) => {
-            let command_response = if result.success {
-                if result.response_data.is_empty() {
-                    CommandResponse::success(b"{}")
-                } else {
-                    CommandResponse::success(&result.response_data)
-                }
-            } else {
-                CommandResponse::error(
-                    result.error_code.unwrap_or_else(|| "UNKNOWN".to_string()),
-                    result
-                        .error_message
-                        .unwrap_or_else(|| "Unknown error".to_string()),
-                )
-            };
-
-            if let Err(e) = submit_response(&envelope, command_response).await {
-                error!(error = %e, "Failed to submit command response");
-            }
-        }
-        Err(e) => {
-            let command_response = CommandResponse::error("HANDLER_ERROR", &e);
-            let _ = submit_response(&envelope, command_response).await;
-            error!(error = %e, "Command handler error");
-        }
-    }
-
-    Ok(ApiGatewayV2httpResponse {
-        status_code: 200,
-        ..Default::default()
-    })
 }
 
 async fn forward_http_request_buffered(
@@ -1316,36 +1064,8 @@ async fn forward_http_request_buffered(
     let uri = event.uri().to_string();
     debug!(request_id = %request_id, method = %method, uri = %uri, app_port = app_port, "Forwarding to app");
 
-    let client = reqwest::Client::new();
-    let path_and_query = event
-        .uri()
-        .path_and_query()
-        .map(|pq| pq.as_str())
-        .unwrap_or("/");
-    let url = format!("http://127.0.0.1:{}{}", app_port, path_and_query);
-
-    let mut req = client.request(
-        reqwest::Method::from_bytes(event.method().as_str().as_bytes()).unwrap(),
-        &url,
-    );
-
-    // Copy headers
-    for (name, value) in event.headers() {
-        if let Ok(v) = value.to_str() {
-            req = req.header(name.as_str(), v);
-        }
-    }
-
-    // Copy body
-    let body_bytes = match event.body() {
-        LambdaBody::Empty => vec![],
-        LambdaBody::Text(s) => s.as_bytes().to_vec(),
-        LambdaBody::Binary(b) => b.to_vec(),
-    };
-    req = req.body(body_bytes);
-
     // Send request
-    match req.send().await {
+    match forward_to_app(app_port, event).await {
         Ok(resp) => {
             let status = resp.status().as_u16() as i64;
             // Clone headers before consuming the body
@@ -1377,6 +1097,144 @@ async fn forward_http_request_buffered(
                 body: Some(LambdaBody::Text(format!("Failed to forward: {}", e))),
                 ..Default::default()
             })
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn s3_event_json() -> serde_json::Value {
+        serde_json::json!({
+            "Records": [{
+                "eventVersion": "2.1",
+                "eventSource": "aws:s3",
+                "awsRegion": "us-east-1",
+                "eventTime": "2024-01-01T12:00:00.000Z",
+                "eventName": "ObjectCreated:Put",
+                "userIdentity": { "principalId": "AWS:X" },
+                "requestParameters": { "sourceIPAddress": "127.0.0.1" },
+                "responseElements": {
+                    "x-amz-request-id": "req",
+                    "x-amz-id-2": "host"
+                },
+                "s3": {
+                    "s3SchemaVersion": "1.0",
+                    "configurationId": "cfg",
+                    "bucket": {
+                        "name": "my-bucket",
+                        "ownerIdentity": { "principalId": "X" },
+                        "arn": "arn:aws:s3:::my-bucket"
+                    },
+                    "object": {
+                        "key": "path/to/file.txt",
+                        "size": 1024,
+                        "eTag": "abc123etag",
+                        "versionId": "v1",
+                        "sequencer": "0055AED6DCD90281E5"
+                    }
+                }
+            }]
+        })
+    }
+
+    fn sqs_event_json() -> serde_json::Value {
+        serde_json::json!({
+            "Records": [{
+                "messageId": "msg-1",
+                "receiptHandle": "rh-1",
+                "body": "{\"hello\":\"world\"}",
+                "attributes": {
+                    "ApproximateReceiveCount": "3",
+                    "SentTimestamp": "1704110400000"
+                },
+                "messageAttributes": {
+                    "trace": { "stringValue": "abc", "dataType": "String" }
+                },
+                "eventSourceARN": "arn:aws:sqs:us-east-1:123456789012:my-queue",
+                "eventSource": "aws:sqs",
+                "awsRegion": "us-east-1"
+            }]
+        })
+    }
+
+    /// Buffered and streaming modes share `s3_record_to_task`, so buffered S3
+    /// tasks must carry the full canonical field set (mapped event type,
+    /// etag, region, version id, timestamp) — previously the buffered handler
+    /// hand-extracted only bucket/key/size and passed the raw event name.
+    #[test]
+    fn s3_tasks_use_canonical_conversion_in_both_modes() {
+        let s3_event: S3Event = serde_json::from_value(s3_event_json()).expect("parse S3 event");
+        let record = s3_event.records.into_iter().next().expect("one record");
+
+        let task = s3_record_to_task("req-1", record).expect("task conversion should succeed");
+        assert_eq!(task.task_id, "req-1-path/to/file.txt");
+
+        let Some(Payload::StorageEvent(event)) = task.payload else {
+            panic!("expected StorageEvent payload");
+        };
+        assert_eq!(event.bucket, "my-bucket");
+        assert_eq!(event.key, "path/to/file.txt");
+        // Mapped through StorageEventType, not the raw "ObjectCreated:Put".
+        assert_eq!(event.event_type, "created");
+        assert_eq!(event.size, 1024);
+        assert_eq!(event.etag, "abc123etag");
+        assert_eq!(event.region, "us-east-1");
+        assert_eq!(event.version_id, "v1");
+        let timestamp = event.timestamp.expect("timestamp must be set");
+        assert_eq!(timestamp.seconds, 1704110400);
+    }
+
+    /// Buffered and streaming modes share `sqs_record_to_task`, so buffered
+    /// SQS tasks must carry attempt_count, attributes, source (queue name),
+    /// and timestamp — previously the buffered handler hardcoded
+    /// attempt_count=1 with empty attributes and no timestamp.
+    #[test]
+    fn sqs_tasks_use_canonical_conversion_in_both_modes() {
+        let sqs_event: SqsEvent =
+            serde_json::from_value(sqs_event_json()).expect("parse SQS event");
+        let record = sqs_event.records.into_iter().next().expect("one record");
+
+        let task = sqs_record_to_task("req-1", record).expect("task conversion should succeed");
+        assert_eq!(task.task_id, "req-1-msg-1");
+
+        let Some(Payload::QueueMessage(message)) = task.payload else {
+            panic!("expected QueueMessage payload");
+        };
+        assert_eq!(message.id, "msg-1");
+        assert_eq!(message.receipt_handle, "rh-1");
+        assert_eq!(message.source, "my-queue");
+        assert_eq!(message.attempt_count, 3);
+        assert_eq!(message.attributes.get("trace"), Some(&"abc".to_string()));
+        let timestamp = message.timestamp.expect("timestamp must be set");
+        assert_eq!(timestamp.seconds, 1704110400);
+        assert_eq!(
+            serde_json::from_slice::<serde_json::Value>(&message.payload).expect("json payload"),
+            serde_json::json!({"hello": "world"})
+        );
+    }
+
+    /// Classification is shared: an S3 payload classifies as a Task in both
+    /// modes; an arbitrary request falls through to HTTP forwarding.
+    #[test]
+    fn classification_is_shared_between_modes() {
+        let s3_request = LambdaRequest::new(LambdaBody::Text(s3_event_json().to_string()));
+        match classify_event(s3_request) {
+            ClassifiedEvent::Task(TaskEvent::S3(event)) => assert_eq!(event.records.len(), 1),
+            _ => panic!("S3 payload must classify as an S3 task event"),
+        }
+
+        let sqs_request = LambdaRequest::new(LambdaBody::Text(sqs_event_json().to_string()));
+        match classify_event(sqs_request) {
+            ClassifiedEvent::Task(TaskEvent::Sqs(event)) => assert_eq!(event.records.len(), 1),
+            _ => panic!("SQS payload must classify as an SQS task event"),
+        }
+
+        let http_request = LambdaRequest::new(LambdaBody::Text("plain body".to_string()));
+        match classify_event(http_request) {
+            ClassifiedEvent::Http(_) => {}
+            _ => panic!("unrecognized payload must fall through to HTTP forwarding"),
         }
     }
 }
