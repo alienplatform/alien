@@ -232,6 +232,18 @@ pub(crate) fn image_output_for_binary(
 /// Trait for implementing programming language toolchains
 #[async_trait]
 pub trait Toolchain: Send + Sync {
+    /// Validate that `src_dir` looks like a project this toolchain can build.
+    ///
+    /// `build_resource` calls this once, before the artifact-cache hash walks
+    /// the source tree, with the resource's real name — so a missing or
+    /// invalid project fails with a clear config error instead of an I/O
+    /// error from the hasher. The default accepts anything (Docker validates
+    /// through `docker build` itself).
+    fn validate_source(&self, src_dir: &Path, resource_name: &str) -> crate::error::Result<()> {
+        let _ = (src_dir, resource_name);
+        Ok(())
+    }
+
     /// Build the source code on the host system with caching
     async fn build(&self, context: &ToolchainContext) -> crate::error::Result<ToolchainOutput>;
 

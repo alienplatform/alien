@@ -476,19 +476,21 @@ impl TypeScriptToolchain {
 
 #[async_trait]
 impl Toolchain for TypeScriptToolchain {
+    fn validate_source(&self, src_dir: &Path, resource_name: &str) -> Result<()> {
+        if !Self::is_typescript_project(src_dir) {
+            return Err(AlienError::new(ErrorData::InvalidResourceConfig {
+                resource_id: resource_name.to_string(),
+                reason: "Source directory does not contain package.json".to_string(),
+            }));
+        }
+        Ok(())
+    }
+
     async fn build(&self, context: &ToolchainContext) -> Result<ToolchainOutput> {
         info!("Building TypeScript project with bun build --compile");
 
         let src_dir = Self::absolute_path(&context.src_dir)?;
         let build_dir = Self::absolute_path(&context.build_dir)?;
-
-        // Validate that this is a TypeScript/JavaScript project
-        if !Self::is_typescript_project(&src_dir) {
-            return Err(AlienError::new(ErrorData::InvalidResourceConfig {
-                resource_id: "typescript-project".to_string(),
-                reason: "Source directory does not contain package.json".to_string(),
-            }));
-        }
 
         // Get binary name and entry point
         let binary_name = self.get_binary_name(&src_dir).await?;

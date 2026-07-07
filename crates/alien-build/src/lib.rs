@@ -1804,33 +1804,14 @@ async fn build_resource(
 
     // Validate the source directory before the artifact-cache hash walks it,
     // so a missing or invalid project fails with a clear config error instead
-    // of an I/O error from the hasher. The per-toolchain checks mirror the
-    // toolchains' own validation (same error shape, just earlier).
+    // of an I/O error from the hasher.
     if !Path::new(src).is_dir() {
         return Err(AlienError::new(ErrorData::InvalidResourceConfig {
             resource_id: resource_name.to_string(),
             reason: format!("Source directory '{}' not found", src),
         }));
     }
-    match toolchain_config {
-        ToolchainConfig::Rust { binary_name } => {
-            if !toolchain::rust::RustToolchain::is_rust_project(Path::new(src)) {
-                return Err(AlienError::new(ErrorData::InvalidResourceConfig {
-                    resource_id: binary_name.clone(),
-                    reason: "Source directory does not contain Cargo.toml".to_string(),
-                }));
-            }
-        }
-        ToolchainConfig::TypeScript { .. } => {
-            if !toolchain::typescript::TypeScriptToolchain::is_typescript_project(Path::new(src)) {
-                return Err(AlienError::new(ErrorData::InvalidResourceConfig {
-                    resource_id: "typescript-project".to_string(),
-                    reason: "Source directory does not contain package.json".to_string(),
-                }));
-            }
-        }
-        ToolchainConfig::Docker { .. } => {}
-    }
+    toolchain::create_toolchain(toolchain_config).validate_source(Path::new(src), resource_name)?;
 
     let cache_key_started = Instant::now();
     let artifact_cache_key =
@@ -2601,20 +2582,7 @@ async fn build_target_to_file(
                         .pull_policy(PullPolicy::Always)
                         .layer(app_layer);
 
-                    // Direct-entrypoint images (source-built Containers/Daemons)
-                    // override the base image's entrypoint with the compiled
-                    // binary and carry no CMD — there is no runtime wrapper and
-                    // no `--` separator. Worker images keep the base image's
-                    // alien-worker-runtime entrypoint and set CMD.
-                    if let Some(entrypoint) = &toolchain_output.entrypoint {
-                        image_builder = image_builder.entrypoint(entrypoint.clone());
-                        if !toolchain_output.runtime_command.is_empty() {
-                            image_builder =
-                                image_builder.cmd(toolchain_output.runtime_command.clone());
-                        }
-                    } else {
-                        image_builder = image_builder.cmd(toolchain_output.runtime_command.clone());
-                    }
+                    image_builder = apply_image_command(image_builder, &toolchain_output);
 
                     build_result = image_builder
                         .output_to(output_path.to_path_buf())
@@ -2728,11 +2696,8 @@ async fn build_target_to_file(
             // Build from scratch (no base image - don't call .from() at all)
             let mut image_builder = DockDashImage::builder()
                 .platform(target.oci_os(), &target.to_dockdash_arch())
-                .working_dir("/app") // Set working directory so ./app resolves correctly
-                .cmd(toolchain_output.runtime_command.clone()); // Set CMD from toolchain
-            if let Some(entrypoint) = &toolchain_output.entrypoint {
-                image_builder = image_builder.entrypoint(entrypoint.clone());
-            }
+                .working_dir("/app"); // Set working directory so ./app resolves correctly
+            image_builder = apply_image_command(image_builder, &toolchain_output);
 
             for layer in all_layers {
                 image_builder = image_builder.layer(layer);
@@ -2757,6 +2722,50 @@ async fn build_target_to_file(
     );
 
     Ok(output_path.to_string_lossy().into_owned())
+}
+
+/// Decide the ENTRYPOINT/CMD pair an image gets from a [`ToolchainOutput`].
+///
+/// - `entrypoint: Some` — direct-entrypoint images (source-built
+///   Containers/Daemons): the compiled binary overrides the base image's
+///   entrypoint (which, per Docker semantics, also clears any CMD inherited
+///   from the base image, including a user-supplied override base image).
+///   CMD is set only when `runtime_command` is nonempty — direct images
+///   carry no runtime wrapper and no `--` separator.
+/// - `entrypoint: None` — keep the base image's entrypoint (e.g. alien-base's
+///   `alien-worker-runtime`) and always set CMD from `runtime_command`.
+///
+/// The resulting image shapes are pinned by `tests/image_shape_tests.rs`.
+fn image_entrypoint_and_cmd(
+    output: &toolchain::ToolchainOutput,
+) -> (Option<Vec<String>>, Option<Vec<String>>) {
+    match &output.entrypoint {
+        Some(entrypoint) => {
+            let cmd = if output.runtime_command.is_empty() {
+                None
+            } else {
+                Some(output.runtime_command.clone())
+            };
+            (Some(entrypoint.clone()), cmd)
+        }
+        None => (None, Some(output.runtime_command.clone())),
+    }
+}
+
+/// Apply the [`image_entrypoint_and_cmd`] contract to a dockdash image
+/// builder. Used by both the base-image and from-scratch build paths.
+fn apply_image_command(
+    mut builder: dockdash::ImageBuilder,
+    output: &toolchain::ToolchainOutput,
+) -> dockdash::ImageBuilder {
+    let (entrypoint, cmd) = image_entrypoint_and_cmd(output);
+    if let Some(entrypoint) = entrypoint {
+        builder = builder.entrypoint(entrypoint);
+    }
+    if let Some(cmd) = cmd {
+        builder = builder.cmd(cmd);
+    }
+    builder
 }
 
 fn base_image_build_retry_delay(attempt: usize) -> Duration {
@@ -3061,6 +3070,56 @@ mod tests {
     use std::path::PathBuf;
     use std::process::Command;
     use tempfile::tempdir;
+
+    fn toolchain_output(
+        entrypoint: Option<Vec<String>>,
+        runtime_command: Vec<String>,
+    ) -> toolchain::ToolchainOutput {
+        toolchain::ToolchainOutput {
+            build_strategy: toolchain::ImageBuildStrategy::FromScratch { layers: vec![] },
+            entrypoint,
+            runtime_command,
+        }
+    }
+
+    /// Pins the ENTRYPOINT/CMD contract shared by the base-image and
+    /// from-scratch build paths (see also tests/image_shape_tests.rs).
+    #[test]
+    fn image_entrypoint_and_cmd_contract() {
+        // Worker: base entrypoint kept, CMD is the separator + binary.
+        let worker = toolchain_output(None, vec!["--".to_string(), "./bin".to_string()]);
+        assert_eq!(
+            image_entrypoint_and_cmd(&worker),
+            (None, Some(vec!["--".to_string(), "./bin".to_string()]))
+        );
+
+        // Direct entrypoint (Container/Daemon): binary is the entrypoint, no CMD.
+        let direct = toolchain_output(Some(vec!["/app/bin".to_string()]), vec![]);
+        assert_eq!(
+            image_entrypoint_and_cmd(&direct),
+            (Some(vec!["/app/bin".to_string()]), None)
+        );
+
+        // Local from-scratch (host process): no entrypoint, CMD is the binary.
+        let local = toolchain_output(None, vec!["./bin".to_string()]);
+        assert_eq!(
+            image_entrypoint_and_cmd(&local),
+            (None, Some(vec!["./bin".to_string()]))
+        );
+
+        // Explicit entrypoint with a nonempty command keeps both.
+        let both = toolchain_output(
+            Some(vec!["/app/bin".to_string()]),
+            vec!["serve".to_string()],
+        );
+        assert_eq!(
+            image_entrypoint_and_cmd(&both),
+            (
+                Some(vec!["/app/bin".to_string()]),
+                Some(vec!["serve".to_string()])
+            )
+        );
+    }
 
     #[test]
     fn requested_host_binary_only_gates_container_skip() {

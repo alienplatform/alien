@@ -169,17 +169,19 @@ impl RustToolchain {
 
 #[async_trait]
 impl Toolchain for RustToolchain {
-    async fn build(&self, context: &ToolchainContext) -> Result<ToolchainOutput> {
-        let build_started = Instant::now();
-        info!("Building Rust project with binary: {}", self.binary_name);
-
-        // Validate that this is a Rust project
-        if !Self::is_rust_project(&context.src_dir) {
+    fn validate_source(&self, src_dir: &Path, resource_name: &str) -> Result<()> {
+        if !Self::is_rust_project(src_dir) {
             return Err(AlienError::new(ErrorData::InvalidResourceConfig {
-                resource_id: self.binary_name.clone(),
+                resource_id: resource_name.to_string(),
                 reason: "Source directory does not contain Cargo.toml".to_string(),
             }));
         }
+        Ok(())
+    }
+
+    async fn build(&self, context: &ToolchainContext) -> Result<ToolchainOutput> {
+        let build_started = Instant::now();
+        info!("Building Rust project with binary: {}", self.binary_name);
 
         // Generate cache key and setup cache paths
         let cache_key = self.generate_cache_key(context).await?;
