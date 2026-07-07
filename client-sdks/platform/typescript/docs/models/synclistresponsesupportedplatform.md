@@ -7,11 +7,11 @@ Represents the target cloud platform.
 ```typescript
 import { SyncListResponseSupportedPlatform } from "@alienplatform/platform-api/models";
 
-let value: SyncListResponseSupportedPlatform = "local";
+let value: SyncListResponseSupportedPlatform = "machines";
 ```
 
 ## Values
 
 ```typescript
-"aws" | "gcp" | "azure" | "kubernetes" | "local" | "test"
+"aws" | "gcp" | "azure" | "kubernetes" | "machines" | "local" | "test"
 ```

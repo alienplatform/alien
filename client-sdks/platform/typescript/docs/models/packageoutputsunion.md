@@ -14,7 +14,6 @@ const value: models.OutputsCli = {
     alienSha: "<value>",
     horizonSha: "<value>",
     platformSha: "<value>",
-    sourceAgentBinarySha256: "<value>",
     sourceCliBinarySha256: "<value>",
   },
   type: "cli",

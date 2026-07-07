@@ -125,6 +125,37 @@ export type PrepareDeploymentStackCustomDomains = {
   domain: string;
 };
 
+export const PrepareDeploymentStackModeLoadBalancer = {
+  LoadBalancer: "loadBalancer",
+} as const;
+export type PrepareDeploymentStackModeLoadBalancer = ClosedEnum<
+  typeof PrepareDeploymentStackModeLoadBalancer
+>;
+
+export type PrepareDeploymentStackPublicEndpointTargetLoadBalancer = {
+  /**
+   * DNS name or URL for the external load balancer.
+   */
+  cnameTarget: string;
+  mode: PrepareDeploymentStackModeLoadBalancer;
+};
+
+export const PrepareDeploymentStackModeMachineAddresses = {
+  MachineAddresses: "machineAddresses",
+} as const;
+export type PrepareDeploymentStackModeMachineAddresses = ClosedEnum<
+  typeof PrepareDeploymentStackModeMachineAddresses
+>;
+
+export type PrepareDeploymentStackPublicEndpointTargetMachineAddresses = {
+  mode: PrepareDeploymentStackModeMachineAddresses;
+};
+
+export type PrepareDeploymentStackPublicEndpointTargetUnion =
+  | PrepareDeploymentStackPublicEndpointTargetLoadBalancer
+  | PrepareDeploymentStackPublicEndpointTargetMachineAddresses
+  | any;
+
 /**
  * Domain configuration for the stack.
  *
@@ -139,6 +170,12 @@ export type PrepareDeploymentStackDomains = {
    */
   customDomains?:
     | { [k: string]: PrepareDeploymentStackCustomDomains }
+    | null
+    | undefined;
+  publicEndpointTarget?:
+    | PrepareDeploymentStackPublicEndpointTargetLoadBalancer
+    | PrepareDeploymentStackPublicEndpointTargetMachineAddresses
+    | any
     | null
     | undefined;
 };
@@ -1499,9 +1536,110 @@ export function prepareDeploymentStackCustomDomainsToJSON(
 }
 
 /** @internal */
+export const PrepareDeploymentStackModeLoadBalancer$outboundSchema: z.ZodEnum<
+  typeof PrepareDeploymentStackModeLoadBalancer
+> = z.enum(PrepareDeploymentStackModeLoadBalancer);
+
+/** @internal */
+export type PrepareDeploymentStackPublicEndpointTargetLoadBalancer$Outbound = {
+  cnameTarget: string;
+  mode: string;
+};
+
+/** @internal */
+export const PrepareDeploymentStackPublicEndpointTargetLoadBalancer$outboundSchema:
+  z.ZodType<
+    PrepareDeploymentStackPublicEndpointTargetLoadBalancer$Outbound,
+    PrepareDeploymentStackPublicEndpointTargetLoadBalancer
+  > = z.object({
+    cnameTarget: z.string(),
+    mode: PrepareDeploymentStackModeLoadBalancer$outboundSchema,
+  });
+
+export function prepareDeploymentStackPublicEndpointTargetLoadBalancerToJSON(
+  prepareDeploymentStackPublicEndpointTargetLoadBalancer:
+    PrepareDeploymentStackPublicEndpointTargetLoadBalancer,
+): string {
+  return JSON.stringify(
+    PrepareDeploymentStackPublicEndpointTargetLoadBalancer$outboundSchema.parse(
+      prepareDeploymentStackPublicEndpointTargetLoadBalancer,
+    ),
+  );
+}
+
+/** @internal */
+export const PrepareDeploymentStackModeMachineAddresses$outboundSchema:
+  z.ZodEnum<typeof PrepareDeploymentStackModeMachineAddresses> = z.enum(
+    PrepareDeploymentStackModeMachineAddresses,
+  );
+
+/** @internal */
+export type PrepareDeploymentStackPublicEndpointTargetMachineAddresses$Outbound =
+  {
+    mode: string;
+  };
+
+/** @internal */
+export const PrepareDeploymentStackPublicEndpointTargetMachineAddresses$outboundSchema:
+  z.ZodType<
+    PrepareDeploymentStackPublicEndpointTargetMachineAddresses$Outbound,
+    PrepareDeploymentStackPublicEndpointTargetMachineAddresses
+  > = z.object({
+    mode: PrepareDeploymentStackModeMachineAddresses$outboundSchema,
+  });
+
+export function prepareDeploymentStackPublicEndpointTargetMachineAddressesToJSON(
+  prepareDeploymentStackPublicEndpointTargetMachineAddresses:
+    PrepareDeploymentStackPublicEndpointTargetMachineAddresses,
+): string {
+  return JSON.stringify(
+    PrepareDeploymentStackPublicEndpointTargetMachineAddresses$outboundSchema
+      .parse(prepareDeploymentStackPublicEndpointTargetMachineAddresses),
+  );
+}
+
+/** @internal */
+export type PrepareDeploymentStackPublicEndpointTargetUnion$Outbound =
+  | PrepareDeploymentStackPublicEndpointTargetLoadBalancer$Outbound
+  | PrepareDeploymentStackPublicEndpointTargetMachineAddresses$Outbound
+  | any;
+
+/** @internal */
+export const PrepareDeploymentStackPublicEndpointTargetUnion$outboundSchema:
+  z.ZodType<
+    PrepareDeploymentStackPublicEndpointTargetUnion$Outbound,
+    PrepareDeploymentStackPublicEndpointTargetUnion
+  > = z.union([
+    z.lazy(() =>
+      PrepareDeploymentStackPublicEndpointTargetLoadBalancer$outboundSchema
+    ),
+    z.lazy(() =>
+      PrepareDeploymentStackPublicEndpointTargetMachineAddresses$outboundSchema
+    ),
+    z.any(),
+  ]);
+
+export function prepareDeploymentStackPublicEndpointTargetUnionToJSON(
+  prepareDeploymentStackPublicEndpointTargetUnion:
+    PrepareDeploymentStackPublicEndpointTargetUnion,
+): string {
+  return JSON.stringify(
+    PrepareDeploymentStackPublicEndpointTargetUnion$outboundSchema.parse(
+      prepareDeploymentStackPublicEndpointTargetUnion,
+    ),
+  );
+}
+
+/** @internal */
 export type PrepareDeploymentStackDomains$Outbound = {
   customDomains?:
     | { [k: string]: PrepareDeploymentStackCustomDomains$Outbound }
+    | null
+    | undefined;
+  publicEndpointTarget?:
+    | PrepareDeploymentStackPublicEndpointTargetLoadBalancer$Outbound
+    | PrepareDeploymentStackPublicEndpointTargetMachineAddresses$Outbound
+    | any
     | null
     | undefined;
 };
@@ -1516,6 +1654,17 @@ export const PrepareDeploymentStackDomains$outboundSchema: z.ZodType<
       z.string(),
       z.lazy(() => PrepareDeploymentStackCustomDomains$outboundSchema),
     ),
+  ).optional(),
+  publicEndpointTarget: z.nullable(
+    z.union([
+      z.lazy(() =>
+        PrepareDeploymentStackPublicEndpointTargetLoadBalancer$outboundSchema
+      ),
+      z.lazy(() =>
+        PrepareDeploymentStackPublicEndpointTargetMachineAddresses$outboundSchema
+      ),
+      z.any(),
+    ]),
   ).optional(),
 });
 

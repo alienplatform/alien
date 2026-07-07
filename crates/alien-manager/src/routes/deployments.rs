@@ -396,6 +396,7 @@ async fn create_deployment(
                 stack_settings: req.stack_settings.unwrap_or_default(),
                 stack_state,
                 environment_variables: req.environment_variables,
+                public_subdomain: None,
                 input_values: Default::default(),
                 deployment_token: Some(raw_token.clone()),
             },

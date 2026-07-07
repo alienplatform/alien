@@ -12,14 +12,14 @@ let value: Data5 = {
     collectionIssues: [
       {
         message: "<value>",
-        reason: "collection-failed",
-        severity: "warning",
+        reason: "not-installed",
+        severity: "info",
         source: "<value>",
       },
     ],
-    health: "healthy",
+    health: "unknown",
     lifecycle: "running",
-    partial: true,
+    partial: false,
     stale: true,
   },
 };
@@ -46,6 +46,6 @@ let value: Data5 = {
 | `skuCapacity`                                                      | *number*                                                           | :heavy_minus_sign:                                                 | N/A                                                                |
 | `skuName`                                                          | *string*                                                           | :heavy_minus_sign:                                                 | N/A                                                                |
 | `skuTier`                                                          | *string*                                                           | :heavy_minus_sign:                                                 | N/A                                                                |
-| `status`                                                           | [operations.DataStatus63](../../models/operations/datastatus63.md) | :heavy_check_mark:                                                 | N/A                                                                |
+| `status`                                                           | [operations.DataStatus65](../../models/operations/datastatus65.md) | :heavy_check_mark:                                                 | N/A                                                                |
 | `updatedAt`                                                        | *string*                                                           | :heavy_minus_sign:                                                 | N/A                                                                |
 | `zoneRedundant`                                                    | *boolean*                                                          | :heavy_minus_sign:                                                 | N/A                                                                |

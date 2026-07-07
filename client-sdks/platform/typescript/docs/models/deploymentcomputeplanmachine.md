@@ -1,18 +1,18 @@
-# Machine
+# DeploymentComputePlanMachine
 
 ## Example Usage
 
 ```typescript
-import { Machine } from "@alienplatform/platform-api/models";
+import { DeploymentComputePlanMachine } from "@alienplatform/platform-api/models";
 
-let value: Machine = {
+let value: DeploymentComputePlanMachine = {
   machine: "<value>",
   profile: {
     cpu: "<value>",
-    memoryBytes: 325948,
-    ephemeralStorageBytes: 794662,
+    memoryBytes: 718877,
+    ephemeralStorageBytes: 953830,
   },
-  recommended: false,
+  recommended: true,
 };
 ```
 

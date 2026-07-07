@@ -41,6 +41,7 @@ export const CreateSetupRegistrationOperationRequestPlatform = {
   Gcp: "gcp",
   Azure: "azure",
   Kubernetes: "kubernetes",
+  Machines: "machines",
   Local: "local",
   Test: "test",
 } as const;
@@ -202,6 +203,39 @@ export type CreateSetupRegistrationOperationRequestCustomDomains = {
   domain: string;
 };
 
+export const CreateSetupRegistrationOperationRequestModeLoadBalancer = {
+  LoadBalancer: "loadBalancer",
+} as const;
+export type CreateSetupRegistrationOperationRequestModeLoadBalancer =
+  ClosedEnum<typeof CreateSetupRegistrationOperationRequestModeLoadBalancer>;
+
+export type CreateSetupRegistrationOperationRequestPublicEndpointTargetLoadBalancer =
+  {
+    /**
+     * DNS name or URL for the external load balancer.
+     */
+    cnameTarget: string;
+    mode: CreateSetupRegistrationOperationRequestModeLoadBalancer;
+  };
+
+export const CreateSetupRegistrationOperationRequestModeMachineAddresses = {
+  MachineAddresses: "machineAddresses",
+} as const;
+export type CreateSetupRegistrationOperationRequestModeMachineAddresses =
+  ClosedEnum<
+    typeof CreateSetupRegistrationOperationRequestModeMachineAddresses
+  >;
+
+export type CreateSetupRegistrationOperationRequestPublicEndpointTargetMachineAddresses =
+  {
+    mode: CreateSetupRegistrationOperationRequestModeMachineAddresses;
+  };
+
+export type CreateSetupRegistrationOperationRequestPublicEndpointTargetUnion =
+  | CreateSetupRegistrationOperationRequestPublicEndpointTargetLoadBalancer
+  | CreateSetupRegistrationOperationRequestPublicEndpointTargetMachineAddresses
+  | any;
+
 /**
  * Domain configuration for the stack.
  *
@@ -216,6 +250,12 @@ export type CreateSetupRegistrationOperationRequestDomains = {
    */
   customDomains?:
     | { [k: string]: CreateSetupRegistrationOperationRequestCustomDomains }
+    | null
+    | undefined;
+  publicEndpointTarget?:
+    | CreateSetupRegistrationOperationRequestPublicEndpointTargetLoadBalancer
+    | CreateSetupRegistrationOperationRequestPublicEndpointTargetMachineAddresses
+    | any
     | null
     | undefined;
 };
@@ -1864,12 +1904,118 @@ export function createSetupRegistrationOperationRequestCustomDomainsToJSON(
 }
 
 /** @internal */
+export const CreateSetupRegistrationOperationRequestModeLoadBalancer$outboundSchema:
+  z.ZodEnum<typeof CreateSetupRegistrationOperationRequestModeLoadBalancer> = z
+    .enum(CreateSetupRegistrationOperationRequestModeLoadBalancer);
+
+/** @internal */
+export type CreateSetupRegistrationOperationRequestPublicEndpointTargetLoadBalancer$Outbound =
+  {
+    cnameTarget: string;
+    mode: string;
+  };
+
+/** @internal */
+export const CreateSetupRegistrationOperationRequestPublicEndpointTargetLoadBalancer$outboundSchema:
+  z.ZodType<
+    CreateSetupRegistrationOperationRequestPublicEndpointTargetLoadBalancer$Outbound,
+    CreateSetupRegistrationOperationRequestPublicEndpointTargetLoadBalancer
+  > = z.object({
+    cnameTarget: z.string(),
+    mode:
+      CreateSetupRegistrationOperationRequestModeLoadBalancer$outboundSchema,
+  });
+
+export function createSetupRegistrationOperationRequestPublicEndpointTargetLoadBalancerToJSON(
+  createSetupRegistrationOperationRequestPublicEndpointTargetLoadBalancer:
+    CreateSetupRegistrationOperationRequestPublicEndpointTargetLoadBalancer,
+): string {
+  return JSON.stringify(
+    CreateSetupRegistrationOperationRequestPublicEndpointTargetLoadBalancer$outboundSchema
+      .parse(
+        createSetupRegistrationOperationRequestPublicEndpointTargetLoadBalancer,
+      ),
+  );
+}
+
+/** @internal */
+export const CreateSetupRegistrationOperationRequestModeMachineAddresses$outboundSchema:
+  z.ZodEnum<
+    typeof CreateSetupRegistrationOperationRequestModeMachineAddresses
+  > = z.enum(CreateSetupRegistrationOperationRequestModeMachineAddresses);
+
+/** @internal */
+export type CreateSetupRegistrationOperationRequestPublicEndpointTargetMachineAddresses$Outbound =
+  {
+    mode: string;
+  };
+
+/** @internal */
+export const CreateSetupRegistrationOperationRequestPublicEndpointTargetMachineAddresses$outboundSchema:
+  z.ZodType<
+    CreateSetupRegistrationOperationRequestPublicEndpointTargetMachineAddresses$Outbound,
+    CreateSetupRegistrationOperationRequestPublicEndpointTargetMachineAddresses
+  > = z.object({
+    mode:
+      CreateSetupRegistrationOperationRequestModeMachineAddresses$outboundSchema,
+  });
+
+export function createSetupRegistrationOperationRequestPublicEndpointTargetMachineAddressesToJSON(
+  createSetupRegistrationOperationRequestPublicEndpointTargetMachineAddresses:
+    CreateSetupRegistrationOperationRequestPublicEndpointTargetMachineAddresses,
+): string {
+  return JSON.stringify(
+    CreateSetupRegistrationOperationRequestPublicEndpointTargetMachineAddresses$outboundSchema
+      .parse(
+        createSetupRegistrationOperationRequestPublicEndpointTargetMachineAddresses,
+      ),
+  );
+}
+
+/** @internal */
+export type CreateSetupRegistrationOperationRequestPublicEndpointTargetUnion$Outbound =
+  | CreateSetupRegistrationOperationRequestPublicEndpointTargetLoadBalancer$Outbound
+  | CreateSetupRegistrationOperationRequestPublicEndpointTargetMachineAddresses$Outbound
+  | any;
+
+/** @internal */
+export const CreateSetupRegistrationOperationRequestPublicEndpointTargetUnion$outboundSchema:
+  z.ZodType<
+    CreateSetupRegistrationOperationRequestPublicEndpointTargetUnion$Outbound,
+    CreateSetupRegistrationOperationRequestPublicEndpointTargetUnion
+  > = z.union([
+    z.lazy(() =>
+      CreateSetupRegistrationOperationRequestPublicEndpointTargetLoadBalancer$outboundSchema
+    ),
+    z.lazy(() =>
+      CreateSetupRegistrationOperationRequestPublicEndpointTargetMachineAddresses$outboundSchema
+    ),
+    z.any(),
+  ]);
+
+export function createSetupRegistrationOperationRequestPublicEndpointTargetUnionToJSON(
+  createSetupRegistrationOperationRequestPublicEndpointTargetUnion:
+    CreateSetupRegistrationOperationRequestPublicEndpointTargetUnion,
+): string {
+  return JSON.stringify(
+    CreateSetupRegistrationOperationRequestPublicEndpointTargetUnion$outboundSchema
+      .parse(createSetupRegistrationOperationRequestPublicEndpointTargetUnion),
+  );
+}
+
+/** @internal */
 export type CreateSetupRegistrationOperationRequestDomains$Outbound = {
   customDomains?:
     | {
       [k: string]:
         CreateSetupRegistrationOperationRequestCustomDomains$Outbound;
     }
+    | null
+    | undefined;
+  publicEndpointTarget?:
+    | CreateSetupRegistrationOperationRequestPublicEndpointTargetLoadBalancer$Outbound
+    | CreateSetupRegistrationOperationRequestPublicEndpointTargetMachineAddresses$Outbound
+    | any
     | null
     | undefined;
 };
@@ -1887,6 +2033,17 @@ export const CreateSetupRegistrationOperationRequestDomains$outboundSchema:
           CreateSetupRegistrationOperationRequestCustomDomains$outboundSchema
         ),
       ),
+    ).optional(),
+    publicEndpointTarget: z.nullable(
+      z.union([
+        z.lazy(() =>
+          CreateSetupRegistrationOperationRequestPublicEndpointTargetLoadBalancer$outboundSchema
+        ),
+        z.lazy(() =>
+          CreateSetupRegistrationOperationRequestPublicEndpointTargetMachineAddresses$outboundSchema
+        ),
+        z.any(),
+      ]),
     ).optional(),
   });
 

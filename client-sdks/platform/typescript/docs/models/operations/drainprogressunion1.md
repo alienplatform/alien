@@ -1,5 +1,6 @@
 # DrainProgressUnion1
 
+
 ## Supported Types
 
 ### `operations.DrainProgress1`
@@ -19,3 +20,4 @@ const value: operations.DrainProgress1 = {
 ```typescript
 const value: any = "<value>";
 ```
+

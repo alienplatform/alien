@@ -32,6 +32,7 @@ use tracing::info;
 #[command(
     disable_version_flag = true,
     about = "Push images and create a release",
+    disable_version_flag = true,
     long_about = "Push built images to a container registry and create a new release on the Alien platform. By default, retrieves registry credentials from the platform's manager. Use override flags for custom registries (e.g., deploying the manager itself).",
     after_help = "EXAMPLES:
     # Standard release (auto-discovers platforms from manager config)
@@ -404,6 +405,7 @@ async fn release_task_core(
         gcp: None,
         azure: None,
         kubernetes: None,
+        machines: None,
         local: None,
         test: None,
     };
@@ -499,6 +501,7 @@ async fn release_task_core(
             Platform::Gcp => stack_by_platform.gcp = Some(stack_json),
             Platform::Azure => stack_by_platform.azure = Some(stack_json),
             Platform::Kubernetes => stack_by_platform.kubernetes = Some(stack_json),
+            Platform::Machines => stack_by_platform.machines = Some(stack_json),
             Platform::Local => stack_by_platform.local = Some(stack_json),
             Platform::Test => stack_by_platform.test = Some(stack_json),
         }
@@ -941,6 +944,7 @@ fn auto_build_settings_for_platform(
         Platform::Kubernetes => alien_build::settings::PlatformBuildSettings::Kubernetes {
             base_platform: kubernetes_base_platform,
         },
+        Platform::Machines => alien_build::settings::PlatformBuildSettings::Machines {},
         Platform::Local => alien_build::settings::PlatformBuildSettings::Local {},
         Platform::Test => alien_build::settings::PlatformBuildSettings::Test {},
     };
@@ -1416,7 +1420,7 @@ fn parse_kubernetes_base_platform(
 
     match parsed {
         Platform::Aws | Platform::Gcp | Platform::Azure => Ok(Some(parsed)),
-        Platform::Kubernetes | Platform::Local | Platform::Test => {
+        Platform::Kubernetes | Platform::Machines | Platform::Local | Platform::Test => {
             Err(AlienError::new(ErrorData::ValidationError {
                 field: "base-platform".to_string(),
                 message: "--base-platform must be one of: aws, gcp, azure".to_string(),
@@ -1939,6 +1943,22 @@ mod tests {
             settings.targets,
             Some(alien_core::BinaryTarget::LINUX.to_vec())
         );
+    }
+
+    #[test]
+    fn machines_release_auto_build_uses_machines_platform() {
+        let temp = tempfile::tempdir().unwrap();
+        let settings = auto_build_settings_for_platform(
+            "machines",
+            &temp.path().join(".alien"),
+            None,
+            None,
+            None,
+        )
+        .unwrap();
+
+        assert_eq!(settings.platform.runtime_platform(), Platform::Machines);
+        assert_eq!(settings.targets, None);
     }
 
     #[test]

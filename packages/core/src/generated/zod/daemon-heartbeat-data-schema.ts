@@ -9,6 +9,7 @@ import { AzureDaemonHeartbeatDataSchema } from "./azure-daemon-heartbeat-data-sc
 import { GcpDaemonHeartbeatDataSchema } from "./gcp-daemon-heartbeat-data-schema.js";
 import { KubernetesDaemonHeartbeatDataSchema } from "./kubernetes-daemon-heartbeat-data-schema.js";
 import { LocalDaemonHeartbeatDataSchema } from "./local-daemon-heartbeat-data-schema.js";
+import { MachinesDaemonHeartbeatDataSchema } from "./machines-daemon-heartbeat-data-schema.js";
 
 export const DaemonHeartbeatDataSchema = z.union([z.lazy(() => AwsDaemonHeartbeatDataSchema).and(z.object({
     "backend": z.enum(["aws"])
@@ -16,6 +17,8 @@ export const DaemonHeartbeatDataSchema = z.union([z.lazy(() => AwsDaemonHeartbea
     "backend": z.enum(["gcp"])
     })), z.lazy(() => AzureDaemonHeartbeatDataSchema).and(z.object({
     "backend": z.enum(["azure"])
+    })), z.lazy(() => MachinesDaemonHeartbeatDataSchema).and(z.object({
+    "backend": z.enum(["machines"])
     })), z.lazy(() => KubernetesDaemonHeartbeatDataSchema).and(z.object({
     "backend": z.enum(["kubernetes"])
     })), z.lazy(() => LocalDaemonHeartbeatDataSchema).and(z.object({

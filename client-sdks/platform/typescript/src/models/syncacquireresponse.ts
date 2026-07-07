@@ -144,6 +144,7 @@ export const SyncAcquireResponseCurrentReleasePlatform = {
   Gcp: "gcp",
   Azure: "azure",
   Kubernetes: "kubernetes",
+  Machines: "machines",
   Local: "local",
   Test: "test",
 } as const;
@@ -1469,6 +1470,7 @@ export const SyncAcquireResponseCurrentReleaseSupportedPlatform = {
   Gcp: "gcp",
   Azure: "azure",
   Kubernetes: "kubernetes",
+  Machines: "machines",
   Local: "local",
   Test: "test",
 } as const;
@@ -1765,6 +1767,7 @@ export const SyncAcquireResponseCurrentPlatform = {
   Gcp: "gcp",
   Azure: "azure",
   Kubernetes: "kubernetes",
+  Machines: "machines",
   Local: "local",
   Test: "test",
 } as const;
@@ -1902,6 +1905,7 @@ export const SyncAcquireResponsePreparedStackPlatform = {
   Gcp: "gcp",
   Azure: "azure",
   Kubernetes: "kubernetes",
+  Machines: "machines",
   Local: "local",
   Test: "test",
 } as const;
@@ -3224,6 +3228,7 @@ export const SyncAcquireResponsePreparedStackSupportedPlatform = {
   Gcp: "gcp",
   Azure: "azure",
   Kubernetes: "kubernetes",
+  Machines: "machines",
   Local: "local",
   Test: "test",
 } as const;
@@ -3306,6 +3311,7 @@ export const SyncAcquireResponseStackStatePlatform = {
   Gcp: "gcp",
   Azure: "azure",
   Kubernetes: "kubernetes",
+  Machines: "machines",
   Local: "local",
   Test: "test",
 } as const;
@@ -3339,6 +3345,7 @@ export const SyncAcquireResponseControllerPlatformEnum = {
   Gcp: "gcp",
   Azure: "azure",
   Kubernetes: "kubernetes",
+  Machines: "machines",
   Local: "local",
   Test: "test",
 } as const;
@@ -3788,6 +3795,7 @@ export const SyncAcquireResponseTargetReleasePlatform = {
   Gcp: "gcp",
   Azure: "azure",
   Kubernetes: "kubernetes",
+  Machines: "machines",
   Local: "local",
   Test: "test",
 } as const;
@@ -5110,6 +5118,7 @@ export const SyncAcquireResponseTargetReleaseSupportedPlatform = {
   Gcp: "gcp",
   Azure: "azure",
   Kubernetes: "kubernetes",
+  Machines: "machines",
   Local: "local",
   Test: "test",
 } as const;
@@ -5242,6 +5251,7 @@ export const SyncAcquireResponseBasePlatformEnum = {
   Gcp: "gcp",
   Azure: "azure",
   Kubernetes: "kubernetes",
+  Machines: "machines",
   Local: "local",
   Test: "test",
 } as const;
@@ -8856,6 +8866,37 @@ export type SyncAcquireResponseCustomDomains = {
   domain: string;
 };
 
+export const SyncAcquireResponseModeLoadBalancer = {
+  LoadBalancer: "loadBalancer",
+} as const;
+export type SyncAcquireResponseModeLoadBalancer = ClosedEnum<
+  typeof SyncAcquireResponseModeLoadBalancer
+>;
+
+export type SyncAcquireResponsePublicEndpointTargetLoadBalancer = {
+  /**
+   * DNS name or URL for the external load balancer.
+   */
+  cnameTarget: string;
+  mode: SyncAcquireResponseModeLoadBalancer;
+};
+
+export const SyncAcquireResponseModeMachineAddresses = {
+  MachineAddresses: "machineAddresses",
+} as const;
+export type SyncAcquireResponseModeMachineAddresses = ClosedEnum<
+  typeof SyncAcquireResponseModeMachineAddresses
+>;
+
+export type SyncAcquireResponsePublicEndpointTargetMachineAddresses = {
+  mode: SyncAcquireResponseModeMachineAddresses;
+};
+
+export type SyncAcquireResponsePublicEndpointTargetUnion =
+  | SyncAcquireResponsePublicEndpointTargetLoadBalancer
+  | SyncAcquireResponsePublicEndpointTargetMachineAddresses
+  | any;
+
 /**
  * Domain configuration for the stack.
  *
@@ -8870,6 +8911,12 @@ export type SyncAcquireResponseDomains = {
    */
   customDomains?:
     | { [k: string]: SyncAcquireResponseCustomDomains }
+    | null
+    | undefined;
+  publicEndpointTarget?:
+    | SyncAcquireResponsePublicEndpointTargetLoadBalancer
+    | SyncAcquireResponsePublicEndpointTargetMachineAddresses
+    | any
     | null
     | undefined;
 };
@@ -24731,6 +24778,90 @@ export function syncAcquireResponseCustomDomainsFromJSON(
 }
 
 /** @internal */
+export const SyncAcquireResponseModeLoadBalancer$inboundSchema: z.ZodEnum<
+  typeof SyncAcquireResponseModeLoadBalancer
+> = z.enum(SyncAcquireResponseModeLoadBalancer);
+
+/** @internal */
+export const SyncAcquireResponsePublicEndpointTargetLoadBalancer$inboundSchema:
+  z.ZodType<SyncAcquireResponsePublicEndpointTargetLoadBalancer, unknown> = z
+    .object({
+      cnameTarget: z.string(),
+      mode: SyncAcquireResponseModeLoadBalancer$inboundSchema,
+    });
+
+export function syncAcquireResponsePublicEndpointTargetLoadBalancerFromJSON(
+  jsonString: string,
+): SafeParseResult<
+  SyncAcquireResponsePublicEndpointTargetLoadBalancer,
+  SDKValidationError
+> {
+  return safeParse(
+    jsonString,
+    (x) =>
+      SyncAcquireResponsePublicEndpointTargetLoadBalancer$inboundSchema.parse(
+        JSON.parse(x),
+      ),
+    `Failed to parse 'SyncAcquireResponsePublicEndpointTargetLoadBalancer' from JSON`,
+  );
+}
+
+/** @internal */
+export const SyncAcquireResponseModeMachineAddresses$inboundSchema: z.ZodEnum<
+  typeof SyncAcquireResponseModeMachineAddresses
+> = z.enum(SyncAcquireResponseModeMachineAddresses);
+
+/** @internal */
+export const SyncAcquireResponsePublicEndpointTargetMachineAddresses$inboundSchema:
+  z.ZodType<SyncAcquireResponsePublicEndpointTargetMachineAddresses, unknown> =
+    z.object({
+      mode: SyncAcquireResponseModeMachineAddresses$inboundSchema,
+    });
+
+export function syncAcquireResponsePublicEndpointTargetMachineAddressesFromJSON(
+  jsonString: string,
+): SafeParseResult<
+  SyncAcquireResponsePublicEndpointTargetMachineAddresses,
+  SDKValidationError
+> {
+  return safeParse(
+    jsonString,
+    (x) =>
+      SyncAcquireResponsePublicEndpointTargetMachineAddresses$inboundSchema
+        .parse(JSON.parse(x)),
+    `Failed to parse 'SyncAcquireResponsePublicEndpointTargetMachineAddresses' from JSON`,
+  );
+}
+
+/** @internal */
+export const SyncAcquireResponsePublicEndpointTargetUnion$inboundSchema:
+  z.ZodType<SyncAcquireResponsePublicEndpointTargetUnion, unknown> = z.union([
+    z.lazy(() =>
+      SyncAcquireResponsePublicEndpointTargetLoadBalancer$inboundSchema
+    ),
+    z.lazy(() =>
+      SyncAcquireResponsePublicEndpointTargetMachineAddresses$inboundSchema
+    ),
+    z.any(),
+  ]);
+
+export function syncAcquireResponsePublicEndpointTargetUnionFromJSON(
+  jsonString: string,
+): SafeParseResult<
+  SyncAcquireResponsePublicEndpointTargetUnion,
+  SDKValidationError
+> {
+  return safeParse(
+    jsonString,
+    (x) =>
+      SyncAcquireResponsePublicEndpointTargetUnion$inboundSchema.parse(
+        JSON.parse(x),
+      ),
+    `Failed to parse 'SyncAcquireResponsePublicEndpointTargetUnion' from JSON`,
+  );
+}
+
+/** @internal */
 export const SyncAcquireResponseDomains$inboundSchema: z.ZodType<
   SyncAcquireResponseDomains,
   unknown
@@ -24740,6 +24871,17 @@ export const SyncAcquireResponseDomains$inboundSchema: z.ZodType<
       z.string(),
       z.lazy(() => SyncAcquireResponseCustomDomains$inboundSchema),
     ),
+  ).optional(),
+  publicEndpointTarget: z.nullable(
+    z.union([
+      z.lazy(() =>
+        SyncAcquireResponsePublicEndpointTargetLoadBalancer$inboundSchema
+      ),
+      z.lazy(() =>
+        SyncAcquireResponsePublicEndpointTargetMachineAddresses$inboundSchema
+      ),
+      z.any(),
+    ]),
   ).optional(),
 });
 

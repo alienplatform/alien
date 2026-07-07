@@ -430,6 +430,10 @@ pub(super) async fn resolve_client_config(
                 state_directory: data_dir.to_string(),
             })
         }
+        Platform::Machines => Err(AlienError::new(ErrorData::ConfigurationError {
+            message: "Machines deployments are reconciled by the manager, not by a local operator"
+                .to_string(),
+        })),
         Platform::Test => Ok(ClientConfig::Test),
         Platform::Aws | Platform::Gcp | Platform::Azure => {
             ClientConfig::from_std_env(platform)

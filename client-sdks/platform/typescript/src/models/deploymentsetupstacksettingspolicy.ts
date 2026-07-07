@@ -160,6 +160,39 @@ export type DeploymentSetupStackSettingsPolicyCustomDomains = {
   domain: string;
 };
 
+export const DeploymentSetupStackSettingsPolicyModeLoadBalancer = {
+  LoadBalancer: "loadBalancer",
+} as const;
+export type DeploymentSetupStackSettingsPolicyModeLoadBalancer = ClosedEnum<
+  typeof DeploymentSetupStackSettingsPolicyModeLoadBalancer
+>;
+
+export type DeploymentSetupStackSettingsPolicyPublicEndpointTargetLoadBalancer =
+  {
+    /**
+     * DNS name or URL for the external load balancer.
+     */
+    cnameTarget: string;
+    mode: DeploymentSetupStackSettingsPolicyModeLoadBalancer;
+  };
+
+export const DeploymentSetupStackSettingsPolicyModeMachineAddresses = {
+  MachineAddresses: "machineAddresses",
+} as const;
+export type DeploymentSetupStackSettingsPolicyModeMachineAddresses = ClosedEnum<
+  typeof DeploymentSetupStackSettingsPolicyModeMachineAddresses
+>;
+
+export type DeploymentSetupStackSettingsPolicyPublicEndpointTargetMachineAddresses =
+  {
+    mode: DeploymentSetupStackSettingsPolicyModeMachineAddresses;
+  };
+
+export type DeploymentSetupStackSettingsPolicyPublicEndpointTargetUnion =
+  | DeploymentSetupStackSettingsPolicyPublicEndpointTargetLoadBalancer
+  | DeploymentSetupStackSettingsPolicyPublicEndpointTargetMachineAddresses
+  | any;
+
 /**
  * Domain configuration for the stack.
  *
@@ -174,6 +207,12 @@ export type DeploymentSetupStackSettingsPolicyDomains = {
    */
   customDomains?:
     | { [k: string]: DeploymentSetupStackSettingsPolicyCustomDomains }
+    | null
+    | undefined;
+  publicEndpointTarget?:
+    | DeploymentSetupStackSettingsPolicyPublicEndpointTargetLoadBalancer
+    | DeploymentSetupStackSettingsPolicyPublicEndpointTargetMachineAddresses
+    | any
     | null
     | undefined;
 };
@@ -2050,6 +2089,185 @@ export function deploymentSetupStackSettingsPolicyCustomDomainsFromJSON(
 }
 
 /** @internal */
+export const DeploymentSetupStackSettingsPolicyModeLoadBalancer$inboundSchema:
+  z.ZodEnum<typeof DeploymentSetupStackSettingsPolicyModeLoadBalancer> = z.enum(
+    DeploymentSetupStackSettingsPolicyModeLoadBalancer,
+  );
+/** @internal */
+export const DeploymentSetupStackSettingsPolicyModeLoadBalancer$outboundSchema:
+  z.ZodEnum<typeof DeploymentSetupStackSettingsPolicyModeLoadBalancer> =
+    DeploymentSetupStackSettingsPolicyModeLoadBalancer$inboundSchema;
+
+/** @internal */
+export const DeploymentSetupStackSettingsPolicyPublicEndpointTargetLoadBalancer$inboundSchema:
+  z.ZodType<
+    DeploymentSetupStackSettingsPolicyPublicEndpointTargetLoadBalancer,
+    unknown
+  > = z.object({
+    cnameTarget: z.string(),
+    mode: DeploymentSetupStackSettingsPolicyModeLoadBalancer$inboundSchema,
+  });
+/** @internal */
+export type DeploymentSetupStackSettingsPolicyPublicEndpointTargetLoadBalancer$Outbound =
+  {
+    cnameTarget: string;
+    mode: string;
+  };
+
+/** @internal */
+export const DeploymentSetupStackSettingsPolicyPublicEndpointTargetLoadBalancer$outboundSchema:
+  z.ZodType<
+    DeploymentSetupStackSettingsPolicyPublicEndpointTargetLoadBalancer$Outbound,
+    DeploymentSetupStackSettingsPolicyPublicEndpointTargetLoadBalancer
+  > = z.object({
+    cnameTarget: z.string(),
+    mode: DeploymentSetupStackSettingsPolicyModeLoadBalancer$outboundSchema,
+  });
+
+export function deploymentSetupStackSettingsPolicyPublicEndpointTargetLoadBalancerToJSON(
+  deploymentSetupStackSettingsPolicyPublicEndpointTargetLoadBalancer:
+    DeploymentSetupStackSettingsPolicyPublicEndpointTargetLoadBalancer,
+): string {
+  return JSON.stringify(
+    DeploymentSetupStackSettingsPolicyPublicEndpointTargetLoadBalancer$outboundSchema
+      .parse(
+        deploymentSetupStackSettingsPolicyPublicEndpointTargetLoadBalancer,
+      ),
+  );
+}
+export function deploymentSetupStackSettingsPolicyPublicEndpointTargetLoadBalancerFromJSON(
+  jsonString: string,
+): SafeParseResult<
+  DeploymentSetupStackSettingsPolicyPublicEndpointTargetLoadBalancer,
+  SDKValidationError
+> {
+  return safeParse(
+    jsonString,
+    (x) =>
+      DeploymentSetupStackSettingsPolicyPublicEndpointTargetLoadBalancer$inboundSchema
+        .parse(JSON.parse(x)),
+    `Failed to parse 'DeploymentSetupStackSettingsPolicyPublicEndpointTargetLoadBalancer' from JSON`,
+  );
+}
+
+/** @internal */
+export const DeploymentSetupStackSettingsPolicyModeMachineAddresses$inboundSchema:
+  z.ZodEnum<typeof DeploymentSetupStackSettingsPolicyModeMachineAddresses> = z
+    .enum(DeploymentSetupStackSettingsPolicyModeMachineAddresses);
+/** @internal */
+export const DeploymentSetupStackSettingsPolicyModeMachineAddresses$outboundSchema:
+  z.ZodEnum<typeof DeploymentSetupStackSettingsPolicyModeMachineAddresses> =
+    DeploymentSetupStackSettingsPolicyModeMachineAddresses$inboundSchema;
+
+/** @internal */
+export const DeploymentSetupStackSettingsPolicyPublicEndpointTargetMachineAddresses$inboundSchema:
+  z.ZodType<
+    DeploymentSetupStackSettingsPolicyPublicEndpointTargetMachineAddresses,
+    unknown
+  > = z.object({
+    mode: DeploymentSetupStackSettingsPolicyModeMachineAddresses$inboundSchema,
+  });
+/** @internal */
+export type DeploymentSetupStackSettingsPolicyPublicEndpointTargetMachineAddresses$Outbound =
+  {
+    mode: string;
+  };
+
+/** @internal */
+export const DeploymentSetupStackSettingsPolicyPublicEndpointTargetMachineAddresses$outboundSchema:
+  z.ZodType<
+    DeploymentSetupStackSettingsPolicyPublicEndpointTargetMachineAddresses$Outbound,
+    DeploymentSetupStackSettingsPolicyPublicEndpointTargetMachineAddresses
+  > = z.object({
+    mode: DeploymentSetupStackSettingsPolicyModeMachineAddresses$outboundSchema,
+  });
+
+export function deploymentSetupStackSettingsPolicyPublicEndpointTargetMachineAddressesToJSON(
+  deploymentSetupStackSettingsPolicyPublicEndpointTargetMachineAddresses:
+    DeploymentSetupStackSettingsPolicyPublicEndpointTargetMachineAddresses,
+): string {
+  return JSON.stringify(
+    DeploymentSetupStackSettingsPolicyPublicEndpointTargetMachineAddresses$outboundSchema
+      .parse(
+        deploymentSetupStackSettingsPolicyPublicEndpointTargetMachineAddresses,
+      ),
+  );
+}
+export function deploymentSetupStackSettingsPolicyPublicEndpointTargetMachineAddressesFromJSON(
+  jsonString: string,
+): SafeParseResult<
+  DeploymentSetupStackSettingsPolicyPublicEndpointTargetMachineAddresses,
+  SDKValidationError
+> {
+  return safeParse(
+    jsonString,
+    (x) =>
+      DeploymentSetupStackSettingsPolicyPublicEndpointTargetMachineAddresses$inboundSchema
+        .parse(JSON.parse(x)),
+    `Failed to parse 'DeploymentSetupStackSettingsPolicyPublicEndpointTargetMachineAddresses' from JSON`,
+  );
+}
+
+/** @internal */
+export const DeploymentSetupStackSettingsPolicyPublicEndpointTargetUnion$inboundSchema:
+  z.ZodType<
+    DeploymentSetupStackSettingsPolicyPublicEndpointTargetUnion,
+    unknown
+  > = z.union([
+    z.lazy(() =>
+      DeploymentSetupStackSettingsPolicyPublicEndpointTargetLoadBalancer$inboundSchema
+    ),
+    z.lazy(() =>
+      DeploymentSetupStackSettingsPolicyPublicEndpointTargetMachineAddresses$inboundSchema
+    ),
+    z.any(),
+  ]);
+/** @internal */
+export type DeploymentSetupStackSettingsPolicyPublicEndpointTargetUnion$Outbound =
+  | DeploymentSetupStackSettingsPolicyPublicEndpointTargetLoadBalancer$Outbound
+  | DeploymentSetupStackSettingsPolicyPublicEndpointTargetMachineAddresses$Outbound
+  | any;
+
+/** @internal */
+export const DeploymentSetupStackSettingsPolicyPublicEndpointTargetUnion$outboundSchema:
+  z.ZodType<
+    DeploymentSetupStackSettingsPolicyPublicEndpointTargetUnion$Outbound,
+    DeploymentSetupStackSettingsPolicyPublicEndpointTargetUnion
+  > = z.union([
+    z.lazy(() =>
+      DeploymentSetupStackSettingsPolicyPublicEndpointTargetLoadBalancer$outboundSchema
+    ),
+    z.lazy(() =>
+      DeploymentSetupStackSettingsPolicyPublicEndpointTargetMachineAddresses$outboundSchema
+    ),
+    z.any(),
+  ]);
+
+export function deploymentSetupStackSettingsPolicyPublicEndpointTargetUnionToJSON(
+  deploymentSetupStackSettingsPolicyPublicEndpointTargetUnion:
+    DeploymentSetupStackSettingsPolicyPublicEndpointTargetUnion,
+): string {
+  return JSON.stringify(
+    DeploymentSetupStackSettingsPolicyPublicEndpointTargetUnion$outboundSchema
+      .parse(deploymentSetupStackSettingsPolicyPublicEndpointTargetUnion),
+  );
+}
+export function deploymentSetupStackSettingsPolicyPublicEndpointTargetUnionFromJSON(
+  jsonString: string,
+): SafeParseResult<
+  DeploymentSetupStackSettingsPolicyPublicEndpointTargetUnion,
+  SDKValidationError
+> {
+  return safeParse(
+    jsonString,
+    (x) =>
+      DeploymentSetupStackSettingsPolicyPublicEndpointTargetUnion$inboundSchema
+        .parse(JSON.parse(x)),
+    `Failed to parse 'DeploymentSetupStackSettingsPolicyPublicEndpointTargetUnion' from JSON`,
+  );
+}
+
+/** @internal */
 export const DeploymentSetupStackSettingsPolicyDomains$inboundSchema: z.ZodType<
   DeploymentSetupStackSettingsPolicyDomains,
   unknown
@@ -2062,11 +2280,28 @@ export const DeploymentSetupStackSettingsPolicyDomains$inboundSchema: z.ZodType<
       ),
     ),
   ).optional(),
+  publicEndpointTarget: z.nullable(
+    z.union([
+      z.lazy(() =>
+        DeploymentSetupStackSettingsPolicyPublicEndpointTargetLoadBalancer$inboundSchema
+      ),
+      z.lazy(() =>
+        DeploymentSetupStackSettingsPolicyPublicEndpointTargetMachineAddresses$inboundSchema
+      ),
+      z.any(),
+    ]),
+  ).optional(),
 });
 /** @internal */
 export type DeploymentSetupStackSettingsPolicyDomains$Outbound = {
   customDomains?:
     | { [k: string]: DeploymentSetupStackSettingsPolicyCustomDomains$Outbound }
+    | null
+    | undefined;
+  publicEndpointTarget?:
+    | DeploymentSetupStackSettingsPolicyPublicEndpointTargetLoadBalancer$Outbound
+    | DeploymentSetupStackSettingsPolicyPublicEndpointTargetMachineAddresses$Outbound
+    | any
     | null
     | undefined;
 };
@@ -2084,6 +2319,17 @@ export const DeploymentSetupStackSettingsPolicyDomains$outboundSchema:
           DeploymentSetupStackSettingsPolicyCustomDomains$outboundSchema
         ),
       ),
+    ).optional(),
+    publicEndpointTarget: z.nullable(
+      z.union([
+        z.lazy(() =>
+          DeploymentSetupStackSettingsPolicyPublicEndpointTargetLoadBalancer$outboundSchema
+        ),
+        z.lazy(() =>
+          DeploymentSetupStackSettingsPolicyPublicEndpointTargetMachineAddresses$outboundSchema
+        ),
+        z.any(),
+      ]),
     ).optional(),
   });
 

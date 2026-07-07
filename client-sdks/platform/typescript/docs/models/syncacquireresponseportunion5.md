@@ -28,3 +28,4 @@ const value: models.SyncAcquireResponsePort5 = {
   },
 };
 ```
+

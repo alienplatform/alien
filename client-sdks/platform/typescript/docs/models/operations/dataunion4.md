@@ -124,6 +124,43 @@ const value: operations.DataAzure1 = {
 };
 ```
 
+### `operations.DataMachines1`
+
+```typescript
+const value: operations.DataMachines1 = {
+  assignedMachines: 323362,
+  capacityGroup: "<value>",
+  commandSupported: true,
+  daemonInstances: [
+    {
+      name: "<value>",
+      ready: false,
+      replicaId: "<id>",
+    },
+  ],
+  desiredMachines: 395294,
+  events: [
+    {
+      message: "<value>",
+      reason: "<value>",
+    },
+  ],
+  healthyInstances: 133817,
+  horizonClusterId: "<id>",
+  horizonStatus: "<value>",
+  latestUpdateTimestamp: "<value>",
+  status: {
+    collectionIssues: [],
+    health: "unhealthy",
+    lifecycle: "stopped",
+    partial: true,
+    stale: false,
+  },
+  unavailableInstances: 26745,
+  backend: "machines",
+};
+```
+
 ### `operations.DataKubernetes3`
 
 ```typescript

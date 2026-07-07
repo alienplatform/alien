@@ -210,7 +210,7 @@ fn recommended_selection(
                 .instance_type
                 .to_string(),
         ),
-        Platform::Local | Platform::Kubernetes | Platform::Test => None,
+        Platform::Local | Platform::Kubernetes | Platform::Machines | Platform::Test => None,
     };
 
     match scale {

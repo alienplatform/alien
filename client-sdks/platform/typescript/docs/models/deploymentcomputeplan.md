@@ -46,8 +46,8 @@ let value: DeploymentComputePlan = {
           machine: "<value>",
           profile: {
             cpu: "<value>",
-            memoryBytes: 325948,
-            ephemeralStorageBytes: 794662,
+            memoryBytes: 718877,
+            ephemeralStorageBytes: 953830,
           },
           recommended: true,
         },

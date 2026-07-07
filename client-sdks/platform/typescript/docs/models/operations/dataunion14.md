@@ -15,13 +15,13 @@ const value: operations.DataAwsCodeBuild = {
     collectionIssues: [
       {
         message: "<value>",
-        reason: "api-unavailable",
-        severity: "error",
+        reason: "not-installed",
+        severity: "info",
         source: "<value>",
       },
     ],
-    health: "degraded",
-    lifecycle: "unknown",
+    health: "healthy",
+    lifecycle: "failed",
     partial: false,
     stale: true,
   },
@@ -41,15 +41,15 @@ const value: operations.DataGcpCloudBuild = {
     collectionIssues: [
       {
         message: "<value>",
-        reason: "not-installed",
+        reason: "timed-out",
         severity: "warning",
         source: "<value>",
       },
     ],
-    health: "unknown",
-    lifecycle: "deleting",
+    health: "healthy",
+    lifecycle: "scaling",
     partial: true,
-    stale: true,
+    stale: false,
   },
   backend: "gcpCloudBuild",
 };
@@ -71,10 +71,10 @@ const value: operations.DataAzureContainerApps2 = {
         source: "<value>",
       },
     ],
-    health: "healthy",
-    lifecycle: "updating",
-    partial: false,
-    stale: false,
+    health: "unhealthy",
+    lifecycle: "deleting",
+    partial: true,
+    stale: true,
   },
   backend: "azureContainerApps",
 };
@@ -92,7 +92,7 @@ const value: operations.DataKubernetesJob = {
     collectionIssues: [
       {
         message: "<value>",
-        reason: "timed-out",
+        reason: "forbidden",
         severity: "warning",
         source: "<value>",
       },

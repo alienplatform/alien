@@ -11,7 +11,7 @@ let value: DataCloudSQL = {
     collectionIssues: [
       {
         message: "<value>",
-        reason: "api-unavailable",
+        reason: "forbidden",
         severity: "error",
         source: "<value>",
       },
@@ -32,5 +32,5 @@ let value: DataCloudSQL = {
 | `databaseVersion`                                                  | *string*                                                           | :heavy_minus_sign:                                                 | N/A                                                                |
 | `instanceName`                                                     | *string*                                                           | :heavy_check_mark:                                                 | N/A                                                                |
 | `state`                                                            | *string*                                                           | :heavy_minus_sign:                                                 | N/A                                                                |
-| `status`                                                           | [operations.DataStatus32](../../models/operations/datastatus32.md) | :heavy_check_mark:                                                 | N/A                                                                |
+| `status`                                                           | [operations.DataStatus34](../../models/operations/datastatus34.md) | :heavy_check_mark:                                                 | N/A                                                                |
 | `backend`                                                          | *"cloudSql"*                                                       | :heavy_check_mark:                                                 | N/A                                                                |

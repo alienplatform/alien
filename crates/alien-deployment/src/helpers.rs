@@ -207,7 +207,7 @@ struct AlienRuntimeSecretsConfig {
 fn otlp_injection_covers_containers_and_daemons(platform: Platform) -> bool {
     match platform {
         Platform::Aws | Platform::Gcp | Platform::Azure => false,
-        Platform::Kubernetes | Platform::Local | Platform::Test => true,
+        Platform::Kubernetes | Platform::Machines | Platform::Local | Platform::Test => true,
     }
 }
 
@@ -528,6 +528,12 @@ pub async fn sync_secrets_to_vault(
     let snapshot = &config.environment_variables;
     let sync_hash = secrets_sync_hash(config);
 
+    if client_config.platform() == Platform::Machines {
+        debug!("Machines platform syncs workload secrets through the runtime controller");
+        runtime_metadata.last_synced_env_vars_hash = Some(sync_hash);
+        return Ok(false);
+    }
+
     // Check if we've already synced this exact snapshot
     if let Some(last_synced_hash) = &runtime_metadata.last_synced_env_vars_hash {
         if last_synced_hash == &sync_hash {
@@ -824,7 +830,7 @@ mod tests {
 
     use alien_core::{
         ExternalBindings, Platform, Resource, ResourceEntry, ResourceLifecycle, ResourceStatus,
-        StackResourceState, StackSettings, Worker, WorkerCode,
+        RuntimeMetadata, StackResourceState, StackSettings, Worker, WorkerCode,
     };
     use alien_error::GenericError;
     use indexmap::IndexMap;
@@ -1196,6 +1202,29 @@ mod tests {
             metrics_auth_header: None,
             resource_attributes: std::collections::HashMap::new(),
         }
+    }
+
+    #[tokio::test]
+    async fn machines_skips_stack_vault_secret_sync() {
+        let mut config = make_config(make_snapshot(&[], &[("API_TOKEN", "secret")]));
+        config.monitoring = Some(make_monitoring_with_metrics());
+        let expected_hash = secrets_sync_hash(&config);
+        let mut runtime_metadata = RuntimeMetadata::default();
+
+        let synced = sync_secrets_to_vault(
+            &StackState::new(Platform::Machines),
+            &ClientConfig::Machines,
+            &config,
+            &mut runtime_metadata,
+        )
+        .await
+        .expect("Machines should not require a stack secrets vault");
+
+        assert!(!synced);
+        assert_eq!(
+            runtime_metadata.last_synced_env_vars_hash.as_deref(),
+            Some(expected_hash.as_str())
+        );
     }
 
     fn resource_env<'a>(stack: &'a Stack, id: &str) -> &'a HashMap<String, String> {

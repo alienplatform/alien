@@ -3002,6 +3002,37 @@ mod tests {
         assert_eq!(daemon.cluster, None);
     }
 
+    #[tokio::test]
+    async fn machines_build_rejects_workers_before_writing_artifacts() {
+        let output = tempdir().unwrap();
+        let worker = Worker::new("job".to_string())
+            .permissions("execution".to_string())
+            .code(WorkerCode::Image {
+                image: "registry.example.com/job:latest".to_string(),
+            })
+            .build();
+        let stack = Stack::new("machines-worker".to_string())
+            .add(worker, alien_core::ResourceLifecycle::Live)
+            .build();
+        let settings = BuildSettings {
+            output_directory: output.path().display().to_string(),
+            platform: PlatformBuildSettings::Machines {},
+            targets: Some(BinaryTarget::LINUX.to_vec()),
+            cache_url: None,
+            override_base_image: None,
+            debug_mode: false,
+        };
+
+        let error = build_stack(stack, &settings)
+            .await
+            .expect_err("machines worker should fail build-time preflight");
+
+        assert_eq!(error.code, "STACK_PROCESSOR_FAILED");
+        let serialized = serde_json::to_string(&error).expect("error should serialize");
+        assert!(serialized.contains("MACHINES_UNSUPPORTED_RESOURCE"));
+        assert!(!output.path().join("build").join("machines").exists());
+    }
+
     #[test]
     fn source_cache_hash_ignores_build_artifacts() {
         let src = tempdir().unwrap();

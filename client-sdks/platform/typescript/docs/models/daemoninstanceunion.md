@@ -3,11 +3,11 @@
 
 ## Supported Types
 
-### `models.DaemonInstance4`
+### `models.DaemonInstance5`
 
 ```typescript
-const value: models.DaemonInstance4 = {
-  kind: "container",
+const value: models.DaemonInstance5 = {
+  kind: "daemon",
   name: "<value>",
   ready: true,
   unitId: "<id>",

@@ -28,6 +28,7 @@ export const NewDeploymentRequestPlatform = {
   Gcp: "gcp",
   Azure: "azure",
   Kubernetes: "kubernetes",
+  Machines: "machines",
   Local: "local",
   Test: "test",
 } as const;
@@ -308,6 +309,37 @@ export type NewDeploymentRequestCustomDomains = {
   domain: string;
 };
 
+export const NewDeploymentRequestModeLoadBalancer = {
+  LoadBalancer: "loadBalancer",
+} as const;
+export type NewDeploymentRequestModeLoadBalancer = ClosedEnum<
+  typeof NewDeploymentRequestModeLoadBalancer
+>;
+
+export type NewDeploymentRequestPublicEndpointTargetLoadBalancer = {
+  /**
+   * DNS name or URL for the external load balancer.
+   */
+  cnameTarget: string;
+  mode: NewDeploymentRequestModeLoadBalancer;
+};
+
+export const NewDeploymentRequestModeMachineAddresses = {
+  MachineAddresses: "machineAddresses",
+} as const;
+export type NewDeploymentRequestModeMachineAddresses = ClosedEnum<
+  typeof NewDeploymentRequestModeMachineAddresses
+>;
+
+export type NewDeploymentRequestPublicEndpointTargetMachineAddresses = {
+  mode: NewDeploymentRequestModeMachineAddresses;
+};
+
+export type NewDeploymentRequestPublicEndpointTargetUnion =
+  | NewDeploymentRequestPublicEndpointTargetLoadBalancer
+  | NewDeploymentRequestPublicEndpointTargetMachineAddresses
+  | any;
+
 /**
  * Domain configuration for the stack.
  *
@@ -322,6 +354,12 @@ export type NewDeploymentRequestDomains = {
    */
   customDomains?:
     | { [k: string]: NewDeploymentRequestCustomDomains }
+    | null
+    | undefined;
+  publicEndpointTarget?:
+    | NewDeploymentRequestPublicEndpointTargetLoadBalancer
+    | NewDeploymentRequestPublicEndpointTargetMachineAddresses
+    | any
     | null
     | undefined;
 };
@@ -1306,6 +1344,10 @@ export type NewDeploymentRequest = {
    * Optional physical-name prefix for generated cloud resources. Omit to let the manager generate one.
    */
   resourcePrefix?: string | undefined;
+  /**
+   * Optional deployment subdomain under the project's generated-domain parent. Omit to generate a random subdomain.
+   */
+  publicSubdomain?: string | undefined;
   setupMethod?: DeploymentSetupMethod | undefined;
   setupMetadata?: { [k: string]: any | null } | undefined;
   /**
@@ -1946,9 +1988,109 @@ export function newDeploymentRequestCustomDomainsToJSON(
 }
 
 /** @internal */
+export const NewDeploymentRequestModeLoadBalancer$outboundSchema: z.ZodEnum<
+  typeof NewDeploymentRequestModeLoadBalancer
+> = z.enum(NewDeploymentRequestModeLoadBalancer);
+
+/** @internal */
+export type NewDeploymentRequestPublicEndpointTargetLoadBalancer$Outbound = {
+  cnameTarget: string;
+  mode: string;
+};
+
+/** @internal */
+export const NewDeploymentRequestPublicEndpointTargetLoadBalancer$outboundSchema:
+  z.ZodType<
+    NewDeploymentRequestPublicEndpointTargetLoadBalancer$Outbound,
+    NewDeploymentRequestPublicEndpointTargetLoadBalancer
+  > = z.object({
+    cnameTarget: z.string(),
+    mode: NewDeploymentRequestModeLoadBalancer$outboundSchema,
+  });
+
+export function newDeploymentRequestPublicEndpointTargetLoadBalancerToJSON(
+  newDeploymentRequestPublicEndpointTargetLoadBalancer:
+    NewDeploymentRequestPublicEndpointTargetLoadBalancer,
+): string {
+  return JSON.stringify(
+    NewDeploymentRequestPublicEndpointTargetLoadBalancer$outboundSchema.parse(
+      newDeploymentRequestPublicEndpointTargetLoadBalancer,
+    ),
+  );
+}
+
+/** @internal */
+export const NewDeploymentRequestModeMachineAddresses$outboundSchema: z.ZodEnum<
+  typeof NewDeploymentRequestModeMachineAddresses
+> = z.enum(NewDeploymentRequestModeMachineAddresses);
+
+/** @internal */
+export type NewDeploymentRequestPublicEndpointTargetMachineAddresses$Outbound =
+  {
+    mode: string;
+  };
+
+/** @internal */
+export const NewDeploymentRequestPublicEndpointTargetMachineAddresses$outboundSchema:
+  z.ZodType<
+    NewDeploymentRequestPublicEndpointTargetMachineAddresses$Outbound,
+    NewDeploymentRequestPublicEndpointTargetMachineAddresses
+  > = z.object({
+    mode: NewDeploymentRequestModeMachineAddresses$outboundSchema,
+  });
+
+export function newDeploymentRequestPublicEndpointTargetMachineAddressesToJSON(
+  newDeploymentRequestPublicEndpointTargetMachineAddresses:
+    NewDeploymentRequestPublicEndpointTargetMachineAddresses,
+): string {
+  return JSON.stringify(
+    NewDeploymentRequestPublicEndpointTargetMachineAddresses$outboundSchema
+      .parse(newDeploymentRequestPublicEndpointTargetMachineAddresses),
+  );
+}
+
+/** @internal */
+export type NewDeploymentRequestPublicEndpointTargetUnion$Outbound =
+  | NewDeploymentRequestPublicEndpointTargetLoadBalancer$Outbound
+  | NewDeploymentRequestPublicEndpointTargetMachineAddresses$Outbound
+  | any;
+
+/** @internal */
+export const NewDeploymentRequestPublicEndpointTargetUnion$outboundSchema:
+  z.ZodType<
+    NewDeploymentRequestPublicEndpointTargetUnion$Outbound,
+    NewDeploymentRequestPublicEndpointTargetUnion
+  > = z.union([
+    z.lazy(() =>
+      NewDeploymentRequestPublicEndpointTargetLoadBalancer$outboundSchema
+    ),
+    z.lazy(() =>
+      NewDeploymentRequestPublicEndpointTargetMachineAddresses$outboundSchema
+    ),
+    z.any(),
+  ]);
+
+export function newDeploymentRequestPublicEndpointTargetUnionToJSON(
+  newDeploymentRequestPublicEndpointTargetUnion:
+    NewDeploymentRequestPublicEndpointTargetUnion,
+): string {
+  return JSON.stringify(
+    NewDeploymentRequestPublicEndpointTargetUnion$outboundSchema.parse(
+      newDeploymentRequestPublicEndpointTargetUnion,
+    ),
+  );
+}
+
+/** @internal */
 export type NewDeploymentRequestDomains$Outbound = {
   customDomains?:
     | { [k: string]: NewDeploymentRequestCustomDomains$Outbound }
+    | null
+    | undefined;
+  publicEndpointTarget?:
+    | NewDeploymentRequestPublicEndpointTargetLoadBalancer$Outbound
+    | NewDeploymentRequestPublicEndpointTargetMachineAddresses$Outbound
+    | any
     | null
     | undefined;
 };
@@ -1963,6 +2105,17 @@ export const NewDeploymentRequestDomains$outboundSchema: z.ZodType<
       z.string(),
       z.lazy(() => NewDeploymentRequestCustomDomains$outboundSchema),
     ),
+  ).optional(),
+  publicEndpointTarget: z.nullable(
+    z.union([
+      z.lazy(() =>
+        NewDeploymentRequestPublicEndpointTargetLoadBalancer$outboundSchema
+      ),
+      z.lazy(() =>
+        NewDeploymentRequestPublicEndpointTargetMachineAddresses$outboundSchema
+      ),
+      z.any(),
+    ]),
   ).optional(),
 });
 
@@ -3826,6 +3979,7 @@ export type NewDeploymentRequest$Outbound = {
   project: string;
   stackSettings?: NewDeploymentRequestStackSettings$Outbound | undefined;
   resourcePrefix?: string | undefined;
+  publicSubdomain?: string | undefined;
   setupMethod?: string | undefined;
   setupMetadata?: { [k: string]: any | null } | undefined;
   inputValues?: { [k: string]: StackInputValueRequest$Outbound } | undefined;
@@ -3860,6 +4014,7 @@ export const NewDeploymentRequest$outboundSchema: z.ZodType<
   stackSettings: z.lazy(() => NewDeploymentRequestStackSettings$outboundSchema)
     .optional(),
   resourcePrefix: z.string().optional(),
+  publicSubdomain: z.string().optional(),
   setupMethod: DeploymentSetupMethod$outboundSchema.optional(),
   setupMetadata: z.record(z.string(), z.nullable(z.any())).optional(),
   inputValues: z.record(z.string(), StackInputValueRequest$outboundSchema)

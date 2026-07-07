@@ -73,17 +73,18 @@ pub struct RegistryRoutingTable {
 }
 
 impl RegistryRoutingTable {
-    pub fn new(mut routes: Vec<RegistryRoute>) -> Self {
+    pub fn new(mut routes: Vec<RegistryRoute>) -> Result<Self, String> {
+        Self::validate_unique_prefixes(&routes)?;
         // Sort by prefix length descending for longest-prefix match.
         routes.sort_by(|a, b| b.prefix.len().cmp(&a.prefix.len()));
-        Self { routes }
+        Ok(Self { routes })
     }
 
     /// Find the registry route that matches the given repo name.
     pub fn resolve(&self, repo_name: &str) -> Option<&RegistryRoute> {
         self.routes.iter().find(|r| {
             if r.prefix.is_empty() {
-                // Empty prefix = catch-all fallback (local registry).
+                // Empty prefix = catch-all; construction rejects more than one.
                 true
             } else {
                 repo_name.starts_with(&r.prefix)
@@ -135,18 +136,28 @@ impl RegistryRoutingTable {
         self.routes.is_empty()
     }
 
-    /// Validate no overlapping prefixes (call at startup).
+    /// Validate no ambiguous prefixes (call at startup).
     pub fn validate(&self) -> Result<(), String> {
-        for (i, a) in self.routes.iter().enumerate() {
-            for b in self.routes.iter().skip(i + 1) {
-                if !a.prefix.is_empty() && !b.prefix.is_empty() {
-                    if a.prefix.starts_with(&b.prefix) || b.prefix.starts_with(&a.prefix) {
-                        return Err(format!(
-                            "Overlapping artifact registry prefixes: '{}' ({}) and '{}' ({})",
-                            a.prefix, a.platform, b.prefix, b.platform
-                        ));
-                    }
-                }
+        Self::validate_unique_prefixes(&self.routes)
+    }
+
+    fn validate_unique_prefixes(routes: &[RegistryRoute]) -> Result<(), String> {
+        let mut seen: HashMap<&str, &RegistryRoute> = HashMap::new();
+        for route in routes {
+            if let Some(existing) = seen.insert(route.prefix.as_str(), route) {
+                let prefix = if route.prefix.is_empty() {
+                    "<empty>"
+                } else {
+                    route.prefix.as_str()
+                };
+                return Err(format!(
+                    "Duplicate artifact registry prefix '{}' for {} binding '{}' and {} binding '{}'",
+                    prefix,
+                    existing.platform,
+                    existing.binding_name,
+                    route.platform,
+                    route.binding_name
+                ));
             }
         }
         Ok(())
@@ -1571,10 +1582,169 @@ mod tests {
     }
 
     // -----------------------------------------------------------------------
+    // RegistryRoutingTable
+    // -----------------------------------------------------------------------
+
+    #[derive(Debug)]
+    struct RegistryRouteTestProvider;
+
+    fn registry_route(prefix: &str, platform: Platform, binding_name: &str) -> RegistryRoute {
+        RegistryRoute {
+            prefix: prefix.to_string(),
+            platform,
+            provider: Arc::new(RegistryRouteTestProvider),
+            binding_name: binding_name.to_string(),
+        }
+    }
+
+    fn route_test_error(binding_name: &str) -> alien_bindings::error::Error {
+        alien_error::AlienError::new(alien_bindings::error::ErrorData::BindingConfigInvalid {
+            binding_name: binding_name.to_string(),
+            reason: "test provider has no bindings".to_string(),
+        })
+    }
+
+    #[async_trait::async_trait]
+    impl BindingsProviderApi for RegistryRouteTestProvider {
+        async fn load_storage(
+            &self,
+            binding_name: &str,
+        ) -> alien_bindings::error::Result<Arc<dyn alien_bindings::traits::Storage>> {
+            Err(route_test_error(binding_name))
+        }
+
+        async fn load_build(
+            &self,
+            binding_name: &str,
+        ) -> alien_bindings::error::Result<Arc<dyn alien_bindings::traits::Build>> {
+            Err(route_test_error(binding_name))
+        }
+
+        async fn load_artifact_registry(
+            &self,
+            binding_name: &str,
+        ) -> alien_bindings::error::Result<Arc<dyn ArtifactRegistry>> {
+            Err(route_test_error(binding_name))
+        }
+
+        async fn load_vault(
+            &self,
+            binding_name: &str,
+        ) -> alien_bindings::error::Result<Arc<dyn alien_bindings::traits::Vault>> {
+            Err(route_test_error(binding_name))
+        }
+
+        async fn load_kv(
+            &self,
+            binding_name: &str,
+        ) -> alien_bindings::error::Result<Arc<dyn alien_bindings::traits::Kv>> {
+            Err(route_test_error(binding_name))
+        }
+
+        async fn load_postgres(
+            &self,
+            binding_name: &str,
+        ) -> alien_bindings::error::Result<Arc<dyn alien_bindings::traits::Postgres>> {
+            Err(route_test_error(binding_name))
+        }
+
+        async fn load_queue(
+            &self,
+            binding_name: &str,
+        ) -> alien_bindings::error::Result<Arc<dyn alien_bindings::traits::Queue>> {
+            Err(route_test_error(binding_name))
+        }
+
+        async fn load_worker(
+            &self,
+            binding_name: &str,
+        ) -> alien_bindings::error::Result<Arc<dyn alien_bindings::traits::Worker>> {
+            Err(route_test_error(binding_name))
+        }
+
+        async fn load_container(
+            &self,
+            binding_name: &str,
+        ) -> alien_bindings::error::Result<Arc<dyn alien_bindings::traits::Container>> {
+            Err(route_test_error(binding_name))
+        }
+
+        async fn load_service_account(
+            &self,
+            binding_name: &str,
+        ) -> alien_bindings::error::Result<Arc<dyn alien_bindings::traits::ServiceAccount>>
+        {
+            Err(route_test_error(binding_name))
+        }
+    }
+
+    #[test]
+    fn registry_routing_table_specific_prefix_beats_catch_all_regardless_registration_order() {
+        for routes in [
+            vec![
+                registry_route("", Platform::Local, "local"),
+                registry_route("artifacts", Platform::Aws, "aws"),
+            ],
+            vec![
+                registry_route("artifacts", Platform::Aws, "aws"),
+                registry_route("", Platform::Local, "local"),
+            ],
+        ] {
+            let table =
+                RegistryRoutingTable::new(routes).expect("routing table should be unambiguous");
+            let route = table
+                .resolve("artifacts/prj_test")
+                .expect("specific route should match");
+
+            assert_eq!(route.platform, Platform::Aws);
+        }
+    }
+
+    #[test]
+    fn registry_routing_table_nested_prefixes_pick_longest_match() {
+        let table = RegistryRoutingTable::new(vec![
+            registry_route("artifacts", Platform::Aws, "aws"),
+            registry_route("artifacts/team-a", Platform::Gcp, "gcp"),
+            registry_route("", Platform::Local, "local"),
+        ])
+        .expect("nested prefixes should be valid");
+        let route = table
+            .resolve("artifacts/team-a/prj_test")
+            .expect("nested route should match");
+
+        assert_eq!(route.platform, Platform::Gcp);
+    }
+
+    #[test]
+    fn registry_routing_table_rejects_duplicate_prefixes_at_construction() {
+        let result = RegistryRoutingTable::new(vec![
+            registry_route("", Platform::Local, "local"),
+            registry_route("", Platform::Azure, "azure"),
+        ]);
+        let Err(error) = result else {
+            panic!("duplicate catch-all prefixes should fail");
+        };
+
+        assert!(error.contains("Duplicate artifact registry prefix '<empty>'"));
+    }
+
+    #[test]
+    fn registry_routing_table_rejects_duplicate_non_empty_prefixes_at_construction() {
+        let result = RegistryRoutingTable::new(vec![
+            registry_route("artifacts", Platform::Aws, "aws"),
+            registry_route("artifacts", Platform::Gcp, "gcp"),
+        ]);
+        let Err(error) = result else {
+            panic!("duplicate non-empty prefixes should fail");
+        };
+
+        assert!(error.contains("Duplicate artifact registry prefix 'artifacts'"));
+    }
+
+    // -----------------------------------------------------------------------
     // project_id_after_prefix — the algorithm behind
     // RegistryRoutingTable::project_id_for_repo. Tests target the free
-    // helper because constructing a full `RegistryRoutingTable` requires a
-    // real `BindingsProviderApi` and a tokio runtime.
+    // helper so separator handling is tested independently from routing.
     // -----------------------------------------------------------------------
 
     #[test]

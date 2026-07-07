@@ -7,11 +7,11 @@ Target platform to resolve the manager for
 ```typescript
 import { ResolvePlatform } from "@alienplatform/platform-api/models/operations";
 
-let value: ResolvePlatform = "azure";
+let value: ResolvePlatform = "kubernetes";
 ```
 
 ## Values
 
 ```typescript
-"aws" | "gcp" | "azure" | "kubernetes" | "local" | "test"
+"aws" | "gcp" | "azure" | "kubernetes" | "machines" | "local" | "test"
 ```

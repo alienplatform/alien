@@ -494,6 +494,7 @@ pub enum DaemonHeartbeatData {
     Aws(AwsDaemonHeartbeatData),
     Gcp(GcpDaemonHeartbeatData),
     Azure(AzureDaemonHeartbeatData),
+    Machines(MachinesDaemonHeartbeatData),
     Kubernetes(KubernetesDaemonHeartbeatData),
     Local(LocalDaemonHeartbeatData),
 }
@@ -751,6 +752,28 @@ pub struct AzureDaemonHeartbeatData {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 #[serde(rename_all = "camelCase")]
+pub struct MachinesDaemonHeartbeatData {
+    pub status: WorkloadHeartbeatStatus,
+    pub horizon_cluster_id: String,
+    #[serde(default)]
+    pub daemon_name: String,
+    pub horizon_status: String,
+    pub horizon_status_reason: Option<String>,
+    pub horizon_status_message: Option<String>,
+    pub capacity_group: String,
+    pub desired_machines: u32,
+    pub assigned_machines: u32,
+    pub healthy_instances: u32,
+    pub unavailable_instances: u32,
+    pub command_supported: bool,
+    pub latest_update_timestamp: String,
+    pub daemon_instances: Vec<ManagedRuntimeUnitStatus>,
+    pub events: Vec<ManagedRuntimeEventSnapshot>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
+#[serde(rename_all = "camelCase")]
 pub struct ManagedRuntimeUnitStatus {
     pub replica_id: String,
     pub name: String,
@@ -902,6 +925,7 @@ pub enum ComputeClusterHeartbeatData {
     Aws(AwsComputeClusterHeartbeatData),
     Gcp(GcpComputeClusterHeartbeatData),
     Azure(AzureComputeClusterHeartbeatData),
+    Machines(MachinesComputeClusterHeartbeatData),
     Local(LocalComputeClusterHeartbeatData),
 }
 
@@ -979,6 +1003,43 @@ pub struct AzureComputeClusterHeartbeatData {
     pub backend_cluster_id: Option<String>,
     pub capacity_groups: Vec<ComputeCapacityGroupStatus>,
     pub provider_fleets: Vec<ProviderFleetStatus>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
+#[serde(rename_all = "camelCase")]
+pub struct MachinesComputeClusterHeartbeatData {
+    pub status: ComputeClusterHeartbeatStatus,
+    pub nodes: ObservedCounts,
+    pub cpu: Option<MetricSample>,
+    pub memory: Option<MetricSample>,
+    pub name: String,
+    pub backend_cluster_id: Option<String>,
+    pub capacity_groups: Vec<ComputeCapacityGroupStatus>,
+    pub machines: Vec<MachinesComputeMachineStatus>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
+#[serde(rename_all = "camelCase")]
+pub struct MachinesComputeMachineStatus {
+    pub machine_id: String,
+    pub status: String,
+    pub capacity_group: String,
+    pub zone: String,
+    pub public_ip: Option<String>,
+    pub overlay_ip: Option<String>,
+    pub last_heartbeat: String,
+    pub horizond_version: Option<String>,
+    pub replica_count: i64,
+    pub cpu_cores: Option<f64>,
+    pub memory_bytes: Option<i64>,
+    pub drain_force: bool,
+    pub drain_requested_at: Option<String>,
+    pub drain_deadline_at: Option<String>,
+    pub drained_at: Option<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub drain_blockers: Vec<ComputeDrainBlocker>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]

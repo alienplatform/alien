@@ -12,15 +12,15 @@ let value: DataAzureServiceBus = {
     collectionIssues: [
       {
         message: "<value>",
-        reason: "timed-out",
-        severity: "info",
+        reason: "collection-failed",
+        severity: "error",
         source: "<value>",
       },
     ],
-    health: "degraded",
-    lifecycle: "deleting",
-    partial: true,
-    stale: true,
+    health: "unknown",
+    lifecycle: "scaling",
+    partial: false,
+    stale: false,
   },
   backend: "azureServiceBus",
 };
@@ -58,7 +58,7 @@ let value: DataAzureServiceBus = {
 | `resourceId`                                                       | *string*                                                           | :heavy_minus_sign:                                                 | N/A                                                                |
 | `scheduledMessageCount`                                            | *number*                                                           | :heavy_minus_sign:                                                 | N/A                                                                |
 | `sizeInBytes`                                                      | *number*                                                           | :heavy_minus_sign:                                                 | N/A                                                                |
-| `status`                                                           | [operations.DataStatus25](../../models/operations/datastatus25.md) | :heavy_check_mark:                                                 | N/A                                                                |
+| `status`                                                           | [operations.DataStatus27](../../models/operations/datastatus27.md) | :heavy_check_mark:                                                 | N/A                                                                |
 | `transferDeadLetterMessageCount`                                   | *number*                                                           | :heavy_minus_sign:                                                 | N/A                                                                |
 | `transferMessageCount`                                             | *number*                                                           | :heavy_minus_sign:                                                 | N/A                                                                |
 | `updatedAt`                                                        | *string*                                                           | :heavy_minus_sign:                                                 | N/A                                                                |

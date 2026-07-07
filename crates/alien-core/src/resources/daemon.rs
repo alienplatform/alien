@@ -2,7 +2,7 @@ use crate::error::{ErrorData, Result};
 use crate::resource::{ResourceDefinition, ResourceOutputsDefinition, ResourceRef, ResourceType};
 use crate::resources::{
     ComputeCluster, ExposeProtocol, HealthCheck, PublicEndpoint, PublicEndpointOutput,
-    ResourceSpec, ToolchainConfig,
+    ResourceSpec, ToolchainConfig, APEX_HOST_LABEL,
 };
 use alien_error::AlienError;
 use bon::Builder;
@@ -127,6 +127,7 @@ impl Daemon {
     fn validate_public_endpoints(&self) -> Result<()> {
         let mut endpoint_names = std::collections::HashSet::new();
         let mut backend_ports = std::collections::HashSet::new();
+        let mut apex_endpoint_name: Option<&str> = None;
 
         for endpoint in &self.public_endpoints {
             endpoint.validate_for_resource(&self.id)?;
@@ -135,6 +136,18 @@ impl Daemon {
                     resource_id: self.id.clone(),
                     reason: format!("duplicate public endpoint name '{}'", endpoint.name),
                 }));
+            }
+            if endpoint.host_label.as_deref() == Some(APEX_HOST_LABEL) {
+                if let Some(existing_name) = apex_endpoint_name {
+                    return Err(AlienError::new(ErrorData::InvalidResourceUpdate {
+                        resource_id: self.id.clone(),
+                        reason: format!(
+                            "only one apex public endpoint is allowed per resource; '{}' already uses hostLabel '@'",
+                            existing_name
+                        ),
+                    }));
+                }
+                apex_endpoint_name = Some(endpoint.name.as_str());
             }
             backend_ports.insert(endpoint.port);
             if endpoint.protocol != ExposeProtocol::Http {
@@ -478,5 +491,31 @@ mod tests {
             .permissions("gateway".to_string())
             .build();
         assert!(tcp.validate_public_endpoints().is_err());
+    }
+
+    #[test]
+    fn daemon_rejects_multiple_apex_public_endpoints() {
+        let daemon = Daemon::new("gateway".to_string())
+            .code(DaemonCode::Image {
+                image: "gateway:latest".to_string(),
+            })
+            .public_endpoint(PublicEndpoint {
+                name: "api".to_string(),
+                port: 8080,
+                protocol: ExposeProtocol::Http,
+                host_label: Some(APEX_HOST_LABEL.to_string()),
+                wildcard_subdomains: false,
+            })
+            .public_endpoint(PublicEndpoint {
+                name: "admin".to_string(),
+                port: 8080,
+                protocol: ExposeProtocol::Http,
+                host_label: Some(APEX_HOST_LABEL.to_string()),
+                wildcard_subdomains: false,
+            })
+            .permissions("gateway".to_string())
+            .build();
+
+        assert!(daemon.validate_public_endpoints().is_err());
     }
 }

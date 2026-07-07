@@ -13,7 +13,9 @@
 
 use crate::error::{ErrorData, Result};
 use crate::resource::{ResourceDefinition, ResourceOutputsDefinition, ResourceRef, ResourceType};
-use crate::resources::{ComputeCluster, PublicEndpoint, PublicEndpointOutput, ToolchainConfig};
+use crate::resources::{
+    ComputeCluster, PublicEndpoint, PublicEndpointOutput, ToolchainConfig, APEX_HOST_LABEL,
+};
 use alien_error::AlienError;
 use bon::Builder;
 use serde::{Deserialize, Serialize};
@@ -301,6 +303,7 @@ impl Container {
     fn validate_public_endpoints(&self) -> Result<()> {
         let mut endpoint_names = std::collections::HashSet::new();
         let mut backend_ports = std::collections::HashSet::new();
+        let mut apex_endpoint_name: Option<&str> = None;
 
         for endpoint in &self.public_endpoints {
             endpoint.validate_for_resource(&self.id)?;
@@ -310,6 +313,19 @@ impl Container {
                     resource_id: self.id.clone(),
                     reason: format!("duplicate public endpoint name '{}'", endpoint.name),
                 }));
+            }
+
+            if endpoint.host_label.as_deref() == Some(APEX_HOST_LABEL) {
+                if let Some(existing_name) = apex_endpoint_name {
+                    return Err(AlienError::new(ErrorData::InvalidResourceUpdate {
+                        resource_id: self.id.clone(),
+                        reason: format!(
+                            "only one apex public endpoint is allowed per resource; '{}' already uses hostLabel '@'",
+                            existing_name
+                        ),
+                    }));
+                }
+                apex_endpoint_name = Some(endpoint.name.as_str());
             }
 
             backend_ports.insert(endpoint.port);
@@ -1000,6 +1016,43 @@ mod tests {
             .build();
 
         assert!(invalid_container.validate_public_endpoints().is_err());
+    }
+
+    #[test]
+    fn container_rejects_multiple_apex_public_endpoints() {
+        let container = Container::new("apex-container".to_string())
+            .cluster("compute".to_string())
+            .code(ContainerCode::Image {
+                image: "test:latest".to_string(),
+            })
+            .cpu(ResourceSpec {
+                min: "1".to_string(),
+                desired: "1".to_string(),
+            })
+            .memory(ResourceSpec {
+                min: "1Gi".to_string(),
+                desired: "1Gi".to_string(),
+            })
+            .port(8080)
+            .public_endpoint(PublicEndpoint {
+                name: "web".to_string(),
+                port: 8080,
+                protocol: ExposeProtocol::Http,
+                host_label: Some(APEX_HOST_LABEL.to_string()),
+                wildcard_subdomains: false,
+            })
+            .public_endpoint(PublicEndpoint {
+                name: "admin".to_string(),
+                port: 8080,
+                protocol: ExposeProtocol::Http,
+                host_label: Some(APEX_HOST_LABEL.to_string()),
+                wildcard_subdomains: false,
+            })
+            .replicas(1)
+            .permissions("test".to_string())
+            .build();
+
+        assert!(container.validate_public_endpoints().is_err());
     }
 
     #[test]

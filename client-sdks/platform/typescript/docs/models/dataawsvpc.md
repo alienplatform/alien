@@ -23,10 +23,10 @@ let value: DataAwsVpc = {
         source: "<value>",
       },
     ],
-    health: "unhealthy",
-    lifecycle: "scaling",
+    health: "unknown",
+    lifecycle: "unknown",
     partial: true,
-    stale: true,
+    stale: false,
   },
   backend: "awsVpc",
 };
@@ -45,7 +45,7 @@ let value: DataAwsVpc = {
 | `publicSubnetIds`                                                          | *string*[]                                                                 | :heavy_check_mark:                                                         | N/A                                                                        |
 | `routeTableCount`                                                          | *number*                                                                   | :heavy_check_mark:                                                         | N/A                                                                        |
 | `securityGroupId`                                                          | *string*                                                                   | :heavy_minus_sign:                                                         | N/A                                                                        |
-| `status`                                                                   | [models.ResourceHeartbeatStatus44](../models/resourceheartbeatstatus44.md) | :heavy_check_mark:                                                         | N/A                                                                        |
+| `status`                                                                   | [models.ResourceHeartbeatStatus46](../models/resourceheartbeatstatus46.md) | :heavy_check_mark:                                                         | N/A                                                                        |
 | `vpcId`                                                                    | *string*                                                                   | :heavy_minus_sign:                                                         | N/A                                                                        |
 | `vpcState`                                                                 | *string*                                                                   | :heavy_minus_sign:                                                         | N/A                                                                        |
 | `backend`                                                                  | *"awsVpc"*                                                                 | :heavy_check_mark:                                                         | N/A                                                                        |
