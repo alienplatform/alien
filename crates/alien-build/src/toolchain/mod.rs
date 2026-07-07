@@ -9,6 +9,7 @@ use std::sync::Arc;
 
 pub mod cache_utils;
 pub mod docker;
+mod native_addon;
 pub mod rust;
 pub mod typescript;
 
