@@ -24,6 +24,7 @@ import {
   ResponseDecodingFailedError,
   StorageOperationFailedError,
 } from "./errors.js"
+import { downloadPresigned } from "./presigned.js"
 import type {
   BodySpec,
   CommandResponse,
@@ -132,105 +133,26 @@ async function decodeBodySpec(
     }
 
     const request = body.storageGetRequest
+    const url =
+      request.backend.type === "http" ? request.backend.url : `local://${request.backend.filePath}`
 
-    // Check if request has expired
-    const expiration = new Date(request.expiration)
-    if (Date.now() > expiration.getTime()) {
-      throw new AlienError(
+    try {
+      // POLICY: the sender only touches the local (dev-only) backend when the
+      // client was configured with `allowLocalStorage: true`.
+      const bytes = await downloadPresigned(request, { allowLocal: allowLocalStorage })
+      return JSON.parse(new TextDecoder().decode(bytes))
+    } catch (error) {
+      if (error instanceof AlienError) {
+        throw error
+      }
+
+      // Wrap fetch/filesystem/parse errors
+      const alienError = await AlienError.from(error)
+      throw alienError.withContext(
         StorageOperationFailedError.create({
           operation: "download",
-          url: request.backend.type === "http" ? request.backend.url : "local",
-          reason: `Presigned request expired at ${expiration.toISOString()}`,
-        }),
-      )
-    }
-
-    // Handle different backend types
-    if (request.backend.type === "http") {
-      // HTTP backend (AWS S3, GCP GCS, Azure Blob)
-      try {
-        const response = await fetch(request.backend.url, {
-          method: request.backend.method,
-          headers: request.backend.headers,
-        })
-
-        if (!response.ok) {
-          throw new AlienError(
-            StorageOperationFailedError.create({
-              operation: "download",
-              url: request.backend.url,
-              reason: `HTTP ${response.status} ${response.statusText}`,
-            }),
-          )
-        }
-
-        const text = await response.text()
-        return JSON.parse(text)
-      } catch (error) {
-        if (error instanceof AlienError) {
-          throw error
-        }
-
-        // Wrap fetch/parse errors
-        const alienError = await AlienError.from(error)
-        throw alienError.withContext(
-          StorageOperationFailedError.create({
-            operation: "download",
-            url: request.backend.url,
-            reason: error instanceof Error ? error.message : String(error),
-          }),
-        )
-      }
-    } else if (request.backend.type === "local") {
-      // Local backend: Only enabled when explicitly allowed (local dev/testing)
-      if (!allowLocalStorage) {
-        throw new AlienError(
-          StorageOperationFailedError.create({
-            operation: "download",
-            url: `local://${request.backend.filePath}`,
-            reason: "Local storage backend not enabled (set allowLocalStorage: true for local dev)",
-          }),
-        )
-      }
-
-      // Validate path doesn't contain path traversal attempts
-      const filePath = request.backend.filePath
-      if (filePath.includes("..")) {
-        throw new AlienError(
-          StorageOperationFailedError.create({
-            operation: "download",
-            url: `local://${filePath}`,
-            reason: "Path traversal not allowed in local storage paths",
-          }),
-        )
-      }
-
-      // Dynamically import fs/promises only when needed (local dev)
-      try {
-        const { readFile } = await import("node:fs/promises")
-        const content = await readFile(filePath, "utf-8")
-        return JSON.parse(content)
-      } catch (error) {
-        if (error instanceof AlienError) {
-          throw error
-        }
-
-        // Wrap filesystem/parse errors
-        const alienError = await AlienError.from(error)
-        throw alienError.withContext(
-          StorageOperationFailedError.create({
-            operation: "download",
-            url: `local://${filePath}`,
-            reason: error instanceof Error ? error.message : String(error),
-          }),
-        )
-      }
-    } else {
-      throw new AlienError(
-        StorageOperationFailedError.create({
-          operation: "download",
-          url: "unknown",
-          reason: `Unknown storage backend type: ${(request.backend as { type: string }).type}`,
+          url,
+          reason: error instanceof Error ? error.message : String(error),
         }),
       )
     }

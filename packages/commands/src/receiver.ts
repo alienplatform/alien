@@ -40,6 +40,7 @@ import {
   InvalidEnvelopeError,
   StorageOperationFailedError,
 } from "./errors.js"
+import { downloadPresigned, uploadPresigned } from "./presigned.js"
 import type {
   BodySpec,
   CommandResponse,
@@ -50,6 +51,14 @@ import type {
   LeaseResponse,
   PresignedRequest,
 } from "./protocol.js"
+
+/**
+ * Presigned-transfer policy for receivers: the local backend is always
+ * allowed — receivers run inside the deployment, and the local backend is
+ * how the local platform delivers bodies. (Senders gate it behind the
+ * `allowLocalStorage` client option instead.)
+ */
+const RECEIVER_ALLOW_LOCAL = true
 
 /** Error code submitted when a leased command has no registered handler. */
 export const ERROR_CODE_UNKNOWN_COMMAND = "UNKNOWN_COMMAND"
@@ -418,51 +427,10 @@ class PullCommandReceiver implements CommandReceiver {
     request: PresignedRequest,
     bytes: Uint8Array,
   ): Promise<void> {
-    // Same expiration guard as decodeParamsBytes' download path: an upload
-    // presigned request that expired before we could use it fails loudly
-    // rather than attempting (and possibly succeeding against) a stale URL.
-    const expiration = new Date(request.expiration)
-    if (Date.now() > expiration.getTime()) {
-      throw new AlienError(
-        StorageOperationFailedError.create({
-          operation: "upload",
-          url: request.backend.type === "http" ? request.backend.url : "local",
-          reason: `Presigned request expired at ${expiration.toISOString()}`,
-        }),
-      )
-    }
-
-    if (request.backend.type === "http") {
-      const res = await this.fetchImpl(request.backend.url, {
-        method: request.backend.method,
-        headers: request.backend.headers,
-        body: bytes,
-      })
-      if (!res.ok) {
-        throw new AlienError(
-          StorageOperationFailedError.create({
-            operation: "upload",
-            url: request.backend.url,
-            reason: `Storage upload failed with status ${res.status}`,
-          }),
-        )
-      }
-      return
-    }
-
-    // Local backend (dev only). Same traversal guard as decodeParamsBytes'
-    // local download path.
-    if (request.backend.filePath.includes("..")) {
-      throw new AlienError(
-        StorageOperationFailedError.create({
-          operation: "upload",
-          url: `local://${request.backend.filePath}`,
-          reason: "Path traversal not allowed in local storage paths",
-        }),
-      )
-    }
-    const { writeFile } = await import("node:fs/promises")
-    await writeFile(request.backend.filePath, bytes)
+    await uploadPresigned(request, bytes, {
+      fetchImpl: this.fetchImpl,
+      allowLocal: RECEIVER_ALLOW_LOCAL,
+    })
   }
 
   private sleepOrStop(ms: number): Promise<void> {
@@ -629,49 +597,10 @@ export async function decodeParamsBytes(
     )
   }
 
-  const request = params.storageGetRequest
-  const expiration = new Date(request.expiration)
-  if (Date.now() > expiration.getTime()) {
-    throw new AlienError(
-      StorageOperationFailedError.create({
-        operation: "download",
-        url: request.backend.type === "http" ? request.backend.url : "local",
-        reason: `Presigned request expired at ${expiration.toISOString()}`,
-      }),
-    )
-  }
-
-  if (request.backend.type === "http") {
-    const response = await fetchImpl(request.backend.url, {
-      method: request.backend.method,
-      headers: request.backend.headers,
-    })
-    if (!response.ok) {
-      throw new AlienError(
-        StorageOperationFailedError.create({
-          operation: "download",
-          url: request.backend.url,
-          reason: `HTTP ${response.status} ${response.statusText}`,
-        }),
-      )
-    }
-    return new Uint8Array(await response.arrayBuffer())
-  }
-
-  // Local backend (dev only).
-  const filePath = request.backend.filePath
-  if (filePath.includes("..")) {
-    throw new AlienError(
-      StorageOperationFailedError.create({
-        operation: "download",
-        url: `local://${filePath}`,
-        reason: "Path traversal not allowed in local storage paths",
-      }),
-    )
-  }
-  const { readFile } = await import("node:fs/promises")
-  const content = await readFile(filePath)
-  return new Uint8Array(content)
+  return downloadPresigned(params.storageGetRequest, {
+    fetchImpl,
+    allowLocal: RECEIVER_ALLOW_LOCAL,
+  })
 }
 
 function successResponse(bytes: Uint8Array): CommandResponse {

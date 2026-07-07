@@ -20,7 +20,7 @@
     "prepare": "npm run build",
     "test": "vitest run",
     "test:integration": "vitest run --config vitest.integration.config.ts",
-    "test:bun": "BUN_EXPECTED=1 bun test tests/runtime-canary.test.ts tests/commands-client.test.ts tests/receiver.test.ts",
+    "test:bun": "BUN_EXPECTED=1 bun test tests/runtime-canary.test.ts tests/commands-client.test.ts tests/receiver.test.ts tests/presigned.test.ts",
     "test:ts": "tsc --noEmit",
     "format-and-lint": "biome check .",
     "format-and-lint:fix": "biome check . --write"
