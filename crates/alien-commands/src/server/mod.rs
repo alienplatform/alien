@@ -15,7 +15,7 @@ use hex;
 use hmac::{Hmac, Mac};
 use serde::{Deserialize, Serialize};
 use sha2::Sha256;
-use tracing::{debug, info};
+use tracing::{debug, info, warn};
 use uuid::Uuid;
 
 use base64::{engine::general_purpose, Engine as _};
@@ -584,16 +584,33 @@ impl CommandServer {
             .await?;
 
         // 7. Clean up lease from KV (best-effort; the terminal state is already
-        // committed above, so a failure here cannot strand the command).
-        self.delete_lease(command_id).await?;
+        // committed above, so a failure here cannot strand the command). Log a
+        // warning and continue instead of failing the call — a leftover entry
+        // is reaped by `acquire_lease`'s terminal-state check on its next scan.
+        if let Err(e) = self.delete_lease(command_id).await {
+            warn!(
+                command_id,
+                error = %e,
+                "Failed to clean up lease after terminal response; will be reaped on next lease scan"
+            );
+        }
 
         // 8. Clean up pending index from KV (best-effort; terminal state).
-        self.delete_pending_index(
-            &status.deployment_id,
-            &status.target.resource_id,
-            command_id,
-        )
-        .await?;
+        // Same reasoning as the lease cleanup above.
+        if let Err(e) = self
+            .delete_pending_index(
+                &status.deployment_id,
+                &status.target.resource_id,
+                command_id,
+            )
+            .await
+        {
+            warn!(
+                command_id,
+                error = %e,
+                "Failed to clean up pending index after terminal response; will be reaped on next lease scan"
+            );
+        }
 
         info!(
             "Command {} completed with state {:?}",

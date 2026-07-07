@@ -1006,17 +1006,22 @@ mod tests {
     }
 
     /// Regression: a failure partway through response cleanup must not strand the
-    /// command as non-terminal with an invisible response.
+    /// command as non-terminal with an invisible response, and must not fail the
+    /// `submit_command_response` call either.
     ///
     /// `submit_command_response` stores the response blob, commits the terminal
     /// registry state (the source of truth), then cleans up the lease and pending
     /// index. Here the KV is armed to fail the pending-index scan performed by
-    /// that cleanup. The submit call surfaces the cleanup error, but because the
-    /// terminal state is committed *before* cleanup, the command must still be
-    /// observable as `Succeeded` with its stored response. Under the old ordering
-    /// (cleanup first, state last) the same fault left the command stuck as
-    /// `Dispatched` with a stored-but-invisible response.
+    /// that cleanup. Cleanup is best-effort — a leftover pending-index/lease entry
+    /// is reaped by `acquire_lease`'s terminal-state check on its next scan — so
+    /// the submit call must still return `Ok`, only logging a warning, and the
+    /// command must still be observable as `Succeeded` with its stored response.
+    /// Under the old ordering (cleanup first, state last) the same fault left the
+    /// command stuck as `Dispatched` with a stored-but-invisible response; under a
+    /// prior version of the new ordering, the cleanup error was still propagated
+    /// with `?`, failing the call despite the terminal state already being safe.
     #[tokio::test]
+    #[tracing_test::traced_test]
     async fn test_response_cleanup_failure_keeps_command_terminal() {
         let server = TestCommandServer::builder()
             .with_pull_mode()
@@ -1046,8 +1051,13 @@ mod tests {
             .submit_command_response(&lease.command_id, agent_response)
             .await;
         assert!(
-            submit_result.is_err(),
-            "the armed pending-index scan fault should surface from submit"
+            submit_result.is_ok(),
+            "cleanup failures are best-effort and must not fail submit_command_response \
+             once the terminal state is committed"
+        );
+        assert!(
+            logs_contain("Failed to clean up pending index"),
+            "a cleanup failure must still be logged as a warning"
         );
 
         // Despite the cleanup failure, the terminal state was committed first, so
