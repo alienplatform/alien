@@ -117,9 +117,14 @@ jobs:
       - name: Build bindings dev addon (used by compiled-binary binding tests)
         # alien-bindings-node is not a pnpm workspace member; resolve the napi
         # CLI from package-layout's devDependencies (root frozen-lockfile
-        # install), matching the fixture's own CI recipe in run.ts.
+        # install), matching the fixture's own CI recipe in run.ts. Debug
+        # profile with capped jobs: a cold --release build at full parallelism
+        # has been killing the runner mid-step (OOM); the tests only need the
+        # .node file to exist, not to be fast.
         working-directory: crates/alien-bindings-node
-        run: ../../packages/package-layout/node_modules/.bin/napi build --platform --release
+        env:
+          CARGO_BUILD_JOBS: "6"
+        run: ../../packages/package-layout/node_modules/.bin/napi build --platform
 
       - name: Rust fast tests (non-cloud)
         env:
