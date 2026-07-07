@@ -11,8 +11,8 @@ let value: DataCloudSQL = {
     collectionIssues: [
       {
         message: "<value>",
-        reason: "timed-out",
-        severity: "error",
+        reason: "forbidden",
+        severity: "warning",
         source: "<value>",
       },
     ],
@@ -32,5 +32,5 @@ let value: DataCloudSQL = {
 | `databaseVersion`                                                          | *string*                                                                   | :heavy_minus_sign:                                                         | N/A                                                                        |
 | `instanceName`                                                             | *string*                                                                   | :heavy_check_mark:                                                         | N/A                                                                        |
 | `state`                                                                    | *string*                                                                   | :heavy_minus_sign:                                                         | N/A                                                                        |
-| `status`                                                                   | [models.ResourceHeartbeatStatus32](../models/resourceheartbeatstatus32.md) | :heavy_check_mark:                                                         | N/A                                                                        |
+| `status`                                                                   | [models.ResourceHeartbeatStatus34](../models/resourceheartbeatstatus34.md) | :heavy_check_mark:                                                         | N/A                                                                        |
 | `backend`                                                                  | *"cloudSql"*                                                               | :heavy_check_mark:                                                         | N/A                                                                        |

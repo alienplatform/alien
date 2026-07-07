@@ -14,6 +14,7 @@ import { DeploymentGroups } from "./deploymentgroups.js";
 import { Deployments } from "./deployments.js";
 import { Domains } from "./domains.js";
 import { Events } from "./events.js";
+import { Machines } from "./machines.js";
 import { Managers } from "./managers.js";
 import { OperatorManifests } from "./operatormanifests.js";
 import { Packages } from "./packages.js";
@@ -89,6 +90,11 @@ export class Alien extends ClientSDK {
   private _events?: Events;
   get events(): Events {
     return (this._events ??= new Events(this._options));
+  }
+
+  private _machines?: Machines;
+  get machines(): Machines {
+    return (this._machines ??= new Machines(this._options));
   }
 
   private _commands?: Commands;

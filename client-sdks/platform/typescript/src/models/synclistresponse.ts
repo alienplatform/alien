@@ -68,6 +68,7 @@ export const SyncListResponsePlatform = {
   Gcp: "gcp",
   Azure: "azure",
   Kubernetes: "kubernetes",
+  Machines: "machines",
   Local: "local",
   Test: "test",
 } as const;
@@ -361,6 +362,37 @@ export type SyncListResponseCustomDomains = {
   domain: string;
 };
 
+export const SyncListResponseModeLoadBalancer = {
+  LoadBalancer: "loadBalancer",
+} as const;
+export type SyncListResponseModeLoadBalancer = ClosedEnum<
+  typeof SyncListResponseModeLoadBalancer
+>;
+
+export type SyncListResponsePublicEndpointTargetLoadBalancer = {
+  /**
+   * DNS name or URL for the external load balancer.
+   */
+  cnameTarget: string;
+  mode: SyncListResponseModeLoadBalancer;
+};
+
+export const SyncListResponseModeMachineAddresses = {
+  MachineAddresses: "machineAddresses",
+} as const;
+export type SyncListResponseModeMachineAddresses = ClosedEnum<
+  typeof SyncListResponseModeMachineAddresses
+>;
+
+export type SyncListResponsePublicEndpointTargetMachineAddresses = {
+  mode: SyncListResponseModeMachineAddresses;
+};
+
+export type SyncListResponsePublicEndpointTargetUnion =
+  | SyncListResponsePublicEndpointTargetLoadBalancer
+  | SyncListResponsePublicEndpointTargetMachineAddresses
+  | any;
+
 /**
  * Domain configuration for the stack.
  *
@@ -375,6 +407,12 @@ export type SyncListResponseDomains = {
    */
   customDomains?:
     | { [k: string]: SyncListResponseCustomDomains }
+    | null
+    | undefined;
+  publicEndpointTarget?:
+    | SyncListResponsePublicEndpointTargetLoadBalancer
+    | SyncListResponsePublicEndpointTargetMachineAddresses
+    | any
     | null
     | undefined;
 };
@@ -1304,6 +1342,7 @@ export const SyncListResponseStackStatePlatform = {
   Gcp: "gcp",
   Azure: "azure",
   Kubernetes: "kubernetes",
+  Machines: "machines",
   Local: "local",
   Test: "test",
 } as const;
@@ -1337,6 +1376,7 @@ export const SyncListResponseControllerPlatformEnum = {
   Gcp: "gcp",
   Azure: "azure",
   Kubernetes: "kubernetes",
+  Machines: "machines",
   Local: "local",
   Test: "test",
 } as const;
@@ -1730,6 +1770,7 @@ export const SyncListResponsePreparedStackPlatform = {
   Gcp: "gcp",
   Azure: "azure",
   Kubernetes: "kubernetes",
+  Machines: "machines",
   Local: "local",
   Test: "test",
 } as const;
@@ -3005,6 +3046,7 @@ export const SyncListResponseSupportedPlatform = {
   Gcp: "gcp",
   Azure: "azure",
   Kubernetes: "kubernetes",
+  Machines: "machines",
   Local: "local",
   Test: "test",
 } as const;
@@ -3946,6 +3988,91 @@ export function syncListResponseCustomDomainsFromJSON(
 }
 
 /** @internal */
+export const SyncListResponseModeLoadBalancer$inboundSchema: z.ZodEnum<
+  typeof SyncListResponseModeLoadBalancer
+> = z.enum(SyncListResponseModeLoadBalancer);
+
+/** @internal */
+export const SyncListResponsePublicEndpointTargetLoadBalancer$inboundSchema:
+  z.ZodType<SyncListResponsePublicEndpointTargetLoadBalancer, unknown> = z
+    .object({
+      cnameTarget: z.string(),
+      mode: SyncListResponseModeLoadBalancer$inboundSchema,
+    });
+
+export function syncListResponsePublicEndpointTargetLoadBalancerFromJSON(
+  jsonString: string,
+): SafeParseResult<
+  SyncListResponsePublicEndpointTargetLoadBalancer,
+  SDKValidationError
+> {
+  return safeParse(
+    jsonString,
+    (x) =>
+      SyncListResponsePublicEndpointTargetLoadBalancer$inboundSchema.parse(
+        JSON.parse(x),
+      ),
+    `Failed to parse 'SyncListResponsePublicEndpointTargetLoadBalancer' from JSON`,
+  );
+}
+
+/** @internal */
+export const SyncListResponseModeMachineAddresses$inboundSchema: z.ZodEnum<
+  typeof SyncListResponseModeMachineAddresses
+> = z.enum(SyncListResponseModeMachineAddresses);
+
+/** @internal */
+export const SyncListResponsePublicEndpointTargetMachineAddresses$inboundSchema:
+  z.ZodType<SyncListResponsePublicEndpointTargetMachineAddresses, unknown> = z
+    .object({
+      mode: SyncListResponseModeMachineAddresses$inboundSchema,
+    });
+
+export function syncListResponsePublicEndpointTargetMachineAddressesFromJSON(
+  jsonString: string,
+): SafeParseResult<
+  SyncListResponsePublicEndpointTargetMachineAddresses,
+  SDKValidationError
+> {
+  return safeParse(
+    jsonString,
+    (x) =>
+      SyncListResponsePublicEndpointTargetMachineAddresses$inboundSchema.parse(
+        JSON.parse(x),
+      ),
+    `Failed to parse 'SyncListResponsePublicEndpointTargetMachineAddresses' from JSON`,
+  );
+}
+
+/** @internal */
+export const SyncListResponsePublicEndpointTargetUnion$inboundSchema: z.ZodType<
+  SyncListResponsePublicEndpointTargetUnion,
+  unknown
+> = z.union([
+  z.lazy(() => SyncListResponsePublicEndpointTargetLoadBalancer$inboundSchema),
+  z.lazy(() =>
+    SyncListResponsePublicEndpointTargetMachineAddresses$inboundSchema
+  ),
+  z.any(),
+]);
+
+export function syncListResponsePublicEndpointTargetUnionFromJSON(
+  jsonString: string,
+): SafeParseResult<
+  SyncListResponsePublicEndpointTargetUnion,
+  SDKValidationError
+> {
+  return safeParse(
+    jsonString,
+    (x) =>
+      SyncListResponsePublicEndpointTargetUnion$inboundSchema.parse(
+        JSON.parse(x),
+      ),
+    `Failed to parse 'SyncListResponsePublicEndpointTargetUnion' from JSON`,
+  );
+}
+
+/** @internal */
 export const SyncListResponseDomains$inboundSchema: z.ZodType<
   SyncListResponseDomains,
   unknown
@@ -3955,6 +4082,17 @@ export const SyncListResponseDomains$inboundSchema: z.ZodType<
       z.string(),
       z.lazy(() => SyncListResponseCustomDomains$inboundSchema),
     ),
+  ).optional(),
+  publicEndpointTarget: z.nullable(
+    z.union([
+      z.lazy(() =>
+        SyncListResponsePublicEndpointTargetLoadBalancer$inboundSchema
+      ),
+      z.lazy(() =>
+        SyncListResponsePublicEndpointTargetMachineAddresses$inboundSchema
+      ),
+      z.any(),
+    ]),
   ).optional(),
 });
 

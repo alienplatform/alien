@@ -18,6 +18,7 @@ let value: ProjectListItemResponse = {
     gcp: "mgr_enxscjrqiiu2lrc672hwwuc5",
     azure: "mgr_enxscjrqiiu2lrc672hwwuc5",
     kubernetes: "mgr_enxscjrqiiu2lrc672hwwuc5",
+    machines: "mgr_enxscjrqiiu2lrc672hwwuc5",
     local: "mgr_enxscjrqiiu2lrc672hwwuc5",
   },
   createdAt: new Date("2024-01-01T16:38:43.547Z"),

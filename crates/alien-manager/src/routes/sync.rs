@@ -180,6 +180,9 @@ pub struct AgentSyncResponse {
 pub struct InitializeRequest {
     pub name: Option<String>,
     pub platform: Option<Platform>,
+    /// Optional generated-domain subdomain to use for this deployment.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub public_subdomain: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub scope: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -1492,9 +1495,9 @@ fn validate_initialize_base_platform(
 
     match base_platform {
         Platform::Aws | Platform::Gcp | Platform::Azure => Ok(Some(base_platform)),
-        Platform::Kubernetes | Platform::Local | Platform::Test => Err(ErrorData::bad_request(
-            "basePlatform for kubernetes must be one of aws, gcp, or azure",
-        )),
+        Platform::Kubernetes | Platform::Machines | Platform::Local | Platform::Test => Err(
+            ErrorData::bad_request("basePlatform for kubernetes must be one of aws, gcp, or azure"),
+        ),
     }
 }
 
@@ -1787,9 +1790,11 @@ async fn initialize(
             let settings = req.stack_settings.unwrap_or_else(|| {
                 let mut settings = alien_core::StackSettings::default();
                 settings.deployment_model = match platform {
-                    Platform::Aws | Platform::Gcp | Platform::Azure | Platform::Test => {
-                        alien_core::DeploymentModel::Push
-                    }
+                    Platform::Aws
+                    | Platform::Gcp
+                    | Platform::Azure
+                    | Platform::Machines
+                    | Platform::Test => alien_core::DeploymentModel::Push,
                     Platform::Kubernetes | Platform::Local => alien_core::DeploymentModel::Pull,
                 };
                 settings
@@ -1816,6 +1821,7 @@ async fn initialize(
                         stack_settings: settings,
                         stack_state: None,
                         environment_variables: None,
+                        public_subdomain: req.public_subdomain,
                         input_values: req.input_values,
                         deployment_token: dep_token,
                     },

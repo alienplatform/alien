@@ -12,10 +12,9 @@ let value: InvolvedObject7 = {};
 
 | Field              | Type               | Required           | Description        |
 | ------------------ | ------------------ | ------------------ | ------------------ |
-| `apiVersion`       | *string*           | :heavy_minus_sign: | N/A                |
-| `fieldPath`        | *string*           | :heavy_minus_sign: | N/A                |
+| `details`          | *any*              | :heavy_minus_sign: | N/A                |
+| `id`               | *string*           | :heavy_minus_sign: | N/A                |
 | `kind`             | *string*           | :heavy_minus_sign: | N/A                |
+| `machineId`        | *string*           | :heavy_minus_sign: | N/A                |
 | `name`             | *string*           | :heavy_minus_sign: | N/A                |
-| `namespace`        | *string*           | :heavy_minus_sign: | N/A                |
-| `resourceVersion`  | *string*           | :heavy_minus_sign: | N/A                |
-| `uid`              | *string*           | :heavy_minus_sign: | N/A                |
+| `replicaId`        | *string*           | :heavy_minus_sign: | N/A                |

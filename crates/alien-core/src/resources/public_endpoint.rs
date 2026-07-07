@@ -3,6 +3,9 @@ use crate::LoadBalancerEndpoint;
 use alien_error::AlienError;
 use serde::{Deserialize, Serialize};
 
+/// Host label that places a generated public endpoint at the deployment base hostname.
+pub const APEX_HOST_LABEL: &str = "@";
+
 /// Protocol for public workload endpoints.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
@@ -45,6 +48,12 @@ impl PublicEndpoint {
         if let Some(host_label) = &self.host_label {
             validate_endpoint_host_label(resource_id, host_label)?;
         }
+        if self.host_label.as_deref() == Some(APEX_HOST_LABEL) && self.wildcard_subdomains {
+            return Err(AlienError::new(ErrorData::InvalidResourceUpdate {
+                resource_id: resource_id.to_string(),
+                reason: "an apex public endpoint cannot also route wildcard subdomains".to_string(),
+            }));
+        }
 
         Ok(())
     }
@@ -76,6 +85,12 @@ impl WorkerPublicEndpoint {
         validate_endpoint_name(resource_id, &self.name)?;
         if let Some(host_label) = &self.host_label {
             validate_endpoint_host_label(resource_id, host_label)?;
+        }
+        if self.host_label.as_deref() == Some(APEX_HOST_LABEL) && self.wildcard_subdomains {
+            return Err(AlienError::new(ErrorData::InvalidResourceUpdate {
+                resource_id: resource_id.to_string(),
+                reason: "an apex public endpoint cannot also route wildcard subdomains".to_string(),
+            }));
         }
 
         Ok(())
@@ -123,6 +138,10 @@ pub fn validate_endpoint_name(resource_id: &str, name: &str) -> Result<()> {
 
 /// Validates a single DNS label used in generated endpoint hostnames.
 pub fn validate_endpoint_host_label(resource_id: &str, host_label: &str) -> Result<()> {
+    if host_label == APEX_HOST_LABEL {
+        return Ok(());
+    }
+
     let valid = !host_label.is_empty()
         && host_label.len() <= 63
         && !host_label.starts_with('-')
@@ -135,10 +154,54 @@ pub fn validate_endpoint_host_label(resource_id: &str, host_label: &str) -> Resu
         return Err(AlienError::new(ErrorData::InvalidResourceUpdate {
             resource_id: resource_id.to_string(),
             reason:
-                "public endpoint hostLabel must be a single lowercase DNS label: letters, numbers, hyphens, no dots, and no leading or trailing hyphen"
+                "public endpoint hostLabel must be '@' for apex or a single lowercase DNS label: letters, numbers, hyphens, no dots, and no leading or trailing hyphen"
                     .to_string(),
         }));
     }
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn host_label_allows_apex_marker() {
+        validate_endpoint_host_label("gateway", APEX_HOST_LABEL).expect("apex host label");
+    }
+
+    #[test]
+    fn public_endpoint_rejects_apex_wildcard_combination() {
+        let endpoint = PublicEndpoint {
+            name: "api".to_string(),
+            port: 8080,
+            protocol: ExposeProtocol::Http,
+            host_label: Some(APEX_HOST_LABEL.to_string()),
+            wildcard_subdomains: true,
+        };
+
+        let error = endpoint
+            .validate_for_resource("gateway")
+            .expect_err("apex wildcard should be rejected");
+
+        assert_eq!(error.code, "INVALID_RESOURCE_UPDATE");
+        assert!(error.message.contains("apex"));
+    }
+
+    #[test]
+    fn worker_endpoint_rejects_apex_wildcard_combination() {
+        let endpoint = WorkerPublicEndpoint {
+            name: "api".to_string(),
+            host_label: Some(APEX_HOST_LABEL.to_string()),
+            wildcard_subdomains: true,
+        };
+
+        let error = endpoint
+            .validate_for_resource("handler")
+            .expect_err("apex wildcard should be rejected");
+
+        assert_eq!(error.code, "INVALID_RESOURCE_UPDATE");
+        assert!(error.message.contains("apex"));
+    }
 }

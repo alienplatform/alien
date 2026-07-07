@@ -19,6 +19,7 @@ export type StackByPlatform = {
   gcp?: any | undefined;
   kubernetes?: any | undefined;
   local?: any | undefined;
+  machines?: any | undefined;
   test?: any | undefined;
 };
 
@@ -32,6 +33,7 @@ export const StackByPlatform$inboundSchema: z.ZodType<
   gcp: z.any().optional(),
   kubernetes: z.any().optional(),
   local: z.any().optional(),
+  machines: z.any().optional(),
   test: z.any().optional(),
 });
 /** @internal */
@@ -41,6 +43,7 @@ export type StackByPlatform$Outbound = {
   gcp?: any | undefined;
   kubernetes?: any | undefined;
   local?: any | undefined;
+  machines?: any | undefined;
   test?: any | undefined;
 };
 
@@ -54,6 +57,7 @@ export const StackByPlatform$outboundSchema: z.ZodType<
   gcp: z.any().optional(),
   kubernetes: z.any().optional(),
   local: z.any().optional(),
+  machines: z.any().optional(),
   test: z.any().optional(),
 });
 

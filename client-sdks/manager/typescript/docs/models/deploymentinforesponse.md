@@ -10,7 +10,7 @@ let value: DeploymentInfoResponse = {
     deploymentId: "<id>",
     url: "https://repentant-cake.biz",
   },
-  platform: "local",
+  platform: "machines",
   resources: {
     "key": {
       resourceType: "<value>",

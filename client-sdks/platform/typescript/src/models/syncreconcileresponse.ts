@@ -143,6 +143,7 @@ export const SyncReconcileResponseCurrentReleasePlatform = {
   Gcp: "gcp",
   Azure: "azure",
   Kubernetes: "kubernetes",
+  Machines: "machines",
   Local: "local",
   Test: "test",
 } as const;
@@ -1475,6 +1476,7 @@ export const SyncReconcileResponseCurrentReleaseSupportedPlatform = {
   Gcp: "gcp",
   Azure: "azure",
   Kubernetes: "kubernetes",
+  Machines: "machines",
   Local: "local",
   Test: "test",
 } as const;
@@ -1771,6 +1773,7 @@ export const SyncReconcileResponseCurrentPlatform = {
   Gcp: "gcp",
   Azure: "azure",
   Kubernetes: "kubernetes",
+  Machines: "machines",
   Local: "local",
   Test: "test",
 } as const;
@@ -1908,6 +1911,7 @@ export const SyncReconcileResponsePreparedStackPlatform = {
   Gcp: "gcp",
   Azure: "azure",
   Kubernetes: "kubernetes",
+  Machines: "machines",
   Local: "local",
   Test: "test",
 } as const;
@@ -3235,6 +3239,7 @@ export const SyncReconcileResponsePreparedStackSupportedPlatform = {
   Gcp: "gcp",
   Azure: "azure",
   Kubernetes: "kubernetes",
+  Machines: "machines",
   Local: "local",
   Test: "test",
 } as const;
@@ -3317,6 +3322,7 @@ export const SyncReconcileResponseStackStatePlatform = {
   Gcp: "gcp",
   Azure: "azure",
   Kubernetes: "kubernetes",
+  Machines: "machines",
   Local: "local",
   Test: "test",
 } as const;
@@ -3350,6 +3356,7 @@ export const SyncReconcileResponseControllerPlatformEnum = {
   Gcp: "gcp",
   Azure: "azure",
   Kubernetes: "kubernetes",
+  Machines: "machines",
   Local: "local",
   Test: "test",
 } as const;
@@ -3801,6 +3808,7 @@ export const SyncReconcileResponseTargetReleasePlatform = {
   Gcp: "gcp",
   Azure: "azure",
   Kubernetes: "kubernetes",
+  Machines: "machines",
   Local: "local",
   Test: "test",
 } as const;
@@ -5128,6 +5136,7 @@ export const SyncReconcileResponseTargetReleaseSupportedPlatform = {
   Gcp: "gcp",
   Azure: "azure",
   Kubernetes: "kubernetes",
+  Machines: "machines",
   Local: "local",
   Test: "test",
 } as const;
@@ -5264,6 +5273,7 @@ export const SyncReconcileResponseBasePlatformEnum = {
   Gcp: "gcp",
   Azure: "azure",
   Kubernetes: "kubernetes",
+  Machines: "machines",
   Local: "local",
   Test: "test",
 } as const;
@@ -8844,6 +8854,37 @@ export type SyncReconcileResponseCustomDomains = {
   domain: string;
 };
 
+export const SyncReconcileResponseModeLoadBalancer = {
+  LoadBalancer: "loadBalancer",
+} as const;
+export type SyncReconcileResponseModeLoadBalancer = ClosedEnum<
+  typeof SyncReconcileResponseModeLoadBalancer
+>;
+
+export type SyncReconcileResponsePublicEndpointTargetLoadBalancer = {
+  /**
+   * DNS name or URL for the external load balancer.
+   */
+  cnameTarget: string;
+  mode: SyncReconcileResponseModeLoadBalancer;
+};
+
+export const SyncReconcileResponseModeMachineAddresses = {
+  MachineAddresses: "machineAddresses",
+} as const;
+export type SyncReconcileResponseModeMachineAddresses = ClosedEnum<
+  typeof SyncReconcileResponseModeMachineAddresses
+>;
+
+export type SyncReconcileResponsePublicEndpointTargetMachineAddresses = {
+  mode: SyncReconcileResponseModeMachineAddresses;
+};
+
+export type SyncReconcileResponsePublicEndpointTargetUnion =
+  | SyncReconcileResponsePublicEndpointTargetLoadBalancer
+  | SyncReconcileResponsePublicEndpointTargetMachineAddresses
+  | any;
+
 /**
  * Domain configuration for the stack.
  *
@@ -8858,6 +8899,12 @@ export type SyncReconcileResponseDomains = {
    */
   customDomains?:
     | { [k: string]: SyncReconcileResponseCustomDomains }
+    | null
+    | undefined;
+  publicEndpointTarget?:
+    | SyncReconcileResponsePublicEndpointTargetLoadBalancer
+    | SyncReconcileResponsePublicEndpointTargetMachineAddresses
+    | any
     | null
     | undefined;
 };
@@ -10094,6 +10141,7 @@ export const ReleaseInfoPlatform = {
   Gcp: "gcp",
   Azure: "azure",
   Kubernetes: "kubernetes",
+  Machines: "machines",
   Local: "local",
   Test: "test",
 } as const;
@@ -11357,6 +11405,7 @@ export const ReleaseInfoSupportedPlatform = {
   Gcp: "gcp",
   Azure: "azure",
   Kubernetes: "kubernetes",
+  Machines: "machines",
   Local: "local",
   Test: "test",
 } as const;
@@ -26517,6 +26566,92 @@ export function syncReconcileResponseCustomDomainsFromJSON(
 }
 
 /** @internal */
+export const SyncReconcileResponseModeLoadBalancer$inboundSchema: z.ZodEnum<
+  typeof SyncReconcileResponseModeLoadBalancer
+> = z.enum(SyncReconcileResponseModeLoadBalancer);
+
+/** @internal */
+export const SyncReconcileResponsePublicEndpointTargetLoadBalancer$inboundSchema:
+  z.ZodType<SyncReconcileResponsePublicEndpointTargetLoadBalancer, unknown> = z
+    .object({
+      cnameTarget: z.string(),
+      mode: SyncReconcileResponseModeLoadBalancer$inboundSchema,
+    });
+
+export function syncReconcileResponsePublicEndpointTargetLoadBalancerFromJSON(
+  jsonString: string,
+): SafeParseResult<
+  SyncReconcileResponsePublicEndpointTargetLoadBalancer,
+  SDKValidationError
+> {
+  return safeParse(
+    jsonString,
+    (x) =>
+      SyncReconcileResponsePublicEndpointTargetLoadBalancer$inboundSchema.parse(
+        JSON.parse(x),
+      ),
+    `Failed to parse 'SyncReconcileResponsePublicEndpointTargetLoadBalancer' from JSON`,
+  );
+}
+
+/** @internal */
+export const SyncReconcileResponseModeMachineAddresses$inboundSchema: z.ZodEnum<
+  typeof SyncReconcileResponseModeMachineAddresses
+> = z.enum(SyncReconcileResponseModeMachineAddresses);
+
+/** @internal */
+export const SyncReconcileResponsePublicEndpointTargetMachineAddresses$inboundSchema:
+  z.ZodType<
+    SyncReconcileResponsePublicEndpointTargetMachineAddresses,
+    unknown
+  > = z.object({
+    mode: SyncReconcileResponseModeMachineAddresses$inboundSchema,
+  });
+
+export function syncReconcileResponsePublicEndpointTargetMachineAddressesFromJSON(
+  jsonString: string,
+): SafeParseResult<
+  SyncReconcileResponsePublicEndpointTargetMachineAddresses,
+  SDKValidationError
+> {
+  return safeParse(
+    jsonString,
+    (x) =>
+      SyncReconcileResponsePublicEndpointTargetMachineAddresses$inboundSchema
+        .parse(JSON.parse(x)),
+    `Failed to parse 'SyncReconcileResponsePublicEndpointTargetMachineAddresses' from JSON`,
+  );
+}
+
+/** @internal */
+export const SyncReconcileResponsePublicEndpointTargetUnion$inboundSchema:
+  z.ZodType<SyncReconcileResponsePublicEndpointTargetUnion, unknown> = z.union([
+    z.lazy(() =>
+      SyncReconcileResponsePublicEndpointTargetLoadBalancer$inboundSchema
+    ),
+    z.lazy(() =>
+      SyncReconcileResponsePublicEndpointTargetMachineAddresses$inboundSchema
+    ),
+    z.any(),
+  ]);
+
+export function syncReconcileResponsePublicEndpointTargetUnionFromJSON(
+  jsonString: string,
+): SafeParseResult<
+  SyncReconcileResponsePublicEndpointTargetUnion,
+  SDKValidationError
+> {
+  return safeParse(
+    jsonString,
+    (x) =>
+      SyncReconcileResponsePublicEndpointTargetUnion$inboundSchema.parse(
+        JSON.parse(x),
+      ),
+    `Failed to parse 'SyncReconcileResponsePublicEndpointTargetUnion' from JSON`,
+  );
+}
+
+/** @internal */
 export const SyncReconcileResponseDomains$inboundSchema: z.ZodType<
   SyncReconcileResponseDomains,
   unknown
@@ -26526,6 +26661,17 @@ export const SyncReconcileResponseDomains$inboundSchema: z.ZodType<
       z.string(),
       z.lazy(() => SyncReconcileResponseCustomDomains$inboundSchema),
     ),
+  ).optional(),
+  publicEndpointTarget: z.nullable(
+    z.union([
+      z.lazy(() =>
+        SyncReconcileResponsePublicEndpointTargetLoadBalancer$inboundSchema
+      ),
+      z.lazy(() =>
+        SyncReconcileResponsePublicEndpointTargetMachineAddresses$inboundSchema
+      ),
+      z.any(),
+    ]),
   ).optional(),
 });
 

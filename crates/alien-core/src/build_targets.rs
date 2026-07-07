@@ -266,6 +266,7 @@ impl BinaryTarget {
             crate::Platform::Gcp => vec![Self::LinuxX64],
             crate::Platform::Azure => vec![Self::LinuxX64],
             crate::Platform::Kubernetes => Self::LINUX.to_vec(),
+            crate::Platform::Machines => Self::LINUX.to_vec(),
             crate::Platform::Local => vec![Self::current_os()],
             crate::Platform::Test => vec![Self::LinuxX64],
         }

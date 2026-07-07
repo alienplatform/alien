@@ -7,6 +7,7 @@ pub mod container_lifecycle;
 pub mod external_bindings_required;
 pub mod frozen_resource_lifecycle;
 pub mod live_provision_permissions;
+pub mod machines_resources;
 pub mod network_required;
 pub mod permission_profiles_exist;
 pub mod public_worker_lifecycle;
@@ -28,6 +29,7 @@ pub use container_lifecycle::ContainerLifecycleCheck;
 pub use external_bindings_required::ExternalBindingsRequiredCheck;
 pub use frozen_resource_lifecycle::FrozenResourceLifecycleCheck;
 pub use live_provision_permissions::LiveProvisionPermissionsCheck;
+pub use machines_resources::MachinesResourcesCheck;
 pub use network_required::{
     stack_requires_network, NetworkSettingsPlatformCheck, PublicSubnetsRequiredCheck,
 };

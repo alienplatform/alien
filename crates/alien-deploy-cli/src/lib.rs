@@ -9,8 +9,9 @@ pub mod error;
 pub mod output;
 
 use crate::commands::{
-    down_command, list_command, operator_command, register_command, status_command, up_command,
-    DownArgs, ListArgs, OperatorArgs, RegisterArgs, StatusArgs, UpArgs,
+    down_command, join_command, leave_command, list_command, operator_command, register_command,
+    status_command, up_command, DownArgs, JoinArgs, LeaveArgs, ListArgs, OperatorArgs,
+    RegisterArgs, StatusArgs, UpArgs,
 };
 use crate::error::Result;
 use alien_core::embedded_config::{load_embedded_config, DeployCliConfig};
@@ -47,6 +48,10 @@ pub enum Commands {
     /// Register an externally-provisioned stack (CloudFormation Outputs,
     /// Terraform, …) with a manager.
     Register(RegisterArgs),
+    /// Join this Linux host to a Machines deployment.
+    Join(JoinArgs),
+    /// Leave a Machines deployment from this host.
+    Leave(LeaveArgs),
 }
 
 pub fn setup_tracing(verbose: bool) {
@@ -76,6 +81,8 @@ pub async fn run_cli(cli: Cli) -> Result<()> {
         Commands::List(args) => list_command(args).await,
         Commands::Operator(args) => operator_command(args).await,
         Commands::Register(args) => register_command(args).await,
+        Commands::Join(args) => join_command(args, embedded_config.as_ref()).await,
+        Commands::Leave(args) => leave_command(args).await,
     }
 }
 
@@ -232,5 +239,51 @@ mod tests {
         assert_eq!(args.region, "us-east-1");
         assert_eq!(args.manager_url, "https://manager.example.com");
         assert_eq!(args.token, "dg_abc");
+    }
+
+    #[test]
+    fn test_parse_join_command() {
+        let cli = Cli::try_parse_from([
+            "alien-deploy",
+            "join",
+            "--token",
+            "jt_secret",
+            "--capacity-group",
+            "gpu",
+            "--zone",
+            "rack-1",
+            "--bundle-url",
+            "https://packages.example.com/machines/manifest.json",
+            "--control-plane-url",
+            "https://control.example.com",
+            "--cluster-id",
+            "cluster-123",
+            "--dry-run",
+        ])
+        .unwrap();
+
+        let Commands::Join(args) = cli.command else {
+            panic!("expected join variant");
+        };
+        assert_eq!(args.token.as_deref(), Some("jt_secret"));
+        assert_eq!(args.capacity_group, "gpu");
+        assert_eq!(args.zone.as_deref(), Some("rack-1"));
+        assert_eq!(
+            args.control_plane_url.as_deref(),
+            Some("https://control.example.com")
+        );
+        assert_eq!(args.cluster_id.as_deref(), Some("cluster-123"));
+        assert!(args.dry_run);
+    }
+
+    #[test]
+    fn test_parse_leave_command() {
+        let cli = Cli::try_parse_from(["alien-deploy", "leave", "--purge", "--dry-run"]).unwrap();
+
+        let Commands::Leave(args) = cli.command else {
+            panic!("expected leave variant");
+        };
+        assert!(args.purge);
+        assert!(args.dry_run);
     }
 }

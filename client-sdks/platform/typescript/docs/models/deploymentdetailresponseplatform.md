@@ -7,11 +7,11 @@ Target platform for the deployment
 ```typescript
 import { DeploymentDetailResponsePlatform } from "@alienplatform/platform-api/models";
 
-let value: DeploymentDetailResponsePlatform = "azure";
+let value: DeploymentDetailResponsePlatform = "kubernetes";
 ```
 
 ## Values
 
 ```typescript
-"aws" | "gcp" | "azure" | "kubernetes" | "local" | "test"
+"aws" | "gcp" | "azure" | "kubernetes" | "machines" | "local" | "test"
 ```

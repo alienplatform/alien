@@ -123,6 +123,37 @@ export type PlanDeploymentComputeCustomDomains = {
   domain: string;
 };
 
+export const PlanDeploymentComputeModeLoadBalancer = {
+  LoadBalancer: "loadBalancer",
+} as const;
+export type PlanDeploymentComputeModeLoadBalancer = ClosedEnum<
+  typeof PlanDeploymentComputeModeLoadBalancer
+>;
+
+export type PlanDeploymentComputePublicEndpointTargetLoadBalancer = {
+  /**
+   * DNS name or URL for the external load balancer.
+   */
+  cnameTarget: string;
+  mode: PlanDeploymentComputeModeLoadBalancer;
+};
+
+export const PlanDeploymentComputeModeMachineAddresses = {
+  MachineAddresses: "machineAddresses",
+} as const;
+export type PlanDeploymentComputeModeMachineAddresses = ClosedEnum<
+  typeof PlanDeploymentComputeModeMachineAddresses
+>;
+
+export type PlanDeploymentComputePublicEndpointTargetMachineAddresses = {
+  mode: PlanDeploymentComputeModeMachineAddresses;
+};
+
+export type PlanDeploymentComputePublicEndpointTargetUnion =
+  | PlanDeploymentComputePublicEndpointTargetLoadBalancer
+  | PlanDeploymentComputePublicEndpointTargetMachineAddresses
+  | any;
+
 /**
  * Domain configuration for the stack.
  *
@@ -137,6 +168,12 @@ export type PlanDeploymentComputeDomains = {
    */
   customDomains?:
     | { [k: string]: PlanDeploymentComputeCustomDomains }
+    | null
+    | undefined;
+  publicEndpointTarget?:
+    | PlanDeploymentComputePublicEndpointTargetLoadBalancer
+    | PlanDeploymentComputePublicEndpointTargetMachineAddresses
+    | any
     | null
     | undefined;
 };
@@ -1487,9 +1524,110 @@ export function planDeploymentComputeCustomDomainsToJSON(
 }
 
 /** @internal */
+export const PlanDeploymentComputeModeLoadBalancer$outboundSchema: z.ZodEnum<
+  typeof PlanDeploymentComputeModeLoadBalancer
+> = z.enum(PlanDeploymentComputeModeLoadBalancer);
+
+/** @internal */
+export type PlanDeploymentComputePublicEndpointTargetLoadBalancer$Outbound = {
+  cnameTarget: string;
+  mode: string;
+};
+
+/** @internal */
+export const PlanDeploymentComputePublicEndpointTargetLoadBalancer$outboundSchema:
+  z.ZodType<
+    PlanDeploymentComputePublicEndpointTargetLoadBalancer$Outbound,
+    PlanDeploymentComputePublicEndpointTargetLoadBalancer
+  > = z.object({
+    cnameTarget: z.string(),
+    mode: PlanDeploymentComputeModeLoadBalancer$outboundSchema,
+  });
+
+export function planDeploymentComputePublicEndpointTargetLoadBalancerToJSON(
+  planDeploymentComputePublicEndpointTargetLoadBalancer:
+    PlanDeploymentComputePublicEndpointTargetLoadBalancer,
+): string {
+  return JSON.stringify(
+    PlanDeploymentComputePublicEndpointTargetLoadBalancer$outboundSchema.parse(
+      planDeploymentComputePublicEndpointTargetLoadBalancer,
+    ),
+  );
+}
+
+/** @internal */
+export const PlanDeploymentComputeModeMachineAddresses$outboundSchema:
+  z.ZodEnum<typeof PlanDeploymentComputeModeMachineAddresses> = z.enum(
+    PlanDeploymentComputeModeMachineAddresses,
+  );
+
+/** @internal */
+export type PlanDeploymentComputePublicEndpointTargetMachineAddresses$Outbound =
+  {
+    mode: string;
+  };
+
+/** @internal */
+export const PlanDeploymentComputePublicEndpointTargetMachineAddresses$outboundSchema:
+  z.ZodType<
+    PlanDeploymentComputePublicEndpointTargetMachineAddresses$Outbound,
+    PlanDeploymentComputePublicEndpointTargetMachineAddresses
+  > = z.object({
+    mode: PlanDeploymentComputeModeMachineAddresses$outboundSchema,
+  });
+
+export function planDeploymentComputePublicEndpointTargetMachineAddressesToJSON(
+  planDeploymentComputePublicEndpointTargetMachineAddresses:
+    PlanDeploymentComputePublicEndpointTargetMachineAddresses,
+): string {
+  return JSON.stringify(
+    PlanDeploymentComputePublicEndpointTargetMachineAddresses$outboundSchema
+      .parse(planDeploymentComputePublicEndpointTargetMachineAddresses),
+  );
+}
+
+/** @internal */
+export type PlanDeploymentComputePublicEndpointTargetUnion$Outbound =
+  | PlanDeploymentComputePublicEndpointTargetLoadBalancer$Outbound
+  | PlanDeploymentComputePublicEndpointTargetMachineAddresses$Outbound
+  | any;
+
+/** @internal */
+export const PlanDeploymentComputePublicEndpointTargetUnion$outboundSchema:
+  z.ZodType<
+    PlanDeploymentComputePublicEndpointTargetUnion$Outbound,
+    PlanDeploymentComputePublicEndpointTargetUnion
+  > = z.union([
+    z.lazy(() =>
+      PlanDeploymentComputePublicEndpointTargetLoadBalancer$outboundSchema
+    ),
+    z.lazy(() =>
+      PlanDeploymentComputePublicEndpointTargetMachineAddresses$outboundSchema
+    ),
+    z.any(),
+  ]);
+
+export function planDeploymentComputePublicEndpointTargetUnionToJSON(
+  planDeploymentComputePublicEndpointTargetUnion:
+    PlanDeploymentComputePublicEndpointTargetUnion,
+): string {
+  return JSON.stringify(
+    PlanDeploymentComputePublicEndpointTargetUnion$outboundSchema.parse(
+      planDeploymentComputePublicEndpointTargetUnion,
+    ),
+  );
+}
+
+/** @internal */
 export type PlanDeploymentComputeDomains$Outbound = {
   customDomains?:
     | { [k: string]: PlanDeploymentComputeCustomDomains$Outbound }
+    | null
+    | undefined;
+  publicEndpointTarget?:
+    | PlanDeploymentComputePublicEndpointTargetLoadBalancer$Outbound
+    | PlanDeploymentComputePublicEndpointTargetMachineAddresses$Outbound
+    | any
     | null
     | undefined;
 };
@@ -1504,6 +1642,17 @@ export const PlanDeploymentComputeDomains$outboundSchema: z.ZodType<
       z.string(),
       z.lazy(() => PlanDeploymentComputeCustomDomains$outboundSchema),
     ),
+  ).optional(),
+  publicEndpointTarget: z.nullable(
+    z.union([
+      z.lazy(() =>
+        PlanDeploymentComputePublicEndpointTargetLoadBalancer$outboundSchema
+      ),
+      z.lazy(() =>
+        PlanDeploymentComputePublicEndpointTargetMachineAddresses$outboundSchema
+      ),
+      z.any(),
+    ]),
   ).optional(),
 });
 

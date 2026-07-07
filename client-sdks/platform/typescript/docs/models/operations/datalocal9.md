@@ -13,15 +13,15 @@ let value: DataLocal9 = {
     collectionIssues: [
       {
         message: "<value>",
-        reason: "timed-out",
+        reason: "not-installed",
         severity: "info",
         source: "<value>",
       },
     ],
-    health: "unknown",
-    lifecycle: "creating",
+    health: "unhealthy",
+    lifecycle: "unknown",
     partial: true,
-    stale: false,
+    stale: true,
   },
   backend: "local",
 };
@@ -37,5 +37,5 @@ let value: DataLocal9 = {
 | `pathExists`                                                                                  | *boolean*                                                                                     | :heavy_check_mark:                                                                            | N/A                                                                                           |
 | `readonly`                                                                                    | *boolean*                                                                                     | :heavy_minus_sign:                                                                            | N/A                                                                                           |
 | `secretMetadataListed`                                                                        | *boolean*                                                                                     | :heavy_check_mark:                                                                            | N/A                                                                                           |
-| `status`                                                                                      | [operations.DataStatus39](../../models/operations/datastatus39.md)                            | :heavy_check_mark:                                                                            | N/A                                                                                           |
+| `status`                                                                                      | [operations.DataStatus41](../../models/operations/datastatus41.md)                            | :heavy_check_mark:                                                                            | N/A                                                                                           |
 | `backend`                                                                                     | *"local"*                                                                                     | :heavy_check_mark:                                                                            | N/A                                                                                           |

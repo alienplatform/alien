@@ -326,12 +326,13 @@ pub async fn build_task(args: &BuildArgs) -> Result<Vec<BuildOutput>> {
             "gcp" => PlatformBuildSettings::Gcp {},
             "azure" => PlatformBuildSettings::Azure {},
             "kubernetes" => PlatformBuildSettings::Kubernetes { base_platform },
+            "machines" => PlatformBuildSettings::Machines {},
             "local" => PlatformBuildSettings::Local {},
             _ => {
                 return Err(AlienError::new(ErrorData::ValidationError {
                     field: "platform".to_string(),
                     message: format!(
-                        "Unknown platform '{}'. Supported platforms: aws, gcp, azure",
+                        "Unknown platform '{}'. Supported platforms: aws, gcp, azure, kubernetes, machines, local",
                         platform_str
                     ),
                 }))
@@ -450,7 +451,7 @@ fn parse_kubernetes_base_platform(
 
     match parsed {
         Platform::Aws | Platform::Gcp | Platform::Azure => Ok(Some(parsed)),
-        Platform::Kubernetes | Platform::Local | Platform::Test => {
+        Platform::Kubernetes | Platform::Machines | Platform::Local | Platform::Test => {
             Err(AlienError::new(ErrorData::ValidationError {
                 field: "base-platform".to_string(),
                 message: "--base-platform must be one of: aws, gcp, azure".to_string(),

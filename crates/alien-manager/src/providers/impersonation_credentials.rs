@@ -58,6 +58,14 @@ impl CredentialResolver for ImpersonationCredentialResolver {
             });
         }
 
+        if platform == Platform::Machines {
+            return Ok(ClientConfig::Machines);
+        }
+
+        if uses_control_plane_credentials(platform) {
+            return Ok(ClientConfig::Test);
+        }
+
         let status = parse_status(&deployment.status);
 
         // InitialSetup is still setup-owned. Even after the remote stack
@@ -107,7 +115,7 @@ impl CredentialResolver for ImpersonationCredentialResolver {
         let status = parse_status(&deployment.status);
         let has_provision_capability = matches!(
             deployment.platform,
-            Platform::Local | Platform::Test | Platform::Kubernetes
+            Platform::Local | Platform::Test | Platform::Kubernetes | Platform::Machines
         ) || !matches!(
             status,
             DeploymentStatus::Pending | DeploymentStatus::PreflightsFailed
@@ -123,6 +131,10 @@ impl CredentialResolver for ImpersonationCredentialResolver {
         &self,
         platform: Platform,
     ) -> Result<Option<ManagementConfig>, AlienError> {
+        if uses_control_plane_credentials(platform) {
+            return Ok(None);
+        }
+
         let provider = self.provider_for_target(platform);
 
         let service_account = match provider.load_service_account("management").await {
@@ -308,6 +320,10 @@ fn uses_direct_management_credentials(status: DeploymentStatus) -> bool {
     )
 }
 
+fn uses_control_plane_credentials(platform: Platform) -> bool {
+    matches!(platform, Platform::Machines)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -408,5 +424,17 @@ mod tests {
         assert!(!uses_direct_management_credentials(
             DeploymentStatus::Running
         ));
+    }
+
+    #[test]
+    fn machines_uses_control_plane_credentials() {
+        assert!(uses_control_plane_credentials(Platform::Machines));
+
+        assert!(!uses_control_plane_credentials(Platform::Aws));
+        assert!(!uses_control_plane_credentials(Platform::Gcp));
+        assert!(!uses_control_plane_credentials(Platform::Azure));
+        assert!(!uses_control_plane_credentials(Platform::Kubernetes));
+        assert!(!uses_control_plane_credentials(Platform::Local));
+        assert!(!uses_control_plane_credentials(Platform::Test));
     }
 }

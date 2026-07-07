@@ -17,8 +17,8 @@ let value: DataAwsDynamoDb = {
     collectionIssues: [
       {
         message: "<value>",
-        reason: "timed-out",
-        severity: "info",
+        reason: "not-installed",
+        severity: "warning",
         source: "<value>",
       },
     ],
@@ -47,7 +47,7 @@ let value: DataAwsDynamoDb = {
 | `restoreInProgress`                                                        | *boolean*                                                                  | :heavy_minus_sign:                                                         | N/A                                                                        |
 | `sseStatus`                                                                | *string*                                                                   | :heavy_minus_sign:                                                         | N/A                                                                        |
 | `sseType`                                                                  | *string*                                                                   | :heavy_minus_sign:                                                         | N/A                                                                        |
-| `status`                                                                   | [models.ResourceHeartbeatStatus27](../models/resourceheartbeatstatus27.md) | :heavy_check_mark:                                                         | N/A                                                                        |
+| `status`                                                                   | [models.ResourceHeartbeatStatus29](../models/resourceheartbeatstatus29.md) | :heavy_check_mark:                                                         | N/A                                                                        |
 | `streamEnabled`                                                            | *boolean*                                                                  | :heavy_minus_sign:                                                         | N/A                                                                        |
 | `streamViewType`                                                           | *string*                                                                   | :heavy_minus_sign:                                                         | N/A                                                                        |
 | `tableArn`                                                                 | *string*                                                                   | :heavy_minus_sign:                                                         | N/A                                                                        |

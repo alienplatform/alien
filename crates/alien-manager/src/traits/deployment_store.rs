@@ -154,6 +154,8 @@ pub struct CreateDeploymentParams {
     pub stack_settings: StackSettings,
     pub stack_state: Option<StackState>,
     pub environment_variables: Option<Vec<EnvironmentVariable>>,
+    /// Optional generated-domain subdomain requested by the deployer.
+    pub public_subdomain: Option<String>,
     /// Stack input values collected before deployment creation.
     pub input_values: HashMap<String, serde_json::Value>,
     /// Raw deployment token for proxy pull auth.

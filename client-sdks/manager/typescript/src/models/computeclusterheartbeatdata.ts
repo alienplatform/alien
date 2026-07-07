@@ -14,6 +14,11 @@ import {
   ComputeClusterHeartbeatStatus$outboundSchema,
 } from "./computeclusterheartbeatstatus.js";
 import {
+  MachinesComputeMachineStatus,
+  MachinesComputeMachineStatus$Outbound,
+  MachinesComputeMachineStatus$outboundSchema,
+} from "./machinescomputemachinestatus.js";
+import {
   MetricSample,
   MetricSample$Outbound,
   MetricSample$outboundSchema,
@@ -44,6 +49,18 @@ export type ComputeClusterHeartbeatDataLocal = {
   status: ComputeClusterHeartbeatStatus;
   trackedContainers?: number | null | undefined;
   backend: "local";
+};
+
+export type ComputeClusterHeartbeatDataMachines = {
+  backendClusterId?: string | null | undefined;
+  capacityGroups: Array<ComputeCapacityGroupStatus>;
+  cpu?: MetricSample | null | undefined;
+  machines: Array<MachinesComputeMachineStatus>;
+  memory?: MetricSample | null | undefined;
+  name: string;
+  nodes: ObservedCounts;
+  status: ComputeClusterHeartbeatStatus;
+  backend: "machines";
 };
 
 export type ComputeClusterHeartbeatDataAzure = {
@@ -89,6 +106,7 @@ export type ComputeClusterHeartbeatData =
   | ComputeClusterHeartbeatDataAws
   | ComputeClusterHeartbeatDataGcp
   | ComputeClusterHeartbeatDataAzure
+  | ComputeClusterHeartbeatDataMachines
   | ComputeClusterHeartbeatDataLocal;
 
 /** @internal */
@@ -136,6 +154,45 @@ export function computeClusterHeartbeatDataLocalToJSON(
   return JSON.stringify(
     ComputeClusterHeartbeatDataLocal$outboundSchema.parse(
       computeClusterHeartbeatDataLocal,
+    ),
+  );
+}
+
+/** @internal */
+export type ComputeClusterHeartbeatDataMachines$Outbound = {
+  backendClusterId?: string | null | undefined;
+  capacityGroups: Array<ComputeCapacityGroupStatus$Outbound>;
+  cpu?: MetricSample$Outbound | null | undefined;
+  machines: Array<MachinesComputeMachineStatus$Outbound>;
+  memory?: MetricSample$Outbound | null | undefined;
+  name: string;
+  nodes: ObservedCounts$Outbound;
+  status: ComputeClusterHeartbeatStatus$Outbound;
+  backend: "machines";
+};
+
+/** @internal */
+export const ComputeClusterHeartbeatDataMachines$outboundSchema: z.ZodType<
+  ComputeClusterHeartbeatDataMachines$Outbound,
+  ComputeClusterHeartbeatDataMachines
+> = z.object({
+  backendClusterId: z.nullable(z.string()).optional(),
+  capacityGroups: z.array(ComputeCapacityGroupStatus$outboundSchema),
+  cpu: z.nullable(MetricSample$outboundSchema).optional(),
+  machines: z.array(MachinesComputeMachineStatus$outboundSchema),
+  memory: z.nullable(MetricSample$outboundSchema).optional(),
+  name: z.string(),
+  nodes: ObservedCounts$outboundSchema,
+  status: ComputeClusterHeartbeatStatus$outboundSchema,
+  backend: z.literal("machines"),
+});
+
+export function computeClusterHeartbeatDataMachinesToJSON(
+  computeClusterHeartbeatDataMachines: ComputeClusterHeartbeatDataMachines,
+): string {
+  return JSON.stringify(
+    ComputeClusterHeartbeatDataMachines$outboundSchema.parse(
+      computeClusterHeartbeatDataMachines,
     ),
   );
 }
@@ -268,6 +325,7 @@ export type ComputeClusterHeartbeatData$Outbound =
   | ComputeClusterHeartbeatDataAws$Outbound
   | ComputeClusterHeartbeatDataGcp$Outbound
   | ComputeClusterHeartbeatDataAzure$Outbound
+  | ComputeClusterHeartbeatDataMachines$Outbound
   | ComputeClusterHeartbeatDataLocal$Outbound;
 
 /** @internal */
@@ -278,6 +336,7 @@ export const ComputeClusterHeartbeatData$outboundSchema: z.ZodType<
   z.lazy(() => ComputeClusterHeartbeatDataAws$outboundSchema),
   z.lazy(() => ComputeClusterHeartbeatDataGcp$outboundSchema),
   z.lazy(() => ComputeClusterHeartbeatDataAzure$outboundSchema),
+  z.lazy(() => ComputeClusterHeartbeatDataMachines$outboundSchema),
   z.lazy(() => ComputeClusterHeartbeatDataLocal$outboundSchema),
 ]);
 

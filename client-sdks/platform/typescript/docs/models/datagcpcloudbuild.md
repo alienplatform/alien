@@ -14,15 +14,15 @@ let value: DataGcpCloudBuild = {
     collectionIssues: [
       {
         message: "<value>",
-        reason: "not-installed",
-        severity: "warning",
+        reason: "timed-out",
+        severity: "info",
         source: "<value>",
       },
     ],
-    health: "unknown",
-    lifecycle: "deleting",
+    health: "healthy",
+    lifecycle: "scaling",
     partial: true,
-    stale: true,
+    stale: false,
   },
   backend: "gcpCloudBuild",
 };
@@ -37,5 +37,5 @@ let value: DataGcpCloudBuild = {
 | `location`                                                                 | *string*                                                                   | :heavy_check_mark:                                                         | N/A                                                                        |
 | `projectId`                                                                | *string*                                                                   | :heavy_check_mark:                                                         | N/A                                                                        |
 | `serviceAccount`                                                           | *string*                                                                   | :heavy_minus_sign:                                                         | N/A                                                                        |
-| `status`                                                                   | [models.ResourceHeartbeatStatus55](../models/resourceheartbeatstatus55.md) | :heavy_check_mark:                                                         | N/A                                                                        |
+| `status`                                                                   | [models.ResourceHeartbeatStatus57](../models/resourceheartbeatstatus57.md) | :heavy_check_mark:                                                         | N/A                                                                        |
 | `backend`                                                                  | *"gcpCloudBuild"*                                                          | :heavy_check_mark:                                                         | N/A                                                                        |

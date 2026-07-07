@@ -537,21 +537,19 @@ impl AlienManagerBuilder {
                 for binding_name in ["artifacts", "artifact-registry"] {
                     if let Ok(ar) = provider.load_artifact_registry(binding_name).await {
                         let prefix = ar.upstream_repository_prefix();
-                        if !prefix.is_empty() {
-                            info!(
-                                platform = %platform,
-                                binding_name = %binding_name,
-                                prefix = %prefix,
-                                "Registered artifact registry route"
-                            );
-                            routes.push(crate::routes::registry_proxy::RegistryRoute {
-                                prefix,
-                                platform: *platform,
-                                provider: provider.clone(),
-                                binding_name: binding_name.to_string(),
-                            });
-                            break;
-                        }
+                        info!(
+                            platform = %platform,
+                            binding_name = %binding_name,
+                            prefix = %prefix,
+                            "Registered artifact registry route"
+                        );
+                        routes.push(crate::routes::registry_proxy::RegistryRoute {
+                            prefix,
+                            platform: *platform,
+                            provider: provider.clone(),
+                            binding_name: binding_name.to_string(),
+                        });
+                        break;
                     }
                 }
             }
@@ -570,14 +568,13 @@ impl AlienManagerBuilder {
                 }
             }
 
-            let routing_table = Arc::new(crate::routes::registry_proxy::RegistryRoutingTable::new(
-                routes,
-            ));
-            if let Err(e) = routing_table.validate() {
-                return Err(AlienError::new(ErrorData::ServerInitFailed {
-                    reason: format!("Artifact registry configuration error: {}", e),
-                }));
-            }
+            let routing_table = Arc::new(
+                crate::routes::registry_proxy::RegistryRoutingTable::new(routes).map_err(|e| {
+                    AlienError::new(ErrorData::ServerInitFailed {
+                        reason: format!("Artifact registry configuration error: {}", e),
+                    })
+                })?,
+            );
 
             self.server_bindings = Some(ServerBindings {
                 kv,

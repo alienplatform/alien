@@ -18,11 +18,18 @@ let value: ComputeClusterHeartbeatDataGcp = {
     },
   ],
   status: {
-    collectionIssues: [],
+    collectionIssues: [
+      {
+        message: "<value>",
+        reason: "forbidden",
+        severity: "info",
+        source: "<value>",
+      },
+    ],
     health: "unhealthy",
-    lifecycle: "stopped",
-    partial: false,
-    stale: true,
+    lifecycle: "creating",
+    partial: true,
+    stale: false,
   },
   backend: "gcp",
 };

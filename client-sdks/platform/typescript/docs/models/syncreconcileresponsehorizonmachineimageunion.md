@@ -14,6 +14,12 @@ const value: models.SyncReconcileResponseHorizonMachineImage = {
   channel: "<value>",
   createdAt: "1726202235588",
   gitSha: "<value>",
+  horizondArtifacts: {
+    "key": {
+      sha256: "<value>",
+      url: "https://sudden-scorpion.org",
+    },
+  },
   horizondVersion: "<value>",
   machineImageVersion: "<value>",
 };

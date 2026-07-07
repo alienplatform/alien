@@ -13,11 +13,17 @@ import {
   ComputeCapacityRecommendation$Outbound,
   ComputeCapacityRecommendation$outboundSchema,
 } from "./computecapacityrecommendation.js";
+import {
+  ComputeDrainProgress,
+  ComputeDrainProgress$Outbound,
+  ComputeDrainProgress$outboundSchema,
+} from "./computedrainprogress.js";
 
 export type ComputeCapacityGroupStatus = {
   capacityBlocker?: ComputeCapacityBlocker | null | undefined;
   currentMachines: number;
   desiredMachines: number;
+  drainProgress?: ComputeDrainProgress | null | undefined;
   groupId: string;
   instanceType?: string | null | undefined;
   maxMachines?: number | null | undefined;
@@ -30,6 +36,7 @@ export type ComputeCapacityGroupStatus$Outbound = {
   capacityBlocker?: ComputeCapacityBlocker$Outbound | null | undefined;
   currentMachines: number;
   desiredMachines: number;
+  drainProgress?: ComputeDrainProgress$Outbound | null | undefined;
   groupId: string;
   instanceType?: string | null | undefined;
   maxMachines?: number | null | undefined;
@@ -45,6 +52,7 @@ export const ComputeCapacityGroupStatus$outboundSchema: z.ZodType<
   capacityBlocker: z.nullable(ComputeCapacityBlocker$outboundSchema).optional(),
   currentMachines: z.int(),
   desiredMachines: z.int(),
+  drainProgress: z.nullable(ComputeDrainProgress$outboundSchema).optional(),
   groupId: z.string(),
   instanceType: z.nullable(z.string()).optional(),
   maxMachines: z.nullable(z.int()).optional(),

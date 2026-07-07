@@ -16,7 +16,7 @@ let value: DataBuild = {
         {
           message: "<value>",
           reason: "not-installed",
-          severity: "error",
+          severity: "info",
           source: "<value>",
         },
       ],

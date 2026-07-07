@@ -29,8 +29,8 @@ const value: models.DataCloudSQL = {
     collectionIssues: [
       {
         message: "<value>",
-        reason: "timed-out",
-        severity: "error",
+        reason: "forbidden",
+        severity: "warning",
         source: "<value>",
       },
     ],

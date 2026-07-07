@@ -12,6 +12,7 @@ export type StackByPlatform = {
   gcp?: any | null | undefined;
   azure?: any | null | undefined;
   kubernetes?: any | null | undefined;
+  machines?: any | null | undefined;
   local?: any | null | undefined;
   test?: any | null | undefined;
 };
@@ -25,6 +26,7 @@ export const StackByPlatform$inboundSchema: z.ZodType<
   gcp: z.nullable(z.any()).optional(),
   azure: z.nullable(z.any()).optional(),
   kubernetes: z.nullable(z.any()).optional(),
+  machines: z.nullable(z.any()).optional(),
   local: z.nullable(z.any()).optional(),
   test: z.nullable(z.any()).optional(),
 });
@@ -34,6 +36,7 @@ export type StackByPlatform$Outbound = {
   gcp?: any | null | undefined;
   azure?: any | null | undefined;
   kubernetes?: any | null | undefined;
+  machines?: any | null | undefined;
   local?: any | null | undefined;
   test?: any | null | undefined;
 };
@@ -47,6 +50,7 @@ export const StackByPlatform$outboundSchema: z.ZodType<
   gcp: z.nullable(z.any()).optional(),
   azure: z.nullable(z.any()).optional(),
   kubernetes: z.nullable(z.any()).optional(),
+  machines: z.nullable(z.any()).optional(),
   local: z.nullable(z.any()).optional(),
   test: z.nullable(z.any()).optional(),
 });

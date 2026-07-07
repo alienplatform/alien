@@ -14,6 +14,12 @@ const value: models.SyncAcquireResponseHorizonMachineImage = {
   channel: "<value>",
   createdAt: "1717157947859",
   gitSha: "<value>",
+  horizondArtifacts: {
+    "key": {
+      sha256: "<value>",
+      url: "https://young-nectarine.org",
+    },
+  },
   horizondVersion: "<value>",
   machineImageVersion: "<value>",
 };

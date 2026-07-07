@@ -255,7 +255,7 @@ mod tests {
                 IpAddr::V4(Ipv4Addr::LOCALHOST),
                 port,
                 db,
-                Arc::new(std::sync::atomic::AtomicBool::new(true)),
+                first_sync_completed,
                 None,
                 None,
                 server_cancel,

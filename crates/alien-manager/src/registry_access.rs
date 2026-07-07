@@ -741,6 +741,18 @@ mod tests {
     }
 
     #[test]
+    fn registry_access_skips_empty_repository_prefix() {
+        let registry = TestArtifactRegistry {
+            prefix: String::new(),
+        };
+        let state = gcp_state_with_stack(worker_stack(
+            "manager.example.com/prj_test/test-worker:abc123",
+        ));
+
+        assert!(repository_ids_for_access(&registry, &state).is_empty());
+    }
+
+    #[test]
     fn gcp_registry_access_requires_worker_image_under_prefix() {
         let registry = TestArtifactRegistry {
             prefix: "test-project/alien-artifacts".to_string(),
