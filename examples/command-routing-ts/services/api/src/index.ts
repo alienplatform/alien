@@ -8,20 +8,10 @@
 // registers. A caller tells them apart with `.target("api")`.
 
 import { command, kv } from "@alienplatform/sdk"
-import type { Kv } from "@alienplatform/sdk"
 import { Hono } from "hono"
+import { scanAll } from "../../shared/scan-all"
 
 const RESOURCE = "api"
-
-/** Iterate every key under a prefix, following the scan cursor across pages. */
-async function* scanAll(store: Kv, prefix: string) {
-  let cursor: string | undefined
-  do {
-    const page = await store.scan(prefix, undefined, cursor)
-    for (const item of page.items) yield item
-    cursor = page.nextCursor
-  } while (cursor)
-}
 
 async function indexSize(): Promise<number> {
   const store = kv("index")

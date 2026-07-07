@@ -10,6 +10,7 @@
 
 import { kv } from "@alienplatform/bindings"
 import { createCommandReceiver } from "@alienplatform/commands"
+import { scanAll } from "../../shared/scan-all"
 
 const RESOURCE = "indexer-daemon"
 const index = kv("index")
@@ -21,18 +22,9 @@ const SEED_DOCS: Record<string, string> = {
   daemons: "A daemon is a resident process that leases commands",
 }
 
-async function* scanAll(prefix: string) {
-  let cursor: string | undefined
-  do {
-    const page = await index.scan(prefix, undefined, cursor)
-    for (const item of page.items) yield item
-    cursor = page.nextCursor
-  } while (cursor)
-}
-
 async function countDocuments(): Promise<number> {
   let count = 0
-  for await (const _ of scanAll("doc:")) count++
+  for await (const _ of scanAll(index, "doc:")) count++
   return count
 }
 
@@ -69,7 +61,7 @@ receiver.handle("status", async () => ({
 receiver.handle("search", async ctx => {
   const { term } = JSON.parse(new TextDecoder().decode(ctx.input)) as { term: string }
   const hits: string[] = []
-  for await (const entry of scanAll("doc:")) {
+  for await (const entry of scanAll(index, "doc:")) {
     const text = new TextDecoder().decode(entry.value)
     if (text.toLowerCase().includes(term.toLowerCase())) {
       hits.push(entry.key.slice("doc:".length))

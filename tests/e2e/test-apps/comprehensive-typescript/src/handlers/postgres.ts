@@ -25,26 +25,17 @@ function bindingEnvVarName(bindingName: string): string {
   return `ALIEN_${bindingName.replace(/-/g, "_").toUpperCase()}_BINDING`
 }
 
-/**
- * Percent-encode a userinfo/path component to the RFC 3986 unreserved set only,
- * byte-for-byte matching the Rust resolver's `encode_userinfo`.
- */
-function encodeUserinfo(value: string): string {
-  return encodeURIComponent(value).replace(
-    /[!'()*]/g,
-    c => `%${c.charCodeAt(0).toString(16).toUpperCase().padStart(2, "0")}`,
-  )
-}
-
 function connectionString(
   host: string,
   params: { port: number; database: string; username: string },
   password: string,
   sslmode: "disable" | "prefer",
 ): string {
-  const user = encodeUserinfo(params.username)
-  const pass = encodeUserinfo(password)
-  return `postgres://${user}:${pass}@${host}:${params.port}/${encodeUserinfo(params.database)}?sslmode=${sslmode}`
+  // Only local/e2e Postgres (plaintext credentials) is exercised here, so
+  // plain encodeURIComponent covers everything these components can contain.
+  const user = encodeURIComponent(params.username)
+  const pass = encodeURIComponent(password)
+  return `postgres://${user}:${pass}@${host}:${params.port}/${encodeURIComponent(params.database)}?sslmode=${sslmode}`
 }
 
 /** Resolve the connection string for a linked local/external Postgres database. */
