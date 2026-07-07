@@ -79,8 +79,8 @@ async fn check_worker_target(deployment: &TestDeployment) -> anyhow::Result<()> 
 async fn check_daemon_target(deployment: &TestDeployment) -> anyhow::Result<()> {
     info!("Checking `status` targeted at the Daemon (pull receiver)");
 
-    let deadline = tokio::time::Instant::now() + INDEX_SEED_TIMEOUT;
-    loop {
+    let last_seen = std::cell::Cell::new(0u64);
+    let seeded = super::poll_until(INDEX_SEED_TIMEOUT, INDEX_SEED_POLL_INTERVAL, || async {
         let result = deployment
             .invoke_command_on_target(DAEMON_RESOURCE, "status", serde_json::json!({}))
             .await
@@ -100,20 +100,24 @@ async fn check_daemon_target(deployment: &TestDeployment) -> anyhow::Result<()> 
             .get("documents")
             .and_then(|v| v.as_u64())
             .with_context(|| format!("daemon status missing numeric documents: {result:?}"))?;
+        last_seen.set(documents);
         if documents >= SEEDED_DOCUMENT_COUNT {
-            info!(documents, "Daemon-targeted status check passed");
-            return Ok(());
-        }
-
-        if tokio::time::Instant::now() >= deadline {
-            bail!(
-                "daemon never finished seeding its index: expected {SEEDED_DOCUMENT_COUNT} documents, last saw {documents}. \
-                 The daemon's in-process kv binding writes are not landing."
-            );
+            return Ok(Some(documents));
         }
         info!(documents, "Daemon index not fully seeded yet, retrying");
-        tokio::time::sleep(INDEX_SEED_POLL_INTERVAL).await;
-    }
+        Ok(None)
+    })
+    .await?;
+
+    let Some(documents) = seeded else {
+        bail!(
+            "daemon never finished seeding its index: expected {SEEDED_DOCUMENT_COUNT} documents, last saw {}. \
+             The daemon's in-process kv binding writes are not landing.",
+            last_seen.get()
+        );
+    };
+    info!(documents, "Daemon-targeted status check passed");
+    Ok(())
 }
 
 /// With two command-capable resources in the deployment, an invoke WITHOUT an

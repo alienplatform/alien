@@ -480,50 +480,40 @@ pub async fn check_queue_event_delivery(deployment: &TestDeployment) -> anyhow::
         bail!("Queue send-only returned {}: {}", status, body);
     }
 
-    let deadline = tokio::time::Instant::now() + EVENT_DELIVERY_TIMEOUT;
-    loop {
+    let delivered = super::poll_until(EVENT_DELIVERY_TIMEOUT, EVENT_POLL_INTERVAL, || async {
         let data = fetch_events_list(url).await?;
         let messages = data
             .get("queueMessages")
             .and_then(|v| v.as_array())
             .context("Events list response missing queueMessages array")?;
 
-        if let Some(record) = messages.iter().find(|record| {
+        let Some(record) = messages.iter().find(|record| {
             record
                 .get("payload")
                 .and_then(|p| p.as_str())
                 .map(|p| p.contains(&marker))
                 .unwrap_or(false)
-        }) {
-            let message_id = record
-                .get("messageId")
-                .and_then(|v| v.as_str())
-                .unwrap_or("");
-            if message_id.is_empty() {
-                bail!("Queue message record missing messageId: {:?}", record);
-            }
-            if record
-                .get("processedAt")
-                .and_then(|v| v.as_str())
-                .unwrap_or("")
-                .is_empty()
-            {
-                bail!("Queue message record missing processedAt: {:?}", record);
-            }
-            info!(%message_id, "Queue trigger delivery check passed");
-            return Ok(());
-        }
+        }) else {
+            return Ok(None);
+        };
 
-        if tokio::time::Instant::now() >= deadline {
-            bail!(
-                "Queue trigger did not deliver message with marker '{}' to the handler within {:?}. Recorded messages: {:?}",
-                marker,
-                EVENT_DELIVERY_TIMEOUT,
-                messages
-            );
-        }
-        tokio::time::sleep(EVENT_POLL_INTERVAL).await;
-    }
+        let message_id =
+            super::require_nonempty_str(record, "messageId", "Queue message record")?.to_string();
+        super::require_nonempty_str(record, "processedAt", "Queue message record")?;
+        Ok(Some(message_id))
+    })
+    .await?;
+
+    let Some(message_id) = delivered else {
+        bail!(
+            "Queue trigger did not deliver message with marker '{}' to the handler within {:?}. Recorded messages: {:?}",
+            marker,
+            EVENT_DELIVERY_TIMEOUT,
+            fetch_events_list(url).await.ok()
+        );
+    };
+    info!(%message_id, "Queue trigger delivery check passed");
+    Ok(())
 }
 
 /// Check storage trigger delivery: write an object with a unique key (write
@@ -552,8 +542,7 @@ pub async fn check_storage_event_delivery(deployment: &TestDeployment) -> anyhow
         bail!("Storage write-only returned {}: {}", status, body);
     }
 
-    let deadline = tokio::time::Instant::now() + EVENT_DELIVERY_TIMEOUT;
-    loop {
+    let delivered = super::poll_until(EVENT_DELIVERY_TIMEOUT, EVENT_POLL_INTERVAL, || async {
         let resp = reqwest::Client::new()
             .get(format!("{}/events/storage/{}", url, key))
             .send()
@@ -569,45 +558,40 @@ pub async fn check_storage_event_delivery(deployment: &TestDeployment) -> anyhow
             .await
             .context("Failed to parse storage event lookup response")?;
 
-        if data.get("found").and_then(|v| v.as_bool()) == Some(true) {
-            let event = data
-                .get("event")
-                .context("Storage event record missing event body")?;
-            // Key equality is the handler-ran proof: only the handler writes
-            // this KV record, keyed by the object it was invoked for.
-            let event_key = event.get("key").and_then(|v| v.as_str()).unwrap_or("");
-            if event_key != key {
-                bail!(
-                    "Storage event key mismatch: expected {}, got {} ({:?})",
-                    key,
-                    event_key,
-                    event
-                );
-            }
-            // Event type naming varies per platform (local: "created"; clouds
-            // use their native names), so assert presence rather than an exact
-            // value.
-            if event
-                .get("eventType")
-                .and_then(|v| v.as_str())
-                .unwrap_or("")
-                .is_empty()
-            {
-                bail!("Storage event record missing eventType: {:?}", event);
-            }
-            info!(%key, "Storage trigger delivery check passed");
-            return Ok(());
+        if data.get("found").and_then(|v| v.as_bool()) != Some(true) {
+            return Ok(None);
         }
-
-        if tokio::time::Instant::now() >= deadline {
+        let event = data
+            .get("event")
+            .context("Storage event record missing event body")?;
+        // Key equality is the handler-ran proof: only the handler writes
+        // this KV record, keyed by the object it was invoked for.
+        let event_key = event.get("key").and_then(|v| v.as_str()).unwrap_or("");
+        if event_key != key {
             bail!(
-                "Storage trigger did not deliver 'created' event for key '{}' to the handler within {:?}",
+                "Storage event key mismatch: expected {}, got {} ({:?})",
                 key,
-                EVENT_DELIVERY_TIMEOUT
+                event_key,
+                event
             );
         }
-        tokio::time::sleep(EVENT_POLL_INTERVAL).await;
+        // Event type naming varies per platform (local: "created"; clouds
+        // use their native names), so assert presence rather than an exact
+        // value.
+        super::require_nonempty_str(event, "eventType", "Storage event record")?;
+        Ok(Some(()))
+    })
+    .await?;
+
+    if delivered.is_none() {
+        bail!(
+            "Storage trigger did not deliver 'created' event for key '{}' to the handler within {:?}",
+            key,
+            EVENT_DELIVERY_TIMEOUT
+        );
     }
+    info!(%key, "Storage trigger delivery check passed");
+    Ok(())
 }
 
 /// Check cron trigger delivery: the deployment declares a `* * * * *`
@@ -620,45 +604,32 @@ pub async fn check_cron_event_delivery(deployment: &TestDeployment) -> anyhow::R
     let url = deployment_url(deployment)?;
     info!("Checking cron trigger delivery (may wait up to one schedule period)");
 
-    let deadline = tokio::time::Instant::now() + CRON_DELIVERY_TIMEOUT;
-    loop {
+    let delivered = super::poll_until(CRON_DELIVERY_TIMEOUT, EVENT_POLL_INTERVAL, || async {
         let data = fetch_events_list(url).await?;
         let cron_events = data
             .get("cronEvents")
             .and_then(|v| v.as_array())
             .context("Events list response missing cronEvents array")?;
 
-        if let Some(event) = cron_events.first() {
-            // Schedule naming varies per platform (local: the cron expression;
-            // clouds use their native rule identifiers), so assert presence.
-            if event
-                .get("scheduleName")
-                .and_then(|v| v.as_str())
-                .unwrap_or("")
-                .is_empty()
-            {
-                bail!("Cron event record missing scheduleName: {:?}", event);
-            }
-            if event
-                .get("processedAt")
-                .and_then(|v| v.as_str())
-                .unwrap_or("")
-                .is_empty()
-            {
-                bail!("Cron event record missing processedAt: {:?}", event);
-            }
-            info!("Cron trigger delivery check passed");
-            return Ok(());
-        }
+        let Some(event) = cron_events.first() else {
+            return Ok(None);
+        };
+        // Schedule naming varies per platform (local: the cron expression;
+        // clouds use their native rule identifiers), so assert presence.
+        super::require_nonempty_str(event, "scheduleName", "Cron event record")?;
+        super::require_nonempty_str(event, "processedAt", "Cron event record")?;
+        Ok(Some(()))
+    })
+    .await?;
 
-        if tokio::time::Instant::now() >= deadline {
-            bail!(
-                "Cron trigger did not fire the handler within {:?} despite a '* * * * *' schedule",
-                CRON_DELIVERY_TIMEOUT
-            );
-        }
-        tokio::time::sleep(EVENT_POLL_INTERVAL).await;
+    if delivered.is_none() {
+        bail!(
+            "Cron trigger did not fire the handler within {:?} despite a '* * * * *' schedule",
+            CRON_DELIVERY_TIMEOUT
+        );
     }
+    info!("Cron trigger delivery check passed");
+    Ok(())
 }
 
 // ---------------------------------------------------------------------------
