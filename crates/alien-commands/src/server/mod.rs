@@ -543,18 +543,14 @@ impl CommandServer {
         // 5. Store response blob in KV
         self.store_response(command_id, &response).await?;
 
-        // 6. Clean up lease from KV
-        self.delete_lease(command_id).await?;
-
-        // 7. Clean up pending index from KV (terminal state)
-        self.delete_pending_index(
-            &status.deployment_id,
-            &status.target.resource_id,
-            command_id,
-        )
-        .await?;
-
-        // 8. Update registry state (SOURCE OF TRUTH)
+        // 6. Update registry state (SOURCE OF TRUTH) BEFORE cleaning up the lease
+        // and pending index. Committing the terminal state first guarantees the
+        // command can never be stranded as Dispatched-with-no-lease-no-index: if
+        // the process dies (or a cleanup step errors) after this point, get/poll
+        // sees the terminal state and returns the already-stored response, and any
+        // orphaned lease/pending-index entry is reaped by `acquire_lease`'s
+        // terminal-state check. The old order (cleanup first, state last) left a
+        // crash window in which the response was stored but permanently invisible.
         let (new_state, error) = if response.is_success() {
             (CommandState::Succeeded, None)
         } else if let CommandResponse::Error { code, message, .. } = &response {
@@ -586,6 +582,18 @@ impl CommandServer {
                 error,
             )
             .await?;
+
+        // 7. Clean up lease from KV (best-effort; the terminal state is already
+        // committed above, so a failure here cannot strand the command).
+        self.delete_lease(command_id).await?;
+
+        // 8. Clean up pending index from KV (best-effort; terminal state).
+        self.delete_pending_index(
+            &status.deployment_id,
+            &status.target.resource_id,
+            command_id,
+        )
+        .await?;
 
         info!(
             "Command {} completed with state {:?}",

@@ -1005,6 +1005,74 @@ mod tests {
         }
     }
 
+    /// Regression: a failure partway through response cleanup must not strand the
+    /// command as non-terminal with an invisible response.
+    ///
+    /// `submit_command_response` stores the response blob, commits the terminal
+    /// registry state (the source of truth), then cleans up the lease and pending
+    /// index. Here the KV is armed to fail the pending-index scan performed by
+    /// that cleanup. The submit call surfaces the cleanup error, but because the
+    /// terminal state is committed *before* cleanup, the command must still be
+    /// observable as `Succeeded` with its stored response. Under the old ordering
+    /// (cleanup first, state last) the same fault left the command stuck as
+    /// `Dispatched` with a stored-but-invisible response.
+    #[tokio::test]
+    async fn test_response_cleanup_failure_keeps_command_terminal() {
+        let server = TestCommandServer::builder()
+            .with_pull_mode()
+            .with_fault_injection()
+            .build()
+            .await;
+        let fault_kv = server
+            .fault_kv
+            .clone()
+            .expect("fault injection was requested");
+
+        // Create + lease the command. Lease acquisition scans the same pending
+        // prefix, so it must run before the fault is armed.
+        let request = test_inline_create_command("cleanup-agent", "cleanup-command");
+        let response = server.create_command(request).await.unwrap();
+        let lease = server
+            .acquire_single_lease("cleanup-agent")
+            .await
+            .unwrap()
+            .unwrap();
+
+        // Arm the fault so the pending-index cleanup scan fails during submit.
+        fault_kv.arm_pending_scan_failure();
+
+        let agent_response = test_json_success_response(&serde_json::json!({ "result": "ok" }));
+        let submit_result = server
+            .submit_command_response(&lease.command_id, agent_response)
+            .await;
+        assert!(
+            submit_result.is_err(),
+            "the armed pending-index scan fault should surface from submit"
+        );
+
+        // Despite the cleanup failure, the terminal state was committed first, so
+        // the command is visible as Succeeded with its stored response rather than
+        // stranded as Dispatched with an invisible one.
+        let status = server
+            .get_command_status(&response.command_id)
+            .await
+            .unwrap();
+        assert_eq!(
+            status.state,
+            CommandState::Succeeded,
+            "command must be terminal even though response cleanup failed"
+        );
+        let final_response = status
+            .response
+            .expect("stored response must be visible on the terminal command");
+        assert!(final_response.is_success());
+        if let CommandResponse::Success { response: body } = final_response {
+            let decoded = body.decode_inline().unwrap();
+            let json: serde_json::Value = serde_json::from_slice(&decoded).unwrap();
+            assert_eq!(json["result"], "ok");
+        }
+    }
+
     /// Test runtime envelope parsing
     #[tokio::test]
     async fn test_runtime_integration() {
