@@ -136,7 +136,7 @@ jobs:
             --exclude byocdb \
             --exclude endpoint-agent \
             --exclude alien-test-server \
-            --filter-expr 'not binary_id(alien-build::build_integration_tests) and not binary_id(alien-build::rust_integration_tests) and not binary_id(alien-build::typescript_integration_tests) and not binary_id(alien-worker-runtime::lambda) and not binary_id(alien-test::distribution) and not binary_id(alien-test::pull) and not binary_id(alien-test::push) and not binary_id(alien-manager::registry_proxy_cloud_test)'
+            --filter-expr 'not binary_id(alien-build::build_integration_tests) and not binary_id(alien-build::rust_integration_tests) and not binary_id(alien-build::typescript_integration_tests) and not binary_id(alien-worker-runtime::lambda) and not binary_id(alien-test::distribution) and not binary_id(alien-test::pull) and not binary_id(alien-test::push) and not binary_id(alien-test::kubernetes) and not binary_id(alien-manager::registry_proxy_cloud_test)'
 
       - name: Build all CLIs
         if: steps.changes.outputs.examples == 'true' || github.event_name == 'workflow_dispatch' || github.ref == 'refs/heads/main'
