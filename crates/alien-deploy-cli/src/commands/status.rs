@@ -3,12 +3,17 @@
 use crate::deployment_tracking::DeploymentTracker;
 use crate::error::{ErrorData, Result};
 use crate::output;
+use alien_core::embedded_config::DeployCliConfig;
 use alien_error::{AlienError, Context, IntoAlienError};
 use clap::Parser;
+use serde::Deserialize;
 use serde_json::Value as JsonValue;
 use std::path::PathBuf;
 
-use super::up::{create_manager_client, read_token_file};
+use super::up::{
+    create_manager_client, create_manager_http_client, resolve_base_url_option,
+    resolve_manager_url_option, resolve_optional_token, resolve_platform_option,
+};
 
 #[derive(Parser, Debug, Clone)]
 #[command(
@@ -33,36 +38,69 @@ pub struct StatusArgs {
     /// Manager URL (optional if deployment is tracked)
     #[arg(long, env = "ALIEN_MANAGER_URL")]
     pub manager_url: Option<String>,
+
+    /// Platform API base URL used for manager discovery when deployment is not tracked.
+    #[arg(long, env = "ALIEN_BASE_URL")]
+    pub base_url: Option<String>,
+
+    /// Platform used only when discovering the manager URL for an untracked deployment.
+    #[arg(long)]
+    pub platform: Option<String>,
 }
 
-pub async fn status_command(args: StatusArgs) -> Result<()> {
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct RemoteDeploymentList {
+    items: Vec<RemoteDeploymentListItem>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct RemoteDeploymentListItem {
+    id: String,
+}
+
+pub async fn status_command(
+    args: StatusArgs,
+    embedded_config: Option<&DeployCliConfig>,
+) -> Result<()> {
     let tracker = DeploymentTracker::new()?;
 
-    let tracked = tracker.get(&args.name).ok_or_else(|| {
-        AlienError::new(ErrorData::ValidationError {
-            field: "name".to_string(),
-            message: format!(
-                "Deployment '{}' is not tracked. Use 'alien-deploy deploy' first.",
-                args.name
-            ),
-        })
-    })?;
-
-    let token = args
-        .token
-        .map(Ok)
-        .or_else(|| args.token_file.as_ref().map(|path| read_token_file(path)))
-        .transpose()?
-        .unwrap_or_else(|| tracked.token.clone());
-    let manager_url = args
-        .manager_url
-        .unwrap_or_else(|| tracked.manager_url.clone());
+    let tracked = tracker.get(&args.name);
+    let token = resolve_optional_token(args.token.clone(), args.token_file.as_ref(), embedded_config)?
+        .or_else(|| tracked.map(|deployment| deployment.token.clone()))
+        .ok_or_else(|| {
+            AlienError::new(ErrorData::ValidationError {
+                field: "token".to_string(),
+                message: format!(
+                    "Deployment '{}' is not tracked. Pass --token or --token-file to look it up remotely.",
+                    args.name
+                ),
+            })
+        })?;
+    let base_url = resolve_base_url_option(args.base_url.as_ref(), embedded_config);
+    let manager_url = match (args.manager_url, tracked) {
+        (Some(manager_url), _) => manager_url,
+        (None, Some(tracked)) => tracked.manager_url.clone(),
+        (None, None) => {
+            let platform = resolve_platform_option(
+                args.platform.as_ref(),
+                embedded_config,
+                "remote deployment status",
+            )?;
+            resolve_manager_url_option(None, &base_url, &token, &platform).await?
+        }
+    };
+    let deployment_id = match tracked {
+        Some(tracked) => tracked.deployment_id.clone(),
+        None => resolve_remote_deployment_id(&token, &manager_url, &args.name).await?,
+    };
 
     let client = create_manager_client(&token, &manager_url)?;
 
     let deployment = client
         .get_deployment()
-        .id(&tracked.deployment_id)
+        .id(&deployment_id)
         .send()
         .await
         .into_alien_error()
@@ -72,8 +110,8 @@ pub async fn status_command(args: StatusArgs) -> Result<()> {
         .into_inner();
 
     output::header(&format!("Deployment: {}", args.name));
-    output::status("ID:", &tracked.deployment_id);
-    output::status("Platform:", &tracked.platform);
+    output::status("ID:", &deployment_id);
+    output::status("Platform:", &deployment.platform.to_string());
     output::status("Manager:", &manager_url);
     output::status("Status:", &deployment.status);
 
@@ -95,6 +133,53 @@ pub async fn status_command(args: StatusArgs) -> Result<()> {
     output::status("Created:", &deployment.created_at);
 
     Ok(())
+}
+
+async fn resolve_remote_deployment_id(
+    token: &str,
+    manager_url: &str,
+    name: &str,
+) -> Result<String> {
+    let client = create_manager_http_client(token)?;
+    let url = format!(
+        "{}/v1/deployments?name={}",
+        manager_url.trim_end_matches('/'),
+        urlencoding::encode(name),
+    );
+    let response = client.get(&url).send().await.into_alien_error().context(
+        ErrorData::ConfigurationError {
+            message: "Failed to list deployments from manager".to_string(),
+        },
+    )?;
+
+    if !response.status().is_success() {
+        let status = response.status();
+        let body = response.text().await.unwrap_or_default();
+        return Err(AlienError::new(ErrorData::ConfigurationError {
+            message: format!("Failed to look up deployment by name (HTTP {status}): {body}"),
+        }));
+    }
+
+    let deployments: RemoteDeploymentList =
+        response
+            .json()
+            .await
+            .into_alien_error()
+            .context(ErrorData::ConfigurationError {
+                message: "Failed to parse manager deployment list".to_string(),
+            })?;
+
+    match deployments.items.as_slice() {
+        [deployment] => Ok(deployment.id.clone()),
+        [] => Err(AlienError::new(ErrorData::ValidationError {
+            field: "name".to_string(),
+            message: format!("Deployment '{name}' was not found for this token."),
+        })),
+        _ => Err(AlienError::new(ErrorData::ValidationError {
+            field: "name".to_string(),
+            message: format!("Deployment name '{name}' matched multiple deployments."),
+        })),
+    }
 }
 
 fn format_error_chain(error: &JsonValue) -> Vec<String> {

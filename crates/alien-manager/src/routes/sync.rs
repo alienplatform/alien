@@ -184,6 +184,7 @@ pub struct InitializeRequest {
 #[serde(rename_all = "camelCase")]
 pub struct InitializeResponse {
     pub deployment_id: String,
+    pub deployment_model: DeploymentModel,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub token: Option<String>,
 }
@@ -1500,9 +1501,19 @@ async fn initialize(
 
     match subject.scope.clone() {
         crate::auth::Scope::Deployment { deployment_id, .. } => {
-            // Already has a deployment - return its ID
+            let deployment = match state
+                .deployment_store
+                .get_deployment(&subject, &deployment_id)
+                .await
+            {
+                Ok(Some(deployment)) => deployment,
+                Ok(None) => return ErrorData::not_found_deployment(&deployment_id).into_response(),
+                Err(e) => return e.into_response(),
+            };
+
             Json(InitializeResponse {
                 deployment_id,
+                deployment_model: super::deployments::deployment_model_for_record(&deployment),
                 token: None,
             })
             .into_response()
@@ -1542,6 +1553,9 @@ async fn initialize(
                     .await
                 {
                     Ok(_) => Json(InitializeResponse {
+                        deployment_model: super::deployments::deployment_model_for_record(
+                            &existing,
+                        ),
                         deployment_id: existing.id,
                         token: Some(raw_token),
                     })
@@ -1550,18 +1564,12 @@ async fn initialize(
                 };
             }
 
-            let settings = req.stack_settings.unwrap_or_else(|| {
-                let mut settings = alien_core::StackSettings::default();
-                settings.deployment_model = match platform {
-                    Platform::Aws
-                    | Platform::Gcp
-                    | Platform::Azure
-                    | Platform::Machines
-                    | Platform::Test => alien_core::DeploymentModel::Push,
-                    Platform::Kubernetes | Platform::Local => alien_core::DeploymentModel::Pull,
+            let settings =
+                match super::deployments::stack_settings_for_platform(platform, req.stack_settings)
+                {
+                    Ok(settings) => settings,
+                    Err(e) => return e.into_response(),
                 };
-                settings
-            });
 
             // Create deployment with a token (reuse the agent's Bearer token)
             let dep_token = headers
@@ -1623,6 +1631,9 @@ async fn initialize(
                 Ok(_) => (
                     StatusCode::CREATED,
                     Json(InitializeResponse {
+                        deployment_model: super::deployments::deployment_model_for_record(
+                            &deployment,
+                        ),
                         deployment_id: deployment.id,
                         token: Some(raw_token),
                     }),
@@ -1650,12 +1661,16 @@ async fn initialize(
                 .await
             {
                 Ok(deployments) if !deployments.is_empty() => {
-                    let deployment_id = deployments[0].id.clone();
+                    let deployment = &deployments[0];
+                    let deployment_id = deployment.id.clone();
                     tracing::info!(
                         %deployment_id,
                         "Admin token: assigning agent to existing deployment"
                     );
                     Json(InitializeResponse {
+                        deployment_model: super::deployments::deployment_model_for_record(
+                            deployment,
+                        ),
                         deployment_id,
                         token: None,
                     })

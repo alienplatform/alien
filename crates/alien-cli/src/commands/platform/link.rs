@@ -66,7 +66,7 @@ pub async fn link_task(args: LinkArgs, ctx: ExecutionMode) -> Result<()> {
     }
 
     let http = ctx.auth_http().await?;
-    let workspace_name = ctx.resolve_workspace_with_bootstrap(!args.json).await?;
+    let workspace = ctx.resolve_platform_workspace_context(!args.json).await?;
 
     let explicit_project_name = match (ctx.project_override(), args.name.as_deref()) {
         (Some(_), Some(_)) => {
@@ -82,7 +82,8 @@ pub async fn link_task(args: LinkArgs, ctx: ExecutionMode) -> Result<()> {
     let (link, git_repository_warning) = if let Some(project_name) = explicit_project_name {
         link_or_create_project_by_name(
             &http,
-            &workspace_name,
+            &workspace.name,
+            workspace.query.as_deref(),
             project_name,
             &current_dir,
             !args.no_git,
@@ -92,7 +93,13 @@ pub async fn link_task(args: LinkArgs, ctx: ExecutionMode) -> Result<()> {
         let allow_prompt = !args.json && can_prompt();
         let selection = choose_or_create_project(
             &http,
-            &workspace_name,
+            workspace.query.as_deref().ok_or_else(|| {
+                AlienError::new(ErrorData::ConfigurationError {
+                    message:
+                        "Interactive project linking with an API key requires `--project <name>`."
+                            .to_string(),
+                })
+            })?,
             Some(&suggest_project_name(&current_dir)),
             &current_dir,
             allow_prompt,
@@ -102,7 +109,7 @@ pub async fn link_task(args: LinkArgs, ctx: ExecutionMode) -> Result<()> {
 
         (
             ProjectLink::new(
-                workspace_name.clone(),
+                workspace.name.clone(),
                 project.id.as_str().to_string(),
                 project.name.as_str().to_string(),
             ),
@@ -122,11 +129,12 @@ pub async fn link_task(args: LinkArgs, ctx: ExecutionMode) -> Result<()> {
 async fn link_or_create_project_by_name(
     http: &crate::auth::AuthHttp,
     workspace_name: &str,
+    workspace_query: Option<&str>,
     project_name: &str,
     current_dir: &std::path::Path,
     include_git_repository: bool,
 ) -> Result<(ProjectLink, Option<types::ApiError>)> {
-    match get_project_by_name(http, workspace_name, Some(workspace_name), project_name).await {
+    match get_project_by_name(http, workspace_name, workspace_query, project_name).await {
         Ok(link) => Ok((link, None)),
         Err(error)
             if matches!(
@@ -137,9 +145,16 @@ async fn link_or_create_project_by_name(
                 })
             ) =>
         {
+            let Some(workspace_query) = workspace_query else {
+                return Err(AlienError::new(ErrorData::ConfigurationError {
+                    message:
+                        "Project creation with an API key requires a project that already exists. Create the project in the dashboard or use user login with `--workspace <name>`."
+                            .to_string(),
+                }));
+            };
             let selection = crate::project_link::create_new_project(
                 http.sdk_client(),
-                workspace_name,
+                workspace_query,
                 Some(project_name),
                 current_dir,
                 false,
@@ -149,7 +164,7 @@ async fn link_or_create_project_by_name(
             let project = selection.project;
             Ok((
                 ProjectLink::new(
-                    workspace_name.to_string(),
+                    workspace_query.to_string(),
                     project.id.as_str().to_string(),
                     project.name.as_str().to_string(),
                 ),

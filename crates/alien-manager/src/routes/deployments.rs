@@ -11,8 +11,8 @@ use serde::{Deserialize, Serialize};
 
 use alien_core::{
     import::ImportSourceKind, is_valid_resource_prefix, ContainerOutputs, DaemonOutputs,
-    EnvironmentVariable, Platform, PublicEndpointOutput, StackSettings, StackState, WorkerOutputs,
-    RESOURCE_PREFIX_ERROR_MESSAGE,
+    DeploymentModel, EnvironmentVariable, Platform, PublicEndpointOutput, StackSettings,
+    StackState, WorkerOutputs, RESOURCE_PREFIX_ERROR_MESSAGE,
 };
 
 use crate::error::ErrorData;
@@ -45,6 +45,7 @@ pub struct CreateDeploymentRequest {
 #[serde(rename_all = "camelCase")]
 pub struct CreateDeploymentResponse {
     pub deployment: DeploymentResponse,
+    pub deployment_model: DeploymentModel,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub token: Option<String>,
 }
@@ -267,6 +268,50 @@ fn record_to_response(
     }
 }
 
+pub(crate) fn expected_deployment_model_for_platform(platform: Platform) -> DeploymentModel {
+    match platform {
+        Platform::Aws | Platform::Gcp | Platform::Azure | Platform::Machines | Platform::Test => {
+            DeploymentModel::Push
+        }
+        Platform::Kubernetes | Platform::Local => DeploymentModel::Pull,
+    }
+}
+
+pub(crate) fn deployment_model_for_record(record: &DeploymentRecord) -> DeploymentModel {
+    record
+        .stack_settings
+        .as_ref()
+        .map(|settings| settings.deployment_model)
+        .unwrap_or(DeploymentModel::Push)
+}
+
+fn deployment_model_name(model: DeploymentModel) -> &'static str {
+    match model {
+        DeploymentModel::Push => "push",
+        DeploymentModel::Pull => "pull",
+    }
+}
+
+pub(crate) fn stack_settings_for_platform(
+    platform: Platform,
+    stack_settings: Option<StackSettings>,
+) -> Result<StackSettings, alien_error::AlienError<ErrorData>> {
+    let expected = expected_deployment_model_for_platform(platform);
+    let mut stack_settings = stack_settings.unwrap_or_default();
+
+    if expected == DeploymentModel::Push && stack_settings.deployment_model != expected {
+        return Err(ErrorData::bad_request(format!(
+            "{} deployments must use deploymentModel '{}', received '{}'",
+            platform.as_str(),
+            deployment_model_name(expected),
+            deployment_model_name(stack_settings.deployment_model),
+        )));
+    }
+
+    stack_settings.deployment_model = expected;
+    Ok(stack_settings)
+}
+
 // --- Handlers ---
 
 /// Every handler in this file runs `auth::require_auth(&state, &headers)`
@@ -383,6 +428,11 @@ async fn create_deployment(
         None => None,
     };
 
+    let stack_settings = match stack_settings_for_platform(req.platform, req.stack_settings) {
+        Ok(settings) => settings,
+        Err(e) => return e.into_response(),
+    };
+
     let mut deployment = match state
         .deployment_store
         .create_deployment(
@@ -393,7 +443,7 @@ async fn create_deployment(
                 deployment_group_id: deployment_group_id.clone(),
                 platform: req.platform,
                 base_platform: None,
-                stack_settings: req.stack_settings.unwrap_or_default(),
+                stack_settings,
                 stack_state,
                 environment_variables: req.environment_variables,
                 public_subdomain: None,
@@ -441,6 +491,7 @@ async fn create_deployment(
     (
         StatusCode::CREATED,
         Json(CreateDeploymentResponse {
+            deployment_model: deployment_model_for_record(&deployment),
             deployment: record_to_response(&deployment, None),
             token,
         }),

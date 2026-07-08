@@ -140,6 +140,7 @@ export * from "./presignedrequest.js";
 export * from "./presignedrequestbackend.js";
 export * from "./providerfleetstatus.js";
 export * from "./providerlifecyclestate.js";
+export * from "./publicendpointtargetsettings.js";
 export * from "./queueheartbeatdata.js";
 export * from "./queueheartbeatstatus.js";
 export * from "./rawheartbeatsnippet.js";

@@ -14,11 +14,7 @@
 use crate::error::{ErrorData, Result};
 use alien_error::{AlienError, Context, ContextError, IntoAlienError, IntoAlienErrorDirect};
 use alien_manager_api::Client as ServerSdkClient;
-#[cfg(feature = "platform")]
-use alien_platform_api::types::Subject;
 use alien_platform_api::Client as SdkClient;
-#[cfg(feature = "platform")]
-use alien_platform_api::SdkResultExt as _;
 use tokio::time::Duration;
 use tracing::{info, warn};
 
@@ -59,6 +55,9 @@ pub struct PlatformWorkspaceContext {
     pub name: String,
     pub query: Option<String>,
 }
+
+#[cfg(feature = "platform")]
+const API_KEY_WORKSPACE_DISPLAY: &str = "api-key-workspace";
 
 /// Execution mode determines which API the command targets and carries all global flags.
 ///
@@ -225,15 +224,12 @@ impl ExecutionMode {
             #[cfg(feature = "platform")]
             Self::Platform {
                 api_key: Some(_),
-                workspace,
                 ..
-            } => {
-                if let Some(workspace) = workspace.clone() {
-                    return Ok(workspace);
-                }
-
-                self.resolve_api_key_workspace_name().await
-            }
+            } => Err(AlienError::new(ErrorData::ConfigurationError {
+                message:
+                    "API keys are already scoped to a workspace. This command needs a user workspace name; log in with user credentials or use a project-scoped command such as `alien link --project <name>`."
+                        .to_string(),
+            })),
             #[cfg(feature = "platform")]
             Self::Platform { workspace, .. } => {
                 if let Some(workspace) = workspace.clone().or_else(load_workspace) {
@@ -264,9 +260,7 @@ impl ExecutionMode {
     /// Resolve the optional workspace query/header for platform API requests.
     ///
     /// User credentials need an explicit workspace because roles are per-workspace.
-    /// API keys are already scoped, so a saved OAuth default workspace must not be
-    /// inherited; only an explicit `--workspace` should be forwarded for mismatch
-    /// checking.
+    /// API keys are already scoped, so the CLI does not add a workspace query.
     #[cfg(feature = "platform")]
     pub async fn resolve_workspace_query_with_bootstrap(
         &self,
@@ -274,10 +268,8 @@ impl ExecutionMode {
     ) -> Result<Option<String>> {
         match self {
             Self::Platform {
-                api_key: Some(_),
-                workspace,
-                ..
-            } => Ok(workspace.clone()),
+                api_key: Some(_), ..
+            } => Ok(None),
             Self::Platform { .. } => self
                 .resolve_workspace_with_bootstrap(allow_prompt)
                 .await
@@ -294,23 +286,11 @@ impl ExecutionMode {
     ) -> Result<PlatformWorkspaceContext> {
         match self {
             Self::Platform {
-                api_key: Some(_),
-                workspace: Some(workspace),
-                ..
-            } => Ok(PlatformWorkspaceContext {
-                name: workspace.clone(),
-                query: Some(workspace.clone()),
-            }),
-            Self::Platform {
                 api_key: Some(_), ..
-            } => {
-                let workspace_name = self.resolve_api_key_workspace_name().await?;
-
-                Ok(PlatformWorkspaceContext {
-                    name: workspace_name,
-                    query: None,
-                })
-            }
+            } => Ok(PlatformWorkspaceContext {
+                name: API_KEY_WORKSPACE_DISPLAY.to_string(),
+                query: None,
+            }),
             Self::Platform { .. } => {
                 let workspace = self.resolve_workspace_with_bootstrap(allow_prompt).await?;
                 Ok(PlatformWorkspaceContext {
@@ -333,6 +313,10 @@ impl ExecutionMode {
     /// `None` in single-tenant modes (dev, standalone) — they don't need one.
     pub fn configured_workspace(&self) -> Option<String> {
         match self {
+            #[cfg(feature = "platform")]
+            Self::Platform {
+                api_key: Some(_), ..
+            } => None,
             #[cfg(feature = "platform")]
             Self::Platform { workspace, .. } => workspace.clone().or_else(load_workspace),
             _ => None,
@@ -683,21 +667,36 @@ impl ExecutionMode {
                     )
                     .await?
                 } else {
-                    let Some(workspace_query) = workspace.query.as_deref() else {
-                        return Err(AlienError::new(ErrorData::ConfigurationError {
-                            message:
-                                "API key mode requires `--project <name>` when no `--workspace` is supplied."
-                                    .to_string(),
-                        }));
-                    };
-                    let current_dir = crate::get_current_dir()?;
-                    crate::project_link::ensure_project_linked(
-                        &current_dir,
-                        &http,
-                        workspace_query,
-                        allow_prompt,
-                    )
-                    .await?
+                    match workspace.query.as_deref() {
+                        Some(workspace_query) => {
+                            let current_dir = crate::get_current_dir()?;
+                            crate::project_link::ensure_project_linked(
+                                &current_dir,
+                                &http,
+                                workspace_query,
+                                allow_prompt,
+                            )
+                            .await?
+                        }
+                        None => {
+                            let current_dir = crate::get_current_dir()?;
+                            match crate::project_link::get_project_link_status(&current_dir) {
+                                crate::project_link::ProjectLinkStatus::Linked(link) => link,
+                                crate::project_link::ProjectLinkStatus::NotLinked => {
+                                    return Err(AlienError::new(ErrorData::ConfigurationError {
+                                        message:
+                                            "No project is linked. Run `alien link --project <name>` or pass `--project <name>`."
+                                                .to_string(),
+                                    }));
+                                }
+                                crate::project_link::ProjectLinkStatus::Error(error) => {
+                                    return Err(AlienError::new(ErrorData::ProjectLinkInvalid {
+                                        message: error,
+                                    }));
+                                }
+                            }
+                        }
+                    }
                 };
 
                 let project_id = link.project_id.clone();
@@ -735,37 +734,6 @@ impl ExecutionMode {
                 base_url: Some(format!("http://localhost:{}", port)),
                 no_browser: true,
             },
-        }
-    }
-
-    #[cfg(feature = "platform")]
-    async fn resolve_api_key_workspace_name(&self) -> Result<String> {
-        let http = self.auth_http().await?;
-        let subject = http
-            .sdk_client()
-            .whoami()
-            .send()
-            .await
-            .into_sdk_error()
-            .context(ErrorData::ApiRequestFailed {
-                message: "Failed to resolve API key workspace".to_string(),
-                url: None,
-            })?
-            .into_inner();
-
-        match subject {
-            Subject::ServiceAccountSubject(subject) => subject.workspace_name.ok_or_else(|| {
-                AlienError::new(ErrorData::ConfigurationError {
-                    message:
-                        "API key subject is missing workspace name. Pass `--workspace <name>` explicitly."
-                            .to_string(),
-                })
-            }),
-            Subject::UserSubject(_) => Err(AlienError::new(ErrorData::ConfigurationError {
-                message:
-                    "API key subject is not scoped to a workspace. Pass `--workspace <name>` explicitly."
-                        .to_string(),
-            })),
         }
     }
 }
@@ -1007,7 +975,7 @@ mod tests {
 
     #[cfg(feature = "platform")]
     #[tokio::test]
-    async fn api_key_with_explicit_workspace_forwards_workspace_query() {
+    async fn api_key_with_explicit_workspace_omits_workspace_query() {
         let mode = ExecutionMode::Platform {
             base_url: "https://api.alien.localhost".to_string(),
             api_key: Some("ax_test".to_string()),
@@ -1020,7 +988,40 @@ mod tests {
             mode.resolve_workspace_query_with_bootstrap(false)
                 .await
                 .unwrap(),
-            Some("demo".to_string())
+            None
         );
+    }
+
+    #[cfg(feature = "platform")]
+    #[test]
+    fn api_key_does_not_inherit_configured_workspace() {
+        let mode = ExecutionMode::Platform {
+            base_url: "https://api.alien.localhost".to_string(),
+            api_key: Some("ax_test".to_string()),
+            no_browser: true,
+            workspace: Some("demo".to_string()),
+            project: None,
+        };
+
+        assert_eq!(mode.configured_workspace(), None);
+    }
+
+    #[cfg(feature = "platform")]
+    #[tokio::test]
+    async fn api_key_platform_context_omits_workspace_query() {
+        let mode = ExecutionMode::Platform {
+            base_url: "https://api.alien.localhost".to_string(),
+            api_key: Some("ax_test".to_string()),
+            no_browser: true,
+            workspace: Some("demo".to_string()),
+            project: None,
+        };
+
+        let context = mode
+            .resolve_platform_workspace_context(false)
+            .await
+            .unwrap();
+
+        assert_eq!(context.query, None);
     }
 }

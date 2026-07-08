@@ -45,7 +45,7 @@ export class Deployments extends ClientSDK {
   async create(
     request?: operations.CreateDeploymentRequest | undefined,
     options?: RequestOptions,
-  ): Promise<operations.CreateDeploymentResponse> {
+  ): Promise<models.CreateDeploymentResponse> {
     return unwrapAsync(deploymentsCreate(
       this,
       request,

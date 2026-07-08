@@ -5850,11 +5850,15 @@
       "CreateDeploymentResponse": {
         "type": "object",
         "required": [
-          "deployment"
+          "deployment",
+          "deploymentModel"
         ],
         "properties": {
           "deployment": {
             "$ref": "#/components/schemas/DeploymentResponse"
+          },
+          "deploymentModel": {
+            "$ref": "#/components/schemas/DeploymentModel"
           },
           "token": {
             "type": [
@@ -7927,11 +7931,15 @@
       "InitializeResponse": {
         "type": "object",
         "required": [
-          "deploymentId"
+          "deploymentId",
+          "deploymentModel"
         ],
         "properties": {
           "deploymentId": {
             "type": "string"
+          },
+          "deploymentModel": {
+            "$ref": "#/components/schemas/DeploymentModel"
           },
           "token": {
             "type": [

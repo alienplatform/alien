@@ -220,14 +220,11 @@ async fn load_release_config(
     let current_dir = get_current_dir()?;
     let output_dir = current_dir.join(".alien");
 
-    let workspace_name = ctx
-        .resolve_workspace_with_bootstrap(allow_bootstrap)
-        .await?;
-
     // Resolve project
     let (_project_id, project_link) = ctx
         .resolve_project(args.project.as_deref(), allow_bootstrap)
         .await?;
+    let workspace_name = project_link.workspace.clone();
 
     let is_dev = ctx.is_dev();
 
@@ -530,10 +527,11 @@ async fn release_task_core(
         // Platform mode: create release directly on the platform API
         #[cfg(feature = "platform")]
         {
+            let workspace_query = ctx.resolve_workspace_query_with_bootstrap(false).await?;
             create_platform_release(
                 ctx,
                 &project_link.project_id,
-                &project_link.workspace,
+                workspace_query.as_deref(),
                 stack_by_platform,
                 git_metadata,
             )
@@ -603,7 +601,7 @@ async fn create_manager_release(
 async fn create_platform_release(
     ctx: &ExecutionMode,
     project_id: &str,
-    workspace: &str,
+    workspace: Option<&str>,
     stack: ManagerStackByPlatform,
     git_metadata: Option<GitMetadata>,
 ) -> Result<String> {
@@ -630,14 +628,6 @@ async fn create_platform_release(
                 url: None,
             })?;
 
-    let workspace_param = alien_platform_api::types::CreateReleaseWorkspace::try_from(workspace)
-        .map_err(|e| {
-            AlienError::new(ErrorData::ValidationError {
-                field: "workspace".to_string(),
-                message: format!("Invalid workspace: {}", e),
-            })
-        })?;
-
     let body = alien_platform_api::types::CreateReleaseRequest::builder()
         .project(project_id.to_string())
         .stack(platform_stack)
@@ -650,17 +640,30 @@ async fn create_platform_release(
         })
     })?;
 
-    let response = platform_client
-        .create_release()
-        .workspace(&workspace_param)
-        .body(body)
-        .send()
-        .await
-        .into_sdk_error()
-        .context(ErrorData::ApiRequestFailed {
-            message: "Failed to create release on platform API".to_string(),
-            url: None,
+    let mut request = platform_client.create_release();
+    if let Some(workspace) = workspace {
+        let workspace_param = alien_platform_api::types::CreateReleaseWorkspace::try_from(
+            workspace,
+        )
+        .map_err(|e| {
+            AlienError::new(ErrorData::ValidationError {
+                field: "workspace".to_string(),
+                message: format!("Invalid workspace: {}", e),
+            })
         })?;
+        request = request.workspace(&workspace_param);
+    }
+
+    let response =
+        request
+            .body(body)
+            .send()
+            .await
+            .into_sdk_error()
+            .context(ErrorData::ApiRequestFailed {
+                message: "Failed to create release on platform API".to_string(),
+                url: None,
+            })?;
 
     let release_id = response.id.to_string();
     info!("Release created successfully!");
@@ -702,8 +705,8 @@ async fn release_declare(args: &ReleaseArgs, ctx: &ExecutionMode) -> Result<Decl
         }));
     }
 
-    let workspace_name = ctx.resolve_workspace_with_bootstrap(false).await?;
     let (_project_id, project_link) = ctx.resolve_project(args.project.as_deref(), false).await?;
+    let workspace_name = project_link.workspace.clone();
 
     let git_metadata = if args.no_git {
         None
@@ -720,10 +723,11 @@ async fn release_declare(args: &ReleaseArgs, ctx: &ExecutionMode) -> Result<Decl
 
     #[cfg(feature = "platform")]
     {
+        let workspace_query = ctx.resolve_workspace_query_with_bootstrap(false).await?;
         let release_id = declare_platform_release(
             ctx,
             &project_link.project_id,
-            &project_link.workspace,
+            workspace_query.as_deref(),
             &version,
             git_metadata,
         )
@@ -748,7 +752,7 @@ async fn release_declare(args: &ReleaseArgs, ctx: &ExecutionMode) -> Result<Decl
 async fn declare_platform_release(
     ctx: &ExecutionMode,
     project_id: &str,
-    workspace: &str,
+    workspace: Option<&str>,
     version: &str,
     git_metadata: Option<GitMetadata>,
 ) -> Result<String> {
@@ -758,14 +762,6 @@ async fn declare_platform_release(
 
     let http = ctx.auth_http().await?;
     let platform_client = http.sdk_client();
-
-    let workspace_param = alien_platform_api::types::CreateReleaseWorkspace::try_from(workspace)
-        .map_err(|e| {
-            AlienError::new(ErrorData::ValidationError {
-                field: "workspace".to_string(),
-                message: format!("Invalid workspace: {}", e),
-            })
-        })?;
 
     let version_value =
         alien_platform_api::types::CreateReleaseRequestVersion::try_from(version.to_string())
@@ -789,17 +785,30 @@ async fn declare_platform_release(
         })
     })?;
 
-    let response = platform_client
-        .create_release()
-        .workspace(&workspace_param)
-        .body(body)
-        .send()
-        .await
-        .into_sdk_error()
-        .context(ErrorData::ApiRequestFailed {
-            message: "Failed to declare release on platform API".to_string(),
-            url: None,
+    let mut request = platform_client.create_release();
+    if let Some(workspace) = workspace {
+        let workspace_param = alien_platform_api::types::CreateReleaseWorkspace::try_from(
+            workspace,
+        )
+        .map_err(|e| {
+            AlienError::new(ErrorData::ValidationError {
+                field: "workspace".to_string(),
+                message: format!("Invalid workspace: {}", e),
+            })
         })?;
+        request = request.workspace(&workspace_param);
+    }
+
+    let response =
+        request
+            .body(body)
+            .send()
+            .await
+            .into_sdk_error()
+            .context(ErrorData::ApiRequestFailed {
+                message: "Failed to declare release on platform API".to_string(),
+                url: None,
+            })?;
 
     let release_id = response.id.to_string();
     info!("Release declared: {}", release_id);

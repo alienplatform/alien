@@ -77,8 +77,8 @@ pub async fn run_cli(cli: Cli) -> Result<()> {
     match cli.command {
         Commands::Deploy(args) => up_command(args, embedded_config.as_ref()).await,
         Commands::Destroy(args) => down_command(args, embedded_config.as_ref()).await,
-        Commands::Status(args) => status_command(args).await,
-        Commands::List(args) => list_command(args).await,
+        Commands::Status(args) => status_command(args, embedded_config.as_ref()).await,
+        Commands::List(args) => list_command(args, embedded_config.as_ref()).await,
         Commands::Operator(args) => operator_command(args).await,
         Commands::Register(args) => register_command(args).await,
         Commands::Join(args) => join_command(args, embedded_config.as_ref()).await,
@@ -135,6 +135,28 @@ mod tests {
         let cli = Cli::try_parse_from(["alien-deploy", "-v", "list"]).unwrap();
         assert!(cli.verbose);
         assert!(matches!(cli.command, Commands::List(_)));
+    }
+
+    #[test]
+    fn test_parse_list_command_token_file() {
+        let cli = Cli::try_parse_from([
+            "alien-deploy",
+            "list",
+            "--token-file",
+            "/run/alien/token",
+            "--platform",
+            "machines",
+        ])
+        .unwrap();
+
+        let Commands::List(args) = cli.command else {
+            panic!("expected list variant");
+        };
+        assert_eq!(
+            args.token_file.as_deref(),
+            Some(std::path::Path::new("/run/alien/token"))
+        );
+        assert_eq!(args.platform.as_deref(), Some("machines"));
     }
 
     #[test]

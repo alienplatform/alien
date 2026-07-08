@@ -68,12 +68,14 @@ pub fn convert_sdk_error(err: Error<types::ApiError>) -> AlienError<GenericError
         Error::ErrorResponse(response) => {
             let status = response.status().as_u16();
             let api_error = response.into_inner();
+            let context =
+                context_with_request_id(api_error.context, api_error.request_id.as_deref());
 
             AlienError {
                 code: api_error.code.to_string(),
                 message: api_error.message.to_string(),
-                context: api_error.context,
-                hint: None,
+                context,
+                hint: api_error.hint,
                 retryable: api_error.retryable,
                 internal: false, // API errors sent to clients are external by nature
                 http_status_code: Some(status),
@@ -89,20 +91,19 @@ pub fn convert_sdk_error(err: Error<types::ApiError>) -> AlienError<GenericError
         Error::CommunicationError(reqwest_err) => {
             let retryable =
                 reqwest_err.is_connect() || reqwest_err.is_timeout() || reqwest_err.is_request();
+            let message = reqwest_failure_message("HTTP request", &reqwest_err);
 
             AlienError {
                 code: "COMMUNICATION_ERROR".to_string(),
-                message: format!("Communication Error: {}", reqwest_err),
-                context: None,
+                message: message.clone(),
+                context: reqwest_failure_context(&reqwest_err),
                 hint: None,
                 retryable,
                 internal: false,
                 http_status_code: reqwest_err.status().map(|s| s.as_u16()),
                 source: build_reqwest_source(&reqwest_err),
                 human_layer_presentation: HumanLayerPresentation::Normal,
-                error: Some(GenericError {
-                    message: format!("Communication Error: {}", reqwest_err),
-                }),
+                error: Some(GenericError { message }),
             }
         }
 
@@ -123,20 +124,22 @@ pub fn convert_sdk_error(err: Error<types::ApiError>) -> AlienError<GenericError
         },
 
         // Failed to read response body
-        Error::ResponseBodyError(reqwest_err) => AlienError {
-            code: "RESPONSE_BODY_ERROR".to_string(),
-            message: format!("Error reading response body: {}", reqwest_err),
-            context: None,
-            hint: None,
-            retryable: true, // Transient network issue
-            internal: false,
-            http_status_code: reqwest_err.status().map(|s| s.as_u16()),
-            source: build_reqwest_source(&reqwest_err),
-            human_layer_presentation: HumanLayerPresentation::Normal,
-            error: Some(GenericError {
-                message: format!("Error reading response body: {}", reqwest_err),
-            }),
-        },
+        Error::ResponseBodyError(reqwest_err) => {
+            let message = reqwest_failure_message("HTTP response body read", &reqwest_err);
+
+            AlienError {
+                code: "RESPONSE_BODY_ERROR".to_string(),
+                message: message.clone(),
+                context: reqwest_failure_context(&reqwest_err),
+                hint: None,
+                retryable: true, // Transient network issue
+                internal: false,
+                http_status_code: reqwest_err.status().map(|s| s.as_u16()),
+                source: build_reqwest_source(&reqwest_err),
+                human_layer_presentation: HumanLayerPresentation::Normal,
+                error: Some(GenericError { message }),
+            }
+        }
 
         // Response body couldn't be parsed as expected type
         // Include raw body in context for debugging
@@ -174,20 +177,22 @@ pub fn convert_sdk_error(err: Error<types::ApiError>) -> AlienError<GenericError
         }
 
         // WebSocket upgrade error
-        Error::InvalidUpgrade(reqwest_err) => AlienError {
-            code: "INVALID_UPGRADE".to_string(),
-            message: format!("Connection upgrade failed: {}", reqwest_err),
-            context: None,
-            hint: None,
-            retryable: false,
-            internal: false,
-            http_status_code: reqwest_err.status().map(|s| s.as_u16()),
-            source: build_reqwest_source(&reqwest_err),
-            human_layer_presentation: HumanLayerPresentation::Normal,
-            error: Some(GenericError {
-                message: format!("Connection upgrade failed: {}", reqwest_err),
-            }),
-        },
+        Error::InvalidUpgrade(reqwest_err) => {
+            let message = reqwest_failure_message("HTTP connection upgrade", &reqwest_err);
+
+            AlienError {
+                code: "INVALID_UPGRADE".to_string(),
+                message: message.clone(),
+                context: reqwest_failure_context(&reqwest_err),
+                hint: None,
+                retryable: false,
+                internal: false,
+                http_status_code: reqwest_err.status().map(|s| s.as_u16()),
+                source: build_reqwest_source(&reqwest_err),
+                human_layer_presentation: HumanLayerPresentation::Normal,
+                error: Some(GenericError { message }),
+            }
+        }
 
         // Response with status code not in OpenAPI spec
         Error::UnexpectedResponse(response) => {
@@ -229,6 +234,44 @@ pub fn convert_sdk_error(err: Error<types::ApiError>) -> AlienError<GenericError
             error: Some(GenericError { message: msg }),
         },
     }
+}
+
+fn context_with_request_id(
+    context: Option<serde_json::Value>,
+    request_id: Option<&str>,
+) -> Option<serde_json::Value> {
+    let Some(request_id) = request_id else {
+        return context;
+    };
+
+    match context {
+        Some(serde_json::Value::Object(mut object)) => {
+            object
+                .entry("requestId")
+                .or_insert_with(|| serde_json::Value::String(request_id.to_string()));
+            Some(serde_json::Value::Object(object))
+        }
+        Some(value) => Some(serde_json::json!({
+            "requestId": request_id,
+            "context": value,
+        })),
+        None => Some(serde_json::json!({ "requestId": request_id })),
+    }
+}
+
+fn reqwest_failure_message(operation: &str, err: &reqwest::Error) -> String {
+    match err.url() {
+        Some(url) => format!("{operation} {} failed: {err}", url),
+        None => format!("{operation} failed: {err}"),
+    }
+}
+
+fn reqwest_failure_context(err: &reqwest::Error) -> Option<serde_json::Value> {
+    err.url().map(|url| {
+        serde_json::json!({
+            "url": url.to_string(),
+        })
+    })
 }
 
 /// Build a source error chain from a reqwest error
@@ -317,5 +360,44 @@ mod tests {
         // Verify generated types work as expected
         let code = types::ApiErrorCode::try_from("TEST_ERROR").unwrap();
         assert_eq!(code.as_str(), "TEST_ERROR");
+    }
+
+    #[test]
+    fn context_with_request_id_adds_request_id_to_empty_context() {
+        let context = super::context_with_request_id(None, Some("req_123")).unwrap();
+
+        assert_eq!(context["requestId"], "req_123");
+    }
+
+    #[test]
+    fn context_with_request_id_preserves_existing_context() {
+        let context = super::context_with_request_id(
+            Some(serde_json::json!({ "workspace": "demo" })),
+            Some("req_123"),
+        )
+        .unwrap();
+
+        assert_eq!(context["workspace"], "demo");
+        assert_eq!(context["requestId"], "req_123");
+    }
+
+    #[tokio::test]
+    async fn communication_error_includes_url_in_message_and_context() {
+        let reqwest_err = reqwest::Client::new()
+            .get("http://127.0.0.1:9/v1/whoami")
+            .send()
+            .await
+            .expect_err("localhost discard port should refuse the connection");
+
+        let error = super::convert_sdk_error(Error::CommunicationError(reqwest_err));
+
+        assert_eq!(error.code, "COMMUNICATION_ERROR");
+        assert!(error
+            .message
+            .starts_with("HTTP request http://127.0.0.1:9/v1/whoami failed:"));
+        assert_eq!(
+            error.context.as_ref().unwrap()["url"],
+            "http://127.0.0.1:9/v1/whoami"
+        );
     }
 }
