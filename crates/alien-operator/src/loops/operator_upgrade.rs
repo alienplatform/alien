@@ -463,6 +463,18 @@ fn build_job_body(inputs: &JobInputs) -> (String, serde_json::Value) {
     } else {
         format!(" {}", inputs.extra_args.trim())
     };
+    // `helm upgrade` flags, and why each matters for a self-update:
+    //   --reuse-values  keep the deployment's existing values; the manager only
+    //                   overrides `image.tag` (the pinned operator version), so a
+    //                   version pin never silently drops other config.
+    //   --atomic        roll the release back to the prior revision if the upgrade
+    //                   fails, so a bad tag never leaves a half-swapped operator.
+    //                   That rollback IS the Apply-phase failure we report — the
+    //                   operator stays on its old version rather than a broken one.
+    //   --wait          block until the new pods pass their readiness probe (which
+    //                   gates on a first successful `/v1/sync`), so "upgrade done"
+    //                   means the new operator actually came up and reached the
+    //                   manager, not merely that the API objects were applied.
     let helm_cmd = format!(
         "set -e\n\
          printf '%s' \"$VALUES_JSON\" > /tmp/values.json\n\
