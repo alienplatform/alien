@@ -308,15 +308,16 @@ pub fn exclusion_reason(
         Binding::Worker => Some("Worker binding test app endpoint not yet implemented"),
         Binding::Container => Some("Container binding requires managed container infrastructure"),
         // The TypeScript comprehensive app's surface is storage/kv/queue/vault
-        // (ALIEN-214: the manager/controller-internal build, artifact-registry,
-        // and service-account flows were split out of the TS SDK and are not
+        // (ALIEN-214: the manager/controller-internal artifact-registry and
+        // service-account flows were split out of the TS SDK and are not
         // reachable through any handler the TS app can serve). The Rust
-        // comprehensive app still exercises these bindings.
-        Binding::Build | Binding::ArtifactRegistry | Binding::ServiceAccount
+        // comprehensive app still exercises these two bindings. Build is not
+        // listed here because it is excluded for every app by the arm below.
+        Binding::ArtifactRegistry | Binding::ServiceAccount
             if app == TestApp::ComprehensiveTs =>
         {
             Some(
-                "TS comprehensive app has no build/artifact-registry/service-account handlers post-ALIEN-214 SDK split",
+                "TS comprehensive app has no artifact-registry/service-account handlers post-ALIEN-214 SDK split",
             )
         }
         Binding::Build => Some("Build binding not yet stable across all platforms"),
@@ -1488,6 +1489,11 @@ mod tests {
 
     #[test]
     fn ts_app_excludes_manager_internal_bindings_on_every_platform() {
+        // Build is intentionally omitted: it is excluded for every app, not the
+        // TS app specifically, so asserting its exclusion here would be
+        // tautological. artifact-registry and service-account are the genuinely
+        // TS-specific exclusions (the Rust app still serves them — see
+        // `rust_app_keeps_service_account_and_artifact_registry_coverage`).
         for platform in [
             Platform::Aws,
             Platform::Gcp,
@@ -1496,11 +1502,7 @@ mod tests {
             Platform::Local,
         ] {
             for model in [DeploymentModel::Push, DeploymentModel::Pull] {
-                for binding in [
-                    Binding::Build,
-                    Binding::ArtifactRegistry,
-                    Binding::ServiceAccount,
-                ] {
+                for binding in [Binding::ArtifactRegistry, Binding::ServiceAccount] {
                     assert!(
                         exclusion_reason(platform, model, binding, TestApp::ComprehensiveTs)
                             .is_some(),
