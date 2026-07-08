@@ -14,6 +14,7 @@ export const AzureNetworkImportDataSchema = z.object({
 "isByoVnet": z.boolean().describe("True when the VNet is owned outside this stack."),
 "natGatewayId": z.string().describe("NAT gateway resource id when one was created.").nullish(),
 "networkSecurityGroupId": z.string().describe("Network Security Group resource id attached to workload subnets.").nullish(),
+"privateEndpointSubnetName": z.string().describe("Dedicated subnet name for Private Endpoints (e.g. Postgres Flexible Server). Distinct from\nthe Container Apps infrastructure (\"private\") subnet, which a Private Endpoint cannot share.").nullish(),
 "resourceGroup": z.string().describe("Resource group containing the VNet."),
 "subnetIds": z.array(z.string()).describe("Subnet resource ids in this VNet used by workloads."),
 "subscriptionId": z.string().describe("Subscription ID containing the VNet."),

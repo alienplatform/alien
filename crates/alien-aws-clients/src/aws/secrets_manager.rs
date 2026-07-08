@@ -406,6 +406,8 @@ pub struct CreateSecretRequest {
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "PascalCase")]
 pub struct CreateSecretResponse {
+    // AWS returns the key all-caps ("ARN"); PascalCase would expect "Arn".
+    #[serde(rename = "ARN")]
     pub arn: Option<String>,
     pub name: Option<String>,
     pub version_id: Option<String>,
@@ -431,6 +433,7 @@ pub struct UpdateSecretRequest {
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "PascalCase")]
 pub struct UpdateSecretResponse {
+    #[serde(rename = "ARN")]
     pub arn: Option<String>,
     pub name: Option<String>,
     pub version_id: Option<String>,
@@ -449,6 +452,7 @@ pub struct DeleteSecretRequest {
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "PascalCase")]
 pub struct DeleteSecretResponse {
+    #[serde(rename = "ARN")]
     pub arn: Option<String>,
     pub name: Option<String>,
     pub deletion_date: Option<f64>,
@@ -463,11 +467,14 @@ pub struct DescribeSecretRequest {
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "PascalCase")]
 pub struct DescribeSecretResponse {
+    #[serde(rename = "ARN")]
     pub arn: Option<String>,
     pub name: Option<String>,
     pub description: Option<String>,
     pub kms_key_id: Option<String>,
     pub rotation_enabled: Option<bool>,
+    // AWS spells the suffix all-caps here too ("RotationLambdaARN") — see CreateSecretResponse.
+    #[serde(rename = "RotationLambdaARN")]
     pub rotation_lambda_arn: Option<String>,
     pub rotation_rules: Option<RotationRulesType>,
     pub last_rotated_date: Option<f64>,
@@ -495,6 +502,7 @@ pub struct GetSecretValueRequest {
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "PascalCase")]
 pub struct GetSecretValueResponse {
+    #[serde(rename = "ARN")]
     pub arn: Option<String>,
     pub name: Option<String>,
     pub version_id: Option<String>,
@@ -521,6 +529,7 @@ pub struct PutSecretValueRequest {
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "PascalCase")]
 pub struct PutSecretValueResponse {
+    #[serde(rename = "ARN")]
     pub arn: Option<String>,
     pub name: Option<String>,
     pub version_id: Option<String>,
@@ -551,4 +560,39 @@ pub struct ReplicaRegionType {
 pub struct RotationRulesType {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub automatically_after_days: Option<i64>,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // AWS returns the ARN key all-caps ("ARN"), not PascalCase ("Arn"); the rename pins that
+    // so responses populate `arn`.
+    #[test]
+    fn create_secret_response_parses_all_caps_arn() {
+        let body = r#"{"ARN":"arn:aws:secretsmanager:us-east-1:0:secret:db-abc","Name":"db"}"#;
+        let resp: CreateSecretResponse = serde_json::from_str(body).expect("parses");
+        assert_eq!(
+            resp.arn.as_deref(),
+            Some("arn:aws:secretsmanager:us-east-1:0:secret:db-abc")
+        );
+    }
+
+    #[test]
+    fn get_secret_value_response_parses_all_caps_arn() {
+        let body = r#"{"ARN":"arn:aws:secretsmanager:us-east-1:0:secret:db-abc","SecretString":"pw"}"#;
+        let resp: GetSecretValueResponse = serde_json::from_str(body).expect("parses");
+        assert_eq!(
+            resp.arn.as_deref(),
+            Some("arn:aws:secretsmanager:us-east-1:0:secret:db-abc")
+        );
+    }
+
+    // A PascalCase "Arn" must NOT populate `arn`: the field is keyed to all-caps "ARN".
+    #[test]
+    fn pascalcase_arn_key_does_not_populate() {
+        let body = r#"{"Arn":"arn:aws:secretsmanager:us-east-1:0:secret:db-abc","Name":"db"}"#;
+        let resp: CreateSecretResponse = serde_json::from_str(body).expect("parses");
+        assert_eq!(resp.arn, None);
+    }
 }
