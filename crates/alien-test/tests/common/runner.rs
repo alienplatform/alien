@@ -5,7 +5,7 @@ use alien_core::Platform;
 use alien_test::{Binding, DeploymentModel, TestApp, TestDeployment};
 use tracing::{info, warn};
 
-use super::bindings;
+use super::{bindings, events};
 use alien_test::e2e;
 
 /// Run all binding checks that are supported for the given platform and model.
@@ -47,9 +47,9 @@ pub async fn check_all_bindings(
             Binding::Environment => bindings::check_environment(deployment).await?,
             Binding::Inspect => bindings::check_inspect(deployment).await?,
             Binding::ManagedSecret => bindings::check_managed_secret(deployment).await?,
-            Binding::QueueEvent => bindings::check_queue_event_delivery(deployment).await?,
-            Binding::StorageEvent => bindings::check_storage_event_delivery(deployment).await?,
-            Binding::CronEvent => bindings::check_cron_event_delivery(deployment).await?,
+            Binding::QueueEvent => events::check_queue_event_delivery(deployment).await?,
+            Binding::StorageEvent => events::check_storage_event_delivery(deployment).await?,
+            Binding::CronEvent => events::check_cron_event_delivery(deployment).await?,
             Binding::Storage => bindings::check_storage(deployment).await?,
             Binding::Kv => bindings::check_kv(deployment).await?,
             Binding::Vault => bindings::check_vault(deployment).await?,
