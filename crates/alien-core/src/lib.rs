@@ -1,6 +1,8 @@
 mod stack;
 pub use stack::*;
 
+mod stack_commands;
+
 mod stack_input;
 pub use stack_input::*;
 
