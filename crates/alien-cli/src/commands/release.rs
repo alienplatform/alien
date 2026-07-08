@@ -753,7 +753,7 @@ async fn declare_platform_release(
     ctx: &ExecutionMode,
     project_id: &str,
     workspace: Option<&str>,
-    version: &str,
+    _version: &str,
     git_metadata: Option<GitMetadata>,
 ) -> Result<String> {
     use alien_platform_api::SdkResultExt as PlatformSdkResultExt;
@@ -763,19 +763,9 @@ async fn declare_platform_release(
     let http = ctx.auth_http().await?;
     let platform_client = http.sdk_client();
 
-    let version_value =
-        alien_platform_api::types::CreateReleaseRequestVersion::try_from(version.to_string())
-            .map_err(|e| {
-                AlienError::new(ErrorData::ValidationError {
-                    field: "version".to_string(),
-                    message: format!("Invalid version: {}", e),
-                })
-            })?;
-
     // No `.stack(...)` — a stackless release is a version identity only.
     let body = alien_platform_api::types::CreateReleaseRequest::builder()
         .project(project_id.to_string())
-        .version(Some(version_value))
         .git_metadata(git_metadata);
 
     let body = alien_platform_api::types::CreateReleaseRequest::try_from(body).map_err(|e| {

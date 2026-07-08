@@ -860,11 +860,8 @@ async fn create_deployment_task(
         },
         manager_id: None,
         pinned_release_id: None,
-        public_subdomain: None,
         environment_info: None,
         input_values: std::collections::HashMap::new(),
-        operator_scope: None,
-        operator_permission: None,
         setup_method: None,
         setup_metadata: None,
     };

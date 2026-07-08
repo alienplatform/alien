@@ -398,7 +398,7 @@ fn validate_failure_states_not_in_flow_entries(
                              The on_failure state '{}' requires manual intervention via retry_failed(). \
                              Remove '{}' from the 'from' list.",
                             from_state_name, flow_type, on_failure_state, from_state_name
-                        )
+                        ),
                     ));
                 }
             }
@@ -454,8 +454,8 @@ fn generate_handler_action_enum(name: &Ident, state_enum_name: &Ident) -> TokenS
             },
             /// Stay in the current handler with a delay (for polling loops).
             Stay {
-                /// Maximum number of iterations before PollingTimeout error
-                max_times: u32,
+                /// Maximum number of iterations before PollingTimeout error. None waits forever.
+                max_times: Option<u32>,
                 /// Delay before running the handler again
                 suggested_delay: Option<std::time::Duration>,
             },
@@ -619,11 +619,11 @@ fn generate_step_match_arms(
                     Ok(#handler_action_name::Stay { max_times, suggested_delay }) => {
                         let count = self._internal_stay_count.get_or_insert(0);
                         *count += 1;
-                        if *count >= max_times {
+                        if max_times.is_some_and(|max_times| *count >= max_times) {
                             return Err(alien_error::AlienError::new(
                                 crate::error::ErrorData::PollingTimeout {
                                     state: format!("{:?}", self.state),
-                                    max_times,
+                                    max_times: max_times.unwrap_or(0),
                                 },
                             ));
                         } else {

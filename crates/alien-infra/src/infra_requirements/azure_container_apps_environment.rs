@@ -174,7 +174,7 @@ impl AzureContainerAppsEnvironmentController {
                 .retry_after
                 .unwrap_or(Duration::from_secs(10));
             Ok(HandlerAction::Stay {
-                max_times: 30,
+                max_times: Some(30),
                 suggested_delay: Some(delay),
             })
         }
@@ -228,7 +228,7 @@ impl AzureContainerAppsEnvironmentController {
                         | Some(Waiting) => {
                             debug!(environment_name=%environment_name, "Environment still being created");
                             Ok(HandlerAction::Stay {
-                                max_times: 20,
+                                max_times: Some(20),
                                 suggested_delay: Some(Duration::from_secs(15)),
                             })
                         }
@@ -243,7 +243,7 @@ impl AzureContainerAppsEnvironmentController {
                         _ => {
                             debug!(environment_name=%environment_name, "Provisioning state not available, continuing to wait");
                             Ok(HandlerAction::Stay {
-                                max_times: 20,
+                                max_times: Some(20),
                                 suggested_delay: Some(Duration::from_secs(10)),
                             })
                         }
@@ -251,7 +251,7 @@ impl AzureContainerAppsEnvironmentController {
                 } else {
                     debug!(environment_name=%environment_name, "Properties not available, continuing to wait");
                     Ok(HandlerAction::Stay {
-                        max_times: 20,
+                        max_times: Some(20),
                         suggested_delay: Some(Duration::from_secs(10)),
                     })
                 }
@@ -262,7 +262,7 @@ impl AzureContainerAppsEnvironmentController {
             }) => {
                 debug!(environment_name=%environment_name, "Environment not yet available, continuing to wait");
                 Ok(HandlerAction::Stay {
-                    max_times: 20,
+                    max_times: Some(20),
                     suggested_delay: Some(Duration::from_secs(10)),
                 })
             }
@@ -581,7 +581,7 @@ impl AzureContainerAppsEnvironmentController {
                 .retry_after
                 .unwrap_or(Duration::from_secs(10));
             Ok(HandlerAction::Stay {
-                max_times: 60,
+                max_times: Some(60),
                 suggested_delay: Some(delay),
             })
         }
@@ -619,7 +619,7 @@ impl AzureContainerAppsEnvironmentController {
             Ok(_) => {
                 debug!(environment_name=%environment_name, "Environment still exists, continuing to wait");
                 Ok(HandlerAction::Stay {
-                    max_times: 20,
+                    max_times: Some(20),
                     suggested_delay: Some(Duration::from_secs(15)),
                 })
             }

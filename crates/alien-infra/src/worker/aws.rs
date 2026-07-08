@@ -527,7 +527,7 @@ impl AwsWorkerController {
                 "Worker not yet active, retrying"
             );
             Ok(HandlerAction::Stay {
-                max_times: 20,
+                max_times: Some(20),
                 suggested_delay: Some(Duration::from_secs(3)),
             })
         }
@@ -575,7 +575,7 @@ impl AwsWorkerController {
                 }))
             }
             _ => Ok(HandlerAction::Stay {
-                max_times: 60,
+                max_times: Some(60),
                 suggested_delay: Some(Duration::from_secs(5)),
             }),
         }
@@ -1152,7 +1152,7 @@ impl AwsWorkerController {
                 }))
             }
             _ => Ok(HandlerAction::Stay {
-                max_times: 60,
+                max_times: Some(60),
                 suggested_delay: Some(Duration::from_secs(5)),
             }),
         }
@@ -1185,7 +1185,7 @@ impl AwsWorkerController {
                     Err(_) => {
                         // Probe failed, let the framework handle retries
                         return Ok(HandlerAction::Stay {
-                            max_times: READINESS_PROBE_MAX_ATTEMPTS,
+                            max_times: Some(READINESS_PROBE_MAX_ATTEMPTS),
                             suggested_delay: Some(Duration::from_secs(5)),
                         });
                     }
@@ -1936,7 +1936,7 @@ impl AwsWorkerController {
             || result.last_update_status.as_deref() == Some("InProgress")
         {
             Ok(HandlerAction::Stay {
-                max_times: 20,
+                max_times: Some(20),
                 suggested_delay: Some(Duration::from_secs(5)),
             })
         } else {
@@ -2088,7 +2088,7 @@ impl AwsWorkerController {
             || result.last_update_status.as_deref() == Some("InProgress")
         {
             Ok(HandlerAction::Stay {
-                max_times: 20,
+                max_times: Some(20),
                 suggested_delay: Some(Duration::from_secs(5)),
             })
         } else {
@@ -2530,7 +2530,7 @@ impl AwsWorkerController {
                     Err(_) => {
                         // Probe failed, let the framework handle retries
                         return Ok(HandlerAction::Stay {
-                            max_times: READINESS_PROBE_MAX_ATTEMPTS,
+                            max_times: Some(READINESS_PROBE_MAX_ATTEMPTS),
                             suggested_delay: Some(Duration::from_secs(5)),
                         });
                     }
@@ -3383,7 +3383,7 @@ impl AwsWorkerController {
                     || result.last_update_status.as_deref() == Some("InProgress") =>
             {
                 Ok(HandlerAction::Stay {
-                    max_times: 60,
+                    max_times: Some(60),
                     suggested_delay: Some(Duration::from_secs(5)),
                 })
             }
@@ -3496,7 +3496,7 @@ impl AwsWorkerController {
                 }
             }
             Ok(_) => Ok(HandlerAction::Stay {
-                max_times: 10,
+                max_times: Some(10),
                 suggested_delay: Some(Duration::from_secs(10)),
             }),
             Err(e) => Err(e.context(ErrorData::CloudPlatformError {
@@ -3570,7 +3570,7 @@ impl AwsWorkerController {
         );
 
         Ok(HandlerAction::Stay {
-            max_times: 90,
+            max_times: Some(90),
             suggested_delay: Some(Duration::from_secs(10)),
         })
     }

@@ -1,10 +1,23 @@
 use crate::{
     DeploymentConfig, DeploymentState, DeploymentStatus, DeploymentStepResult, ErrorData, Result,
 };
-use alien_core::{ResourceLifecycle, Stack, StackStatus};
+use alien_core::{
+    ComputeClusterOutputs, Platform, ResourceLifecycle, Stack, StackState, StackStatus,
+};
 use alien_error::{AlienError, Context};
 use alien_infra::StackExecutor;
 use tracing::{debug, info};
+
+fn machines_deployment_has_zero_machines(platform: Platform, stack_state: &StackState) -> bool {
+    platform == Platform::Machines
+        && stack_state.resources.values().any(|resource| {
+            resource
+                .outputs
+                .as_ref()
+                .and_then(|outputs| outputs.downcast_ref::<ComputeClusterOutputs>())
+                .is_some_and(|outputs| outputs.total_machines == 0)
+        })
+}
 
 /// Handle Provisioning status (deploy live resources)
 ///
@@ -120,7 +133,25 @@ pub async fn handle_provisioning(
             })?;
 
     // Check if all live resources are deployed
-    let result = if stack_status == StackStatus::Running {
+    let waiting_for_machines =
+        machines_deployment_has_zero_machines(current.platform, &step_result.next_state);
+
+    let result = if waiting_for_machines {
+        info!("Machines deployment is waiting for the first machine to join");
+
+        next.status = DeploymentStatus::WaitingForMachines;
+        next.stack_state = Some(step_result.next_state);
+        next.error = None;
+        next.runtime_metadata = Some(runtime_metadata);
+
+        DeploymentStepResult {
+            state: next,
+            suggested_delay_ms: Some(30_000),
+            update_heartbeat: false,
+            heartbeats: step_result.heartbeats,
+            observed_inventory_batches: vec![],
+        }
+    } else if stack_status == StackStatus::Running {
         info!("All live resources deployed successfully, transitioning to Running");
 
         next.status = DeploymentStatus::Running;

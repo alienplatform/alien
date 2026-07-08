@@ -227,7 +227,7 @@ impl GcpServiceActivationController {
                                     "Service enablement operation still in progress"
                                 );
                                 return Ok(HandlerAction::Stay {
-                                    max_times: 60,
+                                    max_times: Some(60),
                                     suggested_delay: Some(Duration::from_secs(10)),
                                 });
                             }
@@ -289,7 +289,7 @@ impl GcpServiceActivationController {
 
         // Service not yet enabled, continue waiting
         Ok(HandlerAction::Stay {
-            max_times: 60,
+            max_times: Some(60),
             suggested_delay: Some(Duration::from_secs(10)),
         })
     }

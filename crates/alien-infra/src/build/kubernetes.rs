@@ -169,7 +169,7 @@ impl KubernetesBuildController {
         }
 
         Ok(HandlerAction::Stay {
-            max_times: 120, // 120 attempts * 10 seconds = 20 minutes max wait for build
+            max_times: Some(120), // 120 attempts * 10 seconds = 20 minutes max wait for build
             suggested_delay: Some(Duration::from_secs(10)),
         })
     }
@@ -345,7 +345,7 @@ impl KubernetesBuildController {
         }
 
         Ok(HandlerAction::Stay {
-            max_times: 60,
+            max_times: Some(60),
             suggested_delay: Some(Duration::from_secs(5)),
         })
     }
@@ -478,7 +478,7 @@ impl KubernetesBuildController {
         }
 
         Ok(HandlerAction::Stay {
-            max_times: 120,
+            max_times: Some(120),
             suggested_delay: Some(Duration::from_secs(10)),
         })
     }
@@ -603,7 +603,7 @@ impl KubernetesBuildController {
         }
 
         Ok(HandlerAction::Stay {
-            max_times: 60, // 60 attempts * 5 seconds = 5 minutes max wait for deletion
+            max_times: Some(60), // 60 attempts * 5 seconds = 5 minutes max wait for deletion
             suggested_delay: Some(Duration::from_secs(5)),
         })
     }

@@ -1086,6 +1086,7 @@ pub fn format_deployment_status(status: DeploymentStatus) -> &'static str {
         DeploymentStatus::InitialSetup => "Initializing",
         DeploymentStatus::InitialSetupFailed => "Failed",
         DeploymentStatus::Provisioning => "Provisioning",
+        DeploymentStatus::WaitingForMachines => "Waiting for machines",
         DeploymentStatus::ProvisioningFailed => "Failed",
         DeploymentStatus::Running => "Running",
         DeploymentStatus::RefreshFailed => "Failed",
@@ -1714,6 +1715,7 @@ pub fn render_single_card(card: &DevDeploymentCard) -> String {
         DeploymentStatus::PreflightsFailed => ("✗", "preflights failed"),
         DeploymentStatus::InitialSetup => ("◐", "initial setup"),
         DeploymentStatus::Provisioning => ("◐", "provisioning"),
+        DeploymentStatus::WaitingForMachines => ("◐", "waiting for machines"),
         DeploymentStatus::UpdatePending | DeploymentStatus::Updating => ("◐", "updating"),
         DeploymentStatus::DeletePending | DeploymentStatus::Deleting => ("◐", "stopping"),
         DeploymentStatus::TeardownRequired => ("◐", "teardown required"),
@@ -1785,7 +1787,8 @@ pub fn render_single_card(card: &DevDeploymentCard) -> String {
             .to_string(),
         DeploymentStatus::Pending
         | DeploymentStatus::InitialSetup
-        | DeploymentStatus::Provisioning => style(format!("{status_icon} {status_label}"))
+        | DeploymentStatus::Provisioning
+        | DeploymentStatus::WaitingForMachines => style(format!("{status_icon} {status_label}"))
             .cyan()
             .to_string(),
         DeploymentStatus::UpdatePending

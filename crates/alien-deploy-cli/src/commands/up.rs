@@ -96,10 +96,6 @@ pub struct UpArgs {
     #[arg(long)]
     pub name: Option<String>,
 
-    /// Optional generated-domain subdomain for this deployment.
-    #[arg(long)]
-    pub subdomain: Option<String>,
-
     /// Encryption key for operator database (required for pull model)
     #[arg(long, env = "OPERATOR_ENCRYPTION_KEY")]
     pub encryption_key: Option<String>,
@@ -174,8 +170,6 @@ pub struct UpArgs {
 struct DeployConfigFile {
     /// Deployment name.
     name: Option<String>,
-    /// Optional generated-domain subdomain.
-    public_subdomain: Option<String>,
     /// Target platform: aws, gcp, azure, kubernetes, machines, or local.
     platform: Option<String>,
     /// Base cloud platform when `platform = "kubernetes"`.
@@ -413,49 +407,6 @@ mod tests {
 
         assert_eq!(local.data_dir, "/tmp/alien-foreground-state");
         assert!(!local.service_managed);
-    }
-
-    #[test]
-    fn public_subdomain_flag_is_validated() {
-        let args = UpArgs::parse_from(["alien-deploy", "--platform", "aws", "--subdomain", "fr"]);
-        let subdomain = resolve_public_subdomain(&args, None)
-            .expect("valid subdomain should parse")
-            .expect("subdomain should be present");
-        assert_eq!(subdomain, "fr");
-
-        let args = UpArgs::parse_from(["alien-deploy", "--platform", "aws", "--subdomain", "API"]);
-        let error = resolve_public_subdomain(&args, None).expect_err("uppercase should fail");
-        assert_eq!(error.code, "VALIDATION_ERROR");
-    }
-
-    #[test]
-    fn public_subdomain_flag_overrides_config() {
-        let mut file = tempfile::NamedTempFile::new().expect("temp config should be created");
-        writeln!(
-            file,
-            r#"
-name = "prod"
-platform = "aws"
-publicSubdomain = "old"
-"#
-        )
-        .expect("config should be written");
-
-        let args = UpArgs::parse_from([
-            "alien-deploy",
-            "--config",
-            file.path().to_str().expect("temp path should be UTF-8"),
-            "--subdomain",
-            "fr",
-        ]);
-        let config = load_deploy_config(&args)
-            .expect("config should load")
-            .expect("config should exist");
-
-        let subdomain = resolve_public_subdomain(&args, Some(&config))
-            .expect("subdomain should parse")
-            .expect("subdomain should be present");
-        assert_eq!(subdomain, "fr");
     }
 
     #[test]
@@ -927,7 +878,6 @@ pub async fn up_command(args: UpArgs, embedded_config: Option<&DeployCliConfig>)
     let platform_str = resolved.platform;
     let base_platform_str = resolved.base_platform;
     let name = resolved.name;
-    let public_subdomain = resolved.public_subdomain;
 
     let platform = Platform::from_str(&platform_str).map_err(|e| {
         AlienError::new(ErrorData::ValidationError {
@@ -1014,9 +964,6 @@ pub async fn up_command(args: UpArgs, embedded_config: Option<&DeployCliConfig>)
         }
         output::label_value("Manager", &manager_url);
         output::label_value("Name", &name);
-        if let Some(public_subdomain) = public_subdomain.as_ref() {
-            output::label_value("Public subdomain", public_subdomain);
-        }
         if let Some(public_endpoints) = public_endpoints.as_ref() {
             let endpoint_count: usize = public_endpoints.values().map(HashMap::len).sum();
             output::label_value("Public endpoints", &endpoint_count.to_string());
@@ -1036,7 +983,6 @@ pub async fn up_command(args: UpArgs, embedded_config: Option<&DeployCliConfig>)
         platform,
         base_platform,
         &name,
-        public_subdomain,
         &stack_settings,
         stack_input_values,
     )
@@ -1292,7 +1238,6 @@ struct ResolvedInfo {
     platform: String,
     base_platform: Option<String>,
     name: String,
-    public_subdomain: Option<String>,
 }
 
 fn requires_install_context(platform: Platform) -> bool {
@@ -1503,11 +1448,7 @@ fn load_public_endpoints(
 
     match platform {
         Platform::Local | Platform::Machines => Ok(Some(public_endpoints)),
-        Platform::Aws
-        | Platform::Gcp
-        | Platform::Azure
-        | Platform::Kubernetes
-        | Platform::Test => {
+        Platform::Aws | Platform::Gcp | Platform::Azure | Platform::Kubernetes | Platform::Test => {
             Err(AlienError::new(ErrorData::ValidationError {
                 field: "public-endpoint".to_string(),
                 message: format!(
@@ -1554,7 +1495,6 @@ fn resolve_deployment_info(
                 platform,
                 base_platform,
                 name: name.clone(),
-                public_subdomain: resolve_public_subdomain(args, deploy_config)?,
             });
         }
     }
@@ -1608,48 +1548,7 @@ fn resolve_deployment_info(
         platform,
         base_platform,
         name,
-        public_subdomain: resolve_public_subdomain(args, deploy_config)?,
     })
-}
-
-fn resolve_public_subdomain(
-    args: &UpArgs,
-    deploy_config: Option<&DeployConfigFile>,
-) -> Result<Option<String>> {
-    let value = args
-        .subdomain
-        .as_ref()
-        .or_else(|| deploy_config.and_then(|config| config.public_subdomain.as_ref()))
-        .map(|value| value.trim().to_string())
-        .filter(|value| !value.is_empty());
-    if let Some(value) = value.as_ref() {
-        validate_public_subdomain(value)?;
-    }
-    Ok(value)
-}
-
-fn validate_public_subdomain(value: &str) -> Result<()> {
-    let valid_len = !value.is_empty() && value.len() <= 63;
-    let valid_label = value
-        .chars()
-        .all(|ch| ch.is_ascii_lowercase() || ch.is_ascii_digit() || ch == '-')
-        && value
-            .as_bytes()
-            .first()
-            .is_some_and(|ch| ch.is_ascii_lowercase() || ch.is_ascii_digit())
-        && value
-            .as_bytes()
-            .last()
-            .is_some_and(|ch| ch.is_ascii_lowercase() || ch.is_ascii_digit());
-    if !valid_len || !valid_label || matches!(value, "api" | "www") {
-        return Err(AlienError::new(ErrorData::ValidationError {
-            field: "subdomain".to_string(),
-            message:
-                "Use a lowercase DNS label: letters, numbers, hyphens, no leading or trailing hyphen, not api or www."
-                    .to_string(),
-        }));
-    }
-    Ok(())
 }
 
 pub(crate) fn resolve_optional_token(
@@ -2265,6 +2164,7 @@ fn parse_deployment_status(raw_status: &str) -> Result<DeploymentStatus> {
         "initial-setup" => Ok(DeploymentStatus::InitialSetup),
         "initial-setup-failed" => Ok(DeploymentStatus::InitialSetupFailed),
         "provisioning" => Ok(DeploymentStatus::Provisioning),
+        "waiting-for-machines" => Ok(DeploymentStatus::WaitingForMachines),
         "provisioning-failed" => Ok(DeploymentStatus::ProvisioningFailed),
         "running" => Ok(DeploymentStatus::Running),
         "refresh-failed" => Ok(DeploymentStatus::RefreshFailed),
@@ -2291,6 +2191,7 @@ fn deployment_status_str(status: DeploymentStatus) -> &'static str {
         DeploymentStatus::InitialSetup => "initial-setup",
         DeploymentStatus::InitialSetupFailed => "initial-setup-failed",
         DeploymentStatus::Provisioning => "provisioning",
+        DeploymentStatus::WaitingForMachines => "waiting-for-machines",
         DeploymentStatus::ProvisioningFailed => "provisioning-failed",
         DeploymentStatus::Running => "running",
         DeploymentStatus::RefreshFailed => "refresh-failed",
@@ -2322,7 +2223,6 @@ async fn initialize_deployment(
     platform: Platform,
     base_platform: Option<Platform>,
     name: &str,
-    public_subdomain: Option<String>,
     stack_settings: &StackSettings,
     input_values: HashMap<String, serde_json::Value>,
 ) -> Result<InitResult> {
@@ -2330,20 +2230,20 @@ async fn initialize_deployment(
         name: Some(name.to_string()),
         platform: Some(sdk_platform(platform)),
         base_platform: base_platform.map(sdk_platform),
-        public_subdomain,
         stack_settings: Some(sdk_stack_settings(stack_settings)?),
         input_values: input_values.into_iter().collect(),
         scope: None,
         permission: None,
+        public_subdomain: None,
         setup_method: None,
     };
 
     let response = match client.initialize().body(body).send().await {
         Ok(response) => response,
         Err(error) => {
-            // Read the error body so server-side rejections (e.g. an invalid or
-            // unavailable public subdomain) surface their own message; the
-            // manager-URL hint only applies when the manager was unreachable.
+            // Read the error body so server-side rejections surface their own
+            // message; the manager-URL hint only applies when the manager was
+            // unreachable.
             let error = alien_manager_api::convert_sdk_error_reading_body(error).await;
             let context = if error.code == "COMMUNICATION_ERROR" {
                 ErrorData::ConfigurationError {

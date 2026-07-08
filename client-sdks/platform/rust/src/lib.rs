@@ -68,14 +68,13 @@ pub fn convert_sdk_error(err: Error<types::ApiError>) -> AlienError<GenericError
         Error::ErrorResponse(response) => {
             let status = response.status().as_u16();
             let api_error = response.into_inner();
-            let context =
-                context_with_request_id(api_error.context, api_error.request_id.as_deref());
+            let context = context_with_request_id(api_error.context, None);
 
             AlienError {
                 code: api_error.code.to_string(),
                 message: api_error.message.to_string(),
                 context,
-                hint: api_error.hint,
+                hint: None,
                 retryable: api_error.retryable,
                 internal: false, // API errors sent to clients are external by nature
                 http_status_code: Some(status),

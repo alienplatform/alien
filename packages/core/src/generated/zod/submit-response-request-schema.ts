@@ -9,6 +9,6 @@ import { CommandResponseSchema } from "./command-response-schema.js";
 /**
  * @description Request to submit a command response (from deployment)
  */
-export const SubmitResponseRequestSchema = z.lazy(() => CommandResponseSchema).describe("Request to submit a command response (from deployment)")
+export const SubmitResponseRequestSchema = z.lazy(() => CommandResponseSchema).describe("Command response from deployment").describe("Request to submit a command response (from deployment)")
 
 export type SubmitResponseRequest = z.infer<typeof SubmitResponseRequestSchema>

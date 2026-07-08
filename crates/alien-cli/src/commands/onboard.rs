@@ -45,6 +45,10 @@ pub struct OnboardArgs {
     /// Platforms this deployment link can create deployments for (comma-separated). Defaults to every platform in the active release.
     #[arg(long = "platforms", alias = "platform", value_delimiter = ',')]
     pub platforms: Vec<String>,
+
+    /// Public subdomain to reserve for deployments created from this link.
+    #[arg(long)]
+    pub subdomain: Option<String>,
 }
 
 pub async fn onboard_task(args: OnboardArgs, ctx: ExecutionMode) -> Result<()> {
@@ -94,6 +98,11 @@ async fn onboard_platform(args: OnboardArgs, ctx: ExecutionMode, name: String) -
         &selected_platforms,
         args.json,
     )?;
+    let public_subdomain = args
+        .subdomain
+        .as_deref()
+        .map(validate_public_subdomain)
+        .transpose()?;
 
     if !args.json {
         let platforms_label = selected_platforms
@@ -192,6 +201,7 @@ async fn onboard_platform(args: OnboardArgs, ctx: ExecutionMode, name: String) -
                 deployment_setup_config: platform_onboard_deployment_setup_config(
                     setup_environment_variables,
                     &selected_platforms,
+                    public_subdomain.clone(),
                 ),
                 input_values: Some(stack_input_values),
             },
@@ -213,6 +223,7 @@ async fn onboard_platform(args: OnboardArgs, ctx: ExecutionMode, name: String) -
             "deploymentLink": deployment_link,
             "maxDeployments": args.max_deployments,
             "platforms": selected_platforms.iter().map(|platform| platform.as_str()).collect::<Vec<_>>(),
+            "subdomain": public_subdomain,
         }))?;
         return Ok(());
     }
@@ -250,6 +261,7 @@ struct ActiveReleaseStackInputs {
 fn platform_onboard_deployment_setup_config(
     environment_variables: Vec<alien_platform_api::types::EnvironmentVariableConfig>,
     platforms: &[Platform],
+    public_subdomain: Option<String>,
 ) -> alien_platform_api::types::DeploymentSetupConfig {
     use alien_platform_api::types;
 
@@ -259,6 +271,7 @@ fn platform_onboard_deployment_setup_config(
             types::DeploymentSetupPolicyAllowedPlatformsItem::Gcp,
             types::DeploymentSetupPolicyAllowedPlatformsItem::Azure,
             types::DeploymentSetupPolicyAllowedPlatformsItem::Kubernetes,
+            types::DeploymentSetupPolicyAllowedPlatformsItem::Machines,
             types::DeploymentSetupPolicyAllowedPlatformsItem::Local,
         ]
     } else {
@@ -314,6 +327,30 @@ fn platform_onboard_deployment_setup_config(
         },
         environment_variables,
         input_values: None,
+        public_subdomain: public_subdomain
+            .map(|value| types::DeploymentSetupConfigPublicSubdomain::try_from(value))
+            .transpose()
+            .expect("public subdomain is validated before setup config creation"),
+    }
+}
+
+#[cfg(feature = "platform")]
+fn validate_public_subdomain(value: &str) -> Result<String> {
+    let valid = !value.is_empty()
+        && value.len() <= 63
+        && !value.starts_with('-')
+        && !value.ends_with('-')
+        && value
+            .bytes()
+            .all(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit() || byte == b'-');
+
+    if valid {
+        Ok(value.to_string())
+    } else {
+        Err(AlienError::new(ErrorData::ValidationError {
+            field: "subdomain".to_string(),
+            message: "Subdomain must be 1-63 characters of lowercase letters, numbers, or hyphens, and cannot start or end with a hyphen.".to_string(),
+        }))
     }
 }
 
@@ -365,7 +402,7 @@ async fn fetch_active_release_stack_inputs(
         });
     };
 
-    let Some(stack_by_platform) = release.stack.as_ref().and_then(|stack| stack.as_ref()) else {
+    let Some(stack_by_platform) = release.stack.as_ref() else {
         return Ok(ActiveReleaseStackInputs {
             supported_platforms: Vec::new(),
             inputs_by_platform: Vec::new(),

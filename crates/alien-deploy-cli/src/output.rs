@@ -355,6 +355,7 @@ fn format_deployment_status(status: DeploymentStatus) -> &'static str {
         DeploymentStatus::InitialSetup => "initializing",
         DeploymentStatus::InitialSetupFailed => "setup failed",
         DeploymentStatus::Provisioning => "provisioning",
+        DeploymentStatus::WaitingForMachines => "waiting for machines",
         DeploymentStatus::ProvisioningFailed => "provisioning failed",
         DeploymentStatus::Running => "running",
         DeploymentStatus::RefreshFailed => "refresh failed",

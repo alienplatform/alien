@@ -1345,7 +1345,7 @@ export type NewDeploymentRequest = {
    */
   resourcePrefix?: string | undefined;
   /**
-   * Optional deployment subdomain under the project's generated-domain parent. Requires the project to use a custom domain; rejected on the shared system domain. Omit to generate a random subdomain.
+   * Optional deployment subdomain under the project's generated-domain parent. Operator-only and requires a custom project domain; customer deploy-link tokens and the shared system domain are rejected. Omit to generate a random subdomain.
    */
   publicSubdomain?: string | undefined;
   setupMethod?: DeploymentSetupMethod | undefined;

@@ -232,7 +232,7 @@ impl TestWorkerController {
                 max_times, identifier
             );
             return Ok(HandlerAction::Stay {
-                max_times,
+                max_times: Some(max_times),
                 suggested_delay: Some(Duration::from_millis(POLL_DELAY_MS)),
             });
         }
