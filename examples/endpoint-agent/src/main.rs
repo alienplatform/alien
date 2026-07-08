@@ -1,4 +1,12 @@
-use alien_sdk::AlienContext;
+//! Endpoint agent: a command-only daemon that monitors device activity and
+//! stores events in an encrypted local database.
+//!
+//! Its only interface is Alien commands, so it drives the app-owned pull
+//! command receiver (`alien_commands::Receiver`) directly:
+//! `Receiver::from_env()` → register handlers with `receiver.handle(...)` →
+//! `receiver.run().await`. There are no resource bindings to load — the
+//! encrypted store is a local Turso database, not a linked binding.
+
 use tokio::spawn;
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 
@@ -20,9 +28,6 @@ async fn main() -> std::result::Result<(), Box<dyn std::error::Error>> {
         .init();
 
     tracing::info!("Starting endpoint agent");
-
-    // Initialize Alien context
-    let ctx = AlienContext::from_env().await?;
 
     // Generate encryption key from device ID + Alien-managed secret
     // In production, this would use a proper key derivation function
@@ -51,13 +56,15 @@ async fn main() -> std::result::Result<(), Box<dyn std::error::Error>> {
 
     tracing::info!("Started monitoring tasks");
 
-    // Register command handlers
-    commands::register(&ctx, db);
+    // Build the app-owned pull command receiver from the injected environment
+    // and register the command handlers on it.
+    let mut receiver = alien_commands::Receiver::from_env()?;
+    commands::register(&mut receiver, db);
 
     tracing::info!("Registered command handlers");
 
-    // Run event loop (blocks until shutdown)
-    ctx.run().await?;
+    // Run the command receiver loop (blocks until shutdown)
+    receiver.run().await?;
 
     Ok(())
 }

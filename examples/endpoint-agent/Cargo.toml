@@ -4,12 +4,13 @@ version = "0.1.0"
 edition = "2021"
 
 [dependencies]
-# Alien bindings
-alien-sdk = { workspace = true, features = ["grpc"] }
+# App-owned pull command receiver: this daemon's only interface is Alien
+# commands, so it leases and handles them directly via `Receiver::from_env()`
+# rather than through a Worker event loop. Light `receiver` feature only.
+alien-commands = { workspace = true, default-features = false, features = ["receiver"] }
 
 # Error handling
 thiserror = { workspace = true }
-alien-error = { workspace = true }
 
 # Async runtime
 tokio = { workspace = true, features = ["full"] }

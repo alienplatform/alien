@@ -1,4 +1,4 @@
-use alien_sdk::AlienContext;
+use alien_commands::Receiver;
 use serde::Deserialize;
 use serde_json::json;
 
@@ -6,52 +6,48 @@ use crate::db::EncryptedDb;
 use crate::error::{Error, Result};
 use crate::monitor;
 
-// Convert our Error to the format alien-bindings expects
-fn to_bindings_error<T>(result: Result<T>) -> alien_sdk::Result<T> {
-    result.map_err(|e| {
-        // Use EventProcessingFailed as a generic handler error wrapper
-        alien_error::AlienError::new(alien_sdk::ErrorData::EventProcessingFailed {
-            event_type: "command".to_string(),
-            reason: e.to_string(),
-        })
-    })
-}
-
-/// Register all command handlers
-pub fn register(ctx: &AlienContext, db: EncryptedDb) {
+/// Register all command handlers on the app-owned pull command receiver.
+///
+/// Each handler deserializes its params from the command context
+/// (`ctx.input_json()`) and returns a JSON value that the receiver submits as
+/// the command's success response. Handler errors are submitted as
+/// `HANDLER_ERROR` responses — both our `Error` and the receiver's own errors
+/// reach the `?` boundary as `std::error::Error`, so no manual conversion is
+/// needed.
+pub fn register(receiver: &mut Receiver, db: EncryptedDb) {
     // get-events command
     {
         let db = db.clone();
-        ctx.on_command("get-events", move |params: GetEventsParams| {
+        receiver.handle("get-events", move |ctx| {
             let db = db.clone();
-            async move { to_bindings_error(handle_get_events(db, params).await) }
+            async move {
+                let params: GetEventsParams = ctx.input_json()?;
+                Ok(handle_get_events(db, params).await?)
+            }
         });
     }
 
     // get-config command
-    {
-        ctx.on_command("get-config", move |_params: serde_json::Value| async move {
-            to_bindings_error(handle_get_config().await)
-        });
-    }
+    receiver.handle("get-config", move |_ctx| async move {
+        Ok(handle_get_config().await?)
+    });
 
     // scan-path command
-    {
-        ctx.on_command("scan-path", move |params: ScanPathParams| async move {
-            to_bindings_error(handle_scan_path(params).await)
-        });
-    }
+    receiver.handle("scan-path", move |ctx| async move {
+        let params: ScanPathParams = ctx.input_json()?;
+        Ok(handle_scan_path(params).await?)
+    });
 
     // simulate-clipboard command (for testing)
     {
         let db = db.clone();
-        ctx.on_command(
-            "simulate-clipboard",
-            move |params: SimulateClipboardParams| {
-                let db = db.clone();
-                async move { to_bindings_error(handle_simulate_clipboard(db, params).await) }
-            },
-        );
+        receiver.handle("simulate-clipboard", move |ctx| {
+            let db = db.clone();
+            async move {
+                let params: SimulateClipboardParams = ctx.input_json()?;
+                Ok(handle_simulate_clipboard(db, params).await?)
+            }
+        });
     }
 }
 
