@@ -135,10 +135,22 @@ export type StackSummary = {
   publicEndpoints: Array<PublicEndpoint>;
 };
 
+/**
+ * Parent domain for generated deployment URLs. Chosen public subdomains are only allowed when isSystem is false.
+ */
+export type GeneratedDomain = {
+  domain: string;
+  isSystem: boolean;
+};
+
 export type DeploymentInfoProject = {
   name: string;
   portal: Portal;
   stackSummary?: StackSummary | null | undefined;
+  /**
+   * Parent domain for generated deployment URLs. Chosen public subdomains are only allowed when isSystem is false.
+   */
+  generatedDomain?: GeneratedDomain | null | undefined;
 };
 
 /**
@@ -832,6 +844,25 @@ export function stackSummaryFromJSON(
 }
 
 /** @internal */
+export const GeneratedDomain$inboundSchema: z.ZodType<
+  GeneratedDomain,
+  unknown
+> = z.object({
+  domain: z.string(),
+  isSystem: z.boolean(),
+});
+
+export function generatedDomainFromJSON(
+  jsonString: string,
+): SafeParseResult<GeneratedDomain, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => GeneratedDomain$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'GeneratedDomain' from JSON`,
+  );
+}
+
+/** @internal */
 export const DeploymentInfoProject$inboundSchema: z.ZodType<
   DeploymentInfoProject,
   unknown
@@ -839,6 +870,8 @@ export const DeploymentInfoProject$inboundSchema: z.ZodType<
   name: z.string(),
   portal: z.lazy(() => Portal$inboundSchema),
   stackSummary: z.nullable(z.lazy(() => StackSummary$inboundSchema)).optional(),
+  generatedDomain: z.nullable(z.lazy(() => GeneratedDomain$inboundSchema))
+    .optional(),
 });
 
 export function deploymentInfoProjectFromJSON(
