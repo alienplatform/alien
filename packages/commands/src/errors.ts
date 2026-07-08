@@ -27,6 +27,23 @@ export const CommandCreationFailedError = defineError({
 })
 
 /**
+ * Error thrown when fetching a command's status fails (network/transport error,
+ * not an HTTP error status — those raise {@link ManagerHttpError}).
+ */
+export const CommandStatusFailedError = defineError({
+  code: "COMMAND_STATUS_FAILED",
+  context: z.object({
+    commandId: z.string(),
+    reason: z.string(),
+  }),
+  message: ({ commandId, reason }) =>
+    `Failed to fetch status for command '${commandId}': ${reason}`,
+  retryable: true,
+  internal: false,
+  httpStatusCode: 500,
+})
+
+/**
  * Error thrown when command execution times out.
  */
 export const CommandTimeoutError = defineError({
@@ -170,4 +187,23 @@ export const ManagerHttpError = defineError({
   retryable: false,
   internal: false,
   httpStatusCode: 500,
+})
+
+/**
+ * Error thrown when a 2xx response body from the command server fails to parse
+ * or validate against its wire schema — a malformed/unexpected JSON shape
+ * surfaces here as a typed error instead of a downstream `TypeError` when a
+ * missing field is dereferenced.
+ */
+export const MalformedResponseError = defineError({
+  code: "MALFORMED_RESPONSE",
+  context: z.object({
+    method: z.string(),
+    url: z.string(),
+    reason: z.string(),
+  }),
+  message: ({ method, url, reason }) => `Malformed response from ${method} ${url}: ${reason}`,
+  retryable: false,
+  internal: false,
+  httpStatusCode: 502,
 })

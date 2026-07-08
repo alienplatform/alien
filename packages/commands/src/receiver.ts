@@ -34,7 +34,7 @@
  * ```
  */
 
-import { AlienError } from "@alienplatform/core"
+import { AlienError, LeaseResponseSchema } from "@alienplatform/core"
 import {
   CommandReceiverConfigInvalidError,
   InvalidEnvelopeError,
@@ -48,9 +48,9 @@ import type {
   Envelope,
   LeaseInfo,
   LeaseRequest,
-  LeaseResponse,
   PresignedRequest,
 } from "./protocol.js"
+import { parseWireResponse } from "./wire.js"
 
 /**
  * Presigned-transfer policy for receivers: the local backend is always
@@ -323,8 +323,8 @@ class PullCommandReceiver implements CommandReceiver {
       throw new Error(`Lease request failed with status ${response.status}: ${body}`)
     }
 
-    const parsed = (await response.json()) as LeaseResponse
-    return parsed.leases ?? []
+    const parsed = parseWireResponse(LeaseResponseSchema, await response.json(), "POST", endpoint)
+    return parsed.leases
   }
 
   /**
@@ -383,7 +383,7 @@ class PullCommandReceiver implements CommandReceiver {
       return errorResponse(code, error instanceof Error ? error.message : String(error))
     }
 
-    const budget = commandBudget(envelope.deadline, leaseExpiresAt)
+    const budget = commandBudget(envelope.deadline ?? undefined, leaseExpiresAt)
     const controller = new AbortController()
     const ctx: CommandContext = {
       input,

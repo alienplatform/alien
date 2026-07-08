@@ -45,10 +45,12 @@ export {
   CommandCreationFailedError,
   CommandExpiredError,
   CommandReceiverConfigInvalidError,
+  CommandStatusFailedError,
   CommandTimeoutError,
   DeploymentCommandError,
   InvalidEnvelopeError,
   ManagerHttpError,
+  MalformedResponseError,
   ResponseDecodingFailedError,
   StorageOperationFailedError,
 } from "./errors.js"

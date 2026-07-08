@@ -14,10 +14,15 @@
  * `options.targetResourceId` the caller also passes.
  */
 
-import { AlienError } from "@alienplatform/core"
+import {
+  AlienError,
+  CommandStatusResponseSchema,
+  CreateCommandResponseSchema,
+} from "@alienplatform/core"
 import {
   CommandCreationFailedError,
   CommandExpiredError,
+  CommandStatusFailedError,
   CommandTimeoutError,
   DeploymentCommandError,
   ManagerHttpError,
@@ -32,6 +37,7 @@ import type {
   CommandStatusResponse,
   CreateCommandResponse,
 } from "./protocol.js"
+import { type WireSchema, parseWireResponse } from "./wire.js"
 
 /**
  * Configuration for {@link CommandsClient}.
@@ -47,6 +53,8 @@ export interface CommandsClientConfig {
   timeoutMs?: number
   /** Allow reading local files for storage responses (default: false, local dev only). */
   allowLocalStorage?: boolean
+  /** `fetch` implementation (defaults to the global `fetch`). */
+  fetch?: typeof fetch
 }
 
 /**
@@ -82,14 +90,11 @@ function base64Encode(data: unknown): string {
 }
 
 /**
- * Base64 decode data.
+ * Base64 decode data. `@alienplatform/commands` is a Node-only package (the
+ * send-side encoder uses `Buffer` too), so this decodes with `Buffer` directly
+ * rather than branching on a browser `atob`, which mangles multibyte UTF-8.
  */
 function base64Decode(encoded: string): string {
-  if (typeof atob !== "undefined") {
-    // Browser
-    return atob(encoded)
-  }
-  // Node.js
   return Buffer.from(encoded, "base64").toString("utf-8")
 }
 
@@ -181,6 +186,7 @@ export class CommandsClient {
   private readonly token: string
   private readonly defaultTimeout: number
   private readonly allowLocalStorage: boolean
+  private readonly fetchImpl: typeof fetch
 
   constructor(config: CommandsClientConfig) {
     this.managerUrl = config.managerUrl.replace(/\/+$/, "")
@@ -188,6 +194,7 @@ export class CommandsClient {
     this.token = config.token
     this.defaultTimeout = config.timeoutMs ?? 60_000
     this.allowLocalStorage = config.allowLocalStorage ?? false
+    this.fetchImpl = config.fetch ?? globalThis.fetch
   }
 
   /**
@@ -254,38 +261,37 @@ export class CommandsClient {
   }
 
   /**
-   * Create a command.
+   * Fetch `path` on the manager, raise {@link ManagerHttpError} on a non-2xx
+   * status, and validate the 2xx JSON body against `schema` (a malformed body
+   * raises {@link MalformedResponseError}). AlienErrors — both of those — pass
+   * through untouched; any other (network/transport) error is wrapped with the
+   * caller-supplied context. Only 2xx responses carry a body, so `schema` is
+   * always applied.
    */
-  private async createCommand(
-    command: string,
-    input: unknown,
-    options?: InvokeOptions,
-  ): Promise<CreateCommandResponse> {
-    const url = `${this.managerUrl}/v1/commands`
-    const body = {
-      deploymentId: this.deploymentId,
-      command,
-      params: createBodySpec(input),
-      deadline: options?.deadline?.toISOString(),
-      idempotencyKey: options?.idempotencyKey,
-      targetResourceId: options?.targetResourceId,
-    }
-
+  private async managerFetch<T>(
+    method: string,
+    path: string,
+    schema: WireSchema<T>,
+    options: {
+      body?: unknown
+      describeError: (reason: string) => Parameters<AlienError["withContext"]>[0]
+    },
+  ): Promise<T> {
+    const url = `${this.managerUrl}${path}`
     try {
-      const response = await fetch(url, {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          Authorization: `Bearer ${this.token}`,
-        },
-        body: JSON.stringify(body),
-      })
+      const headers: Record<string, string> = { Authorization: `Bearer ${this.token}` }
+      const init: RequestInit = { method, headers }
+      if (options.body !== undefined) {
+        headers["Content-Type"] = "application/json"
+        init.body = JSON.stringify(options.body)
+      }
 
+      const response = await this.fetchImpl(url, init)
       if (!response.ok) {
         const errorBody = await response.text().catch(() => "")
         throw new AlienError(
           ManagerHttpError.create({
-            method: "POST",
+            method,
             url,
             status: response.status,
             statusText: response.statusText,
@@ -294,58 +300,51 @@ export class CommandsClient {
         )
       }
 
-      return (await response.json()) as CreateCommandResponse
+      return parseWireResponse(schema, await response.json(), method, url)
     } catch (error) {
       if (error instanceof AlienError) {
         throw error
       }
-
       const alienError = await AlienError.from(error)
       throw alienError.withContext(
-        CommandCreationFailedError.create({
-          deploymentId: this.deploymentId,
-          command,
-          reason: error instanceof Error ? error.message : String(error),
-        }),
+        options.describeError(error instanceof Error ? error.message : String(error)),
       )
     }
   }
 
   /**
+   * Create a command.
+   */
+  private createCommand(
+    command: string,
+    input: unknown,
+    options?: InvokeOptions,
+  ): Promise<CreateCommandResponse> {
+    return this.managerFetch("POST", "/v1/commands", CreateCommandResponseSchema, {
+      body: {
+        deploymentId: this.deploymentId,
+        command,
+        params: createBodySpec(input),
+        deadline: options?.deadline?.toISOString(),
+        idempotencyKey: options?.idempotencyKey,
+        targetResourceId: options?.targetResourceId,
+      },
+      describeError: reason =>
+        CommandCreationFailedError.create({
+          deploymentId: this.deploymentId,
+          command,
+          reason,
+        }),
+    })
+  }
+
+  /**
    * Get a command's status.
    */
-  private async getCommandStatus(commandId: string): Promise<CommandStatusResponse> {
-    const url = `${this.managerUrl}/v1/commands/${commandId}`
-
-    try {
-      const response = await fetch(url, {
-        method: "GET",
-        headers: {
-          Authorization: `Bearer ${this.token}`,
-        },
-      })
-
-      if (!response.ok) {
-        const errorBody = await response.text().catch(() => "")
-        throw new AlienError(
-          ManagerHttpError.create({
-            method: "GET",
-            url,
-            status: response.status,
-            statusText: response.statusText,
-            body: errorBody,
-          }),
-        )
-      }
-
-      return (await response.json()) as CommandStatusResponse
-    } catch (error) {
-      if (error instanceof AlienError) {
-        throw error
-      }
-
-      throw await AlienError.from(error)
-    }
+  private getCommandStatus(commandId: string): Promise<CommandStatusResponse> {
+    return this.managerFetch("GET", `/v1/commands/${commandId}`, CommandStatusResponseSchema, {
+      describeError: reason => CommandStatusFailedError.create({ commandId, reason }),
+    })
   }
 
   /**

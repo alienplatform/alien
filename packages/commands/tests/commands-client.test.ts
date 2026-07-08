@@ -327,6 +327,59 @@ describe("CommandsClient storage decode edge cases", () => {
   })
 })
 
+describe("CommandsClient wire validation", () => {
+  it("rejects a malformed create response with MALFORMED_RESPONSE (not a downstream TypeError)", async () => {
+    // 200 OK but the body is missing every required CreateCommandResponse field.
+    server = await startStubServer((): RouteResult => ({ json: { unexpected: true } }))
+
+    const err = await client(server.baseUrl)
+      .invoke("x", {}, FAST_POLL)
+      .catch((e: unknown) => e)
+
+    expect(err).toBeInstanceOf(AlienError)
+    expect((err as AlienError).code).toBe("MALFORMED_RESPONSE")
+    expect((err as AlienError).context).toMatchObject({ method: "POST" })
+  })
+
+  it("rejects a malformed status response with MALFORMED_RESPONSE", async () => {
+    server = await startStubServer((req): RouteResult => {
+      if (req.method === "POST") return { json: createResponse() }
+      // Missing `attempt`/`target`, so status validation fails.
+      return { json: { commandId: "cmd_1", state: "SUCCEEDED" } }
+    })
+
+    const err = await client(server.baseUrl)
+      .invoke("x", {}, FAST_POLL)
+      .catch((e: unknown) => e)
+
+    expect(err).toBeInstanceOf(AlienError)
+    expect((err as AlienError).code).toBe("MALFORMED_RESPONSE")
+    expect((err as AlienError).context).toMatchObject({ method: "GET" })
+  })
+
+  it("routes requests through an injected fetch implementation", async () => {
+    server = await startStubServer((req): RouteResult => {
+      if (req.method === "POST") return { json: createResponse() }
+      return { json: successStatus("cmd_1", "ok") }
+    })
+
+    let calls = 0
+    const injected: typeof fetch = (input, init) => {
+      calls += 1
+      return fetch(input, init)
+    }
+    const scoped = new CommandsClient({
+      managerUrl: server.baseUrl,
+      deploymentId: "dep_1",
+      token: "tok_secret",
+      fetch: injected,
+    })
+
+    await scoped.invoke("x", {}, FAST_POLL)
+    expect(calls).toBeGreaterThanOrEqual(2)
+  })
+})
+
 describe("CommandsClient target threading", () => {
   it("sends targetResourceId from options.targetResourceId", async () => {
     server = await startStubServer((req): RouteResult => {
