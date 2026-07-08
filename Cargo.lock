@@ -1065,6 +1065,7 @@ dependencies = [
 name = "alien-test-server"
 version = "0.1.0"
 dependencies = [
+ "alien-bindings",
  "alien-core",
  "alien-error",
  "alien-sdk",

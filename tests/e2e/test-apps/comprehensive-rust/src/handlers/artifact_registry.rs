@@ -11,8 +11,9 @@ use crate::{
     models::{AppState, ArtifactRegistryTestRequest, ArtifactRegistryTestResponse},
     ErrorData, Result,
 };
+use alien_bindings::ArtifactRegistryPermissions;
 use alien_error::{AlienError, Context, ContextError, IntoAlienError};
-use alien_sdk::{ArtifactRegistryPermissions, BindingsProvider};
+use alien_sdk::BindingsProvider;
 
 /// Test artifact registry operations
 #[utoipa::path(

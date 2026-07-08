@@ -13,6 +13,10 @@ path = "src/bin/main.rs"
 
 [dependencies]
 alien-sdk = { workspace = true, features = ["grpc", "openapi", "local", "gcp", "aws", "azure"] }
+# This test app exercises the internal binding kinds (artifact registry, build)
+# that the app-facing `alien_sdk` namespace intentionally does not re-export, so
+# it depends on `alien_bindings` directly for those types.
+alien-bindings = { workspace = true }
 alien-core = { workspace = true, features = ["openapi"] }
 alien-error = { workspace = true, features = ["axum", "openapi"] }
 anyhow = { workspace = true }
