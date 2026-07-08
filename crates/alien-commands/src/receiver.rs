@@ -21,10 +21,13 @@
 //!
 //! # Execution budget
 //!
-//! Every command runs under a budget of `min(envelope.deadline,
-//! lease_expires_at)` — there is no lease-renew call. When the budget
-//! expires the handler *future* is aborted (dropped), `ctx.cancellation` is
-//! cancelled, and a `HANDLER_TIMEOUT` error response is submitted.
+//! Every command runs under a budget of `min(envelope.deadline, lease_expiry
+//! − LEASE_SAFETY_MARGIN)` — there is no lease-renew call. Subtracting the
+//! safety margin guarantees the response is submitted (or the handler
+//! abandoned) before the lease actually expires, so an expired lease never
+//! races an in-flight duplicate. When the budget expires the handler *future*
+//! is aborted (dropped), `ctx.cancellation` is cancelled, and a
+//! `HANDLER_TIMEOUT` error response is submitted.
 //!
 //! Dropping the handler future does not, by itself, stop any background work
 //! the handler spawned onto its own tasks (`tokio::spawn`, detached I/O,
@@ -124,9 +127,9 @@ pub struct Context {
     /// Use [`Context::input_json`] to deserialize.
     pub input: Vec<u8>,
     /// The command's effective execution budget:
-    /// `min(envelope.deadline, lease_expires_at)`. Under lease-based
-    /// delivery this is always `Some` (the lease expiry bounds it); kept
-    /// optional to mirror the TS context shape.
+    /// `min(envelope.deadline, lease_expiry − LEASE_SAFETY_MARGIN)`. Under
+    /// lease-based delivery this is always `Some` (the lease expiry bounds
+    /// it); kept optional to mirror the TS context shape.
     pub deadline: Option<DateTime<Utc>>,
     /// Unique command identifier.
     pub command_id: String,
@@ -435,13 +438,26 @@ where
     })
 }
 
-/// Per-command execution budget: `min(envelope.deadline, lease_expires_at)`.
-/// There is no lease-renew call, so the lease expiry always bounds it.
+/// Safety margin subtracted from a lease's expiry when computing the
+/// execution budget. Stopping this far before the lease actually expires
+/// guarantees the response is submitted (or the handler abandoned) while the
+/// lease is still held, so an expired lease is never redelivered while a
+/// duplicate is still in flight. Twin of the TypeScript receiver's
+/// `LEASE_SAFETY_MARGIN_MS`.
+const LEASE_SAFETY_MARGIN: Duration = Duration::from_secs(5);
+
+/// Per-command execution budget: `min(envelope.deadline, lease_expiry −
+/// LEASE_SAFETY_MARGIN)`, clamped so it never falls before now. There is no
+/// lease-renew call, so the safety-margined lease expiry always bounds it.
+/// Twin of the TypeScript receiver's `commandBudget`.
 fn command_budget(
     deadline: Option<DateTime<Utc>>,
     lease_expires_at: DateTime<Utc>,
 ) -> DateTime<Utc> {
-    deadline.map_or(lease_expires_at, |d| d.min(lease_expires_at))
+    let margin = chrono::Duration::from_std(LEASE_SAFETY_MARGIN)
+        .unwrap_or_else(|_| chrono::Duration::seconds(5));
+    let lease_bound = (lease_expires_at - margin).max(Utc::now());
+    deadline.map_or(lease_bound, |d| d.min(lease_bound))
 }
 
 /// Handler-status label for a produced response: `"success"` for a success
@@ -739,19 +755,39 @@ mod tests {
     }
 
     #[test]
-    fn budget_is_min_of_deadline_and_lease_expiry() {
+    fn budget_is_min_of_deadline_and_safety_margined_lease_expiry() {
         let lease_expiry = Utc::now() + ChronoDuration::seconds(60);
+        // The lease bound is the expiry minus the 5s safety margin, not the
+        // raw expiry: a command must finish before the lease is really gone.
+        let margined = lease_expiry - ChronoDuration::seconds(5);
         let early_deadline = Utc::now() + ChronoDuration::seconds(10);
         let late_deadline = Utc::now() + ChronoDuration::seconds(120);
 
-        assert_eq!(command_budget(None, lease_expiry), lease_expiry);
+        // No deadline: budget is the safety-margined lease expiry, never the
+        // raw expiry.
+        assert_eq!(command_budget(None, lease_expiry), margined);
+        // Deadline earlier than the margined lease bound wins.
         assert_eq!(
             command_budget(Some(early_deadline), lease_expiry),
             early_deadline
         );
-        assert_eq!(
-            command_budget(Some(late_deadline), lease_expiry),
-            lease_expiry
+        // Deadline later than the margined lease bound is clamped to it (the
+        // raw expiry would leak past the safety margin).
+        assert_eq!(command_budget(Some(late_deadline), lease_expiry), margined);
+    }
+
+    #[test]
+    fn budget_clamps_to_now_when_lease_already_within_margin() {
+        // A lease whose remaining time is already inside the safety margin
+        // yields a budget clamped to now (never a time in the past), so the
+        // handler is given zero budget rather than a negative one.
+        let before = Utc::now();
+        let nearly_expired = before + ChronoDuration::seconds(2);
+        let budget = command_budget(None, nearly_expired);
+        let after = Utc::now();
+        assert!(
+            budget >= before && budget <= after,
+            "budget must clamp to now, got {budget} (window {before}..{after})"
         );
     }
 

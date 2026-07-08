@@ -9,7 +9,7 @@
 import { AlienError } from "@alienplatform/core"
 import { afterEach, describe, expect, it, vi } from "vitest"
 import type { CommandResponse, Envelope, LeaseInfo } from "../src/protocol.js"
-import { createCommandReceiver } from "../src/receiver.js"
+import { commandBudget, createCommandReceiver } from "../src/receiver.js"
 import type { CommandContext } from "../src/receiver.js"
 import type {
   CapturedRequest,
@@ -198,6 +198,41 @@ describe("createCommandReceiver env validation", () => {
 // ---------------------------------------------------------------------------
 // Lease → handle → submit round trips (against the stub)
 // ---------------------------------------------------------------------------
+
+describe("commandBudget", () => {
+  const SAFETY_MARGIN_MS = 5_000
+
+  it("subtracts the 5s safety margin from the lease expiry when no deadline", () => {
+    const leaseExpiresAt = new Date(Date.now() + 60_000)
+    const budget = commandBudget(undefined, leaseExpiresAt.toISOString())
+    // The budget is the lease expiry minus the safety margin, not the raw expiry.
+    expect(budget.getTime()).toBe(leaseExpiresAt.getTime() - SAFETY_MARGIN_MS)
+  })
+
+  it("clamps a deadline later than the margined lease bound down to it", () => {
+    const leaseExpiresAt = new Date(Date.now() + 60_000)
+    const lateDeadline = new Date(Date.now() + 120_000)
+    const budget = commandBudget(lateDeadline.toISOString(), leaseExpiresAt.toISOString())
+    expect(budget.getTime()).toBe(leaseExpiresAt.getTime() - SAFETY_MARGIN_MS)
+  })
+
+  it("lets a deadline earlier than the margined lease bound win", () => {
+    const leaseExpiresAt = new Date(Date.now() + 60_000)
+    const earlyDeadline = new Date(Date.now() + 10_000)
+    const budget = commandBudget(earlyDeadline.toISOString(), leaseExpiresAt.toISOString())
+    expect(budget.getTime()).toBe(earlyDeadline.getTime())
+  })
+
+  it("clamps to now when the lease is already within the safety margin", () => {
+    const before = Date.now()
+    const nearlyExpired = new Date(before + 2_000)
+    const budget = commandBudget(undefined, nearlyExpired.toISOString())
+    const after = Date.now()
+    // Never a time in the past: clamped to now, giving the handler zero budget.
+    expect(budget.getTime()).toBeGreaterThanOrEqual(before)
+    expect(budget.getTime()).toBeLessThanOrEqual(after)
+  })
+})
 
 describe("CommandReceiver.run", () => {
   it("leases, gives the handler the input bytes/deadline/attempt, and submits the JSON success", async () => {

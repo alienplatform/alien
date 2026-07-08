@@ -10,8 +10,8 @@
  * Pure `fetch`; no bindings, no gRPC. See `PACKAGE_LAYOUT.md` DECIDED(09) for
  * the binding semantics this file implements:
  * - env quintet, fail-fast naming the offending variable (worker type rejected)
- * - execution budget = `min(envelope.deadline, leaseExpiresAt)`; on expiry the
- *   handler's `signal` fires and a `HANDLER_TIMEOUT` response is submitted
+ * - execution budget = `min(envelope.deadline, leaseExpiresAt − safety margin)`;
+ *   on expiry the handler's `signal` fires and a `HANDLER_TIMEOUT` is submitted
  * - error codes `UNKNOWN_COMMAND` / `HANDLER_ERROR` / `HANDLER_TIMEOUT`, with a
  *   params-decode failure submitted under the decode error's own code
  * - at-least-once delivery; `ctx.attempt` starts at 1
@@ -73,6 +73,15 @@ const DEFAULT_POLL_INTERVAL_MS = 5_000
 const DEFAULT_MAX_LEASES = 10
 /** Requested lease duration, in seconds (DECIDED(09) — 60). */
 const DEFAULT_LEASE_SECONDS = 60
+/**
+ * Safety margin subtracted from a lease's expiry when computing the execution
+ * budget, in ms. Stopping this far before the lease actually expires
+ * guarantees the response is submitted (or the handler abandoned) while the
+ * lease is still held, so an expired lease is never redelivered while a
+ * duplicate is still in flight. Twin of the Rust receiver's
+ * `LEASE_SAFETY_MARGIN` (5s).
+ */
+const LEASE_SAFETY_MARGIN_MS = 5_000
 
 // Env variable names — identical strings to the Rust twin
 // (`alien_core::runtime_environment`).
@@ -453,16 +462,20 @@ class PullCommandReceiver implements CommandReceiver {
 }
 
 /**
- * Per-command execution budget: `min(envelope.deadline, leaseExpiresAt)`. There
- * is no lease-renew call, so the lease expiry always bounds it.
+ * Per-command execution budget: `min(envelope.deadline, leaseExpiresAt −
+ * LEASE_SAFETY_MARGIN_MS)`, clamped so it never falls before now. There is no
+ * lease-renew call, so the safety-margined lease expiry always bounds it. Twin
+ * of the Rust receiver's `command_budget`.
  */
 export function commandBudget(deadline: string | undefined, leaseExpiresAt: string): Date {
-  const lease = new Date(leaseExpiresAt)
+  const leaseBound = Math.max(
+    Date.now(),
+    new Date(leaseExpiresAt).getTime() - LEASE_SAFETY_MARGIN_MS,
+  )
   if (deadline === undefined) {
-    return lease
+    return new Date(leaseBound)
   }
-  const envelopeDeadline = new Date(deadline)
-  return envelopeDeadline.getTime() < lease.getTime() ? envelopeDeadline : lease
+  return new Date(Math.min(new Date(deadline).getTime(), leaseBound))
 }
 
 /**
