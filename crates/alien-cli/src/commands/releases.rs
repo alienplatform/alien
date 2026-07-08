@@ -210,12 +210,22 @@ impl ReleaseRollout {
 }
 
 /// Correlate a release id against the deployment list: keep the deployments
-/// that target it (`desiredReleaseId == release_id`) and describe each one's
-/// progress. Pure over its inputs so it can be unit-tested without a client.
+/// that target it and describe each one's progress. Pure over its inputs so it
+/// can be unit-tested without a client.
+///
+/// A deployment "targets" the release if it is either still rolling out to it
+/// (`desiredReleaseId == release_id`) OR has already reached it
+/// (`currentReleaseId == release_id`). Matching only `desired` dropped
+/// fully-rolled-out deployments — once the rollout completed the manager clears
+/// `desired`, so the release would report zero targets despite a deployment
+/// actively running it.
 fn compute_rollout(release_id: &str, deployments: &[DeploymentResponse]) -> Rollout {
     let targets: Vec<RolloutTarget> = deployments
         .iter()
-        .filter(|d| d.desired_release_id.as_deref() == Some(release_id))
+        .filter(|d| {
+            d.desired_release_id.as_deref() == Some(release_id)
+                || d.current_release_id.as_deref() == Some(release_id)
+        })
         .map(|d| RolloutTarget {
             deployment_id: d.id.clone(),
             name: d.name.clone(),
@@ -419,6 +429,20 @@ mod tests {
         assert!(!pending.rolled_out);
         assert!(done.rolled_out);
         assert_eq!(rollout.summary, "1/2 rolled out");
+    }
+
+    #[test]
+    fn completed_rollout_with_cleared_desired_still_counts_as_target() {
+        // Once a deployment reaches the target release the manager clears
+        // `desired_release_id`; the release must still report it as a
+        // rolled-out target (matching on `current`), not drop it to zero.
+        let deployments = vec![deployment("dep_done", "prod", "running", Some(REL), None)];
+
+        let rollout = compute_rollout(REL, &deployments);
+
+        assert_eq!(rollout.targets.len(), 1, "completed rollout must be a target");
+        assert!(rollout.targets[0].rolled_out);
+        assert_eq!(rollout.summary, "1/1 rolled out");
     }
 
     #[test]
