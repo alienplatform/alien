@@ -128,6 +128,65 @@ pub fn init_otlp_logging_from_config(config: OtlpConfig) -> Result<()> {
     Ok(())
 }
 
+/// An OTLP app-log exporter owned by a single caller.
+///
+/// Unlike the process-global provider that `init_otlp_logging*` installs, an
+/// owned logger keeps its own endpoint/service identity and flush lifecycle.
+/// This lets several concurrent callers (e.g. multiple local daemons) each
+/// export under their own identity without clobbering one another, and lets one
+/// caller's shutdown flush only its own logs.
+#[cfg(feature = "otlp")]
+#[derive(Debug)]
+pub struct OwnedOtlpLogger {
+    provider: SdkLoggerProvider,
+}
+
+#[cfg(feature = "otlp")]
+impl OwnedOtlpLogger {
+    /// Builds an owned OTLP logger from already-resolved config, without ever
+    /// touching the process-global `OTLP_PROVIDER`.
+    pub fn from_config(config: OtlpConfig) -> Result<Self> {
+        info!(
+            endpoint = %config.endpoint,
+            service_name = %config.service_name,
+            service_version = %config.service_version,
+            "Initializing owned app log OTLP exporter"
+        );
+        let provider = build_otlp_provider(&config)?;
+        Ok(Self { provider })
+    }
+
+    /// Emits a captured stdout/stderr line through this logger's own provider.
+    pub fn emit_log(&self, stream: &str, body: &str, timestamp_nanos: i64) {
+        emit_to_provider(&self.provider, stream, body, timestamp_nanos);
+    }
+
+    /// Force-flushes this logger's own pending logs (used before shutdown).
+    pub async fn flush(&self) -> Result<()> {
+        force_flush_provider(self.provider.clone()).await
+    }
+}
+
+/// Owned OTLP logger when the feature is disabled: a no-op that keeps callers
+/// (e.g. the local daemon supervisor) uniform across build configurations.
+#[cfg(not(feature = "otlp"))]
+#[derive(Debug)]
+pub struct OwnedOtlpLogger;
+
+#[cfg(not(feature = "otlp"))]
+impl OwnedOtlpLogger {
+    pub fn from_config(_config: OtlpConfig) -> Result<Self> {
+        tracing::warn!("OTLP configuration provided but alien-worker-runtime was compiled without OTLP support. Rebuild with --features otlp to enable OTLP logging.");
+        Ok(Self)
+    }
+
+    pub fn emit_log(&self, _stream: &str, _body: &str, _timestamp_nanos: i64) {}
+
+    pub async fn flush(&self) -> Result<()> {
+        Ok(())
+    }
+}
+
 #[cfg(feature = "otlp")]
 fn build_otlp_provider(config: &OtlpConfig) -> Result<SdkLoggerProvider> {
     // Build OTLP Log exporter over HTTP with protobuf.
@@ -225,11 +284,6 @@ pub fn init_otlp_logging_from_config(_config: OtlpConfig) -> Result<()> {
 /// This is used by embedded runtimes to send captured stdout/stderr from function processes.
 #[cfg(feature = "otlp")]
 pub fn emit_log(stream: &str, body: &str, timestamp_nanos: i64) {
-    use opentelemetry::logs::{
-        AnyValue, LogRecord as _, Logger as _, LoggerProvider as _, Severity,
-    };
-    use std::time::{Duration, UNIX_EPOCH};
-
     // Get the global provider (initialized by init_otlp_logging)
     let provider = {
         let guard = OTLP_PROVIDER.lock().expect("OTLP provider mutex poisoned");
@@ -241,6 +295,23 @@ pub fn emit_log(stream: &str, body: &str, timestamp_nanos: i64) {
             }
         }
     };
+
+    emit_to_provider(&provider, stream, body, timestamp_nanos);
+}
+
+/// Emits a single captured log line through a specific provider. Shared by the
+/// process-global [`emit_log`] and the per-caller [`OwnedOtlpLogger`].
+#[cfg(feature = "otlp")]
+fn emit_to_provider(
+    provider: &SdkLoggerProvider,
+    stream: &str,
+    body: &str,
+    timestamp_nanos: i64,
+) {
+    use opentelemetry::logs::{
+        AnyValue, LogRecord as _, Logger as _, LoggerProvider as _, Severity,
+    };
+    use std::time::{Duration, UNIX_EPOCH};
 
     // Get a logger for function output
     let logger = provider.logger("function-output");
@@ -286,38 +357,39 @@ pub async fn flush_otlp_logs() -> Result<()> {
         .clone();
     if let Some(provider) = provider {
         info!("Flushing OTLP logs before shutdown...");
-
-        // Use force_flush instead of shutdown to avoid permanently shutting down the provider
-        // This allows multiple flush calls in tests without breaking subsequent log emissions
-        let flush_result = tokio::task::spawn_blocking({
-            let provider = provider.clone();
-            move || match provider.force_flush() {
-                Ok(_) => {
-                    info!("OTLP logs flushed successfully");
-                    Ok(())
-                }
-                Err(e) => {
-                    error!(error = %e, "Failed to flush OTLP logs");
-                    Err(AlienError::new(ErrorData::Other {
-                        message: format!("Failed to flush OTLP logs: {}", e),
-                    }))
-                }
-            }
-        })
-        .await;
-
-        match flush_result {
-            Ok(result) => result,
-            Err(e) => {
-                error!(error = %e, "OTLP flush task panicked");
-                Err(AlienError::new(ErrorData::Other {
-                    message: format!("OTLP flush task panicked: {}", e),
-                }))
-            }
-        }
+        force_flush_provider(provider).await
     } else {
         // No OTLP provider configured, nothing to flush
         Ok(())
+    }
+}
+
+/// Force-flushes a specific provider's pending logs on a blocking task. Uses
+/// `force_flush` (not `shutdown`) so the provider stays usable afterwards.
+/// Shared by [`flush_otlp_logs`] and [`OwnedOtlpLogger::flush`].
+async fn force_flush_provider(provider: SdkLoggerProvider) -> Result<()> {
+    let flush_result = tokio::task::spawn_blocking(move || match provider.force_flush() {
+        Ok(_) => {
+            info!("OTLP logs flushed successfully");
+            Ok(())
+        }
+        Err(e) => {
+            error!(error = %e, "Failed to flush OTLP logs");
+            Err(AlienError::new(ErrorData::Other {
+                message: format!("Failed to flush OTLP logs: {}", e),
+            }))
+        }
+    })
+    .await;
+
+    match flush_result {
+        Ok(result) => result,
+        Err(e) => {
+            error!(error = %e, "OTLP flush task panicked");
+            Err(AlienError::new(ErrorData::Other {
+                message: format!("OTLP flush task panicked: {}", e),
+            }))
+        }
     }
 }
 

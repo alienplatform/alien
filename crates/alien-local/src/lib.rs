@@ -53,6 +53,7 @@
 
 mod artifact_registry_manager;
 mod container_manager;
+mod daemon_supervisor;
 mod error;
 mod kv_manager;
 mod local_bindings_provider;
