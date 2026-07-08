@@ -7,15 +7,27 @@
 #![cfg(all(feature = "receiver", feature = "test-utils"))]
 
 use std::collections::HashMap;
+use std::io::Write;
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-use alien_commands::receiver::{Receiver, ERROR_CODE_HANDLER_TIMEOUT, ERROR_CODE_UNKNOWN_COMMAND};
+use alien_commands::receiver::{
+    box_handler, process_lease, Context, HandlerError, Receiver, ERROR_CODE_HANDLER_ERROR,
+    ERROR_CODE_HANDLER_TIMEOUT, ERROR_CODE_UNKNOWN_COMMAND,
+};
 use alien_commands::test_utils::{test_inline_create_command, TestCommandServer};
-use alien_commands::types::{BodySpec, CommandResponse, CommandState};
+use alien_commands::types::{
+    BodySpec, CommandResponse, CommandState, CommandTarget, CommandTargetType, Envelope, LeaseInfo,
+    ResponseHandling,
+};
+use alien_commands::{INLINE_MAX_BYTES, PROTOCOL_VERSION};
+use alien_core::presigned::{PresignedOperation, PresignedRequest};
 use alien_core::{
     ENV_ALIEN_COMMANDS_TARGET_RESOURCE_ID, ENV_ALIEN_COMMANDS_TARGET_RESOURCE_TYPE,
     ENV_ALIEN_COMMANDS_TOKEN, ENV_ALIEN_COMMANDS_URL, ENV_ALIEN_DEPLOYMENT_ID,
 };
+use chrono::{DateTime, Duration as ChronoDuration, Utc};
+use tracing_subscriber::fmt::MakeWriter;
 
 const DEPLOYMENT_ID: &str = "pull-agent";
 const POLL_INTERVAL: Duration = Duration::from_millis(50);
@@ -371,4 +383,190 @@ async fn receiver_round_trips_large_response_via_storage() {
     run.await
         .expect("run task join")
         .expect("run returns Ok on shutdown");
+}
+
+// ---------------------------------------------------------------------------
+// Observability: the `process_lease` "Command processed" event field contract.
+//
+// These drive `process_lease` directly (bypassing the server) so the pinned
+// event fields — command id, lease id, target resource id/type wire value,
+// attempt, deadline rendering, handler/submit status — can be asserted exactly
+// against captured tracing output. The TypeScript twin (`processLease`) logs
+// the same field set.
+// ---------------------------------------------------------------------------
+
+/// In-memory `MakeWriter` capturing formatted tracing output. One definition
+/// shared by both observability tests (was duplicated per test in-module).
+#[derive(Clone)]
+struct BufWriter(Arc<Mutex<Vec<u8>>>);
+
+impl Write for BufWriter {
+    fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+        self.0.lock().expect("lock").extend_from_slice(buf);
+        Ok(buf.len())
+    }
+    fn flush(&mut self) -> std::io::Result<()> {
+        Ok(())
+    }
+}
+
+impl<'a> MakeWriter<'a> for BufWriter {
+    type Writer = BufWriter;
+    fn make_writer(&'a self) -> Self::Writer {
+        self.clone()
+    }
+}
+
+fn observability_envelope(command: &str, deadline: Option<DateTime<Utc>>) -> Envelope {
+    Envelope {
+        protocol: PROTOCOL_VERSION.to_string(),
+        deployment_id: "dep-123".to_string(),
+        target: CommandTarget::new("agent", CommandTargetType::Daemon),
+        command_id: "cmd_1".to_string(),
+        attempt: 1,
+        deadline,
+        command: command.to_string(),
+        params: BodySpec::inline(br#"{"key":"value"}"#),
+        response_handling: ResponseHandling {
+            max_inline_bytes: INLINE_MAX_BYTES as u64,
+            submit_response_url: "https://commands.example.com/v1/commands/cmd_1/response"
+                .to_string(),
+            storage_upload_request: PresignedRequest::new_http(
+                "https://storage.example.com/upload".to_string(),
+                "PUT".to_string(),
+                HashMap::new(),
+                PresignedOperation::Put,
+                "test-path".to_string(),
+                Utc::now() + ChronoDuration::hours(1),
+            ),
+        },
+    }
+}
+
+#[tokio::test]
+async fn process_lease_emits_command_processed_with_pinned_fields() {
+    // Submit target is an unroutable local port: the submit fails fast
+    // (connection refused, no DNS, offline) so `submit_status` is "failed"
+    // while the completion event still fires with every pinned field.
+    let deadline = Utc::now() + ChronoDuration::seconds(30);
+    let mut envelope = observability_envelope("echo", Some(deadline));
+    envelope.response_handling.submit_response_url =
+        "http://127.0.0.1:1/v1/commands/cmd_1/response".to_string();
+    let lease = LeaseInfo {
+        lease_id: "lease_obs".to_string(),
+        lease_expires_at: Utc::now() + ChronoDuration::seconds(60),
+        command_id: envelope.command_id.clone(),
+        attempt: 2,
+        envelope,
+    };
+    let handler = box_handler(|_ctx: Context| async move { Ok(serde_json::json!({ "ok": true })) });
+    let target = CommandTarget::new("agent", CommandTargetType::Daemon);
+
+    let buf = Arc::new(Mutex::new(Vec::<u8>::new()));
+    let subscriber = tracing_subscriber::fmt()
+        .with_writer(BufWriter(buf.clone()))
+        .with_ansi(false)
+        .finish();
+    {
+        let _guard = tracing::subscriber::set_default(subscriber);
+        process_lease(Some(handler), lease, target).await;
+    }
+
+    let logs = String::from_utf8(buf.lock().expect("lock").clone()).expect("utf8");
+    assert!(logs.contains("Command processed"), "logs: {logs}");
+    assert!(logs.contains("command_id"), "command id field: {logs}");
+    assert!(logs.contains("lease_obs"), "lease id value: {logs}");
+    assert!(
+        logs.contains("target_resource_id"),
+        "target id field: {logs}"
+    );
+    // Wire value (lowercase, TS twin's `"daemon"`), not Rust Debug's `Daemon`.
+    assert!(
+        logs.contains("target_resource_type=daemon"),
+        "target type must render the wire value, not Debug: {logs}"
+    );
+    assert!(
+        !logs.contains("target_resource_type=Daemon"),
+        "target type must not render Debug's capitalized variant: {logs}"
+    );
+    assert!(logs.contains("attempt=2"), "attempt value: {logs}");
+    // ISO-8601 string (TS twin's bare `deadline.toISOString()`-equivalent),
+    // not Debug's `Some(2026-...)`.
+    let expected_deadline = format!("deadline=\"{}\"", deadline.to_rfc3339());
+    assert!(
+        logs.contains(&expected_deadline),
+        "deadline must render as a bare ISO-8601 string, got: {logs}"
+    );
+    assert!(
+        !logs.contains("deadline=Some"),
+        "deadline must not render Debug's Some(..) wrapper: {logs}"
+    );
+    assert!(
+        logs.contains("handler_status=success"),
+        "handler status: {logs}"
+    );
+    assert!(
+        logs.contains("submit_status=failed"),
+        "submit status: {logs}"
+    );
+}
+
+#[tokio::test]
+async fn process_lease_emits_command_processed_for_handler_error() {
+    // Submit target is an unroutable local port (same trick as the
+    // success-path test above): the submit fails fast so this test stays
+    // deterministic and network-free.
+    //
+    // No deadline on the envelope: the completion event's `deadline` field
+    // must be entirely absent (tracing's `Option<T>: Value` skips `None`),
+    // matching the TS twin's bare-string-or-`null` semantics for the
+    // no-deadline case.
+    let mut envelope = observability_envelope("burn", None);
+    envelope.target = CommandTarget::new("worker-1", CommandTargetType::Container);
+    envelope.response_handling.submit_response_url =
+        "http://127.0.0.1:1/v1/commands/cmd_1/response".to_string();
+    let lease = LeaseInfo {
+        lease_id: "lease_err".to_string(),
+        lease_expires_at: Utc::now() + ChronoDuration::seconds(60),
+        command_id: envelope.command_id.clone(),
+        attempt: 1,
+        envelope,
+    };
+    let handler = box_handler(|_ctx: Context| async move {
+        Err::<serde_json::Value, HandlerError>("database on fire".into())
+    });
+    let target = CommandTarget::new("worker-1", CommandTargetType::Container);
+
+    let buf = Arc::new(Mutex::new(Vec::<u8>::new()));
+    let subscriber = tracing_subscriber::fmt()
+        .with_writer(BufWriter(buf.clone()))
+        .with_ansi(false)
+        .finish();
+    {
+        let _guard = tracing::subscriber::set_default(subscriber);
+        process_lease(Some(handler), lease, target).await;
+    }
+
+    let logs = String::from_utf8(buf.lock().expect("lock").clone()).expect("utf8");
+    assert!(logs.contains("Command processed"), "logs: {logs}");
+    assert!(
+        logs.contains("target_resource_type=container"),
+        "target type must render the wire value: {logs}"
+    );
+    assert!(
+        logs.contains(&format!("handler_status={ERROR_CODE_HANDLER_ERROR}")),
+        "handler status must be the non-success error code: {logs}"
+    );
+    assert!(
+        !logs.contains("handler_status=success"),
+        "handler status must not be success: {logs}"
+    );
+    assert!(
+        logs.contains("submit_status=failed"),
+        "submit status: {logs}"
+    );
+    assert!(
+        !logs.contains("deadline="),
+        "absent deadline must not appear as a field at all: {logs}"
+    );
 }

@@ -47,8 +47,11 @@ pub use server::{create_axum_router, CommandRegistry, CommandServer, InMemoryCom
 #[cfg(any(feature = "runtime", feature = "receiver"))]
 pub use runtime::{decode_params, parse_envelope, submit_response, LeaseClient};
 
+// NB: `receiver::Context` is intentionally NOT re-exported at the crate root —
+// it would collide with `alien_error::Context` (the error-chaining trait).
+// Import it as `alien_commands::receiver::Context`.
 #[cfg(feature = "receiver")]
-pub use receiver::{Context, Receiver, ShutdownHandle};
+pub use receiver::{Receiver, ShutdownHandle};
 
 /// Default inline size limit in bytes (150 KB)
 /// This is the most conservative platform limit (Azure Service Bus Standard at 256KB)
