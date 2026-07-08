@@ -45,7 +45,7 @@ pub use types::{
 pub use server::{create_axum_router, CommandRegistry, CommandServer, InMemoryCommandRegistry};
 
 #[cfg(any(feature = "runtime", feature = "receiver"))]
-pub use runtime::{decode_params, parse_envelope, submit_response};
+pub use runtime::{decode_params, parse_envelope, submit_response, LeaseClient};
 
 #[cfg(feature = "receiver")]
 pub use receiver::{Context, Receiver, ShutdownHandle};

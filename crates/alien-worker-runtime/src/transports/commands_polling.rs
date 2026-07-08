@@ -6,53 +6,62 @@
 use std::{sync::Arc, time::Duration};
 
 use alien_commands::{
-    runtime::submit_response,
-    types::{
-        CommandResponse, CommandTarget, CommandTargetType, LeaseInfo, LeaseRequest, LeaseResponse,
-    },
+    runtime::{submit_response, LeaseClient},
+    types::{CommandResponse, CommandTarget, CommandTargetType, LeaseInfo, LeaseRequest},
+    DEFAULT_LEASE_SECONDS, DEFAULT_MAX_LEASES, DEFAULT_POLL_INTERVAL_SECS,
 };
 use alien_core::ENV_ALIEN_COMMANDS_TARGET_RESOURCE_ID;
-use alien_error::{AlienError, Context, IntoAlienError};
+use alien_error::{AlienError, Context};
 use alien_worker_protocol::{
     control::{task::Payload, ArcCommand, Task},
     ControlGrpcServer,
 };
-use reqwest::{Client, Url};
+use reqwest::Url;
 use tracing::{debug, error, info, warn};
 
 use crate::error::{ErrorData, Result};
 
 /// Commands polling configuration
 pub struct CommandsPolling {
-    client: Client,
-    url: Url,
+    /// Shared lease client: holds the fully-built `…/commands/leases` endpoint
+    /// (constructed once, so a bad base URL fails at startup) and the token.
+    lease_client: LeaseClient,
     interval: Duration,
     deployment_id: String,
     /// The specific stack resource this runtime polls leases for (its own
     /// resource id). Leases are scoped to this target.
     target_resource_id: String,
-    token: String,
     control_server: Arc<ControlGrpcServer>,
 }
 
 impl CommandsPolling {
     pub fn new(
-        url: Url,
+        lease_client: LeaseClient,
         interval: Duration,
         deployment_id: String,
         target_resource_id: String,
-        token: String,
         control_server: Arc<ControlGrpcServer>,
     ) -> Self {
         Self {
-            client: Client::new(),
-            url,
+            lease_client,
             interval,
             deployment_id,
             target_resource_id,
-            token,
             control_server,
         }
+    }
+
+    /// Build the shared lease client from a base URL, failing fast (config
+    /// error) if the base cannot carry the `commands/leases` path.
+    fn lease_client_from_base(url: &Url, token: String) -> Result<LeaseClient> {
+        LeaseClient::from_base(url, token).ok_or_else(|| {
+            AlienError::new(ErrorData::ConfigurationInvalid {
+                message: format!(
+                    "Invalid commands polling URL '{url}': must be an HTTP/HTTPS URL with a path"
+                ),
+                field: Some("ALIEN_COMMANDS_POLLING_URL".to_string()),
+            })
+        })
     }
 
     /// Create CommandsPolling from environment variables and secrets.
@@ -139,12 +148,13 @@ impl CommandsPolling {
             })
         })?;
 
+        let lease_client = Self::lease_client_from_base(&url, token.clone())?;
+
         Ok(Some(Self::new(
-            url,
-            Duration::from_secs(5),
+            lease_client,
+            Duration::from_secs(DEFAULT_POLL_INTERVAL_SECS),
             deployment_id.clone(),
             target_resource_id.clone(),
-            token.clone(),
             control_server,
         )))
     }
@@ -152,7 +162,7 @@ impl CommandsPolling {
     /// Run the polling loop
     pub async fn run(&self) -> Result<()> {
         info!(
-            url = %self.url,
+            endpoint = %self.lease_client.endpoint(),
             interval = ?self.interval,
             "Starting commands polling"
         );
@@ -198,67 +208,28 @@ impl CommandsPolling {
         LeaseRequest {
             deployment_id: self.deployment_id.clone(),
             target: CommandTarget::new(self.target_resource_id.clone(), CommandTargetType::Worker),
-            max_leases: 10,
-            lease_seconds: 60,
+            max_leases: DEFAULT_MAX_LEASES,
+            lease_seconds: DEFAULT_LEASE_SECONDS,
         }
     }
 
-    /// Acquire leases from command server
+    /// Acquire leases from command server.
+    ///
+    /// ALIEN-219: lease scoped to this runtime's own target resource. The
+    /// manager scans only this target's pending index (a K8s/Local runtime is
+    /// always a Worker target — Container/Daemon poll their own runtimes). The
+    /// endpoint surgery and transport/status error shaping live in the shared
+    /// `LeaseClient`; the runtime-specific error enum is applied at this
+    /// boundary.
     async fn acquire_leases(&self) -> Result<Vec<LeaseInfo>> {
-        let mut lease_endpoint = self.url.clone();
-        lease_endpoint
-            .path_segments_mut()
-            .map_err(|_| {
-                AlienError::new(ErrorData::ConfigurationInvalid {
-                    message: format!(
-                        "Invalid commands polling URL '{}': must be an HTTP/HTTPS URL with a path",
-                        self.url
-                    ),
-                    field: Some("ALIEN_COMMANDS_POLLING_URL".to_string()),
-                })
-            })?
-            .push("commands")
-            .push("leases");
-
-        // ALIEN-219: lease scoped to this runtime's own target resource. The
-        // manager scans only this target's pending index (a K8s/Local runtime is
-        // always a Worker target — Container/Daemon poll their own runtimes).
-        let request = self.build_lease_request();
-
-        let response = self
-            .client
-            .post(lease_endpoint)
-            .header("Authorization", format!("Bearer {}", self.token))
-            .json(&request)
-            .send()
+        self.lease_client
+            .acquire(&self.build_lease_request())
             .await
-            .into_alien_error()
             .context(ErrorData::NetworkRequestFailed {
-                url: self.url.to_string(),
+                url: self.lease_client.endpoint().to_string(),
                 method: Some("POST".to_string()),
                 message: "Failed to acquire leases".to_string(),
-            })?;
-
-        if !response.status().is_success() {
-            let status = response.status();
-            let body = response.text().await.unwrap_or_default();
-            return Err(AlienError::new(ErrorData::NetworkRequestFailed {
-                url: self.url.to_string(),
-                method: Some("POST".to_string()),
-                message: format!("Lease request failed: {} - {}", status, body),
-            }));
-        }
-
-        let lease_response: LeaseResponse =
-            response
-                .json()
-                .await
-                .into_alien_error()
-                .context(ErrorData::SerializationFailed {
-                    message: "Failed to parse lease response".to_string(),
-                })?;
-
-        Ok(lease_response.leases)
+            })
     }
 
     /// Process a single lease - deliver command via gRPC
@@ -406,6 +377,32 @@ mod tests {
             .expect("polling should be enabled");
         assert_eq!(polling.target_resource_id, "worker-7");
         assert_eq!(polling.deployment_id, "dep-123");
+        // The lease endpoint is built once at config time from the base URL.
+        assert_eq!(
+            polling.lease_client.endpoint().as_str(),
+            "https://commands.example.com/commands/leases"
+        );
+    }
+
+    #[test]
+    fn from_env_rejects_cannot_be_a_base_url() {
+        // A URL that parses but cannot carry the `commands/leases` path is a
+        // permanent config error — it must fail fast at construction, not be
+        // retried (and misread as transient) on every poll.
+        let mut env = base_env();
+        env.insert(
+            ENV_ALIEN_COMMANDS_TARGET_RESOURCE_ID.to_string(),
+            "worker-7".to_string(),
+        );
+        env.insert(
+            "ALIEN_COMMANDS_POLLING_URL".to_string(),
+            "mailto:commands@example.com".to_string(),
+        );
+        let err = match CommandsPolling::from_env(&env, &HashMap::new(), control_server()) {
+            Err(e) => e,
+            Ok(_) => panic!("cannot-be-a-base URL must fail fast"),
+        };
+        assert_eq!(err.code, "CONFIGURATION_INVALID");
     }
 
     #[test]
@@ -436,20 +433,25 @@ mod tests {
         // Two runtimes built via `new()` with different target resource ids
         // never build a lease request for the other's target — the request
         // shape is derived purely from `self`, not from any shared state.
+        let lease_client = || {
+            LeaseClient::from_base(
+                &Url::parse("https://commands.example.com").unwrap(),
+                "tok".to_string(),
+            )
+            .expect("valid base URL")
+        };
         let polling_a = CommandsPolling::new(
-            Url::parse("https://commands.example.com").unwrap(),
+            lease_client(),
             Duration::from_secs(5),
             "dep-123".to_string(),
             "worker-a".to_string(),
-            "tok".to_string(),
             control_server(),
         );
         let polling_b = CommandsPolling::new(
-            Url::parse("https://commands.example.com").unwrap(),
+            lease_client(),
             Duration::from_secs(5),
             "dep-123".to_string(),
             "worker-b".to_string(),
-            "tok".to_string(),
             control_server(),
         );
 

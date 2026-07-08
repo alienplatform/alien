@@ -6,7 +6,7 @@ use tracing::debug;
 
 use crate::{
     error::{ErrorData, Result},
-    types::{BodySpec, CommandResponse, Envelope},
+    types::{BodySpec, CommandResponse, Envelope, LeaseInfo, LeaseRequest, LeaseResponse},
     PROTOCOL_VERSION,
 };
 
@@ -296,6 +296,94 @@ pub async fn submit_response(envelope: &Envelope, response: CommandResponse) -> 
     );
 
     Ok(())
+}
+
+/// Shared lease-acquisition client for the pull-side pollers — the app-owned
+/// `Receiver` and the worker runtime's commands-polling transport.
+///
+/// Holds the fully-qualified `…/commands/leases` endpoint, the bearer token,
+/// and a pooled HTTP client. The endpoint is built **once** at construction
+/// via [`LeaseClient::from_base`], so a base URL that cannot be a hierarchical
+/// (HTTP(S)) URL fails at startup rather than being re-derived — and
+/// misclassified as a transient error — on every poll.
+///
+/// [`LeaseClient::acquire`] returns this crate's [`Result`]; each caller maps
+/// it to its own error enum at the boundary.
+#[cfg(any(feature = "runtime", feature = "receiver"))]
+#[derive(Debug, Clone)]
+pub struct LeaseClient {
+    client: reqwest::Client,
+    endpoint: reqwest::Url,
+    token: String,
+}
+
+#[cfg(any(feature = "runtime", feature = "receiver"))]
+impl LeaseClient {
+    /// Build a lease client for a command-server base URL, appending the
+    /// `commands/leases` path segments once.
+    ///
+    /// Returns `None` if `base` cannot be a hierarchical (HTTP(S)) URL —
+    /// callers surface that as their own startup config error so the permanent
+    /// misconfiguration fails fast instead of being retried on every poll.
+    pub fn from_base(base: &reqwest::Url, token: String) -> Option<Self> {
+        let mut endpoint = base.clone();
+        endpoint
+            .path_segments_mut()
+            .ok()?
+            .pop_if_empty()
+            .push("commands")
+            .push("leases");
+        Some(Self {
+            client: reqwest::Client::new(),
+            endpoint,
+            token,
+        })
+    }
+
+    /// The fully-qualified lease endpoint this client POSTs to.
+    pub fn endpoint(&self) -> &reqwest::Url {
+        &self.endpoint
+    }
+
+    /// Acquire leases: POST `request` with the bearer token and parse the
+    /// `LeaseResponse`. Errors as `HTTP_OPERATION_FAILED` (transport or
+    /// non-success status) or `SERIALIZATION_FAILED` (unparseable body).
+    pub async fn acquire(&self, request: &LeaseRequest) -> Result<Vec<LeaseInfo>> {
+        let response = self
+            .client
+            .post(self.endpoint.clone())
+            .header("Authorization", format!("Bearer {}", self.token))
+            .json(request)
+            .send()
+            .await
+            .into_alien_error()
+            .context(ErrorData::HttpOperationFailed {
+                message: "Failed to acquire leases".to_string(),
+                method: Some("POST".to_string()),
+                url: Some(self.endpoint.to_string()),
+            })?;
+
+        if !response.status().is_success() {
+            let status = response.status();
+            let body = response.text().await.unwrap_or_default();
+            return Err(AlienError::new(ErrorData::HttpOperationFailed {
+                message: format!("Lease request failed with status {status}: {body}"),
+                method: Some("POST".to_string()),
+                url: Some(self.endpoint.to_string()),
+            }));
+        }
+
+        let lease_response: LeaseResponse = response
+            .json()
+            .await
+            .into_alien_error()
+            .context(ErrorData::SerializationFailed {
+                message: "Failed to parse lease response".to_string(),
+                data_type: Some("LeaseResponse".to_string()),
+            })?;
+
+        Ok(lease_response.leases)
+    }
 }
 
 /// Create a simple success response for testing
