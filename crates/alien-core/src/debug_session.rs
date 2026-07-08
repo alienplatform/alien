@@ -112,7 +112,11 @@ pub struct RuntimeTunnelDebugSession {
     pub tunnel_url: String,
     /// Bearer the CLI presents on the WebSocket upgrade.
     pub client_token: String,
-    /// Runtime operation this tunnel accepts.
+    /// Runtime operation this tunnel accepts. Renamed on the wire to
+    /// `runtimeKind` so it doesn't collide with the `DebugSessionResponse`
+    /// enum's `kind` discriminator tag (which would produce a duplicate
+    /// `kind` field and break deserialization).
+    #[serde(rename = "runtimeKind")]
     pub kind: DebugSessionKind,
     /// Runtime frame protocol version.
     pub protocol_version: u32,
