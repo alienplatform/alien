@@ -2,10 +2,10 @@ use crate::{ErrorData, Result};
 use alien_aws_clients::{StsApi, StsClient};
 use alien_bindings::{BindingsProvider, BindingsProviderApi};
 use alien_core::{
-    AwsEnvironmentInfo, AzureEnvironmentInfo, ClientConfig, DeploymentConfig, EnvironmentInfo,
-    EnvironmentVariable, EnvironmentVariableType, EnvironmentVariablesSnapshot, GcpEnvironmentInfo,
-    LocalEnvironmentInfo, OtlpConfig, Platform, ResourceStatus, Stack, StackState,
-    TestEnvironmentInfo, ENV_ALIEN_RUNTIME_SECRETS, ENV_ALIEN_SECRETS,
+    AwsEnvironmentInfo, AzureEnvironmentInfo, ClientConfig, ComputeKind, DeploymentConfig,
+    EnvironmentInfo, EnvironmentVariable, EnvironmentVariableType, EnvironmentVariablesSnapshot,
+    GcpEnvironmentInfo, LocalEnvironmentInfo, OtlpConfig, Platform, ResourceStatus, SecretDelivery,
+    Stack, StackState, TestEnvironmentInfo, ENV_ALIEN_RUNTIME_SECRETS, ENV_ALIEN_SECRETS,
 };
 use alien_error::{AlienError, Context, IntoAlienError as _};
 use alien_gcp_clients::{ResourceManagerApi, ResourceManagerClient};
@@ -167,7 +167,7 @@ struct AlienSecretsConfig {
 /// For all compute resources (Workers, Containers, and Daemons):
 /// - Plain variables: Injected directly into resource.environment
 /// - Secret variables: Delivery depends on the platform and resource kind —
-///   see `platform_projects_secret_env`. Where no native projection exists,
+///   see `alien_core::SecretDelivery`. Where no native projection exists,
 ///   the keys are listed in ALIEN_SECRETS and alien-worker-runtime loads the
 ///   actual values from the "secrets" vault at startup.
 ///
@@ -416,7 +416,7 @@ fn parse_otel_resource_attributes(existing: Option<&str>) -> BTreeMap<String, St
 /// - Plain variables: inserted directly into resource.environment.
 /// - Secret variables: collapsed into ALIEN_SECRETS so alien-worker-runtime
 ///   can fetch them from the vault at startup, unless the platform projects
-///   them natively (see `platform_projects_secret_env`).
+///   them natively (see `alien_core::SecretDelivery`).
 fn inject_into_compute_resource(
     resource_name: &str,
     resource_entry: &mut alien_core::ResourceEntry,
@@ -426,7 +426,7 @@ fn inject_into_compute_resource(
     if let Some(worker) = resource_entry.config.downcast_mut::<alien_core::Worker>() {
         inject_into_environment(
             resource_name,
-            "worker",
+            ComputeKind::Worker,
             &mut worker.environment,
             snapshot,
             platform,
@@ -437,7 +437,7 @@ fn inject_into_compute_resource(
     {
         inject_into_environment(
             resource_name,
-            "container",
+            ComputeKind::Container,
             &mut container.environment,
             snapshot,
             platform,
@@ -445,7 +445,7 @@ fn inject_into_compute_resource(
     } else if let Some(daemon) = resource_entry.config.downcast_mut::<alien_core::Daemon>() {
         inject_into_environment(
             resource_name,
-            "daemon",
+            ComputeKind::Daemon,
             &mut daemon.environment,
             snapshot,
             platform,
@@ -460,25 +460,9 @@ fn inject_into_compute_resource(
     }
 }
 
-/// Whether the platform delivers Secret-typed env vars to this compute kind
-/// natively, making the ALIEN_SECRETS vault-load pointer unnecessary.
-///
-/// Kubernetes Containers and Daemons run the application image directly —
-/// there is no runtime wrapper to resolve ALIEN_SECRETS. Their controllers
-/// project each applicable secret as a `valueFrom.secretKeyRef` against a
-/// per-workload Kubernetes Secret (`{workload}-env`) and roll pods via a
-/// checksum annotation when secret values change.
-///
-/// Workers still ship the runtime wrapper on every platform and keep the
-/// ALIEN_SECRETS pointer. Local Container/Daemon secret delivery is separate
-/// work (ALIEN-226) and intentionally still collapses here.
-fn platform_projects_secret_env(platform: Platform, resource_type: &str) -> bool {
-    platform == Platform::Kubernetes && matches!(resource_type, "container" | "daemon")
-}
-
 fn inject_into_environment(
     resource_name: &str,
-    resource_type: &str,
+    kind: ComputeKind,
     environment: &mut HashMap<String, String>,
     snapshot: &EnvironmentVariablesSnapshot,
     platform: Platform,
@@ -509,14 +493,14 @@ fn inject_into_environment(
         .map(|v| v.name.clone())
         .collect();
 
-    if platform_projects_secret_env(platform, resource_type) {
+    if SecretDelivery::resolve(platform, kind).is_native_projection() {
         // The platform controller projects these secrets natively (Kubernetes
         // secretKeyRef); injecting ALIEN_SECRETS here would leak a dangling
         // vault-load pointer into the workload manifest.
         if !secret_keys.is_empty() {
             debug!(
                 "Skipping ALIEN_SECRETS for {} '{}': {} secret keys are projected by the platform",
-                resource_type,
+                kind.as_str(),
                 resource_name,
                 secret_keys.len()
             );
@@ -541,7 +525,7 @@ fn inject_into_environment(
 
         debug!(
             "Added ALIEN_SECRETS to {} '{}' with {} secret keys",
-            resource_type,
+            kind.as_str(),
             resource_name,
             secret_keys.len()
         );

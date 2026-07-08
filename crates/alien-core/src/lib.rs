@@ -10,6 +10,9 @@ pub use permissions::*;
 mod platform;
 pub use platform::*;
 
+mod secret_delivery;
+pub use secret_delivery::*;
+
 pub mod runtime_environment;
 pub use runtime_environment::*;
 
