@@ -1533,7 +1533,7 @@ clusterBootstrap:
 
     append_service_accounts(&mut yaml, analysis);
     append_stack_settings(&mut yaml, stack_settings)?;
-    yaml.push_str("\ninfrastructure: null\n\nbasePlatform: null\nbasePlatformConfig:\n  gcp:\n    projectId: \"\"\n    region: \"\"\n  aws:\n    region: \"\"\n  azure:\n    location: \"\"\n    subscriptionId: \"\"\n    tenantId: \"\"\nserviceAccountPrefix: \"\"\nmanagerServiceAccount:\n  annotations: {}\n  labels: {}\n\n# Agent self-update. When the agent receives operator_target.helm on /v1/sync\n# it creates a short-lived Helm-runner Job that runs `helm upgrade --atomic`.\n# The Job runs as `alien-agent-upgrader`; we keep the SA optional so charts\n# that don't want self-update can disable it.\nupgrader:\n  enabled: true\n");
+    yaml.push_str("\ninfrastructure: null\n\nbasePlatform: null\nbasePlatformConfig:\n  gcp:\n    projectId: \"\"\n    region: \"\"\n  aws:\n    region: \"\"\n  azure:\n    location: \"\"\n    subscriptionId: \"\"\n    tenantId: \"\"\nserviceAccountPrefix: \"\"\nmanagerServiceAccount:\n  annotations: {}\n  labels: {}\n\n# Operator self-update. When the operator receives operator_target.helm on\n# /v1/sync it creates a short-lived Helm-runner Job that runs `helm upgrade\n# --atomic`. The Job runs under the release-derived upgrader SA; keep it\n# optional so charts that don't want self-update can disable it.\nupgrader:\n  enabled: true\n");
     append_services(&mut yaml, analysis);
     yaml.push_str("\npublicEndpoints: {}\n");
 
@@ -2639,13 +2639,13 @@ metadata:
 ---
 {{- end }}
 {{- if .Values.upgrader.enabled }}
-# alien-agent-upgrader is the ServiceAccount used by the Helm-runner Job
-# the agent creates when it acts on operator_target.helm. It exists as a
-# least-privilege boundary for the Job — the agent pod itself uses
-# `alien-agent-manager-sa` and only needs to create Jobs + stage
-# ConfigMaps/Secrets. Operators are not restricted by this — the
-# protection against bad helm upgrades is the chart's `required` values,
-# not RBAC.
+# The upgrader ServiceAccount (release-derived, see
+# `deployment.upgraderServiceAccountName`) is used by the Helm-runner Job the
+# operator creates when it acts on operator_target.helm. It exists as a
+# least-privilege boundary for the Job — the operator pod itself uses its own
+# manager SA and only needs to create Jobs + stage ConfigMaps/Secrets. The
+# protection against bad helm upgrades is the chart's `required` values, not
+# RBAC.
 apiVersion: v1
 kind: ServiceAccount
 metadata:

@@ -32,9 +32,25 @@ use crate::error::{ErrorData, Result};
 const SA_TOKEN_PATH: &str = "/var/run/secrets/kubernetes.io/serviceaccount/token";
 const SA_CA_PATH: &str = "/var/run/secrets/kubernetes.io/serviceaccount/ca.crt";
 
-const COMPONENT_SELECTOR: &str = "alien.dev/component=agent-upgrader";
-const ANNOTATION_TARGET_VERSION: &str = "alien.dev/target-version";
-const LABEL_ATTEMPT: &str = "alien.dev/attempt";
+// Standard `app.kubernetes.io/*` labels on the upgrade Jobs the operator spawns.
+// They carry no hardcoded brand — a white-labeled distribution never leaks
+// `alien` into a customer's cluster — and line up with the chart's white-labeled
+// resources. The vendor's install identity is the Helm release (chart-injected
+// via `KUBERNETES_HELM_RELEASE` -> `app.kubernetes.io/instance`); the rest are
+// generic. Attempt and target version are the operator's own bookkeeping, so
+// they use un-prefixed keys rather than any branded domain.
+const LABEL_NAME: &str = "app.kubernetes.io/name";
+const LABEL_INSTANCE: &str = "app.kubernetes.io/instance";
+const LABEL_COMPONENT: &str = "app.kubernetes.io/component";
+const LABEL_MANAGED_BY: &str = "app.kubernetes.io/managed-by";
+const LABEL_ATTEMPT: &str = "upgrade-attempt";
+const ANNOTATION_TARGET_VERSION: &str = "upgrade-target-version";
+const VALUE_NAME: &str = "operator";
+const VALUE_COMPONENT: &str = "upgrader";
+const VALUE_MANAGED_BY: &str = "operator";
+/// Label selector that finds the upgrade Jobs this operator owns.
+const JOB_SELECTOR: &str =
+    "app.kubernetes.io/component=upgrader,app.kubernetes.io/managed-by=operator";
 
 /// Exponential backoff between failed attempts: `30s * 2^(attempt-1)`, capped.
 const BACKOFF_BASE_SECS: u64 = 30;
@@ -344,9 +360,9 @@ async fn classify_failure(
                 let is_upgrader = pod
                     .get("metadata")
                     .and_then(|m| m.get("labels"))
-                    .and_then(|l| l.get("alien.dev/component"))
+                    .and_then(|l| l.get(LABEL_COMPONENT))
                     .and_then(Value::as_str)
-                    == Some("agent-upgrader");
+                    == Some(VALUE_COMPONENT);
                 if is_upgrader {
                     continue;
                 }
@@ -492,8 +508,10 @@ fn build_job_body(inputs: &JobInputs) -> (String, serde_json::Value) {
             "name": job_name,
             "namespace": inputs.namespace,
             "labels": {
-                "app.kubernetes.io/managed-by": "alien-agent",
-                "alien.dev/component": "agent-upgrader",
+                LABEL_NAME: VALUE_NAME,
+                LABEL_INSTANCE: inputs.release,
+                LABEL_COMPONENT: VALUE_COMPONENT,
+                LABEL_MANAGED_BY: VALUE_MANAGED_BY,
                 LABEL_ATTEMPT: inputs.attempt.to_string(),
             },
             "annotations": {
@@ -506,8 +524,10 @@ fn build_job_body(inputs: &JobInputs) -> (String, serde_json::Value) {
             "template": {
                 "metadata": {
                     "labels": {
-                        "app.kubernetes.io/managed-by": "alien-agent",
-                        "alien.dev/component": "agent-upgrader",
+                        LABEL_NAME: VALUE_NAME,
+                        LABEL_INSTANCE: inputs.release,
+                        LABEL_COMPONENT: VALUE_COMPONENT,
+                        LABEL_MANAGED_BY: VALUE_MANAGED_BY,
                     },
                 },
                 "spec": {
@@ -603,7 +623,7 @@ async fn k8s_get(path: &str, query: &[(&str, &str)]) -> Result<Value> {
 
 async fn list_upgrader_jobs(namespace: &str) -> Result<Vec<UpgraderJob>> {
     let path = format!("/apis/batch/v1/namespaces/{namespace}/jobs");
-    let v = k8s_get(&path, &[("labelSelector", COMPONENT_SELECTOR)]).await?;
+    let v = k8s_get(&path, &[("labelSelector", JOB_SELECTOR)]).await?;
     Ok(v.get("items")
         .and_then(Value::as_array)
         .map(|items| items.iter().filter_map(parse_upgrader_job).collect())
@@ -714,17 +734,27 @@ mod tests {
     }
 
     #[test]
-    fn job_metadata_carries_attempt_label_and_raw_version_annotation() {
+    fn job_metadata_is_white_labeled_with_standard_labels() {
         let mut i = inputs();
         i.attempt = 2;
         i.target_version = "1.4.0+build.7".to_string();
         let (_, body) = build_job_body(&i);
-        assert_eq!(body["metadata"]["labels"]["alien.dev/attempt"], json!("2"));
+        let labels = &body["metadata"]["labels"];
+        // Standard app.kubernetes.io/* set; the vendor identity is the release.
+        assert_eq!(labels["app.kubernetes.io/name"], json!("operator"));
+        assert_eq!(labels["app.kubernetes.io/instance"], json!(i.release)); // == release
+        assert_eq!(labels["app.kubernetes.io/component"], json!("upgrader"));
+        assert_eq!(labels["app.kubernetes.io/managed-by"], json!("operator"));
+        assert_eq!(labels["upgrade-attempt"], json!("2"));
         // Raw version (with '+') preserved in the annotation, not the label.
         assert_eq!(
-            body["metadata"]["annotations"]["alien.dev/target-version"],
+            body["metadata"]["annotations"]["upgrade-target-version"],
             json!("1.4.0+build.7")
         );
+        // No brand leaks into the customer's cluster via labels/annotations.
+        let stamped = format!("{}{}", labels, body["metadata"]["annotations"]);
+        assert!(!stamped.contains("alien.dev"), "no alien.dev keys: {stamped}");
+        assert!(!stamped.contains("alien-agent"), "no alien-agent value: {stamped}");
     }
 
     #[test]
@@ -848,8 +878,8 @@ mod tests {
             "metadata": {
                 "name": "alien-upgrader-1-4-0-2",
                 "creationTimestamp": "2026-07-05T12:00:00Z",
-                "labels": { "alien.dev/attempt": "2" },
-                "annotations": { "alien.dev/target-version": "1.4.0+build" }
+                "labels": { "upgrade-attempt": "2" },
+                "annotations": { "upgrade-target-version": "1.4.0+build" }
             },
             "status": {
                 "conditions": [
