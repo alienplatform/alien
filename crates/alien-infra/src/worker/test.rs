@@ -119,6 +119,17 @@ impl TestWorkerController {
             }));
         }
 
+        if target_func
+            .environment
+            .get("SIMULATE_DEPENDENCY_NOT_READY")
+            .is_some_and(|v| v == "true")
+        {
+            return Err(AlienError::new(ErrorData::DependencyNotReady {
+                resource_id: target_func.id.clone(),
+                dependency_id: "simulated-test-dependency".to_string(),
+            }));
+        }
+
         // Initialize transient failure config from environment
         if self.transient_failure_config.is_none() {
             self.transient_failure_config = target_func

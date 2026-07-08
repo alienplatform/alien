@@ -130,6 +130,7 @@ pub struct StackExecutor {
 }
 
 const MAX_RETRIES: u32 = 10;
+const DEPENDENCY_NOT_READY_CODE: &str = "DEPENDENCY_NOT_READY";
 
 fn controller_platform_for_entry(
     stack_platform: Platform,
@@ -159,6 +160,10 @@ fn is_best_effort_delete_error(err: &AlienError<ErrorData>) -> bool {
             .source
             .as_deref()
             .is_some_and(is_best_effort_delete_source)
+}
+
+fn is_dependency_not_ready_error(err: &AlienError<ErrorData>) -> bool {
+    err.code == DEPENDENCY_NOT_READY_CODE
 }
 
 fn is_best_effort_delete_source(err: &AlienError<GenericError>) -> bool {
@@ -1572,6 +1577,14 @@ impl StackExecutor {
                             "Best-effort delete accepted missing or inaccessible resource"
                         );
                         (0, None, None, false, true)
+                    } else if is_dependency_not_ready_error(&err) {
+                        let delay = Duration::from_secs(10);
+                        info!(
+                            resource_id = %resource_id,
+                            error = %err,
+                            "Dependency is not ready; waiting without consuming retry budget"
+                        );
+                        (0, None, Some(delay), false, false)
                     } else if !err.retryable {
                         let error = Some(err.clone().into_generic());
                         error!(
