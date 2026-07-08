@@ -341,8 +341,11 @@ pub struct AwsNetworkController {
     pub(crate) private_route_table_id: Option<String>,
     pub(crate) route_table_association_ids: Vec<String>,
 
-    // Security Group
-    pub(crate) security_group_id: Option<String>,
+    // Security Group. Public so resource controllers wiring a dedicated database
+    // security group (which admits 5432 only from this stack SG — see
+    // permission-sets/postgres/provision.jsonc) can reference it without
+    // re-discovering it by tag (mirrors the already-public GCP `subnetwork_self_link`).
+    pub security_group_id: Option<String>,
 
     // Metadata
     pub(crate) availability_zones: Vec<String>,

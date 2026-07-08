@@ -67,6 +67,9 @@ pub struct ModifyDbClusterRequest {
     pub engine_version: Option<String>,
     /// Only set for an in-place ACU (memory) resize; mirrors the create scaling ceiling.
     pub max_capacity: Option<f64>,
+    /// Only set to re-sync the master password with the connection secret when adopting an
+    /// existing cluster. Applied immediately (never deferred to the maintenance window).
+    pub master_user_password: Option<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -272,6 +275,9 @@ fn modify_db_cluster_form(r: &ModifyDbClusterRequest) -> HashMap<String, String>
             "ServerlessV2ScalingConfiguration.MaxCapacity".into(),
             format!("{max_capacity}"),
         );
+    }
+    if let Some(password) = &r.master_user_password {
+        form.insert("MasterUserPassword".into(), password.clone());
     }
     form
 }
@@ -625,13 +631,29 @@ mod tests {
             identifier: "stack-db".into(),
             engine_version: None,
             max_capacity: Some(8.0),
+            master_user_password: None,
         });
         assert_eq!(form["Action"], "ModifyDBCluster");
         assert_eq!(form["ApplyImmediately"], "true");
         assert_eq!(form["ServerlessV2ScalingConfiguration.MinCapacity"], "0");
         assert_eq!(form["ServerlessV2ScalingConfiguration.MaxCapacity"], "8");
-        // A memory-only resize must not touch the engine version.
+        // A memory-only resize must not touch the engine version or the password.
         assert!(!form.contains_key("EngineVersion"));
+        assert!(!form.contains_key("MasterUserPassword"));
+    }
+
+    #[test]
+    fn modify_cluster_form_carries_master_password_applied_immediately() {
+        let form = modify_db_cluster_form(&ModifyDbClusterRequest {
+            identifier: "stack-db".into(),
+            engine_version: None,
+            max_capacity: None,
+            master_user_password: Some("s3cret-pw".into()),
+        });
+        // A password re-sync on adopt must apply immediately, never deferred to the
+        // maintenance window (which would leave the secret and cluster diverged).
+        assert_eq!(form["ApplyImmediately"], "true");
+        assert_eq!(form["MasterUserPassword"], "s3cret-pw");
     }
 
     #[test]
@@ -640,6 +662,7 @@ mod tests {
             identifier: "stack-db".into(),
             engine_version: None,
             max_capacity: None,
+            master_user_password: None,
         });
         assert!(!form.contains_key("ServerlessV2ScalingConfiguration.MaxCapacity"));
     }
