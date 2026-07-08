@@ -817,6 +817,7 @@ dependencies = [
  "alien-error",
  "chrono",
  "futures",
+ "http 1.4.2",
  "prettyplease",
  "progenitor",
  "progenitor-client 0.11.2",

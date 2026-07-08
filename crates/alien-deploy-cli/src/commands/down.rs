@@ -240,6 +240,10 @@ async fn destroy_client_config(
         return Ok(ClientConfig::Local { state_directory });
     }
 
+    if platform == Platform::Machines {
+        return Ok(ClientConfig::Machines);
+    }
+
     ClientConfig::from_std_env(platform)
         .await
         .context(ErrorData::ConfigurationError {
@@ -288,5 +292,14 @@ mod tests {
                 state_directory: "/tmp/alien-tracked-state".to_string(),
             }
         );
+    }
+
+    #[tokio::test]
+    async fn machines_destroy_uses_manager_side_client_config() {
+        let config = destroy_client_config(Platform::Machines, None)
+            .await
+            .expect("machines config should resolve without local credentials");
+
+        assert_eq!(config, ClientConfig::Machines);
     }
 }

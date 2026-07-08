@@ -38,6 +38,54 @@ impl<T> SdkResultExt<ResponseValue<T>> for Result<ResponseValue<T>, Error<()>> {
     }
 }
 
+/// Convert a progenitor SDK error to `AlienError`, reading the response body
+/// of error statuses so structured Alien errors returned by the manager
+/// (code, message, hint, retryable) survive the round-trip instead of
+/// collapsing into a generic "Unexpected response" error.
+///
+/// Async because reading the response body requires awaiting; falls back to
+/// [`convert_sdk_error`] semantics when the body is not an Alien error payload.
+pub async fn convert_sdk_error_reading_body(err: Error<()>) -> AlienError<GenericError> {
+    match err {
+        Error::UnexpectedResponse(response) => {
+            let status = response.status().as_u16();
+            let canonical_reason = response
+                .status()
+                .canonical_reason()
+                .unwrap_or("Unknown")
+                .to_string();
+            let url = response.url().to_string();
+            let body = response.text().await.unwrap_or_default();
+
+            if let Ok(mut api_error) = serde_json::from_str::<AlienError<GenericError>>(&body) {
+                if api_error.http_status_code.is_none() {
+                    api_error.http_status_code = Some(status);
+                }
+                return api_error;
+            }
+
+            AlienError {
+                code: "UNEXPECTED_RESPONSE".to_string(),
+                message: format!("Unexpected response: {} {}", status, canonical_reason),
+                context: Some(serde_json::json!({
+                    "status": status,
+                    "url": url,
+                })),
+                hint: None,
+                retryable: status >= 500,
+                internal: false,
+                http_status_code: Some(status),
+                source: None,
+                human_layer_presentation: HumanLayerPresentation::Normal,
+                error: Some(GenericError {
+                    message: format!("Unexpected response status: {}", status),
+                }),
+            }
+        }
+        other => convert_sdk_error(other),
+    }
+}
+
 /// Convert a progenitor SDK error to AlienError, preserving all details.
 pub fn convert_sdk_error(err: Error<()>) -> AlienError<GenericError> {
     match err {
@@ -238,6 +286,49 @@ fn build_reqwest_source(reqwest_err: &reqwest::Error) -> Option<Box<AlienError<G
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn unexpected_response(status: u16, body: &str) -> Error<()> {
+        let response = http::Response::builder()
+            .status(status)
+            .body(body.to_string())
+            .expect("test response should build");
+        Error::UnexpectedResponse(reqwest::Response::from(response))
+    }
+
+    #[tokio::test]
+    async fn reading_body_preserves_structured_alien_errors() {
+        let body = serde_json::json!({
+            "code": "PUBLIC_SUBDOMAIN_REQUIRES_CUSTOM_DOMAIN",
+            "message": "Choosing a public subdomain requires a custom project domain",
+            "retryable": false,
+            "internal": false,
+            "httpStatusCode": 400,
+        })
+        .to_string();
+
+        let error = convert_sdk_error_reading_body(unexpected_response(400, &body)).await;
+
+        assert_eq!(error.code, "PUBLIC_SUBDOMAIN_REQUIRES_CUSTOM_DOMAIN");
+        assert_eq!(
+            error.message,
+            "Choosing a public subdomain requires a custom project domain"
+        );
+        assert_eq!(error.http_status_code, Some(400));
+        assert!(!error.retryable);
+        assert!(!error.internal);
+    }
+
+    #[tokio::test]
+    async fn reading_body_falls_back_to_generic_error_for_non_alien_payloads() {
+        let error =
+            convert_sdk_error_reading_body(unexpected_response(502, "<html>bad gateway</html>"))
+                .await;
+
+        assert_eq!(error.code, "UNEXPECTED_RESPONSE");
+        assert_eq!(error.message, "Unexpected response: 502 Bad Gateway");
+        assert_eq!(error.http_status_code, Some(502));
+        assert!(error.retryable);
+    }
 
     #[tokio::test]
     async fn communication_error_includes_url_in_message_and_context() {

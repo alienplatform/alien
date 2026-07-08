@@ -296,10 +296,18 @@ mod tests {
     }
 
     #[test]
-    fn machines_join_guidance_prints_future_join_command() {
+    fn machines_join_guidance_prints_executable_name_and_wrapped_token() {
         assert_eq!(
-            machines_join_command("alien-deploy"),
-            "sudo alien-deploy join --token <join-token>"
+            machines_join_command("isloctl", "aj1_wrapped-token"),
+            "sudo isloctl join --token 'aj1_wrapped-token'"
+        );
+    }
+
+    #[test]
+    fn machines_join_guidance_shell_quotes_token() {
+        assert_eq!(
+            machines_join_command("alien-deploy", "aj1_token'with-quote"),
+            "sudo alien-deploy join --token 'aj1_token'\"'\"'with-quote'"
         );
     }
 
@@ -1056,9 +1064,21 @@ pub async fn up_command(args: UpArgs, embedded_config: Option<&DeployCliConfig>)
         }
         DeploymentModel::Push => match platform {
             Platform::Machines => {
+                let join_token = create_machines_join_token(
+                    &resolved.base_url,
+                    &effective_token,
+                    &deployment_id,
+                )
+                .await?;
+                let cli_name = embedded_config
+                    .and_then(|config| config.name.as_deref())
+                    .unwrap_or("alien-deploy");
                 output::success("Deployment registered.");
-                output::label_value("Join command", &machines_join_command(banner_title));
-                output::info("Create a join token for this deployment, then run the command on each machine you want to add.");
+                output::label_value(
+                    "Join command",
+                    &machines_join_command(cli_name, &join_token),
+                );
+                output::info("Run this command on each machine you want to add.");
             }
             Platform::Test => {
                 output::info("Test platform — no deployment action needed.");
@@ -1104,8 +1124,69 @@ pub async fn up_command(args: UpArgs, embedded_config: Option<&DeployCliConfig>)
     Ok(())
 }
 
-fn machines_join_command(cli_name: &str) -> String {
-    format!("sudo {cli_name} join --token <join-token>")
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct MachinesJoinTokenResponse {
+    join_token: String,
+}
+
+async fn create_machines_join_token(
+    base_url: &str,
+    token: &str,
+    deployment_id: &str,
+) -> Result<String> {
+    let http_client = create_manager_http_client(token)?;
+    let url = format!(
+        "{}/v1/machines/deployments/{}/join-tokens/rotate",
+        base_url.trim_end_matches('/'),
+        urlencoding::encode(deployment_id),
+    );
+
+    let response = http_client
+        .post(&url)
+        .send()
+        .await
+        .into_alien_error()
+        .context(ErrorData::ConfigurationError {
+            message: "Failed to create Machines join token from platform API".to_string(),
+        })?;
+
+    if !response.status().is_success() {
+        let status = response.status();
+        let body = response.text().await.unwrap_or_default();
+        return Err(AlienError::new(ErrorData::ConfigurationError {
+            message: format!("Failed to create Machines join token (HTTP {status}): {body}"),
+        }));
+    }
+
+    let response: MachinesJoinTokenResponse =
+        response
+            .json()
+            .await
+            .into_alien_error()
+            .context(ErrorData::ConfigurationError {
+                message: "Failed to parse Machines join token response".to_string(),
+            })?;
+
+    let join_token = response.join_token.trim();
+    if join_token.is_empty() {
+        return Err(AlienError::new(ErrorData::ConfigurationError {
+            message: "Platform API returned an empty Machines join token".to_string(),
+        }));
+    }
+
+    Ok(join_token.to_string())
+}
+
+fn machines_join_command(cli_name: &str, join_token: &str) -> String {
+    format!(
+        "sudo {cli_name} join --token {}",
+        shell_single_quote(join_token)
+    )
+}
+
+fn shell_single_quote(value: &str) -> String {
+    format!("'{}'", value.replace('\'', "'\"'\"'"))
 }
 
 /// Resolved deployment info before manager connection.
@@ -2164,15 +2245,25 @@ async fn initialize_deployment(
         setup_method: None,
     };
 
-    let response = client
-        .initialize()
-        .body(body)
-        .send()
-        .await
-        .into_sdk_error()
-        .context(ErrorData::ConfigurationError {
-            message: "Failed to initialize with manager. Is the manager running? Check that --manager-url is correct.".to_string(),
-        })?;
+    let response = match client.initialize().body(body).send().await {
+        Ok(response) => response,
+        Err(error) => {
+            // Read the error body so server-side rejections (e.g. an invalid or
+            // unavailable public subdomain) surface their own message; the
+            // manager-URL hint only applies when the manager was unreachable.
+            let error = alien_manager_api::convert_sdk_error_reading_body(error).await;
+            let context = if error.code == "COMMUNICATION_ERROR" {
+                ErrorData::ConfigurationError {
+                    message: "Failed to initialize with manager. Is the manager running? Check that --manager-url is correct.".to_string(),
+                }
+            } else {
+                ErrorData::DeploymentFailed {
+                    operation: "initialize".to_string(),
+                }
+            };
+            return Err(error).context(context);
+        }
+    };
 
     let init = response.into_inner();
     let deployment_model = manager_deployment_model(init.deployment_model)?;
