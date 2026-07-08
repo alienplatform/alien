@@ -68,7 +68,11 @@ export class Deployment {
    * disambiguates which one runs. When omitted, the server routes by its default
    * rules.
    */
-  async invokeCommand(name: string, params: any, options?: { target?: string }): Promise<any> {
+  async invokeCommand<T = unknown>(
+    name: string,
+    params: unknown,
+    options?: { target?: string },
+  ): Promise<T> {
     const token = this.apiKey ?? ""
     const arc = new CommandsClient({
       managerUrl: this.commandsUrl,
@@ -78,9 +82,9 @@ export class Deployment {
     })
 
     if (options?.target) {
-      return arc.target(options.target).invoke(name, params)
+      return arc.target(options.target).invoke<T>(name, params)
     }
-    return arc.invoke(name, params)
+    return arc.invoke<T>(name, params)
   }
 
   /**
