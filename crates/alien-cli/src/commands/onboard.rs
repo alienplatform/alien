@@ -103,6 +103,14 @@ async fn onboard_platform(args: OnboardArgs, ctx: ExecutionMode, name: String) -
         .as_deref()
         .map(validate_public_subdomain)
         .transpose()?;
+    if let Some(public_subdomain) = &public_subdomain {
+        return Err(AlienError::new(ErrorData::ValidationError {
+            field: "subdomain".to_string(),
+            message: format!(
+                "Choosing a public subdomain ('{public_subdomain}') is not available for deployment links; omit --subdomain to generate one when the deployment is created."
+            ),
+        }));
+    }
 
     if !args.json {
         let platforms_label = selected_platforms
@@ -201,7 +209,6 @@ async fn onboard_platform(args: OnboardArgs, ctx: ExecutionMode, name: String) -
                 deployment_setup_config: platform_onboard_deployment_setup_config(
                     setup_environment_variables,
                     &selected_platforms,
-                    public_subdomain.clone(),
                 ),
                 input_values: Some(stack_input_values),
             },
@@ -261,7 +268,6 @@ struct ActiveReleaseStackInputs {
 fn platform_onboard_deployment_setup_config(
     environment_variables: Vec<alien_platform_api::types::EnvironmentVariableConfig>,
     platforms: &[Platform],
-    public_subdomain: Option<String>,
 ) -> alien_platform_api::types::DeploymentSetupConfig {
     use alien_platform_api::types;
 
@@ -327,10 +333,6 @@ fn platform_onboard_deployment_setup_config(
         },
         environment_variables,
         input_values: None,
-        public_subdomain: public_subdomain
-            .map(|value| types::DeploymentSetupConfigPublicSubdomain::try_from(value))
-            .transpose()
-            .expect("public subdomain is validated before setup config creation"),
     }
 }
 
@@ -402,7 +404,7 @@ async fn fetch_active_release_stack_inputs(
         });
     };
 
-    let Some(stack_by_platform) = release.stack.as_ref() else {
+    let Some(stack_by_platform) = release.stack.as_ref().and_then(|stack| stack.0.as_ref()) else {
         return Ok(ActiveReleaseStackInputs {
             supported_platforms: Vec::new(),
             inputs_by_platform: Vec::new(),
