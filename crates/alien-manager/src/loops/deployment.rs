@@ -509,7 +509,7 @@ impl DeploymentLoop {
 
         // 4. Build environment variables.
         let environment_variables = self
-            .build_environment_variables(&deployment_id, &deployment, Some(&deployment_stack))
+            .build_environment_variables(&deployment_id, &deployment, &deployment_stack)
             .await?;
         let provided_config = deployment.deployment_config.as_ref();
         let monitoring = provided_config
@@ -766,7 +766,7 @@ impl DeploymentLoop {
         &self,
         deployment_id: &str,
         deployment: &DeploymentRecord,
-        deployment_stack: Option<&alien_core::Stack>,
+        deployment_stack: &alien_core::Stack,
     ) -> Result<EnvironmentVariablesSnapshot, AlienError> {
         let mut vars: Vec<EnvironmentVariable> = Vec::new();
 
@@ -875,11 +875,9 @@ impl DeploymentLoop {
 fn commands_polling_env_vars(
     commands_base_url: String,
     deployment_token: Option<&str>,
-    deployment_stack: Option<&alien_core::Stack>,
+    deployment_stack: &alien_core::Stack,
 ) -> Vec<EnvironmentVariable> {
-    deployment_stack
-        .map(|stack| stack.worker_command_polling_env_vars(&commands_base_url, deployment_token))
-        .unwrap_or_default()
+    deployment_stack.worker_command_polling_env_vars(&commands_base_url, deployment_token)
 }
 
 /// Builds the command *receiver* environment variables (`ALIEN_COMMANDS_URL`,
@@ -893,11 +891,9 @@ fn commands_polling_env_vars(
 fn commands_receiver_env_vars(
     commands_base_url: String,
     deployment_token: Option<&str>,
-    deployment_stack: Option<&alien_core::Stack>,
+    deployment_stack: &alien_core::Stack,
 ) -> Vec<EnvironmentVariable> {
-    deployment_stack
-        .map(|stack| stack.receiver_command_env_vars(&commands_base_url, deployment_token))
-        .unwrap_or_default()
+    deployment_stack.receiver_command_env_vars(&commands_base_url, deployment_token)
 }
 
 fn should_wait_for_credential_handoff(
@@ -1353,7 +1349,7 @@ mod tests {
         let vars = commands_polling_env_vars(
             "https://manager.example.test/v1".to_string(),
             Some("ax_dep_test"),
-            Some(&stack),
+            &stack,
         );
 
         // Nothing deployment-wide; nothing scoped to the disabled worker.
@@ -1383,17 +1379,6 @@ mod tests {
                 v.name == alien_core::ENV_ALIEN_COMMANDS_TARGET_RESOURCE_ID && v.value == worker_id
             }));
         }
-    }
-
-    #[test]
-    fn commands_polling_env_vars_empty_without_stack() {
-        let vars = commands_polling_env_vars(
-            "https://manager.example.test/v1".to_string(),
-            Some("ax_dep_test"),
-            None,
-        );
-
-        assert!(vars.is_empty());
     }
 
     fn command_container(id: &str, commands_enabled: bool) -> Container {
@@ -1449,7 +1434,7 @@ mod tests {
         let vars = commands_receiver_env_vars(
             "https://manager.example.test/v1".to_string(),
             Some("ax_dep_test"),
-            Some(&stack),
+            &stack,
         );
 
         // Every var scoped to exactly one command-enabled Container/Daemon; the
@@ -1492,17 +1477,6 @@ mod tests {
                     && v.value == expected_type
             }));
         }
-    }
-
-    #[test]
-    fn commands_receiver_env_vars_empty_without_stack() {
-        let vars = commands_receiver_env_vars(
-            "https://manager.example.test/v1".to_string(),
-            Some("ax_dep_test"),
-            None,
-        );
-
-        assert!(vars.is_empty());
     }
 }
 
