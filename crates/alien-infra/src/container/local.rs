@@ -22,6 +22,21 @@ use alien_local::{ContainerConfig, ContainerInfo};
 use alien_macros::controller;
 use chrono::Utc;
 
+/// Remove the vault-load secret pointers (`ALIEN_SECRETS` /
+/// `ALIEN_RUNTIME_SECRETS`) from a projected environment.
+///
+/// On Local, `SecretDelivery::resolve(Local, Container)` is a `VaultPointer`,
+/// so `add_standard_alien_env_vars` injects `ALIEN_SECRETS`. A local container
+/// runs runtime-less (the app binary is the direct entrypoint) with its
+/// secrets already delivered as concrete env vars, so the pointer is dead
+/// weight that would leak the vault reference into the container. The local
+/// daemon path strips exactly these two vars before spawning its process
+/// (`daemon_supervisor::spawn`); this keeps the container path symmetric.
+fn strip_vault_secret_pointers(env_vars: &mut std::collections::HashMap<String, String>) {
+    env_vars.remove(alien_core::ENV_ALIEN_SECRETS);
+    env_vars.remove(alien_core::ENV_ALIEN_RUNTIME_SECRETS);
+}
+
 fn matches_environment_target(resource_id: &str, target_resources: &Option<Vec<String>>) -> bool {
     match target_resources {
         None => true,
@@ -241,6 +256,12 @@ impl LocalContainerController {
         // Rewrite localhost URLs to host.docker.internal for container networking
         // Containers cannot use "localhost" to reach services on the host machine
         local_utils::rewrite_localhost_urls_for_container(&mut env_vars)?;
+
+        // Strip the vault-load pointer: a runtime-less local container has its
+        // secrets delivered as concrete env vars, so `ALIEN_SECRETS` is dead
+        // weight that would otherwise leak into the container env. Mirrors the
+        // local daemon spawn path.
+        strip_vault_secret_pointers(&mut env_vars);
 
         // Build the container config
         let ports: Vec<u16> = config.ports.iter().map(|p| p.port).collect();
@@ -576,4 +597,44 @@ fn emit_local_container_heartbeat(
         )),
         raw: vec![],
     });
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::collections::HashMap;
+
+    #[test]
+    fn strips_vault_secret_pointers_but_keeps_delivered_secrets_and_plain_vars() {
+        // A runtime-less local container env: the vault-load pointers plus the
+        // concretely-delivered secrets and ordinary vars they exist alongside.
+        let mut env_vars = HashMap::from([
+            (
+                alien_core::ENV_ALIEN_SECRETS.to_string(),
+                "{\"keys\":[\"DB_PASSWORD\"],\"hash\":\"abc\"}".to_string(),
+            ),
+            (
+                alien_core::ENV_ALIEN_RUNTIME_SECRETS.to_string(),
+                "runtime-pointer".to_string(),
+            ),
+            ("DB_PASSWORD".to_string(), "s3cret".to_string()),
+            ("APP_ENV".to_string(), "prod".to_string()),
+        ]);
+
+        strip_vault_secret_pointers(&mut env_vars);
+
+        // The vault-load pointers must be gone — they are what leaks otherwise.
+        assert!(
+            !env_vars.contains_key(alien_core::ENV_ALIEN_SECRETS),
+            "ALIEN_SECRETS must not reach the runtime-less container env"
+        );
+        assert!(
+            !env_vars.contains_key(alien_core::ENV_ALIEN_RUNTIME_SECRETS),
+            "ALIEN_RUNTIME_SECRETS must not reach the runtime-less container env"
+        );
+        // Concretely-delivered secrets and plain vars must survive untouched.
+        assert_eq!(env_vars.get("DB_PASSWORD").map(String::as_str), Some("s3cret"));
+        assert_eq!(env_vars.get("APP_ENV").map(String::as_str), Some("prod"));
+        assert_eq!(env_vars.len(), 2);
+    }
 }
