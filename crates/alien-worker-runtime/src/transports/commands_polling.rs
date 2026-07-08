@@ -6,7 +6,7 @@
 use std::{sync::Arc, time::Duration};
 
 use alien_commands::{
-    runtime::{submit_response, LeaseClient},
+    runtime::{command_budget, submit_response, LeaseClient},
     types::{CommandResponse, CommandTarget, CommandTargetType, LeaseInfo, LeaseRequest},
     DEFAULT_LEASE_SECONDS, DEFAULT_MAX_LEASES, DEFAULT_POLL_INTERVAL_SECS,
 };
@@ -16,7 +16,9 @@ use alien_worker_protocol::{
     control::{task::Payload, ArcCommand, Task},
     ControlGrpcServer,
 };
+use chrono::{DateTime, Utc};
 use reqwest::Url;
+use tokio::task::JoinSet;
 use tracing::{debug, error, info, warn};
 
 use crate::error::{ErrorData, Result};
@@ -183,18 +185,42 @@ impl CommandsPolling {
         }
     }
 
-    /// Poll once for commands
+    /// Poll once for commands.
+    ///
+    /// The leased batch is processed **concurrently** (each command on its own
+    /// task): a command slower than the lease no longer blocks the rest of the
+    /// batch, and — combined with the per-command lease budget in
+    /// [`Self::process_lease`] — the manager never races a redelivery against
+    /// an in-flight duplicate.
     async fn poll_once(&self) -> Result<usize> {
         let leases = self.acquire_leases().await?;
         let count = leases.len();
 
+        let mut in_flight: JoinSet<Result<()>> = JoinSet::new();
         for lease in leases {
-            if let Err(e) = self.process_lease(lease).await {
-                error!(error = %e, "Failed to process lease");
+            in_flight.spawn(Self::process_lease(self.control_server.clone(), lease));
+        }
+
+        while let Some(joined) = in_flight.join_next().await {
+            match joined {
+                Ok(Ok(())) => {}
+                Ok(Err(e)) => error!(error = %e, "Failed to process lease"),
+                Err(e) => error!(error = %e, "Command processing task panicked"),
             }
         }
 
         Ok(count)
+    }
+
+    /// Task timeout for a leased command: the time remaining until its
+    /// execution budget (`min(deadline, lease_expiry − safety margin)`),
+    /// clamped to zero. Bounding the gRPC `send_task` timeout by the lease —
+    /// rather than a fixed wall-clock constant — guarantees the runtime stops
+    /// the command before the manager can redeliver it, so a slow command can
+    /// never be pushed twice. Mirrors the pull receiver's `command_budget`.
+    fn task_timeout(deadline: Option<DateTime<Utc>>, lease_expires_at: DateTime<Utc>) -> Duration {
+        let budget = command_budget(deadline, lease_expires_at);
+        (budget - Utc::now()).to_std().unwrap_or(Duration::ZERO)
     }
 
     /// Build the lease request this runtime sends to the manager.
@@ -232,9 +258,17 @@ impl CommandsPolling {
             })
     }
 
-    /// Process a single lease - deliver command via gRPC
-    async fn process_lease(&self, lease: LeaseInfo) -> Result<()> {
+    /// Process a single lease - deliver command via gRPC.
+    ///
+    /// Associated (not `&self`) so the leased batch can be dispatched
+    /// concurrently onto a [`JoinSet`]; the only runtime state it needs is the
+    /// shared control server, passed in cloned.
+    async fn process_lease(
+        control_server: Arc<ControlGrpcServer>,
+        lease: LeaseInfo,
+    ) -> Result<()> {
         let command_id = lease.command_id.clone();
+        let lease_expires_at = lease.lease_expires_at;
         let envelope = lease.envelope;
 
         info!(
@@ -269,12 +303,14 @@ impl CommandsPolling {
             })),
         };
 
+        // Bound the task by the lease: the runtime must finish (or abort) the
+        // command before the lease expires, or the manager redelivers it and
+        // the same command runs twice. Derive the timeout from the lease
+        // expiry and the envelope deadline instead of a fixed 300s constant.
+        let timeout = Self::task_timeout(envelope.deadline, lease_expires_at);
+
         // Send task and wait for result
-        match self
-            .control_server
-            .send_task(task, std::time::Duration::from_secs(300))
-            .await
-        {
+        match control_server.send_task(task, timeout).await {
             Ok(result) => {
                 // Submit response to commands server
                 let command_response = if result.success {
@@ -320,10 +356,56 @@ impl CommandsPolling {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use chrono::Duration as ChronoDuration;
     use std::collections::HashMap;
 
     fn control_server() -> Arc<ControlGrpcServer> {
         Arc::new(ControlGrpcServer::new())
+    }
+
+    #[test]
+    fn task_timeout_never_exceeds_lease_minus_margin() {
+        // A 60s lease with no envelope deadline: the task timeout is bounded by
+        // the lease expiry minus the 5s safety margin (≈55s remaining), so the
+        // runtime always stops before the manager can redeliver. It must never
+        // be the old fixed 300s, which outlived the lease and caused duplicate
+        // pushes.
+        let lease_expires_at = Utc::now() + ChronoDuration::seconds(60);
+        let timeout = CommandsPolling::task_timeout(None, lease_expires_at);
+        assert!(
+            timeout <= Duration::from_secs(55),
+            "timeout {timeout:?} must not exceed lease_expiry − margin (55s)"
+        );
+        // Sanity: it is close to the full margined budget, not collapsed to 0.
+        assert!(
+            timeout >= Duration::from_secs(53),
+            "timeout {timeout:?} unexpectedly small for a fresh 60s lease"
+        );
+    }
+
+    #[test]
+    fn task_timeout_respects_earlier_envelope_deadline() {
+        // A deadline earlier than the margined lease bound wins: the command
+        // gets at most its deadline, never the longer lease budget.
+        let lease_expires_at = Utc::now() + ChronoDuration::seconds(60);
+        let deadline = Utc::now() + ChronoDuration::seconds(10);
+        let timeout = CommandsPolling::task_timeout(Some(deadline), lease_expires_at);
+        assert!(
+            timeout <= Duration::from_secs(10),
+            "timeout {timeout:?} must be bounded by the earlier deadline"
+        );
+    }
+
+    #[test]
+    fn task_timeout_clamps_to_zero_when_lease_within_margin() {
+        // A lease whose remaining time is already inside the safety margin
+        // yields a zero timeout (never a negative/underflowed Duration): the
+        // command is not run rather than run past its lease.
+        let lease_expires_at = Utc::now() + ChronoDuration::seconds(2);
+        assert_eq!(
+            CommandsPolling::task_timeout(None, lease_expires_at),
+            Duration::ZERO
+        );
     }
 
     /// A fully-populated polling env *except* the target resource id.

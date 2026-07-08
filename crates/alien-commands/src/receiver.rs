@@ -87,7 +87,7 @@ use tracing::{debug, error, info, warn};
 
 use crate::{
     error::{ErrorData, Result},
-    runtime::{decode_params_bytes, submit_response, LeaseClient},
+    runtime::{command_budget, decode_params_bytes, submit_response, LeaseClient},
     types::{
         CommandResponse, CommandTarget, CommandTargetType, LeaseInfo, LeaseRequest,
         DEFAULT_LEASE_SECONDS, DEFAULT_MAX_LEASES, DEFAULT_POLL_INTERVAL_SECS,
@@ -402,28 +402,6 @@ where
                 .map_err(|e| format!("Failed to serialize handler response: {e}"))
         })
     })
-}
-
-/// Safety margin subtracted from a lease's expiry when computing the
-/// execution budget. Stopping this far before the lease actually expires
-/// guarantees the response is submitted (or the handler abandoned) while the
-/// lease is still held, so an expired lease is never redelivered while a
-/// duplicate is still in flight. Twin of the TypeScript receiver's
-/// `LEASE_SAFETY_MARGIN_MS`.
-const LEASE_SAFETY_MARGIN: Duration = Duration::from_secs(5);
-
-/// Per-command execution budget: `min(envelope.deadline, lease_expiry −
-/// LEASE_SAFETY_MARGIN)`, clamped so it never falls before now. There is no
-/// lease-renew call, so the safety-margined lease expiry always bounds it.
-/// Twin of the TypeScript receiver's `commandBudget`.
-fn command_budget(
-    deadline: Option<DateTime<Utc>>,
-    lease_expires_at: DateTime<Utc>,
-) -> DateTime<Utc> {
-    let margin = chrono::Duration::from_std(LEASE_SAFETY_MARGIN)
-        .unwrap_or_else(|_| chrono::Duration::seconds(5));
-    let lease_bound = (lease_expires_at - margin).max(Utc::now());
-    deadline.map_or(lease_bound, |d| d.min(lease_bound))
 }
 
 /// Handler-status label for a produced response: `"success"` for a success

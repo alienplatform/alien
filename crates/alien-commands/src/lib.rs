@@ -45,7 +45,10 @@ pub use types::{
 pub use server::{create_axum_router, CommandRegistry, CommandServer, InMemoryCommandRegistry};
 
 #[cfg(any(feature = "runtime", feature = "receiver"))]
-pub use runtime::{decode_params, parse_envelope, submit_response, LeaseClient};
+pub use runtime::{
+    command_budget, decode_params, parse_envelope, submit_response, LeaseClient,
+    LEASE_SAFETY_MARGIN,
+};
 
 // NB: `receiver::Context` is intentionally NOT re-exported at the crate root —
 // it would collide with `alien_error::Context` (the error-chaining trait).

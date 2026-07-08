@@ -1,7 +1,8 @@
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 use alien_core::{MessagePayload, QueueMessage};
 use alien_error::{AlienError, Context, IntoAlienError};
+use chrono::{DateTime, Utc};
 use tracing::debug;
 
 use crate::{
@@ -9,6 +10,31 @@ use crate::{
     types::{BodySpec, CommandResponse, Envelope, LeaseInfo, LeaseRequest, LeaseResponse},
     PROTOCOL_VERSION,
 };
+
+/// Safety margin subtracted from a lease's expiry when computing a command's
+/// execution budget. Stopping this far before the lease actually expires
+/// guarantees the runtime finishes (or abandons) the command while the lease
+/// is still held, so an expired lease is never redelivered by the manager
+/// while a duplicate is still in flight. Shared by every pull-side poller —
+/// the app-owned `Receiver` and the worker runtime's commands-polling
+/// transport. Twin of the TypeScript receiver's `LEASE_SAFETY_MARGIN_MS`.
+pub const LEASE_SAFETY_MARGIN: Duration = Duration::from_secs(5);
+
+/// Per-command execution budget: `min(envelope.deadline, lease_expiry −
+/// [`LEASE_SAFETY_MARGIN`])`, clamped so it never falls before now. There is
+/// no lease-renew call in the protocol, so the safety-margined lease expiry
+/// always bounds the budget. Shared by both pull-side pollers so the worker
+/// runtime and the app-owned receiver enforce identical semantics. Twin of
+/// the TypeScript receiver's `commandBudget`.
+pub fn command_budget(
+    deadline: Option<DateTime<Utc>>,
+    lease_expires_at: DateTime<Utc>,
+) -> DateTime<Utc> {
+    let margin = chrono::Duration::from_std(LEASE_SAFETY_MARGIN)
+        .unwrap_or_else(|_| chrono::Duration::seconds(5));
+    let lease_bound = (lease_expires_at - margin).max(Utc::now());
+    deadline.map_or(lease_bound, |d| d.min(lease_bound))
+}
 
 /// Parse a QueueMessage to extract a command envelope if present
 pub fn parse_envelope(message: &QueueMessage) -> Result<Option<Envelope>> {
@@ -159,7 +185,6 @@ pub async fn decode_params_bytes(envelope: &Envelope) -> Result<Vec<u8>> {
 #[cfg(any(feature = "runtime", feature = "receiver"))]
 pub async fn submit_response(envelope: &Envelope, response: CommandResponse) -> Result<()> {
     use reqwest::Client;
-    use std::time::Duration;
 
     let start_time = Instant::now();
 
