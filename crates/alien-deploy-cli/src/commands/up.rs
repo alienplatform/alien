@@ -296,24 +296,48 @@ mod tests {
     }
 
     #[test]
-    fn machines_join_guidance_prints_executable_name_and_wrapped_token() {
+    fn machines_join_guidance_uses_install_script_when_available() {
         assert_eq!(
-            machines_join_command("isloctl", "aj1_wrapped-token"),
-            "sudo isloctl join --token 'aj1_wrapped-token'"
+            machines_join_command(
+                "isloctl",
+                Some("https://packages.example.com/ws/prj/install.sh"),
+                "aj1_wrapped-token"
+            ),
+            "curl -fsSL 'https://packages.example.com/ws/prj/install.sh' | sudo bash -s -- join --token 'aj1_wrapped-token'"
         );
     }
 
     #[test]
-    fn machines_join_guidance_shell_quotes_token() {
+    fn machines_join_guidance_shell_quotes_install_script_and_token() {
         assert_eq!(
-            machines_join_command("alien-deploy", "aj1_token'with-quote"),
-            "sudo alien-deploy join --token 'aj1_token'\"'\"'with-quote'"
+            machines_join_command(
+                "alien-deploy",
+                Some("https://packages.example.com/ws/prj/install script.sh"),
+                "aj1_token'with-quote"
+            ),
+            "curl -fsSL 'https://packages.example.com/ws/prj/install script.sh' | sudo bash -s -- join --token 'aj1_token'\"'\"'with-quote'"
+        );
+    }
+
+    #[test]
+    fn machines_join_guidance_falls_back_to_installed_cli_without_install_script() {
+        assert_eq!(
+            machines_join_command("isloctl", None, "aj1_wrapped-token"),
+            "sudo isloctl join --token 'aj1_wrapped-token'"
         );
     }
 
     #[test]
     fn machines_deploy_prints_only_join_command() {
         assert!(!should_print_deploy_progress(Platform::Machines));
+    }
+
+    #[test]
+    fn machines_push_setup_suppresses_neutral_completion_message() {
+        assert!(!should_print_push_setup_neutral_completion(
+            Platform::Machines
+        ));
+        assert!(should_print_push_setup_neutral_completion(Platform::Aws));
     }
 
     #[test]
@@ -1121,7 +1145,12 @@ pub async fn up_command(args: UpArgs, embedded_config: Option<&DeployCliConfig>)
                 let cli_name = embedded_config
                     .and_then(|config| config.name.as_deref())
                     .unwrap_or("alien-deploy");
-                println!("{}", machines_join_command(cli_name, &join_token));
+                let install_script_url =
+                    embedded_config.and_then(|config| config.install_script_url.as_deref());
+                println!(
+                    "{}",
+                    machines_join_command(cli_name, install_script_url, &join_token)
+                );
                 return Ok(());
             }
             Platform::Test => {
@@ -1222,7 +1251,19 @@ async fn create_machines_join_token(
     Ok(join_token.to_string())
 }
 
-fn machines_join_command(cli_name: &str, join_token: &str) -> String {
+fn machines_join_command(
+    cli_name: &str,
+    install_script_url: Option<&str>,
+    join_token: &str,
+) -> String {
+    if let Some(install_script_url) = install_script_url {
+        return format!(
+            "curl -fsSL {} | sudo bash -s -- join --token {}",
+            shell_single_quote(install_script_url),
+            shell_single_quote(join_token)
+        );
+    }
+
     format!(
         "sudo {cli_name} join --token {}",
         shell_single_quote(join_token)
@@ -1230,6 +1271,10 @@ fn machines_join_command(cli_name: &str, join_token: &str) -> String {
 }
 
 fn should_print_deploy_progress(platform: Platform) -> bool {
+    platform != Platform::Machines
+}
+
+fn should_print_push_setup_neutral_completion(platform: Platform) -> bool {
     platform != Platform::Machines
 }
 
@@ -3411,9 +3456,11 @@ pub async fn push_initial_setup(
             ),
         })),
         LoopOutcome::Neutral => {
-            output::success(
-                "Setup complete. Your deployment is being provisioned and will be ready shortly.",
-            );
+            if should_print_push_setup_neutral_completion(platform) {
+                output::success(
+                    "Setup complete. Your deployment is being provisioned and will be ready shortly.",
+                );
+            }
             Ok(())
         }
     }

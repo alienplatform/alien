@@ -1649,6 +1649,7 @@ mod tests {
             machine_bundle_url: Some(
                 "https://packages.example.com/machines/manifest.json".to_string(),
             ),
+            install_script_url: None,
             token_env_var: None,
             name: None,
             display_name: None,
@@ -1765,6 +1766,7 @@ mod tests {
             machine_bundle_url: Some(
                 "https://packages.example.com/machines/manifest.json".to_string(),
             ),
+            install_script_url: None,
             token_env_var: None,
             name: None,
             display_name: None,
