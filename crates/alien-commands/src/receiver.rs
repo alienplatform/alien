@@ -78,7 +78,7 @@ use alien_core::{
 };
 use alien_error::{AlienError, Context as _, IntoAlienError};
 use chrono::{DateTime, Utc};
-use reqwest::{Client, Url};
+use reqwest::Url;
 use serde::de::DeserializeOwned;
 use serde::Serialize;
 use tokio::task::JoinSet;
@@ -87,9 +87,9 @@ use tracing::{debug, error, info, warn};
 
 use crate::{
     error::{ErrorData, Result},
-    runtime::{decode_params_bytes, submit_response},
+    runtime::{decode_params_bytes, submit_response, LeaseClient},
     types::{
-        CommandResponse, CommandTarget, CommandTargetType, LeaseInfo, LeaseRequest, LeaseResponse,
+        CommandResponse, CommandTarget, CommandTargetType, LeaseInfo, LeaseRequest,
         DEFAULT_LEASE_SECONDS, DEFAULT_MAX_LEASES, DEFAULT_POLL_INTERVAL_SECS,
     },
 };
@@ -173,9 +173,7 @@ impl ShutdownHandle {
 /// Pull command receiver: leases commands addressed to this process's
 /// target resource and dispatches them to registered handlers.
 pub struct Receiver {
-    client: Client,
-    url: Url,
-    token: String,
+    lease_client: LeaseClient,
     deployment_id: String,
     target: CommandTarget,
     poll_interval: Duration,
@@ -189,7 +187,7 @@ impl std::fmt::Debug for Receiver {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         // Manual impl: handlers are opaque closures and the token is secret.
         f.debug_struct("Receiver")
-            .field("url", &self.url.as_str())
+            .field("endpoint", &self.lease_client.endpoint().as_str())
             .field("deployment_id", &self.deployment_id)
             .field("target", &self.target)
             .field("poll_interval", &self.poll_interval)
@@ -245,10 +243,19 @@ impl Receiver {
                 }
             };
 
+        // Build the `…/commands/leases` endpoint once, at config time. A base
+        // URL that cannot be a hierarchical URL is a permanent misconfiguration
+        // and must fail fast here — not be re-derived (and misread as a
+        // transient error) on every poll.
+        let lease_client = LeaseClient::from_base(&url, token).ok_or_else(|| {
+            AlienError::new(ErrorData::CommandReceiverConfigInvalid {
+                message: format!("{ENV_ALIEN_COMMANDS_URL} '{url}' must be an HTTP(S) URL with a path"),
+                env_var: ENV_ALIEN_COMMANDS_URL.to_string(),
+            })
+        })?;
+
         Ok(Self {
-            client: Client::new(),
-            url,
-            token,
+            lease_client,
             deployment_id,
             target: CommandTarget::new(resource_id, resource_type),
             poll_interval: Duration::from_secs(DEFAULT_POLL_INTERVAL_SECS),
@@ -305,7 +312,7 @@ impl Receiver {
     /// "Shutdown" section for the precise semantics.
     pub async fn run(&self) -> Result<()> {
         info!(
-            url = %self.url,
+            endpoint = %self.lease_client.endpoint(),
             deployment_id = %self.deployment_id,
             target_resource_id = %self.target.resource_id,
             target_resource_type = ?self.target.resource_type,
@@ -364,59 +371,10 @@ impl Receiver {
     }
 
     async fn acquire_leases(&self) -> Result<Vec<LeaseInfo>> {
-        let mut lease_endpoint = self.url.clone();
-        lease_endpoint
-            .path_segments_mut()
-            .map_err(|_| {
-                AlienError::new(ErrorData::CommandReceiverConfigInvalid {
-                    message: format!(
-                        "{ENV_ALIEN_COMMANDS_URL} '{}' must be an HTTP(S) URL with a path",
-                        self.url
-                    ),
-                    env_var: ENV_ALIEN_COMMANDS_URL.to_string(),
-                })
-            })?
-            .pop_if_empty()
-            .push("commands")
-            .push("leases");
-
-        let request = self.build_lease_request();
-
-        let response = self
-            .client
-            .post(lease_endpoint.clone())
-            .header("Authorization", format!("Bearer {}", self.token))
-            .json(&request)
-            .send()
-            .await
-            .into_alien_error()
-            .context(ErrorData::HttpOperationFailed {
-                message: "Failed to acquire leases".to_string(),
-                method: Some("POST".to_string()),
-                url: Some(lease_endpoint.to_string()),
-            })?;
-
-        if !response.status().is_success() {
-            let status = response.status();
-            let body = response.text().await.unwrap_or_default();
-            return Err(AlienError::new(ErrorData::HttpOperationFailed {
-                message: format!("Lease request failed with status {status}: {body}"),
-                method: Some("POST".to_string()),
-                url: Some(lease_endpoint.to_string()),
-            }));
-        }
-
-        let lease_response: LeaseResponse =
-            response
-                .json()
-                .await
-                .into_alien_error()
-                .context(ErrorData::SerializationFailed {
-                    message: "Failed to parse lease response".to_string(),
-                    data_type: Some("LeaseResponse".to_string()),
-                })?;
-
-        Ok(lease_response.leases)
+        // The endpoint and error mapping live in the shared `LeaseClient`; the
+        // receiver just supplies its own request shape. Errors already carry
+        // this crate's `ErrorData`, so no boundary remap is needed.
+        self.lease_client.acquire(&self.build_lease_request()).await
     }
 }
 
@@ -658,8 +616,12 @@ mod tests {
         assert_eq!(receiver.deployment_id, "dep-123");
         assert_eq!(receiver.target.resource_id, "agent");
         assert_eq!(receiver.target.resource_type, CommandTargetType::Daemon);
-        assert_eq!(receiver.url.as_str(), "https://commands.example.com/v1/");
-        assert_eq!(receiver.token, "tok");
+        // The `…/commands/leases` endpoint is built once at config time from
+        // the base URL (trailing slash collapsed, not doubled).
+        assert_eq!(
+            receiver.lease_client.endpoint().as_str(),
+            "https://commands.example.com/v1/commands/leases"
+        );
         assert_eq!(receiver.poll_interval, Duration::from_secs(5));
         assert_eq!(receiver.max_leases, 10);
         assert_eq!(receiver.lease_seconds, 60);
@@ -713,6 +675,21 @@ mod tests {
         let mut env = full_env();
         env.insert(ENV_ALIEN_COMMANDS_URL.to_string(), "not a url".to_string());
         let err = Receiver::from_env_vars(&env).expect_err("invalid URL must fail");
+        assert_eq!(err.code, "COMMAND_RECEIVER_CONFIG_INVALID");
+        assert!(err.message.contains(ENV_ALIEN_COMMANDS_URL));
+    }
+
+    #[test]
+    fn from_env_vars_rejects_cannot_be_a_base_url() {
+        // A URL that parses but cannot be a hierarchical (HTTP(S)) URL — so the
+        // `commands/leases` path can never be appended — is a permanent config
+        // error. It must fail at construction, not be retried every poll.
+        let mut env = full_env();
+        env.insert(
+            ENV_ALIEN_COMMANDS_URL.to_string(),
+            "mailto:commands@example.com".to_string(),
+        );
+        let err = Receiver::from_env_vars(&env).expect_err("cannot-be-a-base URL must fail");
         assert_eq!(err.code, "COMMAND_RECEIVER_CONFIG_INVALID");
         assert!(err.message.contains(ENV_ALIEN_COMMANDS_URL));
     }
