@@ -189,7 +189,9 @@ export class CommandsClient {
   private readonly fetchImpl: typeof fetch
 
   constructor(config: CommandsClientConfig) {
-    this.managerUrl = config.managerUrl.replace(/\/+$/, "")
+    // Store the base URL raw; request URLs are built with URL-based
+    // construction in `buildManagerUrl`, which preserves any query string.
+    this.managerUrl = config.managerUrl
     this.deploymentId = config.deploymentId
     this.token = config.token
     this.defaultTimeout = config.timeoutMs ?? 60_000
@@ -268,6 +270,24 @@ export class CommandsClient {
    * caller-supplied context. Only 2xx responses carry a body, so `schema` is
    * always applied.
    */
+  /**
+   * Build a request URL by appending `path` to the configured manager base URL.
+   *
+   * Uses URL-based construction rather than a naive `base + path` concat so a
+   * base URL carrying a query string — e.g. `https://h/v1?token=x` — keeps its
+   * query correctly at the end (`https://h/v1/commands?token=x`) instead of
+   * corrupting it into `https://h/v1?token=x/commands`. Twin of the receiver's
+   * `buildLeaseEndpoint`, which appends path segments while leaving the query
+   * untouched.
+   */
+  private buildManagerUrl(path: string): string {
+    const url = new URL(this.managerUrl)
+    const basePath = url.pathname.replace(/\/+$/, "")
+    const suffix = path.startsWith("/") ? path : `/${path}`
+    url.pathname = `${basePath}${suffix}`
+    return url.toString()
+  }
+
   private async managerFetch<T>(
     method: string,
     path: string,
@@ -277,7 +297,7 @@ export class CommandsClient {
       describeError: (reason: string) => Parameters<AlienError["withContext"]>[0]
     },
   ): Promise<T> {
-    const url = `${this.managerUrl}${path}`
+    const url = this.buildManagerUrl(path)
     try {
       const headers: Record<string, string> = { Authorization: `Bearer ${this.token}` }
       const init: RequestInit = { method, headers }

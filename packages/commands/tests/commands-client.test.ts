@@ -378,6 +378,26 @@ describe("CommandsClient wire validation", () => {
     await scoped.invoke("x", {}, FAST_POLL)
     expect(calls).toBeGreaterThanOrEqual(2)
   })
+
+  it("preserves a query string on the manager base URL", async () => {
+    // A base URL carrying a query string (e.g. an auth token) must have that
+    // query kept at the END of the composed request URL. The old naive
+    // `base.replace(/\/+$/, "") + path` concat corrupted it into
+    // `http://host?token=abc/v1/commands`; URL-based construction yields the
+    // correct `http://host/v1/commands?token=abc`.
+    server = await startStubServer((req): RouteResult => {
+      if (req.method === "POST") return { json: createResponse() }
+      return { json: successStatus("cmd_1", "ok") }
+    })
+
+    await client(`${server.baseUrl}?token=abc`).invoke("x", {}, FAST_POLL)
+
+    const create = server.requests.find(r => r.method === "POST") as CapturedRequest
+    // The path is intact and the query rides at the end, not spliced in front.
+    expect(create.path).toBe("/v1/commands?token=abc")
+    const status = server.requests.find(r => r.method === "GET") as CapturedRequest
+    expect(status.path).toBe("/v1/commands/cmd_1?token=abc")
+  })
 })
 
 describe("CommandsClient target threading", () => {
