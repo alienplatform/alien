@@ -3,7 +3,7 @@
 //! This application is used for testing the alien-worker-runtime, alien-local, and dockdash crates.
 //! It provides minimal functionality needed for core runtime testing:
 //! - HTTP server with health and inspect endpoints
-//! - Event handlers for storage and queue events
+//! - Event handlers for storage, cron, and queue events
 //! - Commands for testing command invocation
 //! - Minimal bindings usage (Storage, KV)
 
@@ -223,6 +223,39 @@ fn register_event_handlers(app_state: &AppState) {
         });
     }
 
+    // Cron event handler - stores received cron events in KV for verification
+    {
+        let ctx_for_handler = ctx.clone();
+        ctx.on_cron_event("*", move |event| {
+            let ctx = ctx_for_handler.clone();
+            async move {
+                info!(
+                    schedule_name = %event.schedule_name,
+                    scheduled_time = %event.scheduled_time,
+                    "Received cron event"
+                );
+
+                // Store in KV for test verification
+                let kv = ctx.get_bindings().load_kv("test-kv").await?;
+                let record = serde_json::json!({
+                    "scheduleName": event.schedule_name,
+                    "scheduledTime": event.scheduled_time.to_rfc3339(),
+                    "processedAt": chrono::Utc::now().to_rfc3339(),
+                });
+                let sanitized_name = event.schedule_name.replace('/', "_");
+                let kv_key = format!("cron_event:{}", sanitized_name);
+                let value = serde_json::to_vec(&record).into_alien_error().context(
+                    BindingsErrorData::SerializationFailed {
+                        message: "Failed to serialize cron event".to_string(),
+                    },
+                )?;
+                kv.put(&kv_key, value, None).await?;
+
+                Ok(())
+            }
+        });
+    }
+
     // Test command for small payloads (inline response)
     ctx.on_command("cmd-test-small", |params: serde_json::Value| async move {
         info!(params = ?params, "Received cmd-test-small command");
@@ -277,6 +310,7 @@ fn build_router(app_state: AppState) -> Router {
         .route("/sse", get(sse_stream))
         .route("/events/storage/{*key}", get(get_storage_event))
         .route("/events/queue/{*message_id}", get(get_queue_message))
+        .route("/events/cron/{*schedule_name}", get(get_cron_event))
         .with_state(app_state)
 }
 
@@ -362,6 +396,35 @@ async fn get_storage_event(
         Ok(None) => Err((
             StatusCode::NOT_FOUND,
             format!("Storage event not found: {}", key),
+        )),
+        Err(e) => Err((StatusCode::INTERNAL_SERVER_ERROR, e.to_string())),
+    }
+}
+
+/// Get cron event from KV (for test verification)
+async fn get_cron_event(
+    State(app_state): State<AppState>,
+    Path(schedule_name): Path<String>,
+) -> Result<Json<serde_json::Value>, (StatusCode, String)> {
+    let kv = app_state
+        .ctx
+        .get_bindings()
+        .load_kv("test-kv")
+        .await
+        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+
+    let sanitized_name = schedule_name.replace('/', "_");
+    let kv_key = format!("cron_event:{}", sanitized_name);
+
+    match kv.get(&kv_key).await {
+        Ok(Some(data)) => {
+            let event: serde_json::Value = serde_json::from_slice(&data)
+                .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+            Ok(Json(event))
+        }
+        Ok(None) => Err((
+            StatusCode::NOT_FOUND,
+            format!("Cron event not found: {}", schedule_name),
         )),
         Err(e) => Err((StatusCode::INTERNAL_SERVER_ERROR, e.to_string())),
     }
