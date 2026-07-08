@@ -10,6 +10,7 @@ import { DeploymentInfoDeploymentGroup } from "@alienplatform/platform-api/model
 let value: DeploymentInfoDeploymentGroup = {
   id: "dg_r27ict8c7vcgsumpj90ackf7b",
   name: "<value>",
+  pinnedSubdomain: "<value>",
 };
 ```
 
@@ -19,3 +20,4 @@ let value: DeploymentInfoDeploymentGroup = {
 | ------------------------------------------- | ------------------------------------------- | ------------------------------------------- | ------------------------------------------- | ------------------------------------------- |
 | `id`                                        | *string*                                    | :heavy_check_mark:                          | Unique identifier for the deployment group. | dg_r27ict8c7vcgsumpj90ackf7b                |
 | `name`                                      | *string*                                    | :heavy_check_mark:                          | N/A                                         |                                             |
+| `pinnedSubdomain`                           | *string*                                    | :heavy_check_mark:                          | N/A                                         |                                             |

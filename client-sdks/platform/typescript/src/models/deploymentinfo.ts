@@ -73,6 +73,7 @@ export type DeploymentInfoDeploymentGroup = {
    */
   id: string;
   name: string;
+  pinnedSubdomain: string | null;
 };
 
 export type DeploymentInfoWorkspace = {
@@ -734,6 +735,7 @@ export const DeploymentInfoDeploymentGroup$inboundSchema: z.ZodType<
 > = z.object({
   id: z.string(),
   name: z.string(),
+  pinnedSubdomain: z.nullable(z.string()),
 });
 
 export function deploymentInfoDeploymentGroupFromJSON(
