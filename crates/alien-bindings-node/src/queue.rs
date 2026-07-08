@@ -10,18 +10,20 @@ use std::sync::Arc;
 
 /// A message received from a queue.
 ///
-/// Exactly one of `payload_json` / `payload_text` is set, selected by
-/// `payload_type` (`"json"` | `"text"`).
+/// The payload is a single string; `payload_type` (`"json"` | `"text"`) says how
+/// to read it — serialized JSON for `"json"`, raw text for `"text"`.
 #[napi(object)]
 pub struct QueueMessageJs {
     /// Payload discriminant: `"json"` or `"text"`.
     pub payload_type: String,
-    /// JSON payload as a string, when `payload_type == "json"`.
-    pub payload_json: Option<String>,
-    /// Text payload, when `payload_type == "text"`.
-    pub payload_text: Option<String>,
+    /// The payload string: serialized JSON when `payload_type == "json"`, raw
+    /// text when `payload_type == "text"`.
+    pub payload: String,
     /// Opaque receipt handle for ack/nack.
     pub receipt_handle: String,
+    /// Delivery attempt for this message, 1-based (1 = first delivery), so
+    /// handlers can enforce retry limits.
+    pub attempt: u32,
 }
 
 /// Parse a JSON string argument into a `MessagePayload::Json`. Invalid JSON maps
@@ -38,25 +40,30 @@ fn parse_json_payload(json_string: &str) -> napi::Result<MessagePayload> {
 /// Translate a received `QueueMessage` into its JS shape. Re-serializing the
 /// JSON payload can fail (mapped to `SERIALIZATION_FAILED`).
 fn message_to_js(message: QueueMessage) -> napi::Result<QueueMessageJs> {
-    match message.payload {
+    let QueueMessage {
+        payload,
+        receipt_handle,
+        attempt,
+    } = message;
+    match payload {
         MessagePayload::Json(value) => {
-            let payload_json = serde_json::to_string(&value).map_err(|e| {
+            let payload = serde_json::to_string(&value).map_err(|e| {
                 map_alien_error(AlienError::new(ErrorData::SerializationFailed {
                     message: e.to_string(),
                 }))
             })?;
             Ok(QueueMessageJs {
                 payload_type: "json".to_string(),
-                payload_json: Some(payload_json),
-                payload_text: None,
-                receipt_handle: message.receipt_handle,
+                payload,
+                receipt_handle,
+                attempt,
             })
         }
         MessagePayload::Text(text) => Ok(QueueMessageJs {
             payload_type: "text".to_string(),
-            payload_json: None,
-            payload_text: Some(text),
-            receipt_handle: message.receipt_handle,
+            payload: text,
+            receipt_handle,
+            attempt,
         }),
     }
 }
@@ -158,11 +165,10 @@ mod tests {
         let js = message_to_js(message).expect("json message should translate");
 
         assert_eq!(js.payload_type, "json");
-        assert_eq!(js.payload_text, None);
         assert_eq!(js.receipt_handle, "r1");
+        assert_eq!(js.attempt, 1);
         let parsed: serde_json::Value =
-            serde_json::from_str(js.payload_json.as_deref().expect("json payload present"))
-                .expect("payload_json is valid json");
+            serde_json::from_str(&js.payload).expect("payload is valid json");
         assert_eq!(parsed["k"], "v");
     }
 
@@ -177,8 +183,8 @@ mod tests {
         let js = message_to_js(message).expect("text message should translate");
 
         assert_eq!(js.payload_type, "text");
-        assert_eq!(js.payload_text, Some("hello".to_string()));
-        assert_eq!(js.payload_json, None);
+        assert_eq!(js.payload, "hello");
         assert_eq!(js.receipt_handle, "r2");
+        assert_eq!(js.attempt, 3);
     }
 }

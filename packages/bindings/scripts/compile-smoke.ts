@@ -36,13 +36,10 @@
  * on the `bun build --compile` invocation.
  *
  * This matters beyond this script: `packages/package-layout/run.ts`'s own
- * "compile" step (`bun build --compile src/compile-entry.ts`) does NOT pass
- * `--format=cjs` either. It is currently masked by an unrelated
- * expected-failure ("bindings package not installed" — the prebuilds only
- * exist in release builds, see .github/workflows/release.yml). Once the
- * prebuild is present and the expected-failure entry is removed, that check
- * will hit this exact `__require` crash unless `--format=cjs` is added there
- * too.
+ * "compile" step (`bun build --compile src/compile-entry.ts`) passes
+ * `--format=cjs` for exactly this reason. Without it, that check would hit the
+ * same `__require` crash the moment it stages a real addon for the compiled
+ * binary to embed.
  */
 
 import { spawnSync } from "node:child_process"

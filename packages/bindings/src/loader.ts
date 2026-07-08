@@ -65,10 +65,10 @@ export interface RawPresignedRequest {
 
 /** Raw napi queue message. */
 export interface RawQueueMessage {
-  payloadType: string
-  payloadJson?: string
-  payloadText?: string
+  payloadType: "json" | "text"
+  payload: string
   receiptHandle: string
+  attempt: number
 }
 
 /** Raw napi storage handle. */
@@ -217,17 +217,6 @@ function packageVersion(): string {
   return packageJson.version
 }
 
-/**
- * True when a locally-built addon's reported `version()` doesn't match the
- * installed `@alienplatform/bindings` package version — i.e. it's a stale
- * build left over from an earlier checkout (ABI/version skew) and must not
- * be trusted. Exported for unit testing; the file-walk and native `require`
- * around it are exercised only by the loader's integration behavior.
- */
-export function isStaleLocalAddon(actualVersion: string, expectedVersion: string): boolean {
-  return actualVersion !== expectedVersion
-}
-
 let cached: NativeAddon | undefined
 
 /**
@@ -258,7 +247,10 @@ export function loadAddon(): NativeAddon {
     const addon = require(local) as NativeAddon
     const expected = packageVersion()
     const actual = addon.version()
-    if (!isStaleLocalAddon(actual, expected)) {
+    // Trust the local addon only when its reported version matches the installed
+    // package version. A mismatch means a stale build left over from an earlier
+    // checkout (ABI/version skew) and must not be loaded.
+    if (actual === expected) {
       cached = addon
       return cached
     }

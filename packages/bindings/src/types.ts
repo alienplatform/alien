@@ -124,13 +124,19 @@ export interface Kv {
 /** A message received from a queue. */
 export interface QueueMessage {
   /** Payload discriminant: `"json"` or `"text"`. */
-  payloadType: string
-  /** JSON payload as a string, when `payloadType === "json"`. */
-  payloadJson?: string
-  /** Text payload, when `payloadType === "text"`. */
-  payloadText?: string
+  payloadType: "json" | "text"
+  /**
+   * The payload string: serialized JSON when `payloadType === "json"`, raw text
+   * when `payloadType === "text"`.
+   */
+  payload: string
   /** Opaque receipt handle for ack/nack. */
   receiptHandle: string
+  /**
+   * Delivery attempt, 1-based (1 = first delivery). Providers that do not report
+   * redelivery counts always set 1; use it to enforce retry limits.
+   */
+  attempt: number
 }
 
 /** A resolved queue binding. */

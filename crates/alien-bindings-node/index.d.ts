@@ -126,18 +126,24 @@ export interface PresignedRequestJs {
 /**
  * A message received from a queue.
  *
- * Exactly one of `payload_json` / `payload_text` is set, selected by
- * `payload_type` (`"json"` | `"text"`).
+ * The payload is a single string; `payload_type` (`"json"` | `"text"`) says how
+ * to read it — serialized JSON for `"json"`, raw text for `"text"`.
  */
 export interface QueueMessageJs {
   /** Payload discriminant: `"json"` or `"text"`. */
   payloadType: string
-  /** JSON payload as a string, when `payload_type == "json"`. */
-  payloadJson?: string
-  /** Text payload, when `payload_type == "text"`. */
-  payloadText?: string
+  /**
+   * The payload string: serialized JSON when `payload_type == "json"`, raw
+   * text when `payload_type == "text"`.
+   */
+  payload: string
   /** Opaque receipt handle for ack/nack. */
   receiptHandle: string
+  /**
+   * Delivery attempt for this message, 1-based (1 = first delivery), so
+   * handlers can enforce retry limits.
+   */
+  attempt: number
 }
 
 /** A page of scan results. */

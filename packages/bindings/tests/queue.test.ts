@@ -32,8 +32,8 @@ describe("queue (local turso-backed provider)", () => {
     const msg = only(await q.receive(1))
 
     expect(msg.payloadType).toBe("json")
-    expect(msg.payloadText).toBeUndefined()
-    expect(JSON.parse(msg.payloadJson as string)).toEqual({ hello: "world", n: 1 })
+    expect(msg.attempt).toBe(1)
+    expect(JSON.parse(msg.payload)).toEqual({ hello: "world", n: 1 })
   })
 
   it("sendText() / receive() returns a typed text payload", async () => {
@@ -43,8 +43,8 @@ describe("queue (local turso-backed provider)", () => {
     const msg = only(await q.receive(1))
 
     expect(msg.payloadType).toBe("text")
-    expect(msg.payloadJson).toBeUndefined()
-    expect(msg.payloadText).toBe("plain text message")
+    expect(msg.payload).toBe("plain text message")
+    expect(msg.attempt).toBe(1)
   })
 
   it("receive respects max and returns messages in FIFO order", async () => {
@@ -55,7 +55,7 @@ describe("queue (local turso-backed provider)", () => {
 
     const batch = await q.receive(2)
 
-    expect(batch.map(m => m.payloadText)).toEqual(["first", "second"])
+    expect(batch.map(m => m.payload)).toEqual(["first", "second"])
   })
 
   it("ack removes the message so a later receive is empty", async () => {
@@ -79,7 +79,8 @@ describe("queue (local turso-backed provider)", () => {
     await q.nack(first.receiptHandle)
 
     const redelivered = only(await q.receive(10))
-    expect(redelivered.payloadText).toBe("nack-me")
+    expect(redelivered.payload).toBe("nack-me")
+    expect(redelivered.attempt).toBe(2)
     expect(redelivered.receiptHandle).not.toBe(first.receiptHandle)
   })
 
