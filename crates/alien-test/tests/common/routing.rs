@@ -137,7 +137,24 @@ async fn check_untargeted_invoke_is_rejected(deployment: &TestDeployment) -> any
              command-capable resources, but it succeeded with: {result:?}"
         ),
         Err(error) => {
-            info!(%error, "Untargeted ambiguous invoke correctly rejected");
+            // Not just any failure proves the rejection: assert the stable
+            // COMMAND_TARGET_AMBIGUOUS code (from alien-commands' error enum),
+            // walking the full source chain so the check sees it regardless of
+            // which layer carries it. Any other error means something else
+            // broke and must fail the test.
+            let mut rendered = error.to_string();
+            let mut source = error.source();
+            while let Some(cause) = source {
+                rendered.push_str(&format!(": {cause}"));
+                source = cause.source();
+            }
+            if !rendered.contains("COMMAND_TARGET_AMBIGUOUS") {
+                bail!(
+                    "untargeted `status` invoke must be rejected with the stable \
+                     COMMAND_TARGET_AMBIGUOUS code, but failed with a different error: {rendered}"
+                );
+            }
+            info!(%error, "Untargeted ambiguous invoke correctly rejected (COMMAND_TARGET_AMBIGUOUS)");
             Ok(())
         }
     }

@@ -219,16 +219,24 @@ impl CommandServer {
             )
             .await?;
 
-        // Check idempotency if key provided (idempotency is scoped per target:
-        // the same key addressed to two different targets is two commands).
-        if let Some(ref idem_key) = request.idempotency_key {
-            let composed_key = Self::compose_idempotency_key(
+        // Compose the target-scoped idempotency key once, from the resolved
+        // target, and reuse it for both the pre-create check and the
+        // post-create mapping. Both must derive from the same target, so a
+        // single composition is the source of truth (idempotency is scoped per
+        // target: the same key addressed to two different targets is two
+        // commands).
+        let composed_idempotency_key = request.idempotency_key.as_ref().map(|idem_key| {
+            Self::compose_idempotency_key(
                 &request.deployment_id,
                 &resolved_target.target.resource_id,
                 &request.command,
                 idem_key,
-            );
-            if let Some(existing_id) = self.check_idempotency(&composed_key).await? {
+            )
+        });
+
+        // Check idempotency if key provided.
+        if let Some(ref composed_key) = composed_idempotency_key {
+            if let Some(existing_id) = self.check_idempotency(composed_key).await? {
                 // Return existing command status
                 let status = self
                     .command_registry
@@ -277,15 +285,10 @@ impl CommandServer {
         let command_id = metadata.command_id;
         let delivery_mode = metadata.delivery_mode;
 
-        // 2. Store idempotency mapping in KV (target-scoped key)
-        if let Some(ref idem_key) = request.idempotency_key {
-            let composed_key = Self::compose_idempotency_key(
-                &request.deployment_id,
-                &metadata.target.resource_id,
-                &request.command,
-                idem_key,
-            );
-            self.store_idempotency(&composed_key, &command_id).await?;
+        // 2. Store idempotency mapping in KV, reusing the key composed above
+        // from the same resolved target.
+        if let Some(ref composed_key) = composed_idempotency_key {
+            self.store_idempotency(composed_key, &command_id).await?;
         }
 
         // 3. Store params in KV
