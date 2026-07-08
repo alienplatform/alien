@@ -1430,7 +1430,13 @@ fn build_operator_target(
     }
     Some(alien_core::sync::OperatorTarget {
         version: target_version.to_string(),
-        min_supported_version: target_version.to_string(),
+        // Floor on the operator's *current* version for it to accept this jump.
+        // MVP: any operator we ship (>= 1.0.0) can upgrade straight to the target,
+        // so keep the lowest floor. Setting it to `target_version` would (once the
+        // operator enforces it) make every operator that actually needs the upgrade
+        // refuse it — sub-target operators are exactly the ones we tell to upgrade.
+        // Raise this only when a target requires a stepping-stone upgrade.
+        min_supported_version: "1.0.0".to_string(),
         binary: None,
         helm,
     })

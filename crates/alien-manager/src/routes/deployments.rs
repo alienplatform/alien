@@ -934,11 +934,22 @@ async fn set_target_operator_version(
 }
 
 /// Permissive semver check — `MAJOR.MINOR.PATCH` with optional `-prerelease`
-/// or `+build` suffix. Mirrors the platform API's regex; not full SemVer
-/// 2.0.0 grammar but catches typos and accidental whitespace.
+/// and/or `+build` suffix (SemVer 2.0.0 order). Not the full grammar, but
+/// catches typos and accidental whitespace while accepting valid pins.
 fn is_plausible_semver(v: &str) -> bool {
-    let mut parts = v.splitn(2, |c| c == '-' || c == '+');
-    let core = parts.next().unwrap_or("");
+    // Peel `+build` first, then `-prerelease`, so a version carrying BOTH
+    // (e.g. `1.4.0-rc.1+build.123`) validates. A single split on either
+    // separator would leave the `+build` inside the pre-release chunk and
+    // wrongly reject it, since `+` isn't in the identifier character set.
+    let (without_build, build) = match v.split_once('+') {
+        Some((head, tail)) => (head, Some(tail)),
+        None => (v, None),
+    };
+    let (core, prerelease) = match without_build.split_once('-') {
+        Some((head, tail)) => (head, Some(tail)),
+        None => (without_build, None),
+    };
+
     let core_ok = {
         let segs: Vec<&str> = core.split('.').collect();
         segs.len() == 3
@@ -946,10 +957,51 @@ fn is_plausible_semver(v: &str) -> bool {
                 .iter()
                 .all(|s| !s.is_empty() && s.chars().all(|c| c.is_ascii_digit()))
     };
-    let rest_ok = parts.next().map_or(true, |r| {
-        !r.is_empty()
-            && r.chars()
+    // Pre-release and build are dot-separated `[0-9A-Za-z-]` identifiers.
+    let ident_ok = |s: &str| {
+        !s.is_empty()
+            && s.chars()
                 .all(|c| c.is_ascii_alphanumeric() || c == '.' || c == '-')
-    });
-    core_ok && rest_ok
+    };
+    core_ok && prerelease.map_or(true, ident_ok) && build.map_or(true, ident_ok)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::is_plausible_semver;
+
+    #[test]
+    fn semver_accepts_valid_pins_including_prerelease_and_build() {
+        // Plain, pre-release, build, and BOTH — the last being the case the old
+        // single-split rejected because `+build` fell into the pre-release chunk.
+        for v in [
+            "1.4.0",
+            "0.0.1",
+            "1.10.5",
+            "1.4.0-rc.1",
+            "1.4.0+build.123",
+            "1.4.0-rc.1+build.123",
+            "2.0.0-alpha-1+exp.sha.5114f85",
+        ] {
+            assert!(is_plausible_semver(v), "should accept {v}");
+        }
+    }
+
+    #[test]
+    fn semver_rejects_garbage() {
+        for v in [
+            "",
+            "1.4",          // not three segments
+            "1.4.0.0",      // four segments
+            "v1.4.0",       // leading v
+            "1.4.x",        // non-numeric core
+            "1.4.0 ",       // trailing whitespace
+            "1.4.0-",       // empty pre-release
+            "1.4.0+",       // empty build
+            "1.4.0-rc 1",   // space in pre-release
+            "1.4.0+bu ild", // space in build
+        ] {
+            assert!(!is_plausible_semver(v), "should reject {v:?}");
+        }
+    }
 }
