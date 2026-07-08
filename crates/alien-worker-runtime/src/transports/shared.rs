@@ -271,13 +271,14 @@ pub(crate) async fn dispatch_queue_messages(
     for qm in queue_messages {
         if let Some(envelope) = try_parse_envelope(&qm) {
             match envelope_to_command(&envelope).await {
-                Some(command) => {
+                Ok(command) => {
                     if let Err(e) = handle_command(&envelope, &command, control_server).await {
                         error!(error = %e, "Failed to handle command");
                     }
                 }
-                None => {
-                    error!(command_id = %envelope.command_id, "Failed to decode command params");
+                Err(e) => {
+                    error!(command_id = %envelope.command_id, error = %e, "Failed to decode command params");
+                    submit_decode_error(&envelope, &e).await;
                 }
             }
         } else if let Err(e) = send_queue_message(&qm, control_server).await {
@@ -387,13 +388,30 @@ pub(crate) async fn send_cron_event(
     }
 }
 
-/// Convert an Envelope into an ArcCommand, fetching storage params if needed.
-pub async fn envelope_to_command(envelope: &Envelope) -> Option<ArcCommand> {
-    let params_bytes = alien_commands::runtime::decode_params_bytes(envelope)
-        .await
-        .ok()?;
+/// Submit a typed error response for a command whose params failed to decode,
+/// under the decode error's own code — the same semantics as the pull receiver
+/// and the Lambda transport. Best-effort: a submit failure is logged, not
+/// propagated (there is nothing further to do with the command).
+pub(crate) async fn submit_decode_error(envelope: &Envelope, error: &alien_commands::Error) {
+    let response = alien_commands::CommandResponse::error(&error.code, error.to_string());
+    if let Err(submit_err) = alien_commands::runtime::submit_response(envelope, response).await {
+        error!(
+            command_id = %envelope.command_id,
+            error = %submit_err,
+            "Failed to submit decode-error response"
+        );
+    }
+}
 
-    Some(ArcCommand {
+/// Convert an Envelope into an ArcCommand, fetching storage params if needed.
+///
+/// Propagates the params-decode error (rather than swallowing it) so callers
+/// can submit a typed error response under the decode error's own code — the
+/// same semantics as the pull receiver and the Lambda transport.
+pub async fn envelope_to_command(envelope: &Envelope) -> alien_commands::Result<ArcCommand> {
+    let params_bytes = alien_commands::runtime::decode_params_bytes(envelope).await?;
+
+    Ok(ArcCommand {
         command_id: envelope.command_id.clone(),
         command_name: envelope.command.clone(),
         params: params_bytes,

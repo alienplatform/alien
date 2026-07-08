@@ -757,10 +757,24 @@ async fn handle_command(state: &LambdaState, envelope: &alien_commands::types::E
 
     info!(command_id = %command_id, command = %command_name, "Command received via Lambda");
 
-    // Decode params
-    let params = alien_commands::runtime::decode_params_bytes(envelope)
-        .await
-        .unwrap_or_default();
+    // Decode params. On failure, submit a typed error response under the decode
+    // error's own code (matching the pull receiver's semantics) and return —
+    // never run the handler on empty/garbage params.
+    let params = match alien_commands::runtime::decode_params_bytes(envelope).await {
+        Ok(params) => params,
+        Err(e) => {
+            error!(command_id = %command_id, error = %e, "Failed to decode command params");
+            let command_response = CommandResponse::error(&e.code, e.to_string());
+            if let Err(submit_err) = submit_response(envelope, command_response).await {
+                error!(
+                    command_id = %command_id,
+                    error = %submit_err,
+                    "Failed to submit decode-error response"
+                );
+            }
+            return;
+        }
+    };
 
     let task = Task {
         task_id: command_id.clone(),

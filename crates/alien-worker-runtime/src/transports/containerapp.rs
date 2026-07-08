@@ -28,7 +28,7 @@ use tracing::{debug, error, info, warn};
 use super::shared::{
     create_forward_client, dispatch_queue_messages, envelope_to_command, forward_http_request,
     handle_command, parse_cloudevent_from_http_with_extensions, send_cron_event,
-    send_queue_message, send_storage_events,
+    send_queue_message, send_storage_events, submit_decode_error,
 };
 use crate::error::{ErrorData, Result};
 use crate::events::azure::{
@@ -244,15 +244,16 @@ async fn handle_raw_dapr_message(body_bytes: &Bytes, state: &TransportState) -> 
         if !envelope.command_id.is_empty() {
             info!(command_id = %envelope.command_id, "Received command via Dapr input binding");
             match envelope_to_command(&envelope).await {
-                Some(command) => {
+                Ok(command) => {
                     if let Err(e) = handle_command(&envelope, &command, &state.control_server).await
                     {
                         error!(error = %e, "Failed to handle command");
                     }
                     return StatusCode::OK.into_response();
                 }
-                None => {
-                    error!(command_id = %envelope.command_id, "Failed to decode command params");
+                Err(e) => {
+                    error!(command_id = %envelope.command_id, error = %e, "Failed to decode command params");
+                    submit_decode_error(&envelope, &e).await;
                     return (StatusCode::BAD_REQUEST, "Failed to decode command").into_response();
                 }
             }
