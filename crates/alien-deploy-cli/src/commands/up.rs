@@ -317,6 +317,17 @@ mod tests {
     }
 
     #[test]
+    fn machines_push_setup_does_not_collect_cloud_environment() {
+        assert!(!should_collect_push_setup_environment_info(
+            Platform::Machines
+        ));
+        assert!(should_collect_push_setup_environment_info(Platform::Aws));
+        assert!(should_collect_push_setup_environment_info(
+            Platform::Kubernetes
+        ));
+    }
+
+    #[test]
     fn non_machines_deploy_prints_progress() {
         assert!(should_print_deploy_progress(Platform::Aws));
         assert!(should_print_deploy_progress(Platform::Local));
@@ -1087,6 +1098,20 @@ pub async fn up_command(args: UpArgs, embedded_config: Option<&DeployCliConfig>)
         }
         DeploymentModel::Push => match platform {
             Platform::Machines => {
+                push_initial_setup(
+                    &client,
+                    &deployment_id,
+                    platform,
+                    base_platform,
+                    ClientConfig::Machines,
+                    install_management_config,
+                    &manager_url,
+                    &effective_token,
+                    None,
+                    None,
+                )
+                .await?;
+
                 let join_token = create_machines_join_token(
                     &resolved.base_url,
                     &effective_token,
@@ -3194,12 +3219,17 @@ pub async fn push_initial_setup(
     // DeploymentFailed (retryable/internal = inherit), not the hard-non-retryable ConfigurationError,
     // so a transient cloud blip in collect_environment_info (live STS / project-metadata calls) stays
     // retryable instead of becoming a permanent setup failure.
-    let env_info = alien_deployment::collect_environment_info(environment_platform, &client_config)
-        .await
-        .context(ErrorData::DeploymentFailed {
-            operation: "target environment-info collection".to_string(),
-        })?;
-    state.environment_info = Some(env_info);
+    if should_collect_push_setup_environment_info(environment_platform) {
+        let env_info =
+            alien_deployment::collect_environment_info(environment_platform, &client_config)
+                .await
+                .context(ErrorData::DeploymentFailed {
+                    operation: "target environment-info collection".to_string(),
+                })?;
+        state.environment_info = Some(env_info);
+    } else {
+        state.environment_info = None;
+    }
 
     // Reconstruct DeploymentConfig from stack_settings
     let mut stack_settings: StackSettings = deployment
@@ -3387,6 +3417,10 @@ pub async fn push_initial_setup(
             Ok(())
         }
     }
+}
+
+fn should_collect_push_setup_environment_info(platform: Platform) -> bool {
+    !matches!(platform, Platform::Machines)
 }
 
 /// Run the push-model deletion flow for a deployment.
