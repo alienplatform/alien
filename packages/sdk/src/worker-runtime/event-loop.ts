@@ -254,10 +254,17 @@ export class EventLoop {
   private fromProtoQueueMessage<T>(proto: ProtoQueueMessage): QueueMessageEvent<T> {
     let payload: unknown = null
     if (proto.payload && proto.payload.length > 0) {
+      // The payload bytes are either a JSON message (`MessagePayload::Json`) or
+      // raw text (`MessagePayload::Text`). Decode the bytes as UTF-8 text, then
+      // parse as JSON when possible; otherwise deliver the decoded text string.
+      // Never hand back the raw `Uint8Array` cast to `T` — that silently lies
+      // about the payload's type (a JSON handler would receive bytes, not the
+      // object it expects).
+      const text = new TextDecoder().decode(proto.payload)
       try {
-        payload = JSON.parse(new TextDecoder().decode(proto.payload))
+        payload = JSON.parse(text)
       } catch {
-        payload = proto.payload
+        payload = text
       }
     }
 
