@@ -358,7 +358,7 @@ async fn supervise_daemon_process(
     mut shutdown_rx: tokio::sync::broadcast::Receiver<()>,
     otlp_logger: Option<Arc<OwnedOtlpLogger>>,
 ) -> Result<()> {
-    tokio::select! {
+    let result = tokio::select! {
         status = child.wait() => {
             match status {
                 Ok(status) if status.success() => {
@@ -385,12 +385,19 @@ async fn supervise_daemon_process(
             if let Err(e) = child.kill().await {
                 warn!(daemon_id = %daemon_id, error = %e, "Failed to kill daemon process");
             }
-            if let Some(logger) = &otlp_logger {
-                if let Err(e) = logger.flush().await {
-                    warn!(daemon_id = %daemon_id, error = %e, "Failed to flush daemon logs");
-                }
-            }
             Ok(())
         }
+    };
+
+    // Flush on EVERY exit path, not just shutdown. On an exit/crash the child
+    // produced its final buffered log batch exactly when operators most need
+    // it; returning without flushing (as the old crash path did) drops it. A
+    // single flush here covers both the shutdown and the child-exit/crash arms.
+    if let Some(logger) = &otlp_logger {
+        if let Err(e) = logger.flush().await {
+            warn!(daemon_id = %daemon_id, error = %e, "Failed to flush daemon logs");
+        }
     }
+
+    result
 }
