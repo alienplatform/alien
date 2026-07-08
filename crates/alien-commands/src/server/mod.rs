@@ -39,8 +39,8 @@ pub use axum_handlers::{
     create_axum_router, CommandPayloadResponse, HasCommandServer, StorePayloadRequest,
 };
 pub use command_registry::{
-    delivery_mode_for, select_command_target, validate_command_target_id, CommandEnvelopeData,
-    CommandMetadata, CommandRegistry, CommandStatus, InMemoryCommandRegistry,
+    delivery_mode_for, select_command_target, validate_command_name, validate_command_target_id,
+    CommandEnvelopeData, CommandMetadata, CommandRegistry, CommandStatus, InMemoryCommandRegistry,
     ResolvedCommandTarget,
 };
 pub use dispatchers::{CommandDispatcher, NullCommandDispatcher};
@@ -893,6 +893,15 @@ impl CommandServer {
             }));
         }
 
+        // The command name occupies one segment of the `:`-delimited
+        // idempotency key (`{dep}:{rid}:{command}:{key}`). A ':' in the name
+        // would let it bleed into the client-key segment — which routinely
+        // contains ':' — so (command="a:b", key="c") and (command="a",
+        // key="b:c") would forge the same key and be treated as the same
+        // command. Reject ':' here, mirroring the target-id colon guard, so the
+        // command segment is always unambiguous.
+        validate_command_name(&request.command)?;
+
         if request.deployment_id.is_empty() {
             return Err(AlienError::new(ErrorData::InvalidCommand {
                 message: "Deployment ID cannot be empty".to_string(),
@@ -923,10 +932,15 @@ impl CommandServer {
         command_name: &str,
         idem_key: &str,
     ) -> String {
-        // Invariant: the target id is `:`-free (enforced at resolution via
-        // `validate_command_target_id`), so it occupies exactly one key
-        // segment and cannot collide across the `{dep}:{rid}:{command}:{key}`
-        // fields.
+        // Invariant: at every real call site the target id and command name are
+        // both `:`-free (the former enforced at resolution via
+        // `validate_command_target_id`, the latter via `validate_command_name`
+        // in `validate_create_command`), so each occupies exactly one segment of
+        // `{dep}:{rid}:{command}:{key}` and only the trailing client key may
+        // carry ':'. Those guards live upstream; this is a pure formatter, so it
+        // is not asserted on `command_name` here (the collision tests below
+        // deliberately format a ':'-bearing command to demonstrate what the
+        // upstream guard prevents).
         debug_assert!(
             !target_resource_id.contains(':'),
             "target_resource_id must be ':'-free before key composition: {target_resource_id}"
@@ -1547,7 +1561,7 @@ impl CommandServer {
 #[cfg(test)]
 mod idempotency_key_tests {
     use super::*;
-    use crate::server::validate_command_target_id;
+    use crate::server::{validate_command_name, validate_command_target_id};
 
     /// Idempotency keys are `{dep}:{rid}:{command}:{key}`. If a target id could
     /// contain ':', the `rid` segment would be ambiguous: the two triples
@@ -1568,5 +1582,32 @@ mod idempotency_key_tests {
             "a ':'-bearing target id must be rejected so it cannot forge the rid segment"
         );
         assert!(validate_command_target_id("svc").is_ok());
+    }
+
+    /// The command name is the other forgeable segment. Client keys routinely
+    /// contain ':', so without a command-name guard these two distinct inputs
+    ///   (command="a:b", key="c")
+    ///   (command="a",   key="b:c")
+    /// both compose to `dep:svc:a:b:c` — a cross-command idempotency collision.
+    /// The guard rejects the ':'-bearing command name, so only the second input
+    /// is ever composed; the first can never reach key composition.
+    #[test]
+    fn command_name_colon_guard_prevents_idempotency_key_collision() {
+        // Without the guard, both inputs compose to the identical string.
+        let forged = CommandServer::compose_idempotency_key("dep", "svc", "a:b", "c");
+        let legitimate = CommandServer::compose_idempotency_key("dep", "svc", "a", "b:c");
+        assert_eq!(
+            forged, legitimate,
+            "these inputs are exactly the colliding pair the guard must separate"
+        );
+        assert_eq!(legitimate, "dep:svc:a:b:c");
+
+        // The guard makes the colliding input unreachable: a ':'-bearing command
+        // name is rejected, while the legitimate command name is accepted. With
+        // the forger blocked, `a:b`+`c` can never compose the shared key — only
+        // the distinct `a`+`b:c` command can.
+        let err = validate_command_name("a:b").expect_err("':'-bearing command must be rejected");
+        assert_eq!(err.code, "INVALID_COMMAND");
+        assert!(validate_command_name("a").is_ok());
     }
 }

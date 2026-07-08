@@ -112,6 +112,23 @@ pub fn validate_command_target_id(resource_id: &str) -> Result<()> {
     Ok(())
 }
 
+/// Reject a command name that would break the same `:`-delimited idempotency
+/// key grammar (`{dep}:{rid}:{command}:{key}`).
+///
+/// The trailing client key routinely contains ':', so a ':' in the command
+/// name would be indistinguishable from the key boundary: (command="a:b",
+/// key="c") and (command="a", key="b:c") would forge the same key. Rejecting
+/// ':' in the command name keeps the command segment unambiguous — the twin of
+/// [`validate_command_target_id`] for the command segment.
+pub fn validate_command_name(command: &str) -> Result<()> {
+    if command.contains(':') {
+        return Err(AlienError::new(ErrorData::InvalidCommand {
+            message: format!("Command name '{command}' must not contain ':'"),
+        }));
+    }
+    Ok(())
+}
+
 /// Pinned ALIEN-219 target-selection rules — the single implementation both the
 /// in-memory and SQLite registries route through.
 ///
