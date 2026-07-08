@@ -103,14 +103,6 @@ async fn onboard_platform(args: OnboardArgs, ctx: ExecutionMode, name: String) -
         .as_deref()
         .map(validate_public_subdomain)
         .transpose()?;
-    if let Some(public_subdomain) = &public_subdomain {
-        return Err(AlienError::new(ErrorData::ValidationError {
-            field: "subdomain".to_string(),
-            message: format!(
-                "Choosing a public subdomain ('{public_subdomain}') is not available for deployment links; omit --subdomain to generate one when the deployment is created."
-            ),
-        }));
-    }
 
     if !args.json {
         let platforms_label = selected_platforms
@@ -209,7 +201,8 @@ async fn onboard_platform(args: OnboardArgs, ctx: ExecutionMode, name: String) -
                 deployment_setup_config: platform_onboard_deployment_setup_config(
                     setup_environment_variables,
                     &selected_platforms,
-                ),
+                    public_subdomain.as_deref(),
+                )?,
                 input_values: Some(stack_input_values),
             },
         )
@@ -268,8 +261,22 @@ struct ActiveReleaseStackInputs {
 fn platform_onboard_deployment_setup_config(
     environment_variables: Vec<alien_platform_api::types::EnvironmentVariableConfig>,
     platforms: &[Platform],
-) -> alien_platform_api::types::DeploymentSetupConfig {
+    public_subdomain: Option<&str>,
+) -> Result<alien_platform_api::types::DeploymentSetupConfig> {
     use alien_platform_api::types;
+
+    let public_subdomain = public_subdomain
+        .map(|value| {
+            value
+                .parse::<types::DeploymentSetupConfigPublicSubdomain>()
+                .map_err(|error| {
+                    AlienError::new(ErrorData::ValidationError {
+                        field: "subdomain".to_string(),
+                        message: format!("Invalid public subdomain '{value}': {error}"),
+                    })
+                })
+        })
+        .transpose()?;
 
     let allowed_platforms = if platforms.is_empty() {
         vec![
@@ -288,8 +295,9 @@ fn platform_onboard_deployment_setup_config(
             .expect("selected onboarding platforms are validated before setup config creation")
     };
 
-    types::DeploymentSetupConfig {
+    Ok(types::DeploymentSetupConfig {
         metadata: types::DeploymentSetupMetadata(serde_json::Map::new()),
+        public_subdomain,
         policy: types::DeploymentSetupPolicy {
             allow_release_pinning: None,
             allowed_platforms,
@@ -333,7 +341,7 @@ fn platform_onboard_deployment_setup_config(
         },
         environment_variables,
         input_values: None,
-    }
+    })
 }
 
 #[cfg(feature = "platform")]
