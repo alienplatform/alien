@@ -67,12 +67,3 @@ export async function getOrCreateChannel(address: string): Promise<Channel> {
   }
   return channel
 }
-
-/**
- * Get a gRPC channel to the runtime using the default env var.
- * The channel is cached for reuse.
- */
-export async function getChannel(): Promise<Channel> {
-  const endpoint = getGrpcEndpoint()
-  return await getOrCreateChannel(endpoint)
-}

@@ -284,17 +284,17 @@ export function waitUntil(promise: Promise<unknown>): void {
       tracker.completed = true
       tracker.error = error instanceof Error ? error : new Error(String(error))
     })
+    // Drop the tracker once it settles so the map holds only in-flight tasks and
+    // does not grow without bound over a long-lived worker's lifetime.
+    .finally(() => {
+      state.waitUntilTasks.delete(id)
+    })
 
   try {
     state.onTaskRegistered?.(tracker)
   } catch (error) {
     console.error("[alien:wait-until] onTaskRegistered hook failed:", error)
   }
-}
-
-/** Get all tracked `waitUntil` tasks. @internal */
-export function getWaitUntilTasks(): Map<string, TaskTracker> {
-  return registry().waitUntilTasks
 }
 
 /** Install the runtime's task-registered hook. @internal */

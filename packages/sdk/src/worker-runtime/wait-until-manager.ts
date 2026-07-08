@@ -56,14 +56,4 @@ export class WaitUntilManager {
       })
     })
   }
-
-  /**
-   * Get the current task count from the runtime.
-   */
-  async getTaskCount(): Promise<number> {
-    return await wrapGrpcCall("WaitUntilService", "GetTaskCount", async () => {
-      const response = await this.client.getTaskCount({ applicationId: this.applicationId })
-      return response.taskCount
-    })
-  }
 }

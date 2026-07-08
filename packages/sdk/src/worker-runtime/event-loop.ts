@@ -59,23 +59,31 @@ export class EventLoop {
    * Register all handlers (events + commands) with the runtime.
    */
   async registerHandlers(): Promise<void> {
+    const registrations: Promise<void>[] = []
+
     for (const { registration } of getEventHandlers().values()) {
-      await wrapGrpcCall("ControlService", "RegisterEventHandler", async () => {
-        await this.client.registerEventHandler({
-          handlerType: registration.type,
-          resourceName: registration.source,
-        })
-      })
+      registrations.push(
+        wrapGrpcCall("ControlService", "RegisterEventHandler", async () => {
+          await this.client.registerEventHandler({
+            handlerType: registration.type,
+            resourceName: registration.source,
+          })
+        }),
+      )
     }
 
     for (const command of getCommands().values()) {
-      await wrapGrpcCall("ControlService", "RegisterEventHandler", async () => {
-        await this.client.registerEventHandler({
-          handlerType: "command",
-          resourceName: command.name,
-        })
-      })
+      registrations.push(
+        wrapGrpcCall("ControlService", "RegisterEventHandler", async () => {
+          await this.client.registerEventHandler({
+            handlerType: "command",
+            resourceName: command.name,
+          })
+        }),
+      )
     }
+
+    await Promise.all(registrations)
   }
 
   /**
@@ -171,8 +179,17 @@ export class EventLoop {
     if (command.params && command.params.length > 0) {
       try {
         params = JSON.parse(new TextDecoder().decode(command.params))
-      } catch {
-        params = {}
+      } catch (error) {
+        // Fail fast: params that don't decode mean a malformed command, not an
+        // empty one. Surface it as a task error (mirroring the pull receiver,
+        // which submits the decode failure rather than running the handler)
+        // instead of silently invoking the handler with `{}`. `handleTask`
+        // catches this and reports it as a failed task result.
+        throw new Error(
+          `Command '${command.commandName}' has malformed JSON params: ${
+            error instanceof Error ? error.message : String(error)
+          }`,
+        )
       }
     }
     return await runCommand(command.commandName, params)
@@ -210,7 +227,7 @@ export class EventLoop {
     }
 
     return {
-      eventType: eventTypeMap[proto.eventType] ?? ("unknown" as StorageEventType),
+      eventType: eventTypeMap[proto.eventType] ?? "unknown",
       bucketName: proto.bucket,
       objectKey: proto.key,
       timestamp: proto.timestamp?.toISOString() ?? new Date().toISOString(),
