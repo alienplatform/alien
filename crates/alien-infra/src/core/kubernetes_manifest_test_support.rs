@@ -17,6 +17,8 @@ use alien_core::{
     PermissionsConfig, Platform, Resource, Stack, StackSettings, StackState,
 };
 use indexmap::IndexMap;
+use k8s_openapi::api::apps::v1::{DaemonSet, Deployment};
+use k8s_openapi::api::core::v1::{EnvVar, PodTemplateSpec};
 use std::sync::Arc;
 
 pub(crate) fn secret_env_var(
@@ -31,6 +33,63 @@ pub(crate) fn secret_env_var(
         target_resources: target_resources
             .map(|targets| targets.into_iter().map(str::to_string).collect()),
     }
+}
+
+/// Returns the first container's env from a Deployment pod template.
+pub(crate) fn deployment_env(deployment: &Deployment) -> Vec<EnvVar> {
+    pod_template_env(
+        &deployment
+            .spec
+            .as_ref()
+            .expect("deployment spec")
+            .template,
+    )
+}
+
+/// Returns the first container's env from a DaemonSet pod template.
+pub(crate) fn daemonset_env(daemonset: &DaemonSet) -> Vec<EnvVar> {
+    pod_template_env(&daemonset.spec.as_ref().expect("daemonset spec").template)
+}
+
+/// Returns the first container's env from any workload pod template.
+pub(crate) fn pod_template_env(template: &PodTemplateSpec) -> Vec<EnvVar> {
+    template
+        .spec
+        .as_ref()
+        .expect("pod spec")
+        .containers[0]
+        .env
+        .clone()
+        .expect("container env")
+}
+
+/// Reads the `env-secret-checksum` annotation a controller stamps onto the pod
+/// template to roll pods when the environment Secret rotates.
+pub(crate) fn pod_template_checksum_annotation(template: &PodTemplateSpec) -> Option<String> {
+    template
+        .metadata
+        .as_ref()
+        .and_then(|metadata| metadata.annotations.as_ref())
+        .and_then(|annotations| annotations.get("env-secret-checksum"))
+        .cloned()
+}
+
+/// Asserts an env var is a `secretKeyRef` into `secret_name` keyed by its own
+/// name, carrying no inline value.
+pub(crate) fn assert_secret_key_ref(env: &[EnvVar], name: &str, secret_name: &str) {
+    let var = env
+        .iter()
+        .find(|var| var.name == name)
+        .unwrap_or_else(|| panic!("env var '{name}' missing from manifest"));
+    assert_eq!(var.value, None, "'{name}' must not carry an inline value");
+    let secret_key_ref = var
+        .value_from
+        .as_ref()
+        .and_then(|source| source.secret_key_ref.as_ref())
+        .unwrap_or_else(|| panic!("'{name}' must be a secretKeyRef"));
+    assert_eq!(secret_key_ref.name, secret_name);
+    assert_eq!(secret_key_ref.key, name);
+    assert_eq!(secret_key_ref.optional, Some(false));
 }
 
 /// Owns the borrowed parts of a Kubernetes `ResourceControllerContext`.

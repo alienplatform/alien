@@ -3,9 +3,9 @@ use std::time::Duration;
 use tracing::{debug, info};
 
 use crate::core::{
-    environment_secret_plan, kubernetes_branded_resource_labels, kubernetes_runtime_pod_labels,
-    reconcile_environment_secret, EnvironmentVariableBuilder, KubernetesEnvSecretPlan,
-    ResourceController, ResourceControllerContext,
+    kubernetes_branded_resource_labels, kubernetes_runtime_pod_labels, projected_env_vars,
+    reconcile_environment_secret, EnvSecretRotationTracker, EnvironmentVariableBuilder,
+    KubernetesEnvSecretPlan, ResourceController, ResourceControllerContext,
 };
 use crate::error::{ErrorData, Result};
 use crate::kubernetes_public_endpoint::{
@@ -21,14 +21,14 @@ use alien_core::{
     branded_tag_key, kubernetes_resource_name, kubernetes_service_account_name, public_url_host,
     Container, ContainerCode, ContainerOutputs, ContainerStatus, PublicEndpointOutput,
     ResourceOutputs, ResourceStatus, ALIEN_MANAGED_BY_TAG_KEY, ALIEN_MANAGED_BY_TAG_VALUE,
-    DEFAULT_ALIEN_LABEL_DOMAIN, ENV_ALIEN_SECRETS,
+    DEFAULT_ALIEN_LABEL_DOMAIN,
 };
 use alien_error::{AlienError, Context, ContextError, IntoAlienError};
 use alien_macros::controller;
 
 use k8s_openapi::api::apps::v1::{Deployment, DeploymentSpec, StatefulSet, StatefulSetSpec};
 use k8s_openapi::api::core::v1::{
-    Container as K8sContainer, ContainerPort, EnvVar, LocalObjectReference, PersistentVolumeClaim,
+    Container as K8sContainer, ContainerPort, LocalObjectReference, PersistentVolumeClaim,
     PersistentVolumeClaimSpec, PodSpec, PodTemplateSpec, ResourceRequirements, Service,
     ServicePort, ServiceSpec, Volume, VolumeMount,
 };
@@ -95,12 +95,11 @@ pub struct KubernetesContainerController {
     pub(crate) container_id: Option<String>,
     /// Public endpoint route/certificate state.
     pub(crate) public_endpoint: KubernetesPublicEndpointState,
-    /// Checksum of the environment Secret applied last (create/update).
-    /// Secret-typed env vars never enter the resource config on Kubernetes,
-    /// so `needs_update` compares this against the current snapshot to catch
-    /// secret rotations.
+    /// Tracks the env-Secret checksum so `needs_update` can detect secret
+    /// rotations that config diffing cannot see (secrets are projected via
+    /// secretKeyRef, never into the resource config).
     #[serde(default)]
-    pub(crate) env_secret_checksum: Option<String>,
+    pub(crate) env_secret: EnvSecretRotationTracker,
 }
 
 #[controller]
@@ -150,7 +149,7 @@ impl KubernetesContainerController {
         let env_secret_plan = self
             .reconcile_environment_secret(config, &container_name, &namespace, ctx)
             .await?;
-        self.env_secret_checksum = env_secret_plan.as_ref().map(|plan| plan.checksum.clone());
+        self.env_secret.record(env_secret_plan.as_ref());
         self.reconcile_internal_service(config, &container_name, &namespace, ctx)
             .await?;
 
@@ -631,7 +630,7 @@ impl KubernetesContainerController {
         let env_secret_plan = self
             .reconcile_environment_secret(config, workload_name, namespace, ctx)
             .await?;
-        self.env_secret_checksum = env_secret_plan.as_ref().map(|plan| plan.checksum.clone());
+        self.env_secret.record(env_secret_plan.as_ref());
         self.service_port = first_declared_container_port(config);
         self.reconcile_internal_service(config, workload_name, namespace, ctx)
             .await?;
@@ -1085,13 +1084,11 @@ impl KubernetesContainerController {
             return Ok(false);
         };
         let config = ctx.desired_resource_config::<Container>()?;
-        let current_checksum = environment_secret_plan(
+        Ok(self.env_secret.drifted(
             &config.id,
             workload_name,
             &ctx.deployment_config.environment_variables.variables,
-        )
-        .map(|plan| plan.checksum);
-        Ok(current_checksum != self.env_secret_checksum)
+        ))
     }
 
     fn get_binding_params(&self) -> Result<Option<serde_json::Value>> {
@@ -1132,7 +1129,8 @@ mod output_tests {
     use alien_core::ContainerOutputs;
 
     use super::{
-        KubernetesContainerController, KubernetesContainerState, KubernetesPublicEndpointState,
+        EnvSecretRotationTracker, KubernetesContainerController, KubernetesContainerState,
+        KubernetesPublicEndpointState,
     };
 
     #[test]
@@ -1150,7 +1148,7 @@ mod output_tests {
             service_port: Some(3000),
             container_id: Some("container".to_string()),
             public_endpoint,
-            env_secret_checksum: None,
+            env_secret: EnvSecretRotationTracker::default(),
             _internal_stay_count: None,
         };
 
@@ -1186,7 +1184,7 @@ mod output_tests {
             service_port: Some(3000),
             container_id: Some("container".to_string()),
             public_endpoint,
-            env_secret_checksum: None,
+            env_secret: EnvSecretRotationTracker::default(),
             _internal_stay_count: None,
         };
 
@@ -1218,7 +1216,7 @@ impl KubernetesContainerController {
             service_port: Some(80),
             container_id: Some("test-container".to_string()),
             public_endpoint: KubernetesPublicEndpointState::default(),
-            env_secret_checksum: None,
+            env_secret: EnvSecretRotationTracker::default(),
             _internal_stay_count: None,
         }
     }
@@ -1533,80 +1531,10 @@ impl KubernetesContainerController {
 
         let (env_map, bindings) = env_builder.build_with_bindings();
 
-        let mut env_vars = Vec::new();
-
-        if let Some(plan) = env_secret_plan {
-            for key in &plan.keys {
-                env_vars.push(EnvVar {
-                    name: key.clone(),
-                    value: None,
-                    value_from: Some(k8s_openapi::api::core::v1::EnvVarSource {
-                        secret_key_ref: Some(k8s_openapi::api::core::v1::SecretKeySelector {
-                            name: plan.secret_name.clone(),
-                            key: key.clone(),
-                            optional: Some(false),
-                        }),
-                        ..Default::default()
-                    }),
-                });
-            }
-        }
-
-        // Process bindings for Kubernetes SecretRefs
-        for (binding_name, binding_json) in bindings {
-            if let Ok(extraction) = crate::core::k8s_secret_bindings::extract_binding_secrets(
-                &binding_name,
-                &binding_json,
-            ) {
-                // Add individual secret env vars with valueFrom.secretKeyRef
-                for (env_name, secret_name, secret_key) in extraction.secret_env_vars {
-                    env_vars.push(EnvVar {
-                        name: env_name,
-                        value: None,
-                        value_from: Some(k8s_openapi::api::core::v1::EnvVarSource {
-                            secret_key_ref: Some(k8s_openapi::api::core::v1::SecretKeySelector {
-                                name: secret_name,
-                                key: secret_key,
-                                optional: Some(false),
-                            }),
-                            ..Default::default()
-                        }),
-                    });
-                }
-
-                // Add the binding JSON with $(VAR) placeholders
-                let env_key = format!(
-                    "ALIEN_{}_BINDING",
-                    binding_name.to_uppercase().replace('-', "_")
-                );
-                env_vars.push(EnvVar {
-                    name: env_key,
-                    value: Some(extraction.resolved_binding_json),
-                    value_from: None,
-                });
-            }
-        }
-
-        // Add all remaining env vars from the builder (includes user vars + injected vars)
-        for (key, value) in env_map {
-            // Kubernetes Containers never load secrets at runtime: Secret-typed
-            // env vars are projected as secretKeyRefs above, and the
-            // ALIEN_SECRETS vault-load pointer must never reach the manifest.
-            // Deployment-level injection no longer emits it for K8s
-            // Containers/Daemons; this strip also covers configs injected by
-            // older managers.
-            if key == ENV_ALIEN_SECRETS {
-                continue;
-            }
-            // Skip if already added as a secret ref
-            if !env_vars.iter().any(|ev| ev.name == key) {
-                env_vars.push(EnvVar {
-                    name: key,
-                    value: Some(value),
-                    value_from: None,
-                });
-            }
-        }
+        // Containers project Secret-kind env vars as secretKeyRefs and never
+        // load secrets at runtime, so the ALIEN_SECRETS vault-load pointer is
+        // stripped from the manifest.
+        let env_vars = projected_env_vars(env_secret_plan, bindings, env_map, true)?;
 
         // Build volume mounts
         let mut volume_mounts = Vec::new();
@@ -1944,7 +1872,7 @@ mod tests {
             service_port: Some(3000),
             container_id: Some("api".to_string()),
             public_endpoint: KubernetesPublicEndpointState::default(),
-            env_secret_checksum: None,
+            env_secret: EnvSecretRotationTracker::default(),
             _internal_stay_count: None,
         };
 
@@ -1968,12 +1896,13 @@ mod tests {
 
     use crate::core::environment_secret_plan;
     use crate::core::kubernetes_manifest_test_support::{
-        secret_env_var, KubernetesManifestTestHarness,
+        assert_secret_key_ref, deployment_env, pod_template_checksum_annotation, secret_env_var,
+        KubernetesManifestTestHarness,
     };
     use alien_core::{
         Resource, ENV_ALIEN_COMMANDS_POLLING_ENABLED, ENV_ALIEN_COMMANDS_POLLING_URL,
         ENV_ALIEN_COMMANDS_TOKEN, ENV_ALIEN_LAMBDA_MODE, ENV_ALIEN_RUNTIME_SEND_OTLP,
-        ENV_ALIEN_TRANSPORT, ENV_ALIEN_WORKER_GRPC_ADDRESS,
+        ENV_ALIEN_SECRETS, ENV_ALIEN_TRANSPORT, ENV_ALIEN_WORKER_GRPC_ADDRESS,
     };
     use k8s_openapi::api::core::v1::EnvVar;
 
@@ -2009,46 +1938,6 @@ mod tests {
             container_id: Some("web".to_string()),
             ..Default::default()
         }
-    }
-
-    fn deployment_env(deployment: &Deployment) -> Vec<EnvVar> {
-        deployment
-            .spec
-            .as_ref()
-            .expect("deployment spec")
-            .template
-            .spec
-            .as_ref()
-            .expect("pod spec")
-            .containers[0]
-            .env
-            .clone()
-            .expect("container env")
-    }
-
-    fn pod_checksum_annotation(template: &PodTemplateSpec) -> Option<String> {
-        template
-            .metadata
-            .as_ref()
-            .and_then(|metadata| metadata.annotations.as_ref())
-            .and_then(|annotations| annotations.get("env-secret-checksum"))
-            .cloned()
-    }
-
-    fn assert_secret_key_ref(env: &[EnvVar], name: &str, secret_name: &str) {
-        let var = env
-            .iter()
-            .find(|var| var.name == name)
-            .unwrap_or_else(|| panic!("env var '{name}' missing from manifest"));
-        assert_eq!(var.value, None, "'{name}' must not carry an inline value");
-        let secret_key_ref = var
-            .value_from
-            .as_ref()
-            .and_then(|source| source.secret_key_ref.as_ref())
-            .unwrap_or_else(|| panic!("'{name}' must be a secretKeyRef"));
-        assert_eq!(secret_key_ref.name, secret_name);
-        assert_eq!(secret_key_ref.key, name);
-        assert_eq!(secret_key_ref.optional, Some(false));
     }
 
     #[tokio::test]
@@ -2126,7 +2015,7 @@ mod tests {
 
         // The pod template carries the checksum that rolls pods on rotation.
         assert_eq!(
-            pod_checksum_annotation(&deployment.spec.expect("spec").template),
+            pod_template_checksum_annotation(&deployment.spec.expect("spec").template),
             Some(plan.checksum.clone())
         );
     }
@@ -2160,7 +2049,7 @@ mod tests {
         assert_secret_key_ref(&env, "APP_SECRET", "web-env");
         assert!(!env.iter().any(|var| var.name == ENV_ALIEN_SECRETS));
         assert_eq!(
-            pod_checksum_annotation(&spec.template),
+            pod_template_checksum_annotation(&spec.template),
             Some(plan.checksum.clone())
         );
     }
@@ -2196,8 +2085,8 @@ mod tests {
             "identical secret values must render an identical pod template"
         );
         assert_ne!(
-            pod_checksum_annotation(&templates[0]),
-            pod_checksum_annotation(&templates[2]),
+            pod_template_checksum_annotation(&templates[0]),
+            pod_template_checksum_annotation(&templates[2]),
             "rotating a secret value must change the pod template (rollout)"
         );
     }
@@ -2206,12 +2095,10 @@ mod tests {
     fn needs_update_detects_env_secret_rotation() {
         let config = manifest_test_container(&[], false);
         let original = vec![secret_env_var("APP_SECRET", "v1", None)];
-        let original_checksum = environment_secret_plan("web", "web", &original)
-            .expect("plan")
-            .checksum;
+        let original_plan = environment_secret_plan("web", "web", &original).expect("plan");
 
         let mut controller = manifest_test_controller();
-        controller.env_secret_checksum = Some(original_checksum);
+        controller.env_secret.record(Some(&original_plan));
 
         // Same snapshot: no drift.
         let harness =
@@ -2234,7 +2121,7 @@ mod tests {
             .expect("needs_update"));
 
         // Never had secrets, still none: no drift.
-        controller.env_secret_checksum = None;
+        controller.env_secret.record(None);
         let harness = KubernetesManifestTestHarness::new(Resource::new(config), vec![]);
         assert!(!controller
             .needs_update(&harness.ctx())

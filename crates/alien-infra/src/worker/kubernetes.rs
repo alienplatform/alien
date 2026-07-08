@@ -3,7 +3,7 @@ use std::time::Duration;
 use tracing::{debug, info};
 
 use crate::core::{
-    kubernetes_branded_resource_labels, kubernetes_runtime_pod_labels,
+    kubernetes_branded_resource_labels, kubernetes_runtime_pod_labels, projected_env_vars,
     reconcile_environment_secret, EnvironmentVariableBuilder, KubernetesEnvSecretPlan,
     ResourceControllerContext,
 };
@@ -26,7 +26,7 @@ use alien_macros::controller;
 
 use k8s_openapi::api::apps::v1::{Deployment, DeploymentSpec};
 use k8s_openapi::api::core::v1::{
-    Container, ContainerPort, EnvVar, LocalObjectReference, PodSpec, PodTemplateSpec,
+    Container, ContainerPort, LocalObjectReference, PodSpec, PodTemplateSpec,
 };
 use k8s_openapi::apimachinery::pkg::apis::meta::v1::{LabelSelector, ObjectMeta};
 
@@ -905,71 +905,10 @@ impl KubernetesWorkerController {
 
         let (env_map, bindings) = env_builder.build_with_bindings();
 
-        let mut env_vars = Vec::new();
-
-        if let Some(plan) = env_secret_plan {
-            for key in &plan.keys {
-                env_vars.push(EnvVar {
-                    name: key.clone(),
-                    value: None,
-                    value_from: Some(k8s_openapi::api::core::v1::EnvVarSource {
-                        secret_key_ref: Some(k8s_openapi::api::core::v1::SecretKeySelector {
-                            name: plan.secret_name.clone(),
-                            key: key.clone(),
-                            optional: Some(false),
-                        }),
-                        ..Default::default()
-                    }),
-                });
-            }
-        }
-
-        // Process bindings for Kubernetes SecretRefs
-        for (binding_name, binding_json) in bindings {
-            if let Ok(extraction) = crate::core::k8s_secret_bindings::extract_binding_secrets(
-                &binding_name,
-                &binding_json,
-            ) {
-                // Add individual secret env vars with valueFrom.secretKeyRef
-                for (env_name, secret_name, secret_key) in extraction.secret_env_vars {
-                    env_vars.push(EnvVar {
-                        name: env_name,
-                        value: None,
-                        value_from: Some(k8s_openapi::api::core::v1::EnvVarSource {
-                            secret_key_ref: Some(k8s_openapi::api::core::v1::SecretKeySelector {
-                                name: secret_name,
-                                key: secret_key,
-                                optional: Some(false),
-                            }),
-                            ..Default::default()
-                        }),
-                    });
-                }
-
-                // Add the binding JSON with $(VAR) placeholders
-                let env_key = format!(
-                    "ALIEN_{}_BINDING",
-                    binding_name.to_uppercase().replace('-', "_")
-                );
-                env_vars.push(EnvVar {
-                    name: env_key,
-                    value: Some(extraction.resolved_binding_json),
-                    value_from: None,
-                });
-            }
-        }
-
-        // Add all remaining env vars from the builder (includes user vars + injected vars)
-        for (key, value) in env_map {
-            // Skip if already added as a secret ref
-            if !env_vars.iter().any(|ev| ev.name == key) {
-                env_vars.push(EnvVar {
-                    name: key,
-                    value: Some(value),
-                    value_from: None,
-                });
-            }
-        }
+        // Workers load their secrets from the vault at runtime, so the
+        // ALIEN_SECRETS vault-load pointer is preserved in the manifest (unlike
+        // Containers/Daemons, which project secrets natively via secretKeyRef).
+        let env_vars = projected_env_vars(env_secret_plan, bindings, env_map, false)?;
 
         let container = Container {
             name: "worker".to_string(),

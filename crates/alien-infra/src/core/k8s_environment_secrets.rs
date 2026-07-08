@@ -1,11 +1,13 @@
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashMap};
 
-use alien_core::{EnvironmentVariable, EnvironmentVariableType};
+use alien_core::{EnvironmentVariable, EnvironmentVariableType, ENV_ALIEN_SECRETS};
 use alien_error::{Context, ContextError};
-use k8s_openapi::api::core::v1::Secret;
+use k8s_openapi::api::core::v1::{EnvVar, EnvVarSource, Secret, SecretKeySelector};
 use k8s_openapi::apimachinery::pkg::apis::meta::v1::ObjectMeta;
 use k8s_openapi::ByteString;
+use serde::{Deserialize, Serialize};
 
+use crate::core::k8s_secret_bindings::extract_binding_secrets;
 use crate::core::ResourceControllerContext;
 use crate::error::{ErrorData, Result};
 
@@ -175,6 +177,133 @@ pub async fn reconcile_environment_secret(
     }
 
     Ok(Some(plan))
+}
+
+/// Builds an `EnvVar` that resolves from a Kubernetes Secret key at pod start.
+fn secret_key_ref_env_var(name: &str, secret_name: &str, secret_key: &str) -> EnvVar {
+    EnvVar {
+        name: name.to_string(),
+        value: None,
+        value_from: Some(EnvVarSource {
+            secret_key_ref: Some(SecretKeySelector {
+                name: secret_name.to_string(),
+                key: secret_key.to_string(),
+                optional: Some(false),
+            }),
+            ..Default::default()
+        }),
+    }
+}
+
+/// Projects a workload's resolved environment into the typed `EnvVar` list a
+/// Kubernetes pod template carries. Shared by the Container, Daemon, and Worker
+/// controllers so the projection rules live in exactly one place.
+///
+/// Three inputs are merged, in priority order:
+/// 1. `plan` keys — Secret-typed env vars scoped to the workload, each rendered
+///    as a `secretKeyRef` into the per-workload `{workload}-env` Secret.
+/// 2. `bindings` — linked-resource binding JSON; any embedded `secretRef` is
+///    projected as its own `secretKeyRef` and the binding is emitted as
+///    `ALIEN_<NAME>_BINDING` with `$(VAR)` placeholders. Extraction failures
+///    propagate (fail fast) rather than silently dropping the binding.
+/// 3. `env_map` — the remaining plain env vars; a name already projected as a
+///    secret above wins and is never overwritten with an inline value.
+///
+/// When `strip_alien_secrets` is set, the `ALIEN_SECRETS` vault-load pointer is
+/// dropped from `env_map`. Kubernetes Containers and Daemons project their
+/// secrets natively via `secretKeyRef` and never load them at runtime, so the
+/// pointer must never reach the manifest; this strip also covers configs
+/// injected by older managers that still collapsed secrets into that pointer.
+/// Workers keep the pointer — they load secrets from the vault at runtime.
+pub fn projected_env_vars(
+    plan: Option<&KubernetesEnvSecretPlan>,
+    bindings: Vec<(String, serde_json::Value)>,
+    env_map: HashMap<String, String>,
+    strip_alien_secrets: bool,
+) -> Result<Vec<EnvVar>> {
+    let mut env_vars = Vec::new();
+
+    if let Some(plan) = plan {
+        for key in &plan.keys {
+            env_vars.push(secret_key_ref_env_var(key, &plan.secret_name, key));
+        }
+    }
+
+    for (binding_name, binding_json) in bindings {
+        let extraction = extract_binding_secrets(&binding_name, &binding_json).context(
+            ErrorData::ResourceConfigInvalid {
+                message: format!(
+                    "Failed to project secret references from binding '{binding_name}'"
+                ),
+                resource_id: Some(binding_name.clone()),
+            },
+        )?;
+
+        for (env_name, secret_name, secret_key) in extraction.secret_env_vars {
+            env_vars.push(secret_key_ref_env_var(&env_name, &secret_name, &secret_key));
+        }
+
+        let env_key = format!(
+            "ALIEN_{}_BINDING",
+            binding_name.to_uppercase().replace('-', "_")
+        );
+        env_vars.push(EnvVar {
+            name: env_key,
+            value: Some(extraction.resolved_binding_json),
+            value_from: None,
+        });
+    }
+
+    for (key, value) in env_map {
+        if strip_alien_secrets && key == ENV_ALIEN_SECRETS {
+            continue;
+        }
+        if !env_vars.iter().any(|ev| ev.name == key) {
+            env_vars.push(EnvVar {
+                name: key,
+                value: Some(value),
+                value_from: None,
+            });
+        }
+    }
+
+    Ok(env_vars)
+}
+
+/// Tracks the checksum of the environment Secret applied last (create/update).
+///
+/// Secret-typed env vars never enter the resource config on Kubernetes — they
+/// are projected via `secretKeyRef` — so config diffing alone cannot see secret
+/// rotations. `drifted` compares the snapshot-derived checksum against the one
+/// recorded last so a controller's `needs_update` can schedule an update that
+/// re-reconciles the Secret and rolls pods via the pod-template checksum
+/// annotation. Serializes transparently as the bare checksum so controller
+/// state keeps the same on-disk shape as a plain `Option<String>`.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(transparent)]
+pub struct EnvSecretRotationTracker {
+    checksum: Option<String>,
+}
+
+impl EnvSecretRotationTracker {
+    /// Records the checksum applied by the latest create/update reconcile.
+    pub fn record(&mut self, plan: Option<&KubernetesEnvSecretPlan>) {
+        self.checksum = plan.map(|plan| plan.checksum.clone());
+    }
+
+    /// Returns true when the current env snapshot would derive a different
+    /// env-secret checksum than the one recorded last (i.e. a secret rotated,
+    /// appeared, or was removed).
+    pub fn drifted(
+        &self,
+        resource_id: &str,
+        workload_name: &str,
+        variables: &[EnvironmentVariable],
+    ) -> bool {
+        let current =
+            environment_secret_plan(resource_id, workload_name, variables).map(|plan| plan.checksum);
+        current != self.checksum
+    }
 }
 
 #[cfg(test)]
