@@ -66,18 +66,42 @@
       },
       {
         // The Aurora cluster sits in a dedicated security group that admits 5432
-        // only from the stack security group. Creating it must stamp the Alien
-        // boundary tags so every later mutation can be tag-scoped.
+        // only from the stack security group. AWS authorizes CreateSecurityGroup
+        // against the target VPC as well as the new group, so the create leg
+        // cannot be tag-conditioned; the paired CreateTags-on-create grant below
+        // stamps the Alien boundary tags so every later mutation is tag-scoped.
         "label": "create-database-security-group",
-        "description": "Create the dedicated database security group, tagged with the Alien boundary tags.",
+        "description": "Create the dedicated database security group.",
         "grant": {
-          "actions": ["ec2:CreateSecurityGroup", "ec2:CreateTags"]
+          "actions": ["ec2:CreateSecurityGroup"]
+        },
+        "binding": {
+          "stack": {
+            "resources": [
+              "arn:aws:ec2:${awsRegion}:${awsAccountId}:security-group/*",
+              "arn:aws:ec2:${awsRegion}:${awsAccountId}:vpc/*"
+            ]
+          },
+          "resource": {
+            "resources": [
+              "arn:aws:ec2:${awsRegion}:${awsAccountId}:security-group/*",
+              "arn:aws:ec2:${awsRegion}:${awsAccountId}:vpc/*"
+            ]
+          }
+        }
+      },
+      {
+        "label": "tag-database-security-group",
+        "description": "Stamp the Alien boundary tags on the database security group at creation.",
+        "grant": {
+          "actions": ["ec2:CreateTags"]
         },
         "binding": {
           "stack": {
             "resources": ["arn:aws:ec2:${awsRegion}:${awsAccountId}:security-group/*"],
             "condition": {
               "StringEquals": {
+                "ec2:CreateAction": "CreateSecurityGroup",
                 "aws:RequestTag/${stackTag}": "${stackPrefix}",
                 "aws:RequestTag/${managedByTag}": "runtime"
               }
@@ -87,6 +111,7 @@
             "resources": ["arn:aws:ec2:${awsRegion}:${awsAccountId}:security-group/*"],
             "condition": {
               "StringEquals": {
+                "ec2:CreateAction": "CreateSecurityGroup",
                 "aws:RequestTag/${stackTag}": "${stackPrefix}",
                 "aws:RequestTag/${resourceTag}": "${resourceName}",
                 "aws:RequestTag/${managedByTag}": "runtime"
@@ -130,13 +155,14 @@
         }
       },
       {
-        // AWS requires Resource: "*" for these read-only discovery APIs; the
-        // controller resolves the database security group and the stack security
-        // group it must reference. Describe* carries no data-content access.
-        "label": "describe-security-groups",
-        "description": "Read security group metadata needed to create and wire the database security group.",
+        // The controller lists the cluster's instances with a db-cluster-id
+        // filter (no instance identifier in the request), so IAM evaluates the
+        // call against "*" (Describe* takes no resource-level ARN). Read-only,
+        // no data-content access.
+        "label": "describe-database-instances",
+        "description": "List the Aurora cluster's instances by cluster filter.",
         "grant": {
-          "actions": ["ec2:DescribeSecurityGroups"]
+          "actions": ["rds:DescribeDBInstances"]
         },
         "binding": {
           "stack": {
@@ -150,8 +176,46 @@
     ],
     "gcp": [
       {
+        // The instance is private-only behind Private Service Connect: the
+        // controller reserves a consumer IP in the stack subnetwork and creates
+        // a PSC forwarding rule targeting the Cloud SQL service attachment.
+        "label": "manage-psc-consumer-endpoint",
+        "description": "Reserve the PSC consumer IP and manage the forwarding rule to the Cloud SQL service attachment.",
+        "grant": {
+          "permissions": [
+            "compute.addresses.create",
+            "compute.addresses.createInternal",
+            "compute.addresses.get",
+            "compute.addresses.delete",
+            "compute.addresses.deleteInternal",
+            "compute.addresses.use",
+            "compute.addresses.useInternal",
+            "compute.forwardingRules.create",
+            "compute.forwardingRules.get",
+            "compute.forwardingRules.delete",
+            "compute.forwardingRules.pscCreate",
+            "compute.forwardingRules.pscDelete",
+            "compute.subnetworks.use",
+            "compute.networks.use",
+            "compute.regionOperations.get",
+            // PSC endpoint create/delete auto-(de)registers the endpoint in Service
+            // Directory; the forwarding-rule ops fail without these.
+            "servicedirectory.namespaces.create",
+            "servicedirectory.namespaces.delete",
+            "servicedirectory.services.create",
+            "servicedirectory.services.delete",
+            "servicedirectory.endpoints.create",
+            "servicedirectory.endpoints.delete"
+          ]
+        },
+        "binding": {
+          "stack": { "scope": "projects/${projectName}" },
+          "resource": { "scope": "projects/${projectName}" }
+        }
+      },
+      {
         "label": "manage-cloud-sql-instance",
-        "description": "Create, update and delete the Cloud SQL instance and its database.",
+        "description": "Create, update and delete the Cloud SQL instance, its database, and the app user.",
         "grant": {
           "permissions": [
             "cloudsql.instances.create",
@@ -161,7 +225,11 @@
             "cloudsql.instances.list",
             "cloudsql.databases.create",
             "cloudsql.databases.delete",
-            "cloudsql.databases.get"
+            "cloudsql.databases.get",
+            // The instance create provisions only the built-in `postgres` superuser, so the `alien`
+            // app user is created and its password set to match the connection secret.
+            "cloudsql.users.create",
+            "cloudsql.users.update"
           ]
         },
         "binding": {
@@ -224,14 +292,16 @@
           // provision needs write+delete on all of them — including the private DNS zone, its VNet
           // link, and the Private Endpoint's DNS zone group — or teardown leaves orphans. All are
           // management-plane network actions (no dataActions); none expose secret contents.
-          // The network resources omit `/read`: each PE / DNS-zone op is confirmed via
-          // the Azure-AsyncOperation (LRO) header, not a GET (flexibleServers keeps `/read` because
-          // the controller polls server state directly). A GET-based check would need the read added.
+          // flexibleServers and privateEndpoints also need `/read`: Azure completes both
+          // asynchronously, so the controller polls the resource itself (server state to Ready /
+          // Dropping-to-gone; PE to Succeeded before the DNS zone-group bind and to gone before
+          // the server delete). The DNS-zone ops are LRO-confirmed and stay write+delete only.
           "actions": [
             "Microsoft.DBforPostgreSQL/flexibleServers/write",
             "Microsoft.DBforPostgreSQL/flexibleServers/delete",
             "Microsoft.DBforPostgreSQL/flexibleServers/read",
             "Microsoft.Network/privateEndpoints/write",
+            "Microsoft.Network/privateEndpoints/read",
             "Microsoft.Network/privateEndpoints/delete",
             "Microsoft.Network/privateEndpoints/privateDnsZoneGroups/write",
             "Microsoft.Network/privateEndpoints/privateDnsZoneGroups/delete",

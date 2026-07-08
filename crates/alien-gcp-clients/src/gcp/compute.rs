@@ -5645,6 +5645,12 @@ mod tests {
         );
         // No global-only target-proxy ports leak in.
         assert!(json.get("portRange").is_none());
+        // GCP rejects IPProtocol on a service-attachment-target (PSC) rule outright, so it
+        // must be omitted entirely.
+        assert!(
+            json.get("IPProtocol").is_none(),
+            "PSC consumer endpoint must not set IPProtocol, got {json:?}"
+        );
     }
 
     #[test]

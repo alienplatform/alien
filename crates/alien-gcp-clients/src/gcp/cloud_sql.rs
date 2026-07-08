@@ -103,6 +103,15 @@ pub struct InstanceSettingsPatch {
     pub tier: String,
 }
 
+/// Body for the Cloud SQL users create/update calls — sets a SQL user's password. Request-only;
+/// the password is never returned and the request body is redacted from errors, like the instance body.
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SqlUser {
+    pub name: String,
+    pub password: String,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct IpConfiguration {
@@ -205,6 +214,14 @@ pub trait CloudSqlApi: Send + Sync + Debug {
     async fn get_instance(&self, instance: &str) -> Result<DatabaseInstance>;
     async fn delete_instance(&self, instance: &str) -> Result<()>;
     async fn create_database(&self, instance: &str, database: &str) -> Result<SqlOperation>;
+    /// Creates `user` with `password` on the instance, returning the long-running operation to
+    /// poll. Conflicts if the user already exists.
+    async fn insert_user(&self, instance: &str, user: &str, password: &str)
+        -> Result<SqlOperation>;
+    /// Sets an existing `user`'s password on the instance, returning the long-running operation
+    /// to poll.
+    async fn update_user(&self, instance: &str, user: &str, password: &str)
+        -> Result<SqlOperation>;
     /// Fetches a long-running operation so a poller can read its `status`/`error`.
     async fn get_operation(&self, operation: &str) -> Result<SqlOperation>;
 }
@@ -274,6 +291,51 @@ impl CloudSqlApi for CloudSqlClient {
         self.base
             .execute_request(Method::POST, &path, None, Some(body), database)
             .await
+    }
+
+    async fn insert_user(
+        &self,
+        instance: &str,
+        user: &str,
+        password: &str,
+    ) -> Result<SqlOperation> {
+        let path = format!("projects/{}/instances/{}/users", self.project_id, instance);
+        let body = SqlUser {
+            name: user.to_string(),
+            password: password.to_string(),
+        };
+        // The body carries the password; redact it from any error (same as `create_instance`).
+        alien_client_core::redact_request_body(
+            self.base
+                .execute_request(Method::POST, &path, None, Some(body), user)
+                .await,
+        )
+    }
+
+    async fn update_user(
+        &self,
+        instance: &str,
+        user: &str,
+        password: &str,
+    ) -> Result<SqlOperation> {
+        let path = format!("projects/{}/instances/{}/users", self.project_id, instance);
+        let body = SqlUser {
+            name: user.to_string(),
+            password: password.to_string(),
+        };
+        // The body carries the password; redact it from any error (same as `create_instance`).
+        // Postgres users have no host; the users API still requires the (empty) `host` param.
+        alien_client_core::redact_request_body(
+            self.base
+                .execute_request(
+                    Method::PUT,
+                    &path,
+                    Some(vec![("name", user.to_string()), ("host", String::new())]),
+                    Some(body),
+                    user,
+                )
+                .await,
+        )
     }
 
     async fn get_operation(&self, operation: &str) -> Result<SqlOperation> {

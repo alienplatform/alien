@@ -53,7 +53,7 @@ pub struct InstallArgs {
 
     /// Human-readable deployment name this service should manage.
     #[arg(long)]
-    pub agent_name: Option<String>,
+    pub operator_name: Option<String>,
 
     /// Target platform (aws, gcp, azure)
     #[arg(long, default_value = "local")]
@@ -263,10 +263,10 @@ fn install(args: InstallArgs) -> Result<()> {
     } else {
         service_args
     };
-    let service_args = if let Some(agent_name) = &args.agent_name {
+    let service_args = if let Some(operator_name) = &args.operator_name {
         let mut service_args = service_args;
-        service_args.push(OsString::from("--agent-name"));
-        service_args.push(OsString::from(agent_name));
+        service_args.push(OsString::from("--operator-name"));
+        service_args.push(OsString::from(operator_name));
         service_args
     } else {
         service_args
