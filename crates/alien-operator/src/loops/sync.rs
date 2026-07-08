@@ -11,8 +11,8 @@ use crate::db::{Approval, ApprovalStatus};
 use crate::OperatorState;
 use alien_core::{
     sync::{
-        OperatorCapabilityReport, OperatorCapabilityState, OperatorPackaging, SyncRequest,
-        SyncResponse,
+        OperatorArch, OperatorCapabilityReport, OperatorCapabilityState, OperatorOs,
+        OperatorPackaging, SyncRequest, SyncResponse,
     },
     DeploymentStatus, ObservedInventoryBatch, Platform,
 };
@@ -186,8 +186,8 @@ async fn sync_with_manager(
         capabilities: report_operator_capabilities(state),
         operator_version: Some(env!("CARGO_PKG_VERSION").to_string()),
         // Operator self-update inventory — fleet visibility + upgrade gating.
-        operator_os: Some(std::env::consts::OS.to_string()),
-        operator_arch: Some(std::env::consts::ARCH.to_string()),
+        operator_os: OperatorOs::detect(),
+        operator_arch: OperatorArch::detect(),
         packaging: Some(detect_operator_packaging()),
         // Chart-injected so admins see the registry the operator pulls a new tag from.
         operator_image_repository: std::env::var("ALIEN_OPERATOR_IMAGE_REPOSITORY")

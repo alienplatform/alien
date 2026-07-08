@@ -69,12 +69,12 @@ pub struct SyncRequest {
     /// `operator_target`. Optional for back-compat with older operators.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub operator_version: Option<String>,
-    /// `linux` / `macos` / `windows`. From `std::env::consts::OS`.
+    /// Host OS the operator runs on. From `std::env::consts::OS`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub operator_os: Option<String>,
-    /// `x86_64` / `aarch64`. From `std::env::consts::ARCH`.
+    pub operator_os: Option<OperatorOs>,
+    /// Host CPU architecture the operator runs on. From `std::env::consts::ARCH`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub operator_arch: Option<String>,
+    pub operator_arch: Option<OperatorArch>,
     /// How the operator is supervised — `os-service` (launcher) or `kubernetes`
     /// (Helm). Detected at runtime from `KUBERNETES_SERVICE_HOST`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -105,6 +105,86 @@ pub enum OperatorPackaging {
     OsService,
     /// Kubernetes pod — operator creates a Helm-runner Job that runs `helm upgrade --atomic`.
     Kubernetes,
+}
+
+/// Host operating system an operator runs on.
+///
+/// Serialized values match `std::env::consts::OS`, so the manager can line the
+/// operator up against the binaries it builds. Unsupported OSes are reported as
+/// `None` (the operator can't self-update to a binary that doesn't exist) rather
+/// than as a string the manager can't act on. Prefer this over
+/// `instance_catalog::Architecture` / `build_targets::BinaryTarget`: those model
+/// buildable *targets* (and spell arm as `arm64`), not the OS the operator
+/// happens to run on.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum OperatorOs {
+    Linux,
+    Macos,
+    Windows,
+}
+
+impl OperatorOs {
+    /// Detect the current host OS. `None` for OSes we don't ship binaries for.
+    pub fn detect() -> Option<Self> {
+        Self::from_consts(std::env::consts::OS)
+    }
+
+    /// Map a `std::env::consts::OS` value to a supported OS.
+    pub fn from_consts(os: &str) -> Option<Self> {
+        match os {
+            "linux" => Some(Self::Linux),
+            "macos" => Some(Self::Macos),
+            "windows" => Some(Self::Windows),
+            _ => None,
+        }
+    }
+
+    /// Wire/string form (matches `std::env::consts::OS`).
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Linux => "linux",
+            Self::Macos => "macos",
+            Self::Windows => "windows",
+        }
+    }
+}
+
+/// Host CPU architecture an operator runs on.
+///
+/// Serialized values match `std::env::consts::ARCH` (`x86_64` / `aarch64`) —
+/// deliberately not the `arm64` spelling `instance_catalog::Architecture` uses,
+/// so it round-trips exactly what the operator reports.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum OperatorArch {
+    #[serde(rename = "x86_64")]
+    X86_64,
+    #[serde(rename = "aarch64")]
+    Aarch64,
+}
+
+impl OperatorArch {
+    /// Detect the current host arch. `None` for arches we don't ship binaries for.
+    pub fn detect() -> Option<Self> {
+        Self::from_consts(std::env::consts::ARCH)
+    }
+
+    /// Map a `std::env::consts::ARCH` value to a supported architecture.
+    pub fn from_consts(arch: &str) -> Option<Self> {
+        match arch {
+            "x86_64" => Some(Self::X86_64),
+            "aarch64" => Some(Self::Aarch64),
+            _ => None,
+        }
+    }
+
+    /// Wire/string form (matches `std::env::consts::ARCH`).
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::X86_64 => "x86_64",
+            Self::Aarch64 => "aarch64",
+        }
+    }
 }
 
 /// Operator-reported state of the current self-update attempt.
@@ -354,8 +434,8 @@ mod tests {
     fn test_sync_request_with_self_update_fields_roundtrip() {
         let mut req = empty_sync_request();
         req.operator_version = Some("1.3.5".to_string());
-        req.operator_os = Some("linux".to_string());
-        req.operator_arch = Some("aarch64".to_string());
+        req.operator_os = Some(OperatorOs::Linux);
+        req.operator_arch = Some(OperatorArch::Aarch64);
         req.packaging = Some(OperatorPackaging::Kubernetes);
         req.operator_image_repository = Some("ghcr.io/alien-dev/alien-operator".to_string());
         let json = serde_json::to_value(&req).unwrap();
@@ -370,6 +450,29 @@ mod tests {
         let back: SyncRequest = serde_json::from_value(json).unwrap();
         assert_eq!(back.operator_version.as_deref(), Some("1.3.5"));
         assert_eq!(back.packaging, Some(OperatorPackaging::Kubernetes));
+        assert_eq!(back.operator_os, Some(OperatorOs::Linux));
+        assert_eq!(back.operator_arch, Some(OperatorArch::Aarch64));
+    }
+
+    /// The os/arch enums must serialize to the exact `std::env::consts` spellings
+    /// the operator reports — in particular `aarch64` (not the `arm64` that
+    /// `instance_catalog::Architecture` uses), which is the reason they're
+    /// dedicated enums rather than a reuse of the catalog one.
+    #[test]
+    fn test_operator_os_arch_wire_values() {
+        assert_eq!(serde_json::to_value(OperatorOs::Linux).unwrap(), "linux");
+        assert_eq!(serde_json::to_value(OperatorOs::Macos).unwrap(), "macos");
+        assert_eq!(serde_json::to_value(OperatorOs::Windows).unwrap(), "windows");
+        assert_eq!(serde_json::to_value(OperatorArch::X86_64).unwrap(), "x86_64");
+        assert_eq!(serde_json::to_value(OperatorArch::Aarch64).unwrap(), "aarch64");
+
+        // from_consts round-trips std::env::consts values; unknowns are dropped.
+        assert_eq!(OperatorOs::from_consts("macos"), Some(OperatorOs::Macos));
+        assert_eq!(OperatorOs::from_consts("freebsd"), None);
+        assert_eq!(OperatorArch::from_consts("aarch64"), Some(OperatorArch::Aarch64));
+        assert_eq!(OperatorArch::from_consts("arm"), None);
+        assert_eq!(OperatorOs::Macos.as_str(), "macos");
+        assert_eq!(OperatorArch::Aarch64.as_str(), "aarch64");
     }
 
     /// Backward compat: an old operator omits the self-update fields; the
