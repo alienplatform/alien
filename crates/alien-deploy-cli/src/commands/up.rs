@@ -312,6 +312,17 @@ mod tests {
     }
 
     #[test]
+    fn machines_deploy_prints_only_join_command() {
+        assert!(!should_print_deploy_progress(Platform::Machines));
+    }
+
+    #[test]
+    fn non_machines_deploy_prints_progress() {
+        assert!(should_print_deploy_progress(Platform::Aws));
+        assert!(should_print_deploy_progress(Platform::Local));
+    }
+
+    #[test]
     fn load_stack_settings_omits_server_owned_deployment_model() {
         let args = UpArgs::parse_from(["alien-deploy", "--platform", "machines"]);
         let settings =
@@ -889,6 +900,7 @@ pub async fn up_command(args: UpArgs, embedded_config: Option<&DeployCliConfig>)
             message: e,
         })
     })?;
+    let print_progress = should_print_deploy_progress(platform);
     let base_platform = parse_base_platform(platform, base_platform_str.as_deref())?;
     let public_endpoints = load_public_endpoints(&args, platform, deploy_config.as_ref())?;
     let deployer_inputs = fetch_deployer_inputs(&resolved.base_url, &token, platform)
@@ -922,7 +934,9 @@ pub async fn up_command(args: UpArgs, embedded_config: Option<&DeployCliConfig>)
     let install_context_platform_str = install_context_platform.as_str().to_string();
     let (manager_url, install_management_config) =
         if requires_install_context(install_context_platform) {
-            output::info("Resolving deployment install context via platform API...");
+            if print_progress {
+                output::info("Resolving deployment install context via platform API...");
+            }
             let context = discover_manager_install_context(
                 &resolved.base_url,
                 &token,
@@ -940,7 +954,9 @@ pub async fn up_command(args: UpArgs, embedded_config: Option<&DeployCliConfig>)
             match resolved.manager_url {
                 Some(url) => (url, None),
                 None => {
-                    output::info("Discovering manager via platform API...");
+                    if print_progress {
+                        output::info("Discovering manager via platform API...");
+                    }
                     let context = discover_manager_install_context(
                         &resolved.base_url,
                         &token,
@@ -952,24 +968,26 @@ pub async fn up_command(args: UpArgs, embedded_config: Option<&DeployCliConfig>)
             }
         };
 
-    let banner_title = embedded_config
-        .and_then(|c| c.display_name.as_deref())
-        .unwrap_or("Alien Deploy");
-    output::banner(banner_title);
-    output::label_value("Platform", display_platform);
-    if let Some(base_platform) = base_platform {
-        output::label_value("Base platform", base_platform.as_str());
+    if print_progress {
+        let banner_title = embedded_config
+            .and_then(|c| c.display_name.as_deref())
+            .unwrap_or("Alien Deploy");
+        output::banner(banner_title);
+        output::label_value("Platform", display_platform);
+        if let Some(base_platform) = base_platform {
+            output::label_value("Base platform", base_platform.as_str());
+        }
+        output::label_value("Manager", &manager_url);
+        output::label_value("Name", &name);
+        if let Some(public_subdomain) = public_subdomain.as_ref() {
+            output::label_value("Public subdomain", public_subdomain);
+        }
+        if let Some(public_endpoints) = public_endpoints.as_ref() {
+            let endpoint_count: usize = public_endpoints.values().map(HashMap::len).sum();
+            output::label_value("Public endpoints", &endpoint_count.to_string());
+        }
+        eprintln!();
     }
-    output::label_value("Manager", &manager_url);
-    output::label_value("Name", &name);
-    if let Some(public_subdomain) = public_subdomain.as_ref() {
-        output::label_value("Public subdomain", public_subdomain);
-    }
-    if let Some(public_endpoints) = public_endpoints.as_ref() {
-        let endpoint_count: usize = public_endpoints.values().map(HashMap::len).sum();
-        output::label_value("Public endpoints", &endpoint_count.to_string());
-    }
-    eprintln!();
 
     let stack_settings = load_stack_settings(&args, platform, deploy_config.as_ref())?;
 
@@ -989,7 +1007,9 @@ pub async fn up_command(args: UpArgs, embedded_config: Option<&DeployCliConfig>)
     )
     .await?;
     let deployment_id = init.deployment_id;
-    output::success("Connected to manager");
+    if print_progress {
+        output::success("Connected to manager");
+    }
 
     // Use deployment-scoped token if the manager returned one, otherwise keep the original.
     let effective_token = init.deployment_token.unwrap_or_else(|| token.clone());
@@ -1036,7 +1056,10 @@ pub async fn up_command(args: UpArgs, embedded_config: Option<&DeployCliConfig>)
         validate_public_endpoint_names(public_endpoints, &stack)?;
     }
 
-    if current_deployment.status == "running" && public_endpoints.is_none() {
+    if current_deployment.status == "running"
+        && public_endpoints.is_none()
+        && platform != Platform::Machines
+    {
         eprintln!();
         output::success(&format!("Deployment '{}' is already active.", name));
         return Ok(());
@@ -1073,12 +1096,8 @@ pub async fn up_command(args: UpArgs, embedded_config: Option<&DeployCliConfig>)
                 let cli_name = embedded_config
                     .and_then(|config| config.name.as_deref())
                     .unwrap_or("alien-deploy");
-                output::success("Deployment registered.");
-                output::label_value(
-                    "Join command",
-                    &machines_join_command(cli_name, &join_token),
-                );
-                output::info("Run this command on each machine you want to add.");
+                println!("{}", machines_join_command(cli_name, &join_token));
+                return Ok(());
             }
             Platform::Test => {
                 output::info("Test platform — no deployment action needed.");
@@ -1183,6 +1202,10 @@ fn machines_join_command(cli_name: &str, join_token: &str) -> String {
         "sudo {cli_name} join --token {}",
         shell_single_quote(join_token)
     )
+}
+
+fn should_print_deploy_progress(platform: Platform) -> bool {
+    platform != Platform::Machines
 }
 
 fn shell_single_quote(value: &str) -> String {
