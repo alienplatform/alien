@@ -24,6 +24,9 @@ alien-local = { workspace = true }
 alien-client-config = { workspace = true }
 alien-commands = { workspace = true, default-features = false, features = ["dispatchers"] }
 alien-manager-api = { path = "../../client-sdks/manager/rust" }
+# Kubernetes API access for the self-update Helm-runner Jobs (in-pod SA config).
+alien-k8s-clients = { workspace = true }
+k8s-openapi = { version = "0.25.0", features = ["v1_33"] }
 
 # Async & HTTP
 tokio = { workspace = true, features = ["sync", "macros", "io-util", "rt-multi-thread", "time", "net", "fs", "signal"] }

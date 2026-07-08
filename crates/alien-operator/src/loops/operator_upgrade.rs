@@ -10,27 +10,25 @@
 //! is a *distinct* Job (`<release>-upgrader-<version>-<attempt>`), so a failed
 //! attempt never blocks the next one and its pod survives its TTL for debugging.
 //!
-//! Talks to the Kubernetes API directly (GET/POST to `/apis/batch/v1/...` and
-//! `/api/v1/...`) using the in-pod ServiceAccount token, avoiding a dependency
-//! on `alien-k8s-clients`.
+//! Talks to the Kubernetes API through `alien-k8s-clients` (`JobApi`/`PodApi`)
+//! using the in-pod ServiceAccount config — the projected token + CA and the
+//! `KUBERNETES_SERVICE_*` env the chart's pod already has.
 //!
 //! `os-service` packaging is not in this MVP — the wire carries
 //! `operator_target.binary` for it, but the actuator is unimplemented and this
 //! module logs + skips that path (its failure reporting lands with that work).
 
-use std::fs;
 use std::time::Duration;
 
 use alien_core::sync::{OperatorHelmTarget, OperatorTarget, OperatorUpdatePhase, OperatorUpdateReport};
 use alien_error::AlienError;
+use alien_k8s_clients::{KubernetesClient, KubernetesClientConfig, KubernetesClientConfigExt};
 use chrono::{DateTime, Utc};
+use k8s_openapi::api::batch::v1::Job;
 use serde_json::Value;
 use tracing::{info, warn};
 
 use crate::error::{ErrorData, Result};
-
-const SA_TOKEN_PATH: &str = "/var/run/secrets/kubernetes.io/serviceaccount/token";
-const SA_CA_PATH: &str = "/var/run/secrets/kubernetes.io/serviceaccount/ca.crt";
 
 // Standard `app.kubernetes.io/*` labels on the upgrade Jobs the operator spawns.
 // They carry no hardcoded brand — a white-labeled distribution never leaks
@@ -564,110 +562,79 @@ fn k8s_namespace() -> Result<String> {
     })
 }
 
-/// Build an HTTP client + base URL + bearer token for the in-pod k8s API.
-fn k8s_conn() -> Result<(reqwest::Client, String, String)> {
-    let token = fs::read_to_string(SA_TOKEN_PATH).map_err(|e| {
+/// In-pod Kubernetes client via `alien-k8s-clients`. `try_incluster` reads the
+/// projected ServiceAccount token + CA and the `KUBERNETES_SERVICE_*` env the
+/// chart's pod already has, so this module no longer hand-rolls auth/transport.
+async fn k8s_client() -> Result<KubernetesClient> {
+    let config = KubernetesClientConfig::try_incluster().await.map_err(|e| {
         AlienError::new(ErrorData::ConfigurationError {
-            message: format!("Failed to read in-pod SA token at {SA_TOKEN_PATH}: {e}"),
+            message: format!("Failed to load in-cluster Kubernetes config: {e}"),
         })
     })?;
-    let host = std::env::var("KUBERNETES_SERVICE_HOST").map_err(|_| {
+    KubernetesClient::new(config).await.map_err(|e| {
         AlienError::new(ErrorData::ConfigurationError {
-            message: "KUBERNETES_SERVICE_HOST env var missing — agent not running in a pod?"
-                .to_string(),
-        })
-    })?;
-    let port = std::env::var("KUBERNETES_SERVICE_PORT_HTTPS").unwrap_or_else(|_| "443".to_string());
-
-    let mut builder = reqwest::ClientBuilder::new().timeout(Duration::from_secs(15));
-    if let Ok(ca_pem) = fs::read(SA_CA_PATH) {
-        if let Ok(cert) = reqwest::Certificate::from_pem(&ca_pem) {
-            builder = builder.add_root_certificate(cert);
-        }
-    }
-    let client = builder.build().map_err(|e| {
-        AlienError::new(ErrorData::ConfigurationError {
-            message: format!("Failed to build k8s API HTTP client: {e}"),
-        })
-    })?;
-    Ok((client, format!("https://{host}:{port}"), token.trim().to_string()))
-}
-
-async fn k8s_get(path: &str, query: &[(&str, &str)]) -> Result<Value> {
-    let (client, base, token) = k8s_conn()?;
-    let url = format!("{base}{path}");
-    let resp = client
-        .get(&url)
-        .query(query)
-        .bearer_auth(&token)
-        .send()
-        .await
-        .map_err(|e| {
-            AlienError::new(ErrorData::ConfigurationError {
-                message: format!("Failed to GET k8s API {url}: {e}"),
-            })
-        })?;
-    let status = resp.status();
-    if !status.is_success() {
-        let text = resp.text().await.unwrap_or_default();
-        return Err(AlienError::new(ErrorData::ConfigurationError {
-            message: format!("k8s API GET {url} returned {status}: {text}"),
-        }));
-    }
-    resp.json().await.map_err(|e| {
-        AlienError::new(ErrorData::ConfigurationError {
-            message: format!("Failed to parse k8s API response from {url}: {e}"),
+            message: format!("Failed to build Kubernetes client: {e}"),
         })
     })
 }
 
 async fn list_upgrader_jobs(namespace: &str) -> Result<Vec<UpgraderJob>> {
-    let path = format!("/apis/batch/v1/namespaces/{namespace}/jobs");
-    let v = k8s_get(&path, &[("labelSelector", JOB_SELECTOR)]).await?;
-    Ok(v.get("items")
-        .and_then(Value::as_array)
-        .map(|items| items.iter().filter_map(parse_upgrader_job).collect())
-        .unwrap_or_default())
-}
-
-async fn list_pods(namespace: &str, selector: &str) -> Result<Vec<Value>> {
-    let path = format!("/api/v1/namespaces/{namespace}/pods");
-    let v = k8s_get(&path, &[("labelSelector", selector)]).await?;
-    Ok(v.get("items")
-        .and_then(Value::as_array)
-        .cloned()
-        .unwrap_or_default())
-}
-
-/// POST a Job to the in-pod Kubernetes API. Unique per-attempt names make a 409
-/// a rare same-sync race rather than the old dead-Job stall — treat it as benign.
-async fn create_job(namespace: &str, body: &serde_json::Value) -> Result<()> {
-    let (client, base, token) = k8s_conn()?;
-    let url = format!("{base}/apis/batch/v1/namespaces/{namespace}/jobs");
-    let resp = client
-        .post(&url)
-        .bearer_auth(&token)
-        .json(body)
-        .send()
+    let client = k8s_client().await?;
+    let list = client
+        .list_jobs(namespace, Some(JOB_SELECTOR.to_string()), None)
         .await
         .map_err(|e| {
             AlienError::new(ErrorData::ConfigurationError {
-                message: format!("Failed to call k8s API at {url}: {e}"),
+                message: format!("Failed to list upgrader Jobs: {e}"),
             })
         })?;
+    // Bridge the typed k8s-openapi Jobs back through JSON so the pure
+    // `parse_upgrader_job` (and its tests) keep working unchanged.
+    Ok(list
+        .items
+        .iter()
+        .filter_map(|job| serde_json::to_value(job).ok())
+        .filter_map(|v| parse_upgrader_job(&v))
+        .collect())
+}
 
-    let status = resp.status();
-    if status.is_success() {
-        return Ok(());
+async fn list_pods(namespace: &str, selector: &str) -> Result<Vec<Value>> {
+    let client = k8s_client().await?;
+    let list = client
+        .list_pods(namespace, Some(selector.to_string()), None)
+        .await
+        .map_err(|e| {
+            AlienError::new(ErrorData::ConfigurationError {
+                message: format!("Failed to list pods: {e}"),
+            })
+        })?;
+    Ok(list
+        .items
+        .iter()
+        .filter_map(|pod| serde_json::to_value(pod).ok())
+        .collect())
+}
+
+/// Create the upgrader Job via `alien-k8s-clients`. Unique per-attempt names make
+/// a 409 a rare same-sync race rather than the old dead-Job stall — treat it as
+/// benign (the Job for this attempt is already in flight).
+async fn create_job(namespace: &str, body: &serde_json::Value) -> Result<()> {
+    let job: Job = serde_json::from_value(body.clone()).map_err(|e| {
+        AlienError::new(ErrorData::ConfigurationError {
+            message: format!("Failed to build upgrader Job object: {e}"),
+        })
+    })?;
+    let client = k8s_client().await?;
+    match client.create_job(namespace, &job).await {
+        Ok(_) => Ok(()),
+        Err(e) if e.http_status_code == Some(409) => {
+            warn!("Upgrader Job create returned 409 (race with a concurrent sync); leaving in place");
+            Ok(())
+        }
+        Err(e) => Err(AlienError::new(ErrorData::ConfigurationError {
+            message: format!("k8s API rejected Job creation: {e}"),
+        })),
     }
-    if status.as_u16() == 409 {
-        warn!("Upgrader Job create returned 409 (race with a concurrent sync); leaving in place");
-        return Ok(());
-    }
-    let text = resp.text().await.unwrap_or_default();
-    Err(AlienError::new(ErrorData::ConfigurationError {
-        message: format!("k8s API rejected Job creation ({status}): {text}"),
-    }))
 }
 
 fn non_empty(s: &str) -> Option<&str> {
@@ -755,6 +722,26 @@ mod tests {
         let stamped = format!("{}{}", labels, body["metadata"]["annotations"]);
         assert!(!stamped.contains("alien.dev"), "no alien.dev keys: {stamped}");
         assert!(!stamped.contains("alien-agent"), "no alien-agent value: {stamped}");
+    }
+
+    #[test]
+    fn job_body_deserializes_into_a_typed_k8s_job() {
+        // create_job feeds build_job_body's JSON into a typed k8s-openapi Job
+        // before handing it to JobApi; guard that the hand-built body stays
+        // schema-compatible.
+        let (name, body) = build_job_body(&inputs());
+        let job: k8s_openapi::api::batch::v1::Job =
+            serde_json::from_value(body).expect("body should deserialize into a typed Job");
+        assert_eq!(job.metadata.name.as_deref(), Some(name.as_str()));
+        assert_eq!(job.metadata.namespace.as_deref(), Some("alien-agent"));
+        let containers = job
+            .spec
+            .expect("job spec")
+            .template
+            .spec
+            .expect("pod spec")
+            .containers;
+        assert_eq!(containers.len(), 1);
     }
 
     #[test]
