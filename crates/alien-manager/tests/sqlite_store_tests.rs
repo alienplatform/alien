@@ -764,6 +764,8 @@ async fn reconcile_succeeds_under_other_session_lock() {
                 operator_image_repository: None,
                 launcher_version: None,
                 operator_update: None,
+                redeploy_required: None,
+                min_launcher_version: None,
             },
         )
         .await
@@ -837,6 +839,8 @@ async fn reconcile_refreshes_owned_lock_lease() {
                 operator_image_repository: None,
                 launcher_version: None,
                 operator_update: None,
+                redeploy_required: None,
+                min_launcher_version: None,
             },
         )
         .await

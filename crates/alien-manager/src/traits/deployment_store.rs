@@ -277,6 +277,17 @@ pub struct ReconcileData {
     /// "Alien Operator Update" event reflects a real failure/progress signal.
     /// `None` = no update in flight.
     pub operator_update: Option<serde_json::Value>,
+    /// os-service self-update: the manager withheld the pinned target because
+    /// the installed (frozen) launcher is below the target's
+    /// `minLauncherVersion` — a redeploy with a newer launcher is required.
+    /// Computed by the manager from the release manifest and forwarded so
+    /// platform dashboards can surface it. `None` = not applicable (kubernetes,
+    /// no pin, already converged, or manifest error); `Some(false)` = a target
+    /// is pending and the launcher is fine.
+    pub redeploy_required: Option<bool>,
+    /// The pinned target's `minLauncherVersion` (from the manifest), forwarded
+    /// alongside `redeploy_required` for a "needs ≥ X, has Y" affordance.
+    pub min_launcher_version: Option<String>,
 }
 
 /// Persistence for deployments and deployment groups.

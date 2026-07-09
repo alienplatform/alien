@@ -472,6 +472,8 @@ impl CloudProxyTest {
                     operator_image_repository: None,
                     launcher_version: None,
                     operator_update: None,
+                    redeploy_required: None,
+                    min_launcher_version: None,
                 },
             )
             .await

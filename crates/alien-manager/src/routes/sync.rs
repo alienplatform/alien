@@ -481,6 +481,8 @@ async fn reconcile(
                 packaging: None,
                 operator_image_repository: None,
                 operator_update: None,
+                redeploy_required: None,
+                min_launcher_version: None,
             },
         )
         .await
@@ -1166,6 +1168,61 @@ mod tests {
         );
     }
 
+    /// The "redeploy required" signal mirrors the target gate: an os-service
+    /// deployment with a pinned target whose launcher is below the manifest
+    /// floor reports `(Some(true), floor)`; at/above the floor `(Some(false),
+    /// floor)`; and it is inert `(None, None)` for kubernetes, no pin, or an
+    /// already-converged operator.
+    #[tokio::test]
+    async fn redeploy_status_tracks_the_launcher_floor() {
+        let dir = tempfile::tempdir().unwrap();
+        write_manifest(
+            dir.path(),
+            "2.0.0",
+            r#"{
+                "version": "2.0.0",
+                "minLauncherVersion": "0.5.0",
+                "artifacts": {
+                    "linux/x86_64": { "url": "https://dl.example/op2", "sha256": "def" }
+                }
+            }"#,
+        );
+        let config = crate::config::ManagerConfig {
+            releases_url: Some(dir.path().to_str().unwrap().to_string()),
+            ..Default::default()
+        };
+        let mut deployment = deployment_record_with_state("running", None);
+        deployment.target_operator_version = Some("2.0.0".to_string());
+
+        let floor = || Some("0.5.0".to_string());
+        // Below the floor → redeploy required, with the floor surfaced.
+        assert_eq!(
+            super::resolve_redeploy_status(&config, &deployment, Some("1.0.0"), Some("os-service"), Some("0.4.9")).await,
+            (Some(true), floor())
+        );
+        // At/above the floor → a target is pending but no redeploy needed.
+        assert_eq!(
+            super::resolve_redeploy_status(&config, &deployment, Some("1.0.0"), Some("os-service"), Some("0.5.0")).await,
+            (Some(false), floor())
+        );
+        // Not applicable: kubernetes, already converged, or no pin.
+        assert_eq!(
+            super::resolve_redeploy_status(&config, &deployment, Some("1.0.0"), Some("kubernetes"), Some("0.4.9")).await,
+            (None, None)
+        );
+        assert_eq!(
+            super::resolve_redeploy_status(&config, &deployment, Some("2.0.0"), Some("os-service"), Some("0.4.9")).await,
+            (None, None),
+            "already converged (reported == pin) → nothing withheld"
+        );
+        let mut unpinned = deployment_record_with_state("running", None);
+        unpinned.target_operator_version = None;
+        assert_eq!(
+            super::resolve_redeploy_status(&config, &unpinned, Some("1.0.0"), Some("os-service"), Some("0.4.9")).await,
+            (None, None)
+        );
+    }
+
     /// The Kubernetes path is untouched by the binary work: a pinned
     /// kubernetes deployment still gets the helm values overlay, and a
     /// converged one gets nothing.
@@ -1270,6 +1327,19 @@ async fn agent_sync(
         return ErrorData::forbidden("Access denied").into_response();
     }
 
+    // os-service self-update: compute whether the pinned target is withheld
+    // because the installed launcher is below the target's floor ("redeploy
+    // required"). Forwarded on reconcile (below) so the dashboard can surface
+    // it. Shares the cached manifest load with `resolve_operator_target`.
+    let (redeploy_required, min_launcher_version) = resolve_redeploy_status(
+        &state.config,
+        &deployment,
+        req.operator_version.as_deref(),
+        req.packaging.as_deref(),
+        req.launcher_version.as_deref(),
+    )
+    .await;
+
     // Persist the agent self-update inventory the agent reported on this sync
     // (`operator_version`, `operator_os`, `operator_arch`, `packaging`). Runs on every
     // sync regardless of whether the agent reported a state change, so the
@@ -1343,6 +1413,8 @@ async fn agent_sync(
                                 packaging: req.packaging.clone(),
                                 operator_image_repository: req.operator_image_repository.clone(),
                                 operator_update: req.operator_update.clone(),
+                                redeploy_required,
+                                min_launcher_version: min_launcher_version.clone(),
                             },
                         )
                         .await
@@ -1531,6 +1603,8 @@ async fn agent_sync(
                                 packaging: req.packaging.clone(),
                                 operator_image_repository: req.operator_image_repository.clone(),
                                 operator_update: req.operator_update.clone(),
+                                redeploy_required,
+                                min_launcher_version: min_launcher_version.clone(),
                                 suggested_delay_ms: None,
                             },
                         )
@@ -1594,6 +1668,50 @@ async fn agent_sync(
 /// `deployment.target_operator_version` is set AND differs from what the
 /// operator just reported, build the payload matching its packaging — `helm`
 /// for Kubernetes, a per-host `binary` for os-service.
+/// The "redeploy required" signal for an os-service self-update, mirrored from
+/// the same floor gate `binary_operator_target` uses: a pinned target is
+/// withheld when the installed (frozen) launcher is below the target's manifest
+/// `minLauncherVersion`, and only a redeploy replaces the launcher.
+///
+/// Returns `(redeploy_required, min_launcher_version)`, both forwarded on
+/// reconcile so the dashboard can surface the state:
+/// - `(Some(true), Some(floor))` — target withheld, redeploy needed.
+/// - `(Some(false), Some(floor))` — target pending, launcher satisfies the floor.
+/// - `(None, None)` — not applicable: not os-service, no pin, already converged,
+///   or the manifest failed to load / has an unparseable floor.
+///
+/// The manifest is cached (`release_manifest::load`), so this shares the load
+/// `resolve_operator_target` performs for the same version.
+async fn resolve_redeploy_status(
+    config: &crate::config::ManagerConfig,
+    deployment: &crate::traits::DeploymentRecord,
+    reported_version: Option<&str>,
+    packaging: Option<&str>,
+    launcher_version: Option<&str>,
+) -> (Option<bool>, Option<String>) {
+    if packaging != Some("os-service") {
+        return (None, None);
+    }
+    let Some(target_version) = deployment.target_operator_version.as_deref() else {
+        return (None, None);
+    };
+    // Already converged — no target is pending, so there is nothing to withhold.
+    if reported_version == Some(target_version) {
+        return (None, None);
+    }
+    let manifest = match crate::release_manifest::load(&config.releases_url(), target_version).await
+    {
+        Ok(manifest) => manifest,
+        Err(_) => return (None, None),
+    };
+    let floor = manifest.min_launcher_version.clone();
+    match crate::release_manifest::check_launcher_floor(launcher_version, &floor) {
+        crate::release_manifest::LauncherFloorCheck::Ok => (Some(false), Some(floor)),
+        crate::release_manifest::LauncherFloorCheck::RedeployRequired => (Some(true), Some(floor)),
+        crate::release_manifest::LauncherFloorCheck::InvalidFloor => (None, None),
+    }
+}
+
 async fn resolve_operator_target(
     config: &crate::config::ManagerConfig,
     deployment: &crate::traits::DeploymentRecord,
@@ -1683,30 +1801,30 @@ async fn binary_operator_target(
     };
 
     // The frozen-launcher gate: the installed launcher must be able to
-    // actuate this artifact's handoff contract.
-    let min_launcher = match semver::Version::parse(&manifest.min_launcher_version) {
-        Ok(v) => v,
-        Err(e) => {
+    // actuate this artifact's handoff contract. Shares one definition with the
+    // platform's "redeploy required" signal (see `check_launcher_floor`).
+    match crate::release_manifest::check_launcher_floor(
+        launcher_version,
+        &manifest.min_launcher_version,
+    ) {
+        crate::release_manifest::LauncherFloorCheck::Ok => {}
+        crate::release_manifest::LauncherFloorCheck::RedeployRequired => {
+            tracing::info!(
+                target_version,
+                reported_launcher = ?launcher_version,
+                min_launcher_version = %manifest.min_launcher_version,
+                "Withholding operator_target: installed launcher is below the floor (or unreported) — redeploy required"
+            );
+            return None;
+        }
+        crate::release_manifest::LauncherFloorCheck::InvalidFloor => {
             tracing::warn!(
                 target_version,
                 min_launcher_version = %manifest.min_launcher_version,
-                error = %e,
                 "Release manifest carries an unparseable minLauncherVersion; not emitting"
             );
             return None;
         }
-    };
-    let launcher_ok = launcher_version
-        .and_then(|v| semver::Version::parse(v).ok())
-        .is_some_and(|v| v >= min_launcher);
-    if !launcher_ok {
-        tracing::info!(
-            target_version,
-            reported_launcher = ?launcher_version,
-            min_launcher_version = %manifest.min_launcher_version,
-            "Withholding operator_target: installed launcher is below the floor (or unreported) — redeploy required"
-        );
-        return None;
     }
 
     let key = format!("{os}/{arch}");

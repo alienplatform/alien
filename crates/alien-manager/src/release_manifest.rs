@@ -59,6 +59,43 @@ pub struct ReleaseManifest {
     pub artifacts: BTreeMap<String, ManifestArtifact>,
 }
 
+/// Outcome of checking an installed launcher against a target artifact's floor.
+/// Shared by the sync-route target gate and the platform reconcile so both
+/// agree on exactly one definition of "the launcher is too old".
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum LauncherFloorCheck {
+    /// The launcher satisfies the floor — the target may be delivered.
+    Ok,
+    /// The launcher is below the floor (or unreported/unparseable) — the target
+    /// is withheld and the user must **redeploy** to get a newer launcher.
+    RedeployRequired,
+    /// The manifest's `minLauncherVersion` is itself unparseable — a manifest
+    /// error, not something a redeploy fixes.
+    InvalidFloor,
+}
+
+/// Does the installed (frozen) launcher satisfy the artifact's minimum? The
+/// launcher never self-updates, so a launcher below the floor cannot actuate
+/// the newer handoff contract and the target must be withheld until the
+/// operator is redeployed with a newer launcher. An unreported or unparseable
+/// launcher is treated as below the floor (fail-closed).
+pub fn check_launcher_floor(
+    launcher_version: Option<&str>,
+    min_launcher_version: &str,
+) -> LauncherFloorCheck {
+    let Ok(min) = semver::Version::parse(min_launcher_version) else {
+        return LauncherFloorCheck::InvalidFloor;
+    };
+    let meets_floor = launcher_version
+        .and_then(|v| semver::Version::parse(v).ok())
+        .is_some_and(|v| v >= min);
+    if meets_floor {
+        LauncherFloorCheck::Ok
+    } else {
+        LauncherFloorCheck::RedeployRequired
+    }
+}
+
 /// Load (and cache) the manifest for `version` under `base`. `base` accepts
 /// `http(s)://`, `file://`, or a plain filesystem directory path.
 pub async fn load(base: &str, version: &str) -> Result<Arc<ReleaseManifest>> {
@@ -195,5 +232,20 @@ mod tests {
         let err = load(&base, "3.0.0").await.expect_err("garbage must error");
         assert_eq!(err.code, "BAD_REQUEST");
         assert!(err.to_string().contains("manifest"), "{err}");
+    }
+
+    #[test]
+    fn launcher_floor_check_rows() {
+        use LauncherFloorCheck::*;
+        // At or above the floor → Ok.
+        assert_eq!(check_launcher_floor(Some("0.2.0"), "0.2.0"), Ok);
+        assert_eq!(check_launcher_floor(Some("1.0.0"), "0.2.0"), Ok);
+        // Below the floor → redeploy required.
+        assert_eq!(check_launcher_floor(Some("0.1.9"), "0.2.0"), RedeployRequired);
+        // Unreported or unparseable launcher fails closed → redeploy required.
+        assert_eq!(check_launcher_floor(None, "0.2.0"), RedeployRequired);
+        assert_eq!(check_launcher_floor(Some("garbage"), "0.2.0"), RedeployRequired);
+        // Unparseable floor is a manifest error, not a redeploy case.
+        assert_eq!(check_launcher_floor(Some("1.0.0"), "not-semver"), InvalidFloor);
     }
 }

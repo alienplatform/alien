@@ -458,6 +458,8 @@ impl DeploymentLoop {
                                 packaging: None,
                                 operator_image_repository: None,
                                 operator_update: None,
+                                redeploy_required: None,
+                                min_launcher_version: None,
                             },
                         )
                         .await?;

@@ -352,6 +352,8 @@ async fn setup() -> TestSetup {
                     operator_image_repository: None,
                     launcher_version: None,
                     operator_update: None,
+                    redeploy_required: None,
+                    min_launcher_version: None,
                 },
             )
             .await
@@ -833,6 +835,8 @@ async fn test_proxy_push_then_pull() {
                     operator_image_repository: None,
                     launcher_version: None,
                     operator_update: None,
+                    redeploy_required: None,
+                    min_launcher_version: None,
                 },
             )
             .await
