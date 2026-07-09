@@ -146,13 +146,19 @@ impl ErrorPrinter {
                                 .check_description
                                 .as_deref()
                                 .unwrap_or("Unknown check");
+                            // Machine-readable check code, shown so failures can
+                            // be referenced (and grepped) by their stable code.
+                            let check_heading = match result.code.as_deref() {
+                                Some(code) => format!("[{}] {}", code, check_description),
+                                None => check_description.to_string(),
+                            };
 
                             if result.success && !result.warnings.is_empty() {
                                 // Success with warnings
                                 stderr.set_color(
                                     ColorSpec::new().set_fg(Some(Color::Yellow)).set_bold(true),
                                 )?;
-                                writeln!(stderr, "  ⚠ {}:", check_description)?;
+                                writeln!(stderr, "  ⚠ {}:", check_heading)?;
                                 stderr.reset()?;
                                 for warning_msg in &result.warnings {
                                     stderr
@@ -164,7 +170,7 @@ impl ErrorPrinter {
                                 stderr.set_color(
                                     ColorSpec::new().set_fg(Some(Color::Red)).set_bold(true),
                                 )?;
-                                writeln!(stderr, "  ✗ {}:", check_description)?;
+                                writeln!(stderr, "  ✗ {}:", check_heading)?;
                                 stderr.reset()?;
                                 for error_msg in &result.errors {
                                     stderr
@@ -176,7 +182,7 @@ impl ErrorPrinter {
                                 stderr.set_color(
                                     ColorSpec::new().set_fg(Some(Color::Red)).set_bold(true),
                                 )?;
-                                writeln!(stderr, "  ✗ {}:", check_description)?;
+                                writeln!(stderr, "  ✗ {}:", check_heading)?;
                                 stderr.reset()?;
                                 for error_msg in &result.errors {
                                     stderr

@@ -224,6 +224,7 @@ async fn onboard_platform(args: OnboardArgs, ctx: ExecutionMode, name: String) -
             "deploymentGroupId": deployment_group_id,
             "name": name,
             "deploymentLink": deployment_link,
+            "token": token_response.token,
             "maxDeployments": args.max_deployments,
             "platforms": selected_platforms.iter().map(|platform| platform.as_str()).collect::<Vec<_>>(),
             "subdomain": public_subdomain,

@@ -46,6 +46,10 @@ pub struct StatusArgs {
     /// Platform used only when discovering the manager URL for an untracked deployment.
     #[arg(long)]
     pub platform: Option<String>,
+
+    /// Output status as JSON.
+    #[arg(long)]
+    pub json: bool,
 }
 
 #[derive(Debug, Deserialize)]
@@ -58,6 +62,19 @@ struct RemoteDeploymentList {
 #[serde(rename_all = "camelCase")]
 struct RemoteDeploymentListItem {
     id: String,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct RemoteDeploymentInfo {
+    resources: std::collections::HashMap<String, RemoteResourceInfo>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct RemoteResourceInfo {
+    resource_type: String,
+    public_url: Option<String>,
 }
 
 pub async fn status_command(
@@ -109,6 +126,44 @@ pub async fn status_command(
         })?
         .into_inner();
 
+    let deployment_info =
+        fetch_remote_deployment_info(&token, &manager_url, &deployment_id).await?;
+
+    if args.json {
+        let resources = deployment_info
+            .resources
+            .iter()
+            .map(|(id, resource)| {
+                (
+                    id.clone(),
+                    serde_json::json!({
+                        "type": resource.resource_type,
+                        "publicUrl": resource.public_url,
+                    }),
+                )
+            })
+            .collect::<serde_json::Map<_, _>>();
+        let output = serde_json::json!({
+            "name": args.name,
+            "id": deployment_id,
+            "platform": deployment.platform,
+            "managerUrl": manager_url,
+            "status": deployment.status,
+            "currentReleaseId": deployment.current_release_id,
+            "desiredReleaseId": deployment.desired_release_id,
+            "error": deployment.error,
+            "createdAt": deployment.created_at,
+            "resources": resources,
+        });
+        let json = serde_json::to_string_pretty(&output)
+            .into_alien_error()
+            .context(ErrorData::ConfigurationError {
+                message: "Failed to serialize status JSON".to_string(),
+            })?;
+        println!("{json}");
+        return Ok(());
+    }
+
     output::header(&format!("Deployment: {}", args.name));
     output::status("ID:", &deployment_id);
     output::status("Platform:", &deployment.platform.to_string());
@@ -131,8 +186,51 @@ pub async fn status_command(
         }
     }
     output::status("Created:", &deployment.created_at);
+    for (resource_id, resource) in deployment_info
+        .resources
+        .iter()
+        .filter(|(_, resource)| resource.public_url.is_some())
+    {
+        if let Some(public_url) = resource.public_url.as_ref() {
+            output::status(&format!("{resource_id} URL:"), public_url);
+        }
+    }
 
     Ok(())
+}
+
+async fn fetch_remote_deployment_info(
+    token: &str,
+    manager_url: &str,
+    deployment_id: &str,
+) -> Result<RemoteDeploymentInfo> {
+    let client = create_manager_http_client(token)?;
+    let url = format!(
+        "{}/v1/deployments/{}/info",
+        manager_url.trim_end_matches('/'),
+        urlencoding::encode(deployment_id),
+    );
+    let response = client.get(&url).send().await.into_alien_error().context(
+        ErrorData::ConfigurationError {
+            message: "Failed to fetch deployment info from manager".to_string(),
+        },
+    )?;
+
+    if !response.status().is_success() {
+        let status = response.status();
+        let body = response.text().await.unwrap_or_default();
+        return Err(AlienError::new(ErrorData::ConfigurationError {
+            message: format!("Failed to fetch deployment info (HTTP {status}): {body}"),
+        }));
+    }
+
+    response
+        .json()
+        .await
+        .into_alien_error()
+        .context(ErrorData::ConfigurationError {
+            message: "Failed to parse deployment info response".to_string(),
+        })
 }
 
 async fn resolve_remote_deployment_id(

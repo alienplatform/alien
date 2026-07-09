@@ -221,6 +221,7 @@ mod tests {
             "prod",
             "--token-file",
             "/run/alien/token",
+            "--json",
         ])
         .unwrap();
 
@@ -231,6 +232,7 @@ mod tests {
             args.token_file.as_deref(),
             Some(std::path::Path::new("/run/alien/token"))
         );
+        assert!(args.json);
     }
 
     #[test]

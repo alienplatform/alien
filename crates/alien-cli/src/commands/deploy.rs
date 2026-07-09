@@ -15,8 +15,8 @@ use crate::deployment_tracking::{validate_token, DeploymentToken, DeploymentTrac
 use crate::error::{ErrorData, Result};
 use crate::execution_context::ExecutionMode;
 use crate::ui::{command, contextual_heading, dim_label, success_line, FixedSteps};
-use alien_cli_common::network::{self, NetworkArgs};
-use alien_core::{ClientConfig, DeploymentState, DeploymentStatus, Platform};
+use alien_cli_common::network::{self, NetworkArgs, NetworkMode};
+use alien_core::{ClientConfig, DeploymentState, DeploymentStatus, NetworkSettings, Platform};
 use alien_deployment::loop_contract::{LoopOperation, LoopOutcome, LoopStopReason};
 use alien_deployment::manager_api_transport::{
     acquire_deployment, acquire_setup_run_deployment, final_reconcile, release_deployment,
@@ -25,9 +25,12 @@ use alien_deployment::manager_api_transport::{
 use alien_deployment::runner::{RunnerPolicy, RunnerResult};
 use alien_error::{AlienError, Context, IntoAlienError};
 use alien_platform_api::Client as SdkClient;
+use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine as _};
 use clap::Parser;
 use reqwest::header::{HeaderMap, HeaderValue, AUTHORIZATION, USER_AGENT};
+use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
+use std::path::{Path, PathBuf};
 use std::str::FromStr;
 use tracing::info;
 use uuid::Uuid;
@@ -37,7 +40,13 @@ use uuid::Uuid;
     about = "Provision and update a customer deployment",
     long_about = "Provision and update a customer deployment in their cloud account.",
     after_help = "EXAMPLES:
-    # Set up a new customer deployment
+    # Deploy to your own AWS environment
+    alien deploy --name production --platform aws --secret-input descopeAccessKey=...
+
+    # Create a Machines deployment and print a host join command
+    alien deploy --name eu-prod --machines
+
+    # Set up a deployment from a customer deployment-group token
     alien deploy --token dg_abc123... --name production --platform aws
 
     # Deploy an existing deployment (uses stored API key)
@@ -53,11 +62,33 @@ pub struct DeployArgs {
 
     /// Deployment name for identification in tracking
     #[arg(long)]
-    pub name: String,
+    pub name: Option<String>,
 
-    /// Target platform for the deployment (aws, gcp, azure)
+    /// Target platform for the deployment (aws, gcp, azure, machines)
+    #[arg(long, conflicts_with = "machines")]
+    pub platform: Option<String>,
+
+    /// Create or update a Machines deployment and print a host join command
     #[arg(long)]
-    pub platform: String,
+    pub machines: bool,
+
+    /// TOML file containing deployment settings.
+    #[arg(long)]
+    pub config: Option<PathBuf>,
+
+    /// Stack input value for setup (id=value).
+    #[arg(long = "input")]
+    pub input_values: Vec<String>,
+
+    /// Secret stack input value for setup (id=value).
+    #[arg(long = "secret-input")]
+    pub secret_input_values: Vec<String>,
+
+    /// Public subdomain for deployments in your own environment.
+    ///
+    /// This is only accepted when creating a new deployment without --token.
+    #[arg(long)]
+    pub public_subdomain: Option<String>,
 
     /// Physical-name prefix for generated cloud resources.
     /// Omit to let the manager generate one.
@@ -85,6 +116,249 @@ pub struct DeployArgs {
     pub network: NetworkArgs,
 }
 
+#[derive(Debug, Clone)]
+struct ResolvedDeployArgs {
+    name: String,
+    platform: String,
+    platform_enum: Platform,
+    network_settings: Option<NetworkSettings>,
+    input_values: HashMap<String, serde_json::Value>,
+    public_subdomain: Option<String>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct DeployConfigFile {
+    name: Option<String>,
+    platform: Option<String>,
+    network: Option<DeployConfigNetwork>,
+    inputs: Option<HashMap<String, String>>,
+    secret_inputs: Option<HashMap<String, String>>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(tag = "type", rename_all = "kebab-case", deny_unknown_fields)]
+enum DeployConfigNetwork {
+    UseDefault,
+    Create {
+        cidr: Option<String>,
+        #[serde(default = "default_config_availability_zones")]
+        availability_zones: u8,
+    },
+    ByoVpcAws {
+        vpc_id: String,
+        public_subnet_ids: Vec<String>,
+        private_subnet_ids: Vec<String>,
+        #[serde(default)]
+        security_group_ids: Vec<String>,
+    },
+    ByoVpcGcp {
+        network_name: String,
+        subnet_name: String,
+        region: String,
+    },
+    ByoVnetAzure {
+        vnet_resource_id: String,
+        public_subnet_name: String,
+        private_subnet_name: String,
+    },
+}
+
+fn default_config_availability_zones() -> u8 {
+    2
+}
+
+impl From<DeployConfigNetwork> for NetworkSettings {
+    fn from(value: DeployConfigNetwork) -> Self {
+        match value {
+            DeployConfigNetwork::UseDefault => NetworkSettings::UseDefault,
+            DeployConfigNetwork::Create {
+                cidr,
+                availability_zones,
+            } => NetworkSettings::Create {
+                cidr,
+                availability_zones,
+            },
+            DeployConfigNetwork::ByoVpcAws {
+                vpc_id,
+                public_subnet_ids,
+                private_subnet_ids,
+                security_group_ids,
+            } => NetworkSettings::ByoVpcAws {
+                vpc_id,
+                public_subnet_ids,
+                private_subnet_ids,
+                security_group_ids,
+            },
+            DeployConfigNetwork::ByoVpcGcp {
+                network_name,
+                subnet_name,
+                region,
+            } => NetworkSettings::ByoVpcGcp {
+                network_name,
+                subnet_name,
+                region,
+            },
+            DeployConfigNetwork::ByoVnetAzure {
+                vnet_resource_id,
+                public_subnet_name,
+                private_subnet_name,
+            } => NetworkSettings::ByoVnetAzure {
+                vnet_resource_id,
+                public_subnet_name,
+                private_subnet_name,
+                application_gateway_subnet_name: None,
+                private_endpoint_subnet_name: None,
+            },
+        }
+    }
+}
+
+fn resolve_deploy_args(args: &DeployArgs) -> Result<ResolvedDeployArgs> {
+    let config = match args.config.as_ref() {
+        Some(path) => Some(read_deploy_config(path)?),
+        None => None,
+    };
+
+    let platform = if args.machines {
+        "machines".to_string()
+    } else {
+        args.platform
+            .clone()
+            .or_else(|| config.as_ref().and_then(|config| config.platform.clone()))
+            .ok_or_else(|| {
+                AlienError::new(ErrorData::ValidationError {
+                    field: "platform".to_string(),
+                    message: "--platform, --machines, or config field `platform` is required."
+                        .to_string(),
+                })
+            })?
+    };
+
+    let platform_enum = Platform::from_str(&platform).map_err(|e| {
+        AlienError::new(ErrorData::ValidationError {
+            field: "platform".to_string(),
+            message: e,
+        })
+    })?;
+
+    let name = args
+        .name
+        .clone()
+        .or_else(|| config.as_ref().and_then(|config| config.name.clone()))
+        .ok_or_else(|| {
+            AlienError::new(ErrorData::ValidationError {
+                field: "name".to_string(),
+                message: "--name or config field `name` is required.".to_string(),
+            })
+        })?;
+
+    let network_settings = resolve_network_settings(args, config.as_ref(), &platform)?;
+    let input_values = collect_raw_input_values(
+        config.as_ref(),
+        &args.input_values,
+        &args.secret_input_values,
+    )?;
+    if args.token.is_some() && args.public_subdomain.is_some() {
+        return Err(AlienError::new(ErrorData::ValidationError {
+            field: "public-subdomain".to_string(),
+            message:
+                "--public-subdomain is only supported when creating a deployment without --token."
+                    .to_string(),
+        }));
+    }
+
+    Ok(ResolvedDeployArgs {
+        name,
+        platform,
+        platform_enum,
+        network_settings,
+        input_values,
+        public_subdomain: args.public_subdomain.clone(),
+    })
+}
+
+fn read_deploy_config(path: &Path) -> Result<DeployConfigFile> {
+    let contents = std::fs::read_to_string(path).into_alien_error().context(
+        ErrorData::FileOperationFailed {
+            operation: "read".to_string(),
+            file_path: path.display().to_string(),
+            reason: "Failed to read deploy config".to_string(),
+        },
+    )?;
+    toml::from_str(&contents)
+        .into_alien_error()
+        .context(ErrorData::ConfigurationError {
+            message: format!("Failed to parse deploy config {}", path.display()),
+        })
+}
+
+fn resolve_network_settings(
+    args: &DeployArgs,
+    config: Option<&DeployConfigFile>,
+    platform: &str,
+) -> Result<Option<NetworkSettings>> {
+    let cli_network = network::parse_network_settings(&args.network, platform).map_err(|e| {
+        AlienError::new(ErrorData::ValidationError {
+            field: "network".to_string(),
+            message: e,
+        })
+    })?;
+    if cli_network.is_some() || args.network.network_mode != NetworkMode::Auto {
+        return Ok(cli_network);
+    }
+
+    Ok(config
+        .and_then(|config| config.network.clone())
+        .map(NetworkSettings::from))
+}
+
+fn collect_raw_input_values(
+    config: Option<&DeployConfigFile>,
+    input_values: &[String],
+    secret_input_values: &[String],
+) -> Result<HashMap<String, serde_json::Value>> {
+    let mut values = HashMap::new();
+
+    if let Some(config_inputs) = config.and_then(|config| config.inputs.as_ref()) {
+        for (id, value) in config_inputs {
+            values.insert(id.clone(), serde_json::Value::String(value.clone()));
+        }
+    }
+    if let Some(config_inputs) = config.and_then(|config| config.secret_inputs.as_ref()) {
+        for (id, value) in config_inputs {
+            values.insert(id.clone(), serde_json::Value::String(value.clone()));
+        }
+    }
+    for input in input_values {
+        let (id, value) = parse_stack_input_arg(input, "--input")?;
+        values.insert(id, serde_json::Value::String(value));
+    }
+    for input in secret_input_values {
+        let (id, value) = parse_stack_input_arg(input, "--secret-input")?;
+        values.insert(id, serde_json::Value::String(value));
+    }
+
+    Ok(values)
+}
+
+fn parse_stack_input_arg(input: &str, flag: &str) -> Result<(String, String)> {
+    let Some((id, value)) = input.split_once('=') else {
+        return Err(AlienError::new(ErrorData::ValidationError {
+            field: flag.trim_start_matches("--").to_string(),
+            message: format!("Invalid {flag} format: '{input}'. Use id=value"),
+        }));
+    };
+    let id = id.trim();
+    if id.is_empty() {
+        return Err(AlienError::new(ErrorData::ValidationError {
+            field: flag.trim_start_matches("--").to_string(),
+            message: format!("Invalid {flag} format: input id cannot be empty"),
+        }));
+    }
+    Ok((id.to_string(), value.to_string()))
+}
+
 /// Create authenticated platform client
 fn create_platform_client(api_key: &str, base_url: &str) -> Result<SdkClient> {
     let mut headers = HeaderMap::new();
@@ -109,48 +383,552 @@ fn create_platform_client(api_key: &str, base_url: &str) -> Result<SdkClient> {
     Ok(SdkClient::new_with_client(base_url, http_client))
 }
 
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct ApiDeploymentGroup {
+    id: String,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct FirstPartyDeploymentSession {
+    token: String,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct CreateDeploymentApiResponse {
+    deployment: CreateDeploymentApiDeployment,
+    token: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct CreateDeploymentApiDeployment {
+    id: String,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct MachinesJoinTokenResponse {
+    join_token: String,
+    control_plane_url: Option<String>,
+    cluster_id: Option<String>,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct WrappedMachinesJoinToken<'a> {
+    join_token: &'a str,
+    control_plane_url: &'a str,
+    cluster_id: &'a str,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct DeploymentInfoResponse {
+    packages: Option<DeploymentInfoPackages>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct DeploymentInfoPackages {
+    cli: Option<DeploymentInfoCliPackage>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct DeploymentInfoCliPackage {
+    command_name: Option<String>,
+    install_scripts: Option<DeploymentInfoInstallScripts>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct DeploymentInfoInstallScripts {
+    linux: Option<String>,
+}
+
+async fn create_self_deployment(
+    ctx: &ExecutionMode,
+    tracker: &mut DeploymentTracker,
+    resolved_args: &ResolvedDeployArgs,
+    args: &DeployArgs,
+) -> Result<crate::deployment_tracking::TrackedDeployment> {
+    if ctx.is_standalone() {
+        return Err(AlienError::new(ErrorData::ValidationError {
+            field: "token".to_string(),
+            message: "--token is required when creating a deployment against a standalone manager."
+                .to_string(),
+        }));
+    }
+
+    let base_url = ctx.base_url();
+    let auth = ctx.auth_http().await?;
+    let workspace = ctx.resolve_platform_workspace_context(true).await?;
+    let (project_id, _project_link) = ctx.resolve_project(None, true).await?;
+
+    let deployment_group = ensure_self_deployment_group(
+        &auth.client,
+        &base_url,
+        workspace.query.as_deref(),
+        &resolved_args.name,
+        &project_id,
+    )
+    .await?;
+    let session = create_first_party_deployment_session(
+        &auth.client,
+        &base_url,
+        workspace.query.as_deref(),
+        &deployment_group.id,
+    )
+    .await?;
+
+    if !resolved_args.input_values.is_empty() {
+        set_first_party_deployment_inputs(
+            &base_url,
+            &session.token,
+            &resolved_args.platform,
+            &resolved_args.input_values,
+        )
+        .await?;
+    }
+
+    let create_response = create_deployment_with_group_session(
+        &base_url,
+        &session.token,
+        resolved_args,
+        args,
+        &project_id,
+    )
+    .await?;
+    let deployment_token = create_response.token.ok_or_else(|| {
+        AlienError::new(ErrorData::ConfigurationError {
+            message: "Server did not return deployment token".to_string(),
+        })
+    })?;
+
+    info!("   Deployment created: {}", create_response.deployment.id);
+    tracker
+        .add_deployment(resolved_args.name.clone(), deployment_token, &base_url)
+        .await
+        .context(ErrorData::ConfigurationError {
+            message: "Failed to track newly created deployment".to_string(),
+        })
+}
+
+async fn ensure_self_deployment_group(
+    http_client: &reqwest::Client,
+    base_url: &str,
+    workspace: Option<&str>,
+    name: &str,
+    project_id: &str,
+) -> Result<ApiDeploymentGroup> {
+    let url = api_url(base_url, "/v1/deployment-groups/by-name", workspace)?;
+    let response = http_client
+        .put(url)
+        .json(&serde_json::json!({
+            "name": name,
+            "project": project_id,
+            "maxDeployments": 1,
+        }))
+        .send()
+        .await
+        .into_alien_error()
+        .context(ErrorData::ConfigurationError {
+            message: "Failed to ensure deployment group".to_string(),
+        })?;
+    parse_api_response(response, "Failed to ensure deployment group").await
+}
+
+async fn create_first_party_deployment_session(
+    http_client: &reqwest::Client,
+    base_url: &str,
+    workspace: Option<&str>,
+    deployment_group_id: &str,
+) -> Result<FirstPartyDeploymentSession> {
+    let path = format!(
+        "/v1/deployment-groups/{}/first-party-session",
+        urlencoding::encode(deployment_group_id)
+    );
+    let url = api_url(base_url, &path, workspace)?;
+    let response = http_client
+        .post(url)
+        .send()
+        .await
+        .into_alien_error()
+        .context(ErrorData::ConfigurationError {
+            message: "Failed to create first-party deployment session".to_string(),
+        })?;
+    parse_api_response(response, "Failed to create first-party deployment session").await
+}
+
+async fn set_first_party_deployment_inputs(
+    base_url: &str,
+    session_token: &str,
+    platform: &str,
+    input_values: &HashMap<String, serde_json::Value>,
+) -> Result<()> {
+    let http_client = create_platform_http_client(session_token)?;
+    let url = api_url(base_url, "/v1/deployments/first-party-inputs", None)?;
+    let response = http_client
+        .put(url)
+        .json(&serde_json::json!({
+            "platform": platform,
+            "inputValues": input_values,
+        }))
+        .send()
+        .await
+        .into_alien_error()
+        .context(ErrorData::ConfigurationError {
+            message: "Failed to set first-party deployment inputs".to_string(),
+        })?;
+    parse_empty_api_response(response, "Failed to set first-party deployment inputs").await
+}
+
+async fn create_deployment_with_group_session(
+    base_url: &str,
+    session_token: &str,
+    resolved_args: &ResolvedDeployArgs,
+    args: &DeployArgs,
+    project_id: &str,
+) -> Result<CreateDeploymentApiResponse> {
+    let http_client = create_platform_http_client(session_token)?;
+    let stack_settings = deployment_stack_settings_json(resolved_args, args)?;
+    let mut body = serde_json::json!({
+        "name": resolved_args.name,
+        "project": project_id,
+        "platform": resolved_args.platform,
+        "stackSettings": stack_settings,
+        "inputValues": {},
+        "setupMethod": "cli",
+    });
+
+    if let Some(resource_prefix) = args.resource_prefix.as_ref() {
+        body["resourcePrefix"] = serde_json::Value::String(resource_prefix.clone());
+    }
+    if let Some(public_subdomain) = resolved_args.public_subdomain.as_ref() {
+        body["publicSubdomain"] = serde_json::Value::String(public_subdomain.clone());
+    }
+
+    let url = api_url(base_url, "/v1/deployments", None)?;
+    let response = http_client
+        .post(url)
+        .json(&body)
+        .send()
+        .await
+        .into_alien_error()
+        .context(ErrorData::ConfigurationError {
+            message: "Failed to create deployment".to_string(),
+        })?;
+    parse_api_response(response, "Failed to create deployment").await
+}
+
+fn deployment_stack_settings_json(
+    resolved_args: &ResolvedDeployArgs,
+    args: &DeployArgs,
+) -> Result<serde_json::Value> {
+    let mut settings = serde_json::json!({
+        "deploymentModel": if resolved_args.platform == "aws" { "push" } else { "pull" },
+        "heartbeats": if args.no_heartbeat { "off" } else { "on" },
+        "telemetry": match args.monitoring {
+            MonitoringMode::Off => "off",
+            MonitoringMode::Auto => "auto",
+        },
+        "updates": "auto",
+    });
+
+    if let Some(network_settings) = resolved_args.network_settings.as_ref() {
+        settings["network"] = serde_json::to_value(network_settings)
+            .into_alien_error()
+            .context(ErrorData::ConfigurationError {
+                message: "Failed to serialize network settings".to_string(),
+            })?;
+    }
+
+    Ok(settings)
+}
+
+async fn create_machines_join_command(
+    base_url: &str,
+    deployment_token: &str,
+    deployment_id: &str,
+    platform: Platform,
+) -> Result<String> {
+    let info = fetch_deployment_info(base_url, deployment_token, platform)
+        .await
+        .ok();
+    let join_token = create_machines_join_token(base_url, deployment_token, deployment_id).await?;
+    let cli_name = info
+        .as_ref()
+        .and_then(|info| info.packages.as_ref())
+        .and_then(|packages| packages.cli.as_ref())
+        .and_then(|cli| cli.command_name.as_deref())
+        .unwrap_or("alien-deploy");
+    let install_script_url = info
+        .as_ref()
+        .and_then(|info| info.packages.as_ref())
+        .and_then(|packages| packages.cli.as_ref())
+        .and_then(|cli| cli.install_scripts.as_ref())
+        .and_then(|scripts| scripts.linux.as_deref());
+
+    Ok(machines_join_command(
+        cli_name,
+        install_script_url,
+        &join_token,
+    ))
+}
+
+async fn fetch_deployment_info(
+    base_url: &str,
+    token: &str,
+    platform: Platform,
+) -> Result<DeploymentInfoResponse> {
+    let http_client = create_platform_http_client(token)?;
+    let mut url = api_url(base_url, "/v1/deployment-info", None)?;
+    url.query_pairs_mut()
+        .append_pair("platform", platform.as_str());
+    let response = http_client
+        .get(url)
+        .send()
+        .await
+        .into_alien_error()
+        .context(ErrorData::ConfigurationError {
+            message: "Failed to fetch deployment info".to_string(),
+        })?;
+    parse_api_response(response, "Failed to fetch deployment info").await
+}
+
+async fn create_machines_join_token(
+    base_url: &str,
+    token: &str,
+    deployment_id: &str,
+) -> Result<String> {
+    let http_client = create_platform_http_client(token)?;
+    let path = format!(
+        "/v1/machines/deployments/{}/join-tokens/rotate",
+        urlencoding::encode(deployment_id)
+    );
+    let response = http_client
+        .post(api_url(base_url, &path, None)?)
+        .send()
+        .await
+        .into_alien_error()
+        .context(ErrorData::ConfigurationError {
+            message: "Failed to create Machines join token".to_string(),
+        })?;
+    let response: MachinesJoinTokenResponse =
+        parse_api_response(response, "Failed to create Machines join token").await?;
+    normalize_machines_join_token_response(response)
+}
+
+fn normalize_machines_join_token_response(response: MachinesJoinTokenResponse) -> Result<String> {
+    let join_token = response.join_token.trim();
+    if join_token.is_empty() {
+        return Err(AlienError::new(ErrorData::ConfigurationError {
+            message: "Platform API returned an empty Machines join token".to_string(),
+        }));
+    }
+    if join_token.starts_with("aj1_") {
+        return Ok(join_token.to_string());
+    }
+
+    let control_plane_url = response
+        .control_plane_url
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty());
+    let cluster_id = response
+        .cluster_id
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty());
+
+    match (control_plane_url, cluster_id) {
+        (Some(control_plane_url), Some(cluster_id)) => {
+            validate_machines_control_plane_url(control_plane_url)?;
+            let payload = WrappedMachinesJoinToken {
+                join_token,
+                control_plane_url,
+                cluster_id,
+            };
+            let json = serde_json::to_vec(&payload).into_alien_error().context(
+                ErrorData::ConfigurationError {
+                    message: "Failed to encode Machines join token context".to_string(),
+                },
+            )?;
+            Ok(format!("aj1_{}", URL_SAFE_NO_PAD.encode(json)))
+        }
+        _ => Err(AlienError::new(ErrorData::ConfigurationError {
+            message:
+                "Platform API returned a raw Machines join token without control plane context"
+                    .to_string(),
+        })),
+    }
+}
+
+fn validate_machines_control_plane_url(value: &str) -> Result<()> {
+    let url = reqwest::Url::parse(value).map_err(|e| {
+        AlienError::new(ErrorData::ConfigurationError {
+            message: format!("Platform API returned an invalid Machines control plane URL: {e}"),
+        })
+    })?;
+    if !matches!(url.scheme(), "http" | "https") || url.host_str().is_none() {
+        return Err(AlienError::new(ErrorData::ConfigurationError {
+            message: "Platform API returned an invalid Machines control plane URL".to_string(),
+        }));
+    }
+    Ok(())
+}
+
+fn machines_join_command(
+    cli_name: &str,
+    install_script_url: Option<&str>,
+    join_token: &str,
+) -> String {
+    if let Some(install_script_url) = install_script_url {
+        return format!(
+            "curl -fsSL {} | sudo bash -s -- join --token {}",
+            shell_single_quote(install_script_url),
+            shell_single_quote(join_token)
+        );
+    }
+
+    format!(
+        "sudo {cli_name} join --token {}",
+        shell_single_quote(join_token)
+    )
+}
+
+fn shell_single_quote(value: &str) -> String {
+    format!("'{}'", value.replace('\'', "'\"'\"'"))
+}
+
+fn api_url(base_url: &str, path: &str, workspace: Option<&str>) -> Result<reqwest::Url> {
+    let mut url = reqwest::Url::parse(&format!("{}{}", base_url.trim_end_matches('/'), path))
+        .into_alien_error()
+        .context(ErrorData::ConfigurationError {
+            message: "Invalid platform API base URL".to_string(),
+        })?;
+    if let Some(workspace) = workspace {
+        url.query_pairs_mut().append_pair("workspace", workspace);
+    }
+    Ok(url)
+}
+
+fn create_platform_http_client(token: &str) -> Result<reqwest::Client> {
+    let mut headers = HeaderMap::new();
+    headers.insert(
+        AUTHORIZATION,
+        HeaderValue::from_str(&format!("Bearer {}", token))
+            .into_alien_error()
+            .context(ErrorData::ConfigurationError {
+                message: "Invalid authorization header value".to_string(),
+            })?,
+    );
+    headers.insert(USER_AGENT, HeaderValue::from_static("alien-cli"));
+
+    reqwest::Client::builder()
+        .default_headers(headers)
+        .build()
+        .into_alien_error()
+        .context(ErrorData::ConfigurationError {
+            message: "Failed to create HTTP client".to_string(),
+        })
+}
+
+async fn parse_api_response<T: for<'de> Deserialize<'de>>(
+    response: reqwest::Response,
+    message: &str,
+) -> Result<T> {
+    if !response.status().is_success() {
+        let status = response.status();
+        let body = response.text().await.unwrap_or_default();
+        return Err(AlienError::new(ErrorData::ConfigurationError {
+            message: format!("{message} (HTTP {status}): {body}"),
+        }));
+    }
+
+    response
+        .json()
+        .await
+        .into_alien_error()
+        .context(ErrorData::ConfigurationError {
+            message: format!("{message}: failed to parse response"),
+        })
+}
+
+async fn parse_empty_api_response(response: reqwest::Response, message: &str) -> Result<()> {
+    if !response.status().is_success() {
+        let status = response.status();
+        let body = response.text().await.unwrap_or_default();
+        return Err(AlienError::new(ErrorData::ConfigurationError {
+            message: format!("{message} (HTTP {status}): {body}"),
+        }));
+    }
+    Ok(())
+}
+
 /// Main entry point for deploy command
 pub async fn deploy_task(args: DeployArgs, ctx: ExecutionMode) -> Result<()> {
+    let resolved_args = resolve_deploy_args(&args)?;
+
     if let ExecutionMode::Dev { port } = ctx {
-        return deploy_local_dev_task(args, port).await;
+        return deploy_local_dev_task(resolved_args, port).await;
     }
 
     info!("Starting deploy command");
     println!(
         "{}",
-        contextual_heading("Deploying", &args.name, &[("to", &args.platform)])
+        contextual_heading(
+            "Deploying",
+            &resolved_args.name,
+            &[("to", &resolved_args.platform)]
+        )
     );
-    let steps = FixedSteps::new(&[
-        "Resolve deployment",
-        "Connect to manager",
-        "Provision resources",
-        "Activate",
-    ]);
-    steps.activate(0, Some(args.name.clone()));
+    let steps = if resolved_args.platform_enum == Platform::Machines {
+        FixedSteps::new(&["Resolve deployment", "Create join command"])
+    } else {
+        FixedSteps::new(&[
+            "Resolve deployment",
+            "Connect to manager",
+            "Provision resources",
+            "Activate",
+        ])
+    };
+    steps.activate(0, Some(resolved_args.name.clone()));
 
-    // Parse platform
-    let platform = Platform::from_str(&args.platform).map_err(|e| {
-        AlienError::new(ErrorData::ValidationError {
-            field: "platform".to_string(),
-            message: e,
-        })
-    })?;
+    let platform = resolved_args.platform_enum;
 
     let base_url = ctx.base_url();
 
     // Step 1: Load or register the deployment (via platform API)
     let mut tracker = DeploymentTracker::new()?;
-    let tracked_deployment = match tracker.get_deployment(&args.name) {
+    let tracked_deployment = match tracker.get_deployment(&resolved_args.name) {
         Some(deployment) => {
-            info!("Found tracked deployment '{}'", args.name);
+            info!("Found tracked deployment '{}'", resolved_args.name);
+            if resolved_args.public_subdomain.is_some() {
+                return Err(AlienError::new(ErrorData::ValidationError {
+                    field: "public-subdomain".to_string(),
+                    message: "--public-subdomain can only be set when creating a new deployment."
+                        .to_string(),
+                }));
+            }
 
             // If a token was provided, check if it's different from the stored one
             if let Some(ref provided_token) = args.token {
                 if deployment.api_key != *provided_token {
-                    info!("Updating stored API key for deployment '{}'", args.name);
-                    tracker.remove_deployment(&args.name)?;
+                    info!(
+                        "Updating stored API key for deployment '{}'",
+                        resolved_args.name
+                    );
+                    tracker.remove_deployment(&resolved_args.name)?;
                     tracker
-                        .add_deployment(args.name.clone(), provided_token.clone(), &base_url)
+                        .add_deployment(
+                            resolved_args.name.clone(),
+                            provided_token.clone(),
+                            &base_url,
+                        )
                         .await
                         .context(ErrorData::ConfigurationError {
                             message: "Failed to update deployment API key".to_string(),
@@ -163,77 +941,63 @@ pub async fn deploy_task(args: DeployArgs, ctx: ExecutionMode) -> Result<()> {
             }
         }
         None => {
-            info!("Deployment '{}' not tracked yet, registering...", args.name);
+            info!(
+                "Deployment '{}' not tracked yet, registering...",
+                resolved_args.name
+            );
 
-            let token = args.token.as_ref().ok_or_else(|| {
-                AlienError::new(ErrorData::ValidationError {
-                    field: "token".to_string(),
-                    message: format!(
-                        "API key is required when deploying to a new deployment '{}'",
-                        args.name
-                    ),
-                })
-            })?;
+            if let Some(token) = args.token.as_ref() {
+                let token_info = validate_token(token, &base_url).await?;
 
-            let token_info = validate_token(token, &base_url).await?;
+                match token_info {
+                    DeploymentToken::Deployment { .. } => {
+                        info!("   Using deployment token");
+                        tracker
+                            .add_deployment(resolved_args.name.clone(), token.clone(), &base_url)
+                            .await
+                            .context(ErrorData::ConfigurationError {
+                                message: "Failed to register deployment".to_string(),
+                            })?
+                    }
+                    DeploymentToken::DeploymentGroup {
+                        deployment_group_name,
+                        workspace_name,
+                        project_id,
+                        ..
+                    } => {
+                        info!(
+                            "   Using deployment group token for group '{}'",
+                            deployment_group_name
+                        );
+                        info!("   Creating new deployment '{}'...", resolved_args.name);
 
-            match token_info {
-                DeploymentToken::Deployment { .. } => {
-                    info!("   Using deployment token");
-                    tracker
-                        .add_deployment(args.name.clone(), token.clone(), &base_url)
-                        .await
-                        .context(ErrorData::ConfigurationError {
-                            message: "Failed to register deployment".to_string(),
-                        })?
-                }
-                DeploymentToken::DeploymentGroup {
-                    deployment_group_name,
-                    workspace_name,
-                    project_id,
-                    ..
-                } => {
-                    info!(
-                        "   Using deployment group token for group '{}'",
-                        deployment_group_name
-                    );
-                    info!("   Creating new deployment '{}'...", args.name);
+                        let sdk_client = create_platform_client(token, &base_url)?;
 
-                    let sdk_client = create_platform_client(token, &base_url)?;
+                        let sdk_network = resolved_args
+                            .network_settings
+                            .clone()
+                            .map(|network_settings| {
+                                let json = serde_json::to_value(&network_settings)
+                                    .into_alien_error()
+                                    .context(ErrorData::ConfigurationError {
+                                        message: "Failed to serialize network settings".to_string(),
+                                    })?;
+                                serde_json::from_value(json).into_alien_error().context(
+                                    ErrorData::ConfigurationError {
+                                        message: "Failed to convert network settings to SDK type"
+                                            .to_string(),
+                                    },
+                                )
+                            })
+                            .transpose()?;
 
-                    let network_settings =
-                        network::parse_network_settings(&args.network, &args.platform).map_err(
-                            |e| {
-                                AlienError::new(ErrorData::ValidationError {
-                                    field: "network".to_string(),
-                                    message: e,
-                                })
-                            },
-                        )?;
-
-                    let sdk_network = network_settings
-                        .map(|ns| {
-                            let json = serde_json::to_value(&ns).into_alien_error().context(
-                                ErrorData::ConfigurationError {
-                                    message: "Failed to serialize network settings".to_string(),
-                                },
-                            )?;
-                            serde_json::from_value(json).into_alien_error().context(
-                                ErrorData::ConfigurationError {
-                                    message: "Failed to convert network settings to SDK type"
-                                        .to_string(),
-                                },
-                            )
-                        })
-                        .transpose()?;
-
-                    // AWS managed deployments require push model; pull is for K8s/manager-side.
-                    let deployment_model = if args.platform == "aws" {
-                        alien_platform_api::types::NewDeploymentRequestStackSettingsDeploymentModel::Push
-                    } else {
-                        alien_platform_api::types::NewDeploymentRequestStackSettingsDeploymentModel::Pull
-                    };
-                    let stack_settings = alien_platform_api::types::NewDeploymentRequestStackSettings {
+                        // AWS managed deployments require push model; pull is for K8s/manager-side.
+                        let deployment_model = if resolved_args.platform == "aws" {
+                            alien_platform_api::types::NewDeploymentRequestStackSettingsDeploymentModel::Push
+                        } else {
+                            alien_platform_api::types::NewDeploymentRequestStackSettingsDeploymentModel::Pull
+                        };
+                        let stack_settings = alien_platform_api::types::NewDeploymentRequestStackSettings {
                         compute: None,
                         deployment_model: Some(deployment_model),
                         heartbeats: Some(if args.no_heartbeat {
@@ -252,101 +1016,106 @@ pub async fn deploy_task(args: DeployArgs, ctx: ExecutionMode) -> Result<()> {
                         kubernetes: None,
                     };
 
-                    let create_response = sdk_client
-                        .create_deployment()
-                        .workspace(&workspace_name)
-                        .body(alien_platform_api::types::NewDeploymentRequest {
-                            name: args.name.clone().try_into().into_alien_error().context(
-                                ErrorData::ValidationError {
-                                    field: "name".to_string(),
-                                    message: "Invalid deployment name".to_string(),
-                                },
-                            )?,
-                            platform: args
-                                .platform
-                                .clone()
-                                .as_str()
-                                .try_into()
-                                .into_alien_error()
-                                .context(ErrorData::ValidationError {
-                                    field: "platform".to_string(),
-                                    message: "Invalid platform value".to_string(),
-                                })?,
-                            project: project_id.clone().try_into().into_alien_error().context(
-                                ErrorData::ValidationError {
-                                    field: "project".to_string(),
-                                    message: "Invalid project".to_string(),
-                                },
-                            )?,
-                            stack_settings: Some(stack_settings),
-                            resource_prefix: args
-                                .resource_prefix
-                                .clone()
-                                .map(TryInto::try_into)
-                                .transpose()
-                                .into_alien_error()
-                                .context(ErrorData::ValidationError {
-                                    field: "resource_prefix".to_string(),
-                                    message: "Invalid resource prefix".to_string(),
-                                })?,
-                            manager_id: None,
-                            operator_permission: None,
-                            operator_scope: None,
-                            pinned_release_id: None,
-                            environment_variables: None,
-                            deployment_group_id: None,
-                            environment_info: None,
-                            input_values: HashMap::new(),
-                            public_subdomain: None,
-                            setup_method: None,
-                            setup_metadata: None,
-                        })
-                        .send()
-                        .await
-                        .into_alien_error()
-                        .context(ErrorData::ConfigurationError {
-                            message: "Failed to create deployment with deployment group token"
-                                .to_string(),
-                        })?
-                        .into_inner();
-
-                    let response_json = serde_json::to_value(&create_response)
-                        .into_alien_error()
-                        .context(ErrorData::ConfigurationError {
-                        message: "Failed to serialize response".to_string(),
-                    })?;
-
-                    let deployment_id = response_json
-                        .get("deployment")
-                        .and_then(|d| d.get("id"))
-                        .and_then(|id| id.as_str())
-                        .ok_or_else(|| {
-                            AlienError::new(ErrorData::ConfigurationError {
-                                message: "Failed to extract deployment ID from response"
+                        let create_response = sdk_client
+                            .create_deployment()
+                            .workspace(&workspace_name)
+                            .body(alien_platform_api::types::NewDeploymentRequest {
+                                name: resolved_args
+                                    .name
+                                    .clone()
+                                    .try_into()
+                                    .into_alien_error()
+                                    .context(ErrorData::ValidationError {
+                                        field: "name".to_string(),
+                                        message: "Invalid deployment name".to_string(),
+                                    })?,
+                                platform: resolved_args
+                                    .platform
+                                    .as_str()
+                                    .try_into()
+                                    .into_alien_error()
+                                    .context(ErrorData::ValidationError {
+                                        field: "platform".to_string(),
+                                        message: "Invalid platform value".to_string(),
+                                    })?,
+                                project: project_id.clone().try_into().into_alien_error().context(
+                                    ErrorData::ValidationError {
+                                        field: "project".to_string(),
+                                        message: "Invalid project".to_string(),
+                                    },
+                                )?,
+                                stack_settings: Some(stack_settings),
+                                resource_prefix: args
+                                    .resource_prefix
+                                    .clone()
+                                    .map(TryInto::try_into)
+                                    .transpose()
+                                    .into_alien_error()
+                                    .context(ErrorData::ValidationError {
+                                        field: "resource_prefix".to_string(),
+                                        message: "Invalid resource prefix".to_string(),
+                                    })?,
+                                manager_id: None,
+                                operator_permission: None,
+                                operator_scope: None,
+                                pinned_release_id: None,
+                                environment_variables: None,
+                                deployment_group_id: None,
+                                environment_info: None,
+                                input_values: HashMap::new(),
+                                public_subdomain: None,
+                                setup_method: None,
+                                setup_metadata: None,
+                            })
+                            .send()
+                            .await
+                            .into_alien_error()
+                            .context(ErrorData::ConfigurationError {
+                                message: "Failed to create deployment with deployment group token"
                                     .to_string(),
-                            })
-                        })?
-                        .to_string();
+                            })?
+                            .into_inner();
 
-                    let deployment_token = response_json
-                        .get("token")
-                        .and_then(|t| t.as_str())
-                        .ok_or_else(|| {
-                            AlienError::new(ErrorData::ConfigurationError {
-                                message: "Server did not return deployment token".to_string(),
-                            })
-                        })?
-                        .to_string();
+                        let response_json = serde_json::to_value(&create_response)
+                            .into_alien_error()
+                            .context(ErrorData::ConfigurationError {
+                                message: "Failed to serialize response".to_string(),
+                            })?;
 
-                    info!("   Deployment created: {}", deployment_id);
+                        let deployment_id = response_json
+                            .get("deployment")
+                            .and_then(|d| d.get("id"))
+                            .and_then(|id| id.as_str())
+                            .ok_or_else(|| {
+                                AlienError::new(ErrorData::ConfigurationError {
+                                    message: "Failed to extract deployment ID from response"
+                                        .to_string(),
+                                })
+                            })?
+                            .to_string();
 
-                    tracker
-                        .add_deployment(args.name.clone(), deployment_token, &base_url)
-                        .await
-                        .context(ErrorData::ConfigurationError {
-                            message: "Failed to track newly created deployment".to_string(),
-                        })?
+                        let deployment_token = response_json
+                            .get("token")
+                            .and_then(|t| t.as_str())
+                            .ok_or_else(|| {
+                                AlienError::new(ErrorData::ConfigurationError {
+                                    message: "Server did not return deployment token".to_string(),
+                                })
+                            })?
+                            .to_string();
+
+                        info!("   Deployment created: {}", deployment_id);
+
+                        tracker
+                            .add_deployment(resolved_args.name.clone(), deployment_token, &base_url)
+                            .await
+                            .context(ErrorData::ConfigurationError {
+                                message: "Failed to track newly created deployment".to_string(),
+                            })?
+                    }
                 }
+            } else {
+                create_self_deployment(&ctx, &mut tracker, &resolved_args, &args).await?
             }
         }
     };
@@ -355,15 +1124,35 @@ pub async fn deploy_task(args: DeployArgs, ctx: ExecutionMode) -> Result<()> {
         0,
         Some(format!(
             "{} ({})",
-            args.name, tracked_deployment.deployment_id
+            resolved_args.name, tracked_deployment.deployment_id
         )),
     );
+
+    if platform == Platform::Machines {
+        steps.activate(1, Some("Rotating join token".to_string()));
+        let join_command = create_machines_join_command(
+            &base_url,
+            &tracked_deployment.api_key,
+            &tracked_deployment.deployment_id,
+            resolved_args.platform_enum,
+        )
+        .await?;
+        steps.complete(1, Some("Join command ready".to_string()));
+        drop(steps);
+        println!(
+            "{}",
+            success_line("Machines deployment is ready to join hosts.")
+        );
+        println!();
+        println!("{}", command(&join_command));
+        return Ok(());
+    }
 
     // Step 2: Resolve manager
     steps.activate(1, Some("Discovering manager...".to_string()));
 
     let manager_ctx = ctx
-        .resolve_manager(&tracked_deployment.project_id, &args.platform)
+        .resolve_manager(&tracked_deployment.project_id, &resolved_args.platform)
         .await?;
     // Provisioning calls the manager's sync endpoints, which require
     // `managers.sync` — held by the deployment's own token, not the install
@@ -473,7 +1262,7 @@ pub async fn deploy_task(args: DeployArgs, ctx: ExecutionMode) -> Result<()> {
                     if let Ok(release_json) = resp.json::<serde_json::Value>().await {
                         let stack_for_platform = release_json
                             .get("stack")
-                            .and_then(|s| s.get(args.platform.as_str()))
+                            .and_then(|s| s.get(resolved_args.platform.as_str()))
                             .cloned();
                         if let Some(stack_json) = stack_for_platform {
                             if let Ok(stack) =
@@ -681,7 +1470,7 @@ pub async fn deploy_task(args: DeployArgs, ctx: ExecutionMode) -> Result<()> {
     println!(
         "{} {} ({})",
         dim_label("Deployment"),
-        args.name,
+        resolved_args.name,
         tracked_deployment.deployment_id
     );
     println!(
@@ -709,7 +1498,7 @@ fn describe_failed_status(status: &alien_deployment::DeploymentStatus) -> &'stat
     }
 }
 
-async fn deploy_local_dev_task(args: DeployArgs, port: u16) -> Result<()> {
+async fn deploy_local_dev_task(args: ResolvedDeployArgs, port: u16) -> Result<()> {
     if args.platform != "local" {
         return Err(AlienError::new(ErrorData::ValidationError {
             field: "platform".to_string(),

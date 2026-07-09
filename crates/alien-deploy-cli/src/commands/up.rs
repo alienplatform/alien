@@ -291,10 +291,68 @@ mod tests {
     }
 
     #[test]
+    fn deployment_readiness_not_ready_blocks_with_check_codes() {
+        let info = DeploymentInfoResponse {
+            setup_config: None,
+            readiness: Some(DeploymentReadiness {
+                status: "notReady".to_string(),
+                checks: vec![
+                    DeploymentReadinessCheck {
+                        code: "MACHINE_BUNDLE_ARTIFACTS".to_string(),
+                        status: "failed".to_string(),
+                        message: "Machine bundle manifest is missing linux-x64.".to_string(),
+                    },
+                    DeploymentReadinessCheck {
+                        code: "MANAGER_ACQUIRES_PLATFORM".to_string(),
+                        status: "passed".to_string(),
+                        message: "A machines-capable manager is ready.".to_string(),
+                    },
+                ],
+            }),
+        };
+
+        let error = validate_deployment_readiness(&info, Platform::Machines)
+            .expect_err("notReady readiness must block the deploy");
+        assert!(error.message.contains("machines deployments are not ready"));
+        assert!(error.message.contains("MACHINE_BUNDLE_ARTIFACTS"));
+        assert!(!error.message.contains("MANAGER_ACQUIRES_PLATFORM"));
+    }
+
+    #[test]
+    fn deployment_readiness_unknown_checks_do_not_block() {
+        let info = DeploymentInfoResponse {
+            setup_config: None,
+            readiness: Some(DeploymentReadiness {
+                status: "unknown".to_string(),
+                checks: vec![DeploymentReadinessCheck {
+                    code: "MACHINES_HORIZON_CONTROL_PLANE_REACHABLE".to_string(),
+                    status: "unknown".to_string(),
+                    message: "Horizon control plane reachability could not be confirmed."
+                        .to_string(),
+                }],
+            }),
+        };
+
+        validate_deployment_readiness(&info, Platform::Machines)
+            .expect("unknown readiness must not block the deploy");
+    }
+
+    #[test]
+    fn absent_readiness_does_not_block() {
+        let info = DeploymentInfoResponse {
+            setup_config: None,
+            readiness: None,
+        };
+
+        validate_deployment_readiness(&info, Platform::Machines)
+            .expect("absent readiness document must not block the deploy");
+    }
+
+    #[test]
     fn machines_join_guidance_uses_install_script_when_available() {
         assert_eq!(
             machines_join_command(
-                "isloctl",
+                "acmectl",
                 Some("https://packages.example.com/ws/prj/install.sh"),
                 "aj1_wrapped-token"
             ),
@@ -317,8 +375,8 @@ mod tests {
     #[test]
     fn machines_join_guidance_falls_back_to_installed_cli_without_install_script() {
         assert_eq!(
-            machines_join_command("isloctl", None, "aj1_wrapped-token"),
-            "sudo isloctl join --token 'aj1_wrapped-token'"
+            machines_join_command("acmectl", None, "aj1_wrapped-token"),
+            "sudo acmectl join --token 'aj1_wrapped-token'"
         );
     }
 
@@ -934,16 +992,20 @@ pub async fn up_command(args: UpArgs, embedded_config: Option<&DeployCliConfig>)
     let print_progress = should_print_deploy_progress(platform);
     let base_platform = parse_base_platform(platform, base_platform_str.as_deref())?;
     let public_endpoints = load_public_endpoints(&args, platform, deploy_config.as_ref())?;
-    let deployer_inputs = fetch_deployer_inputs(&resolved.base_url, &token, platform)
-        .await
-        .unwrap_or_else(|error| {
+    let deployer_inputs = match fetch_deployment_info(&resolved.base_url, &token, platform).await {
+        Ok(info) => {
+            validate_deployment_readiness(&info, platform)?;
+            deployer_inputs_from_info(&info, platform)
+        }
+        Err(error) => {
             if !args.input_values.is_empty() || !args.secret_input_values.is_empty() {
                 output::warn(&format!(
                     "Could not load stack input metadata; the platform API will validate supplied inputs: {error}"
                 ));
             }
             Vec::new()
-        });
+        }
+    };
     let stack_input_values = collect_deployer_input_values(
         &deployer_inputs,
         &args.input_values,
@@ -1782,6 +1844,7 @@ fn load_stack_settings(
 #[serde(rename_all = "camelCase")]
 struct DeploymentInfoResponse {
     setup_config: Option<DeploymentInfoSetupConfig>,
+    readiness: Option<DeploymentReadiness>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -1790,11 +1853,26 @@ struct DeploymentInfoSetupConfig {
     inputs: Option<Vec<StackInputDefinition>>,
 }
 
-async fn fetch_deployer_inputs(
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct DeploymentReadiness {
+    status: String,
+    checks: Vec<DeploymentReadinessCheck>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct DeploymentReadinessCheck {
+    code: String,
+    status: String,
+    message: String,
+}
+
+async fn fetch_deployment_info(
     base_url: &str,
     token: &str,
     platform: Platform,
-) -> Result<Vec<StackInputDefinition>> {
+) -> Result<DeploymentInfoResponse> {
     let http_client = {
         use reqwest::header::{HeaderMap, HeaderValue, AUTHORIZATION, USER_AGENT};
 
@@ -1818,9 +1896,18 @@ async fn fetch_deployer_inputs(
             })?
     };
 
-    let url = format!("{}/v1/deployment-info", base_url.trim_end_matches('/'));
+    let mut url = reqwest::Url::parse(&format!(
+        "{}/v1/deployment-info",
+        base_url.trim_end_matches('/')
+    ))
+    .into_alien_error()
+    .context(ErrorData::ConfigurationError {
+        message: "Invalid platform API base URL".to_string(),
+    })?;
+    url.query_pairs_mut()
+        .append_pair("platform", platform.as_str());
     let response = http_client
-        .get(&url)
+        .get(url)
         .send()
         .await
         .into_alien_error()
@@ -1835,22 +1922,58 @@ async fn fetch_deployer_inputs(
         }));
     }
 
-    let info: DeploymentInfoResponse =
-        response
-            .json()
-            .await
-            .into_alien_error()
-            .context(ErrorData::ConfigurationError {
-                message: "Failed to parse deployment info response".to_string(),
-            })?;
+    response
+        .json()
+        .await
+        .into_alien_error()
+        .context(ErrorData::ConfigurationError {
+            message: "Failed to parse deployment info response".to_string(),
+        })
+}
 
-    Ok(info
-        .setup_config
-        .and_then(|setup_config| setup_config.inputs)
+fn deployer_inputs_from_info(
+    info: &DeploymentInfoResponse,
+    platform: Platform,
+) -> Vec<StackInputDefinition> {
+    info.setup_config
+        .as_ref()
+        .and_then(|setup_config| setup_config.inputs.clone())
         .unwrap_or_default()
         .into_iter()
         .filter(|input| stack_input_matches_context(input, platform))
-        .collect())
+        .collect()
+}
+
+fn validate_deployment_readiness(info: &DeploymentInfoResponse, platform: Platform) -> Result<()> {
+    let Some(readiness) = &info.readiness else {
+        return Ok(());
+    };
+    if readiness.status == "notReady" {
+        let failures = readiness
+            .checks
+            .iter()
+            .filter(|check| check.status == "failed")
+            .map(|check| format!("{}: {}", check.code, check.message))
+            .collect::<Vec<_>>()
+            .join("; ");
+        return Err(AlienError::new(ErrorData::ConfigurationError {
+            message: format!(
+                "{} deployments are not ready: {failures}",
+                platform.as_str()
+            ),
+        }));
+    }
+    for check in readiness
+        .checks
+        .iter()
+        .filter(|check| check.status == "unknown")
+    {
+        output::warn(&format!(
+            "Readiness unknown ({}): {}",
+            check.code, check.message
+        ));
+    }
+    Ok(())
 }
 
 fn stack_input_matches_context(input: &StackInputDefinition, platform: Platform) -> bool {

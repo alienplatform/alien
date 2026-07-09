@@ -678,6 +678,33 @@ export type DeploymentInfoInstallContext = {
   targets: { [k: string]: InstallContextTargets };
 };
 
+export const ReadinessStatus = {
+  Ready: "ready",
+  NotReady: "notReady",
+  Unknown: "unknown",
+} as const;
+export type ReadinessStatus = ClosedEnum<typeof ReadinessStatus>;
+
+export const CheckStatus = {
+  Passed: "passed",
+  Failed: "failed",
+  Warning: "warning",
+  Unknown: "unknown",
+} as const;
+export type CheckStatus = ClosedEnum<typeof CheckStatus>;
+
+export type Check = {
+  code: string;
+  status: CheckStatus;
+  message: string;
+  checkedAt: string;
+};
+
+export type Readiness = {
+  status: ReadinessStatus;
+  checks: Array<Check>;
+};
+
 export type DeploymentInfo = {
   /**
    * Type of token used to authenticate this request
@@ -697,6 +724,7 @@ export type DeploymentInfo = {
   installContext: DeploymentInfoInstallContext;
   supportedRegions: SupportedCloudRegions;
   setupConfig?: DeploymentInfoSetupConfig | undefined;
+  readiness?: Readiness | undefined;
 };
 
 /** @internal */
@@ -1460,6 +1488,49 @@ export function deploymentInfoInstallContextFromJSON(
 }
 
 /** @internal */
+export const ReadinessStatus$inboundSchema: z.ZodEnum<typeof ReadinessStatus> =
+  z.enum(ReadinessStatus);
+
+/** @internal */
+export const CheckStatus$inboundSchema: z.ZodEnum<typeof CheckStatus> = z.enum(
+  CheckStatus,
+);
+
+/** @internal */
+export const Check$inboundSchema: z.ZodType<Check, unknown> = z.object({
+  code: z.string(),
+  status: CheckStatus$inboundSchema,
+  message: z.string(),
+  checkedAt: z.string(),
+});
+
+export function checkFromJSON(
+  jsonString: string,
+): SafeParseResult<Check, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => Check$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'Check' from JSON`,
+  );
+}
+
+/** @internal */
+export const Readiness$inboundSchema: z.ZodType<Readiness, unknown> = z.object({
+  status: ReadinessStatus$inboundSchema,
+  checks: z.array(z.lazy(() => Check$inboundSchema)),
+});
+
+export function readinessFromJSON(
+  jsonString: string,
+): SafeParseResult<Readiness, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => Readiness$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'Readiness' from JSON`,
+  );
+}
+
+/** @internal */
 export const DeploymentInfo$inboundSchema: z.ZodType<DeploymentInfo, unknown> =
   z.object({
     tokenType: DeploymentInfoTokenType$inboundSchema,
@@ -1472,6 +1543,7 @@ export const DeploymentInfo$inboundSchema: z.ZodType<DeploymentInfo, unknown> =
     installContext: z.lazy(() => DeploymentInfoInstallContext$inboundSchema),
     supportedRegions: SupportedCloudRegions$inboundSchema,
     setupConfig: DeploymentInfoSetupConfig$inboundSchema.optional(),
+    readiness: z.lazy(() => Readiness$inboundSchema).optional(),
   });
 
 export function deploymentInfoFromJSON(
