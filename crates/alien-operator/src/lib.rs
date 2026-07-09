@@ -137,6 +137,13 @@ pub async fn run_operator_with_cancel_and_debug_loop(
         readiness: readiness.clone(),
     });
 
+    // Die-with-parent: under the launcher, exit if our supervisor dies. macOS
+    // has no PR_SET_PDEATHSIG, and this also backstops the Linux fork→exec race;
+    // a no-op outside the launcher (Kubernetes, tests). Runs on a dedicated OS
+    // thread (not the async runtime, which can starve its timer under load); it
+    // self-exits when `cancel` is tripped, so the handle needs no explicit join.
+    let _parent_death_watch = self_update::spawn_parent_death_watch(cancel.clone());
+
     // Start OTLP server (for local functions to send telemetry).
     // Also serves /livez and /readyz on the same port for Kubernetes probes.
     // Best-effort — a port conflict should not take down the operator.

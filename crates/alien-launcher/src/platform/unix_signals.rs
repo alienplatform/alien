@@ -53,6 +53,16 @@ impl std::fmt::Debug for SignalControls {
     }
 }
 
+/// Serializes tests that deliver a real signal to our own process. Signals are
+/// process-wide, so two self-`SIGTERM` tests running concurrently would each
+/// see the other's signal and break their strict assertions; taking this guard
+/// makes them run one at a time. Test-only.
+#[cfg(test)]
+pub(crate) fn signal_test_guard() -> std::sync::MutexGuard<'static, ()> {
+    static GUARD: std::sync::Mutex<()> = std::sync::Mutex::new(());
+    GUARD.lock().unwrap_or_else(|poisoned| poisoned.into_inner())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -61,6 +71,7 @@ mod tests {
     /// on the next poll, and the flag drains.
     #[test]
     fn sigterm_delivers_stop_once() {
+        let _guard = signal_test_guard();
         let controls = SignalControls::register().expect("registration should succeed");
         assert_eq!(controls.poll(), None, "no signal yet");
 

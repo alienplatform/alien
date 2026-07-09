@@ -3,6 +3,14 @@
 //! Prevents multiple alien-operator instances from running concurrently on the
 //! same machine (or against the same data directory). Uses `flock` on Unix
 //! and `fs2::FileExt` on Windows.
+//!
+//! Under the os-service launcher this lock is also the **hard backstop for
+//! die-with-parent**: if an operator is orphaned when its launcher dies, a
+//! respawned launcher's fresh operator cannot acquire this lock until the
+//! orphan exits and releases it. That guarantees at-most-one operator even if
+//! every soft mechanism fails; the operator's parent-death watch
+//! (`crate::self_update::spawn_parent_death_watch`) exists to keep that
+//! blocking window short (one poll interval) rather than unbounded.
 
 use std::fs::{self, File};
 use std::path::{Path, PathBuf};

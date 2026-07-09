@@ -17,6 +17,7 @@
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicI32, Ordering};
 use std::sync::Once;
+use std::time::Duration;
 
 use alien_core::self_update::{
     backoff_delay, download_dir, failed_dir, failure_path, pending_path, read_json, version_dir,
@@ -28,6 +29,7 @@ use alien_error::{AlienError, Context, IntoAlienError};
 use chrono::Utc;
 use sha2::{Digest, Sha256};
 use tokio::io::AsyncWriteExt;
+use tokio_util::sync::CancellationToken;
 use tracing::{info, warn};
 
 use crate::error::{ErrorData, Result};
@@ -84,6 +86,118 @@ pub fn launcher_version() -> Option<String> {
 
 fn launcher_version_from(env: Option<String>) -> Option<String> {
     env.filter(|value| !value.is_empty())
+}
+
+// ---------------------------------------------------------------------------
+// Die-with-parent watch
+// ---------------------------------------------------------------------------
+//
+// The operator must never outlive its launcher: an orphaned operator would keep
+// the InstanceLock and the state DB, so a respawned launcher's fresh operator
+// could not start. On Linux the launcher installs `PR_SET_PDEATHSIG` between
+// fork and exec, but macOS has no such mechanism, and even on Linux there is a
+// tiny fork→exec race where the launcher can die before the prctl runs. This
+// poll covers both: it samples our parent pid and, the moment the kernel
+// reparents us (launcher gone), triggers a graceful shutdown. The InstanceLock
+// (`crate::lock`) remains the hard backstop — the new operator blocks on it
+// until this orphan exits — and this watch bounds that window to one interval.
+
+/// How often the die-with-parent watch samples `getppid()`. Runs on a dedicated
+/// OS thread (see `spawn_parent_death_watch`), so a short interval is cheap and
+/// bounds how long an orphaned operator lingers.
+#[cfg(unix)]
+const PARENT_WATCH_INTERVAL: Duration = Duration::from_secs(1);
+
+/// Pure decision: the operator is spawned as a direct child of the launcher, so
+/// any change from the parent pid captured at startup means the launcher has
+/// exited and the kernel reparented us (to `init`/`launchd` or a subreaper).
+#[cfg(unix)]
+fn parent_is_gone(original_ppid: i32, current_ppid: i32) -> bool {
+    current_ppid != original_ppid
+}
+
+/// The watch loop, factored out with an injectable `read_ppid` for testing.
+///
+/// Synchronous by design: it runs on a dedicated OS thread (see
+/// `spawn_parent_death_watch`) and MUST NOT depend on the async runtime, so it
+/// sleeps with `std::thread::sleep` and polls the cancel token rather than
+/// awaiting it. Returns when the parent is gone (after cancelling `cancel`) or
+/// when `cancel` is tripped externally (normal shutdown), the latter within one
+/// interval.
+#[cfg(unix)]
+fn run_parent_death_watch(
+    original_ppid: i32,
+    read_ppid: impl Fn() -> i32,
+    interval: Duration,
+    cancel: CancellationToken,
+) {
+    loop {
+        std::thread::sleep(interval);
+        if cancel.is_cancelled() {
+            return;
+        }
+        let current_ppid = read_ppid();
+        if parent_is_gone(original_ppid, current_ppid) {
+            warn!(
+                original_ppid,
+                current_ppid, "launcher parent exited; triggering graceful operator shutdown"
+            );
+            cancel.cancel();
+            return;
+        }
+    }
+}
+
+/// Arm the die-with-parent watch on a **dedicated OS thread**.
+///
+/// Deliberately NOT a tokio task: a `tokio::time::sleep` timer only fires when
+/// the runtime's time driver is scheduled, so under heavy load — blocking DB
+/// work, stalled sync loops occupying every worker — the timer can be *starved*
+/// and fire seconds-to-minutes late, leaving an orphaned operator alive far
+/// longer than the poll interval (observed: minutes, under the concurrent E2E
+/// suite). A plain OS thread with `std::thread::sleep` is immune to runtime
+/// starvation, which is exactly the property a die-with-parent guard needs.
+///
+/// Enabled only when launcher-supervised (`ALIEN_SELF_UPDATE=1`, not
+/// Kubernetes) — a no-op otherwise, since K8s uses pod lifecycle and tests /
+/// manual runs have no launcher to outlive. Returns the thread handle (or
+/// `None` when disabled, or if the thread cannot be spawned — the `InstanceLock`
+/// backstop still bounds correctness). The thread self-exits within one interval
+/// of a normal shutdown and is killed on process exit, so the handle can be
+/// dropped without joining.
+#[cfg(unix)]
+pub fn spawn_parent_death_watch(cancel: CancellationToken) -> Option<std::thread::JoinHandle<()>> {
+    if !actuator_enabled() {
+        return None;
+    }
+    // SAFETY: `getppid` takes no arguments, cannot fail, and only reads process
+    // state — it is async-signal-safe and always sound to call.
+    let original_ppid = unsafe { libc::getppid() };
+    info!(original_ppid, "die-with-parent watch armed");
+    match std::thread::Builder::new()
+        .name("parent-death-watch".to_string())
+        .spawn(move || {
+            run_parent_death_watch(
+                original_ppid,
+                // SAFETY: as above.
+                || unsafe { libc::getppid() },
+                PARENT_WATCH_INTERVAL,
+                cancel,
+            )
+        }) {
+        Ok(handle) => Some(handle),
+        Err(e) => {
+            warn!(error = %e, "failed to spawn the die-with-parent watch thread; relying on the InstanceLock backstop");
+            None
+        }
+    }
+}
+
+/// Windows die-with-parent is a Job Object (`KILL_ON_JOB_CLOSE`), wired in the
+/// Windows phase; there is no `getppid` to poll, so the watch is a no-op here.
+#[cfg(not(unix))]
+pub fn spawn_parent_death_watch(_cancel: CancellationToken) -> Option<std::thread::JoinHandle<()>> {
+    None
 }
 
 // ---------------------------------------------------------------------------
@@ -818,6 +932,58 @@ mod tests {
         assert_eq!(requested_exit_code(), None);
         request_update_handoff_exit();
         assert_eq!(requested_exit_code(), Some(EXIT_CODE_UPDATE_HANDOFF));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn parent_is_gone_decision() {
+        assert!(!parent_is_gone(1000, 1000), "unchanged parent is still alive");
+        assert!(parent_is_gone(1000, 1), "reparented to init means launcher gone");
+        assert!(parent_is_gone(1000, 2000), "any change means launcher gone");
+    }
+
+    /// A changed parent (launcher gone) trips the cancellation token, driving
+    /// the operator's graceful shutdown. The `read_ppid` fn is injected; the
+    /// watch is synchronous (runs on its own OS thread in production).
+    #[cfg(unix)]
+    #[test]
+    fn parent_change_triggers_shutdown() {
+        let cancel = CancellationToken::new();
+        run_parent_death_watch(
+            1000,
+            || 1, // reparented to init: our launcher exited
+            Duration::from_millis(5),
+            cancel.clone(),
+        );
+        assert!(cancel.is_cancelled(), "a changed parent must trigger shutdown");
+    }
+
+    /// A stable parent never trips shutdown; the watch only exits when the token
+    /// is cancelled externally (normal operator shutdown), within one interval.
+    #[cfg(unix)]
+    #[test]
+    fn stable_parent_keeps_running_until_external_cancel() {
+        let cancel = CancellationToken::new();
+        let watcher = cancel.clone();
+        let watch = std::thread::spawn(move || {
+            run_parent_death_watch(
+                1000,
+                || 1000, // parent unchanged across polls
+                Duration::from_millis(5),
+                watcher,
+            );
+        });
+
+        // Let several poll intervals elapse; the watch must not shut us down.
+        std::thread::sleep(Duration::from_millis(40));
+        assert!(
+            !cancel.is_cancelled(),
+            "a stable parent must not trigger shutdown"
+        );
+
+        // External shutdown ends the watch within one interval.
+        cancel.cancel();
+        watch.join().expect("watch thread must not panic");
     }
 
     /// With enforcement on and only the placeholder key available, staging

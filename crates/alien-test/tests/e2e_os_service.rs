@@ -1,13 +1,17 @@
 //! E2E: the os-service self-update flow — a real launcher supervising a real
-//! operator against an in-process manager. Linux-only at runtime (the
-//! launcher's service shim is Linux-first); macOS/Windows jobs join in their
-//! phases. Run with:
+//! operator against an in-process manager. Runs on Linux and macOS (the
+//! launcher runs as a direct child — no systemd/launchd needed, so the suite is
+//! hermetic and identical on both); the Windows job joins in its phase. Run
+//! with:
 //!
 //! ```sh
 //! cargo build -p alien-launcher && cargo build -p alien-operator --features test-hooks
 //! cargo test -p alien-test --features e2e-os-service --test e2e_os_service
 //! ```
-#![cfg(all(feature = "e2e-os-service", target_os = "linux"))]
+#![cfg(all(
+    feature = "e2e-os-service",
+    any(target_os = "linux", target_os = "macos")
+))]
 
 use std::sync::atomic::Ordering;
 use std::time::{Duration, Instant};

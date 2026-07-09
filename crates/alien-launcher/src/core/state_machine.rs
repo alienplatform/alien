@@ -95,6 +95,18 @@ impl Default for RunConfig {
     }
 }
 
+/// Once the operator has run healthy for at least `healthy_reset`, its prior
+/// crash streak no longer counts against the respawn backoff, so the counter is
+/// cleared. Extracted as a pure decision so the reset condition is unit-tested
+/// deterministically (the `supervise` loop feeds it real wall-clock uptime).
+fn should_reset_crash_backoff(
+    consecutive_crashes: u32,
+    up_for: Duration,
+    healthy_reset: Duration,
+) -> bool {
+    consecutive_crashes > 0 && up_for >= healthy_reset
+}
+
 // ---------------------------------------------------------------------------
 // Startup classification (the normative recovery table for the on-disk protocol)
 // ---------------------------------------------------------------------------
@@ -353,7 +365,11 @@ where
             }
 
             let Some(status) = self.child.try_wait(&handle)? else {
-                if consecutive_crashes > 0 && spawned_at.elapsed() >= self.config.healthy_reset {
+                if should_reset_crash_backoff(
+                    consecutive_crashes,
+                    spawned_at.elapsed(),
+                    self.config.healthy_reset,
+                ) {
                     consecutive_crashes = 0;
                 }
                 std::thread::sleep(self.config.poll_interval);
@@ -717,6 +733,18 @@ mod tests {
     #[test]
     fn classification_rows() {
         scenario_classification_rows(stub);
+    }
+
+    #[test]
+    fn crash_backoff_resets_only_after_a_healthy_uptime() {
+        let healthy_reset = Duration::from_secs(60);
+        // No crash streak → nothing to reset, regardless of uptime.
+        assert!(!should_reset_crash_backoff(0, Duration::from_secs(120), healthy_reset));
+        // A streak, but not up long enough → keep it (backoff stays elevated).
+        assert!(!should_reset_crash_backoff(3, Duration::from_secs(59), healthy_reset));
+        // A streak and up at least `healthy_reset` → reset to zero.
+        assert!(should_reset_crash_backoff(3, healthy_reset, healthy_reset));
+        assert!(should_reset_crash_backoff(1, Duration::from_secs(61), healthy_reset));
     }
 
     #[test]

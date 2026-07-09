@@ -260,14 +260,13 @@ impl VersionStore for StubStore {
 // StubChild — scripted ChildSupervisor
 // ---------------------------------------------------------------------------
 
-/// What a scripted spawn does.
+/// What a scripted spawn does. Readiness is controlled separately by the paired
+/// `StubProbe`, so a child that "stays up" is `UpNotReady` here regardless of
+/// what the probe reports.
 #[derive(Debug, Clone)]
 pub enum SpawnOutcome {
-    /// Child runs and never becomes ready (probe stays false); exits only on `stop`.
+    /// Child runs and stays up; exits only on `stop`.
     UpNotReady,
-    /// Child runs; the paired `StubProbe` should be scripted to flip ready
-    /// after the same duration.
-    UpReadyAfter(Duration),
     /// Child exits immediately with this code (e.g. crash `1`, handoff `10`).
     ExitImmediately(i32),
 }
@@ -275,7 +274,6 @@ pub enum SpawnOutcome {
 #[derive(Debug)]
 struct ChildState {
     outcome: SpawnOutcome,
-    spawned_at: Instant,
     stopped: bool,
 }
 
@@ -322,7 +320,6 @@ impl ChildSupervisor for StubChild {
         self.spawned.push((binary.to_path_buf(), env.clone()));
         self.children.push(ChildState {
             outcome,
-            spawned_at: Instant::now(),
             stopped: false,
         });
         // pid is the 1-based child index — unique per spawn within a test.
@@ -345,7 +342,7 @@ impl ChildSupervisor for StubChild {
         }
         match child.outcome {
             SpawnOutcome::ExitImmediately(code) => Ok(Some(ExitStatus::Code(code))),
-            SpawnOutcome::UpNotReady | SpawnOutcome::UpReadyAfter(_) => Ok(None),
+            SpawnOutcome::UpNotReady => Ok(None),
         }
     }
 }
@@ -358,11 +355,6 @@ impl StubChild {
                 message: format!("unknown stub child pid {}", handle.pid),
             })
         })
-    }
-
-    /// Test helper: how long ago the child for `handle` was spawned.
-    pub fn spawned_elapsed(&self, handle: &OperatorHandle) -> Duration {
-        self.children[handle.pid as usize - 1].spawned_at.elapsed()
     }
 }
 
@@ -424,8 +416,8 @@ impl ServiceHost for StubHost {
 pub enum StubProbe {
     /// Always this value.
     Always(bool),
-    /// `false` until the instant, then `true` — pairs with
-    /// `SpawnOutcome::UpReadyAfter`.
+    /// `false` until the instant, then `true` — pairs with an `UpNotReady`
+    /// child to model an operator that becomes ready after a delay.
     ReadyAt(Instant),
 }
 

@@ -117,13 +117,14 @@ fn main() -> ExitCode {
     run_supervisor(args)
 }
 
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", target_os = "macos"))]
 fn run_supervisor(args: Args) -> ExitCode {
     use crate::core::health::UreqProbe;
     use crate::core::state_machine::RunConfig;
     use crate::core::traits::UpdateEnv;
 
-    // Log to stderr; journald captures it via the unit's StandardError.
+    // Log to stderr; the init system captures it (systemd → journald via the
+    // unit's StandardError; launchd → the plist's StandardErrorPath).
     tracing_subscriber::fmt()
         .with_env_filter(
             tracing_subscriber::EnvFilter::try_from_default_env()
@@ -184,14 +185,14 @@ fn run_supervisor(args: Args) -> ExitCode {
     }
 }
 
-/// The supervisor currently runs for real on Linux only; the macOS (launchd)
-/// and Windows (SCM) shims land in their own phases. Starting it elsewhere is
-/// a hard, loud error — never a silent no-op an init system would happily
-/// respawn forever.
-#[cfg(not(target_os = "linux"))]
+/// The supervisor runs for real on Linux (systemd) and macOS (launchd); the
+/// Windows (SCM) shim lands in its own phase. Starting it elsewhere is a hard,
+/// loud error — never a silent no-op an init system would happily respawn
+/// forever.
+#[cfg(not(any(target_os = "linux", target_os = "macos")))]
 fn run_supervisor(_args: Args) -> ExitCode {
     eprintln!(
-        "alien-launcher {}: this platform's service shim is not implemented yet (Linux only for now)",
+        "alien-launcher {}: this platform's service shim is not implemented yet (Linux and macOS only for now)",
         env!("CARGO_PKG_VERSION")
     );
     ExitCode::FAILURE

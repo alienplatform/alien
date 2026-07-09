@@ -3,31 +3,47 @@
 //! `#[cfg(...)]` selects the concrete implementation; nothing else in the
 //! crate branches on the target OS.
 //!
-//! Currently wired: **Linux** (systemd host + shared Unix child supervisor +
-//! shared Unix symlink store). The macOS host (launchd) and the Windows shim
-//! (SCM + Job Object + junction store) land in their own phases; until then
-//! the launcher binary only runs for real on Linux.
+//! Wired for real: **Linux** (systemd host) and **macOS** (launchd host), both
+//! over the shared Unix child supervisor and Unix symlink store — the host is
+//! the only per-OS piece; supervision and the version store are identical Unix
+//! code. The Windows shim (SCM + Job Object + junction store) lands in its own
+//! phase.
 //!
-//! The `unix_*` modules are shared by Linux and (later) macOS; on non-Linux
-//! unix builds they are exercised by tests only until the macOS host lands,
-//! hence the targeted dead-code staging below.
+//! On any other target (no supported host) the `unix_*` modules are exercised
+//! by tests only, hence the narrowed dead-code staging below.
 
 #[cfg(unix)]
-#[cfg_attr(not(target_os = "linux"), allow(dead_code))]
+#[cfg_attr(
+    not(any(target_os = "linux", target_os = "macos")),
+    allow(dead_code)
+)]
 pub mod unix_child;
 #[cfg(unix)]
-#[cfg_attr(not(target_os = "linux"), allow(dead_code))]
+#[cfg_attr(
+    not(any(target_os = "linux", target_os = "macos")),
+    allow(dead_code)
+)]
 pub mod unix_signals;
 #[cfg(unix)]
-#[cfg_attr(not(target_os = "linux"), allow(dead_code))]
+#[cfg_attr(
+    not(any(target_os = "linux", target_os = "macos")),
+    allow(dead_code)
+)]
 pub mod unix_store;
 
 #[cfg(target_os = "linux")]
 pub mod linux;
 
+#[cfg(target_os = "macos")]
+pub mod macos;
+
+// The host is per-OS; the child supervisor and version store are shared Unix.
 #[cfg(target_os = "linux")]
 pub use linux::LinuxHost as ActiveHost;
-#[cfg(target_os = "linux")]
+#[cfg(target_os = "macos")]
+pub use macos::MacosHost as ActiveHost;
+
+#[cfg(any(target_os = "linux", target_os = "macos"))]
 pub use unix_child::UnixChildSupervisor as ActiveChildSupervisor;
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", target_os = "macos"))]
 pub use unix_store::UnixVersionStore as ActiveVersionStore;
