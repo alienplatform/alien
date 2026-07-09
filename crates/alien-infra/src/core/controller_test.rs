@@ -1007,7 +1007,7 @@ impl SingleControllerExecutorBuilder {
             _ => None,
         });
 
-        let config = DeploymentConfig::builder()
+        let mut config = DeploymentConfig::builder()
             .stack_settings(self.stack_settings.clone())
             .maybe_management_config(management_config.clone())
             .maybe_compute_backend(self.compute_backend.clone())
@@ -1015,6 +1015,7 @@ impl SingleControllerExecutorBuilder {
             .external_bindings(alien_core::ExternalBindings::default())
             .allow_frozen_changes(false)
             .build();
+        config.domain_metadata = self.domain_metadata.clone();
 
         let processed_stack = preflight_runner
             .apply_mutations(stack, &stack_state, &config)
