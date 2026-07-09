@@ -29,6 +29,7 @@ use alien_deployment::{
 use alien_error::{AlienError, Context, ContextError, IntoAlienError};
 use alien_infra::ClientConfigExt;
 use alien_manager_api::{Client as ServerClient, SdkResultExt as ManagerSdkResultExt};
+use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine as _};
 use clap::Parser;
 use serde::{Deserialize, Serialize};
 use std::{
@@ -319,6 +320,51 @@ mod tests {
             machines_join_command("isloctl", None, "aj1_wrapped-token"),
             "sudo isloctl join --token 'aj1_wrapped-token'"
         );
+    }
+
+    #[test]
+    fn machines_join_token_response_preserves_wrapped_token() {
+        let token = normalize_machines_join_token_response(MachinesJoinTokenResponse {
+            join_token: " aj1_wrapped-token ".to_string(),
+            control_plane_url: Some("https://horizon.example.com".to_string()),
+            cluster_id: Some("cluster-123".to_string()),
+        })
+        .expect("wrapped token should be accepted");
+
+        assert_eq!(token, "aj1_wrapped-token");
+    }
+
+    #[test]
+    fn machines_join_token_response_wraps_raw_token_with_context() {
+        let token = normalize_machines_join_token_response(MachinesJoinTokenResponse {
+            join_token: " hj_secret ".to_string(),
+            control_plane_url: Some(" https://horizon.example.com ".to_string()),
+            cluster_id: Some(" cluster-123 ".to_string()),
+        })
+        .expect("raw token with context should be wrapped");
+
+        assert!(token.starts_with("aj1_"));
+        let payload = URL_SAFE_NO_PAD
+            .decode(token.trim_start_matches("aj1_"))
+            .expect("wrapped token should be base64url");
+        let payload: serde_json::Value =
+            serde_json::from_slice(&payload).expect("wrapped token should be JSON");
+        assert_eq!(payload["joinToken"], "hj_secret");
+        assert_eq!(payload["controlPlaneUrl"], "https://horizon.example.com");
+        assert_eq!(payload["clusterId"], "cluster-123");
+    }
+
+    #[test]
+    fn machines_join_token_response_rejects_raw_token_without_context() {
+        let error = normalize_machines_join_token_response(MachinesJoinTokenResponse {
+            join_token: "hj_secret".to_string(),
+            control_plane_url: None,
+            cluster_id: Some("cluster-123".to_string()),
+        })
+        .expect_err("raw token should require context");
+
+        assert_eq!(error.code, "CONFIGURATION_ERROR");
+        assert!(error.message.contains("without control plane context"));
     }
 
     #[test]
@@ -1147,6 +1193,16 @@ pub async fn up_command(args: UpArgs, embedded_config: Option<&DeployCliConfig>)
 #[serde(rename_all = "camelCase")]
 struct MachinesJoinTokenResponse {
     join_token: String,
+    control_plane_url: Option<String>,
+    cluster_id: Option<String>,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct WrappedMachinesJoinToken<'a> {
+    join_token: &'a str,
+    control_plane_url: &'a str,
+    cluster_id: &'a str,
 }
 
 async fn create_machines_join_token(
@@ -1187,14 +1243,66 @@ async fn create_machines_join_token(
                 message: "Failed to parse Machines join token response".to_string(),
             })?;
 
+    normalize_machines_join_token_response(response)
+}
+
+fn normalize_machines_join_token_response(response: MachinesJoinTokenResponse) -> Result<String> {
     let join_token = response.join_token.trim();
     if join_token.is_empty() {
         return Err(AlienError::new(ErrorData::ConfigurationError {
             message: "Platform API returned an empty Machines join token".to_string(),
         }));
     }
+    if join_token.starts_with("aj1_") {
+        return Ok(join_token.to_string());
+    }
 
-    Ok(join_token.to_string())
+    let control_plane_url = response
+        .control_plane_url
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty());
+    let cluster_id = response
+        .cluster_id
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty());
+
+    match (control_plane_url, cluster_id) {
+        (Some(control_plane_url), Some(cluster_id)) => {
+            validate_machines_control_plane_url(control_plane_url)?;
+            let payload = WrappedMachinesJoinToken {
+                join_token,
+                control_plane_url,
+                cluster_id,
+            };
+            let json = serde_json::to_vec(&payload).into_alien_error().context(
+                ErrorData::ConfigurationError {
+                    message: "Failed to encode Machines join token context".to_string(),
+                },
+            )?;
+            Ok(format!("aj1_{}", URL_SAFE_NO_PAD.encode(json)))
+        }
+        _ => Err(AlienError::new(ErrorData::ConfigurationError {
+            message:
+                "Platform API returned a raw Machines join token without control plane context"
+                    .to_string(),
+        })),
+    }
+}
+
+fn validate_machines_control_plane_url(value: &str) -> Result<()> {
+    let url = reqwest::Url::parse(value).map_err(|e| {
+        AlienError::new(ErrorData::ConfigurationError {
+            message: format!("Platform API returned an invalid Machines control plane URL: {e}"),
+        })
+    })?;
+    if !matches!(url.scheme(), "http" | "https") || url.host_str().is_none() {
+        return Err(AlienError::new(ErrorData::ConfigurationError {
+            message: "Platform API returned an invalid Machines control plane URL".to_string(),
+        }));
+    }
+    Ok(())
 }
 
 fn machines_join_command(
