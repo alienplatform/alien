@@ -33,6 +33,15 @@ pub struct TestWorkerController {
     /// Records the highest number of transient failures attempted for reporting/testing.
     #[serde(default, skip_serializing_if = "is_zero")]
     pub(crate) transient_failures_recorded: u32,
+    /// Counts Ready-handler executions when SIMULATE_OBSERVED_URL_REFRESH is
+    /// set; each observation rewrites the url output, emulating a resource
+    /// whose outputs mirror external reality (e.g. machine inventory).
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub(crate) ready_observations: u32,
+    /// Set once SIMULATE_OBSERVED_REFRESH_FAIL_ONCE has fired, so the
+    /// simulated observation failure happens exactly once.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub(crate) refresh_failure_simulated: bool,
     /// Polling counter for create worker
     #[serde(default, skip_serializing_if = "is_zero")]
     pub(crate) create_poll_count: u32,
@@ -306,8 +315,56 @@ impl TestWorkerController {
         on_failure = CreateFailed,
         status = ResourceStatus::Running,
     )]
-    async fn ready(&mut self, _ctx: &ResourceControllerContext<'_>) -> Result<HandlerAction> {
+    async fn ready(&mut self, ctx: &ResourceControllerContext<'_>) -> Result<HandlerAction> {
+        // Emulate a controller whose Ready handler observes external reality
+        // and refreshes its outputs (like machine inventory counts).
+        if let Ok(target_func) = ctx.desired_resource_config::<Worker>() {
+            if target_func
+                .environment
+                .get("SIMULATE_OBSERVED_URL_REFRESH")
+                .is_some_and(|v| v == "true")
+            {
+                self.ready_observations += 1;
+                self.url = Some(format!("https://observed-{}.test", self.ready_observations));
+
+                // Optionally simulate one failed observation: dip into
+                // RefreshFailed once, so tests can prove observation recovers.
+                if !self.refresh_failure_simulated
+                    && target_func
+                        .environment
+                        .get("SIMULATE_OBSERVED_REFRESH_FAIL_ONCE")
+                        .is_some_and(|v| v == "true")
+                {
+                    self.refresh_failure_simulated = true;
+                    return Ok(HandlerAction::Continue {
+                        state: RefreshFailed,
+                        suggested_delay: None,
+                    });
+                }
+            }
+        }
+
         // The system will automatically know if config changed and transition to update
+        Ok(HandlerAction::Continue {
+            state: Ready,
+            suggested_delay: None,
+        })
+    }
+
+    /// Failed-observation state: refreshes the observation and recovers to
+    /// Ready, mirroring how real controllers must treat RefreshFailed as a
+    /// retrying state rather than a terminal parking spot.
+    #[handler(
+        state = RefreshFailed,
+        on_failure = RefreshFailed,
+        status = ResourceStatus::RefreshFailed,
+    )]
+    async fn refresh_failed(
+        &mut self,
+        _ctx: &ResourceControllerContext<'_>,
+    ) -> Result<HandlerAction> {
+        self.ready_observations += 1;
+        self.url = Some(format!("https://observed-{}.test", self.ready_observations));
         Ok(HandlerAction::Continue {
             state: Ready,
             suggested_delay: None,
@@ -550,16 +607,12 @@ impl TestWorkerController {
     terminal_state!(state = DeleteFailed, status = ResourceStatus::DeleteFailed);
 
     terminal_state!(state = Deleted, status = ResourceStatus::Deleted);
-}
 
-// Separate impl block for helper methods and get_outputs override
-impl TestWorkerController {
-    // Override the generated get_outputs method
-    pub fn get_outputs(&self) -> Option<ResourceOutputs> {
-        if matches!(self.state, TestWorkerState::Deleted) {
-            return None;
-        }
-
+    // The #[controller] macro only wires outputs through the trait when
+    // `build_outputs` is defined INSIDE this impl block; a same-named method
+    // in a separate impl block is never called. (The macro's generated
+    // get_outputs already returns None for Deleted.)
+    fn build_outputs(&self) -> Option<ResourceOutputs> {
         // Outputs are generally available once identifier exists
         if let Some(identifier) = &self.identifier {
             let url = self.url.as_ref().filter(|u| !u.is_empty());

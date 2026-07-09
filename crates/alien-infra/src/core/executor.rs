@@ -132,6 +132,17 @@ pub struct StackExecutor {
 const MAX_RETRIES: u32 = 10;
 const DEPENDENCY_NOT_READY_CODE: &str = "DEPENDENCY_NOT_READY";
 
+/// Whether a status stops the executor from stepping the resource.
+///
+/// RefreshFailed is terminal for planning/sync purposes but must NOT halt
+/// stepping: it marks a failed observation (heartbeat/health refresh), and a
+/// controller with a RefreshFailed handler recovers by being stepped again.
+/// Controllers that declare RefreshFailed via `terminal_state!` step as a
+/// no-op, so this is safe universally.
+fn status_halts_stepping(status: ResourceStatus) -> bool {
+    status.is_terminal() && status != ResourceStatus::RefreshFailed
+}
+
 fn controller_platform_for_entry(
     stack_platform: Platform,
     base_platform: Option<Platform>,
@@ -966,7 +977,8 @@ impl StackExecutor {
             return self.step_running_resources;
         }
 
-        resource_view.status != ResourceStatus::Pending && !resource_view.status.is_terminal()
+        resource_view.status != ResourceStatus::Pending
+            && !status_halts_stepping(resource_view.status)
     }
 
     /// Performs one *incremental* reconciliation iteration.
@@ -1364,7 +1376,7 @@ impl StackExecutor {
                 // Or terminal due to a failure state?
                 // The main `is_synced` check at the end handles the overall stack goal.
                 // Here, we just want to avoid stepping resources that are *already* in a final (success, deleted, or failed) state *for their current operation*.
-                if current_resource_view.status.is_terminal() {
+                if status_halts_stepping(current_resource_view.status) {
                     continue; // Skip resources already in a terminal status (Running, Deleted, *Failed)
                 }
             }
@@ -1540,7 +1552,7 @@ impl StackExecutor {
                 let mut resource_controller =
                     current_resource_state.get_internal_controller()?.unwrap();
 
-                let step_result = if !resource_controller.get_status().is_terminal() {
+                let step_result = if !status_halts_stepping(resource_controller.get_status()) {
                     // The controller now returns a step result with suggested delay
                     resource_controller.step(&context).await
                 } else {
