@@ -64,6 +64,14 @@ impl RunConfig {
     pub fn readyz_url(&self) -> String {
         format!("http://{}/readyz", self.update_env.health_addr)
     }
+
+    /// The `/livez` URL. Liveness is manager-INDEPENDENT ("up and running,
+    /// possibly just waiting for the manager"), so the startup gate uses it
+    /// for the systemd READY decision — a manager outage at boot must not
+    /// look like a launch failure. The update gate keeps using `/readyz`.
+    pub fn livez_url(&self) -> String {
+        format!("http://{}/livez", self.update_env.health_addr)
+    }
 }
 
 impl Default for RunConfig {
@@ -283,7 +291,8 @@ where
                 if remaining.is_zero() {
                     return self.rollback(&probation, Some(&handle), "probation window expired before the launcher restart".to_string());
                 }
-                match self.gate(&handle, remaining)? {
+                // Resuming an update's probation: full-health gate (/readyz).
+                match self.gate(&handle, remaining, &self.config.readyz_url())? {
                     GateOutcome::Ready => {
                         self.promote(&probation)?;
                         Ok(handle)
@@ -479,8 +488,10 @@ where
             }
         };
 
-        // 5. the probation gate.
-        match self.gate(&handle, self.config.probation_window)? {
+        // 5. the probation gate — a NEW version must prove FULL health,
+        //    including reaching the manager (/readyz), before we promote and
+        //    discard the rollback target.
+        match self.gate(&handle, self.config.probation_window, &self.config.readyz_url())? {
             GateOutcome::Ready => {
                 // 6a. promote.
                 self.promote(probation)?;
@@ -558,14 +569,13 @@ where
     // -- gate + spawn helpers ----------------------------------------------
 
     /// Poll `/readyz` until ready, child exit, or the deadline.
-    fn gate(&mut self, handle: &OperatorHandle, window: Duration) -> Result<GateOutcome> {
-        let url = self.config.readyz_url();
+    fn gate(&mut self, handle: &OperatorHandle, window: Duration, url: &str) -> Result<GateOutcome> {
         let deadline = Instant::now() + window;
         loop {
             if let Some(status) = self.child.try_wait(handle)? {
                 return Ok(GateOutcome::ChildExited(status));
             }
-            if self.probe.is_ready(&url) {
+            if self.probe.is_ready(url) {
                 return Ok(GateOutcome::Ready);
             }
             let now = Instant::now();
@@ -586,16 +596,29 @@ where
             corrupt(self.store, "no current version to spawn — install is incomplete")
         })?;
         let handle = self.spawn_version(&current)?;
-        match self.gate(&handle, self.config.probation_window)? {
+        // Startup gate signals systemd READY on LIVENESS (/livez), not full
+        // readiness: the launcher is "started" once it is supervising a live
+        // operator. An operator that is up but can't reach the manager
+        // (/readyz 503) must still count as started — otherwise a manager
+        // outage at boot fails the launcher's Type=notify start and flaps it.
+        // A genuinely broken operator (crashes, or never serves /livez) does
+        // NOT reach Ready here, so systemd start correctly fails.
+        match self.gate(&handle, self.config.probation_window, &self.config.livez_url())? {
             GateOutcome::Ready => {
-                if self.store.last_stable()?.is_none() {
-                    info!(version = %current, "first install passed the gate; recording last-stable");
+                self.host.report_ready();
+                // last-stable is a PROVEN-good fallback, so it stays gated on
+                // FULL health (/readyz), not liveness. Normally the installer
+                // seeds last-stable; this only fires on a store missing it,
+                // and only once the operator has actually reached the manager.
+                if self.store.last_stable()?.is_none()
+                    && self.probe.is_ready(&self.config.readyz_url())
+                {
+                    info!(version = %current, "first install reached full health; recording last-stable");
                     self.store.set_last_stable(&current)?;
                 }
-                self.host.report_ready();
             }
             GateOutcome::TimedOut => {
-                warn!(version = %current, "operator did not become ready within the window; supervising anyway");
+                warn!(version = %current, "operator did not become live within the window; supervising anyway");
             }
             GateOutcome::ChildExited(status) => {
                 // Hand the exit to the supervise loop's contract by just

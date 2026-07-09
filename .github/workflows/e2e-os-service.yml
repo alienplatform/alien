@@ -63,16 +63,25 @@ jobs:
       - name: systemd smoke — unit template under a real init
         run: |
           set -euo pipefail
-          # A throwaway data dir with the launcher layout, driven through the
-          # real installer path pieces: unit rendered by alien-deploy-cli's
-          # template must reach active (running) under systemd with a stub
-          # manager... the stub here is "no manager": the launcher must come
-          # up, supervise, and respond to systemctl stop with a clean exit.
+          # Prove the Type=notify + watchdog wiring under real systemd: the
+          # launcher must reach "active" (which requires it to send READY=1)
+          # and stop cleanly. The operator here is a stub HTTP server that
+          # serves /livez -> 200 (the launcher gates its startup READY on
+          # liveness); the real sync/update flow is covered by the E2E above.
           DATA_DIR=$(mktemp -d)
           sudo mkdir -p "$DATA_DIR"/{versions/0.0.1,launcher,state,state-snapshots,failed,download}
-          # A do-nothing operator that stays up (the smoke checks supervision
-          # + notify wiring, not the sync flow — the E2E above covers that).
-          printf '#!/bin/sh\ntrap "exit 0" TERM\nwhile true; do sleep 1; done\n' | sudo tee "$DATA_DIR/versions/0.0.1/alien-operator" >/dev/null
+          # Stub operator: bind ALIEN_HEALTH_ADDR (the launcher passes it),
+          # answer every GET with 200, exit on SIGTERM.
+          sudo tee "$DATA_DIR/versions/0.0.1/alien-operator" >/dev/null <<'OP'
+          #!/usr/bin/env python3
+          import http.server, os
+          host, port = os.environ["ALIEN_HEALTH_ADDR"].rsplit(":", 1)
+          class H(http.server.BaseHTTPRequestHandler):
+              def do_GET(self):
+                  self.send_response(200); self.end_headers(); self.wfile.write(b"ok")
+              def log_message(self, *a): pass
+          http.server.HTTPServer((host, int(port)), H).serve_forever()
+          OP
           sudo chmod 755 "$DATA_DIR/versions/0.0.1/alien-operator"
           sudo ln -s versions/0.0.1 "$DATA_DIR/current"
           sudo ln -s versions/0.0.1 "$DATA_DIR/last-stable"
@@ -86,34 +95,22 @@ jobs:
           Type=notify
           NotifyAccess=main
           WatchdogSec=60
-          ExecStart=$DATA_DIR/launcher/alien-launcher --data-dir $DATA_DIR --probation-secs 5
+          ExecStart=$DATA_DIR/launcher/alien-launcher --data-dir $DATA_DIR --probation-secs 10
           Restart=always
           RestartSec=2
           EOF
           sudo systemctl daemon-reload
-          sudo systemctl start alien-e2e-smoke
 
-          # Type=notify: reaching "active (running)" proves READY=1 arrived.
-          for i in $(seq 1 30); do
-            state=$(systemctl show -p ActiveState --value alien-e2e-smoke)
-            [ "$state" = "active" ] && break
-            sleep 1
-          done
-          systemctl status alien-e2e-smoke --no-pager || true
+          dump_logs() { journalctl -u alien-e2e-smoke --no-pager | tail -60 || true; }
+          trap dump_logs ERR
+
+          # Type=notify: `start` blocks until READY=1, so reaching it = success.
+          sudo systemctl start alien-e2e-smoke
           [ "$(systemctl show -p ActiveState --value alien-e2e-smoke)" = "active" ]
 
-          # Clean stop propagates through the launcher to the operator.
+          # Clean stop propagates through the launcher to the stub operator.
           sudo systemctl stop alien-e2e-smoke
           [ "$(systemctl show -p ActiveState --value alien-e2e-smoke)" = "inactive" ]
           sudo systemctl disable alien-e2e-smoke 2>/dev/null || true
           sudo rm /etc/systemd/system/alien-e2e-smoke.service
           sudo systemctl daemon-reload
-
-      - name: Upload logs on failure
-        if: failure()
-        uses: actions/upload-artifact@v4
-        with:
-          name: e2e-os-service-logs
-          path: |
-            /tmp/**/launcher*.log
-          if-no-files-found: ignore

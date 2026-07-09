@@ -64,12 +64,24 @@ impl ReadinessSignals {
         }
     }
 
-    /// All explicit readiness conditions hold.
-    pub fn all_ready(&self) -> bool {
+    /// Liveness — the health conditions that do NOT depend on the manager:
+    /// DB open (2), lock held (3), deployment loop progressing (5). Condition
+    /// 1 (process alive) is implicit in the server answering at all. This is
+    /// "healthy except possibly for manager reachability": `/livez` reflects
+    /// it, and it's the signal the launcher uses to decide the operator is
+    /// up and running (so a manager outage at boot doesn't look like a start
+    /// failure).
+    pub fn local_ready(&self) -> bool {
         self.db_open.load(Ordering::Acquire)
             && self.lock_held.load(Ordering::Acquire)
-            && self.first_sync_completed.load(Ordering::Acquire)
             && self.deployment_loop_ok.load(Ordering::Acquire)
+    }
+
+    /// Full readiness = liveness PLUS at least one successful sync (condition
+    /// 4). `/readyz` reflects it; it gates the launcher's health-gated swap
+    /// and the Kubernetes `readinessProbe`.
+    pub fn all_ready(&self) -> bool {
+        self.local_ready() && self.first_sync_completed.load(Ordering::Acquire)
     }
 }
 
@@ -151,11 +163,21 @@ async fn handle_health() -> Json<HealthResponse> {
     Json(HealthResponse { status: "ok" })
 }
 
-/// Liveness probe. The agent is "live" as long as this server is
-/// answering requests — i.e. the process is alive and tokio is not
-/// deadlocked. Consumed by the Kubernetes `livenessProbe`.
-async fn handle_livez() -> Json<HealthResponse> {
-    Json(HealthResponse { status: "ok" })
+/// Liveness probe: 200 iff the manager-independent health conditions hold —
+/// DB open, InstanceLock held, deployment loop progressing (process-alive is
+/// implicit in this handler answering). Deliberately does NOT require a
+/// successful sync, so an operator that is up and running but cannot reach
+/// the manager reports **live** (200) while `/readyz` stays 503. Consumed by
+/// the Kubernetes `livenessProbe` and by the launcher's startup gate (it
+/// signals systemd READY once the operator is live — a manager outage at
+/// boot must not look like a launch failure).
+async fn handle_livez(
+    State(readiness): State<ReadinessSignals>,
+) -> Result<Json<HealthResponse>, StatusCode> {
+    if !readiness.local_ready() {
+        return Err(StatusCode::SERVICE_UNAVAILABLE);
+    }
+    Ok(Json(HealthResponse { status: "ok" }))
 }
 
 /// Readiness probe: 200 iff ALL health conditions hold — DB opened,
@@ -362,21 +384,50 @@ mod tests {
         server.await.unwrap().unwrap();
     }
 
+    /// `/livez` is 200 once the LOCAL conditions hold (DB open, lock held,
+    /// loop progressing) even with NO successful sync — an operator that is
+    /// up but can't reach the manager is live but not ready. And each local
+    /// condition gates it (but first-sync does NOT).
     #[tokio::test]
-    async fn livez_returns_ok_even_before_first_sync() {
-        // Nothing proven yet — livez must still be 200 (process liveness only).
-        let (port, cancel, server) = start_test_server(ReadinessSignals::new()).await;
+    async fn livez_reflects_local_health_not_manager_reachability() {
+        let signals = all_ready_signals();
+        // No sync yet: manager unreachable, but the operator is up.
+        signals.first_sync_completed.store(false, Ordering::Release);
+        let (port, cancel, server) = start_test_server(signals.clone()).await;
         let client = reqwest::Client::new();
-        let response = client
-            .get(format!("http://127.0.0.1:{port}/livez"))
-            .send()
-            .await
-            .unwrap();
+        let livez = format!("http://127.0.0.1:{port}/livez");
+        let readyz = format!("http://127.0.0.1:{port}/readyz");
+
         assert!(
-            response.status().is_success(),
-            "livez should be 200 even before the agent has synced — it reflects \
-             process liveness, not manager reachability"
+            client.get(&livez).send().await.unwrap().status().is_success(),
+            "live (up + local health) even before any sync"
         );
+        assert_eq!(
+            client.get(&readyz).send().await.unwrap().status().as_u16(),
+            503,
+            "but NOT ready — no manager round-trip yet"
+        );
+
+        // first-sync does not gate liveness; the three local conditions do.
+        signals.first_sync_completed.store(true, Ordering::Release);
+        for (name, flag) in [
+            ("db_open", &signals.db_open),
+            ("lock_held", &signals.lock_held),
+            ("deployment_loop_ok", &signals.deployment_loop_ok),
+        ] {
+            flag.store(false, Ordering::Release);
+            assert_eq!(
+                client.get(&livez).send().await.unwrap().status().as_u16(),
+                503,
+                "{name}=false must gate liveness"
+            );
+            flag.store(true, Ordering::Release);
+            assert!(
+                client.get(&livez).send().await.unwrap().status().is_success(),
+                "{name} restored must recover liveness"
+            );
+        }
+
         cancel.cancel();
         server.await.unwrap().unwrap();
     }
