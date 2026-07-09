@@ -30,6 +30,8 @@ pub mod managed_secret;
 pub mod manager;
 pub mod ngrok;
 pub mod operator;
+#[cfg(feature = "e2e-os-service")]
+pub mod os_service;
 pub mod setup;
 
 // Re-exports for convenience

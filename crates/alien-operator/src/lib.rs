@@ -30,6 +30,25 @@ pub mod loops;
 pub mod otlp_server;
 pub mod self_update;
 
+// The test seam must never ship: a release build with `test-hooks` on would
+// let an env var falsify the fleet's version inventory.
+#[cfg(all(feature = "test-hooks", not(debug_assertions)))]
+compile_error!("the `test-hooks` feature must not be enabled in release builds");
+
+/// The version this operator reports on sync and compares against update
+/// targets. Normally `CARGO_PKG_VERSION`; under the `test-hooks` feature
+/// (debug builds only) `ALIEN_OPERATOR_FAKE_VERSION` overrides it so E2E
+/// suites can drive an update without compiling two binaries.
+pub fn operator_version() -> String {
+    #[cfg(feature = "test-hooks")]
+    if let Ok(fake) = std::env::var("ALIEN_OPERATOR_FAKE_VERSION") {
+        if !fake.is_empty() {
+            return fake;
+        }
+    }
+    env!("CARGO_PKG_VERSION").to_string()
+}
+
 pub use alien_core::{DeploymentState, DeploymentStatus, Platform, ReleaseInfo};
 pub use config::{OperatorConfig, SyncConfig};
 pub use db::{Approval, ApprovalStatus};

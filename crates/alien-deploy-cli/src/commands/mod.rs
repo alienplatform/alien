@@ -1,4 +1,5 @@
 pub mod down;
+pub mod install_launcher;
 pub mod join;
 pub mod list;
 pub mod operator;

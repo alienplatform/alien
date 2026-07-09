@@ -86,7 +86,7 @@ pub async fn apply_operator_target(target: &OperatorTarget, state: &crate::Opera
         let data_dir = std::path::Path::new(&state.config.data_dir);
         match crate::self_update::apply_binary_target(
             data_dir,
-            env!("CARGO_PKG_VERSION"),
+            &crate::operator_version(),
             &target.version,
             &target.min_supported_version,
             binary,

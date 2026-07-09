@@ -185,7 +185,7 @@ async fn sync_with_manager(
         heartbeats,
         observed_inventory_batches,
         capabilities: report_operator_capabilities(state),
-        operator_version: Some(env!("CARGO_PKG_VERSION").to_string()),
+        operator_version: Some(crate::operator_version()),
         // The supervising launcher's version (ALIEN_LAUNCHER_VERSION, set on
         // spawn) — the manager's min_launcher_version gate input. None on
         // Kubernetes / launcher-less runs.

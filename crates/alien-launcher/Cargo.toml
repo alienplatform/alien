@@ -25,6 +25,8 @@ ureq = { workspace = true }
 sha2 = { workspace = true }
 chrono = { workspace = true, features = ["serde"] }
 tracing = { workspace = true }
+# stderr logging for the supervisor (journald/launchd capture stderr).
+tracing-subscriber = { workspace = true, features = ["env-filter", "fmt"] }
 
 [dev-dependencies]
 tempfile = { workspace = true }
@@ -32,7 +34,13 @@ tempfile = { workspace = true }
 # Platform shims are target-gated so they are physically unbuildable from
 # `src/core/` on the wrong OS. Populated as each shim lands.
 [target.'cfg(unix)'.dependencies]
-# nix (or rustix), command-group, sd-notify — land with the Linux/macOS shims.
+nix = { workspace = true }
+command-group = { workspace = true }
+signal-hook = { workspace = true }
+
+[target.'cfg(target_os = "linux")'.dependencies]
+sd-notify = { workspace = true }
 
 [target.'cfg(windows)'.dependencies]
 # windows-service, windows-sys, junction — land with the Windows shim.
+# (section intentionally empty until then)

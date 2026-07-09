@@ -5588,6 +5588,11 @@
             "$ref": "#/components/schemas/ImportSourceKind",
             "nullable": true
           },
+          "launcherVersion": {
+            "type": "string",
+            "description": "Version of the frozen alien-launcher supervising the operator\n(os-service only). Drives the \"redeploy required\" surface when it is\nbelow a target's minLauncherVersion.",
+            "nullable": true
+          },
           "name": {
             "type": "string"
           },

@@ -1,0 +1,119 @@
+name: E2E OS-Service Self-Update
+
+# The os-service self-update flow end-to-end: a real alien-launcher
+# supervising a real alien-operator against an in-process manager —
+# promote, rollback, backoff, crash recovery, die-with-parent, and the
+# min-launcher gate. Linux now; macOS and Windows jobs join with their
+# platform phases.
+
+on:
+  pull_request:
+    paths:
+      - "crates/alien-launcher/**"
+      - "crates/alien-operator/**"
+      - "crates/alien-deploy-cli/**"
+      - "crates/alien-core/src/sync.rs"
+      - "crates/alien-core/src/self_update.rs"
+      - "crates/alien-manager/src/release_manifest.rs"
+      - "crates/alien-test/src/os_service.rs"
+      - "crates/alien-test/tests/e2e_os_service.rs"
+      - ".github/workflows/e2e-os-service.yml"
+  schedule:
+    # Nightly on main, catching drift from changes outside the path filter.
+    - cron: "17 3 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  CARGO_INCREMENTAL: "0"
+  CARGO_NET_GIT_FETCH_WITH_CLI: "true"
+
+jobs:
+  linux-os-service:
+    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.fork != true
+    runs-on: depot-ubuntu-24.04-arm-16
+    timeout-minutes: 60
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - name: Install protoc (opentelemetry-proto build dependency)
+        run: sudo apt-get update -qq && sudo apt-get install -y -qq protobuf-compiler
+
+      - name: Build the launcher and the test-hooks operator
+        run: |
+          cargo build -p alien-launcher
+          cargo build -p alien-operator --features test-hooks
+
+      - name: Launcher unit + platform-guard tests
+        run: cargo test -p alien-launcher
+
+      - name: E2E scenarios
+        env:
+          ALIEN_LAUNCHER_BINARY: ${{ github.workspace }}/target/debug/alien-launcher
+          ALIEN_OPERATOR_BINARY: ${{ github.workspace }}/target/debug/alien-operator
+          RUST_LOG: info
+        run: |
+          cargo test -p alien-test --features e2e-os-service --test e2e_os_service -- --test-threads=4
+
+      - name: systemd smoke — unit template under a real init
+        run: |
+          set -euo pipefail
+          # A throwaway data dir with the launcher layout, driven through the
+          # real installer path pieces: unit rendered by alien-deploy-cli's
+          # template must reach active (running) under systemd with a stub
+          # manager... the stub here is "no manager": the launcher must come
+          # up, supervise, and respond to systemctl stop with a clean exit.
+          DATA_DIR=$(mktemp -d)
+          sudo mkdir -p "$DATA_DIR"/{versions/0.0.1,launcher,state,state-snapshots,failed,download}
+          # A do-nothing operator that stays up (the smoke checks supervision
+          # + notify wiring, not the sync flow — the E2E above covers that).
+          printf '#!/bin/sh\ntrap "exit 0" TERM\nwhile true; do sleep 1; done\n' | sudo tee "$DATA_DIR/versions/0.0.1/alien-operator" >/dev/null
+          sudo chmod 755 "$DATA_DIR/versions/0.0.1/alien-operator"
+          sudo ln -s versions/0.0.1 "$DATA_DIR/current"
+          sudo ln -s versions/0.0.1 "$DATA_DIR/last-stable"
+          sudo cp target/debug/alien-launcher "$DATA_DIR/launcher/alien-launcher"
+
+          sudo tee /etc/systemd/system/alien-e2e-smoke.service >/dev/null <<EOF
+          [Unit]
+          Description=Alien Operator Launcher (E2E smoke)
+
+          [Service]
+          Type=notify
+          NotifyAccess=main
+          WatchdogSec=60
+          ExecStart=$DATA_DIR/launcher/alien-launcher --data-dir $DATA_DIR --probation-secs 5
+          Restart=always
+          RestartSec=2
+          EOF
+          sudo systemctl daemon-reload
+          sudo systemctl start alien-e2e-smoke
+
+          # Type=notify: reaching "active (running)" proves READY=1 arrived.
+          for i in $(seq 1 30); do
+            state=$(systemctl show -p ActiveState --value alien-e2e-smoke)
+            [ "$state" = "active" ] && break
+            sleep 1
+          done
+          systemctl status alien-e2e-smoke --no-pager || true
+          [ "$(systemctl show -p ActiveState --value alien-e2e-smoke)" = "active" ]
+
+          # Clean stop propagates through the launcher to the operator.
+          sudo systemctl stop alien-e2e-smoke
+          [ "$(systemctl show -p ActiveState --value alien-e2e-smoke)" = "inactive" ]
+          sudo systemctl disable alien-e2e-smoke 2>/dev/null || true
+          sudo rm /etc/systemd/system/alien-e2e-smoke.service
+          sudo systemctl daemon-reload
+
+      - name: Upload logs on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: e2e-os-service-logs
+          path: |
+            /tmp/**/launcher*.log
+          if-no-files-found: ignore

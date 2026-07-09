@@ -2261,6 +2261,12 @@ async fn run_local_pull_model(
         public_endpoints: public_endpoints.cloned(),
         enable_local_debug: args.enable_local_debug,
         local_debug_shell_command: args.local_debug_shell_command.clone(),
+        // `alien-deploy up` drives dev/local installs; keep the legacy
+        // direct-operator service there — self-update is a production
+        // install concern (`operator install`).
+        launcher_binary: None,
+        no_launcher: true,
+        service_user: None,
     };
 
     super::operator::install_service(install_args)?;

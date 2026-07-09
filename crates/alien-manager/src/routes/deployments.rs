@@ -94,6 +94,11 @@ pub struct DeploymentResponse {
     // on every operator /v1/sync. NULL until the operator has first reported.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub operator_version: Option<String>,
+    /// Version of the frozen alien-launcher supervising the operator
+    /// (os-service only). Drives the "redeploy required" surface when it is
+    /// below a target's minLauncherVersion.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub launcher_version: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub operator_os: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -284,6 +289,7 @@ fn record_to_response(
         deployment_group,
         // Surface the operator self-update inventory.
         operator_version: r.operator_version.clone(),
+        launcher_version: r.launcher_version.clone(),
         operator_os: r.operator_os.clone(),
         operator_arch: r.operator_arch.clone(),
         packaging: r.packaging.clone(),

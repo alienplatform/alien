@@ -711,12 +711,17 @@ dependencies = [
  "alien-core",
  "alien-error",
  "chrono",
+ "command-group",
+ "nix 0.29.0",
+ "sd-notify",
  "semver",
  "serde",
  "serde_json",
  "sha2 0.10.9",
+ "signal-hook",
  "tempfile",
  "tracing",
+ "tracing-subscriber",
  "ureq 3.3.0",
 ]
 
@@ -2760,6 +2765,16 @@ dependencies = [
  "crossterm",
  "unicode-segmentation",
  "unicode-width 0.2.2",
+]
+
+[[package]]
+name = "command-group"
+version = "5.0.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "a68fa787550392a9d58f44c21a3022cfb3ea3e2458b7f85d3b399d0ceeccf409"
+dependencies = [
+ "nix 0.27.1",
+ "winapi",
 ]
 
 [[package]]
@@ -6080,6 +6095,29 @@ dependencies = [
 ]
 
 [[package]]
+name = "nix"
+version = "0.27.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "2eb04e9c688eff1c89d72b407f168cf79bb9e867a9d3323ed6c01519eb9cc053"
+dependencies = [
+ "bitflags 2.13.0",
+ "cfg-if",
+ "libc",
+]
+
+[[package]]
+name = "nix"
+version = "0.29.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "71e2746dc3a24dd78b3cfcb7be93368c6de9963d30f43a6a73998a9cf4b17b46"
+dependencies = [
+ "bitflags 2.13.0",
+ "cfg-if",
+ "cfg_aliases",
+ "libc",
+]
+
+[[package]]
 name = "nom"
 version = "7.1.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -8365,6 +8403,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "sd-notify"
+version = "0.4.5"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "b943eadf71d8b69e661330cb0e2656e31040acf21ee7708e2c238a0ec6af2bf4"
+dependencies = [
+ "libc",
+]
+
+[[package]]
 name = "sea-query"
 version = "0.32.7"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -10462,14 +10509,10 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "dea7109cdcd5864d4eeb1b58a1648dc9bf520360d7af16ec26d0a9354bafcfc0"
 dependencies = [
  "base64 0.22.1",
- "flate2",
  "log",
  "percent-encoding",
- "rustls 0.23.41",
- "rustls-pki-types",
  "ureq-proto",
  "utf8-zero",
- "webpki-roots 1.0.8",
 ]
 
 [[package]]

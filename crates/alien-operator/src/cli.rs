@@ -22,6 +22,7 @@ use tracing_subscriber::{fmt, layer::SubscriberExt, util::SubscriberInitExt, Env
 #[derive(Parser, Debug)]
 #[command(
     name = "operator",
+    version,
     about = "Operator - Continuous deployment service (pull model)",
     long_about = "Run the Operator for continuous deployment using the pull model.
 

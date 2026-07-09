@@ -6407,6 +6407,13 @@
               }
             ]
           },
+          "launcherVersion": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Version of the frozen alien-launcher supervising the operator\n(os-service only). Drives the \"redeploy required\" surface when it is\nbelow a target's minLauncherVersion."
+          },
           "name": {
             "type": "string"
           },

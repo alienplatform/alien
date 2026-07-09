@@ -446,6 +446,686 @@ pub fn test_update_env() -> UpdateEnv {
     }
 }
 
+
+// ---------------------------------------------------------------------------
+// Parameterized state-machine scenarios
+// ---------------------------------------------------------------------------
+//
+// The Phase-0 state-machine suite, written against ANY `VersionStore` so the
+// platform stores prove they honor the on-disk protocol by running the exact
+// same scenarios the stub runs. `TestStoreOps` supplies the test-only store
+// knowledge (how to install a version, where `state/` lives).
+
+use crate::core::state_machine::{
+    classify_startup, Machine, RunConfig, StartupAction,
+};
+use alien_core::sync::OperatorUpdatePhase;
+use chrono::Utc;
+
+/// Test-only operations every store under test must provide.
+pub trait TestStoreOps: VersionStore {
+    /// Create `versions/<v>/alien-operator` with deterministic content.
+    fn install_version(&self, version: &Version);
+    /// The live `state/` directory (for mutation + restore assertions).
+    fn state_dir_path(&self) -> PathBuf;
+    /// The store root (for snapshot-existence assertions).
+    fn store_root(&self) -> PathBuf;
+}
+
+impl TestStoreOps for StubStore {
+    fn install_version(&self, version: &Version) {
+        StubStore::install_version(self, version)
+    }
+    fn state_dir_path(&self) -> PathBuf {
+        self.state_dir()
+    }
+    fn store_root(&self) -> PathBuf {
+        self.root().to_path_buf()
+    }
+}
+
+pub fn test_run_config() -> RunConfig {
+    RunConfig {
+        probation_window: Duration::from_millis(200),
+        probe_interval: Duration::from_millis(5),
+        poll_interval: Duration::from_millis(5),
+        heartbeat_interval: Duration::from_millis(10),
+        stop_grace: Duration::from_millis(50),
+        restart_backoff_base: Duration::from_millis(5),
+        restart_backoff_cap: Duration::from_millis(40),
+        healthy_reset: Duration::from_millis(150),
+        max_swap_attempts: 3,
+        operator_binary: "alien-operator".to_string(),
+        ..RunConfig::default()
+    }
+}
+
+fn v(s: &str) -> Version {
+    Version::parse(s).expect("test version should parse")
+}
+
+/// Seed the baseline: 1.3.5 installed, both pointers on it, a state DB.
+pub fn seed_base<S: TestStoreOps>(store: &S) {
+    store.install_version(&v("1.3.5"));
+    store.set_current(&v("1.3.5")).unwrap();
+    store.set_last_stable(&v("1.3.5")).unwrap();
+    std::fs::write(store.state_dir_path().join("db"), b"state-v1").unwrap();
+}
+
+/// Install 1.4.0 and write a valid pending marker (real sha256).
+pub fn stage_valid<S: TestStoreOps>(store: &S, config: &RunConfig) -> PendingMarker {
+    store.install_version(&v("1.4.0"));
+    let binary = store.stage_dir(&v("1.4.0")).join(&config.operator_binary);
+    let sha256 = store_common::file_sha256(&binary).unwrap();
+    let pending = PendingMarker {
+        version: v("1.4.0"),
+        sha256,
+        staged_at: Utc::now(),
+    };
+    store.write_pending(&pending).unwrap();
+    pending
+}
+
+pub fn probation_marker(attempt: u32, started_ago: Duration) -> ProbationMarker {
+    ProbationMarker {
+        new: v("1.4.0"),
+        old: v("1.3.5"),
+        started_at: Utc::now() - chrono::Duration::from_std(started_ago).unwrap(),
+        attempt,
+    }
+}
+
+pub fn assert_steady_promoted<S: TestStoreOps>(store: &S) {
+    assert_eq!(store.current().unwrap(), Some(v("1.4.0")));
+    assert_eq!(store.last_stable().unwrap(), Some(v("1.4.0")));
+    assert!(store.read_pending().unwrap().is_none(), "pending cleared");
+    assert!(store.read_probation().unwrap().is_none(), "probation cleared");
+    assert!(
+        !store.store_root().join("state-snapshots/1.3.5").exists(),
+        "snapshot dropped on promote"
+    );
+}
+
+pub fn assert_rolled_back<S: TestStoreOps>(store: &S, expected_attempts: u32) {
+    assert_eq!(store.current().unwrap(), Some(v("1.3.5")));
+    assert_eq!(store.last_stable().unwrap(), Some(v("1.3.5")));
+    assert_eq!(
+        std::fs::read(store.state_dir_path().join("db")).unwrap(),
+        b"state-v1",
+        "state restored from the snapshot"
+    );
+    assert!(store.read_pending().unwrap().is_none());
+    assert!(store.read_probation().unwrap().is_none());
+    let record = store
+        .read_failure(&v("1.4.0"))
+        .unwrap()
+        .expect("failure record written");
+    assert_eq!(record.attempts, expected_attempts);
+    assert_eq!(record.phase, OperatorUpdatePhase::Apply);
+}
+
+macro_rules! machine {
+    ($store:expr, $child:expr, $probe:expr, $host:expr, $config:expr) => {
+        Machine {
+            store: &$store,
+            child: &mut $child,
+            probe: &$probe,
+            host: &$host,
+            config: &$config,
+        }
+    };
+}
+
+// -- the scenarios ---------------------------------------------------------
+
+pub fn scenario_happy_promote<S: TestStoreOps>(make: impl Fn(&Path) -> S) {
+    let dir = tempfile::tempdir().unwrap();
+    let store = make(dir.path());
+    seed_base(&store);
+    let config = test_run_config();
+    let pending = stage_valid(&store, &config);
+
+    let mut child = StubChild::new([SpawnOutcome::UpNotReady]);
+    let probe = StubProbe::ReadyAt(Instant::now() + Duration::from_millis(30));
+    let host = StubHost::new();
+    let mut m = machine!(store, child, probe, host, config);
+
+    let action = classify_startup(&store, &config).unwrap();
+    assert_eq!(action, StartupAction::RunSwap { pending });
+    let handle = m.execute_startup(action).unwrap();
+
+    assert_steady_promoted(&store);
+    assert_eq!(
+        store.list_versions().unwrap(),
+        vec![v("1.4.0")],
+        "old version gc'd after promote"
+    );
+    assert_eq!(child.spawned.len(), 1, "exactly the new operator spawned");
+    assert_eq!(
+        child.spawned[0].0,
+        store.stage_dir(&v("1.4.0")).join("alien-operator")
+    );
+    assert!(child.try_wait(&handle).unwrap().is_none(), "still running");
+    assert!(
+        host.ready_calls.load(Ordering::SeqCst) >= 1,
+        "READY reported on promote"
+    );
+}
+
+pub fn scenario_rollback_restores_state<S: TestStoreOps>(make: impl Fn(&Path) -> S) {
+    let dir = tempfile::tempdir().unwrap();
+    let store = make(dir.path());
+    seed_base(&store);
+    let config = test_run_config();
+    stage_valid(&store, &config);
+
+    // The "new operator" (1.4.0) migrates the DB on spawn; rollback must
+    // undo it. The old operator's respawn must NOT re-mutate (path filter).
+    let state_db = store.state_dir_path().join("db");
+    let mut child = StubChild::new([SpawnOutcome::UpNotReady, SpawnOutcome::UpNotReady]);
+    child.on_spawn = Some(Box::new(move |binary: &Path| {
+        if binary.to_string_lossy().contains("1.4.0") {
+            std::fs::write(&state_db, b"MIGRATED").unwrap();
+        }
+    }));
+    let probe = StubProbe::Always(false);
+    let host = StubHost::new();
+    let mut m = machine!(store, child, probe, host, config);
+
+    let action = classify_startup(&store, &config).unwrap();
+    m.execute_startup(action).unwrap();
+
+    assert_rolled_back(&store, 1);
+    assert_eq!(child.stop_calls.len(), 1, "failed child was stopped");
+    assert_eq!(child.spawned.len(), 2, "old operator respawned");
+    let record = store.read_failure(&v("1.4.0")).unwrap().unwrap();
+    assert!(
+        record.message.contains("probation window"),
+        "message explains the timeout: {}",
+        record.message
+    );
+
+    // Second identical attempt increments the count.
+    let config2 = test_run_config();
+    stage_valid(&store, &config2);
+    let mut child2 = StubChild::new([SpawnOutcome::UpNotReady, SpawnOutcome::UpNotReady]);
+    let probe2 = StubProbe::Always(false);
+    let host2 = StubHost::new();
+    let mut m2 = machine!(store, child2, probe2, host2, config2);
+    let action = classify_startup(&store, &config2).unwrap();
+    m2.execute_startup(action).unwrap();
+    assert_rolled_back(&store, 2);
+}
+
+pub fn scenario_rollback_on_probation_crash<S: TestStoreOps>(make: impl Fn(&Path) -> S) {
+    let dir = tempfile::tempdir().unwrap();
+    let store = make(dir.path());
+    seed_base(&store);
+    let config = test_run_config();
+    stage_valid(&store, &config);
+
+    let mut child = StubChild::new([SpawnOutcome::ExitImmediately(1), SpawnOutcome::UpNotReady]);
+    let probe = StubProbe::Always(false);
+    let host = StubHost::new();
+    let mut m = machine!(store, child, probe, host, config);
+
+    let action = classify_startup(&store, &config).unwrap();
+    m.execute_startup(action).unwrap();
+
+    assert_rolled_back(&store, 1);
+    let record = store.read_failure(&v("1.4.0")).unwrap().unwrap();
+    assert!(record.message.contains("code 1"), "{}", record.message);
+}
+
+/// Every startup-classification row, constructed on disk and executed to a
+/// coherent terminal state.
+pub fn scenario_classification_rows<S: TestStoreOps>(make: impl Fn(&Path) -> S) {
+    let config = test_run_config();
+
+    // Row 1 — steady state.
+    {
+        let dir = tempfile::tempdir().unwrap();
+        let store = make(dir.path());
+        seed_base(&store);
+        assert_eq!(
+            classify_startup(&store, &config).unwrap(),
+            StartupAction::SpawnCurrent
+        );
+    }
+
+    // Row 1, first install: last-stable recorded after a passed gate.
+    {
+        let dir = tempfile::tempdir().unwrap();
+        let store = make(dir.path());
+        store.install_version(&v("1.3.5"));
+        store.set_current(&v("1.3.5")).unwrap();
+        assert_eq!(
+            classify_startup(&store, &config).unwrap(),
+            StartupAction::SpawnCurrent
+        );
+        let mut child = StubChild::new([SpawnOutcome::UpNotReady]);
+        let probe = StubProbe::Always(true);
+        let host = StubHost::new();
+        let mut m = machine!(store, child, probe, host, config);
+        m.execute_startup(StartupAction::SpawnCurrent).unwrap();
+        assert_eq!(store.last_stable().unwrap(), Some(v("1.3.5")));
+        assert!(host.ready_calls.load(Ordering::SeqCst) >= 1);
+    }
+
+    // Row 2 guard — leftover pending after a completed promote.
+    {
+        let dir = tempfile::tempdir().unwrap();
+        let store = make(dir.path());
+        seed_base(&store);
+        store.install_version(&v("1.4.0"));
+        store.set_current(&v("1.4.0")).unwrap();
+        store.set_last_stable(&v("1.4.0")).unwrap();
+        let binary = store.stage_dir(&v("1.4.0")).join(&config.operator_binary);
+        let pending = PendingMarker {
+            version: v("1.4.0"),
+            sha256: store_common::file_sha256(&binary).unwrap(),
+            staged_at: Utc::now(),
+        };
+        store.write_pending(&pending).unwrap();
+
+        let action = classify_startup(&store, &config).unwrap();
+        assert_eq!(action, StartupAction::DiscardLeftoverPending { pending });
+        let mut child = StubChild::new([SpawnOutcome::UpNotReady]);
+        let probe = StubProbe::Always(true);
+        let host = StubHost::new();
+        let mut m = machine!(store, child, probe, host, config);
+        m.execute_startup(action).unwrap();
+        assert!(store.read_pending().unwrap().is_none());
+        assert_eq!(store.current().unwrap(), Some(v("1.4.0")));
+    }
+
+    // Row 3 — invalid pending discarded, current spawned, no swap.
+    {
+        let dir = tempfile::tempdir().unwrap();
+        let store = make(dir.path());
+        seed_base(&store);
+        store.install_version(&v("1.4.0"));
+        let pending = PendingMarker {
+            version: v("1.4.0"),
+            sha256: "0".repeat(64),
+            staged_at: Utc::now(),
+        };
+        store.write_pending(&pending).unwrap();
+
+        let action = classify_startup(&store, &config).unwrap();
+        assert_eq!(action, StartupAction::DiscardInvalidPending { pending });
+        let mut child = StubChild::new([SpawnOutcome::UpNotReady]);
+        let probe = StubProbe::Always(true);
+        let host = StubHost::new();
+        let mut m = machine!(store, child, probe, host, config);
+        m.execute_startup(action).unwrap();
+        assert!(store.read_pending().unwrap().is_none());
+        assert_eq!(store.current().unwrap(), Some(v("1.3.5")));
+        assert_eq!(
+            child.spawned[0].0,
+            store.stage_dir(&v("1.3.5")).join("alien-operator")
+        );
+    }
+
+    // Row 4 — mid-probation crash: resume and promote.
+    {
+        let dir = tempfile::tempdir().unwrap();
+        let store = make(dir.path());
+        seed_base(&store);
+        stage_valid(&store, &config);
+        store.snapshot_state(&v("1.3.5")).unwrap();
+        store
+            .write_probation(&probation_marker(1, Duration::from_millis(50)))
+            .unwrap();
+        store.set_current(&v("1.4.0")).unwrap();
+
+        let action = classify_startup(&store, &config).unwrap();
+        let StartupAction::ResumeProbation { remaining, .. } = &action else {
+            panic!("expected ResumeProbation, got {action:?}");
+        };
+        assert!(*remaining > Duration::ZERO && *remaining < config.probation_window);
+        let mut child = StubChild::new([SpawnOutcome::UpNotReady]);
+        let probe = StubProbe::Always(true);
+        let host = StubHost::new();
+        let mut m = machine!(store, child, probe, host, config);
+        m.execute_startup(action).unwrap();
+        assert_steady_promoted(&store);
+    }
+
+    // Row 4, expired window: roll back even with a ready probe.
+    {
+        let dir = tempfile::tempdir().unwrap();
+        let store = make(dir.path());
+        seed_base(&store);
+        stage_valid(&store, &config);
+        store.snapshot_state(&v("1.3.5")).unwrap();
+        store
+            .write_probation(&probation_marker(1, Duration::from_secs(10)))
+            .unwrap();
+        store.set_current(&v("1.4.0")).unwrap();
+
+        let action = classify_startup(&store, &config).unwrap();
+        let StartupAction::ResumeProbation { remaining, .. } = &action else {
+            panic!("expected ResumeProbation, got {action:?}");
+        };
+        assert_eq!(*remaining, Duration::ZERO);
+        let mut child = StubChild::new([SpawnOutcome::UpNotReady, SpawnOutcome::UpNotReady]);
+        let probe = StubProbe::Always(true);
+        let host = StubHost::new();
+        let mut m = machine!(store, child, probe, host, config);
+        m.execute_startup(action).unwrap();
+        assert_rolled_back(&store, 1);
+    }
+
+    // Row 4b — promote began: finish cleanup.
+    {
+        let dir = tempfile::tempdir().unwrap();
+        let store = make(dir.path());
+        seed_base(&store);
+        stage_valid(&store, &config);
+        store.snapshot_state(&v("1.3.5")).unwrap();
+        store
+            .write_probation(&probation_marker(1, Duration::from_millis(10)))
+            .unwrap();
+        store.set_current(&v("1.4.0")).unwrap();
+        store.set_last_stable(&v("1.4.0")).unwrap();
+
+        let action = classify_startup(&store, &config).unwrap();
+        assert!(matches!(action, StartupAction::FinishPromote { .. }), "got {action:?}");
+        let mut child = StubChild::new([SpawnOutcome::UpNotReady]);
+        let probe = StubProbe::Always(true);
+        let host = StubHost::new();
+        let mut m = machine!(store, child, probe, host, config);
+        m.execute_startup(action).unwrap();
+        assert_steady_promoted(&store);
+    }
+
+    // Row 5 — pre-flip crash: resume the swap and promote.
+    {
+        let dir = tempfile::tempdir().unwrap();
+        let store = make(dir.path());
+        seed_base(&store);
+        stage_valid(&store, &config);
+        store.snapshot_state(&v("1.3.5")).unwrap();
+        store
+            .write_probation(&probation_marker(1, Duration::from_millis(10)))
+            .unwrap();
+
+        let action = classify_startup(&store, &config).unwrap();
+        assert!(matches!(action, StartupAction::ResumeSwapAtFlip { .. }), "got {action:?}");
+        let mut child = StubChild::new([SpawnOutcome::UpNotReady]);
+        let probe = StubProbe::Always(true);
+        let host = StubHost::new();
+        let mut m = machine!(store, child, probe, host, config);
+        m.execute_startup(action).unwrap();
+        assert_steady_promoted(&store);
+    }
+
+    // Row 5 cap — attempt budget exhausted: abort to rollback.
+    {
+        let dir = tempfile::tempdir().unwrap();
+        let store = make(dir.path());
+        seed_base(&store);
+        stage_valid(&store, &config);
+        store.snapshot_state(&v("1.3.5")).unwrap();
+        store
+            .write_probation(&probation_marker(config.max_swap_attempts, Duration::from_millis(10)))
+            .unwrap();
+
+        let action = classify_startup(&store, &config).unwrap();
+        assert!(matches!(action, StartupAction::AbortSwap { .. }), "got {action:?}");
+        let mut child = StubChild::new([SpawnOutcome::UpNotReady]);
+        let probe = StubProbe::Always(true);
+        let host = StubHost::new();
+        let mut m = machine!(store, child, probe, host, config);
+        m.execute_startup(action).unwrap();
+        assert_rolled_back(&store, config.max_swap_attempts);
+    }
+
+    // Row 6 — mid-rollback crash (failure record present): finish rollback.
+    {
+        let dir = tempfile::tempdir().unwrap();
+        let store = make(dir.path());
+        seed_base(&store);
+        stage_valid(&store, &config);
+        store.snapshot_state(&v("1.3.5")).unwrap();
+        store
+            .write_probation(&probation_marker(1, Duration::from_millis(10)))
+            .unwrap();
+        store
+            .write_failure(&FailureRecord {
+                version: v("1.4.0"),
+                sha256: "beef".to_string(),
+                phase: OperatorUpdatePhase::Apply,
+                message: "gate failed before the crash".to_string(),
+                attempts: 1,
+                last_failed_at: Utc::now(),
+            })
+            .unwrap();
+        std::fs::write(store.state_dir_path().join("db"), b"MIGRATED").unwrap();
+
+        let action = classify_startup(&store, &config).unwrap();
+        assert!(matches!(action, StartupAction::FinishRollback { .. }), "got {action:?}");
+        let mut child = StubChild::new([SpawnOutcome::UpNotReady]);
+        let probe = StubProbe::Always(true);
+        let host = StubHost::new();
+        let mut m = machine!(store, child, probe, host, config);
+        m.execute_startup(action).unwrap();
+        assert_eq!(store.current().unwrap(), Some(v("1.3.5")));
+        assert_eq!(
+            std::fs::read(store.state_dir_path().join("db")).unwrap(),
+            b"state-v1",
+            "restore re-ran"
+        );
+        assert!(store.read_probation().unwrap().is_none());
+        assert!(store.read_pending().unwrap().is_none());
+    }
+}
+
+// -- crash injection --------------------------------------------------------
+
+/// A store decorator that fails the k-th MUTATING operation, simulating a
+/// launcher crash at every swap-step boundary. Generic so the matrix runs
+/// against any store under test.
+pub struct FailingStore<'a, S: VersionStore> {
+    inner: &'a S,
+    fail_at: u32,
+    mutations: std::cell::Cell<u32>,
+}
+
+impl<'a, S: VersionStore> FailingStore<'a, S> {
+    pub fn new(inner: &'a S, fail_at: u32) -> Self {
+        Self {
+            inner,
+            fail_at,
+            mutations: std::cell::Cell::new(0),
+        }
+    }
+
+    fn trip(&self, op: &str) -> Result<()> {
+        let n = self.mutations.get() + 1;
+        self.mutations.set(n);
+        if n == self.fail_at {
+            Err(AlienError::new(ErrorData::Other {
+                message: format!("injected crash at mutation #{n} ({op})"),
+            }))
+        } else {
+            Ok(())
+        }
+    }
+}
+
+impl<S: VersionStore> VersionStore for FailingStore<'_, S> {
+    fn stage_dir(&self, version: &Version) -> PathBuf {
+        self.inner.stage_dir(version)
+    }
+    fn current(&self) -> Result<Option<Version>> {
+        self.inner.current()
+    }
+    fn last_stable(&self) -> Result<Option<Version>> {
+        self.inner.last_stable()
+    }
+    fn set_current(&self, version: &Version) -> Result<()> {
+        self.trip("set_current")?;
+        self.inner.set_current(version)
+    }
+    fn set_last_stable(&self, version: &Version) -> Result<()> {
+        self.trip("set_last_stable")?;
+        self.inner.set_last_stable(version)
+    }
+    fn snapshot_state(&self, tag: &Version) -> Result<()> {
+        self.trip("snapshot_state")?;
+        self.inner.snapshot_state(tag)
+    }
+    fn restore_state(&self, tag: &Version) -> Result<()> {
+        self.trip("restore_state")?;
+        self.inner.restore_state(tag)
+    }
+    fn drop_snapshot(&self, tag: &Version) -> Result<()> {
+        self.trip("drop_snapshot")?;
+        self.inner.drop_snapshot(tag)
+    }
+    fn state_size(&self) -> Result<u64> {
+        self.inner.state_size()
+    }
+    fn gc(&self, keep: &[Version]) -> Result<()> {
+        self.trip("gc")?;
+        self.inner.gc(keep)
+    }
+    fn read_pending(&self) -> Result<Option<PendingMarker>> {
+        self.inner.read_pending()
+    }
+    fn write_pending(&self, marker: &PendingMarker) -> Result<()> {
+        self.trip("write_pending")?;
+        self.inner.write_pending(marker)
+    }
+    fn clear_pending(&self) -> Result<()> {
+        self.trip("clear_pending")?;
+        self.inner.clear_pending()
+    }
+    fn read_probation(&self) -> Result<Option<ProbationMarker>> {
+        self.inner.read_probation()
+    }
+    fn write_probation(&self, marker: &ProbationMarker) -> Result<()> {
+        self.trip("write_probation")?;
+        self.inner.write_probation(marker)
+    }
+    fn clear_probation(&self) -> Result<()> {
+        self.trip("clear_probation")?;
+        self.inner.clear_probation()
+    }
+    fn read_failure(&self, version: &Version) -> Result<Option<FailureRecord>> {
+        self.inner.read_failure(version)
+    }
+    fn write_failure(&self, record: &FailureRecord) -> Result<()> {
+        self.trip("write_failure")?;
+        self.inner.write_failure(record)
+    }
+    fn list_versions(&self) -> Result<Vec<Version>> {
+        self.inner.list_versions()
+    }
+    fn free_space_for_snapshot(&self) -> Result<()> {
+        self.inner.free_space_for_snapshot()
+    }
+}
+
+/// Crash-inject at every mutating store call of the promote path, recover
+/// with a fresh machine over the same store, and assert convergence.
+pub fn scenario_crash_injection_promote<S: TestStoreOps>(make: impl Fn(&Path) -> S) {
+    for fail_at in 1..=8u32 {
+        let dir = tempfile::tempdir().unwrap();
+        let store = make(dir.path());
+        seed_base(&store);
+        let config = test_run_config();
+        stage_valid(&store, &config);
+
+        {
+            let failing = FailingStore::new(&store, fail_at);
+            let mut child = StubChild::new([SpawnOutcome::UpNotReady]);
+            let probe = StubProbe::Always(true);
+            let host = StubHost::new();
+            let mut m = machine!(failing, child, probe, host, config);
+            let action = classify_startup(&failing, &config).unwrap();
+            assert!(
+                m.execute_startup(action).is_err(),
+                "fail_at={fail_at}: the injected crash must surface"
+            );
+        }
+
+        let mut child = StubChild::new([
+            SpawnOutcome::UpNotReady,
+            SpawnOutcome::UpNotReady,
+            SpawnOutcome::UpNotReady,
+        ]);
+        let probe = StubProbe::Always(true);
+        let host = StubHost::new();
+        let mut m = machine!(store, child, probe, host, config);
+        let action = classify_startup(&store, &config).unwrap();
+        m.execute_startup(action)
+            .unwrap_or_else(|e| panic!("fail_at={fail_at}: recovery must succeed: {e}"));
+
+        assert!(store.read_probation().unwrap().is_none(), "fail_at={fail_at}");
+        assert!(store.read_pending().unwrap().is_none(), "fail_at={fail_at}");
+        let current = store.current().unwrap().expect("current set");
+        let stable = store.last_stable().unwrap().expect("stable set");
+        assert_eq!(current, stable, "fail_at={fail_at}: pointers agree");
+        assert!(
+            current == v("1.4.0") || current == v("1.3.5"),
+            "fail_at={fail_at}: terminal version is one of the pair"
+        );
+        if current == v("1.3.5") {
+            assert_eq!(
+                std::fs::read(store.state_dir_path().join("db")).unwrap(),
+                b"state-v1",
+                "fail_at={fail_at}: rolled back ⇒ state restored"
+            );
+        }
+    }
+}
+
+/// Same matrix on the rollback path (probe never ready).
+pub fn scenario_crash_injection_rollback<S: TestStoreOps>(make: impl Fn(&Path) -> S) {
+    for fail_at in 4..=8u32 {
+        let dir = tempfile::tempdir().unwrap();
+        let store = make(dir.path());
+        seed_base(&store);
+        let config = test_run_config();
+        stage_valid(&store, &config);
+
+        {
+            let failing = FailingStore::new(&store, fail_at);
+            let mut child =
+                StubChild::new([SpawnOutcome::UpNotReady, SpawnOutcome::UpNotReady]);
+            let probe = StubProbe::Always(false);
+            let host = StubHost::new();
+            let mut m = machine!(failing, child, probe, host, config);
+            let action = classify_startup(&failing, &config).unwrap();
+            assert!(m.execute_startup(action).is_err(), "fail_at={fail_at}");
+        }
+
+        let mut child = StubChild::new([
+            SpawnOutcome::UpNotReady,
+            SpawnOutcome::UpNotReady,
+            SpawnOutcome::UpNotReady,
+        ]);
+        let probe = StubProbe::Always(false);
+        let host = StubHost::new();
+        let mut m = machine!(store, child, probe, host, config);
+        let action = classify_startup(&store, &config).unwrap();
+        m.execute_startup(action)
+            .unwrap_or_else(|e| panic!("fail_at={fail_at}: recovery must succeed: {e}"));
+
+        assert!(store.read_probation().unwrap().is_none(), "fail_at={fail_at}");
+        assert!(store.read_pending().unwrap().is_none(), "fail_at={fail_at}");
+        assert_eq!(store.current().unwrap(), Some(v("1.3.5")), "fail_at={fail_at}");
+        assert_eq!(
+            std::fs::read(store.state_dir_path().join("db")).unwrap(),
+            b"state-v1",
+            "fail_at={fail_at}: state restored"
+        );
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Tests — the stubs themselves must honor the trait contracts
 // ---------------------------------------------------------------------------

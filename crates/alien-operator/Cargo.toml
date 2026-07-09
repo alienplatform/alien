@@ -96,6 +96,10 @@ windows-service = "0.7"
 # the signing workstream ships a pinned key; CI builds with it on so the
 # enforcing path never bitrots. Off-path logs a loud "DISABLED" warning.
 enforce-signature = ["dep:ed25519-dalek"]
+# E2E test seam: allows ALIEN_OPERATOR_FAKE_VERSION to override the reported
+# version so one compiled binary can impersonate "old" and "new" versions.
+# Guarded by a compile_error! against release builds.
+test-hooks = []
 
 [dev-dependencies]
 tempfile = { workspace = true }
