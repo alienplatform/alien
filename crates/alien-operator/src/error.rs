@@ -62,6 +62,17 @@ pub enum ErrorData {
     )]
     SyncFailed { message: String },
 
+    /// The os-service self-update actuator failed (download, staging, or
+    /// marker I/O). Retryable — the manager keeps advertising the target and
+    /// the actuator backs off between attempts.
+    #[error(
+        code = "SELF_UPDATE_FAILED",
+        message = "Self-update failed: {message}",
+        retryable = "true",
+        internal = "true"
+    )]
+    SelfUpdateFailed { message: String },
+
     #[error(
         code = "DEPLOYMENT_FAILED",
         message = "{message}",

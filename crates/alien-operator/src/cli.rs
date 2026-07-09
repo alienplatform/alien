@@ -183,6 +183,15 @@ pub fn cli_main_with_hooks(init_hook: InitHook, debug_loop_hook: DebugLoopHook) 
         eprintln!("Error: {}", e);
         std::process::exit(1);
     }
+
+    // A staged self-update requests the update-handoff exit code (10): the
+    // supervising launcher observes it via the exit status and performs the
+    // health-gated swap. Runs after the runtime has fully shut down so the
+    // InstanceLock and the state DB are released before the swap.
+    if let Some(code) = crate::self_update::requested_exit_code() {
+        drop(rt);
+        std::process::exit(code);
+    }
 }
 
 /// Convenience wrapper: [`cli_main_with_hook`] with a no-op init hook.

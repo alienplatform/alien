@@ -450,6 +450,7 @@ impl DeploymentLoop {
                                 observed_inventory_batches: Vec::new(),
                                 capabilities: Vec::new(),
                                 operator_version: None,
+                                launcher_version: None,
                                 // Background driver loop — no operator sync here,
                                 // so leave the operator-inventory columns untouched.
                                 operator_os: None,
@@ -992,6 +993,7 @@ mod tests {
             packaging: None,
             operator_image_repository: None,
             target_operator_version: None,
+            launcher_version: None,
         }
     }
 

@@ -84,6 +84,11 @@ pub struct DeploymentRecord {
     pub operator_arch: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub packaging: Option<String>,
+    /// Version of the supervising alien-launcher (os-service only; reported,
+    /// never driven). NULL for Kubernetes / launcher-less operators. Gates
+    /// binary targets: a target is withheld when this is below the
+    /// artifact's min_launcher_version ("redeploy required").
+    pub launcher_version: Option<String>,
     // Image repository the agent was pulled from, reported on sync.
     // Surfaced in the dashboard pin-version UI so admins see the registry.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -263,6 +268,10 @@ pub struct ReconcileData {
     pub operator_arch: Option<String>,
     pub packaging: Option<String>,
     pub operator_image_repository: Option<String>,
+    /// Supervising launcher version (os-service only) — forwarded like the
+    /// rest of the inventory so platform dashboards can surface
+    /// "redeploy required".
+    pub launcher_version: Option<String>,
     /// Structured `OperatorUpdateReport` the operator attached on this sync,
     /// forwarded verbatim into the platform reconcile so the dashboard's
     /// "Alien Operator Update" event reflects a real failure/progress signal.
@@ -383,6 +392,7 @@ pub trait DeploymentStore: Send + Sync {
         caller: &crate::auth::Subject,
         id: &str,
         operator_version: Option<&str>,
+        launcher_version: Option<&str>,
         operator_os: Option<&str>,
         operator_arch: Option<&str>,
         packaging: Option<&str>,
@@ -394,7 +404,7 @@ pub trait DeploymentStore: Send + Sync {
     /// sync handler emits `operator_target` on every /v1/sync until the agent
     /// catches up. This is the admin-side knob behind the dashboard's
     /// "Set target version" control and the standalone manager's
-    /// `PUT /v1/deployments/:id/target-agent-version` endpoint.
+    /// `PUT /v1/deployments/:id/target-operator-version` endpoint.
     async fn set_target_operator_version(
         &self,
         caller: &crate::auth::Subject,

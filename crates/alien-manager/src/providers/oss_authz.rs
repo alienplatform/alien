@@ -294,6 +294,7 @@ mod tests {
             packaging: None,
             operator_image_repository: None,
             target_operator_version: None,
+            launcher_version: None,
         }
     }
 

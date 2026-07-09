@@ -41,6 +41,7 @@ aegis = { workspace = true }
 
 # Serialization
 serde = { workspace = true, features = ["derive"] }
+sha2 = { workspace = true }
 serde_json = { workspace = true }
 
 # CLI & Logging
@@ -56,6 +57,11 @@ async-trait = { workspace = true }
 
 # Utilities
 chrono = { workspace = true, features = ["serde"] }
+# Free-disk-space preflight for self-update downloads (cross-platform).
+fs2 = "0.4"
+# Self-update artifact signature verification; only compiled with the
+# `enforce-signature` feature (off by default until the signing workstream).
+ed25519-dalek = { workspace = true, optional = true }
 uuid = { workspace = true, features = ["v4"] }
 url = { workspace = true }
 hostname = { workspace = true }
@@ -84,7 +90,12 @@ libc = "0.2"
 
 [target.'cfg(windows)'.dependencies]
 windows-service = "0.7"
-fs2 = "0.4"
+
+[features]
+# ed25519 verification of downloaded self-update artifacts. Default OFF until
+# the signing workstream ships a pinned key; CI builds with it on so the
+# enforcing path never bitrots. Off-path logs a loud "DISABLED" warning.
+enforce-signature = ["dep:ed25519-dalek"]
 
 [dev-dependencies]
 tempfile = { workspace = true }

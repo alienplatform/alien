@@ -69,6 +69,15 @@ pub struct SyncRequest {
     /// `operator_target`. Optional for back-compat with older operators.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub operator_version: Option<String>,
+    /// Version of the `alien-launcher` supervising this operator (os-service
+    /// packaging only; sourced from `ALIEN_LAUNCHER_VERSION`, which the launcher
+    /// sets on spawn). Reported, never driven — the launcher is frozen and only
+    /// changes via a state-preserving redeploy. The manager compares it against
+    /// `OperatorBinaryTarget::min_launcher_version` and withholds targets the
+    /// installed launcher is too old to actuate. None on Kubernetes and for
+    /// operators not run under a launcher.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub launcher_version: Option<String>,
     /// Host OS the operator runs on. From `std::env::consts::OS`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub operator_os: Option<OperatorOs>,
@@ -285,20 +294,34 @@ pub struct OperatorTarget {
 
 /// OS-service binary upgrade payload — the operator downloads, verifies the
 /// SHA-256, stages the binary, and exits; the launcher performs the
-/// health-gated swap. The `signature` field is **future work**: it rides along
-/// on the wire so newer operators can enforce it once the signing infrastructure
-/// lands, but the current launcher trusts SHA-256 + HTTPS for the download.
+/// health-gated swap.
+///
+/// The manager resolves the artifact for THIS host's `(os, arch)` — both are
+/// known from the `SyncRequest` — and sends exactly one url + sha256 +
+/// signature. (An earlier draft carried an artifacts map with a single sha256;
+/// that was unsound — one digest cannot cover N different binaries — and
+/// unnecessary, since the manager already knows the host.)
+///
+/// The `signature` field is **future work**: it rides along on the wire so
+/// newer operators can enforce it once the signing infrastructure lands, but
+/// the current launcher trusts SHA-256 + HTTPS for the download.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct OperatorBinaryTarget {
-    /// `(os, arch)` → download URL. Keyed as `"<os>/<arch>"` (e.g. `"linux/x86_64"`).
-    pub artifacts: std::collections::BTreeMap<String, String>,
-    /// SHA-256 digest of the binary, lowercase hex.
+    /// Download URL for this host's `(os, arch)` — resolved by the manager
+    /// from the host's reported `operator_os` / `operator_arch`.
+    pub url: String,
+    /// SHA-256 digest of exactly that artifact, lowercase hex.
     pub sha256: String,
-    /// ed25519 detached signature over the binary, base64-encoded.
+    /// ed25519 detached signature over that artifact, base64-encoded.
     /// **Future:** verified against the launcher's pinned public key before
     /// the binary is exec'd. Not enforced in the current iteration.
     pub signature: String,
+    /// The installed (frozen) launcher must be >= this version, or the manager
+    /// withholds the target and surfaces "redeploy required" instead. The
+    /// launcher never self-updates; it is only replaced by a state-preserving
+    /// redeploy.
+    pub min_launcher_version: String,
 }
 
 /// Kubernetes upgrade payload — the operator writes the full values to a
@@ -355,6 +378,7 @@ mod tests {
             observed_inventory_batches: Vec::new(),
             capabilities: Vec::new(),
             operator_version: None,
+            launcher_version: None,
             operator_os: None,
             operator_arch: None,
             packaging: None,
@@ -434,12 +458,14 @@ mod tests {
     fn test_sync_request_with_self_update_fields_roundtrip() {
         let mut req = empty_sync_request();
         req.operator_version = Some("1.3.5".to_string());
+        req.launcher_version = Some("0.1.0".to_string());
         req.operator_os = Some(OperatorOs::Linux);
         req.operator_arch = Some(OperatorArch::Aarch64);
         req.packaging = Some(OperatorPackaging::Kubernetes);
         req.operator_image_repository = Some("ghcr.io/alien-dev/alien-operator".to_string());
         let json = serde_json::to_value(&req).unwrap();
         assert_eq!(json["operatorVersion"], "1.3.5");
+        assert_eq!(json["launcherVersion"], "0.1.0");
         assert_eq!(json["operatorOs"], "linux");
         assert_eq!(json["operatorArch"], "aarch64");
         assert_eq!(json["packaging"], "kubernetes"); // kebab-case enum
@@ -449,6 +475,7 @@ mod tests {
         );
         let back: SyncRequest = serde_json::from_value(json).unwrap();
         assert_eq!(back.operator_version.as_deref(), Some("1.3.5"));
+        assert_eq!(back.launcher_version.as_deref(), Some("0.1.0"));
         assert_eq!(back.packaging, Some(OperatorPackaging::Kubernetes));
         assert_eq!(back.operator_os, Some(OperatorOs::Linux));
         assert_eq!(back.operator_arch, Some(OperatorArch::Aarch64));
@@ -483,10 +510,20 @@ mod tests {
         let req: SyncRequest = serde_json::from_str(json).unwrap();
         assert_eq!(req.deployment_id, "dep_old");
         assert!(req.operator_version.is_none());
+        assert!(req.launcher_version.is_none());
         assert!(req.operator_os.is_none());
         assert!(req.operator_arch.is_none());
         assert!(req.packaging.is_none());
         assert!(req.operator_update.is_none());
+    }
+
+    /// `launcherVersion` is omitted from the JSON when unset (Kubernetes and
+    /// launcher-less operators), so old managers see no unknown-field noise.
+    #[test]
+    fn test_sync_request_launcher_version_omitted_when_none() {
+        let req = empty_sync_request();
+        let json = serde_json::to_value(&req).unwrap();
+        assert!(json.get("launcherVersion").is_none());
     }
 
     /// The SyncResponse's `operatorTarget` is omitted when None so an old
@@ -545,6 +582,50 @@ mod tests {
             serde_json::from_value::<OperatorUpdateReport>(json).unwrap(),
             failed
         );
+    }
+
+    /// `OperatorBinaryTarget` is per-host resolved: exactly one url + sha256 +
+    /// signature + minLauncherVersion, all camelCase. (The earlier artifacts-map
+    /// shape with a single sha256 was unsound — one digest cannot cover N
+    /// binaries — and must not reappear.)
+    #[test]
+    fn test_operator_binary_target_roundtrip() {
+        let binary = OperatorBinaryTarget {
+            url: "https://example.com/releases/v1.4.0/alien-operator-1.4.0-linux-x86_64"
+                .to_string(),
+            sha256: "a94a8fe5ccb19ba61c4c0873d391e987982fbbd3f9c71a1e4a6f2e0e6d5c4b3a"
+                .to_string(),
+            signature: "c2lnbmF0dXJlLXBsYWNlaG9sZGVy".to_string(),
+            min_launcher_version: "0.1.0".to_string(),
+        };
+        let target = OperatorTarget {
+            version: "1.4.0".to_string(),
+            min_supported_version: "1.0.0".to_string(),
+            binary: Some(binary),
+            helm: None,
+        };
+        let json = serde_json::to_value(&target).unwrap();
+        assert!(json.get("helm").is_none(), "helm must be omitted");
+        let b = &json["binary"];
+        assert_eq!(
+            b["url"],
+            "https://example.com/releases/v1.4.0/alien-operator-1.4.0-linux-x86_64"
+        );
+        assert_eq!(
+            b["sha256"],
+            "a94a8fe5ccb19ba61c4c0873d391e987982fbbd3f9c71a1e4a6f2e0e6d5c4b3a"
+        );
+        assert_eq!(b["signature"], "c2lnbmF0dXJlLXBsYWNlaG9sZGVy");
+        assert_eq!(b["minLauncherVersion"], "0.1.0");
+        assert!(
+            b.get("artifacts").is_none(),
+            "the artifacts map shape must not reappear on the wire"
+        );
+        let back: OperatorTarget = serde_json::from_value(json).unwrap();
+        let back_binary = back.binary.expect("binary should round-trip");
+        assert_eq!(back_binary.min_launcher_version, "0.1.0");
+        assert_eq!(back_binary.sha256.len(), 64);
+        assert!(back.helm.is_none());
     }
 
     #[test]

@@ -1,0 +1,38 @@
+[package]
+name = "alien-launcher"
+version.workspace = true
+edition = "2021"
+license-file.workspace = true
+publish = false
+description = "Supervisor for the alien-operator OS-service packaging — health-gated version swaps with last-stable rollback"
+
+[[bin]]
+name = "alien-launcher"
+path = "src/main.rs"
+
+[dependencies]
+# Alien crates
+alien-core = { workspace = true }
+alien-error = { workspace = true }
+
+# OS-agnostic core dependencies ONLY. The launcher is deliberately synchronous
+# (no tokio): it supervises one child and polls one endpoint, and the smallest
+# possible dependency tree is a design goal for the binary that must never break.
+serde = { workspace = true, features = ["derive"] }
+serde_json = { workspace = true }
+semver = { workspace = true, features = ["serde"] }
+ureq = { workspace = true }
+sha2 = { workspace = true }
+chrono = { workspace = true, features = ["serde"] }
+tracing = { workspace = true }
+
+[dev-dependencies]
+tempfile = { workspace = true }
+
+# Platform shims are target-gated so they are physically unbuildable from
+# `src/core/` on the wrong OS. Populated as each shim lands.
+[target.'cfg(unix)'.dependencies]
+# nix (or rustix), command-group, sd-notify — land with the Linux/macOS shims.
+
+[target.'cfg(windows)'.dependencies]
+# windows-service, windows-sys, junction — land with the Windows shim.

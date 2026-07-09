@@ -104,6 +104,40 @@ impl DeploymentLoopTransport for OperatorTransport {
 /// 3. Runs alien-deployment::runner::run_step_loop() with OperatorTransport
 /// 4. OperatorTransport persists state and re-reads config after each step
 /// 5. Sync loop will pick up changes and report to manager
+/// Health condition 5 ("the deployment loop is progressing") as a
+/// consecutive-error tracker: a single failed tick is normal (transient cloud
+/// errors, retries); the readiness flag drops only after
+/// [`LoopHealth::UNREADY_THRESHOLD`] consecutive failures — a crash-looping
+/// tick — and recovers on the next success.
+pub struct LoopHealth {
+    flag: std::sync::Arc<std::sync::atomic::AtomicBool>,
+    consecutive_errors: u32,
+}
+
+impl LoopHealth {
+    /// Consecutive failed ticks after which the loop is considered unhealthy.
+    pub const UNREADY_THRESHOLD: u32 = 3;
+
+    pub fn new(flag: std::sync::Arc<std::sync::atomic::AtomicBool>) -> Self {
+        Self {
+            flag,
+            consecutive_errors: 0,
+        }
+    }
+
+    pub fn record_ok(&mut self) {
+        self.consecutive_errors = 0;
+        self.flag.store(true, std::sync::atomic::Ordering::Release);
+    }
+
+    pub fn record_err(&mut self) {
+        self.consecutive_errors = self.consecutive_errors.saturating_add(1);
+        if self.consecutive_errors >= Self::UNREADY_THRESHOLD {
+            self.flag.store(false, std::sync::atomic::Ordering::Release);
+        }
+    }
+}
+
 pub async fn run_deployment_loop(state: Arc<OperatorState>) {
     let interval = Duration::from_secs(state.config.deployment_interval_seconds);
 
@@ -112,15 +146,19 @@ pub async fn run_deployment_loop(state: Arc<OperatorState>) {
         "Starting deployment loop"
     );
 
+    let mut health = LoopHealth::new(state.readiness.deployment_loop_ok.clone());
+
     loop {
         match run_deployment_continuously(&state).await {
             Ok(steps) => {
+                health.record_ok();
                 if steps > 0 {
                     info!(steps = steps, "Deployment completed");
                 }
             }
             Err(e) => {
                 error!(error = %e, "Deployment failed");
+                health.record_err();
             }
         }
 
@@ -557,5 +595,38 @@ mod tests {
             .unwrap();
 
         assert_eq!(enriched.public_endpoints, Some(public_endpoints));
+    }
+}
+
+#[cfg(test)]
+mod loop_health_tests {
+    use super::LoopHealth;
+    use std::sync::atomic::{AtomicBool, Ordering};
+    use std::sync::Arc;
+
+    /// One or two failed ticks keep readiness (transient errors are normal);
+    /// the third consecutive failure drops it; the next success restores it
+    /// and resets the streak.
+    #[test]
+    fn drops_after_threshold_and_recovers_on_success() {
+        let flag = Arc::new(AtomicBool::new(true));
+        let mut health = LoopHealth::new(flag.clone());
+
+        health.record_err();
+        health.record_err();
+        assert!(flag.load(Ordering::Acquire), "below threshold stays ready");
+
+        health.record_err();
+        assert!(!flag.load(Ordering::Acquire), "threshold reached drops readiness");
+
+        health.record_ok();
+        assert!(flag.load(Ordering::Acquire), "success recovers readiness");
+
+        // The streak reset means it takes a full threshold again to drop.
+        health.record_err();
+        health.record_err();
+        assert!(flag.load(Ordering::Acquire), "streak was reset by the success");
+        health.record_err();
+        assert!(!flag.load(Ordering::Acquire));
     }
 }

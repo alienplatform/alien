@@ -76,6 +76,7 @@ tracing-subscriber = { workspace = true, features = ["env-filter"] }
 # HTTP
 http = { workspace = true }
 reqwest = { workspace = true, features = ["json"] }
+semver = { workspace = true }
 
 # URL
 url = { workspace = true }

@@ -28,6 +28,7 @@ pub mod error;
 pub mod lock;
 pub mod loops;
 pub mod otlp_server;
+pub mod self_update;
 
 pub use alien_core::{DeploymentState, DeploymentStatus, Platform, ReleaseInfo};
 pub use config::{OperatorConfig, SyncConfig};
@@ -94,10 +95,19 @@ pub async fn run_operator_with_cancel_and_debug_loop(
         "Starting operator"
     );
 
+    let readiness = otlp_server::ReadinessSignals::new();
+
     // Initialize encrypted database
     let db = Arc::new(db::OperatorDb::new(&config.data_dir, &config.encryption_key).await?);
-
-    let first_sync_completed = Arc::new(std::sync::atomic::AtomicBool::new(false));
+    readiness
+        .db_open
+        .store(true, std::sync::atomic::Ordering::Release);
+    // The CLI acquires the InstanceLock before calling run_operator and the
+    // guard lives for the process lifetime, so reaching this point means the
+    // lock is held.
+    readiness
+        .lock_held
+        .store(true, std::sync::atomic::Ordering::Release);
 
     // Create shared state
     let state = Arc::new(OperatorState {
@@ -105,19 +115,28 @@ pub async fn run_operator_with_cancel_and_debug_loop(
         db: db.clone(),
         service_provider,
         cancel: cancel.clone(),
-        first_sync_completed: first_sync_completed.clone(),
+        readiness: readiness.clone(),
     });
 
     // Start OTLP server (for local functions to send telemetry).
     // Also serves /livez and /readyz on the same port for Kubernetes probes.
     // Best-effort — a port conflict should not take down the operator.
-    let otlp_host = config.otlp_server_host;
-    let otlp_port = config.otlp_server_port;
+    // Under the launcher, ALIEN_HEALTH_ADDR overrides the bind so the
+    // probation gate probes the exact address it handed us; an unparseable
+    // value is a startup error (a silent fallback would fail every probe by
+    // port mismatch).
+    let (otlp_host, otlp_port) = match otlp_server::health_addr_override()? {
+        Some(addr) => {
+            info!(address = %addr, "Health/OTLP bind overridden by the launcher (ALIEN_HEALTH_ADDR)");
+            (addr.ip(), addr.port())
+        }
+        None => (config.otlp_server_host, config.otlp_server_port),
+    };
     let otlp_db = db.clone();
     let otlp_namespace = config.namespace.clone();
     let otlp_collector_token = config.collector_token.clone();
     let otlp_cancel = cancel.clone();
-    let probe_readiness = first_sync_completed.clone();
+    let probe_readiness = readiness.clone();
     tokio::spawn(async move {
         if let Err(e) = otlp_server::start_otlp_server(
             otlp_host,
@@ -271,11 +290,10 @@ pub struct OperatorState {
     pub service_provider: Option<Arc<dyn alien_infra::PlatformServiceProvider>>,
     /// Cancellation token for graceful shutdown.
     pub cancel: CancellationToken,
-    /// Readiness signal consumed by the `/readyz` probe handler. Flipped to
-    /// `true` by the sync loop on the first successful `/v1/sync` round-trip.
-    /// /readyz returns 503 until then so a freshly-rolled agent isn't marked
-    /// ready before it has actually reached the manager. The other readiness
-    /// conditions (process alive, DB opened, InstanceLock held) are implicit
-    /// — the agent's HTTP server only comes up after those succeed.
-    pub first_sync_completed: Arc<std::sync::atomic::AtomicBool>,
+    /// Readiness signals consumed by the `/readyz` probe handler — the
+    /// explicit health conditions (DB open, InstanceLock held, first sync
+    /// completed, deployment loop progressing). /readyz returns 503 until
+    /// ALL hold, so a freshly-rolled operator isn't marked ready before it
+    /// has proven it can run and reach the manager.
+    pub readiness: otlp_server::ReadinessSignals,
 }

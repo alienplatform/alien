@@ -68,15 +68,52 @@ const IMAGE_PULL_REASONS: &[&str] = &[
 // Public API — called from the sync loop
 // ============================================================================
 
-/// Reconcile the upgrader Job for `target`: spawn the first attempt, wait while
-/// one is running, or (after exponential backoff) spawn the next attempt when
-/// the last one failed. Best-effort — never fails the sync; the report the
-/// manager sees comes from [`current_update_report`] on the next request.
-pub async fn apply_operator_target(target: &OperatorTarget) {
+/// Act on an `operator_target`: the `binary` payload goes to the os-service
+/// actuator (`crate::self_update`), the `helm` payload reconciles the
+/// Kubernetes upgrader Job below. Best-effort — never fails the sync; the
+/// report the manager sees comes from [`current_update_report`] on the next
+/// request.
+pub async fn apply_operator_target(target: &OperatorTarget, state: &crate::OperatorState) {
+    if let Some(binary) = target.binary.as_ref() {
+        if !crate::self_update::actuator_enabled() {
+            warn!(
+                target_version = %target.version,
+                "Received operator_target.binary but the os-service actuator is not \
+                 enabled (not spawned by the launcher, or running in Kubernetes); ignoring"
+            );
+            return;
+        }
+        let data_dir = std::path::Path::new(&state.config.data_dir);
+        match crate::self_update::apply_binary_target(
+            data_dir,
+            env!("CARGO_PKG_VERSION"),
+            &target.version,
+            &target.min_supported_version,
+            binary,
+        )
+        .await
+        {
+            Ok(crate::self_update::BinaryActuation::Staged) => {
+                info!(
+                    target_version = %target.version,
+                    "New operator binary staged; shutting down gracefully for the \
+                     launcher to perform the health-gated swap"
+                );
+                crate::self_update::request_update_handoff_exit();
+                state.cancel.cancel();
+            }
+            Ok(outcome) => {
+                info!(target_version = %target.version, ?outcome, "Binary target not actuated this tick");
+            }
+            Err(e) => {
+                warn!(error = %e, target_version = %target.version, "Binary self-update attempt errored; will retry on a later sync");
+            }
+        }
+        return;
+    }
+
     let Some(helm) = target.helm.as_ref() else {
-        warn!(
-            "Received operator_target with no helm payload; os-service upgrade path is not implemented in this MVP"
-        );
+        warn!("Received operator_target with neither binary nor helm payload; ignoring");
         return;
     };
     let namespace = match k8s_namespace() {
@@ -132,10 +169,17 @@ pub async fn apply_operator_target(target: &OperatorTarget) {
     }
 }
 
-/// Derive the `operator_update` field for the next `SyncRequest` from the live
-/// state of the newest upgrader Job. Returns `None` when no update is in flight
-/// (or the agent is not in a Kubernetes pod).
-pub async fn current_update_report() -> Option<OperatorUpdateReport> {
+/// Derive the `operator_update` field for the next `SyncRequest`. Under the
+/// launcher (os-service) this translates the on-disk markers — `pending.json`
+/// → in-progress, the newest `failed/<v>.json` → failed (the launcher has no
+/// network path, so the record IS its report channel). On Kubernetes it reads
+/// the live state of the newest upgrader Job. `None` when no update is in
+/// flight.
+pub async fn current_update_report(state: &crate::OperatorState) -> Option<OperatorUpdateReport> {
+    if crate::self_update::actuator_enabled() {
+        let data_dir = std::path::Path::new(&state.config.data_dir);
+        return crate::self_update::marker_update_report(data_dir);
+    }
     let namespace = k8s_namespace().ok()?;
     let jobs = list_upgrader_jobs(&namespace).await.ok()?;
     let newest = jobs.iter().max_by_key(|j| j.created_at)?;

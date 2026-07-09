@@ -66,6 +66,7 @@ pub async fn run_sync_loop(state: Arc<OperatorState>) {
                 // agent isn't marked ready until it has actually talked to
                 // the manager. Idempotent — only the first store matters.
                 state
+                    .readiness
                     .first_sync_completed
                     .store(true, std::sync::atomic::Ordering::Release);
                 if has_update {
@@ -175,8 +176,8 @@ async fn sync_with_manager(
 
     // Report the outcome of any in-flight self-update so the manager can show a
     // truthful failed/in-progress state instead of inferring from a stalled
-    // version. Kubernetes packaging only; None otherwise.
-    let operator_update = crate::loops::operator_upgrade::current_update_report().await;
+    // version (markers under the launcher, upgrader-Job state on Kubernetes).
+    let operator_update = crate::loops::operator_upgrade::current_update_report(state).await;
 
     let sync_request = SyncRequest {
         deployment_id: deployment_id.clone(),
@@ -185,6 +186,10 @@ async fn sync_with_manager(
         observed_inventory_batches,
         capabilities: report_operator_capabilities(state),
         operator_version: Some(env!("CARGO_PKG_VERSION").to_string()),
+        // The supervising launcher's version (ALIEN_LAUNCHER_VERSION, set on
+        // spawn) — the manager's min_launcher_version gate input. None on
+        // Kubernetes / launcher-less runs.
+        launcher_version: crate::self_update::launcher_version(),
         // Operator self-update inventory — fleet visibility + upgrade gating.
         operator_os: OperatorOs::detect(),
         operator_arch: OperatorArch::detect(),
@@ -354,7 +359,7 @@ async fn sync_with_manager(
     // Best-effort — the actuator logs failures and the manager keeps
     // sending the target until the agent reports the new version.
     if let Some(target) = sync_response.operator_target.as_ref() {
-        crate::loops::operator_upgrade::apply_operator_target(target).await;
+        crate::loops::operator_upgrade::apply_operator_target(target, state).await;
     }
 
     Ok(has_update || state_hydrated)

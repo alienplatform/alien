@@ -130,6 +130,11 @@ pub struct AgentSyncRequest {
     pub capabilities: Vec<OperatorCapabilityReport>,
     #[serde(default, rename = "operatorVersion")]
     pub operator_version: Option<String>,
+    /// Version of the alien-launcher supervising this operator (os-service
+    /// only; reported, never driven). Gates binary targets against
+    /// min_launcher_version.
+    #[serde(default, rename = "launcherVersion")]
+    pub launcher_version: Option<String>,
     /// Operator host OS — `linux` / `macos` / `windows`.
     #[serde(default)]
     pub operator_os: Option<String>,
@@ -470,6 +475,7 @@ async fn reconcile(
                 operator_version: req.operator_version,
                 // Non-agent reconcile path (push/platform-api) doesn't carry the
                 // operator self-update inventory; leave it out.
+                launcher_version: None,
                 operator_os: None,
                 operator_arch: None,
                 packaging: None,
@@ -1039,7 +1045,188 @@ mod tests {
             packaging: None,
             operator_image_repository: None,
             target_operator_version: None,
+            launcher_version: None,
         }
+    }
+
+    // --- operator_target resolution (binary path) ------------------------
+
+    /// A pinned os-service deployment with a matching manifest gets a
+    /// per-host binary target with the exact manifest values.
+    #[tokio::test]
+    async fn binary_target_resolves_for_the_hosts_platform() {
+        let dir = tempfile::tempdir().unwrap();
+        write_manifest(
+            dir.path(),
+            "1.4.0",
+            r#"{
+                "version": "1.4.0",
+                "minLauncherVersion": "0.2.0",
+                "artifacts": {
+                    "linux/x86_64": { "url": "https://dl.example/op", "sha256": "abc123" }
+                }
+            }"#,
+        );
+        let base = dir.path().to_str().unwrap();
+
+        let target = super::binary_operator_target(
+            base,
+            "1.4.0",
+            Some("linux"),
+            Some("x86_64"),
+            Some("0.2.0"),
+        )
+        .await
+        .expect("target should be emitted");
+
+        assert_eq!(target.version, "1.4.0");
+        assert!(target.helm.is_none(), "binary targets carry no helm payload");
+        let binary = target.binary.expect("binary payload");
+        assert_eq!(binary.url, "https://dl.example/op");
+        assert_eq!(binary.sha256, "abc123");
+        assert_eq!(binary.min_launcher_version, "0.2.0");
+    }
+
+    /// The frozen-launcher gate: an unreported launcher or one below the
+    /// manifest floor withholds the target ("redeploy required"); at or
+    /// above the floor it passes.
+    #[tokio::test]
+    async fn binary_target_gates_on_launcher_version() {
+        let dir = tempfile::tempdir().unwrap();
+        write_manifest(
+            dir.path(),
+            "2.0.0",
+            r#"{
+                "version": "2.0.0",
+                "minLauncherVersion": "0.5.0",
+                "artifacts": {
+                    "linux/x86_64": { "url": "https://dl.example/op2", "sha256": "def" }
+                }
+            }"#,
+        );
+        let base = dir.path().to_str().unwrap();
+
+        for too_old in [None, Some("0.4.9"), Some("garbage")] {
+            assert!(
+                super::binary_operator_target(base, "2.0.0", Some("linux"), Some("x86_64"), too_old)
+                    .await
+                    .is_none(),
+                "launcher {too_old:?} must be withheld"
+            );
+        }
+        assert!(
+            super::binary_operator_target(
+                base,
+                "2.0.0",
+                Some("linux"),
+                Some("x86_64"),
+                Some("0.5.0")
+            )
+            .await
+            .is_some(),
+            "launcher exactly at the floor passes"
+        );
+    }
+
+    /// Missing platform key, unreadable manifest, or unreported os/arch all
+    /// yield NO target — never a partial one, never a panic.
+    #[tokio::test]
+    async fn binary_target_withholds_on_missing_pieces() {
+        let dir = tempfile::tempdir().unwrap();
+        write_manifest(
+            dir.path(),
+            "3.0.0",
+            r#"{
+                "version": "3.0.0",
+                "minLauncherVersion": "0.1.0",
+                "artifacts": {
+                    "linux/x86_64": { "url": "https://dl.example/op3", "sha256": "aaa" }
+                }
+            }"#,
+        );
+        let base = dir.path().to_str().unwrap();
+
+        // Host platform missing from the manifest.
+        assert!(
+            super::binary_operator_target(base, "3.0.0", Some("windows"), Some("x86_64"), Some("1.0.0"))
+                .await
+                .is_none()
+        );
+        // os/arch never reported.
+        assert!(
+            super::binary_operator_target(base, "3.0.0", None, None, Some("1.0.0"))
+                .await
+                .is_none()
+        );
+        // No manifest published for the pinned version at all.
+        assert!(
+            super::binary_operator_target(base, "9.9.9", Some("linux"), Some("x86_64"), Some("1.0.0"))
+                .await
+                .is_none()
+        );
+    }
+
+    /// The Kubernetes path is untouched by the binary work: a pinned
+    /// kubernetes deployment still gets the helm values overlay, and a
+    /// converged one gets nothing.
+    #[tokio::test]
+    async fn resolve_keeps_kubernetes_semantics() {
+        let config = crate::config::ManagerConfig::default();
+        let mut deployment = deployment_record_with_state("running", None);
+        deployment.target_operator_version = Some("1.4.0".to_string());
+
+        let target = super::resolve_operator_target(
+            &config,
+            &deployment,
+            Some("1.3.5"),
+            Some("kubernetes"),
+            None,
+            None,
+            None,
+        )
+        .await
+        .expect("kubernetes target");
+        let helm = target.helm.expect("helm payload");
+        assert_eq!(
+            helm.values,
+            serde_json::json!({ "runtime": { "image": { "tag": "1.4.0" } } })
+        );
+        assert!(target.binary.is_none());
+
+        // Converged (reported == pin) → no target, any packaging.
+        assert!(
+            super::resolve_operator_target(
+                &config,
+                &deployment,
+                Some("1.4.0"),
+                Some("kubernetes"),
+                None,
+                None,
+                None,
+            )
+            .await
+            .is_none()
+        );
+        // Unknown packaging → no target.
+        assert!(
+            super::resolve_operator_target(
+                &config,
+                &deployment,
+                Some("1.3.5"),
+                None,
+                None,
+                None,
+                None,
+            )
+            .await
+            .is_none()
+        );
+    }
+
+    fn write_manifest(dir: &std::path::Path, version: &str, body: &str) {
+        let version_dir = dir.join(version);
+        std::fs::create_dir_all(&version_dir).unwrap();
+        std::fs::write(version_dir.join("manifest.json"), body).unwrap();
     }
 }
 
@@ -1094,6 +1281,7 @@ async fn agent_sync(
             &subject,
             &req.deployment_id,
             req.operator_version.as_deref(),
+            req.launcher_version.as_deref(),
             req.operator_os.as_deref(),
             req.operator_arch.as_deref(),
             req.packaging.as_deref(),
@@ -1145,6 +1333,7 @@ async fn agent_sync(
                                 observed_inventory_batches: req.observed_inventory_batches.clone(),
                                 capabilities: req.capabilities.clone(),
                                 operator_version: req.operator_version.clone(),
+                                launcher_version: req.launcher_version.clone(),
                                 suggested_delay_ms: None,
                                 // Forward the operator self-update inventory the
                                 // operator reported on this sync so multi-tenant
@@ -1336,6 +1525,7 @@ async fn agent_sync(
                                 observed_inventory_batches: req.observed_inventory_batches.clone(),
                                 capabilities: req.capabilities.clone(),
                                 operator_version: req.operator_version.clone(),
+                                launcher_version: req.launcher_version.clone(),
                                 operator_os: req.operator_os.clone(),
                                 operator_arch: req.operator_arch.clone(),
                                 packaging: req.packaging.clone(),
@@ -1372,9 +1562,17 @@ async fn agent_sync(
     // Agent upgrade decision: if the deployment has a pinned target version
     // that differs from what the agent just reported, drive an upgrade via
     // `operator_target` in the response.
-    let operator_target =
-        build_operator_target(&deployment, req.operator_version.as_deref(), req.packaging.as_deref())
-            .and_then(|t| serde_json::to_value(t).ok());
+    let operator_target = resolve_operator_target(
+        &state.config,
+        &deployment,
+        req.operator_version.as_deref(),
+        req.packaging.as_deref(),
+        req.operator_os.as_deref(),
+        req.operator_arch.as_deref(),
+        req.launcher_version.as_deref(),
+    )
+    .await
+    .and_then(|t| serde_json::to_value(t).ok());
 
     Json(AgentSyncResponse {
         current_state,
@@ -1392,43 +1590,153 @@ async fn agent_sync(
     .into_response()
 }
 
-/// Build `OperatorTarget` when `deployment.target_operator_version` is set AND
-/// differs from what the agent just reported. The packaging field controls
-/// which sub-target (`binary` for os-service, `helm` for kubernetes) gets
-/// populated.
-///
-/// k8s-only MVP: only the helm path is wired. chart_repo / chart_version are
-/// emitted as empty strings — the agent re-uses its current chart_ref (from
-/// the existing helm release metadata) and only the values overlay flips the
-/// `runtime.image.tag`. This avoids per-version chart re-publication.
-fn build_operator_target(
+/// Resolve the `operator_target` for this sync: when
+/// `deployment.target_operator_version` is set AND differs from what the
+/// operator just reported, build the payload matching its packaging — `helm`
+/// for Kubernetes, a per-host `binary` for os-service.
+async fn resolve_operator_target(
+    config: &crate::config::ManagerConfig,
     deployment: &crate::traits::DeploymentRecord,
     reported_version: Option<&str>,
     packaging: Option<&str>,
+    operator_os: Option<&str>,
+    operator_arch: Option<&str>,
+    launcher_version: Option<&str>,
 ) -> Option<alien_core::sync::OperatorTarget> {
     let target_version = deployment.target_operator_version.as_deref()?;
     if reported_version == Some(target_version) {
         return None;
     }
-    let helm = (packaging == Some("kubernetes")).then(|| alien_core::sync::OperatorHelmTarget {
-        // Agent reads chart_repo/chart_version directly; when empty it falls
-        // back to its `ALIEN_AGENT_CHART_REF` / `ALIEN_AGENT_CHART_VERSION`
-        // env vars (injected by the chart at install time). Leaving blank
-        // here keeps the manager out of the per-project chart catalog —
-        // upgrade follow-on can plumb explicit refs when chart shape changes
-        // between agent versions, which it doesn't today.
-        chart_repo: String::new(),
-        chart_version: String::new(),
-        values: serde_json::json!({
-            "runtime": { "image": { "tag": target_version } }
+    match packaging {
+        Some("kubernetes") => Some(helm_operator_target(target_version)),
+        Some("os-service") => {
+            binary_operator_target(
+                &config.releases_url(),
+                target_version,
+                operator_os,
+                operator_arch,
+                launcher_version,
+            )
+            .await
+        }
+        other => {
+            tracing::debug!(
+                deployment_id = %deployment.id,
+                packaging = ?other,
+                "Target pinned but the operator reported no known packaging; not emitting operator_target"
+            );
+            None
+        }
+    }
+}
+
+/// Kubernetes payload. chart_repo / chart_version are emitted as empty
+/// strings — the operator re-uses its current chart_ref (from the
+/// `ALIEN_OPERATOR_CHART_REF` / `ALIEN_OPERATOR_CHART_VERSION` env vars the
+/// chart injected at install time) and only the values overlay flips the
+/// `runtime.image.tag`. This avoids per-version chart re-publication.
+fn helm_operator_target(target_version: &str) -> alien_core::sync::OperatorTarget {
+    operator_target_shell(
+        target_version,
+        None,
+        Some(alien_core::sync::OperatorHelmTarget {
+            chart_repo: String::new(),
+            chart_version: String::new(),
+            values: serde_json::json!({
+                "runtime": { "image": { "tag": target_version } }
+            }),
+            sensitive_values: Default::default(),
         }),
-        sensitive_values: Default::default(),
-    });
-    if helm.is_none() {
-        // os-service path not in this MVP — skip without emitting.
+    )
+}
+
+/// os-service payload: resolve the artifact for THIS host's `(os, arch)` from
+/// the release manifest and gate on the frozen launcher's version. Any
+/// missing piece (no manifest, unknown platform, launcher below the floor or
+/// unreported) yields NO target — never a partial one; the admin-facing
+/// remedy for a launcher below the floor is a state-preserving redeploy.
+async fn binary_operator_target(
+    releases_base: &str,
+    target_version: &str,
+    operator_os: Option<&str>,
+    operator_arch: Option<&str>,
+    launcher_version: Option<&str>,
+) -> Option<alien_core::sync::OperatorTarget> {
+    let (Some(os), Some(arch)) = (operator_os, operator_arch) else {
+        tracing::warn!(
+            target_version,
+            "os-service target pinned but the operator did not report os/arch; not emitting"
+        );
+        return None;
+    };
+
+    let manifest = match crate::release_manifest::load(releases_base, target_version).await {
+        Ok(manifest) => manifest,
+        Err(e) => {
+            tracing::warn!(
+                target_version,
+                error = %e,
+                "Failed to load the release manifest; not emitting operator_target"
+            );
+            return None;
+        }
+    };
+
+    // The frozen-launcher gate: the installed launcher must be able to
+    // actuate this artifact's handoff contract.
+    let min_launcher = match semver::Version::parse(&manifest.min_launcher_version) {
+        Ok(v) => v,
+        Err(e) => {
+            tracing::warn!(
+                target_version,
+                min_launcher_version = %manifest.min_launcher_version,
+                error = %e,
+                "Release manifest carries an unparseable minLauncherVersion; not emitting"
+            );
+            return None;
+        }
+    };
+    let launcher_ok = launcher_version
+        .and_then(|v| semver::Version::parse(v).ok())
+        .is_some_and(|v| v >= min_launcher);
+    if !launcher_ok {
+        tracing::info!(
+            target_version,
+            reported_launcher = ?launcher_version,
+            min_launcher_version = %manifest.min_launcher_version,
+            "Withholding operator_target: installed launcher is below the floor (or unreported) — redeploy required"
+        );
         return None;
     }
-    Some(alien_core::sync::OperatorTarget {
+
+    let key = format!("{os}/{arch}");
+    let Some(artifact) = manifest.artifacts.get(&key) else {
+        tracing::warn!(
+            target_version,
+            platform = %key,
+            "Release manifest has no artifact for this host's platform; not emitting"
+        );
+        return None;
+    };
+
+    Some(operator_target_shell(
+        target_version,
+        Some(alien_core::sync::OperatorBinaryTarget {
+            url: artifact.url.clone(),
+            sha256: artifact.sha256.clone(),
+            signature: artifact.signature.clone(),
+            min_launcher_version: manifest.min_launcher_version.clone(),
+        }),
+        None,
+    ))
+}
+
+fn operator_target_shell(
+    target_version: &str,
+    binary: Option<alien_core::sync::OperatorBinaryTarget>,
+    helm: Option<alien_core::sync::OperatorHelmTarget>,
+) -> alien_core::sync::OperatorTarget {
+    alien_core::sync::OperatorTarget {
         version: target_version.to_string(),
         // Floor on the operator's *current* version for it to accept this jump.
         // MVP: any operator we ship (>= 1.0.0) can upgrade straight to the target,
@@ -1437,9 +1745,9 @@ fn build_operator_target(
         // refuse it — sub-target operators are exactly the ones we tell to upgrade.
         // Raise this only when a target requires a stepping-stone upgrade.
         min_supported_version: "1.0.0".to_string(),
-        binary: None,
+        binary,
         helm,
-    })
+    }
 }
 
 fn release_stack_platform(platform: Platform) -> Platform {

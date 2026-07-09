@@ -25,6 +25,7 @@ use utoipa::OpenApi;
         crate::routes::deployments::delete_deployment,
         crate::routes::deployments::retry_deployment,
         crate::routes::deployments::redeploy,
+        crate::routes::deployments::set_target_operator_version,
         // Releases
         crate::routes::releases::create_release,
         crate::routes::releases::list_releases,
@@ -50,6 +51,7 @@ use utoipa::OpenApi;
     components(schemas(
         // Deployment types
         crate::routes::deployments::CreateDeploymentRequest,
+        crate::routes::deployments::SetTargetOperatorVersionRequest,
         crate::routes::deployments::CreateDeploymentResponse,
         crate::routes::deployments::DeploymentResponse,
         crate::routes::deployments::DeploymentGroupMinimal,

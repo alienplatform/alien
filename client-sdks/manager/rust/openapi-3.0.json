@@ -886,6 +886,53 @@
         }
       }
     },
+    "/v1/deployments/{id}/target-operator-version": {
+      "put": {
+        "tags": [
+          "deployments"
+        ],
+        "summary": "Admin-only knob behind the dashboard's \"Set target version\" control\n(and the equivalent flow on the SaaS API). Writes\n`target_operator_version` on the deployment row; the sync handler reads\nit on each /v1/sync and emits `operator_target` whenever it differs from\nthe operator's reported version, until they match.",
+        "operationId": "setDeploymentTargetOperatorVersion",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Deployment ID",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SetTargetOperatorVersionRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "202": {
+            "description": "Target operator version updated"
+          },
+          "400": {
+            "description": "Invalid pin (not semver, build metadata, or a downgrade)"
+          },
+          "401": {
+            "description": "Unauthorized"
+          },
+          "403": {
+            "description": "Forbidden"
+          },
+          "404": {
+            "description": "Not found"
+          }
+        }
+      }
+    },
     "/v1/initialize": {
       "post": {
         "tags": [
@@ -1448,6 +1495,11 @@
           "deploymentId": {
             "type": "string"
           },
+          "launcherVersion": {
+            "type": "string",
+            "description": "Version of the alien-launcher supervising this operator (os-service\nonly; reported, never driven). Gates binary targets against\nmin_launcher_version.",
+            "nullable": true
+          },
           "observedInventoryBatches": {
             "type": "array",
             "items": {
@@ -1502,7 +1554,7 @@
             "description": "Authoritative deployment state from the manager.\n\nReturned when a pull deployment attaches with an empty local state while\nthe manager already has imported or previously reconciled state."
           },
           "operatorTarget": {
-            "description": "Desired agent self-update target. The payload carries either `binary`\n(OS-service flow) or `helm` (Kubernetes flow); the agent picks the\none matching its regime."
+            "description": "Desired agent self-update target. The payload carries either `binary`\n(OS-service flow) or `helm` (Kubernetes flow); the agent picks the\none matching its packaging."
           },
           "target": {}
         }
@@ -11359,6 +11411,16 @@
           },
           "stale": {
             "type": "boolean"
+          }
+        }
+      },
+      "SetTargetOperatorVersionRequest": {
+        "type": "object",
+        "properties": {
+          "targetOperatorVersion": {
+            "type": "string",
+            "description": "Target operator version (semver, no `+build` metadata).\n`None`/omitted clears the target.",
+            "nullable": true
           }
         }
       },

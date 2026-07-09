@@ -58,6 +58,7 @@ pub(crate) enum Deployments {
     /// Pinned target operator version. NULL = no pin. When set ≠ OperatorVersion,
     /// sync handler emits `operator_target` to drive an upgrade.
     TargetOperatorVersion,
+    LauncherVersion,
 }
 
 #[derive(Iden, Clone, Copy)]
@@ -350,6 +351,11 @@ pub async fn run_migrations(db: &SqliteDatabase) -> Result<(), AlienError> {
         // request and emits operator_target when it differs from the agent's
         // reported version. Drives the manager-directed upgrade flow.
         "ALTER TABLE deployments ADD COLUMN target_operator_version TEXT",
+        // Version of the alien-launcher supervising the operator (os-service
+        // only; reported on sync, never driven — the launcher is frozen and
+        // only changes via redeploy). Gates binary targets against
+        // min_launcher_version.
+        "ALTER TABLE deployments ADD COLUMN launcher_version TEXT",
     ];
     for sql in alter_statements {
         if let Err(e) = conn.execute(sql, ()).await {
