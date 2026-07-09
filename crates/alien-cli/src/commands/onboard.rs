@@ -81,10 +81,10 @@ async fn onboard_platform(args: OnboardArgs, ctx: ExecutionMode, name: String) -
     )?;
 
     let (project_id, _project_link) = ctx.resolve_project(None, !args.json).await?;
-    let workspace = ctx.resolve_workspace_with_bootstrap(!args.json).await?;
+    let workspace = ctx.resolve_platform_workspace_context(!args.json).await?;
     let client = ctx.sdk_client().await?;
     let release_inputs =
-        fetch_active_release_stack_inputs(&client, &workspace, &project_id).await?;
+        fetch_active_release_stack_inputs(&client, workspace.query.as_deref(), &project_id).await?;
     let selected_platforms = select_onboard_platforms(
         &args.platforms,
         &release_inputs.supported_platforms,
@@ -125,18 +125,20 @@ async fn onboard_platform(args: OnboardArgs, ctx: ExecutionMode, name: String) -
     };
 
     // Create deployment group via Platform API
-    let workspace_param =
-        alien_platform_api::types::CreateDeploymentGroupWorkspace::try_from(workspace.as_str())
-            .map_err(|e| {
-                AlienError::new(ErrorData::ValidationError {
-                    field: "workspace".to_string(),
-                    message: format!("Invalid workspace: {}", e),
-                })
-            })?;
+    let mut create_deployment_group = client.create_deployment_group();
+    if let Some(workspace_query) = workspace.query.as_deref() {
+        let workspace_param =
+            alien_platform_api::types::CreateDeploymentGroupWorkspace::try_from(workspace_query)
+                .map_err(|e| {
+                    AlienError::new(ErrorData::ValidationError {
+                        field: "workspace".to_string(),
+                        message: format!("Invalid workspace: {}", e),
+                    })
+                })?;
+        create_deployment_group = create_deployment_group.workspace(&workspace_param);
+    }
 
-    let response = client
-        .create_deployment_group()
-        .workspace(&workspace_param)
+    let response = create_deployment_group
         .body(alien_platform_api::types::CreateDeploymentGroupRequest {
             name: name.clone().try_into().map_err(|e| {
                 AlienError::new(ErrorData::ValidationError {
@@ -169,17 +171,6 @@ async fn onboard_platform(args: OnboardArgs, ctx: ExecutionMode, name: String) -
     }
 
     // Create token via Platform API — returns deploymentLink
-    let token_workspace_param =
-        alien_platform_api::types::CreateDeploymentGroupTokenWorkspace::try_from(
-            workspace.as_str(),
-        )
-        .map_err(|e| {
-            AlienError::new(ErrorData::ValidationError {
-                field: "workspace".to_string(),
-                message: format!("Invalid workspace: {}", e),
-            })
-        })?;
-
     let dg_id_param = alien_platform_api::types::CreateDeploymentGroupTokenId::try_from(
         deployment_group_id.as_str(),
     )
@@ -190,10 +181,22 @@ async fn onboard_platform(args: OnboardArgs, ctx: ExecutionMode, name: String) -
         })
     })?;
 
-    let token_response = client
-        .create_deployment_group_token()
-        .id(&dg_id_param)
-        .workspace(&token_workspace_param)
+    let mut create_token = client.create_deployment_group_token().id(&dg_id_param);
+    if let Some(workspace_query) = workspace.query.as_deref() {
+        let token_workspace_param =
+            alien_platform_api::types::CreateDeploymentGroupTokenWorkspace::try_from(
+                workspace_query,
+            )
+            .map_err(|e| {
+                AlienError::new(ErrorData::ValidationError {
+                    field: "workspace".to_string(),
+                    message: format!("Invalid workspace: {}", e),
+                })
+            })?;
+        create_token = create_token.workspace(&token_workspace_param);
+    }
+
+    let token_response = create_token
         .body(
             alien_platform_api::types::CreateDeploymentGroupTokenRequest {
                 description: None,
@@ -387,14 +390,17 @@ fn platform_to_setup_policy_platform(
 #[cfg(feature = "platform")]
 async fn fetch_active_release_stack_inputs(
     client: &alien_platform_api::Client,
-    workspace: &str,
+    workspace_query: Option<&str>,
     project_id: &str,
 ) -> Result<ActiveReleaseStackInputs> {
     use alien_platform_api::SdkResultExt;
 
-    let releases = client
-        .list_releases()
-        .workspace(workspace)
+    let mut request = client.list_releases();
+    if let Some(workspace_query) = workspace_query {
+        request = request.workspace(workspace_query);
+    }
+
+    let releases = request
         .project(project_id)
         .limit(std::num::NonZeroU64::new(1).expect("1 is non-zero"))
         .send()

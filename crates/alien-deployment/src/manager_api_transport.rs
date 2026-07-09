@@ -301,6 +301,7 @@ pub async fn acquire_setup_run_deployment(
             "preflights-failed".to_string(),
             "initial-setup".to_string(),
             "initial-setup-failed".to_string(),
+            "waiting-for-machines".to_string(),
         ]),
     )
     .await
