@@ -63,11 +63,8 @@ impl DeploymentLoopTransport for ManagerApiTransport {
                 message: "suggested_delay_ms exceeded manager API integer range".to_string(),
             })?;
         let heartbeats = to_manager_api_heartbeats(heartbeats)?;
-        #[cfg(not(feature = "openapi"))]
         let observed_inventory_batches =
             to_manager_api_observed_inventory_batches(observed_inventory_batches)?;
-        #[cfg(feature = "openapi")]
-        let _ = observed_inventory_batches;
 
         #[cfg(feature = "openapi")]
         let body = alien_manager_api::types::ReconcileRequest {
@@ -77,7 +74,7 @@ impl DeploymentLoopTransport for ManagerApiTransport {
             update_heartbeat: Some(update_heartbeat),
             suggested_delay_ms,
             resource_heartbeats: heartbeats,
-            observed_inventory_batches: vec![],
+            observed_inventory_batches,
             capabilities: Vec::new(),
             operator_version: None,
         };
@@ -164,7 +161,6 @@ fn to_manager_api_heartbeats(
         })
 }
 
-#[cfg(not(feature = "openapi"))]
 fn to_manager_api_observed_inventory_batches(
     snapshots: Vec<ObservedInventoryBatch>,
 ) -> Result<Vec<alien_manager_api::types::ObservedInventoryBatch>, AlienError> {
@@ -542,6 +538,18 @@ mod tests {
         }
     }
 
+    fn sample_observed_inventory_batch() -> ObservedInventoryBatch {
+        ObservedInventoryBatch {
+            source_kind: "operator".to_string(),
+            inventory_scope: "cluster/test".to_string(),
+            controller_platform: Platform::Machines,
+            backend: HeartbeatBackend::External,
+            observed_at: chrono::Utc.with_ymd_and_hms(2026, 1, 1, 0, 0, 0).unwrap(),
+            complete: true,
+            resources: vec![],
+        }
+    }
+
     #[test]
     fn converts_core_heartbeats_to_generated_manager_request_type() {
         let heartbeats = to_manager_api_heartbeats(vec![sample_heartbeat()])
@@ -555,6 +563,28 @@ mod tests {
         assert!(value.get("collection").is_none());
         assert!(value["data"]["data"].get("summary").is_none());
         assert!(value["data"]["data"].get("detail").is_none());
+    }
+
+    #[test]
+    fn converts_observed_inventory_batches_to_generated_manager_request_type() {
+        let batches =
+            to_manager_api_observed_inventory_batches(vec![sample_observed_inventory_batch()])
+                .expect("core observed inventory should convert to generated manager API type");
+
+        let value = serde_json::to_value(&batches[0]).expect("inventory batch should serialize");
+
+        assert_eq!(value["sourceKind"], "operator");
+        assert_eq!(value["inventoryScope"], "cluster/test");
+        assert_eq!(value["controllerPlatform"], "machines");
+        assert_eq!(value["backend"], "external");
+        assert_eq!(value["complete"], true);
+        assert_eq!(
+            value["resources"]
+                .as_array()
+                .expect("resources should be an array")
+                .len(),
+            0
+        );
     }
 }
 
