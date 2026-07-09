@@ -470,6 +470,7 @@ impl CloudProxyTest {
                     operator_arch: None,
                     packaging: None,
                     operator_image_repository: None,
+                    launcher_version: None,
                     operator_update: None,
                 },
             )

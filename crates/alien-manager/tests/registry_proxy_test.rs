@@ -350,6 +350,7 @@ async fn setup() -> TestSetup {
                     operator_arch: None,
                     packaging: None,
                     operator_image_repository: None,
+                    launcher_version: None,
                     operator_update: None,
                 },
             )
@@ -830,6 +831,7 @@ async fn test_proxy_push_then_pull() {
                     operator_arch: None,
                     packaging: None,
                     operator_image_repository: None,
+                    launcher_version: None,
                     operator_update: None,
                 },
             )

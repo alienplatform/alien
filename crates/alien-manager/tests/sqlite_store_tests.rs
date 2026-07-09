@@ -762,6 +762,7 @@ async fn reconcile_succeeds_under_other_session_lock() {
                 operator_arch: None,
                 packaging: None,
                 operator_image_repository: None,
+                launcher_version: None,
                 operator_update: None,
             },
         )
@@ -834,6 +835,7 @@ async fn reconcile_refreshes_owned_lock_lease() {
                 operator_arch: None,
                 packaging: None,
                 operator_image_repository: None,
+                launcher_version: None,
                 operator_update: None,
             },
         )
@@ -1339,6 +1341,7 @@ async fn update_agent_metadata_persists_full_inventory() {
             &test_subject(),
             &dep.id,
             Some("1.4.0"),
+            Some("0.2.0"),
             Some("linux"),
             Some("aarch64"),
             Some("kubernetes"),
@@ -1353,6 +1356,7 @@ async fn update_agent_metadata_persists_full_inventory() {
         .unwrap()
         .unwrap();
     assert_eq!(fetched.operator_version.as_deref(), Some("1.4.0"));
+    assert_eq!(fetched.launcher_version.as_deref(), Some("0.2.0"));
     assert_eq!(fetched.operator_os.as_deref(), Some("linux"));
     assert_eq!(fetched.operator_arch.as_deref(), Some("aarch64"));
     assert_eq!(fetched.packaging.as_deref(), Some("kubernetes"));
@@ -1379,6 +1383,7 @@ async fn update_agent_metadata_with_all_none_is_a_noop() {
             &test_subject(),
             &dep.id,
             Some("1.4.0"),
+            Some("0.2.0"),
             Some("linux"),
             Some("aarch64"),
             Some("kubernetes"),
@@ -1389,7 +1394,7 @@ async fn update_agent_metadata_with_all_none_is_a_noop() {
 
     // Then a "back-compat" old-agent sync: every field is None.
     store
-        .update_agent_metadata(&test_subject(), &dep.id, None, None, None, None, None)
+        .update_agent_metadata(&test_subject(), &dep.id, None, None, None, None, None, None)
         .await
         .unwrap();
 
@@ -1417,6 +1422,7 @@ async fn update_agent_metadata_partial_update_preserves_others() {
             &test_subject(),
             &dep.id,
             Some("1.3.5"),
+            Some("0.2.0"),
             Some("linux"),
             Some("aarch64"),
             Some("kubernetes"),
@@ -1434,6 +1440,7 @@ async fn update_agent_metadata_partial_update_preserves_others() {
             &test_subject(),
             &dep.id,
             Some("1.4.0"),
+            None,
             None,
             None,
             None,
