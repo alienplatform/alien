@@ -138,6 +138,9 @@ pub enum TestApp {
     /// Worker + Daemon registering overlapping command names, routed by target
     /// (`examples/command-routing-ts`).
     CommandRoutingTs,
+    /// Rust SOURCE Container running the app-owned pull receiver with a
+    /// direct in-process KV binding (`tests/e2e/test-apps/container-rust`).
+    ContainerRust,
 }
 
 impl std::fmt::Display for TestApp {
@@ -147,6 +150,7 @@ impl std::fmt::Display for TestApp {
             TestApp::ComprehensiveTs => write!(f, "comprehensive-ts"),
             TestApp::FullStackMicroservices => write!(f, "full-stack-microservices"),
             TestApp::CommandRoutingTs => write!(f, "command-routing-ts"),
+            TestApp::ContainerRust => write!(f, "container-rust"),
         }
     }
 }
@@ -349,6 +353,7 @@ pub(crate) fn test_app_path(app: TestApp) -> &'static str {
         TestApp::ComprehensiveTs => "test-apps/comprehensive-typescript",
         TestApp::FullStackMicroservices => "../../examples/full-stack-microservices",
         TestApp::CommandRoutingTs => "../../examples/command-routing-ts",
+        TestApp::ContainerRust => "test-apps/container-rust",
     }
 }
 
@@ -361,7 +366,10 @@ fn deployment_environment_variables(
     app: TestApp,
 ) -> Option<Vec<alien_manager_api::types::EnvironmentVariable>> {
     match app {
-        TestApp::ComprehensiveRust | TestApp::ComprehensiveTs | TestApp::CommandRoutingTs => None,
+        TestApp::ComprehensiveRust
+        | TestApp::ComprehensiveTs
+        | TestApp::CommandRoutingTs
+        | TestApp::ContainerRust => None,
         TestApp::FullStackMicroservices => {
             Some(vec![alien_manager_api::types::EnvironmentVariable {
                 name: "APP_SECRET".to_string(),

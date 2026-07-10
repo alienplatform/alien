@@ -166,6 +166,12 @@ pub struct ContainerConfig {
     /// Bind mounts for linked resources (Storage, KV, Vault directories)
     /// The controller is responsible for rewriting binding env vars to use container paths.
     pub bind_mounts: Vec<BindMount>,
+    /// Deployment token for authenticated pulls from the manager's registry
+    /// proxy. Public-registry images (e.g. `postgres:16-alpine`) pull
+    /// anonymously; when the anonymous pull is rejected and this token is
+    /// present, the pull is retried as `deployment:<token>` basic auth —
+    /// the same credential the local worker manager uses for proxy pulls.
+    pub proxy_token: Option<String>,
 }
 
 /// A bind mount for a linked resource directory.
@@ -353,7 +359,12 @@ impl LocalContainerManager {
     /// If the image is a local file path that exists on disk, this method loads the
     /// OCI tarball into Docker and returns the loaded image tag.
     /// Otherwise, it returns the image reference as-is (for registry images).
-    async fn resolve_image(&self, image: &str, container_id: &str) -> Result<String> {
+    async fn resolve_image(
+        &self,
+        image: &str,
+        container_id: &str,
+        proxy_token: Option<&str>,
+    ) -> Result<String> {
         let path = Path::new(image);
 
         // Find the OCI tarball
@@ -364,8 +375,15 @@ impl LocalContainerManager {
             // Directory - look for *.oci.tar files
             Self::find_oci_tarball(path)?
         } else if !path.exists() {
-            // Not a local path, treat as registry image
-            debug!(image = %image, "Image is not a local path, treating as registry image");
+            // Not a local path: a registry image. Pull it explicitly so the
+            // later `create` never depends on an implicit anonymous pull —
+            // source-built container images live behind the manager's
+            // registry proxy, which requires deployment-token auth for GETs.
+            // Public images (e.g. `postgres:16-alpine`) pull anonymously
+            // first; only a rejected anonymous pull retries with the token.
+            debug!(image = %image, "Image is not a local path, pulling registry image");
+            self.pull_registry_image(image, container_id, proxy_token)
+                .await?;
             return Ok(image.to_string());
         } else {
             return Ok(image.to_string());
@@ -508,6 +526,72 @@ impl LocalContainerManager {
         Ok(loaded_image)
     }
 
+    /// Pull a registry image through the daemon, anonymously first and — when
+    /// the registry rejects that and a deployment token is available — again
+    /// with `deployment:<token>` basic auth (the manager registry proxy's
+    /// pull credential, mirroring the local worker manager's pulls).
+    async fn pull_registry_image(
+        &self,
+        image: &str,
+        container_id: &str,
+        proxy_token: Option<&str>,
+    ) -> Result<()> {
+        use futures_util::TryStreamExt;
+
+        let options = Some(bollard::image::CreateImageOptions {
+            from_image: image.to_string(),
+            ..Default::default()
+        });
+
+        let anonymous: std::result::Result<Vec<_>, _> = self
+            .docker
+            .create_image(options.clone(), None, None)
+            .try_collect()
+            .await;
+        if anonymous.is_ok() {
+            return Ok(());
+        }
+
+        let Some(token) = proxy_token else {
+            return anonymous
+                .map(|_| ())
+                .into_alien_error()
+                .context(ErrorData::DockerContainerError {
+                    container: container_id.to_string(),
+                    operation: "pull_image".to_string(),
+                    reason: format!(
+                        "Anonymous pull of '{}' failed and no deployment token is available",
+                        image
+                    ),
+                });
+        };
+
+        info!(
+            image = %image,
+            container_id = %container_id,
+            "Anonymous pull rejected; retrying with deployment-token auth"
+        );
+        let credentials = bollard::auth::DockerCredentials {
+            username: Some("deployment".to_string()),
+            password: Some(token.to_string()),
+            ..Default::default()
+        };
+        self.docker
+            .create_image(options, None, Some(credentials))
+            .try_collect::<Vec<_>>()
+            .await
+            .map(|_| ())
+            .into_alien_error()
+            .context(ErrorData::DockerContainerError {
+                container: container_id.to_string(),
+                operation: "pull_image".to_string(),
+                reason: format!(
+                    "Authenticated pull of '{}' from the registry proxy failed",
+                    image
+                ),
+            })
+    }
+
     /// Finds an OCI tarball in a directory (searches *.oci.tar recursively up to 1 level deep).
     fn find_oci_tarball(dir: &Path) -> Result<PathBuf> {
         // First, look in the directory itself
@@ -589,7 +673,9 @@ impl LocalContainerManager {
         };
 
         // Resolve image (load from OCI tarball if local path)
-        let image = self.resolve_image(&config.image, container_id).await?;
+        let image = self
+            .resolve_image(&config.image, container_id, config.proxy_token.as_deref())
+            .await?;
 
         // Build DNS aliases
         let mut network_aliases = vec![container_id.to_string(), format!("{}.svc", container_id)];

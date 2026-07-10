@@ -1,5 +1,6 @@
 pub mod bindings;
 pub mod commands;
+pub mod container;
 pub mod events;
 pub mod lifecycle;
 pub mod routing;

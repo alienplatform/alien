@@ -211,12 +211,13 @@ fn create_build_settings(
         other => anyhow::bail!("Unsupported platform for build: {:?}", other),
     };
 
-    // Local platform builds for the host OS/arch
-    let targets = if platform == Platform::Local {
-        Some(vec![alien_core::BinaryTarget::current_os()])
-    } else {
-        None
-    };
+    // `None` resolves to the platform defaults — the host target for Local's
+    // Workers/Daemons — while still letting source Containers build their
+    // Linux image. An explicit host-only list means "host-binary CI job" to
+    // the build and skips containers entirely — see
+    // `requested_host_binary_only` in alien-build (and the identical fix in
+    // alien-cli's dev flow).
+    let targets = None;
 
     let override_base_image = std::env::var("ALIEN_OVERRIDE_BASE_IMAGE")
         .or_else(|_| std::env::var("ALIEN_TEST_OVERRIDE_BASE_IMAGE"))

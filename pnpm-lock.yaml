@@ -350,6 +350,18 @@ importers:
         specifier: ^5.7.3
         version: 5.8.3
 
+  tests/e2e/test-apps/container-rust:
+    devDependencies:
+      '@alienplatform/core':
+        specifier: link:../../../../packages/core
+        version: link:../../../../packages/core
+      '@alienplatform/typescript-config':
+        specifier: link:../../../../packages/config-typescript
+        version: link:../../../../packages/config-typescript
+      typescript:
+        specifier: ^5.8.3
+        version: 5.8.3
+
 packages:
 
   '@apidevtools/json-schema-ref-parser@14.2.1':

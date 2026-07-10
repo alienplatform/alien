@@ -280,6 +280,9 @@ impl LocalContainerController {
                 .map(|ps| ps.mount_path.clone()),
             volume_size: config.persistent_storage.as_ref().map(|ps| ps.size.clone()),
             bind_mounts,
+            // For pulls from the manager's registry proxy (source-built
+            // container images in pull deployments).
+            proxy_token: ctx.deployment_config.deployment_token.clone(),
         };
 
         // Start the container

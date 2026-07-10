@@ -1,0 +1,10 @@
+{
+  "extends": "@alienplatform/typescript-config/base.json",
+  "compilerOptions": {
+    "module": "ESNext",
+    "moduleResolution": "bundler",
+    "noEmit": true
+  },
+  "include": ["alien.ts"],
+  "exclude": ["node_modules"]
+}

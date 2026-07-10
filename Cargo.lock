@@ -2978,6 +2978,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "container-rust-indexer"
+version = "0.1.0"
+dependencies = [
+ "alien-bindings",
+ "alien-commands",
+ "serde_json",
+ "tokio",
+ "tracing",
+ "tracing-subscriber",
+]
+
+[[package]]
 name = "convert_case"
 version = "0.6.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"

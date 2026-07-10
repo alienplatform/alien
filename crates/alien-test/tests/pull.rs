@@ -94,3 +94,29 @@ async fn pull_local_command_routing_ts(ctx: &mut LocalPullCommandRouting) {
         .await
         .expect("command routing checks failed");
 }
+
+// ---------------------------------------------------------------------------
+// Local: Rust SOURCE Container (runtime-less, pull receiver, direct bindings)
+// ---------------------------------------------------------------------------
+//
+// The Rust twin of the TS Daemon coverage above: a source-built Rust
+// Container whose compiled binary is the image entrypoint (no runtime
+// wrapper), using `alien_bindings::Bindings::from_env` for a direct KV
+// binding and `alien_commands::Receiver` for target-scoped pull commands.
+// This is the only test that executes the Rust receiver against a real
+// command server from inside a container.
+
+e2e_test_context!(
+    LocalPullContainerRust,
+    Platform::Local,
+    DeploymentModel::Pull,
+    TestApp::ContainerRust
+);
+
+#[test_context(LocalPullContainerRust)]
+#[tokio::test]
+async fn pull_local_container_rust(ctx: &mut LocalPullContainerRust) {
+    common::container::check_container_status(&ctx.ctx.deployment)
+        .await
+        .expect("container status check failed");
+}

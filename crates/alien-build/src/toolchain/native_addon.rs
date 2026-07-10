@@ -74,6 +74,7 @@ async fn find_addon_source(
     triple: &str,
     addon_file_name: &str,
     resource_name: &str,
+    checked: &mut Vec<String>,
 ) -> Result<Option<PathBuf>> {
     // 1a. Prebuild linked next to the resolved bindings package. `bindings_dist`
     // is `<scope>/@alienplatform/bindings/dist`, so the prebuild
@@ -86,6 +87,7 @@ async fn find_addon_source(
         if sibling_prebuild.is_file() {
             return Ok(Some(sibling_prebuild));
         }
+        checked.push(sibling_prebuild.display().to_string());
     }
 
     // 1b. Prebuild package installed in the app's own node_modules.
@@ -96,6 +98,7 @@ async fn find_addon_source(
     if prebuild.is_file() {
         return Ok(Some(prebuild));
     }
+    checked.push(prebuild.display().to_string());
 
     // 2. Workspace dev addon. Walk up from the app directory AND from the
     //    resolved bindings dist: an app outside the repo that links the
@@ -116,10 +119,15 @@ async fn find_addon_source(
                 if dev_addon.is_file() {
                     return Ok(Some(dev_addon));
                 }
+                checked.push(dev_addon.display().to_string());
                 break 'anchors;
             }
             dir = current.parent();
         }
+        checked.push(format!(
+            "(no crates/alien-bindings-node above {})",
+            anchor.display()
+        ));
     }
 
     // 3. In-repo, host-triple build: source-build the dev addon with napi.
@@ -128,6 +136,10 @@ async fn find_addon_source(
         return Ok(None);
     };
     if host_triple != Some(triple) {
+        checked.push(format!(
+            "(source-build skipped: host triple {:?} != target '{triple}')",
+            host_triple
+        ));
         return Ok(None);
     }
 
@@ -348,8 +360,16 @@ async fn stage_addon_into(
     };
     let addon_file_name = format!("alien-bindings-node.{}.node", triple);
 
-    let Some(source) =
-        find_addon_source(src_dir, bindings_dist, triple, &addon_file_name, resource_name).await?
+    let mut checked = Vec::new();
+    let Some(source) = find_addon_source(
+        src_dir,
+        bindings_dist,
+        triple,
+        &addon_file_name,
+        resource_name,
+        &mut checked,
+    )
+    .await?
     else {
         return Err(AlienError::new(ErrorData::ImageBuildFailed {
             resource_name: resource_name.to_string(),
@@ -357,8 +377,10 @@ async fn stage_addon_into(
                 "{pkg} is installed, but the native addon for target '{target}' was not found. \
                  Install the prebuild package '{pkg}-{triple}' (it ships {addon_file_name}), \
                  or, in the alien workspace, build the dev addon with \
-                 `npx napi build --platform --release` in crates/alien-bindings-node.",
+                 `npx napi build --platform --release` in crates/alien-bindings-node. \
+                 Checked: {checked}.",
                 pkg = BINDINGS_PACKAGE,
+                checked = checked.join(", "),
             ),
             build_output: None,
         }));

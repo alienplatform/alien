@@ -40,6 +40,7 @@ members = [
   "examples/byoc-database",
   "crates/alien-test",
   "tests/e2e/test-apps/comprehensive-rust",
+  "tests/e2e/test-apps/container-rust",
 ]
 resolver = "2"
 
