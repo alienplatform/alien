@@ -6,9 +6,9 @@ use crate::output;
 use alien_core::embedded_config::DeployCliConfig;
 use alien_error::{AlienError, Context, IntoAlienError};
 use clap::Parser;
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use serde_json::Value as JsonValue;
-use std::path::PathBuf;
+use std::{collections::BTreeMap, path::PathBuf};
 
 use super::up::{
     create_manager_client, create_manager_http_client, resolve_base_url_option,
@@ -67,7 +67,7 @@ struct RemoteDeploymentListItem {
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct RemoteDeploymentInfo {
-    resources: std::collections::HashMap<String, RemoteResourceInfo>,
+    resources: BTreeMap<String, RemoteResourceInfo>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -75,6 +75,31 @@ struct RemoteDeploymentInfo {
 struct RemoteResourceInfo {
     resource_type: String,
     public_url: Option<String>,
+    #[serde(default)]
+    public_endpoints: BTreeMap<String, PublicEndpointConnectionInfo>,
+}
+
+#[derive(Debug, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct PublicEndpointConnectionInfo {
+    url: String,
+    host: Option<String>,
+    wildcard_host: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct PlatformDeploymentConnectionInfo {
+    resources: BTreeMap<String, PlatformResourceInfo>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct PlatformResourceInfo {
+    #[serde(rename = "type")]
+    resource_type: String,
+    #[serde(default)]
+    public_endpoints: BTreeMap<String, PublicEndpointConnectionInfo>,
 }
 
 pub async fn status_command(
@@ -127,7 +152,10 @@ pub async fn status_command(
         .into_inner();
 
     let deployment_info =
-        fetch_remote_deployment_info(&token, &manager_url, &deployment_id).await?;
+        match fetch_platform_deployment_info(&token, &base_url, &deployment_id).await? {
+            Some(info) => info,
+            None => fetch_remote_deployment_info(&token, &manager_url, &deployment_id).await?,
+        };
 
     if args.json {
         let resources = deployment_info
@@ -139,6 +167,7 @@ pub async fn status_command(
                     serde_json::json!({
                         "type": resource.resource_type,
                         "publicUrl": resource.public_url,
+                        "publicEndpoints": resource.public_endpoints,
                     }),
                 )
             })
@@ -197,6 +226,68 @@ pub async fn status_command(
     }
 
     Ok(())
+}
+
+async fn fetch_platform_deployment_info(
+    token: &str,
+    base_url: &str,
+    deployment_id: &str,
+) -> Result<Option<RemoteDeploymentInfo>> {
+    let client = create_manager_http_client(token)?;
+    let url = format!(
+        "{}/v1/deployments/{}/info",
+        base_url.trim_end_matches('/'),
+        urlencoding::encode(deployment_id),
+    );
+    let response = match client.get(&url).send().await {
+        Ok(response) => response,
+        Err(_) => return Ok(None),
+    };
+
+    if !response.status().is_success() {
+        return Ok(None);
+    }
+
+    let info: PlatformDeploymentConnectionInfo =
+        response
+            .json()
+            .await
+            .into_alien_error()
+            .context(ErrorData::ConfigurationError {
+                message: "Failed to parse platform deployment info response".to_string(),
+            })?;
+
+    Ok(Some(RemoteDeploymentInfo {
+        resources: info
+            .resources
+            .into_iter()
+            .map(|(resource_id, resource)| {
+                let public_url = representative_public_url(&resource.public_endpoints);
+                (
+                    resource_id,
+                    RemoteResourceInfo {
+                        resource_type: resource.resource_type,
+                        public_url,
+                        public_endpoints: resource.public_endpoints,
+                    },
+                )
+            })
+            .collect(),
+    }))
+}
+
+fn representative_public_url(
+    endpoints: &BTreeMap<String, PublicEndpointConnectionInfo>,
+) -> Option<String> {
+    endpoints
+        .get("api")
+        .map(|endpoint| endpoint.url.clone())
+        .or_else(|| {
+            endpoints
+                .values()
+                .next()
+                .map(|endpoint| endpoint.url.clone())
+        })
 }
 
 async fn fetch_remote_deployment_info(
