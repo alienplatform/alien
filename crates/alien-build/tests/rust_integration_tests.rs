@@ -248,7 +248,9 @@ async fn test_rust_toolchain_invalid_project() {
             resource_id,
             reason,
         }) => {
-            assert_eq!(resource_id, "test-app");
+            // The error names the resource, not the configured binary name —
+            // that is what a user can act on in their stack config.
+            assert_eq!(resource_id, "invalid-rust-func");
             assert!(reason.contains("Cargo.toml"));
         }
         other => panic!("Expected InvalidResourceConfig error, got: {:?}", other),

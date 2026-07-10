@@ -97,20 +97,29 @@ async fn find_addon_source(
         return Ok(Some(prebuild));
     }
 
-    // 2. Workspace dev addon, walking up from the app directory.
+    // 2. Workspace dev addon. Walk up from the app directory AND from the
+    //    resolved bindings dist: an app outside the repo that links the
+    //    workspace's bindings package (pnpm link, test fixtures under a temp
+    //    dir) resolves `bindings_dist` to the real in-repo path, which is the
+    //    only anchor that reaches `crates/alien-bindings-node` in that case.
+    //    The dist path is canonicalized so a symlinked node_modules entry
+    //    walks the repo, not the app's directory again.
+    let canonical_dist = bindings_dist.canonicalize().ok();
     let mut workspace_addon_crate: Option<PathBuf> = None;
-    let mut dir = Some(src_dir);
-    while let Some(current) = dir {
-        let crate_dir = current.join("crates").join("alien-bindings-node");
-        if crate_dir.is_dir() {
-            workspace_addon_crate = Some(crate_dir.clone());
-            let dev_addon = crate_dir.join(addon_file_name);
-            if dev_addon.is_file() {
-                return Ok(Some(dev_addon));
+    'anchors: for anchor in std::iter::once(src_dir).chain(canonical_dist.as_deref()) {
+        let mut dir = Some(anchor);
+        while let Some(current) = dir {
+            let crate_dir = current.join("crates").join("alien-bindings-node");
+            if crate_dir.is_dir() {
+                workspace_addon_crate = Some(crate_dir.clone());
+                let dev_addon = crate_dir.join(addon_file_name);
+                if dev_addon.is_file() {
+                    return Ok(Some(dev_addon));
+                }
+                break 'anchors;
             }
-            break;
+            dir = current.parent();
         }
-        dir = current.parent();
     }
 
     // 3. In-repo, host-triple build: source-build the dev addon with napi.

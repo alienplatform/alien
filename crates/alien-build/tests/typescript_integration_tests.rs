@@ -542,7 +542,9 @@ async fn test_typescript_toolchain_invalid_project() {
             resource_id,
             reason,
         }) => {
-            assert_eq!(resource_id, "typescript-project");
+            // The error names the resource, not a toolchain placeholder —
+            // that is what a user can act on in their stack config.
+            assert_eq!(resource_id, "invalid-ts-func");
             assert!(reason.contains("package.json"));
         }
         other => panic!("Expected InvalidResourceConfig error, got: {:?}", other),
