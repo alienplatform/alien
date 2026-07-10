@@ -10,7 +10,7 @@
 use std::path::Path;
 
 use alien_build::settings::{BuildSettings, PlatformBuildSettings, PushSettings};
-use alien_core::{Container, ContainerCode, Platform, Worker, WorkerCode};
+use alien_core::{Container, ContainerCode, Daemon, DaemonCode, Platform, Worker, WorkerCode};
 use anyhow::Context;
 use dockdash::{ClientProtocol, PushOptions, RegistryAuth};
 use tracing::info;
@@ -34,6 +34,13 @@ fn resolve_source_paths(stack: &mut alien_core::Stack, app_dir: &Path) {
 
         if let Some(container) = entry.config.downcast_mut::<Container>() {
             if let ContainerCode::Source { ref mut src, .. } = container.code {
+                let resolved = app_dir.join(&*src);
+                *src = resolved.to_string_lossy().to_string();
+            }
+        }
+
+        if let Some(daemon) = entry.config.downcast_mut::<Daemon>() {
+            if let DaemonCode::Source { ref mut src, .. } = daemon.code {
                 let resolved = app_dir.join(&*src);
                 *src = resolved.to_string_lossy().to_string();
             }

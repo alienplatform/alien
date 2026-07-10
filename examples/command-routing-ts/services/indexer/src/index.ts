@@ -58,5 +58,13 @@ receiver.handle("search", async ctx => {
 })
 
 console.log(`${RESOURCE} leasing commands`)
-await receiver.run()
-controller.abort()
+
+// A source-built daemon compiles to a single binary that embeds the bindings
+// native addon, which requires a CommonJS bundle — and CommonJS forbids
+// top-level await. Drive the receiver from an async entry point instead.
+async function main(): Promise<void> {
+  await receiver.run()
+  controller.abort()
+}
+
+void main()

@@ -35,7 +35,7 @@ const BOOTSTRAP_TEMPLATE: &str = r#"/**
  * Alien Bootstrap - Auto-generated wrapper for TypeScript applications.
  * DO NOT EDIT - This file is generated during the build process.
  */
-import * as userModule from "__USER_ENTRY__"
+__NATIVE_INSTALL__import * as userModule from "__USER_ENTRY__"
 import { runWorker } from "@alienplatform/sdk/worker-runtime"
 
 runWorker(userModule).catch((error) => {
@@ -43,6 +43,35 @@ runWorker(userModule).catch((error) => {
   process.exit(1)
 })
 "#;
+
+/// Registers the bun-embedded bindings addon with the default loader before the
+/// app runs, so a plain `import { kv } from "@alienplatform/bindings"` (directly
+/// or re-exported through the SDK) resolves inside the single-file binary, which
+/// has no prebuild package or dev checkout for the loader's normal resolution to
+/// walk. An explicit call — not a bare side-effect import — so it survives the
+/// `sideEffects: false` tree-shaking of the packages it flows through.
+///
+/// Two variants, because the specifier must be resolvable from the compiled
+/// entry's location:
+///
+/// - **Workers** depend only on `@alienplatform/sdk`; `@alienplatform/bindings`
+///   is transitive through it, so the Worker bootstrap cannot resolve
+///   `@alienplatform/bindings/native` directly. It goes through the SDK's
+///   `./native` bridge, which re-exports `installEmbeddedAddon` from the
+///   bindings package it *can* resolve.
+/// - **Containers/Daemons** depend on `@alienplatform/bindings` directly, so
+///   their entry wrapper resolves `@alienplatform/bindings/native` itself.
+const WORKER_NATIVE_INSTALL_SNIPPET: &str =
+    "import { installEmbeddedAddon } from \"@alienplatform/sdk/native\"\ninstallEmbeddedAddon()\n";
+const DIRECT_NATIVE_INSTALL_SNIPPET: &str =
+    "import { installEmbeddedAddon } from \"@alienplatform/bindings/native\"\ninstallEmbeddedAddon()\n";
+
+/// Rewrite a user entry point (relative to `src_dir`) into an import specifier
+/// usable from a generated file under `src_dir/.alien-build/`.
+fn bootstrap_relative_import(user_entry_point: &str) -> String {
+    let stripped = user_entry_point.strip_prefix("./").unwrap_or(user_entry_point);
+    format!("../{stripped}")
+}
 
 /// Per-source-directory build locks.
 ///
@@ -237,6 +266,7 @@ impl TypeScriptToolchain {
         _src_dir: &Path,
         user_entry_point: &str,
         output_dir: &Path,
+        embed_native: bool,
     ) -> Result<PathBuf> {
         // Create the bootstrap directory
         fs::create_dir_all(output_dir)
@@ -248,23 +278,19 @@ impl TypeScriptToolchain {
                 build_output: None,
             })?;
 
-        // Convert user entry point to a relative path from the bootstrap file location.
-        // The bootstrap file is at: src_dir/.alien-build/__alien_bootstrap.ts
-        // User entry is relative to src_dir (e.g., "./src/index.ts")
-        //
-        // We need to generate an import path that works from the bootstrap location.
-        // Since bun build --compile resolves imports relative to the entry file,
-        // we go up one level from .alien-build/ back to src_dir, then to the user entry.
-        let user_import_path = if user_entry_point.starts_with("./") {
-            format!("../{}", &user_entry_point[2..])
-        } else if user_entry_point.starts_with("../") {
-            format!("../{}", user_entry_point)
-        } else {
-            format!("../{}", user_entry_point)
-        };
+        // Convert user entry point to a relative path from the bootstrap file
+        // location (src_dir/.alien-build/__alien_bootstrap.ts): bun resolves
+        // imports relative to the entry file, so go up one level to src_dir.
+        let user_import_path = bootstrap_relative_import(user_entry_point);
 
-        // Generate the bootstrap code by replacing the placeholder
-        let bootstrap_code = BOOTSTRAP_TEMPLATE.replace("__USER_ENTRY__", &user_import_path);
+        // Generate the bootstrap code by replacing the placeholders. The native
+        // install line is present only when the binary embeds the addon, and a
+        // Worker reaches it through the SDK's `./native` bridge (the Worker
+        // cannot resolve `@alienplatform/bindings/native` directly).
+        let native_install = if embed_native { WORKER_NATIVE_INSTALL_SNIPPET } else { "" };
+        let bootstrap_code = BOOTSTRAP_TEMPLATE
+            .replace("__NATIVE_INSTALL__", native_install)
+            .replace("__USER_ENTRY__", &user_import_path);
 
         // Write the bootstrap file
         let bootstrap_path = output_dir.join("__alien_bootstrap.ts");
@@ -284,6 +310,49 @@ impl TypeScriptToolchain {
         );
 
         Ok(bootstrap_path)
+    }
+
+    /// Generate a thin entry wrapper for a source-built Container/Daemon whose
+    /// binary embeds the bindings addon. It registers the embedded addon, then
+    /// imports the user's entry point (which runs exactly as it would compiled
+    /// directly). Used only when an addon is staged; otherwise the user entry
+    /// is compiled directly with no wrapper.
+    async fn generate_direct_entry_wrapper(
+        &self,
+        _src_dir: &Path,
+        user_entry_point: &str,
+        output_dir: &Path,
+    ) -> Result<PathBuf> {
+        fs::create_dir_all(output_dir)
+            .await
+            .into_alien_error()
+            .context(ErrorData::ImageBuildFailed {
+                resource_name: "typescript-project".to_string(),
+                reason: "Failed to create entry-wrapper directory".to_string(),
+                build_output: None,
+            })?;
+
+        let user_import_path = bootstrap_relative_import(user_entry_point);
+        let wrapper_code =
+            format!("{DIRECT_NATIVE_INSTALL_SNIPPET}import \"{user_import_path}\"\n");
+
+        let wrapper_path = output_dir.join("__alien_entry.ts");
+        fs::write(&wrapper_path, &wrapper_code)
+            .await
+            .into_alien_error()
+            .context(ErrorData::ImageBuildFailed {
+                resource_name: "typescript-project".to_string(),
+                reason: "Failed to write entry wrapper".to_string(),
+                build_output: None,
+            })?;
+
+        info!(
+            "Generated direct-entry wrapper at {} (importing {})",
+            wrapper_path.display(),
+            user_import_path
+        );
+
+        Ok(wrapper_path)
     }
 }
 
@@ -356,22 +425,39 @@ impl Toolchain for TypeScriptToolchain {
         // `runWorker` (the binary runs behind alien-worker-runtime).
         // Containers and Daemons compile the user's entry point directly —
         // their binary is the image entrypoint and owns its own lifecycle.
+        // Stage the TARGET platform's native bindings addon next to the
+        // bindings package's dist/native.js (when the app has
+        // @alienplatform/bindings installed) so bun embeds it into the binary.
+        // Staged before choosing the compile entry: when an addon is embedded,
+        // the compiled entry must pull in `@alienplatform/bindings/native` to
+        // register it with the default loader — a compiled binary has no
+        // prebuild package or dev checkout for the normal resolution to find.
+        let staged_addon = stage_native_addon(&src_dir, context.build_target, &binary_name).await?;
+        let embed_native = staged_addon.is_some();
+
+        // Workers compile a generated bootstrap that hands the app to
+        // `runWorker` (the binary runs behind alien-worker-runtime).
+        // Containers and Daemons compile the user's entry point directly —
+        // their binary is the image entrypoint and owns its own lifecycle —
+        // except when an addon is embedded, where they get a thin wrapper that
+        // registers it before importing the user entry.
         let (compile_entry, bootstrap_dir) = if context.workload == WorkloadKind::Worker {
             // .alien-build/ lives inside the source directory so bun can
             // resolve node_modules; it is cleaned up after the build.
             let bootstrap_dir = src_dir.join(".alien-build");
             let bootstrap_path = self
-                .generate_bootstrap_wrapper(&src_dir, &entry_point, &bootstrap_dir)
+                .generate_bootstrap_wrapper(&src_dir, &entry_point, &bootstrap_dir, embed_native)
                 .await?;
             (bootstrap_path, Some(bootstrap_dir))
+        } else if embed_native {
+            let bootstrap_dir = src_dir.join(".alien-build");
+            let wrapper_path = self
+                .generate_direct_entry_wrapper(&src_dir, &entry_point, &bootstrap_dir)
+                .await?;
+            (wrapper_path, Some(bootstrap_dir))
         } else {
             (src_dir.join(entry_point.trim_start_matches("./")), None)
         };
-
-        // Stage the TARGET platform's native bindings addon next to the
-        // bindings package's dist/native.js (when the app has
-        // @alienplatform/bindings installed) so bun embeds it into the binary.
-        let staged_addon = stage_native_addon(&src_dir, context.build_target, &binary_name).await?;
 
         // Binary is output directly to the proper build directory (not inside source).
         // On Windows, bun appends .exe to the outfile path automatically.

@@ -218,6 +218,23 @@ function packageVersion(): string {
 }
 
 let cached: NativeAddon | undefined
+let embedded: NativeAddon | undefined
+
+/**
+ * Register an addon that is already resident in the process — the one bun
+ * embeds into a `bun build --compile` binary through the `./native` entry.
+ *
+ * A compiled workload has no filesystem prebuild and no dev checkout to walk,
+ * so none of the resolution steps in {@link loadAddon} can find the addon. The
+ * build makes the compiled entry import `@alienplatform/bindings/native`, whose
+ * `installEmbeddedAddon()` calls this so the ordinary `@alienplatform/bindings`
+ * factories (which go through {@link loadAddon}) use the embedded addon. In a
+ * non-compiled dev/test run nothing imports `./native`, so this is never called
+ * and {@link loadAddon} falls through to its normal resolution.
+ */
+export function registerEmbeddedAddon(addon: NativeAddon): void {
+  embedded = addon
+}
 
 /**
  * Load (and memoize) the native addon. Throws if no addon can be resolved for
@@ -225,6 +242,13 @@ let cached: NativeAddon | undefined
  */
 export function loadAddon(): NativeAddon {
   if (cached) return cached
+
+  // A compiled binary registers its embedded addon up front; prefer it over the
+  // filesystem/prebuild resolution below, which cannot work inside the binary.
+  if (embedded) {
+    cached = embedded
+    return cached
+  }
 
   const override = process.env.ALIEN_BINDINGS_ADDON_PATH
   if (override) {

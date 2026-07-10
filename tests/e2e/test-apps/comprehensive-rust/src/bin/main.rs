@@ -141,7 +141,7 @@ fn register_event_handlers(app_state: &AppState) {
                     "contentType": event.content_type,
                     "processedAt": chrono::Utc::now().to_rfc3339(),
                 });
-                let sanitized_key = event.key.replace('/', "_");
+                let sanitized_key = alien_test_server::sanitize_kv_key_part(&event.key);
                 let kv_key = format!("storage_event:{}", sanitized_key);
                 let value = serde_json::to_vec(&record).into_alien_error().context(
                     BindingsErrorData::SerializationFailed {
@@ -169,14 +169,14 @@ fn register_event_handlers(app_state: &AppState) {
                 );
 
                 // Store in KV for test verification
-                // Sanitize schedule name: replace / with _ to comply with KV key validation rules
+                // Sanitize schedule name to comply with KV key validation rules
                 let kv = ctx.get_bindings().load_kv("alien-kv").await?;
                 let record = serde_json::json!({
                     "scheduleName": event.schedule_name,
                     "scheduledTime": event.scheduled_time,
                     "processedAt": chrono::Utc::now().to_rfc3339(),
                 });
-                let sanitized_schedule = event.schedule_name.replace('/', "_");
+                let sanitized_schedule = alien_test_server::sanitize_kv_key_part(&event.schedule_name);
                 let kv_key = format!("cron_event:{}", sanitized_schedule);
                 let value = serde_json::to_vec(&record).into_alien_error().context(
                     BindingsErrorData::SerializationFailed {
@@ -205,7 +205,7 @@ fn register_event_handlers(app_state: &AppState) {
                 );
 
                 // Store in KV for test verification
-                // Sanitize message ID: replace / with _ to comply with KV key validation rules
+                // Sanitize message ID to comply with KV key validation rules
                 let kv = ctx.get_bindings().load_kv("alien-kv").await?;
                 let record = serde_json::json!({
                     "messageId": message.id,
@@ -215,7 +215,7 @@ fn register_event_handlers(app_state: &AppState) {
                     "attemptCount": message.attempt_count,
                     "processedAt": chrono::Utc::now().to_rfc3339(),
                 });
-                let sanitized_id = message.id.replace('/', "_");
+                let sanitized_id = alien_test_server::sanitize_kv_key_part(&message.id);
                 let kv_key = format!("queue_message:{}", sanitized_id);
                 let value = serde_json::to_vec(&record).into_alien_error().context(
                     BindingsErrorData::SerializationFailed {

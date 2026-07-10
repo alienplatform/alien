@@ -10,12 +10,17 @@
     "./worker-runtime": {
       "types": "./dist/worker-runtime/index.d.ts",
       "import": "./dist/worker-runtime/index.js"
+    },
+    "./native": {
+      "types": "./dist/native.d.ts",
+      "import": "./dist/native.js"
     }
   },
   "scripts": {
     "build": "tsdown && tsc --emitDeclarationOnly",
     "prepare": "npm run build",
     "test": "vitest run --passWithNoTests",
+    "test:compile": "node --experimental-strip-types scripts/compile-smoke.ts",
     "test:ts": "tsc --noEmit",
     "generate": "./scripts/generate-proto.sh",
     "format-and-lint": "biome check .",

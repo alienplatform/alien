@@ -382,6 +382,19 @@ async fn watch_storage(
             reason: "Failed to create storage directory for watching".to_string(),
         })?;
 
+    // notify reports canonicalized paths (on macOS `/var` is a symlink to
+    // `/private/var`, so events arrive under `/private/var/...` while the
+    // configured root says `/var/...`). Strip keys against the canonicalized
+    // root, or event keys silently degrade to absolute filesystem paths.
+    let canonical_storage_path = storage_path
+        .canonicalize()
+        .into_alien_error()
+        .context(ErrorData::LocalDirectoryError {
+            path: storage_path.display().to_string(),
+            operation: "canonicalize".to_string(),
+            reason: "Failed to canonicalize storage directory for watching".to_string(),
+        })?;
+
     watcher
         .watch(storage_path, RecursiveMode::Recursive)
         .into_alien_error()
@@ -406,6 +419,11 @@ async fn watch_storage(
             Some(event) = fs_rx.recv() => {
                 let event_type = match event.kind {
                     EventKind::Create(_) => "created",
+                    // object_store's local backend stages an upload as
+                    // `key#N` and renames it into place on completion, so
+                    // the finished object surfaces as a rename, not a
+                    // create.
+                    EventKind::Modify(notify::event::ModifyKind::Name(_)) => "created",
                     EventKind::Remove(_) => "deleted",
                     _ => continue,
                 };
@@ -419,11 +437,38 @@ async fn watch_storage(
                         continue;
                     }
 
-                    let relative = path
-                        .strip_prefix(storage_path)
-                        .unwrap_or(path)
-                        .to_string_lossy()
-                        .to_string();
+                    // Never emit events for object_store's `key#N` staging
+                    // files — only the final renamed object is an object.
+                    if let Some(name) = path.file_name().and_then(|n| n.to_str()) {
+                        if name
+                            .rsplit_once('#')
+                            .is_some_and(|(_, n)| !n.is_empty() && n.bytes().all(|b| b.is_ascii_digit()))
+                        {
+                            continue;
+                        }
+                    }
+
+                    // A created object must exist: this drops the vanished
+                    // half of rename pairs (the old name) and any file that
+                    // was removed again before we got here.
+                    if event_type == "created" && !path.is_file() {
+                        continue;
+                    }
+
+                    let relative = match path
+                        .strip_prefix(&canonical_storage_path)
+                        .or_else(|_| path.strip_prefix(storage_path))
+                    {
+                        Ok(rel) => rel.to_string_lossy().to_string(),
+                        Err(_) => {
+                            warn!(
+                                storage = %binding_name,
+                                path = %path.display(),
+                                "Storage event path outside the watched root; skipping"
+                            );
+                            continue;
+                        }
+                    };
 
                     let size = if event_type == "created" {
                         std::fs::metadata(path).map(|m| m.len()).unwrap_or(0)

@@ -23,6 +23,18 @@
 
 import addon from "./alien-bindings.node"
 import { createFactories } from "./factories.js"
+import { registerEmbeddedAddon } from "./loader.js"
+
+/**
+ * Register the bun-embedded addon with the default loader, so plain
+ * `@alienplatform/bindings` imports (which go through `loader.ts`) resolve to
+ * it inside a compiled binary. `alien build` emits an explicit call to this
+ * from the compiled entry — an explicit call rather than a bare side-effect
+ * import so it survives this package's `sideEffects: false` tree-shaking.
+ */
+export function installEmbeddedAddon(): void {
+  registerEmbeddedAddon(addon)
+}
 
 const factories = createFactories(() => addon)
 

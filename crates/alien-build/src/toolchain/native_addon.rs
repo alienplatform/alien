@@ -7,6 +7,15 @@
 //! the right addon (installed prebuild, workspace dev build, or a source build
 //! via the napi CLI) and copying it into place.
 //!
+//! The bindings package's `dist/` is found by **real module resolution**, not a
+//! hard-coded `src_dir/node_modules/@alienplatform/bindings` path. A
+//! Container/Daemon depends on the bindings package directly, but a Worker
+//! reaches it only *transitively through `@alienplatform/sdk`* — so its addon
+//! lives under the SDK's dependency (a pnpm virtual-store sibling), not the
+//! app's own `node_modules`. Resolving via bun (which honors pnpm symlinks and
+//! package `exports`) stages the addon at exactly the path `bun build --compile`
+//! will resolve the app's `@alienplatform/bindings/native` import to.
+//!
 //! The per-source-directory build serialization lock lives in `typescript.rs`,
 //! since it also guards the generated bootstrap written by that toolchain.
 
@@ -42,22 +51,44 @@ fn napi_triple(target: BinaryTarget) -> Option<&'static str> {
 
 /// Locate the native addon binary for `triple`, trying (in order):
 ///
-/// 1. The prebuild package in the app's own `node_modules`
-///    (`@alienplatform/bindings-<triple>`) — how npm-installed apps get it.
+/// 1. The per-platform prebuild package (`@alienplatform/bindings-<triple>`,
+///    an `optionalDependency` of the bindings package). Checked both as a
+///    sibling of the *resolved* bindings package (`<@scope>/bindings-<triple>`,
+///    where pnpm links a Worker's transitive prebuild) and in the app's own
+///    `node_modules` (flat npm installs / a direct dependency) — how
+///    npm-installed apps get it.
 /// 2. The workspace dev addon (`crates/alien-bindings-node/…​.node`, found by
 ///    walking up from the app) — repo-internal checkouts.
 /// 3. When in-repo and building for the host triple: source-build the dev
 ///    addon via the napi CLI, then use it.
 ///
+/// `bindings_dist` is the resolved `dist/` directory of the bindings package
+/// (see {@link resolve_bindings_dist_dir}); its grandparent is the package
+/// scope directory where a sibling prebuild is linked.
+///
 /// Returns `Ok(None)` when no source exists (the caller turns that into a
 /// build error naming the missing prebuild package).
 async fn find_addon_source(
     src_dir: &Path,
+    bindings_dist: &Path,
     triple: &str,
     addon_file_name: &str,
     resource_name: &str,
 ) -> Result<Option<PathBuf>> {
-    // 1. Prebuild package installed in the app's node_modules.
+    // 1a. Prebuild linked next to the resolved bindings package. `bindings_dist`
+    // is `<scope>/@alienplatform/bindings/dist`, so the prebuild
+    // `@alienplatform/bindings-<triple>` sits at `<scope>/@alienplatform/
+    // bindings-<triple>` — two levels up from dist, then the sibling name.
+    if let Some(scope_dir) = bindings_dist.parent().and_then(Path::parent) {
+        let sibling_prebuild = scope_dir
+            .join(format!("bindings-{}", triple))
+            .join(addon_file_name);
+        if sibling_prebuild.is_file() {
+            return Ok(Some(sibling_prebuild));
+        }
+    }
+
+    // 1b. Prebuild package installed in the app's own node_modules.
     let prebuild = src_dir
         .join("node_modules")
         .join(format!("{}-{}", BINDINGS_PACKAGE, triple))
@@ -131,31 +162,125 @@ async fn find_addon_source(
     }
 }
 
+/// bun script that prints the resolved path of the bindings package's `./native`
+/// entry (i.e. `.../@alienplatform/bindings/dist/native.js`) or nothing.
+///
+/// It resolves `@alienplatform/bindings/native` first directly from the app
+/// (Container/Daemon direct dependency), then — failing that — from the
+/// resolved location of `@alienplatform/sdk` (a Worker's only path to the
+/// bindings package). Using bun's own resolver honors pnpm symlinks and package
+/// `exports` maps, so the printed path is exactly what `bun build --compile`
+/// will embed.
+const RESOLVE_BINDINGS_NATIVE_SCRIPT: &str = r#"
+const path = require("path");
+const from = process.env.ALIEN_BINDINGS_RESOLVE_FROM;
+const tryResolve = (spec, base) => { try { return Bun.resolveSync(spec, base); } catch { return null; } };
+let nativeEntry = tryResolve("@alienplatform/bindings/native", from);
+if (!nativeEntry) {
+  const sdkEntry = tryResolve("@alienplatform/sdk", from);
+  if (sdkEntry) nativeEntry = tryResolve("@alienplatform/bindings/native", path.dirname(sdkEntry));
+}
+if (nativeEntry) process.stdout.write(nativeEntry);
+"#;
+
+/// Resolve the `dist/` directory of `@alienplatform/bindings` as the app itself
+/// resolves the package — directly, or transitively through `@alienplatform/sdk`
+/// (the only path a Worker has). Returns `None` when the app depends on neither,
+/// i.e. it is not a bindings consumer and staging is a no-op.
+///
+/// Resolution is delegated to bun (already required by the compile step) so pnpm
+/// symlinks and package `exports` are honored — the naive
+/// `src_dir/node_modules/@alienplatform/bindings` path does not exist for a
+/// Worker, whose bindings copy lives under the SDK's dependency. This function
+/// is exercised by the SDK-entry compiled-artifact oracle
+/// (`packages/bindings/scripts/compile-smoke.ts` covers the `/native` entry;
+/// the Worker/SDK entry is proven by the ALIEN-211 deploy E2E and the manual
+/// `bun build --compile` check documented in the PR), not a hermetic unit test,
+/// since faithful resolution requires bun and a real installed layout.
+async fn resolve_bindings_dist_dir(
+    src_dir: &Path,
+    resource_name: &str,
+) -> Result<Option<PathBuf>> {
+    let output = Command::new("bun")
+        .args(["-e", RESOLVE_BINDINGS_NATIVE_SCRIPT])
+        .env("ALIEN_BINDINGS_RESOLVE_FROM", src_dir)
+        .current_dir(src_dir)
+        .output()
+        .await
+        .into_alien_error()
+        .context(ErrorData::ImageBuildFailed {
+            resource_name: resource_name.to_string(),
+            reason: "Failed to run bun to resolve @alienplatform/bindings. Is Bun installed?"
+                .to_string(),
+            build_output: None,
+        })?;
+
+    if !output.status.success() {
+        return Err(AlienError::new(ErrorData::ImageBuildFailed {
+            resource_name: resource_name.to_string(),
+            reason: format!(
+                "bun failed while resolving @alienplatform/bindings from {}",
+                src_dir.display()
+            ),
+            build_output: Some(String::from_utf8_lossy(&output.stderr).into_owned()),
+        }));
+    }
+
+    let native_entry = String::from_utf8_lossy(&output.stdout).trim().to_string();
+    if native_entry.is_empty() {
+        // App depends on neither the bindings package nor the SDK: no addon to embed.
+        return Ok(None);
+    }
+
+    let dist = Path::new(&native_entry)
+        .parent()
+        .ok_or_else(|| {
+            AlienError::new(ErrorData::ImageBuildFailed {
+                resource_name: resource_name.to_string(),
+                reason: format!(
+                    "Resolved bindings native entry '{}' has no parent directory",
+                    native_entry
+                ),
+                build_output: None,
+            })
+        })?
+        .to_path_buf();
+    Ok(Some(dist))
+}
+
 /// Stage the TARGET platform's native addon next to the bindings package's
 /// `dist/native.js` so `bun build --compile` can embed it.
 ///
 /// The `./native` entry of `@alienplatform/bindings` imports the addon through
 /// the literal specifier `./alien-bindings.node` (see
 /// `packages/bindings/src/native.ts`); this function fulfills that staging
-/// contract. Returns the staged path (for post-build clean-up) when the
-/// bindings package is installed, `None` when it isn't. Fails with a clear
-/// error naming the missing prebuild package when no addon can be sourced —
-/// an installed bindings package without an addon for the target would
-/// otherwise fail at `bun build --compile` with an opaque unresolved-import
-/// error.
+/// contract. Returns the staged path (for post-build clean-up) when the app
+/// consumes the bindings package (directly or via the SDK), `None` when it does
+/// not. Fails with a clear error naming the missing prebuild package when a
+/// consumer has no addon for the target — otherwise `bun build --compile` would
+/// fail with an opaque unresolved-import error.
 pub(super) async fn stage_native_addon(
     src_dir: &Path,
     target: BinaryTarget,
     resource_name: &str,
 ) -> Result<Option<PathBuf>> {
-    let bindings_dist = src_dir
-        .join("node_modules")
-        .join(BINDINGS_PACKAGE)
-        .join("dist");
-    if !bindings_dist.join("native.js").is_file() {
+    let Some(bindings_dist) = resolve_bindings_dist_dir(src_dir, resource_name).await? else {
         return Ok(None);
-    }
+    };
+    let staged = stage_addon_into(src_dir, &bindings_dist, target, resource_name).await?;
+    Ok(Some(staged))
+}
 
+/// Source the target addon and copy it into `bindings_dist` as the staged
+/// `alien-bindings.node`. Split from {@link stage_native_addon} so the sourcing
+/// and copy logic is unit-testable against a fixture `dist/` directory without
+/// invoking bun's resolver.
+async fn stage_addon_into(
+    src_dir: &Path,
+    bindings_dist: &Path,
+    target: BinaryTarget,
+    resource_name: &str,
+) -> Result<PathBuf> {
     let Some(triple) = napi_triple(target) else {
         return Err(AlienError::new(ErrorData::ImageBuildFailed {
             resource_name: resource_name.to_string(),
@@ -169,7 +294,8 @@ pub(super) async fn stage_native_addon(
     };
     let addon_file_name = format!("alien-bindings-node.{}.node", triple);
 
-    let Some(source) = find_addon_source(src_dir, triple, &addon_file_name, resource_name).await?
+    let Some(source) =
+        find_addon_source(src_dir, bindings_dist, triple, &addon_file_name, resource_name).await?
     else {
         return Err(AlienError::new(ErrorData::ImageBuildFailed {
             resource_name: resource_name.to_string(),
@@ -203,7 +329,7 @@ pub(super) async fn stage_native_addon(
         source.display(),
         staged.display()
     );
-    Ok(Some(staged))
+    Ok(staged)
 }
 
 #[cfg(test)]
@@ -212,9 +338,13 @@ mod tests {
     use tempfile::tempdir;
     use tokio::fs;
 
-    /// Create `<dir>/node_modules/@alienplatform/bindings/dist/native.js`,
-    /// marking the app as a bindings consumer per the staging contract.
-    async fn install_fake_bindings_package(app_dir: &Path) {
+    /// Create `<dir>/node_modules/@alienplatform/bindings/dist/native.js` and
+    /// return the `dist/` path — the directory an addon is staged into, standing
+    /// in for the one {@link resolve_bindings_dist_dir} produces at runtime.
+    /// (The tests drive {@link stage_addon_into} directly with this path, so no
+    /// bun resolution is needed; the resolver is verified by the compiled
+    /// artifact oracle.)
+    async fn install_fake_bindings_package(app_dir: &Path) -> PathBuf {
         let dist = app_dir
             .join("node_modules")
             .join(BINDINGS_PACKAGE)
@@ -223,6 +353,7 @@ mod tests {
         fs::write(dist.join("native.js"), "// fake native entry")
             .await
             .unwrap();
+        dist
     }
 
     #[test]
@@ -237,25 +368,14 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn staging_is_skipped_when_bindings_package_not_installed() {
-        let app = tempdir().unwrap();
-        fs::write(app.path().join("package.json"), r#"{"name":"app"}"#)
-            .await
-            .unwrap();
-
-        let staged = stage_native_addon(app.path(), BinaryTarget::LinuxArm64, "app")
-            .await
-            .expect("staging should be a no-op without the bindings package");
-        assert_eq!(staged, None);
-    }
-
-    #[tokio::test]
     async fn staging_copies_target_addon_from_installed_prebuild_package() {
         let app = tempdir().unwrap();
-        install_fake_bindings_package(app.path()).await;
+        let bindings_dist = install_fake_bindings_package(app.path()).await;
 
         // Install the TARGET platform's prebuild package (a linux addon, as a
-        // cross-build from any host would need).
+        // cross-build from any host would need). It sits beside the bindings
+        // package in the same scope directory — where both the resolved-sibling
+        // (1a) and app-node_modules (1b) lookups find it.
         let prebuild_dir = app
             .path()
             .join("node_modules")
@@ -269,25 +389,20 @@ mod tests {
         .await
         .unwrap();
 
-        let staged = stage_native_addon(app.path(), BinaryTarget::LinuxArm64, "app")
+        let staged = stage_addon_into(app.path(), &bindings_dist, BinaryTarget::LinuxArm64, "app")
             .await
-            .expect("staging should succeed from the installed prebuild")
-            .expect("an addon should have been staged");
+            .expect("staging should succeed from the installed prebuild");
 
         assert_eq!(
             staged,
-            app.path()
-                .join("node_modules")
-                .join(BINDINGS_PACKAGE)
-                .join("dist")
-                .join(STAGED_ADDON_FILE),
+            bindings_dist.join(STAGED_ADDON_FILE),
             "the addon must land next to dist/native.js under the exact name its static import uses"
         );
         assert_eq!(fs::read(&staged).await.unwrap(), addon_bytes);
     }
 
     #[tokio::test]
-    async fn staging_prefers_app_prebuild_over_workspace_dev_addon() {
+    async fn staging_prefers_prebuild_over_workspace_dev_addon() {
         let root = tempdir().unwrap();
         // Fake workspace: <root>/crates/alien-bindings-node with a dev addon.
         let crate_dir = root.path().join("crates").join("alien-bindings-node");
@@ -299,9 +414,9 @@ mod tests {
         .await
         .unwrap();
 
-        // App inside the workspace with its own prebuild installed.
+        // App inside the workspace with a prebuild linked beside the bindings package.
         let app_dir = root.path().join("apps").join("svc");
-        install_fake_bindings_package(&app_dir).await;
+        let bindings_dist = install_fake_bindings_package(&app_dir).await;
         let prebuild_dir = app_dir
             .join("node_modules")
             .join("@alienplatform/bindings-linux-x64-gnu");
@@ -313,9 +428,8 @@ mod tests {
         .await
         .unwrap();
 
-        let staged = stage_native_addon(&app_dir, BinaryTarget::LinuxX64, "svc")
+        let staged = stage_addon_into(&app_dir, &bindings_dist, BinaryTarget::LinuxX64, "svc")
             .await
-            .unwrap()
             .unwrap();
         assert_eq!(fs::read(&staged).await.unwrap(), b"app-prebuild-addon");
     }
@@ -333,11 +447,10 @@ mod tests {
         .unwrap();
 
         let app_dir = root.path().join("apps").join("svc");
-        install_fake_bindings_package(&app_dir).await;
+        let bindings_dist = install_fake_bindings_package(&app_dir).await;
 
-        let staged = stage_native_addon(&app_dir, BinaryTarget::LinuxX64, "svc")
+        let staged = stage_addon_into(&app_dir, &bindings_dist, BinaryTarget::LinuxX64, "svc")
             .await
-            .unwrap()
             .unwrap();
         assert_eq!(fs::read(&staged).await.unwrap(), b"workspace-dev-addon");
     }
@@ -345,7 +458,7 @@ mod tests {
     #[tokio::test]
     async fn staging_failure_names_the_missing_prebuild_package() {
         let app = tempdir().unwrap();
-        install_fake_bindings_package(app.path()).await;
+        let bindings_dist = install_fake_bindings_package(app.path()).await;
 
         // Cross target (never the host triple), no prebuild installed, and no
         // workspace crate above the temp dir — no addon source exists.
@@ -356,7 +469,7 @@ mod tests {
         };
         let triple = napi_triple(target).unwrap();
 
-        let error = stage_native_addon(app.path(), target, "app")
+        let error = stage_addon_into(app.path(), &bindings_dist, target, "app")
             .await
             .expect_err("staging must fail when no addon source exists");
         let message = error.to_string();
@@ -369,9 +482,9 @@ mod tests {
     #[tokio::test]
     async fn staging_fails_for_targets_without_an_addon() {
         let app = tempdir().unwrap();
-        install_fake_bindings_package(app.path()).await;
+        let bindings_dist = install_fake_bindings_package(app.path()).await;
 
-        let error = stage_native_addon(app.path(), BinaryTarget::WindowsX64, "app")
+        let error = stage_addon_into(app.path(), &bindings_dist, BinaryTarget::WindowsX64, "app")
             .await
             .expect_err("windows has no native addon");
         assert!(

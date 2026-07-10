@@ -9,6 +9,8 @@ import { createHash } from "node:crypto"
 import { command, kv, onCronEvent, onQueueMessage, onStorageEvent } from "@alienplatform/sdk"
 import { Hono } from "hono"
 
+import { sanitizeKvKeyPart } from "./helpers.js"
+
 import environmentRoutes from "./handlers/environment.js"
 import eventsRoutes from "./handlers/events.js"
 import healthRoutes from "./handlers/health.js"
@@ -40,7 +42,7 @@ app.route("/", waitUntilRoutes)
 
 onStorageEvent("*", async event => {
   const k = kv("alien-kv")
-  const sanitizedKey = event.objectKey.replace(/\//g, "_")
+  const sanitizedKey = sanitizeKvKeyPart(event.objectKey)
   await k.setJson(`storage_event:${sanitizedKey}`, {
     key: event.objectKey,
     bucket: event.bucketName,
@@ -52,7 +54,7 @@ onStorageEvent("*", async event => {
 
 onCronEvent("*", async event => {
   const k = kv("alien-kv")
-  const sanitizedSchedule = event.scheduleName.replace(/\//g, "_")
+  const sanitizedSchedule = sanitizeKvKeyPart(event.scheduleName)
   await k.setJson(`cron_event:${sanitizedSchedule}`, {
     scheduleName: event.scheduleName,
     scheduledTime: event.timestamp,
@@ -62,14 +64,15 @@ onCronEvent("*", async event => {
 
 onQueueMessage("*", async message => {
   const k = kv("alien-kv")
-  const sanitizedId = message.id.replace(/\//g, "_")
+  const sanitizedId = sanitizeKvKeyPart(message.id)
+  // The SDK delivers the payload already decoded: a parsed JSON value when
+  // the message body is JSON, otherwise the UTF-8 text. Re-serialize objects
+  // so the recorded payload stays a string the checks can match against.
   await k.setJson(`queue_message:${sanitizedId}`, {
     messageId: message.id,
     source: message.source,
     payload:
-      typeof message.payload === "string"
-        ? message.payload
-        : new TextDecoder().decode(message.payload as Uint8Array),
+      typeof message.payload === "string" ? message.payload : JSON.stringify(message.payload),
     processedAt: new Date().toISOString(),
   })
 })
