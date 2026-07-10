@@ -236,6 +236,7 @@ run();
 ### [Machines](docs/sdks/machines/README.md)
 
 * [listJoinTokens](docs/sdks/machines/README.md#listjointokens)
+* [createJoinToken](docs/sdks/machines/README.md#createjointoken)
 * [rotateJoinToken](docs/sdks/machines/README.md#rotatejointoken)
 * [revokeJoinToken](docs/sdks/machines/README.md#revokejointoken)
 * [listInventory](docs/sdks/machines/README.md#listinventory)
@@ -414,6 +415,7 @@ To read more about standalone functions, check [FUNCTIONS.md](./FUNCTIONS.md).
 - [`eventsGet`](docs/sdks/events/README.md#get) - Retrieve an event by ID.
 - [`eventsList`](docs/sdks/events/README.md#list) - Retrieve all events.
 - [`machinesCancelMachineDrain`](docs/sdks/machines/README.md#cancelmachinedrain)
+- [`machinesCreateJoinToken`](docs/sdks/machines/README.md#createjointoken)
 - [`machinesDrainMachine`](docs/sdks/machines/README.md#drainmachine)
 - [`machinesListInventory`](docs/sdks/machines/README.md#listinventory)
 - [`machinesListJoinTokens`](docs/sdks/machines/README.md#listjointokens)

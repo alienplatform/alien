@@ -1,13 +1,13 @@
-# RotateMachinesJoinTokenResponse
+# CreateMachinesJoinTokenResponse
 
 ## Example Usage
 
 ```typescript
-import { RotateMachinesJoinTokenResponse } from "@alienplatform/platform-api/models";
+import { CreateMachinesJoinTokenResponse } from "@alienplatform/platform-api/models";
 
-let value: RotateMachinesJoinTokenResponse = {
+let value: CreateMachinesJoinTokenResponse = {
   joinToken: "<value>",
-  controlPlaneUrl: "https://untried-harp.net",
+  controlPlaneUrl: "https://sugary-doing.net/",
   clusterId: "<id>",
   token: {
     id: "<id>",
@@ -15,7 +15,7 @@ let value: RotateMachinesJoinTokenResponse = {
     createdBy: "<value>",
     joinCount: 196349,
   },
-  cliInstallScriptUrl: null,
+  cliInstallScriptUrl: "https://grubby-affect.info/",
   cliCommandName: "<value>",
 };
 ```

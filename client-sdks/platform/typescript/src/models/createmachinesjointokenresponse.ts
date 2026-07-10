@@ -11,7 +11,7 @@ import {
   MachinesJoinTokenSummary$inboundSchema,
 } from "./machinesjointokensummary.js";
 
-export type RotateMachinesJoinTokenResponse = {
+export type CreateMachinesJoinTokenResponse = {
   joinToken: string;
   controlPlaneUrl: string;
   clusterId: string;
@@ -27,8 +27,8 @@ export type RotateMachinesJoinTokenResponse = {
 };
 
 /** @internal */
-export const RotateMachinesJoinTokenResponse$inboundSchema: z.ZodType<
-  RotateMachinesJoinTokenResponse,
+export const CreateMachinesJoinTokenResponse$inboundSchema: z.ZodType<
+  CreateMachinesJoinTokenResponse,
   unknown
 > = z.object({
   joinToken: z.string(),
@@ -39,12 +39,12 @@ export const RotateMachinesJoinTokenResponse$inboundSchema: z.ZodType<
   cliCommandName: z.nullable(z.string()),
 });
 
-export function rotateMachinesJoinTokenResponseFromJSON(
+export function createMachinesJoinTokenResponseFromJSON(
   jsonString: string,
-): SafeParseResult<RotateMachinesJoinTokenResponse, SDKValidationError> {
+): SafeParseResult<CreateMachinesJoinTokenResponse, SDKValidationError> {
   return safeParse(
     jsonString,
-    (x) => RotateMachinesJoinTokenResponse$inboundSchema.parse(JSON.parse(x)),
-    `Failed to parse 'RotateMachinesJoinTokenResponse' from JSON`,
+    (x) => CreateMachinesJoinTokenResponse$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'CreateMachinesJoinTokenResponse' from JSON`,
   );
 }

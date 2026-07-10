@@ -29,6 +29,7 @@ export * from "./createdeploymentresponse.js";
 export * from "./createdeploymenttokenrequest.js";
 export * from "./createdeploymenttokenresponse.js";
 export * from "./createfirstpartydeploymentsessionresponse.js";
+export * from "./createmachinesjointokenresponse.js";
 export * from "./createmanagerresponse.js";
 export * from "./createreleaserequest.js";
 export * from "./createsetupregistrationoperationrequest.js";
