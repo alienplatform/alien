@@ -46,6 +46,12 @@ async fn check_distribution_deployment(ctx: &mut alien_test::TestContext) {
                 panic!("command routing checks failed: {error:#}");
             }
         }
+        TestApp::ContainerRust => {
+            if let Err(error) = common::container::check_container_status(&ctx.deployment).await {
+                dump_kubernetes_debug(ctx, &error).await;
+                panic!("container status check failed: {error:#}");
+            }
+        }
     }
 }
 
