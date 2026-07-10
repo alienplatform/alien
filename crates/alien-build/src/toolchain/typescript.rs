@@ -1,4 +1,4 @@
-use super::native_addon::stage_native_addon;
+use super::native_addon::{stage_native_addon, AddonResolutionRoute};
 use super::{cache_utils, Toolchain, ToolchainContext, ToolchainOutput, WorkloadKind};
 use crate::command_output::wait_with_captured_output;
 use crate::dependencies::install_dependencies;
@@ -59,8 +59,12 @@ runWorker(userModule).catch((error) => {
 ///   `@alienplatform/bindings/native` directly. It goes through the SDK's
 ///   `./native` bridge, which re-exports `installEmbeddedAddon` from the
 ///   bindings package it *can* resolve.
-/// - **Containers/Daemons** depend on `@alienplatform/bindings` directly, so
-///   their entry wrapper resolves `@alienplatform/bindings/native` itself.
+/// - **Containers/Daemons** usually depend on `@alienplatform/bindings`
+///   directly and import `@alienplatform/bindings/native`; when one gets its
+///   bindings through the SDK instead (only `@alienplatform/sdk` in its
+///   dependencies), the wrapper must go through the SDK bridge exactly like a
+///   Worker — the direct specifier would not resolve. The staging step reports
+///   which route the app resolves (see `AddonResolutionRoute`).
 const WORKER_NATIVE_INSTALL_SNIPPET: &str =
     "import { installEmbeddedAddon } from \"@alienplatform/sdk/native\"\ninstallEmbeddedAddon()\n";
 const DIRECT_NATIVE_INSTALL_SNIPPET: &str =
@@ -322,6 +326,7 @@ impl TypeScriptToolchain {
         _src_dir: &Path,
         user_entry_point: &str,
         output_dir: &Path,
+        addon_route: AddonResolutionRoute,
     ) -> Result<PathBuf> {
         fs::create_dir_all(output_dir)
             .await
@@ -333,8 +338,14 @@ impl TypeScriptToolchain {
             })?;
 
         let user_import_path = bootstrap_relative_import(user_entry_point);
-        let wrapper_code =
-            format!("{DIRECT_NATIVE_INSTALL_SNIPPET}import \"{user_import_path}\"\n");
+        // Import the embedded-addon installer through the package the app can
+        // actually resolve: bindings when it is a direct dependency, otherwise
+        // the SDK's ./native bridge (an SDK-only Container/Daemon).
+        let native_install = match addon_route {
+            AddonResolutionRoute::DirectBindings => DIRECT_NATIVE_INSTALL_SNIPPET,
+            AddonResolutionRoute::ViaSdk => WORKER_NATIVE_INSTALL_SNIPPET,
+        };
+        let wrapper_code = format!("{native_install}import \"{user_import_path}\"\n");
 
         let wrapper_path = output_dir.join("__alien_entry.ts");
         fs::write(&wrapper_path, &wrapper_code)
@@ -432,8 +443,8 @@ impl Toolchain for TypeScriptToolchain {
         // the compiled entry must pull in `@alienplatform/bindings/native` to
         // register it with the default loader — a compiled binary has no
         // prebuild package or dev checkout for the normal resolution to find.
-        let staged_addon = stage_native_addon(&src_dir, context.build_target, &binary_name).await?;
-        let embed_native = staged_addon.is_some();
+        let staged = stage_native_addon(&src_dir, context.build_target, &binary_name).await?;
+        let embed_native = staged.is_some();
 
         // Workers compile a generated bootstrap that hands the app to
         // `runWorker` (the binary runs behind alien-worker-runtime).
@@ -449,10 +460,10 @@ impl Toolchain for TypeScriptToolchain {
                 .generate_bootstrap_wrapper(&src_dir, &entry_point, &bootstrap_dir, embed_native)
                 .await?;
             (bootstrap_path, Some(bootstrap_dir))
-        } else if embed_native {
+        } else if let Some((_, route)) = &staged {
             let bootstrap_dir = src_dir.join(".alien-build");
             let wrapper_path = self
-                .generate_direct_entry_wrapper(&src_dir, &entry_point, &bootstrap_dir)
+                .generate_direct_entry_wrapper(&src_dir, &entry_point, &bootstrap_dir, *route)
                 .await?;
             (wrapper_path, Some(bootstrap_dir))
         } else {
@@ -479,7 +490,8 @@ impl Toolchain for TypeScriptToolchain {
         let binary_path_clone = binary_path.clone();
         let target_arg_clone = target_arg.to_string();
         let compile_entry_str = compile_entry.to_string_lossy().to_string();
-        let use_cjs_format = staged_addon.is_some();
+        let use_cjs_format = embed_native;
+        let staged_addon = staged.map(|(path, _)| path);
 
         // Helper to clean up build-time files staged into the source
         // directory: the generated bootstrap (Workers) and the staged native

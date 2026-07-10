@@ -436,6 +436,75 @@ impl LocalContainerManager {
             "Successfully loaded OCI image with docker load"
         );
 
+        // With Docker's containerd image store, `docker load` registers the
+        // image under the tar's literal `io.containerd.image.name` annotation
+        // (e.g. `worker:tag`), while every docker CLI/API lookup normalizes
+        // the reference to `docker.io/library/worker:tag` — a name the load
+        // did NOT register, so `create` fails with "No such image" even
+        // though the content is present. Re-tagging by image ID registers
+        // the normalized reference. Uses the same bollard client `create`
+        // will use (a CLI `docker tag` could target a different daemon via
+        // the active docker context). On the classic image store the initial
+        // inspect succeeds and nothing else runs.
+        if self.docker.inspect_image(&loaded_image).await.is_err() {
+            let images = self
+                .docker
+                .list_images(None::<bollard::image::ListImagesOptions<String>>)
+                .await
+                .into_alien_error()
+                .context(ErrorData::DockerContainerError {
+                    container: container_id.to_string(),
+                    operation: "list_images".to_string(),
+                    reason: "Failed to list images to locate the loaded OCI image".to_string(),
+                })?;
+            // Compare with the `docker.io/library/` default-registry prefix
+            // stripped from both sides: depending on the image store, the
+            // daemon may report the tag in literal or normalized form.
+            let normalize = |t: &str| {
+                t.strip_prefix("docker.io/library/")
+                    .unwrap_or(t)
+                    .to_string()
+            };
+            let wanted = normalize(&loaded_image);
+            let image_id = images
+                .iter()
+                .find(|img| img.repo_tags.iter().any(|t| normalize(t) == wanted))
+                .map(|img| img.id.clone())
+                .ok_or_else(|| {
+                    AlienError::new(ErrorData::DockerContainerError {
+                        container: container_id.to_string(),
+                        operation: "resolve_loaded_image".to_string(),
+                        reason: format!(
+                            "docker load reported image '{}' but the daemon can neither \
+                             inspect it nor list it — the load did not register usable content",
+                            loaded_image
+                        ),
+                    })
+                })?;
+            let (repo, tag) = loaded_image.rsplit_once(':').ok_or_else(|| {
+                AlienError::new(ErrorData::DockerContainerError {
+                    container: container_id.to_string(),
+                    operation: "resolve_loaded_image".to_string(),
+                    reason: format!("Loaded image reference '{}' has no tag", loaded_image),
+                })
+            })?;
+            self.docker
+                .tag_image(
+                    &image_id,
+                    Some(bollard::image::TagImageOptions { repo, tag }),
+                )
+                .await
+                .into_alien_error()
+                .context(ErrorData::DockerContainerError {
+                    container: container_id.to_string(),
+                    operation: "tag_image".to_string(),
+                    reason: format!(
+                        "Failed to tag loaded image {} as {}",
+                        image_id, loaded_image
+                    ),
+                })?;
+        }
+
         Ok(loaded_image)
     }
 
@@ -695,6 +764,18 @@ impl LocalContainerManager {
                 // On Linux: maps to host gateway IP
                 // On Mac/Windows: Docker Desktop provides this automatically, but explicit is fine
                 extra_hosts: Some(vec!["host.docker.internal:host-gateway".to_string()]),
+                // Restart exited containers like every managed platform does.
+                // Without this a container that races its peers at startup —
+                // e.g. nginx resolving an upstream before that service joined
+                // the network — stays Exited forever, while in production it
+                // would self-heal. ALWAYS (not ON_FAILURE) matches the
+                // Kubernetes Deployment default and also covers entrypoints
+                // that exit 0 on failure; Docker applies exponential backoff
+                // between restarts, and a manual stop/rm still sticks.
+                restart_policy: Some(bollard::models::RestartPolicy {
+                    name: Some(bollard::models::RestartPolicyNameEnum::ALWAYS),
+                    maximum_retry_count: None,
+                }),
                 ..Default::default()
             }),
             networking_config: Some(bollard::container::NetworkingConfig { endpoints_config }),

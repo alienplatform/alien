@@ -68,14 +68,6 @@ async function initializeSchema() {
   `)
 }
 
-await waitForStartupDependency("postgres", async () => {
-  await db.query("select 1")
-})
-await initializeSchema()
-await waitForStartupDependency("redis", async () => {
-  await redis.ping()
-})
-
 const app = new Hono()
 
 app.get("/health", c => c.json({ ok: true, service: "api" }))
@@ -180,7 +172,17 @@ app.post("/internal/maintenance", async c => {
   return c.json({ created: true, issueId: id })
 })
 
-if (import.meta.main) {
+// Async entry instead of top-level await: a source-built container that uses
+// a binding compiles under --format=cjs, which forbids top-level await.
+async function start() {
+  await waitForStartupDependency("postgres", async () => {
+    await db.query("select 1")
+  })
+  await initializeSchema()
+  await waitForStartupDependency("redis", async () => {
+    await redis.ping()
+  })
+
   Bun.serve({
     port,
     fetch: app.fetch,
@@ -189,4 +191,11 @@ if (import.meta.main) {
   console.log(`api listening on ${port}`)
 }
 
-export default app
+void start().catch(error => {
+  console.error("api failed to start", error)
+  process.exit(1)
+})
+
+// No `export default app`: Bun auto-serves a default export with a `fetch`
+// method as soon as the module evaluates, which would open a second server
+// before the dependency gating in `start()` has passed.

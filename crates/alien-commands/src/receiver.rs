@@ -333,7 +333,21 @@ impl Receiver {
 
             match self.acquire_leases().await {
                 Ok(leases) => {
-                    for lease in leases {
+                    for mut lease in leases {
+                        // The manager mints the pre-authorized submit URL from
+                        // its own base address, which may not be reachable from
+                        // behind a container/NAT boundary. The configured
+                        // commands URL is the address the platform corrected
+                        // for this receiver's network (leases flow through it),
+                        // and the submit endpoint lives on the same manager —
+                        // rebase onto that origin, keeping the pre-authorized
+                        // path and response token. Twin of the TS receiver's
+                        // `rebaseOntoCommandsOrigin`.
+                        lease.envelope.response_handling.submit_response_url =
+                            rebase_onto_commands_origin(
+                                &lease.envelope.response_handling.submit_response_url,
+                                self.lease_client.endpoint(),
+                            );
                         let handler = self.handlers.get(&lease.envelope.command).cloned();
                         in_flight.spawn(process_lease(handler, lease, self.target.clone()));
                     }
@@ -413,6 +427,33 @@ fn command_response_status(response: &CommandResponse) -> &str {
         CommandResponse::Success { .. } => "success",
         CommandResponse::Error { code, .. } => code,
     }
+}
+
+/// Rebase a manager-minted absolute URL onto the origin of the receiver's
+/// configured commands endpoint, preserving path and query.
+///
+/// Twin of the TS receiver's `rebaseOntoCommandsOrigin` — see the call site in
+/// [`Receiver::run`] for why. Returns the input unchanged when either URL
+/// fails to parse (an unparseable target then fails at submit time with the
+/// real error; the configured endpoint was already validated at construction).
+///
+/// Known limitation: only the origin is swapped — a reverse proxy that mounts
+/// the manager under a path prefix the manager itself does not know (base
+/// `https://edge/prefix/v1` vs minted `…/v1/commands/…`) still breaks, because
+/// the prefix cannot be reconstructed client-side. The manager's own base-URL
+/// path (e.g. `/v1`) rides inside the minted path and is preserved.
+fn rebase_onto_commands_origin(target: &str, commands_endpoint: &Url) -> String {
+    let Ok(target_url) = Url::parse(target) else {
+        return target.to_string();
+    };
+    if target_url.origin() == commands_endpoint.origin() {
+        return target.to_string();
+    }
+    let mut rebased = commands_endpoint.clone();
+    rebased.set_path(target_url.path());
+    rebased.set_query(target_url.query());
+    rebased.set_fragment(None);
+    rebased.to_string()
 }
 
 /// Process one leased command end to end: execute (or reject) it and submit

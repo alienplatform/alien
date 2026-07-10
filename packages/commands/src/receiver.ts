@@ -413,8 +413,18 @@ class PullCommandReceiver implements CommandReceiver {
     }
 
     // The submit URL is fully qualified and pre-authorized by the envelope, so
-    // it carries no bearer header (matching the Rust twin's submit path).
-    const res = await this.fetchImpl(envelope.responseHandling.submitResponseUrl, {
+    // it carries no bearer header (matching the Rust twin's submit path). It is
+    // rebased onto the receiver's configured commands URL first: the manager
+    // mints it from its own base (e.g. `http://localhost:9090`), which is not
+    // reachable from behind a container/NAT boundary, while the configured URL
+    // is the address the platform already corrected for this network (leases
+    // flow through it). The submit endpoint lives on the same manager, so an
+    // origin swap preserves the pre-authorized path and response token.
+    const submitUrl = rebaseOntoCommandsOrigin(
+      envelope.responseHandling.submitResponseUrl,
+      this.config.url,
+    )
+    const res = await this.fetchImpl(submitUrl, {
       method: "PUT",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(finalResponse),
@@ -425,7 +435,7 @@ class PullCommandReceiver implements CommandReceiver {
       throw new AlienError(
         StorageOperationFailedError.create({
           operation: "upload",
-          url: envelope.responseHandling.submitResponseUrl,
+          url: submitUrl,
           reason: `Response submission failed with status ${res.status}: ${body}`,
         }),
       )
@@ -524,6 +534,38 @@ export function buildLeaseEndpoint(baseUrl: string): string {
   segments.push("commands", "leases")
   url.pathname = segments.join("/")
   return url.toString()
+}
+
+/**
+ * Rebase a manager-minted absolute URL onto the origin of the receiver's
+ * configured commands URL, preserving path and query.
+ *
+ * The manager builds envelope URLs (e.g. the pre-authorized response-submit
+ * URL) from its own base address. Across a container or NAT boundary that
+ * address may not be reachable from the receiver — the platform corrects
+ * `ALIEN_COMMANDS_URL` for the receiver's network (leases already flow
+ * through it), so the same origin must be used for every other endpoint on
+ * that manager. Returns the URL unchanged when either side fails to parse
+ * (an unparseable target fails at fetch time with the real error; the
+ * configured base was already validated at receiver construction).
+ *
+ * Known limitation: only the origin is swapped — a reverse proxy that mounts
+ * the manager under a path prefix the manager itself does not know (base
+ * `https://edge/prefix/v1` vs minted `…/v1/commands/…`) still breaks, because
+ * the prefix cannot be reconstructed client-side. The manager's own base-URL
+ * path (e.g. `/v1`) rides inside the minted path and is preserved.
+ */
+export function rebaseOntoCommandsOrigin(target: string, commandsBaseUrl: string): string {
+  try {
+    const targetUrl = new URL(target)
+    const baseUrl = new URL(commandsBaseUrl)
+    if (targetUrl.origin === baseUrl.origin) {
+      return target
+    }
+    return `${baseUrl.origin}${targetUrl.pathname}${targetUrl.search}`
+  } catch {
+    return target
+  }
 }
 
 /**

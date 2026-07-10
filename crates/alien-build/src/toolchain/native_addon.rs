@@ -175,12 +175,13 @@ const RESOLVE_BINDINGS_NATIVE_SCRIPT: &str = r#"
 const path = require("path");
 const from = process.env.ALIEN_BINDINGS_RESOLVE_FROM;
 const tryResolve = (spec, base) => { try { return Bun.resolveSync(spec, base); } catch { return null; } };
+let route = "direct";
 let nativeEntry = tryResolve("@alienplatform/bindings/native", from);
 if (!nativeEntry) {
   const sdkEntry = tryResolve("@alienplatform/sdk", from);
-  if (sdkEntry) nativeEntry = tryResolve("@alienplatform/bindings/native", path.dirname(sdkEntry));
+  if (sdkEntry) { nativeEntry = tryResolve("@alienplatform/bindings/native", path.dirname(sdkEntry)); route = "sdk"; }
 }
-if (nativeEntry) process.stdout.write(nativeEntry);
+if (nativeEntry) process.stdout.write(route + "\n" + nativeEntry);
 "#;
 
 /// Resolve the `dist/` directory of `@alienplatform/bindings` as the app itself
@@ -200,7 +201,7 @@ if (nativeEntry) process.stdout.write(nativeEntry);
 async fn resolve_bindings_dist_dir(
     src_dir: &Path,
     resource_name: &str,
-) -> Result<Option<PathBuf>> {
+) -> Result<Option<(PathBuf, AddonResolutionRoute)>> {
     let output = Command::new("bun")
         .args(["-e", RESOLVE_BINDINGS_NATIVE_SCRIPT])
         .env("ALIEN_BINDINGS_RESOLVE_FROM", src_dir)
@@ -226,11 +227,42 @@ async fn resolve_bindings_dist_dir(
         }));
     }
 
-    let native_entry = String::from_utf8_lossy(&output.stdout).trim().to_string();
-    if native_entry.is_empty() {
+    let resolved = String::from_utf8_lossy(&output.stdout).trim().to_string();
+    if resolved.is_empty() {
         // App depends on neither the bindings package nor the SDK: no addon to embed.
         return Ok(None);
     }
+    // First line is the resolution route ("direct" or "sdk"), second the
+    // resolved native entry path — the route decides which package the
+    // generated entry wrapper can import `installEmbeddedAddon` from.
+    let (route_str, native_entry) =
+        resolved
+            .split_once('\n')
+            .ok_or_else(|| {
+                AlienError::new(ErrorData::ImageBuildFailed {
+                    resource_name: resource_name.to_string(),
+                    reason: format!(
+                        "Unexpected output resolving @alienplatform/bindings: '{resolved}'"
+                    ),
+                    build_output: None,
+                })
+            })?;
+    let route = match route_str {
+        "sdk" => AddonResolutionRoute::ViaSdk,
+        "direct" => AddonResolutionRoute::DirectBindings,
+        other => {
+            // The resolver script only emits "direct" or "sdk"; anything else
+            // means the script and this parser drifted — fail here, not with
+            // an unresolvable import deep inside `bun build --compile`.
+            return Err(AlienError::new(ErrorData::ImageBuildFailed {
+                resource_name: resource_name.to_string(),
+                reason: format!(
+                    "Unexpected bindings resolution route '{other}' from the resolver script"
+                ),
+                build_output: None,
+            }));
+        }
+    };
 
     let dist = Path::new(&native_entry)
         .parent()
@@ -245,7 +277,18 @@ async fn resolve_bindings_dist_dir(
             })
         })?
         .to_path_buf();
-    Ok(Some(dist))
+    Ok(Some((dist, route)))
+}
+
+/// How the app resolves `@alienplatform/bindings`: as a direct dependency, or
+/// only transitively through `@alienplatform/sdk`. The generated compile entry
+/// must import `installEmbeddedAddon` through a specifier the app can resolve.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum AddonResolutionRoute {
+    /// The app depends on `@alienplatform/bindings` itself.
+    DirectBindings,
+    /// Bindings only resolve through `@alienplatform/sdk` (its dependency).
+    ViaSdk,
 }
 
 /// Stage the TARGET platform's native addon next to the bindings package's
@@ -254,21 +297,23 @@ async fn resolve_bindings_dist_dir(
 /// The `./native` entry of `@alienplatform/bindings` imports the addon through
 /// the literal specifier `./alien-bindings.node` (see
 /// `packages/bindings/src/native.ts`); this function fulfills that staging
-/// contract. Returns the staged path (for post-build clean-up) when the app
-/// consumes the bindings package (directly or via the SDK), `None` when it does
-/// not. Fails with a clear error naming the missing prebuild package when a
-/// consumer has no addon for the target — otherwise `bun build --compile` would
-/// fail with an opaque unresolved-import error.
+/// contract. Returns the staged path (for post-build clean-up) plus how the
+/// app resolves the bindings package (directly or via the SDK) when the app
+/// consumes it, `None` when it does not. Fails with a clear error naming the
+/// missing prebuild package when a consumer has no addon for the target —
+/// otherwise `bun build --compile` would fail with an opaque unresolved-import
+/// error.
 pub(super) async fn stage_native_addon(
     src_dir: &Path,
     target: BinaryTarget,
     resource_name: &str,
-) -> Result<Option<PathBuf>> {
-    let Some(bindings_dist) = resolve_bindings_dist_dir(src_dir, resource_name).await? else {
+) -> Result<Option<(PathBuf, AddonResolutionRoute)>> {
+    let Some((bindings_dist, route)) = resolve_bindings_dist_dir(src_dir, resource_name).await?
+    else {
         return Ok(None);
     };
     let staged = stage_addon_into(src_dir, &bindings_dist, target, resource_name).await?;
-    Ok(Some(staged))
+    Ok(Some((staged, route)))
 }
 
 /// Source the target addon and copy it into `bindings_dist` as the staged
