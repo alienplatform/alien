@@ -367,12 +367,15 @@ main().catch((err) => {{
     assert_eq!(output.entrypoint, None);
     assert_eq!(output.runtime_command, vec!["./bindings-app".to_string()]);
 
-    // The staged addon must be cleaned up after the build; the binary must
-    // carry its own embedded copy.
+    // The staged addon stays in place after the build: it is a shared
+    // singleton path that concurrent builds (parallel containers in one
+    // stack, parallel tests) embed simultaneously, so removing it would
+    // yank it out from under another compile. The binary still carries its
+    // own embedded copy — proven below by running it from an unrelated cwd.
     let staged = app_dir.join("node_modules/@alienplatform/bindings/dist/alien-bindings.node");
     assert!(
-        !staged.exists(),
-        "staged addon should be cleaned up after the build"
+        staged.exists(),
+        "staged addon should remain for concurrent builds"
     );
 
     // RUN the compiled binary from an unrelated cwd against a real local kv.

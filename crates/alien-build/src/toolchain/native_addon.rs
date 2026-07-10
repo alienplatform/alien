@@ -386,9 +386,30 @@ async fn stage_addon_into(
         }));
     };
 
+    // The staged path is a SHARED singleton (`native.js` imports the literal
+    // `./alien-bindings.node`), and concurrent builds — parallel containers in
+    // one stack, parallel tests — all stage into it. Write via a unique temp
+    // file + atomic rename so a concurrent `bun build --compile` never reads a
+    // half-written addon, and never delete it after a build (see the cleanup
+    // in `typescript.rs`): removing it would yank the file out from under a
+    // concurrent compile. The dist directory is build output, so a lingering
+    // copy is expected debris and the next staging simply renames over it.
     let staged = bindings_dist.join(STAGED_ADDON_FILE);
-    fs::copy(&source, &staged)
-        .await
+    let staged_tmp = bindings_dist.join(format!(
+        "{}.staging-{}",
+        STAGED_ADDON_FILE,
+        std::process::id()
+    ));
+    let stage_result = async {
+        fs::copy(&source, &staged_tmp).await?;
+        fs::rename(&staged_tmp, &staged).await
+    }
+    .await;
+    if stage_result.is_err() {
+        // Best-effort temp cleanup before surfacing the real error.
+        let _ = fs::remove_file(&staged_tmp).await;
+    }
+    stage_result
         .into_alien_error()
         .context(ErrorData::ImageBuildFailed {
             resource_name: resource_name.to_string(),

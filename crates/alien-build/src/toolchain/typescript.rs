@@ -491,41 +491,33 @@ impl Toolchain for TypeScriptToolchain {
         let target_arg_clone = target_arg.to_string();
         let compile_entry_str = compile_entry.to_string_lossy().to_string();
         let use_cjs_format = embed_native;
-        let staged_addon = staged.map(|(path, _)| path);
 
-        // Helper to clean up build-time files staged into the source
-        // directory: the generated bootstrap (Workers) and the staged native
-        // addon (bindings apps).
-        let cleanup_staged_files =
-            |bootstrap_dir: Option<PathBuf>, staged_addon: Option<PathBuf>| async move {
-                if let Some(bootstrap_dir) = bootstrap_dir {
-                    if bootstrap_dir.exists() {
-                        if let Err(e) = fs::remove_dir_all(&bootstrap_dir).await {
-                            tracing::debug!(
-                                "Failed to clean up bootstrap directory {}: {}",
-                                bootstrap_dir.display(),
-                                e
-                            );
-                        } else {
-                            info!(
-                                "Cleaned up bootstrap directory: {}",
-                                bootstrap_dir.display()
-                            );
-                        }
-                    }
-                }
-                if let Some(staged_addon) = staged_addon {
-                    if let Err(e) = fs::remove_file(&staged_addon).await {
+        // Helper to clean up the generated bootstrap staged into the source
+        // directory (Workers / wrapped entries). The staged native addon is
+        // deliberately NOT removed: it lives at a shared singleton path
+        // inside the bindings package's dist (`./alien-bindings.node`), and
+        // concurrent builds — parallel containers in one stack, parallel
+        // tests — embed it while another build may still be compiling.
+        // Staging renames over it atomically, and dist is build output, so
+        // leaving it in place is both safe and required.
+        let cleanup_staged_files = |bootstrap_dir: Option<PathBuf>| async move {
+            if let Some(bootstrap_dir) = bootstrap_dir {
+                if bootstrap_dir.exists() {
+                    if let Err(e) = fs::remove_dir_all(&bootstrap_dir).await {
                         tracing::debug!(
-                            "Failed to clean up staged native addon {}: {}",
-                            staged_addon.display(),
+                            "Failed to clean up bootstrap directory {}: {}",
+                            bootstrap_dir.display(),
                             e
                         );
                     } else {
-                        info!("Cleaned up staged native addon: {}", staged_addon.display());
+                        info!(
+                            "Cleaned up bootstrap directory: {}",
+                            bootstrap_dir.display()
+                        );
                     }
                 }
-            };
+            }
+        };
 
         let build_result = AlienEvent::CompilingCode {
             language: "typescript".to_string(),
@@ -611,7 +603,7 @@ impl Toolchain for TypeScriptToolchain {
         .await;
 
         // Always clean up staged files from the source directory, even if the build failed
-        cleanup_staged_files(bootstrap_dir, staged_addon).await;
+        cleanup_staged_files(bootstrap_dir).await;
 
         // Now propagate any build error
         build_result?;
