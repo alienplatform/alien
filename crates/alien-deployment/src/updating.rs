@@ -278,6 +278,7 @@ pub async fn handle_updating(
         }
     } else {
         // Still in progress
+        next.status = DeploymentStatus::Updating;
         next.stack_state = Some(step_result.next_state);
         next.runtime_metadata = Some(runtime_metadata);
 
