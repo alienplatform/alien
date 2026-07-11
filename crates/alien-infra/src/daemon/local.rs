@@ -139,11 +139,15 @@ impl LocalDaemonController {
         // Resolve secret environment variables into plain values before the process starts. On the
         // local platform there is no `ALIEN_SECRETS` vault-load marker — the supervisor spawns the
         // app with these values already in its environment, so the app reads them like any env var.
+        // Their NAMES are handed to the supervisor as runtime-only so the values never persist to
+        // the daemon's on-disk metadata.
+        let mut runtime_only_env_names = Vec::new();
         for var in applicable_secret_environment_variables(
             &config.id,
             &ctx.deployment_config.environment_variables.variables,
         ) {
             env_vars.insert(var.name.clone(), var.value.clone());
+            runtime_only_env_names.push(var.name.clone());
         }
 
         // Linked Postgres resources carry a runtime-only secret (the password). Name them so the
@@ -159,8 +163,12 @@ impl LocalDaemonController {
             .start_daemon(
                 &config.id,
                 env_vars,
-                runtime_only_binding_names,
-                config.command.clone(),
+                alien_local::DaemonLaunchOptions {
+                    runtime_only_binding_names,
+                    runtime_only_env_names,
+                    command_override: config.command.clone(),
+                    stop_grace_period_seconds: config.stop_grace_period_seconds,
+                },
             )
             .await
             .context(ErrorData::CloudPlatformError {

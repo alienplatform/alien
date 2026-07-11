@@ -128,7 +128,16 @@ async fn daemon_runs_as_direct_child_with_resolved_env() {
     env_vars.insert("ALIEN_SECRETS".to_string(), "vault://ignored".to_string());
 
     manager
-        .start_daemon("gateway", env_vars, Vec::new(), None)
+        .start_daemon(
+            "gateway",
+            env_vars,
+            alien_local::DaemonLaunchOptions {
+                // The resolved secret's NAME is runtime-only: the value must
+                // reach the process env but never the persisted metadata.
+                runtime_only_env_names: vec!["MY_SECRET".to_string()],
+                ..Default::default()
+            },
+        )
         .await
         .expect("daemon should start under direct supervision");
 
@@ -186,11 +195,99 @@ async fn daemon_runs_as_direct_child_with_resolved_env() {
         "resolved secret must reach the app as a plain env var"
     );
 
+    // The persisted metadata must NOT contain the secret value ("password
+    // never persisted" invariant): a crash restart uses the in-memory live
+    // env; cold recovery defers to the controller for fresh resolution.
+    let persisted = std::fs::read_to_string(
+        state_dir
+            .join("daemons")
+            .join("gateway")
+            .join("metadata.json"),
+    )
+    .expect("daemon metadata must exist");
+    assert!(
+        !persisted.contains("s3cr3t-value"),
+        "resolved secret value must never persist to metadata.json: {persisted}"
+    );
+    assert!(
+        persisted.contains("MY_SECRET"),
+        "the secret's NAME must persist (runtime_only_env_names) so restarts know the shape"
+    );
+
     manager
         .stop_daemon("gateway")
         .await
         .expect("daemon should stop");
     assert!(!manager.is_daemon_running("gateway").await);
+}
+
+/// Stopping a daemon delivers SIGTERM first and gives the app its drain window: a daemon that
+/// traps SIGTERM gets to run its handler (proven by the marker file it writes) before the
+/// supervisor would escalate to SIGKILL. Guards the graceful half of the shutdown path — an
+/// immediate-kill regression makes the trap never fire and the marker never appear.
+#[tokio::test]
+async fn stopping_daemon_delivers_sigterm_and_honors_the_drain_window() {
+    let temp = TempDir::new().unwrap();
+    let state_dir = temp.path().join("state");
+    std::fs::create_dir_all(&state_dir).unwrap();
+
+    let provider = LocalBindingsProvider::new(&state_dir).unwrap();
+    let manager = provider.worker_manager();
+    settle_initial_recovery().await;
+
+    // A daemon that traps SIGTERM, writes a drain marker, then exits cleanly.
+    let daemon_dir = state_dir.join("daemons").join("drainer");
+    std::fs::create_dir_all(&daemon_dir).unwrap();
+    let ready_file = temp.path().join("drainer-ready.txt");
+    let drain_file = temp.path().join("drainer-drained.txt");
+    let script_path = daemon_dir.join("run.sh");
+    std::fs::write(
+        &script_path,
+        format!(
+            "#!/bin/sh\n\
+             trap 'echo drained > \"{drain}\"; exit 0' TERM\n\
+             echo ready > \"{ready}\"\n\
+             while :; do sleep 0.1; done\n",
+            drain = drain_file.display(),
+            ready = ready_file.display()
+        ),
+    )
+    .unwrap();
+    std::fs::write(
+        daemon_dir.join("metadata.json"),
+        serde_json::to_string_pretty(&serde_json::json!({
+            "worker_id": "drainer",
+            "extracted_path": daemon_dir.to_str().unwrap(),
+            "env_vars": {},
+            "runtime_command": ["/bin/sh", script_path.to_str().unwrap()],
+            "working_dir": null,
+            "transport_port": null,
+            "runtime_only_binding_names": [],
+        }))
+        .unwrap(),
+    )
+    .unwrap();
+
+    manager
+        .start_daemon(
+            "drainer",
+            HashMap::new(),
+            alien_local::DaemonLaunchOptions {
+                stop_grace_period_seconds: Some(10),
+                ..Default::default()
+            },
+        )
+        .await
+        .expect("daemon should start");
+    read_when_ready(&ready_file, Duration::from_secs(10)).await;
+
+    manager.stop_daemon("drainer").await.expect("stop daemon");
+
+    // The trap handler must have run: SIGTERM was delivered and the process
+    // was given time to drain instead of being SIGKILLed outright.
+    let marker = read_when_ready(&drain_file, Duration::from_secs(5)).await;
+    assert_eq!(marker.trim(), "drained");
+    assert!(!manager.is_daemon_running("drainer").await);
 }
 
 /// Stopping a daemon terminates its app process; a subsequent health check fails. Guards the
@@ -209,7 +306,7 @@ async fn stopping_daemon_kills_the_app_process() {
     seed_script_daemon(&state_dir, "worker-d", &out_file);
 
     manager
-        .start_daemon("worker-d", HashMap::new(), Vec::new(), None)
+        .start_daemon("worker-d", HashMap::new(), Default::default())
         .await
         .expect("daemon should start");
 

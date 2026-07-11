@@ -9,21 +9,25 @@ use crate::core::{
     KubernetesEnvSecretPlan, ResourceControllerContext,
 };
 use crate::error::{ErrorData, Result};
+use crate::kubernetes_public_endpoint::{
+    daemon_public_endpoint_target, delete_kubernetes_public_endpoint,
+    reconcile_kubernetes_public_endpoint, KubernetesEndpointAction, KubernetesPublicEndpointState,
+};
 use crate::kubernetes_workload_heartbeat::{
     emit_kubernetes_workload_heartbeat, label_selector, KubernetesWorkload,
     KubernetesWorkloadDataKind, KubernetesWorkloadHeartbeatInput,
 };
 use alien_client_core::ErrorData as CloudClientErrorData;
 use alien_core::{
-    branded_tag_key, kubernetes_resource_name, kubernetes_service_account_name, Daemon, DaemonCode,
-    DaemonOutputs, ResourceOutputs, ResourceStatus, ALIEN_MANAGED_BY_TAG_KEY,
-    ALIEN_MANAGED_BY_TAG_VALUE, DEFAULT_ALIEN_LABEL_DOMAIN,
+    branded_tag_key, kubernetes_resource_name, kubernetes_service_account_name, public_url_host,
+    Daemon, DaemonCode, DaemonOutputs, PublicEndpointOutput, ResourceOutputs, ResourceStatus,
+    ALIEN_MANAGED_BY_TAG_KEY, ALIEN_MANAGED_BY_TAG_VALUE, DEFAULT_ALIEN_LABEL_DOMAIN,
 };
 use alien_error::{AlienError, Context, ContextError};
 use alien_macros::controller;
 use k8s_openapi::api::apps::v1::{DaemonSet, DaemonSetSpec};
 use k8s_openapi::api::core::v1::{
-    Container, LocalObjectReference, PodSpec, PodTemplateSpec, ResourceRequirements,
+    Container, ContainerPort, LocalObjectReference, PodSpec, PodTemplateSpec, ResourceRequirements,
 };
 use k8s_openapi::apimachinery::pkg::api::resource::Quantity;
 use k8s_openapi::apimachinery::pkg::apis::meta::v1::{LabelSelector, ObjectMeta};
@@ -39,6 +43,9 @@ pub struct KubernetesDaemonController {
     /// secretKeyRef, never into the resource config).
     #[serde(default)]
     pub(crate) env_secret: EnvSecretRotationTracker,
+    /// Public endpoint state (Service/route names, resolved public URL).
+    #[serde(default)]
+    pub(crate) public_endpoint: KubernetesPublicEndpointState,
 }
 
 #[controller]
@@ -168,8 +175,8 @@ impl KubernetesDaemonController {
     ) -> Result<HandlerAction> {
         if self.daemonset_ready(ctx).await? {
             return Ok(HandlerAction::Continue {
-                state: Ready,
-                suggested_delay: Some(Duration::from_secs(30)),
+                state: ReconcilePublicEndpoint,
+                suggested_delay: None,
             });
         }
 
@@ -177,6 +184,27 @@ impl KubernetesDaemonController {
             max_times: 60,
             suggested_delay: Some(Duration::from_secs(5)),
         })
+    }
+
+    #[handler(
+        state = ReconcilePublicEndpoint,
+        on_failure = CreateFailed,
+        status = ResourceStatus::Provisioning,
+    )]
+    async fn reconcile_public_endpoint(
+        &mut self,
+        ctx: &ResourceControllerContext<'_>,
+    ) -> Result<HandlerAction> {
+        match self.reconcile_endpoint(ctx).await? {
+            KubernetesEndpointAction::Ready => Ok(HandlerAction::Continue {
+                state: Ready,
+                suggested_delay: Some(Duration::from_secs(30)),
+            }),
+            KubernetesEndpointAction::Waiting { suggested_delay } => Ok(HandlerAction::Stay {
+                max_times: 60,
+                suggested_delay: Some(suggested_delay),
+            }),
+        }
     }
 
     #[handler(
@@ -336,8 +364,8 @@ impl KubernetesDaemonController {
     ) -> Result<HandlerAction> {
         if self.daemonset_ready(ctx).await? {
             return Ok(HandlerAction::Continue {
-                state: Ready,
-                suggested_delay: Some(Duration::from_secs(30)),
+                state: ReconcilePublicEndpointAfterUpdate,
+                suggested_delay: None,
             });
         }
 
@@ -345,6 +373,27 @@ impl KubernetesDaemonController {
             max_times: 60,
             suggested_delay: Some(Duration::from_secs(5)),
         })
+    }
+
+    #[handler(
+        state = ReconcilePublicEndpointAfterUpdate,
+        on_failure = UpdateFailed,
+        status = ResourceStatus::Updating,
+    )]
+    async fn reconcile_public_endpoint_after_update(
+        &mut self,
+        ctx: &ResourceControllerContext<'_>,
+    ) -> Result<HandlerAction> {
+        match self.reconcile_endpoint(ctx).await? {
+            KubernetesEndpointAction::Ready => Ok(HandlerAction::Continue {
+                state: Ready,
+                suggested_delay: Some(Duration::from_secs(30)),
+            }),
+            KubernetesEndpointAction::Waiting { suggested_delay } => Ok(HandlerAction::Stay {
+                max_times: 60,
+                suggested_delay: Some(suggested_delay),
+            }),
+        }
     }
 
     #[flow_entry(Delete)]
@@ -362,6 +411,17 @@ impl KubernetesDaemonController {
                 message: "Namespace not set in state".to_string(),
             })
         })?;
+
+        // Tear down the public endpoint (Service/route) before the workload,
+        // mirroring the container controller's delete order.
+        let namespace_owned = namespace.clone();
+        delete_kubernetes_public_endpoint(
+            ctx,
+            &config.id,
+            &namespace_owned,
+            &mut self.public_endpoint,
+        )
+        .await?;
 
         if let Some(daemon_set_name) = &self.daemon_set_name {
             let workload_client = ctx
@@ -493,13 +553,69 @@ impl KubernetesDaemonController {
             ResourceOutputs::new(DaemonOutputs {
                 daemon_name: daemon_set_name.clone(),
                 running: true,
-                public_endpoints: std::collections::HashMap::new(),
+                public_endpoints: self
+                    .public_endpoint
+                    .effective_public_url()
+                    .map(|url| {
+                        std::collections::HashMap::from([(
+                            "default".to_string(),
+                            PublicEndpointOutput {
+                                host: public_url_host(&url).unwrap_or_default(),
+                                url,
+                                wildcard_host: None,
+                                load_balancer_endpoint: self
+                                    .public_endpoint
+                                    .load_balancer_endpoint
+                                    .clone(),
+                            },
+                        )])
+                    })
+                    .unwrap_or_default(),
             })
         })
     }
 }
 
 impl KubernetesDaemonController {
+    /// Reconcile the Daemon's public endpoint (Service + platform route) —
+    /// shared by the create and update flows. A daemon with no HTTP endpoint
+    /// resolves to `Ready` immediately (the target is non-public).
+    async fn reconcile_endpoint(
+        &mut self,
+        ctx: &ResourceControllerContext<'_>,
+    ) -> Result<KubernetesEndpointAction> {
+        let config = ctx.desired_resource_config::<Daemon>()?;
+        let daemon_set_name = self.daemon_set_name.clone().ok_or_else(|| {
+            AlienError::new(ErrorData::ResourceControllerConfigError {
+                resource_id: config.id.clone(),
+                message: "DaemonSet name not set in state".to_string(),
+            })
+        })?;
+        let namespace = self.namespace.clone().ok_or_else(|| {
+            AlienError::new(ErrorData::ResourceControllerConfigError {
+                resource_id: config.id.clone(),
+                message: "Namespace not set in state".to_string(),
+            })
+        })?;
+        let labels = self.build_labels(&daemon_set_name);
+        reconcile_kubernetes_public_endpoint(
+            ctx,
+            daemon_public_endpoint_target(
+                &config.id,
+                &daemon_set_name,
+                &namespace,
+                labels,
+                &config.public_endpoints,
+                config
+                    .health_check
+                    .as_ref()
+                    .map(|check| check.path.as_str()),
+            )?,
+            &mut self.public_endpoint,
+        )
+        .await
+    }
+
     async fn daemonset_ready(&self, ctx: &ResourceControllerContext<'_>) -> Result<bool> {
         let kubernetes_config = ctx.get_kubernetes_config()?;
         let config = ctx.desired_resource_config::<Daemon>()?;
@@ -604,6 +720,18 @@ impl KubernetesDaemonController {
             // and is first in line for eviction. Mirrors the container
             // controller.
             command: config.command.clone(),
+            ports: (!config.public_endpoints.is_empty()).then(|| {
+                config
+                    .public_endpoints
+                    .iter()
+                    .map(|endpoint| ContainerPort {
+                        container_port: endpoint.port as i32,
+                        name: Some(format!("tcp-{}", endpoint.port)),
+                        protocol: Some("TCP".to_string()),
+                        ..Default::default()
+                    })
+                    .collect()
+            }),
             env: Some(env_vars),
             resources: Some(ResourceRequirements {
                 requests: Some(BTreeMap::from([
@@ -881,6 +1009,13 @@ mod tests {
             desired: "1Gi".to_string(),
         };
         config.stop_grace_period_seconds = Some(90);
+        config.public_endpoints = vec![alien_core::PublicEndpoint {
+            name: "web".to_string(),
+            port: 8080,
+            protocol: alien_core::ExposeProtocol::Http,
+            host_label: None,
+            wildcard_subdomains: false,
+        }];
         let harness = KubernetesManifestTestHarness::new(Resource::new(config.clone()), vec![]);
         let controller = manifest_test_controller();
 
@@ -918,6 +1053,46 @@ mod tests {
         let limits = resources.limits.as_ref().expect("limits");
         assert_eq!(limits["cpu"].0, "1");
         assert_eq!(limits["memory"].0, "1Gi");
+
+        // The declared endpoint's port must reach the pod spec so the
+        // endpoint Service has a port to target.
+        let ports = container.ports.as_ref().expect("ports");
+        assert_eq!(ports.len(), 1);
+        assert_eq!(ports[0].container_port, 8080);
+    }
+
+    /// Outputs report the reconciled endpoint URL — a daemon that declared a
+    /// public endpoint must not claim `running` with an empty endpoint map.
+    #[test]
+    fn build_outputs_includes_public_endpoint_url() {
+        let controller = KubernetesDaemonController {
+            daemon_set_name: Some("agent".to_string()),
+            namespace: Some("test-ns".to_string()),
+            public_endpoint: KubernetesPublicEndpointState {
+                public_url: Some("https://agent.example.test".to_string()),
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+
+        let outputs = controller.build_outputs().expect("outputs");
+        let daemon_outputs = outputs
+            .downcast_ref::<DaemonOutputs>()
+            .expect("daemon outputs");
+        assert_eq!(
+            daemon_outputs
+                .public_endpoints
+                .get("default")
+                .map(|endpoint| endpoint.url.as_str()),
+            Some("https://agent.example.test")
+        );
+        assert_eq!(
+            daemon_outputs
+                .public_endpoints
+                .get("default")
+                .map(|endpoint| endpoint.host.as_str()),
+            Some("agent.example.test")
+        );
     }
 
     #[tokio::test]

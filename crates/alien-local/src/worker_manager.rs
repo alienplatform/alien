@@ -76,6 +76,16 @@ pub(crate) struct WorkerMetadata {
     /// persisted so recovery/restart can re-resolve it live; the secret itself is never written here.
     #[serde(default)]
     pub(crate) runtime_only_binding_names: Vec<String>,
+    /// Env var NAMES whose resolved values are deployment secrets; the values
+    /// are stripped from this persisted file (see `plan_worker_launch`) and
+    /// live only in the process env and the in-memory runtime.
+    #[serde(default)]
+    pub(crate) runtime_only_env_names: Vec<String>,
+    /// Daemon stop grace period (seconds): SIGTERM, then SIGKILL after this
+    /// window. `None` uses the supervisor default. Persisted so monitor
+    /// restarts keep the configured window; absent in pre-existing metadata.
+    #[serde(default)]
+    pub(crate) stop_grace_period_seconds: Option<u32>,
 }
 
 impl LocalWorkerManager {
@@ -325,13 +335,27 @@ impl LocalWorkerManager {
 
         info!(daemon_id = %metadata.worker_id, "Recovering daemon from previous run");
 
+        // A daemon whose env carried deployment secrets cannot be recovered
+        // from disk — the values are intentionally not persisted. Leave it
+        // stopped: the controller's health check fails and re-launches it
+        // with freshly resolved secrets.
+        if !metadata.runtime_only_env_names.is_empty() {
+            info!(
+                daemon_id = %metadata.worker_id,
+                "Skipping cold recovery: daemon env contains runtime-only secrets; the controller will re-launch it"
+            );
+            return Ok(());
+        }
+
         Self::start_daemon_internal(
             &metadata.worker_id,
             metadata.env_vars,
-            metadata.runtime_only_binding_names,
-            // Recovery re-runs the persisted runtime_command, which already
-            // carries any config `command` override from the original start.
-            None,
+            // Recovery re-runs the persisted launch shape (runtime_command,
+            // grace, runtime-only lists) captured at the original start.
+            crate::daemon_supervisor::DaemonLaunchOptions {
+                runtime_only_binding_names: metadata.runtime_only_binding_names,
+                ..Default::default()
+            },
             state_dir,
             daemons,
             bindings_provider,
@@ -452,13 +476,16 @@ impl LocalWorkerManager {
 
                 warn!(daemon_id = %daemon_id, "Auto-restarting daemon...");
 
+                // metadata here is the IN-MEMORY runtime copy, so env_vars
+                // still carries the live secret values the process had.
                 if let Err(e) = Self::start_daemon_internal(
                     &metadata.worker_id,
                     metadata.env_vars,
-                    metadata.runtime_only_binding_names,
-                    // Restarts re-run the persisted runtime_command, which
-                    // already carries any config `command` override.
-                    None,
+                    crate::daemon_supervisor::DaemonLaunchOptions {
+                        runtime_only_binding_names: metadata.runtime_only_binding_names,
+                        runtime_only_env_names: metadata.runtime_only_env_names,
+                        ..Default::default()
+                    },
                     state_dir,
                     daemons,
                     bindings_provider.clone(),
@@ -592,12 +619,18 @@ impl LocalWorkerManager {
         transport_port: Option<u16>,
         passed_env: HashMap<String, String>,
         runtime_only_binding_names: Vec<String>,
+        runtime_only_env_names: &[String],
         resolved: &[(String, HashMap<String, String>)],
     ) -> (WorkerMetadata, HashMap<String, String>) {
         let mut persisted_env = passed_env.clone();
         let mut live_env = passed_env;
         for name in &runtime_only_binding_names {
             persisted_env.remove(&alien_core::bindings::binding_env_var_name(name));
+        }
+        // Resolved deployment secrets (including ALIEN_COMMANDS_TOKEN) never
+        // persist either — same invariant as the binding secrets above.
+        for name in runtime_only_env_names {
+            persisted_env.remove(name);
         }
         for (_name, entry) in resolved {
             live_env.extend(entry.clone());
@@ -610,6 +643,8 @@ impl LocalWorkerManager {
             working_dir: existing.working_dir.clone(),
             transport_port,
             runtime_only_binding_names,
+            runtime_only_env_names: runtime_only_env_names.to_vec(),
+            stop_grace_period_seconds: existing.stop_grace_period_seconds,
         };
         (metadata, live_env)
     }
@@ -700,6 +735,7 @@ impl LocalWorkerManager {
             Some(port),
             env_vars,
             runtime_only_binding_names,
+            &[],
             &resolved_bindings,
         );
 
@@ -1307,6 +1343,8 @@ impl LocalWorkerManager {
                 working_dir: metadata.working_dir,
                 transport_port: None, // Will be allocated during start_worker
                 runtime_only_binding_names: Vec::new(), // Will be set during start_worker
+                runtime_only_env_names: Vec::new(), // Will be set during start_daemon
+                stop_grace_period_seconds: None, // Will be set during start_daemon
             };
             if namespace == "daemons" {
                 Self::save_daemon_metadata_static(&self.state_dir, &worker_metadata)?;
@@ -1382,6 +1420,8 @@ impl LocalWorkerManager {
                 working_dir: metadata.working_dir,
                 transport_port: None, // Will be allocated during start_worker
                 runtime_only_binding_names: Vec::new(), // Will be set during start_worker
+                runtime_only_env_names: Vec::new(), // Will be set during start_daemon
+                stop_grace_period_seconds: None, // Will be set during start_daemon
             };
             if namespace == "daemons" {
                 Self::save_daemon_metadata_static(&self.state_dir, &worker_metadata)?;
@@ -1524,6 +1564,8 @@ mod tests {
             working_dir: None,
             transport_port: None,
             runtime_only_binding_names: Vec::new(),
+            runtime_only_env_names: Vec::new(),
+            stop_grace_period_seconds: None,
         };
         // The env builder already inlined the binding (with password) into the passed env.
         let mut base = HashMap::new();
@@ -1546,6 +1588,7 @@ mod tests {
             Some(3000),
             base,
             vec!["pgdb".to_string()],
+            &[],
             &resolved,
         );
 
@@ -1579,6 +1622,8 @@ mod tests {
             working_dir: None,
             transport_port: None,
             runtime_only_binding_names: Vec::new(),
+            runtime_only_env_names: Vec::new(),
+            stop_grace_period_seconds: None,
         };
         let mut base = HashMap::new();
         base.insert("FOO".to_string(), "bar".to_string());
@@ -1589,6 +1634,7 @@ mod tests {
             None,
             base.clone(),
             Vec::new(),
+            &[],
             &[],
         );
         assert_eq!(metadata.env_vars, base);
@@ -1608,6 +1654,8 @@ mod tests {
             working_dir: None,
             transport_port: None,
             runtime_only_binding_names: Vec::new(),
+            runtime_only_env_names: Vec::new(),
+            stop_grace_period_seconds: None,
         };
         // The env builder already inlined the binding (with password), but re-resolution finds nothing.
         let mut base = HashMap::new();
@@ -1623,6 +1671,7 @@ mod tests {
             Some(3000),
             base,
             vec!["pgdb".to_string()],
+            &[],
             &[],
         );
         let json = serde_json::to_string(&metadata).expect("metadata serializes");

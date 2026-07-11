@@ -42,6 +42,29 @@ pub(crate) struct DaemonRuntime {
     otlp_logger: Option<Arc<OwnedOtlpLogger>>,
 }
 
+/// Launch-time options for a supervised daemon, beyond its resolved env.
+///
+/// Every field follows the persist-on-start rule: values flow into the
+/// daemon's on-disk metadata (or, for the runtime-only lists, only their
+/// NAMES do), so monitor restarts and cold recovery see the same launch
+/// shape without the caller re-supplying it.
+#[derive(Debug, Default, Clone)]
+pub struct DaemonLaunchOptions {
+    /// Linked-resource names whose binding is a runtime-only secret (a local
+    /// Postgres password): re-resolved live at every start, never persisted.
+    pub runtime_only_binding_names: Vec<String>,
+    /// Env var NAMES whose resolved values are deployment secrets (including
+    /// the receiver's `ALIEN_COMMANDS_TOKEN`): delivered to the process but
+    /// stripped from the persisted metadata. The in-memory runtime keeps the
+    /// live values so crash restarts work; cold recovery defers to the
+    /// controller, which re-resolves them fresh.
+    pub runtime_only_env_names: Vec<String>,
+    /// The Daemon config's `command` (image entrypoint override).
+    pub command_override: Option<Vec<String>>,
+    /// Stop grace period: SIGTERM, this window to drain, then SIGKILL.
+    pub stop_grace_period_seconds: Option<u32>,
+}
+
 impl LocalWorkerManager {
     /// Starts a daemon under direct local supervision.
     ///
@@ -52,23 +75,18 @@ impl LocalWorkerManager {
     /// before start, and a command-enabled daemon runs its own app-owned receiver from the
     /// injected `ALIEN_COMMANDS_*` config. The supervisor captures the child's stdout/stderr for
     /// log export itself, and applies restart/health to the app process directly.
-    /// `command_override` is the Daemon config's `command` (the image
-    /// entrypoint override). When present it replaces the OCI-extracted
-    /// runtime command and is persisted into the daemon's metadata, so
-    /// monitor-driven restarts (which pass `None`) keep honoring it until
-    /// the next image extract rewrites the metadata.
+    /// See [`DaemonLaunchOptions`] for the launch shape (entrypoint override,
+    /// stop grace, and the two runtime-only lists).
     pub async fn start_daemon(
         &self,
         id: &str,
         env_vars: HashMap<String, String>,
-        runtime_only_binding_names: Vec<String>,
-        command_override: Option<Vec<String>>,
+        options: DaemonLaunchOptions,
     ) -> Result<()> {
         Self::start_daemon_internal(
             id,
             env_vars,
-            runtime_only_binding_names,
-            command_override,
+            options,
             &self.state_dir,
             &self.daemons,
             self.bindings_provider.clone(),
@@ -80,8 +98,7 @@ impl LocalWorkerManager {
     pub(crate) async fn start_daemon_internal(
         id: &str,
         env_vars: HashMap<String, String>,
-        runtime_only_binding_names: Vec<String>,
-        command_override: Option<Vec<String>>,
+        options: DaemonLaunchOptions,
         state_dir: &PathBuf,
         daemons: &Arc<Mutex<HashMap<String, DaemonRuntime>>>,
         bindings_provider: Arc<dyn alien_bindings::BindingsProviderApi>,
@@ -120,8 +137,17 @@ impl LocalWorkerManager {
         // Apply the Daemon config's entrypoint override over the
         // OCI-extracted command. Flows into the persisted metadata below, so
         // a monitor restart (override = None) keeps running the same command.
-        if let Some(command) = command_override {
+        if let Some(command) = options.command_override {
             existing_metadata.runtime_command = command;
+        }
+        // Same persist-on-start rule for the stop grace period and the
+        // runtime-only env names (monitor restarts and recovery re-read them
+        // from metadata).
+        if options.stop_grace_period_seconds.is_some() {
+            existing_metadata.stop_grace_period_seconds = options.stop_grace_period_seconds;
+        }
+        if !options.runtime_only_env_names.is_empty() {
+            existing_metadata.runtime_only_env_names = options.runtime_only_env_names.clone();
         }
 
         let working_dir = if let Some(ref oci_working_dir) = existing_metadata.working_dir {
@@ -136,7 +162,7 @@ impl LocalWorkerManager {
 
         // Re-resolve each secret live (kept out of persisted metadata; see plan_worker_launch).
         let mut resolved_bindings = Vec::new();
-        for name in &runtime_only_binding_names {
+        for name in &options.runtime_only_binding_names {
             if let Some(entry) = bindings_provider
                 .resolve_runtime_only_binding_env(name)
                 .await
@@ -153,10 +179,12 @@ impl LocalWorkerManager {
             &existing_metadata,
             None,
             env_vars,
-            runtime_only_binding_names,
+            options.runtime_only_binding_names,
+            &existing_metadata.runtime_only_env_names.clone(),
             &resolved_bindings,
         );
 
+        let runtime_env_vars_for_restart = runtime_env_vars.clone();
         let log_exporter = log_exporter_from_env(&runtime_env_vars, id);
 
         Self::save_daemon_metadata_static(state_dir, &updated_metadata)?;
@@ -202,8 +230,20 @@ impl LocalWorkerManager {
 
         let supervised_id = id.to_string();
         let supervisor_logger = otlp_logger.clone();
+        let stop_grace_period = std::time::Duration::from_secs(u64::from(
+            updated_metadata
+                .stop_grace_period_seconds
+                .unwrap_or(DEFAULT_STOP_GRACE_PERIOD_SECONDS),
+        ));
         let runtime_task: JoinHandle<crate::error::Result<()>> = tokio::spawn(async move {
-            supervise_daemon_process(supervised_id, child, shutdown_rx, supervisor_logger).await
+            supervise_daemon_process(
+                supervised_id,
+                child,
+                shutdown_rx,
+                supervisor_logger,
+                stop_grace_period,
+            )
+            .await
         });
 
         // Give an immediately-failing process a chance to surface its exit before we report success.
@@ -228,6 +268,12 @@ impl LocalWorkerManager {
             }
         }
 
+        // The in-memory runtime keeps the LIVE env (secrets included) so a
+        // monitor crash-restart relaunches with the values the process
+        // actually had; only the on-disk metadata is secret-stripped.
+        let mut runtime_metadata = updated_metadata;
+        runtime_metadata.env_vars = runtime_env_vars_for_restart;
+
         let mut daemons_mut = daemons.lock().await;
         daemons_mut.insert(
             id.to_string(),
@@ -236,7 +282,7 @@ impl LocalWorkerManager {
                 shutdown_tx,
                 pid,
                 started_at: chrono::Utc::now(),
-                metadata: updated_metadata,
+                metadata: runtime_metadata,
                 otlp_logger,
             },
         );
@@ -367,11 +413,16 @@ async fn stream_daemon_output(
 /// (or a wait error) is returned as an error so the monitor loop treats it as a crash and restarts.
 /// A clean exit returns `Ok(())`; the monitor still restarts it, since a daemon is expected to run
 /// forever.
+/// Default stop grace period when the Daemon config does not set one —
+/// matches the Kubernetes pod default.
+const DEFAULT_STOP_GRACE_PERIOD_SECONDS: u32 = 30;
+
 async fn supervise_daemon_process(
     daemon_id: String,
     mut child: tokio::process::Child,
     mut shutdown_rx: tokio::sync::broadcast::Receiver<()>,
     otlp_logger: Option<Arc<OwnedOtlpLogger>>,
+    stop_grace_period: std::time::Duration,
 ) -> Result<()> {
     let result = tokio::select! {
         status = child.wait() => {
@@ -396,9 +447,41 @@ async fn supervise_daemon_process(
             }
         }
         _ = shutdown_rx.recv() => {
-            info!(daemon_id = %daemon_id, "Daemon shutdown signal received; terminating process");
-            if let Err(e) = child.kill().await {
-                warn!(daemon_id = %daemon_id, error = %e, "Failed to kill daemon process");
+            // Graceful stop: SIGTERM, then the configured drain window, then
+            // SIGKILL. An immediate kill would cut in-flight command
+            // executions and buffered writes with zero notice — the config
+            // accepts stop_grace_period_seconds, so honor it (the K8s daemon
+            // controller maps the same field to terminationGracePeriodSeconds).
+            info!(
+                daemon_id = %daemon_id,
+                grace_seconds = stop_grace_period.as_secs(),
+                "Daemon shutdown signal received; sending SIGTERM"
+            );
+            match child.id() {
+                Some(pid) => {
+                    // SAFETY: plain kill(2) on the child pid we own; no memory
+                    // access. A failure (e.g. the process already exited) is
+                    // handled by the wait/kill fallback below.
+                    let rc = unsafe { libc::kill(pid as libc::pid_t, libc::SIGTERM) };
+                    if rc != 0 {
+                        warn!(daemon_id = %daemon_id, "Failed to send SIGTERM to daemon process");
+                    }
+                    match tokio::time::timeout(stop_grace_period, child.wait()).await {
+                        Ok(_) => {
+                            info!(daemon_id = %daemon_id, "Daemon process exited within the grace period");
+                        }
+                        Err(_) => {
+                            warn!(daemon_id = %daemon_id, "Daemon did not exit within the grace period; sending SIGKILL");
+                            if let Err(e) = child.kill().await {
+                                warn!(daemon_id = %daemon_id, error = %e, "Failed to kill daemon process");
+                            }
+                        }
+                    }
+                }
+                // No pid means the child already exited; reap it.
+                None => {
+                    let _ = child.wait().await;
+                }
             }
             Ok(())
         }

@@ -796,11 +796,14 @@ impl DeploymentLoop {
 
         if needs_polling {
             let commands_base = self.config.commands_base_url();
-            vars.extend(commands_polling_env_vars(
-                commands_base,
-                deployment.deployment_token.as_deref(),
-                deployment_stack,
-            ));
+            vars.extend(
+                commands_polling_env_vars(
+                    commands_base,
+                    deployment.deployment_token.as_deref(),
+                    deployment_stack,
+                )
+                .map_err(|e| e.into_generic())?,
+            );
         }
 
         // 3b. Container/Daemon command receiver env — injected on EVERY platform.
@@ -814,11 +817,14 @@ impl DeploymentLoop {
         // `alien-deployment::inject_into_environment` (Container/Daemon downcast).
         // Empty when the stack declares no command-enabled Container/Daemon targets.
         let commands_base = self.config.commands_base_url();
-        vars.extend(commands_receiver_env_vars(
-            commands_base,
-            deployment.deployment_token.as_deref(),
-            deployment_stack,
-        ));
+        vars.extend(
+            commands_receiver_env_vars(
+                commands_base,
+                deployment.deployment_token.as_deref(),
+                deployment_stack,
+            )
+            .map_err(|e| e.into_generic())?,
+        );
 
         // 4. User-provided environment variables from the deployment record.
         if let Some(ref user_vars) = deployment.user_environment_variables {
@@ -876,7 +882,7 @@ fn commands_polling_env_vars(
     commands_base_url: String,
     deployment_token: Option<&str>,
     deployment_stack: &alien_core::Stack,
-) -> Vec<EnvironmentVariable> {
+) -> Result<Vec<EnvironmentVariable>, alien_error::AlienError<alien_core::ErrorData>> {
     deployment_stack.worker_command_polling_env_vars(&commands_base_url, deployment_token)
 }
 
@@ -892,7 +898,7 @@ fn commands_receiver_env_vars(
     commands_base_url: String,
     deployment_token: Option<&str>,
     deployment_stack: &alien_core::Stack,
-) -> Vec<EnvironmentVariable> {
+) -> Result<Vec<EnvironmentVariable>, alien_error::AlienError<alien_core::ErrorData>> {
     deployment_stack.receiver_command_env_vars(&commands_base_url, deployment_token)
 }
 
@@ -1350,7 +1356,8 @@ mod tests {
             "https://manager.example.test/v1".to_string(),
             Some("ax_dep_test"),
             &stack,
-        );
+        )
+        .expect("token present");
 
         // Nothing deployment-wide; nothing scoped to the disabled worker.
         assert!(vars.iter().all(|v| {
@@ -1435,7 +1442,8 @@ mod tests {
             "https://manager.example.test/v1".to_string(),
             Some("ax_dep_test"),
             &stack,
-        );
+        )
+        .expect("token present");
 
         // Every var scoped to exactly one command-enabled Container/Daemon; the
         // disabled container and the worker are never scope targets.

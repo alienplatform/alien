@@ -71,6 +71,7 @@ pub use container_manager::{
     BindMount, ContainerConfig, ContainerInfo, ContainerMetadata, LocalContainerManager,
     LocalRuntimeStatus,
 };
+pub use daemon_supervisor::DaemonLaunchOptions;
 pub use error::{ErrorData, Result};
 pub use kv_manager::LocalKvManager;
 pub use local_bindings_provider::LocalBindingsProvider;

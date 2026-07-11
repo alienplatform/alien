@@ -3,7 +3,9 @@
 //! the pull *receiver* (its fixed contract). Both are derived from the same
 //! ordered [`Stack::command_targets`] list.
 
+use crate::error::{ErrorData, Result};
 use crate::{EnvironmentVariable, EnvironmentVariableType, Stack};
+use alien_error::AlienError;
 
 /// Builds a single [`EnvironmentVariable`] scoped to exactly one resource.
 ///
@@ -78,45 +80,48 @@ impl Stack {
         &self,
         polling_url: &str,
         polling_token: Option<&str>,
-    ) -> Vec<EnvironmentVariable> {
+    ) -> Result<Vec<EnvironmentVariable>> {
         use crate::commands_types::CommandTargetType;
 
-        self.command_targets()
+        let mut vars = Vec::new();
+        for target in self
+            .command_targets()
             .into_iter()
             .filter(|target| target.resource_type == CommandTargetType::Worker)
-            .flat_map(|target| {
-                let id = target.resource_id;
-                let mut vars = vec![
-                    scoped(
-                        crate::ENV_ALIEN_COMMANDS_POLLING_ENABLED,
-                        "true",
-                        EnvironmentVariableType::Plain,
-                        &id,
-                    ),
-                    scoped(
-                        crate::ENV_ALIEN_COMMANDS_POLLING_URL,
-                        polling_url,
-                        EnvironmentVariableType::Plain,
-                        &id,
-                    ),
-                ];
-                if let Some(token) = polling_token {
-                    vars.push(scoped(
-                        crate::ENV_ALIEN_COMMANDS_TOKEN,
-                        token,
-                        EnvironmentVariableType::Secret,
-                        &id,
-                    ));
-                }
-                vars.push(scoped(
+        {
+            let id = target.resource_id;
+            // Emitting the polling contract without its token would ship a
+            // worker that crash-loops at startup on the missing env var;
+            // fail the deploy here, where the cause is nameable.
+            let token = require_command_token(polling_token, &id)?;
+            vars.extend([
+                scoped(
+                    crate::ENV_ALIEN_COMMANDS_POLLING_ENABLED,
+                    "true",
+                    EnvironmentVariableType::Plain,
+                    &id,
+                ),
+                scoped(
+                    crate::ENV_ALIEN_COMMANDS_POLLING_URL,
+                    polling_url,
+                    EnvironmentVariableType::Plain,
+                    &id,
+                ),
+                scoped(
+                    crate::ENV_ALIEN_COMMANDS_TOKEN,
+                    token,
+                    EnvironmentVariableType::Secret,
+                    &id,
+                ),
+                scoped(
                     crate::ENV_ALIEN_COMMANDS_TARGET_RESOURCE_ID,
                     id.clone(),
                     EnvironmentVariableType::Plain,
                     &id,
-                ));
-                vars
-            })
-            .collect()
+                ),
+            ]);
+        }
+        Ok(vars)
     }
 
     /// Returns the command *receiver* environment variables for each
@@ -146,50 +151,63 @@ impl Stack {
         &self,
         commands_url: &str,
         commands_token: Option<&str>,
-    ) -> Vec<EnvironmentVariable> {
+    ) -> Result<Vec<EnvironmentVariable>> {
         use crate::commands_types::CommandTargetType;
 
-        self.command_targets()
-            .into_iter()
-            .filter(|target| {
-                matches!(
-                    target.resource_type,
-                    CommandTargetType::Container | CommandTargetType::Daemon
-                )
-            })
-            .flat_map(|target| {
-                let resource_type = target.resource_type.as_str();
-                let id = target.resource_id;
-                let mut vars = vec![scoped(
+        let mut vars = Vec::new();
+        for target in self.command_targets().into_iter().filter(|target| {
+            matches!(
+                target.resource_type,
+                CommandTargetType::Container | CommandTargetType::Daemon
+            )
+        }) {
+            let resource_type = target.resource_type.as_str();
+            let id = target.resource_id;
+            // Four of the five receiver vars without the token would make
+            // `Receiver::from_env` crash-loop the workload at startup; fail
+            // the deploy here instead, where the cause is nameable.
+            let token = require_command_token(commands_token, &id)?;
+            vars.extend([
+                scoped(
                     crate::ENV_ALIEN_COMMANDS_URL,
                     commands_url,
                     EnvironmentVariableType::Plain,
                     &id,
-                )];
-                if let Some(token) = commands_token {
-                    vars.push(scoped(
-                        crate::ENV_ALIEN_COMMANDS_TOKEN,
-                        token,
-                        EnvironmentVariableType::Secret,
-                        &id,
-                    ));
-                }
-                vars.push(scoped(
+                ),
+                scoped(
+                    crate::ENV_ALIEN_COMMANDS_TOKEN,
+                    token,
+                    EnvironmentVariableType::Secret,
+                    &id,
+                ),
+                scoped(
                     crate::ENV_ALIEN_COMMANDS_TARGET_RESOURCE_TYPE,
                     resource_type,
                     EnvironmentVariableType::Plain,
                     &id,
-                ));
-                vars.push(scoped(
+                ),
+                scoped(
                     crate::ENV_ALIEN_COMMANDS_TARGET_RESOURCE_ID,
                     id.clone(),
                     EnvironmentVariableType::Plain,
                     &id,
-                ));
-                vars
-            })
-            .collect()
+                ),
+            ]);
+        }
+        Ok(vars)
     }
+}
+
+/// The deployment token, or a deploy-time error naming the command-enabled
+/// resource that needs it — a runtime crash-loop on a missing env var is the
+/// only alternative.
+fn require_command_token<'a>(token: Option<&'a str>, resource_id: &str) -> Result<&'a str> {
+    token.ok_or_else(|| {
+        AlienError::new(ErrorData::CommandTokenMissing {
+            resource_id: resource_id.to_string(),
+            reason: "the deployment record carries no deployment token".to_string(),
+        })
+    })
 }
 
 #[cfg(test)]
@@ -352,8 +370,9 @@ mod tests {
             .add(daemon_enabled, ResourceLifecycle::Live)
             .build();
 
-        let vars =
-            stack.worker_command_polling_env_vars("https://cmd.example.test/v1", Some("tok"));
+        let vars = stack
+            .worker_command_polling_env_vars("https://cmd.example.test/v1", Some("tok"))
+            .expect("token present");
 
         // Every var is scoped to exactly one command-enabled Worker — nothing
         // is deployment-wide, and neither the disabled Worker nor the Daemon
@@ -389,7 +408,7 @@ mod tests {
     }
 
     #[test]
-    fn worker_command_polling_env_vars_omits_token_when_absent() {
+    fn worker_command_polling_env_vars_fails_without_token() {
         let worker = Worker::new("worker-a".to_string())
             .code(WorkerCode::Image {
                 image: "worker:latest".to_string(),
@@ -402,12 +421,13 @@ mod tests {
             .add(worker, ResourceLifecycle::Live)
             .build();
 
-        let vars = stack.worker_command_polling_env_vars("https://cmd.example.test/v1", None);
-
-        assert_eq!(vars.len(), 3);
-        assert!(!vars
-            .iter()
-            .any(|v| v.name == crate::ENV_ALIEN_COMMANDS_TOKEN));
+        // A command-enabled worker with no token would crash-loop at startup
+        // on the missing env var; the deploy must fail loudly instead.
+        let error = stack
+            .worker_command_polling_env_vars("https://cmd.example.test/v1", None)
+            .expect_err("missing token must fail the env build");
+        assert_eq!(error.code, "COMMAND_TOKEN_MISSING");
+        assert!(error.to_string().contains("worker-a"));
     }
 
     #[test]
@@ -471,7 +491,9 @@ mod tests {
             .add(worker_enabled, ResourceLifecycle::Live)
             .build();
 
-        let vars = stack.receiver_command_env_vars("https://cmd.example.test/v1", Some("tok"));
+        let vars = stack
+            .receiver_command_env_vars("https://cmd.example.test/v1", Some("tok"))
+            .expect("token present");
 
         // Every var is scoped to exactly one command-enabled Container/Daemon —
         // nothing is deployment-wide, and neither the disabled container nor the
@@ -520,7 +542,7 @@ mod tests {
     }
 
     #[test]
-    fn receiver_command_env_vars_omits_token_when_absent() {
+    fn receiver_command_env_vars_fails_without_token() {
         let container = Container::new("container-a".to_string())
             .code(ContainerCode::Image {
                 image: "container:latest".to_string(),
@@ -542,16 +564,13 @@ mod tests {
             .add(container, ResourceLifecycle::Live)
             .build();
 
-        let vars = stack.receiver_command_env_vars("https://cmd.example.test/v1", None);
-
-        assert_eq!(vars.len(), 3);
-        assert!(!vars
-            .iter()
-            .any(|v| v.name == crate::ENV_ALIEN_COMMANDS_TOKEN));
-        assert!(vars
-            .iter()
-            .any(|v| v.name == crate::ENV_ALIEN_COMMANDS_TARGET_RESOURCE_TYPE
-                && v.value == "container"));
+        // Four of the five receiver vars without the token would make
+        // Receiver::from_env crash-loop at startup; the deploy must fail.
+        let error = stack
+            .receiver_command_env_vars("https://cmd.example.test/v1", None)
+            .expect_err("missing token must fail the env build");
+        assert_eq!(error.code, "COMMAND_TOKEN_MISSING");
+        assert!(error.to_string().contains("container-a"));
     }
 
     #[test]
@@ -571,6 +590,7 @@ mod tests {
         // Only a Worker target exists → receiver helper yields nothing.
         assert!(stack
             .receiver_command_env_vars("https://cmd.example.test/v1", Some("tok"))
+            .expect("no command targets")
             .is_empty());
     }
 }

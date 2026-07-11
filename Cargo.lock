@@ -735,6 +735,7 @@ dependencies = [
  "dockdash",
  "futures",
  "futures-util",
+ "libc",
  "notify",
  "object_store",
  "port_check",

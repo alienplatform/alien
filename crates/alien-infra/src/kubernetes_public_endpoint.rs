@@ -752,6 +752,34 @@ pub(crate) fn worker_public_endpoint_target<'a>(
     }
 }
 
+/// Same shape as the container target: a Daemon exposes at most one HTTP
+/// endpoint, and the Service selects the DaemonSet's pods on every node.
+pub(crate) fn daemon_public_endpoint_target<'a>(
+    resource_id: &'a str,
+    workload_name: &'a str,
+    namespace: &'a str,
+    selector: BTreeMap<String, String>,
+    public_endpoints: &'a [alien_core::PublicEndpoint],
+    health_check_path: Option<&str>,
+) -> Result<KubernetesPublicEndpointTarget<'a>> {
+    let http_port = public_endpoints
+        .iter()
+        .find(|endpoint| endpoint.protocol == alien_core::ExposeProtocol::Http)
+        .map(|endpoint| endpoint.port);
+
+    Ok(KubernetesPublicEndpointTarget {
+        resource_id,
+        workload_name,
+        namespace,
+        component: "daemon",
+        selector,
+        service_port: http_port.unwrap_or(80),
+        target_port: http_port.unwrap_or(80),
+        health_check_path: health_check_path.map(ToString::to_string),
+        public: http_port.is_some(),
+    })
+}
+
 pub(crate) fn container_public_endpoint_target<'a>(
     resource_id: &'a str,
     workload_name: &'a str,

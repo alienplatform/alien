@@ -361,7 +361,11 @@ async fn enrich_config(
             // See: security/04-CRITICAL-sync-token-reused-as-commands-token.md
             if let Some(stack) = stack {
                 vars.extend(
-                    stack.worker_command_polling_env_vars(&commands_url, Some(&sync_config.token)),
+                    stack
+                        .worker_command_polling_env_vars(&commands_url, Some(&sync_config.token))
+                        .context(ErrorData::ConfigurationError {
+                            message: "Failed to build worker command polling env".to_string(),
+                        })?,
                 );
                 // Container/Daemon command receiver env (ALIEN_COMMANDS_URL/TOKEN/
                 // TARGET_RESOURCE_ID/TARGET_RESOURCE_TYPE), scoped per resource.
@@ -370,7 +374,11 @@ async fn enrich_config(
                 // platform it serves. Reuses the operator sync token, matching the
                 // worker polling token handling above (same security TODO applies).
                 vars.extend(
-                    stack.receiver_command_env_vars(&commands_url, Some(&sync_config.token)),
+                    stack
+                        .receiver_command_env_vars(&commands_url, Some(&sync_config.token))
+                        .context(ErrorData::ConfigurationError {
+                            message: "Failed to build command receiver env".to_string(),
+                        })?,
                 );
             }
 

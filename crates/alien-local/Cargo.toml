@@ -4,6 +4,7 @@ version.workspace = true
 edition = "2021"
 license-file.workspace = true
 [dependencies]
+libc = "0.2"
 # Alien crates
 alien-core = { workspace = true }
 alien-error = { workspace = true }

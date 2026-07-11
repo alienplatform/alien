@@ -186,6 +186,16 @@ pub enum ErrorData {
         field: Option<String>,
     },
 
+    /// A command-enabled resource exists but the deployment has no token to
+    /// authenticate its command transport.
+    #[error(
+        code = "COMMAND_TOKEN_MISSING",
+        message = "Deployment has command-enabled resource '{resource_id}' but no deployment token to authenticate it: {reason}",
+        retryable = "false",
+        internal = "false"
+    )]
+    CommandTokenMissing { resource_id: String, reason: String },
+
     /// Public URL configuration is invalid.
     #[error(
         code = "PUBLIC_URL_INVALID",
