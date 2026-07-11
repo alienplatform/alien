@@ -7,11 +7,9 @@
 //! A `--console` mode (what the E2E suite drives) swaps the SCM control handler
 //! for a Ctrl-C handler and makes the status calls no-ops — no SCM to report to.
 //!
-//! T3.1 delivers this host shim; the `main.rs` SCM dispatch (`service_dispatcher`
-//! → `core::run`) lands once the Windows `ChildSupervisor` (T3.2) and
-//! `VersionStore` (T3.4) exist, since `core::run` needs a store + child. Until
-//! then nothing constructs the host, so the module is `allow(dead_code)`.
-#![allow(dead_code)]
+//! `main.rs`'s Windows `run_supervisor` constructs this host — via `service()`
+//! under the SCM dispatcher, or `console()` for the E2E suite — and drives it
+//! through `core::run`.
 
 use std::sync::atomic::{AtomicU32, AtomicU8, Ordering};
 use std::sync::{Arc, OnceLock};
@@ -125,10 +123,26 @@ impl WindowsHost {
     }
 
     /// Report `SERVICE_STOPPED` — the service main calls this after `core::run`
-    /// returns so the SCM sees a clean exit. No-op in console mode.
-    pub fn report_stopped(&self) {
+    /// returns. `exit_code` 0 is a clean stop; nonzero trips the SCM recovery
+    /// config (the doc-12 restart actions), the Windows analogue of systemd
+    /// respawning us on a nonzero exit. No-op in console mode.
+    pub fn report_stopped(&self, exit_code: u32) {
         self.state.store(STATE_STOP_PENDING, Ordering::SeqCst);
-        self.set_status(ServiceState::Stopped, ServiceControlAccept::empty());
+        let Some(handle) = self.status_handle.as_ref() else {
+            return;
+        };
+        let status = ServiceStatus {
+            service_type: ServiceType::OWN_PROCESS,
+            current_state: ServiceState::Stopped,
+            controls_accepted: ServiceControlAccept::empty(),
+            exit_code: ServiceExitCode::Win32(exit_code),
+            checkpoint: 0,
+            wait_hint: Duration::default(),
+            process_id: None,
+        };
+        if let Err(e) = handle.set_service_status(status) {
+            warn!(error = %e, "failed to report SERVICE_STOPPED");
+        }
     }
 
     /// Emit an SCM status (no-op in console mode). `checkpoint`/`wait_hint` only

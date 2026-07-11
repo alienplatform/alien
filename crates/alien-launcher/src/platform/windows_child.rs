@@ -4,9 +4,8 @@
 //! operator is terminated). Graceful `stop` sends `CTRL_BREAK` to the child's
 //! process group, then escalates to Job termination after the grace window.
 //!
-//! Wired into `main.rs`'s Windows `run_supervisor` alongside the T3.4 version
-//! store; until then nothing constructs it, so the module is `allow(dead_code)`.
-#![allow(dead_code)]
+//! Constructed by `main.rs`'s Windows `run_supervisor` (aliased
+//! `ActiveChildSupervisor`) and driven through `core::run`.
 
 use std::collections::HashMap;
 use std::path::Path;

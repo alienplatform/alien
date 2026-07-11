@@ -20,10 +20,8 @@
 //! tolerates a locked binary (a just-swapped-away operator `.exe` still mapped):
 //! it schedules the straggler for deletion on the next reboot rather than failing.
 //!
-//! Constructed by `main.rs`'s Windows `run_supervisor` (wired with the T3.1 host
-//! + T3.2 child supervisor); until then nothing outside the tests builds it, so
-//! the module is `allow(dead_code)`.
-#![allow(dead_code)]
+//! Constructed by `main.rs`'s Windows `run_supervisor` (aliased
+//! `ActiveVersionStore`) and driven through `core::run`.
 
 use std::path::{Path, PathBuf};
 

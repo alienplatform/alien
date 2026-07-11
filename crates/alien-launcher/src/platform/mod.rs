@@ -46,18 +46,21 @@ pub mod windows_child;
 #[cfg(target_os = "windows")]
 pub mod windows_store;
 
-// The host is per-OS; the child supervisor and version store are shared Unix.
+// The child supervisor and version store share one alias per OS. The host is
+// NOT aliased on Windows: its constructors differ (`service()` / `console()`
+// select SCM vs console mode), so `main.rs`'s Windows `run_supervisor` names
+// `windows::WindowsHost` directly rather than a uniform `ActiveHost::new()`.
 #[cfg(target_os = "linux")]
 pub use linux::LinuxHost as ActiveHost;
 #[cfg(target_os = "macos")]
 pub use macos::MacosHost as ActiveHost;
-// Windows aliases `ActiveHost` (→ `WindowsHost`) together with its
-// `ActiveChildSupervisor` (T3.2, Job Object) and `ActiveVersionStore` (T3.4,
-// junctions) once main.rs's Windows `run_supervisor` consumes them — aliasing
-// the host alone now would be an unused re-export. The T3.1 host lives in
-// `windows.rs` and is exercised by its unit test.
 
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 pub use unix_child::UnixChildSupervisor as ActiveChildSupervisor;
+#[cfg(target_os = "windows")]
+pub use windows_child::WindowsChildSupervisor as ActiveChildSupervisor;
+
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 pub use unix_store::UnixVersionStore as ActiveVersionStore;
+#[cfg(target_os = "windows")]
+pub use windows_store::WindowsVersionStore as ActiveVersionStore;
