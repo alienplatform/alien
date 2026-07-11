@@ -40,6 +40,9 @@ pub mod macos;
 #[cfg(target_os = "windows")]
 pub mod windows;
 
+#[cfg(target_os = "windows")]
+pub mod windows_child;
+
 // The host is per-OS; the child supervisor and version store are shared Unix.
 #[cfg(target_os = "linux")]
 pub use linux::LinuxHost as ActiveHost;
