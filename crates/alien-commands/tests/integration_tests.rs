@@ -693,6 +693,70 @@ mod tests {
         assert_eq!(second_leases.leases[0].envelope.target, second_target);
     }
 
+    /// Expiry-driven redelivery: a leased command whose lease TTL runs out
+    /// WITHOUT a response (crashed receiver, network partition — no explicit
+    /// release) must become leasable again, and the redelivered envelope must
+    /// carry an incremented attempt so handlers can detect redelivery
+    /// (`ctx.attempt > 1` is the documented at-least-once signal on both
+    /// receiver twins).
+    #[tokio::test]
+    async fn test_expired_lease_redelivers_with_incremented_attempt() {
+        let server = TestCommandServer::builder().with_pull_mode().build().await;
+
+        let mut request = test_inline_create_command("expiry-agent", "expiry-redelivery");
+        request.target_resource_id = Some(server.default_target.resource_id.clone());
+        let created = server.create_command(request).await.unwrap();
+
+        let lease_request = LeaseRequest {
+            deployment_id: "expiry-agent".to_string(),
+            target: server.default_target.clone(),
+            max_leases: 1,
+            lease_seconds: 1,
+        };
+
+        // First lease: attempt 1. No response is ever submitted.
+        let first = server
+            .acquire_lease("expiry-agent", lease_request.clone())
+            .await
+            .unwrap();
+        assert_eq!(first.leases.len(), 1);
+        assert_eq!(first.leases[0].command_id, created.command_id);
+        assert_eq!(first.leases[0].attempt, 1);
+
+        // While the lease is live, the command must NOT be re-leasable.
+        let while_held = server
+            .acquire_lease("expiry-agent", lease_request.clone())
+            .await
+            .unwrap();
+        assert!(
+            while_held.leases.is_empty(),
+            "a live lease must not be double-leased"
+        );
+
+        // Let the 1s lease TTL expire without any response.
+        tokio::time::sleep(std::time::Duration::from_millis(2500)).await;
+
+        // Redelivery: same command, incremented attempt.
+        let second = server
+            .acquire_lease("expiry-agent", lease_request)
+            .await
+            .unwrap();
+        assert_eq!(
+            second.leases.len(),
+            1,
+            "an expired lease must make the command leasable again"
+        );
+        assert_eq!(second.leases[0].command_id, created.command_id);
+        assert_eq!(
+            second.leases[0].attempt, 2,
+            "expiry-driven redelivery must increment the attempt"
+        );
+        assert_eq!(
+            second.leases[0].envelope.attempt, 2,
+            "the redelivered envelope must carry the incremented attempt"
+        );
+    }
+
     /// Lease-served envelopes carry manager URLs as root-relative paths: the
     /// pull consumer resolves them against its own configured commands
     /// endpoint, because the manager cannot know an address reachable from

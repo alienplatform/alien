@@ -698,7 +698,7 @@ impl CommandServer {
             }
 
             // 3. Get metadata from registry
-            let metadata = match self
+            let mut metadata = match self
                 .command_registry
                 .get_command_metadata(&command_id)
                 .await?
@@ -711,6 +711,18 @@ impl CommandServer {
                     continue;
                 }
             };
+
+            // 3.1 Expiry-driven redelivery: this command was already
+            // dispatched, yet the lease slot was free (the conditional put
+            // above succeeded) — the previous lease TTL-expired with no
+            // response and no explicit release. Increment the attempt so the
+            // redelivered envelope carries `attempt > 1`, the at-least-once
+            // redelivery signal both receiver twins document. The explicit
+            // release path (`release_lease`) increments the same counter.
+            if metadata.state == CommandState::Dispatched {
+                self.command_registry.increment_attempt(&command_id).await?;
+                metadata.attempt += 1;
+            }
 
             // 3.5 Defense-in-depth: the pending index key said this command
             // belongs to the requesting target — verify the registry agrees.
