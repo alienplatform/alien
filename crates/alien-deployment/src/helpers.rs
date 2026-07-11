@@ -174,11 +174,7 @@ struct AlienSecretsConfig {
 /// The secrets vault is a dependency of every compute resource (added by
 /// `SecretsVaultMutation`). The executor won't start a function until its
 /// vault dependency is Running, so ALIEN_SECRETS is always safe to inject.
-pub fn inject_environment_variables(
-    stack: &mut Stack,
-    config: &DeploymentConfig,
-    platform: Platform,
-) -> Result<()> {
+pub fn inject_environment_variables(stack: &mut Stack, config: &DeploymentConfig) -> Result<()> {
     info!("Injecting environment variables into compute resources");
 
     let snapshot = &config.environment_variables;
@@ -190,7 +186,7 @@ pub fn inject_environment_variables(
             || resource_type == alien_core::Container::RESOURCE_TYPE
             || resource_type == alien_core::Daemon::RESOURCE_TYPE
         {
-            inject_into_compute_resource(resource_name, resource_entry, snapshot, platform)?;
+            inject_into_compute_resource(resource_name, resource_entry, snapshot)?;
         }
     }
 
@@ -421,7 +417,6 @@ fn inject_into_compute_resource(
     resource_name: &str,
     resource_entry: &mut alien_core::ResourceEntry,
     snapshot: &EnvironmentVariablesSnapshot,
-    platform: Platform,
 ) -> Result<()> {
     if let Some(worker) = resource_entry.config.downcast_mut::<alien_core::Worker>() {
         inject_into_environment(
@@ -429,7 +424,6 @@ fn inject_into_compute_resource(
             ComputeKind::Worker,
             &mut worker.environment,
             snapshot,
-            platform,
         )
     } else if let Some(container) = resource_entry
         .config
@@ -440,7 +434,6 @@ fn inject_into_compute_resource(
             ComputeKind::Container,
             &mut container.environment,
             snapshot,
-            platform,
         )
     } else if let Some(daemon) = resource_entry.config.downcast_mut::<alien_core::Daemon>() {
         inject_into_environment(
@@ -448,7 +441,6 @@ fn inject_into_compute_resource(
             ComputeKind::Daemon,
             &mut daemon.environment,
             snapshot,
-            platform,
         )
     } else {
         Err(AlienError::new(ErrorData::InternalError {
@@ -465,7 +457,6 @@ fn inject_into_environment(
     kind: ComputeKind,
     environment: &mut HashMap<String, String>,
     snapshot: &EnvironmentVariablesSnapshot,
-    platform: Platform,
 ) -> Result<()> {
     // Filter variables that apply to this resource
     let applicable_vars: Vec<&EnvironmentVariable> = snapshot
@@ -1049,7 +1040,7 @@ mod tests {
         let config = make_config(snapshot);
         let mut stack = make_single_function_stack("worker");
 
-        inject_environment_variables(&mut stack, &config, Platform::Test).unwrap();
+        inject_environment_variables(&mut stack, &config).unwrap();
 
         let func = stack
             .resources
@@ -1080,7 +1071,7 @@ mod tests {
         let config = make_config(snapshot);
         let mut stack = make_single_function_stack("worker");
 
-        inject_environment_variables(&mut stack, &config, Platform::Test).unwrap();
+        inject_environment_variables(&mut stack, &config).unwrap();
 
         let func = stack
             .resources
@@ -1106,7 +1097,7 @@ mod tests {
         let config = make_config(snapshot);
         let mut stack = make_single_function_stack("worker");
 
-        inject_environment_variables(&mut stack, &config, Platform::Test).unwrap();
+        inject_environment_variables(&mut stack, &config).unwrap();
 
         let func = stack
             .resources
@@ -1126,7 +1117,7 @@ mod tests {
         let config = make_config(snapshot);
         let mut stack = make_compute_stack();
 
-        inject_environment_variables(&mut stack, &config, Platform::Kubernetes).unwrap();
+        inject_environment_variables(&mut stack, &config).unwrap();
 
         // Worker still ships the runtime wrapper: it keeps the vault-load
         // pointer on Kubernetes (ALIEN-227 leaves Workers untouched).
@@ -1176,7 +1167,7 @@ mod tests {
             let config = make_config(snapshot);
             let mut stack = make_compute_stack();
 
-            inject_environment_variables(&mut stack, &config, platform).unwrap();
+            inject_environment_variables(&mut stack, &config).unwrap();
 
             let worker_env = resource_env(&stack, "worker");
             assert!(

@@ -52,6 +52,12 @@ jobs:
               - 'crates/alien-cli/**'
               - 'crates/alien-deploy-cli/**'
               - 'crates/alien-operator/**'
+              # The addon crates feed the dual-runtime import and
+              # compile-embed checks — without them a PR touching only the
+              # napi layer or the bindings core skips both.
+              - 'crates/alien-bindings-node/**'
+              - 'crates/alien-bindings/**'
+              - 'crates/alien-build/**'
 
       - uses: pnpm/action-setup@v4
         with:
