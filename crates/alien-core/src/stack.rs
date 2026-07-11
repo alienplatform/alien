@@ -101,7 +101,6 @@ impl Stack {
             None => true,
         }
     }
-
 }
 
 impl StackBuilder {
@@ -518,5 +517,4 @@ mod tests {
         let deserialized: Stack = serde_json::from_str(&serialized).expect("Failed to deserialize");
         assert_eq!(stack_extend, deserialized);
     }
-
 }

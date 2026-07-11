@@ -358,8 +358,16 @@ impl LeaseClient {
             .pop_if_empty()
             .push("commands")
             .push("leases");
+        // A request timeout is load-bearing here: the poll loop awaits this
+        // client serially, so a single hung acquire (half-open TCP, stalled
+        // LB) with reqwest's no-timeout default would freeze command intake
+        // for the whole process, not just one request.
+        let client = reqwest::Client::builder()
+            .timeout(Duration::from_secs(30))
+            .build()
+            .ok()?;
         Some(Self {
-            client: reqwest::Client::new(),
+            client,
             endpoint,
             token,
         })
@@ -398,14 +406,15 @@ impl LeaseClient {
             }));
         }
 
-        let mut lease_response: LeaseResponse = response
-            .json()
-            .await
-            .into_alien_error()
-            .context(ErrorData::SerializationFailed {
-                message: "Failed to parse lease response".to_string(),
-                data_type: Some("LeaseResponse".to_string()),
-            })?;
+        let mut lease_response: LeaseResponse =
+            response
+                .json()
+                .await
+                .into_alien_error()
+                .context(ErrorData::SerializationFailed {
+                    message: "Failed to parse lease response".to_string(),
+                    data_type: Some("LeaseResponse".to_string()),
+                })?;
 
         // Lease-served envelopes carry manager URLs as root-relative paths
         // (the manager cannot know an address reachable from behind this

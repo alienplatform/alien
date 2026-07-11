@@ -51,13 +51,16 @@ impl CommandState {
         }
 
         match (self, target) {
-            // From PendingUpload
+            // From PendingUpload (Failed = pre-dispatch failure, e.g. a
+            // create that lost an idempotency race to a concurrent twin)
             (CommandState::PendingUpload, CommandState::Pending) => true,
             (CommandState::PendingUpload, CommandState::Expired) => true,
+            (CommandState::PendingUpload, CommandState::Failed) => true,
 
             // From Pending
             (CommandState::Pending, CommandState::Dispatched) => true,
             (CommandState::Pending, CommandState::Expired) => true,
+            (CommandState::Pending, CommandState::Failed) => true,
 
             // From Dispatched
             (CommandState::Dispatched, CommandState::Pending) => true, // Allow lease release
@@ -611,8 +614,10 @@ mod tests {
         // Valid transitions
         assert!(PendingUpload.can_transition_to(&Pending));
         assert!(PendingUpload.can_transition_to(&Expired));
+        assert!(PendingUpload.can_transition_to(&Failed)); // Pre-dispatch failure
         assert!(Pending.can_transition_to(&Dispatched));
         assert!(Pending.can_transition_to(&Expired));
+        assert!(Pending.can_transition_to(&Failed)); // Pre-dispatch failure
         assert!(Dispatched.can_transition_to(&Pending)); // Lease release
         assert!(Dispatched.can_transition_to(&Succeeded));
         assert!(Dispatched.can_transition_to(&Failed));

@@ -579,7 +579,12 @@ fn classify_event(event: LambdaRequest) -> ClassifiedEvent {
     }
 
     if let Ok(envelope) = serde_json::from_slice::<alien_commands::types::Envelope>(&body_bytes) {
-        return ClassifiedEvent::Task(TaskEvent::Command(Box::new(envelope)));
+        // Gate on the protocol field like `shared::try_parse_envelope`: JSON
+        // that merely matches Envelope's shape (or a future protocol
+        // version) must not be executed under v1 semantics.
+        if envelope.protocol == alien_commands::PROTOCOL_VERSION {
+            return ClassifiedEvent::Task(TaskEvent::Command(Box::new(envelope)));
+        }
     }
 
     ClassifiedEvent::Http(Box::new(event))
@@ -711,11 +716,18 @@ async fn handle_s3_event(state: &LambdaState, request_id: &str, s3_event: S3Even
 
 async fn handle_sqs_event(state: &LambdaState, request_id: &str, sqs_event: SqsEvent) {
     for record in sqs_event.records {
-        // Check if body is a command envelope before converting
+        // Check if body is a command envelope before converting. Gate on the
+        // protocol field like `shared::try_parse_envelope`: any JSON that
+        // merely satisfies Envelope's shape must not be swallowed as a
+        // command. `continue`, never `return` — the Lambda reports the whole
+        // batch as processed, so bailing early would silently discard every
+        // remaining record in the batch (SQS deletes them all).
         if let Some(ref body) = record.body {
             if let Ok(envelope) = serde_json::from_str::<alien_commands::types::Envelope>(body) {
-                handle_command(state, &envelope).await;
-                return;
+                if envelope.protocol == alien_commands::PROTOCOL_VERSION {
+                    handle_command(state, &envelope).await;
+                    continue;
+                }
             }
         }
 

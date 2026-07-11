@@ -82,6 +82,13 @@ const DEFAULT_LEASE_SECONDS = 60
  * `LEASE_SAFETY_MARGIN` (5s).
  */
 const LEASE_SAFETY_MARGIN_MS = 5_000
+/**
+ * Timeout on control-plane HTTP calls (lease acquire, response submit), in
+ * ms. `fetch` has no default timeout, so a hung call would otherwise freeze
+ * the poll loop indefinitely. Twin of the Rust receiver's 30s reqwest
+ * timeout.
+ */
+const CONTROL_TIMEOUT_MS = 30_000
 
 // Env variable names — identical strings to the Rust twin
 // (`alien_core::runtime_environment`).
@@ -316,6 +323,9 @@ class PullCommandReceiver implements CommandReceiver {
         Authorization: `Bearer ${this.config.token}`,
       },
       body: JSON.stringify(this.buildLeaseRequest()),
+      // fetch has no default timeout; a hung lease call would freeze the
+      // whole poll loop, so cap it well under the lease duration.
+      signal: AbortSignal.timeout(CONTROL_TIMEOUT_MS),
     })
 
     if (!response.ok) {
@@ -436,6 +446,7 @@ class PullCommandReceiver implements CommandReceiver {
       method: "PUT",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(finalResponse),
+      signal: AbortSignal.timeout(CONTROL_TIMEOUT_MS),
     })
 
     if (!res.ok) {

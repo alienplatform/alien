@@ -263,10 +263,7 @@ impl CommandsPolling {
     /// Associated (not `&self`) so the leased batch can be dispatched
     /// concurrently onto a [`JoinSet`]; the only runtime state it needs is the
     /// shared control server, passed in cloned.
-    async fn process_lease(
-        control_server: Arc<ControlGrpcServer>,
-        lease: LeaseInfo,
-    ) -> Result<()> {
+    async fn process_lease(control_server: Arc<ControlGrpcServer>, lease: LeaseInfo) -> Result<()> {
         let command_id = lease.command_id.clone();
         let lease_expires_at = lease.lease_expires_at;
         let envelope = lease.envelope;
@@ -277,13 +274,24 @@ impl CommandsPolling {
             "Processing command"
         );
 
-        // Decode params (alien_commands returns AlienError, use .context())
-        let params = alien_commands::runtime::decode_params_bytes(&envelope)
-            .await
-            .context(ErrorData::EventProcessingFailed {
-                event_type: "Command".to_string(),
-                reason: "Failed to decode params".to_string(),
-            })?;
+        // Decode params. A decode failure must SUBMIT a typed error response
+        // (matching the pull receiver twins and the Lambda transport) rather
+        // than propagate: propagating leaves the command unanswered, so its
+        // lease TTL-expires and the server redelivers it forever — a command
+        // with a permanently broken params blob would never reach a terminal
+        // state.
+        let params = match alien_commands::runtime::decode_params_bytes(&envelope).await {
+            Ok(params) => params,
+            Err(e) => {
+                error!(
+                    command_id = %command_id,
+                    error = %e,
+                    "Failed to decode command params; submitting decode error"
+                );
+                super::shared::submit_decode_error(&envelope, &e).await;
+                return Ok(());
+            }
+        };
 
         // Create task for gRPC delivery
         let task = Task {

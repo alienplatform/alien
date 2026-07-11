@@ -254,7 +254,9 @@ impl Receiver {
         // transient error) on every poll.
         let lease_client = LeaseClient::from_base(&url, token).ok_or_else(|| {
             AlienError::new(ErrorData::CommandReceiverConfigInvalid {
-                message: format!("{ENV_ALIEN_COMMANDS_URL} '{url}' must be an HTTP(S) URL with a path"),
+                message: format!(
+                    "{ENV_ALIEN_COMMANDS_URL} '{url}' must be an HTTP(S) URL with a path"
+                ),
                 env_var: ENV_ALIEN_COMMANDS_URL.to_string(),
             })
         })?;
@@ -467,11 +469,7 @@ fn rebase_onto_commands_origin(target: &str, commands_endpoint: &Url) -> String 
 /// Not part of the public API — exposed only so the observability tests in
 /// `tests/receiver_tests.rs` can assert the pinned event fields directly.
 #[doc(hidden)]
-pub async fn process_lease(
-    handler: Option<BoxedHandler>,
-    lease: LeaseInfo,
-    target: CommandTarget,
-) {
+pub async fn process_lease(handler: Option<BoxedHandler>, lease: LeaseInfo, target: CommandTarget) {
     let LeaseInfo {
         lease_id,
         lease_expires_at,

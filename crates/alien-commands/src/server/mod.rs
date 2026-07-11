@@ -286,9 +286,39 @@ impl CommandServer {
         let delivery_mode = metadata.delivery_mode;
 
         // 2. Store idempotency mapping in KV, reusing the key composed above
-        // from the same resolved target.
+        // from the same resolved target. Losing the conditional put means a
+        // concurrent create with the same key raced past the pre-create check
+        // together with this one; dedupe by failing the command created above
+        // and answering with the winner's, so the caller never observes two
+        // live commands for one idempotency key.
         if let Some(ref composed_key) = composed_idempotency_key {
-            self.store_idempotency(composed_key, &command_id).await?;
+            if let Some(winner_id) = self.store_idempotency(composed_key, &command_id).await? {
+                self.command_registry
+                    .update_command_state(
+                        &command_id,
+                        CommandState::Failed,
+                        None,
+                        Some(Utc::now()),
+                        None,
+                        Some(serde_json::json!({
+                            "code": "IDEMPOTENT_DUPLICATE",
+                            "message": format!(
+                                "Superseded by concurrent create '{}' with the same idempotency key",
+                                winner_id
+                            ),
+                        })),
+                    )
+                    .await?;
+                let status = self.command_registry.get_command_status(&winner_id).await?;
+                let state = status.map(|s| s.state).unwrap_or(CommandState::Pending);
+                return Ok(CreateCommandResponse {
+                    command_id: winner_id,
+                    state,
+                    storage_upload: None,
+                    inline_allowed_up_to: self.inline_max_bytes as u64,
+                    next: "poll".to_string(),
+                });
+            }
         }
 
         // 3. Store params in KV
@@ -697,6 +727,27 @@ impl CommandServer {
                 continue;
             }
 
+            // Reverse index for O(1) release-by-lease-id lookups. Shares the
+            // lease's TTL so it self-cleans on expiry; a stale entry is
+            // harmless because every reader re-verifies the lease_id against
+            // the live `cmd:{id}:lease` record.
+            let reverse_key = format!("lease:{}", lease_id);
+            self.kv
+                .put(
+                    &reverse_key,
+                    command_id.as_bytes().to_vec(),
+                    Some(PutOptions {
+                        ttl: Some(lease_duration),
+                        if_not_exists: false,
+                    }),
+                )
+                .await
+                .context(ErrorData::KvOperationFailed {
+                    operation: "put".to_string(),
+                    key: reverse_key,
+                    message: "Failed to create lease reverse index".to_string(),
+                })?;
+
             // 3. Get metadata from registry
             let mut metadata = match self
                 .command_registry
@@ -875,8 +926,9 @@ impl CommandServer {
                 }));
             }
 
-            // 2. Delete lease from KV
+            // 2. Delete lease from KV (and its reverse index)
             self.delete_lease(command_id).await?;
+            let _ = self.kv.delete(&format!("lease:{}", lease_id)).await;
 
             // 3. Increment attempt in registry
             self.command_registry.increment_attempt(command_id).await?;
@@ -902,43 +954,67 @@ impl CommandServer {
         Ok(status.map(|s| s.deployment_id))
     }
 
-    /// Release a lease by lease_id only (for the API).
-    pub async fn release_lease_by_id(&self, lease_id: &str) -> Result<()> {
-        // Scan for leases to find the one with this lease_id
-        let lease_prefix = "cmd:";
-        let scan_result = self
-            .kv
-            .scan_prefix(lease_prefix, None, None)
-            .await
+    /// Resolve a lease_id to `(command_id, owner_deployment_id)` via the
+    /// `lease:{lease_id}` reverse index, re-verifying against the live lease
+    /// record (the reverse entry can outlive a released lease briefly, and a
+    /// command can have been re-leased under a new lease_id since).
+    ///
+    /// Used by the manager's auth layer to check that the caller may act on
+    /// the deployment that holds the lease.
+    pub async fn get_lease_owner(&self, lease_id: &str) -> Result<Option<(String, String)>> {
+        let reverse_key = format!("lease:{}", lease_id);
+        let Some(command_id_bytes) =
+            self.kv
+                .get(&reverse_key)
+                .await
+                .context(ErrorData::KvOperationFailed {
+                    operation: "get".to_string(),
+                    key: reverse_key.clone(),
+                    message: "Failed to look up lease reverse index".to_string(),
+                })?
+        else {
+            return Ok(None);
+        };
+        let command_id = String::from_utf8(command_id_bytes).map_err(|_| {
+            AlienError::new(ErrorData::Other {
+                message: format!("Lease reverse index '{}' is not valid UTF-8", reverse_key),
+            })
+        })?;
+
+        let lease_key = format!("cmd:{}:lease", command_id);
+        let Some(lease_data) =
+            self.kv
+                .get(&lease_key)
+                .await
+                .context(ErrorData::KvOperationFailed {
+                    operation: "get".to_string(),
+                    key: lease_key,
+                    message: "Failed to look up lease".to_string(),
+                })?
+        else {
+            return Ok(None);
+        };
+        let lease: LeaseData = serde_json::from_slice(&lease_data)
             .into_alien_error()
-            .context(ErrorData::KvOperationFailed {
-                operation: "scan_prefix".to_string(),
-                key: lease_prefix.to_string(),
-                message: "Failed to scan for lease keys".to_string(),
+            .context(ErrorData::SerializationFailed {
+                message: "Failed to deserialize lease data".to_string(),
+                data_type: Some("LeaseData".to_string()),
             })?;
-
-        for (key, value) in scan_result.items {
-            if key.ends_with(":lease") {
-                if let Ok(lease) = serde_json::from_slice::<LeaseData>(&value) {
-                    if lease.lease_id == lease_id {
-                        let command_id = key
-                            .strip_prefix("cmd:")
-                            .and_then(|s| s.strip_suffix(":lease"))
-                            .ok_or_else(|| {
-                                AlienError::new(ErrorData::Other {
-                                    message: format!("Invalid lease key format: {}", key),
-                                })
-                            })?;
-
-                        return self.release_lease(command_id, lease_id).await;
-                    }
-                }
-            }
+        if lease.lease_id != lease_id {
+            return Ok(None);
         }
 
-        Err(AlienError::new(ErrorData::LeaseNotFound {
-            lease_id: lease_id.to_string(),
-        }))
+        Ok(Some((command_id, lease.owner)))
+    }
+
+    /// Release a lease by lease_id only (for the API).
+    pub async fn release_lease_by_id(&self, lease_id: &str) -> Result<()> {
+        match self.get_lease_owner(lease_id).await? {
+            Some((command_id, _owner)) => self.release_lease(&command_id, lease_id).await,
+            None => Err(AlienError::new(ErrorData::LeaseNotFound {
+                lease_id: lease_id.to_string(),
+            })),
+        }
     }
 
     // =========================================================================
@@ -1033,10 +1109,18 @@ impl CommandServer {
         Ok(None)
     }
 
-    async fn store_idempotency(&self, idem_key: &str, command_id: &str) -> Result<()> {
+    /// Claim the idempotency key for `command_id`.
+    ///
+    /// Returns `None` when this command won the key. Returns
+    /// `Some(winner_id)` when a concurrent create with the same key won the
+    /// conditional put first — both requests passed the pre-create
+    /// `check_idempotency` before either stored, so the loser must be
+    /// detected here, after its command was already created.
+    async fn store_idempotency(&self, idem_key: &str, command_id: &str) -> Result<Option<String>> {
         let key = format!("idem:{}", idem_key);
         let ttl = Duration::from_secs(24 * 60 * 60); // 24 hours
-        self.kv
+        let won = self
+            .kv
             .put(
                 &key,
                 command_id.as_bytes().to_vec(),
@@ -1051,7 +1135,21 @@ impl CommandServer {
                 key: key.clone(),
                 message: "Failed to store idempotency".to_string(),
             })?;
-        Ok(())
+        if won {
+            return Ok(None);
+        }
+        // Lost the conditional put: read back who won. The winner entry can
+        // only be absent if it TTL-expired in the microseconds since — treat
+        // that as an inconsistency rather than silently duplicating.
+        match self.check_idempotency(idem_key).await? {
+            Some(winner_id) => Ok(Some(winner_id)),
+            None => Err(AlienError::new(ErrorData::Other {
+                message: format!(
+                    "Idempotency key '{}' was concurrently claimed but has no winner entry",
+                    key
+                ),
+            })),
+        }
     }
 
     // --- Params ---

@@ -242,18 +242,16 @@ pub async fn run(
 
         // Build the `…/commands/leases` endpoint once, failing fast if the base
         // URL cannot carry the path (permanent config error, not transient).
-        let lease_client = alien_commands::runtime::LeaseClient::from_base(
-            &url,
-            commands_config.token.clone(),
-        )
-        .ok_or_else(|| {
-            AlienError::new(ErrorData::ConfigurationInvalid {
-                message: format!(
+        let lease_client =
+            alien_commands::runtime::LeaseClient::from_base(&url, commands_config.token.clone())
+                .ok_or_else(|| {
+                    AlienError::new(ErrorData::ConfigurationInvalid {
+                        message: format!(
                     "Invalid commands polling URL '{url}': must be an HTTP/HTTPS URL with a path"
                 ),
-                field: Some("commands_polling.url".to_string()),
-            })
-        })?;
+                        field: Some("commands_polling.url".to_string()),
+                    })
+                })?;
 
         let commands_polling = CommandsPolling::new(
             lease_client,

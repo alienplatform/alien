@@ -25,6 +25,13 @@ export interface PresignedTransferOptions {
 
 type Operation = "download" | "upload"
 
+/**
+ * Cap on a single presigned transfer. Without it a stalled connection hangs
+ * the receiver's poll loop (fetch has no default timeout); generous because
+ * bodies can be multi-megabyte over slow links.
+ */
+const PRESIGNED_TIMEOUT_MS = 120_000
+
 /** URL used in error reports for a presigned request. */
 function errorUrl(request: PresignedRequest): string {
   return request.backend.type === "http" ? request.backend.url : "local"
@@ -92,6 +99,7 @@ export async function downloadPresigned(
     const response = await fetchImpl(request.backend.url, {
       method: request.backend.method,
       headers: request.backend.headers,
+      signal: AbortSignal.timeout(PRESIGNED_TIMEOUT_MS),
     })
     if (!response.ok) {
       throw new AlienError(
@@ -127,6 +135,7 @@ export async function uploadPresigned(
       method: request.backend.method,
       headers: request.backend.headers,
       body: bytes,
+      signal: AbortSignal.timeout(PRESIGNED_TIMEOUT_MS),
     })
     if (!response.ok) {
       throw new AlienError(

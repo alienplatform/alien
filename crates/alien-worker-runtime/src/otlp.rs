@@ -302,12 +302,7 @@ pub fn emit_log(stream: &str, body: &str, timestamp_nanos: i64) {
 /// Emits a single captured log line through a specific provider. Shared by the
 /// process-global [`emit_log`] and the per-caller [`OwnedOtlpLogger`].
 #[cfg(feature = "otlp")]
-fn emit_to_provider(
-    provider: &SdkLoggerProvider,
-    stream: &str,
-    body: &str,
-    timestamp_nanos: i64,
-) {
+fn emit_to_provider(provider: &SdkLoggerProvider, stream: &str, body: &str, timestamp_nanos: i64) {
     use opentelemetry::logs::{
         AnyValue, LogRecord as _, Logger as _, LoggerProvider as _, Severity,
     };

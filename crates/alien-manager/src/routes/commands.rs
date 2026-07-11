@@ -412,14 +412,32 @@ async fn acquire_leases(
 
 /// Release a lease.
 ///
-/// Auth: Any authenticated caller.
+/// Auth: Admin, DG (group), or own Deployment token — the caller must be able
+/// to act on the deployment that HOLDS the lease (the lease owner), otherwise
+/// any authenticated tenant that learned a lease_id could force-release
+/// another deployment's lease and trigger a spurious redelivery.
 async fn release_lease(
     State(state): State<AppState>,
     headers: HeaderMap,
     Path(lease_id): Path<String>,
 ) -> Response {
-    if let Err(e) = auth::require_auth(&state, &headers).await {
-        return e.into_response();
+    let subject = match auth::require_auth(&state, &headers).await {
+        Ok(s) => s,
+        Err(e) => return e.into_response(),
+    };
+
+    let owner = match state.command_server.get_lease_owner(&lease_id).await {
+        Ok(Some((_command_id, owner))) => owner,
+        Ok(None) => {
+            return alien_error::AlienError::new(alien_commands::error::ErrorData::LeaseNotFound {
+                lease_id: lease_id.clone(),
+            })
+            .into_response()
+        }
+        Err(e) => return e.into_response(),
+    };
+    if let Err(e) = require_command_access(&state, &subject, &owner).await {
+        return e;
     }
 
     match state.command_server.release_lease_by_id(&lease_id).await {
