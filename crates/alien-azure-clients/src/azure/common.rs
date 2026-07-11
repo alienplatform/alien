@@ -733,11 +733,15 @@ pub fn create_azure_http_error_with_context(
             message: format!("Bad request for {res_type} '{res_name}': {azure_error_body}"),
             field_name: None,
         },
-        (StatusCode::CONFLICT, _) => ErrorData::RemoteResourceConflict {
-            message: format!("Resource conflict for {res_type} '{res_name}': {azure_error_body}"),
-            resource_type: res_type.into(),
-            resource_name: res_name.into(),
-        },
+        (StatusCode::CONFLICT | StatusCode::PRECONDITION_FAILED, _) => {
+            ErrorData::RemoteResourceConflict {
+                message: format!(
+                    "Resource conflict for {res_type} '{res_name}': {azure_error_body}"
+                ),
+                resource_type: res_type.into(),
+                resource_name: res_name.into(),
+            }
+        }
         (StatusCode::NOT_FOUND, _) => ErrorData::RemoteResourceNotFound {
             resource_type: res_type.into(),
             resource_name: res_name.into(),

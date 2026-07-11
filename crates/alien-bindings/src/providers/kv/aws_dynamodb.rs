@@ -127,12 +127,28 @@ impl Kv for AwsDynamodbKv {
         }
 
         let request = if options.if_not_exists {
+            // Expired rows count as ABSENT, exactly like the local provider's
+            // atomic takeover: DynamoDB's background TTL sweeper can lag the
+            // logical expiry by hours, and without the `#ttl <= :now` arm a
+            // conditional put (e.g. a command lease takeover after the
+            // previous holder died) would be blocked until the sweeper
+            // physically deletes the row.
+            let mut expression_attribute_names = HashMap::new();
+            expression_attribute_names.insert("#ttl".to_string(), "ttl".to_string());
+            let mut expression_attribute_values = HashMap::new();
+            expression_attribute_values.insert(
+                ":now".to_string(),
+                AttributeValue::n(Utc::now().timestamp().to_string()),
+            );
             PutItemRequest::builder()
                 .table_name(self.table_name.clone())
                 .item(item)
                 .condition_expression(
-                    "attribute_not_exists(pk) AND attribute_not_exists(sk)".to_string(),
+                    "(attribute_not_exists(pk) AND attribute_not_exists(sk))                      OR (attribute_exists(#ttl) AND #ttl <= :now)"
+                        .to_string(),
                 )
+                .expression_attribute_names(expression_attribute_names)
+                .expression_attribute_values(expression_attribute_values)
                 .build()
         } else {
             PutItemRequest::builder()

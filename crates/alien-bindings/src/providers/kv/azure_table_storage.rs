@@ -138,6 +138,94 @@ impl AzureTableStorageKv {
     }
 
     /// Splits key into partition key and row key
+    /// Attempt to take over a logically-expired row after a conditional
+    /// insert conflict. Returns `Ok(true)` only when THIS caller replaced
+    /// the expired row (If-Match on the read ETag); a live row, a lost
+    /// race, or a row deleted in between all resolve to `Ok(false)`.
+    async fn try_take_over_expired(
+        &self,
+        key: &str,
+        entity: &alien_azure_clients::azure::tables::TableEntity,
+    ) -> Result<bool> {
+        use alien_client_core::ErrorData as CloudErrorData;
+
+        let (partition_key, row_key) = self.split_key(key);
+        let existing = match self
+            .client
+            .get_entity(
+                &self.resource_group_name,
+                &self.account_name,
+                &self.table_name,
+                &partition_key,
+                &row_key,
+                None,
+            )
+            .await
+        {
+            Ok(existing) => existing,
+            // Deleted between the conflict and this read: treat as lost —
+            // the caller's next attempt sees a clean slate.
+            Err(e)
+                if matches!(
+                    e.error.as_ref(),
+                    Some(CloudErrorData::RemoteResourceNotFound { .. })
+                ) =>
+            {
+                return Ok(false);
+            }
+            Err(e) => {
+                return Err(crate::error::map_cloud_client_error(
+                    e,
+                    format!("Failed to read existing entity for key '{}'", key),
+                    Some(key.to_string()),
+                ));
+            }
+        };
+
+        if !is_entity_expired(&existing) {
+            return Ok(false);
+        }
+        let Some(etag) = existing
+            .properties
+            .get("odata.etag")
+            .and_then(|value| value.as_str())
+        else {
+            // No ETag on the read entity — cannot replace safely.
+            return Ok(false);
+        };
+
+        match self
+            .client
+            .update_entity(
+                &self.resource_group_name,
+                &self.account_name,
+                &self.table_name,
+                &partition_key,
+                &row_key,
+                entity,
+                Some(alien_azure_clients::azure::tables::ETag::from(etag)),
+            )
+            .await
+        {
+            Ok(_) => Ok(true),
+            // 409/412: someone else replaced or deleted it first.
+            Err(e)
+                if matches!(
+                    e.error.as_ref(),
+                    Some(CloudErrorData::RemoteResourceConflict { .. })
+                        | Some(CloudErrorData::RemoteResourceNotFound { .. })
+                ) =>
+            {
+                Ok(false)
+            }
+            Err(e) => Err(crate::error::map_cloud_client_error(
+                e,
+                format!("Failed to take over expired entity for key '{}'", key),
+                Some(key.to_string()),
+            )),
+        }
+    }
+
     fn split_key(&self, key: &str) -> (String, String) {
         // Use hash-based partitioning for load distribution
         let partition_key = format!("p{}", self.hash_bucket(key));
@@ -254,7 +342,17 @@ impl Kv for AzureTableStorageKv {
                 Err(e) => {
                     use alien_client_core::ErrorData as CloudErrorData;
                     match e.error.as_ref() {
-                        Some(CloudErrorData::RemoteResourceConflict { .. }) => Ok(false),
+                        Some(CloudErrorData::RemoteResourceConflict { .. }) => {
+                            // Expired rows count as ABSENT, matching the
+                            // local provider's atomic takeover: Table
+                            // Storage has no server-side TTL, so without
+                            // this an expired row (e.g. a dead command
+                            // lease) blocks conditional puts forever. The
+                            // read + If-Match replace is race-safe: a
+                            // concurrent taker changes the ETag and this
+                            // update loses with a conflict.
+                            self.try_take_over_expired(key, &entity).await
+                        }
                         _ => Err(crate::error::map_cloud_client_error(
                             e,
                             format!("Failed to insert entity for key '{}'", key),

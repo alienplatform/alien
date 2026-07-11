@@ -1654,3 +1654,100 @@ async fn test_binary_data(#[case] ctx: impl KvTestContext) {
         provider_name
     );
 }
+
+#[rstest]
+#[cfg_attr(feature = "local", case::local(LocalProviderTestContext::setup().await))]
+#[cfg_attr(feature = "aws", case::aws(AwsProviderTestContext::setup().await))]
+#[cfg_attr(feature = "azure", case::azure(AzureProviderTestContext::setup().await))]
+#[cfg_attr(feature = "gcp", case::gcp(GcpProviderTestContext::setup().await))]
+#[tokio::test]
+async fn test_expired_row_takeover_conditional_put(#[case] ctx: impl KvTestContext) {
+    // The trait contract every provider must honor identically: a logically
+    // expired row counts as ABSENT for a conditional put, even where the
+    // platform's physical TTL deletion lags (DynamoDB sweeper, Firestore TTL,
+    // Azure Table Storage which has no server-side TTL at all). The command
+    // lease protocol depends on this — without takeover, a lease whose
+    // holder died would block redelivery until physical deletion, or forever.
+    //
+    // Two separate keys, because real-cloud round-trips make a single short
+    // TTL wall-clock flaky: the "live" phase uses a long TTL, the "expired"
+    // phase a short one.
+    let kv = ctx.get_kv().await;
+    let provider_name = ctx.provider_name();
+
+    // Phase 1: a LIVE row must not be taken.
+    let live_key = format!("test-takeover-live-{}", Uuid::new_v4().simple());
+    ctx.track_key(&live_key);
+    let claimed = kv
+        .put(
+            &live_key,
+            b"first-holder".to_vec(),
+            Some(PutOptions {
+                ttl: Some(Duration::from_secs(120)),
+                if_not_exists: true,
+            }),
+        )
+        .await
+        .unwrap_or_else(|e| panic!("[{}] initial claim failed: {:?}", provider_name, e));
+    assert!(claimed, "[{}] initial claim must win", provider_name);
+
+    let stolen_early = kv
+        .put(
+            &live_key,
+            b"contender".to_vec(),
+            Some(PutOptions {
+                ttl: Some(Duration::from_secs(120)),
+                if_not_exists: true,
+            }),
+        )
+        .await
+        .unwrap_or_else(|e| panic!("[{}] early contend failed: {:?}", provider_name, e));
+    assert!(
+        !stolen_early,
+        "[{}] live row must not be taken",
+        provider_name
+    );
+
+    // Phase 2: an EXPIRED row must count as absent.
+    let expired_key = format!("test-takeover-expired-{}", Uuid::new_v4().simple());
+    ctx.track_key(&expired_key);
+    kv.put(
+        &expired_key,
+        b"dead-holder".to_vec(),
+        Some(PutOptions {
+            ttl: Some(Duration::from_secs(2)),
+            if_not_exists: true,
+        }),
+    )
+    .await
+    .unwrap_or_else(|e| panic!("[{}] short claim failed: {:?}", provider_name, e));
+
+    tokio::time::sleep(Duration::from_secs(4)).await;
+    let taken = kv
+        .put(
+            &expired_key,
+            b"second-holder".to_vec(),
+            Some(PutOptions {
+                ttl: Some(Duration::from_secs(120)),
+                if_not_exists: true,
+            }),
+        )
+        .await
+        .unwrap_or_else(|e| panic!("[{}] takeover put failed: {:?}", provider_name, e));
+    assert!(
+        taken,
+        "[{}] expired row must count as absent for a conditional put",
+        provider_name
+    );
+
+    let value = kv
+        .get(&expired_key)
+        .await
+        .unwrap_or_else(|e| panic!("[{}] read-back failed: {:?}", provider_name, e))
+        .expect("taken-over key must be readable");
+    assert_eq!(
+        value, b"second-holder",
+        "[{}] the takeover's value must be served",
+        provider_name
+    );
+}
