@@ -107,9 +107,16 @@ mod tests {
 
         let started = Instant::now();
         assert!(!UreqProbe::default().is_ready(&format!("http://{addr}/readyz")));
+        // A refused connection resolves to "not ready" within the probe timeout.
+        // On Unix the OS RSTs immediately (near-instant); on Windows a connect to
+        // a just-released loopback port can instead run to the connect timeout
+        // before failing — still not-ready, just not instant. Assert the probe's
+        // actual contract (bounded by `timeout_global`), not the OS's fast-fail
+        // optimization, so this holds cross-platform while still catching a
+        // never-returns regression.
         assert!(
-            started.elapsed() < Duration::from_secs(1),
-            "refused connections must fail fast, took {:?}",
+            started.elapsed() < DEFAULT_PROBE_TIMEOUT + Duration::from_secs(1),
+            "refused connection must resolve within the probe timeout, took {:?}",
             started.elapsed()
         );
     }
