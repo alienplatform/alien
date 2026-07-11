@@ -540,9 +540,22 @@ async fn wait_for_shutdown_signal() {
 
 #[cfg(windows)]
 async fn wait_for_shutdown_signal() {
-    tokio::signal::ctrl_c()
-        .await
-        .expect("failed to install Ctrl+C handler");
+    use tokio::signal::windows;
+
+    // Ctrl-C covers the legacy console / no-launcher run. Ctrl-Break is the
+    // launcher's graceful-stop signal to its operator child: the launcher spawns
+    // the operator in a new process group and sends `CTRL_BREAK_EVENT` (see the
+    // launcher's Windows child supervisor). Either drives the same graceful
+    // shutdown — releasing the InstanceLock, closing the DB, and stopping the app
+    // child. The `--service` (no-launcher SCM) path is handled separately by
+    // `windows_entry::run_as_service` and does not go through here.
+    let mut ctrl_c = windows::ctrl_c().expect("failed to install Ctrl+C handler");
+    let mut ctrl_break = windows::ctrl_break().expect("failed to install Ctrl+Break handler");
+
+    tokio::select! {
+        _ = ctrl_c.recv() => {},
+        _ = ctrl_break.recv() => {},
+    }
 }
 
 fn install_panic_hook(data_dir: &PathBuf) {

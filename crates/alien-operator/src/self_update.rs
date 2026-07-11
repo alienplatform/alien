@@ -17,6 +17,9 @@
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicI32, Ordering};
 use std::sync::Once;
+// Only the Unix parent-death watch (and its tests) use `Duration`; on Windows
+// the launcher signals the operator directly, so the import would be unused.
+#[cfg(unix)]
 use std::time::Duration;
 
 use alien_core::self_update::{
