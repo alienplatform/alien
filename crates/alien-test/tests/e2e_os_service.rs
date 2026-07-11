@@ -258,3 +258,64 @@ async fn min_launcher_gate_withholds_the_target() {
     rig.pin(None).await.expect("unpin");
     rig.shutdown().await;
 }
+
+/// 8. Orphan guard: an operator self-update swap must NOT leave the user
+/// workload orphaned. The old operator terminates its app child before handing
+/// off (`shutdown_all` in the operator + `kill_on_drop`/`PR_SET_PDEATHSIG` in
+/// alien-runtime), and the new operator re-spawns exactly ONE app — never two,
+/// never one reparented to init. Regression guard for the two-app orphan bug.
+#[tokio::test]
+async fn app_child_not_orphaned_after_swap() {
+    let mut rig = OsServiceRig::start("1.0.0").await.expect("rig");
+    rig.wait_for_reported_version("1.0.0", CONVERGE)
+        .await
+        .expect("initial version reported");
+
+    // The release's desired-release auto-assign only targets `running`
+    // deployments, so wait for the operator's first sync to mark it running.
+    rig.wait_for_status("running", CONVERGE)
+        .await
+        .expect("deployment reaches running");
+
+    // Deploy a real workload so the operator spawns an observable app child.
+    // Keep `_oci` alive: the operator reads the app's OCI from this dir.
+    let _oci = rig
+        .deploy_test_app_workload()
+        .await
+        .expect("deploy workload");
+    let app_before = rig
+        .wait_for_one_app(CONVERGE)
+        .await
+        .expect("workload app running under the operator");
+
+    // Trigger the operator self-update swap 1.0.0 → 2.0.0.
+    rig.publish_release("2.0.0", rig.wrapper_script("2.0.0", &[]), "0.1.0")
+        .expect("publish 2.0.0");
+    rig.pin(Some("2.0.0")).await.expect("pin 2.0.0");
+    rig.wait_for_reported_version("2.0.0", CONVERGE)
+        .await
+        .expect("converge to 2.0.0");
+    rig.wait_for_promote("2.0.0", CONVERGE)
+        .await
+        .expect("promote 2.0.0");
+
+    // The fix under test: the pre-swap app was TERMINATED by the old operator's
+    // shutdown — never reparented to init (the orphan bug left it running).
+    assert!(
+        !rig.is_orphaned(app_before),
+        "pre-swap app {app_before} survived as an orphan (reparented to init) after the swap"
+    );
+
+    // The new operator re-synced and re-spawned exactly ONE app — a fresh
+    // process (the old one was killed, not adopted).
+    let app_after = rig
+        .wait_for_one_app(CONVERGE)
+        .await
+        .expect("exactly one app under the new operator");
+    assert_ne!(
+        app_after, app_before,
+        "expected a fresh app child after the swap, not the old one"
+    );
+
+    rig.shutdown().await;
+}

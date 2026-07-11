@@ -314,6 +314,143 @@ impl OsServiceRig {
         )
     }
 
+    // -- workload + orphan inspection (for the self-update orphan guard) -----
+
+    /// Poll until the deployment row reports the given `status`. Needed before
+    /// `deploy_test_app_workload`: the manager only assigns a new release's
+    /// `desired_release_id` to deployments already in `running` (see
+    /// `set_desired_release`), and a freshly-synced operator reaches `running`
+    /// a beat after it first reports its version.
+    pub async fn wait_for_status(&self, status: &str, timeout: Duration) -> anyhow::Result<()> {
+        let deadline = Instant::now() + timeout;
+        let mut last = None;
+        while Instant::now() < deadline {
+            let row: serde_json::Value = self
+                .manager
+                .http_client()
+                .get(format!(
+                    "{}/v1/deployments/{}",
+                    self.manager.url, self.deployment_id
+                ))
+                .send()
+                .await?
+                .error_for_status()?
+                .json()
+                .await?;
+            last = row["status"].as_str().map(str::to_string);
+            if last.as_deref() == Some(status) {
+                return Ok(());
+            }
+            tokio::time::sleep(Duration::from_millis(500)).await;
+        }
+        anyhow::bail!("deployment never reached status {status}; last seen {last:?}")
+    }
+
+    /// Deploy a real user workload so the operator spawns an observable app
+    /// child process. Builds `alien-test-app` (a Rust SDK worker) into a local
+    /// OCI via `alien-build` (cargo only — no bun/docker), then `POST
+    /// /v1/releases` with a `local` stack running it; the manager auto-assigns
+    /// it as the deployment's desired release, so the operator extracts + spawns
+    /// the app on its next sync. Returns the OCI build dir — the caller MUST
+    /// keep it alive (the operator reads the OCI from this path) for the test.
+    pub async fn deploy_test_app_workload(&self) -> anyhow::Result<tempfile::TempDir> {
+        use alien_build::settings::{BuildSettings, PlatformBuildSettings};
+        use alien_core::permissions::{PermissionProfile, PermissionsConfig};
+        use alien_core::{
+            BinaryTarget, ResourceLifecycle, Stack, ToolchainConfig, Worker, WorkerCode,
+        };
+
+        let app_src = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .parent()
+            .context("crates dir")?
+            .join("alien-test-app");
+        anyhow::ensure!(
+            app_src.is_dir(),
+            "alien-test-app source not found at {}",
+            app_src.display()
+        );
+
+        let worker = Worker::new("app".to_string())
+            .code(WorkerCode::Source {
+                src: app_src.to_string_lossy().into_owned(),
+                toolchain: ToolchainConfig::Rust {
+                    binary_name: "alien-test-app".to_string(),
+                },
+            })
+            .memory_mb(512)
+            .timeout_seconds(60)
+            .environment(HashMap::new())
+            .permissions("execution".to_string())
+            .build();
+        let permissions = PermissionsConfig {
+            profiles: [("execution".to_string(), PermissionProfile::default())]
+                .into_iter()
+                .collect(),
+            management: Default::default(),
+        };
+        let stack = Stack::new("orphan-guard".to_string())
+            .add(worker, ResourceLifecycle::Live)
+            .permissions(permissions)
+            .build();
+
+        let build_dir = tempfile::tempdir()?;
+        let settings = BuildSettings {
+            output_directory: build_dir.path().to_string_lossy().into_owned(),
+            platform: PlatformBuildSettings::Local {},
+            targets: Some(vec![BinaryTarget::current_os()]),
+            cache_url: None,
+            override_base_image: None,
+            debug_mode: false,
+        };
+        let built = alien_build::build_stack(stack, &settings)
+            .await
+            .context("build alien-test-app into a local OCI")?;
+
+        // The release's `local` stack is the built stack — its Worker.code is now
+        // a local OCI Image path the operator extracts + runs.
+        let stack_json = serde_json::to_value(&built).context("serialize built stack")?;
+        let resp = post_json(
+            &self.manager,
+            "/v1/releases",
+            serde_json::json!({ "stack": { "local": stack_json }, "projectId": "default" }),
+        )
+        .await?;
+        anyhow::ensure!(
+            resp.get("id").and_then(|v| v.as_str()).is_some(),
+            "release response missing id: {resp}"
+        );
+        Ok(build_dir)
+    }
+
+    /// PIDs of the workload app processes — direct children of the operator (the
+    /// operator runs the worker runtime in-process, which `cmd.spawn()`s the app,
+    /// so the app is the operator's child / the launcher's grandchild).
+    pub fn app_pids(&mut self) -> anyhow::Result<Vec<u32>> {
+        let operator_pid = self.operator_pid()?;
+        Ok(child_pids(operator_pid))
+    }
+
+    /// Poll until exactly one app child runs under the current operator.
+    pub async fn wait_for_one_app(&mut self, timeout: Duration) -> anyhow::Result<u32> {
+        let deadline = Instant::now() + timeout;
+        let mut last = Vec::new();
+        while Instant::now() < deadline {
+            last = self.app_pids().unwrap_or_default();
+            if last.len() == 1 {
+                return Ok(last[0]);
+            }
+            tokio::time::sleep(Duration::from_millis(500)).await;
+        }
+        anyhow::bail!("never converged to exactly one app child; last seen {last:?}")
+    }
+
+    /// True if `pid` is still alive AND reparented to init (ppid == 1) — the
+    /// orphaned-workload signature. A terminated process returns false (gone,
+    /// not orphaned).
+    pub fn is_orphaned(&self, pid: u32) -> bool {
+        ppid_of(pid) == Some(1)
+    }
+
     // -- launcher process control ------------------------------------------
 
     pub fn spawn_launcher(&mut self) -> anyhow::Result<()> {
@@ -427,6 +564,33 @@ fn pointer_target(path: &Path) -> Option<String> {
         .ok()?
         .file_name()
         .map(|name| name.to_string_lossy().into_owned())
+}
+
+/// Direct children of `pid` (via `pgrep -P`).
+fn child_pids(pid: u32) -> Vec<u32> {
+    std::process::Command::new("pgrep")
+        .args(["-P", &pid.to_string()])
+        .output()
+        .ok()
+        .map(|o| {
+            String::from_utf8_lossy(&o.stdout)
+                .split_whitespace()
+                .filter_map(|p| p.parse().ok())
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+/// Parent PID of `pid`, or None if the process no longer exists.
+fn ppid_of(pid: u32) -> Option<u32> {
+    let out = std::process::Command::new("ps")
+        .args(["-o", "ppid=", "-p", &pid.to_string()])
+        .output()
+        .ok()?;
+    if !out.status.success() {
+        return None;
+    }
+    String::from_utf8_lossy(&out.stdout).trim().parse().ok()
 }
 
 fn free_port() -> u16 {

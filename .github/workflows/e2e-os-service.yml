@@ -52,6 +52,17 @@ jobs:
       - name: Launcher unit + platform-guard tests
         run: cargo test -p alien-launcher
 
+      - name: Install zig + cargo-zigbuild (the orphan-guard test builds a real workload OCI)
+        run: |
+          set -euo pipefail
+          curl -fsSL https://ziglang.org/download/0.13.0/zig-linux-aarch64-0.13.0.tar.xz -o /tmp/zig.tar.xz
+          sudo mkdir -p /opt/zig-0.13.0
+          sudo tar xJf /tmp/zig.tar.xz -C /opt/zig-0.13.0 --strip-components=1
+          sudo ln -sf /opt/zig-0.13.0/zig /usr/local/bin/zig
+          zig version
+          rustup target add aarch64-unknown-linux-musl
+          cargo install cargo-zigbuild --locked
+
       - name: E2E scenarios
         env:
           ALIEN_LAUNCHER_BINARY: ${{ github.workspace }}/target/debug/alien-launcher
