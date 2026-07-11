@@ -146,11 +146,13 @@ impl LocalWorkerManager {
         {
             warn!("Failed to recover workers from metadata: {:?}", e);
         }
-        if let Err(e) =
-            Self::recover_all_daemons(&state_dir, &daemons, bindings_provider.clone()).await
-        {
-            warn!("Failed to recover daemons from metadata: {:?}", e);
-        }
+        // Daemons are intentionally NOT cold-recovered from metadata: after a
+        // manager restart, only the controller can rebuild the full launch
+        // env (deployment secrets are never persisted, and extraction resets
+        // metadata mid-update). Its Ready handler self-heals a not-running
+        // daemon back through StartingProcess with a freshly built env, so a
+        // disk-driven restart here could only resurrect stale state — an old
+        // binary mid-update, or an empty environment.
 
         // Then monitor health and auto-restart crashed workers
         let mut interval = tokio::time::interval(tokio::time::Duration::from_secs(5));
@@ -165,8 +167,8 @@ impl LocalWorkerManager {
                     if let Err(e) = Self::monitor_and_restart(&state_dir, &workers, bindings_provider.clone()).await {
                         warn!("Worker health check failed: {:?}", e);
                     }
-                    if let Err(e) = Self::monitor_and_restart_daemons(&state_dir, &daemons, bindings_provider.clone()).await {
-                        warn!("Daemon health check failed: {:?}", e);
+                    if let Err(e) = Self::reap_finished_daemons(&daemons).await {
+                        warn!("Daemon reap failed: {:?}", e);
                     }
                 }
             }
@@ -262,109 +264,6 @@ impl LocalWorkerManager {
         Ok(())
     }
 
-    /// Recovers all daemons from metadata files.
-    async fn recover_all_daemons(
-        state_dir: &PathBuf,
-        daemons: &Arc<Mutex<HashMap<String, DaemonRuntime>>>,
-        bindings_provider: Arc<dyn alien_bindings::BindingsProviderApi>,
-    ) -> Result<()> {
-        let daemons_dir = state_dir.join("daemons");
-        if !daemons_dir.exists() {
-            return Ok(());
-        }
-
-        let entries = fs::read_dir(&daemons_dir)
-            .into_alien_error()
-            .context(ErrorData::Other {
-                message: "Failed to read daemons directory".to_string(),
-            })?;
-
-        for entry in entries {
-            let entry = entry.into_alien_error().context(ErrorData::Other {
-                message: "Failed to read daemon entry".to_string(),
-            })?;
-
-            if entry.path().is_dir() {
-                let metadata_file = entry.path().join("metadata.json");
-                if metadata_file.exists() {
-                    if let Err(e) = Self::recover_single_daemon(
-                        &metadata_file,
-                        state_dir,
-                        daemons,
-                        bindings_provider.clone(),
-                    )
-                    .await
-                    {
-                        warn!("Failed to recover daemon from {:?}: {:?}", metadata_file, e);
-                    }
-                }
-            }
-        }
-
-        Ok(())
-    }
-
-    /// Recovers a single daemon from metadata file.
-    async fn recover_single_daemon(
-        metadata_path: &PathBuf,
-        state_dir: &PathBuf,
-        daemons: &Arc<Mutex<HashMap<String, DaemonRuntime>>>,
-        bindings_provider: Arc<dyn alien_bindings::BindingsProviderApi>,
-    ) -> Result<()> {
-        let contents = tokio::fs::read_to_string(metadata_path)
-            .await
-            .into_alien_error()
-            .context(ErrorData::Other {
-                message: format!("Failed to read {}", metadata_path.display()),
-            })?;
-
-        let metadata: WorkerMetadata =
-            serde_json::from_str(&contents)
-                .into_alien_error()
-                .context(ErrorData::Other {
-                    message: "Failed to parse daemon metadata".to_string(),
-                })?;
-
-        {
-            let daemons_guard = daemons.lock().await;
-            if daemons_guard.contains_key(&metadata.worker_id) {
-                debug!(daemon_id = %metadata.worker_id, "Daemon already running, skipping recovery");
-                return Ok(());
-            }
-        }
-
-        info!(daemon_id = %metadata.worker_id, "Recovering daemon from previous run");
-
-        // A daemon whose env carried deployment secrets cannot be recovered
-        // from disk — the values are intentionally not persisted. Leave it
-        // stopped: the controller's health check fails and re-launches it
-        // with freshly resolved secrets.
-        if !metadata.runtime_only_env_names.is_empty() {
-            info!(
-                daemon_id = %metadata.worker_id,
-                "Skipping cold recovery: daemon env contains runtime-only secrets; the controller will re-launch it"
-            );
-            return Ok(());
-        }
-
-        Self::start_daemon_internal(
-            &metadata.worker_id,
-            metadata.env_vars,
-            // Recovery re-runs the persisted launch shape (runtime_command,
-            // grace, runtime-only lists) captured at the original start.
-            crate::daemon_supervisor::DaemonLaunchOptions {
-                runtime_only_binding_names: metadata.runtime_only_binding_names,
-                ..Default::default()
-            },
-            state_dir,
-            daemons,
-            bindings_provider,
-        )
-        .await?;
-
-        Ok(())
-    }
-
     /// Monitors running workers and restarts crashed ones
     async fn monitor_and_restart(
         state_dir: &PathBuf,
@@ -432,7 +331,50 @@ impl LocalWorkerManager {
         Ok(())
     }
 
-    /// Monitors running daemons and restarts crashed ones.
+    /// Reaps finished daemon runtimes from the map.
+    ///
+    /// Deliberately does NOT restart: the local daemon controller is the
+    /// single restarter — its Ready handler notices a not-running daemon
+    /// (this reap is what flips `is_daemon_running` to false) and re-enters
+    /// StartingProcess, rebuilding the full env with freshly resolved
+    /// secrets under the executor's retry/backoff. A monitor-side restart
+    /// here could only relaunch with the stale in-memory env, and its
+    /// remove→spawn window raced the controller's stop→extract→start update
+    /// sequence (resurrecting an old binary mid-update).
+    async fn reap_finished_daemons(
+        daemons: &Arc<Mutex<HashMap<String, DaemonRuntime>>>,
+    ) -> Result<()> {
+        let daemon_ids: Vec<String> = {
+            let daemons_guard = daemons.lock().await;
+            daemons_guard.keys().cloned().collect()
+        };
+
+        for daemon_id in daemon_ids {
+            let mut daemons_mut = daemons.lock().await;
+            let finished = daemons_mut
+                .get(&daemon_id)
+                .is_some_and(|runtime| runtime.task_handle.is_finished());
+            if !finished {
+                continue;
+            }
+            let mut runtime = daemons_mut.remove(&daemon_id).unwrap();
+            drop(daemons_mut);
+            match (&mut runtime.task_handle).await {
+                Ok(Ok(())) => {
+                    warn!(daemon_id = %daemon_id, "Daemon exited cleanly but unexpectedly; the controller will relaunch it");
+                }
+                Ok(Err(e)) => {
+                    warn!(daemon_id = %daemon_id, error = ?e, "Daemon crashed; the controller will relaunch it");
+                }
+                Err(e) => {
+                    warn!(daemon_id = %daemon_id, error = ?e, "Daemon task panicked; the controller will relaunch it");
+                }
+            }
+        }
+
+        Ok(())
+    }
+
     async fn monitor_and_restart_daemons(
         state_dir: &PathBuf,
         daemons: &Arc<Mutex<HashMap<String, DaemonRuntime>>>,

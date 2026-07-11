@@ -374,6 +374,13 @@ fn spawn_daemon_child(
     cmd.stdout(std::process::Stdio::piped());
     cmd.stderr(std::process::Stdio::piped());
 
+    // Own process group (unix): entrypoints that spawn children (`sh -c`,
+    // npm, gunicorn) must have their WHOLE tree signaled on stop — signaling
+    // only the direct child leaves grandchildren holding the port and, worse,
+    // a still-leasing command receiver running old code.
+    #[cfg(unix)]
+    cmd.process_group(0);
+
     cmd.spawn().into_alien_error().context(ErrorData::Other {
         message: format!("Failed to spawn daemon '{}' process ({})", id, program),
     })
@@ -465,12 +472,15 @@ async fn supervise_daemon_process(
             match child.id() {
                 #[cfg(unix)]
                 Some(pid) => {
-                    // SAFETY: plain kill(2) on the child pid we own; no memory
-                    // access. A failure (e.g. the process already exited) is
+                    // Signal the PROCESS GROUP (negative pid): the child was
+                    // spawned with process_group(0), so this reaches its
+                    // whole tree, not just the direct child.
+                    // SAFETY: plain kill(2) on the group we created; no
+                    // memory access. A failure (e.g. already exited) is
                     // handled by the wait/kill fallback below.
-                    let rc = unsafe { libc::kill(pid as libc::pid_t, libc::SIGTERM) };
+                    let rc = unsafe { libc::kill(-(pid as libc::pid_t), libc::SIGTERM) };
                     if rc != 0 {
-                        warn!(daemon_id = %daemon_id, "Failed to send SIGTERM to daemon process");
+                        warn!(daemon_id = %daemon_id, "Failed to send SIGTERM to daemon process group");
                     }
                     match tokio::time::timeout(stop_grace_period, child.wait()).await {
                         Ok(_) => {
@@ -478,9 +488,11 @@ async fn supervise_daemon_process(
                         }
                         Err(_) => {
                             warn!(daemon_id = %daemon_id, "Daemon did not exit within the grace period; sending SIGKILL");
-                            if let Err(e) = child.kill().await {
-                                warn!(daemon_id = %daemon_id, error = %e, "Failed to kill daemon process");
+                            let rc = unsafe { libc::kill(-(pid as libc::pid_t), libc::SIGKILL) };
+                            if rc != 0 {
+                                warn!(daemon_id = %daemon_id, "Failed to SIGKILL daemon process group");
                             }
+                            let _ = child.wait().await;
                         }
                     }
                 }
