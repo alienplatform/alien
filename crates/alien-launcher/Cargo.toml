@@ -42,13 +42,17 @@ signal-hook = { workspace = true }
 sd-notify = { workspace = true }
 
 [target.'cfg(windows)'.dependencies]
-# SCM service host (T3.1) + Job-Object child supervisor (T3.2). `junction`
-# (T3.4 VersionStore) lands with that shim.
+# SCM service host (T3.1) + Job-Object child supervisor (T3.2) +
+# junction-pointer version store (T3.4).
 windows-service = { workspace = true }
 windows-sys = { workspace = true, features = [
     "Win32_Foundation",
     "Win32_System_Console",
     "Win32_System_Threading",
+    # T3.4 store: MoveFileExW (reboot-delete) + GetDiskFreeSpaceExW (preflight).
+    "Win32_Storage_FileSystem",
 ] }
 # Job Object (kill-on-close) child supervisor — same crate the Unix shim uses.
 command-group = { workspace = true }
+# Directory-junction pointers (`current` / `last-stable`) for the version store.
+junction = { workspace = true }

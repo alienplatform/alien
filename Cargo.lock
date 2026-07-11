@@ -712,6 +712,7 @@ dependencies = [
  "alien-error",
  "chrono",
  "command-group",
+ "junction",
  "nix 0.29.0",
  "sd-notify",
  "semver",
@@ -994,6 +995,7 @@ dependencies = [
  "chrono",
  "clap",
  "cloudevents-sdk",
+ "command-group",
  "config",
  "dotenvy",
  "futures-util",
@@ -2775,7 +2777,9 @@ version = "5.0.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "a68fa787550392a9d58f44c21a3022cfb3ea3e2458b7f85d3b399d0ceeccf409"
 dependencies = [
+ "async-trait",
  "nix 0.27.1",
+ "tokio",
  "winapi",
 ]
 
@@ -5360,6 +5364,16 @@ dependencies = [
  "pest",
  "pest_derive",
  "serde",
+]
+
+[[package]]
+name = "junction"
+version = "1.4.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "8cfc352a66ba903c23239ef51e809508b6fc2b0f90e3476ac7a9ff47e863ae95"
+dependencies = [
+ "scopeguard",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
