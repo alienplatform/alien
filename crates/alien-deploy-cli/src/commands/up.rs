@@ -2655,7 +2655,7 @@ async fn run_local_pull_model(
         sync_url: manager_url.to_string(),
         sync_token: token.to_string(),
         deployment_id: Some(deployment_id.to_string()),
-        agent_name: Some(deployment_name.to_string()),
+        operator_name: Some(deployment_name.to_string()),
         platform: platform.to_string(),
         data_dir: data_dir.map(ToOwned::to_owned),
         encryption_key: args.encryption_key.clone(),
@@ -2679,7 +2679,7 @@ async fn run_operator_foreground(
     manager_url: &str,
     token: &str,
     deployment_id: &str,
-    agent_name: &str,
+    operator_name: &str,
     platform: &str,
     encryption_key: &str,
     data_dir_override: Option<&str>,
@@ -2768,8 +2768,8 @@ async fn run_operator_foreground(
         .arg(sync_token_file.path())
         .arg("--deployment-id")
         .arg(deployment_id)
-        .arg("--agent-name")
-        .arg(agent_name)
+        .arg("--operator-name")
+        .arg(operator_name)
         .arg("--encryption-key-file")
         .arg(encryption_key_file.path())
         .arg("--data-dir")

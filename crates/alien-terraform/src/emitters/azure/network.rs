@@ -102,6 +102,10 @@ impl TfEmitter for AzureNetworkEmitter {
                     expr::traversal(["azurerm_subnet", &format!("{label}_appgw"), "name"]),
                 ),
                 (
+                    "privateEndpointSubnetName",
+                    expr::traversal(["azurerm_subnet", &format!("{label}_pe"), "name"]),
+                ),
+                (
                     "natGatewayId",
                     expr::traversal(["azurerm_nat_gateway", &nat_label, "id"]),
                 ),
@@ -152,6 +156,7 @@ fn create_topology(ctx: &EmitContext<'_>, label: &str, cidr: Option<String>) -> 
     let private_label = format!("{label}_private");
     let appgw_label = format!("{label}_appgw");
     let alb_label = format!("{label}_alb");
+    let pe_label = format!("{label}_pe");
     let nat_label = format!("{label}_nat");
     let nat_pip_label = format!("{label}_nat_pip");
     let nsg_label = format!("{label}_workload");
@@ -331,6 +336,39 @@ fn create_topology(ctx: &EmitContext<'_>, label: &str, cidr: Option<String>) -> 
                     )),
                 ],
             )),
+        ],
+    ));
+
+    // Dedicated Private Endpoint subnet for Postgres Flexible Server (and any future PE-reached
+    // service). It must NOT share the delegated Container Apps "private" subnet: a subnet delegated
+    // to `Microsoft.App/environments` cannot host a Private Endpoint. Left undelegated, with
+    // Private Endpoint network policies disabled as Azure requires for PE NICs.
+    fragment.resource_blocks.push(resource_block(
+        "azurerm_subnet",
+        &pe_label,
+        [
+            attr(
+                "name",
+                expr::template(format!("${{local.resource_prefix}}-{label}-pe")),
+            ),
+            attr(
+                "resource_group_name",
+                expr::raw("var.azure_resource_group_name"),
+            ),
+            attr(
+                "virtual_network_name",
+                expr::traversal(["azurerm_virtual_network", label, "name"]),
+            ),
+            attr(
+                "address_prefixes",
+                Expression::Array(vec![expr::raw(format!(
+                    "cidrsubnet(tolist(azurerm_virtual_network.{label}.address_space)[0], 8, 4)"
+                ))]),
+            ),
+            attr(
+                "private_endpoint_network_policies",
+                Expression::String("Disabled".to_string()),
+            ),
         ],
     ));
 
