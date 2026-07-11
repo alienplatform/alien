@@ -125,3 +125,135 @@ jobs:
           sudo systemctl disable alien-e2e-smoke 2>/dev/null || true
           sudo rm /etc/systemd/system/alien-e2e-smoke.service
           sudo systemctl daemon-reload
+
+  # Windows: the platform unit + state-machine tests (the real proof of the
+  # junction VersionStore, the Job-Object ChildSupervisor, and the SCM control
+  # mapping) plus an SCM smoke. The full seven-scenario E2E rig is Unix-only for
+  # now (symlinks, /bin/sh version wrappers, pgrep/ps, a musl workload build) —
+  # porting `os_service.rs` to Windows is tracked separately (doc 17 T3.7).
+  windows-os-service:
+    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.fork != true
+    runs-on: depot-windows-2025-16
+    timeout-minutes: 60
+    env:
+      CARGO_INCREMENTAL: "0"
+      CARGO_NET_GIT_FETCH_WITH_CLI: "true"
+      # ring / aws-lc-sys build their C with the bundled cmake builder + NASM.
+      AWS_LC_SYS_CMAKE_BUILDER: "1"
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@nightly
+
+      - name: Install build tools (protoc, nasm, cmake)
+        shell: bash
+        run: choco install protoc nasm cmake -y
+
+      - name: Build the launcher
+        shell: bash
+        run: |
+          export PATH="/c/Program Files/NASM:$PATH"
+          cargo build -p alien-launcher
+
+      # The real proof of T3.1–T3.4 on native Windows: the junction VersionStore's
+      # flip + crash-residue reconciliation + locked-file gc, the full Phase-0
+      # state-machine suite over that store, the Job-Object kill-on-close
+      # ChildSupervisor (spawn/stop/exit-code + drop-kills-child), and the SCM
+      # control-signal mapping — all run here as real processes.
+      - name: Launcher + operator unit + platform tests
+        shell: bash
+        run: |
+          export PATH="/c/Program Files/NASM:$PATH"
+          cargo test -p alien-launcher -p alien-operator
+
+      # SCM smoke (the runner is admin): register the launcher as a real service,
+      # prove it starts (a tiny stub operator answers /livez so the launcher
+      # reports RUNNING), the doc-12 recovery config lands, and a stop propagates
+      # cleanly through the launcher to the operator, then delete.
+      - name: SCM smoke — sc create/start/qfailure/stop/delete
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          $svc  = "alien-e2e-scm"
+          $data = "C:\alien-scm"           # fixed, space-free: keeps sc binPath simple
+          $ver  = Join-Path $data "versions\0.0.1"
+
+          # Clean any residue from a previous run on this (reused) runner.
+          sc.exe stop $svc *> $null
+          sc.exe delete $svc *> $null
+          if (Test-Path $data) { Remove-Item -Recurse -Force $data }
+          foreach ($d in "versions\0.0.1","launcher","state","state-snapshots","failed","download") {
+            New-Item -ItemType Directory -Force -Path (Join-Path $data $d) | Out-Null
+          }
+
+          # A tiny stub "operator": bind ALIEN_HEALTH_ADDR (the launcher passes it)
+          # and answer every GET 200 — the launcher gates its SCM 'Running' on the
+          # operator's /livez. Compiled to a real .exe so the launcher can
+          # CreateProcess it (the spawn name is alien-operator.exe).
+          $stub = @'
+          use std::io::{Read, Write};
+          use std::net::TcpListener;
+          fn main() {
+              let addr = std::env::var("ALIEN_HEALTH_ADDR").expect("ALIEN_HEALTH_ADDR");
+              let listener = TcpListener::bind(&addr).expect("bind health addr");
+              for stream in listener.incoming() {
+                  let mut stream = match stream { Ok(s) => s, Err(_) => continue };
+                  let mut buf = [0u8; 1024];
+                  let _ = stream.read(&mut buf);
+                  let _ = stream.write_all(
+                      b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\nConnection: close\r\n\r\nok",
+                  );
+              }
+          }
+          '@
+          $stubRs = Join-Path $env:RUNNER_TEMP "stub_operator.rs"
+          Set-Content -Path $stubRs -Value $stub -Encoding ascii
+          & rustc $stubRs -O -o (Join-Path $ver "alien-operator.exe")
+          if ($LASTEXITCODE -ne 0) { throw "rustc stub operator failed" }
+
+          Copy-Item "target\debug\alien-launcher.exe" (Join-Path $data "launcher\alien-launcher.exe")
+
+          # Junction pointers, exactly as the installer seeds them.
+          New-Item -ItemType Junction -Path (Join-Path $data "current")     -Target $ver | Out-Null
+          New-Item -ItemType Junction -Path (Join-Path $data "last-stable") -Target $ver | Out-Null
+
+          $launcher = Join-Path $data "launcher\alien-launcher.exe"
+          $bin = "$launcher --data-dir $data --probation-secs 10 --health-port 7799"
+
+          Write-Host "== sc create =="
+          sc.exe create $svc binPath= $bin start= demand
+          if ($LASTEXITCODE -ne 0) { throw "sc create failed" }
+
+          Write-Host "== sc failure (doc-12 recovery config) =="
+          sc.exe failure $svc reset= 86400 actions= restart/5000/restart/5000/restart/5000
+          if ($LASTEXITCODE -ne 0) { throw "sc failure failed" }
+          $qf = (sc.exe qfailure $svc | Out-String)
+          Write-Host $qf
+          if ($qf -notmatch "86400")      { throw "recovery reset period (86400) not applied" }
+          if ($qf -notmatch "(?i)restart") { throw "restart actions not applied" }
+
+          Write-Host "== sc start =="
+          sc.exe start $svc | Out-Null
+          $running = $false
+          foreach ($i in 1..30) {
+            Start-Sleep -Seconds 1
+            if ((sc.exe query $svc | Out-String) -match "RUNNING") { $running = $true; break }
+          }
+          if (-not $running) {
+            sc.exe query $svc
+            sc.exe delete $svc *> $null
+            throw "service never reached RUNNING (launcher did not gate on the operator /livez)"
+          }
+          Write-Host "service RUNNING"
+
+          Write-Host "== sc stop (must propagate to the operator) =="
+          sc.exe stop $svc | Out-Null
+          $stopped = $false
+          foreach ($i in 1..30) {
+            Start-Sleep -Seconds 1
+            if ((sc.exe query $svc | Out-String) -match "STOPPED") { $stopped = $true; break }
+          }
+          sc.exe delete $svc *> $null
+          if (-not $stopped) { throw "service did not stop cleanly" }
+          Write-Host "service STOPPED cleanly — stop propagated through to the operator"
