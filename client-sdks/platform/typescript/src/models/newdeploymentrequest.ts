@@ -1296,6 +1296,18 @@ export type NewDeploymentRequestStackSettings = {
 };
 
 /**
+ * Desired-release selection for a new deployment. Use none to register an environment without initially requesting a release; later updates can assign one.
+ */
+export const InitialDesiredRelease = {
+  Active: "active",
+  None: "none",
+} as const;
+/**
+ * Desired-release selection for a new deployment. Use none to register an environment without initially requesting a release; later updates can assign one.
+ */
+export type InitialDesiredRelease = ClosedEnum<typeof InitialDesiredRelease>;
+
+/**
  * Request schema for creating a new deployment
  */
 export type NewDeploymentRequest = {
@@ -1362,6 +1374,10 @@ export type NewDeploymentRequest = {
    * Display-only permission tier reported by the Operator manifest.
    */
   operatorPermission?: string | undefined;
+  /**
+   * Desired-release selection for a new deployment. Use none to register an environment without initially requesting a release; later updates can assign one.
+   */
+  initialDesiredRelease?: InitialDesiredRelease | undefined;
 };
 
 /** @internal */
@@ -3957,6 +3973,11 @@ export function newDeploymentRequestStackSettingsToJSON(
 }
 
 /** @internal */
+export const InitialDesiredRelease$outboundSchema: z.ZodEnum<
+  typeof InitialDesiredRelease
+> = z.enum(InitialDesiredRelease);
+
+/** @internal */
 export type NewDeploymentRequest$Outbound = {
   name: string;
   platform: string;
@@ -3985,6 +4006,7 @@ export type NewDeploymentRequest$Outbound = {
   inputValues?: { [k: string]: StackInputValueRequest$Outbound } | undefined;
   operatorScope?: string | undefined;
   operatorPermission?: string | undefined;
+  initialDesiredRelease: string;
 };
 
 /** @internal */
@@ -4021,6 +4043,7 @@ export const NewDeploymentRequest$outboundSchema: z.ZodType<
     .optional(),
   operatorScope: z.string().optional(),
   operatorPermission: z.string().optional(),
+  initialDesiredRelease: InitialDesiredRelease$outboundSchema.default("active"),
 });
 
 export function newDeploymentRequestToJSON(

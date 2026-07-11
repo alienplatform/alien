@@ -28,6 +28,7 @@ const alien = new Alien({
 async function run() {
   const result = await alien.machines.listJoinTokens({
     id: "dep_0c29fq4a2yjb7kx3smwdgxlc",
+    workspace: "my-workspace",
   });
 
   console.log(result);
@@ -53,6 +54,7 @@ const alien = new AlienCore({
 async function run() {
   const res = await machinesListJoinTokens(alien, {
     id: "dep_0c29fq4a2yjb7kx3smwdgxlc",
+    workspace: "my-workspace",
   });
   if (res.ok) {
     const { value: result } = res;
@@ -101,6 +103,7 @@ const alien = new Alien({
 async function run() {
   const result = await alien.machines.createJoinToken({
     id: "dep_0c29fq4a2yjb7kx3smwdgxlc",
+    workspace: "my-workspace",
   });
 
   console.log(result);
@@ -126,6 +129,7 @@ const alien = new AlienCore({
 async function run() {
   const res = await machinesCreateJoinToken(alien, {
     id: "dep_0c29fq4a2yjb7kx3smwdgxlc",
+    workspace: "my-workspace",
   });
   if (res.ok) {
     const { value: result } = res;
@@ -174,6 +178,7 @@ const alien = new Alien({
 async function run() {
   const result = await alien.machines.rotateJoinToken({
     id: "dep_0c29fq4a2yjb7kx3smwdgxlc",
+    workspace: "my-workspace",
   });
 
   console.log(result);
@@ -199,6 +204,7 @@ const alien = new AlienCore({
 async function run() {
   const res = await machinesRotateJoinToken(alien, {
     id: "dep_0c29fq4a2yjb7kx3smwdgxlc",
+    workspace: "my-workspace",
   });
   if (res.ok) {
     const { value: result } = res;
@@ -248,6 +254,7 @@ async function run() {
   const result = await alien.machines.revokeJoinToken({
     id: "dep_0c29fq4a2yjb7kx3smwdgxlc",
     tokenId: "<id>",
+    workspace: "my-workspace",
   });
 
   console.log(result);
@@ -274,6 +281,7 @@ async function run() {
   const res = await machinesRevokeJoinToken(alien, {
     id: "dep_0c29fq4a2yjb7kx3smwdgxlc",
     tokenId: "<id>",
+    workspace: "my-workspace",
   });
   if (res.ok) {
     const { value: result } = res;
@@ -322,6 +330,7 @@ const alien = new Alien({
 async function run() {
   const result = await alien.machines.listInventory({
     id: "dep_0c29fq4a2yjb7kx3smwdgxlc",
+    workspace: "my-workspace",
   });
 
   console.log(result);
@@ -347,6 +356,7 @@ const alien = new AlienCore({
 async function run() {
   const res = await machinesListInventory(alien, {
     id: "dep_0c29fq4a2yjb7kx3smwdgxlc",
+    workspace: "my-workspace",
   });
   if (res.ok) {
     const { value: result } = res;
@@ -396,6 +406,7 @@ async function run() {
   const result = await alien.machines.drainMachine({
     id: "dep_0c29fq4a2yjb7kx3smwdgxlc",
     machineId: "<id>",
+    workspace: "my-workspace",
   });
 
   console.log(result);
@@ -422,6 +433,7 @@ async function run() {
   const res = await machinesDrainMachine(alien, {
     id: "dep_0c29fq4a2yjb7kx3smwdgxlc",
     machineId: "<id>",
+    workspace: "my-workspace",
   });
   if (res.ok) {
     const { value: result } = res;
@@ -471,6 +483,7 @@ async function run() {
   const result = await alien.machines.cancelMachineDrain({
     id: "dep_0c29fq4a2yjb7kx3smwdgxlc",
     machineId: "<id>",
+    workspace: "my-workspace",
   });
 
   console.log(result);
@@ -497,6 +510,7 @@ async function run() {
   const res = await machinesCancelMachineDrain(alien, {
     id: "dep_0c29fq4a2yjb7kx3smwdgxlc",
     machineId: "<id>",
+    workspace: "my-workspace",
   });
   if (res.ok) {
     const { value: result } = res;
@@ -546,6 +560,7 @@ async function run() {
   const result = await alien.machines.removeMachine({
     id: "dep_0c29fq4a2yjb7kx3smwdgxlc",
     machineId: "<id>",
+    workspace: "my-workspace",
   });
 
   console.log(result);
@@ -572,6 +587,7 @@ async function run() {
   const res = await machinesRemoveMachine(alien, {
     id: "dep_0c29fq4a2yjb7kx3smwdgxlc",
     machineId: "<id>",
+    workspace: "my-workspace",
   });
   if (res.ok) {
     const { value: result } = res;

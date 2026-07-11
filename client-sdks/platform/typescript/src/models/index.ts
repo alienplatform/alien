@@ -94,6 +94,7 @@ export * from "./importedresource.js";
 export * from "./importsource.js";
 export * from "./importsourcekind.js";
 export * from "./kubernetesbaseplatform.js";
+export * from "./kubernetesclustersource.js";
 export * from "./listcommanddeploymentsresponse.js";
 export * from "./listcommandnamesresponse.js";
 export * from "./listmachinesinventoryresponse.js";

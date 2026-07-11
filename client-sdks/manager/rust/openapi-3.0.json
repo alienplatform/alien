@@ -6759,13 +6759,27 @@
           }
         }
       },
+      "InitialDesiredRelease": {
+        "type": "string",
+        "enum": [
+          "active",
+          "none"
+        ]
+      },
       "InitializeRequest": {
         "type": "object",
+        "required": [
+          "initialDesiredRelease"
+        ],
         "properties": {
           "basePlatform": {
             "$ref": "#/components/schemas/Platform",
             "description": "Optional base cloud platform for Kubernetes setup targets such as\nEKS/GKE/AKS. The runtime platform remains Kubernetes.",
             "nullable": true
+          },
+          "initialDesiredRelease": {
+            "$ref": "#/components/schemas/InitialDesiredRelease",
+            "description": "Desired-release selection for a newly registered deployment. This is\ncreation intent, not a permanent deployment mode: a later update can\nassign a desired release to a deployment initialized with `none`."
           },
           "inputValues": {
             "type": "object",
@@ -6782,11 +6796,6 @@
           },
           "platform": {
             "$ref": "#/components/schemas/Platform",
-            "nullable": true
-          },
-          "publicSubdomain": {
-            "type": "string",
-            "description": "Optional generated-domain subdomain to use for this deployment.",
             "nullable": true
           },
           "scope": {

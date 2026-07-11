@@ -77,6 +77,7 @@ export * from "./heartbeatsmode.js";
 export * from "./horizonworkloadschedulingmode.js";
 export * from "./importedresource.js";
 export * from "./importsourcekind.js";
+export * from "./initialdesiredrelease.js";
 export * from "./initializerequest.js";
 export * from "./initializeresponse.js";
 export * from "./kubernetescertificatemode.js";

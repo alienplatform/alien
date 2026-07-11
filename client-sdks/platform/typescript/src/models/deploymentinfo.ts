@@ -129,6 +129,10 @@ export type StackSummary = {
    * Platforms supported by the active release
    */
   platforms: Array<StackSummaryPlatform>;
+  /**
+   * Whether the stack contains resources that require cloud VPC networking
+   */
+  requiresNetwork: boolean;
   resourceCounts: ResourceCounts;
   /**
    * Public endpoints declared by the active release stack
@@ -859,6 +863,7 @@ export function publicEndpointFromJSON(
 export const StackSummary$inboundSchema: z.ZodType<StackSummary, unknown> = z
   .object({
     platforms: z.array(StackSummaryPlatform$inboundSchema),
+    requiresNetwork: z.boolean(),
     resourceCounts: z.lazy(() => ResourceCounts$inboundSchema),
     publicEndpoints: z.array(z.lazy(() => PublicEndpoint$inboundSchema)),
   });

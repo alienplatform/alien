@@ -150,6 +150,16 @@ pub struct AgentSyncResponse {
     pub commands_url: Option<String>,
 }
 
+#[derive(Debug, Clone, Copy, Deserialize, Serialize, PartialEq, Eq)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
+#[serde(rename_all = "kebab-case")]
+pub enum InitialDesiredRelease {
+    /// Start from the project's active release.
+    Active,
+    /// Register the environment without expressing desired release state.
+    None,
+}
+
 #[derive(Debug, Deserialize)]
 #[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 #[serde(rename_all = "camelCase")]
@@ -168,6 +178,10 @@ pub struct InitializeRequest {
     /// EKS/GKE/AKS. The runtime platform remains Kubernetes.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub base_platform: Option<Platform>,
+    /// Desired-release selection for a newly registered deployment. This is
+    /// creation intent, not a permanent deployment mode: a later update can
+    /// assign a desired release to a deployment initialized with `none`.
+    pub initial_desired_release: InitialDesiredRelease,
     pub stack_settings: Option<alien_core::StackSettings>,
     /// Deployer-provided stack inputs. Embedded platform managers resolve
     /// these before creating the deployment; standalone managers accept the
@@ -503,7 +517,8 @@ mod tests {
         build_target_deployment_config, deployment_needs_target, deployment_state_from_record,
         deployment_target_release_id, management_platform, release_stack_platform,
         should_ignore_agent_state_report, should_return_current_state_for_agent_sync,
-        validate_initialize_base_platform, AgentSyncRequest, ReconcileRequest,
+        validate_initialize_base_platform, AgentSyncRequest, InitialDesiredRelease,
+        InitializeRequest, ReconcileRequest,
     };
 
     #[test]
@@ -688,6 +703,23 @@ mod tests {
         assert!(
             validate_initialize_base_platform(Platform::Kubernetes, Some(Platform::Local)).is_err()
         );
+    }
+
+    #[test]
+    fn initialize_requires_explicit_initial_desired_release() {
+        let request: InitializeRequest = serde_json::from_value(json!({
+            "platform": "kubernetes",
+            "permission": "observe",
+            "initialDesiredRelease": "none"
+        }))
+        .expect("explicit no-release initialization should deserialize");
+        assert_eq!(request.initial_desired_release, InitialDesiredRelease::None);
+
+        let missing_selection = serde_json::from_value::<InitializeRequest>(json!({
+            "platform": "kubernetes",
+            "permission": "observe"
+        }));
+        assert!(missing_selection.is_err());
     }
 
     #[test]
@@ -1600,15 +1632,16 @@ async fn initialize(
                 Err(e) => return e.into_response(),
             };
 
-            // Auto-assign latest release if available. Initialize is the
-            // agent's own bootstrap: keep the caller's subject for both
-            // reads and writes so embedders can authorize against the
-            // agent's scope rather than a service credential.
-            if let Ok(Some(release)) = state.release_store.get_latest_release(&subject).await {
-                let _ = state
-                    .deployment_store
-                    .set_deployment_desired_release(&subject, &deployment.id, &release.id)
-                    .await;
+            if req.initial_desired_release == InitialDesiredRelease::Active {
+                // Initialize is the agent's own bootstrap: keep the caller's
+                // subject for reads and writes so embedders can authorize
+                // against the agent's scope rather than a service credential.
+                if let Ok(Some(release)) = state.release_store.get_latest_release(&subject).await {
+                    let _ = state
+                        .deployment_store
+                        .set_deployment_desired_release(&subject, &deployment.id, &release.id)
+                        .await;
+                }
             }
 
             // Create a deployment token for the new deployment

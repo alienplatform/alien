@@ -2461,11 +2461,11 @@ async fn initialize_deployment(
         name: Some(name.to_string()),
         platform: Some(sdk_platform(platform)),
         base_platform: base_platform.map(sdk_platform),
+        initial_desired_release: alien_manager_api::types::InitialDesiredRelease::Active,
         stack_settings: Some(sdk_stack_settings(stack_settings)?),
         input_values: input_values.into_iter().collect(),
         scope: None,
         permission: None,
-        public_subdomain: None,
         setup_method: None,
     };
 
