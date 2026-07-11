@@ -382,13 +382,25 @@ impl LocalContainerManager {
             // Public images (e.g. `postgres:16-alpine`) pull anonymously
             // first; only a rejected anonymous pull retries with the token.
             debug!(image = %image, "Image is not a local path, pulling registry image");
-            self.pull_registry_image(image, container_id, proxy_token)
-                .await?;
-            return Ok(image.to_string());
+            return self
+                .pull_registry_image(image, container_id, proxy_token)
+                .await;
         } else {
             return Ok(image.to_string());
         };
 
+        self.load_oci_tarball_into_docker(&tarball_path, container_id)
+            .await
+    }
+
+    /// `docker load` an OCI tarball and return a reference the daemon can
+    /// `create` from, re-tagging by image ID when the containerd image store
+    /// registered only the tar's literal annotation name.
+    async fn load_oci_tarball_into_docker(
+        &self,
+        tarball_path: &Path,
+        container_id: &str,
+    ) -> Result<String> {
         info!(
             tarball = %tarball_path.display(),
             container_id = %container_id,
@@ -526,16 +538,24 @@ impl LocalContainerManager {
         Ok(loaded_image)
     }
 
-    /// Pull a registry image through the daemon, anonymously first and — when
-    /// the registry rejects that and a deployment token is available — again
-    /// with `deployment:<token>` basic auth (the manager registry proxy's
-    /// pull credential, mirroring the local worker manager's pulls).
+    /// Make a registry image available to the daemon and return a reference
+    /// `create` can use. Three attempts, cheapest first:
+    ///
+    /// 1. Daemon-side anonymous pull — public images (`postgres:16-alpine`).
+    /// 2. Daemon-side pull with `deployment:<token>` basic auth (the manager
+    ///    registry proxy's pull credential) — proxies the daemon can reach
+    ///    over HTTPS, e.g. the E2E harness's public manager URL.
+    /// 3. Host-side pull via dockdash with the same credential, then
+    ///    `docker load` — the dev server's proxy lives on the HOST's
+    ///    localhost, which the daemon cannot reach (and would refuse as a
+    ///    plain-HTTP registry anyway). The operator process CAN reach it,
+    ///    exactly like the local worker manager's image pulls.
     async fn pull_registry_image(
         &self,
         image: &str,
         container_id: &str,
         proxy_token: Option<&str>,
-    ) -> Result<()> {
+    ) -> Result<String> {
         use futures_util::TryStreamExt;
 
         let options = Some(bollard::image::CreateImageOptions {
@@ -543,29 +563,29 @@ impl LocalContainerManager {
             ..Default::default()
         });
 
-        let anonymous: std::result::Result<Vec<_>, _> = self
+        // 1. Daemon-side, anonymous.
+        if self
             .docker
             .create_image(options.clone(), None, None)
-            .try_collect()
-            .await;
-        if anonymous.is_ok() {
-            return Ok(());
+            .try_collect::<Vec<_>>()
+            .await
+            .is_ok()
+        {
+            return Ok(image.to_string());
         }
 
         let Some(token) = proxy_token else {
-            return anonymous
-                .map(|_| ())
-                .into_alien_error()
-                .context(ErrorData::DockerContainerError {
-                    container: container_id.to_string(),
-                    operation: "pull_image".to_string(),
-                    reason: format!(
-                        "Anonymous pull of '{}' failed and no deployment token is available",
-                        image
-                    ),
-                });
+            return Err(AlienError::new(ErrorData::DockerContainerError {
+                container: container_id.to_string(),
+                operation: "pull_image".to_string(),
+                reason: format!(
+                    "Anonymous pull of '{}' failed and no deployment token is available",
+                    image
+                ),
+            }));
         };
 
+        // 2. Daemon-side, deployment-token auth.
         info!(
             image = %image,
             container_id = %container_id,
@@ -576,20 +596,56 @@ impl LocalContainerManager {
             password: Some(token.to_string()),
             ..Default::default()
         };
-        self.docker
+        if self
+            .docker
             .create_image(options, None, Some(credentials))
             .try_collect::<Vec<_>>()
             .await
-            .map(|_| ())
+            .is_ok()
+        {
+            return Ok(image.to_string());
+        }
+
+        // 3. Host-side pull + docker load.
+        info!(
+            image = %image,
+            container_id = %container_id,
+            "Daemon-side pulls failed; pulling on the host and loading into Docker"
+        );
+        let protocol = if image.starts_with("127.0.0.1") || image.starts_with("localhost") {
+            dockdash::ClientProtocol::Http
+        } else {
+            dockdash::ClientProtocol::Https
+        };
+        let container_target = alien_core::BinaryTarget::linux_container_target();
+        let arch = match container_target.oci_arch() {
+            "arm64" => dockdash::Arch::ARM64,
+            _ => dockdash::Arch::Amd64,
+        };
+        let (pulled, _diagnostics) = dockdash::Image::builder()
+            .from(image)
+            .pull_policy(dockdash::PullPolicy::Always)
+            .protocol(protocol)
+            .platform(container_target.oci_os(), &arch)
+            .auth(dockdash::RegistryAuth::Basic(
+                "deployment".to_string(),
+                token.to_string(),
+            ))
+            .build()
+            .await
             .into_alien_error()
             .context(ErrorData::DockerContainerError {
                 container: container_id.to_string(),
                 operation: "pull_image".to_string(),
                 reason: format!(
-                    "Authenticated pull of '{}' from the registry proxy failed",
+                    "Pull of '{}' failed anonymously, with deployment-token auth via the \
+                     daemon, and via the host-side registry client",
                     image
                 ),
-            })
+            })?;
+
+        self.load_oci_tarball_into_docker(pulled.path(), container_id)
+            .await
     }
 
     /// Finds an OCI tarball in a directory (searches *.oci.tar recursively up to 1 level deep).
