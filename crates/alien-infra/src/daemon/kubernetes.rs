@@ -2,6 +2,7 @@ use std::collections::BTreeMap;
 use std::time::Duration;
 use tracing::{debug, info};
 
+use crate::container::kubernetes::is_already_exists;
 use crate::core::{
     kubernetes_branded_resource_labels, kubernetes_runtime_pod_labels, projected_env_vars,
     reconcile_environment_secret, EnvSecretRotationTracker, EnvironmentVariableBuilder,
@@ -14,13 +15,17 @@ use crate::kubernetes_workload_heartbeat::{
 };
 use alien_client_core::ErrorData as CloudClientErrorData;
 use alien_core::{
-    kubernetes_resource_name, kubernetes_service_account_name, Daemon, DaemonCode, DaemonOutputs,
-    ResourceOutputs, ResourceStatus,
+    branded_tag_key, kubernetes_resource_name, kubernetes_service_account_name, Daemon, DaemonCode,
+    DaemonOutputs, ResourceOutputs, ResourceStatus, ALIEN_MANAGED_BY_TAG_KEY,
+    ALIEN_MANAGED_BY_TAG_VALUE, DEFAULT_ALIEN_LABEL_DOMAIN,
 };
 use alien_error::{AlienError, Context, ContextError};
 use alien_macros::controller;
 use k8s_openapi::api::apps::v1::{DaemonSet, DaemonSetSpec};
-use k8s_openapi::api::core::v1::{Container, LocalObjectReference, PodSpec, PodTemplateSpec};
+use k8s_openapi::api::core::v1::{
+    Container, LocalObjectReference, PodSpec, PodTemplateSpec, ResourceRequirements,
+};
+use k8s_openapi::apimachinery::pkg::api::resource::Quantity;
 use k8s_openapi::apimachinery::pkg::apis::meta::v1::{LabelSelector, ObjectMeta};
 
 #[controller]
@@ -98,13 +103,48 @@ impl KubernetesDaemonController {
             )
             .await?;
 
-        workload_client
+        match workload_client
             .create_daemonset(&namespace, &daemonset)
             .await
-            .context(ErrorData::CloudPlatformError {
-                message: format!("Failed to create daemonset '{}'.", daemon_set_name),
-                resource_id: Some(config.id.clone()),
-            })?;
+        {
+            Ok(_) => {}
+            // A retry after a transient failure between a successful create
+            // and state persistence (or an orphan from a prior deploy) hits
+            // AlreadyExists. Adopt the existing DaemonSet when it carries our
+            // managed-by labels — mirrors the container controller.
+            Err(err) if is_already_exists(&err) => {
+                let existing = workload_client
+                    .get_daemonset(&namespace, &daemon_set_name)
+                    .await
+                    .context(ErrorData::CloudPlatformError {
+                        message: format!(
+                            "Failed to read existing daemonset '{}' before adoption.",
+                            daemon_set_name
+                        ),
+                        resource_id: Some(config.id.clone()),
+                    })?;
+                if !self.is_managed_daemonset(
+                    ctx,
+                    existing.metadata.labels.as_ref(),
+                    &daemon_set_name,
+                ) {
+                    return Err(err.context(ErrorData::CloudPlatformError {
+                        message: format!(
+                            "Refusing to adopt unmanaged daemonset '{}'.",
+                            daemon_set_name
+                        ),
+                        resource_id: Some(config.id.clone()),
+                    }));
+                }
+                info!(daemon_set_name=%daemon_set_name, namespace=%namespace, "Adopting existing Kubernetes DaemonSet");
+            }
+            Err(err) => {
+                return Err(err.context(ErrorData::CloudPlatformError {
+                    message: format!("Failed to create daemonset '{}'.", daemon_set_name),
+                    resource_id: Some(config.id.clone()),
+                }));
+            }
+        }
 
         self.daemon_set_name = Some(daemon_set_name.clone());
         self.namespace = Some(namespace.clone());
@@ -536,6 +576,9 @@ impl KubernetesDaemonController {
 
         let env_builder = EnvironmentVariableBuilder::try_new(&config.environment)?
             .add_daemon_runtime_env_vars(ctx)?
+            // Cross-target parity with the local controller: apps read
+            // ALIEN_PUBLIC_ENDPOINTS_JSON to build their own absolute URLs.
+            .add_current_resource_public_endpoint(ctx, &config.id)?
             .add_linked_resources(&config.links, ctx, &config.id)
             .await?;
 
@@ -555,7 +598,27 @@ impl KubernetesDaemonController {
         let container = Container {
             name: "daemon".to_string(),
             image: Some(image),
+            // The daemon contract: `command` overrides the image default
+            // entrypoint, and the declared ResourceSpecs become real
+            // requests/limits — without them the pod schedules as BestEffort
+            // and is first in line for eviction. Mirrors the container
+            // controller.
+            command: config.command.clone(),
             env: Some(env_vars),
+            resources: Some(ResourceRequirements {
+                requests: Some(BTreeMap::from([
+                    ("cpu".to_string(), Quantity(config.cpu.min.clone())),
+                    ("memory".to_string(), Quantity(config.memory.min.clone())),
+                ])),
+                limits: Some(BTreeMap::from([
+                    ("cpu".to_string(), Quantity(config.cpu.desired.clone())),
+                    (
+                        "memory".to_string(),
+                        Quantity(config.memory.desired.clone()),
+                    ),
+                ])),
+                ..Default::default()
+            }),
             ..Default::default()
         };
 
@@ -570,6 +633,9 @@ impl KubernetesDaemonController {
             containers: vec![container],
             restart_policy: Some("Always".to_string()),
             image_pull_secrets,
+            // Honor the configured stop grace period during pod shutdown
+            // (K8s default is 30s when unset).
+            termination_grace_period_seconds: config.stop_grace_period_seconds.map(i64::from),
             ..Default::default()
         };
 
@@ -622,6 +688,33 @@ impl KubernetesDaemonController {
     ) -> BTreeMap<String, String> {
         labels.extend(kubernetes_branded_resource_labels(ctx, resource_id));
         labels
+    }
+
+    /// Whether an existing DaemonSet carries our managed-by labels and may be
+    /// adopted on an AlreadyExists create. Twin of the container controller's
+    /// `is_managed_workload`.
+    fn is_managed_daemonset(
+        &self,
+        ctx: &ResourceControllerContext<'_>,
+        labels: Option<&BTreeMap<String, String>>,
+        daemon_set_name: &str,
+    ) -> bool {
+        let label_domain = ctx
+            .deployment_config
+            .label_domain
+            .as_deref()
+            .unwrap_or(DEFAULT_ALIEN_LABEL_DOMAIN);
+        let managed_by_key = branded_tag_key(label_domain, ALIEN_MANAGED_BY_TAG_KEY);
+        let default_managed_by_key =
+            branded_tag_key(DEFAULT_ALIEN_LABEL_DOMAIN, ALIEN_MANAGED_BY_TAG_KEY);
+        labels.is_some_and(|labels| {
+            labels.get(&managed_by_key).map(String::as_str) == Some(ALIEN_MANAGED_BY_TAG_VALUE)
+                || labels.get(&default_managed_by_key).map(String::as_str)
+                    == Some(ALIEN_MANAGED_BY_TAG_VALUE)
+                || (labels.get("managed-by").map(String::as_str) == Some("runtime")
+                    && labels.get("component").map(String::as_str) == Some("daemon")
+                    && labels.get("app").map(String::as_str) == Some(daemon_set_name))
+        })
     }
 
     fn get_kubernetes_namespace(&self, ctx: &ResourceControllerContext<'_>) -> Result<String> {
@@ -772,6 +865,61 @@ mod tests {
         );
     }
 
+    /// The runtime-less daemon contract on Kubernetes: `command` overrides
+    /// the image entrypoint, ResourceSpecs become requests/limits (never
+    /// BestEffort), and the stop grace period reaches the pod spec.
+    #[tokio::test]
+    async fn daemonset_manifest_carries_command_resources_and_grace_period() {
+        let mut config = manifest_test_daemon(&[]);
+        config.command = Some(vec!["/agent".to_string(), "--poll".to_string()]);
+        config.cpu = alien_core::ResourceSpec {
+            min: "0.25".to_string(),
+            desired: "1".to_string(),
+        };
+        config.memory = alien_core::ResourceSpec {
+            min: "256Mi".to_string(),
+            desired: "1Gi".to_string(),
+        };
+        config.stop_grace_period_seconds = Some(90);
+        let harness = KubernetesManifestTestHarness::new(Resource::new(config.clone()), vec![]);
+        let controller = manifest_test_controller();
+
+        let daemonset = controller
+            .build_daemonset(
+                &config,
+                "agent",
+                "test-ns",
+                "agent-sa",
+                None,
+                None,
+                &harness.ctx(),
+            )
+            .await
+            .expect("daemonset manifest");
+
+        let pod_spec = daemonset
+            .spec
+            .expect("spec")
+            .template
+            .spec
+            .expect("pod spec");
+        assert_eq!(pod_spec.termination_grace_period_seconds, Some(90));
+
+        let container = &pod_spec.containers[0];
+        assert_eq!(
+            container.command.as_deref(),
+            Some(&["/agent".to_string(), "--poll".to_string()][..])
+        );
+
+        let resources = container.resources.as_ref().expect("resources");
+        let requests = resources.requests.as_ref().expect("requests");
+        assert_eq!(requests["cpu"].0, "0.25");
+        assert_eq!(requests["memory"].0, "256Mi");
+        let limits = resources.limits.as_ref().expect("limits");
+        assert_eq!(limits["cpu"].0, "1");
+        assert_eq!(limits["memory"].0, "1Gi");
+    }
+
     #[tokio::test]
     async fn daemonset_secret_rotation_changes_the_rendered_pod_template() {
         let config = manifest_test_daemon(&[]);
@@ -804,12 +952,8 @@ mod tests {
             "identical secret values must render an identical pod template"
         );
         assert_ne!(
-            pod_template_checksum_annotation(
-                &daemonsets[0].spec.as_ref().expect("spec").template
-            ),
-            pod_template_checksum_annotation(
-                &daemonsets[2].spec.as_ref().expect("spec").template
-            ),
+            pod_template_checksum_annotation(&daemonsets[0].spec.as_ref().expect("spec").template),
+            pod_template_checksum_annotation(&daemonsets[2].spec.as_ref().expect("spec").template),
             "rotating a secret value must change the pod template (rollout)"
         );
     }
@@ -818,8 +962,7 @@ mod tests {
     fn needs_update_detects_env_secret_rotation() {
         let config = manifest_test_daemon(&[]);
         let original = vec![secret_env_var("APP_SECRET", "v1", None)];
-        let original_plan =
-            environment_secret_plan("agent", "agent", &original).expect("plan");
+        let original_plan = environment_secret_plan("agent", "agent", &original).expect("plan");
 
         let mut controller = manifest_test_controller();
         controller.env_secret.record(Some(&original_plan));

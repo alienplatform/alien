@@ -636,7 +636,10 @@ mod tests {
             "ALIEN_RUNTIME_SECRETS must not reach the runtime-less container env"
         );
         // Concretely-delivered secrets and plain vars must survive untouched.
-        assert_eq!(env_vars.get("DB_PASSWORD").map(String::as_str), Some("s3cret"));
+        assert_eq!(
+            env_vars.get("DB_PASSWORD").map(String::as_str),
+            Some("s3cret")
+        );
         assert_eq!(env_vars.get("APP_ENV").map(String::as_str), Some("prod"));
         assert_eq!(env_vars.len(), 2);
     }

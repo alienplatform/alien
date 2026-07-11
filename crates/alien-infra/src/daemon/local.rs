@@ -156,7 +156,12 @@ impl LocalDaemonController {
             .collect();
 
         manager
-            .start_daemon(&config.id, env_vars, runtime_only_binding_names)
+            .start_daemon(
+                &config.id,
+                env_vars,
+                runtime_only_binding_names,
+                config.command.clone(),
+            )
             .await
             .context(ErrorData::CloudPlatformError {
                 message: "Failed to start daemon runtime".to_string(),

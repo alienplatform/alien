@@ -74,7 +74,7 @@ fn kubernetes_port_name(port: &alien_core::ContainerPort) -> String {
     }
 }
 
-fn is_already_exists(error: &alien_client_core::Error) -> bool {
+pub(crate) fn is_already_exists(error: &alien_client_core::Error) -> bool {
     let text = error.to_string();
     text.contains("AlreadyExists") || text.contains("409")
 }
@@ -1525,6 +1525,9 @@ impl KubernetesContainerController {
         // IMPORTANT: Start with config.environment which includes injected vars from DeploymentConfig
         let env_builder = EnvironmentVariableBuilder::try_new(&config.environment)?
             .add_container_runtime_env_vars(ctx, &config.id)?
+            // Cross-target parity with the local controller: apps read
+            // ALIEN_PUBLIC_ENDPOINTS_JSON to build their own absolute URLs.
+            .add_current_resource_public_endpoint(ctx, &config.id)?
             .add_linked_resources(&config.links, ctx, &config.id)
             .await?
             .add_self_container_binding(&config.id, self.get_binding_params()?.as_ref())?;

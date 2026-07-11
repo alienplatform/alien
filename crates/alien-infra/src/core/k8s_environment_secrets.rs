@@ -300,8 +300,8 @@ impl EnvSecretRotationTracker {
         workload_name: &str,
         variables: &[EnvironmentVariable],
     ) -> bool {
-        let current =
-            environment_secret_plan(resource_id, workload_name, variables).map(|plan| plan.checksum);
+        let current = environment_secret_plan(resource_id, workload_name, variables)
+            .map(|plan| plan.checksum);
         current != self.checksum
     }
 }

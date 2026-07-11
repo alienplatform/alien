@@ -52,16 +52,23 @@ impl LocalWorkerManager {
     /// before start, and a command-enabled daemon runs its own app-owned receiver from the
     /// injected `ALIEN_COMMANDS_*` config. The supervisor captures the child's stdout/stderr for
     /// log export itself, and applies restart/health to the app process directly.
+    /// `command_override` is the Daemon config's `command` (the image
+    /// entrypoint override). When present it replaces the OCI-extracted
+    /// runtime command and is persisted into the daemon's metadata, so
+    /// monitor-driven restarts (which pass `None`) keep honoring it until
+    /// the next image extract rewrites the metadata.
     pub async fn start_daemon(
         &self,
         id: &str,
         env_vars: HashMap<String, String>,
         runtime_only_binding_names: Vec<String>,
+        command_override: Option<Vec<String>>,
     ) -> Result<()> {
         Self::start_daemon_internal(
             id,
             env_vars,
             runtime_only_binding_names,
+            command_override,
             &self.state_dir,
             &self.daemons,
             self.bindings_provider.clone(),
@@ -74,6 +81,7 @@ impl LocalWorkerManager {
         id: &str,
         env_vars: HashMap<String, String>,
         runtime_only_binding_names: Vec<String>,
+        command_override: Option<Vec<String>>,
         state_dir: &PathBuf,
         daemons: &Arc<Mutex<HashMap<String, DaemonRuntime>>>,
         bindings_provider: Arc<dyn alien_bindings::BindingsProviderApi>,
@@ -103,11 +111,18 @@ impl LocalWorkerManager {
                 message: format!("Failed to read metadata file: {}", metadata_file.display()),
             })?;
 
-        let existing_metadata: WorkerMetadata = serde_json::from_str(&metadata_contents)
+        let mut existing_metadata: WorkerMetadata = serde_json::from_str(&metadata_contents)
             .into_alien_error()
             .context(ErrorData::Other {
                 message: "Failed to parse daemon metadata".to_string(),
             })?;
+
+        // Apply the Daemon config's entrypoint override over the
+        // OCI-extracted command. Flows into the persisted metadata below, so
+        // a monitor restart (override = None) keeps running the same command.
+        if let Some(command) = command_override {
+            existing_metadata.runtime_command = command;
+        }
 
         let working_dir = if let Some(ref oci_working_dir) = existing_metadata.working_dir {
             let relative_path = oci_working_dir.trim_start_matches('/');

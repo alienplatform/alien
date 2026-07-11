@@ -37,13 +37,7 @@ pub(crate) fn secret_env_var(
 
 /// Returns the first container's env from a Deployment pod template.
 pub(crate) fn deployment_env(deployment: &Deployment) -> Vec<EnvVar> {
-    pod_template_env(
-        &deployment
-            .spec
-            .as_ref()
-            .expect("deployment spec")
-            .template,
-    )
+    pod_template_env(&deployment.spec.as_ref().expect("deployment spec").template)
 }
 
 /// Returns the first container's env from a DaemonSet pod template.
@@ -53,11 +47,7 @@ pub(crate) fn daemonset_env(daemonset: &DaemonSet) -> Vec<EnvVar> {
 
 /// Returns the first container's env from any workload pod template.
 pub(crate) fn pod_template_env(template: &PodTemplateSpec) -> Vec<EnvVar> {
-    template
-        .spec
-        .as_ref()
-        .expect("pod spec")
-        .containers[0]
+    template.spec.as_ref().expect("pod spec").containers[0]
         .env
         .clone()
         .expect("container env")

@@ -128,7 +128,7 @@ async fn daemon_runs_as_direct_child_with_resolved_env() {
     env_vars.insert("ALIEN_SECRETS".to_string(), "vault://ignored".to_string());
 
     manager
-        .start_daemon("gateway", env_vars, Vec::new())
+        .start_daemon("gateway", env_vars, Vec::new(), None)
         .await
         .expect("daemon should start under direct supervision");
 
@@ -209,7 +209,7 @@ async fn stopping_daemon_kills_the_app_process() {
     seed_script_daemon(&state_dir, "worker-d", &out_file);
 
     manager
-        .start_daemon("worker-d", HashMap::new(), Vec::new())
+        .start_daemon("worker-d", HashMap::new(), Vec::new(), None)
         .await
         .expect("daemon should start");
 

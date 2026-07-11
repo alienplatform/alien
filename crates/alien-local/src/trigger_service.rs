@@ -386,14 +386,15 @@ async fn watch_storage(
     // `/private/var`, so events arrive under `/private/var/...` while the
     // configured root says `/var/...`). Strip keys against the canonicalized
     // root, or event keys silently degrade to absolute filesystem paths.
-    let canonical_storage_path = storage_path
-        .canonicalize()
-        .into_alien_error()
-        .context(ErrorData::LocalDirectoryError {
-            path: storage_path.display().to_string(),
-            operation: "canonicalize".to_string(),
-            reason: "Failed to canonicalize storage directory for watching".to_string(),
-        })?;
+    let canonical_storage_path =
+        storage_path
+            .canonicalize()
+            .into_alien_error()
+            .context(ErrorData::LocalDirectoryError {
+                path: storage_path.display().to_string(),
+                operation: "canonicalize".to_string(),
+                reason: "Failed to canonicalize storage directory for watching".to_string(),
+            })?;
 
     watcher
         .watch(storage_path, RecursiveMode::Recursive)

@@ -329,6 +329,9 @@ impl LocalWorkerManager {
             &metadata.worker_id,
             metadata.env_vars,
             metadata.runtime_only_binding_names,
+            // Recovery re-runs the persisted runtime_command, which already
+            // carries any config `command` override from the original start.
+            None,
             state_dir,
             daemons,
             bindings_provider,
@@ -453,6 +456,9 @@ impl LocalWorkerManager {
                     &metadata.worker_id,
                     metadata.env_vars,
                     metadata.runtime_only_binding_names,
+                    // Restarts re-run the persisted runtime_command, which
+                    // already carries any config `command` override.
+                    None,
                     state_dir,
                     daemons,
                     bindings_provider.clone(),

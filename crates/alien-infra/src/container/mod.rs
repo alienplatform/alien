@@ -6,7 +6,7 @@ mod local;
 pub use local::*;
 
 #[cfg(feature = "kubernetes")]
-mod kubernetes;
+pub(crate) mod kubernetes;
 #[cfg(feature = "kubernetes")]
 pub use kubernetes::*;
 
