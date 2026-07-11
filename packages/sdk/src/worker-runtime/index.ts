@@ -131,10 +131,3 @@ async function registerHttpServer(
     await client.registerHttpServer({ port })
   })
 }
-
-// Protocol internals for generated bootstraps / advanced use.
-export { EventLoop } from "./event-loop.js"
-export { WaitUntilManager } from "./wait-until-manager.js"
-export { createGrpcChannel, getGrpcEndpoint, getOrCreateChannel } from "./channel.js"
-export { ControlServiceDefinition } from "./generated/control.js"
-export { WaitUntilServiceDefinition } from "./generated/wait_until.js"

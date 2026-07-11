@@ -290,8 +290,3 @@ export function loadAddon(): NativeAddon {
     `Cannot load the @alienplatform/bindings native addon for '${triple}'. Install the '${pkg}' prebuild, or build it locally with \`napi build --platform\` in crates/alien-bindings-node, or set ALIEN_BINDINGS_ADDON_PATH to a built .node file.`,
   )
 }
-
-/** Test-only: reset the memoized addon so a fresh load can be observed. */
-export function resetAddonCacheForTests(): void {
-  cached = undefined
-}

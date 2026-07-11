@@ -1,6 +1,6 @@
 /**
  * Dual-runtime smoke: prove end-to-end envelope recovery through the REAL napi
- * addon. Runs under both `node` and `bun` (see the `smoke:both` invocation).
+ * addon. Runs under both `node` and `bun` (run `pnpm smoke` under each runtime).
  *
  * It intentionally sets no `ALIEN_BINDINGS_ADDON_PATH`, exercising the loader's
  * documented dev fallback (walk up to `crates/alien-bindings-node`). It resolves

@@ -78,7 +78,6 @@ export type {
   UploadCompleteRequest,
   UploadCompleteResponse,
 } from "./protocol.js"
-export { COMMANDS_INLINE_MAX_BYTES, COMMANDS_PROTOCOL_VERSION } from "./protocol.js"
 
 // Shared error primitives, re-exported for consumer error handling.
 export { AlienError, defineError } from "@alienplatform/core"

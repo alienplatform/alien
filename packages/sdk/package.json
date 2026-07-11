@@ -20,7 +20,6 @@
     "build": "tsdown && tsc --emitDeclarationOnly",
     "prepare": "npm run build",
     "test": "vitest run --passWithNoTests",
-    "test:compile": "node --experimental-strip-types scripts/compile-smoke.ts",
     "test:ts": "tsc --noEmit",
     "generate": "./scripts/generate-proto.sh",
     "format-and-lint": "biome check .",

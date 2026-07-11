@@ -46,9 +46,3 @@ export type CommandTarget = {
 
 /** Error envelope returned by the axum handlers on non-2xx responses. */
 export type ErrorResponse = { code: string; message: string; details?: string }
-
-/** Protocol version carried by command envelopes. */
-export const COMMANDS_PROTOCOL_VERSION = "arc.v1"
-
-/** Server inline payload ceiling (bytes). */
-export const COMMANDS_INLINE_MAX_BYTES = 150_000
