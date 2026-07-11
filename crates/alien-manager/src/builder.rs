@@ -692,7 +692,7 @@ async fn finalize(
     use alien_commands::server::CommandServer;
 
     // --- CommandServer ---
-    let command_server = Arc::new(CommandServer::new(
+    let command_server: Arc<CommandServer> = Arc::new(CommandServer::new(
         server_bindings.kv.clone(),
         server_bindings.command_storage.clone(),
         server_bindings.command_dispatcher.clone(),
@@ -710,7 +710,7 @@ async fn finalize(
         authz: authz.clone(),
         telemetry_backend: telemetry_backend.clone(),
         credential_resolver: credential_resolver.clone(),
-        command_server,
+        command_server: command_server.clone(),
         config: config.clone(),
         bindings_provider: server_bindings.bindings_provider.clone(),
         target_bindings_providers: server_bindings.target_bindings_providers.clone(),
@@ -758,6 +758,7 @@ async fn finalize(
         server_bindings,
         dev_status_tx,
         log_buffer,
+        command_server,
     })
 }
 

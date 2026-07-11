@@ -21,7 +21,10 @@ use crate::{
 pub const LEASE_SAFETY_MARGIN: Duration = Duration::from_secs(5);
 
 /// Per-command execution budget: `min(envelope.deadline, lease_expiry −
-/// [`LEASE_SAFETY_MARGIN`])`, clamped so it never falls before now. There is
+/// [`LEASE_SAFETY_MARGIN`])`. The LEASE bound is clamped to now; an
+/// already-past deadline is not — it yields a zero budget and an immediate
+/// `HANDLER_TIMEOUT`, which is the correct outcome for a command delivered
+/// after its deadline. There is
 /// no lease-renew call in the protocol, so the safety-margined lease expiry
 /// always bounds the budget. Shared by both pull-side pollers so the worker
 /// runtime and the app-owned receiver enforce identical semantics. Twin of

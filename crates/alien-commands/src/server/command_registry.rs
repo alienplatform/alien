@@ -261,6 +261,22 @@ pub trait CommandRegistry: Send + Sync {
         error: Option<serde_json::Value>,
     ) -> Result<()>;
 
+    /// Atomically transition a command from any NON-terminal state to the
+    /// given terminal `state`.
+    ///
+    /// Returns `false` when the command was already terminal — a concurrent
+    /// submitter won the race — so a terminal record can never be
+    /// overwritten by a late duplicate (redelivered execution racing the
+    /// original whose lease expired).
+    async fn complete_command(
+        &self,
+        command_id: &str,
+        state: CommandState,
+        completed_at: DateTime<Utc>,
+        response_size_bytes: Option<u64>,
+        error: Option<serde_json::Value>,
+    ) -> Result<bool>;
+
     /// Increment attempt count (on lease release/expiry).
     ///
     /// Returns the new attempt number.
@@ -469,6 +485,32 @@ impl CommandRegistry for InMemoryCommandRegistry {
         }
 
         Ok(())
+    }
+
+    async fn complete_command(
+        &self,
+        command_id: &str,
+        state: CommandState,
+        completed_at: DateTime<Utc>,
+        response_size_bytes: Option<u64>,
+        error: Option<serde_json::Value>,
+    ) -> Result<bool> {
+        let mut commands = self.commands.write().await;
+        let Some(record) = commands.get_mut(command_id) else {
+            return Ok(false);
+        };
+        if record.state.is_terminal() {
+            return Ok(false);
+        }
+        record.state = state;
+        record.completed_at = Some(completed_at);
+        if let Some(size) = response_size_bytes {
+            record.response_size_bytes = Some(size);
+        }
+        if let Some(err) = error {
+            record.error = Some(err);
+        }
+        Ok(true)
     }
 
     async fn increment_attempt(&self, command_id: &str) -> Result<u32> {

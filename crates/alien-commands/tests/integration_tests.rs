@@ -1330,3 +1330,91 @@ mod tests {
         }
     }
 }
+
+/// Two racing submitters with OPPOSITE outcomes (a redelivered execution
+/// racing the original whose lease expired): exactly one wins the terminal
+/// transition, the loser is swallowed as a duplicate, and the recorded state
+/// matches the served response — a terminal record is never overwritten.
+#[tokio::test]
+async fn concurrent_opposite_submits_keep_state_and_response_consistent() {
+    use alien_commands::test_utils::*;
+    use alien_commands::types::{CommandResponse, CommandState};
+
+    let server = TestCommandServer::builder().with_pull_mode().build().await;
+
+    let request = test_inline_create_command("pull-agent", "flaky-op");
+    let created = server.create_command(request).await.unwrap();
+    let lease = server
+        .acquire_single_lease("pull-agent")
+        .await
+        .unwrap()
+        .unwrap();
+
+    let success = test_json_success_response(&serde_json::json!({ "ok": true }));
+    let failure = CommandResponse::Error {
+        code: "HANDLER_ERROR".to_string(),
+        message: "boom".to_string(),
+        details: None,
+    };
+
+    // Race the two submissions.
+    let (a, b) = tokio::join!(
+        server.submit_command_response(&lease.command_id, success),
+        server.submit_command_response(&lease.command_id, failure),
+    );
+    // Both calls succeed: the loser is silently treated as a duplicate.
+    a.unwrap();
+    b.unwrap();
+
+    let status = server
+        .get_command_status(&created.command_id)
+        .await
+        .unwrap();
+    assert!(status.state.is_terminal());
+    let response = status.response.expect("terminal command serves a response");
+    match (&status.state, &response) {
+        (CommandState::Succeeded, CommandResponse::Success { .. }) => {}
+        (CommandState::Failed, CommandResponse::Error { .. }) => {}
+        (state, response) => {
+            panic!("torn terminal record: state {state:?} does not match response {response:?}")
+        }
+    }
+}
+
+/// The deadline reaper terminates commands nothing else would ever touch:
+/// a Pending pull command past its deadline (with its pending-index entry
+/// cleaned) — the same path also covers PendingUpload commands whose params
+/// upload never completed, since the reaper transitions ANY non-terminal
+/// state.
+#[tokio::test]
+async fn deadline_reaper_expires_overdue_commands() {
+    use alien_commands::test_utils::*;
+    use alien_commands::types::CommandState;
+
+    let server = TestCommandServer::builder().with_pull_mode().build().await;
+
+    let mut request = test_inline_create_command("pull-agent", "slow-op");
+    request.deadline = Some(chrono::Utc::now() + chrono::Duration::milliseconds(80));
+    let created = server.create_command(request).await.unwrap();
+    assert_eq!(created.state, CommandState::Pending);
+
+    tokio::time::sleep(std::time::Duration::from_millis(150)).await;
+    let expired = server.command_server.reap_expired_commands().await.unwrap();
+    assert_eq!(expired, 1, "the overdue command must be reaped");
+
+    let status = server
+        .get_command_status(&created.command_id)
+        .await
+        .unwrap();
+    assert_eq!(status.state, CommandState::Expired);
+
+    // The pending index entry is gone: a poller can no longer lease it.
+    let lease = server.acquire_single_lease("pull-agent").await.unwrap();
+    assert!(lease.is_none(), "expired command must not be leasable");
+
+    // A second reap pass is a no-op (index entry deleted).
+    assert_eq!(
+        server.command_server.reap_expired_commands().await.unwrap(),
+        0
+    );
+}

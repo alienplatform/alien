@@ -605,16 +605,27 @@ impl CommandServer {
             _ => None,
         };
 
-        self.command_registry
-            .update_command_state(
-                command_id,
-                new_state,
-                None, // dispatched_at already set
-                Some(Utc::now()),
-                response_size,
-                error,
-            )
+        // Conditional terminal transition: exactly one of two racing
+        // submitters (a redelivered execution racing the original whose lease
+        // expired) wins; a terminal record is never overwritten. The blob was
+        // pre-stored above for crash-safety (state never flips terminal with
+        // no blob on disk); the winner re-stores its own response below so
+        // the recorded state and the served blob agree. Residual: a loser
+        // whose pre-store lands after the winner's re-store can still leave
+        // its blob — that requires the loser's KV write to outlast the
+        // winner's entire transition+re-store, a pathological schedule.
+        let won = self
+            .command_registry
+            .complete_command(command_id, new_state, Utc::now(), response_size, error)
             .await?;
+        if !won {
+            debug!(
+                "Ignoring duplicate response for command {} (lost the terminal transition race)",
+                command_id
+            );
+            return Ok(());
+        }
+        self.store_response(command_id, &response).await?;
 
         // 7. Clean up lease from KV (best-effort; the terminal state is already
         // committed above, so a failure here cannot strand the command). Log a
@@ -1460,6 +1471,87 @@ impl CommandServer {
         let key = format!("cmd:{}:lease", command_id);
         let _ = self.kv.delete(&key).await;
         Ok(())
+    }
+
+    /// Expire every overdue non-terminal command recorded in the deadline
+    /// index. Intended to run periodically from the hosting process.
+    ///
+    /// Deadlines are otherwise only enforced lazily (status polls and lease
+    /// scans), which never reaches a command nobody polls — most notably a
+    /// `PendingUpload` whose params upload never completed, which has no
+    /// pending-index entry and would otherwise live forever.
+    ///
+    /// Uses the conditional terminal transition, so racing a concurrent
+    /// submit is safe: whoever wins, the record stays consistent. Returns
+    /// the number of commands expired.
+    pub async fn reap_expired_commands(&self) -> Result<u32> {
+        let scan = self
+            .kv
+            .scan_prefix("deadline:", Some(512), None)
+            .await
+            .into_alien_error()
+            .context(ErrorData::KvOperationFailed {
+                operation: "scan_prefix".to_string(),
+                key: "deadline:".to_string(),
+                message: "Failed to scan the deadline index".to_string(),
+            })?;
+
+        let now = Utc::now();
+        let mut expired = 0u32;
+        for (key, value) in scan.items {
+            let Ok(data) = serde_json::from_slice::<DeadlineIndexData>(&value) else {
+                warn!(key = %key, "Unparseable deadline index entry; deleting");
+                let _ = self.kv.delete(&key).await;
+                continue;
+            };
+            if data.deadline > now {
+                // Not due yet. (Keys are not sortable numerically — the
+                // timestamp segment isn't zero-padded — so keep scanning.)
+                continue;
+            }
+
+            let status = self
+                .command_registry
+                .get_command_status(&data.command_id)
+                .await?;
+            match status {
+                None => {
+                    let _ = self.kv.delete(&key).await;
+                }
+                Some(status) if status.state.is_terminal() => {
+                    let _ = self.kv.delete(&key).await;
+                }
+                Some(status) => {
+                    let won = self
+                        .command_registry
+                        .complete_command(
+                            &data.command_id,
+                            CommandState::Expired,
+                            now,
+                            None,
+                            Some(serde_json::json!({
+                                "code": "COMMAND_EXPIRED",
+                                "message": format!("Deadline {} elapsed", data.deadline.to_rfc3339()),
+                            })),
+                        )
+                        .await?;
+                    if won {
+                        expired += 1;
+                        info!(command_id = %data.command_id, "Expired overdue command");
+                        let _ = self.delete_lease(&data.command_id).await;
+                        let _ = self
+                            .delete_pending_index(
+                                &status.deployment_id,
+                                &status.target.resource_id,
+                                &data.command_id,
+                            )
+                            .await;
+                    }
+                    let _ = self.kv.delete(&key).await;
+                }
+            }
+        }
+        Ok(expired)
     }
 
     // --- Deadline Index ---
