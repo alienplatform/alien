@@ -268,12 +268,15 @@ fn record_to_response(
     }
 }
 
-pub(crate) fn expected_deployment_model_for_platform(platform: Platform) -> DeploymentModel {
+pub(crate) fn required_deployment_model_for_platform(
+    platform: Platform,
+) -> Option<DeploymentModel> {
     match platform {
         Platform::Aws | Platform::Gcp | Platform::Azure | Platform::Machines | Platform::Test => {
-            DeploymentModel::Push
+            Some(DeploymentModel::Push)
         }
-        Platform::Kubernetes | Platform::Local => DeploymentModel::Pull,
+        Platform::Kubernetes => Some(DeploymentModel::Pull),
+        Platform::Local => None,
     }
 }
 
@@ -296,8 +299,10 @@ pub(crate) fn stack_settings_for_platform(
     platform: Platform,
     stack_settings: Option<StackSettings>,
 ) -> Result<StackSettings, alien_error::AlienError<ErrorData>> {
-    let expected = expected_deployment_model_for_platform(platform);
     let mut stack_settings = stack_settings.unwrap_or_default();
+    let Some(expected) = required_deployment_model_for_platform(platform) else {
+        return Ok(stack_settings);
+    };
 
     if expected == DeploymentModel::Push && stack_settings.deployment_model != expected {
         return Err(ErrorData::bad_request(format!(
@@ -882,4 +887,49 @@ async fn redeploy(
     }
 
     Json(serde_json::json!({ "success": true })).into_response()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn local_deployments_default_to_push_for_embedded_dev_loop() {
+        let settings = stack_settings_for_platform(Platform::Local, None)
+            .expect("local defaults should be valid");
+
+        assert_eq!(settings.deployment_model, DeploymentModel::Push);
+    }
+
+    #[test]
+    fn local_deployments_preserve_explicit_pull_model() {
+        let mut requested = StackSettings::default();
+        requested.deployment_model = DeploymentModel::Pull;
+
+        let settings = stack_settings_for_platform(Platform::Local, Some(requested))
+            .expect("local pull mode should be valid");
+
+        assert_eq!(settings.deployment_model, DeploymentModel::Pull);
+    }
+
+    #[test]
+    fn kubernetes_deployments_are_pull_mode() {
+        let settings = stack_settings_for_platform(Platform::Kubernetes, None)
+            .expect("kubernetes defaults should be valid");
+
+        assert_eq!(settings.deployment_model, DeploymentModel::Pull);
+    }
+
+    #[test]
+    fn machines_deployments_reject_pull_model() {
+        let mut requested = StackSettings::default();
+        requested.deployment_model = DeploymentModel::Pull;
+
+        let error = stack_settings_for_platform(Platform::Machines, Some(requested))
+            .expect_err("machines deployments should reject pull mode");
+
+        assert!(error
+            .to_string()
+            .contains("must use deploymentModel 'push'"));
+    }
 }
