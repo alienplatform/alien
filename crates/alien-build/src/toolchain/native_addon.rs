@@ -23,6 +23,7 @@ use crate::error::{ErrorData, Result};
 use alien_core::BinaryTarget;
 use alien_error::{AlienError, Context, IntoAlienError};
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 use tokio::fs;
 use tokio::process::Command;
 use tracing::info;
@@ -312,6 +313,66 @@ pub(super) enum AddonResolutionRoute {
     ViaSdk,
 }
 
+/// A staged addon plus the exclusivity that keeps it valid: the guard holds a
+/// per-dist-path lock from staging until the caller's compile finishes, so a
+/// concurrent build staging a DIFFERENT target into the same shared
+/// `dist/alien-bindings.node` cannot swap the file mid-embed. Same-target
+/// concurrency was already safe (atomic rename, identical content), but this
+/// serializes conservatively — per-target staging locations are the real fix
+/// for multi-target throughput.
+pub(super) struct StagedAddon {
+    pub route: AddonResolutionRoute,
+    _guard: tokio::sync::OwnedMutexGuard<()>,
+}
+
+/// Workspace dev addon files that exist for the requested targets, walking
+/// up from `anchor` (typically the realpath of the resolved bindings
+/// package). Used by the build cache key: the compiled binary embeds these
+/// bytes, so a rebuilt addon must invalidate cached artifacts.
+pub(crate) fn workspace_addon_inputs(
+    anchor: &Path,
+    targets: &[BinaryTarget],
+) -> Vec<PathBuf> {
+    let mut crate_dir: Option<PathBuf> = None;
+    let mut dir = Some(anchor);
+    while let Some(current) = dir {
+        let candidate = current.join("crates").join("alien-bindings-node");
+        if candidate.is_dir() {
+            crate_dir = Some(candidate);
+            break;
+        }
+        dir = current.parent();
+    }
+    let Some(crate_dir) = crate_dir else {
+        return Vec::new();
+    };
+
+    let mut inputs: Vec<PathBuf> = targets
+        .iter()
+        .filter_map(|target| napi_triple(*target))
+        .map(|triple| crate_dir.join(format!("alien-bindings-node.{triple}.node")))
+        .filter(|path| path.is_file())
+        .collect();
+    inputs.sort();
+    inputs.dedup();
+    inputs
+}
+
+/// One lock per staged-addon path (canonicalized bindings dist).
+static STAGING_LOCKS: std::sync::OnceLock<
+    std::sync::Mutex<std::collections::HashMap<PathBuf, Arc<tokio::sync::Mutex<()>>>>,
+> = std::sync::OnceLock::new();
+
+async fn lock_staged_path(staged: &Path) -> tokio::sync::OwnedMutexGuard<()> {
+    let key = staged.canonicalize().unwrap_or_else(|_| staged.to_path_buf());
+    let lock = {
+        let map = STAGING_LOCKS.get_or_init(Default::default);
+        let mut map = map.lock().expect("staging lock map poisoned");
+        Arc::clone(map.entry(key).or_default())
+    };
+    lock.lock_owned().await
+}
+
 /// Stage the TARGET platform's native addon next to the bindings package's
 /// `dist/native.js` so `bun build --compile` can embed it.
 ///
@@ -328,13 +389,20 @@ pub(super) async fn stage_native_addon(
     src_dir: &Path,
     target: BinaryTarget,
     resource_name: &str,
-) -> Result<Option<(PathBuf, AddonResolutionRoute)>> {
+) -> Result<Option<StagedAddon>> {
     let Some((bindings_dist, route)) = resolve_bindings_dist_dir(src_dir, resource_name).await?
     else {
         return Ok(None);
     };
-    let staged = stage_addon_into(src_dir, &bindings_dist, target, resource_name).await?;
-    Ok(Some((staged, route)))
+    // Take the per-path staging lock BEFORE writing, and hand it to the
+    // caller so it survives until the compile that embeds the staged file
+    // has finished (see `StagedAddon`).
+    let guard = lock_staged_path(&bindings_dist.join(STAGED_ADDON_FILE)).await;
+    stage_addon_into(src_dir, &bindings_dist, target, resource_name).await?;
+    Ok(Some(StagedAddon {
+        route,
+        _guard: guard,
+    }))
 }
 
 /// Source the target addon and copy it into `bindings_dist` as the staged
@@ -378,6 +446,13 @@ async fn stage_addon_into(
                  Install the prebuild package '{pkg}-{triple}' (it ships {addon_file_name}), \
                  or, in the alien workspace, build the dev addon with \
                  `npx napi build --platform --release` in crates/alien-bindings-node. \
+                 Cross-building from another OS: zig/napi-cross cannot build this cdylib; \
+                 build natively in Docker instead: \
+                 `docker run --rm --platform linux/<arch> -v <workspace>:/work \
+                 -e CARGO_TARGET_DIR=/tmp/target -w /work/crates/alien-bindings-node \
+                 rust:1-bookworm sh -c 'apt-get update -qq && apt-get install -y -qq \
+                 protobuf-compiler && cargo build --release --lib && \
+                 cp /tmp/target/release/libalien_bindings_node.so {addon_file_name}'`. \
                  Checked: {checked}.",
                 pkg = BINDINGS_PACKAGE,
                 checked = checked.join(", "),

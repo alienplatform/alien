@@ -460,7 +460,8 @@ impl Toolchain for TypeScriptToolchain {
                 .generate_bootstrap_wrapper(&src_dir, &entry_point, &bootstrap_dir, embed_native)
                 .await?;
             (bootstrap_path, Some(bootstrap_dir))
-        } else if let Some((_, route)) = &staged {
+        } else if let Some(staged_addon) = &staged {
+            let route = &staged_addon.route;
             let bootstrap_dir = src_dir.join(".alien-build");
             let wrapper_path = self
                 .generate_direct_entry_wrapper(&src_dir, &entry_point, &bootstrap_dir, *route)

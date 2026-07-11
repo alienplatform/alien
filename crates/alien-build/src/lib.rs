@@ -1996,7 +1996,7 @@ async fn compute_source_artifact_cache_key(
         hasher.update(target.runtime_platform_id().as_bytes());
     }
 
-    hash_build_input_source(src, toolchain_config, &mut hasher).await?;
+    hash_build_input_source(src, toolchain_config, targets, &mut hasher).await?;
 
     Ok(format!("{:x}", hasher.finalize()))
 }
@@ -2004,12 +2004,86 @@ async fn compute_source_artifact_cache_key(
 async fn hash_build_input_source(
     src: &str,
     toolchain_config: &alien_core::ToolchainConfig,
+    targets: &[BinaryTarget],
     hasher: &mut Sha256,
 ) -> Result<()> {
     match toolchain_config {
         ToolchainConfig::Rust { .. } => hash_rust_build_input_graph(Path::new(src), hasher).await,
+        ToolchainConfig::TypeScript { .. } => {
+            hash_source_directory(Path::new(src), hasher).await?;
+            hash_typescript_dependency_inputs(Path::new(src), targets, hasher).await
+        }
         _ => hash_source_directory(Path::new(src), hasher).await,
     }
+}
+
+/// Hash the build inputs a TypeScript app pulls in from OUTSIDE its source
+/// directory, which `hash_source_directory` cannot see (`node_modules` is
+/// excluded from the source walk):
+///
+/// - the `dist/` content of every `@alienplatform/*` package the app has
+///   installed, resolved through its symlink to the real location — a
+///   `workspace:`/`file:` dependency changes content without changing any
+///   version number, and the compiled binary bundles that content;
+/// - the workspace dev addon files for the requested targets — the compiled
+///   binary embeds the addon, so a rebuilt addon must invalidate the cached
+///   artifact.
+///
+/// Registry-installed dependencies are content-addressed by the lockfile,
+/// which lives in the source directory and is already hashed.
+async fn hash_typescript_dependency_inputs(
+    src_dir: &Path,
+    targets: &[BinaryTarget],
+    hasher: &mut Sha256,
+) -> Result<()> {
+    let scope_dir = src_dir.join("node_modules").join("@alienplatform");
+    let Ok(entries) = std::fs::read_dir(&scope_dir) else {
+        // No workspace packages installed — nothing extra to hash.
+        return Ok(());
+    };
+
+    let mut packages: Vec<PathBuf> = entries
+        .flatten()
+        .map(|entry| entry.path())
+        .collect();
+    packages.sort();
+
+    let mut bindings_realpath: Option<PathBuf> = None;
+    for package_dir in packages {
+        let Ok(realpath) = package_dir.canonicalize() else {
+            continue;
+        };
+        if package_dir.file_name().is_some_and(|n| n == "bindings") {
+            bindings_realpath = Some(realpath.clone());
+        }
+        hasher.update(b"alienplatform-package");
+        hasher.update(package_dir.to_string_lossy().as_bytes());
+        let dist = realpath.join("dist");
+        if dist.is_dir() {
+            hash_source_directory(&dist, hasher).await?;
+        }
+    }
+
+    // Workspace dev addons for the requested targets, anchored on the real
+    // bindings package location (mirrors the staging lookup's anchor).
+    if let Some(bindings) = bindings_realpath {
+        for addon in
+            toolchain::native_addon::workspace_addon_inputs(&bindings, targets)
+        {
+            hasher.update(b"native-addon");
+            hasher.update(addon.to_string_lossy().as_bytes());
+            let bytes = fs::read(&addon).await.into_alien_error().context(
+                ErrorData::FileOperationFailed {
+                    operation: "read file".to_string(),
+                    file_path: addon.display().to_string(),
+                    reason: "Failed to read native addon for build cache key".to_string(),
+                },
+            )?;
+            hasher.update(&bytes);
+        }
+    }
+
+    Ok(())
 }
 
 async fn hash_rust_build_input_graph(src_dir: &Path, hasher: &mut Sha256) -> Result<()> {
@@ -2251,6 +2325,7 @@ fn is_ignored_source_cache_path(file_name: &str) -> bool {
     matches!(
         file_name,
         ".git" | ".alien" | ".alien-build" | "target" | "node_modules"
+            | "alien-bindings.node" // staged addon: derived artifact, hashed via its source
     ) || file_name.ends_with(".bun-build")
 }
 
