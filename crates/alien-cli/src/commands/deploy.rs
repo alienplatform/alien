@@ -1064,6 +1064,7 @@ pub async fn deploy_task(args: DeployArgs, ctx: ExecutionMode) -> Result<()> {
                                 environment_info: None,
                                 input_values: HashMap::new(),
                                 public_subdomain: None,
+                                initial_desired_release: alien_platform_api::types::NewDeploymentRequestInitialDesiredRelease::Active,
                                 setup_method: None,
                                 setup_metadata: None,
                             })

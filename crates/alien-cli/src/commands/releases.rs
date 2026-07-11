@@ -6,9 +6,7 @@ use crate::output::print_json;
 use crate::ui::{dim_label, make_table, print_table, status_cell};
 use alien_core::DeploymentStatus;
 use alien_error::Context;
-use alien_manager_api::types::{
-    DeploymentResponse, ReleaseResponse, StackByPlatform,
-};
+use alien_manager_api::types::{DeploymentResponse, ReleaseResponse, StackByPlatform};
 use alien_manager_api::SdkResultExt as _;
 use clap::{Parser, Subcommand};
 use serde::Serialize;
@@ -106,11 +104,7 @@ async fn list_releases_task(client: &alien_manager_api::Client) -> Result<()> {
 /// forward to it. So "how is this release doing?" is answered by correlating
 /// the release id against those deployments: which have reached it, and which
 /// have failed on the way.
-async fn get_release_task(
-    client: &alien_manager_api::Client,
-    id: &str,
-    json: bool,
-) -> Result<()> {
+async fn get_release_task(client: &alien_manager_api::Client, id: &str, json: bool) -> Result<()> {
     let release = client
         .get_release()
         .id(id)
@@ -410,7 +404,13 @@ mod tests {
     #[test]
     fn rolled_out_only_when_current_reaches_release() {
         let deployments = vec![
-            deployment("dep_pending", "prod", "provisioning", Some("rel_prev"), Some(REL)),
+            deployment(
+                "dep_pending",
+                "prod",
+                "provisioning",
+                Some("rel_prev"),
+                Some(REL),
+            ),
             deployment("dep_done", "eu", "running", Some(REL), Some(REL)),
         ];
 
@@ -440,7 +440,11 @@ mod tests {
 
         let rollout = compute_rollout(REL, &deployments);
 
-        assert_eq!(rollout.targets.len(), 1, "completed rollout must be a target");
+        assert_eq!(
+            rollout.targets.len(),
+            1,
+            "completed rollout must be a target"
+        );
         assert!(rollout.targets[0].rolled_out);
         assert_eq!(rollout.summary, "1/1 rolled out");
     }
@@ -512,13 +516,7 @@ mod tests {
 
     #[test]
     fn reports_no_targets_when_nothing_points_at_the_release() {
-        let deployments = vec![deployment(
-            "dep_x",
-            "x",
-            "running",
-            None,
-            Some("rel_other"),
-        )];
+        let deployments = vec![deployment("dep_x", "x", "running", None, Some("rel_other"))];
 
         let rollout = compute_rollout(REL, &deployments);
 
