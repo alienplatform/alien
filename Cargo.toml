@@ -159,6 +159,9 @@ sd-notify = "0.4"
 signal-hook = "0.3"
 # Unix syscall surface for the launcher shims (pdeathsig, killpg, statvfs).
 nix = { version = "0.29", features = ["signal", "process", "fs"] }
+# Windows launcher shims: SCM service host + Win32 (console Ctrl-C, junctions).
+windows-service = "0.7"
+windows-sys = "0.59"
 # Blocking HTTP client for the launcher's /readyz probe — deliberately tiny so
 # the must-never-break supervisor binary stays free of an async runtime. No
 # default features: the probe only ever speaks plain HTTP to 127.0.0.1, so

@@ -37,11 +37,19 @@ pub mod linux;
 #[cfg(target_os = "macos")]
 pub mod macos;
 
+#[cfg(target_os = "windows")]
+pub mod windows;
+
 // The host is per-OS; the child supervisor and version store are shared Unix.
 #[cfg(target_os = "linux")]
 pub use linux::LinuxHost as ActiveHost;
 #[cfg(target_os = "macos")]
 pub use macos::MacosHost as ActiveHost;
+// Windows aliases `ActiveHost` (→ `WindowsHost`) together with its
+// `ActiveChildSupervisor` (T3.2, Job Object) and `ActiveVersionStore` (T3.4,
+// junctions) once main.rs's Windows `run_supervisor` consumes them — aliasing
+// the host alone now would be an unused re-export. The T3.1 host lives in
+// `windows.rs` and is exercised by its unit test.
 
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 pub use unix_child::UnixChildSupervisor as ActiveChildSupervisor;
