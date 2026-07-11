@@ -731,7 +731,8 @@ describe("resolveEnvelopeUrls", () => {
     // configured commands URL — including a manager-served upload URL —
     // while an absolute cloud-presigned URL passes through untouched.
     const env = envelope({ baseUrl: "http://ignored.example.com" })
-    env.responseHandling.submitResponseUrl = "/v1/commands/cmd_1/response?response_token=t&expires=1"
+    env.responseHandling.submitResponseUrl =
+      "/v1/commands/cmd_1/response?response_token=t&expires=1"
     env.responseHandling.storageUploadRequest.backend = {
       type: "http",
       url: "/v1/commands/cmd_1/response-blob?sig=x",

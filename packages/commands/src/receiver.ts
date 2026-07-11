@@ -585,14 +585,15 @@ export function resolveEnvelopeUrls(envelope: Envelope, commandsBaseUrl: string)
   }
   const resolve = (url: string) => (url.startsWith("/") ? `${origin}${url}` : url)
 
-  envelope.responseHandling.submitResponseUrl = resolve(
-    envelope.responseHandling.submitResponseUrl,
-  )
+  envelope.responseHandling.submitResponseUrl = resolve(envelope.responseHandling.submitResponseUrl)
   const upload = envelope.responseHandling.storageUploadRequest
   if (upload.backend.type === "http") {
     upload.backend.url = resolve(upload.backend.url)
   }
-  if (envelope.params.mode === "storage" && envelope.params.storageGetRequest?.backend.type === "http") {
+  if (
+    envelope.params.mode === "storage" &&
+    envelope.params.storageGetRequest?.backend.type === "http"
+  ) {
     envelope.params.storageGetRequest.backend.url = resolve(
       envelope.params.storageGetRequest.backend.url,
     )
