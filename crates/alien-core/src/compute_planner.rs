@@ -771,11 +771,11 @@ mod tests {
 
     #[test]
     fn nested_x86_fixed_range_pool_preserves_bounds_and_rejects_graviton() {
-        let daemon = Daemon::new("bear-agent-loader".to_string())
+        let daemon = Daemon::new("vm-runtime-loader".to_string())
             .code(DaemonCode::Image {
-                image: "example.com/bear:latest".to_string(),
+                image: "example.com/vm-runtime:latest".to_string(),
             })
-            .cluster("bear-runtime".to_string())
+            .cluster("vm-runtime".to_string())
             .cpu(ResourceSpec {
                 min: "2".to_string(),
                 desired: "2".to_string(),
@@ -786,7 +786,7 @@ mod tests {
             })
             .permissions("loader".to_string())
             .build();
-        let cluster = ComputeCluster::new("bear-runtime".to_string())
+        let cluster = ComputeCluster::new("vm-runtime".to_string())
             .capacity_group(CapacityGroup {
                 group_id: "general".to_string(),
                 instance_type: None,
@@ -810,10 +810,10 @@ mod tests {
             })
             .build();
         let stack = Stack {
-            id: "bear".to_string(),
+            id: "vm-runtime".to_string(),
             resources: [
                 (
-                    "bear-agent-loader".to_string(),
+                    "vm-runtime-loader".to_string(),
                     ResourceEntry {
                         config: Resource::new(daemon),
                         lifecycle: ResourceLifecycle::Live,
@@ -822,7 +822,7 @@ mod tests {
                     },
                 ),
                 (
-                    "bear-runtime".to_string(),
+                    "vm-runtime".to_string(),
                     ResourceEntry {
                         config: Resource::new(cluster),
                         lifecycle: ResourceLifecycle::Frozen,
