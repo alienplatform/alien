@@ -10,12 +10,17 @@ export type CancelMachinesMachineDrainRequest = {
    */
   id: string;
   machineId: string;
+  /**
+   * Workspace name. Required for user/session/OAuth requests. Optional for API keys because API keys are workspace-scoped; if provided with an API key, it must match the key's workspace.
+   */
+  workspace?: string | undefined;
 };
 
 /** @internal */
 export type CancelMachinesMachineDrainRequest$Outbound = {
   id: string;
   machineId: string;
+  workspace?: string | undefined;
 };
 
 /** @internal */
@@ -25,6 +30,7 @@ export const CancelMachinesMachineDrainRequest$outboundSchema: z.ZodType<
 > = z.object({
   id: z.string(),
   machineId: z.string(),
+  workspace: z.string().optional(),
 });
 
 export function cancelMachinesMachineDrainRequestToJSON(

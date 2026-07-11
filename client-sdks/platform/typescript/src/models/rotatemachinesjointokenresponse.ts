@@ -16,6 +16,14 @@ export type RotateMachinesJoinTokenResponse = {
   controlPlaneUrl: string;
   clusterId: string;
   token: MachinesJoinTokenSummary;
+  /**
+   * Deploy CLI install script URL, or null when no ready CLI package exists.
+   */
+  cliInstallScriptUrl: string | null;
+  /**
+   * CLI command name to use in join instructions.
+   */
+  cliCommandName: string | null;
 };
 
 /** @internal */
@@ -27,6 +35,8 @@ export const RotateMachinesJoinTokenResponse$inboundSchema: z.ZodType<
   controlPlaneUrl: z.string(),
   clusterId: z.string(),
   token: MachinesJoinTokenSummary$inboundSchema,
+  cliInstallScriptUrl: z.nullable(z.string()),
+  cliCommandName: z.nullable(z.string()),
 });
 
 export function rotateMachinesJoinTokenResponseFromJSON(

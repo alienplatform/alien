@@ -24,6 +24,10 @@ export type DeploymentSetupConfig = {
   policy: DeploymentSetupPolicy;
   environmentVariables: Array<EnvironmentVariableConfig>;
   inputValues?: { [k: string]: EncryptedStackInputValue } | undefined;
+  /**
+   * Operator-pinned deployment subdomain for this setup token.
+   */
+  publicSubdomain?: string | undefined;
 };
 
 /** @internal */
@@ -32,6 +36,7 @@ export type DeploymentSetupConfig$Outbound = {
   policy: DeploymentSetupPolicy$Outbound;
   environmentVariables: Array<EnvironmentVariableConfig$Outbound>;
   inputValues?: { [k: string]: EncryptedStackInputValue$Outbound } | undefined;
+  publicSubdomain?: string | undefined;
 };
 
 /** @internal */
@@ -44,6 +49,7 @@ export const DeploymentSetupConfig$outboundSchema: z.ZodType<
   environmentVariables: z.array(EnvironmentVariableConfig$outboundSchema),
   inputValues: z.record(z.string(), EncryptedStackInputValue$outboundSchema)
     .optional(),
+  publicSubdomain: z.string().optional(),
 });
 
 export function deploymentSetupConfigToJSON(

@@ -317,6 +317,8 @@ pub struct SingleControllerExecutor {
     compute_backend: Option<ComputeBackend>,
     // Environment variables snapshot for deployment config
     environment_variables: EnvironmentVariablesSnapshot,
+    // Deployment monitoring configuration
+    monitoring: Option<alien_core::OtlpConfig>,
     // Domain metadata for public resources (certificates, DNS)
     domain_metadata: Option<DomainMetadata>,
     // Public endpoint URL overrides for testing.
@@ -378,6 +380,7 @@ impl SingleControllerExecutor {
                 .maybe_management_config(self.management_config.clone())
                 .maybe_compute_backend(self.compute_backend.clone())
                 .environment_variables(self.environment_variables.clone())
+                .maybe_monitoring(self.monitoring.clone())
                 .external_bindings(alien_core::ExternalBindings::default())
                 .allow_frozen_changes(false)
                 .maybe_domain_metadata(self.domain_metadata.clone())
@@ -621,6 +624,7 @@ pub struct SingleControllerExecutorBuilder {
     management_config: Option<ManagementConfig>,
     compute_backend: Option<ComputeBackend>,
     environment_variables: EnvironmentVariablesSnapshot,
+    monitoring: Option<alien_core::OtlpConfig>,
     domain_metadata: Option<DomainMetadata>,
     public_endpoints: Option<alien_core::PublicEndpointUrls>,
     dependencies: Vec<(ResourceRef, Resource, Box<dyn ResourceController>)>,
@@ -641,6 +645,7 @@ impl SingleControllerExecutorBuilder {
                 hash: String::new(),
                 created_at: String::new(),
             },
+            monitoring: None,
             domain_metadata: None,
             public_endpoints: None,
             dependencies: Vec::new(),
@@ -669,6 +674,12 @@ impl SingleControllerExecutorBuilder {
     /// Sets the environment variables snapshot.
     pub fn environment_variables(mut self, variables: EnvironmentVariablesSnapshot) -> Self {
         self.environment_variables = variables;
+        self
+    }
+
+    /// Sets the deployment monitoring configuration.
+    pub fn monitoring(mut self, monitoring: alien_core::OtlpConfig) -> Self {
+        self.monitoring = Some(monitoring);
         self
     }
 
@@ -996,7 +1007,7 @@ impl SingleControllerExecutorBuilder {
             _ => None,
         });
 
-        let config = DeploymentConfig::builder()
+        let mut config = DeploymentConfig::builder()
             .stack_settings(self.stack_settings.clone())
             .maybe_management_config(management_config.clone())
             .maybe_compute_backend(self.compute_backend.clone())
@@ -1004,6 +1015,7 @@ impl SingleControllerExecutorBuilder {
             .external_bindings(alien_core::ExternalBindings::default())
             .allow_frozen_changes(false)
             .build();
+        config.domain_metadata = self.domain_metadata.clone();
 
         let processed_stack = preflight_runner
             .apply_mutations(stack, &stack_state, &config)
@@ -1089,6 +1101,7 @@ impl SingleControllerExecutorBuilder {
             management_config,
             compute_backend: self.compute_backend,
             environment_variables: self.environment_variables,
+            monitoring: self.monitoring,
             domain_metadata: self.domain_metadata,
             public_endpoints: self.public_endpoints,
             desired_stack: stack,

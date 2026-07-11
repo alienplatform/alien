@@ -294,11 +294,76 @@ impl DeploymentPrerequisiteCheck for TargetResourcesResolveCheck {
     }
 }
 
-/// Validates external bindings for platforms that do not provision infrastructure.
-pub struct ExternalInfrastructureBindingsRequiredCheck;
+/// Iterate the stack resources whose types require external bindings on this platform.
+fn external_binding_required_resources<'a>(
+    stack: &'a Stack,
+    stack_state: &StackState,
+) -> impl Iterator<Item = (&'a String, &'a ResourceEntry, String)> {
+    let required_types = external_binding_required_types(stack_state.platform);
+    stack.resources().filter_map(move |(resource_id, entry)| {
+        let resource_type = entry.config.resource_type().0.as_ref().to_string();
+        if required_types.contains(&resource_type.as_str()) {
+            Some((resource_id, entry, resource_type))
+        } else {
+            None
+        }
+    })
+}
+
+/// Validates that machines infrastructure resources use the Frozen lifecycle.
+pub struct MachinesInfrastructureFrozenCheck;
 
 #[async_trait::async_trait]
-impl DeploymentPrerequisiteCheck for ExternalInfrastructureBindingsRequiredCheck {
+impl DeploymentPrerequisiteCheck for MachinesInfrastructureFrozenCheck {
+    fn code(&self) -> Option<&'static str> {
+        Some("MACHINES_INFRASTRUCTURE_MUST_BE_FROZEN")
+    }
+
+    fn description(&self) -> &'static str {
+        "Machines infrastructure resources must use the Frozen lifecycle"
+    }
+
+    fn should_run(
+        &self,
+        _stack: &Stack,
+        stack_state: &StackState,
+        _config: &DeploymentConfig,
+    ) -> bool {
+        stack_state.platform == Platform::Machines
+    }
+
+    async fn check(
+        &self,
+        stack: &Stack,
+        stack_state: &StackState,
+        _config: &DeploymentConfig,
+    ) -> Result<CheckResult> {
+        let errors = external_binding_required_resources(stack, stack_state)
+            .filter(|(_, entry, _)| entry.lifecycle != ResourceLifecycle::Frozen)
+            .map(|(resource_id, _, resource_type)| {
+                format!(
+                    "Resource '{resource_id}' of type '{resource_type}' must use Frozen lifecycle on platform 'machines'. Machines deployments require setup-owned infrastructure with external bindings."
+                )
+            })
+            .collect::<Vec<_>>();
+
+        if errors.is_empty() {
+            Ok(CheckResult::success())
+        } else {
+            Ok(CheckResult::failed(errors))
+        }
+    }
+}
+
+/// Validates that external bindings exist for platforms that do not provision infrastructure.
+pub struct ExternalBindingsRequiredCheck;
+
+#[async_trait::async_trait]
+impl DeploymentPrerequisiteCheck for ExternalBindingsRequiredCheck {
+    fn code(&self) -> Option<&'static str> {
+        Some("EXTERNAL_BINDING_REQUIRED")
+    }
+
     fn description(&self) -> &'static str {
         "External infrastructure resources require matching bindings"
     }
@@ -318,40 +383,62 @@ impl DeploymentPrerequisiteCheck for ExternalInfrastructureBindingsRequiredCheck
         stack_state: &StackState,
         config: &DeploymentConfig,
     ) -> Result<CheckResult> {
-        let required_types = external_binding_required_types(stack_state.platform);
-        let mut errors = Vec::new();
-
-        for (resource_id, entry) in stack.resources() {
-            let resource_type_value = entry.config.resource_type();
-            let resource_type = resource_type_value.0.as_ref();
-            if !required_types.contains(&resource_type) {
-                continue;
-            }
-
-            if stack_state.platform == Platform::Machines
-                && entry.lifecycle != ResourceLifecycle::Frozen
-            {
-                errors.push(format!(
-                    "MACHINES_INFRASTRUCTURE_MUST_BE_FROZEN: Resource '{resource_id}' of type '{resource_type}' must use Frozen lifecycle on platform 'machines'. Your machines deployments require setup-owned infrastructure with external bindings."
-                ));
-            }
-
-            match config.external_bindings.get(resource_id) {
-                None => errors.push(format!(
-                    "{}_EXTERNAL_BINDING_REQUIRED: Platform '{}' requires an external binding for infrastructure resource '{resource_id}' of type '{resource_type}'.",
-                    stack_state.platform.as_str().to_ascii_uppercase(),
+        let errors = external_binding_required_resources(stack, stack_state)
+            .filter(|(resource_id, _, _)| !config.external_bindings.has(resource_id))
+            .map(|(resource_id, _, resource_type)| {
+                format!(
+                    "Platform '{}' requires an external binding for infrastructure resource '{resource_id}' of type '{resource_type}'.",
                     stack_state.platform.as_str()
-                )),
-                Some(binding) => {
-                    if validate_binding_type(&entry.config, binding).is_err() {
-                        errors.push(format!(
-                            "{}_EXTERNAL_BINDING_TYPE_MISMATCH: External binding for resource '{resource_id}' must match resource type '{resource_type}'.",
-                            stack_state.platform.as_str().to_ascii_uppercase()
-                        ));
-                    }
-                }
-            }
+                )
+            })
+            .collect::<Vec<_>>();
+
+        if errors.is_empty() {
+            Ok(CheckResult::success())
+        } else {
+            Ok(CheckResult::failed(errors))
         }
+    }
+}
+
+/// Validates that provided external bindings match their resource types.
+pub struct ExternalBindingsTypeCheck;
+
+#[async_trait::async_trait]
+impl DeploymentPrerequisiteCheck for ExternalBindingsTypeCheck {
+    fn code(&self) -> Option<&'static str> {
+        Some("EXTERNAL_BINDING_TYPE_MISMATCH")
+    }
+
+    fn description(&self) -> &'static str {
+        "External infrastructure bindings must match their resource types"
+    }
+
+    fn should_run(
+        &self,
+        _stack: &Stack,
+        stack_state: &StackState,
+        _config: &DeploymentConfig,
+    ) -> bool {
+        !external_binding_required_types(stack_state.platform).is_empty()
+    }
+
+    async fn check(
+        &self,
+        stack: &Stack,
+        stack_state: &StackState,
+        config: &DeploymentConfig,
+    ) -> Result<CheckResult> {
+        let errors = external_binding_required_resources(stack, stack_state)
+            .filter_map(|(resource_id, entry, resource_type)| {
+                let binding = config.external_bindings.get(resource_id.as_str())?;
+                validate_binding_type(&entry.config, binding).err().map(|_| {
+                    format!(
+                        "External binding for resource '{resource_id}' must match resource type '{resource_type}'."
+                    )
+                })
+            })
+            .collect::<Vec<_>>();
 
         if errors.is_empty() {
             Ok(CheckResult::success())
@@ -827,8 +914,9 @@ mod tests {
         resources.insert("uploads".to_string(), create_storage_entry("uploads"));
         let stack = create_stack(resources);
         let config = deployment_config();
-        let check = ExternalInfrastructureBindingsRequiredCheck;
+        let check = ExternalBindingsRequiredCheck;
 
+        assert_eq!(check.code(), Some("EXTERNAL_BINDING_REQUIRED"));
         assert!(check.should_run(&stack, &stack_state(Platform::Machines), &config));
         let result = check
             .check(&stack, &stack_state(Platform::Machines), &config)
@@ -838,7 +926,7 @@ mod tests {
         assert_eq!(
             result.errors,
             vec![
-                "MACHINES_EXTERNAL_BINDING_REQUIRED: Platform 'machines' requires an external binding for infrastructure resource 'uploads' of type 'storage'."
+                "Platform 'machines' requires an external binding for infrastructure resource 'uploads' of type 'storage'."
                     .to_string()
             ]
         );
@@ -854,8 +942,11 @@ mod tests {
             "uploads",
             ExternalBinding::Storage(StorageBinding::s3("bucket")),
         );
-        let check = ExternalInfrastructureBindingsRequiredCheck;
+        let check = MachinesInfrastructureFrozenCheck;
 
+        assert_eq!(check.code(), Some("MACHINES_INFRASTRUCTURE_MUST_BE_FROZEN"));
+        assert!(check.should_run(&stack, &stack_state(Platform::Machines), &config));
+        assert!(!check.should_run(&stack, &stack_state(Platform::Kubernetes), &config));
         let result = check
             .check(&stack, &stack_state(Platform::Machines), &config)
             .await
@@ -864,7 +955,7 @@ mod tests {
         assert_eq!(
             result.errors,
             vec![
-                "MACHINES_INFRASTRUCTURE_MUST_BE_FROZEN: Resource 'uploads' of type 'storage' must use Frozen lifecycle on platform 'machines'. Your machines deployments require setup-owned infrastructure with external bindings."
+                "Resource 'uploads' of type 'storage' must use Frozen lifecycle on platform 'machines'. Machines deployments require setup-owned infrastructure with external bindings."
                     .to_string()
             ]
         );
@@ -880,8 +971,9 @@ mod tests {
             "uploads",
             ExternalBinding::Kv(KvBinding::redis("redis://cache")),
         );
-        let check = ExternalInfrastructureBindingsRequiredCheck;
+        let check = ExternalBindingsTypeCheck;
 
+        assert_eq!(check.code(), Some("EXTERNAL_BINDING_TYPE_MISMATCH"));
         let result = check
             .check(&stack, &stack_state(Platform::Machines), &config)
             .await
@@ -890,10 +982,18 @@ mod tests {
         assert_eq!(
             result.errors,
             vec![
-                "MACHINES_EXTERNAL_BINDING_TYPE_MISMATCH: External binding for resource 'uploads' must match resource type 'storage'."
+                "External binding for resource 'uploads' must match resource type 'storage'."
                     .to_string()
             ]
         );
+
+        // A missing binding is the required-check's finding, not a type mismatch.
+        let empty_config = deployment_config();
+        let result = ExternalBindingsTypeCheck
+            .check(&stack, &stack_state(Platform::Machines), &empty_config)
+            .await
+            .unwrap();
+        assert!(result.success);
     }
 
     #[tokio::test]
@@ -906,15 +1006,24 @@ mod tests {
             "uploads",
             ExternalBinding::Storage(StorageBinding::s3("bucket")),
         );
-        let check = ExternalInfrastructureBindingsRequiredCheck;
 
-        let result = check
-            .check(&stack, &stack_state(Platform::Machines), &config)
-            .await
-            .unwrap();
-
-        assert!(result.success);
-        assert!(result.errors.is_empty());
+        for result in [
+            MachinesInfrastructureFrozenCheck
+                .check(&stack, &stack_state(Platform::Machines), &config)
+                .await
+                .unwrap(),
+            ExternalBindingsRequiredCheck
+                .check(&stack, &stack_state(Platform::Machines), &config)
+                .await
+                .unwrap(),
+            ExternalBindingsTypeCheck
+                .check(&stack, &stack_state(Platform::Machines), &config)
+                .await
+                .unwrap(),
+        ] {
+            assert!(result.success);
+            assert!(result.errors.is_empty());
+        }
     }
 
     #[tokio::test]

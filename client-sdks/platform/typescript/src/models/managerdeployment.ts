@@ -17,6 +17,7 @@ export const ManagerDeploymentStatus = {
   InitialSetup: "initial-setup",
   InitialSetupFailed: "initial-setup-failed",
   Provisioning: "provisioning",
+  WaitingForMachines: "waiting-for-machines",
   ProvisioningFailed: "provisioning-failed",
   Running: "running",
   RefreshFailed: "refresh-failed",

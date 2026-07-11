@@ -99,7 +99,11 @@ fn render_user_subject(user: &UserSubject) -> String {
         format!("{} {}", dim_label("Workspace ID"), user.workspace_id),
     ];
     if let Some(workspace_name) = &user.workspace_name {
-        lines.push(format!("{} {}", dim_label("Workspace Name"), workspace_name));
+        lines.push(format!(
+            "{} {}",
+            dim_label("Workspace Name"),
+            workspace_name
+        ));
     }
     lines.join("\n")
 }
@@ -126,7 +130,11 @@ fn render_service_account_subject(service_account: &ServiceAccountSubject) -> St
         ),
     ];
     if let Some(workspace_name) = &service_account.workspace_name {
-        lines.push(format!("{} {}", dim_label("Workspace Name"), workspace_name));
+        lines.push(format!(
+            "{} {}",
+            dim_label("Workspace Name"),
+            workspace_name
+        ));
     }
     lines.join("\n")
 }

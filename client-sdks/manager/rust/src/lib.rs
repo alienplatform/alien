@@ -38,6 +38,54 @@ impl<T> SdkResultExt<ResponseValue<T>> for Result<ResponseValue<T>, Error<()>> {
     }
 }
 
+/// Convert a progenitor SDK error to `AlienError`, reading the response body
+/// of error statuses so structured Alien errors returned by the manager
+/// (code, message, hint, retryable) survive the round-trip instead of
+/// collapsing into a generic "Unexpected response" error.
+///
+/// Async because reading the response body requires awaiting; falls back to
+/// [`convert_sdk_error`] semantics when the body is not an Alien error payload.
+pub async fn convert_sdk_error_reading_body(err: Error<()>) -> AlienError<GenericError> {
+    match err {
+        Error::UnexpectedResponse(response) => {
+            let status = response.status().as_u16();
+            let canonical_reason = response
+                .status()
+                .canonical_reason()
+                .unwrap_or("Unknown")
+                .to_string();
+            let url = response.url().to_string();
+            let body = response.text().await.unwrap_or_default();
+
+            if let Ok(mut api_error) = serde_json::from_str::<AlienError<GenericError>>(&body) {
+                if api_error.http_status_code.is_none() {
+                    api_error.http_status_code = Some(status);
+                }
+                return api_error;
+            }
+
+            AlienError {
+                code: "UNEXPECTED_RESPONSE".to_string(),
+                message: format!("Unexpected response: {} {}", status, canonical_reason),
+                context: Some(serde_json::json!({
+                    "status": status,
+                    "url": url,
+                })),
+                hint: None,
+                retryable: status >= 500,
+                internal: false,
+                http_status_code: Some(status),
+                source: None,
+                human_layer_presentation: HumanLayerPresentation::Normal,
+                error: Some(GenericError {
+                    message: format!("Unexpected response status: {}", status),
+                }),
+            }
+        }
+        other => convert_sdk_error(other),
+    }
+}
+
 /// Convert a progenitor SDK error to AlienError, preserving all details.
 pub fn convert_sdk_error(err: Error<()>) -> AlienError<GenericError> {
     match err {
@@ -67,20 +115,19 @@ pub fn convert_sdk_error(err: Error<()>) -> AlienError<GenericError> {
         Error::CommunicationError(reqwest_err) => {
             let retryable =
                 reqwest_err.is_connect() || reqwest_err.is_timeout() || reqwest_err.is_request();
+            let message = reqwest_failure_message("HTTP request", &reqwest_err);
 
             AlienError {
                 code: "COMMUNICATION_ERROR".to_string(),
-                message: format!("Communication Error: {}", reqwest_err),
-                context: None,
+                message: message.clone(),
+                context: reqwest_failure_context(&reqwest_err),
                 hint: None,
                 retryable,
                 internal: false,
                 http_status_code: reqwest_err.status().map(|s| s.as_u16()),
                 source: build_reqwest_source(&reqwest_err),
                 human_layer_presentation: HumanLayerPresentation::Normal,
-                error: Some(GenericError {
-                    message: format!("Communication Error: {}", reqwest_err),
-                }),
+                error: Some(GenericError { message }),
             }
         }
         Error::InvalidRequest(msg) => AlienError {
@@ -97,20 +144,22 @@ pub fn convert_sdk_error(err: Error<()>) -> AlienError<GenericError> {
                 message: format!("Invalid Request: {}", msg),
             }),
         },
-        Error::ResponseBodyError(reqwest_err) => AlienError {
-            code: "RESPONSE_BODY_ERROR".to_string(),
-            message: format!("Error reading response body: {}", reqwest_err),
-            context: None,
-            hint: None,
-            retryable: true,
-            internal: false,
-            http_status_code: reqwest_err.status().map(|s| s.as_u16()),
-            source: build_reqwest_source(&reqwest_err),
-            human_layer_presentation: HumanLayerPresentation::Normal,
-            error: Some(GenericError {
-                message: format!("Error reading response body: {}", reqwest_err),
-            }),
-        },
+        Error::ResponseBodyError(reqwest_err) => {
+            let message = reqwest_failure_message("HTTP response body read", &reqwest_err);
+
+            AlienError {
+                code: "RESPONSE_BODY_ERROR".to_string(),
+                message: message.clone(),
+                context: reqwest_failure_context(&reqwest_err),
+                hint: None,
+                retryable: true,
+                internal: false,
+                http_status_code: reqwest_err.status().map(|s| s.as_u16()),
+                source: build_reqwest_source(&reqwest_err),
+                human_layer_presentation: HumanLayerPresentation::Normal,
+                error: Some(GenericError { message }),
+            }
+        }
         Error::InvalidResponsePayload(bytes, json_err) => {
             let raw_body = String::from_utf8_lossy(&bytes);
             let truncated = if raw_body.len() > 1000 {
@@ -143,20 +192,22 @@ pub fn convert_sdk_error(err: Error<()>) -> AlienError<GenericError> {
                 }),
             }
         }
-        Error::InvalidUpgrade(reqwest_err) => AlienError {
-            code: "INVALID_UPGRADE".to_string(),
-            message: format!("Connection upgrade failed: {}", reqwest_err),
-            context: None,
-            hint: None,
-            retryable: false,
-            internal: false,
-            http_status_code: reqwest_err.status().map(|s| s.as_u16()),
-            source: build_reqwest_source(&reqwest_err),
-            human_layer_presentation: HumanLayerPresentation::Normal,
-            error: Some(GenericError {
-                message: format!("Connection upgrade failed: {}", reqwest_err),
-            }),
-        },
+        Error::InvalidUpgrade(reqwest_err) => {
+            let message = reqwest_failure_message("HTTP connection upgrade", &reqwest_err);
+
+            AlienError {
+                code: "INVALID_UPGRADE".to_string(),
+                message: message.clone(),
+                context: reqwest_failure_context(&reqwest_err),
+                hint: None,
+                retryable: false,
+                internal: false,
+                http_status_code: reqwest_err.status().map(|s| s.as_u16()),
+                source: build_reqwest_source(&reqwest_err),
+                human_layer_presentation: HumanLayerPresentation::Normal,
+                error: Some(GenericError { message }),
+            }
+        }
         Error::UnexpectedResponse(response) => {
             let status = response.status().as_u16();
             AlienError {
@@ -196,6 +247,21 @@ pub fn convert_sdk_error(err: Error<()>) -> AlienError<GenericError> {
     }
 }
 
+fn reqwest_failure_message(operation: &str, err: &reqwest::Error) -> String {
+    match err.url() {
+        Some(url) => format!("{operation} {} failed: {err}", url),
+        None => format!("{operation} failed: {err}"),
+    }
+}
+
+fn reqwest_failure_context(err: &reqwest::Error) -> Option<serde_json::Value> {
+    err.url().map(|url| {
+        serde_json::json!({
+            "url": url.to_string(),
+        })
+    })
+}
+
 fn build_reqwest_source(reqwest_err: &reqwest::Error) -> Option<Box<AlienError<GenericError>>> {
     use std::error::Error as _;
 
@@ -215,4 +281,72 @@ fn build_reqwest_source(reqwest_err: &reqwest::Error) -> Option<Box<AlienError<G
             }),
         })
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn unexpected_response(status: u16, body: &str) -> Error<()> {
+        let response = http::Response::builder()
+            .status(status)
+            .body(body.to_string())
+            .expect("test response should build");
+        Error::UnexpectedResponse(reqwest::Response::from(response))
+    }
+
+    #[tokio::test]
+    async fn reading_body_preserves_structured_alien_errors() {
+        let body = serde_json::json!({
+            "code": "PUBLIC_SUBDOMAIN_REQUIRES_CUSTOM_DOMAIN",
+            "message": "Choosing a public subdomain requires a custom project domain",
+            "retryable": false,
+            "internal": false,
+            "httpStatusCode": 400,
+        })
+        .to_string();
+
+        let error = convert_sdk_error_reading_body(unexpected_response(400, &body)).await;
+
+        assert_eq!(error.code, "PUBLIC_SUBDOMAIN_REQUIRES_CUSTOM_DOMAIN");
+        assert_eq!(
+            error.message,
+            "Choosing a public subdomain requires a custom project domain"
+        );
+        assert_eq!(error.http_status_code, Some(400));
+        assert!(!error.retryable);
+        assert!(!error.internal);
+    }
+
+    #[tokio::test]
+    async fn reading_body_falls_back_to_generic_error_for_non_alien_payloads() {
+        let error =
+            convert_sdk_error_reading_body(unexpected_response(502, "<html>bad gateway</html>"))
+                .await;
+
+        assert_eq!(error.code, "UNEXPECTED_RESPONSE");
+        assert_eq!(error.message, "Unexpected response: 502 Bad Gateway");
+        assert_eq!(error.http_status_code, Some(502));
+        assert!(error.retryable);
+    }
+
+    #[tokio::test]
+    async fn communication_error_includes_url_in_message_and_context() {
+        let reqwest_err = reqwest::Client::new()
+            .get("http://127.0.0.1:9/v1/initialize")
+            .send()
+            .await
+            .expect_err("localhost discard port should refuse the connection");
+
+        let error = super::convert_sdk_error(Error::CommunicationError(reqwest_err));
+
+        assert_eq!(error.code, "COMMUNICATION_ERROR");
+        assert!(error
+            .message
+            .starts_with("HTTP request http://127.0.0.1:9/v1/initialize failed:"));
+        assert_eq!(
+            error.context.as_ref().unwrap()["url"],
+            "http://127.0.0.1:9/v1/initialize"
+        );
+    }
 }

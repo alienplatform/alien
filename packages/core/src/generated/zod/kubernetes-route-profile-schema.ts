@@ -12,8 +12,8 @@ import { KubernetesIngressRouteProfileSchema } from "./kubernetes-ingress-route-
  */
 export const KubernetesRouteProfileSchema = z.union([z.lazy(() => KubernetesIngressRouteProfileSchema).and(z.object({
     "routeApi": z.enum(["ingress"])
-    })), z.lazy(() => KubernetesGatewayRouteProfileSchema).and(z.object({
+    })).describe("Shared Ingress route profile values."), z.lazy(() => KubernetesGatewayRouteProfileSchema).and(z.object({
     "routeApi": z.enum(["gateway"])
-    }))]).describe("Kubernetes route API selected for public endpoints.")
+    })).describe("Shared Gateway API route profile values.")]).describe("Kubernetes route API selected for public endpoints.")
 
 export type KubernetesRouteProfile = z.infer<typeof KubernetesRouteProfileSchema>

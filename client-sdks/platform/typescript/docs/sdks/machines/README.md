@@ -5,6 +5,7 @@
 ### Available Operations
 
 * [listJoinTokens](#listjointokens)
+* [createJoinToken](#createjointoken)
 * [rotateJoinToken](#rotatejointoken)
 * [revokeJoinToken](#revokejointoken)
 * [listInventory](#listinventory)
@@ -27,6 +28,7 @@ const alien = new Alien({
 async function run() {
   const result = await alien.machines.listJoinTokens({
     id: "dep_0c29fq4a2yjb7kx3smwdgxlc",
+    workspace: "my-workspace",
   });
 
   console.log(result);
@@ -52,6 +54,7 @@ const alien = new AlienCore({
 async function run() {
   const res = await machinesListJoinTokens(alien, {
     id: "dep_0c29fq4a2yjb7kx3smwdgxlc",
+    workspace: "my-workspace",
   });
   if (res.ok) {
     const { value: result } = res;
@@ -85,6 +88,81 @@ run();
 | errors.APIError          | 500                      | application/json         |
 | errors.AlienDefaultError | 4XX, 5XX                 | \*/\*                    |
 
+## createJoinToken
+
+### Example Usage
+
+<!-- UsageSnippet language="typescript" operationID="createMachinesJoinToken" method="post" path="/v1/machines/deployments/{id}/join-tokens" -->
+```typescript
+import { Alien } from "@alienplatform/platform-api";
+
+const alien = new Alien({
+  apiKey: process.env["ALIEN_API_KEY"] ?? "",
+});
+
+async function run() {
+  const result = await alien.machines.createJoinToken({
+    id: "dep_0c29fq4a2yjb7kx3smwdgxlc",
+    workspace: "my-workspace",
+  });
+
+  console.log(result);
+}
+
+run();
+```
+
+### Standalone function
+
+The standalone function version of this method:
+
+```typescript
+import { AlienCore } from "@alienplatform/platform-api/core.js";
+import { machinesCreateJoinToken } from "@alienplatform/platform-api/funcs/machinesCreateJoinToken.js";
+
+// Use `AlienCore` for best tree-shaking performance.
+// You can create one instance of it to use across an application.
+const alien = new AlienCore({
+  apiKey: process.env["ALIEN_API_KEY"] ?? "",
+});
+
+async function run() {
+  const res = await machinesCreateJoinToken(alien, {
+    id: "dep_0c29fq4a2yjb7kx3smwdgxlc",
+    workspace: "my-workspace",
+  });
+  if (res.ok) {
+    const { value: result } = res;
+    console.log(result);
+  } else {
+    console.log("machinesCreateJoinToken failed:", res.error);
+  }
+}
+
+run();
+```
+
+### Parameters
+
+| Parameter                                                                                                                                                                      | Type                                                                                                                                                                           | Required                                                                                                                                                                       | Description                                                                                                                                                                    |
+| ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `request`                                                                                                                                                                      | [operations.CreateMachinesJoinTokenRequest](../../models/operations/createmachinesjointokenrequest.md)                                                                         | :heavy_check_mark:                                                                                                                                                             | The request object to use for the request.                                                                                                                                     |
+| `options`                                                                                                                                                                      | RequestOptions                                                                                                                                                                 | :heavy_minus_sign:                                                                                                                                                             | Used to set various options for making HTTP requests.                                                                                                                          |
+| `options.fetchOptions`                                                                                                                                                         | [RequestInit](https://developer.mozilla.org/en-US/docs/Web/API/Request/Request#options)                                                                                        | :heavy_minus_sign:                                                                                                                                                             | Options that are passed to the underlying HTTP request. This can be used to inject extra headers for examples. All `Request` options, except `method` and `body`, are allowed. |
+| `options.retries`                                                                                                                                                              | [RetryConfig](../../lib/utils/retryconfig.md)                                                                                                                                  | :heavy_minus_sign:                                                                                                                                                             | Enables retrying HTTP requests under certain failure conditions.                                                                                                               |
+
+### Response
+
+**Promise\<[models.CreateMachinesJoinTokenResponse](../../models/createmachinesjointokenresponse.md)\>**
+
+### Errors
+
+| Error Type               | Status Code              | Content Type             |
+| ------------------------ | ------------------------ | ------------------------ |
+| errors.APIError          | 400, 404                 | application/json         |
+| errors.APIError          | 500                      | application/json         |
+| errors.AlienDefaultError | 4XX, 5XX                 | \*/\*                    |
+
 ## rotateJoinToken
 
 ### Example Usage
@@ -100,6 +178,7 @@ const alien = new Alien({
 async function run() {
   const result = await alien.machines.rotateJoinToken({
     id: "dep_0c29fq4a2yjb7kx3smwdgxlc",
+    workspace: "my-workspace",
   });
 
   console.log(result);
@@ -125,6 +204,7 @@ const alien = new AlienCore({
 async function run() {
   const res = await machinesRotateJoinToken(alien, {
     id: "dep_0c29fq4a2yjb7kx3smwdgxlc",
+    workspace: "my-workspace",
   });
   if (res.ok) {
     const { value: result } = res;
@@ -174,6 +254,7 @@ async function run() {
   const result = await alien.machines.revokeJoinToken({
     id: "dep_0c29fq4a2yjb7kx3smwdgxlc",
     tokenId: "<id>",
+    workspace: "my-workspace",
   });
 
   console.log(result);
@@ -200,6 +281,7 @@ async function run() {
   const res = await machinesRevokeJoinToken(alien, {
     id: "dep_0c29fq4a2yjb7kx3smwdgxlc",
     tokenId: "<id>",
+    workspace: "my-workspace",
   });
   if (res.ok) {
     const { value: result } = res;
@@ -248,6 +330,7 @@ const alien = new Alien({
 async function run() {
   const result = await alien.machines.listInventory({
     id: "dep_0c29fq4a2yjb7kx3smwdgxlc",
+    workspace: "my-workspace",
   });
 
   console.log(result);
@@ -273,6 +356,7 @@ const alien = new AlienCore({
 async function run() {
   const res = await machinesListInventory(alien, {
     id: "dep_0c29fq4a2yjb7kx3smwdgxlc",
+    workspace: "my-workspace",
   });
   if (res.ok) {
     const { value: result } = res;
@@ -322,6 +406,7 @@ async function run() {
   const result = await alien.machines.drainMachine({
     id: "dep_0c29fq4a2yjb7kx3smwdgxlc",
     machineId: "<id>",
+    workspace: "my-workspace",
   });
 
   console.log(result);
@@ -348,6 +433,7 @@ async function run() {
   const res = await machinesDrainMachine(alien, {
     id: "dep_0c29fq4a2yjb7kx3smwdgxlc",
     machineId: "<id>",
+    workspace: "my-workspace",
   });
   if (res.ok) {
     const { value: result } = res;
@@ -397,6 +483,7 @@ async function run() {
   const result = await alien.machines.cancelMachineDrain({
     id: "dep_0c29fq4a2yjb7kx3smwdgxlc",
     machineId: "<id>",
+    workspace: "my-workspace",
   });
 
   console.log(result);
@@ -423,6 +510,7 @@ async function run() {
   const res = await machinesCancelMachineDrain(alien, {
     id: "dep_0c29fq4a2yjb7kx3smwdgxlc",
     machineId: "<id>",
+    workspace: "my-workspace",
   });
   if (res.ok) {
     const { value: result } = res;
@@ -472,6 +560,7 @@ async function run() {
   const result = await alien.machines.removeMachine({
     id: "dep_0c29fq4a2yjb7kx3smwdgxlc",
     machineId: "<id>",
+    workspace: "my-workspace",
   });
 
   console.log(result);
@@ -498,6 +587,7 @@ async function run() {
   const res = await machinesRemoveMachine(alien, {
     id: "dep_0c29fq4a2yjb7kx3smwdgxlc",
     machineId: "<id>",
+    workspace: "my-workspace",
   });
   if (res.ok) {
     const { value: result } = res;

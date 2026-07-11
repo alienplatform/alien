@@ -129,7 +129,7 @@ impl AzureServiceBusNamespaceController {
                         Some("Creating") | Some("Updating") => {
                             debug!(namespace_name=%namespace_name, "Namespace still being created");
                             Ok(HandlerAction::Stay {
-                                max_times: 60,
+                                max_times: Some(60),
                                 suggested_delay: Some(Duration::from_secs(15)),
                             })
                         }
@@ -144,7 +144,7 @@ impl AzureServiceBusNamespaceController {
                         other => {
                             debug!(namespace_name=%namespace_name, status=?other, "Status not 'Active', continuing to wait");
                             Ok(HandlerAction::Stay {
-                                max_times: 60,
+                                max_times: Some(60),
                                 suggested_delay: Some(Duration::from_secs(15)),
                             })
                         }
@@ -152,7 +152,7 @@ impl AzureServiceBusNamespaceController {
                 } else {
                     debug!(namespace_name=%namespace_name, "Properties not available, continuing to wait");
                     Ok(HandlerAction::Stay {
-                        max_times: 60,
+                        max_times: Some(60),
                         suggested_delay: Some(Duration::from_secs(15)),
                     })
                 }
@@ -163,7 +163,7 @@ impl AzureServiceBusNamespaceController {
             }) => {
                 debug!(namespace_name=%namespace_name, "Namespace not yet available, continuing to wait");
                 Ok(HandlerAction::Stay {
-                    max_times: 60,
+                    max_times: Some(60),
                     suggested_delay: Some(Duration::from_secs(15)),
                 })
             }
@@ -359,7 +359,7 @@ impl AzureServiceBusNamespaceController {
             Ok(_) => {
                 debug!(namespace_name=%namespace_name, "Namespace still exists, continuing to wait");
                 Ok(HandlerAction::Stay {
-                    max_times: 20,
+                    max_times: Some(20),
                     suggested_delay: Some(Duration::from_secs(15)),
                 })
             }

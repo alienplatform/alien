@@ -10,6 +10,7 @@ let value: DeploymentInfo = {
   deploymentGroup: {
     id: "dg_r27ict8c7vcgsumpj90ackf7b",
     name: "<value>",
+    pinnedSubdomain: "<value>",
   },
   workspace: {
     id: "<id>",
@@ -22,31 +23,19 @@ let value: DeploymentInfo = {
     },
   },
   packages: {
-    ready: true,
+    ready: false,
   },
   installContext: {
-    targets: {
-      "key": {
-        platform: "gcp",
-        managerUrl: "https://low-possession.com/",
-      },
-    },
+    targets: {},
   },
   supportedRegions: {
-    aws: [
-      "<value 1>",
-      "<value 2>",
-      "<value 3>",
-    ],
+    aws: [],
     gcp: [
       "<value 1>",
-      "<value 2>",
-      "<value 3>",
     ],
     azure: [
       "<value 1>",
       "<value 2>",
-      "<value 3>",
     ],
   },
 };
@@ -65,3 +54,4 @@ let value: DeploymentInfo = {
 | `installContext`                                                                   | [models.DeploymentInfoInstallContext](../models/deploymentinfoinstallcontext.md)   | :heavy_check_mark:                                                                 | N/A                                                                                |
 | `supportedRegions`                                                                 | [models.SupportedCloudRegions](../models/supportedcloudregions.md)                 | :heavy_check_mark:                                                                 | N/A                                                                                |
 | `setupConfig`                                                                      | [models.DeploymentInfoSetupConfig](../models/deploymentinfosetupconfig.md)         | :heavy_minus_sign:                                                                 | N/A                                                                                |
+| `readiness`                                                                        | [models.Readiness](../models/readiness.md)                                         | :heavy_minus_sign:                                                                 | N/A                                                                                |

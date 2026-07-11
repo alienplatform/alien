@@ -16,6 +16,7 @@ pub enum DeploymentStatus {
     InitialSetup,
     InitialSetupFailed,
     Provisioning,
+    WaitingForMachines,
     ProvisioningFailed,
     Running,
     RefreshFailed,

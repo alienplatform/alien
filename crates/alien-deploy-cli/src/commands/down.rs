@@ -156,7 +156,15 @@ pub async fn down_command(args: DownArgs, embedded_config: Option<&DeployCliConf
         return Ok(());
     }
 
-    let total_steps = 3;
+    let platform = Platform::from_str(&platform_str).map_err(|e| {
+        AlienError::new(ErrorData::ValidationError {
+            field: "platform".to_string(),
+            message: e,
+        })
+    })?;
+    let run_client_side_deletion = requires_client_side_deletion(platform);
+    let total_steps = if run_client_side_deletion { 3 } else { 2 };
+
     if matches!(deployment_status, "teardown-required" | "teardown-failed") {
         output::step(
             1,
@@ -180,18 +188,20 @@ pub async fn down_command(args: DownArgs, embedded_config: Option<&DeployCliConf
             })?;
     }
 
+    if !run_client_side_deletion {
+        tracker.remove(&args.name)?;
+
+        output::step(total_steps, total_steps, "Done!");
+        output::success("Deployment deletion requested.");
+
+        return Ok(());
+    }
+
     output::step(
         2,
         total_steps,
         "Loading target credentials and running deletion...",
     );
-
-    let platform = Platform::from_str(&platform_str).map_err(|e| {
-        AlienError::new(ErrorData::ValidationError {
-            field: "platform".to_string(),
-            message: e,
-        })
-    })?;
 
     let client_config = destroy_client_config(platform, tracked_local.as_ref()).await?;
 
@@ -240,6 +250,10 @@ async fn destroy_client_config(
         return Ok(ClientConfig::Local { state_directory });
     }
 
+    if platform == Platform::Machines {
+        return Ok(ClientConfig::Machines);
+    }
+
     ClientConfig::from_std_env(platform)
         .await
         .context(ErrorData::ConfigurationError {
@@ -248,6 +262,10 @@ async fn destroy_client_config(
                 platform
             ),
         })
+}
+
+fn requires_client_side_deletion(platform: Platform) -> bool {
+    platform != Platform::Machines
 }
 
 fn resolve_token(
@@ -288,5 +306,26 @@ mod tests {
                 state_directory: "/tmp/alien-tracked-state".to_string(),
             }
         );
+    }
+
+    #[tokio::test]
+    async fn machines_destroy_uses_manager_side_client_config() {
+        let config = destroy_client_config(Platform::Machines, None)
+            .await
+            .expect("machines config should resolve without local credentials");
+
+        assert_eq!(config, ClientConfig::Machines);
+    }
+
+    #[test]
+    fn machines_destroy_does_not_run_client_side_teardown() {
+        assert!(!requires_client_side_deletion(Platform::Machines));
+    }
+
+    #[test]
+    fn cloud_destroy_runs_client_side_teardown() {
+        assert!(requires_client_side_deletion(Platform::Aws));
+        assert!(requires_client_side_deletion(Platform::Gcp));
+        assert!(requires_client_side_deletion(Platform::Azure));
     }
 }

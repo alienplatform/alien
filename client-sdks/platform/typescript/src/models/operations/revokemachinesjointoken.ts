@@ -10,12 +10,17 @@ export type RevokeMachinesJoinTokenRequest = {
    */
   id: string;
   tokenId: string;
+  /**
+   * Workspace name. Required for user/session/OAuth requests. Optional for API keys because API keys are workspace-scoped; if provided with an API key, it must match the key's workspace.
+   */
+  workspace?: string | undefined;
 };
 
 /** @internal */
 export type RevokeMachinesJoinTokenRequest$Outbound = {
   id: string;
   tokenId: string;
+  workspace?: string | undefined;
 };
 
 /** @internal */
@@ -25,6 +30,7 @@ export const RevokeMachinesJoinTokenRequest$outboundSchema: z.ZodType<
 > = z.object({
   id: z.string(),
   tokenId: z.string(),
+  workspace: z.string().optional(),
 });
 
 export function revokeMachinesJoinTokenRequestToJSON(

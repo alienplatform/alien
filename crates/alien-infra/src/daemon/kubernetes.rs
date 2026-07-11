@@ -119,7 +119,7 @@ impl KubernetesDaemonController {
         }
 
         Ok(HandlerAction::Stay {
-            max_times: 60,
+            max_times: Some(60),
             suggested_delay: Some(Duration::from_secs(5)),
         })
     }
@@ -279,7 +279,7 @@ impl KubernetesDaemonController {
         }
 
         Ok(HandlerAction::Stay {
-            max_times: 60,
+            max_times: Some(60),
             suggested_delay: Some(Duration::from_secs(5)),
         })
     }
@@ -391,7 +391,7 @@ impl KubernetesDaemonController {
         }
 
         Ok(HandlerAction::Stay {
-            max_times: 60,
+            max_times: Some(60),
             suggested_delay: Some(Duration::from_secs(5)),
         })
     }

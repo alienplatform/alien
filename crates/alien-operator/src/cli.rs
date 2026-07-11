@@ -12,7 +12,7 @@ use alien_core::{
     DEPLOYMENT_PROTOCOL_VERSION,
 };
 use alien_error::{AlienError, Context, IntoAlienError};
-use clap::Parser;
+use clap::{Parser, ValueEnum};
 use std::net::IpAddr;
 use std::path::PathBuf;
 use tokio_util::sync::CancellationToken;
@@ -75,6 +75,16 @@ pub struct Args {
     #[arg(long, env = "OPERATOR_PERMISSION")]
     pub operator_permission: Option<String>,
 
+    /// Desired release to select when this Operator registers a new deployment.
+    /// This affects first registration only; later updates can assign a release.
+    #[arg(
+        long,
+        env = "OPERATOR_INITIAL_DESIRED_RELEASE",
+        value_enum,
+        default_value = "active"
+    )]
+    pub initial_desired_release: InitialDesiredReleaseArg,
+
     #[arg(long, env = "OPERATOR_SETUP_METHOD")]
     pub operator_setup_method: Option<String>,
 
@@ -125,6 +135,12 @@ pub struct Args {
 
     #[arg(long, hide = true)]
     pub service: bool,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
+pub enum InitialDesiredReleaseArg {
+    Active,
+    None,
 }
 
 /// Hook callback that runs once before the operator's deployment loop starts.
@@ -281,11 +297,12 @@ async fn run(mut args: Args, init_hook: InitHook, debug_loop_hook: DebugLoopHook
                         operator_scope.as_deref(),
                         operator_permission.as_deref(),
                         operator_setup_method.as_deref(),
+                        args.initial_desired_release,
                     )
                     .await?;
 
                     db.set_deployment_id(&initialized_deployment_id).await?;
-                    if is_observe_permission(operator_permission.as_deref()) {
+                    if args.initial_desired_release == InitialDesiredReleaseArg::None {
                         db.set_deployment_state(&observe_only_initial_state(args.platform))
                             .await?;
                     }
@@ -443,10 +460,6 @@ fn select_startup_deployment_id(
         (None, Some(configured)) => Ok(StartupDeploymentId::Configured(configured)),
         (None, None) => Ok(StartupDeploymentId::Initialize),
     }
-}
-
-fn is_observe_permission(permission: Option<&str>) -> bool {
-    matches!(permission, Some("observe"))
 }
 
 fn observe_only_initial_state(platform: Platform) -> DeploymentState {
@@ -621,6 +634,7 @@ async fn initialize_with_manager(
     operator_scope: Option<&str>,
     operator_permission: Option<&str>,
     operator_setup_method: Option<&str>,
+    initial_desired_release: InitialDesiredReleaseArg,
 ) -> Result<(String, Option<String>)> {
     use alien_manager_api::types::Platform as SdkPlatform;
     use reqwest::header::{HeaderMap, HeaderValue, AUTHORIZATION, USER_AGENT};
@@ -663,7 +677,14 @@ async fn initialize_with_manager(
             .or_else(|| hostname::get().ok().and_then(|h| h.into_string().ok()))
     });
 
-    let mut builder = client.initialize().body_map(|b| b.platform(sdk_platform));
+    let sdk_initial_desired_release = match initial_desired_release {
+        InitialDesiredReleaseArg::Active => alien_manager_api::types::InitialDesiredRelease::Active,
+        InitialDesiredReleaseArg::None => alien_manager_api::types::InitialDesiredRelease::None,
+    };
+    let mut builder = client.initialize().body_map(|b| {
+        b.platform(sdk_platform)
+            .initial_desired_release(sdk_initial_desired_release)
+    });
 
     if let Some(name) = default_name {
         builder = builder.body_map(|b| b.name(name));
@@ -864,10 +885,11 @@ async fn load_collector_token(file: Option<&std::path::Path>) -> Result<Option<S
 #[cfg(all(test, unix))]
 mod tests {
     use super::{
-        is_observe_permission, is_secret_file_mode_allowed, observe_only_initial_state,
-        select_startup_deployment_id, StartupDeploymentId,
+        is_secret_file_mode_allowed, observe_only_initial_state, select_startup_deployment_id,
+        Args, InitialDesiredReleaseArg, StartupDeploymentId,
     };
     use alien_core::{DeploymentStatus, Platform};
+    use clap::Parser;
 
     #[test]
     fn secret_file_mode_allows_kubernetes_fs_group_read() {
@@ -930,16 +952,32 @@ mod tests {
     }
 
     #[test]
-    fn observe_permission_initializes_running_observe_state() {
-        assert!(is_observe_permission(Some("observe")));
-        assert!(!is_observe_permission(Some("manage")));
-        assert!(!is_observe_permission(None));
-
+    fn no_desired_release_initializes_running_observed_state() {
         let state = observe_only_initial_state(Platform::Kubernetes);
         assert_eq!(state.status, DeploymentStatus::Running);
         assert_eq!(state.platform, Platform::Kubernetes);
         assert!(state.current_release.is_none());
         assert!(state.target_release.is_none());
         assert!(state.stack_state.is_none());
+    }
+
+    #[test]
+    fn initial_release_selection_is_independent_from_permission() {
+        let args = Args::try_parse_from([
+            "operator",
+            "--platform",
+            "kubernetes",
+            "--operator-permission",
+            "observe",
+            "--initial-desired-release",
+            "active",
+        ])
+        .expect("operator arguments should parse");
+
+        assert_eq!(
+            args.initial_desired_release,
+            InitialDesiredReleaseArg::Active
+        );
+        assert_eq!(args.operator_permission.as_deref(), Some("observe"));
     }
 }

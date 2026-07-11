@@ -500,6 +500,7 @@ fn deployment_status_string(status: DeploymentStatus) -> String {
         DeploymentStatus::InitialSetup => "initial-setup",
         DeploymentStatus::InitialSetupFailed => "initial-setup-failed",
         DeploymentStatus::Provisioning => "provisioning",
+        DeploymentStatus::WaitingForMachines => "waiting-for-machines",
         DeploymentStatus::ProvisioningFailed => "provisioning-failed",
         DeploymentStatus::Running => "running",
         DeploymentStatus::RefreshFailed => "refresh-failed",

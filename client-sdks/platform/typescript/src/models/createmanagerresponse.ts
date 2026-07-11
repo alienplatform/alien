@@ -42,6 +42,10 @@ export type CreateManagerResponseSetupConfig = {
   metadata: { [k: string]: any | null };
   policy: DeploymentSetupPolicy;
   inputValues?: { [k: string]: EncryptedStackInputValue } | undefined;
+  /**
+   * Operator-pinned deployment subdomain for this setup token.
+   */
+  publicSubdomain?: string | undefined;
   environmentVariables: Array<CreateManagerResponseEnvironmentVariable>;
 };
 
@@ -3610,6 +3614,7 @@ export const CreateManagerResponseSetupConfig$inboundSchema: z.ZodType<
   policy: DeploymentSetupPolicy$inboundSchema,
   inputValues: z.record(z.string(), EncryptedStackInputValue$inboundSchema)
     .optional(),
+  publicSubdomain: z.string().optional(),
   environmentVariables: z.array(
     z.lazy(() => CreateManagerResponseEnvironmentVariable$inboundSchema),
   ),

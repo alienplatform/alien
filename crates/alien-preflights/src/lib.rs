@@ -10,6 +10,7 @@ pub mod runtime;
 use crate::error::Result;
 use alien_core::{DeploymentConfig, Platform, Stack, StackState};
 use serde::{Deserialize, Serialize};
+use std::collections::HashSet;
 
 #[cfg(feature = "runtime-checks")]
 use alien_core::ClientConfig;
@@ -22,6 +23,12 @@ use utoipa::ToSchema;
 #[cfg_attr(feature = "openapi", derive(ToSchema))]
 #[serde(rename_all = "camelCase")]
 pub struct CheckResult {
+    /// Stable machine-readable check code
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub code: Option<String>,
+    /// Machine-readable check status
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub status: Option<CheckStatus>,
     /// Description of the check
     pub check_description: Option<String>,
     /// Whether the check passed
@@ -32,10 +39,24 @@ pub struct CheckResult {
     pub warnings: Vec<String>,
 }
 
+/// Machine-readable preflight status.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "openapi", derive(ToSchema))]
+#[serde(rename_all = "camelCase")]
+pub enum CheckStatus {
+    Passed,
+    Failed,
+    Warning,
+    Skipped,
+    Unknown,
+}
+
 impl CheckResult {
     /// Create a successful check result
     pub fn success() -> Self {
         Self {
+            code: None,
+            status: Some(CheckStatus::Passed),
             success: true,
             errors: Vec::new(),
             warnings: Vec::new(),
@@ -46,6 +67,8 @@ impl CheckResult {
     /// Create a check result with warnings
     pub fn with_warnings(warnings: Vec<String>) -> Self {
         Self {
+            code: None,
+            status: Some(CheckStatus::Warning),
             success: true,
             errors: Vec::new(),
             warnings,
@@ -56,6 +79,8 @@ impl CheckResult {
     /// Create a failed check result
     pub fn failed(errors: Vec<String>) -> Self {
         Self {
+            code: None,
+            status: Some(CheckStatus::Failed),
             success: false,
             errors,
             warnings: Vec::new(),
@@ -66,6 +91,8 @@ impl CheckResult {
     /// Create a failed check result with warnings
     pub fn failed_with_warnings(errors: Vec<String>, warnings: Vec<String>) -> Self {
         Self {
+            code: None,
+            status: Some(CheckStatus::Failed),
             success: false,
             errors,
             warnings,
@@ -77,11 +104,15 @@ impl CheckResult {
     pub fn add_error(&mut self, error: String) {
         self.errors.push(error);
         self.success = false;
+        self.status = Some(CheckStatus::Failed);
     }
 
     /// Add a warning to the result
     pub fn add_warning(&mut self, warning: String) {
         self.warnings.push(warning);
+        if self.success {
+            self.status = Some(CheckStatus::Warning);
+        }
     }
 
     /// Merge another check result into this one
@@ -91,6 +122,7 @@ impl CheckResult {
         if !other.success {
             self.success = false;
         }
+        self.status = Some(Self::status_for(self.success, &self.warnings));
     }
 
     /// Set the check description for this result
@@ -98,12 +130,46 @@ impl CheckResult {
         self.check_description = Some(check_description);
         self
     }
+
+    /// Set stable metadata supplied by the registered check.
+    pub fn with_check_metadata(
+        mut self,
+        code: Option<&'static str>,
+        check_description: &'static str,
+    ) -> Self {
+        self.code = code.map(str::to_string);
+        self.check_description = Some(check_description.to_string());
+        // Preserve a non-derivable status a check set itself (skipped/unknown);
+        // otherwise derive it from the pass/fail/warning outcome.
+        if !matches!(
+            self.status,
+            Some(CheckStatus::Skipped) | Some(CheckStatus::Unknown)
+        ) {
+            self.status = Some(Self::status_for(self.success, &self.warnings));
+        }
+        self
+    }
+
+    fn status_for(success: bool, warnings: &[String]) -> CheckStatus {
+        if !success {
+            CheckStatus::Failed
+        } else if !warnings.is_empty() {
+            CheckStatus::Warning
+        } else {
+            CheckStatus::Passed
+        }
+    }
 }
 
 /// Validates stack configuration without requiring cloud access.
 /// Can run during build time for early error detection.
 #[async_trait::async_trait]
 pub trait CompileTimeCheck: Send + Sync {
+    /// Stable machine-readable check code
+    fn code(&self) -> Option<&'static str> {
+        None
+    }
+
     /// User-facing description of what this check validates
     fn description(&self) -> &'static str;
 
@@ -121,6 +187,11 @@ pub trait CompileTimeCheck: Send + Sync {
 /// implicit infrastructure resources.
 #[async_trait::async_trait]
 pub trait DeploymentPrerequisiteCheck: Send + Sync {
+    /// Stable machine-readable check code
+    fn code(&self) -> Option<&'static str> {
+        None
+    }
+
     /// User-facing description of what this check validates
     fn description(&self) -> &'static str;
 
@@ -146,6 +217,11 @@ pub trait DeploymentPrerequisiteCheck: Send + Sync {
 #[cfg(feature = "runtime-checks")]
 #[async_trait::async_trait]
 pub trait RuntimeCheck: Send + Sync {
+    /// Stable machine-readable check code
+    fn code(&self) -> Option<&'static str> {
+        None
+    }
+
     /// User-facing description of what this check validates
     fn description(&self) -> &'static str;
 
@@ -166,6 +242,11 @@ pub trait RuntimeCheck: Send + Sync {
 /// Runs during stack updates to prevent breaking changes.
 #[async_trait::async_trait]
 pub trait StackCompatibilityCheck: Send + Sync {
+    /// Stable machine-readable check code
+    fn code(&self) -> Option<&'static str> {
+        None
+    }
+
     /// User-facing description of what this check validates
     fn description(&self) -> &'static str;
 
@@ -206,6 +287,9 @@ pub struct PreflightRegistry {
     runtime_checks: Vec<Box<dyn RuntimeCheck>>,
     compatibility_checks: Vec<Box<dyn StackCompatibilityCheck>>,
     mutations: Vec<Box<dyn StackMutation>>,
+    /// Registered check codes; codes are a stable machine-readable namespace,
+    /// so registration panics on a duplicate (a programming error).
+    registered_check_codes: HashSet<&'static str>,
 }
 
 impl PreflightRegistry {
@@ -218,6 +302,16 @@ impl PreflightRegistry {
             runtime_checks: Vec::new(),
             compatibility_checks: Vec::new(),
             mutations: Vec::new(),
+            registered_check_codes: HashSet::new(),
+        }
+    }
+
+    fn register_check_code(&mut self, code: Option<&'static str>) {
+        if let Some(code) = code {
+            assert!(
+                self.registered_check_codes.insert(code),
+                "duplicate preflight check code registered: {code}"
+            );
         }
     }
 
@@ -265,7 +359,13 @@ impl PreflightRegistry {
             deployment_prerequisites::TargetResourcesResolveCheck,
         ));
         registry.add_deployment_prerequisite_check(Box::new(
-            deployment_prerequisites::ExternalInfrastructureBindingsRequiredCheck,
+            deployment_prerequisites::MachinesInfrastructureFrozenCheck,
+        ));
+        registry.add_deployment_prerequisite_check(Box::new(
+            deployment_prerequisites::ExternalBindingsRequiredCheck,
+        ));
+        registry.add_deployment_prerequisite_check(Box::new(
+            deployment_prerequisites::ExternalBindingsTypeCheck,
         ));
         registry
             .add_deployment_prerequisite_check(Box::new(compile_time::CapacityGroupProfileCheck));
@@ -343,6 +443,7 @@ impl PreflightRegistry {
 
     /// Add a compile-time check
     pub fn add_compile_time_check(&mut self, check: Box<dyn CompileTimeCheck>) {
+        self.register_check_code(check.code());
         self.compile_time_checks.push(check);
     }
 
@@ -351,17 +452,20 @@ impl PreflightRegistry {
         &mut self,
         check: Box<dyn DeploymentPrerequisiteCheck>,
     ) {
+        self.register_check_code(check.code());
         self.deployment_prerequisite_checks.push(check);
     }
 
     /// Add a runtime check
     #[cfg(feature = "runtime-checks")]
     pub fn add_runtime_check(&mut self, check: Box<dyn RuntimeCheck>) {
+        self.register_check_code(check.code());
         self.runtime_checks.push(check);
     }
 
     /// Add a compatibility check
     pub fn add_compatibility_check(&mut self, check: Box<dyn StackCompatibilityCheck>) {
+        self.register_check_code(check.code());
         self.compatibility_checks.push(check);
     }
 

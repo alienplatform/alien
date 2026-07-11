@@ -146,16 +146,11 @@ impl CommandRegistry for SqliteCommandRegistry {
             }));
         }
 
-        let deployment_model = match deployment.platform {
-            alien_core::Platform::Kubernetes | alien_core::Platform::Local => DeploymentModel::Pull,
-            _ => {
-                deployment
-                    .stack_settings
-                    .as_ref()
-                    .expect("stored deployment carries stack_settings")
-                    .deployment_model
-            }
-        };
+        let deployment_model = deployment
+            .stack_settings
+            .as_ref()
+            .expect("stored deployment carries stack_settings")
+            .deployment_model;
         let deployment_model_str = serialize_enum(&deployment_model);
 
         let sql = Query::insert()

@@ -2875,6 +2875,7 @@ export const PersistImportedDeploymentRequestStatus = {
   InitialSetup: "initial-setup",
   InitialSetupFailed: "initial-setup-failed",
   Provisioning: "provisioning",
+  WaitingForMachines: "waiting-for-machines",
   ProvisioningFailed: "provisioning-failed",
   Running: "running",
   RefreshFailed: "refresh-failed",
@@ -2973,7 +2974,7 @@ export type PersistImportedDeploymentRequest = {
   deploymentGroupId: string;
   managerId: string;
   /**
-   * Optional deployment subdomain under the project's generated-domain parent. Omit to generate a random subdomain.
+   * Optional deployment subdomain under the project's generated-domain parent. Operator-only and requires a custom project domain; customer deploy-link tokens and the shared system domain are rejected. Omit to generate a random subdomain.
    */
   publicSubdomain?: string | undefined;
   /**

@@ -6,6 +6,10 @@ pub struct MachinesResourcesCheck;
 
 #[async_trait::async_trait]
 impl CompileTimeCheck for MachinesResourcesCheck {
+    fn code(&self) -> Option<&'static str> {
+        Some("MACHINES_UNSUPPORTED_RESOURCE")
+    }
+
     fn description(&self) -> &'static str {
         "Machines deployments support only Horizon-schedulable resources"
     }
@@ -20,26 +24,26 @@ impl CompileTimeCheck for MachinesResourcesCheck {
         for (resource_id, entry) in stack.resources() {
             if entry.config.downcast_ref::<Worker>().is_some() {
                 errors.push(format!(
-                    "MACHINES_UNSUPPORTED_RESOURCE: Worker '{resource_id}' is not supported on platform 'machines'. Workers are supported on aws, gcp, azure, kubernetes, and local. Use a daemon or stateless replicated container for Your machines deployments."
+                    "Worker '{resource_id}' is not supported on platform 'machines'. Workers are supported on aws, gcp, azure, kubernetes, and local. Use a daemon or stateless replicated container for machines deployments."
                 ));
             }
 
             if entry.config.downcast_ref::<Build>().is_some() {
                 errors.push(format!(
-                    "MACHINES_UNSUPPORTED_RESOURCE: Build '{resource_id}' is not supported on platform 'machines'. Builds are supported on aws, gcp, azure, and kubernetes."
+                    "Build '{resource_id}' is not supported on platform 'machines'. Builds are supported on aws, gcp, azure, and kubernetes."
                 ));
             }
 
             if entry.config.downcast_ref::<ServiceAccount>().is_some() {
                 errors.push(format!(
-                    "MACHINES_UNSUPPORTED_RESOURCE: ServiceAccount '{resource_id}' is not supported on platform 'machines'. Service accounts are supported on aws, gcp, azure, kubernetes, and local."
+                    "ServiceAccount '{resource_id}' is not supported on platform 'machines'. Service accounts are supported on aws, gcp, azure, kubernetes, and local."
                 ));
             }
 
             if let Some(container) = entry.config.downcast_ref::<Container>() {
                 if container.stateful {
                     errors.push(format!(
-                        "MACHINES_UNSUPPORTED_RESOURCE: Stateful container '{resource_id}' is not supported on platform 'machines'. Stateful containers are supported on kubernetes. Use a stateless replicated container for Your machines deployments."
+                        "Stateful container '{resource_id}' is not supported on platform 'machines'. Stateful containers are supported on kubernetes. Use a stateless replicated container for machines deployments."
                     ));
                 }
             }
@@ -133,9 +137,13 @@ mod tests {
 
         assert!(!result.success);
         assert_eq!(
+            MachinesResourcesCheck.code(),
+            Some("MACHINES_UNSUPPORTED_RESOURCE")
+        );
+        assert_eq!(
             result.errors,
             vec![
-                "MACHINES_UNSUPPORTED_RESOURCE: Worker 'job' is not supported on platform 'machines'. Workers are supported on aws, gcp, azure, kubernetes, and local. Use a daemon or stateless replicated container for Your machines deployments."
+                "Worker 'job' is not supported on platform 'machines'. Workers are supported on aws, gcp, azure, kubernetes, and local. Use a daemon or stateless replicated container for machines deployments."
                     .to_string()
             ]
         );
@@ -158,8 +166,8 @@ mod tests {
 
         assert!(!result.success);
         assert_eq!(result.errors.len(), 2);
-        assert!(result.errors[0].starts_with("MACHINES_UNSUPPORTED_RESOURCE"));
-        assert!(result.errors[1].starts_with("MACHINES_UNSUPPORTED_RESOURCE"));
+        assert!(result.errors[0].starts_with("Build 'image-build'"));
+        assert!(result.errors[1].starts_with("ServiceAccount 'runtime'"));
     }
 
     #[tokio::test]
@@ -178,7 +186,7 @@ mod tests {
         assert_eq!(
             result.errors,
             vec![
-                "MACHINES_UNSUPPORTED_RESOURCE: Stateful container 'db' is not supported on platform 'machines'. Stateful containers are supported on kubernetes. Use a stateless replicated container for Your machines deployments."
+                "Stateful container 'db' is not supported on platform 'machines'. Stateful containers are supported on kubernetes. Use a stateless replicated container for machines deployments."
                     .to_string()
             ]
         );

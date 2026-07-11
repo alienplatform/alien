@@ -200,7 +200,7 @@ impl KubernetesWorkerController {
         }
 
         Ok(HandlerAction::Stay {
-            max_times: 60, // 60 attempts * 5 seconds = 5 minutes max wait
+            max_times: Some(60), // 60 attempts * 5 seconds = 5 minutes max wait
             suggested_delay: Some(Duration::from_secs(5)),
         })
     }
@@ -251,7 +251,7 @@ impl KubernetesWorkerController {
                 suggested_delay: Some(Duration::from_secs(30)),
             }),
             KubernetesEndpointAction::Waiting { suggested_delay } => Ok(HandlerAction::Stay {
-                max_times: 60,
+                max_times: Some(60),
                 suggested_delay: Some(suggested_delay),
             }),
         }
@@ -334,7 +334,7 @@ impl KubernetesWorkerController {
             .await?;
             if let KubernetesEndpointAction::Waiting { suggested_delay } = action {
                 return Ok(HandlerAction::Stay {
-                    max_times: 60,
+                    max_times: Some(60),
                     suggested_delay: Some(suggested_delay),
                 });
             }
@@ -512,7 +512,7 @@ impl KubernetesWorkerController {
         }
 
         Ok(HandlerAction::Stay {
-            max_times: 60,
+            max_times: Some(60),
             suggested_delay: Some(Duration::from_secs(5)),
         })
     }
@@ -563,7 +563,7 @@ impl KubernetesWorkerController {
                 suggested_delay: Some(Duration::from_secs(30)),
             }),
             KubernetesEndpointAction::Waiting { suggested_delay } => Ok(HandlerAction::Stay {
-                max_times: 60,
+                max_times: Some(60),
                 suggested_delay: Some(suggested_delay),
             }),
         }
@@ -696,7 +696,7 @@ impl KubernetesWorkerController {
         }
 
         Ok(HandlerAction::Stay {
-            max_times: 60, // 60 attempts * 5 seconds = 5 minutes max wait for deletion
+            max_times: Some(60), // 60 attempts * 5 seconds = 5 minutes max wait for deletion
             suggested_delay: Some(Duration::from_secs(5)),
         })
     }

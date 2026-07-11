@@ -50,6 +50,21 @@ fn retryable_function(id: &str, fail_count: u32) -> Worker {
         .build()
 }
 
+/// Helper to create a function blocked on a dependency that is expected to become ready later.
+fn dependency_waiting_function(id: &str) -> Worker {
+    Worker::new(id.to_string())
+        .code(WorkerCode::Image {
+            image: format!("image-{}", id),
+        })
+        .memory_mb(1024)
+        .environment(HashMap::from([(
+            "SIMULATE_DEPENDENCY_NOT_READY".to_string(),
+            "true".to_string(),
+        )]))
+        .permissions("execution".to_string())
+        .build()
+}
+
 /// Tests automatic recovery when config is updated after failure.
 #[tokio::test]
 async fn test_failure_auto_recovery_on_config_update() -> Result<()> {
@@ -195,6 +210,49 @@ async fn test_transient_failure_auto_retry() -> Result<()> {
     );
 
     // The important thing is that it recovered from transient failure
+    Ok(())
+}
+
+#[tokio::test]
+async fn test_dependency_not_ready_does_not_consume_retry_budget() -> Result<()> {
+    let waiting_func = dependency_waiting_function("waiting-func");
+
+    let stack = Stack::new("dependency-wait-stack".to_owned())
+        .add(waiting_func.clone(), ResourceLifecycle::Live)
+        .build();
+
+    let executor = new_executor(&stack)?;
+    let mut state = new_test_state();
+
+    for _ in 0..10 {
+        let step_result = executor.step(state).await?;
+        assert_eq!(
+            step_result.suggested_delay_ms,
+            Some(10_000),
+            "dependency wait should suggest a bounded poll delay"
+        );
+        state = step_result.next_state;
+    }
+
+    let resource_state = state
+        .resources
+        .get("waiting-func")
+        .expect("waiting resource should be in stack state");
+
+    assert_eq!(
+        resource_state.status,
+        ResourceStatus::Provisioning,
+        "dependency wait should keep the resource in progress"
+    );
+    assert_eq!(
+        resource_state.retry_attempt, 0,
+        "dependency wait should not consume the retry budget"
+    );
+    assert!(
+        resource_state.error.is_none(),
+        "dependency wait should not persist a resource failure"
+    );
+
     Ok(())
 }
 
