@@ -324,6 +324,14 @@ class PullCommandReceiver implements CommandReceiver {
     }
 
     const parsed = parseWireResponse(LeaseResponseSchema, await response.json(), "POST", endpoint)
+    // Lease-served envelopes carry manager URLs as root-relative paths (the
+    // manager cannot know an address reachable from behind this consumer's
+    // network boundary; the configured URL — corrected by the platform for
+    // exactly that — is the address to resolve against). Absolute URLs pass
+    // through: cloud-presigned storage and older managers.
+    for (const lease of parsed.leases) {
+      resolveEnvelopeUrls(lease.envelope, this.config.url)
+    }
     return parsed.leases
   }
 
@@ -555,6 +563,42 @@ export function buildLeaseEndpoint(baseUrl: string): string {
  * the prefix cannot be reconstructed client-side. The manager's own base-URL
  * path (e.g. `/v1`) rides inside the minted path and is preserved.
  */
+/**
+ * Resolve root-relative envelope URLs in place against the configured
+ * commands endpoint's origin.
+ *
+ * Lease-served envelopes carry manager URLs as root-relative paths — the
+ * manager cannot know an address that is reachable from behind every
+ * consumer's network boundary, while the configured commands URL is exactly
+ * that address. Absolute URLs pass through unchanged: cloud-presigned
+ * storage requests and envelopes from managers that predate relative
+ * minting. Twin of the Rust `resolve_envelope_urls`.
+ */
+export function resolveEnvelopeUrls(envelope: Envelope, commandsBaseUrl: string): void {
+  let origin: string
+  try {
+    origin = new URL(commandsBaseUrl).origin
+  } catch {
+    // Unparseable base (already rejected at construction): leave the
+    // envelope as served.
+    return
+  }
+  const resolve = (url: string) => (url.startsWith("/") ? `${origin}${url}` : url)
+
+  envelope.responseHandling.submitResponseUrl = resolve(
+    envelope.responseHandling.submitResponseUrl,
+  )
+  const upload = envelope.responseHandling.storageUploadRequest
+  if (upload.backend.type === "http") {
+    upload.backend.url = resolve(upload.backend.url)
+  }
+  if (envelope.params.mode === "storage" && envelope.params.storageGetRequest?.backend.type === "http") {
+    envelope.params.storageGetRequest.backend.url = resolve(
+      envelope.params.storageGetRequest.backend.url,
+    )
+  }
+}
+
 export function rebaseOntoCommandsOrigin(target: string, commandsBaseUrl: string): string {
   try {
     const targetUrl = new URL(target)

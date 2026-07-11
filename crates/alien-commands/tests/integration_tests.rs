@@ -693,6 +693,50 @@ mod tests {
         assert_eq!(second_leases.leases[0].envelope.target, second_target);
     }
 
+    /// Lease-served envelopes carry manager URLs as root-relative paths: the
+    /// pull consumer resolves them against its own configured commands
+    /// endpoint, because the manager cannot know an address reachable from
+    /// behind the consumer's network boundary (a container's
+    /// `host.docker.internal`, a BYOC tunnel). The signed query parameters
+    /// must survive the relativization untouched.
+    #[tokio::test]
+    async fn test_leased_envelope_manager_urls_are_root_relative() {
+        let server = TestCommandServer::builder().with_pull_mode().build().await;
+
+        let mut request = test_inline_create_command("relative-agent", "relative-urls");
+        request.target_resource_id = Some(server.default_target.resource_id.clone());
+        let created = server.create_command(request).await.unwrap();
+
+        let leases = server
+            .acquire_lease(
+                "relative-agent",
+                LeaseRequest {
+                    deployment_id: "relative-agent".to_string(),
+                    target: server.default_target.clone(),
+                    max_leases: 1,
+                    lease_seconds: 60,
+                },
+            )
+            .await
+            .unwrap();
+        assert_eq!(leases.leases.len(), 1);
+        let envelope = &leases.leases[0].envelope;
+
+        let submit = &envelope.response_handling.submit_response_url;
+        assert!(
+            submit.starts_with('/'),
+            "lease-served submit URL must be root-relative, got '{submit}'"
+        );
+        assert!(
+            submit.contains(&format!("/commands/{}/response", created.command_id)),
+            "relative submit URL must keep the manager path, got '{submit}'"
+        );
+        assert!(
+            submit.contains("response_token="),
+            "relativization must preserve the signed query, got '{submit}'"
+        );
+    }
+
     /// Defense-in-depth: a pending-index entry under target A's prefix whose
     /// stored command metadata says target B is corruption — the lease call
     /// must fail loudly instead of misdelivering the command.

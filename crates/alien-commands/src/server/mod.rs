@@ -780,8 +780,17 @@ impl CommandServer {
                 )
                 .await?;
 
-            // 8. Build envelope
-            let envelope = self.build_envelope(&command_id, &metadata, params).await?;
+            // 8. Build envelope. Lease-served envelopes carry manager URLs
+            // as root-relative paths: a pull consumer resolves them against
+            // its own configured commands endpoint — the one address the
+            // platform corrected for that consumer's network (a container's
+            // `host.docker.internal`, a BYOC daemon's tunnel URL) — because
+            // the manager cannot know an address that is reachable from
+            // behind every consumer's boundary. Push envelopes keep absolute
+            // URLs: push transports have no configured base, and reaching
+            // the manager's public address is inherent to push delivery.
+            let mut envelope = self.build_envelope(&command_id, &metadata, params).await?;
+            Self::relativize_manager_urls(&mut envelope, &self.base_url);
 
             leases.push(LeaseInfo {
                 lease_id,
@@ -793,6 +802,44 @@ impl CommandServer {
         }
 
         Ok(LeaseResponse { leases })
+    }
+
+    /// Rewrite manager-origin URLs in a lease-served envelope to
+    /// root-relative paths (see the call site in [`Self::acquire_lease`]).
+    /// Only URLs on the server's own origin are rewritten — cloud-presigned
+    /// storage URLs live on other origins and pass through absolute.
+    fn relativize_manager_urls(envelope: &mut Envelope, base_url: &str) {
+        let Ok(base) = reqwest::Url::parse(base_url) else {
+            // An unparseable base cannot produce a strippable prefix; leave
+            // the envelope absolute (the pre-relative behavior).
+            return;
+        };
+        let origin = base.origin().ascii_serialization();
+        let strip = |target: &mut String| {
+            if let Some(rest) = target.strip_prefix(&origin) {
+                if rest.starts_with('/') {
+                    *target = rest.to_string();
+                }
+            }
+        };
+
+        strip(&mut envelope.response_handling.submit_response_url);
+        if let alien_core::presigned::PresignedRequestBackend::Http { url, .. } =
+            &mut envelope.response_handling.storage_upload_request.backend
+        {
+            strip(url);
+        }
+        if let BodySpec::Storage {
+            storage_get_request: Some(request),
+            ..
+        } = &mut envelope.params
+        {
+            if let alien_core::presigned::PresignedRequestBackend::Http { url, .. } =
+                &mut request.backend
+            {
+                strip(url);
+            }
+        }
     }
 
     /// Release a lease manually.

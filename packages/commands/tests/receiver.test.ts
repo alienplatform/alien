@@ -722,3 +722,34 @@ describe("CommandReceiver.run", () => {
     expect(submits).toHaveLength(1)
   })
 })
+
+describe("resolveEnvelopeUrls", () => {
+  it("resolves root-relative manager URLs against the configured origin and keeps absolute URLs", async () => {
+    const { resolveEnvelopeUrls } = await import("../src/receiver.js")
+
+    // Relative manager URLs (lease-served) resolve against the origin of the
+    // configured commands URL — including a manager-served upload URL —
+    // while an absolute cloud-presigned URL passes through untouched.
+    const env = envelope({ baseUrl: "http://ignored.example.com" })
+    env.responseHandling.submitResponseUrl = "/v1/commands/cmd_1/response?response_token=t&expires=1"
+    env.responseHandling.storageUploadRequest.backend = {
+      type: "http",
+      url: "/v1/commands/cmd_1/response-blob?sig=x",
+      method: "PUT",
+      headers: {},
+    }
+    resolveEnvelopeUrls(env, "http://host.docker.internal:9090/v1")
+    expect(env.responseHandling.submitResponseUrl).toBe(
+      "http://host.docker.internal:9090/v1/commands/cmd_1/response?response_token=t&expires=1",
+    )
+    expect(env.responseHandling.storageUploadRequest.backend).toMatchObject({
+      url: "http://host.docker.internal:9090/v1/commands/cmd_1/response-blob?sig=x",
+    })
+
+    const absolute = envelope({ baseUrl: "https://commands.example.com" })
+    resolveEnvelopeUrls(absolute, "http://host.docker.internal:9090/v1")
+    expect(absolute.responseHandling.submitResponseUrl).toBe(
+      "https://commands.example.com/v1/commands/cmd_1/response",
+    )
+  })
+})
