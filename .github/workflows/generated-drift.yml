@@ -6,7 +6,6 @@ on:
       - 'packages/core/**'
       - 'packages/sdk/**'
       - 'crates/alien-core/**'
-      - 'crates/alien-bindings/proto/**'
       - 'client-sdks/platform/openapi.json'
       - 'client-sdks/manager/openapi.json'
       - 'package.json'

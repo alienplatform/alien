@@ -914,9 +914,17 @@ impl LocalWorkerManager {
 
     /// Stops a daemon runtime (keeps extracted image directory and metadata for recovery).
     pub async fn stop_daemon(&self, id: &str) -> Result<()> {
-        let mut daemons = self.daemons.lock().await;
+        // Remove under the lock, then drain OUTSIDE it: the graceful stop can
+        // take up to the daemon's stop grace period (30s default), and other
+        // daemons' health checks, the crash monitor, and concurrent starts
+        // all contend on this lock. The removed entry already makes the stop
+        // exclusive — nothing else can reach this runtime.
+        let runtime = {
+            let mut daemons = self.daemons.lock().await;
+            daemons.remove(id)
+        };
 
-        if let Some(runtime) = daemons.remove(id) {
+        if let Some(runtime) = runtime {
             if let Err(e) = runtime.shutdown_tx.send(()) {
                 warn!(
                     daemon_id = %id,

@@ -254,6 +254,19 @@ impl KubernetesDaemonController {
             .await?;
         }
 
+        // Keep the public endpoint reconciled on every Ready tick, like the
+        // container controller: managed-TLS certificate rotations, LB/DNS
+        // drift, and a deleted Service/route are otherwise never re-applied
+        // until an unrelated config change triggers the Update flow.
+        if let KubernetesEndpointAction::Waiting { suggested_delay } =
+            self.reconcile_endpoint(ctx).await?
+        {
+            return Ok(HandlerAction::Stay {
+                max_times: 60,
+                suggested_delay: Some(suggested_delay),
+            });
+        }
+
         Ok(HandlerAction::Continue {
             state: Ready,
             suggested_delay: Some(Duration::from_secs(30)),

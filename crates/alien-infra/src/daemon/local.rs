@@ -200,6 +200,21 @@ impl LocalDaemonController {
                 })
             })?;
 
+        // Self-heal instead of erroring when the daemon simply isn't running:
+        // after a manager restart, cold recovery intentionally skips daemons
+        // whose env carried runtime-only secrets (their values are never
+        // persisted), so the controller — resuming at Ready — is the ONLY
+        // thing that can bring them back. Re-entering StartingProcess rebuilds
+        // the full env (secrets freshly resolved) and starts the process;
+        // erroring here would just cycle Ready→RefreshFailed→Ready forever.
+        if !manager.is_daemon_running(&config.id).await {
+            debug!(daemon_id=%config.id, "Daemon not running; re-entering start flow");
+            return Ok(HandlerAction::Continue {
+                state: StartingProcess,
+                suggested_delay: None,
+            });
+        }
+
         manager
             .check_daemon_health(&config.id)
             .await

@@ -463,6 +463,7 @@ async fn supervise_daemon_process(
                 "Daemon shutdown signal received; sending SIGTERM"
             );
             match child.id() {
+                #[cfg(unix)]
                 Some(pid) => {
                     // SAFETY: plain kill(2) on the child pid we own; no memory
                     // access. A failure (e.g. the process already exited) is
@@ -481,6 +482,15 @@ async fn supervise_daemon_process(
                                 warn!(daemon_id = %daemon_id, error = %e, "Failed to kill daemon process");
                             }
                         }
+                    }
+                }
+                // Windows has no SIGTERM to offer a drain window; hard-kill
+                // as before. (The local platform is unix-first; this arm only
+                // keeps the Windows CLI build compiling.)
+                #[cfg(not(unix))]
+                Some(_pid) => {
+                    if let Err(e) = child.kill().await {
+                        warn!(daemon_id = %daemon_id, error = %e, "Failed to kill daemon process");
                     }
                 }
                 // No pid means the child already exited; reap it.

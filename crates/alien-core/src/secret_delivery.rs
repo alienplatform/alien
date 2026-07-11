@@ -7,8 +7,6 @@
 //! of stringly-typed `matches!(resource_type, "container" | "daemon")` checks
 //! scattered across crates.
 
-use crate::Platform;
-
 /// A compute resource kind that receives injected environment variables.
 ///
 /// Only the three compute kinds are represented; storage/queue/etc. resources
@@ -37,40 +35,33 @@ impl ComputeKind {
 pub enum SecretDelivery {
     /// Inject the `ALIEN_SECRETS` vault-load pointer (the secret keys plus a
     /// values hash). At startup the workload loads the actual values from the
-    /// "secrets" vault: Workers do this through their runtime wrapper on every
-    /// platform, and — pending native local delivery (ALIEN-226) — off-Kubernetes
-    /// Containers and Daemons still collapse to this same pointer.
+    /// "secrets" vault through the Worker runtime wrapper. Worker-only:
+    /// runtime-less workloads have nothing that could consume the pointer.
     VaultPointer,
-    /// The platform controller projects each applicable secret natively (e.g. a
-    /// Kubernetes `valueFrom.secretKeyRef` against a per-workload Secret), so no
-    /// vault-load pointer is injected into the manifest.
+    /// The hosting layer delivers each applicable secret natively before the
+    /// process starts — Kubernetes `valueFrom.secretKeyRef`, the local
+    /// supervisor's resolved plain env, or Horizon workload secrets — so no
+    /// vault-load pointer is ever injected.
     NativeProjection,
 }
 
 impl SecretDelivery {
-    /// Resolves how a compute kind's secrets are delivered on a platform.
+    /// Resolves how a compute kind's secrets are delivered.
     ///
-    /// Behavior, preserved from the original per-crate checks:
-    /// - Workers ship the runtime wrapper on every platform and always load
-    ///   their secrets from the vault via the pointer.
-    /// - Kubernetes Containers and Daemons run the app image directly (no
-    ///   runtime wrapper), so their controllers project secrets natively.
-    /// - Every other Container/Daemon (AWS, GCP, Azure, Machines, Local, Test)
-    ///   still collapses to the vault pointer. Native local Container/Daemon
-    ///   delivery is deferred (ALIEN-226) — see [`SecretDelivery::VaultPointer`].
+    /// - Workers ship the runtime wrapper on every platform and load their
+    ///   secrets from the vault via the pointer.
+    /// - Containers and Daemons are runtime-less on EVERY platform
+    ///   (ALIEN-211): nothing in the workload can load a vault pointer, so
+    ///   the hosting layer projects secrets natively before process start
+    ///   (Kubernetes secretKeyRef, local supervisor plain env, Horizon
+    ///   workload secrets) and the pointer must never be minted for them.
     ///
-    /// The match is exhaustive over `(Platform, ComputeKind)` so adding a
-    /// platform or compute kind forces an explicit delivery choice here.
-    pub fn resolve(platform: Platform, kind: ComputeKind) -> Self {
-        use ComputeKind::{Container, Daemon, Worker};
-        use Platform::{Aws, Azure, Gcp, Kubernetes, Local, Machines, Test};
-
-        match (platform, kind) {
-            (_, Worker) => SecretDelivery::VaultPointer,
-            (Kubernetes, Container | Daemon) => SecretDelivery::NativeProjection,
-            (Aws | Gcp | Azure | Machines | Local | Test, Container | Daemon) => {
-                SecretDelivery::VaultPointer
-            }
+    /// The match is exhaustive over `ComputeKind` so a new compute kind
+    /// forces an explicit delivery choice here.
+    pub fn resolve(kind: ComputeKind) -> Self {
+        match kind {
+            ComputeKind::Worker => SecretDelivery::VaultPointer,
+            ComputeKind::Container | ComputeKind::Daemon => SecretDelivery::NativeProjection,
         }
     }
 
@@ -84,55 +75,26 @@ impl SecretDelivery {
 mod tests {
     use super::*;
 
+    /// The ALIEN-211 delete-list invariant: the ALIEN_SECRETS pointer is
+    /// Worker-only. A runtime-less Container/Daemon has nothing that could
+    /// consume it, on any platform.
     #[test]
-    fn kubernetes_projects_container_and_daemon_secrets_natively() {
+    fn containers_and_daemons_always_project_natively() {
         for kind in [ComputeKind::Container, ComputeKind::Daemon] {
             assert_eq!(
-                SecretDelivery::resolve(Platform::Kubernetes, kind),
+                SecretDelivery::resolve(kind),
                 SecretDelivery::NativeProjection,
-                "{} on Kubernetes must project natively",
+                "{} must never receive the vault pointer",
                 kind.as_str()
             );
         }
     }
 
     #[test]
-    fn workers_always_use_the_vault_pointer() {
-        for platform in [
-            Platform::Aws,
-            Platform::Gcp,
-            Platform::Azure,
-            Platform::Kubernetes,
-            Platform::Machines,
-            Platform::Local,
-            Platform::Test,
-        ] {
-            assert_eq!(
-                SecretDelivery::resolve(platform, ComputeKind::Worker),
-                SecretDelivery::VaultPointer,
-                "workers on {platform:?} must keep the vault pointer"
-            );
-        }
-    }
-
-    #[test]
-    fn non_kubernetes_containers_and_daemons_collapse_to_the_vault_pointer() {
-        for platform in [
-            Platform::Aws,
-            Platform::Gcp,
-            Platform::Azure,
-            Platform::Machines,
-            Platform::Local,
-            Platform::Test,
-        ] {
-            for kind in [ComputeKind::Container, ComputeKind::Daemon] {
-                assert_eq!(
-                    SecretDelivery::resolve(platform, kind),
-                    SecretDelivery::VaultPointer,
-                    "{} on {platform:?} still collapses to the vault pointer",
-                    kind.as_str()
-                );
-            }
-        }
+    fn workers_use_the_vault_pointer() {
+        assert_eq!(
+            SecretDelivery::resolve(ComputeKind::Worker),
+            SecretDelivery::VaultPointer
+        );
     }
 }

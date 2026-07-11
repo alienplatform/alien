@@ -45,6 +45,7 @@ export type {
   QueueMessage,
   QueueMessageEvent,
   ScheduledEvent,
+  WorkerCommandContext,
 } from "./worker-runtime/registry.js"
 
 // ============================================================================

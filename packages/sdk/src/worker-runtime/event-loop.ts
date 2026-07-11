@@ -192,7 +192,11 @@ export class EventLoop {
         )
       }
     }
-    return await runCommand(command.commandName, params)
+    return await runCommand(command.commandName, params, {
+      commandId: command.commandId,
+      attempt: command.attempt,
+      deadline: command.deadline,
+    })
   }
 
   private async sendTaskResult(

@@ -55,13 +55,27 @@ export interface QueueMessageEvent<T = unknown> {
 }
 
 /**
+ * Per-invocation metadata passed to a Worker command handler alongside its
+ * params. Mirrors the pull receiver's context: `attempt > 1` means
+ * redelivery (at-least-once semantics), and `deadline` bounds execution.
+ */
+export interface WorkerCommandContext {
+  /** Unique command identifier. */
+  commandId: string
+  /** Delivery attempt, starting at 1. */
+  attempt: number
+  /** Deadline for completion, when the sender set one. */
+  deadline?: Date
+}
+
+/**
  * Command definition.
  */
 export interface CommandDefinition {
   /** Command name */
   name: string
   /** Handler function that receives params and returns a result */
-  handler: (params: unknown) => Promise<unknown>
+  handler: (params: unknown, context: WorkerCommandContext) => Promise<unknown>
 }
 
 /**
@@ -137,25 +151,29 @@ function registry(): RegistryState {
 /**
  * Register a command handler.
  *
+ * The handler receives the decoded params and, optionally, a
+ * {@link WorkerCommandContext} with `commandId`, `attempt`, and `deadline` —
+ * use `attempt` to make redeliveries idempotent (at-least-once semantics).
+ *
  * @param name - Command name
- * @param handler - Handler that receives params and returns a result
+ * @param handler - Handler that receives params (and optionally the context)
  *
  * @example
  * ```typescript
  * import { command } from "@alienplatform/sdk"
  *
- * command("echo", async ({ message }: { message: string }) => {
- *   return { message, timestamp: new Date().toISOString() }
+ * command("echo", async ({ message }: { message: string }, { attempt }) => {
+ *   return { message, attempt, timestamp: new Date().toISOString() }
  * })
  * ```
  */
 export function command<TParams = unknown, TResult = unknown>(
   name: string,
-  handler: (params: TParams) => Promise<TResult>,
+  handler: (params: TParams, context: WorkerCommandContext) => Promise<TResult>,
 ): void {
   registry().commands.set(name, {
     name,
-    handler: handler as (params: unknown) => Promise<unknown>,
+    handler: handler as (params: unknown, context: WorkerCommandContext) => Promise<unknown>,
   })
 }
 
@@ -165,13 +183,17 @@ export function getCommands(): Map<string, CommandDefinition> {
 }
 
 /** Execute a registered command by name. @internal */
-export async function runCommand(name: string, params: unknown): Promise<unknown> {
+export async function runCommand(
+  name: string,
+  params: unknown,
+  context: WorkerCommandContext,
+): Promise<unknown> {
   const commands = registry().commands
   const cmd = commands.get(name)
   if (!cmd) {
     throw new Error(`Unknown command: ${name}. Available: ${[...commands.keys()].join(", ")}`)
   }
-  return await cmd.handler(params)
+  return await cmd.handler(params, context)
 }
 
 // ============================================================================

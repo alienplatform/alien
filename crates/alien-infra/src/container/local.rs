@@ -25,13 +25,13 @@ use chrono::Utc;
 /// Remove the vault-load secret pointers (`ALIEN_SECRETS` /
 /// `ALIEN_RUNTIME_SECRETS`) from a projected environment.
 ///
-/// On Local, `SecretDelivery::resolve(Local, Container)` is a `VaultPointer`,
-/// so `add_standard_alien_env_vars` injects `ALIEN_SECRETS`. A local container
-/// runs runtime-less (the app binary is the direct entrypoint) with its
-/// secrets already delivered as concrete env vars, so the pointer is dead
-/// weight that would leak the vault reference into the container. The local
-/// daemon path strips exactly these two vars before spawning its process
-/// (`daemon_supervisor::spawn`); this keeps the container path symmetric.
+/// Containers never receive `ALIEN_SECRETS` anymore
+/// (`SecretDelivery::resolve(Container)` is `NativeProjection` on every
+/// platform), so this is defense in depth: it keeps a pointer minted by an
+/// OLDER manager's env snapshot — or by any future regression — out of the
+/// runtime-less container, whose secrets arrive as concrete env vars. The
+/// local daemon path strips the same two vars before spawning its process;
+/// this keeps the container path symmetric.
 fn strip_vault_secret_pointers(env_vars: &mut std::collections::HashMap<String, String>) {
     env_vars.remove(alien_core::ENV_ALIEN_SECRETS);
     env_vars.remove(alien_core::ENV_ALIEN_RUNTIME_SECRETS);

@@ -493,10 +493,11 @@ fn inject_into_environment(
         .map(|v| v.name.clone())
         .collect();
 
-    if SecretDelivery::resolve(platform, kind).is_native_projection() {
-        // The platform controller projects these secrets natively (Kubernetes
-        // secretKeyRef); injecting ALIEN_SECRETS here would leak a dangling
-        // vault-load pointer into the workload manifest.
+    if SecretDelivery::resolve(kind).is_native_projection() {
+        // The hosting layer projects these secrets natively before process
+        // start (Kubernetes secretKeyRef, local supervisor plain env, Horizon
+        // workload secrets); injecting ALIEN_SECRETS here would leak a
+        // dangling vault-load pointer into a runtime-less workload.
         if !secret_keys.is_empty() {
             debug!(
                 "Skipping ALIEN_SECRETS for {} '{}': {} secret keys are projected by the platform",
@@ -1160,21 +1161,33 @@ mod tests {
     }
 
     #[test]
-    fn non_kubernetes_platforms_still_collapse_secrets_for_all_compute() {
-        // Local Container/Daemon secret delivery is separate work (ALIEN-226);
-        // off Kubernetes, every compute resource keeps the ALIEN_SECRETS pointer.
-        for platform in [Platform::Local, Platform::Test, Platform::Aws] {
+    fn vault_pointer_is_worker_only_on_every_platform() {
+        // Runtime-less Containers/Daemons have nothing that could load the
+        // ALIEN_SECRETS pointer; the hosting layer projects their secrets
+        // natively before process start on every platform (ALIEN-211). Only
+        // the Worker — which ships the runtime wrapper — keeps the pointer.
+        for platform in [
+            Platform::Local,
+            Platform::Test,
+            Platform::Aws,
+            Platform::Kubernetes,
+        ] {
             let snapshot = make_snapshot(&[], &[("APP_SECRET", "s3cret")]);
             let config = make_config(snapshot);
             let mut stack = make_compute_stack();
 
             inject_environment_variables(&mut stack, &config, platform).unwrap();
 
-            for id in ["worker", "web", "agent"] {
+            let worker_env = resource_env(&stack, "worker");
+            assert!(
+                worker_env.contains_key(ENV_ALIEN_SECRETS),
+                "{platform:?}: worker keeps ALIEN_SECRETS"
+            );
+            for id in ["web", "agent"] {
                 let env = resource_env(&stack, id);
                 assert!(
-                    env.contains_key(ENV_ALIEN_SECRETS),
-                    "{platform:?}: '{id}' keeps ALIEN_SECRETS"
+                    !env.contains_key(ENV_ALIEN_SECRETS),
+                    "{platform:?}: runtime-less '{id}' must never receive ALIEN_SECRETS"
                 );
             }
         }
