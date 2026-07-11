@@ -196,6 +196,7 @@ fn parse_deployment_status(raw: &str) -> Option<DeploymentStatus> {
         "initial-setup" => Some(DeploymentStatus::InitialSetup),
         "initial-setup-failed" => Some(DeploymentStatus::InitialSetupFailed),
         "provisioning" => Some(DeploymentStatus::Provisioning),
+        "waiting-for-machines" => Some(DeploymentStatus::WaitingForMachines),
         "provisioning-failed" => Some(DeploymentStatus::ProvisioningFailed),
         "running" => Some(DeploymentStatus::Running),
         "refresh-failed" => Some(DeploymentStatus::RefreshFailed),

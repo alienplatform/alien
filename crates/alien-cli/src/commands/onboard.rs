@@ -305,6 +305,16 @@ fn platform_onboard_deployment_setup_config(
         policy: types::DeploymentSetupPolicy {
             allow_release_pinning: None,
             allowed_platforms,
+            allowed_kubernetes_base_platforms: vec![
+                types::DeploymentSetupPolicyAllowedKubernetesBasePlatformsItem::Aws,
+                types::DeploymentSetupPolicyAllowedKubernetesBasePlatformsItem::Gcp,
+                types::DeploymentSetupPolicyAllowedKubernetesBasePlatformsItem::Azure,
+                types::DeploymentSetupPolicyAllowedKubernetesBasePlatformsItem::OnPrem,
+            ],
+            allowed_kubernetes_cluster_sources: vec![
+                types::KubernetesClusterSource::Create,
+                types::KubernetesClusterSource::Existing,
+            ],
             allowed_setup_methods: vec![
                 types::DeploymentSetupMethod::Cloudformation,
                 types::DeploymentSetupMethod::GoogleOauth,

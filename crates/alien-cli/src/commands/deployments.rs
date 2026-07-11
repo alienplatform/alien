@@ -865,6 +865,8 @@ async fn create_deployment_task(
         environment_info: None,
         input_values: std::collections::HashMap::new(),
         public_subdomain: None,
+        initial_desired_release:
+            alien_platform_api::types::NewDeploymentRequestInitialDesiredRelease::Active,
         setup_method: None,
         setup_metadata: None,
     };
