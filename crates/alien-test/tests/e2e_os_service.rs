@@ -264,38 +264,16 @@ async fn min_launcher_gate_withholds_the_target() {
 /// off (`shutdown_all` in the operator + `kill_on_drop`/`PR_SET_PDEATHSIG` in
 /// alien-runtime), and the new operator re-spawns exactly ONE app — never two,
 /// never one reparented to init. Regression guard for the two-app orphan bug.
-// NOTE (workload seeding — finish before un-ignoring): an appless os-service
-// deployment stays `pending`, and `create_release`'s auto-assign is gated to
-// `running`/`update-failed`/`refresh-failed` deployments (set_desired_release),
-// so it can't attach the app here (CI: "never reached status running; last seen
-// pending"). The fix is to seed the workload release BEFORE the deployment is
-// created: `create_deployment` attaches `get_latest_release` (unfiltered, newest)
-// via a DIRECT, non-gated `set_deployment_desired_release`. Add a
-// `start_with_workload()` rig variant that publishes the app release between
-// manager-start and deployment-create, drop the `wait_for_status`/
-// `deploy_test_app_workload` dance, then remove this `#[ignore]`. The fix under
-// test (shutdown_all + kill_on_drop/PR_SET_PDEATHSIG) is verified live; the rest
-// of this test (app build, PID capture, orphan assertions) is ready.
 #[tokio::test]
-#[ignore = "workload seeding incomplete — see NOTE above; the fix it guards is verified live"]
 async fn app_child_not_orphaned_after_swap() {
-    let mut rig = OsServiceRig::start("1.0.0").await.expect("rig");
+    // Seed a real workload up front (release published before the deployment is
+    // created, so the operator picks it up) → the operator spawns an app child.
+    let mut rig = OsServiceRig::start_with_workload("1.0.0")
+        .await
+        .expect("rig with workload");
     rig.wait_for_reported_version("1.0.0", CONVERGE)
         .await
         .expect("initial version reported");
-
-    // The release's desired-release auto-assign only targets `running`
-    // deployments, so wait for the operator's first sync to mark it running.
-    rig.wait_for_status("running", CONVERGE)
-        .await
-        .expect("deployment reaches running");
-
-    // Deploy a real workload so the operator spawns an observable app child.
-    // Keep `_oci` alive: the operator reads the app's OCI from this dir.
-    let _oci = rig
-        .deploy_test_app_workload()
-        .await
-        .expect("deploy workload");
     let app_before = rig
         .wait_for_one_app(CONVERGE)
         .await

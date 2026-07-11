@@ -38,12 +38,29 @@ pub struct OsServiceRig {
     launcher: Option<std::process::Child>,
     /// Env the launcher (and by inheritance the operator) runs with.
     launcher_env: Vec<(String, String)>,
+    /// Kept alive so the operator can read the seeded workload's OCI (built under
+    /// this dir) for the rig's lifetime. `None` unless started via
+    /// `start_with_workload`.
+    _workload_oci: Option<tempfile::TempDir>,
 }
 
 impl OsServiceRig {
     /// Boot the full rig: manager + deployment + artifact server + version
     /// store seeded with `initial_version` + a running launcher.
     pub async fn start(initial_version: &str) -> anyhow::Result<Self> {
+        Self::start_inner(initial_version, false).await
+    }
+
+    /// Like [`start`], but also seeds a real workload: `alien-test-app` built to
+    /// a local OCI, published as a release BEFORE the deployment is created — so
+    /// `create_deployment` attaches it as the desired release (directly, not via
+    /// the `running`-gated `set_desired_release`) and the operator spawns an
+    /// observable app child. The OCI build needs `cargo` + `zig` (musl target).
+    pub async fn start_with_workload(initial_version: &str) -> anyhow::Result<Self> {
+        Self::start_inner(initial_version, true).await
+    }
+
+    async fn start_inner(initial_version: &str, seed_workload: bool) -> anyhow::Result<Self> {
         let operator_binary = find_operator_binary()?;
         let launcher_binary = find_launcher_binary()?;
 
@@ -60,6 +77,15 @@ impl OsServiceRig {
         )
         .await
         .map_err(|e| anyhow::anyhow!("manager start failed: {e}"))?;
+
+        // Seed the workload release BEFORE the deployment is created, so
+        // `create_deployment` attaches it as the desired release (via the direct,
+        // non-`running`-gated path). Kept alive on the rig for the operator.
+        let workload_oci = if seed_workload {
+            Some(publish_workload_release(&manager).await?)
+        } else {
+            None
+        };
 
         // A deployment group is required before a deployment (the admin token
         // is workspace-scoped). Create one, then a deployment in it — the
@@ -117,6 +143,7 @@ impl OsServiceRig {
             health_port: free_port(),
             launcher: None,
             launcher_env: Vec::new(),
+            _workload_oci: workload_oci,
         };
 
         let initial_script = rig_partial.wrapper_script(initial_version, &[]);
@@ -316,112 +343,6 @@ impl OsServiceRig {
 
     // -- workload + orphan inspection (for the self-update orphan guard) -----
 
-    /// Poll until the deployment row reports the given `status`. Needed before
-    /// `deploy_test_app_workload`: the manager only assigns a new release's
-    /// `desired_release_id` to deployments already in `running` (see
-    /// `set_desired_release`), and a freshly-synced operator reaches `running`
-    /// a beat after it first reports its version.
-    pub async fn wait_for_status(&self, status: &str, timeout: Duration) -> anyhow::Result<()> {
-        let deadline = Instant::now() + timeout;
-        let mut last = None;
-        while Instant::now() < deadline {
-            let row: serde_json::Value = self
-                .manager
-                .http_client()
-                .get(format!(
-                    "{}/v1/deployments/{}",
-                    self.manager.url, self.deployment_id
-                ))
-                .send()
-                .await?
-                .error_for_status()?
-                .json()
-                .await?;
-            last = row["status"].as_str().map(str::to_string);
-            if last.as_deref() == Some(status) {
-                return Ok(());
-            }
-            tokio::time::sleep(Duration::from_millis(500)).await;
-        }
-        anyhow::bail!("deployment never reached status {status}; last seen {last:?}")
-    }
-
-    /// Deploy a real user workload so the operator spawns an observable app
-    /// child process. Builds `alien-test-app` (a Rust SDK worker) into a local
-    /// OCI via `alien-build` (cargo only — no bun/docker), then `POST
-    /// /v1/releases` with a `local` stack running it; the manager auto-assigns
-    /// it as the deployment's desired release, so the operator extracts + spawns
-    /// the app on its next sync. Returns the OCI build dir — the caller MUST
-    /// keep it alive (the operator reads the OCI from this path) for the test.
-    pub async fn deploy_test_app_workload(&self) -> anyhow::Result<tempfile::TempDir> {
-        use alien_build::settings::{BuildSettings, PlatformBuildSettings};
-        use alien_core::permissions::{PermissionProfile, PermissionsConfig};
-        use alien_core::{
-            BinaryTarget, ResourceLifecycle, Stack, ToolchainConfig, Worker, WorkerCode,
-        };
-
-        let app_src = Path::new(env!("CARGO_MANIFEST_DIR"))
-            .parent()
-            .context("crates dir")?
-            .join("alien-test-app");
-        anyhow::ensure!(
-            app_src.is_dir(),
-            "alien-test-app source not found at {}",
-            app_src.display()
-        );
-
-        let worker = Worker::new("app".to_string())
-            .code(WorkerCode::Source {
-                src: app_src.to_string_lossy().into_owned(),
-                toolchain: ToolchainConfig::Rust {
-                    binary_name: "alien-test-app".to_string(),
-                },
-            })
-            .memory_mb(512)
-            .timeout_seconds(60)
-            .environment(HashMap::new())
-            .permissions("execution".to_string())
-            .build();
-        let permissions = PermissionsConfig {
-            profiles: [("execution".to_string(), PermissionProfile::default())]
-                .into_iter()
-                .collect(),
-            management: Default::default(),
-        };
-        let stack = Stack::new("orphan-guard".to_string())
-            .add(worker, ResourceLifecycle::Live)
-            .permissions(permissions)
-            .build();
-
-        let build_dir = tempfile::tempdir()?;
-        let settings = BuildSettings {
-            output_directory: build_dir.path().to_string_lossy().into_owned(),
-            platform: PlatformBuildSettings::Local {},
-            targets: Some(vec![BinaryTarget::current_os()]),
-            cache_url: None,
-            override_base_image: None,
-            debug_mode: false,
-        };
-        let built = alien_build::build_stack(stack, &settings)
-            .await
-            .context("build alien-test-app into a local OCI")?;
-
-        // The release's `local` stack is the built stack — its Worker.code is now
-        // a local OCI Image path the operator extracts + runs.
-        let stack_json = serde_json::to_value(&built).context("serialize built stack")?;
-        let resp = post_json(
-            &self.manager,
-            "/v1/releases",
-            serde_json::json!({ "stack": { "local": stack_json }, "projectId": "default" }),
-        )
-        .await?;
-        anyhow::ensure!(
-            resp.get("id").and_then(|v| v.as_str()).is_some(),
-            "release response missing id: {resp}"
-        );
-        Ok(build_dir)
-    }
-
     /// PIDs of the workload app processes — direct children of the operator (the
     /// operator runs the worker runtime in-process, which `cmd.spawn()`s the app,
     /// so the app is the operator's child / the launcher's grandchild).
@@ -591,6 +512,80 @@ fn ppid_of(pid: u32) -> Option<u32> {
         return None;
     }
     String::from_utf8_lossy(&out.stdout).trim().parse().ok()
+}
+
+/// Build `alien-test-app` (a Rust SDK worker) into a local OCI via `alien-build`
+/// (cargo + zig for the musl target — no bun/docker) and publish it as a `local`
+/// release. When called before the deployment is created, `create_deployment`
+/// attaches it as the deployment's desired release. Returns the OCI build dir —
+/// keep it alive for the operator to read.
+async fn publish_workload_release(manager: &TestManager) -> anyhow::Result<tempfile::TempDir> {
+    use alien_build::settings::{BuildSettings, PlatformBuildSettings};
+    use alien_core::permissions::{PermissionProfile, PermissionsConfig};
+    use alien_core::{
+        BinaryTarget, ResourceLifecycle, Stack, ToolchainConfig, Worker, WorkerCode,
+    };
+
+    let app_src = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .parent()
+        .context("crates dir")?
+        .join("alien-test-app");
+    anyhow::ensure!(
+        app_src.is_dir(),
+        "alien-test-app source not found at {}",
+        app_src.display()
+    );
+
+    let worker = Worker::new("app".to_string())
+        .code(WorkerCode::Source {
+            src: app_src.to_string_lossy().into_owned(),
+            toolchain: ToolchainConfig::Rust {
+                binary_name: "alien-test-app".to_string(),
+            },
+        })
+        .memory_mb(512)
+        .timeout_seconds(60)
+        .environment(HashMap::new())
+        .permissions("execution".to_string())
+        .build();
+    let permissions = PermissionsConfig {
+        profiles: [("execution".to_string(), PermissionProfile::default())]
+            .into_iter()
+            .collect(),
+        management: Default::default(),
+    };
+    let stack = Stack::new("orphan-guard".to_string())
+        .add(worker, ResourceLifecycle::Live)
+        .permissions(permissions)
+        .build();
+
+    let build_dir = tempfile::tempdir()?;
+    let settings = BuildSettings {
+        output_directory: build_dir.path().to_string_lossy().into_owned(),
+        platform: PlatformBuildSettings::Local {},
+        targets: Some(vec![BinaryTarget::current_os()]),
+        cache_url: None,
+        override_base_image: None,
+        debug_mode: false,
+    };
+    let built = alien_build::build_stack(stack, &settings)
+        .await
+        .context("build alien-test-app into a local OCI")?;
+
+    // The release's `local` stack is the built stack — its Worker.code is now a
+    // local OCI Image path the operator extracts + runs.
+    let stack_json = serde_json::to_value(&built).context("serialize built stack")?;
+    let resp = post_json(
+        manager,
+        "/v1/releases",
+        serde_json::json!({ "stack": { "local": stack_json }, "projectId": "default" }),
+    )
+    .await?;
+    anyhow::ensure!(
+        resp.get("id").and_then(|v| v.as_str()).is_some(),
+        "release response missing id: {resp}"
+    );
+    Ok(build_dir)
 }
 
 fn free_port() -> u16 {
