@@ -587,6 +587,29 @@ async fn start_application(
     cmd.stdout(Stdio::piped());
     cmd.stderr(Stdio::piped());
 
+    // Die-with-parent for the workload: the app must never outlive this operator.
+    // Without it, an operator self-update handoff (or any operator exit) reparents
+    // the app to init and leaves it running — a second copy then starts under the
+    // swapped-in operator. `kill_on_drop` handles the child handle being dropped;
+    // on Linux `PR_SET_PDEATHSIG` also covers an operator crash that skips graceful
+    // shutdown. The clean path still kills the child explicitly (the operator calls
+    // `shutdown_all` on shutdown) — these are backstops. macOS has no pdeathsig, so
+    // its crash case falls back to `kill_on_drop` + the graceful-shutdown teardown.
+    cmd.kill_on_drop(true);
+    #[cfg(target_os = "linux")]
+    // SAFETY: the closure runs in the forked child before exec; `prctl` is
+    // async-signal-safe and touches no shared state, meeting `pre_exec`'s contract.
+    unsafe {
+        cmd.pre_exec(|| {
+            // SIGKILL (not SIGTERM) — a hard backstop for an operator that died
+            // without draining; the graceful path already SIGKILLs via child.kill().
+            if libc::prctl(libc::PR_SET_PDEATHSIG, libc::SIGKILL as libc::c_ulong) != 0 {
+                return Err(std::io::Error::last_os_error());
+            }
+            Ok(())
+        });
+    }
+
     let mut child = cmd.spawn().map_err(|e| {
         AlienError::new(ErrorData::ProcessFailed {
             exit_code: None,

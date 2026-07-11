@@ -300,6 +300,20 @@ pub async fn run_operator_with_cancel_and_debug_loop(
     // Signal all loops to stop (idempotent if already cancelled)
     cancel.cancel();
 
+    // Tear down the managed application before we exit. The operator owns the
+    // worker runtime that spawned the user's app; without this, a self-update
+    // handoff exit (like any operator exit) reparents the app to init and leaves
+    // it running — a second copy then starts under the swapped-in operator.
+    // `shutdown_all` signals the worker runtime, which kills the app child. The
+    // spawn-side `kill_on_drop`/`PR_SET_PDEATHSIG` are crash backstops; this is
+    // the clean-shutdown path. No-op when there is no local worker manager
+    // (e.g. Kubernetes, where the pod lifecycle owns the process tree).
+    if let Some(sp) = &state.service_provider {
+        if let Some(wm) = sp.get_local_worker_manager() {
+            wm.shutdown_all().await;
+        }
+    }
+
     // Give loops a moment to finish current work
     tokio::time::sleep(std::time::Duration::from_secs(2)).await;
 
