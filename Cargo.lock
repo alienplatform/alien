@@ -495,6 +495,7 @@ dependencies = [
  "getrandom 0.2.17",
  "hex",
  "hostname 0.4.2",
+ "junction",
  "libc",
  "reqwest 0.12.28",
  "serde",

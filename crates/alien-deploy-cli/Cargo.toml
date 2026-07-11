@@ -67,3 +67,5 @@ libc = "0.2"
 
 [target.'cfg(windows)'.dependencies]
 fs2 = "0.4"
+# Directory-junction pointers for the launcher layout's current/last-stable.
+junction = { workspace = true }

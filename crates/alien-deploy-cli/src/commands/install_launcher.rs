@@ -26,11 +26,19 @@
 //! DATA_DIR, …), and the launcher's child inherits the launcher's
 //! environment, so no argv plumbing is needed through the supervisor.
 
+#[cfg(unix)]
 use std::io::Write as _;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
+#[cfg(windows)]
+use std::ffi::OsString;
+
 use alien_error::{AlienError, Context, IntoAlienError};
+#[cfg(windows)]
+use service_manager::{
+    RestartPolicy, ServiceInstallCtx, ServiceLabel, ServiceManager, ServiceStartCtx, ServiceStopCtx,
+};
 
 use crate::error::{ErrorData, Result};
 use crate::output;
@@ -41,15 +49,25 @@ fn service_error(message: String) -> ErrorData {
     ErrorData::OperatorServiceError { message }
 }
 
-/// The launcher layout is the default on Linux (the only OS whose service
-/// shim is wired); other platforms keep the legacy direct-operator service
-/// until their launcher phases land. `--no-launcher` forces legacy anywhere.
+/// The launcher layout is the default on Linux and Windows (the OSes whose
+/// service shim is wired); macOS keeps the legacy direct-operator service until
+/// its launcher phase lands. `--no-launcher` forces legacy anywhere.
 pub fn use_launcher_layout(no_launcher: bool) -> bool {
     use_launcher_layout_for(no_launcher, std::env::consts::OS)
 }
 
 fn use_launcher_layout_for(no_launcher: bool, os: &str) -> bool {
-    !no_launcher && os == "linux"
+    !no_launcher && matches!(os, "linux" | "windows")
+}
+
+/// The operator binary filename inside `versions/<v>/` — `.exe` on Windows.
+fn operator_binary_name() -> String {
+    format!("alien-operator{}", std::env::consts::EXE_SUFFIX)
+}
+
+/// The launcher binary filename inside `launcher/` — `.exe` on Windows.
+fn launcher_binary_name() -> String {
+    format!("alien-launcher{}", std::env::consts::EXE_SUFFIX)
 }
 
 /// Locate the launcher binary: explicit flag → `ALIEN_LAUNCHER_BINARY` env →
@@ -76,7 +94,10 @@ pub fn which_launcher_binary(
             "ALIEN_LAUNCHER_BINARY is set to '{env_path}' but the file does not exist"
         ))));
     }
-    if let Some(sibling) = operator_binary.parent().map(|dir| dir.join("alien-launcher")) {
+    if let Some(sibling) = operator_binary
+        .parent()
+        .map(|dir| dir.join(launcher_binary_name()))
+    {
         if sibling.is_file() {
             return Ok(sibling);
         }
@@ -150,8 +171,11 @@ pub fn write_layout(
             "failed to create '{}'",
             version_dir.display()
         )))?;
-    install_binary(operator_binary, &version_dir.join("alien-operator"))?;
-    install_binary(launcher_binary, &data_dir.join("launcher").join("alien-launcher"))?;
+    install_binary(operator_binary, &version_dir.join(operator_binary_name()))?;
+    install_binary(
+        launcher_binary,
+        &data_dir.join("launcher").join(launcher_binary_name()),
+    )?;
 
     let target = Path::new("versions").join(operator_version);
     ensure_pointer(data_dir, "current", &target)?;
@@ -188,26 +212,38 @@ fn install_binary(from: &Path, to: &Path) -> Result<()> {
         )))
 }
 
-/// Create a pointer symlink only if it does not exist yet.
+/// Create a pointer only if it does not exist yet — a symlink on Unix, a
+/// directory junction on Windows (which needs an absolute target, so the
+/// relative `target` is rooted at `data_dir`). Matches the launcher's store,
+/// which reads the version from the pointer target's final component.
 fn ensure_pointer(data_dir: &Path, name: &str, target: &Path) -> Result<()> {
     let path = data_dir.join(name);
     if path.symlink_metadata().is_ok() {
         return Ok(());
     }
     #[cfg(unix)]
-    std::os::unix::fs::symlink(target, &path)
-        .into_alien_error()
-        .context(service_error(format!(
-            "failed to create the '{name}' pointer"
-        )))?;
-    #[cfg(not(unix))]
+    {
+        std::os::unix::fs::symlink(target, &path)
+            .into_alien_error()
+            .context(service_error(format!(
+                "failed to create the '{name}' pointer"
+            )))?;
+    }
+    #[cfg(windows)]
+    {
+        junction::create(data_dir.join(target), &path)
+            .into_alien_error()
+            .context(service_error(format!(
+                "failed to create the '{name}' junction"
+            )))?;
+    }
+    #[cfg(not(any(unix, windows)))]
     {
         let _ = target;
         return Err(AlienError::new(service_error(
-            "the launcher layout is only supported on Unix platforms so far".to_string(),
+            "the launcher layout is only supported on Unix and Windows".to_string(),
         )));
     }
-    #[cfg(unix)]
     Ok(())
 }
 
@@ -262,8 +298,8 @@ WantedBy=multi-user.target
     )
 }
 
-/// Install (or redeploy) the launcher-based service on Linux: stop the
-/// service, refresh the layout + unit, daemon-reload, enable and start.
+/// Install (or redeploy) the launcher-based service: stop it, refresh the
+/// layout, then register + start it — systemd on Linux, the SCM on Windows.
 pub fn install_launcher_service(
     service_label: &str,
     data_dir: &Path,
@@ -275,7 +311,7 @@ pub fn install_launcher_service(
     let operator_version = binary_version(operator_binary)?;
 
     output::step(1, 4, "Stopping the service (if running)");
-    let _ = systemctl(&["stop", &format!("{service_label}.service")]);
+    stop_service_best_effort(service_label);
 
     output::step(
         2,
@@ -284,8 +320,39 @@ pub fn install_launcher_service(
     );
     write_layout(data_dir, operator_binary, &operator_version, launcher_binary)?;
 
+    register_and_start(service_label, data_dir, service_user, environment)
+}
+
+/// Stop the service if running (best-effort — a first install has nothing to
+/// stop; the restart is what adopts the refreshed layout).
+#[cfg(unix)]
+fn stop_service_best_effort(service_label: &str) {
+    let _ = systemctl(&["stop", &format!("{service_label}.service")]);
+}
+
+#[cfg(windows)]
+fn stop_service_best_effort(service_label: &str) {
+    if let (Ok(label), Ok(manager)) = (
+        service_label.parse::<ServiceLabel>(),
+        <dyn ServiceManager>::native(),
+    ) {
+        let _ = manager.stop(ServiceStopCtx { label });
+    }
+}
+
+#[cfg(not(any(unix, windows)))]
+fn stop_service_best_effort(_service_label: &str) {}
+
+/// Linux: write the systemd unit, daemon-reload, enable + start.
+#[cfg(unix)]
+fn register_and_start(
+    service_label: &str,
+    data_dir: &Path,
+    service_user: Option<&str>,
+    environment: &[(String, String)],
+) -> Result<()> {
     output::step(3, 4, "Installing the systemd unit");
-    let launcher_path = data_dir.join("launcher").join("alien-launcher");
+    let launcher_path = data_dir.join("launcher").join(launcher_binary_name());
     let unit = render_unit(&launcher_path, data_dir, service_user, environment);
     let unit_path = PathBuf::from(format!("/etc/systemd/system/{service_label}.service"));
     write_file(&unit_path, unit.as_bytes())?;
@@ -296,6 +363,92 @@ pub fn install_launcher_service(
     Ok(())
 }
 
+/// Windows: register `alien-launcher` as the SCM service, apply the doc-12
+/// recovery config (`sc.exe` can't set restart policy via `create`), and start
+/// it. The launcher passes its environment through to the operator child, so
+/// the operator's config flows via the service `environment` — the mirror of
+/// the systemd `Environment=` lines. `service_user` is Linux-only.
+#[cfg(windows)]
+fn register_and_start(
+    service_label: &str,
+    data_dir: &Path,
+    _service_user: Option<&str>,
+    environment: &[(String, String)],
+) -> Result<()> {
+    output::step(3, 4, "Registering the launcher service");
+    let label: ServiceLabel = service_label.parse().map_err(|_| {
+        AlienError::new(service_error(format!(
+            "invalid service label '{service_label}'"
+        )))
+    })?;
+    let manager = <dyn ServiceManager>::native()
+        .into_alien_error()
+        .context(service_error("no supported service manager found".to_string()))?;
+    let launcher_path = data_dir.join("launcher").join(launcher_binary_name());
+    manager
+        .install(ServiceInstallCtx {
+            label: label.clone(),
+            program: launcher_path,
+            args: vec![OsString::from("--data-dir"), OsString::from(data_dir)],
+            contents: None,
+            username: None,
+            working_directory: None,
+            environment: Some(environment.to_vec()),
+            autostart: true,
+            // `sc create` can't set restart policy; we apply the doc-12 recovery
+            // config right after via `sc failure`. `Never` here avoids
+            // service-manager's misleading "will not restart" warning.
+            restart_policy: RestartPolicy::Never,
+        })
+        .into_alien_error()
+        .context(service_error(
+            "failed to register the launcher service".to_string(),
+        ))?;
+
+    configure_failure_actions(&label.to_qualified_name())?;
+
+    output::step(4, 4, "Starting the service");
+    manager
+        .start(ServiceStartCtx { label })
+        .into_alien_error()
+        .context(service_error(
+            "failed to start the launcher service".to_string(),
+        ))?;
+    Ok(())
+}
+
+/// Apply the SCM recovery config via `sc.exe failure` (doc 12).
+#[cfg(windows)]
+fn configure_failure_actions(service_name: &str) -> Result<()> {
+    let status = Command::new("sc")
+        .args(failure_action_args(service_name))
+        .status()
+        .into_alien_error()
+        .context(service_error("failed to run 'sc failure'".to_string()))?;
+    if !status.success() {
+        return Err(AlienError::new(service_error(format!(
+            "'sc failure' exited with {status}"
+        ))));
+    }
+    Ok(())
+}
+
+/// The `sc failure` argument vector (doc 12): reset the failure counter after
+/// 24 h and restart three times at 5 s each. OS-agnostic so it is unit-tested on
+/// any host.
+#[cfg(any(windows, test))]
+fn failure_action_args(service_name: &str) -> Vec<String> {
+    vec![
+        "failure".to_string(),
+        service_name.to_string(),
+        "reset=".to_string(),
+        "86400".to_string(),
+        "actions=".to_string(),
+        "restart/5000/restart/5000/restart/5000".to_string(),
+    ]
+}
+
+#[cfg(unix)]
 fn write_file(path: &Path, contents: &[u8]) -> Result<()> {
     let mut file = std::fs::File::create(path)
         .into_alien_error()
@@ -311,6 +464,7 @@ fn write_file(path: &Path, contents: &[u8]) -> Result<()> {
         )))
 }
 
+#[cfg(unix)]
 fn systemctl(args: &[&str]) -> Result<()> {
     let status = Command::new("systemctl")
         .args(args)
@@ -334,12 +488,31 @@ mod tests {
     #[test]
     fn layout_decision_matrix() {
         assert!(use_launcher_layout_for(false, "linux"));
+        assert!(use_launcher_layout_for(false, "windows"));
         assert!(!use_launcher_layout_for(true, "linux"), "--no-launcher wins");
+        assert!(
+            !use_launcher_layout_for(true, "windows"),
+            "--no-launcher wins on Windows too"
+        );
         assert!(
             !use_launcher_layout_for(false, "macos"),
             "macOS keeps legacy until its launcher phase"
         );
-        assert!(!use_launcher_layout_for(false, "windows"));
+    }
+
+    #[test]
+    fn failure_actions_match_doc_12() {
+        assert_eq!(
+            failure_action_args("dev.alien.operator"),
+            vec![
+                "failure",
+                "dev.alien.operator",
+                "reset=",
+                "86400",
+                "actions=",
+                "restart/5000/restart/5000/restart/5000",
+            ]
+        );
     }
 
     #[test]
@@ -428,6 +601,67 @@ mod tests {
         assert_eq!(
             std::fs::read_link(data_dir.join("current")).unwrap(),
             Path::new("versions/2.0.0"),
+            "a live store's pointers are the launcher's truth — never clobbered"
+        );
+    }
+
+    /// Windows analogue: junction pointers + `.exe` binary names, same
+    /// state/secret-preserving redeploy guarantees. Pointer reads resolve the
+    /// junction target's final component (the version), like the launcher store.
+    #[cfg(windows)]
+    #[test]
+    fn layout_is_exact_and_idempotency_preserves_state_and_secrets_windows() {
+        let root = tempfile::tempdir().unwrap();
+        let data_dir = root.path().join("data");
+        let operator = root.path().join("alien-operator-artifact");
+        let launcher = root.path().join("alien-launcher-artifact");
+        std::fs::write(&operator, b"operator-v1-bytes").unwrap();
+        std::fs::write(&launcher, b"launcher-v1-bytes").unwrap();
+
+        write_layout(&data_dir, &operator, "1.11.2", &launcher).expect("fresh install");
+
+        let mut entries: Vec<String> = walk(&data_dir);
+        entries.sort();
+        assert_eq!(
+            entries,
+            vec![
+                "current".to_string(),
+                "last-stable".to_string(),
+                "launcher/alien-launcher.exe".to_string(),
+                "versions/1.11.2/alien-operator.exe".to_string(),
+            ]
+        );
+        for dir in ["state", "state-snapshots", "failed", "download"] {
+            assert!(data_dir.join(dir).is_dir(), "{dir}/ must exist");
+        }
+        let current = junction::get_target(data_dir.join("current")).unwrap();
+        assert_eq!(current.file_name().unwrap().to_str().unwrap(), "1.11.2");
+
+        // Live system: state + secrets present, current advanced by a self-update.
+        std::fs::write(data_dir.join("state/db"), b"live-state").unwrap();
+        std::fs::write(data_dir.join("sync-token"), b"secret-token").unwrap();
+        std::fs::create_dir_all(data_dir.join("versions/2.0.0")).unwrap();
+        std::fs::remove_dir(data_dir.join("current")).unwrap();
+        junction::create(data_dir.join("versions/2.0.0"), data_dir.join("current")).unwrap();
+
+        std::fs::write(&operator, b"operator-v2-bytes").unwrap();
+        std::fs::write(&launcher, b"launcher-v2-bytes").unwrap();
+        write_layout(&data_dir, &operator, "1.11.2", &launcher).expect("redeploy");
+
+        assert_eq!(std::fs::read(data_dir.join("state/db")).unwrap(), b"live-state");
+        assert_eq!(
+            std::fs::read(data_dir.join("sync-token")).unwrap(),
+            b"secret-token"
+        );
+        assert_eq!(
+            std::fs::read(data_dir.join("launcher/alien-launcher.exe")).unwrap(),
+            b"launcher-v2-bytes",
+            "the launcher binary is always refreshed — this IS the redeploy"
+        );
+        let current = junction::get_target(data_dir.join("current")).unwrap();
+        assert_eq!(
+            current.file_name().unwrap().to_str().unwrap(),
+            "2.0.0",
             "a live store's pointers are the launcher's truth — never clobbered"
         );
     }
