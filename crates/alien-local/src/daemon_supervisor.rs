@@ -103,12 +103,18 @@ impl LocalWorkerManager {
         daemons: &Arc<Mutex<HashMap<String, DaemonRuntime>>>,
         bindings_provider: Arc<dyn alien_bindings::BindingsProviderApi>,
     ) -> Result<()> {
-        {
-            let daemons_guard = daemons.lock().await;
-            if daemons_guard.contains_key(id) {
-                debug!(daemon_id = %id, "Daemon already running");
-                return Ok(());
-            }
+        // Hold the map lock for the WHOLE start, not just the contains_key
+        // guard: with separate acquisitions, two concurrent callers (the
+        // crash monitor racing a controller start) both pass the guard and
+        // spawn two app processes, with only the second insert's runtime
+        // tracked — the orphan keeps running (double log export, duplicate
+        // command receiver) with no handle to stop it. The lock is a tokio
+        // Mutex, so holding it across the awaits below is safe; daemon
+        // starts are rare and brief, so the serialization is cheap.
+        let mut daemons_guard = daemons.lock().await;
+        if daemons_guard.contains_key(id) {
+            debug!(daemon_id = %id, "Daemon already running");
+            return Ok(());
         }
 
         let extracted_dir = state_dir.join("daemons").join(id);
@@ -274,8 +280,7 @@ impl LocalWorkerManager {
         let mut runtime_metadata = updated_metadata;
         runtime_metadata.env_vars = runtime_env_vars_for_restart;
 
-        let mut daemons_mut = daemons.lock().await;
-        daemons_mut.insert(
+        daemons_guard.insert(
             id.to_string(),
             DaemonRuntime {
                 task_handle: runtime_task,
