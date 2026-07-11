@@ -19,7 +19,11 @@ permissions:
 
 jobs:
   drift:
-    if: false # temporarily disabled — speakeasy CLI not available in CI
+    # Gated on a repo variable: flip GENERATED_DRIFT_ENABLED to 'true' once
+    # the SPEAKEASY_API_KEY secret is configured. The job itself is ready —
+    # the previous hard-disable traced to installing the wrong package (the
+    # npm `speakeasy` package is a TOTP library, not the Speakeasy CLI).
+    if: vars.GENERATED_DRIFT_ENABLED == 'true'
     runs-on: depot-ubuntu-24.04-arm-4
     timeout-minutes: 60
     env:
@@ -54,9 +58,13 @@ jobs:
         run: pnpm install --frozen-lockfile
 
       - name: Install Speakeasy CLI
-        run: npm install -g speakeasy@latest
+        # The npm `speakeasy` package is an unrelated TOTP library — the CLI
+        # ships through Speakeasy's install script.
+        run: curl -fsSL https://go.speakeasy.com/cli-install.sh | sh
 
       - name: Regenerate code
+        env:
+          SPEAKEASY_API_KEY: ${{ secrets.SPEAKEASY_API_KEY }}
         run: |
           pnpm generate
           pnpm generate:platform-api
