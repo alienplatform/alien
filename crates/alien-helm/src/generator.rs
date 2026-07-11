@@ -4625,7 +4625,15 @@ management:
         )
         .expect("chart should render");
 
+        // The secret.yaml guardrail requires `management.token`, so render with
+        // the manager-fetch overlay like the sibling render tests (see f6db6046);
+        // this test was missed in that sweep.
         let values = r#"
+management:
+  url: "https://manager.example.com"
+  name: "test-manager"
+  token: "test-sync-token"
+  deploymentId: "test-deployment-id"
 logCollector:
   enabled: true
   token: test-collector-token
