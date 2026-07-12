@@ -415,9 +415,13 @@ fn postgres_provision_and_heartbeat_grant_no_secret_value_read() {
         "key vault administrator",
     ];
 
-    for set_id in ["postgres/provision", "postgres/heartbeat", "postgres/management"] {
-        let permission_set = get_permission_set(set_id)
-            .unwrap_or_else(|| panic!("missing permission set {set_id}"));
+    for set_id in [
+        "postgres/provision",
+        "postgres/heartbeat",
+        "postgres/management",
+    ] {
+        let permission_set =
+            get_permission_set(set_id).unwrap_or_else(|| panic!("missing permission set {set_id}"));
 
         let aws_actions: Vec<&str> = permission_set
             .platforms
@@ -478,7 +482,9 @@ fn postgres_provision_and_heartbeat_grant_no_secret_value_read() {
             .collect();
         for forbidden in FORBIDDEN_GCP_ROLES {
             assert!(
-                !gcp_roles.iter().any(|role| role == &forbidden.to_ascii_lowercase()),
+                !gcp_roles
+                    .iter()
+                    .any(|role| role == &forbidden.to_ascii_lowercase()),
                 "{set_id} must not grant the secret-reading GCP role '{forbidden}'"
             );
         }

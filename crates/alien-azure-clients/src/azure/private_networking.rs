@@ -531,7 +531,11 @@ impl PrivateNetworkingApi for AzurePrivateNetworkingClient {
             .build()?;
         let signed = self.base.sign_request(req, &token).await?;
         self.base
-            .execute_request_with_long_running_support(signed, "DeleteVirtualNetworkLink", link_name)
+            .execute_request_with_long_running_support(
+                signed,
+                "DeleteVirtualNetworkLink",
+                link_name,
+            )
             .await
     }
 

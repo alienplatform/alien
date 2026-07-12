@@ -143,6 +143,13 @@ fn status_halts_stepping(status: ResourceStatus) -> bool {
     status.is_terminal() && status != ResourceStatus::RefreshFailed
 }
 
+fn status_allows_update_planning(status: ResourceStatus) -> bool {
+    matches!(
+        status,
+        ResourceStatus::Running | ResourceStatus::RefreshFailed | ResourceStatus::UpdateFailed
+    )
+}
+
 fn controller_platform_for_entry(
     stack_platform: Platform,
     base_platform: Option<Platform>,
@@ -735,7 +742,7 @@ impl StackExecutor {
                     // Compare desired resource config with the config in the *current* state
                     if Some(&desired_config.resource) != current_resource_config_opt {
                         match current_resource_state.status {
-                            ResourceStatus::Running | ResourceStatus::UpdateFailed => {
+                            status if status_allows_update_planning(status) => {
                                 // Check if all new dependencies are ready before planning the update
                                 let new_dependencies_ready =
                                     desired_config.dependencies.iter().all(|dep_ref| {
@@ -830,10 +837,7 @@ impl StackExecutor {
                                 );
                             }
                         }
-                    } else if matches!(
-                        current_resource_state.status,
-                        ResourceStatus::Running | ResourceStatus::UpdateFailed
-                    ) {
+                    } else if status_allows_update_planning(current_resource_state.status) {
                         if let Some(resource_controller) =
                             current_resource_state.get_internal_controller()?
                         {
@@ -896,7 +900,7 @@ impl StackExecutor {
                     // Check if the resource exists in current state and is in a status that allows updates
                     if let Some(current_resource_state) = state.resources.get(resource_id) {
                         match current_resource_state.status {
-                            ResourceStatus::Running | ResourceStatus::UpdateFailed => {
+                            status if status_allows_update_planning(status) => {
                                 // Check if all dependencies are ready before planning the update from dependency propagation
                                 let dependencies_ready =
                                     desired_config.dependencies.iter().all(|dep_ref| {
