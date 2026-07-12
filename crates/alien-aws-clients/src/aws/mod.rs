@@ -952,17 +952,21 @@ mod tests {
         let endpoint = start_mock_imds().await;
         let mut env = HashMap::new();
         env.insert("AWS_ACCOUNT_ID".to_string(), "123456789012".to_string());
-        env.insert("AWS_EC2_METADATA_SERVICE_ENDPOINT".to_string(), endpoint);
+        env.insert(
+            "AWS_EC2_METADATA_SERVICE_ENDPOINT".to_string(),
+            endpoint.clone(),
+        );
 
         let config = AwsClientConfig::from_env(&env).await.unwrap();
 
         assert_eq!(config.region, "us-east-1");
+        // Discovery validates the IMDS credential document (the mock would
+        // reject a parse failure), but the stored credential stays deferred:
+        // role credentials expire, so they are resolved at use time.
         assert_eq!(
             config.credentials,
-            AwsCredentials::AccessKeys {
-                access_key_id: "AKIAIMDS".to_string(),
-                secret_access_key: "secret".to_string(),
-                session_token: Some("session".to_string()),
+            AwsCredentials::Imds {
+                endpoint: Some(endpoint),
             }
         );
     }
@@ -994,7 +998,8 @@ mod tests {
                     } else if request
                         .starts_with("GET /latest/meta-data/iam/security-credentials/test-role ")
                     {
-                        r#"{"AccessKeyId":"AKIAIMDS","SecretAccessKey":"secret","Token":"session"}"#
+                        // Real IMDS role credentials always carry an Expiration.
+                        r#"{"AccessKeyId":"AKIAIMDS","SecretAccessKey":"secret","Token":"session","Expiration":"2099-01-01T00:00:00Z"}"#
                             .to_string()
                     } else {
                         let response =

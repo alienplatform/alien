@@ -61,12 +61,7 @@
             "lambda:ListTags",
             "lambda:GetFunctionUrlConfig",
             "lambda:GetCodeSigningConfig",
-            "lambda:GetFunctionEventInvokeConfig",
-            "lambda:CreateEventSourceMapping",
-            "lambda:DeleteEventSourceMapping",
-            "lambda:GetEventSourceMapping",
-            "lambda:ListEventSourceMappings",
-            "lambda:UpdateEventSourceMapping"
+            "lambda:GetFunctionEventInvokeConfig"
           ]
         },
         "binding": {
@@ -88,6 +83,56 @@
                 "aws:ResourceTag/${managedByTag}": "runtime"
               }
             }
+          }
+        }
+      },
+      {
+        // Event source mapping actions do not authorize against function ARNs:
+        // Create evaluates against `*`, Get/Update/Delete against the mapping's
+        // own UUID ARN — all scoped via the lambda:FunctionArn condition.
+        "label": "provision-event-source-mappings",
+        "description": "Create, read, update, and delete SQS event source mappings for this application's functions.",
+        "grant": {
+          "actions": [
+            "lambda:CreateEventSourceMapping",
+            "lambda:DeleteEventSourceMapping",
+            "lambda:GetEventSourceMapping",
+            "lambda:UpdateEventSourceMapping"
+          ]
+        },
+        "binding": {
+          "stack": {
+            "resources": ["*"],
+            "condition": {
+              "StringLike": {
+                "lambda:FunctionArn": "arn:aws:lambda:${awsRegion}:${awsAccountId}:function:${stackPrefix}-*"
+              }
+            }
+          },
+          "resource": {
+            "resources": ["*"],
+            "condition": {
+              "StringLike": {
+                "lambda:FunctionArn": "arn:aws:lambda:${awsRegion}:${awsAccountId}:function:${resourceName}"
+              }
+            }
+          }
+        }
+      },
+      {
+        // ListEventSourceMappings supports neither resource-level scoping nor
+        // lambda condition keys — AWS evaluates it against `*` only.
+        "label": "list-event-source-mappings",
+        "description": "List event source mappings (AWS supports this action only on all resources).",
+        "grant": {
+          "actions": ["lambda:ListEventSourceMappings"]
+        },
+        "binding": {
+          "stack": {
+            "resources": ["*"]
+          },
+          "resource": {
+            "resources": ["*"]
           }
         }
       },

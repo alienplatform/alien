@@ -1443,6 +1443,30 @@ async fn test_get_nonexistent_repository_returns_404(
     // Try to get a repository that doesn't exist
     let result = artifact_registry.get_repository(&nonexistent_repo).await;
 
+    // ACR and GAR repositories are implicit (image paths under a fixed parent
+    // registry) — there is no discrete repository resource to 404 on, and
+    // get_repository documents that it returns the routable name without a
+    // cloud call. Assert that contract instead of a not-found error.
+    if provider_name == "azure" || provider_name == "gcp" {
+        let response = result.unwrap_or_else(|e| {
+            panic!(
+                "[{}] get_repository is implicit for this provider and must succeed: {:?}",
+                provider_name, e
+            )
+        });
+        assert!(
+            response.name.contains(nonexistent_repo.as_str()),
+            "[{}] Routable name '{}' should carry the requested repo id",
+            provider_name,
+            response.name
+        );
+        println!(
+            "[{}] ✓ Implicit repository resolved to routable name '{}'",
+            provider_name, response.name
+        );
+        return;
+    }
+
     // Should get an error
     assert!(
         result.is_err(),
