@@ -1244,8 +1244,11 @@ async fn test_ttl_expiry(#[case] ctx: impl KvTestContext) {
 
     ctx.track_key(&key);
 
+    // The TTL must comfortably outlast the sequential cloud round trips the
+    // "immediately exists" assertions below make — a 2s TTL logically expires
+    // mid-test on high-latency links even though it passes on CI runners.
     let options = Some(PutOptions {
-        ttl: Some(Duration::from_secs(2)), // 2 second TTL
+        ttl: Some(Duration::from_secs(8)),
         if_not_exists: false,
     });
 
@@ -1280,7 +1283,7 @@ async fn test_ttl_expiry(#[case] ctx: impl KvTestContext) {
     );
 
     // Wait for TTL to expire
-    tokio::time::sleep(Duration::from_secs(3)).await;
+    tokio::time::sleep(Duration::from_secs(10)).await;
 
     // Check that the value has expired (logical expiry)
     let exists_after_ttl = kv.exists(&key).await.unwrap_or_else(|e| {

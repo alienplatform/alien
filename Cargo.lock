@@ -10170,9 +10170,9 @@ dependencies = [
 
 [[package]]
 name = "turso"
-version = "0.7.0-pre.17"
+version = "0.7.0-pre.20"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "fc8e938f54b9f25d016e51a8e2743265ca86c2e288a453edf43707855990f62b"
+checksum = "9f88be966ef74b4da4af64bbf492ea00fd2fd835f13c1c13dc235e672eba21b8"
 dependencies = [
  "thiserror 2.0.18",
  "tracing",
