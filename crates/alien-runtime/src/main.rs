@@ -1,9 +1,9 @@
 use alien_runtime::{
-    init_tracing, run, setup_shutdown_on_signals, BindingsSource, Result, RuntimeConfig,
+    init_tracing, run, setup_shutdown_on_signals, BindingsSource, Error, Result, RuntimeConfig,
 };
 use tracing::{error, info};
 
-fn main() -> Result<()> {
+fn main() -> std::process::ExitCode {
     // Build tokio runtime manually with a larger worker thread stack size.
     // The default musl stack size (128KB) is too small for the deep async call
     // stacks from gRPC + OTLP initialization, causing stack overflows.
@@ -13,7 +13,30 @@ fn main() -> Result<()> {
         .build()
         .expect("Failed to build tokio runtime");
 
-    runtime.block_on(async_main())
+    match runtime.block_on(async_main()) {
+        Ok(()) => std::process::ExitCode::SUCCESS,
+        Err(error) => {
+            report_error(error);
+            std::process::ExitCode::FAILURE
+        }
+    }
+}
+
+fn report_error(error: Error) {
+    let error = error.into_external();
+    let report = error.human_report();
+    let serialized = serde_json::to_string(&error).unwrap_or_else(|serialization_error| {
+        format!("failed to serialize error: {serialization_error}")
+    });
+
+    error!(
+        message = %report.message,
+        error_code = %error.code,
+        error_retryable = error.retryable,
+        error_internal = error.internal,
+        error_http_status_code = i64::from(error.http_status_code.unwrap_or(500)),
+        alien_error = %serialized,
+    );
 }
 
 async fn async_main() -> Result<()> {
@@ -24,10 +47,7 @@ async fn async_main() -> Result<()> {
     info!("Initializing Alien Runtime...");
 
     // Load configuration from CLI arguments and environment variables
-    let config = RuntimeConfig::from_cli().map_err(|e| {
-        error!(error = %e, "Failed to load configuration");
-        e
-    })?;
+    let config = RuntimeConfig::from_cli()?;
 
     info!(
         transport = ?config.transport,

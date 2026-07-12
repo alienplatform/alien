@@ -223,6 +223,30 @@ async fn test_plan_update_failed_with_config_change() -> Result<()> {
     Ok(())
 }
 
+/// A failed observation must not prevent a new desired configuration from
+/// repairing the resource.
+#[tokio::test]
+async fn test_plan_refresh_failed_with_config_change() -> Result<()> {
+    let func1_v1 = test_function_with_image("func1", "image-v1");
+    let mut state = new_test_state();
+    let mut failed_state = create_refresh_failed_function_state("func1");
+    failed_state.config = alien_core::Resource::new(func1_v1);
+    state.resources.insert("func1".to_string(), failed_state);
+
+    let func1_v2 = test_function_with_image("func1", "image-v2");
+    let stack = Stack::new("plan-refresh-failed-test".to_owned())
+        .add(func1_v2, ResourceLifecycle::Live)
+        .build();
+
+    let plan = new_executor(&stack)?.plan(&state)?;
+
+    assert!(
+        plan.updates.contains_key("func1"),
+        "RefreshFailed resource with a new configuration should be updated"
+    );
+    Ok(())
+}
+
 /// Tests plan ignores deleting resources (waits for deletion to complete).
 #[tokio::test]
 async fn test_plan_on_deleting_resource() -> Result<()> {

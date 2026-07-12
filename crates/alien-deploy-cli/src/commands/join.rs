@@ -149,6 +149,47 @@ struct MachineBundleService {
     args: Vec<String>,
     #[serde(default)]
     environment: BTreeMap<String, String>,
+    #[serde(default)]
+    restart_policy: MachineBundleRestartPolicy,
+    #[serde(default)]
+    restart_delay_seconds: Option<u32>,
+    #[serde(default)]
+    systemd: Option<MachineBundleSystemdService>,
+}
+
+#[derive(Debug, Clone, Copy, Default, Deserialize)]
+#[serde(rename_all = "camelCase")]
+enum MachineBundleRestartPolicy {
+    Always,
+    #[default]
+    OnFailure,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct MachineBundleSystemdService {
+    service_type: MachineBundleSystemdServiceType,
+    #[serde(default)]
+    notify_access: Option<MachineBundleSystemdNotifyAccess>,
+    #[serde(default)]
+    pid_file: Option<String>,
+    #[serde(default)]
+    timeout_start_seconds: Option<u64>,
+}
+
+#[derive(Debug, Clone, Copy, Deserialize)]
+#[serde(rename_all = "camelCase")]
+enum MachineBundleSystemdServiceType {
+    Simple,
+    Notify,
+}
+
+#[derive(Debug, Clone, Copy, Deserialize)]
+#[serde(rename_all = "camelCase")]
+enum MachineBundleSystemdNotifyAccess {
+    Main,
+    Exec,
+    All,
 }
 
 #[derive(Debug, Deserialize)]
@@ -1154,24 +1195,48 @@ fn install_machine_service(
         )
     };
 
+    let restart_policy = match service.restart_policy {
+        MachineBundleRestartPolicy::Always => RestartPolicy::Always {
+            delay_secs: service.restart_delay_seconds,
+        },
+        MachineBundleRestartPolicy::OnFailure => RestartPolicy::OnFailure {
+            delay_secs: service.restart_delay_seconds.or(Some(5)),
+        },
+    };
+    let contents = service
+        .systemd
+        .as_ref()
+        .map(|systemd| {
+            render_systemd_machine_service(
+                service,
+                systemd,
+                executable_path,
+                config_path,
+                executable_path.parent(),
+            )
+        })
+        .transpose()?;
+
     manager
         .install(ServiceInstallCtx {
             label: label.clone(),
             program: executable_path.to_path_buf(),
             args: rendered_args,
-            contents: None,
+            contents,
             username: None,
             working_directory: executable_path.parent().map(Path::to_path_buf),
             environment,
             autostart: true,
-            restart_policy: RestartPolicy::OnFailure {
-                delay_secs: Some(5),
-            },
+            restart_policy,
         })
         .into_alien_error()
         .context(ErrorData::OperatorServiceError {
             message: "Failed to install machine service".to_string(),
         })?;
+
+    if service.systemd.is_some() {
+        reload_systemd_units()?;
+    }
 
     let _ = manager.stop(ServiceStopCtx {
         label: label.clone(),
@@ -1185,6 +1250,122 @@ fn install_machine_service(
         })?;
 
     Ok(())
+}
+
+fn render_systemd_machine_service(
+    service: &MachineBundleService,
+    systemd: &MachineBundleSystemdService,
+    executable_path: &Path,
+    config_path: &Path,
+    working_directory: Option<&Path>,
+) -> Result<String> {
+    if matches!(
+        systemd.service_type,
+        MachineBundleSystemdServiceType::Notify
+    ) && !matches!(
+        systemd.notify_access,
+        Some(MachineBundleSystemdNotifyAccess::All)
+    ) {
+        return Err(AlienError::new(ErrorData::ValidationError {
+            field: "bundle.service.systemd.notifyAccess".to_string(),
+            message: "notify machine services must use notifyAccess=all so handoff children can promote themselves".to_string(),
+        }));
+    }
+
+    let rendered_args = service
+        .args
+        .iter()
+        .map(|arg| arg.replace("{config_path}", &config_path.display().to_string()));
+    let mut exec_start = systemd_quote(executable_path.as_os_str().to_string_lossy().as_ref());
+    for arg in rendered_args {
+        exec_start.push(' ');
+        exec_start.push_str(&systemd_quote(&arg));
+    }
+
+    let mut unit = format!(
+        "[Unit]\nDescription={}\nAfter=network-online.target\nWants=network-online.target\n\n[Service]\nType={}\n",
+        service.label,
+        match systemd.service_type {
+            MachineBundleSystemdServiceType::Simple => "simple",
+            MachineBundleSystemdServiceType::Notify => "notify",
+        }
+    );
+    if let Some(notify_access) = systemd.notify_access {
+        unit.push_str(&format!(
+            "NotifyAccess={}\n",
+            match notify_access {
+                MachineBundleSystemdNotifyAccess::Main => "main",
+                MachineBundleSystemdNotifyAccess::Exec => "exec",
+                MachineBundleSystemdNotifyAccess::All => "all",
+            }
+        ));
+    }
+    if let Some(pid_file) = &systemd.pid_file {
+        unit.push_str(&format!("PIDFile={}\n", systemd_escape_value(pid_file)));
+    }
+    if let Some(timeout) = systemd.timeout_start_seconds {
+        unit.push_str(&format!("TimeoutStartSec={timeout}\n"));
+    }
+    if let Some(working_directory) = working_directory {
+        unit.push_str(&format!(
+            "WorkingDirectory={}\n",
+            systemd_escape_value(&working_directory.display().to_string())
+        ));
+    }
+    for (key, value) in &service.environment {
+        let value = value.replace("{config_path}", &config_path.display().to_string());
+        unit.push_str(&format!(
+            "Environment={}\n",
+            systemd_quote(&format!("{key}={value}"))
+        ));
+    }
+    unit.push_str(&format!("ExecStart={exec_start}\n"));
+    unit.push_str(match service.restart_policy {
+        MachineBundleRestartPolicy::Always => "Restart=always\n",
+        MachineBundleRestartPolicy::OnFailure => "Restart=on-failure\n",
+    });
+    if let Some(delay) = service.restart_delay_seconds {
+        unit.push_str(&format!("RestartSec={delay}\n"));
+    }
+    unit.push_str("\n[Install]\nWantedBy=multi-user.target\n");
+    Ok(unit)
+}
+
+fn systemd_quote(value: &str) -> String {
+    format!(
+        "\"{}\"",
+        value
+            .replace('\\', "\\\\")
+            .replace('"', "\\\"")
+            .replace('%', "%%")
+            .replace('$', "$$")
+    )
+}
+
+fn systemd_escape_value(value: &str) -> String {
+    value
+        .replace('%', "%%")
+        .replace(char::is_whitespace, "\\x20")
+}
+
+fn reload_systemd_units() -> Result<()> {
+    let output = Command::new("systemctl")
+        .arg("daemon-reload")
+        .output()
+        .into_alien_error()
+        .context(ErrorData::OperatorServiceError {
+            message: "Failed to reload systemd after installing machine service".to_string(),
+        })?;
+    if output.status.success() {
+        return Ok(());
+    }
+
+    Err(AlienError::new(ErrorData::OperatorServiceError {
+        message: format!(
+            "systemctl daemon-reload failed: {}",
+            String::from_utf8_lossy(&output.stderr).trim()
+        ),
+    }))
 }
 
 async fn uninstall_joined_machine(install_root: &Path, purge: bool) -> Result<()> {
@@ -1623,6 +1804,9 @@ mod tests {
                 executable: "bin/machine".to_string(),
                 args: vec![],
                 environment: BTreeMap::new(),
+                restart_policy: MachineBundleRestartPolicy::OnFailure,
+                restart_delay_seconds: None,
+                systemd: None,
             },
             artifacts: vec![],
             registration: None,
@@ -2283,6 +2467,67 @@ mod tests {
         let absolute_error =
             safe_join(root.path(), "/bin/machine").expect_err("absolute executable should fail");
         assert_eq!(absolute_error.code, "VALIDATION_ERROR");
+    }
+
+    #[test]
+    fn notify_machine_service_renders_handoff_and_restart_contract() {
+        let service = MachineBundleService {
+            label: "dev.alien.machine".to_string(),
+            executable: "bin/machine-entrypoint".to_string(),
+            args: vec![],
+            environment: BTreeMap::from([(
+                "HORIZON_CONFIG".to_string(),
+                "{config_path}".to_string(),
+            )]),
+            restart_policy: MachineBundleRestartPolicy::Always,
+            restart_delay_seconds: Some(5),
+            systemd: None,
+        };
+        let systemd = MachineBundleSystemdService {
+            service_type: MachineBundleSystemdServiceType::Notify,
+            notify_access: Some(MachineBundleSystemdNotifyAccess::All),
+            pid_file: Some("/run/horizond.pid".to_string()),
+            timeout_start_seconds: Some(600),
+        };
+
+        let unit = render_systemd_machine_service(
+            &service,
+            &systemd,
+            Path::new("/opt/alien/machine-bundle/bin/machine-entrypoint"),
+            Path::new("/etc/horizond/horizond.toml"),
+            Some(Path::new("/opt/alien/machine-bundle/bin")),
+        )
+        .expect("notify service should render");
+
+        assert!(unit.contains("Type=notify\n"));
+        assert!(unit.contains("NotifyAccess=all\n"));
+        assert!(unit.contains("PIDFile=/run/horizond.pid\n"));
+        assert!(unit.contains("TimeoutStartSec=600\n"));
+        assert!(unit.contains("Restart=always\nRestartSec=5\n"));
+        assert!(unit.contains("Environment=\"HORIZON_CONFIG=/etc/horizond/horizond.toml\"\n"));
+    }
+
+    #[test]
+    fn notify_machine_service_rejects_main_only_notifications() {
+        let mut manifest = test_manifest();
+        manifest.service.restart_policy = MachineBundleRestartPolicy::Always;
+        let systemd = MachineBundleSystemdService {
+            service_type: MachineBundleSystemdServiceType::Notify,
+            notify_access: Some(MachineBundleSystemdNotifyAccess::Main),
+            pid_file: Some("/run/horizond.pid".to_string()),
+            timeout_start_seconds: Some(600),
+        };
+
+        let error = render_systemd_machine_service(
+            &manifest.service,
+            &systemd,
+            Path::new("/opt/alien/machine"),
+            Path::new("/etc/horizond.toml"),
+            None,
+        )
+        .expect_err("handoff children require notify access all");
+
+        assert_eq!(error.code, "VALIDATION_ERROR");
     }
 
     fn write_test_archive(path: &Path, entries: &[(&str, &[u8])]) {
