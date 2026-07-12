@@ -362,6 +362,7 @@ pub fn to_api_platform(platform: Platform) -> alien_manager_api::types::Platform
         Platform::Gcp => alien_manager_api::types::Platform::Gcp,
         Platform::Azure => alien_manager_api::types::Platform::Azure,
         Platform::Kubernetes => alien_manager_api::types::Platform::Kubernetes,
+        Platform::Machines => alien_manager_api::types::Platform::Machines,
         Platform::Local => alien_manager_api::types::Platform::Local,
         Platform::Test => alien_manager_api::types::Platform::Test,
     }

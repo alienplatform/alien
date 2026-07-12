@@ -213,6 +213,7 @@ pub async fn handle_provisioning(
         }
     } else {
         // Still in progress
+        next.status = DeploymentStatus::Provisioning;
         next.stack_state = Some(step_result.next_state);
         next.runtime_metadata = Some(runtime_metadata);
 
