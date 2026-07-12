@@ -60,10 +60,7 @@
         "label": "manage-event-source-mappings",
         "description": "Read and update SQS event source mappings for this application's functions.",
         "grant": {
-          "actions": [
-            "lambda:GetEventSourceMapping",
-            "lambda:UpdateEventSourceMapping"
-          ]
+          "actions": ["lambda:GetEventSourceMapping", "lambda:UpdateEventSourceMapping"]
         },
         "binding": {
           "stack": {
