@@ -124,14 +124,6 @@ jobs:
           NODE_OPTIONS: "--max-old-space-size=8192"
         run: pnpm test:ts
 
-      - name: TypeScript unit tests
-        # The per-package vitest suites (commands receiver twins, bindings
-        # loader/error mapping, core schemas) — `test:ts` above is
-        # typecheck-only, so without this step they never ran in CI.
-        env:
-          NODE_OPTIONS: "--max-old-space-size=8192"
-        run: pnpm -r --if-present --filter "./packages/*" test
-
       - name: Validate package layout
         run: pnpm validate:package-layout
 
@@ -146,6 +138,16 @@ jobs:
         env:
           CARGO_BUILD_JOBS: "6"
         run: ../../packages/package-layout/node_modules/.bin/napi build --platform
+
+      - name: TypeScript unit tests
+        # The per-package vitest suites (commands receiver twins, bindings
+        # loader/error mapping, core schemas) — `test:ts` above is
+        # typecheck-only, so without this step they never ran in CI. Must run
+        # after the dev-addon build: the bindings kv/queue/storage/vault
+        # suites load the native addon.
+        env:
+          NODE_OPTIONS: "--max-old-space-size=8192"
+        run: pnpm -r --if-present --filter "./packages/*" test
 
       - name: Rust fast tests (non-cloud)
         env:
