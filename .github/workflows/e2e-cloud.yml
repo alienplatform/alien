@@ -988,7 +988,7 @@ jobs:
           pnpm build
           pnpm -C examples install --frozen-lockfile
         env:
-          NODE_OPTIONS: "--max-old-space-size=4096"
+          NODE_OPTIONS: "--max-old-space-size=8192"
 
       - name: Mask sensitive values from .env.test
         run: |
@@ -1083,7 +1083,7 @@ jobs:
           pnpm build
           pnpm -C examples install --frozen-lockfile
         env:
-          NODE_OPTIONS: "--max-old-space-size=4096"
+          NODE_OPTIONS: "--max-old-space-size=8192"
 
       - name: Mask sensitive values from .env.test
         run: |
@@ -1230,7 +1230,7 @@ jobs:
           pnpm build
           pnpm -C examples install --frozen-lockfile
         env:
-          NODE_OPTIONS: "--max-old-space-size=4096"
+          NODE_OPTIONS: "--max-old-space-size=8192"
 
       - name: Mask sensitive values from .env.test
         run: |
@@ -1354,7 +1354,7 @@ jobs:
           pnpm build
           pnpm -C examples install --frozen-lockfile
         env:
-          NODE_OPTIONS: "--max-old-space-size=4096"
+          NODE_OPTIONS: "--max-old-space-size=8192"
 
       - name: Build alien-operator and alien-deploy (Unix)
         if: runner.os != 'Windows'
