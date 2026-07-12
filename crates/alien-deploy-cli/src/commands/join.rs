@@ -2170,6 +2170,43 @@ mod tests {
     }
 
     #[test]
+    fn bundle_manifest_ignores_machine_image_catalog_fields() {
+        let raw = r#"{
+          "channel": "prod",
+          "machineImageVersion": "1.1.5+abc.42",
+          "horizondVersion": "1.1.5",
+          "gitSha": "abc",
+          "createdAt": "2026-07-12T00:00:00Z",
+          "baseImage": { "name": "flatcar", "version": "stable-current" },
+          "horizondArtifacts": {},
+          "aws": { "amis": {} },
+          "version": "1.1.5+abc.42",
+          "config": {
+            "path": "etc/horizond/horizond.toml",
+            "joinTokenFile": "var/lib/horizond/join-token",
+            "machineIdFile": "var/lib/horizond/machine-id",
+            "machineTokenFile": "var/lib/horizond/machine-token",
+            "entries": []
+          },
+          "service": {
+            "label": "dev.alien.machine",
+            "executable": "bin/machine-entrypoint"
+          },
+          "artifacts": [{
+            "os": "linux",
+            "arch": "x64",
+            "url": "https://releases.example.com/machine-bundle.tar.gz",
+            "sha256": "00"
+          }]
+        }"#;
+
+        let manifest: MachineBundleManifest =
+            serde_json::from_str(raw).expect("combined release manifest should parse");
+
+        assert_eq!(manifest.version, "1.1.5+abc.42");
+    }
+
+    #[test]
     fn machine_config_writes_secret_files_under_install_root() {
         let root = tempfile::tempdir().expect("install root");
         let args = JoinArgs {
