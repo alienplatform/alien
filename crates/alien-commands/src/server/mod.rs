@@ -293,12 +293,12 @@ impl CommandServer {
         // live commands for one idempotency key.
         if let Some(ref composed_key) = composed_idempotency_key {
             if let Some(winner_id) = self.store_idempotency(composed_key, &command_id).await? {
-                self.command_registry
-                    .update_command_state(
+                let _ = self
+                    .command_registry
+                    .complete_command(
                         &command_id,
                         CommandState::Failed,
-                        None,
-                        Some(Utc::now()),
+                        Utc::now(),
                         None,
                         Some(serde_json::json!({
                             "code": "IDEMPOTENT_DUPLICATE",
@@ -466,33 +466,54 @@ impl CommandServer {
         // 2. Check deadline expiry inline
         if let Some(deadline) = status.deadline {
             if Utc::now() > deadline && !status.state.is_terminal() {
-                // Expire the command
-                self.command_registry
-                    .update_command_state(
+                // Expire the command — CONDITIONALLY: a submit can land
+                // between the status read above and this write, and an
+                // unconditional write would stomp its terminal state (the
+                // torn-record class the conditional transition exists for).
+                let won = self
+                    .command_registry
+                    .complete_command(command_id, CommandState::Expired, Utc::now(), None, None)
+                    .await?;
+                if won {
+                    // Clean up pending index
+                    self.delete_pending_index(
+                        &status.deployment_id,
+                        &status.target.resource_id,
                         command_id,
-                        CommandState::Expired,
-                        None,
-                        Some(Utc::now()),
-                        None,
-                        None,
                     )
                     .await?;
 
-                // Clean up pending index
-                self.delete_pending_index(
-                    &status.deployment_id,
-                    &status.target.resource_id,
-                    command_id,
-                )
-                .await?;
-
-                // Return expired status directly (avoid recursion)
+                    // Return expired status directly (avoid recursion)
+                    return Ok(CommandStatusResponse {
+                        command_id: command_id.to_string(),
+                        state: CommandState::Expired,
+                        attempt: status.attempt,
+                        target: status.target,
+                        response: None,
+                    });
+                }
+                // Lost to a concurrent submit: fall through and serve the
+                // freshly-terminal state below.
+                let status = self
+                    .command_registry
+                    .get_command_status(command_id)
+                    .await?
+                    .ok_or_else(|| {
+                        AlienError::new(ErrorData::CommandNotFound {
+                            command_id: command_id.to_string(),
+                        })
+                    })?;
+                let response = if status.state.is_terminal() {
+                    self.get_response(command_id).await?
+                } else {
+                    None
+                };
                 return Ok(CommandStatusResponse {
                     command_id: command_id.to_string(),
-                    state: CommandState::Expired,
+                    state: status.state,
                     attempt: status.attempt,
                     target: status.target,
-                    response: None,
+                    response,
                 });
             }
         }
@@ -812,16 +833,16 @@ impl CommandServer {
                 continue;
             }
 
-            // 5. Check deadline expiry
+            // 5. Check deadline expiry — conditionally: a racing submit's
+            // terminal state must never be stomped back to Expired.
             if let Some(deadline) = metadata.deadline {
                 if Utc::now() > deadline {
-                    // Expire the command
-                    self.command_registry
-                        .update_command_state(
+                    let _ = self
+                        .command_registry
+                        .complete_command(
                             &command_id,
                             CommandState::Expired,
-                            None,
-                            Some(Utc::now()),
+                            Utc::now(),
                             None,
                             None,
                         )
@@ -842,17 +863,23 @@ impl CommandServer {
                 }
             };
 
-            // 7. Update registry state to Dispatched
-            self.command_registry
-                .update_command_state(
-                    &command_id,
-                    CommandState::Dispatched,
-                    Some(Utc::now()),
-                    None,
-                    None,
-                    None,
-                )
+            // 7. Mark Dispatched — conditionally. Between the terminal
+            // check in step 3.1 and here, the ORIGINAL holder of a
+            // TTL-expired lease can still submit; handing out this lease
+            // would re-execute a completed command and stomp its state.
+            let dispatched = self
+                .command_registry
+                .mark_dispatched_if_not_terminal(&command_id, Utc::now())
                 .await?;
+            if !dispatched {
+                debug!(
+                    command_id = %command_id,
+                    "Command turned terminal while leasing; releasing the lease"
+                );
+                self.delete_lease(&command_id).await?;
+                let _ = self.kv.delete(&index_key).await;
+                continue;
+            }
 
             // 8. Build envelope. Lease-served envelopes carry manager URLs
             // as root-relative paths: a pull consumer resolves them against
@@ -1485,44 +1512,50 @@ impl CommandServer {
     /// submit is safe: whoever wins, the record stays consistent. Returns
     /// the number of commands expired.
     pub async fn reap_expired_commands(&self) -> Result<u32> {
-        let scan = self
-            .kv
-            .scan_prefix("deadline:", Some(512), None)
-            .await
-            .into_alien_error()
-            .context(ErrorData::KvOperationFailed {
-                operation: "scan_prefix".to_string(),
-                key: "deadline:".to_string(),
-                message: "Failed to scan the deadline index".to_string(),
-            })?;
-
         let now = Utc::now();
         let mut expired = 0u32;
-        for (key, value) in scan.items {
-            let Ok(data) = serde_json::from_slice::<DeadlineIndexData>(&value) else {
-                warn!(key = %key, "Unparseable deadline index entry; deleting");
-                let _ = self.kv.delete(&key).await;
-                continue;
-            };
-            if data.deadline > now {
-                // Not due yet. (Keys are not sortable numerically — the
-                // timestamp segment isn't zero-padded — so keep scanning.)
-                continue;
-            }
+        let mut cursor: Option<String> = None;
+        // Paginate the whole index (bounded page count as a runaway guard):
+        // keys are not numerically ordered — the timestamp segment isn't
+        // zero-padded — so due entries can sit behind any number of
+        // future-dated ones and a single capped scan would starve them.
+        for _ in 0..64 {
+            let scan = self
+                .kv
+                .scan_prefix("deadline:", Some(256), cursor.clone())
+                .await
+                .into_alien_error()
+                .context(ErrorData::KvOperationFailed {
+                    operation: "scan_prefix".to_string(),
+                    key: "deadline:".to_string(),
+                    message: "Failed to scan the deadline index".to_string(),
+                })?;
+            let next_cursor = scan.next_cursor.clone();
+            for (key, value) in scan.items {
+                let Ok(data) = serde_json::from_slice::<DeadlineIndexData>(&value) else {
+                    warn!(key = %key, "Unparseable deadline index entry; deleting");
+                    let _ = self.kv.delete(&key).await;
+                    continue;
+                };
+                if data.deadline > now {
+                    // Not due yet. (Keys are not sortable numerically — the
+                    // timestamp segment isn't zero-padded — so keep scanning.)
+                    continue;
+                }
 
-            let status = self
-                .command_registry
-                .get_command_status(&data.command_id)
-                .await?;
-            match status {
-                None => {
-                    let _ = self.kv.delete(&key).await;
-                }
-                Some(status) if status.state.is_terminal() => {
-                    let _ = self.kv.delete(&key).await;
-                }
-                Some(status) => {
-                    let won = self
+                let status = self
+                    .command_registry
+                    .get_command_status(&data.command_id)
+                    .await?;
+                match status {
+                    None => {
+                        let _ = self.kv.delete(&key).await;
+                    }
+                    Some(status) if status.state.is_terminal() => {
+                        let _ = self.kv.delete(&key).await;
+                    }
+                    Some(status) => {
+                        let won = self
                         .command_registry
                         .complete_command(
                             &data.command_id,
@@ -1535,20 +1568,25 @@ impl CommandServer {
                             })),
                         )
                         .await?;
-                    if won {
-                        expired += 1;
-                        info!(command_id = %data.command_id, "Expired overdue command");
-                        let _ = self.delete_lease(&data.command_id).await;
-                        let _ = self
-                            .delete_pending_index(
-                                &status.deployment_id,
-                                &status.target.resource_id,
-                                &data.command_id,
-                            )
-                            .await;
+                        if won {
+                            expired += 1;
+                            info!(command_id = %data.command_id, "Expired overdue command");
+                            let _ = self.delete_lease(&data.command_id).await;
+                            let _ = self
+                                .delete_pending_index(
+                                    &status.deployment_id,
+                                    &status.target.resource_id,
+                                    &data.command_id,
+                                )
+                                .await;
+                        }
+                        let _ = self.kv.delete(&key).await;
                     }
-                    let _ = self.kv.delete(&key).await;
                 }
+            }
+            match next_cursor {
+                Some(next) => cursor = Some(next),
+                None => break,
             }
         }
         Ok(expired)
@@ -1574,15 +1612,19 @@ impl CommandServer {
             },
         )?;
 
-        let ttl = deadline.signed_duration_since(Utc::now());
-        let ttl_duration = if ttl.num_seconds() > 0 {
-            Some(Duration::from_secs(ttl.num_seconds() as u64))
-        } else {
-            None
-        };
-
-        let options = ttl_duration.map(|ttl| PutOptions {
-            ttl: Some(ttl),
+        // The entry must remain VISIBLE well past the deadline: scan_prefix
+        // treats logically-expired keys as absent on every provider, so a
+        // TTL equal to the deadline would hide the entry at exactly the
+        // moment the reaper needs it (the bug that made the reaper inert).
+        // The reaper deletes entries as it processes them; the 7-day grace
+        // is only self-cleaning for processes that never run a reaper.
+        const DEADLINE_INDEX_GRACE: chrono::Duration = chrono::Duration::days(7);
+        let ttl = deadline
+            .signed_duration_since(Utc::now())
+            .checked_add(&DEADLINE_INDEX_GRACE)
+            .unwrap_or(DEADLINE_INDEX_GRACE);
+        let options = (ttl.num_seconds() > 0).then(|| PutOptions {
+            ttl: Some(Duration::from_secs(ttl.num_seconds() as u64)),
             if_not_exists: false,
         });
 
@@ -1621,19 +1663,11 @@ impl CommandServer {
         // Build envelope
         let envelope = self.build_envelope(command_id, &metadata, params).await?;
 
-        // Dispatch via transport
-        self.command_dispatcher
-            .dispatch(&envelope)
-            .await
-            .map_err(|e| {
-                e.context(ErrorData::TransportDispatchFailed {
-                    message: "Failed to dispatch command".to_string(),
-                    transport_type: None,
-                    target: Some(deployment_id.to_string()),
-                })
-            })?;
-
-        // Update registry state
+        // Mark Dispatched BEFORE invoking the transport: a fast worker can
+        // execute and submit before this function resumes, and submit
+        // validates state == Dispatched — the old dispatch-then-mark order
+        // could reject that submit (losing the response) or stomp its
+        // terminal state back to Dispatched.
         self.command_registry
             .update_command_state(
                 command_id,
@@ -1644,6 +1678,23 @@ impl CommandServer {
                 None,
             )
             .await?;
+
+        // Dispatch via transport
+        if let Err(e) = self.command_dispatcher.dispatch(&envelope).await {
+            // Best-effort revert so the command can be retried rather than
+            // sitting Dispatched with nothing in flight. Conditional-free is
+            // fine here: nothing else can have submitted for an envelope
+            // that was never delivered.
+            let _ = self
+                .command_registry
+                .update_command_state(command_id, CommandState::Pending, None, None, None, None)
+                .await;
+            return Err(e.context(ErrorData::TransportDispatchFailed {
+                message: "Failed to dispatch command".to_string(),
+                transport_type: None,
+                target: Some(deployment_id.to_string()),
+            }));
+        }
 
         info!("Command {} dispatched via push", command_id);
         Ok(())

@@ -489,6 +489,30 @@ impl CommandRegistry for SqliteCommandRegistry {
         Ok(rows_affected > 0)
     }
 
+    async fn mark_dispatched_if_not_terminal(
+        &self,
+        command_id: &str,
+        dispatched_at: DateTime<Utc>,
+    ) -> alien_commands::error::Result<bool> {
+        let sql = Query::update()
+            .table(Commands::Table)
+            .value(Commands::State, CommandState::Dispatched.as_ref())
+            .value(Commands::DispatchedAt, dispatched_at.to_rfc3339())
+            .and_where(Expr::col(Commands::Id).eq(command_id))
+            .and_where(Expr::col(Commands::State).is_not_in([
+                CommandState::Succeeded.as_ref(),
+                CommandState::Failed.as_ref(),
+                CommandState::Expired.as_ref(),
+            ]))
+            .to_string(SqliteQueryBuilder);
+        let rows_affected = self
+            .db
+            .execute_returning_rows_affected(&sql)
+            .await
+            .map_err(to_cmd_err)?;
+        Ok(rows_affected > 0)
+    }
+
     async fn increment_attempt(&self, command_id: &str) -> alien_commands::error::Result<u32> {
         let update_sql = Query::update()
             .table(Commands::Table)

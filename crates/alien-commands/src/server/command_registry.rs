@@ -277,6 +277,19 @@ pub trait CommandRegistry: Send + Sync {
         error: Option<serde_json::Value>,
     ) -> Result<bool>;
 
+    /// Atomically mark a command Dispatched unless it is already terminal.
+    ///
+    /// Returns `false` when the command reached a terminal state in the
+    /// meantime — e.g. a lease TTL-expired, a new poller won the takeover
+    /// put, and the ORIGINAL holder's submit landed between the poller's
+    /// terminal check and this write. An unconditional write there would
+    /// flip a committed terminal state back to Dispatched.
+    async fn mark_dispatched_if_not_terminal(
+        &self,
+        command_id: &str,
+        dispatched_at: DateTime<Utc>,
+    ) -> Result<bool>;
+
     /// Increment attempt count (on lease release/expiry).
     ///
     /// Returns the new attempt number.
@@ -510,6 +523,23 @@ impl CommandRegistry for InMemoryCommandRegistry {
         if let Some(err) = error {
             record.error = Some(err);
         }
+        Ok(true)
+    }
+
+    async fn mark_dispatched_if_not_terminal(
+        &self,
+        command_id: &str,
+        dispatched_at: DateTime<Utc>,
+    ) -> Result<bool> {
+        let mut commands = self.commands.write().await;
+        let Some(record) = commands.get_mut(command_id) else {
+            return Ok(false);
+        };
+        if record.state.is_terminal() {
+            return Ok(false);
+        }
+        record.state = CommandState::Dispatched;
+        record.dispatched_at = Some(dispatched_at);
         Ok(true)
     }
 

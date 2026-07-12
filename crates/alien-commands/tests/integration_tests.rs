@@ -1393,12 +1393,15 @@ async fn deadline_reaper_expires_overdue_commands() {
 
     let server = TestCommandServer::builder().with_pull_mode().build().await;
 
+    // A multi-second deadline matters here: the index entry gets a KV TTL,
+    // and the regression this guards is the TTL expiring AT the deadline —
+    // hiding the entry from the reaper's scan exactly when it became due.
     let mut request = test_inline_create_command("pull-agent", "slow-op");
-    request.deadline = Some(chrono::Utc::now() + chrono::Duration::milliseconds(80));
+    request.deadline = Some(chrono::Utc::now() + chrono::Duration::seconds(2));
     let created = server.create_command(request).await.unwrap();
     assert_eq!(created.state, CommandState::Pending);
 
-    tokio::time::sleep(std::time::Duration::from_millis(150)).await;
+    tokio::time::sleep(std::time::Duration::from_millis(2600)).await;
     let expired = server.command_server.reap_expired_commands().await.unwrap();
     assert_eq!(expired, 1, "the overdue command must be reaped");
 

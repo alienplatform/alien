@@ -182,12 +182,11 @@ impl GcpFirestoreKv {
         {
             Ok(_) => Ok(true),
             Err(e) => match e.error.as_ref() {
+                // A lost race: the precondition mismatch maps to Conflict
+                // (FAILED_PRECONDITION → RemoteResourceConflict in
+                // map_gcp_error), and a deletion in between maps to NotFound.
                 Some(CloudErrorData::RemoteResourceConflict { .. })
                 | Some(CloudErrorData::RemoteResourceNotFound { .. }) => Ok(false),
-                // Firestore reports a failed updateTime precondition as
-                // FAILED_PRECONDITION; depending on the surface it can map
-                // to a non-conflict variant — a lost race either way.
-                _ if e.to_string().contains("FAILED_PRECONDITION") => Ok(false),
                 _ => Err(crate::error::map_cloud_client_error(
                     e,
                     format!("Failed to take over expired document for key '{}'", key),

@@ -33,8 +33,6 @@ pub(crate) struct DaemonRuntime {
     /// When the daemon was started (used for monitoring)
     #[allow(dead_code)]
     started_at: chrono::DateTime<chrono::Utc>,
-    /// Persistent metadata for this daemon (used for crash recovery)
-    pub(crate) metadata: WorkerMetadata,
     /// This daemon's own OTLP log exporter, if configured. Owned per-daemon (not the
     /// process-global provider) so each daemon keeps its own endpoint/service identity and its
     /// own flush lifecycle. Held here to keep the provider alive for the daemon's lifetime.
@@ -190,7 +188,6 @@ impl LocalWorkerManager {
             &resolved_bindings,
         );
 
-        let runtime_env_vars_for_restart = runtime_env_vars.clone();
         let log_exporter = log_exporter_from_env(&runtime_env_vars, id);
 
         Self::save_daemon_metadata_static(state_dir, &updated_metadata)?;
@@ -274,12 +271,6 @@ impl LocalWorkerManager {
             }
         }
 
-        // The in-memory runtime keeps the LIVE env (secrets included) so a
-        // monitor crash-restart relaunches with the values the process
-        // actually had; only the on-disk metadata is secret-stripped.
-        let mut runtime_metadata = updated_metadata;
-        runtime_metadata.env_vars = runtime_env_vars_for_restart;
-
         daemons_guard.insert(
             id.to_string(),
             DaemonRuntime {
@@ -287,7 +278,6 @@ impl LocalWorkerManager {
                 shutdown_tx,
                 pid,
                 started_at: chrono::Utc::now(),
-                metadata: runtime_metadata,
                 otlp_logger,
             },
         );
@@ -422,7 +412,7 @@ async fn stream_daemon_output(
 /// Supervises the daemon's app process: waits for either a shutdown signal or the process exit.
 ///
 /// On shutdown the child is terminated and this daemon's own OTLP logs are flushed. A non-zero exit
-/// (or a wait error) is returned as an error so the monitor loop treats it as a crash and restarts.
+/// (or a wait error) is returned as an error so the reaper removes it from the map and the controller relaunches it.
 /// A clean exit returns `Ok(())`; the monitor still restarts it, since a daemon is expected to run
 /// forever.
 /// Default stop grace period when the Daemon config does not set one —
@@ -436,8 +426,25 @@ async fn supervise_daemon_process(
     otlp_logger: Option<Arc<OwnedOtlpLogger>>,
     stop_grace_period: std::time::Duration,
 ) -> Result<()> {
+    // Captured before the waits: after the child exits, `child.id()` is
+    // None, and the crash arm below still needs the group id to sweep
+    // surviving grandchildren.
+    #[cfg(unix)]
+    let group_pid = child.id();
+
     let result = tokio::select! {
         status = child.wait() => {
+            // The direct child is gone, but an entrypoint's own children
+            // (sh -c, npm, gunicorn workers) may have survived it — holding
+            // the port and, worse, still leasing commands with old code.
+            // Sweep the process group the child led; ESRCH (nothing left)
+            // is the normal case.
+            #[cfg(unix)]
+            if let Some(pid) = group_pid {
+                unsafe {
+                    let _ = libc::kill(-(pid as libc::pid_t), libc::SIGKILL);
+                }
+            }
             match status {
                 Ok(status) if status.success() => {
                     info!(daemon_id = %daemon_id, "Daemon process exited cleanly");
