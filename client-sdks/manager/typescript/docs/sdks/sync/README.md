@@ -42,7 +42,9 @@ const alienManager = new AlienManager({
 });
 
 async function run() {
-  const result = await alienManager.sync.initialize({});
+  const result = await alienManager.sync.initialize({
+    initialDesiredRelease: "none",
+  });
 
   console.log(result);
 }
@@ -66,7 +68,9 @@ const alienManager = new AlienManagerCore({
 });
 
 async function run() {
-  const res = await syncInitialize(alienManager, {});
+  const res = await syncInitialize(alienManager, {
+    initialDesiredRelease: "none",
+  });
   if (res.ok) {
     const { value: result } = res;
     console.log(result);

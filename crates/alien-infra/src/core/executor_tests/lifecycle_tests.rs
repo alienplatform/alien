@@ -694,3 +694,129 @@ async fn test_complex_dependency_graph_with_lifecycles() -> Result<()> {
 
     Ok(())
 }
+
+/// Regression for the machines waiting-for-machines deadlock: a frozen
+/// resource whose Ready handler observes external reality (e.g. machine
+/// inventory) must keep refreshing its outputs while a Live-filtered
+/// executor steps the deployment. Frozen restricts mutation, never
+/// observation.
+#[tokio::test]
+async fn test_live_filtered_executor_refreshes_frozen_observed_outputs() -> Result<()> {
+    let observed = {
+        let mut worker = test_function("observed-cluster");
+        worker.environment.insert(
+            "SIMULATE_OBSERVED_URL_REFRESH".to_string(),
+            "true".to_string(),
+        );
+        worker
+    };
+    let live_func = test_function("live-func");
+
+    let stack = Stack::new("frozen-observation-test".to_owned())
+        .add(observed.clone(), ResourceLifecycle::Frozen)
+        .add(live_func.clone(), ResourceLifecycle::Live)
+        .build();
+
+    // Phase 1: provision everything (no filter) so the frozen resource is Running.
+    let full_executor = new_executor(&stack)?;
+    let state = run_to_synced(&full_executor, new_test_state()).await?;
+    assert_all_running(&state, &["observed-cluster", "live-func"]);
+
+    let url_of = |state: &alien_core::StackState| -> Option<String> {
+        state
+            .resources
+            .get("observed-cluster")
+            .and_then(|r| r.outputs.as_ref())
+            .and_then(|o| o.downcast_ref::<alien_core::WorkerOutputs>())
+            .and_then(|o| o.public_endpoints.get("default"))
+            .map(|e| e.url.clone())
+    };
+    let url_before = url_of(&state).expect("frozen resource should expose outputs");
+
+    // Phase 2: step with a Live lifecycle filter, as deployment provisioning does.
+    let live_executor = new_executor_with_filter(&stack, vec![ResourceLifecycle::Live])?;
+    let mut state = state;
+    for _ in 0..3 {
+        state = live_executor.step(state).await?.next_state;
+    }
+
+    let url_after = url_of(&state).expect("frozen resource outputs must survive live steps");
+    assert_ne!(
+        url_before, url_after,
+        "Live-filtered steps must refresh the frozen resource's observed outputs"
+    );
+    assert_eq!(
+        get_status(&state, "observed-cluster"),
+        Some(ResourceStatus::Running),
+        "observation must not mutate the frozen resource's status"
+    );
+
+    Ok(())
+}
+
+/// A transient observation failure (RefreshFailed) on a frozen resource must
+/// not park it: out-of-scope stepping keeps running it, the controller
+/// recovers, and observed outputs keep refreshing. One transient error must
+/// never permanently freeze observed state.
+#[tokio::test]
+async fn test_frozen_resource_recovers_from_failed_observation() -> Result<()> {
+    let observed = {
+        let mut worker = test_function("observed-cluster");
+        worker.environment.insert(
+            "SIMULATE_OBSERVED_URL_REFRESH".to_string(),
+            "true".to_string(),
+        );
+        worker.environment.insert(
+            "SIMULATE_OBSERVED_REFRESH_FAIL_ONCE".to_string(),
+            "true".to_string(),
+        );
+        worker
+    };
+    let live_func = test_function("live-func");
+
+    let stack = Stack::new("frozen-observation-recovery-test".to_owned())
+        .add(observed.clone(), ResourceLifecycle::Frozen)
+        .add(live_func.clone(), ResourceLifecycle::Live)
+        .build();
+
+    let full_executor = new_executor(&stack)?;
+    let state = run_to_synced(&full_executor, new_test_state()).await?;
+
+    let url_of = |state: &alien_core::StackState| -> Option<String> {
+        state
+            .resources
+            .get("observed-cluster")
+            .and_then(|r| r.outputs.as_ref())
+            .and_then(|o| o.downcast_ref::<alien_core::WorkerOutputs>())
+            .and_then(|o| o.public_endpoints.get("default"))
+            .map(|e| e.url.clone())
+    };
+    let url_before = url_of(&state).expect("frozen resource should expose outputs");
+
+    // Step under the Live filter; the first observation dips into
+    // RefreshFailed, subsequent steps must recover it.
+    let live_executor = new_executor_with_filter(&stack, vec![ResourceLifecycle::Live])?;
+    let mut state = state;
+    let mut seen_statuses = Vec::new();
+    for _ in 0..4 {
+        state = live_executor.step(state).await?.next_state;
+        seen_statuses.push(get_status(&state, "observed-cluster"));
+    }
+
+    assert!(
+        seen_statuses.contains(&Some(ResourceStatus::RefreshFailed)),
+        "the simulated observation failure should surface as RefreshFailed, saw: {seen_statuses:?}"
+    );
+    assert_eq!(
+        get_status(&state, "observed-cluster"),
+        Some(ResourceStatus::Running),
+        "the frozen resource must recover to Running after the transient failure"
+    );
+    let url_after = url_of(&state).expect("outputs must survive the failure");
+    assert_ne!(
+        url_before, url_after,
+        "observation must keep refreshing outputs after recovery"
+    );
+
+    Ok(())
+}

@@ -179,15 +179,22 @@ pub struct AgentSyncResponse {
     pub operator_target: Option<serde_json::Value>,
 }
 
+#[derive(Debug, Clone, Copy, Deserialize, Serialize, PartialEq, Eq)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
+#[serde(rename_all = "kebab-case")]
+pub enum InitialDesiredRelease {
+    /// Start from the project's active release.
+    Active,
+    /// Register the environment without expressing desired release state.
+    None,
+}
+
 #[derive(Debug, Deserialize)]
 #[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 #[serde(rename_all = "camelCase")]
 pub struct InitializeRequest {
     pub name: Option<String>,
     pub platform: Option<Platform>,
-    /// Optional generated-domain subdomain to use for this deployment.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub public_subdomain: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub scope: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -200,6 +207,10 @@ pub struct InitializeRequest {
     /// EKS/GKE/AKS. The runtime platform remains Kubernetes.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub base_platform: Option<Platform>,
+    /// Desired-release selection for a newly registered deployment. This is
+    /// creation intent, not a permanent deployment mode: a later update can
+    /// assign a desired release to a deployment initialized with `none`.
+    pub initial_desired_release: InitialDesiredRelease,
     pub stack_settings: Option<alien_core::StackSettings>,
     /// Deployer-provided stack inputs. Embedded platform managers resolve
     /// these before creating the deployment; standalone managers accept the
@@ -213,6 +224,7 @@ pub struct InitializeRequest {
 #[serde(rename_all = "camelCase")]
 pub struct InitializeResponse {
     pub deployment_id: String,
+    pub deployment_model: DeploymentModel,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub token: Option<String>,
 }
@@ -579,7 +591,8 @@ mod tests {
         build_target_deployment_config, deployment_needs_target, deployment_state_from_record,
         deployment_target_release_id, management_platform, release_stack_platform,
         should_ignore_agent_state_report, should_return_current_state_for_agent_sync,
-        validate_initialize_base_platform, AgentSyncRequest, ReconcileRequest,
+        validate_initialize_base_platform, AgentSyncRequest, InitialDesiredRelease,
+        InitializeRequest, ReconcileRequest,
     };
 
     #[test]
@@ -763,6 +776,23 @@ mod tests {
         assert!(
             validate_initialize_base_platform(Platform::Kubernetes, Some(Platform::Local)).is_err()
         );
+    }
+
+    #[test]
+    fn initialize_requires_explicit_initial_desired_release() {
+        let request: InitializeRequest = serde_json::from_value(json!({
+            "platform": "kubernetes",
+            "permission": "observe",
+            "initialDesiredRelease": "none"
+        }))
+        .expect("explicit no-release initialization should deserialize");
+        assert_eq!(request.initial_desired_release, InitialDesiredRelease::None);
+
+        let missing_selection = serde_json::from_value::<InitializeRequest>(json!({
+            "platform": "kubernetes",
+            "permission": "observe"
+        }));
+        assert!(missing_selection.is_err());
     }
 
     #[test]
@@ -2169,9 +2199,19 @@ async fn initialize(
 
     match subject.scope.clone() {
         crate::auth::Scope::Deployment { deployment_id, .. } => {
-            // Already has a deployment - return its ID
+            let deployment = match state
+                .deployment_store
+                .get_deployment(&subject, &deployment_id)
+                .await
+            {
+                Ok(Some(deployment)) => deployment,
+                Ok(None) => return ErrorData::not_found_deployment(&deployment_id).into_response(),
+                Err(e) => return e.into_response(),
+            };
+
             Json(InitializeResponse {
                 deployment_id,
+                deployment_model: super::deployments::deployment_model_for_record(&deployment),
                 token: None,
             })
             .into_response()
@@ -2211,6 +2251,9 @@ async fn initialize(
                     .await
                 {
                     Ok(_) => Json(InitializeResponse {
+                        deployment_model: super::deployments::deployment_model_for_record(
+                            &existing,
+                        ),
                         deployment_id: existing.id,
                         token: Some(raw_token),
                     })
@@ -2219,18 +2262,12 @@ async fn initialize(
                 };
             }
 
-            let settings = req.stack_settings.unwrap_or_else(|| {
-                let mut settings = alien_core::StackSettings::default();
-                settings.deployment_model = match platform {
-                    Platform::Aws
-                    | Platform::Gcp
-                    | Platform::Azure
-                    | Platform::Machines
-                    | Platform::Test => alien_core::DeploymentModel::Push,
-                    Platform::Kubernetes | Platform::Local => alien_core::DeploymentModel::Pull,
+            let settings =
+                match super::deployments::stack_settings_for_platform(platform, req.stack_settings)
+                {
+                    Ok(settings) => settings,
+                    Err(e) => return e.into_response(),
                 };
-                settings
-            });
 
             // Create deployment with a token (reuse the agent's Bearer token)
             let dep_token = headers
@@ -2253,7 +2290,7 @@ async fn initialize(
                         stack_settings: settings,
                         stack_state: None,
                         environment_variables: None,
-                        public_subdomain: req.public_subdomain,
+                        public_subdomain: None,
                         input_values: req.input_values,
                         deployment_token: dep_token,
                     },
@@ -2264,15 +2301,16 @@ async fn initialize(
                 Err(e) => return e.into_response(),
             };
 
-            // Auto-assign latest release if available. Initialize is the
-            // agent's own bootstrap: keep the caller's subject for both
-            // reads and writes so embedders can authorize against the
-            // agent's scope rather than a service credential.
-            if let Ok(Some(release)) = state.release_store.get_latest_release(&subject).await {
-                let _ = state
-                    .deployment_store
-                    .set_deployment_desired_release(&subject, &deployment.id, &release.id)
-                    .await;
+            if req.initial_desired_release == InitialDesiredRelease::Active {
+                // Initialize is the agent's own bootstrap: keep the caller's
+                // subject for reads and writes so embedders can authorize
+                // against the agent's scope rather than a service credential.
+                if let Ok(Some(release)) = state.release_store.get_latest_release(&subject).await {
+                    let _ = state
+                        .deployment_store
+                        .set_deployment_desired_release(&subject, &deployment.id, &release.id)
+                        .await;
+                }
             }
 
             // Create a deployment token for the new deployment
@@ -2292,6 +2330,9 @@ async fn initialize(
                 Ok(_) => (
                     StatusCode::CREATED,
                     Json(InitializeResponse {
+                        deployment_model: super::deployments::deployment_model_for_record(
+                            &deployment,
+                        ),
                         deployment_id: deployment.id,
                         token: Some(raw_token),
                     }),
@@ -2319,12 +2360,16 @@ async fn initialize(
                 .await
             {
                 Ok(deployments) if !deployments.is_empty() => {
-                    let deployment_id = deployments[0].id.clone();
+                    let deployment = &deployments[0];
+                    let deployment_id = deployment.id.clone();
                     tracing::info!(
                         %deployment_id,
                         "Admin token: assigning agent to existing deployment"
                     );
                     Json(InitializeResponse {
+                        deployment_model: super::deployments::deployment_model_for_record(
+                            deployment,
+                        ),
                         deployment_id,
                         token: None,
                     })

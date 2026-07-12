@@ -868,6 +868,7 @@ fn parse_deployment_status(status: &str) -> Result<DeploymentStatus> {
         "initial-setup" => Ok(DeploymentStatus::InitialSetup),
         "initial-setup-failed" => Ok(DeploymentStatus::InitialSetupFailed),
         "provisioning" => Ok(DeploymentStatus::Provisioning),
+        "waiting-for-machines" => Ok(DeploymentStatus::WaitingForMachines),
         "provisioning-failed" => Ok(DeploymentStatus::ProvisioningFailed),
         "running" => Ok(DeploymentStatus::Running),
         "refresh-failed" => Ok(DeploymentStatus::RefreshFailed),
@@ -898,6 +899,14 @@ mod tests {
     fn parse_deployment_status_rejects_unknown_values() {
         let err = parse_deployment_status("mystery").unwrap_err();
         assert!(err.to_string().contains("Unknown local deployment status"));
+    }
+
+    #[test]
+    fn parse_deployment_status_accepts_waiting_for_machines() {
+        assert_eq!(
+            parse_deployment_status("waiting-for-machines").unwrap(),
+            DeploymentStatus::WaitingForMachines
+        );
     }
 
     #[test]

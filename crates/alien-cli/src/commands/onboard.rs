@@ -45,6 +45,10 @@ pub struct OnboardArgs {
     /// Platforms this deployment link can create deployments for (comma-separated). Defaults to every platform in the active release.
     #[arg(long = "platforms", alias = "platform", value_delimiter = ',')]
     pub platforms: Vec<String>,
+
+    /// Public subdomain to reserve for deployments created from this link.
+    #[arg(long)]
+    pub subdomain: Option<String>,
 }
 
 pub async fn onboard_task(args: OnboardArgs, ctx: ExecutionMode) -> Result<()> {
@@ -77,10 +81,10 @@ async fn onboard_platform(args: OnboardArgs, ctx: ExecutionMode, name: String) -
     )?;
 
     let (project_id, _project_link) = ctx.resolve_project(None, !args.json).await?;
-    let workspace = ctx.resolve_workspace_with_bootstrap(!args.json).await?;
+    let workspace = ctx.resolve_platform_workspace_context(!args.json).await?;
     let client = ctx.sdk_client().await?;
     let release_inputs =
-        fetch_active_release_stack_inputs(&client, &workspace, &project_id).await?;
+        fetch_active_release_stack_inputs(&client, workspace.query.as_deref(), &project_id).await?;
     let selected_platforms = select_onboard_platforms(
         &args.platforms,
         &release_inputs.supported_platforms,
@@ -94,6 +98,11 @@ async fn onboard_platform(args: OnboardArgs, ctx: ExecutionMode, name: String) -
         &selected_platforms,
         args.json,
     )?;
+    let public_subdomain = args
+        .subdomain
+        .as_deref()
+        .map(validate_public_subdomain)
+        .transpose()?;
 
     if !args.json {
         let platforms_label = selected_platforms
@@ -116,18 +125,20 @@ async fn onboard_platform(args: OnboardArgs, ctx: ExecutionMode, name: String) -
     };
 
     // Create deployment group via Platform API
-    let workspace_param =
-        alien_platform_api::types::CreateDeploymentGroupWorkspace::try_from(workspace.as_str())
-            .map_err(|e| {
-                AlienError::new(ErrorData::ValidationError {
-                    field: "workspace".to_string(),
-                    message: format!("Invalid workspace: {}", e),
-                })
-            })?;
+    let mut create_deployment_group = client.create_deployment_group();
+    if let Some(workspace_query) = workspace.query.as_deref() {
+        let workspace_param =
+            alien_platform_api::types::CreateDeploymentGroupWorkspace::try_from(workspace_query)
+                .map_err(|e| {
+                    AlienError::new(ErrorData::ValidationError {
+                        field: "workspace".to_string(),
+                        message: format!("Invalid workspace: {}", e),
+                    })
+                })?;
+        create_deployment_group = create_deployment_group.workspace(&workspace_param);
+    }
 
-    let response = client
-        .create_deployment_group()
-        .workspace(&workspace_param)
+    let response = create_deployment_group
         .body(alien_platform_api::types::CreateDeploymentGroupRequest {
             name: name.clone().try_into().map_err(|e| {
                 AlienError::new(ErrorData::ValidationError {
@@ -160,17 +171,6 @@ async fn onboard_platform(args: OnboardArgs, ctx: ExecutionMode, name: String) -
     }
 
     // Create token via Platform API — returns deploymentLink
-    let token_workspace_param =
-        alien_platform_api::types::CreateDeploymentGroupTokenWorkspace::try_from(
-            workspace.as_str(),
-        )
-        .map_err(|e| {
-            AlienError::new(ErrorData::ValidationError {
-                field: "workspace".to_string(),
-                message: format!("Invalid workspace: {}", e),
-            })
-        })?;
-
     let dg_id_param = alien_platform_api::types::CreateDeploymentGroupTokenId::try_from(
         deployment_group_id.as_str(),
     )
@@ -181,10 +181,22 @@ async fn onboard_platform(args: OnboardArgs, ctx: ExecutionMode, name: String) -
         })
     })?;
 
-    let token_response = client
-        .create_deployment_group_token()
-        .id(&dg_id_param)
-        .workspace(&token_workspace_param)
+    let mut create_token = client.create_deployment_group_token().id(&dg_id_param);
+    if let Some(workspace_query) = workspace.query.as_deref() {
+        let token_workspace_param =
+            alien_platform_api::types::CreateDeploymentGroupTokenWorkspace::try_from(
+                workspace_query,
+            )
+            .map_err(|e| {
+                AlienError::new(ErrorData::ValidationError {
+                    field: "workspace".to_string(),
+                    message: format!("Invalid workspace: {}", e),
+                })
+            })?;
+        create_token = create_token.workspace(&token_workspace_param);
+    }
+
+    let token_response = create_token
         .body(
             alien_platform_api::types::CreateDeploymentGroupTokenRequest {
                 description: None,
@@ -192,7 +204,8 @@ async fn onboard_platform(args: OnboardArgs, ctx: ExecutionMode, name: String) -
                 deployment_setup_config: platform_onboard_deployment_setup_config(
                     setup_environment_variables,
                     &selected_platforms,
-                ),
+                    public_subdomain.as_deref(),
+                )?,
                 input_values: Some(stack_input_values),
             },
         )
@@ -211,8 +224,10 @@ async fn onboard_platform(args: OnboardArgs, ctx: ExecutionMode, name: String) -
             "deploymentGroupId": deployment_group_id,
             "name": name,
             "deploymentLink": deployment_link,
+            "token": token_response.token,
             "maxDeployments": args.max_deployments,
             "platforms": selected_platforms.iter().map(|platform| platform.as_str()).collect::<Vec<_>>(),
+            "subdomain": public_subdomain,
         }))?;
         return Ok(());
     }
@@ -250,8 +265,22 @@ struct ActiveReleaseStackInputs {
 fn platform_onboard_deployment_setup_config(
     environment_variables: Vec<alien_platform_api::types::EnvironmentVariableConfig>,
     platforms: &[Platform],
-) -> alien_platform_api::types::DeploymentSetupConfig {
+    public_subdomain: Option<&str>,
+) -> Result<alien_platform_api::types::DeploymentSetupConfig> {
     use alien_platform_api::types;
+
+    let public_subdomain = public_subdomain
+        .map(|value| {
+            value
+                .parse::<types::DeploymentSetupConfigPublicSubdomain>()
+                .map_err(|error| {
+                    AlienError::new(ErrorData::ValidationError {
+                        field: "subdomain".to_string(),
+                        message: format!("Invalid public subdomain '{value}': {error}"),
+                    })
+                })
+        })
+        .transpose()?;
 
     let allowed_platforms = if platforms.is_empty() {
         vec![
@@ -259,6 +288,7 @@ fn platform_onboard_deployment_setup_config(
             types::DeploymentSetupPolicyAllowedPlatformsItem::Gcp,
             types::DeploymentSetupPolicyAllowedPlatformsItem::Azure,
             types::DeploymentSetupPolicyAllowedPlatformsItem::Kubernetes,
+            types::DeploymentSetupPolicyAllowedPlatformsItem::Machines,
             types::DeploymentSetupPolicyAllowedPlatformsItem::Local,
         ]
     } else {
@@ -269,11 +299,22 @@ fn platform_onboard_deployment_setup_config(
             .expect("selected onboarding platforms are validated before setup config creation")
     };
 
-    types::DeploymentSetupConfig {
+    Ok(types::DeploymentSetupConfig {
         metadata: types::DeploymentSetupMetadata(serde_json::Map::new()),
+        public_subdomain,
         policy: types::DeploymentSetupPolicy {
             allow_release_pinning: None,
             allowed_platforms,
+            allowed_kubernetes_base_platforms: vec![
+                types::DeploymentSetupPolicyAllowedKubernetesBasePlatformsItem::Aws,
+                types::DeploymentSetupPolicyAllowedKubernetesBasePlatformsItem::Gcp,
+                types::DeploymentSetupPolicyAllowedKubernetesBasePlatformsItem::Azure,
+                types::DeploymentSetupPolicyAllowedKubernetesBasePlatformsItem::OnPrem,
+            ],
+            allowed_kubernetes_cluster_sources: vec![
+                types::KubernetesClusterSource::Create,
+                types::KubernetesClusterSource::Existing,
+            ],
             allowed_setup_methods: vec![
                 types::DeploymentSetupMethod::Cloudformation,
                 types::DeploymentSetupMethod::GoogleOauth,
@@ -314,6 +355,26 @@ fn platform_onboard_deployment_setup_config(
         },
         environment_variables,
         input_values: None,
+    })
+}
+
+#[cfg(feature = "platform")]
+fn validate_public_subdomain(value: &str) -> Result<String> {
+    let valid = !value.is_empty()
+        && value.len() <= 63
+        && !value.starts_with('-')
+        && !value.ends_with('-')
+        && value
+            .bytes()
+            .all(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit() || byte == b'-');
+
+    if valid {
+        Ok(value.to_string())
+    } else {
+        Err(AlienError::new(ErrorData::ValidationError {
+            field: "subdomain".to_string(),
+            message: "Subdomain must be 1-63 characters of lowercase letters, numbers, or hyphens, and cannot start or end with a hyphen.".to_string(),
+        }))
     }
 }
 
@@ -340,14 +401,17 @@ fn platform_to_setup_policy_platform(
 #[cfg(feature = "platform")]
 async fn fetch_active_release_stack_inputs(
     client: &alien_platform_api::Client,
-    workspace: &str,
+    workspace_query: Option<&str>,
     project_id: &str,
 ) -> Result<ActiveReleaseStackInputs> {
     use alien_platform_api::SdkResultExt;
 
-    let releases = client
-        .list_releases()
-        .workspace(workspace)
+    let mut request = client.list_releases();
+    if let Some(workspace_query) = workspace_query {
+        request = request.workspace(workspace_query);
+    }
+
+    let releases = request
         .project(project_id)
         .limit(std::num::NonZeroU64::new(1).expect("1 is non-zero"))
         .send()
@@ -365,7 +429,7 @@ async fn fetch_active_release_stack_inputs(
         });
     };
 
-    let Some(stack_by_platform) = release.stack.as_ref().and_then(|stack| stack.as_ref()) else {
+    let Some(stack_by_platform) = release.stack.as_ref().and_then(|stack| stack.0.as_ref()) else {
         return Ok(ActiveReleaseStackInputs {
             supported_platforms: Vec::new(),
             inputs_by_platform: Vec::new(),

@@ -173,7 +173,7 @@ impl GcpKvController {
         if !operation.done.unwrap_or(false) {
             debug!(database=%database_name, operation=%op_name, "Database creation still in progress");
             return Ok(HandlerAction::Stay {
-                max_times: 60,
+                max_times: Some(60),
                 suggested_delay: Some(Duration::from_secs(10)),
             });
         }

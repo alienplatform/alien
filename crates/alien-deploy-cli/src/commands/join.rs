@@ -1649,6 +1649,7 @@ mod tests {
             machine_bundle_url: Some(
                 "https://packages.example.com/machines/manifest.json".to_string(),
             ),
+            install_script_url: None,
             token_env_var: None,
             name: None,
             display_name: None,
@@ -1765,6 +1766,7 @@ mod tests {
             machine_bundle_url: Some(
                 "https://packages.example.com/machines/manifest.json".to_string(),
             ),
+            install_script_url: None,
             token_env_var: None,
             name: None,
             display_name: None,
@@ -1797,6 +1799,39 @@ mod tests {
         let plan = build_join_plan(&args, None, linux_host(dir.path())).expect("join plan");
 
         assert_eq!(plan.token_source, TokenSource::File);
+    }
+
+    #[test]
+    fn join_request_reads_wrapped_token_file_context() {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let wrapped = wrapped_join_token(
+            "hj_file_secret",
+            "https://horizon-from-file.example.com",
+            "cluster-from-file",
+        );
+        let mut token_file = tempfile::NamedTempFile::new().expect("token file");
+        token_file
+            .write_all(format!(" {wrapped}\n").as_bytes())
+            .expect("write token");
+        let args = JoinArgs {
+            token: None,
+            token_file: Some(token_file.path().to_path_buf()),
+            control_plane_url: None,
+            cluster_id: None,
+            dry_run: true,
+            ..test_join_args()
+        };
+
+        let request = build_join_request(&args, None, linux_host(dir.path()))
+            .expect("join request should resolve wrapped token from file");
+
+        assert_eq!(request.token, "hj_file_secret");
+        assert_eq!(request.plan.token_source, TokenSource::File);
+        assert_eq!(
+            request.plan.control_plane_url,
+            "https://horizon-from-file.example.com"
+        );
+        assert_eq!(request.plan.cluster_id, "cluster-from-file");
     }
 
     #[test]

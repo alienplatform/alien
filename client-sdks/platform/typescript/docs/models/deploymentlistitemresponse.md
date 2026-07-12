@@ -8,7 +8,7 @@ import { DeploymentListItemResponse } from "@alienplatform/platform-api/models";
 let value: DeploymentListItemResponse = {
   id: "dep_0c29fq4a2yjb7kx3smwdgxlc",
   name: "<value>",
-  status: "update-pending",
+  status: "refresh-failed",
   projectId: "prj_mcytp6z3j91f7tn5ryqsfwtr",
   platform: "test",
   deploymentProtocolVersion: 850514,

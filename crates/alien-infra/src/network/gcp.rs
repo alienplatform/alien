@@ -443,7 +443,7 @@ impl GcpNetworkController {
         if !operation.is_done() {
             debug!(operation_name = %operation_name, "Network creation still in progress");
             return Ok(HandlerAction::Stay {
-                max_times: 60,
+                max_times: Some(60),
                 suggested_delay: Some(std::time::Duration::from_secs(5)),
             });
         }
@@ -565,7 +565,7 @@ impl GcpNetworkController {
         if !operation.is_done() {
             debug!(operation_name = %operation_name, "Subnetwork creation still in progress");
             return Ok(HandlerAction::Stay {
-                max_times: 60,
+                max_times: Some(60),
                 suggested_delay: Some(std::time::Duration::from_secs(5)),
             });
         }
@@ -681,7 +681,7 @@ impl GcpNetworkController {
         if !operation.is_done() {
             debug!(operation_name = %operation_name, "Router creation still in progress");
             return Ok(HandlerAction::Stay {
-                max_times: 60,
+                max_times: Some(60),
                 suggested_delay: Some(std::time::Duration::from_secs(5)),
             });
         }
@@ -804,7 +804,7 @@ impl GcpNetworkController {
         if !operation.is_done() {
             debug!(operation_name = %operation_name, "Cloud NAT creation still in progress");
             return Ok(HandlerAction::Stay {
-                max_times: 60,
+                max_times: Some(60),
                 suggested_delay: Some(std::time::Duration::from_secs(5)),
             });
         }
@@ -920,7 +920,7 @@ impl GcpNetworkController {
         if !operation.is_done() {
             debug!(operation_name = %operation_name, "Firewall creation still in progress");
             return Ok(HandlerAction::Stay {
-                max_times: 60,
+                max_times: Some(60),
                 suggested_delay: Some(std::time::Duration::from_secs(5)),
             });
         }
@@ -1140,7 +1140,7 @@ impl GcpNetworkController {
 
         if !operation.is_done() {
             return Ok(HandlerAction::Stay {
-                max_times: 60,
+                max_times: Some(60),
                 suggested_delay: Some(std::time::Duration::from_secs(5)),
             });
         }
@@ -1251,7 +1251,7 @@ impl GcpNetworkController {
 
         if !operation.is_done() {
             return Ok(HandlerAction::Stay {
-                max_times: 60,
+                max_times: Some(60),
                 suggested_delay: Some(std::time::Duration::from_secs(5)),
             });
         }
@@ -1329,7 +1329,7 @@ impl GcpNetworkController {
 
         if !operation.is_done() {
             return Ok(HandlerAction::Stay {
-                max_times: 60,
+                max_times: Some(60),
                 suggested_delay: Some(std::time::Duration::from_secs(5)),
             });
         }
@@ -1407,7 +1407,7 @@ impl GcpNetworkController {
 
         if !operation.is_done() {
             return Ok(HandlerAction::Stay {
-                max_times: 60,
+                max_times: Some(60),
                 suggested_delay: Some(std::time::Duration::from_secs(5)),
             });
         }
@@ -1483,7 +1483,7 @@ impl GcpNetworkController {
 
         if !operation.is_done() {
             return Ok(HandlerAction::Stay {
-                max_times: 60,
+                max_times: Some(60),
                 suggested_delay: Some(std::time::Duration::from_secs(5)),
             });
         }

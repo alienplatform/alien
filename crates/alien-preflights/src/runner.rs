@@ -51,8 +51,7 @@ impl PreflightRunner {
                         resource_id: None,
                     })?;
 
-            // Set the check description in the result
-            result.check_description = Some(check.description().to_string());
+            result = result.with_check_metadata(check.code(), check.description());
 
             if !result.success {
                 error!(check = %check.description(), "Compile-time check failed");
@@ -94,8 +93,7 @@ impl PreflightRunner {
                 },
             )?;
 
-            // Set the check description in the result
-            result.check_description = Some(check.description().to_string());
+            result = result.with_check_metadata(check.code(), check.description());
 
             if !result.success {
                 error!(check = %check.description(), "Compatibility check failed");
@@ -141,8 +139,7 @@ impl PreflightRunner {
                     platform: Some(platform.to_string()),
                 })?;
 
-            // Set the check description in the result
-            result.check_description = Some(check.description().to_string());
+            result = result.with_check_metadata(check.code(), check.description());
 
             if !result.success {
                 error!(check = %check.description(), "Runtime check failed");
@@ -192,7 +189,7 @@ impl PreflightRunner {
                 },
             )?;
 
-            result.check_description = Some(check.description().to_string());
+            result = result.with_check_metadata(check.code(), check.description());
 
             if !result.success {
                 error!(check = %check.description(), "Deployment prerequisite check failed");
@@ -249,9 +246,9 @@ impl PreflightRunner {
 
         let mut dependency_result =
             crate::compile_time::validate_stack_dependencies(&current_stack);
-        dependency_result.check_description = Some(
-            "Mutated resource dependencies should be valid and shouldn't create circular references"
-                .to_string(),
+        dependency_result = dependency_result.with_check_metadata(
+            Some("POST_MUTATION_DEPENDENCY_INVALID"),
+            "Mutated resource dependencies should be valid and shouldn't create circular references",
         );
         if !dependency_result.success {
             error!(
@@ -301,7 +298,7 @@ impl PreflightRunner {
                         resource_id: None,
                     })?;
 
-            result.check_description = Some(check.description().to_string());
+            result = result.with_check_metadata(check.code(), check.description());
 
             if !result.success {
                 error!(check = %check.description(), "Template preflight check failed");

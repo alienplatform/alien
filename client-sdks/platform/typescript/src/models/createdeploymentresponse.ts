@@ -4,12 +4,31 @@
 
 import * as z from "zod/v4";
 import { safeParse } from "../lib/schemas.js";
+import { ClosedEnum } from "../types/enums.js";
 import { Result as SafeParseResult } from "../types/fp.js";
 import { Deployment, Deployment$inboundSchema } from "./deployment.js";
 import { SDKValidationError } from "./errors/sdkvalidationerror.js";
 
+/**
+ * Effective deployment model persisted for the deployment.
+ */
+export const CreateDeploymentResponseDeploymentModel = {
+  Push: "push",
+  Pull: "pull",
+} as const;
+/**
+ * Effective deployment model persisted for the deployment.
+ */
+export type CreateDeploymentResponseDeploymentModel = ClosedEnum<
+  typeof CreateDeploymentResponseDeploymentModel
+>;
+
 export type CreateDeploymentResponse = {
   deployment: Deployment;
+  /**
+   * Effective deployment model persisted for the deployment.
+   */
+  deploymentModel: CreateDeploymentResponseDeploymentModel;
   /**
    * Deployment token (only returned when using deployment group token)
    */
@@ -17,11 +36,17 @@ export type CreateDeploymentResponse = {
 };
 
 /** @internal */
+export const CreateDeploymentResponseDeploymentModel$inboundSchema: z.ZodEnum<
+  typeof CreateDeploymentResponseDeploymentModel
+> = z.enum(CreateDeploymentResponseDeploymentModel);
+
+/** @internal */
 export const CreateDeploymentResponse$inboundSchema: z.ZodType<
   CreateDeploymentResponse,
   unknown
 > = z.object({
   deployment: Deployment$inboundSchema,
+  deploymentModel: CreateDeploymentResponseDeploymentModel$inboundSchema,
   token: z.string().optional(),
 });
 

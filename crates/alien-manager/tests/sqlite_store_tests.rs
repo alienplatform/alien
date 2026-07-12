@@ -391,6 +391,8 @@ async fn acquire_filters_by_deployment_model() {
     let group_id = create_test_group(&store).await;
 
     let push_dep = create_test_deployment(&store, &group_id, "push-dep", Platform::Aws).await;
+    let machines_dep =
+        create_test_deployment(&store, &group_id, "machines-dep", Platform::Machines).await;
     let pull_dep = create_test_deployment_with_settings(
         &store,
         &group_id,
@@ -430,8 +432,13 @@ async fn acquire_filters_by_deployment_model() {
         )
         .await
         .unwrap();
-    assert_eq!(push_acquired.len(), 1);
-    assert_eq!(push_acquired[0].deployment.id, push_dep.id);
+    let push_ids = push_acquired
+        .iter()
+        .map(|acquired| acquired.deployment.id.as_str())
+        .collect::<std::collections::BTreeSet<_>>();
+    assert_eq!(push_ids.len(), 2);
+    assert!(push_ids.contains(push_dep.id.as_str()));
+    assert!(push_ids.contains(machines_dep.id.as_str()));
 }
 
 #[tokio::test]

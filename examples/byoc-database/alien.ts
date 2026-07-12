@@ -65,7 +65,7 @@ const router = new alien.Container("router")
   .build()
 
 export default new alien.Stack("byoc-database")
-  .platforms(["aws", "gcp", "azure", "kubernetes"])
+  .platforms(["aws", "gcp", "azure", "kubernetes", "machines"])
   .add(storage, "frozen")
   .add(writer, "live")
   .add(reader, "live")

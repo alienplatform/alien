@@ -92,6 +92,7 @@ async function $do(
   const path = pathToFunc("/v1/deployment-info")();
 
   const query = encodeFormQuery({
+    "platform": payload?.platform,
     "workspace": payload?.workspace,
   });
 

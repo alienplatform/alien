@@ -385,7 +385,7 @@ impl KubernetesContainerController {
         }
 
         Ok(HandlerAction::Stay {
-            max_times: KUBERNETES_WORKLOAD_READY_MAX_POLLS,
+            max_times: Some(KUBERNETES_WORKLOAD_READY_MAX_POLLS),
             suggested_delay: Some(Duration::from_secs(5)),
         })
     }
@@ -436,7 +436,7 @@ impl KubernetesContainerController {
                 suggested_delay: Some(Duration::from_secs(30)),
             }),
             KubernetesEndpointAction::Waiting { suggested_delay } => Ok(HandlerAction::Stay {
-                max_times: 60,
+                max_times: Some(60),
                 suggested_delay: Some(suggested_delay),
             }),
         }
@@ -555,7 +555,7 @@ impl KubernetesContainerController {
             .await?;
             if let KubernetesEndpointAction::Waiting { suggested_delay } = action {
                 return Ok(HandlerAction::Stay {
-                    max_times: 60,
+                    max_times: Some(60),
                     suggested_delay: Some(suggested_delay),
                 });
             }
@@ -803,7 +803,7 @@ impl KubernetesContainerController {
         }
 
         Ok(HandlerAction::Stay {
-            max_times: KUBERNETES_WORKLOAD_READY_MAX_POLLS,
+            max_times: Some(KUBERNETES_WORKLOAD_READY_MAX_POLLS),
             suggested_delay: Some(Duration::from_secs(5)),
         })
     }
@@ -854,7 +854,7 @@ impl KubernetesContainerController {
                 suggested_delay: Some(Duration::from_secs(30)),
             }),
             KubernetesEndpointAction::Waiting { suggested_delay } => Ok(HandlerAction::Stay {
-                max_times: 60,
+                max_times: Some(60),
                 suggested_delay: Some(suggested_delay),
             }),
         }
@@ -1012,7 +1012,7 @@ impl KubernetesContainerController {
         }
 
         Ok(HandlerAction::Stay {
-            max_times: 60, // 60 attempts * 5 seconds = 5 minutes max wait for deletion
+            max_times: Some(60), // 60 attempts * 5 seconds = 5 minutes max wait for deletion
             suggested_delay: Some(Duration::from_secs(5)),
         })
     }

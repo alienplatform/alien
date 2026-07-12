@@ -56,6 +56,10 @@ export type APIErrorData = {
    */
   context?: any | null | undefined;
   /**
+   * Optional human-facing remediation hint.
+   */
+  hint?: string | null | undefined;
+  /**
    * HTTP status code for this error.
    *
    * @remarks
@@ -74,6 +78,10 @@ export type APIErrorData = {
    * logged for debugging but replaced with generic error messages in responses.
    */
   internal: boolean;
+  /**
+   * Request ID echoed in the x-request-id response header and server logs.
+   */
+  requestId?: string | undefined;
 };
 
 export class APIError extends AlienError {
@@ -118,6 +126,10 @@ export class APIError extends AlienError {
    */
   context?: any | null | undefined;
   /**
+   * Optional human-facing remediation hint.
+   */
+  hint?: string | null | undefined;
+  /**
    * HTTP status code for this error.
    *
    * @remarks
@@ -136,6 +148,10 @@ export class APIError extends AlienError {
    * logged for debugging but replaced with generic error messages in responses.
    */
   internal: boolean;
+  /**
+   * Request ID echoed in the x-request-id response header and server logs.
+   */
+  requestId?: string | undefined;
 
   /** The original data that was passed to this error instance. */
   data$: APIErrorData;
@@ -151,8 +167,10 @@ export class APIError extends AlienError {
     if (err.source != null) this.source = err.source;
     if (err.retryable != null) this.retryable = err.retryable;
     if (err.context != null) this.context = err.context;
+    if (err.hint != null) this.hint = err.hint;
     if (err.httpStatusCode != null) this.httpStatusCode = err.httpStatusCode;
     this.internal = err.internal;
+    if (err.requestId != null) this.requestId = err.requestId;
 
     this.name = "APIError";
   }
@@ -165,8 +183,10 @@ export const APIError$inboundSchema: z.ZodType<APIError, unknown> = z.object({
   source: z.nullable(z.any()).optional(),
   retryable: z.boolean().default(false),
   context: z.nullable(z.any()).optional(),
+  hint: z.nullable(z.string()).optional(),
   httpStatusCode: z.nullable(z.int()).optional(),
   internal: z.boolean(),
+  requestId: z.string().optional(),
   request$: z.custom<Request>(x => x instanceof Request),
   response$: z.custom<Response>(x => x instanceof Response),
   body$: z.string(),

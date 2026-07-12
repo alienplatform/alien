@@ -561,7 +561,7 @@ impl AzureRemoteStackManagementController {
                 "Waiting for Azure management role assignment propagation"
             );
             return Ok(HandlerAction::Stay {
-                max_times: AZURE_RBAC_WAIT_MAX_ATTEMPTS,
+                max_times: Some(AZURE_RBAC_WAIT_MAX_ATTEMPTS),
                 suggested_delay: Some(delay),
             });
         }

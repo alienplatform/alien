@@ -256,7 +256,7 @@ impl CommandServer {
             .await?;
 
         let command_id = metadata.command_id;
-        let deployment_model = metadata.deployment_model;
+        let command_delivery_model = metadata.deployment_model;
 
         // 2. Store idempotency mapping in KV
         if let Some(ref idem_key) = request.idempotency_key {
@@ -273,17 +273,17 @@ impl CommandServer {
             None
         };
 
-        // 5. Handle dispatch based on state and deployment model
+        // 5. Handle dispatch based on state and command delivery mode.
         let (final_state, next_action) = if initial_state == CommandState::Pending {
-            match deployment_model {
+            match command_delivery_model {
                 DeploymentModel::Push => {
-                    // Push model: dispatch immediately
+                    // Push delivery: dispatch immediately through the platform transport.
                     self.dispatch_command_push(&command_id, &request.deployment_id)
                         .await?;
                     (CommandState::Dispatched, "poll")
                 }
                 DeploymentModel::Pull => {
-                    // Pull model: create pending index, deployment will poll
+                    // Pull delivery: create pending index, target will lease over HTTPS.
                     self.create_pending_index(&request.deployment_id, &command_id)
                         .await?;
                     debug!(

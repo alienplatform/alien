@@ -217,7 +217,25 @@ where
         rendered.push_str(&format!("  {hint}"));
     }
 
+    if let Some(request_id) = find_request_id(error) {
+        rendered.push('\n');
+        rendered.push_str(&format!("(request id: {request_id})"));
+    }
+
     rendered
+}
+
+fn find_request_id<T>(error: &AlienError<T>) -> Option<String>
+where
+    T: AlienErrorData + Clone + std::fmt::Debug + serde::Serialize,
+{
+    request_id_from_context(error.context.as_ref())
+        .or_else(|| error.source.as_deref().and_then(find_request_id_generic))
+}
+
+fn find_request_id_generic(error: &AlienError<GenericError>) -> Option<String> {
+    request_id_from_context(error.context.as_ref())
+        .or_else(|| error.source.as_deref().and_then(find_request_id_generic))
 }
 
 fn find_build_output<T>(error: &AlienError<T>) -> Option<String>
@@ -240,6 +258,16 @@ fn build_output_from_context(context: Option<&Value>) -> Option<String> {
         .or_else(|| context.get("build_output"))
         .and_then(Value::as_str)
         .filter(|value| !value.is_empty())
+        .filter(|value| !value.trim().is_empty())
+        .map(ToString::to_string)
+}
+
+fn request_id_from_context(context: Option<&Value>) -> Option<String> {
+    let context = context?;
+    context
+        .get("requestId")
+        .or_else(|| context.get("request_id"))
+        .and_then(Value::as_str)
         .filter(|value| !value.trim().is_empty())
         .map(ToString::to_string)
 }
@@ -303,6 +331,37 @@ mod event_tests {
         let rendered = render_human_error(&error);
 
         assert!(!rendered.contains("Build output:"));
+    }
+
+    #[test]
+    fn render_human_error_prints_request_id_from_context() {
+        let mut error = AlienError::new(crate::error::ErrorData::ApiRequestFailed {
+            message: "Workspace mismatch".to_string(),
+            url: Some("https://api.alien.dev/v1/projects".to_string()),
+        });
+        error.context = Some(serde_json::json!({ "requestId": "req_123" }));
+
+        let rendered = render_human_error(&error);
+
+        assert!(rendered.contains("(request id: req_123)"));
+    }
+
+    #[test]
+    fn render_human_error_prints_request_id_from_source_context() {
+        let mut source = AlienError::new(GenericError {
+            message: "Workspace mismatch".to_string(),
+        });
+        source.context = Some(serde_json::json!({ "requestId": "req_123" }));
+        let error = Err::<(), _>(source)
+            .context(crate::error::ErrorData::ApiRequestFailed {
+                message: "Failed to list projects".to_string(),
+                url: None,
+            })
+            .unwrap_err();
+
+        let rendered = render_human_error(&error);
+
+        assert!(rendered.contains("(request id: req_123)"));
     }
 }
 
@@ -1027,6 +1086,7 @@ pub fn format_deployment_status(status: DeploymentStatus) -> &'static str {
         DeploymentStatus::InitialSetup => "Initializing",
         DeploymentStatus::InitialSetupFailed => "Failed",
         DeploymentStatus::Provisioning => "Provisioning",
+        DeploymentStatus::WaitingForMachines => "Waiting for machines",
         DeploymentStatus::ProvisioningFailed => "Failed",
         DeploymentStatus::Running => "Running",
         DeploymentStatus::RefreshFailed => "Failed",
@@ -1655,6 +1715,7 @@ pub fn render_single_card(card: &DevDeploymentCard) -> String {
         DeploymentStatus::PreflightsFailed => ("✗", "preflights failed"),
         DeploymentStatus::InitialSetup => ("◐", "initial setup"),
         DeploymentStatus::Provisioning => ("◐", "provisioning"),
+        DeploymentStatus::WaitingForMachines => ("◐", "waiting for machines"),
         DeploymentStatus::UpdatePending | DeploymentStatus::Updating => ("◐", "updating"),
         DeploymentStatus::DeletePending | DeploymentStatus::Deleting => ("◐", "stopping"),
         DeploymentStatus::TeardownRequired => ("◐", "teardown required"),
@@ -1726,7 +1787,8 @@ pub fn render_single_card(card: &DevDeploymentCard) -> String {
             .to_string(),
         DeploymentStatus::Pending
         | DeploymentStatus::InitialSetup
-        | DeploymentStatus::Provisioning => style(format!("{status_icon} {status_label}"))
+        | DeploymentStatus::Provisioning
+        | DeploymentStatus::WaitingForMachines => style(format!("{status_icon} {status_label}"))
             .cyan()
             .to_string(),
         DeploymentStatus::UpdatePending

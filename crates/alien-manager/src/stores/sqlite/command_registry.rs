@@ -15,6 +15,24 @@ use alien_error::IntoAlienError;
 use super::database::{RowParser, SqliteDatabase};
 use super::migrations::Commands;
 
+fn command_delivery_model_for_deployment(
+    deployment: &crate::traits::DeploymentRecord,
+) -> DeploymentModel {
+    match deployment.platform {
+        // Local and Kubernetes deployments can still be manager-reconciled in
+        // push mode, but command delivery for their workers is pull-based:
+        // the worker runtime leases commands over outbound HTTPS.
+        alien_core::Platform::Kubernetes | alien_core::Platform::Local => DeploymentModel::Pull,
+        _ => {
+            deployment
+                .stack_settings
+                .as_ref()
+                .expect("stored deployment carries stack_settings")
+                .deployment_model
+        }
+    }
+}
+
 pub struct SqliteCommandRegistry {
     db: Arc<SqliteDatabase>,
     deployment_store: Arc<dyn crate::traits::DeploymentStore>,
@@ -146,16 +164,7 @@ impl CommandRegistry for SqliteCommandRegistry {
             }));
         }
 
-        let deployment_model = match deployment.platform {
-            alien_core::Platform::Kubernetes | alien_core::Platform::Local => DeploymentModel::Pull,
-            _ => {
-                deployment
-                    .stack_settings
-                    .as_ref()
-                    .expect("stored deployment carries stack_settings")
-                    .deployment_model
-            }
-        };
+        let deployment_model = command_delivery_model_for_deployment(&deployment);
         let deployment_model_str = serialize_enum(&deployment_model);
 
         let sql = Query::insert()
@@ -351,4 +360,112 @@ fn to_cmd_err<E: std::fmt::Display>(err: E) -> alien_commands::error::Error {
     alien_error::AlienError::new(alien_commands::error::ErrorData::Other {
         message: err.to_string(),
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use chrono::Utc;
+
+    use alien_core::{DeploymentModel, Platform, StackSettings};
+
+    use super::command_delivery_model_for_deployment;
+
+    fn deployment_record(
+        platform: Platform,
+        deployment_model: DeploymentModel,
+    ) -> crate::traits::DeploymentRecord {
+        crate::traits::DeploymentRecord {
+            id: "dep_test".to_string(),
+            workspace_id: "default".to_string(),
+            project_id: "default".to_string(),
+            name: "test".to_string(),
+            deployment_group_id: "dg_test".to_string(),
+            platform,
+            deployment_protocol_version: alien_core::CURRENT_DEPLOYMENT_PROTOCOL_VERSION,
+            base_platform: None,
+            status: "running".to_string(),
+            stack_settings: Some(StackSettings {
+                deployment_model,
+                ..StackSettings::default()
+            }),
+            stack_state: None,
+            environment_info: None,
+            runtime_metadata: None,
+            current_release_id: None,
+            desired_release_id: None,
+            import_source: None,
+            setup_method: None,
+            setup_metadata: None,
+            setup_target: None,
+            setup_fingerprint: None,
+            setup_fingerprint_version: None,
+            user_environment_variables: None,
+            management_config: None,
+            deployment_config: None,
+            deployment_token: None,
+            retry_requested: false,
+            locked_by: None,
+            locked_at: None,
+            created_at: Utc::now(),
+            updated_at: None,
+            error: None,
+            operator_version: None,
+            operator_os: None,
+            operator_arch: None,
+            packaging: None,
+            launcher_version: None,
+            operator_image_repository: None,
+            target_operator_version: None,
+        }
+    }
+
+    #[test]
+    fn local_commands_poll_even_for_push_dev_deployments() {
+        let deployment = deployment_record(Platform::Local, DeploymentModel::Push);
+
+        assert_eq!(
+            command_delivery_model_for_deployment(&deployment),
+            DeploymentModel::Pull
+        );
+    }
+
+    #[test]
+    fn kubernetes_commands_poll_even_if_record_is_malformed_as_push() {
+        let deployment = deployment_record(Platform::Kubernetes, DeploymentModel::Push);
+
+        assert_eq!(
+            command_delivery_model_for_deployment(&deployment),
+            DeploymentModel::Pull
+        );
+    }
+
+    #[test]
+    fn cloud_commands_use_recorded_delivery_model() {
+        let aws = deployment_record(Platform::Aws, DeploymentModel::Push);
+        let gcp = deployment_record(Platform::Gcp, DeploymentModel::Push);
+        let azure = deployment_record(Platform::Azure, DeploymentModel::Push);
+
+        assert_eq!(
+            command_delivery_model_for_deployment(&aws),
+            DeploymentModel::Push
+        );
+        assert_eq!(
+            command_delivery_model_for_deployment(&gcp),
+            DeploymentModel::Push
+        );
+        assert_eq!(
+            command_delivery_model_for_deployment(&azure),
+            DeploymentModel::Push
+        );
+    }
+
+    #[test]
+    fn machines_commands_use_recorded_delivery_model() {
+        let deployment = deployment_record(Platform::Machines, DeploymentModel::Push);
+
+        assert_eq!(
+            command_delivery_model_for_deployment(&deployment),
+            DeploymentModel::Push
+        );
+    }
 }

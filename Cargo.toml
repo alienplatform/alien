@@ -49,7 +49,7 @@ default-members = [
 ]
 
 [workspace.package]
-version = "1.11.2"
+version = "1.13.2"
 edition = "2021"
 authors = ["Alien Software, Inc. <hi@alien.dev>"]
 description = "Deploy software into your customers' cloud accounts and keep it fully managed"
@@ -58,37 +58,37 @@ repository = "https://github.com/alienplatform/alien"
 license-file = "LICENSE.md"
 
 [workspace.dependencies]
-alien-commands = { path = "crates/alien-commands", version = "1.11.2", default-features = false }
+alien-commands = { path = "crates/alien-commands", version = "1.13.2", default-features = false }
 alien-commands-client = { path = "crates/alien-commands-client" }
-alien-bindings = { path = "crates/alien-bindings", version = "1.11.2", default-features = false }
-alien-sdk = { path = "crates/alien-sdk", version = "1.11.2", default-features = false }
-alien-runtime = { path = "crates/alien-runtime", version = "1.11.2" }
+alien-bindings = { path = "crates/alien-bindings", version = "1.13.2", default-features = false }
+alien-sdk = { path = "crates/alien-sdk", version = "1.13.2", default-features = false }
+alien-runtime = { path = "crates/alien-runtime", version = "1.13.2" }
 dockdash = "0.2.0"
-alien-core = { path = "crates/alien-core", version = "1.11.2" }
-alien-infra = { path = "crates/alien-infra", version = "1.11.2" }
-alien-build = { path = "crates/alien-build", version = "1.11.2" }
-alien-macros = { path = "crates/alien-macros", version = "1.11.2" }
-alien-client-core = { path = "crates/alien-client-core", version = "1.11.2" }
-alien-client-config = { path = "crates/alien-client-config", version = "1.11.2" }
-alien-aws-clients = { path = "crates/alien-aws-clients", version = "1.11.2" }
-alien-gcp-clients = { path = "crates/alien-gcp-clients", version = "1.11.2" }
-alien-azure-clients = { path = "crates/alien-azure-clients", version = "1.11.2" }
-alien-k8s-clients = { path = "crates/alien-k8s-clients", version = "1.11.2" }
-alien-error = { path = "crates/alien-error", version = "1.11.2", features = ["anyhow"] }
-alien-error-derive = { path = "crates/alien-error-derive", version = "1.11.2" }
-alien-permissions = { path = "crates/alien-permissions", version = "1.11.2" }
-alien-preflights = { path = "crates/alien-preflights", version = "1.11.2" }
-alien-deployment = { path = "crates/alien-deployment", version = "1.11.2" }
-alien-cli-common = { path = "crates/alien-cli-common", version = "1.11.2" }
-alien-local = { path = "crates/alien-local", version = "1.11.2" }
-alien-cloudformation = { path = "crates/alien-cloudformation", version = "1.11.2" }
-alien-terraform = { path = "crates/alien-terraform", version = "1.11.2" }
-alien-helm = { path = "crates/alien-helm", version = "1.11.2" }
-alien-manager = { path = "crates/alien-manager", version = "1.11.2" }
-alien-observer = { path = "crates/alien-observer", version = "1.11.2" }
+alien-core = { path = "crates/alien-core", version = "1.13.2" }
+alien-infra = { path = "crates/alien-infra", version = "1.13.2" }
+alien-build = { path = "crates/alien-build", version = "1.13.2" }
+alien-macros = { path = "crates/alien-macros", version = "1.13.2" }
+alien-client-core = { path = "crates/alien-client-core", version = "1.13.2" }
+alien-client-config = { path = "crates/alien-client-config", version = "1.13.2" }
+alien-aws-clients = { path = "crates/alien-aws-clients", version = "1.13.2" }
+alien-gcp-clients = { path = "crates/alien-gcp-clients", version = "1.13.2" }
+alien-azure-clients = { path = "crates/alien-azure-clients", version = "1.13.2" }
+alien-k8s-clients = { path = "crates/alien-k8s-clients", version = "1.13.2" }
+alien-error = { path = "crates/alien-error", version = "1.13.2", features = ["anyhow"] }
+alien-error-derive = { path = "crates/alien-error-derive", version = "1.13.2" }
+alien-permissions = { path = "crates/alien-permissions", version = "1.13.2" }
+alien-preflights = { path = "crates/alien-preflights", version = "1.13.2" }
+alien-deployment = { path = "crates/alien-deployment", version = "1.13.2" }
+alien-cli-common = { path = "crates/alien-cli-common", version = "1.13.2" }
+alien-local = { path = "crates/alien-local", version = "1.13.2" }
+alien-cloudformation = { path = "crates/alien-cloudformation", version = "1.13.2" }
+alien-terraform = { path = "crates/alien-terraform", version = "1.13.2" }
+alien-helm = { path = "crates/alien-helm", version = "1.13.2" }
+alien-manager = { path = "crates/alien-manager", version = "1.13.2" }
+alien-observer = { path = "crates/alien-observer", version = "1.13.2" }
 alien-deploy-cli = { path = "crates/alien-deploy-cli" }
-alien-manager-api = { path = "client-sdks/manager/rust", version = "1.11.2", default-features = false, features = ["rustls"] }
-alien-platform-api = { path = "client-sdks/platform/rust", version = "1.11.2", default-features = false, features = ["rustls"] }
+alien-manager-api = { path = "client-sdks/manager/rust", version = "1.13.2", default-features = false, features = ["rustls"] }
+alien-platform-api = { path = "client-sdks/platform/rust", version = "1.13.2", default-features = false, features = ["rustls"] }
 
 # External dependencies
 anyhow = "1.0"

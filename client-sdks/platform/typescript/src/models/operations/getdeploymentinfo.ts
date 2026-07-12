@@ -3,17 +3,47 @@
  */
 
 import * as z from "zod/v4";
+import { ClosedEnum } from "../../types/enums.js";
+
+/**
+ * Represents the target cloud platform.
+ */
+export const GetDeploymentInfoPlatform = {
+  Aws: "aws",
+  Gcp: "gcp",
+  Azure: "azure",
+  Kubernetes: "kubernetes",
+  Machines: "machines",
+  Local: "local",
+  Test: "test",
+} as const;
+/**
+ * Represents the target cloud platform.
+ */
+export type GetDeploymentInfoPlatform = ClosedEnum<
+  typeof GetDeploymentInfoPlatform
+>;
 
 export type GetDeploymentInfoRequest = {
   /**
    * Workspace name. Required for user/session/OAuth requests. Optional for API keys because API keys are workspace-scoped; if provided with an API key, it must match the key's workspace.
    */
   workspace?: string | undefined;
+  /**
+   * Represents the target cloud platform.
+   */
+  platform?: GetDeploymentInfoPlatform | undefined;
 };
+
+/** @internal */
+export const GetDeploymentInfoPlatform$outboundSchema: z.ZodEnum<
+  typeof GetDeploymentInfoPlatform
+> = z.enum(GetDeploymentInfoPlatform);
 
 /** @internal */
 export type GetDeploymentInfoRequest$Outbound = {
   workspace?: string | undefined;
+  platform?: string | undefined;
 };
 
 /** @internal */
@@ -22,6 +52,7 @@ export const GetDeploymentInfoRequest$outboundSchema: z.ZodType<
   GetDeploymentInfoRequest
 > = z.object({
   workspace: z.string().optional(),
+  platform: GetDeploymentInfoPlatform$outboundSchema.optional(),
 });
 
 export function getDeploymentInfoRequestToJSON(

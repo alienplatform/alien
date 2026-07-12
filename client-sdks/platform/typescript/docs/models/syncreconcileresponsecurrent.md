@@ -10,7 +10,7 @@ import { SyncReconcileResponseCurrent } from "@alienplatform/platform-api/models
 let value: SyncReconcileResponseCurrent = {
   platform: "local",
   protocolVersion: 797563,
-  status: "teardown-required",
+  status: "delete-failed",
 };
 ```
 

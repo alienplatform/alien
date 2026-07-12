@@ -9,11 +9,16 @@ export type RotateMachinesJoinTokenRequest = {
    * Unique identifier for the deployment.
    */
   id: string;
+  /**
+   * Workspace name. Required for user/session/OAuth requests. Optional for API keys because API keys are workspace-scoped; if provided with an API key, it must match the key's workspace.
+   */
+  workspace?: string | undefined;
 };
 
 /** @internal */
 export type RotateMachinesJoinTokenRequest$Outbound = {
   id: string;
+  workspace?: string | undefined;
 };
 
 /** @internal */
@@ -22,6 +27,7 @@ export const RotateMachinesJoinTokenRequest$outboundSchema: z.ZodType<
   RotateMachinesJoinTokenRequest
 > = z.object({
   id: z.string(),
+  workspace: z.string().optional(),
 });
 
 export function rotateMachinesJoinTokenRequestToJSON(

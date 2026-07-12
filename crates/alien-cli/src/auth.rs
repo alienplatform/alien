@@ -80,9 +80,16 @@ pub fn load_workspace() -> Option<String> {
         .ok()
         .and_then(|s| serde_json::from_str::<ProfileStore>(&s).ok())
         .and_then(|p| p.default_workspace)
+        .and_then(normalize_workspace_name)
 }
 
 pub fn save_workspace(ws: &str) -> Result<()> {
+    let workspace = normalize_workspace_name(ws.to_string()).ok_or_else(|| {
+        alien_error::AlienError::new(ErrorData::ValidationError {
+            field: "workspace".to_string(),
+            message: "Workspace name cannot be empty".to_string(),
+        })
+    })?;
     let cfg = cfg_path();
     let dir = cfg.parent().unwrap();
     fs::create_dir_all(dir)
@@ -93,7 +100,7 @@ pub fn save_workspace(ws: &str) -> Result<()> {
             reason: "Failed to create config directory".to_string(),
         })?;
     let s = serde_json::to_string_pretty(&ProfileStore {
-        default_workspace: Some(ws.to_string()),
+        default_workspace: Some(workspace),
     })
     .into_alien_error()
     .context(ErrorData::JsonError {
@@ -109,6 +116,15 @@ pub fn save_workspace(ws: &str) -> Result<()> {
             reason: "Failed to write profile config".to_string(),
         })?;
     Ok(())
+}
+
+pub fn normalize_workspace_name(workspace: String) -> Option<String> {
+    let trimmed = workspace.trim();
+    if trimmed.is_empty() {
+        None
+    } else {
+        Some(trimmed.to_string())
+    }
 }
 
 pub fn client_with_header(auth_value: &str) -> Result<Client> {
@@ -173,6 +189,24 @@ pub fn build_auth_http(client: Client, base_url: String, bearer_token: Option<St
         base_url,
         bearer_token,
         sdk_client,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::normalize_workspace_name;
+
+    #[test]
+    fn normalize_workspace_name_treats_blank_as_unset() {
+        assert_eq!(normalize_workspace_name("   ".to_string()), None);
+    }
+
+    #[test]
+    fn normalize_workspace_name_trims_non_blank_names() {
+        assert_eq!(
+            normalize_workspace_name("  demo  ".to_string()),
+            Some("demo".to_string())
+        );
     }
 }
 

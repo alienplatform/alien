@@ -777,6 +777,7 @@ fn operator_deployment_doc(
         "OPERATOR_PERMISSION",
         options.permission.as_str(),
     );
+    append_env_value(&mut yaml, "OPERATOR_INITIAL_DESIRED_RELEASE", "none");
     append_env_value(&mut yaml, "OPERATOR_SETUP_METHOD", "manual");
     append_env_value(&mut yaml, "DATA_DIR", "/var/lib/operator");
     if options.log_collector.is_some() {
@@ -4269,6 +4270,7 @@ mod tests {
 
         assert!(env_names.contains(&"OPERATOR_SCOPE"));
         assert!(env_names.contains(&"OPERATOR_PERMISSION"));
+        assert!(env_names.contains(&"OPERATOR_INITIAL_DESIRED_RELEASE"));
         assert!(env_names.contains(&"SYNC_TOKEN_FILE"));
         assert!(
             !env_names.contains(&"DEPLOYMENT_ID"),
@@ -4281,6 +4283,11 @@ mod tests {
             operator_env_value(&deployment, "OPERATOR_NAME"),
             Some("acme-prod-eu"),
             "OPERATOR_NAME is the per-environment identity"
+        );
+        assert_eq!(
+            operator_env_value(&deployment, "OPERATOR_INITIAL_DESIRED_RELEASE"),
+            Some("none"),
+            "a connection manifest must register without requesting a release"
         );
         assert_eq!(
             operator_env_value(&deployment, "KUBERNETES_NAMESPACE"),
