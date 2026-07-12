@@ -81,7 +81,7 @@ jobs:
           # (crate manifest, wrapper, and each npm/<triple> skeleton) that must all
           # carry the release version BEFORE the native build on the runners, so the
           # loader embeds it and publish injects matching optionalDependencies.
-          for pkg in packages/core packages/sdk packages/testing \
+          for pkg in packages/core packages/commands packages/sdk packages/testing \
             client-sdks/platform/typescript client-sdks/manager/typescript \
             packages/bindings crates/alien-bindings-node \
             packages/bindings/npm/darwin-arm64 packages/bindings/npm/darwin-x64 \
@@ -100,7 +100,8 @@ jobs:
           VERSION="${{ steps.bump.outputs.version }}"
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
-          git add Cargo.toml packages/core/package.json packages/sdk/package.json packages/testing/package.json \
+          git add Cargo.toml packages/core/package.json packages/commands/package.json \
+            packages/sdk/package.json packages/testing/package.json \
             client-sdks/platform/typescript/package.json client-sdks/manager/typescript/package.json \
             packages/bindings/package.json crates/alien-bindings-node/package.json \
             packages/bindings/npm/darwin-arm64/package.json packages/bindings/npm/darwin-x64/package.json \
@@ -232,6 +233,9 @@ jobs:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
         run: |
           pnpm --filter @alienplatform/core publish --access public --no-git-checks
+          # commands must land before testing: @alienplatform/testing depends on it,
+          # and publish rewrites the workspace:* range to this release's version.
+          pnpm --filter @alienplatform/commands publish --access public --no-git-checks
           pnpm --filter @alienplatform/sdk publish --access public --no-git-checks
           pnpm --filter @alienplatform/testing publish --access public --no-git-checks
 
