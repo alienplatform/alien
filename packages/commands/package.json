@@ -1,6 +1,6 @@
 {
   "name": "@alienplatform/commands",
-  "version": "1.13.2",
+  "version": "1.14.0",
   "type": "module",
   "sideEffects": false,
   "types": "./dist/index.d.ts",
