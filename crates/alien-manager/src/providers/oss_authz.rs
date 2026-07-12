@@ -288,6 +288,13 @@ mod tests {
             created_at: Utc::now(),
             updated_at: None,
             error: None,
+            operator_version: None,
+            operator_os: None,
+            operator_arch: None,
+            packaging: None,
+            operator_image_repository: None,
+            target_operator_version: None,
+            launcher_version: None,
         }
     }
 

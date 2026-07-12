@@ -10,7 +10,10 @@
 use crate::db::{Approval, ApprovalStatus};
 use crate::OperatorState;
 use alien_core::{
-    sync::{OperatorCapabilityReport, OperatorCapabilityState, SyncRequest, SyncResponse},
+    sync::{
+        OperatorArch, OperatorCapabilityReport, OperatorCapabilityState, OperatorOs,
+        OperatorPackaging, SyncRequest, SyncResponse,
+    },
     DeploymentStatus, ObservedInventoryBatch, Platform,
 };
 use alien_deployment::run_observe_pass;
@@ -58,6 +61,14 @@ pub async fn run_sync_loop(state: Arc<OperatorState>) {
     loop {
         match sync_with_manager(&state, &client, sync_config.url.as_str()).await {
             Ok(has_update) => {
+                // First successful sync turns /readyz from 503 → 200 — the
+                // gate Helm's --atomic --wait relies on so a freshly-rolled
+                // agent isn't marked ready until it has actually talked to
+                // the manager. Idempotent — only the first store matters.
+                state
+                    .readiness
+                    .first_sync_completed
+                    .store(true, std::sync::atomic::Ordering::Release);
                 if has_update {
                     info!("Received update from manager");
                 } else {
@@ -163,13 +174,31 @@ async fn sync_with_manager(
         }
     }
 
+    // Report the outcome of any in-flight self-update so the manager can show a
+    // truthful failed/in-progress state instead of inferring from a stalled
+    // version (markers under the launcher, upgrader-Job state on Kubernetes).
+    let operator_update = crate::loops::operator_upgrade::current_update_report(state).await;
+
     let sync_request = SyncRequest {
         deployment_id: deployment_id.clone(),
         current_state: Some(deployment_state),
         heartbeats,
         observed_inventory_batches,
         capabilities: report_operator_capabilities(state),
-        operator_version: Some(env!("CARGO_PKG_VERSION").to_string()),
+        operator_version: Some(crate::operator_version()),
+        // The supervising launcher's version (ALIEN_LAUNCHER_VERSION, set on
+        // spawn) — the manager's min_launcher_version gate input. None on
+        // Kubernetes / launcher-less runs.
+        launcher_version: crate::self_update::launcher_version(),
+        // Operator self-update inventory — fleet visibility + upgrade gating.
+        operator_os: OperatorOs::detect(),
+        operator_arch: OperatorArch::detect(),
+        packaging: Some(detect_operator_packaging()),
+        // Chart-injected so admins see the registry the operator pulls a new tag from.
+        operator_image_repository: std::env::var("ALIEN_OPERATOR_IMAGE_REPOSITORY")
+            .ok()
+            .filter(|s| !s.is_empty()),
+        operator_update,
     };
 
     // Call manager with deployment_id in request body.
@@ -326,6 +355,13 @@ async fn sync_with_manager(
         }
     }
 
+    // Agent self-update: act on `operator_target` when the manager emits one.
+    // Best-effort — the actuator logs failures and the manager keeps
+    // sending the target until the agent reports the new version.
+    if let Some(target) = sync_response.operator_target.as_ref() {
+        crate::loops::operator_upgrade::apply_operator_target(target, state).await;
+    }
+
     Ok(has_update || state_hydrated)
 }
 
@@ -436,6 +472,17 @@ fn is_uninitialized_deployment_state(state: &alien_core::DeploymentState) -> boo
         && state.stack_state.is_none()
         && state.environment_info.is_none()
         && state.runtime_metadata.is_none()
+}
+
+/// Detect the agent's supervisor packaging. `KUBERNETES_SERVICE_HOST` is the
+/// kubelet-injected signal and takes precedence over any other hint; outside
+/// k8s the agent is supervised as a native OS service via the launcher.
+fn detect_operator_packaging() -> OperatorPackaging {
+    if std::env::var_os("KUBERNETES_SERVICE_HOST").is_some() {
+        OperatorPackaging::Kubernetes
+    } else {
+        OperatorPackaging::OsService
+    }
 }
 
 fn apply_manager_control_state(

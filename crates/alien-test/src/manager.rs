@@ -125,7 +125,16 @@ impl TestManager {
         config: &TestConfig,
         platforms: &[Platform],
     ) -> Result<Self, Box<dyn std::error::Error>> {
-        Self::start_inner(Some(config), platforms).await
+        Self::start_inner(Some(config), platforms, None).await
+    }
+
+    /// Start a standalone manager whose release-manifest base points at a
+    /// custom location (URL, `file://`, or plain path). Used by the
+    /// os-service self-update E2E to serve test release manifests.
+    pub async fn start_with_releases_url(
+        releases_url: String,
+    ) -> Result<Self, Box<dyn std::error::Error>> {
+        Self::start_inner(None, &[], Some(releases_url)).await
     }
 
     /// Start a standalone manager with no cloud credentials.
@@ -133,13 +142,14 @@ impl TestManager {
     /// Useful for tests that only exercise the manager API surface without
     /// deploying to a real cloud environment.
     pub async fn start() -> Result<Self, Box<dyn std::error::Error>> {
-        Self::start_inner(None, &[]).await
+        Self::start_inner(None, &[], None).await
     }
 
     /// Internal constructor shared by both `start()` and `start_with_config()`.
     async fn start_inner(
         config: Option<&TestConfig>,
         platforms: &[Platform],
+        releases_url: Option<String>,
     ) -> Result<Self, Box<dyn std::error::Error>> {
         // 1. Ephemeral state directory
         let state_dir = tempfile::tempdir()?;
@@ -283,6 +293,9 @@ impl TestManager {
         // or sets differently for production use.
         manager_config.targets = targets;
         manager_config.disable_heartbeat_loop = true;
+        if releases_url.is_some() {
+            manager_config.releases_url = releases_url;
+        }
         manager_config.response_signing_key = derive_response_signing_key(&raw_token);
 
         // 7. Build the server (reuses the pre-created token store).

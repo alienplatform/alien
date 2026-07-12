@@ -961,7 +961,9 @@ impl OperatorDb {
         Ok(())
     }
 
-    /// Get the deployment-scoped sync token returned by initialization.
+    /// Get the deployment-scoped sync token returned by initialization. The
+    /// operator persists this so a pod restart doesn't fall back to the
+    /// chart-mounted deployment-group token (rejected by `/v1/sync/acquire`).
     pub async fn get_sync_token(&self) -> Result<Option<String>> {
         let conn = self.conn.lock().await;
 
@@ -993,7 +995,8 @@ impl OperatorDb {
         }
     }
 
-    /// Persist the deployment-scoped sync token returned by initialization.
+    /// Persist the deployment-scoped sync token. Idempotent — overwrites any
+    /// prior value (e.g. when the manager rotates the token).
     pub async fn set_sync_token(&self, token: &str) -> Result<()> {
         let conn = self.conn.lock().await;
 

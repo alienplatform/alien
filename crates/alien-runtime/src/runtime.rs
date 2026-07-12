@@ -26,7 +26,7 @@ use reqwest::Url;
 use serde::Deserialize;
 use tokio::{
     io::{AsyncBufReadExt, BufReader},
-    process::{Child, Command},
+    process::Command,
     signal,
     sync::{broadcast, OnceCell},
     task::JoinHandle,
@@ -34,6 +34,7 @@ use tokio::{
 use tracing::{debug, error, info, warn};
 
 use crate::{
+    app_child::AppChild,
     config::{RuntimeConfig, TransportType},
     error::{ErrorData, Result},
     otlp::{flush_otlp_logs, init_otlp_logging_from_config, shutdown_otlp_logs},
@@ -301,7 +302,7 @@ async fn run_transport(
     control_server: Arc<ControlGrpcServer>,
     app_http_port: Option<u16>,
     wait_until_server: Arc<WaitUntilGrpcServer>,
-    child: &mut Child,
+    child: &mut AppChild,
     mut shutdown_rx: broadcast::Receiver<()>,
 ) -> Result<()> {
     // Create separate shutdown receiver for transport
@@ -423,7 +424,7 @@ fn spawn_transport(
 async fn handle_shutdown(
     shutdown_result: std::result::Result<(), broadcast::error::RecvError>,
     wait_until_server: Arc<WaitUntilGrpcServer>,
-    child: &mut Child,
+    child: &mut AppChild,
 ) -> Result<()> {
     match shutdown_result {
         Ok(_) | Err(broadcast::error::RecvError::Closed) => {
@@ -528,7 +529,7 @@ async fn start_application(
     config: &RuntimeConfig,
     secrets: &HashMap<String, String>,
     log_exporter: crate::config::LogExporter,
-) -> Result<Child> {
+) -> Result<AppChild> {
     if config.command.is_empty() {
         return Err(AlienError::new(ErrorData::ConfigurationInvalid {
             message: "Application command is empty".to_string(),
@@ -587,17 +588,37 @@ async fn start_application(
     cmd.stdout(Stdio::piped());
     cmd.stderr(Stdio::piped());
 
-    let mut child = cmd.spawn().map_err(|e| {
-        AlienError::new(ErrorData::ProcessFailed {
-            exit_code: None,
-            message: format!("Failed to start application: {}", e),
-        })
-    })?;
+    // Die-with-parent for the workload: the app must never outlive this operator.
+    // Without it, an operator self-update handoff (or any operator exit) reparents
+    // the app to init and leaves it running — a second copy then starts under the
+    // swapped-in operator. `kill_on_drop` handles the child handle being dropped;
+    // on Linux `PR_SET_PDEATHSIG` also covers an operator crash that skips graceful
+    // shutdown, and on Windows the app runs in its own kill-on-close Job Object
+    // (see `AppChild::spawn`) which covers the same crash case. The clean path
+    // still kills the child explicitly (the operator calls `shutdown_all` on
+    // shutdown) — these are backstops. macOS has no pdeathsig, so its crash case
+    // falls back to `kill_on_drop` + the graceful-shutdown teardown.
+    cmd.kill_on_drop(true);
+    #[cfg(target_os = "linux")]
+    // SAFETY: the closure runs in the forked child before exec; `prctl` is
+    // async-signal-safe and touches no shared state, meeting `pre_exec`'s contract.
+    unsafe {
+        cmd.pre_exec(|| {
+            // SIGKILL (not SIGTERM) — a hard backstop for an operator that died
+            // without draining; the graceful path already SIGKILLs via child.kill().
+            if libc::prctl(libc::PR_SET_PDEATHSIG, libc::SIGKILL as libc::c_ulong) != 0 {
+                return Err(std::io::Error::last_os_error());
+            }
+            Ok(())
+        });
+    }
+
+    let mut child = AppChild::spawn(&mut cmd)?;
 
     info!(pid = child.id(), "Application started");
 
     // Always capture and stream stdout/stderr
-    if let Some(stdout) = child.stdout.take() {
+    if let Some(stdout) = child.take_stdout() {
         let exporter = log_exporter.clone();
         tokio::spawn(async move {
             stream_output(stdout, true, exporter).await;
@@ -606,7 +627,7 @@ async fn start_application(
         warn!("Failed to capture stdout - will miss application logs");
     }
 
-    if let Some(stderr) = child.stderr.take() {
+    if let Some(stderr) = child.take_stderr() {
         let exporter = log_exporter;
         tokio::spawn(async move {
             stream_output(stderr, false, exporter).await;
@@ -787,7 +808,7 @@ async fn stream_output(
 /// Graceful shutdown.
 async fn graceful_shutdown(
     wait_until_server: Arc<WaitUntilGrpcServer>,
-    child: &mut Child,
+    child: &mut AppChild,
 ) -> Result<()> {
     info!("Initiating graceful shutdown");
 

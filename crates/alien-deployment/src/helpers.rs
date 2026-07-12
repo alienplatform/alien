@@ -37,7 +37,11 @@ pub async fn collect_environment_info(
         Platform::Aws => collect_aws_env_info(client_config).await,
         Platform::Gcp => collect_gcp_env_info(client_config).await,
         Platform::Azure => collect_azure_env_info(client_config).await,
-        Platform::Local => collect_local_env_info(client_config).await,
+        // For pure Kubernetes (no base_platform), there is no cloud account/region
+        // to report. Treat it like Local — return hostname/os/arch runtime metadata.
+        // k8s-on-cloud deployments take a different path via environment_collection_context
+        // in pending.rs, which substitutes the base cloud platform here.
+        Platform::Local | Platform::Kubernetes => collect_local_env_info(client_config).await,
         Platform::Test => collect_test_env_info().await,
         _ => Err(AlienError::new(ErrorData::MissingConfiguration {
             message: format!(

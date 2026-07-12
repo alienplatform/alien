@@ -74,6 +74,31 @@ pub struct DeploymentRecord {
     pub created_at: DateTime<Utc>,
     pub updated_at: Option<DateTime<Utc>>,
     pub error: Option<serde_json::Value>,
+    // Agent self-update inventory, written by the sync handler.
+    // All four are NULL until the agent has actually reported in.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub operator_version: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub operator_os: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub operator_arch: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub packaging: Option<String>,
+    /// Version of the supervising alien-launcher (os-service only; reported,
+    /// never driven). NULL for Kubernetes / launcher-less operators. Gates
+    /// binary targets: a target is withheld when this is below the
+    /// artifact's min_launcher_version ("redeploy required").
+    pub launcher_version: Option<String>,
+    // Image repository the agent was pulled from, reported on sync.
+    // Surfaced in the dashboard pin-version UI so admins see the registry.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub operator_image_repository: Option<String>,
+
+    // Desired agent version. When set AND ≠ `operator_version`, the sync
+    // handler emits `operator_target` in the response so the agent triggers
+    // an upgrade. NULL = no pin, no upgrade.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub target_operator_version: Option<String>,
 }
 
 impl std::fmt::Debug for DeploymentRecord {
@@ -235,6 +260,34 @@ pub struct ReconcileData {
     pub observed_inventory_batches: Vec<ObservedInventoryBatch>,
     pub capabilities: Vec<OperatorCapabilityReport>,
     pub operator_version: Option<String>,
+    /// Operator self-update inventory reported on this sync. Forwarded by
+    /// multi-tenant embedders into their platform-side reconcile request so the
+    /// dashboard can show fleet inventory. Each `None` means "leave the existing
+    /// column untouched" — back-compat with operators that don't report these.
+    pub operator_os: Option<String>,
+    pub operator_arch: Option<String>,
+    pub packaging: Option<String>,
+    pub operator_image_repository: Option<String>,
+    /// Supervising launcher version (os-service only) — forwarded like the
+    /// rest of the inventory so platform dashboards can surface
+    /// "redeploy required".
+    pub launcher_version: Option<String>,
+    /// Structured `OperatorUpdateReport` the operator attached on this sync,
+    /// forwarded verbatim into the platform reconcile so the dashboard's
+    /// "Alien Operator Update" event reflects a real failure/progress signal.
+    /// `None` = no update in flight.
+    pub operator_update: Option<serde_json::Value>,
+    /// os-service self-update: the manager withheld the pinned target because
+    /// the installed (frozen) launcher is below the target's
+    /// `minLauncherVersion` — a redeploy with a newer launcher is required.
+    /// Computed by the manager from the release manifest and forwarded so
+    /// platform dashboards can surface it. `None` = not applicable (kubernetes,
+    /// no pin, already converged, or manifest error); `Some(false)` = a target
+    /// is pending and the launcher is fine.
+    pub redeploy_required: Option<bool>,
+    /// The pinned target's `minLauncherVersion` (from the manifest), forwarded
+    /// alongside `redeploy_required` for a "needs ≥ X, has Y" affordance.
+    pub min_launcher_version: Option<String>,
 }
 
 /// Persistence for deployments and deployment groups.
@@ -336,6 +389,38 @@ pub trait DeploymentStore: Send + Sync {
         &self,
         caller: &crate::auth::Subject,
         id: &str,
+    ) -> Result<(), AlienError>;
+
+    /// Persist the agent self-update inventory reported on a `SyncRequest`
+    /// (`operator_version`, `operator_os`, `operator_arch`, `packaging`, image repo).
+    /// Called on every agent sync — alongside the heartbeat update — so the
+    /// manager has a fleet-wide view of which version + registry each host
+    /// is on and can decide whether to send an `operator_target` in the
+    /// response. A field of `None` leaves the corresponding column
+    /// untouched.
+    async fn update_agent_metadata(
+        &self,
+        caller: &crate::auth::Subject,
+        id: &str,
+        operator_version: Option<&str>,
+        launcher_version: Option<&str>,
+        operator_os: Option<&str>,
+        operator_arch: Option<&str>,
+        packaging: Option<&str>,
+        operator_image_repository: Option<&str>,
+    ) -> Result<(), AlienError>;
+
+    /// Set (or clear with `None`) the deployment's target agent version.
+    /// When set AND different from the agent's reported `operator_version` the
+    /// sync handler emits `operator_target` on every /v1/sync until the agent
+    /// catches up. This is the admin-side knob behind the dashboard's
+    /// "Set target version" control and the standalone manager's
+    /// `PUT /v1/deployments/:id/target-operator-version` endpoint.
+    async fn set_target_operator_version(
+        &self,
+        caller: &crate::auth::Subject,
+        id: &str,
+        target_operator_version: Option<&str>,
     ) -> Result<(), AlienError>;
 
     async fn set_redeploy(&self, caller: &crate::auth::Subject, id: &str)

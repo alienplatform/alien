@@ -125,13 +125,62 @@ impl SqliteDeploymentStore {
         }
     }
 
+    /// UPDATE statement persisting the inventory an operator reported on
+    /// sync. `None` when nothing was reported (old operator on the wire).
+    /// Built in a helper (not inline) so the non-Send sea_query statement is
+    /// dropped before any await — and so tests can assert the column set.
+    #[allow(clippy::too_many_arguments)]
+    fn update_agent_metadata_sql(
+        id: &str,
+        operator_version: Option<&str>,
+        launcher_version: Option<&str>,
+        operator_os: Option<&str>,
+        operator_arch: Option<&str>,
+        packaging: Option<&str>,
+        operator_image_repository: Option<&str>,
+    ) -> Option<String> {
+        if operator_version.is_none()
+            && launcher_version.is_none()
+            && operator_os.is_none()
+            && operator_arch.is_none()
+            && packaging.is_none()
+            && operator_image_repository.is_none()
+        {
+            return None;
+        }
+        let mut q = Query::update();
+        q.table(Deployments::Table);
+        if let Some(v) = operator_version {
+            q.value(Deployments::OperatorVersion, v);
+        }
+        if let Some(v) = launcher_version {
+            q.value(Deployments::LauncherVersion, v);
+        }
+        if let Some(v) = operator_os {
+            q.value(Deployments::OperatorOs, v);
+        }
+        if let Some(v) = operator_arch {
+            q.value(Deployments::OperatorArch, v);
+        }
+        if let Some(v) = packaging {
+            q.value(Deployments::Packaging, v);
+        }
+        if let Some(v) = operator_image_repository {
+            q.value(Deployments::OperatorImageRepository, v);
+        }
+        Some(
+            q.and_where(Expr::col(Deployments::Id).eq(id))
+                .to_string(SqliteQueryBuilder),
+        )
+    }
+
     fn stale_lock_condition_sql() -> String {
         "\"locked_at\" IS NOT NULL AND julianday(\"locked_at\") < julianday('now', '-5 minutes')"
             .to_string()
     }
 
     /// All columns needed for deployment queries (must match parse_deployment order).
-    const DEPLOYMENT_COLUMNS: [Deployments; 27] = [
+    const DEPLOYMENT_COLUMNS: [Deployments; 34] = [
         Deployments::Id,
         Deployments::Name,
         Deployments::DeploymentGroupId,
@@ -159,6 +208,16 @@ impl SqliteDeploymentStore {
         Deployments::Error,
         Deployments::WorkspaceId,
         Deployments::ProjectId,
+        // Operator self-update inventory:
+        Deployments::OperatorVersion,
+        Deployments::OperatorOs,
+        Deployments::OperatorArch,
+        Deployments::Packaging,
+        Deployments::OperatorImageRepository,
+        // Manager-driven upgrade target:
+        Deployments::TargetOperatorVersion,
+        // Supervising launcher version (os-service inventory):
+        Deployments::LauncherVersion,
     ];
 
     fn parse_deployment(row: &turso::Row) -> Result<DeploymentRecord, AlienError> {
@@ -229,6 +288,14 @@ impl SqliteDeploymentStore {
             project_id: p
                 .optional_string(26, "project_id")?
                 .unwrap_or_else(|| "default".to_string()),
+            // Operator self-update inventory; indices match DEPLOYMENT_COLUMNS order.
+            operator_version: p.optional_string(27, "operator_version")?,
+            operator_os: p.optional_string(28, "operator_os")?,
+            operator_arch: p.optional_string(29, "operator_arch")?,
+            packaging: p.optional_string(30, "packaging")?,
+            operator_image_repository: p.optional_string(31, "operator_image_repository")?,
+            target_operator_version: p.optional_string(32, "target_operator_version")?,
+            launcher_version: p.optional_string(33, "launcher_version")?,
         })
     }
 
@@ -261,6 +328,43 @@ mod tests {
     use crate::traits::DeploymentRecord;
 
     use super::SqliteDeploymentStore;
+
+    /// The inventory UPDATE persists launcher_version alongside the operator
+    /// fields (and skips columns that weren't reported).
+    #[test]
+    fn update_agent_metadata_sql_persists_launcher_version() {
+        let sql = SqliteDeploymentStore::update_agent_metadata_sql(
+            "dep_1",
+            Some("1.4.0"),
+            Some("0.2.0"),
+            Some("linux"),
+            Some("x86_64"),
+            Some("os-service"),
+            None,
+        )
+        .expect("reported fields produce an UPDATE");
+        assert!(sql.contains("\"operator_version\""), "{sql}");
+        assert!(sql.contains("\"launcher_version\""), "{sql}");
+        assert!(sql.contains("'0.2.0'"), "{sql}");
+        assert!(sql.contains("\"packaging\""), "{sql}");
+        assert!(
+            !sql.contains("operator_image_repository"),
+            "unreported columns stay untouched: {sql}"
+        );
+
+        // Only the launcher version reported → still an UPDATE.
+        let sql = SqliteDeploymentStore::update_agent_metadata_sql(
+            "dep_1", None, Some("0.2.0"), None, None, None, None,
+        )
+        .expect("launcher-only report persists");
+        assert!(sql.contains("\"launcher_version\""), "{sql}");
+
+        // Nothing reported → no statement at all.
+        assert!(SqliteDeploymentStore::update_agent_metadata_sql(
+            "dep_1", None, None, None, None, None, None
+        )
+        .is_none());
+    }
 
     #[test]
     fn stale_lock_condition_parses_rfc3339_timestamps() {
@@ -356,6 +460,13 @@ mod tests {
             created_at: now,
             updated_at: Some(now),
             error: None,
+            operator_version: None,
+            operator_os: None,
+            operator_arch: None,
+            packaging: None,
+            operator_image_repository: None,
+            target_operator_version: None,
+            launcher_version: None,
         }
     }
 }
@@ -489,6 +600,14 @@ impl DeploymentStore for SqliteDeploymentStore {
             created_at: now,
             updated_at: None,
             error: None,
+            // Operator self-update inventory — NULL until the agent's first sync.
+            operator_version: None,
+            operator_os: None,
+            operator_arch: None,
+            packaging: None,
+            operator_image_repository: None,
+            target_operator_version: None,
+            launcher_version: None,
         })
     }
 
@@ -652,6 +771,14 @@ impl DeploymentStore for SqliteDeploymentStore {
             created_at: now,
             updated_at: None,
             error: None,
+            // Operator self-update inventory — NULL until the agent's first sync.
+            operator_version: None,
+            operator_os: None,
+            operator_arch: None,
+            packaging: None,
+            operator_image_repository: None,
+            target_operator_version: None,
+            launcher_version: None,
         })
     }
 
@@ -908,6 +1035,33 @@ impl DeploymentStore for SqliteDeploymentStore {
         self.db.execute(&sql).await
     }
 
+    async fn update_agent_metadata(
+        &self,
+        _caller: &crate::auth::Subject,
+        id: &str,
+        operator_version: Option<&str>,
+        launcher_version: Option<&str>,
+        operator_os: Option<&str>,
+        operator_arch: Option<&str>,
+        packaging: Option<&str>,
+        operator_image_repository: Option<&str>,
+    ) -> Result<(), AlienError> {
+        // Nothing to do if the agent didn't report any of these fields
+        // (e.g. an older agent on the wire).
+        let Some(sql) = Self::update_agent_metadata_sql(
+            id,
+            operator_version,
+            launcher_version,
+            operator_os,
+            operator_arch,
+            packaging,
+            operator_image_repository,
+        ) else {
+            return Ok(());
+        };
+        self.db.execute(&sql).await
+    }
+
     async fn set_redeploy(
         &self,
         _caller: &crate::auth::Subject,
@@ -918,6 +1072,26 @@ impl DeploymentStore for SqliteDeploymentStore {
             .value(Deployments::Status, "update-pending")
             .and_where(Expr::col(Deployments::Id).eq(id))
             .to_string(SqliteQueryBuilder);
+        self.db.execute(&sql).await
+    }
+
+    async fn set_target_operator_version(
+        &self,
+        _caller: &crate::auth::Subject,
+        id: &str,
+        target_operator_version: Option<&str>,
+    ) -> Result<(), AlienError> {
+        let sql = {
+            let mut q = Query::update();
+            q.table(Deployments::Table);
+            match target_operator_version {
+                Some(v) => q.value(Deployments::TargetOperatorVersion, v),
+                // sea_query treats `Option::<&str>::None` as SQL NULL.
+                None => q.value(Deployments::TargetOperatorVersion, Option::<&str>::None),
+            };
+            q.and_where(Expr::col(Deployments::Id).eq(id))
+                .to_string(SqliteQueryBuilder)
+        };
         self.db.execute(&sql).await
     }
 

@@ -42,6 +42,23 @@ pub(crate) enum Deployments {
     WorkspaceId,
     /// Project this deployment belongs to. Always `"default"` in this store.
     ProjectId,
+    // Operator self-update inventory. Populated by the sync handler from the
+    // matching SyncRequest fields on every /v1/sync.
+    /// Operator binary version (e.g. `"1.3.5"`). NULL until first sync.
+    OperatorVersion,
+    /// `linux` / `macos` / `windows`. NULL until first sync.
+    OperatorOs,
+    /// `x86_64` / `aarch64`. NULL until first sync.
+    OperatorArch,
+    /// Supervisor packaging — `os-service` / `kubernetes`. NULL until first sync.
+    Packaging,
+    /// Image repository the operator was pulled from (no tag), reported on
+    /// each sync. Drives the dashboard's pin-version registry display.
+    OperatorImageRepository,
+    /// Pinned target operator version. NULL = no pin. When set ≠ OperatorVersion,
+    /// sync handler emits `operator_target` to drive an upgrade.
+    TargetOperatorVersion,
+    LauncherVersion,
 }
 
 #[derive(Iden, Clone, Copy)]
@@ -321,6 +338,24 @@ pub async fn run_migrations(db: &SqliteDatabase) -> Result<(), AlienError> {
         "ALTER TABLE releases ADD COLUMN project_id TEXT NOT NULL DEFAULT 'default'",
         "ALTER TABLE deployment_groups ADD COLUMN workspace_id TEXT NOT NULL DEFAULT 'default'",
         "ALTER TABLE deployment_groups ADD COLUMN project_id TEXT NOT NULL DEFAULT 'default'",
+        // Operator self-update inventory: populated by the sync handler from
+        // the new SyncRequest fields on every /v1/sync.
+        "ALTER TABLE deployments ADD COLUMN operator_version TEXT",
+        "ALTER TABLE deployments ADD COLUMN operator_os TEXT",
+        "ALTER TABLE deployments ADD COLUMN operator_arch TEXT",
+        "ALTER TABLE deployments ADD COLUMN packaging TEXT",
+        // Image repository the operator was pulled from, reported on sync.
+        // Surfaced in the dashboard pin-version UI so admins see the registry.
+        "ALTER TABLE deployments ADD COLUMN operator_image_repository TEXT",
+        // Pinned target operator version. Sync handler reads this on every
+        // request and emits operator_target when it differs from the agent's
+        // reported version. Drives the manager-directed upgrade flow.
+        "ALTER TABLE deployments ADD COLUMN target_operator_version TEXT",
+        // Version of the alien-launcher supervising the operator (os-service
+        // only; reported on sync, never driven — the launcher is frozen and
+        // only changes via redeploy). Gates binary targets against
+        // min_launcher_version.
+        "ALTER TABLE deployments ADD COLUMN launcher_version TEXT",
     ];
     for sql in alter_statements {
         if let Err(e) = conn.execute(sql, ()).await {

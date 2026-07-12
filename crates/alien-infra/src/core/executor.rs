@@ -384,6 +384,17 @@ impl StackExecutor {
             let resource_type = resource_entry.config.resource_type();
             let controller_platform =
                 controller_platform_for_entry(platform, base_platform, resource_entry.lifecycle);
+
+            // Kubernetes ServiceAccounts are created by the Helm chart (with cloud
+            // identity annotations); worker/daemon/container controllers reference
+            // them by name. The agent does not provision them, and there is no k8s
+            // ServiceAccount controller, so skip the controller requirement here.
+            if matches!(controller_platform, Platform::Kubernetes)
+                && resource_type.0.as_ref() == "service-account"
+            {
+                continue;
+            }
+
             resource_registry
                 .get_controller(resource_type.clone(), controller_platform)
                 .context(ErrorData::ControllerNotAvailable {
@@ -514,6 +525,26 @@ impl StackExecutor {
 
     fn is_external_binding_resource(&self, resource_id: &str) -> bool {
         self.deployment_config.external_bindings.has(resource_id)
+    }
+
+    /// Resources the platform provides externally, so the agent neither owns a
+    /// controller for them nor provisions them: Kubernetes ServiceAccounts,
+    /// which the Helm chart creates (worker/daemon/container controllers
+    /// reference them by name). Treated like external bindings throughout —
+    /// short-circuited to Running and exempt from the controller requirement.
+    fn is_platform_provided_resource(&self, resource_id: &str, platform: Platform) -> bool {
+        let Some(entry) = self.desired_stack.resources.get(resource_id) else {
+            return false;
+        };
+        if entry.config.resource_type().0.as_ref() != "service-account" {
+            return false;
+        }
+        let controller_platform = controller_platform_for_entry(
+            platform,
+            self.deployment_config.base_platform,
+            entry.lifecycle,
+        );
+        matches!(controller_platform, Platform::Kubernetes)
     }
 
     fn resource_lifecycle(
@@ -1088,6 +1119,30 @@ impl StackExecutor {
                 continue;
             }
 
+            // Platform-provided resources (Kubernetes ServiceAccounts, created by
+            // the Helm chart) have no agent controller. Mark them Running, like an
+            // external binding, so dependents unblock and initial setup completes.
+            if self.is_platform_provided_resource(resource_id, next_state.platform) {
+                info!(
+                    "Platform-provided resource '{}' (Helm-managed) -> Running",
+                    resource_id
+                );
+                let mut resource_state = StackResourceState::new_pending(
+                    desired_config.resource.resource_type().to_string(),
+                    desired_config.resource.clone(),
+                    resource_lifecycle,
+                    desired_config.dependencies.clone(),
+                );
+                resource_state.status = ResourceStatus::Running;
+                resource_state.controller_platform = Some(controller_platform_for_entry(
+                    next_state.platform,
+                    self.deployment_config.base_platform,
+                    desired_config.lifecycle,
+                ));
+                initial_transitions.insert(resource_id.clone(), resource_state);
+                continue;
+            }
+
             debug!("Preparing CREATE for '{}' -> Pending", resource_id);
             let pending_view = StackResourceState::new_pending(
                 desired_config.resource.resource_type().to_string(),
@@ -1505,10 +1560,12 @@ impl StackExecutor {
             // We don't need to get a separate controller since the controller is stored
             // in the internal_state and handles its own stepping
             if !current_resource_state.has_internal_state() {
-                if self.is_external_binding_resource(&resource_id) {
+                if self.is_external_binding_resource(&resource_id)
+                    || self.is_platform_provided_resource(&resource_id, next_state.platform)
+                {
                     debug!(
                         resource_id = %resource_id,
-                        "External binding resource has no controller state; skipping step"
+                        "Externally-provided resource has no controller state; skipping step"
                     );
                 } else {
                     warn!(

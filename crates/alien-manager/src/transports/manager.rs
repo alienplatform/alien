@@ -85,6 +85,16 @@ impl DeploymentLoopTransport for ManagerTransport {
                     observed_inventory_batches,
                     capabilities: Vec::new(),
                     operator_version: None,
+                    launcher_version: None,
+                    // Background reconciliation from inside the manager — no
+                    // operator self-update inventory in this code path.
+                    operator_os: None,
+                    operator_arch: None,
+                    packaging: None,
+                    operator_image_repository: None,
+                    operator_update: None,
+                    redeploy_required: None,
+                    min_launcher_version: None,
                 },
             )
             .await?;

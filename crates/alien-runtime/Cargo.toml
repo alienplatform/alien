@@ -67,6 +67,14 @@ cloudevents-sdk = { workspace = true, features = ["reqwest"], optional = true }
 port_check = { workspace = true }
 strip-ansi-escapes = { workspace = true }
 
+# Die-with-parent for the user application: place it in its own kill-on-close
+# Job Object so it can't outlive the operator (Windows has no pdeathsig). Same
+# crate the launcher uses to supervise the operator.
+[target.'cfg(windows)'.dependencies]
+# `with-tokio` for the async child API (`AsyncCommandGroup`/`AsyncGroupChild`) —
+# the runtime waits on the app child inside a `tokio::select!`.
+command-group = { workspace = true, features = ["with-tokio"] }
+
 [dev-dependencies]
 port_check = { workspace = true }
 alien-bindings = { workspace = true, features = ["grpc", "local"] }

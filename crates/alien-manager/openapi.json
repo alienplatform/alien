@@ -886,6 +886,53 @@
         }
       }
     },
+    "/v1/deployments/{id}/target-operator-version": {
+      "put": {
+        "tags": [
+          "deployments"
+        ],
+        "summary": "Admin-only knob behind the dashboard's \"Set target version\" control\n(and the equivalent flow on the SaaS API). Writes\n`target_operator_version` on the deployment row; the sync handler reads\nit on each /v1/sync and emits `operator_target` whenever it differs from\nthe operator's reported version, until they match.",
+        "operationId": "setDeploymentTargetOperatorVersion",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Deployment ID",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SetTargetOperatorVersionRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "202": {
+            "description": "Target operator version updated"
+          },
+          "400": {
+            "description": "Invalid pin (not semver, build metadata, or a downgrade)"
+          },
+          "401": {
+            "description": "Unauthorized"
+          },
+          "403": {
+            "description": "Forbidden"
+          },
+          "404": {
+            "description": "Not found"
+          }
+        }
+      }
+    },
     "/v1/initialize": {
       "post": {
         "tags": [
@@ -923,6 +970,46 @@
                 }
               }
             }
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ]
+      }
+    },
+    "/v1/rejoin": {
+      "post": {
+        "tags": [
+          "sync"
+        ],
+        "summary": "`POST /v1/rejoin` — re-acquire a deployment-scoped sync token for an\nexisting deployment by name. The OSS handler is intentionally lean:\nthe dg-token caller specifies the name, the store looks up the row,\nand a fresh `Deployment` token is minted and returned. Returns\n`404 Deployment not found` when no row matches — agents should fall\nback to `/v1/initialize` in that case.",
+        "description": "Distinct from `/v1/initialize`'s idempotency branch because the agent\nwants an explicit, distinguishable code path for \"I lost local state,\nplease re-attach me\" vs \"I'm a brand-new pod claiming a name\". The\nplatform-mode override forwards this to the SaaS rejoin endpoint\nwhere audit / event semantics differ.",
+        "operationId": "rejoin",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RejoinRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Existing deployment rejoined; fresh token returned",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RejoinResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No deployment with that name in caller's deployment group"
           }
         },
         "security": [
@@ -1418,17 +1505,55 @@
           "deploymentId": {
             "type": "string"
           },
+          "launcherVersion": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Version of the alien-launcher supervising this operator (os-service\nonly; reported, never driven). Gates binary targets against\nmin_launcher_version."
+          },
           "observedInventoryBatches": {
             "type": "array",
             "items": {
               "$ref": "#/components/schemas/ObservedInventoryBatch"
             }
           },
+          "operatorArch": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Operator host arch — `x86_64` / `aarch64`."
+          },
+          "operatorImageRepository": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Image repository the operator was pulled from (no tag), chart-injected.\nSurfaced in the dashboard pin-version UI. Optional and Kubernetes-only."
+          },
+          "operatorOs": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Operator host OS — `linux` / `macos` / `windows`."
+          },
+          "operatorUpdate": {
+            "description": "Outcome of the operator's in-flight self-update (structured\n`OperatorUpdateReport`), forwarded verbatim to the platform reconcile so\nthe dashboard can show a truthful failed/in-progress state; opaque to the\nstandalone manager. Optional for back-compat."
+          },
           "operatorVersion": {
             "type": [
               "string",
               "null"
             ]
+          },
+          "packaging": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Supervisor packaging — `os-service` / `kubernetes`."
           },
           "resourceHeartbeats": {
             "type": "array",
@@ -1451,6 +1576,9 @@
           },
           "currentState": {
             "description": "Authoritative deployment state from the manager.\n\nReturned when a pull deployment attaches with an empty local state while\nthe manager already has imported or previously reconciled state."
+          },
+          "operatorTarget": {
+            "description": "Desired agent self-update target. The payload carries either `binary`\n(OS-service flow) or `helm` (Kubernetes flow); the agent picks the\none matching its packaging."
           },
           "target": {}
         }
@@ -6283,8 +6411,45 @@
               }
             ]
           },
+          "launcherVersion": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Version of the frozen alien-launcher supervising the operator\n(os-service only). Drives the \"redeploy required\" surface when it is\nbelow a target's minLauncherVersion."
+          },
           "name": {
             "type": "string"
+          },
+          "operatorArch": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "operatorImageRepository": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "operatorOs": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "operatorVersion": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "packaging": {
+            "type": [
+              "string",
+              "null"
+            ]
           },
           "platform": {
             "$ref": "#/components/schemas/Platform"
@@ -6301,6 +6466,12 @@
           "stackState": {},
           "status": {
             "type": "string"
+          },
+          "targetOperatorVersion": {
+            "type": [
+              "string",
+              "null"
+            ]
           },
           "updatedAt": {
             "type": [
@@ -12128,6 +12299,33 @@
           }
         }
       },
+      "RejoinRequest": {
+        "type": "object",
+        "description": "`POST /v1/rejoin` — re-acquire a deployment-scoped sync token for an\nagent whose persistent state was wiped (e.g. emptyDir on pod restart).\n\nThe agent calls this when `/v1/initialize` returns a name-conflict\nerror: the deployment row already exists, so creating it would 409,\nbut the agent legitimately needs a new sync token to keep operating\nagainst it. Auth is the same dg bearer the chart originally mounted.\n\n`name` is required — without it the server can't disambiguate which\nrow to reattach to.",
+        "required": [
+          "name"
+        ],
+        "properties": {
+          "name": {
+            "type": "string"
+          }
+        }
+      },
+      "RejoinResponse": {
+        "type": "object",
+        "required": [
+          "deploymentId",
+          "token"
+        ],
+        "properties": {
+          "deploymentId": {
+            "type": "string"
+          },
+          "token": {
+            "type": "string"
+          }
+        }
+      },
       "ReleaseRequest": {
         "type": "object",
         "required": [
@@ -13047,6 +13245,18 @@
           },
           "stale": {
             "type": "boolean"
+          }
+        }
+      },
+      "SetTargetOperatorVersionRequest": {
+        "type": "object",
+        "properties": {
+          "targetOperatorVersion": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Target operator version (semver, no `+build` metadata).\n`None`/omitted clears the target."
           }
         }
       },

@@ -4,7 +4,7 @@ use axum::{
     extract::{Path, State},
     http::{request::Parts, HeaderMap, StatusCode},
     response::{IntoResponse, Response},
-    routing::{get, post},
+    routing::{get, post, put},
     Json, Router,
 };
 use serde::{Deserialize, Serialize};
@@ -91,6 +91,25 @@ pub struct DeploymentResponse {
     pub error: Option<serde_json::Value>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub deployment_group: Option<DeploymentGroupMinimal>,
+    // Agent self-update inventory — populated by the sync handler
+    // on every operator /v1/sync. NULL until the operator has first reported.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub operator_version: Option<String>,
+    /// Version of the frozen alien-launcher supervising the operator
+    /// (os-service only). Drives the "redeploy required" surface when it is
+    /// below a target's minLauncherVersion.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub launcher_version: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub operator_os: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub operator_arch: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub packaging: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub operator_image_repository: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub target_operator_version: Option<String>,
 }
 
 #[derive(Debug, Serialize, Clone)]
@@ -218,6 +237,10 @@ pub fn router() -> Router<AppState> {
         .route("/v1/deployments/{id}/info", get(get_deployment_info))
         .route("/v1/deployments/{id}/retry", post(retry_deployment))
         .route("/v1/deployments/{id}/redeploy", post(redeploy))
+        .route(
+            "/v1/deployments/{id}/target-operator-version",
+            put(set_target_operator_version),
+        )
 }
 
 // --- Helpers ---
@@ -265,6 +288,14 @@ fn record_to_response(
         ),
         error: r.error.clone(),
         deployment_group,
+        // Surface the operator self-update inventory.
+        operator_version: r.operator_version.clone(),
+        launcher_version: r.launcher_version.clone(),
+        operator_os: r.operator_os.clone(),
+        operator_arch: r.operator_arch.clone(),
+        packaging: r.packaging.clone(),
+        operator_image_repository: r.operator_image_repository.clone(),
+        target_operator_version: r.target_operator_version.clone(),
     }
 }
 
@@ -889,9 +920,174 @@ async fn redeploy(
     Json(serde_json::json!({ "success": true })).into_response()
 }
 
+#[derive(Debug, Deserialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
+#[serde(rename_all = "camelCase")]
+pub struct SetTargetOperatorVersionRequest {
+    /// Target operator version (semver, no `+build` metadata).
+    /// `None`/omitted clears the target.
+    #[serde(default)]
+    pub target_operator_version: Option<String>,
+}
+
+/// Admin-only knob behind the dashboard's "Set target version" control
+/// (and the equivalent flow on the SaaS API). Writes
+/// `target_operator_version` on the deployment row; the sync handler reads
+/// it on each /v1/sync and emits `operator_target` whenever it differs from
+/// the operator's reported version, until they match.
+#[cfg_attr(feature = "openapi", utoipa::path(
+    put,
+    operation_id = "setDeploymentTargetOperatorVersion",
+    path = "/v1/deployments/{id}/target-operator-version",
+    tag = "deployments",
+    params(
+        ("id" = String, Path, description = "Deployment ID"),
+    ),
+    request_body = SetTargetOperatorVersionRequest,
+    responses(
+        (status = 202, description = "Target operator version updated"),
+        (status = 400, description = "Invalid pin (not semver, build metadata, or a downgrade)"),
+        (status = 401, description = "Unauthorized"),
+        (status = 403, description = "Forbidden"),
+        (status = 404, description = "Not found"),
+    )
+))]
+async fn set_target_operator_version(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path(id): Path<String>,
+    Json(req): Json<SetTargetOperatorVersionRequest>,
+) -> Response {
+    let subject = match auth::require_auth(&state, &headers).await {
+        Ok(s) => s,
+        Err(e) => return e.into_response(),
+    };
+
+    let deployment = match state.deployment_store.get_deployment(&subject, &id).await {
+        Ok(Some(d)) => d,
+        Ok(None) => return ErrorData::not_found_deployment(&id).into_response(),
+        Err(e) => return e.into_response(),
+    };
+    if !state.authz.can_update_deployment(&subject, &deployment) {
+        return ErrorData::forbidden("Cannot set target operator version").into_response();
+    }
+
+    // Validate the pin early so admins get a 4xx rather than the operator
+    // silently ignoring a bad tag later (or a downgrade handing an old binary
+    // a state DB migrated past it).
+    if let Some(v) = req.target_operator_version.as_deref() {
+        if let Err(reason) = validate_target_pin(v, deployment.operator_version.as_deref()) {
+            return ErrorData::bad_request(reason).into_response();
+        }
+    }
+
+    if let Err(e) = state
+        .deployment_store
+        .set_target_operator_version(&subject, &id, req.target_operator_version.as_deref())
+        .await
+    {
+        return e.into_response();
+    }
+
+    (
+        StatusCode::ACCEPTED,
+        Json(serde_json::json!({ "success": true })),
+    )
+        .into_response()
+}
+
+/// Validate a target-version pin with the same parser used for ordering
+/// everywhere else (`semver`): one grammar, no drift between "accepted" and
+/// "comparable".
+///
+/// Three rules:
+/// - must parse as SemVer (prerelease pins like `1.5.0-rc.1` are fine —
+///   canary channels need them);
+/// - must not carry `+build` metadata: build metadata is semver-EQUAL but
+///   string-UNEQUAL, and convergence compares exact strings, so such a pin
+///   could never converge;
+/// - must not be a downgrade below the reported operator version: the new
+///   version may have migrated the state DB and the promote path discards
+///   the pre-migration snapshot, so an older binary may be unable to open
+///   the current state. Recovery from a bad release is rolling FORWARD.
+///   An unreported/unparseable current version allows the pin (unknown is
+///   not lower; the operator-side floor still protects).
+fn validate_target_pin(pin: &str, reported_version: Option<&str>) -> Result<(), String> {
+    let pin_version = semver::Version::parse(pin).map_err(|e| {
+        format!("targetOperatorVersion must be a semver string (e.g. 1.4.0): {e}")
+    })?;
+    if !pin_version.build.is_empty() {
+        return Err(
+            "targetOperatorVersion must not contain build metadata (+…): convergence              compares exact version strings, so a build-metadata pin can never converge"
+                .to_string(),
+        );
+    }
+    if let Some(reported) = reported_version.and_then(|v| semver::Version::parse(v).ok()) {
+        if pin_version < reported {
+            return Err(format!(
+                "targetOperatorVersion {pin_version} is a downgrade below the reported                  operator version {reported}; downgrades are not supported (state may                  have been migrated past the target) — roll forward to a fixed version                  instead"
+            ));
+        }
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn pin_accepts_valid_versions_including_prerelease() {
+        for v in ["1.4.0", "0.0.1", "1.10.5", "1.4.0-rc.1", "2.0.0-alpha-1"] {
+            assert!(
+                validate_target_pin(v, None).is_ok(),
+                "should accept {v} with no reported version"
+            );
+            assert!(
+                validate_target_pin(v, Some("0.0.1")).is_ok(),
+                "should accept {v} above reported 0.0.1"
+            );
+        }
+        // Equal and higher pins are fine.
+        assert!(validate_target_pin("1.4.0", Some("1.4.0")).is_ok());
+        assert!(validate_target_pin("1.5.0", Some("1.4.0")).is_ok());
+    }
+
+    #[test]
+    fn pin_rejects_garbage_semver() {
+        for v in ["", "1.4", "1.4.0.0", "v1.4.0", "1.4.x", "1.4.0 ", "01.2.3"] {
+            let err = validate_target_pin(v, None).expect_err(&format!("should reject {v:?}"));
+            assert!(err.contains("semver"), "{err}");
+        }
+    }
+
+    #[test]
+    fn pin_rejects_build_metadata() {
+        for v in ["1.4.0+build.123", "1.4.0-rc.1+build.123"] {
+            let err = validate_target_pin(v, None).expect_err("build metadata must be rejected");
+            assert!(err.contains("build metadata"), "{err}");
+        }
+    }
+
+    #[test]
+    fn pin_rejects_downgrades_by_semver_precedence() {
+        let err = validate_target_pin("1.3.9", Some("1.4.0")).expect_err("downgrade");
+        assert!(err.contains("downgrade"), "{err}");
+        // Prerelease of the SAME version sorts below its release → downgrade.
+        let err = validate_target_pin("1.4.0-rc.1", Some("1.4.0")).expect_err("prerelease below");
+        assert!(err.contains("downgrade"), "{err}");
+        // Numeric (not lexical) comparison: 1.10.0 > 1.9.0 is NOT a downgrade.
+        assert!(validate_target_pin("1.10.0", Some("1.9.0")).is_ok());
+    }
+
+    #[test]
+    fn pin_allows_unknown_or_unparseable_reported_version() {
+        // Never-synced deployment: nothing to compare against.
+        assert!(validate_target_pin("1.4.0", None).is_ok());
+        // A garbage reported version cannot be ordered — allow the pin
+        // (the operator-side floor still protects).
+        assert!(validate_target_pin("1.4.0", Some("not-a-version")).is_ok());
+    }
 
     #[test]
     fn local_deployments_default_to_push_for_embedded_dev_loop() {

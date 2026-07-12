@@ -11,7 +11,7 @@ use alien_core::{
     validate_public_endpoint_urls, DeploymentState, DeploymentStatus, Platform, PublicEndpointUrls,
     DEPLOYMENT_PROTOCOL_VERSION,
 };
-use alien_error::{AlienError, Context, IntoAlienError};
+use alien_error::{AlienError, Context, ContextError, IntoAlienError};
 use clap::{Parser, ValueEnum};
 use std::net::IpAddr;
 use std::path::PathBuf;
@@ -22,6 +22,7 @@ use tracing_subscriber::{fmt, layer::SubscriberExt, util::SubscriberInitExt, Env
 #[derive(Parser, Debug)]
 #[command(
     name = "operator",
+    version,
     about = "Operator - Continuous deployment service (pull model)",
     long_about = "Run the Operator for continuous deployment using the pull model.
 
@@ -199,6 +200,15 @@ pub fn cli_main_with_hooks(init_hook: InitHook, debug_loop_hook: DebugLoopHook) 
         eprintln!("Error: {}", e);
         std::process::exit(1);
     }
+
+    // A staged self-update requests the update-handoff exit code (10): the
+    // supervising launcher observes it via the exit status and performs the
+    // health-gated swap. Runs after the runtime has fully shut down so the
+    // InstanceLock and the state DB are released before the swap.
+    if let Some(code) = crate::self_update::requested_exit_code() {
+        drop(rt);
+        std::process::exit(code);
+    }
 }
 
 /// Convenience wrapper: [`cli_main_with_hook`] with a no-op init hook.
@@ -245,6 +255,21 @@ async fn run(mut args: Args, init_hook: InitHook, debug_loop_hook: DebugLoopHook
     let cli_sync_token = load_sync_token(args.sync_token_file.as_deref()).await?;
     let collector_token = load_collector_token(args.collector_token_file.as_deref()).await?;
 
+    // Stack settings are loaded up front so they can be forwarded on the
+    // `initialize` call (multi-tenant managers like managerx require them
+    // to construct the deployment row; single-tenant OSS ignores them).
+    let stack_settings_json = load_config_value(
+        args.stack_settings.clone(),
+        args.stack_settings_file.as_deref(),
+        "stack settings",
+        false,
+    )
+    .await?;
+    let initial_stack_settings = parse_json_opt::<alien_core::StackSettings>(
+        stack_settings_json.clone(),
+        "stack settings",
+    )?;
+
     let effective_sync_url = args
         .sync_url
         .or_else(|| embedded_config.as_ref().and_then(|c| c.manager_url.clone()));
@@ -277,6 +302,10 @@ async fn run(mut args: Args, init_hook: InitHook, debug_loop_hook: DebugLoopHook
             )? {
                 StartupDeploymentId::Stored(stored_deployment_id) => {
                     info!("   Using stored deployment ID: {}", stored_deployment_id);
+                    // Prefer the deployment-scoped token returned by
+                    // `/v1/initialize` over the chart-mounted deployment-group
+                    // token (rejected by `/v1/sync/acquire`), so pod restarts
+                    // don't silently lose sync.
                     if let Some(stored_sync_token) = db.get_sync_token().await? {
                         info!("   Using stored deployment-scoped sync token");
                         sync_token = stored_sync_token;
@@ -289,7 +318,7 @@ async fn run(mut args: Args, init_hook: InitHook, debug_loop_hook: DebugLoopHook
                 StartupDeploymentId::Initialize => {
                     info!("   First startup, initializing with manager...");
 
-                    let (initialized_deployment_id, deployment_token) = initialize_with_manager(
+                    let init_result = initialize_with_manager(
                         &sync_url,
                         &sync_token,
                         args.platform,
@@ -299,7 +328,40 @@ async fn run(mut args: Args, init_hook: InitHook, debug_loop_hook: DebugLoopHook
                         operator_setup_method.as_deref(),
                         args.initial_desired_release,
                     )
-                    .await?;
+                    .await;
+
+                    let (initialized_deployment_id, deployment_token) = match init_result {
+                        Ok(v) => v,
+                        // 409 from initialize means a deployment with our name
+                        // already exists in this dg — the canonical cause is
+                        // that we *had* state (deployment_id + dep-scoped token)
+                        // in `data_dir` but it was wiped (emptyDir on chart
+                        // default, manual reset, etc.). Re-acquiring a fresh
+                        // deployment-scoped token over the existing row is
+                        // exactly what `/v1/rejoin` exists for; fall through to
+                        // it instead of crashing the agent.
+                        Err(e) if e.http_status_code == Some(409) => {
+                            info!(
+                                "   Name already exists — assuming local state was wiped, rejoining…"
+                            );
+                            let agent_name = args.operator_name.clone().or_else(|| {
+                                std::env::var("HOSTNAME").ok().or_else(|| {
+                                    hostname::get().ok().and_then(|h| h.into_string().ok())
+                                })
+                            });
+                            let name = agent_name.ok_or_else(|| {
+                                AlienError::new(ErrorData::ConfigurationError {
+                                    message: "Cannot rejoin without a deployment name — pass --agent-name or set AGENT_NAME / HOSTNAME"
+                                        .to_string(),
+                                })
+                            })?;
+                            let (dep_id, dep_token) =
+                                rejoin_with_manager(&sync_url, &sync_token, &name).await?;
+                            info!(deployment_id = %dep_id, "   Rejoined existing deployment");
+                            (dep_id, Some(dep_token))
+                        }
+                        Err(e) => return Err(e),
+                    };
 
                     db.set_deployment_id(&initialized_deployment_id).await?;
                     if args.initial_desired_release == InitialDesiredReleaseArg::None {
@@ -311,6 +373,9 @@ async fn run(mut args: Args, init_hook: InitHook, debug_loop_hook: DebugLoopHook
                         info!("   Received deployment-scoped token from manager");
                         db.set_sync_token(dt).await?;
                         sync_token = dt.clone();
+                        // Persist so pod restarts don't fall back to the
+                        // chart-mounted deployment-group token.
+                        db.set_sync_token(&sync_token).await?;
                     }
 
                     info!(
@@ -366,13 +431,9 @@ async fn run(mut args: Args, init_hook: InitHook, debug_loop_hook: DebugLoopHook
             message: "Invalid public endpoints configuration".to_string(),
         })?;
     }
-    let stack_settings_json = load_config_value(
-        args.stack_settings,
-        args.stack_settings_file.as_deref(),
-        "stack settings",
-        false,
-    )
-    .await?;
+    // `stack_settings_json` was loaded up front so it could be forwarded to
+    // `initialize`; reuse that same value here so the downstream config sees
+    // the settings that were sent to the manager.
     let mut stack_settings =
         parse_json_opt::<alien_core::StackSettings>(stack_settings_json, "stack settings")?
             .unwrap_or_default();
@@ -492,9 +553,22 @@ async fn wait_for_shutdown_signal() {
 
 #[cfg(windows)]
 async fn wait_for_shutdown_signal() {
-    tokio::signal::ctrl_c()
-        .await
-        .expect("failed to install Ctrl+C handler");
+    use tokio::signal::windows;
+
+    // Ctrl-C covers the legacy console / no-launcher run. Ctrl-Break is the
+    // launcher's graceful-stop signal to its operator child: the launcher spawns
+    // the operator in a new process group and sends `CTRL_BREAK_EVENT` (see the
+    // launcher's Windows child supervisor). Either drives the same graceful
+    // shutdown — releasing the InstanceLock, closing the DB, and stopping the app
+    // child. The `--service` (no-launcher SCM) path is handled separately by
+    // `windows_entry::run_as_service` and does not go through here.
+    let mut ctrl_c = windows::ctrl_c().expect("failed to install Ctrl+C handler");
+    let mut ctrl_break = windows::ctrl_break().expect("failed to install Ctrl+Break handler");
+
+    tokio::select! {
+        _ = ctrl_c.recv() => {},
+        _ = ctrl_break.recv() => {},
+    }
 }
 
 fn install_panic_hook(data_dir: &PathBuf) {
@@ -699,17 +773,81 @@ async fn initialize_with_manager(
         builder = builder.body_map(|b| b.setup_method(setup_method.to_string()));
     }
 
+    // NOTE (follow-up): the operator refactor's onboarding (operator_scope /
+    // permission / setup_method) replaced the previous stack-settings-on-
+    // initialize forwarding here. Multi-tenant `initialize` may still need the
+    // full stack settings — revisit when reconciling onboarding.
+
     let response = builder
         .send()
         .await
         .map_err(alien_manager_api::convert_sdk_error)
-        .context(ErrorData::ConfigurationError {
-            message: "Failed to call initialize endpoint".to_string(),
+        .map_err(|e| {
+            // Preserve a 409 (deployment name already exists) verbatim
+            // so the caller's `e.http_status_code == Some(409)` arm can
+            // trigger the rejoin fall-through. Wrapping with
+            // `ConfigurationError` here would override the status to 500
+            // and the agent would crash instead of recovering.
+            if e.http_status_code == Some(409) {
+                AlienError::new(ErrorData::DeploymentNameAlreadyExists)
+            } else {
+                e.context(ErrorData::ConfigurationError {
+                    message: "Failed to call initialize endpoint".to_string(),
+                })
+            }
         })?;
 
     let init_response = response.into_inner();
 
     Ok((init_response.deployment_id, init_response.token))
+}
+
+/// Re-acquire a deployment-scoped sync token from the manager after the
+/// agent's persistent state was wiped (chart-default emptyDir, manual
+/// reset, etc.). Called only on a 409 from `initialize_with_manager` —
+/// the existing deployment row is reattached to and a fresh sync token
+/// is minted.
+async fn rejoin_with_manager(
+    sync_url: &url::Url,
+    token: &str,
+    deployment_name: &str,
+) -> Result<(String, String)> {
+    use reqwest::header::{HeaderMap, HeaderValue, AUTHORIZATION, USER_AGENT};
+
+    let mut headers = HeaderMap::new();
+    headers.insert(
+        AUTHORIZATION,
+        HeaderValue::from_str(&format!("Bearer {}", token))
+            .into_alien_error()
+            .context(ErrorData::ConfigurationError {
+                message: "Invalid token format".to_string(),
+            })?,
+    );
+    headers.insert(USER_AGENT, HeaderValue::from_static("alien-agent"));
+
+    let http_client = reqwest::Client::builder()
+        .default_headers(headers)
+        .build()
+        .into_alien_error()
+        .context(ErrorData::ConfigurationError {
+            message: "Failed to create HTTP client".to_string(),
+        })?;
+
+    let base_url = sync_url.as_str().trim_end_matches('/');
+    let client = alien_manager_api::Client::new_with_client(base_url, http_client);
+
+    let response = client
+        .rejoin()
+        .body_map(|b| b.name(deployment_name.to_string()))
+        .send()
+        .await
+        .map_err(alien_manager_api::convert_sdk_error)
+        .context(ErrorData::ConfigurationError {
+            message: "Failed to call rejoin endpoint".to_string(),
+        })?;
+
+    let r = response.into_inner();
+    Ok((r.deployment_id, r.token))
 }
 
 fn setup_tracing(verbose: bool) {

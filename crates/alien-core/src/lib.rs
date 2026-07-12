@@ -77,6 +77,7 @@ pub mod presigned;
 pub use presigned::*;
 
 pub mod embedded_config;
+pub mod self_update;
 pub mod sync;
 
 pub mod commands_types;

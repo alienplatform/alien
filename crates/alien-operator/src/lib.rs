@@ -28,6 +28,26 @@ pub mod error;
 pub mod lock;
 pub mod loops;
 pub mod otlp_server;
+pub mod self_update;
+
+// The test seam must never ship: a release build with `test-hooks` on would
+// let an env var falsify the fleet's version inventory.
+#[cfg(all(feature = "test-hooks", not(debug_assertions)))]
+compile_error!("the `test-hooks` feature must not be enabled in release builds");
+
+/// The version this operator reports on sync and compares against update
+/// targets. Normally `CARGO_PKG_VERSION`; under the `test-hooks` feature
+/// (debug builds only) `ALIEN_OPERATOR_FAKE_VERSION` overrides it so E2E
+/// suites can drive an update without compiling two binaries.
+pub fn operator_version() -> String {
+    #[cfg(feature = "test-hooks")]
+    if let Ok(fake) = std::env::var("ALIEN_OPERATOR_FAKE_VERSION") {
+        if !fake.is_empty() {
+            return fake;
+        }
+    }
+    env!("CARGO_PKG_VERSION").to_string()
+}
 
 pub use alien_core::{DeploymentState, DeploymentStatus, Platform, ReleaseInfo};
 pub use config::{OperatorConfig, SyncConfig};
@@ -94,8 +114,19 @@ pub async fn run_operator_with_cancel_and_debug_loop(
         "Starting operator"
     );
 
+    let readiness = otlp_server::ReadinessSignals::new();
+
     // Initialize encrypted database
     let db = Arc::new(db::OperatorDb::new(&config.data_dir, &config.encryption_key).await?);
+    readiness
+        .db_open
+        .store(true, std::sync::atomic::Ordering::Release);
+    // The CLI acquires the InstanceLock before calling run_operator and the
+    // guard lives for the process lifetime, so reaching this point means the
+    // lock is held.
+    readiness
+        .lock_held
+        .store(true, std::sync::atomic::Ordering::Release);
 
     // Create shared state
     let state = Arc::new(OperatorState {
@@ -103,21 +134,41 @@ pub async fn run_operator_with_cancel_and_debug_loop(
         db: db.clone(),
         service_provider,
         cancel: cancel.clone(),
+        readiness: readiness.clone(),
     });
 
+    // Die-with-parent: under the launcher, exit if our supervisor dies. macOS
+    // has no PR_SET_PDEATHSIG, and this also backstops the Linux fork→exec race;
+    // a no-op outside the launcher (Kubernetes, tests). Runs on a dedicated OS
+    // thread (not the async runtime, which can starve its timer under load); it
+    // self-exits when `cancel` is tripped, so the handle needs no explicit join.
+    let _parent_death_watch = self_update::spawn_parent_death_watch(cancel.clone());
+
     // Start OTLP server (for local functions to send telemetry).
-    // This is best-effort — a port conflict should not take down the operator.
-    let otlp_host = config.otlp_server_host;
-    let otlp_port = config.otlp_server_port;
+    // Also serves /livez and /readyz on the same port for Kubernetes probes.
+    // Best-effort — a port conflict should not take down the operator.
+    // Under the launcher, ALIEN_HEALTH_ADDR overrides the bind so the
+    // probation gate probes the exact address it handed us; an unparseable
+    // value is a startup error (a silent fallback would fail every probe by
+    // port mismatch).
+    let (otlp_host, otlp_port) = match otlp_server::health_addr_override()? {
+        Some(addr) => {
+            info!(address = %addr, "Health/OTLP bind overridden by the launcher (ALIEN_HEALTH_ADDR)");
+            (addr.ip(), addr.port())
+        }
+        None => (config.otlp_server_host, config.otlp_server_port),
+    };
     let otlp_db = db.clone();
     let otlp_namespace = config.namespace.clone();
     let otlp_collector_token = config.collector_token.clone();
     let otlp_cancel = cancel.clone();
+    let probe_readiness = readiness.clone();
     tokio::spawn(async move {
         if let Err(e) = otlp_server::start_otlp_server(
             otlp_host,
             otlp_port,
             otlp_db,
+            probe_readiness,
             otlp_namespace,
             otlp_collector_token,
             otlp_cancel,
@@ -249,6 +300,20 @@ pub async fn run_operator_with_cancel_and_debug_loop(
     // Signal all loops to stop (idempotent if already cancelled)
     cancel.cancel();
 
+    // Tear down the managed application before we exit. The operator owns the
+    // worker runtime that spawned the user's app; without this, a self-update
+    // handoff exit (like any operator exit) reparents the app to init and leaves
+    // it running — a second copy then starts under the swapped-in operator.
+    // `shutdown_all` signals the worker runtime, which kills the app child. The
+    // spawn-side `kill_on_drop`/`PR_SET_PDEATHSIG` are crash backstops; this is
+    // the clean-shutdown path. No-op when there is no local worker manager
+    // (e.g. Kubernetes, where the pod lifecycle owns the process tree).
+    if let Some(sp) = &state.service_provider {
+        if let Some(wm) = sp.get_local_worker_manager() {
+            wm.shutdown_all().await;
+        }
+    }
+
     // Give loops a moment to finish current work
     tokio::time::sleep(std::time::Duration::from_secs(2)).await;
 
@@ -265,4 +330,10 @@ pub struct OperatorState {
     pub service_provider: Option<Arc<dyn alien_infra::PlatformServiceProvider>>,
     /// Cancellation token for graceful shutdown.
     pub cancel: CancellationToken,
+    /// Readiness signals consumed by the `/readyz` probe handler — the
+    /// explicit health conditions (DB open, InstanceLock held, first sync
+    /// completed, deployment loop progressing). /readyz returns 503 until
+    /// ALL hold, so a freshly-rolled operator isn't marked ready before it
+    /// has proven it can run and reach the manager.
+    pub readiness: otlp_server::ReadinessSignals,
 }

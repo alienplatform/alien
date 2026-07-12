@@ -14,6 +14,7 @@ use axum::{
 };
 use serde::Serialize;
 use std::net::{IpAddr, SocketAddr};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use tokio_util::sync::CancellationToken;
 use tracing::{debug, error, info};
@@ -28,6 +29,68 @@ struct OtlpServerState {
     collector_token: Option<String>,
 }
 
+/// The operator's readiness, decomposed into the observable conditions of
+/// the health contract ("an operator is healthy when…"). `/readyz` is 200
+/// iff ALL of them hold; condition 1 — the process is alive — is implicit in
+/// the server answering at all.
+#[derive(Clone)]
+pub struct ReadinessSignals {
+    /// Condition 2: the encrypted state DB opened successfully. Set once at
+    /// startup after `OperatorDb::new` succeeds (a DB that dies later
+    /// surfaces through condition 5 — the loops start failing).
+    pub db_open: Arc<AtomicBool>,
+    /// Condition 3: the `InstanceLock` is held. The CLI acquires it before
+    /// the operator runs and the guard lives for the process lifetime.
+    pub lock_held: Arc<AtomicBool>,
+    /// Condition 4: flipped to `true` by the sync loop once at least one
+    /// /v1/sync round-trip with the manager has succeeded.
+    pub first_sync_completed: Arc<AtomicBool>,
+    /// Condition 5: the deployment loop is progressing — flipped to `false`
+    /// after it errors several consecutive ticks, back to `true` on the next
+    /// success (see `loops::deployment::LoopHealth`).
+    pub deployment_loop_ok: Arc<AtomicBool>,
+}
+
+impl ReadinessSignals {
+    /// Fresh signals: nothing proven yet (DB, lock, sync all pending) except
+    /// the deployment loop, which is healthy-until-it-fails — it may not
+    /// even have work to do.
+    pub fn new() -> Self {
+        Self {
+            db_open: Arc::new(AtomicBool::new(false)),
+            lock_held: Arc::new(AtomicBool::new(false)),
+            first_sync_completed: Arc::new(AtomicBool::new(false)),
+            deployment_loop_ok: Arc::new(AtomicBool::new(true)),
+        }
+    }
+
+    /// Liveness — the health conditions that do NOT depend on the manager:
+    /// DB open (2), lock held (3), deployment loop progressing (5). Condition
+    /// 1 (process alive) is implicit in the server answering at all. This is
+    /// "healthy except possibly for manager reachability": `/livez` reflects
+    /// it, and it's the signal the launcher uses to decide the operator is
+    /// up and running (so a manager outage at boot doesn't look like a start
+    /// failure).
+    pub fn local_ready(&self) -> bool {
+        self.db_open.load(Ordering::Acquire)
+            && self.lock_held.load(Ordering::Acquire)
+            && self.deployment_loop_ok.load(Ordering::Acquire)
+    }
+
+    /// Full readiness = liveness PLUS at least one successful sync (condition
+    /// 4). `/readyz` reflects it; it gates the launcher's health-gated swap
+    /// and the Kubernetes `readinessProbe`.
+    pub fn all_ready(&self) -> bool {
+        self.local_ready() && self.first_sync_completed.load(Ordering::Acquire)
+    }
+}
+
+impl Default for ReadinessSignals {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 /// OTLP response
 #[derive(Serialize)]
 struct OtlpResponse {
@@ -39,11 +102,14 @@ struct HealthResponse {
     status: &'static str,
 }
 
-/// Start the OTLP server with graceful shutdown support.
+/// Start the OTLP server with graceful shutdown support. Also serves
+/// `/livez` and `/readyz` on the same port — the Kubernetes probes the
+/// chart's deployment template references.
 pub async fn start_otlp_server(
     host: IpAddr,
     port: u16,
     db: Arc<OperatorDb>,
+    readiness: ReadinessSignals,
     namespace: Option<String>,
     collector_token: Option<String>,
     cancel: CancellationToken,
@@ -51,6 +117,14 @@ pub async fn start_otlp_server(
     let addr = SocketAddr::new(host, port);
 
     info!(address = %addr, "Starting OTLP server");
+
+    // Probes ride on a separate Router so they don't need the OTLP body-limit
+    // layer and have a different (slim) state type; they are merged into the
+    // OTLP app at the end.
+    let probes = Router::new()
+        .route("/livez", get(handle_livez))
+        .route("/readyz", get(handle_readyz))
+        .with_state(readiness);
 
     let app = Router::new()
         .route("/health", get(handle_health))
@@ -63,7 +137,8 @@ pub async fn start_otlp_server(
             db,
             namespace,
             collector_token,
-        });
+        })
+        .merge(probes);
 
     let listener = tokio::net::TcpListener::bind(&addr)
         .await
@@ -86,6 +161,64 @@ pub async fn start_otlp_server(
 
 async fn handle_health() -> Json<HealthResponse> {
     Json(HealthResponse { status: "ok" })
+}
+
+/// Liveness probe: 200 iff the manager-independent health conditions hold —
+/// DB open, InstanceLock held, deployment loop progressing (process-alive is
+/// implicit in this handler answering). Deliberately does NOT require a
+/// successful sync, so an operator that is up and running but cannot reach
+/// the manager reports **live** (200) while `/readyz` stays 503. Consumed by
+/// the Kubernetes `livenessProbe` and by the launcher's startup gate (it
+/// signals systemd READY once the operator is live — a manager outage at
+/// boot must not look like a launch failure).
+async fn handle_livez(
+    State(readiness): State<ReadinessSignals>,
+) -> Result<Json<HealthResponse>, StatusCode> {
+    if !readiness.local_ready() {
+        return Err(StatusCode::SERVICE_UNAVAILABLE);
+    }
+    Ok(Json(HealthResponse { status: "ok" }))
+}
+
+/// Readiness probe: 200 iff ALL health conditions hold — DB opened,
+/// InstanceLock held, at least one successful `/v1/sync` round-trip, and the
+/// deployment loop progressing (the process being alive is implicit in the
+/// response itself). Consumed by the chart's `readinessProbe` (and therefore
+/// Helm's `--atomic --wait`) on Kubernetes and by the launcher's probation
+/// gate on os-service — a freshly-swapped operator isn't considered healthy
+/// until it has actually proven it can run and reach the manager.
+async fn handle_readyz(
+    State(readiness): State<ReadinessSignals>,
+) -> Result<Json<HealthResponse>, StatusCode> {
+    if !readiness.all_ready() {
+        return Err(StatusCode::SERVICE_UNAVAILABLE);
+    }
+    Ok(Json(HealthResponse { status: "ok" }))
+}
+
+/// The health-endpoint bind override the launcher passes on spawn
+/// (`ALIEN_HEALTH_ADDR=127.0.0.1:<port>`). `None` when unset (Kubernetes /
+/// standalone — the config's OTLP host+port apply). An unparseable value is
+/// a hard error: the launcher probes the exact address it set, so falling
+/// back to the config port would make every probation fail by mismatch —
+/// better to crash loudly and let the launcher's backoff surface it.
+pub fn health_addr_override() -> crate::error::Result<Option<SocketAddr>> {
+    parse_health_addr(std::env::var(alien_core::self_update::ENV_HEALTH_ADDR).ok())
+}
+
+fn parse_health_addr(env: Option<String>) -> crate::error::Result<Option<SocketAddr>> {
+    let Some(raw) = env.filter(|value| !value.is_empty()) else {
+        return Ok(None);
+    };
+    raw.parse::<SocketAddr>()
+        .map(Some)
+        .into_alien_error()
+        .context(crate::error::ErrorData::ConfigurationError {
+            message: format!(
+                "{} is set but is not a valid socket address: '{raw}'",
+                alien_core::self_update::ENV_HEALTH_ADDR
+            ),
+        })
 }
 
 async fn handle_logs(
@@ -185,9 +318,22 @@ mod tests {
         listener.local_addr().unwrap().port()
     }
 
-    #[tokio::test]
-    async fn health_endpoint_returns_ok() {
+    /// Signals with every condition already satisfied — tests flip individual
+    /// flags off from here.
+    fn all_ready_signals() -> ReadinessSignals {
+        let signals = ReadinessSignals::new();
+        signals.db_open.store(true, Ordering::Release);
+        signals.lock_held.store(true, Ordering::Release);
+        signals.first_sync_completed.store(true, Ordering::Release);
+        signals
+    }
+
+    async fn start_test_server(
+        readiness: ReadinessSignals,
+    ) -> (u16, CancellationToken, tokio::task::JoinHandle<crate::error::Result<()>>) {
         let data_dir = tempfile::tempdir().unwrap();
+        // Leak the tempdir guard so it outlives the spawned server.
+        let data_dir = Box::leak(Box::new(data_dir));
         let db = Arc::new(
             OperatorDb::new(data_dir.path().to_str().unwrap(), TEST_ENCRYPTION_KEY)
                 .await
@@ -196,38 +342,171 @@ mod tests {
         let port = free_port();
         let cancel = CancellationToken::new();
         let server_cancel = cancel.clone();
-
         let server = tokio::spawn(async move {
             start_otlp_server(
                 IpAddr::V4(Ipv4Addr::LOCALHOST),
                 port,
                 db,
+                readiness,
                 None,
                 None,
                 server_cancel,
             )
             .await
         });
-
+        // Wait for the server to bind so subsequent GETs don't race.
         let url = format!("http://127.0.0.1:{port}/health");
         let client = reqwest::Client::new();
-        let mut response = None;
         for _ in 0..50 {
-            if let Ok(success) = client.get(&url).send().await {
-                response = Some(success);
+            if client.get(&url).send().await.is_ok() {
                 break;
             }
             sleep(Duration::from_millis(20)).await;
         }
+        (port, cancel, server)
+    }
 
-        let response = response.expect("health endpoint did not become reachable");
+    #[tokio::test]
+    async fn health_endpoint_returns_ok() {
+        let (port, cancel, server) = start_test_server(ReadinessSignals::new()).await;
+        let client = reqwest::Client::new();
+        let response = client
+            .get(format!("http://127.0.0.1:{port}/health"))
+            .send()
+            .await
+            .unwrap();
         assert!(response.status().is_success());
         assert_eq!(
             response.json::<serde_json::Value>().await.unwrap(),
             serde_json::json!({ "status": "ok" })
         );
+        cancel.cancel();
+        server.await.unwrap().unwrap();
+    }
+
+    /// `/livez` is 200 once the LOCAL conditions hold (DB open, lock held,
+    /// loop progressing) even with NO successful sync — an operator that is
+    /// up but can't reach the manager is live but not ready. And each local
+    /// condition gates it (but first-sync does NOT).
+    #[tokio::test]
+    async fn livez_reflects_local_health_not_manager_reachability() {
+        let signals = all_ready_signals();
+        // No sync yet: manager unreachable, but the operator is up.
+        signals.first_sync_completed.store(false, Ordering::Release);
+        let (port, cancel, server) = start_test_server(signals.clone()).await;
+        let client = reqwest::Client::new();
+        let livez = format!("http://127.0.0.1:{port}/livez");
+        let readyz = format!("http://127.0.0.1:{port}/readyz");
+
+        assert!(
+            client.get(&livez).send().await.unwrap().status().is_success(),
+            "live (up + local health) even before any sync"
+        );
+        assert_eq!(
+            client.get(&readyz).send().await.unwrap().status().as_u16(),
+            503,
+            "but NOT ready — no manager round-trip yet"
+        );
+
+        // first-sync does not gate liveness; the three local conditions do.
+        signals.first_sync_completed.store(true, Ordering::Release);
+        for (name, flag) in [
+            ("db_open", &signals.db_open),
+            ("lock_held", &signals.lock_held),
+            ("deployment_loop_ok", &signals.deployment_loop_ok),
+        ] {
+            flag.store(false, Ordering::Release);
+            assert_eq!(
+                client.get(&livez).send().await.unwrap().status().as_u16(),
+                503,
+                "{name}=false must gate liveness"
+            );
+            flag.store(true, Ordering::Release);
+            assert!(
+                client.get(&livez).send().await.unwrap().status().is_success(),
+                "{name} restored must recover liveness"
+            );
+        }
 
         cancel.cancel();
         server.await.unwrap().unwrap();
+    }
+
+    #[tokio::test]
+    async fn readyz_is_503_before_first_sync_and_200_after() {
+        let signals = all_ready_signals();
+        signals.first_sync_completed.store(false, Ordering::Release);
+        let (port, cancel, server) = start_test_server(signals.clone()).await;
+        let client = reqwest::Client::new();
+        let url = format!("http://127.0.0.1:{port}/readyz");
+
+        // Before the sync loop flips the flag, readyz must be 503 so that
+        // a freshly-rolled agent isn't marked ready until it has actually
+        // talked to the manager once.
+        let before = client.get(&url).send().await.unwrap();
+        assert_eq!(before.status().as_u16(), 503, "expected 503 before first sync");
+
+        // Simulate the sync loop completing its first round-trip.
+        signals.first_sync_completed.store(true, Ordering::Release);
+
+        let after = client.get(&url).send().await.unwrap();
+        assert!(after.status().is_success(), "expected 200 after first sync");
+
+        cancel.cancel();
+        server.await.unwrap().unwrap();
+    }
+
+    /// Every one of the four explicit conditions gates /readyz on its own:
+    /// flipping any single flag off must 503, restoring it must 200.
+    #[tokio::test]
+    async fn readyz_requires_every_condition() {
+        let signals = all_ready_signals();
+        let (port, cancel, server) = start_test_server(signals.clone()).await;
+        let client = reqwest::Client::new();
+        let url = format!("http://127.0.0.1:{port}/readyz");
+
+        let all_ok = client.get(&url).send().await.unwrap();
+        assert!(all_ok.status().is_success(), "all conditions true → 200");
+
+        let flags = [
+            ("db_open", &signals.db_open),
+            ("lock_held", &signals.lock_held),
+            ("first_sync_completed", &signals.first_sync_completed),
+            ("deployment_loop_ok", &signals.deployment_loop_ok),
+        ];
+        for (name, flag) in flags {
+            flag.store(false, Ordering::Release);
+            let degraded = client.get(&url).send().await.unwrap();
+            assert_eq!(
+                degraded.status().as_u16(),
+                503,
+                "{name}=false must gate readiness"
+            );
+            flag.store(true, Ordering::Release);
+            let recovered = client.get(&url).send().await.unwrap();
+            assert!(
+                recovered.status().is_success(),
+                "{name} restored must recover readiness"
+            );
+        }
+
+        cancel.cancel();
+        server.await.unwrap().unwrap();
+    }
+
+    /// The launcher-passed bind override parses strictly: valid → Some,
+    /// absent/empty → None, garbage → loud error (a silent fallback would
+    /// make every probation fail by port mismatch).
+    #[test]
+    fn health_addr_override_parses_strictly() {
+        assert_eq!(
+            parse_health_addr(Some("127.0.0.1:7799".to_string())).unwrap(),
+            Some("127.0.0.1:7799".parse().unwrap())
+        );
+        assert_eq!(parse_health_addr(None).unwrap(), None);
+        assert_eq!(parse_health_addr(Some(String::new())).unwrap(), None);
+        let err = parse_health_addr(Some("not-an-addr".to_string()))
+            .expect_err("garbage must be a hard error");
+        assert_eq!(err.code, "CONFIGURATION_ERROR");
     }
 }

@@ -30,6 +30,20 @@ pub enum ErrorData {
     )]
     ConfigurationError { message: String },
 
+    /// The manager rejected `/v1/initialize` because a deployment with the
+    /// requested `(deployment_group_id, name)` already exists. Distinct
+    /// from `ConfigurationError` so the caller can route this into the
+    /// `/v1/rejoin` fall-through (state-wipe recovery) instead of crashing
+    /// the agent.
+    #[error(
+        code = "DEPLOYMENT_NAME_ALREADY_EXISTS",
+        message = "Deployment name already exists in this deployment group",
+        retryable = "false",
+        internal = "false",
+        http_status_code = 409
+    )]
+    DeploymentNameAlreadyExists,
+
     #[error(
         code = "DATABASE_ERROR",
         message = "Database error: {message}",
@@ -47,6 +61,17 @@ pub enum ErrorData {
         http_status_code = 502
     )]
     SyncFailed { message: String },
+
+    /// The os-service self-update actuator failed (download, staging, or
+    /// marker I/O). Retryable — the manager keeps advertising the target and
+    /// the actuator backs off between attempts.
+    #[error(
+        code = "SELF_UPDATE_FAILED",
+        message = "Self-update failed: {message}",
+        retryable = "true",
+        internal = "true"
+    )]
+    SelfUpdateFailed { message: String },
 
     #[error(
         code = "DEPLOYMENT_FAILED",

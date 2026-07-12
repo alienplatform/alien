@@ -765,6 +765,14 @@ async fn reconcile_succeeds_under_other_session_lock() {
                 suggested_delay_ms: None,
                 capabilities: vec![],
                 operator_version: None,
+                operator_os: None,
+                operator_arch: None,
+                packaging: None,
+                operator_image_repository: None,
+                launcher_version: None,
+                operator_update: None,
+                redeploy_required: None,
+                min_launcher_version: None,
             },
         )
         .await
@@ -832,6 +840,14 @@ async fn reconcile_refreshes_owned_lock_lease() {
                 suggested_delay_ms: None,
                 capabilities: vec![],
                 operator_version: None,
+                operator_os: None,
+                operator_arch: None,
+                packaging: None,
+                operator_image_repository: None,
+                launcher_version: None,
+                operator_update: None,
+                redeploy_required: None,
+                min_launcher_version: None,
             },
         )
         .await
@@ -1297,4 +1313,160 @@ async fn release_not_found() {
         .await
         .unwrap();
     assert!(result.is_none());
+}
+
+// ---------- Agent self-update inventory ----------------------------------
+
+/// A freshly-created deployment has no agent inventory until the first sync.
+#[tokio::test]
+async fn agent_metadata_is_null_until_first_sync_report() {
+    let db = fresh_db().await;
+    let store = SqliteDeploymentStore::new(db.clone());
+    let group_id = create_test_group(&store).await;
+    let dep =
+        create_test_deployment(&store, &group_id, "fresh", Platform::Kubernetes).await;
+
+    let fetched = store
+        .get_deployment(&test_subject(), &dep.id)
+        .await
+        .unwrap()
+        .expect("deployment exists");
+    assert!(fetched.operator_version.is_none(), "operator_version must be NULL pre-sync");
+    assert!(fetched.operator_os.is_none());
+    assert!(fetched.operator_arch.is_none());
+    assert!(fetched.packaging.is_none());
+}
+
+/// The agent reports its full inventory on a sync; the manager writes
+/// all four columns. A subsequent read sees the persisted values.
+#[tokio::test]
+async fn update_agent_metadata_persists_full_inventory() {
+    let db = fresh_db().await;
+    let store = SqliteDeploymentStore::new(db.clone());
+    let group_id = create_test_group(&store).await;
+    let dep =
+        create_test_deployment(&store, &group_id, "k8s", Platform::Kubernetes).await;
+
+    store
+        .update_agent_metadata(
+            &test_subject(),
+            &dep.id,
+            Some("1.4.0"),
+            Some("0.2.0"),
+            Some("linux"),
+            Some("aarch64"),
+            Some("kubernetes"),
+            Some("ghcr.io/alien-dev/alien-agent"),
+        )
+        .await
+        .unwrap();
+
+    let fetched = store
+        .get_deployment(&test_subject(), &dep.id)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(fetched.operator_version.as_deref(), Some("1.4.0"));
+    assert_eq!(fetched.launcher_version.as_deref(), Some("0.2.0"));
+    assert_eq!(fetched.operator_os.as_deref(), Some("linux"));
+    assert_eq!(fetched.operator_arch.as_deref(), Some("aarch64"));
+    assert_eq!(fetched.packaging.as_deref(), Some("kubernetes"));
+    assert_eq!(
+        fetched.operator_image_repository.as_deref(),
+        Some("ghcr.io/alien-dev/alien-agent")
+    );
+}
+
+/// An old agent that doesn't send any of the new fields is a no-op:
+/// previously-persisted values must be preserved (the call must not
+/// blank existing inventory).
+#[tokio::test]
+async fn update_agent_metadata_with_all_none_is_a_noop() {
+    let db = fresh_db().await;
+    let store = SqliteDeploymentStore::new(db.clone());
+    let group_id = create_test_group(&store).await;
+    let dep =
+        create_test_deployment(&store, &group_id, "k8s", Platform::Kubernetes).await;
+
+    // First, populate.
+    store
+        .update_agent_metadata(
+            &test_subject(),
+            &dep.id,
+            Some("1.4.0"),
+            Some("0.2.0"),
+            Some("linux"),
+            Some("aarch64"),
+            Some("kubernetes"),
+            Some("ghcr.io/alien-dev/alien-agent"),
+        )
+        .await
+        .unwrap();
+
+    // Then a "back-compat" old-agent sync: every field is None.
+    store
+        .update_agent_metadata(&test_subject(), &dep.id, None, None, None, None, None, None)
+        .await
+        .unwrap();
+
+    let fetched = store
+        .get_deployment(&test_subject(), &dep.id)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(fetched.operator_version.as_deref(), Some("1.4.0"));
+    assert_eq!(fetched.packaging.as_deref(), Some("kubernetes"));
+}
+
+/// A partial update only touches the specified columns — useful for
+/// agents that learn about new fields over time.
+#[tokio::test]
+async fn update_agent_metadata_partial_update_preserves_others() {
+    let db = fresh_db().await;
+    let store = SqliteDeploymentStore::new(db.clone());
+    let group_id = create_test_group(&store).await;
+    let dep =
+        create_test_deployment(&store, &group_id, "k8s", Platform::Kubernetes).await;
+
+    store
+        .update_agent_metadata(
+            &test_subject(),
+            &dep.id,
+            Some("1.3.5"),
+            Some("0.2.0"),
+            Some("linux"),
+            Some("aarch64"),
+            Some("kubernetes"),
+            Some("ghcr.io/alien-dev/alien-agent"),
+        )
+        .await
+        .unwrap();
+
+    // Agent upgraded to 1.4.0; OS/arch/packaging/repo didn't change, so the
+    // handler only forwards operator_version this time (hypothetically — the
+    // real agent always sends all fields, but the contract supports
+    // partial updates).
+    store
+        .update_agent_metadata(
+            &test_subject(),
+            &dep.id,
+            Some("1.4.0"),
+            None,
+            None,
+            None,
+            None,
+            None,
+        )
+        .await
+        .unwrap();
+
+    let fetched = store
+        .get_deployment(&test_subject(), &dep.id)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(fetched.operator_version.as_deref(), Some("1.4.0"), "version updated");
+    assert_eq!(fetched.operator_os.as_deref(), Some("linux"), "os preserved");
+    assert_eq!(fetched.operator_arch.as_deref(), Some("aarch64"), "arch preserved");
+    assert_eq!(fetched.packaging.as_deref(), Some("kubernetes"), "packaging preserved");
 }

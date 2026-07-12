@@ -123,6 +123,17 @@ pub struct UpArgs {
     #[arg(long)]
     pub local_debug_shell_command: Option<String>,
 
+    /// Install the legacy direct-operator service instead of the launcher-supervised
+    /// layout (no self-update). Only affects Linux — macOS/Windows use the direct
+    /// layout until their launcher installers land.
+    #[arg(long)]
+    pub no_launcher: bool,
+
+    /// Path to the alien-launcher binary for the launcher-supervised layout (Linux).
+    /// Defaults to ALIEN_LAUNCHER_BINARY, then next to the operator binary, then PATH.
+    #[arg(long, env = "ALIEN_LAUNCHER_BINARY")]
+    pub launcher_binary: Option<std::path::PathBuf>,
+
     /// Kubernetes namespace for Helm installs.
     #[arg(long, env = "ALIEN_KUBERNETES_NAMESPACE")]
     pub namespace: Option<String>,
@@ -2662,6 +2673,13 @@ async fn run_local_pull_model(
         public_endpoints: public_endpoints.cloned(),
         enable_local_debug: args.enable_local_debug,
         local_debug_shell_command: args.local_debug_shell_command.clone(),
+        // Default to the launcher-supervised layout so deployments can self-update,
+        // matching `operator install`. `use_launcher_layout_for` gates this to Linux;
+        // macOS/Windows fall back to the direct operator until their installers land.
+        // `--no-launcher` keeps the legacy direct-operator service (no self-update).
+        launcher_binary: args.launcher_binary.clone(),
+        no_launcher: args.no_launcher,
+        service_user: None,
     };
 
     super::operator::install_service(install_args)?;

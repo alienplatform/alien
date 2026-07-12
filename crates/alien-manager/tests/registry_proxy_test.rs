@@ -346,6 +346,14 @@ async fn setup() -> TestSetup {
                     suggested_delay_ms: None,
                     capabilities: vec![],
                     operator_version: None,
+                    operator_os: None,
+                    operator_arch: None,
+                    packaging: None,
+                    operator_image_repository: None,
+                    launcher_version: None,
+                    operator_update: None,
+                    redeploy_required: None,
+                    min_launcher_version: None,
                 },
             )
             .await
@@ -821,6 +829,14 @@ async fn test_proxy_push_then_pull() {
                     suggested_delay_ms: None,
                     capabilities: vec![],
                     operator_version: None,
+                    operator_os: None,
+                    operator_arch: None,
+                    packaging: None,
+                    operator_image_repository: None,
+                    launcher_version: None,
+                    operator_update: None,
+                    redeploy_required: None,
+                    min_launcher_version: None,
                 },
             )
             .await

@@ -1,0 +1,58 @@
+[package]
+name = "alien-launcher"
+version.workspace = true
+edition = "2021"
+license-file.workspace = true
+publish = false
+description = "Supervisor for the alien-operator OS-service packaging — health-gated version swaps with last-stable rollback"
+
+[[bin]]
+name = "alien-launcher"
+path = "src/main.rs"
+
+[dependencies]
+# Alien crates
+alien-core = { workspace = true }
+alien-error = { workspace = true }
+
+# OS-agnostic core dependencies ONLY. The launcher is deliberately synchronous
+# (no tokio): it supervises one child and polls one endpoint, and the smallest
+# possible dependency tree is a design goal for the binary that must never break.
+serde = { workspace = true, features = ["derive"] }
+serde_json = { workspace = true }
+semver = { workspace = true, features = ["serde"] }
+ureq = { workspace = true }
+sha2 = { workspace = true }
+chrono = { workspace = true, features = ["serde"] }
+tracing = { workspace = true }
+# stderr logging for the supervisor (journald/launchd capture stderr).
+tracing-subscriber = { workspace = true, features = ["env-filter", "fmt"] }
+
+[dev-dependencies]
+tempfile = { workspace = true }
+
+# Platform shims are target-gated so they are physically unbuildable from
+# `src/core/` on the wrong OS. Populated as each shim lands.
+[target.'cfg(unix)'.dependencies]
+nix = { workspace = true }
+command-group = { workspace = true }
+signal-hook = { workspace = true }
+
+[target.'cfg(target_os = "linux")'.dependencies]
+sd-notify = { workspace = true }
+
+[target.'cfg(windows)'.dependencies]
+# SCM service host (T3.1) + Job-Object child supervisor (T3.2) +
+# junction-pointer version store (T3.4).
+windows-service = { workspace = true }
+windows-sys = { workspace = true, features = [
+    "Win32_Foundation",
+    "Win32_System_Console",
+    "Win32_System_Threading",
+    # T3.4 store: MoveFileExW (reboot-delete) + GetDiskFreeSpaceExW (preflight).
+    "Win32_Storage_FileSystem",
+] }
+# Job Object (kill-on-close) child supervisor — same crate the Unix shim uses.
+command-group = { workspace = true }
+# Directory-junction pointers (`current` / `last-stable`) for the version store.
+junction = { workspace = true }

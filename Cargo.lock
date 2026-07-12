@@ -85,7 +85,7 @@ dependencies = [
 
 [[package]]
 name = "alien-aws-clients"
-version = "1.13.0"
+version = "1.13.2"
 dependencies = [
  "alien-aws-clients",
  "alien-client-core",
@@ -127,7 +127,7 @@ dependencies = [
 
 [[package]]
 name = "alien-azure-clients"
-version = "1.13.0"
+version = "1.13.2"
 dependencies = [
  "alien-client-core",
  "alien-core",
@@ -170,7 +170,7 @@ dependencies = [
 
 [[package]]
 name = "alien-bindings"
-version = "1.13.0"
+version = "1.13.2"
 dependencies = [
  "alien-aws-clients",
  "alien-azure-clients",
@@ -220,7 +220,7 @@ dependencies = [
 
 [[package]]
 name = "alien-build"
-version = "1.13.0"
+version = "1.13.2"
 dependencies = [
  "alien-build",
  "alien-core",
@@ -254,7 +254,7 @@ dependencies = [
 
 [[package]]
 name = "alien-cli"
-version = "1.13.0"
+version = "1.13.2"
 dependencies = [
  "alien-bindings",
  "alien-build",
@@ -324,7 +324,7 @@ dependencies = [
 
 [[package]]
 name = "alien-cli-common"
-version = "1.13.0"
+version = "1.13.2"
 dependencies = [
  "alien-core",
  "alien-deployment",
@@ -338,7 +338,7 @@ dependencies = [
 
 [[package]]
 name = "alien-client-config"
-version = "1.13.0"
+version = "1.13.2"
 dependencies = [
  "alien-aws-clients",
  "alien-azure-clients",
@@ -356,7 +356,7 @@ dependencies = [
 
 [[package]]
 name = "alien-client-core"
-version = "1.13.0"
+version = "1.13.2"
 dependencies = [
  "alien-error",
  "anyhow",
@@ -375,7 +375,7 @@ dependencies = [
 
 [[package]]
 name = "alien-cloudformation"
-version = "1.13.0"
+version = "1.13.2"
 dependencies = [
  "alien-core",
  "alien-error",
@@ -390,7 +390,7 @@ dependencies = [
 
 [[package]]
 name = "alien-commands"
-version = "1.13.0"
+version = "1.13.2"
 dependencies = [
  "alien-aws-clients",
  "alien-azure-clients",
@@ -424,7 +424,7 @@ dependencies = [
 
 [[package]]
 name = "alien-commands-client"
-version = "1.13.0"
+version = "1.13.2"
 dependencies = [
  "alien-core",
  "base64 0.22.1",
@@ -439,7 +439,7 @@ dependencies = [
 
 [[package]]
 name = "alien-core"
-version = "1.13.0"
+version = "1.13.2"
 dependencies = [
  "alien-error",
  "alien-macros",
@@ -458,8 +458,10 @@ dependencies = [
  "reqwest 0.12.28",
  "rstest",
  "schemars 0.8.22",
+ "semver",
  "serde",
  "serde_json",
+ "tempfile",
  "thiserror 2.0.18",
  "tokio",
  "tracing",
@@ -470,7 +472,7 @@ dependencies = [
 
 [[package]]
 name = "alien-deploy-cli"
-version = "1.13.0"
+version = "1.13.2"
 dependencies = [
  "alien-cli-common",
  "alien-core",
@@ -493,6 +495,7 @@ dependencies = [
  "getrandom 0.2.17",
  "hex",
  "hostname 0.4.2",
+ "junction",
  "libc",
  "reqwest 0.12.28",
  "serde",
@@ -513,7 +516,7 @@ dependencies = [
 
 [[package]]
 name = "alien-deployment"
-version = "1.13.0"
+version = "1.13.2"
 dependencies = [
  "alien-aws-clients",
  "alien-azure-clients",
@@ -544,7 +547,7 @@ dependencies = [
 
 [[package]]
 name = "alien-error"
-version = "1.13.0"
+version = "1.13.2"
 dependencies = [
  "alien-error-derive",
  "anyhow",
@@ -557,7 +560,7 @@ dependencies = [
 
 [[package]]
 name = "alien-error-derive"
-version = "1.13.0"
+version = "1.13.2"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -567,7 +570,7 @@ dependencies = [
 
 [[package]]
 name = "alien-gcp-clients"
-version = "1.13.0"
+version = "1.13.2"
 dependencies = [
  "alien-client-core",
  "alien-core",
@@ -600,10 +603,11 @@ dependencies = [
 
 [[package]]
 name = "alien-helm"
-version = "1.13.0"
+version = "1.13.2"
 dependencies = [
  "alien-core",
  "alien-error",
+ "alien-helm",
  "indexmap 2.14.0",
  "insta",
  "serde",
@@ -614,7 +618,7 @@ dependencies = [
 
 [[package]]
 name = "alien-infra"
-version = "1.13.0"
+version = "1.13.2"
 dependencies = [
  "alien-aws-clients",
  "alien-azure-clients",
@@ -674,7 +678,7 @@ dependencies = [
 
 [[package]]
 name = "alien-k8s-clients"
-version = "1.13.0"
+version = "1.13.2"
 dependencies = [
  "alien-client-core",
  "alien-core",
@@ -702,8 +706,32 @@ dependencies = [
 ]
 
 [[package]]
+name = "alien-launcher"
+version = "1.13.2"
+dependencies = [
+ "alien-core",
+ "alien-error",
+ "chrono",
+ "command-group",
+ "junction",
+ "nix 0.29.0",
+ "sd-notify",
+ "semver",
+ "serde",
+ "serde_json",
+ "sha2 0.10.9",
+ "signal-hook",
+ "tempfile",
+ "tracing",
+ "tracing-subscriber",
+ "ureq 3.3.0",
+ "windows-service",
+ "windows-sys 0.59.0",
+]
+
+[[package]]
 name = "alien-local"
-version = "1.13.0"
+version = "1.13.2"
 dependencies = [
  "alien-bindings",
  "alien-build",
@@ -744,7 +772,7 @@ dependencies = [
 
 [[package]]
 name = "alien-macros"
-version = "1.13.0"
+version = "1.13.2"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -753,7 +781,7 @@ dependencies = [
 
 [[package]]
 name = "alien-manager"
-version = "1.13.0"
+version = "1.13.2"
 dependencies = [
  "aegis",
  "alien-bindings",
@@ -792,6 +820,7 @@ dependencies = [
  "rustls 0.23.41",
  "sea-query",
  "sec",
+ "semver",
  "serde",
  "serde_json",
  "sha2 0.10.9",
@@ -812,7 +841,7 @@ dependencies = [
 
 [[package]]
 name = "alien-manager-api"
-version = "1.13.0"
+version = "1.13.2"
 dependencies = [
  "alien-error",
  "chrono",
@@ -831,7 +860,7 @@ dependencies = [
 
 [[package]]
 name = "alien-observer"
-version = "1.13.0"
+version = "1.13.2"
 dependencies = [
  "alien-aws-clients",
  "alien-azure-clients",
@@ -851,7 +880,7 @@ dependencies = [
 
 [[package]]
 name = "alien-operator"
-version = "1.13.0"
+version = "1.13.2"
 dependencies = [
  "aegis",
  "alien-client-config",
@@ -860,6 +889,7 @@ dependencies = [
  "alien-deployment",
  "alien-error",
  "alien-infra",
+ "alien-k8s-clients",
  "alien-local",
  "alien-manager-api",
  "async-trait",
@@ -871,9 +901,11 @@ dependencies = [
  "bon",
  "chrono",
  "clap",
+ "ed25519-dalek",
  "fs2",
  "futures",
  "hostname 0.4.2",
+ "k8s-openapi",
  "libc",
  "opentelemetry-proto",
  "prost 0.13.5",
@@ -881,6 +913,7 @@ dependencies = [
  "rustls 0.23.41",
  "serde",
  "serde_json",
+ "sha2 0.10.9",
  "tempfile",
  "tokio",
  "tokio-tungstenite",
@@ -895,7 +928,7 @@ dependencies = [
 
 [[package]]
 name = "alien-permissions"
-version = "1.13.0"
+version = "1.13.2"
 dependencies = [
  "alien-core",
  "alien-error",
@@ -914,7 +947,7 @@ dependencies = [
 
 [[package]]
 name = "alien-platform-api"
-version = "1.13.0"
+version = "1.13.2"
 dependencies = [
  "alien-error",
  "chrono",
@@ -932,7 +965,7 @@ dependencies = [
 
 [[package]]
 name = "alien-preflights"
-version = "1.13.0"
+version = "1.13.2"
 dependencies = [
  "alien-core",
  "alien-error",
@@ -949,7 +982,7 @@ dependencies = [
 
 [[package]]
 name = "alien-runtime"
-version = "1.13.0"
+version = "1.13.2"
 dependencies = [
  "alien-bindings",
  "alien-commands",
@@ -966,6 +999,7 @@ dependencies = [
  "chrono",
  "clap",
  "cloudevents-sdk",
+ "command-group",
  "config",
  "dotenvy",
  "futures-util",
@@ -1007,14 +1041,14 @@ dependencies = [
 
 [[package]]
 name = "alien-sdk"
-version = "1.13.0"
+version = "1.13.2"
 dependencies = [
  "alien-bindings",
 ]
 
 [[package]]
 name = "alien-terraform"
-version = "1.13.0"
+version = "1.13.2"
 dependencies = [
  "alien-core",
  "alien-error",
@@ -1029,7 +1063,7 @@ dependencies = [
 
 [[package]]
 name = "alien-test"
-version = "1.13.0"
+version = "1.13.2"
 dependencies = [
  "alien-aws-clients",
  "alien-azure-clients",
@@ -1075,7 +1109,7 @@ dependencies = [
 
 [[package]]
 name = "alien-test-app"
-version = "1.13.0"
+version = "1.13.2"
 dependencies = [
  "alien-bindings",
  "alien-error",
@@ -2742,6 +2776,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "command-group"
+version = "5.0.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "a68fa787550392a9d58f44c21a3022cfb3ea3e2458b7f85d3b399d0ceeccf409"
+dependencies = [
+ "async-trait",
+ "nix 0.27.1",
+ "tokio",
+ "winapi",
+]
+
+[[package]]
 name = "concurrent-queue"
 version = "2.5.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3154,6 +3200,33 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "7d5515a3834141de9eafb9717ad39eea8247b5674e6066c404e8c4b365d2a29e"
 dependencies = [
  "cmov",
+]
+
+[[package]]
+name = "curve25519-dalek"
+version = "4.1.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "97fb8b7c4503de7d6ae7b42ab72a5a59857b4c937ec27a3d4539dba95b5ab2be"
+dependencies = [
+ "cfg-if",
+ "cpufeatures 0.2.17",
+ "curve25519-dalek-derive",
+ "digest 0.10.7",
+ "fiat-crypto",
+ "rustc_version",
+ "subtle",
+ "zeroize",
+]
+
+[[package]]
+name = "curve25519-dalek-derive"
+version = "0.1.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "f46882e17999c6cc590af592290432be3bce0428cb0d5f8b6715e4dc7b383eb3"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "syn 2.0.118",
 ]
 
 [[package]]
@@ -3609,6 +3682,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "ed25519"
+version = "2.2.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "115531babc129696a58c64a4fef0a8bf9e9698629fb97e9e40767d235cfbcd53"
+dependencies = [
+ "pkcs8 0.10.2",
+ "signature 2.2.0",
+]
+
+[[package]]
 name = "ed25519-compact"
 version = "2.3.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3616,6 +3699,20 @@ checksum = "5c24599140dc39d7a81e4476e7573d41bbc18e07c803900298e522a5fbcfbfb6"
 dependencies = [
  "ct-codecs",
  "getrandom 0.4.3",
+]
+
+[[package]]
+name = "ed25519-dalek"
+version = "2.2.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "70e796c081cee67dc755e1a36a0a172b897fab85fc3f6bc48307991f64e4eca9"
+dependencies = [
+ "curve25519-dalek",
+ "ed25519",
+ "serde",
+ "sha2 0.10.9",
+ "subtle",
+ "zeroize",
 ]
 
 [[package]]
@@ -3849,6 +3946,12 @@ dependencies = [
  "rand_core 0.6.4",
  "subtle",
 ]
+
+[[package]]
+name = "fiat-crypto"
+version = "0.2.9"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "28dea519a9695b9977216879a3ebfddf92f1c08c05d984f8996aecd6ecdc811d"
 
 [[package]]
 name = "filetime"
@@ -5268,6 +5371,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "junction"
+version = "1.4.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "8cfc352a66ba903c23239ef51e809508b6fc2b0f90e3476ac7a9ff47e863ae95"
+dependencies = [
+ "scopeguard",
+ "windows-sys 0.61.2",
+]
+
+[[package]]
 name = "jwt"
 version = "0.16.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -6002,6 +6115,29 @@ dependencies = [
 ]
 
 [[package]]
+name = "nix"
+version = "0.27.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "2eb04e9c688eff1c89d72b407f168cf79bb9e867a9d3323ed6c01519eb9cc053"
+dependencies = [
+ "bitflags 2.13.0",
+ "cfg-if",
+ "libc",
+]
+
+[[package]]
+name = "nix"
+version = "0.29.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "71e2746dc3a24dd78b3cfcb7be93368c6de9963d30f43a6a73998a9cf4b17b46"
+dependencies = [
+ "bitflags 2.13.0",
+ "cfg-if",
+ "cfg_aliases",
+ "libc",
+]
+
+[[package]]
 name = "nom"
 version = "7.1.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -6289,7 +6425,7 @@ dependencies = [
  "sha2 0.10.9",
  "tar",
  "toml 0.8.23",
- "ureq",
+ "ureq 2.12.1",
  "url",
  "urlencoding",
  "uuid",
@@ -8284,6 +8420,15 @@ checksum = "da046153aa2352493d6cb7da4b6e5c0c057d8a1d0a9aa8560baffdd945acd414"
 dependencies = [
  "ring",
  "untrusted",
+]
+
+[[package]]
+name = "sd-notify"
+version = "0.4.5"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "b943eadf71d8b69e661330cb0e2656e31040acf21ee7708e2c238a0ec6af2bf4"
+dependencies = [
+ "libc",
 ]
 
 [[package]]
@@ -10378,6 +10523,31 @@ dependencies = [
 ]
 
 [[package]]
+name = "ureq"
+version = "3.3.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "dea7109cdcd5864d4eeb1b58a1648dc9bf520360d7af16ec26d0a9354bafcfc0"
+dependencies = [
+ "base64 0.22.1",
+ "log",
+ "percent-encoding",
+ "ureq-proto",
+ "utf8-zero",
+]
+
+[[package]]
+name = "ureq-proto"
+version = "0.6.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "e994ba84b0bd1b1b0cf92878b7ef898a5c1760108fe7b6010327e274917a808c"
+dependencies = [
+ "base64 0.22.1",
+ "http 1.4.2",
+ "httparse",
+ "log",
+]
+
+[[package]]
 name = "url"
 version = "2.5.8"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -10401,6 +10571,12 @@ name = "utf-8"
 version = "0.7.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "09cc8ee72d2a9becf2f2febe0205bbed8fc6615b7cb429ad062dc7b7ddd036a9"
+
+[[package]]
+name = "utf8-zero"
+version = "0.8.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "b8c0a043c9540bae7c578c88f91dda8bd82e59ae27c21baca69c8b191aaf5a6e"
 
 [[package]]
 name = "utf8_iter"

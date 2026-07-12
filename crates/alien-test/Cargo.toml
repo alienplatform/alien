@@ -83,3 +83,9 @@ async-trait = { workspace = true }
 chrono = { workspace = true }
 test-context = { workspace = true }
 temp-env = { workspace = true }
+
+[features]
+# os-service self-update E2E (launcher + operator + manager, Linux-only at
+# runtime). Kept behind a feature so the heavyweight suite runs only when CI
+# (or a developer) asks for it.
+e2e-os-service = []

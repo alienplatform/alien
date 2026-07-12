@@ -30,7 +30,20 @@ pub enum OperatorCommand {
     /// Show the operator service status
     Status,
     /// Uninstall the alien-operator service
-    Uninstall,
+    Uninstall(UninstallArgs),
+}
+
+#[derive(Args)]
+pub struct UninstallArgs {
+    /// Also delete the data directory (state DB, secrets, version store).
+    /// Default keeps data so a reinstall resumes the same deployment
+    /// identity — wiping it orphans the deployment on the manager.
+    #[arg(long)]
+    pub purge: bool,
+
+    /// Data directory to purge (with --purge). Defaults to the service default.
+    #[arg(long)]
+    pub data_dir: Option<String>,
 }
 
 #[derive(Args)]
@@ -78,6 +91,20 @@ pub struct InstallArgs {
     /// Override the shell command used by Local runtime debug shells.
     #[arg(long)]
     pub local_debug_shell_command: Option<String>,
+
+    /// Path to the alien-launcher binary (Linux launcher layout). If omitted,
+    /// checks ALIEN_LAUNCHER_BINARY, then next to the operator binary, then PATH.
+    #[arg(long)]
+    pub launcher_binary: Option<PathBuf>,
+
+    /// Install the legacy direct-operator service instead of the
+    /// launcher-supervised layout (no self-update support).
+    #[arg(long)]
+    pub no_launcher: bool,
+
+    /// Unix user the service runs as (Linux launcher layout). Defaults to root.
+    #[arg(long)]
+    pub service_user: Option<String>,
 }
 
 pub async fn operator_command(args: OperatorArgs) -> Result<()> {
@@ -86,7 +113,7 @@ pub async fn operator_command(args: OperatorArgs) -> Result<()> {
         OperatorCommand::Start => start(),
         OperatorCommand::Stop => stop(),
         OperatorCommand::Status => status(),
-        OperatorCommand::Uninstall => uninstall(),
+        OperatorCommand::Uninstall(uninstall_args) => uninstall(uninstall_args.purge, uninstall_args.data_dir),
     }
 }
 
@@ -137,7 +164,7 @@ pub fn uninstall_service_if_installed() -> Result<()> {
         .context(ErrorData::OperatorServiceError {
             message: "Failed to check service status".to_string(),
         })? {
-        ServiceStatus::Running | ServiceStatus::Stopped(_) => uninstall(),
+        ServiceStatus::Running | ServiceStatus::Stopped(_) => uninstall(false, None),
         ServiceStatus::NotInstalled => {
             output::info("alien-operator service is not installed");
             Ok(())
@@ -229,6 +256,68 @@ fn install(args: InstallArgs) -> Result<()> {
                 e
             ));
         }
+    }
+
+    // Linux default: the launcher-supervised layout (health-gated binary
+    // swaps with rollback). The operator's config flows through the unit's
+    // Environment= lines — every operator flag has an env alias — and the
+    // launcher's child inherits them. `--no-launcher` keeps the legacy
+    // direct-operator service (no self-update).
+    if crate::commands::install_launcher::use_launcher_layout(args.no_launcher) {
+        let launcher_binary = crate::commands::install_launcher::which_launcher_binary(
+            args.launcher_binary.clone(),
+            &binary_path,
+        )?;
+        let mut environment: Vec<(String, String)> = vec![
+            ("PLATFORM".to_string(), args.platform.clone()),
+            ("SYNC_URL".to_string(), args.sync_url.clone()),
+            (
+                "SYNC_TOKEN_FILE".to_string(),
+                sync_token_path.display().to_string(),
+            ),
+            ("DATA_DIR".to_string(), data_dir.clone()),
+            (
+                "OPERATOR_ENCRYPTION_KEY_FILE".to_string(),
+                encryption_key_path.display().to_string(),
+            ),
+        ];
+        if let Some(deployment_id) = &args.deployment_id {
+            environment.push(("DEPLOYMENT_ID".to_string(), deployment_id.clone()));
+        }
+        if let Some(operator_name) = &args.operator_name {
+            environment.push(("OPERATOR_NAME".to_string(), operator_name.clone()));
+        }
+        if args.public_endpoints.is_some() {
+            environment.push((
+                "PUBLIC_ENDPOINTS_FILE".to_string(),
+                public_endpoints_path.display().to_string(),
+            ));
+        }
+        if args.enable_local_debug {
+            environment.push(("ALIEN_ENABLE_LOCAL_DEBUG".to_string(), "true".to_string()));
+        }
+        if let Some(shell_command) = &args.local_debug_shell_command {
+            environment.push((
+                "ALIEN_LOCAL_DEBUG_SHELL_COMMAND".to_string(),
+                shell_command.clone(),
+            ));
+        }
+
+        crate::commands::install_launcher::install_launcher_service(
+            SERVICE_LABEL,
+            std::path::Path::new(&data_dir),
+            &binary_path,
+            &launcher_binary,
+            args.service_user.as_deref(),
+            &environment,
+        )?;
+
+        output::success("alien-operator service installed under the launcher");
+        output::info(&format!("  Operator:   {}", binary_path.display()));
+        output::info(&format!("  Launcher:   {}", launcher_binary.display()));
+        output::info(&format!("  Data dir:   {}", data_dir));
+        output::info(&format!("  Sync URL:   {}", args.sync_url));
+        return Ok(());
     }
 
     let mut service_args = vec![
@@ -409,7 +498,7 @@ fn status() -> Result<()> {
     Ok(())
 }
 
-fn uninstall() -> Result<()> {
+fn uninstall(purge: bool, data_dir: Option<String>) -> Result<()> {
     let manager = get_manager()?;
 
     // Stop first (ignore errors if not running)
@@ -423,6 +512,20 @@ fn uninstall() -> Result<()> {
         })?;
 
     output::success("alien-operator service uninstalled");
+
+    let data_dir = data_dir.unwrap_or_else(default_service_data_dir);
+    if purge {
+        std::fs::remove_dir_all(&data_dir)
+            .into_alien_error()
+            .context(ErrorData::OperatorServiceError {
+                message: format!("Failed to purge data directory {data_dir}"),
+            })?;
+        output::info(&format!("  Purged data dir: {data_dir}"));
+    } else {
+        output::info(&format!(
+            "  Data dir kept: {data_dir} (state + deployment identity survive a              reinstall; pass --purge to delete)"
+        ));
+    }
     Ok(())
 }
 

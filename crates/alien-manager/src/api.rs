@@ -25,6 +25,7 @@ use utoipa::OpenApi;
         crate::routes::deployments::delete_deployment,
         crate::routes::deployments::retry_deployment,
         crate::routes::deployments::redeploy,
+        crate::routes::deployments::set_target_operator_version,
         // Releases
         crate::routes::releases::create_release,
         crate::routes::releases::list_releases,
@@ -43,12 +44,14 @@ use utoipa::OpenApi;
         crate::routes::sync::release,
         crate::routes::sync::agent_sync,
         crate::routes::sync::initialize,
+        crate::routes::sync::rejoin,
         // Credentials
         crate::routes::credentials::resolve_credentials,
     ),
     components(schemas(
         // Deployment types
         crate::routes::deployments::CreateDeploymentRequest,
+        crate::routes::deployments::SetTargetOperatorVersionRequest,
         crate::routes::deployments::CreateDeploymentResponse,
         crate::routes::deployments::DeploymentResponse,
         crate::routes::deployments::DeploymentGroupMinimal,
@@ -83,6 +86,8 @@ use utoipa::OpenApi;
         crate::routes::sync::AgentSyncResponse,
         crate::routes::sync::InitializeRequest,
         crate::routes::sync::InitializeResponse,
+        crate::routes::sync::RejoinRequest,
+        crate::routes::sync::RejoinResponse,
         // Credentials types
         crate::routes::credentials::ResolveCredentialsRequest,
         crate::routes::credentials::ResolveCredentialsResponse,

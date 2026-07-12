@@ -451,6 +451,16 @@ impl DeploymentLoop {
                                 observed_inventory_batches: Vec::new(),
                                 capabilities: Vec::new(),
                                 operator_version: None,
+                                launcher_version: None,
+                                // Background driver loop — no operator sync here,
+                                // so leave the operator-inventory columns untouched.
+                                operator_os: None,
+                                operator_arch: None,
+                                packaging: None,
+                                operator_image_repository: None,
+                                operator_update: None,
+                                redeploy_required: None,
+                                min_launcher_version: None,
                             },
                         )
                         .await?;
@@ -980,6 +990,13 @@ mod tests {
             created_at: Utc::now(),
             updated_at: None,
             error: None,
+            operator_version: None,
+            operator_os: None,
+            operator_arch: None,
+            packaging: None,
+            operator_image_repository: None,
+            target_operator_version: None,
+            launcher_version: None,
         }
     }
 

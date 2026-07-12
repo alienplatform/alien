@@ -30,6 +30,7 @@ members = [
   "crates/alien-helm",
   "crates/alien-manager",
   "crates/alien-operator",
+  "crates/alien-launcher",
   "crates/alien-deploy-cli",
   "client-sdks/manager/rust",
   "client-sdks/platform/rust",
@@ -150,6 +151,31 @@ rand = "0.9"
 rand_distr = "0.5"
 regex = "1"
 reqwest = { version = "0.12.2", default-features = false }
+# Launcher platform shims: process groups + Job Objects behind one API.
+command-group = "5.0"
+# systemd notify/watchdog protocol without linking libsystemd (launcher, Linux).
+sd-notify = "0.4"
+# Safe Unix signal registration for the launcher's poll-based control channel.
+signal-hook = "0.3"
+# Unix syscall surface for the launcher shims (pdeathsig, killpg, statvfs).
+nix = { version = "0.29", features = ["signal", "process", "fs"] }
+# Windows launcher shims: SCM service host + Win32 (console Ctrl-C, junctions).
+windows-service = "0.7"
+windows-sys = "0.59"
+# Directory junctions for the Windows version store's `current`/`last-stable`.
+junction = "1.2"
+# Blocking HTTP client for the launcher's /readyz probe — deliberately tiny so
+# the must-never-break supervisor binary stays free of an async runtime. No
+# default features: the probe only ever speaks plain HTTP to 127.0.0.1, so
+# TLS (rustls/ring) would be dead weight in the safety-net binary.
+ureq = { version = "3.1", default-features = false }
+# Spec-correct SemVer parsing + precedence ordering (the same crate cargo uses).
+# One parser for validation AND comparison everywhere versions are ordered —
+# hand-rolled ordering gets prerelease precedence wrong (1.4.0-rc.1 < 1.4.0).
+semver = "1.0"
+# ed25519 signature verification for self-update artifacts (feature-gated stub
+# until the signing workstream lands - see the enforce-signature features).
+ed25519-dalek = "2.1"
 rkyv = "0.7.43"
 rstest = "0.25.0"
 schemars = { version = "0.8", features = ["indexmap2"] }
