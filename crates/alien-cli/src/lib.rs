@@ -17,6 +17,8 @@ pub mod ui;
 pub mod test_utils;
 
 #[cfg(feature = "platform")]
+use crate::auth::normalize_workspace_name;
+#[cfg(feature = "platform")]
 use crate::commands::manager::{managers_task, ManagersArgs};
 #[cfg(feature = "platform")]
 use crate::commands::platform::{
@@ -1454,7 +1456,7 @@ pub async fn run_cli(cli: Cli) -> Result<()> {
                     .unwrap_or_else(|| "https://api.alien.dev".to_string()),
                 api_key: cli.api_key.clone(),
                 no_browser: cli.no_browser,
-                workspace: cli.workspace.clone(),
+                workspace: cli.workspace.clone().and_then(normalize_workspace_name),
                 project: cli.project.clone(),
             }
         }

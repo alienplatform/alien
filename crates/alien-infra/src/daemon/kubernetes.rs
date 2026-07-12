@@ -181,7 +181,7 @@ impl KubernetesDaemonController {
         }
 
         Ok(HandlerAction::Stay {
-            max_times: 60,
+            max_times: Some(60),
             suggested_delay: Some(Duration::from_secs(5)),
         })
     }
@@ -201,7 +201,7 @@ impl KubernetesDaemonController {
                 suggested_delay: Some(Duration::from_secs(30)),
             }),
             KubernetesEndpointAction::Waiting { suggested_delay } => Ok(HandlerAction::Stay {
-                max_times: 60,
+                max_times: Some(60),
                 suggested_delay: Some(suggested_delay),
             }),
         }
@@ -262,7 +262,7 @@ impl KubernetesDaemonController {
             self.reconcile_endpoint(ctx).await?
         {
             return Ok(HandlerAction::Stay {
-                max_times: 60,
+                max_times: Some(60),
                 suggested_delay: Some(suggested_delay),
             });
         }
@@ -383,7 +383,7 @@ impl KubernetesDaemonController {
         }
 
         Ok(HandlerAction::Stay {
-            max_times: 60,
+            max_times: Some(60),
             suggested_delay: Some(Duration::from_secs(5)),
         })
     }
@@ -403,7 +403,7 @@ impl KubernetesDaemonController {
                 suggested_delay: Some(Duration::from_secs(30)),
             }),
             KubernetesEndpointAction::Waiting { suggested_delay } => Ok(HandlerAction::Stay {
-                max_times: 60,
+                max_times: Some(60),
                 suggested_delay: Some(suggested_delay),
             }),
         }
@@ -527,7 +527,7 @@ impl KubernetesDaemonController {
         }
 
         Ok(HandlerAction::Stay {
-            max_times: 60,
+            max_times: Some(60),
             suggested_delay: Some(Duration::from_secs(5)),
         })
     }

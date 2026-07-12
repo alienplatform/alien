@@ -224,6 +224,8 @@ export class AlienError<TContext extends z.ZodTypeAny = z.ZodAny> extends Error 
   public readonly httpStatusCode: number
   /** Type-safe context data specific to this error */
   public readonly context?: z.infer<TContext>
+  /** Optional human-facing remediation hint */
+  public readonly hint?: string | null
   /** Source error that caused this error (for chaining) */
   public readonly source?: AlienError<any>
 
@@ -259,6 +261,7 @@ export class AlienError<TContext extends z.ZodTypeAny = z.ZodAny> extends Error 
     this.internal = options.internal
     this.httpStatusCode = options.httpStatusCode ?? 500
     this.context = options.context
+    this.hint = options.hint
 
     // Handle source construction - check if it's a valid AlienErrorOptions object
     this.source = undefined
@@ -489,6 +492,7 @@ export class AlienError<TContext extends z.ZodTypeAny = z.ZodAny> extends Error 
       internal: this.internal,
       httpStatusCode: this.httpStatusCode,
       context: this.context,
+      hint: this.hint,
       source: this.source?.toOptions(),
     }
 
@@ -519,6 +523,7 @@ export class AlienError<TContext extends z.ZodTypeAny = z.ZodAny> extends Error 
       internal: this.internal,
       httpStatusCode: this.httpStatusCode,
       context: this.context,
+      hint: this.hint,
       source: this.source?.toOptions(),
     }
   }
@@ -565,6 +570,7 @@ export class AlienError<TContext extends z.ZodTypeAny = z.ZodAny> extends Error 
       internal: this.internal,
       httpStatusCode: this.httpStatusCode,
       context: this.context,
+      hint: this.hint,
       source: this.source?.toExternal(),
     }
   }

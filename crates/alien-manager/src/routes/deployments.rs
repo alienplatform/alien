@@ -11,8 +11,8 @@ use serde::{Deserialize, Serialize};
 
 use alien_core::{
     import::ImportSourceKind, is_valid_resource_prefix, ContainerOutputs, DaemonOutputs,
-    EnvironmentVariable, Platform, PublicEndpointOutput, StackSettings, StackState, WorkerOutputs,
-    RESOURCE_PREFIX_ERROR_MESSAGE,
+    DeploymentModel, EnvironmentVariable, Platform, PublicEndpointOutput, StackSettings,
+    StackState, WorkerOutputs, RESOURCE_PREFIX_ERROR_MESSAGE,
 };
 
 use crate::error::ErrorData;
@@ -45,6 +45,7 @@ pub struct CreateDeploymentRequest {
 #[serde(rename_all = "camelCase")]
 pub struct CreateDeploymentResponse {
     pub deployment: DeploymentResponse,
+    pub deployment_model: DeploymentModel,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub token: Option<String>,
 }
@@ -267,6 +268,55 @@ fn record_to_response(
     }
 }
 
+pub(crate) fn required_deployment_model_for_platform(
+    platform: Platform,
+) -> Option<DeploymentModel> {
+    match platform {
+        Platform::Aws | Platform::Gcp | Platform::Azure | Platform::Machines | Platform::Test => {
+            Some(DeploymentModel::Push)
+        }
+        Platform::Kubernetes => Some(DeploymentModel::Pull),
+        Platform::Local => None,
+    }
+}
+
+pub(crate) fn deployment_model_for_record(record: &DeploymentRecord) -> DeploymentModel {
+    record
+        .stack_settings
+        .as_ref()
+        .map(|settings| settings.deployment_model)
+        .unwrap_or(DeploymentModel::Push)
+}
+
+fn deployment_model_name(model: DeploymentModel) -> &'static str {
+    match model {
+        DeploymentModel::Push => "push",
+        DeploymentModel::Pull => "pull",
+    }
+}
+
+pub(crate) fn stack_settings_for_platform(
+    platform: Platform,
+    stack_settings: Option<StackSettings>,
+) -> Result<StackSettings, alien_error::AlienError<ErrorData>> {
+    let mut stack_settings = stack_settings.unwrap_or_default();
+    let Some(expected) = required_deployment_model_for_platform(platform) else {
+        return Ok(stack_settings);
+    };
+
+    if expected == DeploymentModel::Push && stack_settings.deployment_model != expected {
+        return Err(ErrorData::bad_request(format!(
+            "{} deployments must use deploymentModel '{}', received '{}'",
+            platform.as_str(),
+            deployment_model_name(expected),
+            deployment_model_name(stack_settings.deployment_model),
+        )));
+    }
+
+    stack_settings.deployment_model = expected;
+    Ok(stack_settings)
+}
+
 // --- Handlers ---
 
 /// Every handler in this file runs `auth::require_auth(&state, &headers)`
@@ -383,6 +433,11 @@ async fn create_deployment(
         None => None,
     };
 
+    let stack_settings = match stack_settings_for_platform(req.platform, req.stack_settings) {
+        Ok(settings) => settings,
+        Err(e) => return e.into_response(),
+    };
+
     let mut deployment = match state
         .deployment_store
         .create_deployment(
@@ -393,7 +448,7 @@ async fn create_deployment(
                 deployment_group_id: deployment_group_id.clone(),
                 platform: req.platform,
                 base_platform: None,
-                stack_settings: req.stack_settings.unwrap_or_default(),
+                stack_settings,
                 stack_state,
                 environment_variables: req.environment_variables,
                 public_subdomain: None,
@@ -441,6 +496,7 @@ async fn create_deployment(
     (
         StatusCode::CREATED,
         Json(CreateDeploymentResponse {
+            deployment_model: deployment_model_for_record(&deployment),
             deployment: record_to_response(&deployment, None),
             token,
         }),
@@ -831,4 +887,49 @@ async fn redeploy(
     }
 
     Json(serde_json::json!({ "success": true })).into_response()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn local_deployments_default_to_push_for_embedded_dev_loop() {
+        let settings = stack_settings_for_platform(Platform::Local, None)
+            .expect("local defaults should be valid");
+
+        assert_eq!(settings.deployment_model, DeploymentModel::Push);
+    }
+
+    #[test]
+    fn local_deployments_preserve_explicit_pull_model() {
+        let mut requested = StackSettings::default();
+        requested.deployment_model = DeploymentModel::Pull;
+
+        let settings = stack_settings_for_platform(Platform::Local, Some(requested))
+            .expect("local pull mode should be valid");
+
+        assert_eq!(settings.deployment_model, DeploymentModel::Pull);
+    }
+
+    #[test]
+    fn kubernetes_deployments_are_pull_mode() {
+        let settings = stack_settings_for_platform(Platform::Kubernetes, None)
+            .expect("kubernetes defaults should be valid");
+
+        assert_eq!(settings.deployment_model, DeploymentModel::Pull);
+    }
+
+    #[test]
+    fn machines_deployments_reject_pull_model() {
+        let mut requested = StackSettings::default();
+        requested.deployment_model = DeploymentModel::Pull;
+
+        let error = stack_settings_for_platform(Platform::Machines, Some(requested))
+            .expect_err("machines deployments should reject pull mode");
+
+        assert!(error
+            .to_string()
+            .contains("must use deploymentModel 'push'"));
+    }
 }

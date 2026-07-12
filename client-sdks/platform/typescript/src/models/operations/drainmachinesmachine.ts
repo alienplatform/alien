@@ -12,6 +12,10 @@ export type DrainMachinesMachineRequest = {
    */
   id: string;
   machineId: string;
+  /**
+   * Workspace name. Required for user/session/OAuth requests. Optional for API keys because API keys are workspace-scoped; if provided with an API key, it must match the key's workspace.
+   */
+  workspace?: string | undefined;
   drainMachinesMachineRequest?: models.DrainMachinesMachineRequest | undefined;
 };
 
@@ -19,6 +23,7 @@ export type DrainMachinesMachineRequest = {
 export type DrainMachinesMachineRequest$Outbound = {
   id: string;
   machineId: string;
+  workspace?: string | undefined;
   DrainMachinesMachineRequest?:
     | models.DrainMachinesMachineRequest$Outbound
     | undefined;
@@ -31,6 +36,7 @@ export const DrainMachinesMachineRequest$outboundSchema: z.ZodType<
 > = z.object({
   id: z.string(),
   machineId: z.string(),
+  workspace: z.string().optional(),
   drainMachinesMachineRequest: models.DrainMachinesMachineRequest$outboundSchema
     .optional(),
 }).transform((v) => {

@@ -535,7 +535,7 @@ impl GcpWorkerController {
             // first-time deployments that need to pull and start a container image.
             debug!(operation=%operation_name, "Operation still in progress");
             Ok(HandlerAction::Stay {
-                max_times: 60,
+                max_times: Some(60),
                 suggested_delay: Some(Duration::from_secs(5)),
             })
         }
@@ -614,7 +614,7 @@ impl GcpWorkerController {
             // Cloud Run services that pull from cross-project Artifact Registry
             // may take 10-20 minutes while freshly-granted IAM bindings propagate.
             return Ok(HandlerAction::Stay {
-                max_times: 240,
+                max_times: Some(240),
                 suggested_delay: Some(Duration::from_secs(5)),
             });
         }
@@ -714,7 +714,7 @@ impl GcpWorkerController {
                 }))
             }
             _ => Ok(HandlerAction::Stay {
-                max_times: 60,
+                max_times: Some(60),
                 suggested_delay: Some(Duration::from_secs(5)),
             }),
         }
@@ -822,7 +822,7 @@ impl GcpWorkerController {
             .await?
         {
             return Ok(HandlerAction::Stay {
-                max_times: 60,
+                max_times: Some(60),
                 suggested_delay: Some(Duration::from_secs(5)),
             });
         }
@@ -924,7 +924,7 @@ impl GcpWorkerController {
             .await?
         {
             return Ok(HandlerAction::Stay {
-                max_times: 60,
+                max_times: Some(60),
                 suggested_delay: Some(Duration::from_secs(5)),
             });
         }
@@ -1030,7 +1030,7 @@ impl GcpWorkerController {
             .await?
         {
             return Ok(HandlerAction::Stay {
-                max_times: 60,
+                max_times: Some(60),
                 suggested_delay: Some(Duration::from_secs(5)),
             });
         }
@@ -1125,7 +1125,7 @@ impl GcpWorkerController {
             .await?
         {
             return Ok(HandlerAction::Stay {
-                max_times: 60,
+                max_times: Some(60),
                 suggested_delay: Some(Duration::from_secs(5)),
             });
         }
@@ -1239,7 +1239,7 @@ impl GcpWorkerController {
             .await?
         {
             return Ok(HandlerAction::Stay {
-                max_times: 60,
+                max_times: Some(60),
                 suggested_delay: Some(Duration::from_secs(5)),
             });
         }
@@ -1328,7 +1328,7 @@ impl GcpWorkerController {
             .await?
         {
             return Ok(HandlerAction::Stay {
-                max_times: 60,
+                max_times: Some(60),
                 suggested_delay: Some(Duration::from_secs(5)),
             });
         }
@@ -1444,7 +1444,7 @@ impl GcpWorkerController {
             .await?
         {
             return Ok(HandlerAction::Stay {
-                max_times: 60,
+                max_times: Some(60),
                 suggested_delay: Some(Duration::from_secs(5)),
             });
         }
@@ -1501,7 +1501,7 @@ impl GcpWorkerController {
                 }))
             }
             _ => Ok(HandlerAction::Stay {
-                max_times: 60,
+                max_times: Some(60),
                 suggested_delay: Some(Duration::from_secs(5)),
             }),
         }
@@ -1928,7 +1928,7 @@ impl GcpWorkerController {
                     Err(_) => {
                         // Probe failed, let the framework handle retries
                         return Ok(HandlerAction::Stay {
-                            max_times: READINESS_PROBE_MAX_ATTEMPTS,
+                            max_times: Some(READINESS_PROBE_MAX_ATTEMPTS),
                             suggested_delay: Some(Duration::from_secs(5)),
                         });
                     }
@@ -2351,7 +2351,7 @@ impl GcpWorkerController {
             // Operation still in progress
             debug!(operation=%operation_name, "Update operation still in progress");
             Ok(HandlerAction::Stay {
-                max_times: 60,
+                max_times: Some(60),
                 suggested_delay: Some(Duration::from_secs(5)),
             })
         }
@@ -2404,7 +2404,7 @@ impl GcpWorkerController {
         if !is_ready {
             debug!(name=%service_name, "Service not yet ready after update");
             return Ok(HandlerAction::Stay {
-                max_times: 60,
+                max_times: Some(60),
                 suggested_delay: Some(Duration::from_secs(5)),
             });
         }
@@ -3239,7 +3239,7 @@ impl GcpWorkerController {
                     Err(_) => {
                         // Probe failed, let the framework handle retries
                         return Ok(HandlerAction::Stay {
-                            max_times: READINESS_PROBE_MAX_ATTEMPTS,
+                            max_times: Some(READINESS_PROBE_MAX_ATTEMPTS),
                             suggested_delay: Some(Duration::from_secs(5)),
                         });
                     }
@@ -3403,7 +3403,7 @@ impl GcpWorkerController {
                         "Target HTTPS proxy is still referenced by another GCP resource; retrying deletion"
                     );
                     return Ok(HandlerAction::Stay {
-                        max_times: 30,
+                        max_times: Some(30),
                         suggested_delay: Some(Duration::from_secs(10)),
                     });
                 }
@@ -3979,7 +3979,7 @@ impl GcpWorkerController {
             // Operation still in progress
             debug!(operation=%operation_name, "Delete operation still in progress");
             Ok(HandlerAction::Stay {
-                max_times: 20,
+                max_times: Some(20),
                 suggested_delay: Some(Duration::from_secs(3)),
             })
         }
@@ -4034,7 +4034,7 @@ impl GcpWorkerController {
             Ok(_) => {
                 debug!(name=%service_name, "Service still exists, waiting for deletion");
                 Ok(HandlerAction::Stay {
-                    max_times: 20,
+                    max_times: Some(20),
                     suggested_delay: Some(Duration::from_secs(3)),
                 })
             }

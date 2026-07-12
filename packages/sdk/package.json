@@ -1,6 +1,6 @@
 {
   "name": "@alienplatform/sdk",
-  "version": "1.11.2",
+  "version": "1.13.2",
   "type": "module",
   "exports": {
     ".": {
@@ -52,7 +52,7 @@
     "@alienplatform/bindings": "workspace:^",
     "@alienplatform/core": "workspace:^",
     "@bufbuild/protobuf": "^2.5.3",
-    "@grpc/grpc-js": "^1.13.4",
+    "@grpc/grpc-js": "^1.14.4",
     "nice-grpc": "^2.1.11",
     "nice-grpc-common": "^2.0.2",
     "zod": "4.3.2"

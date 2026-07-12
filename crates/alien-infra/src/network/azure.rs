@@ -439,7 +439,7 @@ impl AzureNetworkController {
                         }
 
                         return Ok(HandlerAction::Stay {
-                            max_times: AZURE_BYO_VNET_RBAC_WAIT_MAX_ATTEMPTS,
+                            max_times: Some(AZURE_BYO_VNET_RBAC_WAIT_MAX_ATTEMPTS),
                             suggested_delay: Some(std::time::Duration::from_secs(
                                 AZURE_BYO_VNET_RBAC_WAIT_SECS,
                             )),
@@ -1228,7 +1228,7 @@ impl AzureNetworkController {
 
         debug!("NAT Gateway association still in progress");
         Ok(HandlerAction::Stay {
-            max_times: 60,
+            max_times: Some(60),
             suggested_delay: Some(std::time::Duration::from_secs(5)),
         })
     }
@@ -1540,7 +1540,7 @@ impl AzureNetworkController {
             Ok(_) => {
                 debug!("NSG deletion still in progress");
                 Ok(HandlerAction::Stay {
-                    max_times: 60,
+                    max_times: Some(60),
                     suggested_delay: Some(std::time::Duration::from_secs(5)),
                 })
             }
@@ -1656,7 +1656,7 @@ impl AzureNetworkController {
 
         debug!("NAT Gateway dissociation still in progress");
         Ok(HandlerAction::Stay {
-            max_times: 60,
+            max_times: Some(60),
             suggested_delay: Some(std::time::Duration::from_secs(5)),
         })
     }
@@ -1730,7 +1730,7 @@ impl AzureNetworkController {
             Ok(_) => {
                 debug!("NAT Gateway deletion still in progress");
                 Ok(HandlerAction::Stay {
-                    max_times: 30,
+                    max_times: Some(30),
                     suggested_delay: Some(std::time::Duration::from_secs(10)),
                 })
             }
@@ -1822,7 +1822,7 @@ impl AzureNetworkController {
             Ok(_) => {
                 debug!("Public IP deletion still in progress");
                 Ok(HandlerAction::Stay {
-                    max_times: 60,
+                    max_times: Some(60),
                     suggested_delay: Some(std::time::Duration::from_secs(5)),
                 })
             }
@@ -1905,7 +1905,7 @@ impl AzureNetworkController {
             Ok(_) => {
                 debug!("VNet deletion still in progress");
                 Ok(HandlerAction::Stay {
-                    max_times: 30,
+                    max_times: Some(30),
                     suggested_delay: Some(std::time::Duration::from_secs(10)),
                 })
             }

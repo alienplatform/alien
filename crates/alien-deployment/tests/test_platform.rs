@@ -354,6 +354,28 @@ async fn test_initial_setup_creates_only_frozen_resources() {
     assert_eq!(function.status, alien_core::ResourceStatus::Running);
 }
 
+#[tokio::test]
+async fn stale_waiting_for_machines_returns_to_provisioning() {
+    let stack = create_test_stack("test-stack", "test-function");
+    let config = create_test_config("hash_v1", false);
+    let state = run_until_status(
+        create_initial_state(stack),
+        config.clone(),
+        &[DeploymentStatus::Provisioning],
+    )
+    .await;
+    let stale_state = DeploymentState {
+        status: DeploymentStatus::WaitingForMachines,
+        ..state
+    };
+
+    let result = alien_deployment::step(stale_state, config, ClientConfig::Test, None)
+        .await
+        .expect("provisioning step should succeed");
+
+    assert_eq!(result.state.status, DeploymentStatus::Provisioning);
+}
+
 /// B) Secrets sync behavior tests
 
 #[tokio::test]
@@ -685,6 +707,28 @@ async fn test_update_flow_happy_path_promotes_release() {
         v1_release.release_id,
         "should have updated from v1"
     );
+}
+
+#[tokio::test]
+async fn stale_waiting_for_machines_returns_to_updating() {
+    let stack_v1 = create_test_stack("test-stack", "test-function");
+    let config = create_test_config("hash_v1", false);
+    let mut state = run_to_completion(create_initial_state(stack_v1), config.clone()).await;
+    let release_v2 = ReleaseInfo {
+        release_id: Some("rel_v2".to_string()),
+        version: Some("2.0.0".to_string()),
+        description: None,
+        stack: create_test_stack("test-stack", "test-function-v2"),
+    };
+    start_update(&mut state, release_v2);
+    state = run_until_status(state, config.clone(), &[DeploymentStatus::Updating]).await;
+    state.status = DeploymentStatus::WaitingForMachines;
+
+    let result = alien_deployment::step(state, config, ClientConfig::Test, None)
+        .await
+        .expect("updating step should succeed");
+
+    assert_eq!(result.state.status, DeploymentStatus::Updating);
 }
 
 #[tokio::test]

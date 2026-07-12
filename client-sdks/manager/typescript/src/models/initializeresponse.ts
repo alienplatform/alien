@@ -5,10 +5,18 @@
 import * as z from "zod/v4";
 import { safeParse } from "../lib/schemas.js";
 import { Result as SafeParseResult } from "../types/fp.js";
+import {
+  DeploymentModel,
+  DeploymentModel$inboundSchema,
+} from "./deploymentmodel.js";
 import { SDKValidationError } from "./errors/sdkvalidationerror.js";
 
 export type InitializeResponse = {
   deploymentId: string;
+  /**
+   * Deployment model: how updates are delivered to the remote environment.
+   */
+  deploymentModel: DeploymentModel;
   token?: string | null | undefined;
 };
 
@@ -18,6 +26,7 @@ export const InitializeResponse$inboundSchema: z.ZodType<
   unknown
 > = z.object({
   deploymentId: z.string(),
+  deploymentModel: DeploymentModel$inboundSchema,
   token: z.nullable(z.string()).optional(),
 });
 

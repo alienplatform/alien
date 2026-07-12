@@ -1,6 +1,6 @@
 {
   "name": "@alienplatform/testing",
-  "version": "1.11.2",
+  "version": "1.13.2",
   "description": "Testing framework for Alien applications",
   "author": "Alien Software, Inc. <hi@alien.dev>",
   "license": "FSL-1.1-Apache-2.0",
@@ -26,8 +26,6 @@
   "scripts": {
     "build": "tsdown",
     "dev": "tsdown --watch --no-clean",
-    "test": "vitest run",
-    "test:watch": "vitest",
     "test:ts": "tsc --noEmit"
   },
   "dependencies": {
