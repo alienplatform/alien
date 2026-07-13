@@ -40,12 +40,14 @@ else
 fi
 
 build_filters=()
-build_filters+=(--filter @alienplatform/platform-api)
-build_filters+=(--filter @alienplatform/core)
-build_filters+=(--filter @alienplatform/bindings)
-build_filters+=(--filter @alienplatform/commands)
-build_filters+=(--filter @alienplatform/sdk)
-build_filters+=(--filter @alienplatform/testing)
+if [[ "${ALIEN_EXAMPLES_REUSE_BUILT_PACKAGES:-}" != "true" ]]; then
+  build_filters+=(--filter @alienplatform/platform-api)
+  build_filters+=(--filter @alienplatform/core)
+  build_filters+=(--filter @alienplatform/bindings)
+  build_filters+=(--filter @alienplatform/commands)
+  build_filters+=(--filter @alienplatform/sdk)
+  build_filters+=(--filter @alienplatform/testing)
+fi
 
 if (( ${#build_filters[@]} > 0 )); then
   pnpm -r "${build_filters[@]}" run build
