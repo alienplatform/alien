@@ -26,9 +26,12 @@ fn process_failure_is_reported_as_structured_json() {
         .filter_map(|line| serde_json::from_str::<serde_json::Value>(line).ok())
         .find(|event| event["fields"]["error_code"] == "PROCESS_FAILED")
         .expect("runtime should emit a structured PROCESS_FAILED event");
-    assert_eq!(
-        event["fields"]["message"],
-        "Process failed: Application exited with code 7"
+    let event_message = event["fields"]["message"]
+        .as_str()
+        .expect("structured event should include a message");
+    assert!(
+        event_message.starts_with("Process failed: Failed to start application: "),
+        "unexpected process failure message: {event_message}"
     );
 
     let serialized = event["fields"]["alien_error"]
@@ -38,10 +41,10 @@ fn process_failure_is_reported_as_structured_json() {
         serde_json::from_str(serialized).expect("AlienError field should be valid JSON");
     assert_eq!(error["code"], "PROCESS_FAILED");
     assert_eq!(error["context"]["exit_code"], serde_json::Value::Null);
-    assert!(error["context"]["message"]
+    let context_message = error["context"]["message"]
         .as_str()
-        .expect("process error should contain a message")
-        .contains("Failed to start application"));
+        .expect("process error should contain a message");
+    assert_eq!(event_message, format!("Process failed: {context_message}"));
     assert_eq!(error["retryable"], false);
     assert_eq!(error["internal"], false);
     assert_eq!(error["httpStatusCode"], 500);
