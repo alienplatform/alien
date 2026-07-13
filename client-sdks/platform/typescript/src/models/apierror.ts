@@ -58,6 +58,10 @@ export type APIError = {
    */
   context?: any | null | undefined;
   /**
+   * Optional human-facing remediation hint.
+   */
+  hint?: string | null | undefined;
+  /**
    * HTTP status code for this error.
    *
    * @remarks
@@ -76,6 +80,10 @@ export type APIError = {
    * logged for debugging but replaced with generic error messages in responses.
    */
   internal: boolean;
+  /**
+   * Request ID echoed in the x-request-id response header and server logs.
+   */
+  requestId?: string | undefined;
 };
 
 /** @internal */
@@ -85,8 +93,10 @@ export const APIError$inboundSchema: z.ZodType<APIError, unknown> = z.object({
   source: z.nullable(z.any()).optional(),
   retryable: z.boolean().default(false),
   context: z.nullable(z.any()).optional(),
+  hint: z.nullable(z.string()).optional(),
   httpStatusCode: z.nullable(z.int()).optional(),
   internal: z.boolean(),
+  requestId: z.string().optional(),
 });
 
 export function apiErrorFromJSON(

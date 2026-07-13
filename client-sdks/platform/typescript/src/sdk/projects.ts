@@ -7,6 +7,7 @@ import { projectsCreateFromTemplate } from "../funcs/projectsCreateFromTemplate.
 import { projectsDelete } from "../funcs/projectsDelete.js";
 import { projectsGet } from "../funcs/projectsGet.js";
 import { projectsGetActiveRelease } from "../funcs/projectsGetActiveRelease.js";
+import { projectsGetDeploymentLinkSetup } from "../funcs/projectsGetDeploymentLinkSetup.js";
 import { projectsGetDeploymentPortalDomain } from "../funcs/projectsGetDeploymentPortalDomain.js";
 import { projectsGetGcpOAuthProvider } from "../funcs/projectsGetGcpOAuthProvider.js";
 import { projectsGetTemplateUrls } from "../funcs/projectsGetTemplateUrls.js";
@@ -153,6 +154,20 @@ export class Projects extends ClientSDK {
     options?: RequestOptions,
   ): Promise<operations.GetProjectTemplateUrlsResponse> {
     return unwrapAsync(projectsGetTemplateUrls(
+      this,
+      request,
+      options,
+    ));
+  }
+
+  /**
+   * Get the active release stack and portal-visible setup availability for deployment-link configuration.
+   */
+  async getDeploymentLinkSetup(
+    request: operations.GetProjectDeploymentLinkSetupRequest,
+    options?: RequestOptions,
+  ): Promise<models.DeploymentLinkSetupResponse> {
+    return unwrapAsync(projectsGetDeploymentLinkSetup(
       this,
       request,
       options,

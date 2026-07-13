@@ -130,6 +130,25 @@ pub struct StackExecutor {
 }
 
 const MAX_RETRIES: u32 = 10;
+const DEPENDENCY_NOT_READY_CODE: &str = "DEPENDENCY_NOT_READY";
+
+/// Whether a status stops the executor from stepping the resource.
+///
+/// RefreshFailed is terminal for planning/sync purposes but must NOT halt
+/// stepping: it marks a failed observation (heartbeat/health refresh), and a
+/// controller with a RefreshFailed handler recovers by being stepped again.
+/// Controllers that declare RefreshFailed via `terminal_state!` step as a
+/// no-op, so this is safe universally.
+fn status_halts_stepping(status: ResourceStatus) -> bool {
+    status.is_terminal() && status != ResourceStatus::RefreshFailed
+}
+
+fn status_allows_update_planning(status: ResourceStatus) -> bool {
+    matches!(
+        status,
+        ResourceStatus::Running | ResourceStatus::RefreshFailed | ResourceStatus::UpdateFailed
+    )
+}
 
 fn controller_platform_for_entry(
     stack_platform: Platform,
@@ -159,6 +178,10 @@ fn is_best_effort_delete_error(err: &AlienError<ErrorData>) -> bool {
             .source
             .as_deref()
             .is_some_and(is_best_effort_delete_source)
+}
+
+fn is_dependency_not_ready_error(err: &AlienError<ErrorData>) -> bool {
+    err.code == DEPENDENCY_NOT_READY_CODE
 }
 
 fn is_best_effort_delete_source(err: &AlienError<GenericError>) -> bool {
@@ -719,7 +742,7 @@ impl StackExecutor {
                     // Compare desired resource config with the config in the *current* state
                     if Some(&desired_config.resource) != current_resource_config_opt {
                         match current_resource_state.status {
-                            ResourceStatus::Running | ResourceStatus::UpdateFailed => {
+                            status if status_allows_update_planning(status) => {
                                 // Check if all new dependencies are ready before planning the update
                                 let new_dependencies_ready =
                                     desired_config.dependencies.iter().all(|dep_ref| {
@@ -814,10 +837,7 @@ impl StackExecutor {
                                 );
                             }
                         }
-                    } else if matches!(
-                        current_resource_state.status,
-                        ResourceStatus::Running | ResourceStatus::UpdateFailed
-                    ) {
+                    } else if status_allows_update_planning(current_resource_state.status) {
                         if let Some(resource_controller) =
                             current_resource_state.get_internal_controller()?
                         {
@@ -880,7 +900,7 @@ impl StackExecutor {
                     // Check if the resource exists in current state and is in a status that allows updates
                     if let Some(current_resource_state) = state.resources.get(resource_id) {
                         match current_resource_state.status {
-                            ResourceStatus::Running | ResourceStatus::UpdateFailed => {
+                            status if status_allows_update_planning(status) => {
                                 // Check if all dependencies are ready before planning the update from dependency propagation
                                 let dependencies_ready =
                                     desired_config.dependencies.iter().all(|dep_ref| {
@@ -961,7 +981,8 @@ impl StackExecutor {
             return self.step_running_resources;
         }
 
-        resource_view.status != ResourceStatus::Pending && !resource_view.status.is_terminal()
+        resource_view.status != ResourceStatus::Pending
+            && !status_halts_stepping(resource_view.status)
     }
 
     /// Performs one *incremental* reconciliation iteration.
@@ -1359,7 +1380,7 @@ impl StackExecutor {
                 // Or terminal due to a failure state?
                 // The main `is_synced` check at the end handles the overall stack goal.
                 // Here, we just want to avoid stepping resources that are *already* in a final (success, deleted, or failed) state *for their current operation*.
-                if current_resource_view.status.is_terminal() {
+                if status_halts_stepping(current_resource_view.status) {
                     continue; // Skip resources already in a terminal status (Running, Deleted, *Failed)
                 }
             }
@@ -1535,7 +1556,7 @@ impl StackExecutor {
                 let mut resource_controller =
                     current_resource_state.get_internal_controller()?.unwrap();
 
-                let step_result = if !resource_controller.get_status().is_terminal() {
+                let step_result = if !status_halts_stepping(resource_controller.get_status()) {
                     // The controller now returns a step result with suggested delay
                     resource_controller.step(&context).await
                 } else {
@@ -1572,6 +1593,14 @@ impl StackExecutor {
                             "Best-effort delete accepted missing or inaccessible resource"
                         );
                         (0, None, None, false, true)
+                    } else if is_dependency_not_ready_error(&err) {
+                        let delay = Duration::from_secs(10);
+                        info!(
+                            resource_id = %resource_id,
+                            error = %err,
+                            "Dependency is not ready; waiting without consuming retry budget"
+                        );
+                        (0, None, Some(delay), false, false)
                     } else if !err.retryable {
                         let error = Some(err.clone().into_generic());
                         error!(

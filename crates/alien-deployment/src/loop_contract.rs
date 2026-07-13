@@ -121,7 +121,9 @@ pub fn classify_status(status: &DeploymentStatus, operation: LoopOperation) -> O
     if operation == LoopOperation::InitialSetup
         && matches!(
             status,
-            DeploymentStatus::Provisioning | DeploymentStatus::Updating
+            DeploymentStatus::Provisioning
+                | DeploymentStatus::WaitingForMachines
+                | DeploymentStatus::Updating
         )
     {
         return Some(LoopResult {
@@ -143,12 +145,13 @@ pub fn classify_status(status: &DeploymentStatus, operation: LoopOperation) -> O
 mod tests {
     use super::*;
 
-    const ALL_STATUSES: [DeploymentStatus; 18] = [
+    const ALL_STATUSES: [DeploymentStatus; 19] = [
         DeploymentStatus::Pending,
         DeploymentStatus::PreflightsFailed,
         DeploymentStatus::InitialSetup,
         DeploymentStatus::InitialSetupFailed,
         DeploymentStatus::Provisioning,
+        DeploymentStatus::WaitingForMachines,
         DeploymentStatus::ProvisioningFailed,
         DeploymentStatus::Running,
         DeploymentStatus::RefreshFailed,

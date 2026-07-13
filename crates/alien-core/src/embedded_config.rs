@@ -36,6 +36,9 @@ pub struct DeployCliConfig {
     /// Machine bootstrap bundle manifest URL used by `alien-deploy join`.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub machine_bundle_url: Option<String>,
+    /// Unix install script URL for this CLI package.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub install_script_url: Option<String>,
     /// Branded environment variable that contains the deployment token.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub token_env_var: Option<String>,
@@ -191,6 +194,7 @@ mod tests {
             machine_bundle_url: Some(
                 "https://packages.example.com/acme/machine-bundle.json".into(),
             ),
+            install_script_url: Some("https://packages.example.com/acme/install.sh".into()),
             token_env_var: Some("ACME_DEPLOYMENT_TOKEN".into()),
             name: Some("acme-deploy".into()),
         };
@@ -208,6 +212,7 @@ mod tests {
         assert_eq!(loaded.api_base_url, config.api_base_url);
         assert_eq!(loaded.agent_binary_url, config.agent_binary_url);
         assert_eq!(loaded.machine_bundle_url, config.machine_bundle_url);
+        assert_eq!(loaded.install_script_url, config.install_script_url);
         assert_eq!(loaded.token_env_var, config.token_env_var);
         assert_eq!(loaded.display_name, config.display_name);
         assert_eq!(loaded.name, config.name);

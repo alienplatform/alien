@@ -439,7 +439,9 @@ pub fn failed_status_for_deployment_error(status: DeploymentStatus) -> Deploymen
     match status {
         DeploymentStatus::Pending => DeploymentStatus::PreflightsFailed,
         DeploymentStatus::InitialSetup => DeploymentStatus::InitialSetupFailed,
-        DeploymentStatus::Provisioning => DeploymentStatus::ProvisioningFailed,
+        DeploymentStatus::Provisioning | DeploymentStatus::WaitingForMachines => {
+            DeploymentStatus::ProvisioningFailed
+        }
         DeploymentStatus::Running => DeploymentStatus::RefreshFailed,
         DeploymentStatus::UpdatePending | DeploymentStatus::Updating => {
             DeploymentStatus::UpdateFailed

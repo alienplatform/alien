@@ -14,6 +14,42 @@ struct OperationCoverage<'a> {
 fn critical_e2e_provider_operations_are_declared() {
     let cases = [
         OperationCoverage {
+            // Ops the provision flow exercises against live clouds; the WHY for each grant lives
+            // in permission-sets/postgres/provision.jsonc.
+            permission_set_id: "postgres/provision",
+            aws_actions: &[
+                "ec2:CreateSecurityGroup",
+                "ec2:CreateTags",
+                "ec2:AuthorizeSecurityGroupIngress",
+                "rds:CreateDBCluster",
+                "rds:ModifyDBCluster",
+                "rds:DescribeDBInstances",
+                "secretsmanager:CreateSecret",
+            ],
+            gcp_permissions: &[
+                "cloudsql.instances.create",
+                "cloudsql.users.create",
+                "cloudsql.users.update",
+                "cloudsql.databases.create",
+                "compute.addresses.create",
+                "compute.addresses.createInternal",
+                "compute.forwardingRules.pscCreate",
+                "servicedirectory.namespaces.create",
+                "secretmanager.versions.add",
+            ],
+            gcp_predefined_roles: &[],
+            azure_actions: &[
+                "Microsoft.DBforPostgreSQL/flexibleServers/write",
+                "Microsoft.DBforPostgreSQL/flexibleServers/read",
+                "Microsoft.Network/privateEndpoints/write",
+                "Microsoft.Network/privateEndpoints/read",
+                "Microsoft.Network/privateDnsZones/virtualNetworkLinks/delete",
+                "Microsoft.Network/privateDnsZones/delete",
+            ],
+            azure_data_actions: &[],
+            azure_predefined_roles: &[],
+        },
+        OperationCoverage {
             permission_set_id: "worker/provision",
             aws_actions: &[
                 "lambda:CreateFunction",
@@ -353,4 +389,139 @@ fn critical_e2e_provider_operations_are_declared() {
         "critical provider operation coverage failed:\n{}",
         failures.join("\n")
     );
+}
+
+/// provision/heartbeat generate the connection password and only ever WRITE it (secret + DB
+/// principal), so a secret-value READ grant would widen the management identity's data reach for
+/// nothing. Pins that no such grant — action or predefined role — appears in either set.
+#[test]
+fn postgres_provision_and_heartbeat_grant_no_secret_value_read() {
+    const FORBIDDEN_AWS: &[&str] = &[
+        "secretsmanager:GetSecretValue",
+        "secretsmanager:BatchGetSecretValue",
+    ];
+    const FORBIDDEN_GCP: &[&str] = &["secretmanager.versions.access", "secretmanager.secrets.get"];
+    // Role names hide their payload, so secret-reading predefined roles must be pinned too — a
+    // `Reader` → `Key Vault Secrets User` swap would otherwise sail through the action checks.
+    // (`secrets.get` above is metadata-only; it rides along as defense-in-depth, unlike the Azure
+    // matcher below which deliberately skips metadata actions.)
+    const FORBIDDEN_GCP_ROLES: &[&str] = &[
+        "roles/secretmanager.secretAccessor",
+        "roles/secretmanager.admin",
+    ];
+    const FORBIDDEN_AZURE_ROLES: &[&str] = &[
+        "key vault secrets user",
+        "key vault secrets officer",
+        "key vault administrator",
+    ];
+
+    for set_id in [
+        "postgres/provision",
+        "postgres/heartbeat",
+        "postgres/management",
+    ] {
+        let permission_set =
+            get_permission_set(set_id).unwrap_or_else(|| panic!("missing permission set {set_id}"));
+
+        let aws_actions: Vec<&str> = permission_set
+            .platforms
+            .aws
+            .as_ref()
+            .into_iter()
+            .flatten()
+            .flat_map(|permission| permission.grant.actions.as_deref().unwrap_or(&[]))
+            .map(String::as_str)
+            .collect();
+        for forbidden in FORBIDDEN_AWS {
+            assert!(
+                !aws_actions.contains(forbidden),
+                "{set_id} must not grant AWS secret-value read '{forbidden}'"
+            );
+        }
+
+        let gcp_permissions: Vec<&str> = permission_set
+            .platforms
+            .gcp
+            .as_ref()
+            .into_iter()
+            .flatten()
+            .flat_map(|permission| {
+                // `permissions` and `residual_permissions` can co-exist; the guard must scan
+                // both or a forbidden permission could hide in the unscanned list.
+                permission
+                    .grant
+                    .permissions
+                    .as_deref()
+                    .unwrap_or(&[])
+                    .iter()
+                    .chain(
+                        permission
+                            .grant
+                            .residual_permissions
+                            .as_deref()
+                            .unwrap_or(&[]),
+                    )
+            })
+            .map(String::as_str)
+            .collect();
+        for forbidden in FORBIDDEN_GCP {
+            assert!(
+                !gcp_permissions.contains(forbidden),
+                "{set_id} must not grant GCP secret read '{forbidden}'"
+            );
+        }
+
+        let gcp_roles: Vec<String> = permission_set
+            .platforms
+            .gcp
+            .as_ref()
+            .into_iter()
+            .flatten()
+            .flat_map(|permission| permission.grant.predefined_roles.as_deref().unwrap_or(&[]))
+            .map(|role| role.to_ascii_lowercase())
+            .collect();
+        for forbidden in FORBIDDEN_GCP_ROLES {
+            assert!(
+                !gcp_roles
+                    .iter()
+                    .any(|role| role == &forbidden.to_ascii_lowercase()),
+                "{set_id} must not grant the secret-reading GCP role '{forbidden}'"
+            );
+        }
+
+        // These sets have no business touching Key Vault secret contents at all, so any
+        // `/secrets/` data action is forbidden except the metadata-only reads — this also
+        // catches wildcard forms a getSecret/backup denylist would miss.
+        let has_azure_secret_read = permission_set
+            .platforms
+            .azure
+            .as_ref()
+            .into_iter()
+            .flatten()
+            .flat_map(|permission| permission.grant.data_actions.as_deref().unwrap_or(&[]))
+            .any(|action| {
+                let lower = action.to_ascii_lowercase();
+                lower.contains("/secrets/") && !lower.contains("readmetadata")
+            });
+        assert!(
+            !has_azure_secret_read,
+            "{set_id} must not grant an Azure Key Vault secrets data action (beyond metadata)"
+        );
+
+        let azure_roles: Vec<String> = permission_set
+            .platforms
+            .azure
+            .as_ref()
+            .into_iter()
+            .flatten()
+            .flat_map(|permission| permission.grant.predefined_roles.as_deref().unwrap_or(&[]))
+            .map(|role| role.to_ascii_lowercase())
+            .collect();
+        for forbidden in FORBIDDEN_AZURE_ROLES {
+            assert!(
+                !azure_roles.iter().any(|role| role == forbidden),
+                "{set_id} must not grant the secret-reading Azure role '{forbidden}'"
+            );
+        }
+    }
 }

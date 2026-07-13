@@ -447,19 +447,15 @@ fn handle_child_exit(
         }
         Ok(status) => {
             let code = status.code().unwrap_or(-1);
-            error!(exit_code = code, "Application exited with error");
             Err(AlienError::new(ErrorData::ProcessFailed {
                 exit_code: Some(code),
                 message: format!("Application exited with code {}", code),
             }))
         }
-        Err(e) => {
-            error!(error = %e, "Failed to wait for application");
-            Err(AlienError::new(ErrorData::ProcessFailed {
-                exit_code: None,
-                message: format!("Failed to wait for process: {}", e),
-            }))
-        }
+        Err(e) => Err(AlienError::new(ErrorData::ProcessFailed {
+            exit_code: None,
+            message: format!("Failed to wait for process: {}", e),
+        })),
     }
 }
 

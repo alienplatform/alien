@@ -3,6 +3,7 @@
  */
 
 import { machinesCancelMachineDrain } from "../funcs/machinesCancelMachineDrain.js";
+import { machinesCreateJoinToken } from "../funcs/machinesCreateJoinToken.js";
 import { machinesDrainMachine } from "../funcs/machinesDrainMachine.js";
 import { machinesListInventory } from "../funcs/machinesListInventory.js";
 import { machinesListJoinTokens } from "../funcs/machinesListJoinTokens.js";
@@ -20,6 +21,17 @@ export class Machines extends ClientSDK {
     options?: RequestOptions,
   ): Promise<models.ListMachinesJoinTokensResponse> {
     return unwrapAsync(machinesListJoinTokens(
+      this,
+      request,
+      options,
+    ));
+  }
+
+  async createJoinToken(
+    request: operations.CreateMachinesJoinTokenRequest,
+    options?: RequestOptions,
+  ): Promise<models.CreateMachinesJoinTokenResponse> {
+    return unwrapAsync(machinesCreateJoinToken(
       this,
       request,
       options,

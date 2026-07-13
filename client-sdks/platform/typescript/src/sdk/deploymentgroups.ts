@@ -6,6 +6,7 @@ import { deploymentGroupsCreateDeploymentGroup } from "../funcs/deploymentGroups
 import { deploymentGroupsCreateDeploymentGroupToken } from "../funcs/deploymentGroupsCreateDeploymentGroupToken.js";
 import { deploymentGroupsCreateFirstPartyDeploymentSession } from "../funcs/deploymentGroupsCreateFirstPartyDeploymentSession.js";
 import { deploymentGroupsDeleteDeploymentGroup } from "../funcs/deploymentGroupsDeleteDeploymentGroup.js";
+import { deploymentGroupsEnsureDeploymentGroupByName } from "../funcs/deploymentGroupsEnsureDeploymentGroupByName.js";
 import { deploymentGroupsGetDeploymentGroup } from "../funcs/deploymentGroupsGetDeploymentGroup.js";
 import { deploymentGroupsListDeploymentGroups } from "../funcs/deploymentGroupsListDeploymentGroups.js";
 import { deploymentGroupsUpdateDeploymentGroup } from "../funcs/deploymentGroupsUpdateDeploymentGroup.js";
@@ -37,6 +38,20 @@ export class DeploymentGroups extends ClientSDK {
     options?: RequestOptions,
   ): Promise<models.DeploymentGroup> {
     return unwrapAsync(deploymentGroupsCreateDeploymentGroup(
+      this,
+      request,
+      options,
+    ));
+  }
+
+  /**
+   * Get or create a deployment group by project and name
+   */
+  async ensureDeploymentGroupByName(
+    request?: operations.EnsureDeploymentGroupByNameRequest | undefined,
+    options?: RequestOptions,
+  ): Promise<models.DeploymentGroup> {
+    return unwrapAsync(deploymentGroupsEnsureDeploymentGroupByName(
       this,
       request,
       options,

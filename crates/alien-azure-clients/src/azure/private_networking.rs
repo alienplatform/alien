@@ -243,6 +243,15 @@ pub trait PrivateNetworkingApi: Send + Sync + std::fmt::Debug {
         registration_enabled: bool,
     ) -> Result<OperationResult<()>>;
 
+    /// Deletes a zone's Virtual Network Link. Azure refuses to delete a private DNS zone that
+    /// still has links, so zone teardown removes the link first.
+    async fn delete_vnet_link(
+        &self,
+        resource_group: &str,
+        zone_name: &str,
+        link_name: &str,
+    ) -> Result<OperationResult<()>>;
+
     // ─── Private DNS Zone Group (child of the PE) ───
     async fn create_or_update_dns_zone_group(
         &self,
@@ -494,6 +503,37 @@ impl PrivateNetworkingApi for AzurePrivateNetworkingClient {
             .execute_request_with_long_running_support(
                 signed,
                 "CreateOrUpdateVirtualNetworkLink",
+                link_name,
+            )
+            .await
+    }
+
+    async fn delete_vnet_link(
+        &self,
+        resource_group: &str,
+        zone_name: &str,
+        link_name: &str,
+    ) -> Result<OperationResult<()>> {
+        let token = self
+            .token_cache
+            .get_bearer_token_with_scope(MANAGEMENT_SCOPE)
+            .await?;
+        let url = self.base.build_url(
+            &format!(
+                "{}/virtualNetworkLinks/{}",
+                self.private_dns_zone_path(resource_group, zone_name),
+                link_name
+            ),
+            Some(vec![("api-version", Self::PRIVATE_DNS_API_VERSION.into())]),
+        );
+        let req = AzureRequestBuilder::new(Method::DELETE, url)
+            .content_length("")
+            .build()?;
+        let signed = self.base.sign_request(req, &token).await?;
+        self.base
+            .execute_request_with_long_running_support(
+                signed,
+                "DeleteVirtualNetworkLink",
                 link_name,
             )
             .await

@@ -249,7 +249,9 @@ async fn runtime_shell_task(args: DebugShellArgs, ctx: ExecutionMode) -> Result<
         DebugSessionResponse::RuntimeTunnel(tunnel) => {
             run_runtime_shell(tunnel, &args.deployment).await
         }
-        DebugSessionResponse::RemoteExec(session) => run_remote_exec_attach(session).await,
+        DebugSessionResponse::RemoteExec(session) => {
+            run_remote_exec_attach(session, None, false).await
+        }
         _ => Err(AlienError::new(ErrorData::ApiRequestFailed {
             message: "Manager returned a non-runtime debug session for `alien debug shell`"
                 .to_string(),
@@ -281,7 +283,9 @@ async fn runtime_exec_task(args: DebugExecArgs, ctx: ExecutionMode) -> Result<()
         DebugSessionResponse::RuntimeTunnel(tunnel) => {
             run_runtime_exec(tunnel, args.cmd, args.timeout_seconds, args.json).await
         }
-        DebugSessionResponse::RemoteExec(session) => run_remote_exec_attach(session).await,
+        DebugSessionResponse::RemoteExec(session) => {
+            run_remote_exec_attach(session, Some(args.timeout_seconds), args.json).await
+        }
         _ => Err(AlienError::new(ErrorData::ApiRequestFailed {
             message: "Manager returned a non-runtime debug session for `alien debug exec`"
                 .to_string(),
@@ -607,7 +611,11 @@ fn runtime_ws_url(tunnel: &RuntimeTunnelDebugSession) -> Result<String> {
     ))
 }
 
-async fn run_remote_exec_attach(session: RemoteExecDebugSession) -> Result<()> {
+async fn run_remote_exec_attach(
+    session: RemoteExecDebugSession,
+    timeout_seconds: Option<u64>,
+    json: bool,
+) -> Result<()> {
     let ws_url = remote_exec_ws_url(&session)?;
     let (socket, _) = connect_async(ws_url.as_str())
         .await
@@ -646,8 +654,22 @@ async fn run_remote_exec_attach(session: RemoteExecDebugSession) -> Result<()> {
         let _ = sink.close().await;
     });
 
-    let mut exit_code = 255;
-    while let Some(incoming) = stream.next().await {
+    let mut exit_code = None;
+    let mut output = Vec::new();
+    let deadline = timeout_seconds
+        .map(|seconds| tokio::time::Instant::now() + std::time::Duration::from_secs(seconds));
+    loop {
+        let incoming = match deadline {
+            Some(deadline) => match tokio::time::timeout_at(deadline, stream.next()).await {
+                Ok(incoming) => incoming,
+                Err(_) => {
+                    writer.abort();
+                    return finish_remote_exec(&session, 124, output, true, json);
+                }
+            },
+            None => stream.next().await,
+        };
+        let Some(incoming) = incoming else { break };
         match incoming
             .into_alien_error()
             .context(ErrorData::ApiRequestFailed {
@@ -655,6 +677,10 @@ async fn run_remote_exec_attach(session: RemoteExecDebugSession) -> Result<()> {
                 url: Some(session.attach_url.clone()),
             })? {
             Message::Binary(bytes) => {
+                if json {
+                    output.extend_from_slice(&bytes);
+                    continue;
+                }
                 std::io::stdout()
                     .write_all(&bytes)
                     .into_alien_error()
@@ -669,8 +695,19 @@ async fn run_remote_exec_attach(session: RemoteExecDebugSession) -> Result<()> {
             }
             Message::Text(text) => {
                 if let Some(code) = parse_remote_exec_exit_code(&text) {
-                    exit_code = code;
+                    exit_code = Some(code);
                     break;
+                }
+                if let Some(message) = parse_remote_exec_error(&text) {
+                    writer.abort();
+                    return Err(AlienError::new(ErrorData::ApiRequestFailed {
+                        message,
+                        url: Some(session.attach_url.clone()),
+                    }));
+                }
+                if json {
+                    output.extend_from_slice(text.as_str().as_bytes());
+                    continue;
                 }
                 std::io::stdout()
                     .write_all(text.as_str().as_bytes())
@@ -689,6 +726,42 @@ async fn run_remote_exec_attach(session: RemoteExecDebugSession) -> Result<()> {
         }
     }
     writer.abort();
+    let Some(exit_code) = exit_code else {
+        return Err(AlienError::new(ErrorData::ApiRequestFailed {
+            message: "Remote exec session closed before reporting an exit status".to_string(),
+            url: Some(session.attach_url.clone()),
+        }));
+    };
+    finish_remote_exec(&session, exit_code, output, false, json)
+}
+
+fn finish_remote_exec(
+    session: &RemoteExecDebugSession,
+    exit_code: i32,
+    output: Vec<u8>,
+    timed_out: bool,
+    json: bool,
+) -> Result<()> {
+    if json {
+        #[derive(Serialize)]
+        #[serde(rename_all = "camelCase")]
+        struct RemoteExecJson<'a> {
+            session_id: &'a str,
+            exit_code: i32,
+            stdout_b64: String,
+            stderr_b64: String,
+            timed_out: bool,
+            output_truncated: bool,
+        }
+        crate::output::print_json(&RemoteExecJson {
+            session_id: &session.session_id,
+            exit_code,
+            stdout_b64: BASE64.encode(output),
+            stderr_b64: String::new(),
+            timed_out,
+            output_truncated: false,
+        })?;
+    }
     if exit_code != 0 {
         std::process::exit(exit_code);
     }
@@ -780,6 +853,14 @@ fn parse_remote_exec_exit_code(text: &str) -> Option<i32> {
         return None;
     }
     value["exitCode"].as_i64().map(|code| code as i32)
+}
+
+fn parse_remote_exec_error(text: &str) -> Option<String> {
+    let value: serde_json::Value = serde_json::from_str(text).ok()?;
+    if value["type"].as_str()? != "error" {
+        return None;
+    }
+    value["message"].as_str().map(str::to_string)
 }
 
 struct RawModeGuard;
@@ -1481,6 +1562,17 @@ mod tests {
         assert_eq!(
             parse_remote_exec_exit_code(&serde_json::json!({"type": "stdout"}).to_string()),
             None
+        );
+    }
+
+    #[test]
+    fn parse_remote_exec_error_reads_error_frame() {
+        assert_eq!(
+            parse_remote_exec_error(
+                &serde_json::json!({"type": "error", "message": "spawn failed"}).to_string()
+            )
+            .as_deref(),
+            Some("spawn failed")
         );
     }
 }

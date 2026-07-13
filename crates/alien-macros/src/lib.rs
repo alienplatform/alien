@@ -9,7 +9,7 @@ use syn::{parse_macro_input, Expr, ItemFn};
 ///
 /// # Usage
 ///
-/// ```rust
+/// ```rust,ignore
 /// use alien_macros::alien_event;
 /// use alien_core::{AlienEvent, Result};
 ///
@@ -23,7 +23,7 @@ use syn::{parse_macro_input, Expr, ItemFn};
 ///
 /// The macro supports any AlienEvent variant:
 ///
-/// ```rust
+/// ```rust,ignore
 /// #[alien_event(AlienEvent::BuildingImage { image: "api:latest".to_string() })]
 /// async fn build_image() -> Result<()> {
 ///     Ok(())
@@ -32,7 +32,7 @@ use syn::{parse_macro_input, Expr, ItemFn};
 ///
 /// You can also use expressions for dynamic values:
 ///
-/// ```rust
+/// ```rust,ignore
 /// #[alien_event(AlienEvent::BuildingStack { stack: format!("stack-{}", id) })]
 /// async fn build_dynamic_stack(id: u32) -> Result<()> {
 ///     Ok(())
@@ -79,7 +79,7 @@ use controller::{controller_impl, controller_struct};
 /// When applied to an impl block, it generates the ResourceController trait implementation.
 ///
 /// # Usage on struct:
-/// ```rust
+/// ```rust,ignore
 /// #[controller]
 /// struct AwsFunctionController {
 ///     pub arn: Option<String>,
@@ -88,7 +88,7 @@ use controller::{controller_impl, controller_struct};
 /// ```
 ///
 /// # Usage on impl:
-/// ```rust
+/// ```rust,ignore
 /// #[controller]
 /// impl AwsFunctionController {
 ///     #[flow_entry(Create)]

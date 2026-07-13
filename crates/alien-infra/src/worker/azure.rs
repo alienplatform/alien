@@ -486,7 +486,7 @@ impl AzureWorkerController {
             .wait_for_container_apps_environment_wake_retry(&func_cfg.id, "commands infrastructure")
         {
             return Ok(HandlerAction::Stay {
-                max_times: AZURE_RBAC_WAIT_MAX_ATTEMPTS,
+                max_times: Some(AZURE_RBAC_WAIT_MAX_ATTEMPTS),
                 suggested_delay: Some(delay),
             });
         }
@@ -521,7 +521,7 @@ impl AzureWorkerController {
                             "Azure authorization is not ready for commands infrastructure; retrying"
                         );
                         return Ok(HandlerAction::Stay {
-                            max_times: AZURE_RBAC_WAIT_MAX_ATTEMPTS,
+                            max_times: Some(AZURE_RBAC_WAIT_MAX_ATTEMPTS),
                             suggested_delay: Some(delay),
                         });
                     }
@@ -543,7 +543,7 @@ impl AzureWorkerController {
                             "Azure Container Apps Environment is waking; retrying commands infrastructure"
                         );
                         return Ok(HandlerAction::Stay {
-                            max_times: AZURE_RBAC_WAIT_MAX_ATTEMPTS,
+                            max_times: Some(AZURE_RBAC_WAIT_MAX_ATTEMPTS),
                             suggested_delay: Some(delay),
                         });
                     }
@@ -616,7 +616,7 @@ impl AzureWorkerController {
                 .map(Duration::from_secs)
                 .unwrap_or(Duration::from_secs(15));
             Ok(HandlerAction::Stay {
-                max_times: 100,
+                max_times: Some(100),
                 suggested_delay: Some(delay),
             })
         }
@@ -644,7 +644,7 @@ impl AzureWorkerController {
                 "Waiting for Azure RBAC propagation before creating Container App"
             );
             return Ok(HandlerAction::Stay {
-                max_times: AZURE_RBAC_WAIT_MAX_ATTEMPTS,
+                max_times: Some(AZURE_RBAC_WAIT_MAX_ATTEMPTS),
                 suggested_delay: Some(delay),
             });
         }
@@ -786,7 +786,7 @@ impl AzureWorkerController {
                 .map(Duration::from_secs)
                 .unwrap_or(Duration::from_secs(15));
             Ok(HandlerAction::Stay {
-                max_times: 100,
+                max_times: Some(100),
                 suggested_delay: Some(delay),
             })
         }
@@ -859,7 +859,7 @@ impl AzureWorkerController {
                         Some(ContainerAppPropertiesProvisioningState::InProgress) => {
                             debug!(name=%container_app_name, "Provisioning still in progress");
                             Ok(HandlerAction::Stay {
-                                max_times: 60,
+                                max_times: Some(60),
                                 suggested_delay: Some(Duration::from_secs(10)),
                             })
                         }
@@ -871,14 +871,14 @@ impl AzureWorkerController {
                             }))
                         }
                         _ => Ok(HandlerAction::Stay {
-                            max_times: 60,
+                            max_times: Some(60),
                             suggested_delay: Some(Duration::from_secs(10)),
                         }),
                     }
                 } else {
                     debug!(name=%container_app_name, "Properties missing – retry");
                     Ok(HandlerAction::Stay {
-                        max_times: 60,
+                        max_times: Some(60),
                         suggested_delay: Some(Duration::from_secs(10)),
                     })
                 }
@@ -891,7 +891,7 @@ impl AzureWorkerController {
             {
                 debug!(name=%container_app_name, "Resource not yet visible – retry");
                 Ok(HandlerAction::Stay {
-                    max_times: 60,
+                    max_times: Some(60),
                     suggested_delay: Some(Duration::from_secs(10)),
                 })
             }
@@ -944,7 +944,7 @@ impl AzureWorkerController {
                 }))
             }
             _ => Ok(HandlerAction::Stay {
-                max_times: 60,
+                max_times: Some(60),
                 suggested_delay: Some(Duration::from_secs(5)),
             }),
         }
@@ -1225,7 +1225,7 @@ impl AzureWorkerController {
                 }))
             }
             _ => Ok(HandlerAction::Stay {
-                max_times: 60,
+                max_times: Some(60),
                 suggested_delay: Some(Duration::from_secs(5)),
             }),
         }
@@ -1245,7 +1245,7 @@ impl AzureWorkerController {
             .wait_for_container_apps_environment_wake_retry(&func_cfg.id, "Dapr component creation")
         {
             return Ok(HandlerAction::Stay {
-                max_times: AZURE_RBAC_WAIT_MAX_ATTEMPTS,
+                max_times: Some(AZURE_RBAC_WAIT_MAX_ATTEMPTS),
                 suggested_delay: Some(delay),
             });
         }
@@ -1291,7 +1291,7 @@ impl AzureWorkerController {
                                         "Azure Container Apps Environment is waking; retrying Dapr component creation"
                                     );
                                     return Ok(HandlerAction::Stay {
-                                        max_times: AZURE_RBAC_WAIT_MAX_ATTEMPTS,
+                                        max_times: Some(AZURE_RBAC_WAIT_MAX_ATTEMPTS),
                                         suggested_delay: Some(delay),
                                     });
                                 }
@@ -1336,7 +1336,7 @@ impl AzureWorkerController {
                                         "Azure Container Apps Environment is waking; retrying Dapr component creation"
                                     );
                                     return Ok(HandlerAction::Stay {
-                                        max_times: AZURE_RBAC_WAIT_MAX_ATTEMPTS,
+                                        max_times: Some(AZURE_RBAC_WAIT_MAX_ATTEMPTS),
                                         suggested_delay: Some(delay),
                                     });
                                 }
@@ -1381,7 +1381,7 @@ impl AzureWorkerController {
                                         "Azure Container Apps Environment is waking; retrying Dapr component creation"
                                     );
                                     return Ok(HandlerAction::Stay {
-                                        max_times: AZURE_RBAC_WAIT_MAX_ATTEMPTS,
+                                        max_times: Some(AZURE_RBAC_WAIT_MAX_ATTEMPTS),
                                         suggested_delay: Some(delay),
                                     });
                                 }
@@ -1463,7 +1463,7 @@ impl AzureWorkerController {
                 .map(Duration::from_secs)
                 .unwrap_or(Duration::from_secs(15));
             Ok(HandlerAction::Stay {
-                max_times: 100,
+                max_times: Some(100),
                 suggested_delay: Some(delay),
             })
         }
@@ -1483,7 +1483,7 @@ impl AzureWorkerController {
             .wait_for_container_apps_environment_wake_retry(&func_cfg.id, "commands Dapr component")
         {
             return Ok(HandlerAction::Stay {
-                max_times: AZURE_RBAC_WAIT_MAX_ATTEMPTS,
+                max_times: Some(AZURE_RBAC_WAIT_MAX_ATTEMPTS),
                 suggested_delay: Some(delay),
             });
         }
@@ -1710,7 +1710,7 @@ impl AzureWorkerController {
                             "Azure Container Apps Environment is waking; retrying commands Dapr component"
                         );
                         return Ok(HandlerAction::Stay {
-                            max_times: AZURE_RBAC_WAIT_MAX_ATTEMPTS,
+                            max_times: Some(AZURE_RBAC_WAIT_MAX_ATTEMPTS),
                             suggested_delay: Some(delay),
                         });
                     }
@@ -1792,7 +1792,7 @@ impl AzureWorkerController {
                 .map(Duration::from_secs)
                 .unwrap_or(Duration::from_secs(15));
             Ok(HandlerAction::Stay {
-                max_times: 100,
+                max_times: Some(100),
                 suggested_delay: Some(delay),
             })
         }
@@ -1847,7 +1847,7 @@ impl AzureWorkerController {
             Err(_) => {
                 // Probe failed, let the framework handle retries
                 Ok(HandlerAction::Stay {
-                    max_times: READINESS_PROBE_MAX_ATTEMPTS as u32,
+                    max_times: Some(READINESS_PROBE_MAX_ATTEMPTS as u32),
                     suggested_delay: Some(Duration::from_secs(5)),
                 })
             }
@@ -1933,7 +1933,7 @@ impl AzureWorkerController {
                 "Waiting for Azure RBAC propagation before marking worker Ready"
             );
             return Ok(HandlerAction::Stay {
-                max_times: AZURE_RBAC_WAIT_MAX_ATTEMPTS,
+                max_times: Some(AZURE_RBAC_WAIT_MAX_ATTEMPTS),
                 suggested_delay: Some(delay),
             });
         }
@@ -2297,7 +2297,7 @@ impl AzureWorkerController {
                 .map(Duration::from_secs)
                 .unwrap_or(Duration::from_secs(15));
             Ok(HandlerAction::Stay {
-                max_times: 100,
+                max_times: Some(100),
                 suggested_delay: Some(delay),
             })
         }
@@ -2353,7 +2353,7 @@ impl AzureWorkerController {
                 }
                 Some(ContainerAppPropertiesProvisioningState::InProgress) => {
                     Ok(HandlerAction::Stay {
-                        max_times: 60,
+                        max_times: Some(60),
                         suggested_delay: Some(Duration::from_secs(10)),
                     })
                 }
@@ -2364,13 +2364,13 @@ impl AzureWorkerController {
                     }))
                 }
                 _ => Ok(HandlerAction::Stay {
-                    max_times: 60,
+                    max_times: Some(60),
                     suggested_delay: Some(Duration::from_secs(10)),
                 }),
             }
         } else {
             Ok(HandlerAction::Stay {
-                max_times: 60,
+                max_times: Some(60),
                 suggested_delay: Some(Duration::from_secs(10)),
             })
         }
@@ -2391,7 +2391,7 @@ impl AzureWorkerController {
             "Dapr component update",
         ) {
             return Ok(HandlerAction::Stay {
-                max_times: AZURE_RBAC_WAIT_MAX_ATTEMPTS,
+                max_times: Some(AZURE_RBAC_WAIT_MAX_ATTEMPTS),
                 suggested_delay: Some(delay),
             });
         }
@@ -2448,7 +2448,7 @@ impl AzureWorkerController {
                                             "Azure Container Apps Environment is waking; retrying Dapr component update"
                                         );
                                         return Ok(HandlerAction::Stay {
-                                            max_times: AZURE_RBAC_WAIT_MAX_ATTEMPTS,
+                                            max_times: Some(AZURE_RBAC_WAIT_MAX_ATTEMPTS),
                                             suggested_delay: Some(delay),
                                         });
                                     }
@@ -2492,7 +2492,7 @@ impl AzureWorkerController {
                                             "Azure Container Apps Environment is waking; retrying Dapr component update"
                                         );
                                         return Ok(HandlerAction::Stay {
-                                            max_times: AZURE_RBAC_WAIT_MAX_ATTEMPTS,
+                                            max_times: Some(AZURE_RBAC_WAIT_MAX_ATTEMPTS),
                                             suggested_delay: Some(delay),
                                         });
                                     }
@@ -2536,7 +2536,7 @@ impl AzureWorkerController {
                                             "Azure Container Apps Environment is waking; retrying Dapr component update"
                                         );
                                         return Ok(HandlerAction::Stay {
-                                            max_times: AZURE_RBAC_WAIT_MAX_ATTEMPTS,
+                                            max_times: Some(AZURE_RBAC_WAIT_MAX_ATTEMPTS),
                                             suggested_delay: Some(delay),
                                         });
                                     }
@@ -2622,7 +2622,7 @@ impl AzureWorkerController {
                 .map(Duration::from_secs)
                 .unwrap_or(Duration::from_secs(15));
             Ok(HandlerAction::Stay {
-                max_times: 100,
+                max_times: Some(100),
                 suggested_delay: Some(delay),
             })
         }
@@ -2665,7 +2665,7 @@ impl AzureWorkerController {
             Err(_) => {
                 // Probe failed, let the framework handle retries
                 Ok(HandlerAction::Stay {
-                    max_times: READINESS_PROBE_MAX_ATTEMPTS as u32,
+                    max_times: Some(READINESS_PROBE_MAX_ATTEMPTS as u32),
                     suggested_delay: Some(Duration::from_secs(5)),
                 })
             }
@@ -2694,7 +2694,7 @@ impl AzureWorkerController {
                 "Waiting for Azure RBAC propagation before completing worker update"
             );
             return Ok(HandlerAction::Stay {
-                max_times: AZURE_RBAC_WAIT_MAX_ATTEMPTS,
+                max_times: Some(AZURE_RBAC_WAIT_MAX_ATTEMPTS),
                 suggested_delay: Some(delay),
             });
         }
@@ -3014,7 +3014,7 @@ impl AzureWorkerController {
                 .map(Duration::from_secs)
                 .unwrap_or(Duration::from_secs(15));
             Ok(HandlerAction::Stay {
-                max_times: 60,
+                max_times: Some(60),
                 suggested_delay: Some(delay),
             })
         }
@@ -3063,7 +3063,7 @@ impl AzureWorkerController {
             Ok(_) => {
                 debug!(name=%container_app_name, "Container app still exists – retry");
                 Ok(HandlerAction::Stay {
-                    max_times: 60,
+                    max_times: Some(60),
                     suggested_delay: Some(Duration::from_secs(15)),
                 })
             }
@@ -3202,7 +3202,7 @@ impl AzureWorkerController {
                 .map(Duration::from_secs)
                 .unwrap_or(Duration::from_secs(15));
             Ok(HandlerAction::Stay {
-                max_times: 60,
+                max_times: Some(60),
                 suggested_delay: Some(delay),
             })
         }

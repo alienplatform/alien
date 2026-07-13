@@ -23,6 +23,10 @@ pub struct AzureNetworkImportData {
     /// Dedicated subnet name for classic Azure Application Gateway ingress.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub application_gateway_subnet_name: Option<String>,
+    /// Dedicated subnet name for Private Endpoints (e.g. Postgres Flexible Server). Distinct from
+    /// the Container Apps infrastructure ("private") subnet, which a Private Endpoint cannot share.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub private_endpoint_subnet_name: Option<String>,
     /// NAT gateway resource id when one was created.
     pub nat_gateway_id: Option<String>,
     /// Network Security Group resource id attached to workload subnets.

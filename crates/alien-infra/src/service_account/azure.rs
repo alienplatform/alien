@@ -278,7 +278,7 @@ impl AzureServiceAccountController {
                 "Waiting for Azure managed identity propagation"
             );
             return Ok(HandlerAction::Stay {
-                max_times: AZURE_RBAC_WAIT_MAX_ATTEMPTS,
+                max_times: Some(AZURE_RBAC_WAIT_MAX_ATTEMPTS),
                 suggested_delay: Some(delay),
             });
         }
@@ -580,7 +580,7 @@ impl AzureServiceAccountController {
                 "Waiting for Azure role assignment propagation"
             );
             return Ok(HandlerAction::Stay {
-                max_times: AZURE_RBAC_WAIT_MAX_ATTEMPTS,
+                max_times: Some(AZURE_RBAC_WAIT_MAX_ATTEMPTS),
                 suggested_delay: Some(delay),
             });
         }
@@ -768,7 +768,7 @@ impl AzureServiceAccountController {
                 "Waiting for Azure role assignment propagation after update"
             );
             return Ok(HandlerAction::Stay {
-                max_times: AZURE_RBAC_WAIT_MAX_ATTEMPTS,
+                max_times: Some(AZURE_RBAC_WAIT_MAX_ATTEMPTS),
                 suggested_delay: Some(delay),
             });
         }

@@ -837,7 +837,7 @@ fn render_management_config(
             oidc_issuer: String::new(),
             oidc_subject: String::new(),
         })),
-        Platform::Kubernetes | Platform::Local | Platform::Test => None,
+        Platform::Kubernetes | Platform::Machines | Platform::Local | Platform::Test => None,
     }
 }
 

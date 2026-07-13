@@ -260,6 +260,19 @@ pub fn create_update_failed_function_state(id: &str) -> StackResourceState {
     state
 }
 
+/// Create a refresh-failed function state for testing.
+pub fn create_refresh_failed_function_state(id: &str) -> StackResourceState {
+    let func = test_function(id);
+    let mut state = StackResourceState::new_pending(
+        Worker::RESOURCE_TYPE.to_string(),
+        Resource::new(func),
+        Some(ResourceLifecycle::Live),
+        vec![],
+    );
+    state.status = ResourceStatus::RefreshFailed;
+    state
+}
+
 /// Create a state with specified resources already running.
 pub fn create_state_with_running(resources: Vec<(&str, ResourceLifecycle)>) -> StackState {
     let mut state = new_test_state();

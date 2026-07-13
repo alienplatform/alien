@@ -12,6 +12,12 @@ import {
   CustomDomainConfig$outboundSchema,
 } from "./customdomainconfig.js";
 import { SDKValidationError } from "./errors/sdkvalidationerror.js";
+import {
+  PublicEndpointTargetSettings,
+  PublicEndpointTargetSettings$inboundSchema,
+  PublicEndpointTargetSettings$Outbound,
+  PublicEndpointTargetSettings$outboundSchema,
+} from "./publicendpointtargetsettings.js";
 
 /**
  * Domain configuration for the stack.
@@ -26,6 +32,7 @@ export type DomainSettings = {
    * Custom domain configuration per resource ID.
    */
   customDomains?: { [k: string]: CustomDomainConfig } | null | undefined;
+  publicEndpointTarget?: PublicEndpointTargetSettings | null | undefined;
 };
 
 /** @internal */
@@ -34,11 +41,17 @@ export const DomainSettings$inboundSchema: z.ZodType<DomainSettings, unknown> =
     customDomains: z.nullable(
       z.record(z.string(), CustomDomainConfig$inboundSchema),
     ).optional(),
+    publicEndpointTarget: z.nullable(PublicEndpointTargetSettings$inboundSchema)
+      .optional(),
   });
 /** @internal */
 export type DomainSettings$Outbound = {
   customDomains?:
     | { [k: string]: CustomDomainConfig$Outbound }
+    | null
+    | undefined;
+  publicEndpointTarget?:
+    | PublicEndpointTargetSettings$Outbound
     | null
     | undefined;
 };
@@ -51,6 +64,8 @@ export const DomainSettings$outboundSchema: z.ZodType<
   customDomains: z.nullable(
     z.record(z.string(), CustomDomainConfig$outboundSchema),
   ).optional(),
+  publicEndpointTarget: z.nullable(PublicEndpointTargetSettings$outboundSchema)
+    .optional(),
 });
 
 export function domainSettingsToJSON(domainSettings: DomainSettings): string {

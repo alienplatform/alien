@@ -178,7 +178,7 @@ run();
 
 ### Response
 
-**Promise\<[operations.CreateDeploymentResponse](../../models/operations/createdeploymentresponse.md)\>**
+**Promise\<[models.CreateDeploymentResponse](../../models/createdeploymentresponse.md)\>**
 
 ### Errors
 

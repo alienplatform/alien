@@ -1,6 +1,6 @@
 {
   "name": "@alienplatform/core",
-  "version": "1.11.2",
+  "version": "1.14.1",
   "type": "module",
   "exports": {
     ".": {
@@ -45,7 +45,7 @@
     "@types/node": "^24.0.15",
     "tsdown": "^0.13.0",
     "typescript": "^5.8.3",
-    "vitest": "^3.1.4"
+    "vitest": "^3.2.7"
   },
   "dependencies": {
     "@openapi-contrib/json-schema-to-openapi-schema": "^4.0.0",

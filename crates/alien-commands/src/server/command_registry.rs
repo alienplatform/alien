@@ -24,7 +24,11 @@ use uuid::Uuid;
 pub struct CommandMetadata {
     /// Unique command ID
     pub command_id: String,
-    /// How to dispatch the command (Push or Pull)
+    /// How to deliver this command: platform push transport or pull leases.
+    ///
+    /// This field is currently encoded with `DeploymentModel` for compatibility,
+    /// but it is command delivery metadata, not the deployment reconciliation
+    /// model for the target environment.
     pub deployment_model: DeploymentModel,
     /// Project ID for routing/authorization
     pub project_id: String,
@@ -39,6 +43,7 @@ pub struct CommandEnvelopeData {
     pub attempt: u32,
     pub deadline: Option<DateTime<Utc>>,
     pub state: CommandState,
+    /// Command delivery mode encoded with `DeploymentModel` for compatibility.
     pub deployment_model: DeploymentModel,
 }
 
@@ -87,7 +92,7 @@ struct CommandRecord {
 pub trait CommandRegistry: Send + Sync {
     /// Create a new command and return metadata for routing.
     ///
-    /// The registry generates the command_id, determines the deployment_model,
+    /// The registry generates the command_id, determines command delivery mode,
     /// and stores all metadata (state, timestamps, etc.).
     async fn create_command(
         &self,

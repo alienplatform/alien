@@ -11,11 +11,11 @@ resource health comes from inventory and resource heartbeat data.
 ```typescript
 import { SyncAcquireResponseStatus } from "@alienplatform/platform-api/models";
 
-let value: SyncAcquireResponseStatus = "refresh-failed";
+let value: SyncAcquireResponseStatus = "running";
 ```
 
 ## Values
 
 ```typescript
-"pending" | "preflights-failed" | "initial-setup" | "initial-setup-failed" | "provisioning" | "provisioning-failed" | "running" | "refresh-failed" | "update-pending" | "updating" | "update-failed" | "delete-pending" | "deleting" | "delete-failed" | "teardown-required" | "teardown-failed" | "deleted" | "error"
+"pending" | "preflights-failed" | "initial-setup" | "initial-setup-failed" | "provisioning" | "waiting-for-machines" | "provisioning-failed" | "running" | "refresh-failed" | "update-pending" | "updating" | "update-failed" | "delete-pending" | "deleting" | "delete-failed" | "teardown-required" | "teardown-failed" | "deleted" | "error"
 ```

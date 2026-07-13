@@ -859,12 +859,14 @@ async fn create_deployment_task(
             Some(variables)
         },
         manager_id: None,
+        operator_permission: None,
+        operator_scope: None,
         pinned_release_id: None,
-        public_subdomain: None,
         environment_info: None,
         input_values: std::collections::HashMap::new(),
-        operator_scope: None,
-        operator_permission: None,
+        public_subdomain: None,
+        initial_desired_release:
+            alien_platform_api::types::NewDeploymentRequestInitialDesiredRelease::Active,
         setup_method: None,
         setup_metadata: None,
     };

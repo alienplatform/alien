@@ -29,8 +29,9 @@ use alien_deployment::{
 use alien_error::{AlienError, Context, ContextError, IntoAlienError};
 use alien_infra::ClientConfigExt;
 use alien_manager_api::{Client as ServerClient, SdkResultExt as ManagerSdkResultExt};
+use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine as _};
 use clap::Parser;
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use std::{
     collections::{BTreeSet, HashMap},
     io::{IsTerminal, Write},
@@ -95,10 +96,6 @@ pub struct UpArgs {
     /// Deployment name (for tracking)
     #[arg(long)]
     pub name: Option<String>,
-
-    /// Optional generated-domain subdomain for this deployment.
-    #[arg(long)]
-    pub subdomain: Option<String>,
 
     /// Encryption key for operator database (required for pull model)
     #[arg(long, env = "OPERATOR_ENCRYPTION_KEY")]
@@ -174,8 +171,6 @@ pub struct UpArgs {
 struct DeployConfigFile {
     /// Deployment name.
     name: Option<String>,
-    /// Optional generated-domain subdomain.
-    public_subdomain: Option<String>,
     /// Target platform: aws, gcp, azure, kubernetes, machines, or local.
     platform: Option<String>,
     /// Base cloud platform when `platform = "kubernetes"`.
@@ -296,20 +291,196 @@ mod tests {
     }
 
     #[test]
-    fn machines_join_guidance_prints_future_join_command() {
+    fn deployment_readiness_not_ready_blocks_with_check_codes() {
+        let info = DeploymentInfoResponse {
+            setup_config: None,
+            readiness: Some(DeploymentReadiness {
+                status: "notReady".to_string(),
+                checks: vec![
+                    DeploymentReadinessCheck {
+                        code: "MACHINE_BUNDLE_ARTIFACTS".to_string(),
+                        status: "failed".to_string(),
+                        message: "Machine bundle manifest is missing linux-x64.".to_string(),
+                    },
+                    DeploymentReadinessCheck {
+                        code: "MANAGER_ACQUIRES_PLATFORM".to_string(),
+                        status: "passed".to_string(),
+                        message: "A machines-capable manager is ready.".to_string(),
+                    },
+                ],
+            }),
+        };
+
+        let error = validate_deployment_readiness(&info, Platform::Machines)
+            .expect_err("notReady readiness must block the deploy");
+        assert!(error.message.contains("machines deployments are not ready"));
+        assert!(error.message.contains("MACHINE_BUNDLE_ARTIFACTS"));
+        assert!(!error.message.contains("MANAGER_ACQUIRES_PLATFORM"));
+    }
+
+    #[test]
+    fn deployment_readiness_unknown_checks_do_not_block() {
+        let info = DeploymentInfoResponse {
+            setup_config: None,
+            readiness: Some(DeploymentReadiness {
+                status: "unknown".to_string(),
+                checks: vec![DeploymentReadinessCheck {
+                    code: "MACHINES_HORIZON_CONTROL_PLANE_REACHABLE".to_string(),
+                    status: "unknown".to_string(),
+                    message: "Horizon control plane reachability could not be confirmed."
+                        .to_string(),
+                }],
+            }),
+        };
+
+        validate_deployment_readiness(&info, Platform::Machines)
+            .expect("unknown readiness must not block the deploy");
+    }
+
+    #[test]
+    fn absent_readiness_does_not_block() {
+        let info = DeploymentInfoResponse {
+            setup_config: None,
+            readiness: None,
+        };
+
+        validate_deployment_readiness(&info, Platform::Machines)
+            .expect("absent readiness document must not block the deploy");
+    }
+
+    #[test]
+    fn machines_join_guidance_uses_install_script_when_available() {
         assert_eq!(
-            machines_join_command("alien-deploy"),
-            "sudo alien-deploy join --token <join-token>"
+            machines_join_command(
+                "acmectl",
+                Some("https://packages.example.com/ws/prj/install.sh"),
+                "aj1_wrapped-token"
+            ),
+            "curl -fsSL 'https://packages.example.com/ws/prj/install.sh' | sudo bash -s -- join --token 'aj1_wrapped-token'"
         );
     }
 
     #[test]
-    fn machines_deploy_defaults_to_pull_model() {
+    fn machines_join_guidance_shell_quotes_install_script_and_token() {
+        assert_eq!(
+            machines_join_command(
+                "alien-deploy",
+                Some("https://packages.example.com/ws/prj/install script.sh"),
+                "aj1_token'with-quote"
+            ),
+            "curl -fsSL 'https://packages.example.com/ws/prj/install script.sh' | sudo bash -s -- join --token 'aj1_token'\"'\"'with-quote'"
+        );
+    }
+
+    #[test]
+    fn machines_join_guidance_falls_back_to_installed_cli_without_install_script() {
+        assert_eq!(
+            machines_join_command("acmectl", None, "aj1_wrapped-token"),
+            "sudo acmectl join --token 'aj1_wrapped-token'"
+        );
+    }
+
+    #[test]
+    fn machines_join_token_response_preserves_wrapped_token() {
+        let token = normalize_machines_join_token_response(MachinesJoinTokenResponse {
+            join_token: " aj1_wrapped-token ".to_string(),
+            control_plane_url: Some("https://horizon.example.com".to_string()),
+            cluster_id: Some("cluster-123".to_string()),
+        })
+        .expect("wrapped token should be accepted");
+
+        assert_eq!(token, "aj1_wrapped-token");
+    }
+
+    #[test]
+    fn machines_join_token_response_wraps_raw_token_with_context() {
+        let token = normalize_machines_join_token_response(MachinesJoinTokenResponse {
+            join_token: " hj_secret ".to_string(),
+            control_plane_url: Some(" https://horizon.example.com ".to_string()),
+            cluster_id: Some(" cluster-123 ".to_string()),
+        })
+        .expect("raw token with context should be wrapped");
+
+        assert!(token.starts_with("aj1_"));
+        let payload = URL_SAFE_NO_PAD
+            .decode(token.trim_start_matches("aj1_"))
+            .expect("wrapped token should be base64url");
+        let payload: serde_json::Value =
+            serde_json::from_slice(&payload).expect("wrapped token should be JSON");
+        assert_eq!(payload["joinToken"], "hj_secret");
+        assert_eq!(payload["controlPlaneUrl"], "https://horizon.example.com");
+        assert_eq!(payload["clusterId"], "cluster-123");
+    }
+
+    #[test]
+    fn machines_join_token_response_rejects_raw_token_without_context() {
+        let error = normalize_machines_join_token_response(MachinesJoinTokenResponse {
+            join_token: "hj_secret".to_string(),
+            control_plane_url: None,
+            cluster_id: Some("cluster-123".to_string()),
+        })
+        .expect_err("raw token should require context");
+
+        assert_eq!(error.code, "CONFIGURATION_ERROR");
+        assert!(error.message.contains("without control plane context"));
+    }
+
+    #[test]
+    fn machines_deploy_prints_only_join_command() {
+        assert!(!should_print_deploy_progress(Platform::Machines));
+    }
+
+    #[test]
+    fn machines_push_setup_suppresses_neutral_completion_message() {
+        assert!(!should_print_push_setup_neutral_completion(
+            Platform::Machines
+        ));
+        assert!(should_print_push_setup_neutral_completion(Platform::Aws));
+    }
+
+    #[test]
+    fn machines_push_setup_does_not_collect_cloud_environment() {
+        assert!(!should_collect_push_setup_environment_info(
+            Platform::Machines
+        ));
+        assert!(should_collect_push_setup_environment_info(Platform::Aws));
+        assert!(should_collect_push_setup_environment_info(
+            Platform::Kubernetes
+        ));
+    }
+
+    #[test]
+    fn non_machines_deploy_prints_progress() {
+        assert!(should_print_deploy_progress(Platform::Aws));
+        assert!(should_print_deploy_progress(Platform::Local));
+    }
+
+    #[test]
+    fn load_stack_settings_omits_server_owned_deployment_model() {
         let args = UpArgs::parse_from(["alien-deploy", "--platform", "machines"]);
         let settings =
             load_stack_settings(&args, Platform::Machines, None).expect("settings should load");
 
-        assert_eq!(settings.deployment_model, DeploymentModel::Pull);
+        let wire = serde_json::to_value(settings).expect("settings should serialize");
+        assert_eq!(wire.get("deploymentModel"), None);
+    }
+
+    #[test]
+    fn sdk_stack_settings_serializes_explicit_deployment_model() {
+        let settings = StackSettings {
+            deployment_model: DeploymentModel::Pull,
+            ..StackSettings::default()
+        };
+
+        let wire = serde_json::to_value(
+            sdk_stack_settings(&settings).expect("settings should convert to SDK type"),
+        )
+        .expect("settings should serialize");
+
+        assert_eq!(
+            wire.get("deploymentModel"),
+            Some(&serde_json::json!("pull"))
+        );
     }
 
     #[test]
@@ -340,49 +511,6 @@ mod tests {
 
         assert_eq!(local.data_dir, "/tmp/alien-foreground-state");
         assert!(!local.service_managed);
-    }
-
-    #[test]
-    fn public_subdomain_flag_is_validated() {
-        let args = UpArgs::parse_from(["alien-deploy", "--platform", "aws", "--subdomain", "fr"]);
-        let subdomain = resolve_public_subdomain(&args, None)
-            .expect("valid subdomain should parse")
-            .expect("subdomain should be present");
-        assert_eq!(subdomain, "fr");
-
-        let args = UpArgs::parse_from(["alien-deploy", "--platform", "aws", "--subdomain", "API"]);
-        let error = resolve_public_subdomain(&args, None).expect_err("uppercase should fail");
-        assert_eq!(error.code, "VALIDATION_ERROR");
-    }
-
-    #[test]
-    fn public_subdomain_flag_overrides_config() {
-        let mut file = tempfile::NamedTempFile::new().expect("temp config should be created");
-        writeln!(
-            file,
-            r#"
-name = "prod"
-platform = "aws"
-publicSubdomain = "old"
-"#
-        )
-        .expect("config should be written");
-
-        let args = UpArgs::parse_from([
-            "alien-deploy",
-            "--config",
-            file.path().to_str().expect("temp path should be UTF-8"),
-            "--subdomain",
-            "fr",
-        ]);
-        let config = load_deploy_config(&args)
-            .expect("config should load")
-            .expect("config should exist");
-
-        let subdomain = resolve_public_subdomain(&args, Some(&config))
-            .expect("subdomain should parse")
-            .expect("subdomain should be present");
-        assert_eq!(subdomain, "fr");
     }
 
     #[test]
@@ -854,7 +982,6 @@ pub async fn up_command(args: UpArgs, embedded_config: Option<&DeployCliConfig>)
     let platform_str = resolved.platform;
     let base_platform_str = resolved.base_platform;
     let name = resolved.name;
-    let public_subdomain = resolved.public_subdomain;
 
     let platform = Platform::from_str(&platform_str).map_err(|e| {
         AlienError::new(ErrorData::ValidationError {
@@ -862,18 +989,23 @@ pub async fn up_command(args: UpArgs, embedded_config: Option<&DeployCliConfig>)
             message: e,
         })
     })?;
+    let print_progress = should_print_deploy_progress(platform);
     let base_platform = parse_base_platform(platform, base_platform_str.as_deref())?;
     let public_endpoints = load_public_endpoints(&args, platform, deploy_config.as_ref())?;
-    let deployer_inputs = fetch_deployer_inputs(&resolved.base_url, &token, platform)
-        .await
-        .unwrap_or_else(|error| {
+    let deployer_inputs = match fetch_deployment_info(&resolved.base_url, &token, platform).await {
+        Ok(info) => {
+            validate_deployment_readiness(&info, platform)?;
+            deployer_inputs_from_info(&info, platform)
+        }
+        Err(error) => {
             if !args.input_values.is_empty() || !args.secret_input_values.is_empty() {
                 output::warn(&format!(
                     "Could not load stack input metadata; the platform API will validate supplied inputs: {error}"
                 ));
             }
             Vec::new()
-        });
+        }
+    };
     let stack_input_values = collect_deployer_input_values(
         &deployer_inputs,
         &args.input_values,
@@ -895,7 +1027,9 @@ pub async fn up_command(args: UpArgs, embedded_config: Option<&DeployCliConfig>)
     let install_context_platform_str = install_context_platform.as_str().to_string();
     let (manager_url, install_management_config) =
         if requires_install_context(install_context_platform) {
-            output::info("Resolving deployment install context via platform API...");
+            if print_progress {
+                output::info("Resolving deployment install context via platform API...");
+            }
             let context = discover_manager_install_context(
                 &resolved.base_url,
                 &token,
@@ -913,7 +1047,9 @@ pub async fn up_command(args: UpArgs, embedded_config: Option<&DeployCliConfig>)
             match resolved.manager_url {
                 Some(url) => (url, None),
                 None => {
-                    output::info("Discovering manager via platform API...");
+                    if print_progress {
+                        output::info("Discovering manager via platform API...");
+                    }
                     let context = discover_manager_install_context(
                         &resolved.base_url,
                         &token,
@@ -925,24 +1061,23 @@ pub async fn up_command(args: UpArgs, embedded_config: Option<&DeployCliConfig>)
             }
         };
 
-    let banner_title = embedded_config
-        .and_then(|c| c.display_name.as_deref())
-        .unwrap_or("Alien Deploy");
-    output::banner(banner_title);
-    output::label_value("Platform", display_platform);
-    if let Some(base_platform) = base_platform {
-        output::label_value("Base platform", base_platform.as_str());
+    if print_progress {
+        let banner_title = embedded_config
+            .and_then(|c| c.display_name.as_deref())
+            .unwrap_or("Alien Deploy");
+        output::banner(banner_title);
+        output::label_value("Platform", display_platform);
+        if let Some(base_platform) = base_platform {
+            output::label_value("Base platform", base_platform.as_str());
+        }
+        output::label_value("Manager", &manager_url);
+        output::label_value("Name", &name);
+        if let Some(public_endpoints) = public_endpoints.as_ref() {
+            let endpoint_count: usize = public_endpoints.values().map(HashMap::len).sum();
+            output::label_value("Public endpoints", &endpoint_count.to_string());
+        }
+        eprintln!();
     }
-    output::label_value("Manager", &manager_url);
-    output::label_value("Name", &name);
-    if let Some(public_subdomain) = public_subdomain.as_ref() {
-        output::label_value("Public subdomain", public_subdomain);
-    }
-    if let Some(public_endpoints) = public_endpoints.as_ref() {
-        let endpoint_count: usize = public_endpoints.values().map(HashMap::len).sum();
-        output::label_value("Public endpoints", &endpoint_count.to_string());
-    }
-    eprintln!();
 
     let stack_settings = load_stack_settings(&args, platform, deploy_config.as_ref())?;
 
@@ -956,13 +1091,14 @@ pub async fn up_command(args: UpArgs, embedded_config: Option<&DeployCliConfig>)
         platform,
         base_platform,
         &name,
-        public_subdomain,
         &stack_settings,
         stack_input_values,
     )
     .await?;
     let deployment_id = init.deployment_id;
-    output::success("Connected to manager");
+    if print_progress {
+        output::success("Connected to manager");
+    }
 
     // Use deployment-scoped token if the manager returned one, otherwise keep the original.
     let effective_token = init.deployment_token.unwrap_or_else(|| token.clone());
@@ -1009,7 +1145,10 @@ pub async fn up_command(args: UpArgs, embedded_config: Option<&DeployCliConfig>)
         validate_public_endpoint_names(public_endpoints, &stack)?;
     }
 
-    if current_deployment.status == "running" && public_endpoints.is_none() {
+    if current_deployment.status == "running"
+        && public_endpoints.is_none()
+        && platform != Platform::Machines
+    {
         eprintln!();
         output::success(&format!("Deployment '{}' is already active.", name));
         return Ok(());
@@ -1019,8 +1158,8 @@ pub async fn up_command(args: UpArgs, embedded_config: Option<&DeployCliConfig>)
         );
     }
 
-    match (platform, base_platform) {
-        (Platform::Local, _) | (Platform::Kubernetes, None) => {
+    match init.deployment_model {
+        DeploymentModel::Pull => {
             run_pull_model(
                 &client,
                 &args,
@@ -1035,42 +1174,75 @@ pub async fn up_command(args: UpArgs, embedded_config: Option<&DeployCliConfig>)
             )
             .await?;
         }
-        (Platform::Aws | Platform::Gcp | Platform::Azure, _) | (Platform::Kubernetes, Some(_)) => {
-            // Build progress callback
-            let progress =
-                std::sync::Arc::new(std::sync::Mutex::new(output::DeployProgress::new()));
-            let progress_clone = progress.clone();
-            let on_progress: alien_deployment::runner::ProgressCallback =
-                Box::new(move |step_progress| {
-                    let mut p = progress_clone.lock().unwrap_or_else(|e| e.into_inner());
-                    p.update(step_progress);
-                });
+        DeploymentModel::Push => match platform {
+            Platform::Machines => {
+                push_initial_setup(
+                    &client,
+                    &deployment_id,
+                    platform,
+                    base_platform,
+                    ClientConfig::Machines,
+                    install_management_config,
+                    &manager_url,
+                    &effective_token,
+                    None,
+                    None,
+                )
+                .await?;
 
-            run_push_model(
-                &client,
-                &deployment_id,
-                platform,
-                base_platform,
-                &manager_url,
-                &effective_token,
-                install_management_config,
-                &args.network,
-                Some(on_progress),
-            )
-            .await?;
+                let join_token = create_machines_join_token(
+                    &resolved.base_url,
+                    &effective_token,
+                    &deployment_id,
+                )
+                .await?;
+                let cli_name = embedded_config
+                    .and_then(|config| config.name.as_deref())
+                    .unwrap_or("alien-deploy");
+                let install_script_url =
+                    embedded_config.and_then(|config| config.install_script_url.as_deref());
+                println!(
+                    "{}",
+                    machines_join_command(cli_name, install_script_url, &join_token)
+                );
+                return Ok(());
+            }
+            Platform::Test => {
+                output::info("Test platform — no deployment action needed.");
+            }
+            Platform::Aws
+            | Platform::Gcp
+            | Platform::Azure
+            | Platform::Kubernetes
+            | Platform::Local => {
+                // Build progress callback
+                let progress =
+                    std::sync::Arc::new(std::sync::Mutex::new(output::DeployProgress::new()));
+                let progress_clone = progress.clone();
+                let on_progress: alien_deployment::runner::ProgressCallback =
+                    Box::new(move |step_progress| {
+                        let mut p = progress_clone.lock().unwrap_or_else(|e| e.into_inner());
+                        p.update(step_progress);
+                    });
 
-            // Clear the live progress display
-            let mut p = progress.lock().unwrap_or_else(|e| e.into_inner());
-            p.finish();
-        }
-        (Platform::Machines, _) => {
-            output::success("Deployment registered.");
-            output::label_value("Join command", &machines_join_command(banner_title));
-            output::info("Create a join token for this deployment, then run the command on each machine you want to add.");
-        }
-        (Platform::Test, _) => {
-            output::info("Test platform — no deployment action needed.");
-        }
+                run_push_model(
+                    &client,
+                    &deployment_id,
+                    platform,
+                    base_platform,
+                    &manager_url,
+                    &effective_token,
+                    install_management_config,
+                    &args.network,
+                    Some(on_progress),
+                )
+                .await?;
+
+                // Clear the live progress display
+                let mut p = progress.lock().unwrap_or_else(|e| e.into_inner());
+                p.finish();
+            }
+        },
     }
 
     eprintln!();
@@ -1079,8 +1251,151 @@ pub async fn up_command(args: UpArgs, embedded_config: Option<&DeployCliConfig>)
     Ok(())
 }
 
-fn machines_join_command(cli_name: &str) -> String {
-    format!("sudo {cli_name} join --token <join-token>")
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct MachinesJoinTokenResponse {
+    join_token: String,
+    control_plane_url: Option<String>,
+    cluster_id: Option<String>,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct WrappedMachinesJoinToken<'a> {
+    join_token: &'a str,
+    control_plane_url: &'a str,
+    cluster_id: &'a str,
+}
+
+async fn create_machines_join_token(
+    base_url: &str,
+    token: &str,
+    deployment_id: &str,
+) -> Result<String> {
+    let http_client = create_manager_http_client(token)?;
+    let url = format!(
+        "{}/v1/machines/deployments/{}/join-tokens/rotate",
+        base_url.trim_end_matches('/'),
+        urlencoding::encode(deployment_id),
+    );
+
+    let response = http_client
+        .post(&url)
+        .send()
+        .await
+        .into_alien_error()
+        .context(ErrorData::ConfigurationError {
+            message: "Failed to create Machines join token from platform API".to_string(),
+        })?;
+
+    if !response.status().is_success() {
+        let status = response.status();
+        let body = response.text().await.unwrap_or_default();
+        return Err(AlienError::new(ErrorData::ConfigurationError {
+            message: format!("Failed to create Machines join token (HTTP {status}): {body}"),
+        }));
+    }
+
+    let response: MachinesJoinTokenResponse =
+        response
+            .json()
+            .await
+            .into_alien_error()
+            .context(ErrorData::ConfigurationError {
+                message: "Failed to parse Machines join token response".to_string(),
+            })?;
+
+    normalize_machines_join_token_response(response)
+}
+
+fn normalize_machines_join_token_response(response: MachinesJoinTokenResponse) -> Result<String> {
+    let join_token = response.join_token.trim();
+    if join_token.is_empty() {
+        return Err(AlienError::new(ErrorData::ConfigurationError {
+            message: "Platform API returned an empty Machines join token".to_string(),
+        }));
+    }
+    if join_token.starts_with("aj1_") {
+        return Ok(join_token.to_string());
+    }
+
+    let control_plane_url = response
+        .control_plane_url
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty());
+    let cluster_id = response
+        .cluster_id
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty());
+
+    match (control_plane_url, cluster_id) {
+        (Some(control_plane_url), Some(cluster_id)) => {
+            validate_machines_control_plane_url(control_plane_url)?;
+            let payload = WrappedMachinesJoinToken {
+                join_token,
+                control_plane_url,
+                cluster_id,
+            };
+            let json = serde_json::to_vec(&payload).into_alien_error().context(
+                ErrorData::ConfigurationError {
+                    message: "Failed to encode Machines join token context".to_string(),
+                },
+            )?;
+            Ok(format!("aj1_{}", URL_SAFE_NO_PAD.encode(json)))
+        }
+        _ => Err(AlienError::new(ErrorData::ConfigurationError {
+            message:
+                "Platform API returned a raw Machines join token without control plane context"
+                    .to_string(),
+        })),
+    }
+}
+
+fn validate_machines_control_plane_url(value: &str) -> Result<()> {
+    let url = reqwest::Url::parse(value).map_err(|e| {
+        AlienError::new(ErrorData::ConfigurationError {
+            message: format!("Platform API returned an invalid Machines control plane URL: {e}"),
+        })
+    })?;
+    if !matches!(url.scheme(), "http" | "https") || url.host_str().is_none() {
+        return Err(AlienError::new(ErrorData::ConfigurationError {
+            message: "Platform API returned an invalid Machines control plane URL".to_string(),
+        }));
+    }
+    Ok(())
+}
+
+fn machines_join_command(
+    cli_name: &str,
+    install_script_url: Option<&str>,
+    join_token: &str,
+) -> String {
+    if let Some(install_script_url) = install_script_url {
+        return format!(
+            "curl -fsSL {} | sudo bash -s -- join --token {}",
+            shell_single_quote(install_script_url),
+            shell_single_quote(join_token)
+        );
+    }
+
+    format!(
+        "sudo {cli_name} join --token {}",
+        shell_single_quote(join_token)
+    )
+}
+
+fn should_print_deploy_progress(platform: Platform) -> bool {
+    platform != Platform::Machines
+}
+
+fn should_print_push_setup_neutral_completion(platform: Platform) -> bool {
+    platform != Platform::Machines
+}
+
+fn shell_single_quote(value: &str) -> String {
+    format!("'{}'", value.replace('\'', "'\"'\"'"))
 }
 
 /// Resolved deployment info before manager connection.
@@ -1093,7 +1408,6 @@ struct ResolvedInfo {
     platform: String,
     base_platform: Option<String>,
     name: String,
-    public_subdomain: Option<String>,
 }
 
 fn requires_install_context(platform: Platform) -> bool {
@@ -1304,11 +1618,7 @@ fn load_public_endpoints(
 
     match platform {
         Platform::Local | Platform::Machines => Ok(Some(public_endpoints)),
-        Platform::Aws
-        | Platform::Gcp
-        | Platform::Azure
-        | Platform::Kubernetes
-        | Platform::Test => {
+        Platform::Aws | Platform::Gcp | Platform::Azure | Platform::Kubernetes | Platform::Test => {
             Err(AlienError::new(ErrorData::ValidationError {
                 field: "public-endpoint".to_string(),
                 message: format!(
@@ -1355,7 +1665,6 @@ fn resolve_deployment_info(
                 platform,
                 base_platform,
                 name: name.clone(),
-                public_subdomain: resolve_public_subdomain(args, deploy_config)?,
             });
         }
     }
@@ -1409,62 +1718,28 @@ fn resolve_deployment_info(
         platform,
         base_platform,
         name,
-        public_subdomain: resolve_public_subdomain(args, deploy_config)?,
     })
 }
 
-fn resolve_public_subdomain(
-    args: &UpArgs,
-    deploy_config: Option<&DeployConfigFile>,
+pub(crate) fn resolve_optional_token(
+    token: Option<String>,
+    token_file: Option<&PathBuf>,
+    embedded_config: Option<&DeployCliConfig>,
 ) -> Result<Option<String>> {
-    let value = args
-        .subdomain
-        .as_ref()
-        .or_else(|| deploy_config.and_then(|config| config.public_subdomain.as_ref()))
-        .map(|value| value.trim().to_string())
-        .filter(|value| !value.is_empty());
-    if let Some(value) = value.as_ref() {
-        validate_public_subdomain(value)?;
-    }
-    Ok(value)
-}
-
-fn validate_public_subdomain(value: &str) -> Result<()> {
-    let valid_len = !value.is_empty() && value.len() <= 63;
-    let valid_label = value
-        .chars()
-        .all(|ch| ch.is_ascii_lowercase() || ch.is_ascii_digit() || ch == '-')
-        && value
-            .as_bytes()
-            .first()
-            .is_some_and(|ch| ch.is_ascii_lowercase() || ch.is_ascii_digit())
-        && value
-            .as_bytes()
-            .last()
-            .is_some_and(|ch| ch.is_ascii_lowercase() || ch.is_ascii_digit());
-    if !valid_len || !valid_label || matches!(value, "api" | "www") {
-        return Err(AlienError::new(ErrorData::ValidationError {
-            field: "subdomain".to_string(),
-            message:
-                "Use a lowercase DNS label: letters, numbers, hyphens, no leading or trailing hyphen, not api or www."
-                    .to_string(),
-        }));
-    }
-    Ok(())
-}
-
-fn resolve_token(args: &UpArgs, embedded_config: Option<&DeployCliConfig>) -> Result<String> {
-    args.token
-        .clone()
+    Ok(token
         .map(Ok)
-        .or_else(|| args.token_file.as_ref().map(|path| read_token_file(path)))
+        .or_else(|| token_file.map(|path| read_token_file(path)))
         .transpose()?
         .or_else(|| {
             embedded_config
                 .and_then(|c| c.token_env_var.as_ref())
                 .and_then(|env_var| std::env::var(env_var).ok())
         })
-        .or_else(|| embedded_config.and_then(|c| c.token.clone()))
+        .or_else(|| embedded_config.and_then(|c| c.token.clone())))
+}
+
+fn resolve_token(args: &UpArgs, embedded_config: Option<&DeployCliConfig>) -> Result<String> {
+    resolve_optional_token(args.token.clone(), args.token_file.as_ref(), embedded_config)?
         .ok_or_else(|| {
             let branded_hint = embedded_config
                 .and_then(|c| c.token_env_var.as_deref())
@@ -1495,11 +1770,36 @@ pub(crate) fn read_token_file(path: &Path) -> Result<String> {
     Ok(token)
 }
 
-fn resolve_base_url(args: &UpArgs, embedded_config: Option<&DeployCliConfig>) -> String {
-    args.base_url
-        .clone()
+pub(crate) fn resolve_base_url_option(
+    base_url: Option<&String>,
+    embedded_config: Option<&DeployCliConfig>,
+) -> String {
+    base_url
+        .cloned()
         .or_else(|| embedded_config.and_then(|c| c.api_base_url.clone()))
         .unwrap_or_else(|| "https://api.alien.dev".to_string())
+}
+
+fn resolve_base_url(args: &UpArgs, embedded_config: Option<&DeployCliConfig>) -> String {
+    resolve_base_url_option(args.base_url.as_ref(), embedded_config)
+}
+
+pub(crate) fn resolve_platform_option(
+    platform: Option<&String>,
+    embedded_config: Option<&DeployCliConfig>,
+    command: &str,
+) -> Result<String> {
+    platform
+        .cloned()
+        .or_else(|| embedded_config.and_then(|c| c.default_platform.clone()))
+        .ok_or_else(|| {
+            AlienError::new(ErrorData::ValidationError {
+                field: "platform".to_string(),
+                message: format!(
+                    "--platform is required for {command} when --manager-url is not set and the binary has no embedded default platform."
+                ),
+            })
+        })
 }
 
 fn load_stack_settings(
@@ -1508,11 +1808,6 @@ fn load_stack_settings(
     deploy_config: Option<&DeployConfigFile>,
 ) -> Result<StackSettings> {
     let mut settings = StackSettings::default();
-    settings.deployment_model = match platform {
-        Platform::Aws | Platform::Gcp | Platform::Azure | Platform::Test => DeploymentModel::Push,
-        Platform::Kubernetes | Platform::Local => DeploymentModel::Pull,
-        Platform::Machines => DeploymentModel::Pull,
-    };
 
     if let Some(config) = deploy_config {
         if let Some(network) = config.network.clone() {
@@ -1549,6 +1844,7 @@ fn load_stack_settings(
 #[serde(rename_all = "camelCase")]
 struct DeploymentInfoResponse {
     setup_config: Option<DeploymentInfoSetupConfig>,
+    readiness: Option<DeploymentReadiness>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -1557,11 +1853,26 @@ struct DeploymentInfoSetupConfig {
     inputs: Option<Vec<StackInputDefinition>>,
 }
 
-async fn fetch_deployer_inputs(
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct DeploymentReadiness {
+    status: String,
+    checks: Vec<DeploymentReadinessCheck>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct DeploymentReadinessCheck {
+    code: String,
+    status: String,
+    message: String,
+}
+
+async fn fetch_deployment_info(
     base_url: &str,
     token: &str,
     platform: Platform,
-) -> Result<Vec<StackInputDefinition>> {
+) -> Result<DeploymentInfoResponse> {
     let http_client = {
         use reqwest::header::{HeaderMap, HeaderValue, AUTHORIZATION, USER_AGENT};
 
@@ -1585,9 +1896,18 @@ async fn fetch_deployer_inputs(
             })?
     };
 
-    let url = format!("{}/v1/deployment-info", base_url.trim_end_matches('/'));
+    let mut url = reqwest::Url::parse(&format!(
+        "{}/v1/deployment-info",
+        base_url.trim_end_matches('/')
+    ))
+    .into_alien_error()
+    .context(ErrorData::ConfigurationError {
+        message: "Invalid platform API base URL".to_string(),
+    })?;
+    url.query_pairs_mut()
+        .append_pair("platform", platform.as_str());
     let response = http_client
-        .get(&url)
+        .get(url)
         .send()
         .await
         .into_alien_error()
@@ -1602,22 +1922,58 @@ async fn fetch_deployer_inputs(
         }));
     }
 
-    let info: DeploymentInfoResponse =
-        response
-            .json()
-            .await
-            .into_alien_error()
-            .context(ErrorData::ConfigurationError {
-                message: "Failed to parse deployment info response".to_string(),
-            })?;
+    response
+        .json()
+        .await
+        .into_alien_error()
+        .context(ErrorData::ConfigurationError {
+            message: "Failed to parse deployment info response".to_string(),
+        })
+}
 
-    Ok(info
-        .setup_config
-        .and_then(|setup_config| setup_config.inputs)
+fn deployer_inputs_from_info(
+    info: &DeploymentInfoResponse,
+    platform: Platform,
+) -> Vec<StackInputDefinition> {
+    info.setup_config
+        .as_ref()
+        .and_then(|setup_config| setup_config.inputs.clone())
         .unwrap_or_default()
         .into_iter()
         .filter(|input| stack_input_matches_context(input, platform))
-        .collect())
+        .collect()
+}
+
+fn validate_deployment_readiness(info: &DeploymentInfoResponse, platform: Platform) -> Result<()> {
+    let Some(readiness) = &info.readiness else {
+        return Ok(());
+    };
+    if readiness.status == "notReady" {
+        let failures = readiness
+            .checks
+            .iter()
+            .filter(|check| check.status == "failed")
+            .map(|check| format!("{}: {}", check.code, check.message))
+            .collect::<Vec<_>>()
+            .join("; ");
+        return Err(AlienError::new(ErrorData::ConfigurationError {
+            message: format!(
+                "{} deployments are not ready: {failures}",
+                platform.as_str()
+            ),
+        }));
+    }
+    for check in readiness
+        .checks
+        .iter()
+        .filter(|check| check.status == "unknown")
+    {
+        output::warn(&format!(
+            "Readiness unknown ({}): {}",
+            check.code, check.message
+        ));
+    }
+    Ok(())
 }
 
 fn stack_input_matches_context(input: &StackInputDefinition, platform: Platform) -> bool {
@@ -1989,7 +2345,27 @@ async fn discover_manager_install_context(
     })
 }
 
+pub(crate) async fn resolve_manager_url_option(
+    manager_url: Option<String>,
+    base_url: &str,
+    token: &str,
+    platform: &str,
+) -> Result<String> {
+    if let Some(manager_url) = manager_url {
+        return Ok(manager_url);
+    }
+
+    discover_manager_install_context(base_url, token, platform)
+        .await
+        .map(|context| context.manager_url)
+}
+
 pub fn create_manager_client(token: &str, manager_url: &str) -> Result<ServerClient> {
+    let http_client = create_manager_http_client(token)?;
+    Ok(ServerClient::new_with_client(manager_url, http_client))
+}
+
+pub(crate) fn create_manager_http_client(token: &str) -> Result<reqwest::Client> {
     use reqwest::header::{HeaderMap, HeaderValue, AUTHORIZATION, USER_AGENT};
 
     let mut headers = HeaderMap::new();
@@ -2003,15 +2379,13 @@ pub fn create_manager_client(token: &str, manager_url: &str) -> Result<ServerCli
     );
     headers.insert(USER_AGENT, HeaderValue::from_static("alien-deploy-cli"));
 
-    let http_client = reqwest::Client::builder()
+    reqwest::Client::builder()
         .default_headers(headers)
         .build()
         .into_alien_error()
         .context(ErrorData::ConfigurationError {
             message: "Failed to create HTTP client".to_string(),
-        })?;
-
-    Ok(ServerClient::new_with_client(manager_url, http_client))
+        })
 }
 
 fn parse_deployment_status(raw_status: &str) -> Result<DeploymentStatus> {
@@ -2021,6 +2395,7 @@ fn parse_deployment_status(raw_status: &str) -> Result<DeploymentStatus> {
         "initial-setup" => Ok(DeploymentStatus::InitialSetup),
         "initial-setup-failed" => Ok(DeploymentStatus::InitialSetupFailed),
         "provisioning" => Ok(DeploymentStatus::Provisioning),
+        "waiting-for-machines" => Ok(DeploymentStatus::WaitingForMachines),
         "provisioning-failed" => Ok(DeploymentStatus::ProvisioningFailed),
         "running" => Ok(DeploymentStatus::Running),
         "refresh-failed" => Ok(DeploymentStatus::RefreshFailed),
@@ -2047,6 +2422,7 @@ fn deployment_status_str(status: DeploymentStatus) -> &'static str {
         DeploymentStatus::InitialSetup => "initial-setup",
         DeploymentStatus::InitialSetupFailed => "initial-setup-failed",
         DeploymentStatus::Provisioning => "provisioning",
+        DeploymentStatus::WaitingForMachines => "waiting-for-machines",
         DeploymentStatus::ProvisioningFailed => "provisioning-failed",
         DeploymentStatus::Running => "running",
         DeploymentStatus::RefreshFailed => "refresh-failed",
@@ -2066,6 +2442,7 @@ fn deployment_status_str(status: DeploymentStatus) -> &'static str {
 /// Result of initializing with the manager.
 struct InitResult {
     deployment_id: String,
+    deployment_model: DeploymentModel,
     /// Deployment-scoped token returned by the manager (when using a deployment group token).
     /// If present, this should replace the original token for subsequent requests.
     deployment_token: Option<String>,
@@ -2077,7 +2454,6 @@ async fn initialize_deployment(
     platform: Platform,
     base_platform: Option<Platform>,
     name: &str,
-    public_subdomain: Option<String>,
     stack_settings: &StackSettings,
     input_values: HashMap<String, serde_json::Value>,
 ) -> Result<InitResult> {
@@ -2085,7 +2461,7 @@ async fn initialize_deployment(
         name: Some(name.to_string()),
         platform: Some(sdk_platform(platform)),
         base_platform: base_platform.map(sdk_platform),
-        public_subdomain,
+        initial_desired_release: alien_manager_api::types::InitialDesiredRelease::Active,
         stack_settings: Some(sdk_stack_settings(stack_settings)?),
         input_values: input_values.into_iter().collect(),
         scope: None,
@@ -2093,21 +2469,46 @@ async fn initialize_deployment(
         setup_method: None,
     };
 
-    let response = client
-        .initialize()
-        .body(body)
-        .send()
-        .await
-        .into_sdk_error()
-        .context(ErrorData::ConfigurationError {
-            message: "Failed to initialize with manager. Is the manager running? Check that --manager-url is correct.".to_string(),
-        })?;
+    let response = match client.initialize().body(body).send().await {
+        Ok(response) => response,
+        Err(error) => {
+            // Read the error body so server-side rejections surface their own
+            // message; the manager-URL hint only applies when the manager was
+            // unreachable.
+            let error = alien_manager_api::convert_sdk_error_reading_body(error).await;
+            let context = if error.code == "COMMUNICATION_ERROR" {
+                ErrorData::ConfigurationError {
+                    message: "Failed to initialize with manager. Is the manager running? Check that --manager-url is correct.".to_string(),
+                }
+            } else {
+                ErrorData::DeploymentFailed {
+                    operation: "initialize".to_string(),
+                }
+            };
+            return Err(error).context(context);
+        }
+    };
 
     let init = response.into_inner();
+    let deployment_model = manager_deployment_model(init.deployment_model)?;
     Ok(InitResult {
         deployment_id: init.deployment_id,
+        deployment_model,
         deployment_token: init.token,
     })
+}
+
+fn manager_deployment_model<T: Serialize>(deployment_model: T) -> Result<DeploymentModel> {
+    let value = serde_json::to_value(deployment_model)
+        .into_alien_error()
+        .context(ErrorData::ConfigurationError {
+            message: "Failed to serialize manager deployment model".to_string(),
+        })?;
+    serde_json::from_value(value)
+        .into_alien_error()
+        .context(ErrorData::ConfigurationError {
+            message: "Failed to deserialize manager deployment model".to_string(),
+        })
 }
 
 fn sdk_platform(platform: Platform) -> alien_manager_api::types::Platform {
@@ -2254,7 +2655,7 @@ async fn run_local_pull_model(
         sync_url: manager_url.to_string(),
         sync_token: token.to_string(),
         deployment_id: Some(deployment_id.to_string()),
-        agent_name: Some(deployment_name.to_string()),
+        operator_name: Some(deployment_name.to_string()),
         platform: platform.to_string(),
         data_dir: data_dir.map(ToOwned::to_owned),
         encryption_key: args.encryption_key.clone(),
@@ -2278,7 +2679,7 @@ async fn run_operator_foreground(
     manager_url: &str,
     token: &str,
     deployment_id: &str,
-    agent_name: &str,
+    operator_name: &str,
     platform: &str,
     encryption_key: &str,
     data_dir_override: Option<&str>,
@@ -2367,8 +2768,8 @@ async fn run_operator_foreground(
         .arg(sync_token_file.path())
         .arg("--deployment-id")
         .arg(deployment_id)
-        .arg("--agent-name")
-        .arg(agent_name)
+        .arg("--operator-name")
+        .arg(operator_name)
         .arg("--encryption-key-file")
         .arg(encryption_key_file.path())
         .arg("--data-dir")
@@ -2525,6 +2926,7 @@ fn render_kubernetes_helm_chart(
             })?;
     let registry = alien_helm::HelmRegistry::built_in();
     let mut helm_settings = stack_settings.clone();
+    // Helm charts install the Kubernetes operator, which always polls the manager.
     helm_settings.deployment_model = DeploymentModel::Pull;
     let chart = alien_helm::generate_helm_chart(
         stack,
@@ -2574,6 +2976,7 @@ fn write_kubernetes_helm_values(
 ) -> Result<PathBuf> {
     let (repository, tag) = split_image_tag(operator_image)?;
     let mut helm_settings = stack_settings.clone();
+    // Helm values are consumed by the Kubernetes operator, which always runs pull-model.
     helm_settings.deployment_model = DeploymentModel::Pull;
     let values = serde_json::json!({
         "management": {
@@ -2992,12 +3395,17 @@ pub async fn push_initial_setup(
     // DeploymentFailed (retryable/internal = inherit), not the hard-non-retryable ConfigurationError,
     // so a transient cloud blip in collect_environment_info (live STS / project-metadata calls) stays
     // retryable instead of becoming a permanent setup failure.
-    let env_info = alien_deployment::collect_environment_info(environment_platform, &client_config)
-        .await
-        .context(ErrorData::DeploymentFailed {
-            operation: "target environment-info collection".to_string(),
-        })?;
-    state.environment_info = Some(env_info);
+    if should_collect_push_setup_environment_info(environment_platform) {
+        let env_info =
+            alien_deployment::collect_environment_info(environment_platform, &client_config)
+                .await
+                .context(ErrorData::DeploymentFailed {
+                    operation: "target environment-info collection".to_string(),
+                })?;
+        state.environment_info = Some(env_info);
+    } else {
+        state.environment_info = None;
+    }
 
     // Reconstruct DeploymentConfig from stack_settings
     let mut stack_settings: StackSettings = deployment
@@ -3179,12 +3587,18 @@ pub async fn push_initial_setup(
             ),
         })),
         LoopOutcome::Neutral => {
-            output::success(
-                "Setup complete. Your deployment is being provisioned and will be ready shortly.",
-            );
+            if should_print_push_setup_neutral_completion(platform) {
+                output::success(
+                    "Setup complete. Your deployment is being provisioned and will be ready shortly.",
+                );
+            }
             Ok(())
         }
     }
+}
+
+fn should_collect_push_setup_environment_info(platform: Platform) -> bool {
+    !matches!(platform, Platform::Machines)
 }
 
 /// Run the push-model deletion flow for a deployment.

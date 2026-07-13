@@ -192,6 +192,7 @@ run();
 
 * [listDeploymentGroups](docs/sdks/deploymentgroups/README.md#listdeploymentgroups) - List deployment groups
 * [createDeploymentGroup](docs/sdks/deploymentgroups/README.md#createdeploymentgroup) - Create a new deployment group
+* [ensureDeploymentGroupByName](docs/sdks/deploymentgroups/README.md#ensuredeploymentgroupbyname) - Get or create a deployment group by project and name
 * [getDeploymentGroup](docs/sdks/deploymentgroups/README.md#getdeploymentgroup) - Get deployment group details
 * [deleteDeploymentGroup](docs/sdks/deploymentgroups/README.md#deletedeploymentgroup) - Delete deployment group
 * [updateDeploymentGroup](docs/sdks/deploymentgroups/README.md#updatedeploymentgroup) - Update deployment group
@@ -235,6 +236,7 @@ run();
 ### [Machines](docs/sdks/machines/README.md)
 
 * [listJoinTokens](docs/sdks/machines/README.md#listjointokens)
+* [createJoinToken](docs/sdks/machines/README.md#createjointoken)
 * [rotateJoinToken](docs/sdks/machines/README.md#rotatejointoken)
 * [revokeJoinToken](docs/sdks/machines/README.md#revokejointoken)
 * [listInventory](docs/sdks/machines/README.md#listinventory)
@@ -286,6 +288,7 @@ run();
 * [getDeploymentPortalDomain](docs/sdks/projects/README.md#getdeploymentportaldomain) - Get the deployment portal domain binding for a project.
 * [createFromTemplate](docs/sdks/projects/README.md#createfromtemplate) - Create a project by forking alienplatform/alien into your namespace, then configuring GitHub Actions.
 * [getTemplateUrls](docs/sdks/projects/README.md#gettemplateurls) - Get template URLs for deploying setup stacks in this project.
+* [getDeploymentLinkSetup](docs/sdks/projects/README.md#getdeploymentlinksetup) - Get the active release stack and portal-visible setup availability for deployment-link configuration.
 * [getActiveRelease](docs/sdks/projects/README.md#getactiverelease) - Get the active release for this project. Returns the latest release, or the pinned release if deploymentId is provided and that deployment has a pinned release.
 
 ### [Releases](docs/sdks/releases/README.md)
@@ -380,6 +383,7 @@ To read more about standalone functions, check [FUNCTIONS.md](./FUNCTIONS.md).
 - [`deploymentGroupsCreateDeploymentGroupToken`](docs/sdks/deploymentgroups/README.md#createdeploymentgrouptoken) - Create deployment group token
 - [`deploymentGroupsCreateFirstPartyDeploymentSession`](docs/sdks/deploymentgroups/README.md#createfirstpartydeploymentsession) - Create first-party deployment session
 - [`deploymentGroupsDeleteDeploymentGroup`](docs/sdks/deploymentgroups/README.md#deletedeploymentgroup) - Delete deployment group
+- [`deploymentGroupsEnsureDeploymentGroupByName`](docs/sdks/deploymentgroups/README.md#ensuredeploymentgroupbyname) - Get or create a deployment group by project and name
 - [`deploymentGroupsGetDeploymentGroup`](docs/sdks/deploymentgroups/README.md#getdeploymentgroup) - Get deployment group details
 - [`deploymentGroupsListDeploymentGroups`](docs/sdks/deploymentgroups/README.md#listdeploymentgroups) - List deployment groups
 - [`deploymentGroupsUpdateDeploymentGroup`](docs/sdks/deploymentgroups/README.md#updatedeploymentgroup) - Update deployment group
@@ -411,6 +415,7 @@ To read more about standalone functions, check [FUNCTIONS.md](./FUNCTIONS.md).
 - [`eventsGet`](docs/sdks/events/README.md#get) - Retrieve an event by ID.
 - [`eventsList`](docs/sdks/events/README.md#list) - Retrieve all events.
 - [`machinesCancelMachineDrain`](docs/sdks/machines/README.md#cancelmachinedrain)
+- [`machinesCreateJoinToken`](docs/sdks/machines/README.md#createjointoken)
 - [`machinesDrainMachine`](docs/sdks/machines/README.md#drainmachine)
 - [`machinesListInventory`](docs/sdks/machines/README.md#listinventory)
 - [`machinesListJoinTokens`](docs/sdks/machines/README.md#listjointokens)
@@ -445,6 +450,7 @@ To read more about standalone functions, check [FUNCTIONS.md](./FUNCTIONS.md).
 - [`projectsDelete`](docs/sdks/projects/README.md#delete) - Delete a project. The project must have no deployments.
 - [`projectsGet`](docs/sdks/projects/README.md#get) - Retrieve a project by ID or name.
 - [`projectsGetActiveRelease`](docs/sdks/projects/README.md#getactiverelease) - Get the active release for this project. Returns the latest release, or the pinned release if deploymentId is provided and that deployment has a pinned release.
+- [`projectsGetDeploymentLinkSetup`](docs/sdks/projects/README.md#getdeploymentlinksetup) - Get the active release stack and portal-visible setup availability for deployment-link configuration.
 - [`projectsGetDeploymentPortalDomain`](docs/sdks/projects/README.md#getdeploymentportaldomain) - Get the deployment portal domain binding for a project.
 - [`projectsGetGcpOAuthProvider`](docs/sdks/projects/README.md#getgcpoauthprovider) - Retrieve redacted project-level Google Cloud OAuth provider settings.
 - [`projectsGetTemplateUrls`](docs/sdks/projects/README.md#gettemplateurls) - Get template URLs for deploying setup stacks in this project.

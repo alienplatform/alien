@@ -70,7 +70,8 @@ pub struct BuildArgs {
     #[arg(short = 'o', long)]
     pub output_dir: Option<String>,
 
-    /// Target platforms (comma-separated). Examples: aws, gcp, azure, aws,gcp
+    /// Target platforms (comma-separated). When omitted, uses platforms declared by the stack.
+    /// Examples: aws, gcp, azure, aws,gcp
     #[arg(long = "platforms", alias = "platform", value_delimiter = ',')]
     pub platforms: Vec<String>,
 
@@ -145,13 +146,6 @@ pub async fn build_command(args: BuildArgs) -> Result<()> {
         Some(BuildSubcommand::Plan(plan_args)) => return plan_command(plan_args).await,
         Some(BuildSubcommand::Merge(merge_args)) => return merge_command(merge_args),
         None => {}
-    }
-
-    if args.platforms.is_empty() {
-        return Err(AlienError::new(ErrorData::ValidationError {
-            field: "platforms".to_string(),
-            message: "At least one platform is required. Use --platform <aws|gcp|azure> or --platforms aws,gcp".to_string(),
-        }));
     }
 
     let outputs = build_task(&args).await?;
@@ -243,21 +237,6 @@ pub async fn build_task(args: &BuildArgs) -> Result<Vec<BuildOutput>> {
         .clone()
         .unwrap_or_else(|| current_dir.join(".alien").display().to_string());
 
-    let display_stack_name = build_display_name(args.config.as_deref(), &current_dir);
-    let platforms_label = args.platforms.join(", ");
-
-    if !args.json {
-        println!(
-            "{}",
-            contextual_heading(
-                "Building",
-                &display_stack_name,
-                &[("for", &platforms_label)]
-            )
-        );
-        println!("{} {}", dim_label("Output"), accent(&output_dir));
-    }
-
     let targets = args
         .targets
         .as_ref()
@@ -276,15 +255,30 @@ pub async fn build_task(args: &BuildArgs) -> Result<Vec<BuildOutput>> {
             message: "Failed to load configuration".to_string(),
         })?;
 
-    let has_kubernetes_platform = args
-        .platforms
+    let target_platforms = resolve_build_platforms(&args.platforms, &stack)?;
+    let display_stack_name = build_display_name(args.config.as_deref(), &current_dir);
+    let platforms_label = target_platforms.join(", ");
+
+    if !args.json {
+        println!(
+            "{}",
+            contextual_heading(
+                "Building",
+                &display_stack_name,
+                &[("for", &platforms_label)]
+            )
+        );
+        println!("{} {}", dim_label("Output"), accent(&output_dir));
+    }
+
+    let has_kubernetes_platform = target_platforms
         .iter()
         .any(|platform| platform.eq_ignore_ascii_case(Platform::Kubernetes.as_str()));
     let kubernetes_base_platform =
         parse_kubernetes_base_platform(has_kubernetes_platform, args.base_platform.as_deref())?;
 
     let mut plans = Vec::new();
-    for platform_str in &args.platforms {
+    for platform_str in &target_platforms {
         let platform_str = platform_str.to_ascii_lowercase();
 
         if let Ok(platform) = Platform::from_str(&platform_str) {
@@ -369,6 +363,33 @@ pub async fn build_task(args: &BuildArgs) -> Result<Vec<BuildOutput>> {
         .ok();
 
     Ok(outputs)
+}
+
+fn resolve_build_platforms(
+    requested_platforms: &[String],
+    stack: &alien_core::Stack,
+) -> Result<Vec<String>> {
+    if !requested_platforms.is_empty() {
+        return Ok(requested_platforms.to_vec());
+    }
+
+    let Some(supported_platforms) = stack.supported_platforms() else {
+        return Err(AlienError::new(ErrorData::ValidationError {
+            field: "platforms".to_string(),
+            message: "At least one platform is required. Declare .platforms() in alien.ts or specify --platform <aws|gcp|azure|kubernetes|machines|local>.".to_string(),
+        }));
+    };
+    if supported_platforms.is_empty() {
+        return Err(AlienError::new(ErrorData::ValidationError {
+            field: "platforms".to_string(),
+            message: "At least one platform is required. Declare .platforms() in alien.ts or specify --platform <aws|gcp|azure|kubernetes|machines|local>.".to_string(),
+        }));
+    }
+
+    Ok(supported_platforms
+        .iter()
+        .map(|platform| platform.as_str().to_string())
+        .collect())
 }
 
 async fn build_platform_groups(
@@ -633,6 +654,39 @@ mod tests {
     fn parse_kubernetes_base_platform_rejects_non_cloud_platforms() {
         assert!(parse_kubernetes_base_platform(true, Some("kubernetes")).is_err());
         assert!(parse_kubernetes_base_platform(true, Some("local")).is_err());
+    }
+
+    #[test]
+    fn resolve_build_platforms_preserves_explicit_platforms() {
+        let stack = alien_core::Stack::new("demo".to_string())
+            .platforms(vec![Platform::Aws])
+            .build();
+        let requested = vec!["machines".to_string()];
+
+        assert_eq!(
+            resolve_build_platforms(&requested, &stack).unwrap(),
+            vec!["machines".to_string()]
+        );
+    }
+
+    #[test]
+    fn resolve_build_platforms_uses_stack_platforms_when_omitted() {
+        let stack = alien_core::Stack::new("demo".to_string())
+            .platforms(vec![Platform::Aws, Platform::Machines])
+            .build();
+
+        assert_eq!(
+            resolve_build_platforms(&[], &stack).unwrap(),
+            vec!["aws".to_string(), "machines".to_string()]
+        );
+    }
+
+    #[test]
+    fn resolve_build_platforms_requires_platforms_without_stack_declaration() {
+        let stack = alien_core::Stack::new("demo".to_string()).build();
+        let err = resolve_build_platforms(&[], &stack).unwrap_err();
+
+        assert!(err.to_string().contains("Declare .platforms()"));
     }
 
     #[test]

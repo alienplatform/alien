@@ -18,6 +18,11 @@ import {
   DeploymentSetupStackSettingsPolicy$outboundSchema,
 } from "./deploymentsetupstacksettingspolicy.js";
 import { SDKValidationError } from "./errors/sdkvalidationerror.js";
+import {
+  KubernetesClusterSource,
+  KubernetesClusterSource$inboundSchema,
+  KubernetesClusterSource$outboundSchema,
+} from "./kubernetesclustersource.js";
 
 /**
  * Represents the target cloud platform.
@@ -36,8 +41,28 @@ export const AllowedPlatform = {
  */
 export type AllowedPlatform = ClosedEnum<typeof AllowedPlatform>;
 
+export const AllowedKubernetesBasePlatform = {
+  Aws: "aws",
+  Gcp: "gcp",
+  Azure: "azure",
+  OnPrem: "on-prem",
+} as const;
+export type AllowedKubernetesBasePlatform = ClosedEnum<
+  typeof AllowedKubernetesBasePlatform
+>;
+
 export type DeploymentSetupPolicy = {
   allowedPlatforms: Array<AllowedPlatform>;
+  /**
+   * Kubernetes base environments the recipient may target.
+   */
+  allowedKubernetesBasePlatforms?:
+    | Array<AllowedKubernetesBasePlatform>
+    | undefined;
+  /**
+   * Whether recipients may create a cluster, use an existing cluster, or both.
+   */
+  allowedKubernetesClusterSources?: Array<KubernetesClusterSource> | undefined;
   allowedSetupMethods: Array<DeploymentSetupMethod>;
   allowReleasePinning?: boolean | undefined;
   stackSettings?: DeploymentSetupStackSettingsPolicy | undefined;
@@ -51,11 +76,26 @@ export const AllowedPlatform$outboundSchema: z.ZodEnum<typeof AllowedPlatform> =
   AllowedPlatform$inboundSchema;
 
 /** @internal */
+export const AllowedKubernetesBasePlatform$inboundSchema: z.ZodEnum<
+  typeof AllowedKubernetesBasePlatform
+> = z.enum(AllowedKubernetesBasePlatform);
+/** @internal */
+export const AllowedKubernetesBasePlatform$outboundSchema: z.ZodEnum<
+  typeof AllowedKubernetesBasePlatform
+> = AllowedKubernetesBasePlatform$inboundSchema;
+
+/** @internal */
 export const DeploymentSetupPolicy$inboundSchema: z.ZodType<
   DeploymentSetupPolicy,
   unknown
 > = z.object({
   allowedPlatforms: z.array(AllowedPlatform$inboundSchema),
+  allowedKubernetesBasePlatforms: z.array(
+    AllowedKubernetesBasePlatform$inboundSchema,
+  ).optional(),
+  allowedKubernetesClusterSources: z.array(
+    KubernetesClusterSource$inboundSchema,
+  ).optional(),
   allowedSetupMethods: z.array(DeploymentSetupMethod$inboundSchema),
   allowReleasePinning: z.boolean().optional(),
   stackSettings: DeploymentSetupStackSettingsPolicy$inboundSchema.optional(),
@@ -63,6 +103,8 @@ export const DeploymentSetupPolicy$inboundSchema: z.ZodType<
 /** @internal */
 export type DeploymentSetupPolicy$Outbound = {
   allowedPlatforms: Array<string>;
+  allowedKubernetesBasePlatforms?: Array<string> | undefined;
+  allowedKubernetesClusterSources?: Array<string> | undefined;
   allowedSetupMethods: Array<string>;
   allowReleasePinning?: boolean | undefined;
   stackSettings?: DeploymentSetupStackSettingsPolicy$Outbound | undefined;
@@ -74,6 +116,12 @@ export const DeploymentSetupPolicy$outboundSchema: z.ZodType<
   DeploymentSetupPolicy
 > = z.object({
   allowedPlatforms: z.array(AllowedPlatform$outboundSchema),
+  allowedKubernetesBasePlatforms: z.array(
+    AllowedKubernetesBasePlatform$outboundSchema,
+  ).optional(),
+  allowedKubernetesClusterSources: z.array(
+    KubernetesClusterSource$outboundSchema,
+  ).optional(),
   allowedSetupMethods: z.array(DeploymentSetupMethod$outboundSchema),
   allowReleasePinning: z.boolean().optional(),
   stackSettings: DeploymentSetupStackSettingsPolicy$outboundSchema.optional(),
