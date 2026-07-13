@@ -580,7 +580,8 @@ mod tests {
 
     #[test]
     fn get_secret_value_response_parses_all_caps_arn() {
-        let body = r#"{"ARN":"arn:aws:secretsmanager:us-east-1:0:secret:db-abc","SecretString":"pw"}"#;
+        let body =
+            r#"{"ARN":"arn:aws:secretsmanager:us-east-1:0:secret:db-abc","SecretString":"pw"}"#;
         let resp: GetSecretValueResponse = serde_json::from_str(body).expect("parses");
         assert_eq!(
             resp.arn.as_deref(),

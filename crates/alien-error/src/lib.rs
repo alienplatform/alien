@@ -509,6 +509,20 @@ where
         }
     }
 
+    /// Convert this error into the representation safe to expose to external users.
+    ///
+    /// Internal errors are replaced with a generic message. Externally safe errors
+    /// retain their complete structured context and source chain.
+    pub fn into_external(self) -> AlienError<GenericError> {
+        if self.internal {
+            AlienError::new(GenericError {
+                message: "Internal server error".to_string(),
+            })
+        } else {
+            self.into_generic()
+        }
+    }
+
     pub fn human_report(&self) -> HumanErrorReport {
         let mut layers = Vec::new();
         collect_human_layers(
@@ -670,15 +684,7 @@ where
         use axum::http::StatusCode;
         use axum::response::{IntoResponse, Json};
 
-        // For external responses, sanitize internal errors
-        let response_error = if self.internal {
-            // For internal errors, return a generic error message with 500 status code
-            AlienError::new(GenericError {
-                message: "Internal server error".to_string(),
-            })
-        } else {
-            self.into_generic()
-        };
+        let response_error = self.into_external();
 
         // Convert HTTP status code to StatusCode
         let status_code = response_error
@@ -789,5 +795,40 @@ mod tests {
 
         assert_eq!(report.code, "HINT");
         assert_eq!(report.hint.as_deref(), Some("Run the setup command first."));
+    }
+
+    #[test]
+    fn into_external_preserves_safe_error_data() {
+        let source = AlienError::new(GenericError {
+            message: "Socket closed".to_string(),
+        });
+        let error = Err::<(), _>(source)
+            .context(TestError::Hint)
+            .unwrap_err()
+            .into_external();
+
+        assert_eq!(error.code, "HINT");
+        assert_eq!(error.hint.as_deref(), Some("Run the setup command first."));
+        assert_eq!(
+            error
+                .source
+                .as_deref()
+                .map(|source| source.message.as_str()),
+            Some("Socket closed")
+        );
+    }
+
+    #[test]
+    fn into_external_sanitizes_internal_error_data() {
+        let mut error = AlienError::new(TestError::Normal);
+        error.internal = true;
+        error.context = Some(serde_json::json!({ "secret": "do-not-expose" }));
+
+        let external = error.into_external();
+
+        assert_eq!(external.code, "GENERIC_ERROR");
+        assert_eq!(external.message, "Internal server error");
+        assert!(external.context.is_none());
+        assert!(external.source.is_none());
     }
 }
