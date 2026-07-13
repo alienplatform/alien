@@ -902,9 +902,7 @@ jobs:
           retention-days: 1
 
       - name: Install 1Password CLI
-        uses: 1password/install-cli-action@v1
-        with:
-          version: 2.33.1
+        uses: 1password/install-cli-action@v4
 
       - name: Upload .env.test to 1Password (for local dev)
         run: |
