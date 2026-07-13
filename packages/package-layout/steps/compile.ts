@@ -11,8 +11,8 @@
 // crashes on load with `ReferenceError: __require is not defined` — see
 // packages/bindings/scripts/compile-smoke.ts for the verified repro.
 
-import { copyFileSync, mkdirSync, rmSync } from "node:fs"
-import { join } from "node:path"
+import { copyFileSync, existsSync, mkdirSync, rmSync } from "node:fs"
+import { dirname, join } from "node:path"
 import { type CheckResult, type Ctx, lastLine, run } from "./shared.ts"
 
 export function compileNativeEmbed(ctx: Ctx): CheckResult[] {
@@ -31,7 +31,33 @@ export function compileNativeEmbed(ctx: Ctx): CheckResult[] {
     "alien-bindings.node",
   )
 
-  if (addonPath) copyFileSync(addonPath, stagedAddonPath)
+  if (!existsSync(dirname(stagedAddonPath))) {
+    return [
+      {
+        check: "compile",
+        package: "bindings",
+        status: "fail",
+        reason: "installed bindings package is unavailable (see the install failure above)",
+        evidence: `expected package dist at ${dirname(stagedAddonPath)}`,
+      },
+    ]
+  }
+
+  if (addonPath) {
+    try {
+      copyFileSync(addonPath, stagedAddonPath)
+    } catch (error) {
+      return [
+        {
+          check: "compile",
+          package: "bindings",
+          status: "fail",
+          reason: "failed to stage the host addon for bun build --compile",
+          evidence: error instanceof Error ? error.message : String(error),
+        },
+      ]
+    }
+  }
 
   const built = addonPath
     ? run(

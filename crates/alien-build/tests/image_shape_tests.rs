@@ -212,20 +212,14 @@ async fn typescript_source_image_shapes_per_compute_type() {
         .expect("worker image should load")
         .get_metadata()
         .expect("worker image metadata");
-    // The published alien-base:latest still carries the pre-rename
-    // `/app/alien-runtime` entrypoint (ALIEN-224 renamed the binary; the base
-    // image is republished by the release pipeline). Accept both spellings —
-    // the contract under test is that Worker images keep the base image's
-    // runtime entrypoint.
     let worker_entrypoint = worker_meta
         .entrypoint
         .as_deref()
         .expect("Worker images must keep the runtime entrypoint");
-    assert_eq!(worker_entrypoint.len(), 1);
-    assert!(
-        worker_entrypoint[0] == "/app/alien-worker-runtime"
-            || worker_entrypoint[0] == "/app/alien-runtime",
-        "Worker entrypoint must be the runtime binary, got {worker_entrypoint:?}"
+    assert_eq!(
+        worker_entrypoint,
+        ["/app/alien-worker-runtime"],
+        "Worker entrypoint must be the Worker runtime binary"
     );
     assert_eq!(
         worker_meta.cmd.as_deref(),

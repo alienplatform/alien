@@ -87,7 +87,12 @@ async fn receiver_round_trips_success_response() {
         async move {
             let input: serde_json::Value = ctx.input_json()?;
             ctx_tx
-                .send((ctx.command_id.clone(), ctx.attempt, ctx.deadline))
+                .send((
+                    ctx.command_id.clone(),
+                    ctx.attempt,
+                    ctx.deadline,
+                    ctx.target.clone(),
+                ))
                 .expect("test channel open");
             Ok(serde_json::json!({
                 "status": "synced",
@@ -120,11 +125,13 @@ async fn receiver_round_trips_success_response() {
     );
 
     // Handler context carried the real command identity and a budget.
-    let (command_id, attempt, deadline) = ctx_rx.recv().await.expect("handler ran");
+    let (command_id, attempt, deadline, target) = ctx_rx.recv().await.expect("handler ran");
     assert_eq!(command_id, created.command_id);
     assert_eq!(attempt, 1);
     let budget = deadline.expect("budget deadline always set under leases");
     assert!(budget > chrono::Utc::now(), "budget must be in the future");
+    assert_eq!(target.resource_id, server.default_target.resource_id);
+    assert_eq!(target.resource_type, CommandTargetType::Daemon);
 
     shutdown.shutdown();
     run.await
@@ -325,6 +332,47 @@ async fn receiver_shutdown_drains_in_flight_and_stops_leasing() {
     );
 }
 
+/// A handler still running after the drain timeout is cancelled and its lease
+/// is explicitly released so another receiver can pick it up immediately.
+#[tokio::test]
+async fn receiver_shutdown_timeout_cancels_and_releases_in_flight_lease() {
+    let (server, env) = pull_server_and_env().await;
+
+    let (started_tx, mut started_rx) = tokio::sync::mpsc::unbounded_channel();
+    let mut receiver = Receiver::from_env_vars(&env)
+        .expect("receiver should build from env")
+        .with_poll_interval(POLL_INTERVAL)
+        .with_drain_timeout(Duration::from_millis(10));
+    receiver.handle("release-me", move |ctx| {
+        let started_tx = started_tx.clone();
+        async move {
+            started_tx.send(()).expect("test channel open");
+            ctx.cancellation.cancelled().await;
+            Ok(serde_json::json!({ "shouldNotSubmit": true }))
+        }
+    });
+    let shutdown = receiver.shutdown_handle();
+    let run = tokio::spawn(async move { receiver.run().await });
+
+    let request = test_inline_create_command(DEPLOYMENT_ID, "release-me");
+    let created = server.create_command(request).await.expect("create");
+    started_rx.recv().await.expect("handler started");
+    shutdown.shutdown();
+    run.await
+        .expect("run task join")
+        .expect("run returns Ok after release");
+
+    let status = server
+        .get_command_status(&created.command_id)
+        .await
+        .expect("status after release");
+    assert_eq!(status.state, CommandState::Pending);
+    assert!(
+        status.response.is_none(),
+        "cancelled handler must not submit"
+    );
+}
+
 /// A response larger than max_inline_bytes goes through the envelope's real
 /// presigned storage upload flow and round-trips.
 #[tokio::test]
@@ -424,6 +472,7 @@ fn observability_envelope(command: &str, deadline: Option<DateTime<Utc>>) -> Env
         target: CommandTarget::new("agent", CommandTargetType::Daemon),
         command_id: "cmd_1".to_string(),
         attempt: 1,
+        trace_context: None,
         deadline,
         command: command.to_string(),
         params: BodySpec::inline(br#"{"key":"value"}"#),

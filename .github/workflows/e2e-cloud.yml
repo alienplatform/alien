@@ -64,6 +64,8 @@ on:
           - comprehensive-rust
           - comprehensive-ts
           - full-stack-microservices
+          - command-routing-ts
+          - container-rust
       network_mode:
         description: "Cloud network mode"
         type: choice
@@ -292,6 +294,12 @@ jobs:
             if [ "$APP" = "All" ] || [ "$APP" = "comprehensive-ts" ]; then
               LOCAL_ENTRIES=$(echo "$LOCAL_ENTRIES" | jq -c '. + [{"name":"local-linux-comprehensive-ts","os":"depot-ubuntu-24.04-arm-8","test_filter":"pull_local_comprehensive_ts"}]')
             fi
+            if [ "$APP" = "All" ] || [ "$APP" = "command-routing-ts" ]; then
+              LOCAL_ENTRIES=$(echo "$LOCAL_ENTRIES" | jq -c '. + [{"name":"local-linux-command-routing-ts","os":"depot-ubuntu-24.04-arm-8","test_filter":"pull_local_command_routing_ts"}]')
+            fi
+            if [ "$APP" = "All" ] || [ "$APP" = "container-rust" ]; then
+              LOCAL_ENTRIES=$(echo "$LOCAL_ENTRIES" | jq -c '. + [{"name":"local-linux-container-rust","os":"depot-ubuntu-24.04-arm-8","test_filter":"pull_local_container_rust"}]')
+            fi
           fi
           if [ "$LOCAL_MACOS_AGENT" = "true" ]; then
             if [ "$APP" = "All" ] || [ "$APP" = "comprehensive-rust" ]; then
@@ -344,6 +352,15 @@ jobs:
             fi
             if [ "$KUBERNETES_AZURE_TERRAFORM_HELM" = "true" ]; then
               TERRAFORM_ENTRIES=$(echo "$TERRAFORM_ENTRIES" | jq -c '. + [{"name":"terraform-aks-helm-pull-full-stack-microservices","test_filter":"terraform_aks_helm_pull_full_stack_microservices","needs_oidc":true,"resource_suffix":"tfaksfs"}]')
+            fi
+          fi
+          # One managed Kubernetes target is enough to prove the runtime-less
+          # Daemon and target-scoped routing contract. The app is portable to
+          # GKE/AKS too, but duplicating this behavior test across all three
+          # providers would only multiply cloud cost and runtime.
+          if [ "$APP" = "All" ] || [ "$APP" = "command-routing-ts" ]; then
+            if [ "$KUBERNETES_AWS_TERRAFORM_HELM" = "true" ]; then
+              TERRAFORM_ENTRIES=$(echo "$TERRAFORM_ENTRIES" | jq -c '. + [{"name":"terraform-eks-helm-pull-command-routing-ts","test_filter":"terraform_eks_helm_pull_command_routing_ts","needs_oidc":false,"resource_suffix":"tfeksrt"}]')
             fi
           fi
 

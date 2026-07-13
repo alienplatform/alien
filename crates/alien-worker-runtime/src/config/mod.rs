@@ -52,11 +52,10 @@ pub enum LogExporter {
 #[derive(Clone, Builder)]
 #[builder(on(String, into), on(PathBuf, into))]
 pub struct RuntimeConfig {
-    /// Transport type. Defaults to `Passthrough` for programmatic use: the
-    /// embedded, non-Worker workloads that construct `RuntimeConfig` directly
-    /// (local daemons) run with no invocation proxy. Worker transports
-    /// (`lambda|cloud-run|container-app|http|local`) are selected explicitly.
-    #[builder(default = TransportType::Passthrough)]
+    /// Worker transport type.
+    ///
+    /// Programmatic callers must select this explicitly so a Worker cannot
+    /// accidentally start with a workload type that has no invocation proxy.
     pub transport: TransportType,
     /// Port for CloudRun/ContainerApp transports
     #[builder(default = 8080)]

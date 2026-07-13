@@ -2,3 +2,9 @@
 # npm packages in a later task; never committed.
 *.node
 node_modules/
+# napi-rs generates these beside the private translation crate, but the public
+# loader and declarations live in packages/bindings. Keep the generated shim
+# out of the repository so it cannot become a second public surface.
+index.js
+index.d.ts
+pnpm-lock.yaml

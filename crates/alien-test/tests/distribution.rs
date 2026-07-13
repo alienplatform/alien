@@ -734,6 +734,20 @@ async fn terraform_eks_helm_pull_full_stack_microservices(
 }
 
 distribution_test_context!(
+    TerraformEksHelmPullCommandRoutingTs,
+    DistributionFlow::TerraformEksHelmPull,
+    TestApp::CommandRoutingTs
+);
+
+#[test_context(TerraformEksHelmPullCommandRoutingTs)]
+#[tokio::test]
+async fn terraform_eks_helm_pull_command_routing_ts(
+    ctx: &mut TerraformEksHelmPullCommandRoutingTs,
+) {
+    check_distribution_deployment(&mut ctx.ctx).await;
+}
+
+distribution_test_context!(
     TerraformGkeHelmPullRust,
     DistributionFlow::TerraformGkeHelmPull,
     TestApp::ComprehensiveRust

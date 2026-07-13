@@ -23,10 +23,9 @@ const CONTAINER_RESOURCE: &str = "indexer";
 const SEEDED_DOCUMENT_COUNT: u64 = 4;
 
 fn string_field<'a>(value: &'a Value, field: &str) -> anyhow::Result<&'a str> {
-    value
-        .get(field)
-        .and_then(|v| v.as_str())
-        .with_context(|| format!("container status response missing string field '{field}': {value:?}"))
+    value.get(field).and_then(|v| v.as_str()).with_context(|| {
+        format!("container status response missing string field '{field}': {value:?}")
+    })
 }
 
 /// `status` targeted at the Rust container must be answered by its pull

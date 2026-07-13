@@ -17,9 +17,7 @@
       "generated/**",
       "shim.mjs",
       "target/**",
-      "examples/**/github-agent/packages/dashboard/**",
-      "crates/alien-bindings-node/index.js",
-      "crates/alien-bindings-node/index.d.ts"
+      "examples/**/github-agent/packages/dashboard/**"
     ]
   },
   "formatter": {

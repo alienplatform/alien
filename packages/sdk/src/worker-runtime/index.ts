@@ -93,8 +93,6 @@ export async function runWorker(app?: unknown): Promise<void> {
   // alien-worker-runtime is co-located (same container or host), proxies all
   // external traffic, and learns the port via RegisterHttpServer. Nothing else
   // may reach this server, so 127.0.0.1 is the only correct interface.
-  // (Passthrough transport is a non-Worker concern — Daemons and build pods —
-  // and those binaries no longer run through runWorker.)
   const fetchHandler = resolveFetchHandler(app)
   const server = Bun.serve({
     // No HTTP framework — a minimal server so the runtime can probe readiness

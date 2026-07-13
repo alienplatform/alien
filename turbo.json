@@ -17,9 +17,6 @@
       "dependsOn": ["^build", "build"],
       "cache": false
     },
-    "validate:package-layout": {
-      "cache": false
-    },
     "//#format-and-lint": {},
     "//#format-and-lint:fix": {
       "cache": false

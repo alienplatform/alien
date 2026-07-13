@@ -8,11 +8,9 @@ fn process_failure_is_reported_as_structured_json() {
             "--bindings-address",
             "127.0.0.1:0",
             "--transport",
-            "passthrough",
+            "local",
             "--",
-            "sh",
-            "-c",
-            "exit 7",
+            "/definitely-not-a-real-alien-test-binary",
         ])
         .output()
         .expect("alien-worker-runtime should start");
@@ -39,7 +37,11 @@ fn process_failure_is_reported_as_structured_json() {
     let error: serde_json::Value =
         serde_json::from_str(serialized).expect("AlienError field should be valid JSON");
     assert_eq!(error["code"], "PROCESS_FAILED");
-    assert_eq!(error["context"]["exit_code"], 7);
+    assert_eq!(error["context"]["exit_code"], serde_json::Value::Null);
+    assert!(error["context"]["message"]
+        .as_str()
+        .expect("process error should contain a message")
+        .contains("Failed to start application"));
     assert_eq!(error["retryable"], false);
     assert_eq!(error["internal"], false);
     assert_eq!(error["httpStatusCode"], 500);

@@ -6139,6 +6139,11 @@
           "target": {
             "$ref": "#/components/schemas/CommandTarget",
             "description": "The specific resource this command is addressed to"
+          },
+          "traceContext": {
+            "$ref": "#/components/schemas/TraceContext",
+            "description": "Optional W3C trace context for the command invocation.",
+            "nullable": true
           }
         }
       },
@@ -12715,6 +12720,24 @@
           "auto",
           "approval-required"
         ]
+      },
+      "TraceContext": {
+        "type": "object",
+        "description": "W3C Trace Context propagated with a command lease.\n\nThe values are kept in their standard wire form so receivers can attach\nthem to handler telemetry without inventing separate trace/span fields.",
+        "required": [
+          "traceparent"
+        ],
+        "properties": {
+          "traceparent": {
+            "type": "string",
+            "description": "W3C `traceparent` header value."
+          },
+          "tracestate": {
+            "type": "string",
+            "description": "Optional W3C `tracestate` header value.",
+            "nullable": true
+          }
+        }
       },
       "UpdatesMode": {
         "type": "string",

@@ -150,10 +150,6 @@ pub enum TransportType {
     Http,
     /// Local Platform - simple HTTP proxy (for VMs, edge, bare metal)
     Local,
-    /// Passthrough - build pods, the only non-Worker workloads still run under the
-    /// runtime wrapper, with no invocation proxy; the app handles any HTTP directly.
-    /// Daemons run runtime-less (ALIEN-226). Not a Worker transport value.
-    Passthrough,
 }
 
 impl Default for TransportType {
@@ -212,6 +208,27 @@ mod tests {
 
         assert_eq!(cli.transport, TransportType::Http);
         assert_eq!(cli.local_port, 8080);
+    }
+
+    #[test]
+    fn test_parse_rejects_retired_passthrough_transport() {
+        let error = Cli::try_parse_from([
+            "alien-worker-runtime",
+            "--transport",
+            "passthrough",
+            "--",
+            "app",
+        ])
+        .expect_err("passthrough is not a Worker transport");
+
+        let message = error.to_string();
+        assert!(message.contains("invalid value 'passthrough'"));
+        for transport in ["lambda", "cloud-run", "container-app", "http", "local"] {
+            assert!(
+                message.contains(transport),
+                "error should list the supported Worker transport {transport}: {message}"
+            );
+        }
     }
 
     #[test]

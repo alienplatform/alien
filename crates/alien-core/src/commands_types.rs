@@ -333,6 +333,21 @@ impl CommandTarget {
     }
 }
 
+/// W3C Trace Context propagated with a command lease.
+///
+/// The values are kept in their standard wire form so receivers can attach
+/// them to handler telemetry without inventing separate trace/span fields.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "openapi", derive(ToSchema))]
+#[serde(rename_all = "camelCase")]
+pub struct TraceContext {
+    /// W3C `traceparent` header value.
+    pub traceparent: String,
+    /// Optional W3C `tracestate` header value.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub tracestate: Option<String>,
+}
+
 /// Commands envelope sent to deployments
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(feature = "openapi", derive(ToSchema))]
@@ -348,6 +363,9 @@ pub struct Envelope {
     pub command_id: String,
     /// Attempt number (starts at 1)
     pub attempt: u32,
+    /// Optional W3C trace context for the command invocation.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub trace_context: Option<TraceContext>,
     /// Command deadline
     #[serde(skip_serializing_if = "Option::is_none")]
     pub deadline: Option<DateTime<Utc>>,
@@ -378,6 +396,7 @@ impl Envelope {
             target,
             command_id: command_id.into(),
             attempt,
+            trace_context: None,
             deadline,
             command: command.into(),
             params,
@@ -765,6 +784,26 @@ mod tests {
         assert!(
             json.contains("\"target\":{\"resourceId\":\"worker-1\",\"resourceType\":\"worker\"}")
         );
+        assert!(!json.contains("traceContext"));
+
+        let without_trace: Envelope = serde_json::from_str(&json).unwrap();
+        assert_eq!(without_trace.trace_context, None);
+
+        let mut traced_envelope = envelope;
+        traced_envelope.trace_context = Some(TraceContext {
+            traceparent: "00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01".to_string(),
+            tracestate: Some("vendor=opaque-value".to_string()),
+        });
+        let traced_json = serde_json::to_value(&traced_envelope).unwrap();
+        assert_eq!(
+            traced_json["traceContext"],
+            serde_json::json!({
+                "traceparent": "00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01",
+                "tracestate": "vendor=opaque-value",
+            })
+        );
+        let round_tripped: Envelope = serde_json::from_value(traced_json).unwrap();
+        assert_eq!(round_tripped, traced_envelope);
     }
 
     #[test]

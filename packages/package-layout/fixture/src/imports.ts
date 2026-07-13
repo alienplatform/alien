@@ -8,15 +8,11 @@
  * present, asserts the pinned error codes by their `code` field.
  *
  * Every package is loaded with its OWN dynamic `import()` inside a `try/catch`
- * so a not-yet-published package fails only its own checks — the file never dies
- * on the first missing package. Each check prints one machine-readable
- * `##CHECK##` line; `run.ts` reconciles the failing ones against
- * `expected-failures.json`. This file always exits 0: a crash with no output is
- * how `run.ts` detects an unexpected, un-reported failure.
+ * so one broken package does not hide results for the others. Each check prints
+ * one machine-readable `##CHECK##` line. This file always exits 0: a crash with
+ * no output is how `run.ts` detects an unreported failure.
  *
- * The installed `@alienplatform/*` packages' checks must PASS. Any surface
- * that cannot resolve reports `fail`, and `run.ts` reconciles it against
- * expected-failures.json.
+ * Every installed `@alienplatform/*` check must pass.
  */
 
 interface CheckLine {

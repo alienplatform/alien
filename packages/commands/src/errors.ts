@@ -155,8 +155,8 @@ export const InvalidEnvelopeError = defineError({
  * the offending variable in `context.envVar`.
  *
  * The Rust twin (`alien_commands::Receiver::from_env`) raises the identical code
- * (`COMMAND_RECEIVER_CONFIG_INVALID`) for the same five variables, so the two
- * receivers reject the same misconfigurations.
+ * (`COMMAND_RECEIVER_CONFIG_INVALID`) for the same identity, token-source, and
+ * tuning variables, so the two receivers reject the same misconfigurations.
  */
 export const CommandReceiverConfigInvalidError = defineError({
   code: "COMMAND_RECEIVER_CONFIG_INVALID",

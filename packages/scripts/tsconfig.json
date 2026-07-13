@@ -1,7 +1,0 @@
-{
-  "extends": "@alienplatform/typescript-config/base.json",
-  "compilerOptions": {
-    "noEmit": true
-  },
-  "include": ["*.ts"]
-}

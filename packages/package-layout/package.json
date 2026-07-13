@@ -14,13 +14,9 @@
     "directory": "packages/package-layout"
   },
   "scripts": {
-    "check": "node --experimental-strip-types run.ts",
-    "test": "vitest run"
+    "check": "node --experimental-strip-types run.ts"
   },
   "devDependencies": {
-    "@alienplatform/scripts": "workspace:^",
-    "@napi-rs/cli": "^3.0.0",
-    "@types/node": "^24.0.15",
-    "vitest": "^3.1.4"
+    "@napi-rs/cli": "^3.0.0"
   }
 }

@@ -16,7 +16,7 @@ pub enum MessagePayload {
     Text(String),
 }
 
-/// Standardized queue message structure used by alien-runtime
+/// Standardized queue message structure delivered to applications
 ///
 /// This structure contains commonly available metadata across all platforms
 /// and a JSON-first payload that handles both structured data and plain text.

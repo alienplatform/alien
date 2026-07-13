@@ -514,7 +514,7 @@ mod tests {
         assert_eq!(request.deployment_id, "dep-123");
         assert_eq!(request.target.resource_id, "worker-7");
         assert_eq!(request.target.resource_type, CommandTargetType::Worker);
-        assert_eq!(request.max_leases, 10);
+        assert_eq!(request.max_leases, 1);
         assert_eq!(request.lease_seconds, 60);
     }
 

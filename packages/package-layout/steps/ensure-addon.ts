@@ -51,11 +51,9 @@ export function ensureAddon(ctx: Ctx): CheckResult[] {
     console.log(
       `[addon] no prebuild and no dev addon for '${triple}' — building one with \`napi build --platform --release\` in crates/alien-bindings-node (CI path)...`,
     )
-    // crates/alien-bindings-node is not a pnpm workspace member, so it has no
-    // node_modules in CI — `npx napi` there would fall through to the npm
-    // registry. Resolve the napi CLI from this package's own devDependencies
-    // (installed by the root frozen-lockfile `pnpm install`) and spawn its bin
-    // directly with cwd set to the crate dir.
+    // Resolve the napi CLI from the workspace install and spawn its bin
+    // directly with cwd set to the translation crate. This avoids `npx`
+    // falling through to the registry when a local install is incomplete.
     const napiRequire = createRequire(import.meta.url)
     const napiPkgPath = napiRequire.resolve("@napi-rs/cli/package.json")
     const napiPkg = JSON.parse(readFileSync(napiPkgPath, "utf8")) as {

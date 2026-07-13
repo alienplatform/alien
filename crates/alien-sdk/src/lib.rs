@@ -18,17 +18,14 @@
 //! # Example
 //!
 //! ```no_run
-//! use alien_sdk::AlienContext;
+//! use alien_sdk::Bindings;
 //!
-//! #[tokio::main]
+//! #[tokio::main(flavor = "current_thread")]
 //! async fn main() -> Result<(), Box<dyn std::error::Error>> {
-//!     let ctx = AlienContext::init().await?;
-//!
-//!     ctx.on_command("hello", |params: serde_json::Value| async move {
-//!         Ok(serde_json::json!({ "message": "Hello!" }))
-//!     });
-//!
-//!     ctx.run().await?;
+//!     let bindings = Bindings::from_env()?;
+//!     let cache = bindings.kv("cache").await?;
+//!     cache.put("greeting", b"hello".to_vec(), None).await?;
+//!     assert_eq!(cache.get("greeting").await?, Some(b"hello".to_vec()));
 //!     Ok(())
 //! }
 //! ```
@@ -37,14 +34,23 @@
 // the internal binding kinds never leak into the app namespace.
 pub use alien_bindings::{
     // Platform detection + env plumbing.
-    get_current_platform, get_platform_from_env, Platform, ENV_ALIEN_DEPLOYMENT_TYPE,
-    ENV_OPERATOR_BASE_PLATFORM,
-    // Bindings entry points.
-    Bindings, BindingsProvider,
-    // Errors.
-    ErrorData, Result,
+    get_current_platform,
+    get_platform_from_env,
     // Storage / KV / queue / vault factory types + the shared marker trait.
-    Binding, Kv, Queue, Storage, Vault,
+    Binding,
+    // Bindings entry points.
+    Bindings,
+    BindingsProvider,
+    // Errors.
+    ErrorData,
+    Kv,
+    Platform,
+    Queue,
+    Result,
+    Storage,
+    Vault,
+    ENV_ALIEN_DEPLOYMENT_TYPE,
+    ENV_OPERATOR_BASE_PLATFORM,
 };
 
 // App-facing modules. `traits` is re-exported below as a curated subset; the

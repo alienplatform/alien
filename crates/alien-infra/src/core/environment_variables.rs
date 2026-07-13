@@ -3,8 +3,7 @@ use crate::error::{ErrorData, Result};
 use alien_core::{
     bindings::serialize_binding_as_env_var, container_runtime_environment_contract,
     daemon_runtime_environment_contract, kubernetes_base_platform_runtime_environment_plan,
-    passthrough_transport_runtime_environment_plan, public_url_host,
-    render_runtime_environment_entries, render_runtime_environment_plan,
+    public_url_host, render_runtime_environment_entries, render_runtime_environment_plan,
     standard_runtime_environment_plan, validate_prepared_runtime_environment_map,
     worker_runtime_environment_contract, Container, Daemon, ResourceRef, ResourceStatus,
     RuntimeEnvironmentBindingEntry, RuntimeEnvironmentRenderer, RuntimeEnvironmentValue, Worker,
@@ -478,17 +477,6 @@ impl EnvironmentVariableBuilder {
     /// Add a single environment variable.
     pub fn add_env_var(mut self, key: String, value: String) -> Self {
         self.env_vars.insert(key, value);
-        self
-    }
-
-    /// Add passthrough transport for non-Worker runtime workloads.
-    pub fn add_passthrough_transport_env_vars(mut self) -> Self {
-        for entry in passthrough_transport_runtime_environment_plan() {
-            if let RuntimeEnvironmentValue::Literal(value) = entry.value {
-                self.env_vars
-                    .insert(entry.name.to_string(), value.to_string());
-            }
-        }
         self
     }
 

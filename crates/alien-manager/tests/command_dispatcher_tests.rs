@@ -98,6 +98,7 @@ fn envelope(deployment_id: &str, target: CommandTarget) -> Envelope {
         target,
         command_id: "cmd_test".to_string(),
         attempt: 1,
+        trace_context: None,
         deadline: None,
         command: "sync".to_string(),
         params: BodySpec::inline(b"{}"),

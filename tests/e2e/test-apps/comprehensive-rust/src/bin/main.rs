@@ -176,7 +176,8 @@ fn register_event_handlers(app_state: &AppState) {
                     "scheduledTime": event.scheduled_time,
                     "processedAt": chrono::Utc::now().to_rfc3339(),
                 });
-                let sanitized_schedule = alien_test_server::sanitize_kv_key_part(&event.schedule_name);
+                let sanitized_schedule =
+                    alien_test_server::sanitize_kv_key_part(&event.schedule_name);
                 let kv_key = format!("cron_event:{}", sanitized_schedule);
                 let value = serde_json::to_vec(&record).into_alien_error().context(
                     BindingsErrorData::SerializationFailed {

@@ -24,7 +24,6 @@ default-filter = """
     and not binary_id(alien-test::distribution) \
     and not binary_id(alien-test::pull) \
     and not binary_id(alien-test::push) \
-    and not binary_id(alien-test::kubernetes) \
     and not binary_id(alien-manager::registry_proxy_cloud_test)
 """
 

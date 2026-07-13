@@ -134,6 +134,7 @@ use utoipa::OpenApi;
     CommandTargetType,
     CommandDeliveryMode,
     CommandTarget,
+    TraceContext,
     Envelope,
     CreateCommandRequest,
     StorageUpload,

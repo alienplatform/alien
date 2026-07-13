@@ -18,6 +18,22 @@ pub const ENV_ALIEN_COMMANDS_POLLING_ENABLED: &str = "ALIEN_COMMANDS_POLLING_ENA
 pub const ENV_ALIEN_COMMANDS_POLLING_URL: &str = "ALIEN_COMMANDS_POLLING_URL";
 pub const ENV_ALIEN_COMMANDS_POLLING_INTERVAL_SECS: &str = "ALIEN_COMMANDS_POLLING_INTERVAL_SECS";
 pub const ENV_ALIEN_COMMANDS_TOKEN: &str = "ALIEN_COMMANDS_TOKEN";
+/// File containing the command receiver bearer token. Receivers re-read this
+/// file after an unauthorized response so controllers can rotate credentials
+/// without restarting the workload.
+pub const ENV_ALIEN_COMMANDS_TOKEN_FILE: &str = "ALIEN_COMMANDS_TOKEN_FILE";
+/// Lease duration requested by app-owned command receivers, in seconds.
+pub const ENV_ALIEN_COMMANDS_LEASE_SECONDS: &str = "ALIEN_COMMANDS_LEASE_SECONDS";
+/// Maximum command leases requested by an app-owned receiver per poll.
+pub const ENV_ALIEN_COMMANDS_MAX_LEASES: &str = "ALIEN_COMMANDS_MAX_LEASES";
+/// Base command receiver poll interval, in milliseconds.
+pub const ENV_ALIEN_COMMANDS_POLL_INTERVAL_MS: &str = "ALIEN_COMMANDS_POLL_INTERVAL_MS";
+/// Maximum command receiver poll interval after adaptive backoff, in milliseconds.
+pub const ENV_ALIEN_COMMANDS_POLL_MAX_INTERVAL_MS: &str = "ALIEN_COMMANDS_POLL_MAX_INTERVAL_MS";
+/// Fractional jitter applied to command receiver poll intervals.
+pub const ENV_ALIEN_COMMANDS_POLL_JITTER: &str = "ALIEN_COMMANDS_POLL_JITTER";
+/// Graceful command receiver drain timeout, in milliseconds.
+pub const ENV_ALIEN_COMMANDS_DRAIN_TIMEOUT_MS: &str = "ALIEN_COMMANDS_DRAIN_TIMEOUT_MS";
 /// Identifies which stack resource a command-capable runtime is polling
 /// leases for (its own resource id within the deployment's stack). Consumed
 /// by runtime polling in a later ALIEN-219 task; declared here so it's
@@ -315,8 +331,7 @@ pub fn worker_transport_runtime_environment_plan(
             // in-process HTTP invocation proxy the worker manager selects via
             // `TransportType::Local`). The env-plan value now matches that reality,
             // so `ALIEN_TRANSPORT` for Workers is exactly the transport set
-            // `lambda | cloud-run | container-app | http | local`. `passthrough`
-            // is a non-Worker signal (Daemons/build pods), never a Worker value.
+            // `lambda | cloud-run | container-app | http | local`.
             value: RuntimeEnvironmentValue::Literal("local"),
         }],
     }
@@ -353,23 +368,10 @@ pub fn worker_runtime_environment_contract(
         .add_current_worker_binding(worker_id)
 }
 
-/// Transport plan for build pods, the only remaining workloads that run under
-/// the runtime wrapper without an invocation proxy. Daemons run runtime-less
-/// under direct supervision (ALIEN-226) and never receive this. `passthrough`
-/// is a non-Worker signal only — Workers use `lambda|cloud-run|container-app|http|local`.
-pub fn passthrough_transport_runtime_environment_plan() -> [RuntimeEnvironmentEntry; 1] {
-    [RuntimeEnvironmentEntry {
-        name: ENV_ALIEN_TRANSPORT,
-        value: RuntimeEnvironmentValue::Literal("passthrough"),
-    }]
-}
-
 pub fn container_runtime_environment_plan(platform: Platform) -> Vec<RuntimeEnvironmentEntry> {
     let mut entries = standard_runtime_environment_plan(platform);
-    // Containers no longer receive `ALIEN_TRANSPORT=passthrough`. Command-enabled
-    // Containers run the pull receiver, configured per-resource by the controllers
-    // via the `ALIEN_COMMANDS_*` receiver contract (ALIEN-222); the old passthrough
-    // transport signal is retired.
+    // `ALIEN_TRANSPORT` is Worker-only. Command-enabled Containers run the pull
+    // receiver configured per resource through the `ALIEN_COMMANDS_*` contract.
     entries.push(RuntimeEnvironmentEntry {
         name: ENV_ALIEN_CURRENT_CONTAINER_BINDING_NAME,
         value: RuntimeEnvironmentValue::CurrentContainerBindingName,
@@ -389,13 +391,10 @@ pub fn container_runtime_environment_contract(
 }
 
 pub fn daemon_runtime_environment_plan(platform: Platform) -> Vec<RuntimeEnvironmentEntry> {
-    // Daemons run runtime-less under direct supervision (ALIEN-226): they receive
-    // the standard platform-identity vars only. Unlike Containers they carry no
-    // self-binding var (`ALIEN_CURRENT_CONTAINER_BINDING_NAME`), and unlike
-    // Workers no transport var — the old `ALIEN_TRANSPORT=passthrough` signal is
-    // retired (ALIEN-222). Command-enabled Daemons get their pull-receiver config
-    // (`ALIEN_COMMANDS_*`) injected per-resource by the manager/operator
-    // controllers, not from this static plan.
+    // Daemons run under direct supervision and receive only the standard
+    // platform-identity vars. `ALIEN_TRANSPORT` and the container self-binding
+    // var are not part of the Daemon contract. Command-enabled Daemons get their
+    // `ALIEN_COMMANDS_*` receiver config from the resource controller.
     standard_runtime_environment_plan(platform)
 }
 
@@ -480,6 +479,13 @@ pub fn is_reserved_runtime_environment_name(name: &str) -> bool {
                 | ENV_ALIEN_COMMANDS_POLLING_INTERVAL_SECS
                 | ENV_ALIEN_COMMANDS_POLLING_URL
                 | ENV_ALIEN_COMMANDS_TOKEN
+                | ENV_ALIEN_COMMANDS_TOKEN_FILE
+                | ENV_ALIEN_COMMANDS_LEASE_SECONDS
+                | ENV_ALIEN_COMMANDS_MAX_LEASES
+                | ENV_ALIEN_COMMANDS_POLL_INTERVAL_MS
+                | ENV_ALIEN_COMMANDS_POLL_MAX_INTERVAL_MS
+                | ENV_ALIEN_COMMANDS_POLL_JITTER
+                | ENV_ALIEN_COMMANDS_DRAIN_TIMEOUT_MS
                 | ENV_ALIEN_COMMANDS_TARGET_RESOURCE_ID
                 | ENV_ALIEN_COMMANDS_TARGET_RESOURCE_TYPE
                 | ENV_ALIEN_COMMANDS_URL
@@ -603,15 +609,35 @@ mod tests {
 
     #[test]
     fn reserves_command_receiver_names() {
-        assert!(is_reserved_runtime_environment_name(ENV_ALIEN_COMMANDS_URL));
-        assert!(is_reserved_runtime_environment_name(
-            ENV_ALIEN_COMMANDS_TARGET_RESOURCE_TYPE
-        ));
-        assert_eq!(ENV_ALIEN_COMMANDS_URL, "ALIEN_COMMANDS_URL");
-        assert_eq!(
-            ENV_ALIEN_COMMANDS_TARGET_RESOURCE_TYPE,
-            "ALIEN_COMMANDS_TARGET_RESOURCE_TYPE"
-        );
+        for (constant, expected) in [
+            (ENV_ALIEN_COMMANDS_URL, "ALIEN_COMMANDS_URL"),
+            (ENV_ALIEN_COMMANDS_TOKEN_FILE, "ALIEN_COMMANDS_TOKEN_FILE"),
+            (
+                ENV_ALIEN_COMMANDS_LEASE_SECONDS,
+                "ALIEN_COMMANDS_LEASE_SECONDS",
+            ),
+            (ENV_ALIEN_COMMANDS_MAX_LEASES, "ALIEN_COMMANDS_MAX_LEASES"),
+            (
+                ENV_ALIEN_COMMANDS_POLL_INTERVAL_MS,
+                "ALIEN_COMMANDS_POLL_INTERVAL_MS",
+            ),
+            (
+                ENV_ALIEN_COMMANDS_POLL_MAX_INTERVAL_MS,
+                "ALIEN_COMMANDS_POLL_MAX_INTERVAL_MS",
+            ),
+            (ENV_ALIEN_COMMANDS_POLL_JITTER, "ALIEN_COMMANDS_POLL_JITTER"),
+            (
+                ENV_ALIEN_COMMANDS_DRAIN_TIMEOUT_MS,
+                "ALIEN_COMMANDS_DRAIN_TIMEOUT_MS",
+            ),
+            (
+                ENV_ALIEN_COMMANDS_TARGET_RESOURCE_TYPE,
+                "ALIEN_COMMANDS_TARGET_RESOURCE_TYPE",
+            ),
+        ] {
+            assert_eq!(constant, expected);
+            assert!(is_reserved_runtime_environment_name(constant));
+        }
     }
 
     #[test]
@@ -677,10 +703,7 @@ mod tests {
     }
 
     #[test]
-    fn container_environment_no_longer_injects_passthrough_transport() {
-        // ALIEN-222: command-enabled Containers run the pull receiver
-        // (`ALIEN_COMMANDS_*`), so the old `ALIEN_TRANSPORT=passthrough` signal
-        // is retired from the container plan on every platform.
+    fn container_environment_does_not_inject_worker_transport() {
         for platform in [
             Platform::Local,
             Platform::Kubernetes,
@@ -708,9 +731,8 @@ mod tests {
 
     #[test]
     fn daemon_environment_is_standard_identity_only() {
-        // ALIEN-226/222: Daemons run runtime-less under direct supervision. Their
-        // env plan is the standard platform-identity set — no transport var, no
-        // self-binding var. Receiver config is injected per-resource, not here.
+        // Daemons use the standard platform-identity set. Receiver config is
+        // injected per resource, not by the static environment plan.
         for platform in [
             Platform::Local,
             Platform::Kubernetes,
@@ -744,23 +766,14 @@ mod tests {
 
     #[test]
     fn worker_local_transport_uses_local_proxy() {
-        // Local/Test Workers run under `TransportType::Local` (the worker manager
-        // selects it), so the env-plan transport value must be `local` — never
-        // `passthrough`, which is a non-Worker (build-pod) signal. This
-        // keeps the Worker `ALIEN_TRANSPORT` set to lambda|cloud-run|container-app|http|local.
+        // Local/Test Workers run under `TransportType::Local`, selected by the
+        // Worker manager.
         for platform in [Platform::Local, Platform::Test] {
             let entries = worker_transport_runtime_environment_plan(platform);
             assert!(entries.iter().any(|entry| {
                 entry.name == ENV_ALIEN_TRANSPORT
                     && entry.value == RuntimeEnvironmentValue::Literal("local")
             }));
-            assert!(
-                !entries.iter().any(|entry| {
-                    entry.name == ENV_ALIEN_TRANSPORT
-                        && entry.value == RuntimeEnvironmentValue::Literal("passthrough")
-                }),
-                "Worker transport must not be passthrough on {platform:?}"
-            );
         }
     }
 }

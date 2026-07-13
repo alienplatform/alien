@@ -9,14 +9,15 @@
  *
  * Pure `fetch`; no bindings, no gRPC. See `PACKAGE_LAYOUT.md` DECIDED(09) for
  * the binding semantics this file implements:
- * - env quintet, fail-fast naming the offending variable (worker type rejected)
+ * - required identity plus token-or-token-file env, with fail-fast validation
  * - execution budget = `min(envelope.deadline, leaseExpiresAt − safety margin)`;
  *   on expiry the handler's `signal` fires and a `HANDLER_TIMEOUT` is submitted
- * - error codes `UNKNOWN_COMMAND` / `HANDLER_ERROR` / `HANDLER_TIMEOUT`, with a
- *   params-decode failure submitted under the decode error's own code
+ * - error codes `UNKNOWN_COMMAND` / handler `error.code` (falling back to
+ *   `HANDLER_ERROR`) / `HANDLER_TIMEOUT`, with params-decode failures retaining
+ *   their decode error code
  * - at-least-once delivery; `ctx.attempt` starts at 1
- * - drain: shutdown stops *starting* new polls; in-flight commands complete
- * - lease params 5s / maxLeases 10 / leaseSeconds 60
+ * - drain: shutdown stops polls, waits up to 30s, then aborts and releases
+ * - lease params 5s / maxLeases 1 / leaseSeconds 60, all env-tunable
  * - `ctx.input` = decoded param bytes; success body = `JSON.stringify(return)`;
  *   `ctx.deadline` = the effective budget, always present while a lease is held
  *
@@ -34,6 +35,7 @@
  * ```
  */
 
+import { readFile } from "node:fs/promises"
 import { AlienError, LeaseResponseSchema } from "@alienplatform/core"
 import {
   CommandReceiverConfigInvalidError,
@@ -49,6 +51,7 @@ import type {
   LeaseInfo,
   LeaseRequest,
   PresignedRequest,
+  TraceContext,
 } from "./protocol.js"
 import { parseWireResponse } from "./wire.js"
 
@@ -69,10 +72,16 @@ export const ERROR_CODE_HANDLER_ERROR = "HANDLER_ERROR"
 
 /** Lease poll interval, in ms (DECIDED(09) — 5s). */
 const DEFAULT_POLL_INTERVAL_MS = 5_000
-/** Max leases requested per poll (DECIDED(09) — 10). */
-const DEFAULT_MAX_LEASES = 10
+/** Max leases requested per poll. One process executes one command at a time by default. */
+const DEFAULT_MAX_LEASES = 1
 /** Requested lease duration, in seconds (DECIDED(09) — 60). */
 const DEFAULT_LEASE_SECONDS = 60
+/** Maximum interval reached by the empty/error poll backoff. */
+const DEFAULT_POLL_MAX_INTERVAL_MS = 30_000
+/** Fractional randomization applied to poll sleeps. */
+const DEFAULT_POLL_JITTER = 0.1
+/** Time allowed for in-flight handlers to finish before abort + release. */
+const DEFAULT_DRAIN_TIMEOUT_MS = 30_000
 /**
  * Safety margin subtracted from a lease's expiry when computing the execution
  * budget, in ms. Stopping this far before the lease actually expires
@@ -94,9 +103,16 @@ const CONTROL_TIMEOUT_MS = 30_000
 // (`alien_core::runtime_environment`).
 const ENV_ALIEN_COMMANDS_URL = "ALIEN_COMMANDS_URL"
 const ENV_ALIEN_COMMANDS_TOKEN = "ALIEN_COMMANDS_TOKEN"
+const ENV_ALIEN_COMMANDS_TOKEN_FILE = "ALIEN_COMMANDS_TOKEN_FILE"
 const ENV_ALIEN_DEPLOYMENT_ID = "ALIEN_DEPLOYMENT_ID"
 const ENV_ALIEN_COMMANDS_TARGET_RESOURCE_ID = "ALIEN_COMMANDS_TARGET_RESOURCE_ID"
 const ENV_ALIEN_COMMANDS_TARGET_RESOURCE_TYPE = "ALIEN_COMMANDS_TARGET_RESOURCE_TYPE"
+const ENV_ALIEN_COMMANDS_LEASE_SECONDS = "ALIEN_COMMANDS_LEASE_SECONDS"
+const ENV_ALIEN_COMMANDS_MAX_LEASES = "ALIEN_COMMANDS_MAX_LEASES"
+const ENV_ALIEN_COMMANDS_POLL_INTERVAL_MS = "ALIEN_COMMANDS_POLL_INTERVAL_MS"
+const ENV_ALIEN_COMMANDS_POLL_MAX_INTERVAL_MS = "ALIEN_COMMANDS_POLL_MAX_INTERVAL_MS"
+const ENV_ALIEN_COMMANDS_POLL_JITTER = "ALIEN_COMMANDS_POLL_JITTER"
+const ENV_ALIEN_COMMANDS_DRAIN_TIMEOUT_MS = "ALIEN_COMMANDS_DRAIN_TIMEOUT_MS"
 
 /**
  * Per-command context passed to a {@link CommandHandler}.
@@ -125,6 +141,13 @@ export interface CommandContext {
   deadline: Date
   /** Unique command identifier. */
   commandId: string
+  /** The resource identity this receiver owns. */
+  target: {
+    resourceId: string
+    resourceType: Exclude<CommandTargetType, "worker">
+  }
+  /** Optional W3C trace context propagated from the command envelope. */
+  traceContext?: TraceContext
   /**
    * Delivery attempt, starting at 1. Greater than 1 means redelivery
    * (at-least-once semantics); handlers must tolerate running more than once.
@@ -135,14 +158,15 @@ export interface CommandContext {
 /**
  * A command handler. Receives a {@link CommandContext} and returns any
  * JSON-serializable value, submitted as the command's success response
- * (`JSON.stringify`-encoded). Throwing/rejecting submits a `HANDLER_ERROR`.
+ * (`JSON.stringify`-encoded). Throwing/rejecting submits the error's non-empty
+ * string `code` when present, otherwise `HANDLER_ERROR`.
  */
 export type CommandHandler = (ctx: CommandContext) => unknown | Promise<unknown>
 
 /**
  * The pull receiver handle. Register handlers with {@link CommandReceiver.handle},
- * drive the lease loop with {@link CommandReceiver.run}, and stop it (draining
- * in-flight commands) with {@link CommandReceiver.stop}.
+ * drive the lease loop with {@link CommandReceiver.run}, and stop it with
+ * {@link CommandReceiver.stop}.
  */
 export interface CommandReceiver {
   /** Register a handler for a command name. Registering a name twice replaces it. */
@@ -150,8 +174,8 @@ export interface CommandReceiver {
   /**
    * Drive the lease loop until {@link CommandReceiver.stop} is called. No new
    * lease poll *starts* once draining begins; a poll already in flight
-   * completes and its leases are dispatched and drained. Every in-flight
-   * command finishes within its budget before this resolves.
+   * completes and its leases are dispatched. In-flight commands may finish
+   * within the drain timeout; remaining handlers are aborted and released.
    */
   run(): Promise<void>
   /** Signal the receiver to drain and stop (see {@link CommandReceiver.run}). */
@@ -164,34 +188,48 @@ export interface CommandReceiverOptions {
   env?: Record<string, string | undefined>
   /** `fetch` implementation (defaults to the global `fetch`). */
   fetch?: typeof fetch
-  /** Lease poll interval in ms (default 5000). Mainly for tests. */
+  /** Lease poll interval in ms (default 5000). Overrides the environment. */
   pollIntervalMs?: number
-  /** Requested lease duration in seconds (default 60). Mainly for tests. */
+  /** Maximum empty/error poll interval in ms (default 30000). */
+  pollMaxIntervalMs?: number
+  /** Poll jitter fraction from 0 to 1 (default 0.1). */
+  pollJitter?: number
+  /** Requested lease duration in seconds (default 60). Overrides the environment. */
   leaseSeconds?: number
-  /** Max leases requested per poll (default 10). Mainly for tests. */
+  /** Max leases requested per poll (default 1). Overrides the environment. */
   maxLeases?: number
+  /** Graceful drain timeout in ms (default 30000). */
+  drainTimeoutMs?: number
 }
 
 interface ReceiverConfig {
   url: string
-  token: string
+  token?: string
+  tokenFile?: string
   deploymentId: string
   resourceId: string
-  resourceType: CommandTargetType
+  resourceType: Exclude<CommandTargetType, "worker">
+  pollIntervalMs: number
+  pollMaxIntervalMs: number
+  pollJitter: number
+  leaseSeconds: number
+  maxLeases: number
+  drainTimeoutMs: number
 }
 
 /**
  * Construct the pull receiver from environment configuration.
  *
- * Validates the required env quintet **synchronously** — an empty, missing, or
- * invalid value throws {@link CommandReceiverConfigInvalidError} naming the
- * offending variable in `context.envVar` (DECIDED(09)). `resourceType` must be
+ * Validates required identity, token source, and numeric tuning values
+ * **synchronously**. An invalid value throws
+ * {@link CommandReceiverConfigInvalidError} naming the offending variable in
+ * `context.envVar`. `resourceType` must be
  * `container` or `daemon`; `worker` (and anything else) is rejected — a receiver
  * must not guess its target type.
  */
 export function createCommandReceiver(options: CommandReceiverOptions = {}): CommandReceiver {
   const env = options.env ?? (typeof process !== "undefined" ? process.env : {})
-  const config = validateConfig(env)
+  const config = validateConfig(env, options)
   return new PullCommandReceiver(config, options)
 }
 
@@ -213,7 +251,45 @@ function requireEnv(env: Record<string, string | undefined>, name: string): stri
   return value
 }
 
-function validateConfig(env: Record<string, string | undefined>): ReceiverConfig {
+function optionalNonEmpty(
+  env: Record<string, string | undefined>,
+  name: string,
+): string | undefined {
+  const value = env[name]
+  if (value === "") {
+    throw new AlienError(
+      CommandReceiverConfigInvalidError.create({
+        envVar: name,
+        reason: `${name} must not be empty`,
+      }),
+    )
+  }
+  return value
+}
+
+function numericConfig(
+  env: Record<string, string | undefined>,
+  envName: string,
+  override: number | undefined,
+  fallback: number,
+  validate: (value: number) => boolean,
+): number {
+  const raw = override ?? (env[envName] === undefined ? fallback : Number(env[envName]))
+  if (!Number.isFinite(raw) || !validate(raw)) {
+    throw new AlienError(
+      CommandReceiverConfigInvalidError.create({
+        envVar: envName,
+        reason: `${envName} has invalid numeric value '${env[envName] ?? raw}'`,
+      }),
+    )
+  }
+  return raw
+}
+
+function validateConfig(
+  env: Record<string, string | undefined>,
+  options: CommandReceiverOptions,
+): ReceiverConfig {
   const url = requireEnv(env, ENV_ALIEN_COMMANDS_URL)
   try {
     // eslint-disable-next-line no-new -- validating parseability only
@@ -227,7 +303,16 @@ function validateConfig(env: Record<string, string | undefined>): ReceiverConfig
     )
   }
 
-  const token = requireEnv(env, ENV_ALIEN_COMMANDS_TOKEN)
+  const token = optionalNonEmpty(env, ENV_ALIEN_COMMANDS_TOKEN)
+  const tokenFile = optionalNonEmpty(env, ENV_ALIEN_COMMANDS_TOKEN_FILE)
+  if (token === undefined && tokenFile === undefined) {
+    throw new AlienError(
+      CommandReceiverConfigInvalidError.create({
+        envVar: ENV_ALIEN_COMMANDS_TOKEN,
+        reason: `${ENV_ALIEN_COMMANDS_TOKEN} or ${ENV_ALIEN_COMMANDS_TOKEN_FILE} is required`,
+      }),
+    )
+  }
   const deploymentId = requireEnv(env, ENV_ALIEN_DEPLOYMENT_ID)
   const resourceId = requireEnv(env, ENV_ALIEN_COMMANDS_TARGET_RESOURCE_ID)
 
@@ -241,7 +326,114 @@ function validateConfig(env: Record<string, string | undefined>): ReceiverConfig
     )
   }
 
-  return { url, token, deploymentId, resourceId, resourceType: rawType }
+  const pollIntervalMs = numericConfig(
+    env,
+    ENV_ALIEN_COMMANDS_POLL_INTERVAL_MS,
+    options.pollIntervalMs,
+    DEFAULT_POLL_INTERVAL_MS,
+    value => Number.isInteger(value) && value > 0,
+  )
+  const pollMaxIntervalMs = numericConfig(
+    env,
+    ENV_ALIEN_COMMANDS_POLL_MAX_INTERVAL_MS,
+    options.pollMaxIntervalMs,
+    DEFAULT_POLL_MAX_INTERVAL_MS,
+    value => Number.isInteger(value) && value > 0,
+  )
+  if (pollMaxIntervalMs < pollIntervalMs) {
+    throw new AlienError(
+      CommandReceiverConfigInvalidError.create({
+        envVar: ENV_ALIEN_COMMANDS_POLL_MAX_INTERVAL_MS,
+        reason: `${ENV_ALIEN_COMMANDS_POLL_MAX_INTERVAL_MS} must be at least ${ENV_ALIEN_COMMANDS_POLL_INTERVAL_MS}`,
+      }),
+    )
+  }
+
+  return {
+    url,
+    token,
+    tokenFile,
+    deploymentId,
+    resourceId,
+    resourceType: rawType,
+    pollIntervalMs,
+    pollMaxIntervalMs,
+    pollJitter: numericConfig(
+      env,
+      ENV_ALIEN_COMMANDS_POLL_JITTER,
+      options.pollJitter,
+      DEFAULT_POLL_JITTER,
+      value => value >= 0 && value <= 1,
+    ),
+    leaseSeconds: numericConfig(
+      env,
+      ENV_ALIEN_COMMANDS_LEASE_SECONDS,
+      options.leaseSeconds,
+      DEFAULT_LEASE_SECONDS,
+      value => Number.isInteger(value) && value > 0,
+    ),
+    maxLeases: numericConfig(
+      env,
+      ENV_ALIEN_COMMANDS_MAX_LEASES,
+      options.maxLeases,
+      DEFAULT_MAX_LEASES,
+      value => Number.isInteger(value) && value > 0,
+    ),
+    drainTimeoutMs: numericConfig(
+      env,
+      ENV_ALIEN_COMMANDS_DRAIN_TIMEOUT_MS,
+      options.drainTimeoutMs,
+      DEFAULT_DRAIN_TIMEOUT_MS,
+      value => Number.isInteger(value) && value >= 0,
+    ),
+  }
+}
+
+class TokenSource {
+  private cachedFileToken: string | undefined
+
+  constructor(
+    private readonly token: string | undefined,
+    private readonly tokenFile: string | undefined,
+  ) {}
+
+  get refreshable(): boolean {
+    return this.token === undefined && this.tokenFile !== undefined
+  }
+
+  async read(forceRefresh = false): Promise<string> {
+    if (this.token !== undefined) return this.token
+    if (!forceRefresh && this.cachedFileToken !== undefined) return this.cachedFileToken
+
+    const path = this.tokenFile as string
+    let token: string
+    try {
+      token = (await readFile(path, "utf8")).trim()
+    } catch (error) {
+      throw (await AlienError.from(error)).withContext(
+        CommandReceiverConfigInvalidError.create({
+          envVar: ENV_ALIEN_COMMANDS_TOKEN_FILE,
+          reason: `Failed to read command token file '${path}'`,
+        }),
+      )
+    }
+    if (token === "") {
+      throw new AlienError(
+        CommandReceiverConfigInvalidError.create({
+          envVar: ENV_ALIEN_COMMANDS_TOKEN_FILE,
+          reason: `${ENV_ALIEN_COMMANDS_TOKEN_FILE} '${path}' contains an empty token`,
+        }),
+      )
+    }
+    this.cachedFileToken = token
+    return token
+  }
+}
+
+interface ActiveLease {
+  lease: LeaseInfo
+  controller: AbortController
+  task: Promise<void>
 }
 
 class PullCommandReceiver implements CommandReceiver {
@@ -250,15 +442,24 @@ class PullCommandReceiver implements CommandReceiver {
   private readonly pollIntervalMs: number
   private readonly leaseSeconds: number
   private readonly maxLeases: number
+  private readonly pollMaxIntervalMs: number
+  private readonly pollJitter: number
+  private readonly drainTimeoutMs: number
+  private readonly tokenSource: TokenSource
   private readonly handlers = new Map<string, CommandHandler>()
   private readonly shutdown = new AbortController()
+  private readonly active = new Map<string, ActiveLease>()
 
   constructor(config: ReceiverConfig, options: CommandReceiverOptions) {
     this.config = config
     this.fetchImpl = options.fetch ?? globalThis.fetch
-    this.pollIntervalMs = options.pollIntervalMs ?? DEFAULT_POLL_INTERVAL_MS
-    this.leaseSeconds = options.leaseSeconds ?? DEFAULT_LEASE_SECONDS
-    this.maxLeases = options.maxLeases ?? DEFAULT_MAX_LEASES
+    this.pollIntervalMs = config.pollIntervalMs
+    this.pollMaxIntervalMs = config.pollMaxIntervalMs
+    this.pollJitter = config.pollJitter
+    this.leaseSeconds = config.leaseSeconds
+    this.maxLeases = config.maxLeases
+    this.drainTimeoutMs = config.drainTimeoutMs
+    this.tokenSource = new TokenSource(config.token, config.tokenFile)
   }
 
   handle(name: string, handler: CommandHandler): CommandReceiver {
@@ -272,21 +473,39 @@ class PullCommandReceiver implements CommandReceiver {
 
   async run(): Promise<void> {
     const inFlight = new Set<Promise<void>>()
+    let nextPollMs = this.pollIntervalMs
 
     // Mirrors the Rust run loop: check shutdown at the top of each iteration
     // (no new poll starts once draining begins), acquire leases (a poll already
     // in flight completes and its leases are dispatched), then sleep-or-stop.
     while (!this.shutdown.signal.aborted) {
       let leases: LeaseInfo[] = []
+      let sleepMs = nextPollMs
       try {
         leases = await this.acquireLeases()
+        if (leases.length > 0) {
+          sleepMs = this.pollIntervalMs
+          nextPollMs = this.pollIntervalMs
+        } else {
+          nextPollMs = this.nextBackoff(nextPollMs)
+        }
       } catch (error) {
         // Transient lease errors are logged and retried next interval.
         logWarn("Failed to acquire command leases, will retry", error)
+        nextPollMs = this.nextBackoff(nextPollMs)
       }
 
       for (const lease of leases) {
-        const task = this.processLease(lease)
+        if (this.active.has(lease.commandId)) {
+          await this.releaseLease(lease.leaseId)
+          continue
+        }
+        const controller = new AbortController()
+        const task = this.processLease(lease, controller).finally(() => {
+          const current = this.active.get(lease.commandId)
+          if (current?.lease.leaseId === lease.leaseId) this.active.delete(lease.commandId)
+        })
+        this.active.set(lease.commandId, { lease, controller, task })
         inFlight.add(task)
         void task.finally(() => inFlight.delete(task))
       }
@@ -294,11 +513,30 @@ class PullCommandReceiver implements CommandReceiver {
       if (this.shutdown.signal.aborted) {
         break
       }
-      await this.sleepOrStop(this.pollIntervalMs)
+      await this.sleepOrStop(this.withJitter(sleepMs))
     }
 
-    // Drain: every in-flight command finishes within its own budget.
+    let drainTimer: ReturnType<typeof setTimeout> | undefined
+    const drained = await Promise.race([
+      Promise.all([...inFlight]).then(() => true),
+      new Promise<false>(resolve => {
+        drainTimer = setTimeout(() => resolve(false), this.drainTimeoutMs)
+      }),
+    ])
+    if (drainTimer !== undefined) clearTimeout(drainTimer)
+    if (!drained) {
+      for (const active of this.active.values()) active.controller.abort()
+    }
     await Promise.all([...inFlight])
+  }
+
+  private nextBackoff(current: number): number {
+    return Math.min(this.pollMaxIntervalMs, Math.max(this.pollIntervalMs, current * 2))
+  }
+
+  private withJitter(ms: number): number {
+    const factor = 1 + (Math.random() * 2 - 1) * this.pollJitter
+    return Math.max(0, Math.round(ms * factor))
   }
 
   /** Build the lease request this receiver sends (pure — unit-testable). */
@@ -316,11 +554,10 @@ class PullCommandReceiver implements CommandReceiver {
 
   private async acquireLeases(): Promise<LeaseInfo[]> {
     const endpoint = buildLeaseEndpoint(this.config.url)
-    const response = await this.fetchImpl(endpoint, {
+    const response = await this.authenticatedFetch(endpoint, {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
-        Authorization: `Bearer ${this.config.token}`,
       },
       body: JSON.stringify(this.buildLeaseRequest()),
       // fetch has no default timeout; a hung lease call would freeze the
@@ -345,14 +582,32 @@ class PullCommandReceiver implements CommandReceiver {
     return parsed.leases
   }
 
+  private async authenticatedFetch(endpoint: string, init: RequestInit): Promise<Response> {
+    const send = async (forceRefresh: boolean) => {
+      const token = await this.tokenSource.read(forceRefresh)
+      const headers = new Headers(init.headers)
+      headers.set("Authorization", `Bearer ${token}`)
+      return this.fetchImpl(endpoint, { ...init, headers })
+    }
+    let response = await send(false)
+    if (response.status === 401 && this.tokenSource.refreshable) {
+      response = await send(true)
+    }
+    return response
+  }
+
   /**
    * Process one leased command end to end: execute (or reject) it, then submit
    * exactly one response. Only this path submits — a handler cannot double
    * submit, and a submit failure produces no ack, so the lease expires and the
    * command is redelivered.
    */
-  private async processLease(lease: LeaseInfo): Promise<void> {
-    const response = await this.executeLease(lease)
+  private async processLease(lease: LeaseInfo, controller: AbortController): Promise<void> {
+    const response = await this.executeLease(lease, controller)
+    if (response === undefined) {
+      await this.releaseLease(lease.leaseId)
+      return
+    }
     const handlerStatus = commandResponseStatus(response)
     let submitStatus: SubmitStatus = "submitted"
     try {
@@ -381,7 +636,10 @@ class PullCommandReceiver implements CommandReceiver {
    * Execute a leased command under its budget and produce the response to
    * submit. Never submits (keeps the "only the loop submits, once" invariant).
    */
-  private async executeLease(lease: LeaseInfo): Promise<CommandResponse> {
+  private async executeLease(
+    lease: LeaseInfo,
+    controller: AbortController,
+  ): Promise<CommandResponse | undefined> {
     const { envelope, leaseExpiresAt, attempt } = lease
     const handler = this.handlers.get(envelope.command)
     if (!handler) {
@@ -402,16 +660,40 @@ class PullCommandReceiver implements CommandReceiver {
     }
 
     const budget = commandBudget(envelope.deadline ?? undefined, leaseExpiresAt)
-    const controller = new AbortController()
     const ctx: CommandContext = {
       input,
       signal: controller.signal,
       deadline: budget,
       commandId: envelope.commandId,
       attempt,
+      target: {
+        resourceId: this.config.resourceId,
+        resourceType: this.config.resourceType,
+      },
+      traceContext: envelope.traceContext ?? undefined,
     }
 
     return runUnderBudget(handler, ctx, budget, controller, envelope.command)
+  }
+
+  private async releaseLease(leaseId: string): Promise<void> {
+    const endpoint = buildReleaseEndpoint(this.config.url, leaseId)
+    try {
+      const response = await this.authenticatedFetch(endpoint, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ leaseId }),
+        signal: AbortSignal.timeout(CONTROL_TIMEOUT_MS),
+      })
+      if (response.ok || response.status === 409 || response.status === 410) return
+      const body = await response.text().catch(() => "")
+      logWarn(
+        `Failed to release command lease '${leaseId}' (${response.status}: ${body})`,
+        response,
+      )
+    } catch (error) {
+      logWarn(`Failed to release command lease '${leaseId}'`, error)
+    }
   }
 
   private async submitResponse(envelope: Envelope, response: CommandResponse): Promise<void> {
@@ -449,7 +731,7 @@ class PullCommandReceiver implements CommandReceiver {
       signal: AbortSignal.timeout(CONTROL_TIMEOUT_MS),
     })
 
-    if (!res.ok) {
+    if (!res.ok && res.status !== 409 && res.status !== 410) {
       const body = await res.text().catch(() => "")
       throw new AlienError(
         StorageOperationFailedError.create({
@@ -558,6 +840,15 @@ export function buildLeaseEndpoint(baseUrl: string): string {
   return url.toString()
 }
 
+/** Build the authenticated lease-release endpoint without corrupting base queries. */
+export function buildReleaseEndpoint(baseUrl: string, leaseId: string): string {
+  const url = new URL(buildLeaseEndpoint(baseUrl))
+  const segments = url.pathname.split("/")
+  segments.push(encodeURIComponent(leaseId), "release")
+  url.pathname = segments.join("/")
+  return url.toString()
+}
+
 /**
  * Rebase a manager-minted absolute URL onto the origin of the receiver's
  * configured commands URL, preserving path and query.
@@ -638,7 +929,7 @@ async function runUnderBudget(
   budget: Date,
   controller: AbortController,
   command: string,
-): Promise<CommandResponse> {
+): Promise<CommandResponse | undefined> {
   const remainingMs = Math.max(0, budget.getTime() - Date.now())
 
   let timer: ReturnType<typeof setTimeout> | undefined
@@ -653,7 +944,17 @@ async function runUnderBudget(
       (error: unknown) => ({ kind: "throw" as const, error }),
     )
 
-  const outcome = await Promise.race([handlerPromise, budgetPromise])
+  const shutdownPromise = new Promise<{ kind: "shutdown" }>(resolve => {
+    if (controller.signal.aborted) {
+      resolve({ kind: "shutdown" })
+      return
+    }
+    controller.signal.addEventListener("abort", () => resolve({ kind: "shutdown" }), {
+      once: true,
+    })
+  })
+
+  const outcome = await Promise.race([handlerPromise, budgetPromise, shutdownPromise])
   if (timer !== undefined) {
     clearTimeout(timer)
   }
@@ -669,9 +970,14 @@ async function runUnderBudget(
     )
   }
 
+  if (outcome.kind === "shutdown") {
+    void handlerPromise.catch(() => {})
+    return undefined
+  }
+
   if (outcome.kind === "throw") {
     const message = outcome.error instanceof Error ? outcome.error.message : String(outcome.error)
-    return errorResponse(ERROR_CODE_HANDLER_ERROR, message)
+    return errorResponse(handlerErrorCode(outcome.error), message)
   }
 
   // Success: JSON-encode the return value (DECIDED(09)).
@@ -685,6 +991,14 @@ async function runUnderBudget(
     )
   }
   return successResponse(new TextEncoder().encode(json))
+}
+
+function handlerErrorCode(error: unknown): string {
+  if (typeof error !== "object" || error === null || !("code" in error)) {
+    return ERROR_CODE_HANDLER_ERROR
+  }
+  const code = error.code
+  return typeof code === "string" && code.length > 0 ? code : ERROR_CODE_HANDLER_ERROR
 }
 
 /**
@@ -770,9 +1084,9 @@ type SubmitStatus = "submitted" | "failed"
 
 /**
  * Handler-status label for a produced response: `"success"` for a success
- * response, otherwise the error code (`UNKNOWN_COMMAND` / `HANDLER_ERROR` /
- * `HANDLER_TIMEOUT` / a params-decode code). Twin of the Rust receiver's
- * `command_response_status`.
+ * response, otherwise the error code (`UNKNOWN_COMMAND` / a handler-provided
+ * code or `HANDLER_ERROR` / `HANDLER_TIMEOUT` / a params-decode code). Twin of
+ * the Rust receiver's `command_response_status`.
  */
 function commandResponseStatus(response: CommandResponse): string {
   return response.status === "success" ? "success" : response.code

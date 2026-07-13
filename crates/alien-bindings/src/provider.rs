@@ -37,9 +37,9 @@ pub struct BindingsProvider {
 /// Environment-backed provider that defers cloud client configuration until the
 /// first binding is actually used.
 ///
-/// Long-running HTTP daemons can be wrapped by alien-worker-runtime only for commands,
-/// logs, or future binding access. They should still start when no startup
-/// secret needs loading, even if cloud metadata is temporarily unavailable.
+/// Runtime-less Containers and Daemons resolve bindings in the application
+/// process. They should still start when no startup secret needs loading, even
+/// if cloud metadata is temporarily unavailable.
 ///
 /// On first binding use it resolves credentials in a fixed order (see
 /// [`LazyEnvBindingsProvider::select`]): native/projected `ClientConfig::from_env`

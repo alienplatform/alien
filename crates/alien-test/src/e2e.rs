@@ -14,7 +14,6 @@ use tracing::info;
 use crate::build_push::build_and_push_stack;
 use crate::config::TestConfig;
 use crate::deployment::TestDeployment;
-use crate::helm_values::{runtime_image_pull_secrets, to_helm_values_yaml};
 use crate::managed_secret::provision_managed_test_secret;
 use crate::manager::TestManager;
 
@@ -400,7 +399,6 @@ pub fn to_api_platform(platform: Platform) -> alien_manager_api::types::Platform
         Platform::Kubernetes => alien_manager_api::types::Platform::Kubernetes,
         Platform::Machines => alien_manager_api::types::Platform::Machines,
         Platform::Local => alien_manager_api::types::Platform::Local,
-        Platform::Machines => alien_manager_api::types::Platform::Machines,
         Platform::Test => alien_manager_api::types::Platform::Test,
     }
 }
@@ -578,103 +576,6 @@ console.log(JSON.stringify(stack));
     });
 
     Ok(stack_by_platform)
-}
-
-async fn start_generated_helm_agent(
-    manager: &Arc<TestManager>,
-    deployment: &TestDeployment,
-    stack: &Stack,
-    operator_image: &str,
-) -> anyhow::Result<crate::operator::TestAlienOperator> {
-    let chart_dir = tempfile::tempdir().context("failed to create generated Helm chart dir")?;
-    let registry = alien_helm::HelmRegistry::built_in();
-    let mut stack_settings = alien_core::StackSettings::default();
-    stack_settings.deployment_model = alien_core::DeploymentModel::Pull;
-    let chart = alien_helm::generate_helm_chart(
-        stack,
-        alien_helm::HelmOptions {
-            registry: &registry,
-            stack_settings,
-            chart_name: format!("e2e-agent-{}", &uuid::Uuid::new_v4().to_string()[..8]),
-        },
-    )
-    .map_err(|error| anyhow::anyhow!("failed to generate Helm agent chart: {error}"))?;
-
-    for (path, contents) in chart.files {
-        let path = chart_dir.path().join(path);
-        if let Some(parent) = path.parent() {
-            tokio::fs::create_dir_all(parent).await?;
-        }
-        tokio::fs::write(path, contents).await?;
-    }
-
-    let (repository, tag) = split_image_tag(operator_image)?;
-    let mut runtime = serde_json::json!({
-        "image": {
-            "repository": repository,
-            "tag": tag,
-            "pullPolicy": "IfNotPresent",
-        },
-        "encryption": {
-            "key": crate::operator::generate_encryption_key(),
-        }
-    });
-    if let Some(image_pull_secrets) = runtime_image_pull_secrets(&repository) {
-        runtime["imagePullSecrets"] = image_pull_secrets;
-    }
-
-    let values = serde_json::json!({
-        "management": {
-            "token": deployment.token.clone(),
-            "name": deployment.name.clone(),
-            "url": manager.public_url.clone(),
-            "deploymentId": deployment.id.clone(),
-            "updates": "auto",
-            "telemetry": "auto",
-            "healthChecks": "on",
-        },
-        "runtime": runtime,
-        "stackSettings": {
-            "deploymentModel": "pull",
-            "updates": "auto",
-            "telemetry": "auto",
-            "heartbeats": "on",
-        },
-        "infrastructure": null,
-    });
-    let values_path = chart_dir.path().join("values.e2e.yaml");
-    tokio::fs::write(&values_path, to_helm_values_yaml(&values)?).await?;
-
-    crate::operator::TestAlienOperator::helm_install_with_values(
-        chart_dir.path(),
-        &values_path,
-        &format!("e2e-agent-{}", &uuid::Uuid::new_v4().to_string()[..8]),
-        "alien-test",
-        None,
-        None,
-        &[],
-    )
-    .await
-    .map_err(|error| {
-        anyhow::anyhow!("Failed to start alien-operator via generated Helm chart: {error}")
-    })
-}
-
-fn split_image_tag(image: &str) -> anyhow::Result<(String, String)> {
-    if image.contains('@') {
-        anyhow::bail!(
-            "ALIEN_TEST_OVERRIDE_AGENT_IMAGE must use a tag for Helm E2E installs; digest references are not supported yet"
-        );
-    }
-    let last_slash = image.rfind('/');
-    let last_colon = image.rfind(':');
-    if let Some(colon) =
-        last_colon.filter(|colon| last_slash.map(|slash| *colon > slash).unwrap_or(true))
-    {
-        Ok((image[..colon].to_string(), image[colon + 1..].to_string()))
-    } else {
-        Ok((image.to_string(), "latest".to_string()))
-    }
 }
 
 // ---------------------------------------------------------------------------
@@ -1354,22 +1255,6 @@ pub async fn run_alien_deploy_up(
 // Platform availability
 // ---------------------------------------------------------------------------
 
-/// Whether a kubeconfig is available for plain Kubernetes pull E2E:
-/// `KUBECONFIG` is set or the default `~/.kube/config` exists.
-fn kubeconfig_available() -> bool {
-    if std::env::var_os("KUBECONFIG").is_some() {
-        return true;
-    }
-    std::env::var_os("HOME")
-        .map(|home| {
-            std::path::Path::new(&home)
-                .join(".kube")
-                .join("config")
-                .exists()
-        })
-        .unwrap_or(false)
-}
-
 /// Check if a platform is available and supported for the given deployment model and app.
 pub fn is_platform_available(
     config: &TestConfig,
@@ -1387,27 +1272,11 @@ pub fn is_platform_available(
                     || config.has_platform(Platform::Gcp)
                     || config.has_platform(Platform::Azure))
         }
-        Platform::Kubernetes => {
-            // Kubernetes only supports pull (container) model. The plain
-            // (non-distribution) flow installs the generated Helm agent into
-            // the cluster of the ambient kubeconfig and pushes built images to
-            // a cloud registry, so both must be present. Distribution flows
-            // provision their own clusters and do not consult this gate.
-            model == DeploymentModel::Pull
-                && kubeconfig_available()
-                && (config.has_platform(Platform::Aws)
-                    || config.has_platform(Platform::Gcp)
-                    || config.has_platform(Platform::Azure))
-        }
         Platform::Aws | Platform::Gcp | Platform::Azure => {
-            // Cloud platforms support both push and pull models.
-            //
-            // Push: manager deploys using cross-account impersonation (RSM).
-            // Pull: alien-operator runs in the target environment and deploys
-            //       directly using target credentials — no cross-account IAM.
-            //
-            // Both require management + target credentials to be configured.
-            config.has_platform(platform)
+            // `setup` currently owns the cloud push path. Kubernetes pull is
+            // exercised through `setup_distribution`, where Terraform creates
+            // the setup resources and Helm installs the operator.
+            model == DeploymentModel::Push && config.has_platform(platform)
         }
         _ => false,
     }
@@ -1620,11 +1489,11 @@ pub async fn setup(
 
     // ── Route to the correct flow based on platform + model ─────────
     //
-    // Push (AWS/GCP/Azure) and Local pull: use the real `alien-deploy deploy` flow.
+    // Push (AWS/GCP/Azure) and Local pull use separate real product flows.
     //   Developer role: build, push, release, create DG + token.
     //   Customer role: `alien-deploy deploy --token <dg_token> --platform <platform>`.
-    //
-    // K8s pull uses the direct Terraform+Helm flow.
+    // Kubernetes pull belongs to `setup_distribution`; it needs the setup
+    // artifact outputs to select a cloud registry and configure Helm.
 
     // Only local pull uses `alien-deploy deploy` for now.
     // Push model has an auth issue: alien-deploy deploy uses the DG token for
@@ -1665,15 +1534,13 @@ pub async fn setup(
 
         (deployment, agent)
     } else {
-        // ── Direct flow (push + K8s pull) ───────────────────────────
+        // ── Direct cloud push flow ──────────────────────────────────
         //
         // Push model: test harness calls push_initial_setup() directly
         // with the admin token (alien-deploy deploy auth not yet supported).
-        //
-        // K8s pull: helm install alien-operator chart.
-        if model == DeploymentModel::Pull && platform != Platform::Kubernetes {
+        if model == DeploymentModel::Pull {
             anyhow::bail!(
-                "direct cloud pull is not supported by the e2e harness; use local pull or Terraform+Helm Kubernetes pull"
+                "direct pull is not supported by this E2E path; use local pull or a Terraform+Helm Kubernetes distribution test"
             );
         }
 
@@ -1706,21 +1573,7 @@ pub async fn setup(
             }
         }
 
-        // Pull model: start the agent for supported pull flows.
-        let agent = if model == DeploymentModel::Pull && platform == Platform::Kubernetes {
-            let operator_image = std::env::var("ALIEN_TEST_OVERRIDE_AGENT_IMAGE")
-                .ok()
-                .filter(|image| !image.is_empty())
-                .unwrap_or_else(|| "ghcr.io/alienplatform/alien-operator:latest".to_string());
-
-            let agent =
-                start_generated_helm_agent(&manager, &deployment, &stack, &operator_image).await?;
-            Some(agent)
-        } else {
-            None
-        };
-
-        (deployment, agent)
+        (deployment, None)
     };
 
     // Capture agent container ID for debug logging (avoids holding non-Send

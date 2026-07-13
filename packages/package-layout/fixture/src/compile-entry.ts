@@ -11,7 +11,7 @@
  * `.node` prebuilds are only staged by the release pipeline
  * (.github/workflows/release.yml), so in a workspace checkout the packed
  * tarball has no addon next to `native.js` and the `bun build --compile`
- * step fails — `run.ts` marks that `[expected]`.
+ * step fails.
  */
 
 import { storage } from "@alienplatform/bindings/native"

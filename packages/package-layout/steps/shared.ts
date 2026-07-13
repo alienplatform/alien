@@ -4,12 +4,12 @@
  * Each pipeline step lives in its own `steps/*.ts` file as a
  * `(ctx: Ctx) => CheckResult[]` function; they all depend on the `Ctx`/
  * `CheckResult` shapes and the process/text helpers here. `run.ts` threads the
- * shared context through the steps and reconciles their combined results.
+ * shared context through the steps and reports their combined results.
  */
 
 import { spawnSync } from "node:child_process"
 
-/** One reported check. Failing ones are reconciled against expected-failures.json. */
+/** One reported operation in the executable consumer proof. */
 export interface CheckResult {
   check: string
   package: string
@@ -21,7 +21,7 @@ export interface CheckResult {
    * family from src/imports.ts, executed under both Bun and Node). Used by
    * `detectRuntimeDivergence` to compare the same assertion across runtimes;
    * absent for checks that run exactly once regardless of runtime (pack,
-   * install, typecheck, packed-contents, compile, validator).
+   * install, typecheck, packed-contents, compile).
    */
   runtime?: "bun" | "node"
 }
@@ -38,7 +38,6 @@ export interface Ctx {
   tarballsDir: string
   fixtureDir: string
   repoRoot: string
-  validatorPath: string
   bunAvailable: boolean
   /** name -> absolute tarball path, for packages that packed successfully. */
   tarballs: Map<string, string>
@@ -86,7 +85,7 @@ export function escapeRegExp(text: string): string {
 
 // Hard denylist: never allowed in a packed tarball, regardless of `files` or
 // EXTRA_SHIPPED_TODAY. Catches regressions even if an .npmignore is deleted.
-// Shared by the packed-contents (sdk/core) and prebuild-packages steps.
+// Applied to every package tarball inspected by the packed-contents step.
 export const HARD_DENYLIST_PATTERNS: RegExp[] = [
   /(^|\/)node_modules\//,
   /(^|\/)\.env$/,

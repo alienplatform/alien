@@ -6,6 +6,9 @@
  * (`bun test`).
  */
 
+import { mkdtemp, rm, writeFile } from "node:fs/promises"
+import { tmpdir } from "node:os"
+import { join } from "node:path"
 import { AlienError } from "@alienplatform/core"
 import { afterEach, describe, expect, it, vi } from "vitest"
 import type { CommandResponse, Envelope, LeaseInfo } from "../src/protocol.js"
@@ -193,6 +196,23 @@ describe("createCommandReceiver env validation", () => {
     expect((err as AlienError).code).toBe("COMMAND_RECEIVER_CONFIG_INVALID")
     expect((err as AlienError).context).toMatchObject({ envVar: "ALIEN_COMMANDS_URL" })
   })
+
+  it("validates tunable environment values synchronously", () => {
+    expect(() =>
+      createCommandReceiver({
+        env: { ...FULL_ENV, ALIEN_COMMANDS_POLL_JITTER: "1.1" },
+      }),
+    ).toThrowError(/ALIEN_COMMANDS_POLL_JITTER/)
+    expect(() =>
+      createCommandReceiver({
+        env: {
+          ...FULL_ENV,
+          ALIEN_COMMANDS_POLL_INTERVAL_MS: "5000",
+          ALIEN_COMMANDS_POLL_MAX_INTERVAL_MS: "4999",
+        },
+      }),
+    ).toThrowError(/ALIEN_COMMANDS_POLL_MAX_INTERVAL_MS/)
+  })
 })
 
 // ---------------------------------------------------------------------------
@@ -238,11 +258,27 @@ describe("CommandReceiver.run", () => {
   it("leases, gives the handler the input bytes/deadline/attempt, and submits the JSON success", async () => {
     // The stub needs the envelope, which needs the base url: bind, then reopen.
     server = await openServer()
-    const env = envelope({ baseUrl: server.baseUrl, attempt: 2 })
+    const env = envelope({
+      baseUrl: server.baseUrl,
+      attempt: 2,
+      traceContext: {
+        traceparent: "00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01",
+        tracestate: "vendor=opaque-value",
+      },
+    })
     const serve = leaseOnce([lease(env, { attempt: 2 })])
     route = req => serve(req) ?? { status: 200 }
 
-    let seen: { input: string; deadline: number; attempt: number; commandId: string } | undefined
+    let seen:
+      | {
+          input: string
+          deadline: number
+          attempt: number
+          commandId: string
+          target: CommandContext["target"]
+          traceContext: CommandContext["traceContext"]
+        }
+      | undefined
     const r = createCommandReceiver({
       env: { ...FULL_ENV, ALIEN_COMMANDS_URL: `${server.baseUrl}/v1/` },
       pollIntervalMs: 5,
@@ -253,6 +289,8 @@ describe("CommandReceiver.run", () => {
         deadline: ctx.deadline.getTime(),
         attempt: ctx.attempt,
         commandId: ctx.commandId,
+        target: ctx.target,
+        traceContext: ctx.traceContext,
       }
       return { echoed: JSON.parse(new TextDecoder().decode(ctx.input)) }
     })
@@ -266,6 +304,11 @@ describe("CommandReceiver.run", () => {
     expect(seen?.input).toBe(JSON.stringify({ key: "value" }))
     expect(seen?.attempt).toBe(2)
     expect(seen?.commandId).toBe("cmd_1")
+    expect(seen?.target).toEqual({ resourceId: "agent", resourceType: "daemon" })
+    expect(seen?.traceContext).toEqual({
+      traceparent: "00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01",
+      tracestate: "vendor=opaque-value",
+    })
     expect(seen?.deadline).toBeGreaterThan(Date.now())
 
     const body = submitBody("cmd_1") as Extract<CommandResponse, { status: "success" }>
@@ -352,6 +395,34 @@ describe("CommandReceiver.run", () => {
     const body = submitBody("cmd_1") as Extract<CommandResponse, { status: "error" }>
     expect(body.code).toBe("HANDLER_ERROR")
     expect(body.message).toContain("database on fire")
+  })
+
+  it("preserves a throwing handler's non-empty string error code", async () => {
+    server = await openServer()
+    const env = envelope({ baseUrl: server.baseUrl })
+    const serve = leaseOnce([lease(env)])
+    route = req => serve(req) ?? { status: 200 }
+
+    const r = createCommandReceiver({
+      env: { ...FULL_ENV, ALIEN_COMMANDS_URL: `${server.baseUrl}/v1` },
+      pollIntervalMs: 5,
+    })
+    r.handle("echo", () => {
+      throw Object.assign(new Error("upstream unavailable"), { code: "UPSTREAM_UNAVAILABLE" })
+    })
+    receiverStop = () => r.stop()
+    running = r.run()
+
+    await waitFor(() => submitBody("cmd_1") !== undefined)
+    r.stop()
+    await running
+
+    const body = submitBody("cmd_1")
+    expect(body).toMatchObject({
+      status: "error",
+      code: "UPSTREAM_UNAVAILABLE",
+      message: "upstream unavailable",
+    })
   })
 
   it("aborts on budget expiry: fires the signal, submits HANDLER_TIMEOUT, drops the late result", async () => {
@@ -520,6 +591,143 @@ describe("CommandReceiver.run", () => {
     expect(leasePolls()).toBe(after)
   })
 
+  it("aborts and releases a handler that exceeds the graceful drain timeout", async () => {
+    server = await openServer()
+    const env = envelope({ baseUrl: server.baseUrl })
+    const serve = leaseOnce([lease(env)])
+    route = req => serve(req) ?? { status: 200 }
+
+    let handlerStarted = false
+    let signalFired = false
+    const r = createCommandReceiver({
+      env: { ...FULL_ENV, ALIEN_COMMANDS_URL: `${server.baseUrl}/v1/` },
+      pollIntervalMs: 5,
+      drainTimeoutMs: 10,
+      pollJitter: 0,
+    })
+    r.handle("echo", async ctx => {
+      handlerStarted = true
+      await new Promise<void>(resolve => {
+        ctx.signal.addEventListener(
+          "abort",
+          () => {
+            signalFired = true
+            resolve()
+          },
+          { once: true },
+        )
+      })
+      return { shouldNotSubmit: true }
+    })
+    receiverStop = () => r.stop()
+    running = r.run()
+
+    await waitFor(() => handlerStarted)
+    r.stop()
+    await running
+
+    expect(signalFired).toBe(true)
+    expect(submitBody("cmd_1")).toBeUndefined()
+    const release = server.requests.find(
+      req => req.method === "POST" && req.path === "/v1/commands/leases/lease_1/release",
+    )
+    expect(release?.headers.authorization).toBe("Bearer tok")
+  })
+
+  it("suppresses duplicate in-flight command ids and releases the duplicate lease", async () => {
+    server = await openServer()
+    const env = envelope({ baseUrl: server.baseUrl })
+    const serve = leaseOnce([
+      lease(env, { leaseId: "lease_first" }),
+      lease(env, { leaseId: "lease_duplicate" }),
+    ])
+    route = req => serve(req) ?? { status: 200 }
+
+    let calls = 0
+    let finish!: () => void
+    const gate = new Promise<void>(resolve => {
+      finish = resolve
+    })
+    const r = createCommandReceiver({
+      env: { ...FULL_ENV, ALIEN_COMMANDS_URL: `${server.baseUrl}/v1/` },
+      pollIntervalMs: 5,
+      pollJitter: 0,
+    })
+    r.handle("echo", async () => {
+      calls += 1
+      await gate
+      return { ok: true }
+    })
+    receiverStop = () => {
+      finish()
+      r.stop()
+    }
+    running = r.run()
+
+    await waitFor(() =>
+      server!.requests.some(
+        req => req.method === "POST" && req.path === "/v1/commands/leases/lease_duplicate/release",
+      ),
+    )
+    expect(calls).toBe(1)
+    finish()
+    await waitFor(() => submitBody("cmd_1") !== undefined)
+    r.stop()
+    await running
+  })
+
+  it("rereads a token file and retries once when lease acquisition returns 401", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "alien-command-token-"))
+    const tokenFile = join(directory, "token")
+    await writeFile(tokenFile, "old-token\n")
+    try {
+      server = await openServer()
+      const env = envelope({ baseUrl: server.baseUrl })
+      let authorized = false
+      route = async req => {
+        if (req.method === "POST" && req.path === "/v1/commands/leases") {
+          if (!authorized) {
+            expect(req.headers.authorization).toBe("Bearer old-token")
+            authorized = true
+            await writeFile(tokenFile, "new-token\n")
+            return { status: 401 }
+          }
+          expect(req.headers.authorization).toBe("Bearer new-token")
+          return { json: { leases: [lease(env)] } }
+        }
+        return { status: 200 }
+      }
+
+      const envWithoutToken: Record<string, string | undefined> = {
+        ...FULL_ENV,
+        ALIEN_COMMANDS_URL: `${server.baseUrl}/v1/`,
+        ALIEN_COMMANDS_TOKEN_FILE: tokenFile,
+      }
+      envWithoutToken.ALIEN_COMMANDS_TOKEN = undefined
+      const r = createCommandReceiver({
+        env: envWithoutToken,
+        pollIntervalMs: 5,
+        pollJitter: 0,
+      })
+      r.handle("echo", () => ({ ok: true }))
+      receiverStop = () => r.stop()
+      running = r.run()
+
+      await waitFor(() => submitBody("cmd_1") !== undefined)
+      r.stop()
+      await running
+      const leaseRequests = server.requests.filter(
+        req => req.method === "POST" && req.path === "/v1/commands/leases",
+      )
+      expect(leaseRequests.slice(0, 2).map(req => req.headers.authorization)).toEqual([
+        "Bearer old-token",
+        "Bearer new-token",
+      ])
+    } finally {
+      await rm(directory, { recursive: true, force: true })
+    }
+  })
+
   it("submits INVALID_ENVELOPE for malformed inline base64 params (twin of Rust's decode_params_bytes)", async () => {
     server = await openServer()
     const env = envelope({
@@ -589,7 +797,7 @@ describe("CommandReceiver.run", () => {
     expect(leaseReq?.body).toEqual({
       deploymentId: "dep-123",
       target: { resourceId: "agent", resourceType: "daemon" },
-      maxLeases: 10,
+      maxLeases: 1,
       leaseSeconds: 60,
     })
     expect(leaseReq?.headers.authorization).toBe("Bearer tok")
@@ -721,6 +929,40 @@ describe("CommandReceiver.run", () => {
     )
     expect(submits).toHaveLength(1)
   })
+
+  it.each([409, 410])(
+    "tolerates an idempotent %s response to duplicate submission",
+    async status => {
+      const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {})
+      try {
+        server = await openServer()
+        const env = envelope({ baseUrl: server.baseUrl })
+        const serve = leaseOnce([lease(env)])
+        route = req => {
+          if (req.method === "PUT" && req.path === "/v1/commands/cmd_1/response") {
+            return { status }
+          }
+          return serve(req) ?? { status: 200 }
+        }
+
+        const r = createCommandReceiver({
+          env: { ...FULL_ENV, ALIEN_COMMANDS_URL: `${server.baseUrl}/v1/` },
+          pollIntervalMs: 5,
+          pollJitter: 0,
+        })
+        r.handle("echo", () => ({ ok: true }))
+        receiverStop = () => r.stop()
+        running = r.run()
+
+        await waitFor(() => submitBody("cmd_1") !== undefined)
+        r.stop()
+        await running
+        expect(errorSpy).not.toHaveBeenCalled()
+      } finally {
+        errorSpy.mockRestore()
+      }
+    },
+  )
 })
 
 describe("resolveEnvelopeUrls", () => {

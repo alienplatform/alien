@@ -140,18 +140,17 @@ Task 03 owns the signatures the contract left open; recorded here as executed.
   module, `runWorker(userModule).catch(...)`.
 - **DECIDED(03)** `getPostgresConnection` / `PostgresConnection` are **DELETED from
   the SDK**. Neither pinned export list admits a connection-only Postgres helper;
-  the logic is inlined into its sole consumer, the comprehensive-typescript e2e
-  test-app (`tests/e2e/test-apps/comprehensive-typescript/src/handlers/postgres.ts`,
-  local/external variants only — cloud secret resolution is not exercised there).
+  connection resolution belongs to applications that use Postgres rather than
+  the runtime-less SDK facade. The OSS comprehensive TypeScript E2E app keeps a
+  local/external-only resolver next to its Postgres test handler.
 - **DECIDED(03)** `AlienContext.forRemoteDeployment(deploymentId, token)` is
-  **deferred** (tracked by the packed-contents allowances in
-  `packages/package-layout/run.ts`). `AlienContext` is deleted from the public surface and
+  **deferred**. `AlienContext` is deleted from the public surface and
   no remote-bindings protocol exists to implement it cheaply atop current code;
   introducing one is out of scope for the facade split. The docs pin remains for
   17 to satisfy when the remote-bindings entry lands.
 
 ## Status
 
-- The split is executed (manifest `files` tightening still pending; see
-  `packages/package-layout/run.ts` EXTRA_SHIPPED_TODAY).
+- The split is executed. The package-layout consumer test checks the packed
+  manifests and contents directly.
 - This file is the contract; it defines no runtime code.

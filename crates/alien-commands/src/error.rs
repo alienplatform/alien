@@ -118,6 +118,21 @@ pub enum ErrorData {
         env_var: String,
     },
 
+    /// The command receiver bearer token was rejected by the commands API.
+    #[error(
+        code = "COMMAND_RECEIVER_UNAUTHORIZED",
+        message = "Command receiver authorization failed during {operation}",
+        retryable = "false",
+        internal = "false",
+        http_status_code = 401
+    )]
+    CommandReceiverUnauthorized {
+        /// Command API operation that was rejected
+        operation: String,
+        /// Commands API URL that rejected the token
+        url: String,
+    },
+
     /// Invalid state transition attempted on command.
     #[error(
         code = "INVALID_STATE_TRANSITION",

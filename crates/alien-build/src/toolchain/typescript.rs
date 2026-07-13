@@ -73,7 +73,9 @@ const DIRECT_NATIVE_INSTALL_SNIPPET: &str =
 /// Rewrite a user entry point (relative to `src_dir`) into an import specifier
 /// usable from a generated file under `src_dir/.alien-build/`.
 fn bootstrap_relative_import(user_entry_point: &str) -> String {
-    let stripped = user_entry_point.strip_prefix("./").unwrap_or(user_entry_point);
+    let stripped = user_entry_point
+        .strip_prefix("./")
+        .unwrap_or(user_entry_point);
     format!("../{stripped}")
 }
 
@@ -291,7 +293,11 @@ impl TypeScriptToolchain {
         // install line is present only when the binary embeds the addon, and a
         // Worker reaches it through the SDK's `./native` bridge (the Worker
         // cannot resolve `@alienplatform/bindings/native` directly).
-        let native_install = if embed_native { WORKER_NATIVE_INSTALL_SNIPPET } else { "" };
+        let native_install = if embed_native {
+            WORKER_NATIVE_INSTALL_SNIPPET
+        } else {
+            ""
+        };
         let bootstrap_code = BOOTSTRAP_TEMPLATE
             .replace("__NATIVE_INSTALL__", native_install)
             .replace("__USER_ENTRY__", &user_import_path);

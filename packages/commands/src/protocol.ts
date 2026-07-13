@@ -27,6 +27,7 @@ export type {
   ResponseHandling,
   StorageUpload,
   SubmitResponseRequest,
+  TraceContext,
   UploadCompleteRequest,
   UploadCompleteResponse,
 } from "@alienplatform/core"

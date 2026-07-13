@@ -303,7 +303,10 @@ pub async fn submit_response(envelope: &Envelope, response: CommandResponse) -> 
             url: Some(submit_url.clone()),
         })?;
 
-    if !http_response.status().is_success() {
+    if !http_response.status().is_success()
+        && http_response.status() != reqwest::StatusCode::CONFLICT
+        && http_response.status() != reqwest::StatusCode::GONE
+    {
         let status = http_response.status();
         let error_body = http_response.text().await.unwrap_or_default();
         return Err(AlienError::new(ErrorData::HttpOperationFailed {
@@ -385,10 +388,20 @@ impl LeaseClient {
     /// `LeaseResponse`. Errors as `HTTP_OPERATION_FAILED` (transport or
     /// non-success status) or `SERIALIZATION_FAILED` (unparseable body).
     pub async fn acquire(&self, request: &LeaseRequest) -> Result<Vec<LeaseInfo>> {
+        self.acquire_with_token(request, &self.token).await
+    }
+
+    /// Acquire leases with a caller-supplied token. Receivers use this for
+    /// file-backed token rotation; the worker runtime keeps using [`Self::acquire`].
+    pub async fn acquire_with_token(
+        &self,
+        request: &LeaseRequest,
+        token: &str,
+    ) -> Result<Vec<LeaseInfo>> {
         let response = self
             .client
             .post(self.endpoint.clone())
-            .header("Authorization", format!("Bearer {}", self.token))
+            .header("Authorization", format!("Bearer {token}"))
             .json(request)
             .send()
             .await
@@ -398,6 +411,13 @@ impl LeaseClient {
                 method: Some("POST".to_string()),
                 url: Some(self.endpoint.to_string()),
             })?;
+
+        if response.status() == reqwest::StatusCode::UNAUTHORIZED {
+            return Err(AlienError::new(ErrorData::CommandReceiverUnauthorized {
+                operation: "lease acquisition".to_string(),
+                url: self.endpoint.to_string(),
+            }));
+        }
 
         if !response.status().is_success() {
             let status = response.status();
@@ -430,6 +450,58 @@ impl LeaseClient {
         }
 
         Ok(lease_response.leases)
+    }
+
+    /// Release a lease during graceful shutdown or duplicate suppression.
+    /// Conflict/gone responses mean the lease is already no longer owned and
+    /// are therefore successful idempotent outcomes.
+    pub async fn release_with_token(&self, lease_id: &str, token: &str) -> Result<()> {
+        let mut endpoint = self.endpoint.clone();
+        let Ok(mut segments) = endpoint.path_segments_mut() else {
+            return Err(AlienError::new(ErrorData::HttpOperationFailed {
+                message: "Commands lease endpoint cannot be extended for release".to_string(),
+                method: Some("POST".to_string()),
+                url: Some(endpoint.to_string()),
+            }));
+        };
+        segments.push(lease_id).push("release");
+        drop(segments);
+        let response = self
+            .client
+            .post(endpoint.clone())
+            .header("Authorization", format!("Bearer {token}"))
+            .json(&crate::types::ReleaseRequest {
+                lease_id: lease_id.to_string(),
+            })
+            .send()
+            .await
+            .into_alien_error()
+            .context(ErrorData::HttpOperationFailed {
+                message: format!("Failed to release lease '{lease_id}'"),
+                method: Some("POST".to_string()),
+                url: Some(endpoint.to_string()),
+            })?;
+
+        if response.status() == reqwest::StatusCode::UNAUTHORIZED {
+            return Err(AlienError::new(ErrorData::CommandReceiverUnauthorized {
+                operation: "lease release".to_string(),
+                url: endpoint.to_string(),
+            }));
+        }
+        if response.status().is_success()
+            || response.status() == reqwest::StatusCode::CONFLICT
+            || response.status() == reqwest::StatusCode::GONE
+        {
+            return Ok(());
+        }
+
+        let status = response.status();
+        let body = response.text().await.unwrap_or_default();
+        Err(AlienError::new(ErrorData::HttpOperationFailed {
+            message: format!("Lease release failed with status {status}: {body}"),
+            method: Some("POST".to_string()),
+            url: Some(endpoint.to_string()),
+        }))
     }
 }
 
@@ -490,6 +562,7 @@ mod tests {
             ),
             command_id: "cmd_123".to_string(),
             attempt: 1,
+            trace_context: None,
             deadline: None,
             command: "test-command".to_string(),
             params: BodySpec::inline(b"{}"),
@@ -681,6 +754,7 @@ mod tests {
             ),
             command_id: "cmd_decode".to_string(),
             attempt: 1,
+            trace_context: None,
             deadline: None,
             command: "test".to_string(),
             params: BodySpec::inline(&params_bytes),

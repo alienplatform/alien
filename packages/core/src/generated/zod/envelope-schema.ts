@@ -7,6 +7,7 @@ import * as z from "zod";
 import { BodySpecSchema } from "./body-spec-schema.js";
 import { CommandTargetSchema } from "./command-target-schema.js";
 import { ResponseHandlingSchema } from "./response-handling-schema.js";
+import { TraceContextSchema } from "./trace-context-schema.js";
 
 /**
  * @description Commands envelope sent to deployments
@@ -26,6 +27,9 @@ get "responseHandling"(){
               },
 get "target"(){
                 return CommandTargetSchema.describe("Identifies the specific resource a command is addressed to.")
+              },
+get "traceContext"(){
+                return z.union([TraceContextSchema, z.null()]).optional()
               }
     }).describe("Commands envelope sent to deployments")
 

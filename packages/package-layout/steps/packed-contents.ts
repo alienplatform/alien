@@ -1,11 +1,12 @@
-// Step 7 — packed-contents check for the publishable sdk/core tarballs.
+// Packed-contents check for every publishable package tarball.
 //
 // Asserts each packed tarball ships exactly its intended publish set: required
 // artifacts present, nothing outside the allowlist, no hard-denylisted files.
-// The per-platform prebuild packages are checked separately in
-// prebuild-packages.ts.
+// Per-platform prebuild packages are built, architecture-checked, installed,
+// and smoke-tested by the native release matrix; they do not exist in a normal
+// source checkout and are therefore not represented as expected failures here.
 
-import { existsSync, readFileSync } from "node:fs"
+import { readFileSync } from "node:fs"
 import { join, relative } from "node:path"
 import { type CheckResult, type Ctx, HARD_DENYLIST_PATTERNS, escapeRegExp, run } from "./shared.ts"
 
@@ -29,25 +30,8 @@ export function packedContents(ctx: Ctx): CheckResult[] {
     /^package\.json$/,
     /^README(\.|$)/i,
     /^LICENSE(\.|$)/i,
-    /^PACKAGE_LAYOUT\.md$/,
     /^dist\//,
   ]
-
-  // Files OUTSIDE the intended publish set that sdk/core ship TODAY, because no
-  // publishable manifest carries a `files` allowlist yet. Listed explicitly — not
-  // a silent allowance: anything not named here fails the run. Tightening the
-  // manifests (adding `files` and dropping these entries) is still pending for
-  // sdk/core; see packages/sdk/PACKAGE_LAYOUT.md.
-  const EXTRA_SHIPPED_TODAY: Record<string, RegExp[]> = {
-    sdk: [/^AGENTS\.md$/, /^scripts\//, /^src\//, /^tsconfig\.json$/, /^tsdown\.config\.ts$/],
-    core: [
-      /^AGENTS\.md$/,
-      /^kubb\.config\.ts$/,
-      /^src\//,
-      /^tsconfig\.json$/,
-      /^tsdown\.config\.ts$/,
-    ],
-  }
 
   /** The exact-contents allowlist for one packed package. */
   function allowedPatternsFor(name: string): RegExp[] {
@@ -65,10 +49,10 @@ export function packedContents(ctx: Ctx): CheckResult[] {
       return [...always, ...fromFiles]
     }
 
-    return [...DEFAULT_ALLOWED_PATTERNS, ...(EXTRA_SHIPPED_TODAY[name] ?? [])]
+    return DEFAULT_ALLOWED_PATTERNS
   }
 
-  for (const name of ["sdk", "core"]) {
+  for (const name of ["sdk", "core", "bindings", "commands"]) {
     const tarball = tarballs.get(name)
     if (!tarball) continue
     const entries = tarEntries(tarball, scriptDir).map(entry => entry.replace(/^package\//, ""))
@@ -76,9 +60,6 @@ export function packedContents(ctx: Ctx): CheckResult[] {
     // Required artifacts must be present…
     const hasManifest = entries.includes("package.json")
     const hasDist = entries.some(entry => /^dist\/.+\.js$/.test(entry))
-    // Only the three contract packages ship a PACKAGE_LAYOUT.md; core does not.
-    const requiresContract = existsSync(join(packagesDir, name, "PACKAGE_LAYOUT.md"))
-    const hasContract = entries.includes("PACKAGE_LAYOUT.md")
 
     // …and nothing outside the exact allowlist may ship. Hard-denylisted entries
     // are reported separately (and always), so exclude them from `unexpected` to
@@ -94,7 +75,6 @@ export function packedContents(ctx: Ctx): CheckResult[] {
     const problems: string[] = []
     if (!hasManifest) problems.push("missing package.json")
     if (!hasDist) problems.push("missing dist/*.js")
-    if (requiresContract && !hasContract) problems.push("missing PACKAGE_LAYOUT.md")
     if (denylisted.length > 0) {
       const shown = denylisted.slice(0, 5).join(", ")
       problems.push(
@@ -115,7 +95,7 @@ export function packedContents(ctx: Ctx): CheckResult[] {
       reason: problems.length === 0 ? "ok" : problems.join("; "),
       evidence:
         problems.length === 0
-          ? `${entries.length} entries, all within the expected file set${requiresContract ? " (incl. PACKAGE_LAYOUT.md)" : ""}`
+          ? `${entries.length} entries, all within the expected file set`
           : `${entries.length} entries in ${relative(scriptDir, tarball)}`,
     })
   }

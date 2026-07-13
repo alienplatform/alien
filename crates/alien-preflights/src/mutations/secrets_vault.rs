@@ -4,8 +4,8 @@ use crate::error::Result;
 use crate::StackMutation;
 use alien_core::permissions::{PermissionProfile, PermissionSetReference};
 use alien_core::{
-    Container, Daemon, DeploymentConfig, Platform, RemoteStackManagement, ResourceEntry,
-    ResourceLifecycle, ResourceRef, Stack, StackState, Vault, Worker,
+    ComputeCluster, Container, Daemon, DeploymentConfig, Platform, RemoteStackManagement,
+    ResourceEntry, ResourceLifecycle, ResourceRef, Stack, StackState, Vault, Worker,
 };
 use async_trait::async_trait;
 use tracing::{debug, info};
@@ -78,6 +78,7 @@ impl StackMutation for SecretsVaultMutation {
         // Step 2: Link the vault to all compute resources (Workers, Daemons, and Containers)
         // This gives them the vault binding so alien-worker-runtime can load secrets
         link_vault_to_compute_resources(&mut stack, secrets_vault_id)?;
+        add_vault_dependency_to_compute_clusters(&mut stack, secrets_vault_id);
 
         // Step 3: Add vault/data-read permission to all compute resource profiles
         // This allows Workers, Daemons, and Containers to read secrets from the vault
@@ -89,6 +90,34 @@ impl StackMutation for SecretsVaultMutation {
         add_vault_permissions_to_management(&mut stack, secrets_vault_id)?;
 
         Ok(stack)
+    }
+}
+
+/// Horizon machine identities receive narrowly scoped read access to the
+/// deployment secrets vault. Make the Frozen vault an explicit dependency so
+/// provider-specific ComputeCluster controllers never assign that access
+/// against a vault whose outputs or cloud resource do not exist yet.
+fn add_vault_dependency_to_compute_clusters(stack: &mut Stack, vault_id: &str) {
+    let vault_ref = ResourceRef::new(Vault::RESOURCE_TYPE, vault_id);
+
+    for (resource_id, entry) in &mut stack.resources {
+        if entry.config.resource_type() != ComputeCluster::RESOURCE_TYPE {
+            continue;
+        }
+        if entry
+            .dependencies
+            .iter()
+            .any(|dependency| dependency == &vault_ref)
+        {
+            continue;
+        }
+
+        entry.dependencies.push(vault_ref.clone());
+        debug!(
+            compute_cluster = %resource_id,
+            vault = %vault_id,
+            "Made the Horizon compute cluster depend on its deployment secrets vault"
+        );
     }
 }
 
@@ -313,6 +342,43 @@ mod tests {
             dependencies: Vec::new(),
             remote_access: false,
         }
+    }
+
+    #[test]
+    fn compute_cluster_depends_on_secrets_vault_exactly_once() {
+        let mut stack = Stack {
+            id: "test-stack".to_string(),
+            resources: IndexMap::from([(
+                "compute".to_string(),
+                ResourceEntry {
+                    config: alien_core::Resource::new(
+                        ComputeCluster::new("compute".to_string()).build(),
+                    ),
+                    lifecycle: ResourceLifecycle::Frozen,
+                    dependencies: Vec::new(),
+                    remote_access: false,
+                },
+            )]),
+            permissions: PermissionsConfig {
+                profiles: IndexMap::new(),
+                management: ManagementPermissions::Auto,
+            },
+            supported_platforms: None,
+            inputs: vec![],
+        };
+
+        add_vault_dependency_to_compute_clusters(&mut stack, "secrets");
+        add_vault_dependency_to_compute_clusters(&mut stack, "secrets");
+
+        let dependencies = &stack
+            .resources
+            .get("compute")
+            .expect("compute cluster")
+            .dependencies;
+        assert_eq!(
+            dependencies,
+            &[ResourceRef::new(Vault::RESOURCE_TYPE, "secrets")]
+        );
     }
 
     #[tokio::test]

@@ -25,15 +25,16 @@ the same wire protocol.
 | `CommandsClient#target` | method | `.target(name: string)` | Scopes the client to a target command-capable resource. Return type: `TargetedCommands` — DECIDED(08). |
 | `CommandsClient#invoke` | method | `.invoke(name: string, input, options?)` | Invokes a command and resolves to its response. types DECIDED(08) — see the DECIDED(08) section. |
 | `createCommandReceiver` | function | `createCommandReceiver(options?: CommandReceiverOptions): CommandReceiver` | Constructs the pull receiver from environment configuration. |
-| `CommandReceiverOptions` | type | constructor options | `{ env?, fetch?, pollIntervalMs?, leaseSeconds?, maxLeases? }`. Every field has a production default; the three tuning knobs exist mainly for tests. **DECIDED(08).** |
-| `CommandReceiver` | type | receiver handle | `.handle(name: string, handler)` registers a handler; `.run(): Promise<void>` leases and dispatches. Handler context `{ input, signal, deadline, commandId, attempt }`. Field types DECIDED(08) — see the DECIDED(08) section. |
-| `CommandReceiverConfigInvalidError` | error | `defineError({ code: "COMMAND_RECEIVER_CONFIG_INVALID", context: { … } })` | Thrown when receiver env config is empty/invalid. Context names the offending variable — any of the five in the receiver environment contract below. **DECIDED(09).** |
+| `CommandReceiverOptions` | type | constructor options | `{ env?, fetch?, pollIntervalMs?, pollMaxIntervalMs?, pollJitter?, leaseSeconds?, maxLeases?, drainTimeoutMs? }`. Constructor values override environment values. |
+| `CommandReceiver` | type | receiver handle | `.handle(name: string, handler)` registers a handler; `.run(): Promise<void>` leases and dispatches. Handler context includes input, cancellation, deadline, command identity, attempt, target identity, and optional W3C trace context. |
+| `CommandReceiverConfigInvalidError` | error | `defineError({ code: "COMMAND_RECEIVER_CONFIG_INVALID", context: { … } })` | Thrown when receiver env config is empty/invalid. Context names the offending identity, token-source, or tuning variable. **DECIDED(09).** |
 | sender error types | error | migrated from the current `@alienplatform/sdk/commands` error set | Sender-error set DECIDED(08) — the seven migrated errors; see the DECIDED(08) section. |
 | shared error primitives | re-export | `AlienError`, `defineError` (from `@alienplatform/core`) | Re-exported for consumer error handling. |
 
 ### Receiver environment contract
 
-All five variables below are required; an empty, missing, or invalid value
+The identity variables are required and one token source is required. An empty,
+missing, or invalid value
 fails fast with `COMMAND_RECEIVER_CONFIG_INVALID`, naming the specific
 variable. **DECIDED(09)** — the Rust receiver (`alien_commands::Receiver`)
 reads the identical names; the TypeScript receiver (`src/receiver.ts`) must match them
@@ -42,7 +43,8 @@ exactly so the two are behavior-identical twins.
 | Env var | Requirement | DECIDED(09) |
 |---|---|---|
 | `ALIEN_COMMANDS_URL` | Base URL of the command server. | Pinned since this file's creation. |
-| `ALIEN_COMMANDS_TOKEN` | Bearer token for outbound requests. | Reused from the existing worker command-polling token variable. |
+| `ALIEN_COMMANDS_TOKEN` | Bearer token for outbound requests. Required unless `ALIEN_COMMANDS_TOKEN_FILE` is set. | Reused from the existing worker command-polling token variable. |
+| `ALIEN_COMMANDS_TOKEN_FILE` | File containing the bearer token. Reread once after a 401 to support rotation. | Alternative to the literal token. |
 | `ALIEN_DEPLOYMENT_ID` | Deployment the leased commands belong to. | Reused; lease requests require it. |
 | `ALIEN_COMMANDS_TARGET_RESOURCE_ID` | This resource's id within the deployment's stack. | Reused from the existing target-resource variable. |
 | `ALIEN_COMMANDS_TARGET_RESOURCE_TYPE` | `container` \| `daemon`, lowercase; any other value (e.g. `worker`) is rejected. | New. Lease requests need a typed target and a receiver must not guess it — the worker runtime hardcodes `worker`; a Container/Daemon receiver gets its type injected. |
@@ -89,21 +91,23 @@ MAY depend on:
 - Importing the package and constructing `CommandsClient` requires no deployment and
   no cloud credentials.
 - `createCommandReceiver()` reads the receiver environment contract above. An
-  empty/invalid value on any of the five variables throws
+  empty/invalid required value or tunable throws
   `CommandReceiverConfigInvalidError` (code `COMMAND_RECEIVER_CONFIG_INVALID`)
   naming that variable.
 - The receiver leases only commands addressed to its own target resource, over
   outbound HTTPS; it never sees another target's commands.
 - **DECIDED(09).** Execution budget: each command runs under
-  `min(envelope.deadline, lease_expires_at)` — there is no lease-renewal call,
-  so the lease expiry always bounds the budget. On expiry the handler is
-  aborted, its cancellation signal (`ctx.signal`) fires, and the receiver
-  submits a `HANDLER_TIMEOUT` error response.
+  `min(envelope.deadline, lease_expires_at − 5 seconds)` — there is no
+  lease-renewal call, so the safety-margined lease expiry always bounds the
+  budget and leaves time to submit before the lease expires. On budget expiry
+  the handler is aborted, its cancellation signal (`ctx.signal`) fires, and
+  the receiver submits a `HANDLER_TIMEOUT` error response.
 - **DECIDED(09).** Error codes the receiver submits: `UNKNOWN_COMMAND` (no
-  handler registered for the leased command name), `HANDLER_ERROR` (the
-  handler threw/rejected, including a response-serialization failure), and
-  `HANDLER_TIMEOUT` (budget expiry, above). A params-decode failure is
-  submitted under the decode error's own code, not a receiver-specific one.
+  handler registered for the leased command name), a handler error's non-empty
+  string `code` when present or `HANDLER_ERROR` otherwise (including a
+  response-serialization failure), and `HANDLER_TIMEOUT` (budget expiry,
+  above). A params-decode failure is submitted under the decode error's own
+  code, not a receiver-specific one.
 - **DECIDED(09) — twin-pinned.** Envelope decode failures — malformed inline
   base64 params, and storage-mode params missing `storageGetRequest` — are
   submitted as `INVALID_ENVELOPE`, the identical code the Rust twin's
@@ -122,12 +126,13 @@ MAY depend on:
   is raised, the receiver stops *starting* new lease polls (checked at the
   top of each poll loop iteration) — a poll already in flight when shutdown
   is raised still completes, and any leases it returns are dispatched and
-  drained like the rest of the batch. Every in-flight command finishes
-  within its own budget before the receiver's run loop returns; no command
-  created after shutdown is ever leased.
-- **DECIDED(09).** Lease parameters: poll every 5 seconds, `maxLeases` 10,
-  `leaseSeconds` 60 per poll — identical to the existing worker-runtime
-  command-polling defaults.
+  handled like the rest of the batch. In-flight work gets 30 seconds to drain;
+  remaining handlers are aborted and their leases released. No command created
+  after shutdown is leased.
+- **DECIDED(09).** Lease parameters: 5 second base poll, 30 second maximum
+  backoff, 0.1 jitter, `maxLeases` 1, `leaseSeconds` 60, and a 30 second drain
+  timeout. The `ALIEN_COMMANDS_*` tuning variables configure them and explicit
+  constructor options win over environment values.
 - **DECIDED(09).** `ctx.input` is the decoded command param bytes: the same
   bytes the params envelope carries after decode, prior to any
   handler-side parsing. The concrete TypeScript context field types are now
@@ -137,9 +142,10 @@ MAY depend on:
   of the handler's return value (`JSON.stringify`-equivalent), submitted as
   the command's success response payload.
 - **DECIDED(09).** The handler context's `deadline` is the effective budget —
-  `min(envelope deadline, lease expiry)` — not the raw envelope deadline, and
-  it is always present while a lease is held. The TypeScript receiver must
-  expose the same value; anything else diverges the twins' timeout behavior.
+  `min(envelope deadline, lease expiry − 5 seconds)` — not the raw envelope
+  deadline, and it is always present while a lease is held. The TypeScript
+  receiver must expose the same value; anything else diverges the twins'
+  timeout behavior.
 
 ## DECIDED
 
@@ -147,10 +153,14 @@ The OPEN(08) type decisions, now pinned.
 
 - **`CommandReceiver` handler-context field types** (`CommandContext`, exported
   from `"."`): `{ input: Uint8Array; signal: AbortSignal; deadline: Date;
-  commandId: string; attempt: number }`. `input` is the decoded param bytes
+  commandId: string; attempt: number; target: { resourceId; resourceType };
+  traceContext?: { traceparent; tracestate? } }`.
+  `input` is the decoded param bytes
   (byte-for-byte twin of the Rust `ctx.input`); `signal` is the twin of the Rust
   `ctx.cancellation` token, firing at budget expiry; `deadline` is the effective
-  budget `min(envelope.deadline, leaseExpiresAt)`, always present. A
+  budget `min(envelope.deadline, leaseExpiresAt − 5 seconds)`, always present.
+  `traceContext` carries the envelope's optional W3C `traceparent` and
+  `tracestate`. A
   `CommandHandler` is `(ctx: CommandContext) => unknown | Promise<unknown>`; its
   return value is the JSON success body. `createCommandReceiver()` returns a
   `CommandReceiver` (`.handle` / `.run` / `.stop`); `.stop()` is the exposed
@@ -158,11 +168,10 @@ The OPEN(08) type decisions, now pinned.
 
 - **`CommandReceiverOptions`** (constructor options for `createCommandReceiver`,
   exported from `"."`): `{ env?: Record<string, string | undefined>; fetch?:
-  typeof fetch; pollIntervalMs?: number; leaseSeconds?: number; maxLeases?:
-  number }`. `env` defaults to `process.env`; `fetch` defaults to the global
-  `fetch`; the three tuning knobs default to the DECIDED(09) production
-  values (5000ms poll / 60s lease / 10 max leases) and exist mainly so tests
-  can drive the lease loop fast and inject a stub `fetch`.
+  typeof fetch; pollIntervalMs?: number; pollMaxIntervalMs?: number;
+  pollJitter?: number; leaseSeconds?: number; maxLeases?: number;
+  drainTimeoutMs?: number }`. `env` defaults to `process.env`; `fetch` defaults
+  to the global `fetch`; constructor tuning values override the environment.
 
 - **`InvalidEnvelopeError`** (`defineError`, exported from `"."`): code
   `INVALID_ENVELOPE`, context `{ field?: string; reason: string }`. Thrown by

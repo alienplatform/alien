@@ -2042,10 +2042,7 @@ async fn hash_typescript_dependency_inputs(
         return Ok(());
     };
 
-    let mut packages: Vec<PathBuf> = entries
-        .flatten()
-        .map(|entry| entry.path())
-        .collect();
+    let mut packages: Vec<PathBuf> = entries.flatten().map(|entry| entry.path()).collect();
     packages.sort();
 
     let mut bindings_realpath: Option<PathBuf> = None;
@@ -2067,9 +2064,7 @@ async fn hash_typescript_dependency_inputs(
     // Workspace dev addons for the requested targets, anchored on the real
     // bindings package location (mirrors the staging lookup's anchor).
     if let Some(bindings) = bindings_realpath {
-        for addon in
-            toolchain::native_addon::workspace_addon_inputs(&bindings, targets)
-        {
+        for addon in toolchain::native_addon::workspace_addon_inputs(&bindings, targets) {
             hasher.update(b"native-addon");
             hasher.update(addon.to_string_lossy().as_bytes());
             let bytes = fs::read(&addon).await.into_alien_error().context(
@@ -2324,8 +2319,7 @@ fn collect_source_files(base_dir: &Path, dir: &Path, files: &mut Vec<PathBuf>) -
 fn is_ignored_source_cache_path(file_name: &str) -> bool {
     matches!(
         file_name,
-        ".git" | ".alien" | ".alien-build" | "target" | "node_modules"
-            | "alien-bindings.node" // staged addon: derived artifact, hashed via its source
+        ".git" | ".alien" | ".alien-build" | "target" | "node_modules" | "alien-bindings.node" // staged addon: derived artifact, hashed via its source
     ) || file_name.ends_with(".bun-build")
 }
 

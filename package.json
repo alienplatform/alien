@@ -22,7 +22,7 @@
     "changeset": "changeset",
     "version:npm": "changeset version",
     "test:ts": "turbo test:ts --concurrency 15",
-    "validate:package-layout": "turbo run validate:package-layout",
+    "validate:package-layout": "node --experimental-strip-types packages/scripts/validate-package-layout.ts && pnpm --filter @alienplatform/package-layout check",
     "format-and-lint": "biome check .",
     "format-and-lint:fix": "biome check . --write"
   },

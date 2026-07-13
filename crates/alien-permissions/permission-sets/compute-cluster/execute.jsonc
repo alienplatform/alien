@@ -1,6 +1,6 @@
 {
   "id": "compute-cluster/execute",
-  "description": "Runtime permissions for managed container VMs: cross-account image pull, per-container service account impersonation, EBS/disk attach, and LB target registration.",
+  "description": "Runtime permissions for managed container VMs: cross-account image pull, per-container service account impersonation, stack-scoped secret resolution, disk attach, and LB target registration.",
   "platforms": {
     "aws": [
       // Cross-account ECR image pull from managing account's registry
@@ -41,6 +41,29 @@
           },
           "resource": {
             "resources": ["arn:aws:iam::${awsAccountId}:role/${stackPrefix}-*-sa"]
+          }
+        }
+      },
+      // horizond resolves typed workload SecretRefs with the VM's ambient
+      // identity before starting the container. Keep reads inside this
+      // deployment's SSM namespace: the shared app-secret vault plus the
+      // controller-owned command-token path.
+      {
+        "grant": {
+          "actions": ["ssm:GetParameter"]
+        },
+        "binding": {
+          "stack": {
+            "resources": [
+              "arn:aws:ssm:${awsRegion}:${awsAccountId}:parameter/${stackPrefix}-secrets-*",
+              "arn:aws:ssm:${awsRegion}:${awsAccountId}:parameter/alien/${stackPrefix}/*"
+            ]
+          },
+          "resource": {
+            "resources": [
+              "arn:aws:ssm:${awsRegion}:${awsAccountId}:parameter/${stackPrefix}-secrets-*",
+              "arn:aws:ssm:${awsRegion}:${awsAccountId}:parameter/alien/${stackPrefix}/*"
+            ]
           }
         }
       },
@@ -154,6 +177,29 @@
           }
         }
       },
+      // Machine-wide Horizon secret resolution. The condition restricts the
+      // predefined accessor role to Secret Manager values owned by this stack.
+      {
+        "grant": {
+          "predefinedRoles": ["roles/secretmanager.secretAccessor"]
+        },
+        "binding": {
+          "stack": {
+            "scope": "projects/${projectName}",
+            "condition": {
+              "title": "HorizonStackSecretsRead",
+              "expression": "(resource.type == \"secretmanager.googleapis.com/Secret\" || resource.type == \"secretmanager.googleapis.com/SecretVersion\") && resource.name.startsWith(\"projects/${projectNumber}/secrets/${stackPrefix}-\")"
+            }
+          },
+          "resource": {
+            "scope": "projects/${projectName}",
+            "condition": {
+              "title": "HorizonStackSecretsRead",
+              "expression": "(resource.type == \"secretmanager.googleapis.com/Secret\" || resource.type == \"secretmanager.googleapis.com/SecretVersion\") && resource.name.startsWith(\"projects/${projectNumber}/secrets/${stackPrefix}-\")"
+            }
+          }
+        }
+      },
       // Disk attach/detach for persistent storage containers (container runtime)
       {
         "grant": {
@@ -205,6 +251,21 @@
           },
           "resource": {
             "scope": "/subscriptions/${managingSubscriptionId}/resourceGroups/${managingResourceGroup}"
+          }
+        }
+      },
+      // horizond uses the VMSS identity to resolve app, command-token, and
+      // telemetry SecretRefs from the deployment's dedicated Key Vault.
+      {
+        "grant": {
+          "predefinedRoles": ["Key Vault Secrets User"]
+        },
+        "binding": {
+          "stack": {
+            "scope": "/subscriptions/${subscriptionId}/resourceGroups/${resourceGroup}/providers/Microsoft.KeyVault/vaults/${stackPrefix}-secrets"
+          },
+          "resource": {
+            "scope": "/subscriptions/${subscriptionId}/resourceGroups/${resourceGroup}/providers/Microsoft.KeyVault/vaults/${stackPrefix}-secrets"
           }
         }
       },

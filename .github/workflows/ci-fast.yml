@@ -124,10 +124,7 @@ jobs:
           NODE_OPTIONS: "--max-old-space-size=8192"
         run: pnpm test:ts
 
-      - name: Validate package layout
-        run: pnpm validate:package-layout
-
-      - name: Build bindings dev addon (used by compiled-binary binding tests)
+      - name: Build bindings dev addon (used by package and compiled-binary tests)
         # alien-bindings-node is not a pnpm workspace member; resolve the napi
         # CLI from package-layout's devDependencies (root frozen-lockfile
         # install), matching the fixture's own CI recipe in run.ts. Debug
@@ -138,6 +135,9 @@ jobs:
         env:
           CARGO_BUILD_JOBS: "6"
         run: ../../packages/package-layout/node_modules/.bin/napi build --platform
+
+      - name: Validate package layout
+        run: pnpm validate:package-layout
 
       - name: TypeScript unit tests
         # The per-package vitest suites (commands receiver twins, bindings
@@ -190,7 +190,6 @@ jobs:
       - name: Run examples
         if: steps.changes.outputs.examples == 'true' || github.event_name == 'workflow_dispatch' || github.ref == 'refs/heads/main'
         env:
-          ALIEN_EXAMPLES_REUSE_BUILT_PACKAGES: "true"
           NODE_OPTIONS: "--max-old-space-size=4096"
           RUST_LOG: info
           VERBOSE: "true"

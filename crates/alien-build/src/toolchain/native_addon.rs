@@ -257,18 +257,13 @@ async fn resolve_bindings_dist_dir(
     // First line is the resolution route ("direct" or "sdk"), second the
     // resolved native entry path — the route decides which package the
     // generated entry wrapper can import `installEmbeddedAddon` from.
-    let (route_str, native_entry) =
-        resolved
-            .split_once('\n')
-            .ok_or_else(|| {
-                AlienError::new(ErrorData::ImageBuildFailed {
-                    resource_name: resource_name.to_string(),
-                    reason: format!(
-                        "Unexpected output resolving @alienplatform/bindings: '{resolved}'"
-                    ),
-                    build_output: None,
-                })
-            })?;
+    let (route_str, native_entry) = resolved.split_once('\n').ok_or_else(|| {
+        AlienError::new(ErrorData::ImageBuildFailed {
+            resource_name: resource_name.to_string(),
+            reason: format!("Unexpected output resolving @alienplatform/bindings: '{resolved}'"),
+            build_output: None,
+        })
+    })?;
     let route = match route_str {
         "sdk" => AddonResolutionRoute::ViaSdk,
         "direct" => AddonResolutionRoute::DirectBindings,
@@ -329,10 +324,7 @@ pub(super) struct StagedAddon {
 /// up from `anchor` (typically the realpath of the resolved bindings
 /// package). Used by the build cache key: the compiled binary embeds these
 /// bytes, so a rebuilt addon must invalidate cached artifacts.
-pub(crate) fn workspace_addon_inputs(
-    anchor: &Path,
-    targets: &[BinaryTarget],
-) -> Vec<PathBuf> {
+pub(crate) fn workspace_addon_inputs(anchor: &Path, targets: &[BinaryTarget]) -> Vec<PathBuf> {
     let mut crate_dir: Option<PathBuf> = None;
     let mut dir = Some(anchor);
     while let Some(current) = dir {
@@ -364,7 +356,9 @@ static STAGING_LOCKS: std::sync::OnceLock<
 > = std::sync::OnceLock::new();
 
 async fn lock_staged_path(staged: &Path) -> tokio::sync::OwnedMutexGuard<()> {
-    let key = staged.canonicalize().unwrap_or_else(|_| staged.to_path_buf());
+    let key = staged
+        .canonicalize()
+        .unwrap_or_else(|_| staged.to_path_buf());
     let lock = {
         let map = STAGING_LOCKS.get_or_init(Default::default);
         let mut map = map.lock().expect("staging lock map poisoned");

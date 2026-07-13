@@ -1,34 +1,6 @@
 {
-  "name": "@alienplatform/scripts",
+  "name": "@alienplatform/package-scripts",
   "version": "0.0.0",
   "private": true,
-  "type": "module",
-  "description": "Internal validation scripts enforcing the TypeScript package layout contracts (PACKAGE_LAYOUT.md)",
-  "keywords": ["alien", "internal", "validation"],
-  "author": "Alien Software, Inc. <hi@alien.dev>",
-  "license": "FSL-1.1-Apache-2.0",
-  "homepage": "https://alien.dev",
-  "repository": {
-    "type": "git",
-    "url": "https://github.com/alienplatform/alien.git",
-    "directory": "packages/scripts"
-  },
-  "scripts": {
-    "test": "vitest run",
-    "test:watch": "vitest",
-    "test:ts": "tsc --noEmit",
-    "validate:package-layout": "node --experimental-strip-types validate-package-layout.ts",
-    "format-and-lint": "biome check .",
-    "format-and-lint:fix": "biome check . --write"
-  },
-  "dependencies": {
-    "ts-pattern": "^5.7.1"
-  },
-  "devDependencies": {
-    "@alienplatform/typescript-config": "workspace:^",
-    "@biomejs/biome": "^1.9.4",
-    "@types/node": "^24.0.15",
-    "typescript": "^5.8.3",
-    "vitest": "^3.1.4"
-  }
+  "type": "module"
 }

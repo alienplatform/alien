@@ -175,8 +175,8 @@ pub async fn run(
     // 3. Start application subprocess with secrets
     let mut child = start_application(&config, &secrets, log_exporter).await?;
 
-    // 4. Wait for app to register HTTP port (if transport needs it)
-    let app_http_port = if config.transport != TransportType::Passthrough {
+    // 4. Wait for app to register HTTP port.
+    let app_http_port = {
         info!("Waiting for application to register HTTP server...");
         match tokio::time::timeout(
             std::time::Duration::from_secs(30),
@@ -197,27 +197,23 @@ pub async fn run(
                 None
             }
         }
-    } else {
-        None
     };
 
     // 4b. Wait for app to subscribe to the task stream before accepting invocations.
     // Without this, cold starts can race: the invoke arrives before the app has called
     // WaitForTasks, causing "channel closed" errors on the broadcast channel.
-    if config.transport != TransportType::Passthrough {
-        info!("Waiting for application to subscribe to task stream...");
-        match tokio::time::timeout(
-            std::time::Duration::from_secs(30),
-            control_server.wait_for_task_subscriber(),
-        )
-        .await
-        {
-            Ok(_) => {
-                info!("Application subscribed to task stream");
-            }
-            Err(_) => {
-                warn!("Timeout waiting for task stream subscriber — commands may fail");
-            }
+    info!("Waiting for application to subscribe to task stream...");
+    match tokio::time::timeout(
+        std::time::Duration::from_secs(30),
+        control_server.wait_for_task_subscriber(),
+    )
+    .await
+    {
+        Ok(_) => {
+            info!("Application subscribed to task stream");
+        }
+        Err(_) => {
+            warn!("Timeout waiting for task stream subscriber — commands may fail");
         }
     }
 
@@ -398,13 +394,6 @@ fn spawn_transport(
                 transport = transport.with_app_port(port);
             }
             Ok(tokio::spawn(async move { transport.run().await }))
-        }
-
-        TransportType::Passthrough => {
-            info!("Passthrough mode - no transport");
-            Ok(tokio::spawn(async move {
-                std::future::pending::<Result<()>>().await
-            }))
         }
 
         #[cfg(feature = "aws")]
@@ -701,7 +690,7 @@ fn application_runtime_env(config: &RuntimeConfig) -> Vec<(&'static str, String)
     // Setting ALIEN_WORKER_GRPC_ADDRESS is what selects the worker-protocol gRPC
     // channel in the app SDK — its presence is the mode switch, so no separate
     // mode flag is injected.
-    let mut env = vec![
+    vec![
         (
             ENV_ALIEN_WORKER_GRPC_ADDRESS,
             config.bindings_address.clone(),
@@ -710,13 +699,7 @@ fn application_runtime_env(config: &RuntimeConfig) -> Vec<(&'static str, String)
             ENV_ALIEN_TRANSPORT,
             application_transport_env_value(config.transport).to_string(),
         ),
-    ];
-
-    if config.transport == TransportType::Passthrough {
-        env.push(("PORT", config.transport_port.to_string()));
-    }
-
-    env
+    ]
 }
 
 fn application_transport_env_value(transport: TransportType) -> &'static str {
@@ -726,7 +709,6 @@ fn application_transport_env_value(transport: TransportType) -> &'static str {
         TransportType::ContainerApp => "container-app",
         TransportType::Http => "http",
         TransportType::Local => "local",
-        TransportType::Passthrough => "passthrough",
     }
 }
 
@@ -775,7 +757,7 @@ async fn stream_output(
         LogExporter::None => {
             // Containers: Pass through to stdout/stderr (orchestrator captures)
             // No prefix needed; the runtime adds resource_id when sending to OTLP/LogBuffer.
-            tracing::debug!("Starting passthrough log streaming");
+            tracing::debug!("Starting forwarded log streaming");
 
             while let Ok(Some(line)) = lines.next_line().await {
                 if is_stdout {
@@ -785,7 +767,7 @@ async fn stream_output(
                 }
             }
 
-            tracing::debug!("Passthrough log streaming ended");
+            tracing::debug!("Forwarded log streaming ended");
         }
     }
 }
@@ -872,43 +854,31 @@ mod tests {
     use super::{application_runtime_env, RuntimeConfig, TransportType};
 
     #[test]
-    fn application_runtime_env_forces_runtime_grpc_provider() {
-        let config = RuntimeConfig::builder()
-            .transport(TransportType::Passthrough)
-            .transport_port(61000)
-            .command(vec!["app".to_string()])
-            .bindings_address("127.0.0.1:60000".to_string())
-            .build();
+    fn application_runtime_env_uses_only_worker_transports() {
+        for (transport, expected) in [
+            (TransportType::Lambda, "lambda"),
+            (TransportType::CloudRun, "cloud-run"),
+            (TransportType::ContainerApp, "container-app"),
+            (TransportType::Http, "http"),
+            (TransportType::Local, "local"),
+        ] {
+            let config = RuntimeConfig::builder()
+                .transport(transport)
+                .transport_port(61000)
+                .command(vec!["app".to_string()])
+                .bindings_address("127.0.0.1:60000".to_string())
+                .build();
 
-        let env = application_runtime_env(&config)
-            .into_iter()
-            .collect::<HashMap<_, _>>();
+            let env = application_runtime_env(&config)
+                .into_iter()
+                .collect::<HashMap<_, _>>();
 
-        assert_eq!(
-            env.get(ENV_ALIEN_WORKER_GRPC_ADDRESS),
-            Some(&"127.0.0.1:60000".to_string())
-        );
-        assert_eq!(
-            env.get(ENV_ALIEN_TRANSPORT),
-            Some(&"passthrough".to_string())
-        );
-        assert_eq!(env.get("PORT"), Some(&"61000".to_string()));
-    }
-
-    #[test]
-    fn application_runtime_env_overrides_local_transport_without_port() {
-        let config = RuntimeConfig::builder()
-            .transport(TransportType::Local)
-            .transport_port(61000)
-            .command(vec!["app".to_string()])
-            .bindings_address("127.0.0.1:60000".to_string())
-            .build();
-
-        let env = application_runtime_env(&config)
-            .into_iter()
-            .collect::<HashMap<_, _>>();
-
-        assert_eq!(env.get(ENV_ALIEN_TRANSPORT), Some(&"local".to_string()));
-        assert_eq!(env.get("PORT"), None);
+            assert_eq!(
+                env.get(ENV_ALIEN_WORKER_GRPC_ADDRESS),
+                Some(&"127.0.0.1:60000".to_string())
+            );
+            assert_eq!(env.get(ENV_ALIEN_TRANSPORT), Some(&expected.to_string()));
+            assert_eq!(env.get("PORT"), None);
+        }
     }
 }
