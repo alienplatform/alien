@@ -130,6 +130,13 @@ on:
   pull_request:
     types: [opened, reopened, synchronize, labeled]
 
+# Every run currently shares ALIEN_E2E_SLOT 03. Serialize the complete workflow
+# so a newer run cannot reuse resources while an older run is still testing or
+# cleaning them up.
+concurrency:
+  group: e2e-tests-slot-03
+  cancel-in-progress: false
+
 permissions:
   contents: read
   id-token: write
