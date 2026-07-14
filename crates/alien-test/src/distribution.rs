@@ -473,7 +473,7 @@ async fn prepare_distribution(
     info!(%test_name, "Starting distribution E2E setup");
 
     let config = TestConfig::from_env();
-    if !e2e::is_platform_available(&config, platform, model, app) {
+    if !is_distribution_flow_available(flow, &config, app) {
         anyhow::bail!(
             "Skipping {}: platform credentials not available or platform not supported for this distribution flow",
             test_name,
@@ -565,6 +565,25 @@ async fn prepare_distribution(
         group_id,
         dg_token,
     })
+}
+
+fn is_distribution_flow_available(
+    flow: DistributionFlow,
+    config: &TestConfig,
+    app: TestApp,
+) -> bool {
+    if let Some(base_platform) = flow.kubernetes_base_platform() {
+        return config.has_platform(base_platform);
+    }
+
+    match flow {
+        DistributionFlow::TerraformOnpremHelmPull => {
+            [Platform::Aws, Platform::Gcp, Platform::Azure]
+                .into_iter()
+                .any(|platform| config.has_platform(platform))
+        }
+        _ => e2e::is_platform_available(config, flow.platform(), flow.deployment_model(), app),
+    }
 }
 
 fn missing_distribution_flow_config(
@@ -3448,6 +3467,85 @@ mod tests {
             e2e_network_mode: crate::config::E2eNetworkMode::None,
             kubernetes_cluster_mode: KubernetesClusterMode::Existing,
         }
+    }
+
+    fn test_config_with_platform(platform: Platform) -> TestConfig {
+        let mut config = empty_test_config();
+        match platform {
+            Platform::Aws => {
+                let credentials = AwsConfig {
+                    access_key_id: "test".to_string(),
+                    secret_access_key: "test".to_string(),
+                    session_token: None,
+                    region: "us-east-1".to_string(),
+                    account_id: Some("123456789012".to_string()),
+                };
+                config.aws_mgmt = Some(credentials.clone());
+                config.aws_target = Some(credentials);
+            }
+            Platform::Gcp => {
+                let credentials = GcpConfig {
+                    project_id: "test-project".to_string(),
+                    region: "us-central1".to_string(),
+                    credentials_json: Some("{}".to_string()),
+                    management_identity_email: None,
+                    management_identity_unique_id: None,
+                };
+                config.gcp_mgmt = Some(credentials.clone());
+                config.gcp_target = Some(credentials);
+            }
+            Platform::Azure => {
+                let credentials = AzureConfig {
+                    subscription_id: "test-subscription".to_string(),
+                    tenant_id: "test-tenant".to_string(),
+                    client_id: "test-client".to_string(),
+                    client_secret: "test-secret".to_string(),
+                    region: "eastus".to_string(),
+                    principal_id: Some("test-principal".to_string()),
+                    oidc_issuer: None,
+                    oidc_subject: None,
+                };
+                config.azure_mgmt = Some(credentials.clone());
+                config.azure_target = Some(credentials);
+            }
+            other => panic!("unsupported test platform: {other}"),
+        }
+        config
+    }
+
+    #[test]
+    fn managed_kubernetes_distribution_availability_uses_base_cloud() {
+        for (flow, base_platform) in [
+            (DistributionFlow::CloudFormationEksHelmPull, Platform::Aws),
+            (DistributionFlow::TerraformEksHelmPull, Platform::Aws),
+            (DistributionFlow::TerraformGkeHelmPull, Platform::Gcp),
+            (DistributionFlow::TerraformAksHelmPull, Platform::Azure),
+        ] {
+            assert!(is_distribution_flow_available(
+                flow,
+                &test_config_with_platform(base_platform),
+                TestApp::RuntimeLessMixed,
+            ));
+            assert!(!is_distribution_flow_available(
+                flow,
+                &empty_test_config(),
+                TestApp::RuntimeLessMixed,
+            ));
+        }
+    }
+
+    #[test]
+    fn onprem_distribution_requires_a_cloud_registry_platform() {
+        assert!(!is_distribution_flow_available(
+            DistributionFlow::TerraformOnpremHelmPull,
+            &empty_test_config(),
+            TestApp::RuntimeLessMixed,
+        ));
+        assert!(is_distribution_flow_available(
+            DistributionFlow::TerraformOnpremHelmPull,
+            &test_config_with_platform(Platform::Gcp),
+            TestApp::RuntimeLessMixed,
+        ));
     }
 
     fn contains_resource_type(stack: &Stack, resource_type: &str) -> bool {
