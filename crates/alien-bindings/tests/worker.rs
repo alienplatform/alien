@@ -973,6 +973,9 @@ impl AsyncTestContext for AzureProviderTestContext {
             alien_azure_clients::AzureCredentials::AccessToken { .. } => {
                 panic!("AccessToken credentials not supported in worker binding tests")
             }
+            alien_azure_clients::AzureCredentials::ScopedAccessTokens { .. } => {
+                panic!("ScopedAccessTokens credentials not supported in worker binding tests")
+            }
             alien_azure_clients::AzureCredentials::WorkloadIdentity { client_id, .. } => {
                 panic!("WorkloadIdentity credentials not fully supported in worker binding tests, client_id: {}", client_id)
             }

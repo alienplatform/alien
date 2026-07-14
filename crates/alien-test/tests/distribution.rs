@@ -52,6 +52,14 @@ async fn check_distribution_deployment(ctx: &mut alien_test::TestContext) {
                 panic!("container status check failed: {error:#}");
             }
         }
+        TestApp::RuntimeLessMixed => {
+            if let Err(error) =
+                common::runtime_less::check_mixed_runtime_less(&ctx.deployment).await
+            {
+                dump_kubernetes_debug(ctx, &error).await;
+                panic!("mixed runtime-less checks failed: {error:#}");
+            }
+        }
     }
 }
 
@@ -743,6 +751,20 @@ distribution_test_context!(
 #[tokio::test]
 async fn terraform_eks_helm_pull_command_routing_ts(
     ctx: &mut TerraformEksHelmPullCommandRoutingTs,
+) {
+    check_distribution_deployment(&mut ctx.ctx).await;
+}
+
+distribution_test_context!(
+    TerraformEksHelmPullRuntimeLessMixed,
+    DistributionFlow::TerraformEksHelmPull,
+    TestApp::RuntimeLessMixed
+);
+
+#[test_context(TerraformEksHelmPullRuntimeLessMixed)]
+#[tokio::test]
+async fn terraform_eks_helm_pull_runtime_less_mixed(
+    ctx: &mut TerraformEksHelmPullRuntimeLessMixed,
 ) {
     check_distribution_deployment(&mut ctx.ctx).await;
 }

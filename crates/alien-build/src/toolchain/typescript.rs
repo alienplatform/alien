@@ -545,7 +545,7 @@ impl Toolchain for TypeScriptToolchain {
             // statically imported .node addon: the binary embeds the addon but
             // crashes on load with "ReferenceError: __require is not defined".
             // --format=cjs is the verified workaround (see
-            // packages/bindings/scripts/compile-smoke.ts), applied only when
+            // packages/package-layout/steps/compile.ts), applied only when
             // an addon is staged so plain apps keep the default ESM output.
             if use_cjs_format {
                 args.push("--format=cjs");

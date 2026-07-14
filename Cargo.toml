@@ -41,6 +41,7 @@ members = [
   "crates/alien-test",
   "tests/e2e/test-apps/comprehensive-rust",
   "tests/e2e/test-apps/container-rust",
+  "tests/e2e/test-apps/runtime-less-mixed/daemon",
 ]
 resolver = "2"
 

@@ -1,9 +1,14 @@
 //! Credential resolution and minting endpoints.
 
+use alien_azure_clients::AzureClientConfigExt;
 use alien_bindings::traits::ImpersonationRequest;
 use alien_bindings::ServiceAccountInfo;
-use alien_core::ClientConfig;
-use alien_error::ContextError;
+use alien_core::{
+    AwsCredentials, AzureCredentials, ClientConfig, Container, Daemon, GcpCredentials, Platform,
+    ServiceAccount, Worker,
+};
+use alien_error::{AlienError, Context, ContextError};
+use alien_gcp_clients::GcpClientConfigExt;
 use axum::{
     extract::{Json, State},
     http::HeaderMap,
@@ -13,6 +18,7 @@ use axum::{
 };
 use chrono::{SecondsFormat, Utc};
 use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
 use tracing::info;
 
 use crate::auth::Subject;
@@ -33,6 +39,18 @@ const DEFAULT_DURATION_SECONDS: i32 = 3600;
 /// Maximum length of an STS `RoleSessionName`. Session names longer than this
 /// are hash-suffix truncated (see [`mint_session_name`]).
 const MAX_SESSION_NAME_LEN: usize = 64;
+/// GCP access tokens minted by this endpoint use the broad cloud-platform
+/// scope; the service account's IAM grants remain the authorization boundary.
+const GCP_CLOUD_PLATFORM_SCOPE: &str = "https://www.googleapis.com/auth/cloud-platform";
+/// The exact OAuth scopes used by Alien's Azure bindings. Azure access tokens
+/// are audience-specific, so one management token cannot safely stand in for
+/// storage, Key Vault, or Service Bus.
+const AZURE_MINT_SCOPES: [&str; 4] = [
+    "https://management.azure.com/.default",
+    "https://storage.azure.com/.default",
+    "https://vault.azure.net/.default",
+    "https://servicebus.azure.net/.default",
+];
 
 // --- Request / Response types ---
 
@@ -74,10 +92,9 @@ pub struct MintCredentialsRequest {
     /// Deployment to mint credentials for. The caller's bearer token must be
     /// this deployment's token (or a workspace-admin token).
     pub deployment_id: String,
-    /// Optional target resource the credentials are scoped to. Only affects the
-    /// impersonation session name.
-    #[serde(default)]
-    pub resource_id: Option<String>,
+    /// Current-release compute resource requesting the credentials. The
+    /// resource must depend on `bindingName` as a service-account resource.
+    pub resource_id: String,
     /// Service-account binding to impersonate on the target platform.
     pub binding_name: String,
     /// Requested lifetime in seconds. Clamped to
@@ -243,22 +260,23 @@ async fn mint_credentials(
     if let Some(response) = validate_sts_session_component("bindingName", &req.binding_name) {
         return response;
     }
-    if let Some(resource_id) = req.resource_id.as_deref() {
-        if let Some(response) = validate_sts_session_component("resourceId", resource_id) {
-            return response;
-        }
+    if let Some(response) = validate_sts_session_component("resourceId", &req.resource_id) {
+        return response;
+    }
+    if let Err(response) =
+        validate_mint_resource_link(&state, &deployment, &req.resource_id, &req.binding_name).await
+    {
+        return response;
     }
 
     let platform = deployment.platform;
     let duration_seconds = clamp_duration(req.duration_seconds);
-    let session_name = mint_session_name(&req.deployment_id, req.resource_id.as_deref());
+    let session_name = mint_session_name(&req.deployment_id, &req.resource_id);
 
-    // Prefer per-target impersonation: if a target bindings provider is
-    // configured for this platform (managed / cross-account mode), impersonate
-    // the requested service-account binding to obtain short-lived credentials.
-    // Otherwise fall back to the deployment-level credential resolver
-    // (single-account / local mode). The branch — not a config flag — is what
-    // distinguishes managed impersonation from local resolution.
+    // Cloud minting requires a per-target bindings provider. The generic
+    // resolver may contain manager-local static or refreshable credentials and
+    // must never be serialized to a workload. Only the Local platform retains
+    // resolver fallback for its credential-free fixture config.
     let (client_config, principal, provider) =
         if let Some(target_provider) = state.target_bindings_providers.get(&platform) {
             let service_account = match target_provider
@@ -314,12 +332,37 @@ async fn mint_credentials(
                 }
             };
 
-            (impersonated, principal_from_info(&info), "impersonation")
+            let materialized = match materialize_minted_client_config(impersonated).await {
+                Ok(config) => config,
+                Err(e) => return e.into_response(),
+            };
+            if materialized.platform() != platform {
+                return ErrorData::internal(format!(
+                    "Credential impersonation for {platform} returned {} credentials",
+                    materialized.platform()
+                ))
+                .into_response();
+            }
+
+            (materialized, principal_from_info(&info), "impersonation")
         } else {
+            if platform != Platform::Local {
+                return ErrorData::internal(format!(
+                    "Credential minting for {platform} requires a target bindings provider"
+                ))
+                .into_response();
+            }
+
             match state.credential_resolver.resolve(&deployment).await {
-                Ok(config) => {
+                Ok(config @ ClientConfig::Local { .. }) => {
                     let principal = principal_from_client_config(&config);
                     (config, principal, "resolver")
+                }
+                Ok(_) => {
+                    return ErrorData::internal(
+                        "Local credential mint fallback returned a non-local client config",
+                    )
+                    .into_response()
                 }
                 Err(e) => return e.into_response(),
             }
@@ -332,7 +375,7 @@ async fn mint_credentials(
     // request shape, the resolved provider/principal, and the expiry.
     info!(
         deployment_id = %req.deployment_id,
-        resource_id = req.resource_id.as_deref().unwrap_or("-"),
+        resource_id = %req.resource_id,
         binding_name = %req.binding_name,
         provider = %provider,
         principal = %principal,
@@ -351,6 +394,167 @@ async fn mint_credentials(
 
 // --- Mint helpers ---
 
+/// Ensure an authenticated caller cannot ask for an arbitrary binding. Minting
+/// is permitted only for an application compute resource in the deployment's
+/// current release, and only for a service account that resource depends on.
+async fn validate_mint_resource_link(
+    state: &AppState,
+    deployment: &DeploymentRecord,
+    resource_id: &str,
+    binding_name: &str,
+) -> std::result::Result<(), Response> {
+    let release_id = deployment.current_release_id.as_deref().ok_or_else(|| {
+        ErrorData::bad_request("Deployment has no current release; credentials cannot be minted")
+            .into_response()
+    })?;
+
+    let release = state
+        .release_store
+        .get_release(&Subject::system(), release_id)
+        .await
+        .map_err(|error| {
+            error
+                .context(ErrorData::InternalError {
+                    message: format!(
+                        "Failed to load current release '{release_id}' for credential minting"
+                    ),
+                })
+                .into_response()
+        })?
+        .ok_or_else(|| {
+            ErrorData::internal(format!(
+                "Current release '{release_id}' for deployment '{}' does not exist",
+                deployment.id
+            ))
+            .into_response()
+        })?;
+
+    let stack = release.stacks.get(&deployment.platform).ok_or_else(|| {
+        ErrorData::internal(format!(
+            "Current release '{release_id}' has no {} stack",
+            deployment.platform
+        ))
+        .into_response()
+    })?;
+    let resource = stack.resources.get(resource_id).ok_or_else(|| {
+        ErrorData::bad_request(format!(
+            "Resource '{resource_id}' is not part of the deployment's current release"
+        ))
+        .into_response()
+    })?;
+
+    let resource_type = resource.config.resource_type();
+    if resource_type != Container::RESOURCE_TYPE
+        && resource_type != Worker::RESOURCE_TYPE
+        && resource_type != Daemon::RESOURCE_TYPE
+    {
+        return Err(ErrorData::bad_request(format!(
+            "Resource '{resource_id}' is not an application compute resource"
+        ))
+        .into_response());
+    }
+
+    let intrinsic_dependencies = resource.config.get_dependencies();
+    let has_declared_binding_dependency = resource
+        .dependencies
+        .iter()
+        .chain(intrinsic_dependencies.iter())
+        .any(|dependency| {
+            dependency.resource_type() == &ServiceAccount::RESOURCE_TYPE
+                && dependency.id() == binding_name
+        });
+    // Release records contain the user stack. Deployment preflights
+    // deterministically create `{profile}-sa` and add the dependency for app
+    // compute resources, so recognize that generated current-release edge
+    // without consulting `runtime_metadata.prepared_stack` (which may already
+    // describe a desired release during an update).
+    let has_generated_binding_dependency = resource
+        .config
+        .get_permissions()
+        .filter(|profile| stack.permissions.profiles.contains_key(*profile))
+        .is_some_and(|profile| {
+            binding_name == format!("{profile}-sa")
+                && !(profile == "management"
+                    && matches!(
+                        deployment.platform,
+                        Platform::Aws | Platform::Gcp | Platform::Azure
+                    ))
+        });
+    let has_binding_dependency =
+        has_declared_binding_dependency || has_generated_binding_dependency;
+    if !has_binding_dependency {
+        return Err(ErrorData::bad_request(format!(
+            "Resource '{resource_id}' does not depend on service-account binding '{binding_name}'"
+        ))
+        .into_response());
+    }
+
+    Ok(())
+}
+
+/// Convert provider impersonation output into a response-safe credential
+/// form. Refreshable sources (service-account keys, workload identity files,
+/// managed-identity endpoints, manager profiles, etc.) never cross the API.
+async fn materialize_minted_client_config(
+    config: ClientConfig,
+) -> std::result::Result<ClientConfig, AlienError<ErrorData>> {
+    match config {
+        ClientConfig::Aws(config)
+            if matches!(
+                &config.credentials,
+                AwsCredentials::SessionCredentials { .. }
+            ) =>
+        {
+            Ok(ClientConfig::Aws(config))
+        }
+        ClientConfig::Aws(_) => Err(ErrorData::internal(
+            "AWS impersonation did not return short-lived session credentials",
+        )),
+        ClientConfig::Gcp(config) => {
+            let token = config
+                .get_bearer_token(GCP_CLOUD_PLATFORM_SCOPE)
+                .await
+                .context(ErrorData::InternalError {
+                    message: "Failed to materialize short-lived GCP credentials".to_string(),
+                })?;
+            let config = *config;
+            Ok(ClientConfig::Gcp(Box::new(alien_core::GcpClientConfig {
+                credentials: GcpCredentials::AccessToken { token },
+                ..config
+            })))
+        }
+        ClientConfig::Azure(config) => {
+            if matches!(&config.credentials, AzureCredentials::AccessToken { .. }) {
+                return Err(ErrorData::internal(
+                    "Azure impersonation returned a single-scope access token; exact per-scope tokens are required",
+                ));
+            }
+            let mut tokens = HashMap::with_capacity(AZURE_MINT_SCOPES.len());
+            for scope in AZURE_MINT_SCOPES {
+                let token = config.get_bearer_token_with_scope(scope).await.context(
+                    ErrorData::InternalError {
+                        message: format!(
+                        "Failed to materialize short-lived Azure credentials for scope '{scope}'"
+                    ),
+                    },
+                )?;
+                tokens.insert(scope.to_string(), token);
+            }
+            let config = *config;
+            Ok(ClientConfig::Azure(Box::new(
+                alien_core::AzureClientConfig {
+                    credentials: AzureCredentials::ScopedAccessTokens { tokens },
+                    ..config
+                },
+            )))
+        }
+        other => Err(ErrorData::internal(format!(
+            "Credential impersonation returned unsupported {} client config",
+            other.platform()
+        ))),
+    }
+}
+
 /// Clamp a requested duration into the allowed window, defaulting when absent.
 fn clamp_duration(requested: Option<i32>) -> i32 {
     requested
@@ -364,11 +568,8 @@ fn clamp_duration(requested: Option<i32>) -> i32 {
 /// When the raw name is too long, it is replaced by a stable
 /// `{prefix}-{hash8}` form so distinct inputs keep distinct (and reproducible)
 /// session names while staying within the limit.
-fn mint_session_name(deployment_id: &str, resource_id: Option<&str>) -> String {
-    let raw = match resource_id {
-        Some(resource_id) => format!("alien-mint-{deployment_id}-{resource_id}"),
-        None => format!("alien-mint-{deployment_id}"),
-    };
+fn mint_session_name(deployment_id: &str, resource_id: &str) -> String {
+    let raw = format!("alien-mint-{deployment_id}-{resource_id}");
     truncate_session_name(&raw)
 }
 
@@ -482,16 +683,15 @@ mod tests {
     #[test]
     fn session_name_short_is_unchanged() {
         assert_eq!(
-            mint_session_name("dep_123", Some("api")),
+            mint_session_name("dep_123", "api"),
             "alien-mint-dep_123-api"
         );
-        assert_eq!(mint_session_name("dep_123", None), "alien-mint-dep_123");
     }
 
     #[test]
     fn session_name_truncates_long_input_within_limit() {
         let long_deployment = "d".repeat(80);
-        let name = mint_session_name(&long_deployment, Some("some-long-resource-name"));
+        let name = mint_session_name(&long_deployment, "some-long-resource-name");
         assert!(
             name.len() <= MAX_SESSION_NAME_LEN,
             "session name must fit the STS limit, got {} chars: {name}",
@@ -503,10 +703,10 @@ mod tests {
     #[test]
     fn session_name_truncation_is_deterministic_and_distinct() {
         let base = "e".repeat(80);
-        let a = mint_session_name(&base, Some("resource-a"));
-        let b = mint_session_name(&base, Some("resource-b"));
+        let a = mint_session_name(&base, "resource-a");
+        let b = mint_session_name(&base, "resource-b");
         // Same input -> same output.
-        assert_eq!(a, mint_session_name(&base, Some("resource-a")));
+        assert_eq!(a, mint_session_name(&base, "resource-a"));
         // Different input -> different output (hash suffix disambiguates).
         assert_ne!(a, b);
         assert!(a.len() <= MAX_SESSION_NAME_LEN && b.len() <= MAX_SESSION_NAME_LEN);

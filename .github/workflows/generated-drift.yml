@@ -15,11 +15,19 @@ on:
 
 permissions:
   contents: read
-  id-token: write
 
 jobs:
   drift:
-    if: false # temporarily disabled — speakeasy CLI not available in CI
+    # Speakeasy does not support GitHub OIDC for CLI authentication. Keep this
+    # job gated until the SPEAKEASY_API_KEY secret is configured, then set the
+    # GENERATED_DRIFT_ENABLED repository variable to "true".
+    #
+    # Pull requests from forks cannot access repository secrets, so only run
+    # authenticated generation for branches in this repository.
+    if: >-
+      vars.GENERATED_DRIFT_ENABLED == 'true' &&
+      (github.event_name != 'pull_request' ||
+      github.event.pull_request.head.repo.full_name == github.repository)
     runs-on: depot-ubuntu-24.04-arm-4
     timeout-minutes: 60
     env:
@@ -44,9 +52,6 @@ jobs:
 
       - uses: mozilla-actions/sccache-action@v0.0.9
 
-      - name: Configure git credentials
-        run: git config --global url."https://x-access-token:${{ secrets.REPO_ACCESS_TOKEN }}@github.com/".insteadOf "https://github.com/"
-
       - name: Install protoc
         run: sudo apt-get update && sudo apt-get install -y protobuf-compiler
 
@@ -54,9 +59,15 @@ jobs:
         run: pnpm install --frozen-lockfile
 
       - name: Install Speakeasy CLI
-        run: npm install -g speakeasy@latest
+        # Match the version recorded by both checked-in Speakeasy lock files.
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          VERSION: "1.680.11"
+        run: curl -fsSL https://raw.githubusercontent.com/speakeasy-api/speakeasy/v1.680.11/install.sh | sh
 
       - name: Regenerate code
+        env:
+          SPEAKEASY_API_KEY: ${{ secrets.SPEAKEASY_API_KEY }}
         run: |
           pnpm generate
           pnpm generate:platform-api

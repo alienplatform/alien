@@ -13,7 +13,8 @@
  *      config in `crates/alien-bindings-node/package.json`. The workspace source
  *      manifest carries no `optionalDependencies`, so this path is a no-op
  *      (module-not-found) in every dev/test checkout — expected, and why step 3
- *      exists below.
+ *      exists below. Its reported version must match this wrapper package;
+ *      mixed wrapper/prebuild versions are rejected before any binding runs.
  *   3. Dev fallback: the locally-built addon under
  *      `crates/alien-bindings-node/alien-bindings-node.<triple>.node`, located by
  *      walking up from this module. This lets the repo run against a
@@ -217,6 +218,24 @@ function packageVersion(): string {
   return packageJson.version
 }
 
+/**
+ * Reject wrapper/addon version skew before the native module is used.
+ *
+ * The wrapper and every platform prebuild are published as one release. npm
+ * normally installs the exact version pinned in `optionalDependencies`, but a
+ * stale lockfile, package-manager override, or copied `node_modules` can still
+ * leave a different native binary on disk. Loading that binary risks calling
+ * an incompatible napi surface, so fail with the two observed versions.
+ */
+export function assertAddonVersion(addon: NativeAddon, expected: string, source: string): void {
+  const actual = addon.version()
+  if (actual !== expected) {
+    throw new Error(
+      `@alienplatform/bindings native addon version mismatch for ${source}: addon reports '${actual}', wrapper is '${expected}'. Reinstall @alienplatform/bindings so the wrapper and platform prebuild use the same version.`,
+    )
+  }
+}
+
 let cached: NativeAddon | undefined
 let embedded: NativeAddon | undefined
 
@@ -259,31 +278,40 @@ export function loadAddon(): NativeAddon {
   const triple = platformTriple()
   const pkg = `@alienplatform/bindings-${triple}`
 
+  let publishedPath: string | undefined
   try {
-    cached = require(pkg) as NativeAddon
-    return cached
+    publishedPath = require.resolve(pkg)
   } catch {
     // Prebuild not installed — fall through to the dev-built addon.
+  }
+  if (publishedPath) {
+    const addon = require(publishedPath) as NativeAddon
+    assertAddonVersion(addon, packageVersion(), `published prebuild '${pkg}'`)
+    cached = addon
+    return cached
   }
 
   const local = findLocalAddon(triple)
   if (local) {
     const addon = require(local) as NativeAddon
     const expected = packageVersion()
-    const actual = addon.version()
     // Trust the local addon only when its reported version matches the installed
     // package version. A mismatch means a stale build left over from an earlier
     // checkout (ABI/version skew) and must not be loaded.
-    if (actual === expected) {
+    try {
+      assertAddonVersion(addon, expected, `locally-built addon at '${local}'`)
       cached = addon
       return cached
+    } catch (error) {
+      // Stale locally-built addon (ABI/version skew) — warn and fall through to
+      // the standard "cannot load" error below rather than serving a mismatched
+      // binary. A dev checkout can repair this by rebuilding locally, while a
+      // published prebuild mismatch above is a broken installation and fails
+      // immediately with reinstall guidance.
+      console.warn(
+        `${error instanceof Error ? error.message : String(error)} Rebuild it with \`napi build --platform\` in crates/alien-bindings-node.`,
+      )
     }
-    // Stale locally-built addon (ABI/version skew) — warn and fall through to
-    // the standard "cannot load" error below rather than serving a mismatched
-    // binary.
-    console.warn(
-      `@alienplatform/bindings: ignoring stale locally-built addon at '${local}' (version '${actual}', expected '${expected}'). Rebuild it with \`napi build --platform\` in crates/alien-bindings-node.`,
-    )
   }
 
   throw new Error(

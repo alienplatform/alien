@@ -8,7 +8,7 @@
 //!   image entrypoint — no runtime, no `--` separator, no CMD;
 //! - a compiled TypeScript binary with a staged native bindings addon
 //!   actually RUNS and round-trips a real local kv binding (the
-//!   compile-smoke pattern from `packages/bindings/scripts/compile-smoke.ts`,
+//!   compile-smoke pattern from `packages/package-layout/steps/compile.ts`,
 //!   exercised through the real `TypeScriptToolchain` staging path).
 //!
 //! The image-shape test needs network access to pull base images (the same
@@ -191,12 +191,19 @@ async fn typescript_source_image_shapes_per_compute_type() {
     // x64 hosts stay x64): the staged addon is the HOST-built dev addon, so a
     // hardcoded x64 target can never be satisfied on an arm64 machine.
     let target = BinaryTarget::linux_container_target();
+    // E2E builds the branch's alien-base image before exercising image
+    // assembly. Accept that immutable image here when supplied so the test
+    // validates the code under review instead of the independently-published
+    // `latest` tag.
+    let worker_base_image = std::env::var("ALIEN_OVERRIDE_BASE_IMAGE")
+        .ok()
+        .filter(|image| !image.is_empty());
     let settings = BuildSettings {
         output_directory: output_dir.path().to_string_lossy().into_owned(),
         platform: PlatformBuildSettings::Test {},
         targets: Some(vec![target]),
         cache_url: None,
-        override_base_image: None,
+        override_base_image: worker_base_image,
         debug_mode: false,
     };
 
@@ -212,19 +219,14 @@ async fn typescript_source_image_shapes_per_compute_type() {
         .expect("worker image should load")
         .get_metadata()
         .expect("worker image metadata");
-    // The published alien-base:latest may still carry the pre-rename
-    // `/app/alien-runtime` entrypoint while the branch release is pending.
-    // This test verifies that Worker images preserve the base runtime
-    // entrypoint; the release pipeline owns replacing that base artifact.
     let worker_entrypoint = worker_meta
         .entrypoint
         .as_deref()
         .expect("Worker images must keep the runtime entrypoint");
-    assert_eq!(worker_entrypoint.len(), 1);
-    assert!(
-        worker_entrypoint[0] == "/app/alien-worker-runtime"
-            || worker_entrypoint[0] == "/app/alien-runtime",
-        "Worker entrypoint must be the runtime binary, got {worker_entrypoint:?}"
+    assert_eq!(
+        worker_entrypoint,
+        &["/app/alien-worker-runtime".to_string()],
+        "Worker entrypoint must use the renamed runtime binary"
     );
     assert_eq!(
         worker_meta.cmd.as_deref(),
@@ -266,8 +268,10 @@ async fn typescript_source_image_shapes_per_compute_type() {
 /// Compile a TypeScript app that uses `@alienplatform/bindings/native`
 /// through the real toolchain (which stages the target addon from the app's
 /// installed prebuild package), then RUN the produced binary from a
-/// different directory — with the staged addon cleaned up, proving the addon
-/// is embedded — and assert a real local-kv put/get round-trip.
+/// different directory. The staged addon intentionally remains available for
+/// concurrent builds; the independent package-layout compile-smoke removes its
+/// staged addon before execution to prove embedding. This test also asserts a
+/// real local-kv put/get round-trip.
 #[tokio::test]
 async fn compiled_typescript_binary_runs_local_binding() {
     if !bun_available() {

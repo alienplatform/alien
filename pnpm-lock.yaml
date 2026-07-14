@@ -333,6 +333,28 @@ importers:
         specifier: ^5.8.3
         version: 5.8.3
 
+  tests/e2e/test-apps/runtime-less-mixed:
+    dependencies:
+      '@alienplatform/bindings':
+        specifier: workspace:*
+        version: link:../../../../packages/bindings
+      '@alienplatform/commands':
+        specifier: workspace:*
+        version: link:../../../../packages/commands
+      '@alienplatform/core':
+        specifier: link:../../../../packages/core
+        version: link:../../../../packages/core
+    devDependencies:
+      '@alienplatform/typescript-config':
+        specifier: link:../../../../packages/config-typescript
+        version: link:../../../../packages/config-typescript
+      '@types/node':
+        specifier: ^24.0.15
+        version: 24.10.4
+      typescript:
+        specifier: ^5.8.3
+        version: 5.8.3
+
 packages:
 
   '@apidevtools/json-schema-ref-parser@14.2.1':

@@ -254,21 +254,10 @@
           }
         }
       },
-      // horizond uses the VMSS identity to resolve app, command-token, and
-      // telemetry SecretRefs from the deployment's dedicated Key Vault.
-      {
-        "grant": {
-          "predefinedRoles": ["Key Vault Secrets User"]
-        },
-        "binding": {
-          "stack": {
-            "scope": "/subscriptions/${subscriptionId}/resourceGroups/${resourceGroup}/providers/Microsoft.KeyVault/vaults/${stackPrefix}-secrets"
-          },
-          "resource": {
-            "scope": "/subscriptions/${subscriptionId}/resourceGroups/${resourceGroup}/providers/Microsoft.KeyVault/vaults/${stackPrefix}-secrets"
-          }
-        }
-      },
+      // The setup-owned Key Vault has a generated uniqueness suffix, so its
+      // exact scope cannot be expressed by this stack-prefix permission set.
+      // The provider ComputeCluster controller grants Key Vault Secrets User
+      // after resolving the concrete vault binding.
       // Disk attach/detach for persistent storage containers (container runtime)
       {
         "grant": {

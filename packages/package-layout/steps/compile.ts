@@ -9,7 +9,7 @@
 // addon `run.ts` itself resolved above). `--format=cjs` is required: a
 // plain ESM `bun build --compile` of this entry embeds the addon but
 // crashes on load with `ReferenceError: __require is not defined` — see
-// packages/bindings/scripts/compile-smoke.ts for the verified repro.
+// this compile-smoke step for the verified repro.
 
 import { copyFileSync, existsSync, mkdirSync, rmSync } from "node:fs"
 import { dirname, join } from "node:path"
@@ -99,7 +99,7 @@ export function compileNativeEmbed(ctx: Ctx): CheckResult[] {
 
   // Remove the staged .node now: if the binary didn't truly embed it,
   // running with the source file gone proves that (mirrors
-  // packages/bindings/scripts/compile-smoke.ts).
+  // this compile-smoke step).
   rmSync(stagedAddonPath, { force: true })
   const ran = run(outFile, [], fixtureDir)
   return [

@@ -5,8 +5,8 @@
 //! through `tower::ServiceExt::oneshot` — no real network involved. This file
 //! instead spins the real manager `AppState`/router on a real TCP listener
 //! (`axum::serve`) and points `alien_bindings::provider::BindingsProvider::
-//! from_env_lazy` — the actual entry point a deployed app process uses — at
-//! it over real HTTP, with a real deployment token minted by a real
+//! from_env_lazy` — the entry point an explicitly configured external/bootstrap
+//! integration uses — at it over real HTTP, with a real deployment token minted by a real
 //! `TokenStore`. That proves the client (`alien-bindings`'s minting resolver)
 //! and server (`alien-manager`'s mint route) round-trip correctly end-to-end,
 //! not just that each side unit-tests cleanly against a fake counterpart.
@@ -40,9 +40,11 @@ use alien_commands::dispatchers::NullCommandDispatcher;
 use alien_commands::server::{CommandDispatcher, CommandRegistry, CommandServer};
 use alien_commands::InMemoryCommandRegistry;
 use alien_core::{
-    Platform, StackSettings, CURRENT_DEPLOYMENT_PROTOCOL_VERSION, ENV_ALIEN_DEPLOYMENT_ID,
+    Container, ContainerCode, PermissionProfile, Platform, ResourceLifecycle, ResourceSpec,
+    RuntimeMetadata, ServiceAccount, Stack, StackSettings, StackState,
+    CURRENT_DEPLOYMENT_PROTOCOL_VERSION, ENV_ALIEN_DEPLOYMENT_ID,
     ENV_ALIEN_DEPLOYMENT_SERVICE_ACCOUNT, ENV_ALIEN_DEPLOYMENT_TOKEN, ENV_ALIEN_DEPLOYMENT_TYPE,
-    ENV_ALIEN_MANAGER_URL,
+    ENV_ALIEN_MANAGER_URL, ENV_ALIEN_RESOURCE_ID,
 };
 use alien_manager::auth::Subject;
 use alien_manager::config::ManagerConfig;
@@ -57,11 +59,12 @@ use alien_manager::stores::sqlite::{
     SqliteDatabase, SqliteDeploymentStore, SqliteReleaseStore, SqliteTokenStore,
 };
 use alien_manager::traits::{
-    AuthValidator, CreateDeploymentGroupParams, CreateDeploymentParams, CreateTokenParams,
-    CredentialResolver, DeploymentStore, ReleaseStore, TelemetryBackend, TokenStore, TokenType,
+    AuthValidator, CreateDeploymentGroupParams, CreateImportedDeploymentParams,
+    CreateReleaseParams, CreateTokenParams, CredentialResolver, DeploymentStore, ReleaseStore,
+    TelemetryBackend, TokenStore, TokenType,
 };
 
-const BINDING_NAME: &str = "management";
+const BINDING_NAME: &str = "execution-sa";
 
 /// Bound every mint round trip in these tests: a regression that hangs
 /// instead of erroring must fail the test quickly, not stall CI.
@@ -112,10 +115,36 @@ async fn build() -> Fixture {
         .await
         .unwrap();
 
-    let (deployment_a, token_a) =
-        create_deployment(&deployment_store, &token_store, &dg.id, "app-a").await;
-    let (_deployment_b, token_b) =
-        create_deployment(&deployment_store, &token_store, &dg.id, "app-b").await;
+    let release = release_store
+        .create_release(
+            &Subject::system(),
+            CreateReleaseParams {
+                project_id: "default".to_string(),
+                stacks: HashMap::from([(Platform::Local, mint_test_stack())]),
+                git_commit_sha: None,
+                git_commit_ref: None,
+                git_commit_message: None,
+            },
+        )
+        .await
+        .unwrap();
+
+    let (deployment_a, token_a) = create_deployment(
+        &deployment_store,
+        &token_store,
+        &dg.id,
+        "app-a",
+        &release.id,
+    )
+    .await;
+    let (_deployment_b, token_b) = create_deployment(
+        &deployment_store,
+        &token_store,
+        &dg.id,
+        "app-b",
+        &release.id,
+    )
+    .await;
 
     let auth_validator: Arc<dyn AuthValidator> =
         Arc::new(TokenDbValidator::new(token_store.clone()));
@@ -174,27 +203,64 @@ async fn build() -> Fixture {
     }
 }
 
+fn mint_test_stack() -> Stack {
+    let container = Container::new("api".to_string())
+        .code(ContainerCode::Image {
+            image: "example.invalid/api:latest".to_string(),
+        })
+        .cpu(ResourceSpec {
+            min: "0.25".to_string(),
+            desired: "0.5".to_string(),
+        })
+        .memory(ResourceSpec {
+            min: "256Mi".to_string(),
+            desired: "512Mi".to_string(),
+        })
+        .port(8080)
+        .permissions("execution".to_string())
+        .build();
+    Stack::new("mint-bootstrap".to_string())
+        .platforms(vec![Platform::Local])
+        .permission("execution", PermissionProfile::new())
+        .add(
+            ServiceAccount::new(BINDING_NAME.to_string()).build(),
+            ResourceLifecycle::Live,
+        )
+        .add(container, ResourceLifecycle::Live)
+        .build()
+}
+
 async fn create_deployment(
     deployment_store: &Arc<dyn DeploymentStore>,
     token_store: &Arc<dyn TokenStore>,
     deployment_group_id: &str,
     name: &str,
+    release_id: &str,
 ) -> (String, String) {
     let record = deployment_store
-        .create_deployment(
+        .create_with_state(
             &Subject::system(),
-            CreateDeploymentParams {
+            CreateImportedDeploymentParams {
                 deployment_protocol_version: CURRENT_DEPLOYMENT_PROTOCOL_VERSION,
                 name: name.to_string(),
                 deployment_group_id: deployment_group_id.to_string(),
                 platform: Platform::Local,
                 base_platform: None,
                 stack_settings: StackSettings::default(),
-                public_subdomain: None,
-                stack_state: None,
-                environment_variables: None,
+                stack_state: StackState::new(Platform::Local),
+                environment_info: None,
+                runtime_metadata: RuntimeMetadata::default(),
+                status: "running".to_string(),
+                current_release_id: Some(release_id.to_string()),
+                desired_release_id: None,
+                import_source: None,
+                setup_metadata: None,
+                setup_target: "test".to_string(),
+                setup_fingerprint: "test".to_string(),
+                setup_fingerprint_version: 1,
                 input_values: Default::default(),
                 deployment_token: None,
+                management_config: None,
             },
         )
         .await
@@ -287,6 +353,7 @@ fn base_env(
             ENV_ALIEN_DEPLOYMENT_SERVICE_ACCOUNT.to_string(),
             BINDING_NAME.to_string(),
         ),
+        (ENV_ALIEN_RESOURCE_ID.to_string(), "api".to_string()),
     ])
 }
 

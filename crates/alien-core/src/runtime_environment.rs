@@ -10,9 +10,17 @@ pub const ENV_ALIEN_LAMBDA_MODE: &str = "ALIEN_LAMBDA_MODE";
 pub const ENV_ALIEN_RUNTIME_SEND_OTLP: &str = "ALIEN_RUNTIME_SEND_OTLP";
 pub const ENV_ALIEN_RUNTIME_SECRETS: &str = "ALIEN_RUNTIME_SECRETS";
 pub const ENV_ALIEN_SECRETS: &str = "ALIEN_SECRETS";
+/// Opaque deployment-managed revision that rolls workloads when referenced
+/// secret values change without exposing secret-derived data in the spec.
+pub const ENV_ALIEN_SECRET_ENV_REVISION: &str = "ALIEN_SECRET_ENV_REVISION";
 pub const ENV_ALIEN_TRANSPORT: &str = "ALIEN_TRANSPORT";
 pub const ENV_ALIEN_DEPLOYMENT_ID: &str = "ALIEN_DEPLOYMENT_ID";
 pub const ENV_ALIEN_DEPLOYMENT_NAME: &str = "ALIEN_DEPLOYMENT_NAME";
+/// Identifies the current app resource within its deployment stack. Unlike
+/// command-specific target variables, this is the universal resource identity
+/// name. External/bootstrap mint clients include it when requesting
+/// resource-scoped credentials.
+pub const ENV_ALIEN_RESOURCE_ID: &str = "ALIEN_RESOURCE_ID";
 pub const ENV_ALIEN_PUBLIC_ENDPOINTS_JSON: &str = "ALIEN_PUBLIC_ENDPOINTS_JSON";
 pub const ENV_ALIEN_COMMANDS_POLLING_ENABLED: &str = "ALIEN_COMMANDS_POLLING_ENABLED";
 pub const ENV_ALIEN_COMMANDS_POLLING_URL: &str = "ALIEN_COMMANDS_POLLING_URL";
@@ -54,19 +62,15 @@ pub const ENV_ALIEN_COMMANDS_URL: &str = "ALIEN_COMMANDS_URL";
 pub const ENV_ALIEN_COMMANDS_TARGET_RESOURCE_TYPE: &str = "ALIEN_COMMANDS_TARGET_RESOURCE_TYPE";
 /// Base URL of the deployment's manager. The client-side minting-backed
 /// credential resolver ([`alien-bindings`]) posts to `{ALIEN_MANAGER_URL}/v1/credentials/mint`
-/// when native cloud credentials are not available in the environment.
-/// Injected for deployed app processes by the manager (controller injection is
-/// tracked as an ALIEN-218 task-10/16 follow-up).
+/// when an external/bootstrap integration explicitly configures the mint
+/// environment contract. Managed cloud workloads use projected identities.
 pub const ENV_ALIEN_MANAGER_URL: &str = "ALIEN_MANAGER_URL";
-/// Deployment bearer token the minting resolver presents to the manager. Carries
-/// the deployment's token value; kept distinct from [`ENV_ALIEN_COMMANDS_TOKEN`]
-/// (which is command-polling/receiver scoped and injected for command-enabled
-/// Workers as well as Container/Daemon receivers) so the Container/Daemon
-/// lazy-bindings path has a deployment-wide credential of its own.
+/// Deployment bearer token an external/bootstrap mint client presents to the
+/// manager. Kept distinct from [`ENV_ALIEN_COMMANDS_TOKEN`], which is scoped to
+/// command polling. Managed workload controllers do not inject this token.
 pub const ENV_ALIEN_DEPLOYMENT_TOKEN: &str = "ALIEN_DEPLOYMENT_TOKEN";
 /// Service-account binding name the minting resolver asks the manager to mint
-/// credentials for (the deployment's own managed identity). Required by the mint
-/// request contract; the manager selects and injects it (task-10/16 follow-up).
+/// credentials for. Required by the external/bootstrap mint request contract.
 ///
 /// Deliberately does **not** end in `_BINDING`: names matching `ALIEN_*_BINDING`
 /// are parsed as resource-binding JSON by the provider, which this is not.
@@ -494,8 +498,10 @@ pub fn is_reserved_runtime_environment_name(name: &str) -> bool {
                 | ENV_ALIEN_DEPLOYMENT_SERVICE_ACCOUNT
                 | ENV_ALIEN_DEPLOYMENT_TOKEN
                 | ENV_ALIEN_MANAGER_URL
+                | ENV_ALIEN_RESOURCE_ID
                 | ENV_ALIEN_PUBLIC_ENDPOINTS_JSON
                 | ENV_ALIEN_RUNTIME_SECRETS
+                | ENV_ALIEN_SECRET_ENV_REVISION
                 | ENV_ALIEN_SECRETS
         )
         || name.starts_with("ALIEN_BINDING_")
@@ -564,6 +570,9 @@ mod tests {
         ));
         assert!(is_reserved_runtime_environment_name(ENV_ALIEN_SECRETS));
         assert!(is_reserved_runtime_environment_name(
+            ENV_ALIEN_SECRET_ENV_REVISION
+        ));
+        assert!(is_reserved_runtime_environment_name(
             ENV_ALIEN_WORKER_GRPC_ADDRESS
         ));
         assert_eq!(ENV_ALIEN_WORKER_GRPC_ADDRESS, "ALIEN_WORKER_GRPC_ADDRESS");
@@ -585,8 +594,10 @@ mod tests {
         assert!(is_reserved_runtime_environment_name(
             ENV_ALIEN_DEPLOYMENT_SERVICE_ACCOUNT
         ));
+        assert!(is_reserved_runtime_environment_name(ENV_ALIEN_RESOURCE_ID));
         assert_eq!(ENV_ALIEN_MANAGER_URL, "ALIEN_MANAGER_URL");
         assert_eq!(ENV_ALIEN_DEPLOYMENT_TOKEN, "ALIEN_DEPLOYMENT_TOKEN");
+        assert_eq!(ENV_ALIEN_RESOURCE_ID, "ALIEN_RESOURCE_ID");
         assert_eq!(
             ENV_ALIEN_DEPLOYMENT_SERVICE_ACCOUNT,
             "ALIEN_DEPLOYMENT_SERVICE_ACCOUNT"

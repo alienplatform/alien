@@ -45,6 +45,7 @@ use utoipa::OpenApi;
         crate::routes::sync::initialize,
         // Credentials
         crate::routes::credentials::resolve_credentials,
+        crate::routes::credentials::mint_credentials,
     ),
     components(schemas(
         // Deployment types
@@ -86,6 +87,8 @@ use utoipa::OpenApi;
         // Credentials types
         crate::routes::credentials::ResolveCredentialsRequest,
         crate::routes::credentials::ResolveCredentialsResponse,
+        crate::routes::credentials::MintCredentialsRequest,
+        crate::routes::credentials::MintCredentialsResponse,
         // Identity types
         crate::routes::whoami::WhoamiResponse,
         // Health types

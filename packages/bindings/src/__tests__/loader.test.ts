@@ -1,5 +1,26 @@
 import { describe, expect, it } from "vitest"
-import { platformTriple } from "../loader.js"
+import type { NativeAddon } from "../loader.js"
+import { assertAddonVersion, platformTriple } from "../loader.js"
+
+function addonReporting(version: string): NativeAddon {
+  return {
+    BindingsHandle: class {
+      storage(): never {
+        throw new Error("not used by version validation")
+      }
+      kv(): never {
+        throw new Error("not used by version validation")
+      }
+      queue(): never {
+        throw new Error("not used by version validation")
+      }
+      vault(): never {
+        throw new Error("not used by version validation")
+      }
+    },
+    version: () => version,
+  }
+}
 
 describe("platformTriple", () => {
   // Pins the full platform/arch/libc -> napi triple mapping table (the
@@ -32,6 +53,30 @@ describe("platformTriple", () => {
   it("throws a clear error for an unsupported platform/arch pair", () => {
     expect(() => platformTriple("win32", "x64", "gnu")).toThrow(
       "@alienplatform/bindings has no native addon for platform 'win32' arch 'x64'.",
+    )
+  })
+})
+
+describe("assertAddonVersion", () => {
+  it("accepts the platform prebuild from the wrapper's release", () => {
+    expect(() =>
+      assertAddonVersion(
+        addonReporting("1.14.1"),
+        "1.14.1",
+        "published prebuild '@alienplatform/bindings-darwin-arm64'",
+      ),
+    ).not.toThrow()
+  })
+
+  it("rejects a platform prebuild from a different release with actionable details", () => {
+    expect(() =>
+      assertAddonVersion(
+        addonReporting("1.13.0"),
+        "1.14.1",
+        "published prebuild '@alienplatform/bindings-darwin-arm64'",
+      ),
+    ).toThrow(
+      "native addon version mismatch for published prebuild '@alienplatform/bindings-darwin-arm64': addon reports '1.13.0', wrapper is '1.14.1'. Reinstall @alienplatform/bindings",
     )
   })
 })

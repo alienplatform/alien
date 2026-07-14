@@ -7,12 +7,13 @@
 //! clamping, session-name wiring, short-lived-only managed credentials, response
 //! shape, and the guarantee that the audit log never carries credential material.
 //!
-//! Two credential paths are exercised explicitly rather than faked into one:
+//! Two credential paths are exercised explicitly:
 //!   * **managed / impersonation** — a target bindings provider is configured
 //!     for the platform, so the handler impersonates a service-account binding
-//!     and returns session-token credentials.
+//!     and returns materialized, short-lived credentials.
 //!   * **local / resolver** — no target provider, so the handler falls back to
-//!     the deployment-level credential resolver, which returns static keys.
+//!     the credential-free local client config. Cloud resolver fallback is
+//!     deliberately rejected.
 
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
@@ -26,7 +27,8 @@ use tower::ServiceExt;
 
 use alien_bindings::error::{ErrorData as BindingErrorData, Result as BindingResult};
 use alien_bindings::traits::{
-    AwsServiceAccountInfo, Binding, ImpersonationRequest, ServiceAccount, ServiceAccountInfo,
+    AwsServiceAccountInfo, AzureServiceAccountInfo, Binding, GcpServiceAccountInfo,
+    ImpersonationRequest, ServiceAccount, ServiceAccountInfo,
 };
 use alien_bindings::BindingsProviderApi;
 use alien_bindings::{providers::kv::local::LocalKv, providers::storage::local::LocalStorage};
@@ -34,8 +36,10 @@ use alien_commands::dispatchers::NullCommandDispatcher;
 use alien_commands::server::{CommandDispatcher, CommandRegistry, CommandServer};
 use alien_commands::InMemoryCommandRegistry;
 use alien_core::{
-    AwsClientConfig, AwsCredentials, ClientConfig, Platform, StackSettings,
-    CURRENT_DEPLOYMENT_PROTOCOL_VERSION,
+    AwsClientConfig, AwsCredentials, AzureClientConfig, AzureCredentials, ClientConfig, Container,
+    ContainerCode, GcpClientConfig, GcpCredentials, PermissionProfile, Platform, ResourceLifecycle,
+    ResourceSpec, RuntimeMetadata, ServiceAccount as ServiceAccountResource, Stack, StackSettings,
+    StackState, CURRENT_DEPLOYMENT_PROTOCOL_VERSION,
 };
 use alien_error::AlienError;
 use alien_manager::auth::{Authz, Subject};
@@ -49,9 +53,9 @@ use alien_manager::stores::sqlite::{
     SqliteDatabase, SqliteDeploymentStore, SqliteReleaseStore, SqliteTokenStore,
 };
 use alien_manager::traits::{
-    AuthValidator, CreateDeploymentGroupParams, CreateDeploymentParams, CreateTokenParams,
-    CredentialResolver, DeploymentRecord, DeploymentStore, ReleaseStore, TelemetryBackend,
-    TokenStore, TokenType,
+    AuthValidator, CreateDeploymentGroupParams, CreateImportedDeploymentParams,
+    CreateReleaseParams, CreateTokenParams, CredentialResolver, DeploymentRecord, DeploymentStore,
+    ReleaseStore, TelemetryBackend, TokenStore, TokenType,
 };
 
 // ---------------------------------------------------------------------------
@@ -69,17 +73,48 @@ fn missing_binding(binding_name: &str) -> AlienError<BindingErrorData> {
     })
 }
 
-/// Managed short-lived credentials, modelling what STS AssumeRole returns:
-/// access keys *with* a session token.
+/// Managed short-lived credentials, modelling what STS AssumeRole returns.
 fn managed_aws_config() -> ClientConfig {
     ClientConfig::Aws(Box::new(AwsClientConfig {
         account_id: "210987654321".to_string(),
         region: "us-east-1".to_string(),
-        credentials: AwsCredentials::AccessKeys {
+        credentials: AwsCredentials::SessionCredentials {
             access_key_id: "ASIAEXAMPLE".to_string(),
             secret_access_key: FAKE_SECRET.to_string(),
-            session_token: Some(FAKE_SESSION_TOKEN.to_string()),
+            session_token: FAKE_SESSION_TOKEN.to_string(),
+            expires_at: "2099-01-01T00:00:00Z".to_string(),
         },
+        service_overrides: None,
+    }))
+}
+
+fn managed_gcp_config() -> ClientConfig {
+    ClientConfig::Gcp(Box::new(GcpClientConfig {
+        project_id: "target-project".to_string(),
+        region: "us-central1".to_string(),
+        credentials: GcpCredentials::AccessToken {
+            token: FAKE_SESSION_TOKEN.to_string(),
+        },
+        service_overrides: None,
+        project_number: Some("123456789012".to_string()),
+    }))
+}
+
+fn managed_azure_config() -> ClientConfig {
+    let tokens = [
+        "https://management.azure.com/.default",
+        "https://storage.azure.com/.default",
+        "https://vault.azure.net/.default",
+        "https://servicebus.azure.net/.default",
+    ]
+    .into_iter()
+    .map(|scope| (scope.to_string(), format!("{FAKE_SESSION_TOKEN}:{scope}")))
+    .collect();
+    ClientConfig::Azure(Box::new(AzureClientConfig {
+        subscription_id: "target-subscription".to_string(),
+        tenant_id: "target-tenant".to_string(),
+        region: Some("japaneast".to_string()),
+        credentials: AzureCredentials::ScopedAccessTokens { tokens },
         service_overrides: None,
     }))
 }
@@ -243,25 +278,38 @@ struct Fixture {
     captured: Arc<Mutex<Option<ImpersonationRequest>>>,
 }
 
-const BINDING_NAME: &str = "management";
+const BINDING_NAME: &str = "execution-sa";
 
 /// Build a fixture wired for the managed / impersonation path: a target bindings
 /// provider for AWS that impersonates `BINDING_NAME`.
 async fn impersonation_fixture() -> Fixture {
-    let captured = Arc::new(Mutex::new(None));
-    let service_account = Arc::new(FakeServiceAccount {
-        info: ServiceAccountInfo::Aws(AwsServiceAccountInfo {
+    cloud_impersonation_fixture(
+        Platform::Aws,
+        ServiceAccountInfo::Aws(AwsServiceAccountInfo {
             role_name: "AlienManaged".to_string(),
             role_arn: "arn:aws:iam::210987654321:role/AlienManaged".to_string(),
         }),
-        minted: managed_aws_config(),
+        managed_aws_config(),
+    )
+    .await
+}
+
+async fn cloud_impersonation_fixture(
+    platform: Platform,
+    info: ServiceAccountInfo,
+    minted: ClientConfig,
+) -> Fixture {
+    let captured = Arc::new(Mutex::new(None));
+    let service_account = Arc::new(FakeServiceAccount {
+        info,
+        minted,
         captured: captured.clone(),
     });
     let provider: Arc<dyn BindingsProviderApi> = Arc::new(FakeServiceAccountProvider {
         binding_name: BINDING_NAME.to_string(),
         service_account,
     });
-    let target_providers = HashMap::from([(Platform::Aws, provider)]);
+    let target_providers = HashMap::from([(platform, provider)]);
 
     // Resolver present but should never be hit on the impersonation path; give
     // it a config distinct from the managed one so a wrong branch is visible.
@@ -269,19 +317,41 @@ async fn impersonation_fixture() -> Fixture {
         config: static_aws_config(),
     });
 
-    build(target_providers, resolver, captured).await
+    build(platform, target_providers, resolver, captured).await
 }
 
 /// Build a fixture wired for the local / resolver path: no target providers, so
 /// the handler falls back to the credential resolver.
 async fn resolver_fixture() -> Fixture {
     let resolver: Arc<dyn CredentialResolver> = Arc::new(StaticCredentialResolver {
+        config: ClientConfig::Local {
+            state_directory: "/tmp/alien-mint-test".to_string(),
+        },
+    });
+    build(
+        Platform::Local,
+        HashMap::new(),
+        resolver,
+        Arc::new(Mutex::new(None)),
+    )
+    .await
+}
+
+async fn cloud_resolver_fixture() -> Fixture {
+    let resolver: Arc<dyn CredentialResolver> = Arc::new(StaticCredentialResolver {
         config: static_aws_config(),
     });
-    build(HashMap::new(), resolver, Arc::new(Mutex::new(None))).await
+    build(
+        Platform::Aws,
+        HashMap::new(),
+        resolver,
+        Arc::new(Mutex::new(None)),
+    )
+    .await
 }
 
 async fn build(
+    platform: Platform,
     target_bindings_providers: HashMap<Platform, Arc<dyn BindingsProviderApi>>,
     credential_resolver: Arc<dyn CredentialResolver>,
     captured: Arc<Mutex<Option<ImpersonationRequest>>>,
@@ -313,10 +383,38 @@ async fn build(
         .await
         .unwrap();
 
-    let (deployment_a, token_a) =
-        create_deployment(&deployment_store, &token_store, &dg.id, "deploy-a").await;
-    let (_deployment_b, token_b) =
-        create_deployment(&deployment_store, &token_store, &dg.id, "deploy-b").await;
+    let release = release_store
+        .create_release(
+            &Subject::system(),
+            CreateReleaseParams {
+                project_id: "default".to_string(),
+                stacks: HashMap::from([(platform, mint_test_stack(platform))]),
+                git_commit_sha: None,
+                git_commit_ref: None,
+                git_commit_message: None,
+            },
+        )
+        .await
+        .unwrap();
+
+    let (deployment_a, token_a) = create_deployment(
+        &deployment_store,
+        &token_store,
+        &dg.id,
+        "deploy-a",
+        platform,
+        &release.id,
+    )
+    .await;
+    let (_deployment_b, token_b) = create_deployment(
+        &deployment_store,
+        &token_store,
+        &dg.id,
+        "deploy-b",
+        platform,
+        &release.id,
+    )
+    .await;
 
     let group_token = mint_token(
         &token_store,
@@ -383,29 +481,67 @@ async fn build(
     }
 }
 
-/// Create an AWS deployment and a deployment token scoped to it. Returns
+fn mint_test_stack(platform: Platform) -> Stack {
+    let container = Container::new("api".to_string())
+        .code(ContainerCode::Image {
+            image: "example.invalid/api:latest".to_string(),
+        })
+        .cpu(ResourceSpec {
+            min: "0.25".to_string(),
+            desired: "0.5".to_string(),
+        })
+        .memory(ResourceSpec {
+            min: "256Mi".to_string(),
+            desired: "512Mi".to_string(),
+        })
+        .port(8080)
+        .permissions("execution".to_string())
+        .build();
+    Stack::new("mint-test".to_string())
+        .platforms(vec![platform])
+        .permission("execution", PermissionProfile::new())
+        .add(
+            ServiceAccountResource::new(BINDING_NAME.to_string()).build(),
+            ResourceLifecycle::Live,
+        )
+        .add(container, ResourceLifecycle::Live)
+        .build()
+}
+
+/// Create a deployment pinned to the test release and a deployment token scoped to it. Returns
 /// `(deployment_id, raw_token)`.
 async fn create_deployment(
     deployment_store: &Arc<dyn DeploymentStore>,
     token_store: &Arc<dyn TokenStore>,
     deployment_group_id: &str,
     name: &str,
+    platform: Platform,
+    release_id: &str,
 ) -> (String, String) {
     let record = deployment_store
-        .create_deployment(
+        .create_with_state(
             &Subject::system(),
-            CreateDeploymentParams {
+            CreateImportedDeploymentParams {
                 deployment_protocol_version: CURRENT_DEPLOYMENT_PROTOCOL_VERSION,
                 name: name.to_string(),
                 deployment_group_id: deployment_group_id.to_string(),
-                platform: Platform::Aws,
+                platform,
                 base_platform: None,
                 stack_settings: StackSettings::default(),
-                public_subdomain: None,
-                stack_state: None,
-                environment_variables: None,
+                stack_state: StackState::new(platform),
+                environment_info: None,
+                runtime_metadata: RuntimeMetadata::default(),
+                status: "running".to_string(),
+                current_release_id: Some(release_id.to_string()),
+                desired_release_id: None,
+                import_source: None,
+                setup_metadata: None,
+                setup_target: "test".to_string(),
+                setup_fingerprint: "test".to_string(),
+                setup_fingerprint_version: 1,
                 input_values: Default::default(),
                 deployment_token: None,
+                management_config: None,
             },
         )
         .await
@@ -487,6 +623,7 @@ async fn post_mint(
 fn mint_body(deployment_id: &str) -> serde_json::Value {
     serde_json::json!({
         "deploymentId": deployment_id,
+        "resourceId": "api",
         "bindingName": BINDING_NAME,
     })
 }
@@ -672,15 +809,16 @@ async fn managed_path_returns_session_token_credentials() {
     assert_eq!(status, StatusCode::OK, "body = {json:#}");
 
     let credentials = &json["clientConfig"]["credentials"];
-    assert_eq!(credentials["type"], "accessKeys");
+    assert_eq!(credentials["type"], "sessionCredentials");
     assert!(
         credentials["session_token"].is_string(),
         "managed impersonation must return short-lived session-token creds: {credentials:#}"
     );
+    assert!(credentials["expires_at"].is_string());
 }
 
 #[tokio::test]
-async fn local_path_returns_static_credentials_without_session_token() {
+async fn local_path_returns_credential_free_local_config() {
     let fixture = resolver_fixture().await;
     let (status, json) = post_mint(
         &fixture,
@@ -690,25 +828,153 @@ async fn local_path_returns_static_credentials_without_session_token() {
     .await;
     assert_eq!(status, StatusCode::OK, "body = {json:#}");
 
-    // No target provider -> resolver fallback -> principal derived from config.
-    assert_eq!(json["principal"], "aws:123456789012");
-    let credentials = &json["clientConfig"]["credentials"];
-    assert_eq!(credentials["type"], "accessKeys");
+    assert_eq!(json["principal"], "local");
+    assert_eq!(json["clientConfig"]["platform"], "local");
+    assert!(json["clientConfig"]["credentials"].is_null());
+}
+
+#[tokio::test]
+async fn cloud_without_target_provider_fails_closed_without_serializing_resolver_credentials() {
+    let fixture = cloud_resolver_fixture().await;
+    let (status, json) = post_mint(
+        &fixture,
+        Some(&fixture.token_a),
+        mint_body(&fixture.deployment_a),
+    )
+    .await;
+    assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR, "body = {json:#}");
+    let body = json.to_string();
     assert!(
-        credentials["session_token"].is_null(),
-        "local static credentials carry no session token: {credentials:#}"
+        !body.contains(FAKE_SECRET),
+        "response leaked resolver secret"
+    );
+    assert!(
+        !body.contains("AKIAEXAMPLE"),
+        "response leaked resolver key id"
     );
 }
 
 #[tokio::test]
-async fn unknown_binding_returns_400() {
+async fn aws_static_impersonation_output_is_rejected_without_serializing_it() {
+    let fixture = cloud_impersonation_fixture(
+        Platform::Aws,
+        ServiceAccountInfo::Aws(AwsServiceAccountInfo {
+            role_name: "AlienManaged".to_string(),
+            role_arn: "arn:aws:iam::210987654321:role/AlienManaged".to_string(),
+        }),
+        static_aws_config(),
+    )
+    .await;
+    let (status, json) = post_mint(
+        &fixture,
+        Some(&fixture.token_a),
+        mint_body(&fixture.deployment_a),
+    )
+    .await;
+    assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR, "body = {json:#}");
+    assert!(!json.to_string().contains(FAKE_SECRET));
+}
+
+#[tokio::test]
+async fn gcp_mint_response_contains_only_materialized_access_token_credentials() {
+    let fixture = cloud_impersonation_fixture(
+        Platform::Gcp,
+        ServiceAccountInfo::Gcp(GcpServiceAccountInfo {
+            email: "execution@target-project.iam.gserviceaccount.com".to_string(),
+            unique_id: "123456789012345678901".to_string(),
+        }),
+        managed_gcp_config(),
+    )
+    .await;
+    let (status, json) = post_mint(
+        &fixture,
+        Some(&fixture.token_a),
+        mint_body(&fixture.deployment_a),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "body = {json:#}");
+    assert_eq!(json["clientConfig"]["credentials"]["type"], "accessToken");
+    let serialized = json["clientConfig"]["credentials"].to_string();
+    assert!(!serialized.contains("source"));
+    assert!(!serialized.contains("serviceAccountKey"));
+    assert!(!serialized.contains("refresh_token"));
+}
+
+#[tokio::test]
+async fn azure_mint_response_contains_exact_scoped_short_lived_tokens() {
+    let fixture = cloud_impersonation_fixture(
+        Platform::Azure,
+        ServiceAccountInfo::Azure(AzureServiceAccountInfo {
+            client_id: "00000000-0000-0000-0000-000000000001".to_string(),
+            resource_id: "/subscriptions/target/resourceGroups/alien/providers/Microsoft.ManagedIdentity/userAssignedIdentities/execution".to_string(),
+            principal_id: "00000000-0000-0000-0000-000000000002".to_string(),
+        }),
+        managed_azure_config(),
+    )
+    .await;
+    let (status, json) = post_mint(
+        &fixture,
+        Some(&fixture.token_a),
+        mint_body(&fixture.deployment_a),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "body = {json:#}");
+    let credentials = &json["clientConfig"]["credentials"];
+    assert_eq!(credentials["type"], "scopedAccessTokens");
+    let tokens = credentials["tokens"].as_object().expect("scope token map");
+    assert_eq!(tokens.len(), 4);
+    for scope in [
+        "https://management.azure.com/.default",
+        "https://storage.azure.com/.default",
+        "https://vault.azure.net/.default",
+        "https://servicebus.azure.net/.default",
+    ] {
+        assert!(tokens.contains_key(scope), "missing exact scope {scope}");
+    }
+}
+
+#[tokio::test]
+async fn binding_not_declared_by_resource_returns_400() {
     let fixture = impersonation_fixture().await;
     let body = serde_json::json!({
         "deploymentId": fixture.deployment_a,
+        "resourceId": "api",
         "bindingName": "does-not-exist",
     });
     let (status, json) = post_mint(&fixture, Some(&fixture.token_a), body).await;
     assert_eq!(status, StatusCode::BAD_REQUEST, "body = {json:#}");
+}
+
+#[tokio::test]
+async fn missing_resource_id_is_rejected_before_minting() {
+    let fixture = impersonation_fixture().await;
+    let body = serde_json::json!({
+        "deploymentId": fixture.deployment_a,
+        "bindingName": BINDING_NAME,
+    });
+    let (status, _) = post_mint(&fixture, Some(&fixture.token_a), body).await;
+    assert!(status.is_client_error());
+    assert!(fixture.captured.lock().unwrap().is_none());
+}
+
+#[tokio::test]
+async fn resource_must_exist_in_current_release() {
+    let fixture = impersonation_fixture().await;
+    let mut body = mint_body(&fixture.deployment_a);
+    body["resourceId"] = serde_json::json!("missing");
+    let (status, json) = post_mint(&fixture, Some(&fixture.token_a), body).await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "body = {json:#}");
+    assert!(fixture.captured.lock().unwrap().is_none());
+}
+
+#[tokio::test]
+async fn resource_must_be_application_compute() {
+    let fixture = impersonation_fixture().await;
+    let mut body = mint_body(&fixture.deployment_a);
+    body["resourceId"] = serde_json::json!(BINDING_NAME);
+    let (status, json) = post_mint(&fixture, Some(&fixture.token_a), body).await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "body = {json:#}");
+    assert!(fixture.captured.lock().unwrap().is_none());
 }
 
 #[tokio::test]
@@ -729,6 +995,7 @@ async fn unknown_field_is_rejected() {
     let fixture = impersonation_fixture().await;
     let body = serde_json::json!({
         "deploymentId": fixture.deployment_a,
+        "resourceId": "api",
         "bindingName": BINDING_NAME,
         "platform": "aws",
     });
@@ -769,17 +1036,19 @@ async fn audit_log_never_contains_credential_material() {
         .with_ansi(false)
         .finish();
 
-    // `#[tokio::test]` uses a current-thread runtime, so the awaited handler
-    // work stays on this thread and the thread-local default subscriber
-    // captures its audit event.
-    let guard = tracing::subscriber::set_default(subscriber);
+    // This integration-test binary installs no other global subscriber. Use a
+    // global subscriber here because tracing's callsite-interest cache is also
+    // global: a thread-local subscriber can lose the audit event when parallel
+    // tests register the same callsite under a different dispatcher.
+    tracing::subscriber::set_global_default(subscriber)
+        .expect("credential mint tests must install only one global subscriber");
+    tracing::callsite::rebuild_interest_cache();
     let (status, _) = post_mint(
         &fixture,
         Some(&fixture.token_a),
         mint_body(&fixture.deployment_a),
     )
     .await;
-    drop(guard);
     assert_eq!(status, StatusCode::OK);
 
     let logs = String::from_utf8(buf.lock().unwrap().clone()).unwrap();

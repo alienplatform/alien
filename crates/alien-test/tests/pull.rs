@@ -120,3 +120,26 @@ async fn pull_local_container_rust(ctx: &mut LocalPullContainerRust) {
         .await
         .expect("container status check failed");
 }
+
+// ---------------------------------------------------------------------------
+// Local: TypeScript Container + Rust Daemon, direct bindings and commands
+// ---------------------------------------------------------------------------
+//
+// Both source-built processes start directly, share a KV through their native
+// in-process binding libraries, and own their command receiver loops. They
+// deliberately register the same command name so target identity is required.
+
+e2e_test_context!(
+    LocalPullRuntimeLessMixed,
+    Platform::Local,
+    DeploymentModel::Pull,
+    TestApp::RuntimeLessMixed
+);
+
+#[test_context(LocalPullRuntimeLessMixed)]
+#[tokio::test]
+async fn pull_local_runtime_less_mixed(ctx: &mut LocalPullRuntimeLessMixed) {
+    common::runtime_less::check_mixed_runtime_less(&ctx.ctx.deployment)
+        .await
+        .expect("mixed runtime-less checks failed");
+}

@@ -43,8 +43,9 @@ pub struct BindingsProvider {
 ///
 /// On first binding use it resolves credentials in a fixed order (see
 /// [`LazyEnvBindingsProvider::select`]): native/projected `ClientConfig::from_env`
-/// first, then minting-backed resolution if the mint env contract is present,
-/// otherwise the original `from_env` error is surfaced unchanged.
+/// first, then minting-backed resolution if an external/bootstrap caller
+/// explicitly supplied the mint environment contract, otherwise the original
+/// `from_env` error is surfaced unchanged.
 pub struct LazyEnvBindingsProvider {
     env: HashMap<String, String>,
     /// Deployment platform parsed at construction on the runtime path
@@ -486,8 +487,8 @@ impl LazyEnvBindingsProvider {
     /// Decide the credential strategy at first use, in a fixed order:
     ///
     /// 1. Native/projected `ClientConfig::from_env` succeeds → use it, never mint.
-    /// 2. Else if the mint env contract (`ALIEN_MANAGER_URL` +
-    ///    `ALIEN_DEPLOYMENT_TOKEN`) is present → mint.
+    /// 2. Else if the complete external/bootstrap mint env contract is present
+    ///    → mint.
     /// 3. Else → surface the original `from_env` error unchanged.
     async fn select(&self) -> Result<CredentialResolver> {
         // Binding JSON (and, on the `from_env_lazy` path, the platform) was
@@ -2033,7 +2034,7 @@ mod tests {
         use crate::traits::BindingsProviderApi;
         use alien_core::{
             ENV_ALIEN_DEPLOYMENT_ID, ENV_ALIEN_DEPLOYMENT_SERVICE_ACCOUNT,
-            ENV_ALIEN_DEPLOYMENT_TOKEN, ENV_ALIEN_MANAGER_URL,
+            ENV_ALIEN_DEPLOYMENT_TOKEN, ENV_ALIEN_MANAGER_URL, ENV_ALIEN_RESOURCE_ID,
         };
         use axum::{extract::State, routing::post, Json, Router};
         use std::net::SocketAddr;
@@ -2086,6 +2087,7 @@ mod tests {
                     ENV_ALIEN_DEPLOYMENT_SERVICE_ACCOUNT.to_string(),
                     "management".to_string(),
                 ),
+                (ENV_ALIEN_RESOURCE_ID.to_string(), "api".to_string()),
             ])
         }
 

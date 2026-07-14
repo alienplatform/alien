@@ -140,6 +140,9 @@ pub enum TestApp {
     /// Rust SOURCE Container running the app-owned pull receiver with a
     /// direct in-process KV binding (`tests/e2e/test-apps/container-rust`).
     ContainerRust,
+    /// TypeScript SOURCE Container + Rust SOURCE Daemon sharing a direct KV
+    /// binding and registering the same target-scoped command.
+    RuntimeLessMixed,
 }
 
 impl std::fmt::Display for TestApp {
@@ -150,6 +153,7 @@ impl std::fmt::Display for TestApp {
             TestApp::FullStackMicroservices => write!(f, "full-stack-microservices"),
             TestApp::CommandRoutingTs => write!(f, "command-routing-ts"),
             TestApp::ContainerRust => write!(f, "container-rust"),
+            TestApp::RuntimeLessMixed => write!(f, "runtime-less-mixed"),
         }
     }
 }
@@ -353,6 +357,7 @@ pub(crate) fn test_app_path(app: TestApp) -> &'static str {
         TestApp::FullStackMicroservices => "../../examples/full-stack-microservices",
         TestApp::CommandRoutingTs => "../../examples/command-routing-ts",
         TestApp::ContainerRust => "test-apps/container-rust",
+        TestApp::RuntimeLessMixed => "test-apps/runtime-less-mixed",
     }
 }
 
@@ -368,7 +373,8 @@ fn deployment_environment_variables(
         TestApp::ComprehensiveRust
         | TestApp::ComprehensiveTs
         | TestApp::CommandRoutingTs
-        | TestApp::ContainerRust => None,
+        | TestApp::ContainerRust
+        | TestApp::RuntimeLessMixed => None,
         TestApp::FullStackMicroservices => {
             Some(vec![alien_manager_api::types::EnvironmentVariable {
                 name: "APP_SECRET".to_string(),

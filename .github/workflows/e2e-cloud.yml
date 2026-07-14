@@ -66,6 +66,7 @@ on:
           - full-stack-microservices
           - command-routing-ts
           - container-rust
+          - runtime-less-mixed
       network_mode:
         description: "Cloud network mode"
         type: choice
@@ -307,6 +308,9 @@ jobs:
             if [ "$APP" = "All" ] || [ "$APP" = "container-rust" ]; then
               LOCAL_ENTRIES=$(echo "$LOCAL_ENTRIES" | jq -c '. + [{"name":"local-linux-container-rust","os":"depot-ubuntu-24.04-arm-8","test_filter":"pull_local_container_rust"}]')
             fi
+            if [ "$APP" = "All" ] || [ "$APP" = "runtime-less-mixed" ]; then
+              LOCAL_ENTRIES=$(echo "$LOCAL_ENTRIES" | jq -c '. + [{"name":"local-linux-runtime-less-mixed","os":"depot-ubuntu-24.04-arm-8","test_filter":"pull_local_runtime_less_mixed"}]')
+            fi
           fi
           if [ "$LOCAL_MACOS_AGENT" = "true" ]; then
             if [ "$APP" = "All" ] || [ "$APP" = "comprehensive-rust" ]; then
@@ -368,6 +372,14 @@ jobs:
           if [ "$APP" = "All" ] || [ "$APP" = "command-routing-ts" ]; then
             if [ "$KUBERNETES_AWS_TERRAFORM_HELM" = "true" ]; then
               TERRAFORM_ENTRIES=$(echo "$TERRAFORM_ENTRIES" | jq -c '. + [{"name":"terraform-eks-helm-pull-command-routing-ts","test_filter":"terraform_eks_helm_pull_command_routing_ts","needs_oidc":false,"resource_suffix":"tfeksrt"}]')
+            fi
+          fi
+          # One mixed app proves both missing runtime-less SDK paths in a
+          # single deployment: TypeScript Container + Rust Daemon, direct KV,
+          # pull receivers, and a target-scoped command-name collision.
+          if [ "$APP" = "All" ] || [ "$APP" = "runtime-less-mixed" ]; then
+            if [ "$KUBERNETES_AWS_TERRAFORM_HELM" = "true" ]; then
+              TERRAFORM_ENTRIES=$(echo "$TERRAFORM_ENTRIES" | jq -c '. + [{"name":"terraform-eks-helm-pull-runtime-less-mixed","test_filter":"terraform_eks_helm_pull_runtime_less_mixed","needs_oidc":false,"resource_suffix":"tfeksrm"}]')
             fi
           fi
 
@@ -576,6 +588,28 @@ jobs:
           push: true
           tags: ghcr.io/alienplatform/alien-base:${{ github.sha }}
           provenance: false
+
+      - name: Verify alien-base runtime entrypoint
+        env:
+          BASE_IMAGE: ghcr.io/alienplatform/alien-base:${{ github.sha }}
+          NEEDS_X86_64: ${{ needs.compute-matrix.outputs.needs_x86_64 }}
+          NEEDS_AARCH64: ${{ needs.compute-matrix.outputs.needs_aarch64 }}
+        run: |
+          expected='["/app/alien-worker-runtime"]'
+          if [ "$NEEDS_X86_64" = "true" ]; then
+            actual="$(docker buildx imagetools inspect --format '{{json (index .Image "linux/amd64").Config.Entrypoint}}' "$BASE_IMAGE" | jq -c .)"
+            [ "$actual" = "$expected" ] || {
+              echo "linux/amd64 alien-base entrypoint: expected $expected, got $actual" >&2
+              exit 1
+            }
+          fi
+          if [ "$NEEDS_AARCH64" = "true" ]; then
+            actual="$(docker buildx imagetools inspect --format '{{json (index .Image "linux/arm64").Config.Entrypoint}}' "$BASE_IMAGE" | jq -c .)"
+            [ "$actual" = "$expected" ] || {
+              echo "linux/arm64 alien-base entrypoint: expected $expected, got $actual" >&2
+              exit 1
+            }
+          fi
 
   build-operator-image:
     needs: [compute-matrix, build-x86_64, build-aarch64]

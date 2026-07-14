@@ -5,24 +5,22 @@
 //! background timers, no spawned refresh loops — refresh happens lazily, on the
 //! access path).
 //!
-//! When a deployed app process cannot resolve native/projected cloud
-//! credentials from its environment (see the selection order in
-//! [`crate::provider::LazyEnvBindingsProvider`]), it falls back to *minting*:
-//! it POSTs to `{ALIEN_MANAGER_URL}/v1/credentials/mint` with its deployment
-//! token and receives a short-lived [`ClientConfig`] plus a server-computed
-//! `expiresAt` refresh hint. The minted config is cached and re-minted on
-//! access once it passes the refresh threshold, with a single-flight guard so a
-//! burst of concurrent binding loads triggers at most one mint.
+//! Managed cloud workloads use their platform-projected service account or
+//! Horizon metadata; they do not receive deployment bearer tokens. Minting is
+//! an explicitly configured fallback for external/bootstrap integrations that
+//! cannot use that native identity path. Such a client POSTs to
+//! `{ALIEN_MANAGER_URL}/v1/credentials/mint` with a deployment token and
+//! receives a short-lived [`ClientConfig`] plus a server-computed `expiresAt`
+//! refresh hint. The minted config is cached and re-minted on access once it
+//! passes the refresh threshold, with a single-flight guard so a burst of
+//! concurrent binding loads triggers at most one mint.
 //!
 //! # Bootstrapping an external app
 //!
-//! An externally-deployed app process (Container/Daemon) never receives a
-//! native cloud identity of its own — it has no IAM role, no metadata service,
-//! nothing [`crate::provider::LazyEnvBindingsProvider`]'s native path can read.
-//! What it does get, injected by the manager at deploy time, is a *deployment
-//! token*: proof of which deployment it is, good for asking the manager to
-//! mint short-lived credentials on its behalf. That handoff is carried by
-//! three env vars, all required together (see [`MintingCredentialSource::from_env`]):
+//! An external/bootstrap integration may opt into minting by supplying the
+//! following environment contract. The manager does not inject this contract
+//! into managed Container/Daemon workloads. All values are required together
+//! (see [`MintingCredentialSource::from_env`]):
 //!
 //! - `ALIEN_MANAGER_URL` — base URL of the deployment's manager; the mint
 //!   endpoint is `{ALIEN_MANAGER_URL}/v1/credentials/mint`.
@@ -30,14 +28,11 @@
 //!   deployment group). Sent as `Authorization: Bearer …`; never logged.
 //! - `ALIEN_DEPLOYMENT_SERVICE_ACCOUNT` — the service-account binding to mint
 //!   credentials for (`bindingName` in the request body).
+//! - `ALIEN_RESOURCE_ID` — the current app resource in the deployment stack
+//!   (`resourceId` in the request body).
 //!
 //! `ALIEN_DEPLOYMENT_ID` (`deploymentId` in the request body) is reused from
 //! the existing deployment-identity contract rather than duplicated.
-//!
-//! Controller injection of these three vars for Container/Daemon processes is
-//! a follow-up (ALIEN-218 tasks 10/16); until it lands, the gate below is
-//! simply absent and every process falls through to whatever error its native
-//! resolution already produced.
 //!
 //! # Selection order
 //!
@@ -47,8 +42,8 @@
 //! 1. **Native/projected identity** — `ClientConfig::from_env` succeeds (an
 //!    IAM role, workload identity, metadata service, or explicit static
 //!    credentials in the environment). Used as-is; minting is never attempted.
-//! 2. **Mint** — native resolution failed, but the mint gate
-//!    (`ALIEN_MANAGER_URL` + `ALIEN_DEPLOYMENT_TOKEN`) is present. Falls back
+//! 2. **Mint** — native resolution failed and an external/bootstrap caller
+//!    explicitly supplied the complete mint environment contract. Falls back
 //!    to this module.
 //! 3. **Original error** — native resolution failed and no mint gate is
 //!    present. The original `from_env` error is surfaced unchanged; there is
@@ -90,7 +85,7 @@ use std::time::Duration;
 
 use alien_core::{
     ClientConfig, ENV_ALIEN_DEPLOYMENT_ID, ENV_ALIEN_DEPLOYMENT_SERVICE_ACCOUNT,
-    ENV_ALIEN_DEPLOYMENT_TOKEN, ENV_ALIEN_MANAGER_URL,
+    ENV_ALIEN_DEPLOYMENT_TOKEN, ENV_ALIEN_MANAGER_URL, ENV_ALIEN_RESOURCE_ID,
 };
 use alien_error::{AlienError, Context, IntoAlienError};
 use chrono::{DateTime, Duration as ChronoDuration, Utc};
@@ -122,8 +117,8 @@ const MINT_TIMEOUT: Duration = Duration::from_secs(30);
 /// The mint request inputs read from the process environment, plus the HTTP
 /// client used to reach the manager.
 ///
-/// The manager injects these vars for deployed app processes (controller
-/// injection is an ALIEN-218 task-10/16 follow-up).
+/// External/bootstrap callers supply these vars explicitly. Managed workload
+/// controllers do not inject them.
 pub(crate) struct MintingCredentialSource {
     /// Base URL of the deployment's manager (`ALIEN_MANAGER_URL`).
     manager_url: String,
@@ -135,6 +130,8 @@ pub(crate) struct MintingCredentialSource {
     /// Service-account binding to mint credentials for
     /// (`ALIEN_DEPLOYMENT_SERVICE_ACCOUNT`).
     binding_name: String,
+    /// Current app resource id (`ALIEN_RESOURCE_ID`).
+    resource_id: String,
     http: reqwest::Client,
 }
 
@@ -147,6 +144,7 @@ impl fmt::Debug for MintingCredentialSource {
             .field("token", &"<redacted>")
             .field("deployment_id", &self.deployment_id)
             .field("binding_name", &self.binding_name)
+            .field("resource_id", &self.resource_id)
             .finish()
     }
 }
@@ -157,9 +155,10 @@ impl MintingCredentialSource {
     /// Returns `Ok(None)` when the gate (`ALIEN_MANAGER_URL` +
     /// `ALIEN_DEPLOYMENT_TOKEN`) is absent — the caller then keeps the existing
     /// (non-minting) behaviour. When the gate *is* present but the rest of the
-    /// request contract (`ALIEN_DEPLOYMENT_ID`, `ALIEN_DEPLOYMENT_SERVICE_ACCOUNT`)
-    /// is missing, this fails fast: a half-injected mint environment is a
-    /// manager bug, not a reason to silently fall back to static resolution.
+    /// request contract (`ALIEN_DEPLOYMENT_ID`, `ALIEN_DEPLOYMENT_SERVICE_ACCOUNT`,
+    /// `ALIEN_RESOURCE_ID`) is missing, this fails fast: a half-injected mint
+    /// environment is a manager bug, not a reason to silently fall back to
+    /// static resolution.
     pub(crate) fn from_env(env: &HashMap<String, String>) -> Result<Option<Self>> {
         let (Some(manager_url), Some(token)) = (
             env.get(ENV_ALIEN_MANAGER_URL),
@@ -180,6 +179,11 @@ impl MintingCredentialSource {
                     variable_name: ENV_ALIEN_DEPLOYMENT_SERVICE_ACCOUNT.to_string(),
                 })
             })?;
+        let resource_id = env.get(ENV_ALIEN_RESOURCE_ID).ok_or_else(|| {
+            AlienError::new(ErrorData::EnvironmentVariableMissing {
+                variable_name: ENV_ALIEN_RESOURCE_ID.to_string(),
+            })
+        })?;
 
         let http = reqwest::Client::builder()
             .timeout(MINT_TIMEOUT)
@@ -194,6 +198,7 @@ impl MintingCredentialSource {
             token: token.clone(),
             deployment_id: deployment_id.clone(),
             binding_name: binding_name.clone(),
+            resource_id: resource_id.clone(),
             http,
         }))
     }
@@ -212,6 +217,7 @@ impl MintingCredentialSource {
             .bearer_auth(&self.token)
             .json(&serde_json::json!({
                 "deploymentId": self.deployment_id,
+                "resourceId": self.resource_id,
                 "bindingName": self.binding_name,
             }))
             .send()
@@ -240,6 +246,7 @@ impl MintingCredentialSource {
         // the non-secret principal and expiry.
         debug!(
             deployment_id = %self.deployment_id,
+            resource_id = %self.resource_id,
             binding_name = %self.binding_name,
             principal = %minted.principal,
             expires_at = %minted.expires_at.to_rfc3339(),
@@ -461,6 +468,7 @@ mod tests {
                 ENV_ALIEN_DEPLOYMENT_SERVICE_ACCOUNT.to_string(),
                 "management".to_string(),
             ),
+            (ENV_ALIEN_RESOURCE_ID.to_string(), "api".to_string()),
         ]);
         MintingCredentialSource::from_env(&env)
             .expect("source builds")

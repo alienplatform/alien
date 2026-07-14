@@ -83,7 +83,7 @@ fn test_azure_observe_generates_subscription_scoped_read_grant_plan() {
 }
 
 #[test]
-fn compute_cluster_execute_reads_only_the_stack_secrets_vault() {
+fn compute_cluster_execute_does_not_guess_the_setup_owned_secrets_vault() {
     let generator = AzureRuntimePermissionsGenerator::new();
     let permission_set =
         get_permission_set("compute-cluster/execute").expect("permission set exists");
@@ -94,20 +94,13 @@ fn compute_cluster_execute_reads_only_the_stack_secrets_vault() {
     let result = generator
         .generate_grant_plan(permission_set, BindingTarget::Stack, &context)
         .expect("compute cluster execute grant plan should generate");
-    let binding = result
-        .bindings
-        .iter()
-        .find(|binding| binding.role_name == "Key Vault Secrets User")
-        .expect("Horizon machine Key Vault binding");
-
-    assert_eq!(
-        binding.scope,
-        "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-observability-prod/providers/Microsoft.KeyVault/vaults/my-stack-secrets"
+    assert!(
+        result
+            .bindings
+            .iter()
+            .all(|binding| binding.role_name != "Key Vault Secrets User"),
+        "the provider controller must grant the exact generated Key Vault scope"
     );
-    assert!(matches!(
-        binding.role_definition,
-        AzureRoleDefinitionRef::Predefined { .. }
-    ));
 }
 
 #[test]

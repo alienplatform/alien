@@ -359,6 +359,17 @@ pub enum AzureCredentials {
         /// The bearer token to use for authentication
         token: String,
     },
+    /// Short-lived bearer tokens keyed by their exact Azure OAuth scope.
+    ///
+    /// This is the only Azure credential form returned by the credential mint
+    /// endpoint. It contains no refreshable source credential and must not be
+    /// used for a scope that is absent from the map.
+    ScopedAccessTokens {
+        /// Exact scope-to-token map. Minted configs include only the Azure
+        /// management, storage, Key Vault, and Service Bus scopes used by
+        /// Alien bindings.
+        tokens: HashMap<String, String>,
+    },
     /// Azure VM IMDS managed identity.
     VmManagedIdentity {
         /// The client ID of the user-assigned managed identity
@@ -400,6 +411,11 @@ impl std::fmt::Debug for AzureCredentials {
             AzureCredentials::AccessToken { .. } => f
                 .debug_struct("AzureCredentials::AccessToken")
                 .field("token", &"[REDACTED]")
+                .finish(),
+            AzureCredentials::ScopedAccessTokens { tokens } => f
+                .debug_struct("AzureCredentials::ScopedAccessTokens")
+                .field("scopes", &tokens.keys().collect::<Vec<_>>())
+                .field("tokens", &"[REDACTED]")
                 .finish(),
             AzureCredentials::VmManagedIdentity {
                 client_id,
@@ -817,5 +833,28 @@ mod tests {
         assert_eq!(config.azure_config().unwrap().subscription_id, "sub");
         assert!(config.aws_config().is_none());
         assert!(config.gcp_config().is_none());
+    }
+
+    #[test]
+    fn scoped_azure_tokens_debug_redacts_every_token() {
+        let credentials = AzureCredentials::ScopedAccessTokens {
+            tokens: std::collections::HashMap::from([
+                (
+                    "https://management.azure.com/.default".to_string(),
+                    "management-secret".to_string(),
+                ),
+                (
+                    "https://storage.azure.com/.default".to_string(),
+                    "storage-secret".to_string(),
+                ),
+            ]),
+        };
+
+        let debug = format!("{credentials:?}");
+        assert!(debug.contains("https://management.azure.com/.default"));
+        assert!(debug.contains("https://storage.azure.com/.default"));
+        assert!(!debug.contains("management-secret"));
+        assert!(!debug.contains("storage-secret"));
+        assert!(debug.contains("[REDACTED]"));
     }
 }

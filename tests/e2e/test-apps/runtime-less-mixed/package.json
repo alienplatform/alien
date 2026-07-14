@@ -1,0 +1,19 @@
+{
+  "name": "runtime-less-mixed",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "test:ts": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@alienplatform/bindings": "workspace:*",
+    "@alienplatform/commands": "workspace:*",
+    "@alienplatform/core": "workspace:*"
+  },
+  "devDependencies": {
+    "@alienplatform/typescript-config": "workspace:*",
+    "@types/node": "^24.0.15",
+    "typescript": "^5.8.3"
+  }
+}

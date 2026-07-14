@@ -216,7 +216,7 @@ if (nativeEntry) process.stdout.write(route + "\n" + nativeEntry);
 /// `src_dir/node_modules/@alienplatform/bindings` path does not exist for a
 /// Worker, whose bindings copy lives under the SDK's dependency. This function
 /// is exercised by the SDK-entry compiled-artifact oracle
-/// (`packages/bindings/scripts/compile-smoke.ts` covers the `/native` entry;
+/// (`packages/package-layout/steps/compile.ts` covers the `/native` entry;
 /// the Worker/SDK entry is proven by the ALIEN-211 deploy E2E and the manual
 /// `bun build --compile` check documented in the PR), not a hermetic unit test,
 /// since faithful resolution requires bun and a real installed layout.

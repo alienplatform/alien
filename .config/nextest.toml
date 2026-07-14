@@ -18,6 +18,7 @@ e2e-tests = { max-threads = 1 }
 [profile.fast]
 default-filter = """
     not binary_id(alien-build::build_integration_tests) \
+    and not binary_id(alien-build::image_shape_tests) \
     and not binary_id(alien-build::rust_integration_tests) \
     and not binary_id(alien-build::typescript_integration_tests) \
     and not binary_id(alien-worker-runtime::lambda) \

@@ -18,7 +18,7 @@
  *
  * `bun build --compile` on this entry needs `--format=cjs` or the produced
  * binary crashes on load (`__require is not defined`) — see
- * `scripts/compile-smoke.ts` for the verified repro and required flag.
+ * `packages/package-layout/steps/compile.ts` for the verified repro and required flag.
  */
 
 import addon from "./alien-bindings.node"

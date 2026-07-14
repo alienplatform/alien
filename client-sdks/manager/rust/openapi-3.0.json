@@ -462,6 +462,41 @@
         }
       }
     },
+    "/v1/credentials/mint": {
+      "post": {
+        "tags": [
+          "credentials"
+        ],
+        "operationId": "mint_credentials",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/MintCredentialsRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Credentials minted successfully",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MintCredentialsResponse"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ]
+      }
+    },
     "/v1/deployment-groups": {
       "get": {
         "tags": [
@@ -3473,6 +3508,29 @@
                 "type": "string",
                 "enum": [
                   "accessToken"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "description": "Short-lived bearer tokens keyed by their exact Azure OAuth scope.\n\nThis is the only Azure credential form returned by the credential mint\nendpoint. It contains no refreshable source credential and must not be\nused for a scope that is absent from the map.",
+            "required": [
+              "tokens",
+              "type"
+            ],
+            "properties": {
+              "tokens": {
+                "type": "object",
+                "description": "Exact scope-to-token map. Minted configs include only the Azure\nmanagement, storage, Key Vault, and Service Bus scopes used by\nAlien bindings.",
+                "additionalProperties": {
+                  "type": "string"
+                }
+              },
+              "type": {
+                "type": "string",
+                "enum": [
+                  "scopedAccessTokens"
                 ]
               }
             }
@@ -10356,6 +10414,59 @@
           "milliseconds",
           "requests-per-second"
         ]
+      },
+      "MintCredentialsRequest": {
+        "type": "object",
+        "description": "Request body for `POST /v1/credentials/mint`.\n\n`deny_unknown_fields` so clients cannot smuggle in resolver internals\n(platform, stack state, etc.) — the server derives everything from the\nauthenticated deployment.",
+        "required": [
+          "deploymentId",
+          "resourceId",
+          "bindingName"
+        ],
+        "properties": {
+          "bindingName": {
+            "type": "string",
+            "description": "Service-account binding to impersonate on the target platform."
+          },
+          "deploymentId": {
+            "type": "string",
+            "description": "Deployment to mint credentials for. The caller's bearer token must be\nthis deployment's token (or a workspace-admin token)."
+          },
+          "durationSeconds": {
+            "type": "integer",
+            "format": "int32",
+            "description": "Requested lifetime in seconds. Clamped to\n`[MIN_DURATION_SECONDS, MAX_DURATION_SECONDS]`; defaults to\n`DEFAULT_DURATION_SECONDS` when omitted.",
+            "nullable": true
+          },
+          "resourceId": {
+            "type": "string",
+            "description": "Current-release compute resource requesting the credentials. The\nresource must depend on `bindingName` as a service-account resource."
+          }
+        },
+        "additionalProperties": false
+      },
+      "MintCredentialsResponse": {
+        "type": "object",
+        "description": "Response body for `POST /v1/credentials/mint`.",
+        "required": [
+          "clientConfig",
+          "expiresAt",
+          "principal"
+        ],
+        "properties": {
+          "clientConfig": {
+            "$ref": "#/components/schemas/ClientConfig",
+            "description": "Minted platform client configuration (carries the short-lived creds)."
+          },
+          "expiresAt": {
+            "type": "string",
+            "description": "Credential expiry as an RFC3339 timestamp (now + clamped duration).\n\nThis is server-computed (`now + clamped duration`), not read back from\nthe provider — for lazily-resolved configs (e.g. GCP, where the\nresolver doesn't always round-trip an authoritative expiry) it is\nnominal rather than provider truth. Treat it as a refresh hint: fetch\nnew credentials at or before this time, don't rely on it to prove the\nunderlying credential is still valid at that exact instant."
+          },
+          "principal": {
+            "type": "string",
+            "description": "Human-readable identity the credentials act as (role ARN, SA email,\nmanaged-identity client id, or `platform:account` for the local path)."
+          }
+        }
       },
       "NetworkHeartbeatData": {
         "oneOf": [

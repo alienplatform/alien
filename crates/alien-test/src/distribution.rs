@@ -3486,7 +3486,7 @@ mod tests {
             kubernetes: Some(KubernetesSettings {
                 cluster: Some(KubernetesClusterSettings {
                     ownership: KubernetesClusterOwnership::Managed,
-                    namespace: Some("alien-runtime".to_string()),
+                    namespace: Some("alien-worker-runtime".to_string()),
                     cloud: None,
                 }),
                 exposure: Some(KubernetesExposureSettings::Disabled),
@@ -3499,7 +3499,7 @@ mod tests {
         let kubernetes = settings.kubernetes.expect("kubernetes settings");
         let cluster = kubernetes.cluster.expect("cluster settings");
         assert_eq!(cluster.ownership, KubernetesClusterOwnership::Existing);
-        assert_eq!(cluster.namespace.as_deref(), Some("alien-runtime"));
+        assert_eq!(cluster.namespace.as_deref(), Some("alien-worker-runtime"));
         assert_eq!(
             kubernetes.exposure,
             Some(KubernetesExposureSettings::Disabled)
