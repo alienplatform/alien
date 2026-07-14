@@ -278,6 +278,11 @@ pub async fn deployments_task(args: DeploymentsArgs, ctx: ExecutionMode) -> Resu
 ///
 /// Uses the linked project (or `--project` override) to discover the manager URL
 /// in platform mode. In dev/standalone modes, the manager URL is known directly.
+///
+/// All `deployments` subcommands are Manager API operations that never push
+/// container images, so we resolve metadata-only and skip the artifact-repo
+/// provisioning step. On platform/dev clusters that provisioning is a cloud
+/// API round trip that adds ~10–15s per invocation for a repo we never use.
 pub(crate) async fn resolve_manager_client(
     ctx: &ExecutionMode,
     project_override: Option<&str>,
@@ -288,7 +293,9 @@ pub(crate) async fn resolve_manager_client(
         .await?;
     // The platform parameter is only used in platform mode for build-config
     // discovery; the manager URL is the same regardless of platform.
-    let manager_ctx = ctx.resolve_manager(&project_link.project_id, "aws").await?;
+    let manager_ctx = ctx
+        .resolve_manager_metadata_only(&project_link.project_id, "aws")
+        .await?;
     Ok(manager_ctx.client)
 }
 

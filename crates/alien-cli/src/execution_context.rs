@@ -259,13 +259,28 @@ impl ExecutionMode {
     /// Resolve the optional workspace query/header for platform API requests.
     ///
     /// User credentials need an explicit workspace because roles are per-workspace.
-    /// API keys are already scoped, so the CLI does not add a workspace query.
+    /// A workspace-scoped API key is already scoped, so it normally omits the
+    /// query. The exception is when the caller *explicitly* set a workspace
+    /// (`--workspace` / `ALIEN_WORKSPACE`): pass it through regardless of
+    /// credential kind. The API ignores `?workspace=` for API keys (they hit
+    /// the service-account path), but user bearer tokens — e.g. the per-turn
+    /// user session the ai-agent mints and hands to the CLI via `ALIEN_API_KEY`
+    /// — *require* it. Since the CLI can't tell an API key from a user token
+    /// (both arrive via `ALIEN_API_KEY`), honoring an explicit workspace is the
+    /// correct, harmless-for-API-keys behavior.
     #[cfg(feature = "platform")]
     pub async fn resolve_workspace_query_with_bootstrap(
         &self,
         allow_prompt: bool,
     ) -> Result<Option<String>> {
         match self {
+            // Explicit workspace wins even with an api_key present — the
+            // credential may be a user token that needs it.
+            Self::Platform {
+                api_key: Some(_),
+                workspace: Some(workspace),
+                ..
+            } => Ok(Some(workspace.clone())),
             Self::Platform {
                 api_key: Some(_), ..
             } => Ok(None),
@@ -284,6 +299,19 @@ impl ExecutionMode {
         allow_prompt: bool,
     ) -> Result<PlatformWorkspaceContext> {
         match self {
+            // An explicit workspace is honored even with an api_key present:
+            // the credential may be a user bearer token (e.g. the ai-agent's
+            // per-turn user session via `ALIEN_API_KEY`) that requires it. The
+            // API ignores the query for real API keys. See
+            // `resolve_workspace_query_with_bootstrap` for the full rationale.
+            Self::Platform {
+                api_key: Some(_),
+                workspace: Some(workspace),
+                ..
+            } => Ok(PlatformWorkspaceContext {
+                name: workspace.clone(),
+                query: Some(workspace.clone()),
+            }),
             Self::Platform {
                 api_key: Some(_), ..
             } => Ok(PlatformWorkspaceContext {
@@ -1001,7 +1029,11 @@ mod tests {
 
     #[cfg(feature = "platform")]
     #[tokio::test]
-    async fn api_key_with_explicit_workspace_omits_workspace_query() {
+    async fn api_key_with_explicit_workspace_sends_workspace_query() {
+        // The credential arriving via `ALIEN_API_KEY` may be a user bearer
+        // token (e.g. the ai-agent's per-turn user session), which the API
+        // requires `?workspace=` for. When a workspace is explicitly set we
+        // send it; the API harmlessly ignores it for real API keys.
         let mode = ExecutionMode::Platform {
             base_url: "https://api.alien.localhost".to_string(),
             api_key: Some("ax_test".to_string()),
@@ -1014,7 +1046,7 @@ mod tests {
             mode.resolve_workspace_query_with_bootstrap(false)
                 .await
                 .unwrap(),
-            None
+            Some("demo".to_string())
         );
     }
 
@@ -1034,12 +1066,13 @@ mod tests {
 
     #[cfg(feature = "platform")]
     #[tokio::test]
-    async fn api_key_platform_query_context_omits_workspace_query() {
+    async fn api_key_without_workspace_platform_query_context_omits_workspace_query() {
+        // No explicit workspace → a real API key is self-scoped, so no query.
         let mode = ExecutionMode::Platform {
             base_url: "https://api.alien.localhost".to_string(),
             api_key: Some("ax_test".to_string()),
             no_browser: true,
-            workspace: Some("demo".to_string()),
+            workspace: None,
             project: None,
         };
 
@@ -1049,5 +1082,27 @@ mod tests {
                 .unwrap(),
             None
         );
+    }
+
+    #[cfg(feature = "platform")]
+    #[tokio::test]
+    async fn api_key_with_explicit_workspace_platform_context_sends_workspace_query() {
+        // `resolve_platform_workspace_context` mirrors the query resolver: an
+        // explicit workspace is honored (name + query) even with an api_key,
+        // since the credential may be a user token that needs it.
+        let mode = ExecutionMode::Platform {
+            base_url: "https://api.alien.localhost".to_string(),
+            api_key: Some("ax_test".to_string()),
+            no_browser: true,
+            workspace: Some("demo".to_string()),
+            project: None,
+        };
+
+        let ctx = mode
+            .resolve_platform_workspace_context(false)
+            .await
+            .unwrap();
+        assert_eq!(ctx.name, "demo");
+        assert_eq!(ctx.query, Some("demo".to_string()));
     }
 }
