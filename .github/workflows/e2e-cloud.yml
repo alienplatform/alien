@@ -596,19 +596,31 @@ jobs:
           NEEDS_AARCH64: ${{ needs.compute-matrix.outputs.needs_aarch64 }}
         run: |
           expected='["/app/alien-worker-runtime"]'
-          if [ "$NEEDS_X86_64" = "true" ]; then
-            actual="$(docker buildx imagetools inspect --format '{{json (index .Image "linux/amd64").Config.Entrypoint}}' "$BASE_IMAGE" | jq -c .)"
-            [ "$actual" = "$expected" ] || {
-              echo "linux/amd64 alien-base entrypoint: expected $expected, got $actual" >&2
+          images="$(docker buildx imagetools inspect --format '{{json .Image}}' "$BASE_IMAGE")"
+          verify_entrypoint() {
+            local platform="$1"
+            local image
+            local actual_platform
+            local actual_entrypoint
+
+            image="$(jq -c --arg platform "$platform" 'if has($platform) then .[$platform] else . end' <<<"$images")"
+            actual_platform="$(jq -r '"\(.os)/\(.architecture)"' <<<"$image")"
+            [ "$actual_platform" = "$platform" ] || {
+              echo "$platform alien-base platform: expected $platform, got $actual_platform" >&2
               exit 1
             }
+            actual_entrypoint="$(jq -c '.config.Entrypoint' <<<"$image")"
+            [ "$actual_entrypoint" = "$expected" ] || {
+              echo "$platform alien-base entrypoint: expected $expected, got $actual_entrypoint" >&2
+              exit 1
+            }
+          }
+
+          if [ "$NEEDS_X86_64" = "true" ]; then
+            verify_entrypoint linux/amd64
           fi
           if [ "$NEEDS_AARCH64" = "true" ]; then
-            actual="$(docker buildx imagetools inspect --format '{{json (index .Image "linux/arm64").Config.Entrypoint}}' "$BASE_IMAGE" | jq -c .)"
-            [ "$actual" = "$expected" ] || {
-              echo "linux/arm64 alien-base entrypoint: expected $expected, got $actual" >&2
-              exit 1
-            }
+            verify_entrypoint linux/arm64
           fi
 
   build-operator-image:
