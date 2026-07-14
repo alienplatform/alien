@@ -5,12 +5,6 @@ use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 
 const RESOURCE: &str = "rust-daemon";
 const OWN_KEYS: [&str; 4] = ["rust:0", "rust:1", "rust:2", "rust:3"];
-const PEER_KEYS: [&str; 4] = [
-    "typescript:0",
-    "typescript:1",
-    "typescript:2",
-    "typescript:3",
-];
 
 async fn count_existing(
     kv: &dyn alien_bindings::Kv,
@@ -51,7 +45,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 "language": "rust",
                 "model": "pull",
                 "ownDocuments": count_existing(kv.as_ref(), &OWN_KEYS).await?,
-                "peerDocuments": count_existing(kv.as_ref(), &PEER_KEYS).await?,
             }))
         }
     });

@@ -125,7 +125,7 @@ async fn pull_local_container_rust(ctx: &mut LocalPullContainerRust) {
 // Local: TypeScript Container + Rust Daemon, direct bindings and commands
 // ---------------------------------------------------------------------------
 //
-// Both source-built processes start directly, share a KV through their native
+// Both source-built processes start directly, use a KV through their native
 // in-process binding libraries, and own their command receiver loops. They
 // deliberately register the same command name so target identity is required.
 

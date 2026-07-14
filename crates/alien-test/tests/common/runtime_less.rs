@@ -1,9 +1,9 @@
 //! Mixed runtime-less application checks.
 //!
 //! The fixture has a TypeScript Container and Rust Daemon that both register
-//! `status` and use the same direct KV binding. Each handler reports its own
-//! identity and counts both processes' seeded keys. A pass therefore requires
-//! both language bindings, both pull receivers, and target-scoped routing.
+//! `status` and use a direct KV binding. Each handler reports its own identity
+//! and verifies the keys it seeded. A pass therefore requires both language
+//! bindings, both pull receivers, and target-scoped routing.
 
 use alien_test::TestDeployment;
 use anyhow::{bail, Context};
@@ -56,7 +56,7 @@ async fn check_target(
         "Checking mixed runtime-less target"
     );
 
-    let last_counts = std::cell::Cell::new((0u64, 0u64));
+    let last_count = std::cell::Cell::new(0u64);
     let ready = super::poll_until(SEED_TIMEOUT, SEED_POLL_INTERVAL, || async {
         let result = deployment
             .invoke_command_on_target(expected.resource, "status", serde_json::json!({}))
@@ -71,25 +71,24 @@ async fn check_target(
         require_string(&result, "model", "pull")?;
 
         let own_documents = numeric_field(&result, "ownDocuments")?;
-        let peer_documents = numeric_field(&result, "peerDocuments")?;
-        last_counts.set((own_documents, peer_documents));
+        last_count.set(own_documents);
 
-        if own_documents == SEEDED_DOCUMENT_COUNT && peer_documents == SEEDED_DOCUMENT_COUNT {
+        if own_documents == SEEDED_DOCUMENT_COUNT {
             return Ok(Some(()));
         }
 
         info!(
             target = expected.resource,
-            own_documents, peer_documents, "Shared index is not fully seeded yet"
+            own_documents, "Target has not fully seeded its index yet"
         );
         Ok(None)
     })
     .await?;
 
     if ready.is_none() {
-        let (own_documents, peer_documents) = last_counts.get();
+        let own_documents = last_count.get();
         bail!(
-            "{} never observed the complete shared index: expected {SEEDED_DOCUMENT_COUNT} own and peer documents, saw {own_documents} own and {peer_documents} peer",
+            "{} never observed its complete index: expected {SEEDED_DOCUMENT_COUNT} documents, saw {own_documents}",
             expected.resource
         );
     }

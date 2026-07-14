@@ -17,15 +17,19 @@ use tracing::{error, info};
 
 /// Bootstrap wrapper template for TypeScript **Worker** applications.
 ///
-/// Only Workers get a generated bootstrap: their compiled binary runs behind
-/// `alien-worker-runtime`. Container and Daemon builds compile the user's
-/// entry point directly — the binary is the image entrypoint and owns its own
-/// process lifecycle (e.g. `export default { fetch }` is auto-served by Bun on
-/// `PORT`).
+/// Workers always get a generated bootstrap because their compiled binary runs
+/// behind `alien-worker-runtime`. Container and Daemon builds normally compile
+/// the user's entry point directly; when native bindings must be embedded, a
+/// separate thin wrapper installs them and preserves the entry module's Bun
+/// server lifecycle.
 ///
-/// This wrapper imports the user's module (which registers command/event
-/// handlers as an import side effect) and hands its default export to
-/// `runWorker`. `runWorker` (in `@alienplatform/sdk/worker-runtime`) owns the
+/// This wrapper installs the embedded bindings addon before dynamically
+/// importing the user's module (which registers command/event handlers as an
+/// import side effect), then hands its default export to `runWorker`. A static
+/// user import would be evaluated before `installEmbeddedAddon()`, so bindings
+/// used during module initialization would incorrectly fall back to filesystem
+/// lookup inside the compiled executable. `runWorker` (in
+/// `@alienplatform/sdk/worker-runtime`) owns the
 /// Worker protocol wiring: it connects to the runtime, detects an HTTP `fetch`
 /// handler and serves it on `127.0.0.1` (always loopback — the runtime/agent
 /// is co-located in the same container or host, and registers the dynamic
@@ -35,13 +39,15 @@ const BOOTSTRAP_TEMPLATE: &str = r#"/**
  * Alien Bootstrap - Auto-generated wrapper for TypeScript applications.
  * DO NOT EDIT - This file is generated during the build process.
  */
-__NATIVE_INSTALL__import * as userModule from "__USER_ENTRY__"
 import { runWorker } from "@alienplatform/sdk/worker-runtime"
+__NATIVE_INSTALL__
 
-runWorker(userModule).catch((error) => {
-  console.error("Alien bootstrap error:", error)
-  process.exit(1)
-})
+import("__USER_ENTRY__")
+  .then((userModule) => runWorker(userModule))
+  .catch((error) => {
+    console.error("Alien bootstrap error:", error)
+    process.exit(1)
+  })
 "#;
 
 /// Registers the bun-embedded bindings addon with the default loader before the
@@ -324,9 +330,12 @@ impl TypeScriptToolchain {
 
     /// Generate a thin entry wrapper for a source-built Container/Daemon whose
     /// binary embeds the bindings addon. It registers the embedded addon, then
-    /// imports the user's entry point (which runs exactly as it would compiled
-    /// directly). Used only when an addon is staged; otherwise the user entry
-    /// is compiled directly with no wrapper.
+    /// dynamically imports the user's entry point. The dynamic import is
+    /// required because static imports are evaluated before the wrapper body.
+    /// Because the user module is no longer Bun's entry module, the wrapper
+    /// also preserves Bun's automatic server startup for a default export with
+    /// a `fetch` method. Used only when an addon is staged; otherwise the user
+    /// entry is compiled directly with no wrapper.
     async fn generate_direct_entry_wrapper(
         &self,
         _src_dir: &Path,
@@ -351,7 +360,20 @@ impl TypeScriptToolchain {
             AddonResolutionRoute::DirectBindings => DIRECT_NATIVE_INSTALL_SNIPPET,
             AddonResolutionRoute::ViaSdk => WORKER_NATIVE_INSTALL_SNIPPET,
         };
-        let wrapper_code = format!("{native_install}import \"{user_import_path}\"\n");
+        let wrapper_code = format!(
+            r#"{native_install}import("{user_import_path}")
+  .then((userModule) => {{
+    const app = userModule.default
+    if (app && typeof app.fetch === "function") {{
+      Bun.serve(app)
+    }}
+  }})
+  .catch((error) => {{
+    console.error("Alien entry error:", error)
+    process.exit(1)
+  }})
+"#
+        );
 
         let wrapper_path = output_dir.join("__alien_entry.ts");
         fs::write(&wrapper_path, &wrapper_code)
@@ -438,10 +460,6 @@ impl Toolchain for TypeScriptToolchain {
         let build_lock = src_dir_build_lock(&src_dir);
         let _build_guard = build_lock.lock().await;
 
-        // Workers compile a generated bootstrap that hands the app to
-        // `runWorker` (the binary runs behind alien-worker-runtime).
-        // Containers and Daemons compile the user's entry point directly —
-        // their binary is the image entrypoint and owns its own lifecycle.
         // Stage the TARGET platform's native bindings addon next to the
         // bindings package's dist/native.js (when the app has
         // @alienplatform/bindings installed) so bun embeds it into the binary.

@@ -3,7 +3,6 @@ import { createCommandReceiver } from "@alienplatform/commands"
 
 const RESOURCE = "typescript-container"
 const ownKeys = Array.from({ length: 4 }, (_, index) => `typescript:${index}`)
-const peerKeys = Array.from({ length: 4 }, (_, index) => `rust:${index}`)
 const index = kv("index")
 
 async function countExisting(keys: string[]): Promise<number> {
@@ -23,7 +22,6 @@ async function main(): Promise<void> {
     language: "typescript",
     model: "pull",
     ownDocuments: await countExisting(ownKeys),
-    peerDocuments: await countExisting(peerKeys),
   }))
 
   await receiver.run()

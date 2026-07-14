@@ -6,8 +6,8 @@
 //!   entrypoint) with `CMD ["--", "./<bin>"]`;
 //! - Container/Daemon source images set the compiled binary as the DIRECT
 //!   image entrypoint — no runtime, no `--` separator, no CMD;
-//! - a compiled TypeScript binary with a staged native bindings addon
-//!   actually RUNS and round-trips a real local kv binding (the
+//! - a compiled TypeScript Container with a staged native bindings addon
+//!   actually SERVES HTTP and round-trips a real local kv binding (the
 //!   compile-smoke pattern from `packages/package-layout/steps/compile.ts`,
 //!   exercised through the real `TypeScriptToolchain` staging path).
 //!
@@ -28,8 +28,10 @@ use alien_core::{
 };
 use dockdash::Image;
 use std::path::{Path, PathBuf};
-use std::process::Command;
+use std::process::{Command, Stdio};
+use std::time::Duration;
 use tempfile::tempdir;
+use tokio::process::Command as TokioCommand;
 
 fn workspace_root() -> PathBuf {
     workspace_root::get_workspace_root()
@@ -265,17 +267,17 @@ async fn typescript_source_image_shapes_per_compute_type() {
     }
 }
 
-/// Compile a TypeScript app that uses `@alienplatform/bindings/native`
-/// through the real toolchain (which stages the target addon from the app's
-/// installed prebuild package), then RUN the produced binary from a
-/// different directory. The staged addon intentionally remains available for
-/// concurrent builds; the independent package-layout compile-smoke removes its
-/// staged addon before execution to prove embedding. This test also asserts a
-/// real local-kv put/get round-trip.
+/// Compile a TypeScript Container that uses the ordinary
+/// `@alienplatform/bindings` entry and Bun's `export default { fetch }` server
+/// convention through the real toolchain. Then run the binary from a different
+/// directory and probe it over HTTP. This proves the generated wrapper both
+/// registers the embedded addon before app evaluation and preserves Bun's
+/// entry-module server lifecycle. The request also performs a real local-kv
+/// put/get round-trip.
 #[tokio::test]
-async fn compiled_typescript_binary_runs_local_binding() {
+async fn compiled_typescript_container_serves_local_binding() {
     if !bun_available() {
-        eprintln!("Skipping compiled_typescript_binary_runs_local_binding: bun not available");
+        eprintln!("Skipping compiled_typescript_container_serves_local_binding: bun not available");
         return;
     }
     std::env::set_var("ALIEN_SKIP_DEPENDENCY_INSTALL", "1");
@@ -287,7 +289,9 @@ async fn compiled_typescript_binary_runs_local_binding() {
         BinaryTarget::LinuxArm64 => "linux-arm64-gnu",
         BinaryTarget::DarwinArm64 => "darwin-arm64",
         BinaryTarget::WindowsX64 => {
-            eprintln!("Skipping compiled_typescript_binary_runs_local_binding: no windows addon");
+            eprintln!(
+                "Skipping compiled_typescript_container_serves_local_binding: no windows addon"
+            );
             return;
         }
     };
@@ -307,23 +311,21 @@ async fn compiled_typescript_binary_runs_local_binding() {
 
     let value = "hello-from-alien-build";
     let app_source = format!(
-        r#"import {{ kv }} from "@alienplatform/bindings/native"
+        r#"import {{ kv }} from "@alienplatform/bindings"
 
-async function main() {{
-  const store = kv("smoke-kv")
-  await store.set("smoke-key", "{value}")
-  const got = await store.getText("smoke-key")
-  if (got !== "{value}") {{
-    console.error(`MISMATCH: got ${{JSON.stringify(got)}}`)
-    process.exit(1)
+const store = kv("smoke-kv")
+const seeded = store.set("smoke-key", "{value}")
+
+export default {{
+  async fetch(): Promise<Response> {{
+    await seeded
+    const got = await store.getText("smoke-key")
+    if (got !== "{value}") {{
+      return new Response(`MISMATCH: got ${{JSON.stringify(got)}}`, {{ status: 500 }})
+    }}
+    return new Response(`OK ${{got}}`)
   }}
-  console.log(`OK ${{got}}`)
 }}
-
-main().catch((err) => {{
-  console.error("UNEXPECTED", err)
-  process.exit(1)
-}})
 "#
     );
 
@@ -339,8 +341,8 @@ main().catch((err) => {{
     std::fs::create_dir_all(&prebuild_dir).expect("create prebuild dir");
     std::fs::copy(&dev_addon, prebuild_dir.join(&addon_file_name)).expect("install prebuild");
 
-    // Build as a local Daemon: direct compile of the user entry, from-scratch
-    // image, binary left in build_dir — runnable on the host.
+    // Build as a local Container: direct executable image, binary left in
+    // build_dir and runnable on the host.
     let build_dir = tempdir().expect("temp build dir");
     let toolchain = TypeScriptToolchain {
         binary_name: Some("bindings-app".to_string()),
@@ -353,7 +355,7 @@ main().catch((err) => {{
         build_target: host_target,
         runtime_platform_name: "local".to_string(),
         debug_mode: false,
-        workload: WorkloadKind::Daemon,
+        workload: WorkloadKind::Container,
     };
 
     let output = toolchain
@@ -363,12 +365,15 @@ main().catch((err) => {{
     assert!(
         matches!(
             output.build_strategy,
-            ImageBuildStrategy::FromScratch { .. }
+            ImageBuildStrategy::FromBaseImage { .. }
         ),
-        "local daemons package from scratch"
+        "local containers package from a direct-executable base image"
     );
-    assert_eq!(output.entrypoint, None);
-    assert_eq!(output.runtime_command, vec!["./bindings-app".to_string()]);
+    assert_eq!(
+        output.entrypoint,
+        Some(vec!["/app/bindings-app".to_string()])
+    );
+    assert!(output.runtime_command.is_empty());
 
     // The staged addon stays in place after the build: it is a shared
     // singleton path that concurrent builds (parallel containers in one
@@ -381,13 +386,20 @@ main().catch((err) => {{
         "staged addon should remain for concurrent builds"
     );
 
-    // RUN the compiled binary from an unrelated cwd against a real local kv.
+    // Run the compiled binary from an unrelated cwd against a real local kv,
+    // and prove the default-export server actually listens.
     let binary = build_dir.path().join("bindings-app");
     assert!(binary.is_file(), "compiled binary should exist");
     let kv_data_dir = tempdir().expect("kv data dir");
     let run_cwd = tempdir().expect("run cwd");
-    let output = Command::new(&binary)
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("reserve probe port");
+    let port = listener.local_addr().expect("probe address").port();
+    drop(listener);
+
+    let mut child = TokioCommand::new(&binary)
         .current_dir(run_cwd.path())
+        .kill_on_drop(true)
+        .env("PORT", port.to_string())
         .env("ALIEN_DEPLOYMENT_TYPE", "local")
         .env(
             "ALIEN_SMOKE_KV_BINDING",
@@ -397,18 +409,49 @@ main().catch((err) => {{
             })
             .to_string(),
         )
-        .output()
-        .expect("compiled binary should execute");
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("compiled binary should start");
 
+    let client = reqwest::Client::new();
+    let url = format!("http://127.0.0.1:{port}/");
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(10);
+    let probe = loop {
+        match client.get(&url).send().await {
+            Ok(response) => {
+                let status = response.status();
+                let body = response
+                    .text()
+                    .await
+                    .unwrap_or_else(|error| format!("failed to read response: {error}"));
+                break Ok((status, body));
+            }
+            Err(error) => {
+                if let Some(status) = child.try_wait().expect("check compiled binary") {
+                    break Err(format!(
+                        "compiled binary exited early with {status}: {error}"
+                    ));
+                }
+                if tokio::time::Instant::now() >= deadline {
+                    break Err(format!("HTTP probe timed out: {error}"));
+                }
+                tokio::time::sleep(Duration::from_millis(100)).await;
+            }
+        }
+    };
+
+    let _ = child.start_kill();
+    let output = child
+        .wait_with_output()
+        .await
+        .expect("collect compiled binary output");
     let stdout = String::from_utf8_lossy(&output.stdout);
     let stderr = String::from_utf8_lossy(&output.stderr);
+    let (status, body) =
+        probe.unwrap_or_else(|error| panic!("{error}\nstdout: {stdout}\nstderr: {stderr}"));
     assert!(
-        output.status.success(),
-        "compiled binary failed (status {:?})\nstdout: {stdout}\nstderr: {stderr}",
-        output.status
-    );
-    assert!(
-        stdout.contains(&format!("OK {value}")),
-        "expected kv round-trip output, got\nstdout: {stdout}\nstderr: {stderr}"
+        status.is_success() && body == format!("OK {value}"),
+        "unexpected HTTP response {status}: {body}\nstdout: {stdout}\nstderr: {stderr}"
     );
 }
