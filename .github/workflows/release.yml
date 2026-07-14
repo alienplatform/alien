@@ -57,7 +57,6 @@ jobs:
           echo "version=$VERSION" >> "$GITHUB_OUTPUT"
 
       - name: Set workspace Cargo version
-        if: ${{ !inputs.dry_run }}
         run: |
           VERSION="${{ steps.bump.outputs.version }}"
           python3 - <<EOF
@@ -74,7 +73,6 @@ jobs:
           VERSION: ${{ steps.bump.outputs.version }}
 
       - name: Set npm package versions
-        if: ${{ !inputs.dry_run }}
         run: |
           VERSION="${{ steps.bump.outputs.version }}"
           # The bindings addon ships as a wrapper + per-platform prebuild packages
@@ -93,6 +91,31 @@ jobs:
               fs.writeFileSync(path, content.replace(/\"version\": \"[^\"]*\"/, '\"version\": \"${VERSION}\"'));
             "
           done
+
+      # Dry-run build jobs start from the untagged commit, so carry the exact
+      # versioned manifests that a real release would commit into those fresh
+      # checkouts. This keeps the addon binary, wrapper, and platform packages
+      # on one computed version without mutating git or publishing anything.
+      - name: Upload versioned manifests for dry run
+        if: ${{ inputs.dry_run }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-version-manifests
+          retention-days: 1
+          path: |
+            Cargo.toml
+            packages/core/package.json
+            packages/commands/package.json
+            packages/sdk/package.json
+            packages/testing/package.json
+            client-sdks/platform/typescript/package.json
+            client-sdks/manager/typescript/package.json
+            packages/bindings/package.json
+            crates/alien-bindings-node/package.json
+            packages/bindings/npm/darwin-arm64/package.json
+            packages/bindings/npm/darwin-x64/package.json
+            packages/bindings/npm/linux-x64-gnu/package.json
+            packages/bindings/npm/linux-arm64-gnu/package.json
 
       - name: Commit and tag
         if: ${{ !inputs.dry_run }}
@@ -329,6 +352,18 @@ jobs:
         with:
           ref: ${{ inputs.dry_run && github.sha || format('v{0}', needs.prepare.outputs.version) }}
 
+      - name: Apply computed version for dry run
+        if: ${{ inputs.dry_run }}
+        uses: actions/download-artifact@v4
+        with:
+          name: release-version-manifests
+          path: .
+
+      - name: Validate bindings release version lockstep
+        env:
+          VERSION: ${{ needs.prepare.outputs.version }}
+        run: node packages/bindings/scripts/validate-release-version.mjs "$VERSION"
+
       # Rust toolchain: Linux via the shared composite; macOS uses dtolnay +
       # brew protoc directly (plain `napi build`, not `depot cargo`, so no
       # Depot/sccache setup here). The addon depends on alien-bindings, whose
@@ -417,6 +452,18 @@ jobs:
       - uses: actions/checkout@v4
         with:
           ref: ${{ inputs.dry_run && github.sha || format('v{0}', needs.prepare.outputs.version) }}
+
+      - name: Apply computed version for dry run
+        if: ${{ inputs.dry_run }}
+        uses: actions/download-artifact@v4
+        with:
+          name: release-version-manifests
+          path: .
+
+      - name: Validate bindings release version lockstep
+        env:
+          VERSION: ${{ needs.prepare.outputs.version }}
+        run: node packages/bindings/scripts/validate-release-version.mjs "$VERSION"
 
       - uses: pnpm/action-setup@v4
         with:
