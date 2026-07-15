@@ -485,8 +485,6 @@ impl EnvironmentVariableBuilder {
     /// 1. ALIEN_CURRENT_WORKER_BINDING_NAME - the function's ID for identifying itself
     /// 2. ALIEN_{FUNCTION_ID}_BINDING - the function's full binding parameters (if available)
     ///
-    /// This allows the function to introspect itself via alien_context.get_current_worker().
-    ///
     /// The binding params should be provided when available. During initial creation, binding
     /// params may be incomplete (e.g., URL not yet known). During updates or after creation
     /// completes, full binding params should be available.

@@ -47,8 +47,8 @@ pub async fn test_storage(
 
     let storage_instance = app_state
         .ctx
-        .get_bindings()
-        .load_storage(&binding_name)
+        .bindings()
+        .storage(&binding_name)
         .await
         .context(ErrorData::BindingNotFound {
             binding_name: binding_name.clone(),
@@ -367,8 +367,8 @@ pub async fn write_storage_object(
 
     let storage_instance = app_state
         .ctx
-        .get_bindings()
-        .load_storage(&binding_name)
+        .bindings()
+        .storage(&binding_name)
         .await
         .context(ErrorData::BindingNotFound {
             binding_name: binding_name.clone(),

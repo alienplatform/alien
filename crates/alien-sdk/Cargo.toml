@@ -2,7 +2,7 @@
 name = "alien-sdk"
 version.workspace = true
 edition = "2021"
-description = "Alien SDK for Rust — cloud-agnostic bindings for storage, KV, queues, vault, and more"
+description = "Alien SDK for Rust — app bindings for storage, KV, queues, and vaults"
 license-file.workspace = true
 
 [features]

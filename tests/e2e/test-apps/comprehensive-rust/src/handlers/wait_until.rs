@@ -66,8 +66,8 @@ pub async fn test_wait_until(
     // Get the storage binding for the background task
     let storage_binding = match state
         .ctx
-        .get_bindings()
-        .load_storage(&request.storage_binding_name)
+        .bindings()
+        .storage(&request.storage_binding_name)
         .await
     {
         Ok(storage) => storage,
@@ -141,8 +141,8 @@ pub async fn verify_wait_until(
 
     let storage_instance = match app_state
         .ctx
-        .get_bindings()
-        .load_storage(&storage_binding_name)
+        .bindings()
+        .storage(&storage_binding_name)
         .await
     {
         Ok(storage) => storage,

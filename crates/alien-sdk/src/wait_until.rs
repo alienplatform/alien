@@ -1,7 +1,4 @@
-use alien_bindings::{
-    error::{ErrorData, Result},
-    traits::Binding,
-};
+use alien_bindings::error::{ErrorData, Result};
 use alien_error::{AlienError, Context, IntoAlienError};
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
@@ -53,10 +50,12 @@ pub struct DrainConfig {
     pub reason: String,
 }
 
-/// A trait for wait_until bindings that provide task coordination capabilities.
-/// Note: This trait is not object-safe due to generic methods, so we use concrete types in providers.
+/// Worker task coordination and drain operations.
+///
+/// This trait is not object-safe due to its generic task method; callers use
+/// [`WaitUntilContext`] directly.
 #[async_trait]
-pub trait WaitUntil: Binding {
+pub trait WaitUntil: Send + Sync + std::fmt::Debug {
     /// Waits for a drain signal from the runtime.
     /// This is a blocking call that returns when the runtime decides it's time to drain.
     async fn wait_for_drain_signal(&self, timeout: Option<Duration>) -> Result<DrainConfig>;
@@ -390,8 +389,6 @@ impl WaitUntilContext {
         Ok(())
     }
 }
-
-impl Binding for WaitUntilContext {}
 
 #[async_trait]
 impl WaitUntil for WaitUntilContext {

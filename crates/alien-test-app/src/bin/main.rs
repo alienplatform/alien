@@ -165,7 +165,7 @@ fn register_event_handlers(app_state: &AppState) {
                 );
 
                 // Store in KV for test verification
-                let kv = ctx.get_bindings().load_kv("test-kv").await?;
+                let kv = ctx.bindings().kv("test-kv").await?;
                 let record = serde_json::json!({
                     "key": event.key,
                     "bucket": event.bucket,
@@ -201,7 +201,7 @@ fn register_event_handlers(app_state: &AppState) {
                 );
 
                 // Store in KV for test verification
-                let kv = ctx.get_bindings().load_kv("test-kv").await?;
+                let kv = ctx.bindings().kv("test-kv").await?;
                 let record = serde_json::json!({
                     "messageId": message.id,
                     "source": message.source,
@@ -236,7 +236,7 @@ fn register_event_handlers(app_state: &AppState) {
                 );
 
                 // Store in KV for test verification
-                let kv = ctx.get_bindings().load_kv("test-kv").await?;
+                let kv = ctx.bindings().kv("test-kv").await?;
                 let record = serde_json::json!({
                     "scheduleName": event.schedule_name,
                     "scheduledTime": event.scheduled_time.to_rfc3339(),
@@ -379,8 +379,8 @@ async fn get_storage_event(
 ) -> Result<Json<serde_json::Value>, (StatusCode, String)> {
     let kv = app_state
         .ctx
-        .get_bindings()
-        .load_kv("test-kv")
+        .bindings()
+        .kv("test-kv")
         .await
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
 
@@ -408,8 +408,8 @@ async fn get_cron_event(
 ) -> Result<Json<serde_json::Value>, (StatusCode, String)> {
     let kv = app_state
         .ctx
-        .get_bindings()
-        .load_kv("test-kv")
+        .bindings()
+        .kv("test-kv")
         .await
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
 
@@ -437,8 +437,8 @@ async fn get_queue_message(
 ) -> Result<Json<serde_json::Value>, (StatusCode, String)> {
     let kv = app_state
         .ctx
-        .get_bindings()
-        .load_kv("test-kv")
+        .bindings()
+        .kv("test-kv")
         .await
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
 

@@ -39,8 +39,8 @@ pub async fn get_storage_event(
 
     let kv = app_state
         .ctx
-        .get_bindings()
-        .load_kv("alien-kv")
+        .bindings()
+        .kv("alien-kv")
         .await
         .context(ErrorData::BindingNotFound {
             binding_name: "alien-kv".to_string(),
@@ -73,8 +73,8 @@ pub async fn get_cron_event(
 
     let kv = app_state
         .ctx
-        .get_bindings()
-        .load_kv("alien-kv")
+        .bindings()
+        .kv("alien-kv")
         .await
         .context(ErrorData::BindingNotFound {
             binding_name: "alien-kv".to_string(),
@@ -107,8 +107,8 @@ pub async fn get_queue_message(
 
     let kv = app_state
         .ctx
-        .get_bindings()
-        .load_kv("alien-kv")
+        .bindings()
+        .kv("alien-kv")
         .await
         .context(ErrorData::BindingNotFound {
             binding_name: "alien-kv".to_string(),
@@ -138,8 +138,8 @@ pub async fn list_events(State(app_state): State<AppState>) -> Result<Json<Event
 
     let kv = app_state
         .ctx
-        .get_bindings()
-        .load_kv("alien-kv")
+        .bindings()
+        .kv("alien-kv")
         .await
         .context(ErrorData::BindingNotFound {
             binding_name: "alien-kv".to_string(),

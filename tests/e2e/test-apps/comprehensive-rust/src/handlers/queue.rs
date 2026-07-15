@@ -38,8 +38,8 @@ pub async fn test_queue(
 
     let queue = app_state
         .ctx
-        .get_bindings()
-        .load_queue(&binding_name)
+        .bindings()
+        .queue(&binding_name)
         .await
         .context(ErrorData::BindingNotFound {
             binding_name: binding_name.clone(),
@@ -113,8 +113,8 @@ pub async fn send_queue_message(
 
     let queue = app_state
         .ctx
-        .get_bindings()
-        .load_queue(&binding_name)
+        .bindings()
+        .queue(&binding_name)
         .await
         .context(ErrorData::BindingNotFound {
             binding_name: binding_name.clone(),

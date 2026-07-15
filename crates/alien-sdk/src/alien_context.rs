@@ -13,10 +13,11 @@ use tokio::sync::{Mutex, RwLock};
 use tokio_stream::StreamExt as _;
 use tracing::{debug, error, info, warn};
 
-use crate::wait_until::{WaitUntil, WaitUntilContext};
+use crate::{
+    wait_until::{WaitUntil, WaitUntilContext},
+    Bindings,
+};
 use alien_bindings::error::{ErrorData, Result};
-use alien_bindings::{BindingsProvider, BindingsProviderApi};
-use alien_core::{ENV_ALIEN_CURRENT_CONTAINER_BINDING_NAME, ENV_ALIEN_CURRENT_WORKER_BINDING_NAME};
 use alien_error::{AlienError, Context, IntoAlienError};
 
 #[cfg(feature = "grpc")]
@@ -90,8 +91,8 @@ impl Default for Handlers {
 pub struct AlienContext {
     /// The wait_until context for managing background tasks
     wait_until_context: Arc<WaitUntilContext>,
-    /// The bindings provider for accessing resources
-    bindings_provider: Arc<dyn BindingsProviderApi>,
+    /// Application-facing direct bindings.
+    bindings: Arc<Bindings>,
     /// Application ID
     app_id: String,
     /// Environment variables
@@ -113,10 +114,7 @@ impl AlienContext {
     /// Creates a new AlienContext from provided environment variables.
     /// This is useful for testing or when environment variables are not available via std::env.
     pub async fn from_env_with_vars(env_vars: &HashMap<String, String>) -> Result<Self> {
-        // Bindings are always resolved in-process by the direct provider. The
-        // former gRPC bindings mode was removed with the binding-gRPC services.
-        let bindings_provider: Arc<dyn BindingsProviderApi> =
-            Arc::new(BindingsProvider::from_env(env_vars.clone()).await?);
+        let bindings = Arc::new(Bindings::from_env_map(env_vars.clone())?);
 
         let app_id = uuid::Uuid::new_v4().to_string();
 
@@ -128,7 +126,7 @@ impl AlienContext {
 
         Ok(Self {
             wait_until_context,
-            bindings_provider,
+            bindings,
             app_id,
             env_vars: env_vars.clone(),
             handlers: Arc::new(RwLock::new(Handlers::default())),
@@ -137,16 +135,13 @@ impl AlienContext {
         })
     }
 
-    /// Creates a new AlienContext with custom provider and wait_until context.
+    /// Creates a new AlienContext with custom bindings and wait_until context.
     /// This is mainly useful for testing or advanced use cases.
-    pub fn new(
-        wait_until_context: Arc<WaitUntilContext>,
-        bindings_provider: Arc<dyn BindingsProviderApi>,
-    ) -> Self {
+    pub fn new(wait_until_context: Arc<WaitUntilContext>, bindings: Arc<Bindings>) -> Self {
         Self {
             app_id: wait_until_context.application_id().to_string(),
             wait_until_context,
-            bindings_provider,
+            bindings,
             env_vars: std::env::vars().collect(),
             handlers: Arc::new(RwLock::new(Handlers::default())),
             #[cfg(feature = "grpc")]
@@ -194,14 +189,14 @@ impl AlienContext {
 
     // ==================== BINDINGS ====================
 
-    /// Gets the bindings provider for accessing storage, build, and other resources.
-    pub fn bindings(&self) -> &dyn BindingsProviderApi {
-        self.bindings_provider.as_ref()
+    /// Gets the application binding facade.
+    pub fn bindings(&self) -> &Bindings {
+        self.bindings.as_ref()
     }
 
-    /// Gets the bindings provider as an Arc
-    pub fn get_bindings(&self) -> Arc<dyn BindingsProviderApi> {
-        Arc::clone(&self.bindings_provider)
+    /// Gets a shared application binding facade.
+    pub fn get_bindings(&self) -> Arc<Bindings> {
+        Arc::clone(&self.bindings)
     }
 
     // ==================== EVENT HANDLERS ====================
@@ -787,50 +782,5 @@ impl AlienContext {
     /// Gets the current number of registered wait_until tasks.
     pub async fn get_task_count(&self) -> Result<u32> {
         self.wait_until_context.get_task_count().await
-    }
-
-    /// Gets the current worker binding if available.
-    pub async fn get_current_worker(
-        &self,
-    ) -> Result<Option<Arc<dyn alien_bindings::traits::Worker>>> {
-        if let Some(current_worker_name) = self.env_vars.get(ENV_ALIEN_CURRENT_WORKER_BINDING_NAME)
-        {
-            Ok(Some(
-                self.bindings_provider
-                    .load_worker(current_worker_name)
-                    .await?,
-            ))
-        } else {
-            Ok(None)
-        }
-    }
-
-    /// Gets the current container binding if available.
-    ///
-    /// This allows a container to discover its own public and internal URLs.
-    /// Useful for constructing callback URLs, OAuth redirects, etc.
-    ///
-    /// # Example
-    /// ```ignore
-    /// let ctx = AlienContext::from_env().await?;
-    /// if let Some(container) = ctx.get_current_container().await? {
-    ///     let public_url = container.get_public_url();
-    ///     let callback_url = format!("{}/callback", public_url.unwrap_or(""));
-    /// }
-    /// ```
-    pub async fn get_current_container(
-        &self,
-    ) -> Result<Option<Arc<dyn alien_bindings::traits::Container>>> {
-        if let Some(current_container_name) =
-            self.env_vars.get(ENV_ALIEN_CURRENT_CONTAINER_BINDING_NAME)
-        {
-            Ok(Some(
-                self.bindings_provider
-                    .load_container(current_container_name)
-                    .await?,
-            ))
-        } else {
-            Ok(None)
-        }
     }
 }

@@ -1,19 +1,15 @@
 //! Alien SDK for Rust.
 //!
-//! Cloud-agnostic bindings for storage, KV, queues, vault, commands, and more.
+//! Cloud-agnostic bindings for storage, KV, queues, and vaults, plus the
+//! Worker application context.
 //! Works on AWS, GCP, Azure, Kubernetes, and locally.
 //!
-//! This is the public-facing crate for Alien app developers. It re-exports the
-//! **app-facing** surface of [`alien_bindings`] — the storage/KV/queue/vault
-//! binding factory types, the [`Bindings`] entry point, and the plumbing an
-//! app needs — under the `alien_sdk` import path.
+//! This is the public-facing crate for Alien app developers. Its binding API is
+//! deliberately limited to [`Bindings`] and the four kinds applications can
+//! use directly: [`Storage`], [`Kv`], [`Queue`], and [`Vault`].
 //!
-//! The internal binding *kinds* — `Worker`, `Container`, `Build`,
-//! `ArtifactRegistry`, `ServiceAccount`, `Postgres` — and the provider-facing
-//! `BindingsProviderApi` trait are deliberately **not** re-exported here. They
-//! describe resources the platform manages, not surfaces an app calls, so they
-//! stay out of the app namespace. An integration that genuinely needs one
-//! (e.g. an operator or a BYOC tool) imports it from `alien_bindings` directly.
+//! Platform tooling that needs provider construction or managed resource kinds
+//! such as builds and artifact registries uses `alien_bindings` directly.
 //!
 //! # Example
 //!
@@ -29,45 +25,74 @@
 //!     Ok(())
 //! }
 //! ```
+//!
+//! Provider construction and managed resource bindings are not part of this
+//! crate's application API:
+//!
+//! ```compile_fail
+//! use alien_sdk::BindingsProvider;
+//! ```
+//!
+//! ```compile_fail
+//! use alien_sdk::BindingsProviderApi;
+//! ```
+//!
+//! ```compile_fail
+//! use alien_sdk::Binding;
+//! ```
+//!
+//! ```compile_fail
+//! use alien_sdk::{ArtifactRegistry, Build, Container, Postgres, ServiceAccount, Worker};
+//! ```
+//!
+//! ```compile_fail
+//! use alien_sdk::provider;
+//! ```
+//!
+//! ```compile_fail
+//! use alien_sdk::providers;
+//! ```
+//!
+//! ```compile_fail
+//! use alien_sdk::http_client;
+//! ```
+//!
+//! [`AlienContext`] exposes the same four-kind [`Bindings`] facade, not the
+//! provider API:
+//!
+//! ```compile_fail
+//! fn load_internal_binding(ctx: &alien_sdk::AlienContext) {
+//!     let _ = ctx.bindings().load_build("builder");
+//! }
+//! ```
+//!
+//! ```compile_fail
+//! fn inspect_managed_resource(ctx: &alien_sdk::AlienContext) {
+//!     let _ = ctx.get_current_worker();
+//!     let _ = ctx.get_current_container();
+//! }
+//! ```
 
-// App-facing surface of `alien_bindings`, re-exported explicitly (no glob) so
-// the internal binding kinds never leak into the app namespace.
-pub use alien_bindings::{
-    // Platform detection + env plumbing.
-    get_current_platform,
-    get_platform_from_env,
-    // Storage / KV / queue / vault factory types + the shared marker trait.
-    Binding,
-    // Bindings entry points.
-    Bindings,
-    BindingsProvider,
-    // Errors.
-    ErrorData,
-    Kv,
-    Platform,
-    Queue,
-    Result,
-    Storage,
-    Vault,
-    ENV_ALIEN_DEPLOYMENT_TYPE,
-    ENV_OPERATOR_BASE_PLATFORM,
-};
+pub use alien_bindings::{Bindings, ErrorData, Kv, Queue, Result, Storage, Vault};
 
-// App-facing modules. `traits` is re-exported below as a curated subset; the
-// upstream `alien_bindings::traits` also carries the internal kinds, so it is
-// not re-exported wholesale.
-pub use alien_bindings::{error, http_client, presigned, provider, providers};
+/// Errors returned by the application binding and Worker APIs.
+pub mod error {
+    pub use alien_bindings::error::{Error, ErrorData, Result};
+}
+
+/// Serializable requests returned by storage presigning operations.
+pub mod presigned {
+    pub use alien_bindings::presigned::{
+        LocalOperation, PresignedOperation, PresignedRequest, PresignedRequestBackend,
+        PresignedResponse,
+    };
+}
 
 /// App-facing binding value types (the option/message/result types that flow
 /// through storage/KV/queue/vault calls).
-///
-/// This intentionally re-exports only the app-facing items from
-/// [`alien_bindings::traits`] — never the internal binding kinds (`Worker`,
-/// `Container`, `Build`, `ArtifactRegistry`, `ServiceAccount`, `Postgres`) or
-/// the provider-facing `BindingsProviderApi` trait.
 pub mod traits {
     pub use alien_bindings::traits::{
-        Binding, Kv, MessagePayload, PutOptions, Queue, ScanResult, Storage, Vault,
+        Kv, MessagePayload, PutOptions, Queue, QueueMessage, ScanResult, Storage, Vault,
     };
 }
 

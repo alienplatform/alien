@@ -1,5 +1,10 @@
 # alien-sdk
 
-Public Rust SDK for Alien applications. Re-exports everything from `alien-bindings` (`pub use alien_bindings::*`) so application code has a single import path.
+Public Rust SDK for Alien applications. Its binding API exposes only the
+application-facing `Bindings` facade and storage, KV, queue, and vault types.
+Provider construction and managed resource bindings belong to
+`alien-bindings`, not this crate.
 
-Owns `AlienContext` (initializing bindings and handling commands) and `WaitUntil`; re-exports the `Bindings` API from `alien-bindings`. Your application code uses `alien_sdk::*` regardless of which cloud platform it runs on.
+The crate also owns `AlienContext` for Worker events, commands, and `waitUntil`.
+Both `Bindings::from_env()` and `AlienContext::bindings()` use the same direct,
+in-process binding facade on every supported platform.

@@ -6,6 +6,7 @@
 //! - Background tasks with `wait_until`
 //! - Bindings usage (storage, kv, queue, vault, etc.)
 
+use alien_bindings::{BindingsProvider, BindingsProviderApi};
 use alien_error::{Context, IntoAlienError};
 use alien_sdk::{AlienContext, ErrorData as BindingsErrorData};
 use alien_test_server::{handlers, models::AppState};
@@ -16,6 +17,7 @@ use axum::{
 use clap::Parser;
 use sha2::{Digest, Sha256};
 use std::{
+    collections::HashMap,
     net::{IpAddr, Ipv4Addr, SocketAddr},
     sync::Arc,
 };
@@ -46,8 +48,18 @@ async fn main() -> anyhow::Result<()> {
 
     info!(port = port, "Starting Alien Test Server (dynamic port)");
 
-    // Initialize Alien context
-    let ctx = AlienContext::from_env()
+    let env_vars: HashMap<String, String> = std::env::vars().collect();
+
+    // Managed resource bindings are intentionally outside alien-sdk's app API.
+    // This comprehensive infrastructure test keeps a direct provider for those
+    // test-only endpoints.
+    let internal_bindings: Arc<dyn BindingsProviderApi> = Arc::new(
+        BindingsProvider::from_env(env_vars.clone())
+            .await
+            .expect("Failed to create internal bindings provider"),
+    );
+
+    let ctx = AlienContext::from_env_with_vars(&env_vars)
         .await
         .expect("Failed to create Alien context");
 
@@ -56,7 +68,10 @@ async fn main() -> anyhow::Result<()> {
         "Initialized Alien context"
     );
 
-    let app_state = AppState { ctx: Arc::new(ctx) };
+    let app_state = AppState {
+        ctx: Arc::new(ctx),
+        internal_bindings,
+    };
 
     // Register event handlers (using new SDK pattern)
     // Note: These handlers are called via gRPC from the runtime when events occur
@@ -132,7 +147,7 @@ fn register_event_handlers(app_state: &AppState) {
 
                 // Store in KV for test verification
                 // Sanitize key: replace / with _ to comply with KV key validation rules
-                let kv = ctx.get_bindings().load_kv("alien-kv").await?;
+                let kv = ctx.bindings().kv("alien-kv").await?;
                 let record = serde_json::json!({
                     "key": event.key,
                     "bucket": event.bucket,
@@ -170,7 +185,7 @@ fn register_event_handlers(app_state: &AppState) {
 
                 // Store in KV for test verification
                 // Sanitize schedule name to comply with KV key validation rules
-                let kv = ctx.get_bindings().load_kv("alien-kv").await?;
+                let kv = ctx.bindings().kv("alien-kv").await?;
                 let record = serde_json::json!({
                     "scheduleName": event.schedule_name,
                     "scheduledTime": event.scheduled_time,
@@ -207,7 +222,7 @@ fn register_event_handlers(app_state: &AppState) {
 
                 // Store in KV for test verification
                 // Sanitize message ID to comply with KV key validation rules
-                let kv = ctx.get_bindings().load_kv("alien-kv").await?;
+                let kv = ctx.bindings().kv("alien-kv").await?;
                 let record = serde_json::json!({
                     "messageId": message.id,
                     "source": message.source,

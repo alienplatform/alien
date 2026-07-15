@@ -1,3 +1,4 @@
+use alien_bindings::BindingsProviderApi;
 use alien_core::ComputeType;
 use alien_sdk::AlienContext;
 use chrono::{DateTime, Utc};
@@ -9,8 +10,10 @@ use utoipa::ToSchema;
 /// Shared application state for the test server.
 #[derive(Clone)]
 pub struct AppState {
-    /// The Alien context that provides both bindings and wait_until functionality
+    /// Worker application context and application-facing bindings.
     pub ctx: Arc<AlienContext>,
+    /// Provider API used only by this comprehensive infrastructure test app.
+    pub internal_bindings: Arc<dyn BindingsProviderApi>,
 }
 
 // Health check models
