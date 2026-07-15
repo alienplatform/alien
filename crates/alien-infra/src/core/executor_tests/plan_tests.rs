@@ -239,8 +239,7 @@ async fn test_step_restarts_update_from_terminal_failure_with_config_change() ->
         .unwrap();
     failed_controller.state = TestWorkerState::UpdateFailed;
     resource_state.status = ResourceStatus::UpdateFailed;
-    resource_state.set_internal_controller(Some(Box::new(failed_controller.clone())))?;
-    resource_state.set_last_failed_controller(Some(Box::new(failed_controller)))?;
+    resource_state.set_internal_controller(Some(Box::new(failed_controller)))?;
 
     let func_v2 = test_function_with_image("func1", "image-v2");
     let stack_v2 = Stack::new("update-failed-repair-test".to_owned())

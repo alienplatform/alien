@@ -1255,7 +1255,9 @@ impl StackExecutor {
                 );
 
                 let mut update_state = current_state.clone();
-                if update_state.status == ResourceStatus::UpdateFailed {
+                if update_state.status == ResourceStatus::UpdateFailed
+                    && update_state.has_last_failed_state()
+                {
                     update_state
                         .retry_failed()
                         .context(ErrorData::InfrastructureError {
