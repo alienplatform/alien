@@ -457,6 +457,14 @@ async fn authorized_bootstrap_mints_via_real_manager_and_loads_a_working_binding
         "audit event must carry bindingName; captured logs: {logs}"
     );
     assert!(
+        logs.contains("resource_id=api"),
+        "audit event must carry resourceId; captured logs: {logs}"
+    );
+    assert!(
+        logs.contains("provider=local") && logs.contains("credential_source=resolver"),
+        "audit event must carry the actual provider and credential source; captured logs: {logs}"
+    );
+    assert!(
         logs.contains("principal"),
         "audit event must carry the principal field; captured logs: {logs}"
     );

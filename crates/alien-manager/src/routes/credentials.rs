@@ -277,7 +277,7 @@ async fn mint_credentials(
     // resolver may contain manager-local static or refreshable credentials and
     // must never be serialized to a workload. Only the Local platform retains
     // resolver fallback for its credential-free fixture config.
-    let (client_config, principal, provider) =
+    let (client_config, principal, credential_source) =
         if let Some(target_provider) = state.target_bindings_providers.get(&platform) {
             let service_account = match target_provider
                 .load_service_account(&req.binding_name)
@@ -377,7 +377,8 @@ async fn mint_credentials(
         deployment_id = %req.deployment_id,
         resource_id = %req.resource_id,
         binding_name = %req.binding_name,
-        provider = %provider,
+        provider = %platform,
+        credential_source = %credential_source,
         principal = %principal,
         expires_at = %expires_at,
         duration_seconds = duration_seconds,

@@ -219,7 +219,7 @@ pub(crate) fn image_output_for_binary(
 
     // Container / non-local Daemon: the compiled binary IS the entrypoint.
     // The explicit entrypoint also clears any entrypoint/CMD inherited from
-    // the base image (including a user-supplied --override-base-image).
+    // the plain direct base image.
     ToolchainOutput {
         build_strategy: ImageBuildStrategy::FromBaseImage {
             base_images: DIRECT_BASE_IMAGES.iter().map(|s| s.to_string()).collect(),

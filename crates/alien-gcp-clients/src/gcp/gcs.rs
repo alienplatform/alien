@@ -518,6 +518,7 @@ impl GcsApi for GcsClient {
 #[derive(Debug, Serialize, Deserialize, Clone)]
 #[serde(rename_all = "camelCase")]
 pub struct ProjectServiceAccount {
+    #[serde(rename = "email_address")]
     pub email_address: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub kind: Option<String>,
@@ -790,4 +791,29 @@ pub struct GcsNotification {
     /// Custom attributes to attach to each notification message
     #[serde(default, skip_serializing_if = "HashMap::is_empty")]
     pub custom_attributes: HashMap<String, String>,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::ProjectServiceAccount;
+
+    #[test]
+    fn project_service_account_deserializes_gcs_response() {
+        let response = r#"{
+            "email_address": "service-123456789@gs-project-accounts.iam.gserviceaccount.com",
+            "kind": "storage#serviceAccount"
+        }"#;
+
+        let service_account: ProjectServiceAccount = serde_json::from_str(response)
+            .expect("GCS service account response should deserialize");
+
+        assert_eq!(
+            service_account.email_address,
+            "service-123456789@gs-project-accounts.iam.gserviceaccount.com"
+        );
+        assert_eq!(
+            service_account.kind.as_deref(),
+            Some("storage#serviceAccount")
+        );
+    }
 }

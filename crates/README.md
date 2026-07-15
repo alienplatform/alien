@@ -31,7 +31,7 @@
 
 | Crate | Description |
 |-------|-------------|
-| [alien-worker-runtime](./alien-worker-runtime/) | In-container runtime — starts user code, injects bindings via gRPC, routes requests |
+| [alien-worker-runtime](./alien-worker-runtime/) | Worker-only invocation adapter — delivers platform events, HTTP, and commands and manages `waitUntil`/lifecycle |
 | [alien-bindings](./alien-bindings/) | Platform-agnostic binding traits and providers (storage, KV, vault, queue, etc.) |
 | [alien-sdk](./alien-sdk/) | Public Rust SDK for Alien applications — re-exports alien-bindings |
 | [alien-operator](./alien-operator/) | Pull-model operator — syncs with manager, runs deployments in remote environments |

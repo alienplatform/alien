@@ -1,4 +1,6 @@
-use crate::azure::common::{AzureClientBase, AzureRequestBuilder};
+use crate::azure::common::{
+    create_azure_http_error_with_context, AzureClientBase, AzureRequestBuilder,
+};
 use crate::azure::models::certificates::{CertificateBundle, CertificateImportParameters};
 use crate::azure::models::keyvault::{Vault, VaultCreateOrUpdateParameters};
 use crate::azure::models::secrets::{SecretBundle, SecretSetParameters, SecretUpdateParameters};
@@ -677,16 +679,15 @@ impl KeyVaultSecretsApi for AzureKeyVaultSecretsClient {
                 .text()
                 .await
                 .unwrap_or_else(|_| "Unknown error".to_string());
-            return Err(AlienError::new(ErrorData::HttpResponseError {
-                message: format!(
-                    "Azure DeleteSecret failed with status {}: {}",
-                    status, error_text
-                ),
-                url: url.to_string(),
-                http_status: status.as_u16(),
-                http_request_text: None,
-                http_response_text: Some(error_text),
-            }));
+            return Err(create_azure_http_error_with_context(
+                status,
+                "DeleteSecret",
+                "Azure Key Vault Secret",
+                &secret_name,
+                &error_text,
+                url.as_str(),
+                None,
+            ));
         }
 
         let response_body =
@@ -932,5 +933,74 @@ impl KeyVaultCertificatesApi for AzureKeyVaultCertificatesClient {
             })?;
 
         Ok(cert)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::collections::HashMap;
+
+    use httpmock::{Method::DELETE, MockServer};
+    use serde_json::json;
+
+    use super::*;
+    use crate::azure::{AzureClientConfig, AzureClientConfigExt, ServiceOverrides};
+
+    async fn delete_secret_error(status: u16, azure_error_code: &str) -> alien_client_core::Error {
+        let server = MockServer::start_async().await;
+        let response = server
+            .mock_async(|when, then| {
+                when.method(DELETE)
+                    .path("/secrets/ALIEN-COMMANDS-TOKEN")
+                    .query_param("api-version", "7.4");
+                then.status(status).json_body(json!({
+                    "error": {
+                        "code": azure_error_code,
+                        "message": "response used to verify delete error classification"
+                    }
+                }));
+            })
+            .await;
+
+        let config = AzureClientConfig::mock().with_service_overrides(ServiceOverrides {
+            endpoints: HashMap::from([("keyvault".to_string(), server.base_url())]),
+        });
+        let client = AzureKeyVaultSecretsClient::new(Client::new(), AzureTokenCache::new(config));
+
+        let error = client
+            .delete_secret(
+                "ignored-by-service-override".to_string(),
+                "ALIEN-COMMANDS-TOKEN".to_string(),
+            )
+            .await
+            .expect_err("the mock response should fail the client request");
+
+        response.assert_async().await;
+        error
+    }
+
+    #[tokio::test]
+    async fn delete_secret_maps_azure_secret_not_found_to_remote_resource_not_found() {
+        let error = delete_secret_error(404, "SecretNotFound").await;
+
+        match error.error {
+            Some(ErrorData::RemoteResourceNotFound {
+                resource_type,
+                resource_name,
+            }) => {
+                assert_eq!(resource_type, "Azure Key Vault Secret");
+                assert_eq!(resource_name, "ALIEN-COMMANDS-TOKEN");
+            }
+            other => panic!("expected RemoteResourceNotFound, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn delete_secret_preserves_auth_and_server_failures() {
+        let forbidden = delete_secret_error(403, "Forbidden").await;
+        assert_eq!(forbidden.code, "REMOTE_ACCESS_DENIED");
+
+        let server_error = delete_secret_error(500, "InternalServerError").await;
+        assert_eq!(server_error.code, "REMOTE_SERVICE_UNAVAILABLE");
     }
 }

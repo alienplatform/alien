@@ -160,11 +160,22 @@ impl MintingCredentialSource {
     /// environment is a manager bug, not a reason to silently fall back to
     /// static resolution.
     pub(crate) fn from_env(env: &HashMap<String, String>) -> Result<Option<Self>> {
-        let (Some(manager_url), Some(token)) = (
+        let (manager_url, token) = match (
             env.get(ENV_ALIEN_MANAGER_URL),
             env.get(ENV_ALIEN_DEPLOYMENT_TOKEN),
-        ) else {
-            return Ok(None);
+        ) {
+            (None, None) => return Ok(None),
+            (Some(manager_url), Some(token)) => (manager_url, token),
+            (None, Some(_)) => {
+                return Err(AlienError::new(ErrorData::EnvironmentVariableMissing {
+                    variable_name: ENV_ALIEN_MANAGER_URL.to_string(),
+                }));
+            }
+            (Some(_), None) => {
+                return Err(AlienError::new(ErrorData::EnvironmentVariableMissing {
+                    variable_name: ENV_ALIEN_DEPLOYMENT_TOKEN.to_string(),
+                }));
+            }
         };
 
         let deployment_id = env.get(ENV_ALIEN_DEPLOYMENT_ID).ok_or_else(|| {
@@ -498,6 +509,26 @@ mod tests {
         let error = MintingCredentialSource::from_env(&env)
             .expect_err("incomplete contract should fail fast");
         assert_eq!(error.code, "ENVIRONMENT_VARIABLE_MISSING");
+    }
+
+    #[test]
+    fn from_env_fails_fast_when_only_one_gate_variable_is_present() {
+        for (present, missing) in [
+            (ENV_ALIEN_MANAGER_URL, ENV_ALIEN_DEPLOYMENT_TOKEN),
+            (ENV_ALIEN_DEPLOYMENT_TOKEN, ENV_ALIEN_MANAGER_URL),
+        ] {
+            let env = HashMap::from([(present.to_string(), "configured".to_string())]);
+            let error = MintingCredentialSource::from_env(&env)
+                .expect_err("a partial mint gate must not silently disable minting");
+
+            assert_eq!(error.code, "ENVIRONMENT_VARIABLE_MISSING");
+            match error.error {
+                Some(ErrorData::EnvironmentVariableMissing { variable_name }) => {
+                    assert_eq!(variable_name, missing);
+                }
+                other => panic!("expected missing {missing}, got {other:?}"),
+            }
+        }
     }
 
     #[tokio::test]

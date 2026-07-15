@@ -1,6 +1,5 @@
 // Local pull E2E app: one Rust SOURCE Container with a pull command receiver
-// and a direct in-process KV binding. The OSS local platform is the only
-// target — cloud container coverage lives in the platform repo's E2E.
+// and a direct in-process KV binding.
 import * as alien from "@alienplatform/core"
 
 const index = new alien.Kv("index").build()

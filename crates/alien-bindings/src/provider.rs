@@ -402,11 +402,7 @@ impl BindingsProvider {
             .into_inner();
 
         // 2. Get manager URL (caller-scoped)
-        let manager_id = deployment_response.manager_id.ok_or_else(|| {
-            AlienError::new(ErrorData::RemoteAccessFailed {
-                operation: "fetch manager from Platform API".to_string(),
-            })
-        })?;
+        let manager_id = deployment_response.manager_id;
 
         let manager_response = sdk_client
             .get_manager()

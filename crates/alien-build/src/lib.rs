@@ -1969,7 +1969,7 @@ async fn compute_source_artifact_cache_key(
     workload: toolchain::WorkloadKind,
 ) -> Result<String> {
     let mut hasher = Sha256::new();
-    hasher.update(b"alien-build-artifact-cache-v2");
+    hasher.update(b"alien-build-artifact-cache-v3");
     hasher.update(src.as_bytes());
     hasher.update(
         serde_json::to_vec(toolchain_config)
@@ -1989,8 +1989,11 @@ async fn compute_source_artifact_cache_key(
     hasher.update(host_process.to_string().as_bytes());
     hasher.update(settings.debug_mode.to_string().as_bytes());
     hasher.update(workload.as_str().as_bytes());
-    if let Some(override_base_image) = &settings.override_base_image {
-        hasher.update(override_base_image.as_bytes());
+    for base_image in
+        effective_source_base_images(toolchain_config, settings, workload, host_process)
+    {
+        hasher.update(b"\0base-image\0");
+        hasher.update(base_image.as_bytes());
     }
     for target in targets {
         hasher.update(target.runtime_platform_id().as_bytes());
@@ -2585,12 +2588,15 @@ async fn build_target_to_file(
             files_to_package,
         } => {
             // Cloud platform flow - build from base image
-            let base_images_to_try: Vec<String> =
-                if let Some(override_image) = &settings.override_base_image {
-                    vec![override_image.clone()]
-                } else {
-                    base_images.clone()
-                };
+            // The override is specifically the Worker runtime base. Direct
+            // Container/Daemon images must remain on their plain bases even
+            // when a mixed stack builds Workers from a feature-versioned
+            // alien-base image.
+            let base_images_to_try = base_images_for_workload(
+                base_images,
+                settings.override_base_image.as_deref(),
+                workload,
+            );
 
             if base_images_to_try.is_empty() {
                 return Err(AlienError::new(ErrorData::BuildConfigInvalid {
@@ -2650,6 +2656,17 @@ async fn build_target_to_file(
                         .platform(target.oci_os(), &target.to_dockdash_arch())
                         .pull_policy(PullPolicy::Always)
                         .layer(app_layer);
+
+                    // Built-in Worker and direct bases are public. Do not let
+                    // unrelated DOCKER_USERNAME/PASSWORD values get sent to
+                    // GHCR, cgr.dev, or Docker Hub. A feature-versioned Worker
+                    // override may be private, so it keeps dockdash's explicit
+                    // environment-auth path.
+                    if workload != toolchain::WorkloadKind::Worker
+                        || settings.override_base_image.is_none()
+                    {
+                        image_builder = image_builder.auth(dockdash::RegistryAuth::Anonymous);
+                    }
 
                     image_builder = apply_image_command(image_builder, &toolchain_output);
 
@@ -2793,14 +2810,53 @@ async fn build_target_to_file(
     Ok(output_path.to_string_lossy().into_owned())
 }
 
+/// Return the ordered base-image inputs that affect a source artifact.
+/// Host-process and Dockerfile builds do not use the source toolchain bases.
+fn effective_source_base_images(
+    toolchain_config: &alien_core::ToolchainConfig,
+    settings: &BuildSettings,
+    workload: toolchain::WorkloadKind,
+    host_process: bool,
+) -> Vec<String> {
+    if host_process || matches!(toolchain_config, alien_core::ToolchainConfig::Docker { .. }) {
+        return vec![];
+    }
+
+    let defaults = match workload {
+        toolchain::WorkloadKind::Worker => toolchain::WORKER_BASE_IMAGES,
+        toolchain::WorkloadKind::Container | toolchain::WorkloadKind::Daemon => {
+            toolchain::DIRECT_BASE_IMAGES
+        }
+    }
+    .iter()
+    .map(|image| (*image).to_string())
+    .collect::<Vec<_>>();
+
+    base_images_for_workload(&defaults, settings.override_base_image.as_deref(), workload)
+}
+
+/// Apply a feature-versioned runtime base only to Worker source images.
+fn base_images_for_workload(
+    base_images: &[String],
+    override_base_image: Option<&str>,
+    workload: toolchain::WorkloadKind,
+) -> Vec<String> {
+    if workload == toolchain::WorkloadKind::Worker {
+        if let Some(override_image) = override_base_image {
+            return vec![override_image.to_string()];
+        }
+    }
+
+    base_images.to_vec()
+}
+
 /// Decide the ENTRYPOINT/CMD pair an image gets from a [`ToolchainOutput`].
 ///
 /// - `entrypoint: Some` — direct-entrypoint images (source-built
-///   Containers/Daemons): the compiled binary overrides the base image's
-///   entrypoint (which, per Docker semantics, also clears any CMD inherited
-///   from the base image, including a user-supplied override base image).
-///   CMD is set only when `runtime_command` is nonempty — direct images
-///   carry no runtime wrapper and no `--` separator.
+///   Containers/Daemons): the compiled binary overrides the plain base
+///   image's entrypoint and clears inherited CMD. CMD is set only when
+///   `runtime_command` is nonempty — direct images carry no runtime wrapper
+///   and no `--` separator.
 /// - `entrypoint: None` — keep the base image's entrypoint (e.g. alien-base's
 ///   `alien-worker-runtime`) and always set CMD from `runtime_command`.
 ///
@@ -3188,6 +3244,37 @@ mod tests {
                 Some(vec!["serve".to_string()])
             )
         );
+    }
+
+    #[test]
+    fn runtime_base_override_only_applies_to_workers() {
+        let direct_bases = vec!["cgr.dev/chainguard/wolfi-base:latest".to_string()];
+        let runtime_base = "registry.example.com/alien-base:feature";
+
+        assert_eq!(
+            base_images_for_workload(&direct_bases, None, toolchain::WorkloadKind::Worker),
+            direct_bases,
+            "without an override the declared default bases must be preserved"
+        );
+        assert_eq!(
+            base_images_for_workload(
+                &direct_bases,
+                Some(runtime_base),
+                toolchain::WorkloadKind::Worker,
+            ),
+            vec![runtime_base.to_string()]
+        );
+        for workload in [
+            toolchain::WorkloadKind::Container,
+            toolchain::WorkloadKind::Daemon,
+        ] {
+            assert_eq!(
+                base_images_for_workload(&direct_bases, Some(runtime_base), workload),
+                direct_bases,
+                "{} must not inherit the Worker runtime base",
+                workload.as_str()
+            );
+        }
     }
 
     #[test]
@@ -3783,6 +3870,7 @@ mod tests {
         };
         let azure = BuildSettings {
             platform: PlatformBuildSettings::Azure {},
+            override_base_image: Some("registry.example.com/base:other-tag".to_string()),
             ..gcp.clone()
         };
 
@@ -3805,7 +3893,114 @@ mod tests {
         .await
         .unwrap();
 
-        assert_eq!(gcp_key, azure_key);
+        assert_eq!(
+            gcp_key, azure_key,
+            "direct workloads must ignore the Worker runtime-base override"
+        );
+        let gcp_daemon_key = compute_source_artifact_cache_key(
+            src_dir.path().to_str().unwrap(),
+            &toolchain,
+            &gcp,
+            &targets,
+            crate::toolchain::WorkloadKind::Daemon,
+        )
+        .await
+        .unwrap();
+        let azure_daemon_key = compute_source_artifact_cache_key(
+            src_dir.path().to_str().unwrap(),
+            &toolchain,
+            &azure,
+            &targets,
+            crate::toolchain::WorkloadKind::Daemon,
+        )
+        .await
+        .unwrap();
+        assert_eq!(
+            gcp_daemon_key, azure_daemon_key,
+            "Daemon artifacts must ignore the Worker runtime-base override"
+        );
+
+        let gcp_worker_key = compute_source_artifact_cache_key(
+            src_dir.path().to_str().unwrap(),
+            &toolchain,
+            &gcp,
+            &targets,
+            crate::toolchain::WorkloadKind::Worker,
+        )
+        .await
+        .unwrap();
+        let azure_worker_key = compute_source_artifact_cache_key(
+            src_dir.path().to_str().unwrap(),
+            &toolchain,
+            &azure,
+            &targets,
+            crate::toolchain::WorkloadKind::Worker,
+        )
+        .await
+        .unwrap();
+        assert_ne!(
+            gcp_worker_key, azure_worker_key,
+            "Worker artifacts must include their runtime base in the cache key"
+        );
+
+        let docker_toolchain = ToolchainConfig::Docker {
+            dockerfile: None,
+            build_args: None,
+            target: None,
+        };
+        let gcp_docker_key = compute_source_artifact_cache_key(
+            src_dir.path().to_str().unwrap(),
+            &docker_toolchain,
+            &gcp,
+            &targets,
+            crate::toolchain::WorkloadKind::Worker,
+        )
+        .await
+        .unwrap();
+        let azure_docker_key = compute_source_artifact_cache_key(
+            src_dir.path().to_str().unwrap(),
+            &docker_toolchain,
+            &azure,
+            &targets,
+            crate::toolchain::WorkloadKind::Worker,
+        )
+        .await
+        .unwrap();
+        assert_eq!(
+            gcp_docker_key, azure_docker_key,
+            "Dockerfile builds own their base and must ignore the source Worker override"
+        );
+
+        let local_a = BuildSettings {
+            platform: PlatformBuildSettings::Local {},
+            ..gcp
+        };
+        let local_b = BuildSettings {
+            platform: PlatformBuildSettings::Local {},
+            ..azure
+        };
+        let local_a_key = compute_source_artifact_cache_key(
+            src_dir.path().to_str().unwrap(),
+            &toolchain,
+            &local_a,
+            &targets,
+            crate::toolchain::WorkloadKind::Worker,
+        )
+        .await
+        .unwrap();
+        let local_b_key = compute_source_artifact_cache_key(
+            src_dir.path().to_str().unwrap(),
+            &toolchain,
+            &local_b,
+            &targets,
+            crate::toolchain::WorkloadKind::Worker,
+        )
+        .await
+        .unwrap();
+        assert_eq!(
+            local_a_key, local_b_key,
+            "Local Workers run from scratch and must ignore the cloud runtime base"
+        );
     }
 
     #[tokio::test]

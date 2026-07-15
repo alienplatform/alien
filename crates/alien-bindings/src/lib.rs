@@ -24,6 +24,7 @@ pub mod presigned {
 mod credential_source;
 pub mod http_client;
 pub mod provider;
+mod refreshing;
 
 /// Gets the current platform from the ALIEN_DEPLOYMENT_TYPE environment variable.
 /// This is used by the runtime to determine which platform-specific implementations to use.

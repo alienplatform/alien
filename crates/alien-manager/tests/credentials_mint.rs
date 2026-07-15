@@ -1061,6 +1061,14 @@ async fn audit_log_never_contains_credential_material() {
         "audit event must carry the deployment id and principal; captured logs: {logs}"
     );
     assert!(
+        logs.contains("resource_id=api"),
+        "audit event must carry the resource id; captured logs: {logs}"
+    );
+    assert!(
+        logs.contains("provider=aws") && logs.contains("credential_source=impersonation"),
+        "audit event must carry the actual provider and credential source; captured logs: {logs}"
+    );
+    assert!(
         !logs.contains(FAKE_SECRET),
         "audit log leaked the secret access key: {logs}"
     );

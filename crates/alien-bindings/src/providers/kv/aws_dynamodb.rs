@@ -69,6 +69,11 @@ impl Kv for AwsDynamodbKv {
         let request = GetItemRequest::builder()
             .table_name(self.table_name.clone())
             .key(primary_key)
+            // `Kv::put` followed by `Kv::get` must observe the write. DynamoDB
+            // GetItem is eventually consistent by default, which can make a
+            // freshly stored command payload appear missing during immediate
+            // push dispatch.
+            .consistent_read(true)
             .build();
 
         let response = self.client.get_item(request).await.map_err(|e| {
@@ -218,6 +223,7 @@ impl Kv for AwsDynamodbKv {
             .key(primary_key)
             .projection_expression("pk, #ttl".to_string()) // Get key and TTL for expiry check
             .expression_attribute_names(expression_attribute_names)
+            .consistent_read(true)
             .build();
 
         let response = self.client.get_item(request).await.map_err(|e| {

@@ -2,7 +2,7 @@
 name = "alien-bindings"
 version.workspace = true
 edition = "2021"
-description = "Alien platform runtime bindings"
+description = "Alien direct in-process resource bindings"
 license-file.workspace = true
 
 [lib]

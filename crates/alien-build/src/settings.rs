@@ -92,9 +92,9 @@ pub struct BuildSettings {
     /// Optional cache URL for build caching (e.g., s3://bucket/path, gcs://bucket/path).
     /// If None, no build caching will be used.
     pub cache_url: Option<String>,
-    /// Optional override for the base image used in container builds.
-    /// If provided, this will override the default base image from toolchains.
-    /// Useful for testing or using custom base images.
+    /// Optional override for the Worker runtime base image.
+    /// Container and Daemon builds intentionally keep their plain direct bases.
+    /// Useful for testing a feature-versioned `alien-worker-runtime` image.
     pub override_base_image: Option<String>,
     /// Build in debug mode for faster builds (default: false for release builds).
     /// Debug builds are faster but produce larger binaries.

@@ -8,14 +8,26 @@ E2E test harness for cross-cloud deployment testing. Provides reusable building 
 # Build binaries
 cargo build -p alien-operator -p alien-deploy-cli
 
-# Build runtime base image (x86_64 for GCP/Azure, arm64 for AWS Lambda)
-docker buildx build -t alien-worker-runtime:local --platform linux/amd64 \
-  -f crates/alien-worker-runtime/Dockerfile .
-export ALIEN_OVERRIDE_BASE_IMAGE=alien-worker-runtime:local
-
 # Source test credentials
 set -a && source .env.test && set +a
 ```
+
+Local E2E does not need a Worker base-image override. To test an unpublished
+Worker runtime in cloud E2E, build both runtime architectures, push a
+multi-architecture image to a registry reachable by the cloud builder, and set
+`ALIEN_OVERRIDE_BASE_IMAGE` to that fully qualified image reference:
+
+```bash
+cargo zigbuild --release -p alien-worker-runtime --target x86_64-unknown-linux-musl
+cargo zigbuild --release -p alien-worker-runtime --target aarch64-unknown-linux-musl
+docker buildx build --push --platform linux/amd64,linux/arm64 \
+  -t registry.example.com/alien-base:test \
+  -f docker/Dockerfile.alien-base .
+export ALIEN_OVERRIDE_BASE_IMAGE=registry.example.com/alien-base:test
+```
+
+The override applies to source-built Workers only. Source-built Containers and
+Daemons use their direct base images.
 
 ## Key Types
 
