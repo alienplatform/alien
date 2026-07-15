@@ -299,17 +299,19 @@ describe("real-wire command twins", () => {
     expect(seen!.deadline).toBeInstanceOf(Date)
   }, 30_000)
 
-  it("budget: short lease → slow handler → real lease-expiry fires signal → HANDLER_TIMEOUT surfaced", async () => {
+  it("budget: short valid lease → slow handler → lease-derived budget fires signal → HANDLER_TIMEOUT surfaced", async () => {
     server = await startRealServer()
 
     let signalFired = false
     const receiver = createCommandReceiver({
       env: receiverEnv(server),
       // Poll fast so the command is caught right after creation; the short
-      // lease then bounds the budget. Once HANDLER_TIMEOUT settles the command
+      // lease then bounds the budget. The receiver reserves 5s for response
+      // submission, so 6s leaves about 1s in which the handler genuinely runs
+      // before its signal fires. Once HANDLER_TIMEOUT settles the command
       // Failed (terminal), re-leasing is a no-op, so a small interval is safe.
       pollIntervalMs: 25,
-      leaseSeconds: 1,
+      leaseSeconds: 6,
     })
     receiver.handle("slow", async ctx => {
       // Deliberately ignore the abort signal (only record it) and outlive the
@@ -330,7 +332,7 @@ describe("real-wire command twins", () => {
     receiver.stop()
     await running
 
-    // The real lease's expiry drove the budget: the signal fired in-process…
+    // The real lease-derived budget fired the signal in-process…
     expect(signalFired).toBe(true)
     // …and the receiver submitted HANDLER_TIMEOUT, which the sender surfaces.
     expect(err).toBeInstanceOf(AlienError)
