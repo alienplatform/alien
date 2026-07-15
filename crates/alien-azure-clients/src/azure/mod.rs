@@ -17,6 +17,7 @@ pub mod compute;
 pub mod container_apps;
 pub mod containerregistry;
 pub mod disks;
+pub mod event_grid;
 pub mod flexible_server;
 pub mod keyvault;
 pub mod load_balancers;

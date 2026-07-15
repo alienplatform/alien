@@ -86,7 +86,7 @@ impl CompileTimeCheck for TriggerEdgeOwnershipCheck {
 }
 
 fn storage_trigger_source_requires_management(platform: Platform) -> bool {
-    matches!(platform, Platform::Aws | Platform::Gcp)
+    matches!(platform, Platform::Aws | Platform::Gcp | Platform::Azure)
 }
 
 fn profile_contains_permission(
@@ -218,7 +218,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn azure_storage_trigger_does_not_require_source_storage_management() {
+    async fn azure_storage_trigger_requires_source_storage_management() {
         let stack = stack_with_storage_lifecycle(
             ResourceLifecycle::Frozen,
             ManagementPermissions::override_(PermissionProfile::new().global(["worker/provision"])),
@@ -229,7 +229,8 @@ mod tests {
             .await
             .unwrap();
 
-        assert!(result.success);
+        assert!(!result.success);
+        assert!(result.errors[0].contains("storage/trigger-management"));
     }
 
     #[tokio::test]

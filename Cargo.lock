@@ -140,6 +140,7 @@ dependencies = [
  "dotenvy",
  "hmac 0.12.1",
  "http 1.4.2",
+ "httpmock",
  "mockall",
  "openapiv3",
  "p12",

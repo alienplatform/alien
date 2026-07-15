@@ -144,12 +144,17 @@ impl InfrastructureDependenciesMutation {
                     ),
                 ];
 
-                if stack
+                let worker = stack
                     .resources
                     .get(resource_id)
-                    .and_then(|entry| entry.config.downcast_ref::<alien_core::Worker>())
-                    .is_some_and(|worker| worker.commands_enabled)
-                {
+                    .and_then(|entry| entry.config.downcast_ref::<alien_core::Worker>());
+                let needs_service_bus = worker.is_some_and(|worker| {
+                    worker.commands_enabled
+                        || worker.triggers.iter().any(|trigger| {
+                            matches!(trigger, alien_core::WorkerTrigger::Storage { .. })
+                        })
+                });
+                if needs_service_bus {
                     dependencies.push(ResourceRef::new(
                         alien_core::ServiceActivation::RESOURCE_TYPE,
                         "enable-servicebus",
@@ -157,6 +162,17 @@ impl InfrastructureDependenciesMutation {
                     dependencies.push(ResourceRef::new(
                         alien_core::AzureServiceBusNamespace::RESOURCE_TYPE,
                         "default-service-bus-namespace",
+                    ));
+                }
+                if worker.is_some_and(|worker| {
+                    worker
+                        .triggers
+                        .iter()
+                        .any(|trigger| matches!(trigger, alien_core::WorkerTrigger::Storage { .. }))
+                }) {
+                    dependencies.push(ResourceRef::new(
+                        alien_core::ServiceActivation::RESOURCE_TYPE,
+                        "enable-eventgrid",
                     ));
                 }
 
@@ -363,7 +379,7 @@ mod tests {
         AzureResourceGroup, AzureStorageAccount, EnvironmentVariablesSnapshot, ExternalBindings,
         KubernetesCluster, KubernetesClusterOwnership, KubernetesClusterProvider,
         KubernetesHeartbeatMode, Resource, ResourceEntry, ResourceLifecycle, StackSettings,
-        Storage,
+        Storage, Worker, WorkerCode, WorkerTrigger,
     };
     use indexmap::IndexMap;
 
@@ -454,6 +470,51 @@ mod tests {
         let app_storage_deps = &result.resources.get("app-storage").unwrap().dependencies;
         assert!(app_storage_deps.contains(&resource_group));
         assert!(app_storage_deps.contains(&storage_account));
+    }
+
+    #[tokio::test]
+    async fn azure_storage_trigger_depends_on_event_grid_and_service_bus() {
+        let storage = Storage::new("uploads".to_string()).build();
+        let worker = Worker::new("processor".to_string())
+            .code(WorkerCode::Image {
+                image: "test:latest".to_string(),
+            })
+            .permissions("worker".to_string())
+            .trigger(WorkerTrigger::storage(
+                &storage,
+                vec!["created".to_string()],
+            ))
+            .build();
+        let stack = Stack::new("test".to_string())
+            .add(storage, ResourceLifecycle::Frozen)
+            .add(worker, ResourceLifecycle::Live)
+            .build();
+        let stack_state = StackState::new(Platform::Azure);
+        let config = DeploymentConfig::builder()
+            .stack_settings(StackSettings::default())
+            .environment_variables(empty_env_snapshot())
+            .allow_frozen_changes(false)
+            .external_bindings(ExternalBindings::default())
+            .build();
+
+        let result = InfrastructureDependenciesMutation
+            .mutate(stack, &stack_state, &config)
+            .await
+            .unwrap();
+        let dependencies = &result.resources.get("processor").unwrap().dependencies;
+
+        assert!(dependencies.contains(&ResourceRef::new(
+            alien_core::ServiceActivation::RESOURCE_TYPE,
+            "enable-eventgrid",
+        )));
+        assert!(dependencies.contains(&ResourceRef::new(
+            alien_core::ServiceActivation::RESOURCE_TYPE,
+            "enable-servicebus",
+        )));
+        assert!(dependencies.contains(&ResourceRef::new(
+            alien_core::AzureServiceBusNamespace::RESOURCE_TYPE,
+            "default-service-bus-namespace",
+        )));
     }
 
     #[tokio::test]

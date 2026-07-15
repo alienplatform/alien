@@ -1,5 +1,5 @@
 use std::time::Duration;
-use tracing::info;
+use tracing::{info, warn};
 
 use crate::core::{ResourceControllerContext, ResourcePermissionsHelper};
 use crate::error::{ErrorData, Result};
@@ -12,7 +12,8 @@ use alien_core::{
 };
 use alien_error::{AlienError, Context, ContextError};
 use alien_gcp_clients::iam::{
-    Binding, CreateServiceAccountRequest, IamPolicy, ServiceAccount as GcpServiceAccount,
+    Binding, CreateServiceAccountRequest, GenerateAccessTokenRequest, IamPolicy,
+    ServiceAccount as GcpServiceAccount,
 };
 use alien_macros::controller;
 #[cfg(test)]
@@ -375,9 +376,8 @@ impl GcpRemoteStackManagementController {
                 management_service_account = %management_service_account_email,
                 "Impersonation permissions already reconciled"
             );
-            self.impersonation_granted = true;
             return Ok(HandlerAction::Continue {
-                state: Ready,
+                state: VerifyingImpersonation,
                 suggested_delay: None,
             });
         }
@@ -407,12 +407,66 @@ impl GcpRemoteStackManagementController {
             "Impersonation permissions granted successfully"
         );
 
-        self.impersonation_granted = true;
-
         Ok(HandlerAction::Continue {
-            state: Ready,
+            state: VerifyingImpersonation,
             suggested_delay: None,
         })
+    }
+
+    #[handler(
+        state = VerifyingImpersonation,
+        on_failure = CreateFailed,
+        status = ResourceStatus::Provisioning,
+    )]
+    async fn verifying_impersonation(
+        &mut self,
+        ctx: &ResourceControllerContext<'_>,
+    ) -> Result<HandlerAction> {
+        let config = ctx.desired_resource_config::<RemoteStackManagement>()?;
+        let gcp_config = ctx.get_gcp_config()?;
+        let service_account_email = self.service_account_email.as_ref().ok_or_else(|| {
+            AlienError::new(ErrorData::InfrastructureError {
+                message: "Management service account email is not available for impersonation verification"
+                    .to_string(),
+                operation: Some("verifying_impersonation".to_string()),
+                resource_id: Some(config.id.clone()),
+            })
+        })?;
+        let iam_client = ctx.service_provider.get_gcp_iam_client(gcp_config)?;
+        let request = GenerateAccessTokenRequest::builder()
+            .scope(vec![
+                "https://www.googleapis.com/auth/cloud-platform".to_string()
+            ])
+            .lifetime("300s".to_string())
+            .build();
+
+        match iam_client
+            .generate_access_token(service_account_email.clone(), request)
+            .await
+        {
+            Ok(_) => {
+                info!(
+                    target_service_account = %service_account_email,
+                    "Management service account impersonation verified"
+                );
+                self.impersonation_granted = true;
+                Ok(HandlerAction::Continue {
+                    state: Ready,
+                    suggested_delay: None,
+                })
+            }
+            Err(error) => {
+                warn!(
+                    target_service_account = %service_account_email,
+                    error = ?error,
+                    "Management service account impersonation is not usable yet"
+                );
+                Ok(HandlerAction::Stay {
+                    max_times: Some(30),
+                    suggested_delay: Some(Duration::from_secs(2)),
+                })
+            }
+        }
     }
 
     // ─────────────── READY STATE ──────────────────────────────

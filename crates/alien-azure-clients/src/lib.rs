@@ -15,6 +15,7 @@ pub use azure::compute::{AzureVmssClient, VirtualMachineScaleSetsApi};
 pub use azure::container_apps::{AzureContainerAppsClient, ContainerAppsApi};
 pub use azure::containerregistry::{AzureContainerRegistryClient, ContainerRegistryApi};
 pub use azure::disks::{AzureManagedDisksClient, ManagedDisksApi};
+pub use azure::event_grid::{AzureEventGridClient, EventGridApi};
 pub use azure::flexible_server::{AzureFlexibleServerClient, FlexibleServerApi};
 pub use azure::keyvault::{
     AzureKeyVaultManagementClient, AzureKeyVaultSecretsClient, KeyVaultManagementApi,

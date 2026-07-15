@@ -2,6 +2,10 @@ use alien_azure_clients::container_apps::{
     ManagedEnvironmentCertificate, ManagedEnvironmentCertificateKeyVaultProperties,
     ManagedEnvironmentCertificateProperties,
 };
+use alien_azure_clients::event_grid::{
+    EventSubscriptionFilter, EventSubscriptionRequest, EventSubscriptionRequestProperties,
+    ServiceBusQueueDestination, ServiceBusQueueDestinationProperties,
+};
 use alien_azure_clients::long_running_operation::{LongRunningOperation, OperationResult};
 use alien_azure_clients::models::container_apps::{
     Configuration, ConfigurationActiveRevisionsMode, Container, ContainerApp,
@@ -40,6 +44,44 @@ use alien_macros::controller;
 /// Generates a deterministic Azure Container Apps name for a worker.
 fn get_azure_container_app_name(prefix: &str, name: &str) -> String {
     format!("{}-{}", prefix, name)
+}
+
+fn get_azure_storage_event_subscription_name(worker_id: &str, storage_id: &str) -> String {
+    let mut stem: String = format!("alien{worker_id}{storage_id}")
+        .chars()
+        .filter(|ch| ch.is_ascii_alphanumeric())
+        .collect();
+    stem.truncate(31);
+    let suffix = uuid::Uuid::new_v5(
+        &uuid::Uuid::NAMESPACE_OID,
+        format!("azure-storage-trigger:{worker_id}:{storage_id}").as_bytes(),
+    )
+    .simple()
+    .to_string();
+    format!("{stem}{suffix}")
+}
+
+fn azure_storage_event_types(events: &[String], worker_id: &str) -> Result<Vec<String>> {
+    events
+        .iter()
+        .map(|event| {
+            let event_type = match event.as_str() {
+                "created" => "Microsoft.Storage.BlobCreated",
+                "deleted" => "Microsoft.Storage.BlobDeleted",
+                "tierChanged" => "Microsoft.Storage.BlobTierChanged",
+                _ => {
+                    return Err(AlienError::new(ErrorData::ResourceConfigInvalid {
+                        message: format!(
+                            "Azure storage trigger event '{}' is not supported; expected one of: created, deleted, tierChanged",
+                            event
+                        ),
+                        resource_id: Some(worker_id.to_string()),
+                    }));
+                }
+            };
+            Ok(event_type.to_string())
+        })
+        .collect()
 }
 
 #[cfg(not(test))]
@@ -182,6 +224,18 @@ struct DomainInfo {
 enum DaprComponentOperation {
     Completed,
     LongRunning(Duration),
+    Pending(Duration),
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AzureStorageTriggerInfrastructure {
+    pub source_resource_id: String,
+    pub event_subscription_name: String,
+    pub service_bus_resource_group: String,
+    pub namespace_name: String,
+    pub queue_name: String,
+    pub receiver_role_assignment_id: Option<String>,
 }
 
 fn emit_azure_container_apps_worker_heartbeat(
@@ -351,6 +405,9 @@ pub struct AzureWorkerController {
     pub(crate) pending_operation_retry_after: Option<u64>,
     /// Dapr component names for queue triggers (one per queue trigger)
     pub(crate) dapr_components: Vec<String>,
+    /// Event Grid and Service Bus resources created for storage triggers.
+    #[serde(default)]
+    pub(crate) storage_trigger_infrastructure: Vec<AzureStorageTriggerInfrastructure>,
 
     // Domain & Certificate
     /// The fully qualified domain name for the worker
@@ -507,6 +564,12 @@ impl AzureWorkerController {
                         suggested_delay: Some(delay),
                     });
                 }
+                Ok(DaprComponentOperation::Pending(delay)) => {
+                    return Ok(HandlerAction::Stay {
+                        max_times: Some(AZURE_RBAC_WAIT_MAX_ATTEMPTS),
+                        suggested_delay: Some(delay),
+                    });
+                }
                 Err(e) if is_azure_authorization_propagation_error(&e) => {
                     let deadline = ensure_rbac_wait_deadline(
                         &mut self.commands_infrastructure_auth_wait_until_epoch_secs,
@@ -554,10 +617,38 @@ impl AzureWorkerController {
             }
         }
 
+        // Storage triggers use Event Grid -> a dedicated Service Bus queue ->
+        // a Dapr Service Bus input binding. Pre-create that chain before the
+        // Container App so its receiver role can propagate while the app starts.
+        for trigger in &func_cfg.triggers {
+            let alien_core::WorkerTrigger::Storage { storage, events } = trigger else {
+                continue;
+            };
+
+            match self
+                .create_azure_storage_trigger(ctx, &container_app_name, func_cfg, storage, events)
+                .await?
+            {
+                DaprComponentOperation::Completed => {}
+                DaprComponentOperation::LongRunning(delay) => {
+                    return Ok(HandlerAction::Continue {
+                        state: WaitingForPreCreateCommandsDaprComponentOperation,
+                        suggested_delay: Some(delay),
+                    });
+                }
+                DaprComponentOperation::Pending(delay) => {
+                    return Ok(HandlerAction::Stay {
+                        max_times: Some(AZURE_RBAC_WAIT_MAX_ATTEMPTS),
+                        suggested_delay: Some(delay),
+                    });
+                }
+            }
+        }
+
         // Wait in a real controller state for Azure RBAC propagation. A
         // suggested delay alone is only a scheduling hint and can be shortened
         // by other resources in the executor.
-        info!(name=%func_cfg.id, "Commands infrastructure ready, waiting for RBAC propagation before creating Container App");
+        info!(name=%func_cfg.id, "Trigger infrastructure ready, waiting for RBAC propagation before creating Container App");
         Ok(HandlerAction::Continue {
             state: WaitingBeforeContainerAppCreation,
             suggested_delay: None,
@@ -1299,18 +1390,27 @@ impl AzureWorkerController {
                             return Err(e);
                         }
                     };
-                    if let DaprComponentOperation::LongRunning(delay) = operation {
-                        return Ok(HandlerAction::Continue {
-                            state: WaitingForDaprComponentCreateOperation,
-                            suggested_delay: Some(delay),
-                        });
+                    match operation {
+                        DaprComponentOperation::LongRunning(delay) => {
+                            return Ok(HandlerAction::Continue {
+                                state: WaitingForDaprComponentCreateOperation,
+                                suggested_delay: Some(delay),
+                            });
+                        }
+                        DaprComponentOperation::Pending(delay) => {
+                            return Ok(HandlerAction::Stay {
+                                max_times: Some(AZURE_RBAC_WAIT_MAX_ATTEMPTS),
+                                suggested_delay: Some(delay),
+                            });
+                        }
+                        DaprComponentOperation::Completed => {}
                     }
                     created_any = true;
                 }
                 alien_core::WorkerTrigger::Storage { storage, events } => {
-                    info!(worker=%func_cfg.id, storage=%storage.id, "Creating Dapr blob storage component");
+                    info!(worker=%func_cfg.id, storage=%storage.id, "Creating Azure storage trigger delivery");
                     let operation = match self
-                        .create_dapr_blob_storage_component(
+                        .create_azure_storage_trigger(
                             ctx,
                             &container_app_name,
                             &func_cfg,
@@ -1344,11 +1444,20 @@ impl AzureWorkerController {
                             return Err(e);
                         }
                     };
-                    if let DaprComponentOperation::LongRunning(delay) = operation {
-                        return Ok(HandlerAction::Continue {
-                            state: WaitingForDaprComponentCreateOperation,
-                            suggested_delay: Some(delay),
-                        });
+                    match operation {
+                        DaprComponentOperation::LongRunning(delay) => {
+                            return Ok(HandlerAction::Continue {
+                                state: WaitingForDaprComponentCreateOperation,
+                                suggested_delay: Some(delay),
+                            });
+                        }
+                        DaprComponentOperation::Pending(delay) => {
+                            return Ok(HandlerAction::Stay {
+                                max_times: Some(AZURE_RBAC_WAIT_MAX_ATTEMPTS),
+                                suggested_delay: Some(delay),
+                            });
+                        }
+                        DaprComponentOperation::Completed => {}
                     }
                     created_any = true;
                 }
@@ -1389,11 +1498,20 @@ impl AzureWorkerController {
                             return Err(e);
                         }
                     };
-                    if let DaprComponentOperation::LongRunning(delay) = operation {
-                        return Ok(HandlerAction::Continue {
-                            state: WaitingForDaprComponentCreateOperation,
-                            suggested_delay: Some(delay),
-                        });
+                    match operation {
+                        DaprComponentOperation::LongRunning(delay) => {
+                            return Ok(HandlerAction::Continue {
+                                state: WaitingForDaprComponentCreateOperation,
+                                suggested_delay: Some(delay),
+                            });
+                        }
+                        DaprComponentOperation::Pending(delay) => {
+                            return Ok(HandlerAction::Stay {
+                                max_times: Some(AZURE_RBAC_WAIT_MAX_ATTEMPTS),
+                                suggested_delay: Some(delay),
+                            });
+                        }
+                        DaprComponentOperation::Completed => {}
                     }
                     cron_index += 1;
                     created_any = true;
@@ -2412,6 +2530,7 @@ impl AzureWorkerController {
             if !self.update_dapr_components_deleted {
                 // Trigger components are keyed by trigger shape. Delete the previous
                 // set once, then recreate desired components across possible ARM LROs.
+                self.delete_storage_trigger_infrastructure(ctx).await?;
                 self.delete_all_dapr_components(ctx).await?;
                 self.update_dapr_components_deleted = true;
             }
@@ -2456,16 +2575,25 @@ impl AzureWorkerController {
                                 return Err(e);
                             }
                         };
-                        if let DaprComponentOperation::LongRunning(delay) = operation {
-                            return Ok(HandlerAction::Continue {
-                                state: WaitingForDaprComponentUpdateOperation,
-                                suggested_delay: Some(delay),
-                            });
+                        match operation {
+                            DaprComponentOperation::LongRunning(delay) => {
+                                return Ok(HandlerAction::Continue {
+                                    state: WaitingForDaprComponentUpdateOperation,
+                                    suggested_delay: Some(delay),
+                                });
+                            }
+                            DaprComponentOperation::Pending(delay) => {
+                                return Ok(HandlerAction::Stay {
+                                    max_times: Some(AZURE_RBAC_WAIT_MAX_ATTEMPTS),
+                                    suggested_delay: Some(delay),
+                                });
+                            }
+                            DaprComponentOperation::Completed => {}
                         }
                     }
                     alien_core::WorkerTrigger::Storage { storage, events } => {
                         let operation = match self
-                            .create_dapr_blob_storage_component(
+                            .create_azure_storage_trigger(
                                 ctx,
                                 &container_app_name,
                                 &current_config,
@@ -2500,11 +2628,20 @@ impl AzureWorkerController {
                                 return Err(e);
                             }
                         };
-                        if let DaprComponentOperation::LongRunning(delay) = operation {
-                            return Ok(HandlerAction::Continue {
-                                state: WaitingForDaprComponentUpdateOperation,
-                                suggested_delay: Some(delay),
-                            });
+                        match operation {
+                            DaprComponentOperation::LongRunning(delay) => {
+                                return Ok(HandlerAction::Continue {
+                                    state: WaitingForDaprComponentUpdateOperation,
+                                    suggested_delay: Some(delay),
+                                });
+                            }
+                            DaprComponentOperation::Pending(delay) => {
+                                return Ok(HandlerAction::Stay {
+                                    max_times: Some(AZURE_RBAC_WAIT_MAX_ATTEMPTS),
+                                    suggested_delay: Some(delay),
+                                });
+                            }
+                            DaprComponentOperation::Completed => {}
                         }
                     }
                     alien_core::WorkerTrigger::Schedule { cron } => {
@@ -2544,11 +2681,20 @@ impl AzureWorkerController {
                                 return Err(e);
                             }
                         };
-                        if let DaprComponentOperation::LongRunning(delay) = operation {
-                            return Ok(HandlerAction::Continue {
-                                state: WaitingForDaprComponentUpdateOperation,
-                                suggested_delay: Some(delay),
-                            });
+                        match operation {
+                            DaprComponentOperation::LongRunning(delay) => {
+                                return Ok(HandlerAction::Continue {
+                                    state: WaitingForDaprComponentUpdateOperation,
+                                    suggested_delay: Some(delay),
+                                });
+                            }
+                            DaprComponentOperation::Pending(delay) => {
+                                return Ok(HandlerAction::Stay {
+                                    max_times: Some(AZURE_RBAC_WAIT_MAX_ATTEMPTS),
+                                    suggested_delay: Some(delay),
+                                });
+                            }
+                            DaprComponentOperation::Completed => {}
                         }
                         cron_index += 1;
                     }
@@ -2754,6 +2900,8 @@ impl AzureWorkerController {
         let worker_config = ctx.desired_resource_config::<Worker>()?;
 
         info!(worker=%worker_config.id, components=?self.dapr_components, "Deleting Dapr components");
+
+        self.delete_storage_trigger_infrastructure(ctx).await?;
 
         // Delete all Dapr components using best-effort approach (ignore NotFound)
         self.delete_all_dapr_components(ctx).await?;
@@ -3721,6 +3869,7 @@ impl AzureWorkerController {
         self.pending_operation_url = None;
         self.pending_operation_retry_after = None;
         self.dapr_components.clear();
+        self.storage_trigger_infrastructure.clear();
     }
 
     /// Called whenever provisioning *succeeds* and we have the live resource.
@@ -4254,25 +4403,26 @@ impl AzureWorkerController {
         Ok(DaprComponentOperation::Completed)
     }
 
-    /// Creates a Dapr blob storage input binding for a storage trigger
-    async fn create_dapr_blob_storage_component(
+    /// Creates supported Azure storage-trigger delivery:
+    /// Event Grid -> dedicated Service Bus queue -> Dapr Service Bus input binding.
+    async fn create_azure_storage_trigger(
         &mut self,
         ctx: &ResourceControllerContext<'_>,
         container_app_name: &str,
         worker_config: &alien_core::Worker,
         storage_ref: &alien_core::ResourceRef,
-        _events: &[String],
+        events: &[String],
     ) -> Result<DaprComponentOperation> {
+        use alien_azure_clients::authorization::Scope;
         use alien_azure_clients::models::managed_environments_dapr_components::{
             DaprComponent, DaprComponentProperties, DaprMetadata,
         };
 
         let azure_config = ctx.get_azure_config()?;
         let env_outputs = get_container_apps_environment_outputs(ctx.state)?;
-        let resource_group_name = env_outputs.resource_group_name.clone();
+        let environment_resource_group = env_outputs.resource_group_name.clone();
         let environment_name = env_outputs.environment_name.clone();
 
-        // Get storage controller to access storage account and container names
         let storage_controller =
             ctx.require_dependency::<crate::storage::azure::AzureStorageController>(storage_ref)?;
         let storage_account_name = storage_controller
@@ -4283,25 +4433,186 @@ impl AzureWorkerController {
                     resource_id: worker_config.id.clone(),
                     dependency_id: storage_ref.id.clone(),
                 })
-            })?;
-        let container_name = storage_controller.container_name.as_ref().ok_or_else(|| {
-            AlienError::new(ErrorData::DependencyNotReady {
-                resource_id: worker_config.id.clone(),
-                dependency_id: storage_ref.id.clone(),
-            })
+            })?
+            .clone();
+        let container_name = storage_controller
+            .container_name
+            .as_ref()
+            .ok_or_else(|| {
+                AlienError::new(ErrorData::DependencyNotReady {
+                    resource_id: worker_config.id.clone(),
+                    dependency_id: storage_ref.id.clone(),
+                })
+            })?
+            .clone();
+
+        let namespace_ref = ResourceRef::new(
+            alien_core::AzureServiceBusNamespace::RESOURCE_TYPE,
+            "default-service-bus-namespace",
+        );
+        let namespace_controller = ctx.require_dependency::<crate::infra_requirements::azure_service_bus_namespace::AzureServiceBusNamespaceController>(&namespace_ref)?;
+        let namespace_name = namespace_controller
+            .namespace_name
+            .as_ref()
+            .ok_or_else(|| {
+                AlienError::new(ErrorData::DependencyNotReady {
+                    resource_id: worker_config.id.clone(),
+                    dependency_id: namespace_ref.id.clone(),
+                })
+            })?
+            .clone();
+        let service_bus_resource_group = namespace_controller.resource_group_name(ctx)?;
+
+        let service_account_id = format!("{}-sa", worker_config.get_permissions());
+        let service_account_ref = ResourceRef::new(
+            alien_core::ServiceAccount::RESOURCE_TYPE,
+            service_account_id.clone(),
+        );
+        let service_account = ctx
+            .require_dependency::<crate::service_account::AzureServiceAccountController>(
+                &service_account_ref,
+            )?;
+        let execution_client_id = service_account
+            .identity_client_id
+            .as_ref()
+            .ok_or_else(|| {
+                AlienError::new(ErrorData::DependencyNotReady {
+                    resource_id: worker_config.id.clone(),
+                    dependency_id: service_account_id.clone(),
+                })
+            })?
+            .clone();
+        let execution_principal_id = service_account
+            .identity_principal_id
+            .as_ref()
+            .ok_or_else(|| {
+                AlienError::new(ErrorData::DependencyNotReady {
+                    resource_id: worker_config.id.clone(),
+                    dependency_id: service_account_id,
+                })
+            })?
+            .clone();
+
+        let queue_name = format!("{}-storage-{}", container_app_name, storage_ref.id);
+        let component_name = format!("blobstorage-{}-{}", container_app_name, storage_ref.id);
+        let event_subscription_name =
+            get_azure_storage_event_subscription_name(&worker_config.id, &storage_ref.id);
+        let deployment_resource_group = get_resource_group_name(ctx.state)?;
+        let source_resource_id = format!(
+            "/subscriptions/{}/resourceGroups/{}/providers/Microsoft.Storage/storageAccounts/{}",
+            azure_config.subscription_id, deployment_resource_group, storage_account_name
+        );
+        let queue_resource_id = format!(
+            "/subscriptions/{}/resourceGroups/{}/providers/Microsoft.ServiceBus/namespaces/{}/queues/{}",
+            azure_config.subscription_id,
+            service_bus_resource_group,
+            namespace_name,
+            queue_name
+        );
+
+        let mgmt = ctx
+            .service_provider
+            .get_azure_service_bus_management_client(azure_config)?;
+        mgmt.create_or_update_queue(
+            service_bus_resource_group.clone(),
+            namespace_name.clone(),
+            queue_name.clone(),
+            alien_azure_clients::models::queue::SbQueueProperties::default(),
+        )
+        .await
+        .context(ErrorData::CloudPlatformError {
+            message: format!(
+                "Failed to create storage-trigger Service Bus queue '{}'",
+                queue_name
+            ),
+            resource_id: Some(worker_config.id.clone()),
         })?;
 
-        let component_name = format!("blobstorage-{}-{}", container_app_name, storage_ref.id);
+        let tracker_index = self
+            .storage_trigger_infrastructure
+            .iter()
+            .position(|item| item.event_subscription_name == event_subscription_name);
+        let tracker_index = match tracker_index {
+            Some(index) => {
+                let tracker = &mut self.storage_trigger_infrastructure[index];
+                tracker.source_resource_id = source_resource_id.clone();
+                tracker.service_bus_resource_group = service_bus_resource_group.clone();
+                tracker.namespace_name = namespace_name.clone();
+                tracker.queue_name = queue_name.clone();
+                index
+            }
+            None => {
+                self.storage_trigger_infrastructure
+                    .push(AzureStorageTriggerInfrastructure {
+                        source_resource_id: source_resource_id.clone(),
+                        event_subscription_name: event_subscription_name.clone(),
+                        service_bus_resource_group: service_bus_resource_group.clone(),
+                        namespace_name: namespace_name.clone(),
+                        queue_name: queue_name.clone(),
+                        receiver_role_assignment_id: None,
+                    });
+                self.storage_trigger_infrastructure.len() - 1
+            }
+        };
 
-        let mut metadata = vec![
+        if self.storage_trigger_infrastructure[tracker_index]
+            .receiver_role_assignment_id
+            .is_none()
+        {
+            let queue_scope = Scope::Resource {
+                resource_group_name: service_bus_resource_group.clone(),
+                resource_provider: "Microsoft.ServiceBus".to_string(),
+                parent_resource_path: Some(format!("namespaces/{namespace_name}")),
+                resource_type: "queues".to_string(),
+                resource_name: queue_name.clone(),
+            };
+            let role_assignment_id = uuid::Uuid::new_v5(
+                &uuid::Uuid::NAMESPACE_OID,
+                format!(
+                    "deployment:azure:storage-trigger-receiver:{}:{}:{}:{}",
+                    ctx.resource_prefix, worker_config.id, storage_ref.id, execution_principal_id
+                )
+                .as_bytes(),
+            )
+            .to_string();
+            let authorization_client = ctx
+                .service_provider
+                .get_azure_authorization_client(azure_config)?;
+            let full_assignment_id = authorization_client
+                .build_role_assignment_id(&queue_scope, role_assignment_id.clone());
+            let role_definition_id = format!(
+                "/subscriptions/{}/providers/Microsoft.Authorization/roleDefinitions/4f6d3b9b-027b-4f4c-9142-0e5a2a2247e0",
+                azure_config.subscription_id
+            );
+            AzurePermissionsHelper::create_role_assignment(
+                &authorization_client,
+                azure_config,
+                &queue_scope,
+                &role_assignment_id,
+                &execution_principal_id,
+                &role_definition_id,
+            )
+            .await
+            .context(ErrorData::CloudPlatformError {
+                message: format!(
+                    "Failed to grant the worker access to storage-trigger queue '{}'",
+                    queue_name
+                ),
+                resource_id: Some(worker_config.id.clone()),
+            })?;
+            self.storage_trigger_infrastructure[tracker_index].receiver_role_assignment_id =
+                Some(full_assignment_id);
+        }
+
+        let metadata = vec![
             DaprMetadata {
-                name: Some("storageAccount".into()),
-                value: Some(storage_account_name.clone()),
+                name: Some("namespaceName".into()),
+                value: Some(format!("{}.servicebus.windows.net", namespace_name)),
                 secret_ref: None,
             },
             DaprMetadata {
-                name: Some("container".into()),
-                value: Some(container_name.clone()),
+                name: Some("queueName".into()),
+                value: Some(queue_name.clone()),
                 secret_ref: None,
             },
             DaprMetadata {
@@ -4309,33 +4620,17 @@ impl AzureWorkerController {
                 value: Some("input".into()),
                 secret_ref: None,
             },
+            DaprMetadata {
+                name: Some("azureClientId".into()),
+                value: Some(execution_client_id),
+                secret_ref: None,
+            },
         ];
-
-        // Add client ID for user-assigned managed identity
-        let service_account_id = format!("{}-sa", worker_config.get_permissions());
-        let service_account_ref = alien_core::ResourceRef::new(
-            alien_core::ServiceAccount::RESOURCE_TYPE,
-            service_account_id.to_string(),
-        );
-
-        if let Ok(service_account_state) = ctx
-            .require_dependency::<crate::service_account::AzureServiceAccountController>(
-                &service_account_ref,
-            )
-        {
-            if let Some(client_id) = &service_account_state.identity_client_id {
-                metadata.push(DaprMetadata {
-                    name: Some("azureClientId".into()),
-                    value: Some(client_id.clone()),
-                    secret_ref: None,
-                });
-            }
-        }
 
         let dapr_component = DaprComponent {
             name: Some(component_name.clone()),
             properties: Some(DaprComponentProperties {
-                component_type: Some("bindings.azure.blobstorage".to_string()),
+                component_type: Some("bindings.azure.servicebusqueues".to_string()),
                 ignore_errors: false,
                 init_timeout: None,
                 version: Some("v1".to_string()),
@@ -4349,13 +4644,13 @@ impl AzureWorkerController {
             type_: None,
         };
 
-        let client = ctx
+        let container_apps_client = ctx
             .service_provider
             .get_azure_container_apps_client(&azure_config)?;
 
-        match client
+        match container_apps_client
             .create_or_update_dapr_component(
-                &resource_group_name,
+                &environment_resource_group,
                 &environment_name,
                 &component_name,
                 &dapr_component,
@@ -4363,7 +4658,7 @@ impl AzureWorkerController {
             .await
             .context(ErrorData::CloudPlatformError {
                 message: format!(
-                    "Failed to create Dapr blob storage component '{}' for storage '{}'",
+                    "Failed to create Dapr component '{}' for storage trigger '{}'",
                     component_name, storage_ref.id
                 ),
                 resource_id: Some(worker_config.id.clone()),
@@ -4382,10 +4677,63 @@ impl AzureWorkerController {
             self.dapr_components.push(component_name.clone());
         }
 
+        let included_event_types = azure_storage_event_types(events, &worker_config.id)?;
+        let event_grid_client = ctx
+            .service_provider
+            .get_azure_event_grid_client(azure_config)?;
+        let event_subscription = event_grid_client
+            .create_or_update_event_subscription(
+                source_resource_id,
+                event_subscription_name.clone(),
+                EventSubscriptionRequest {
+                    properties: EventSubscriptionRequestProperties {
+                        destination: ServiceBusQueueDestination {
+                            endpoint_type: "ServiceBusQueue".to_string(),
+                            properties: ServiceBusQueueDestinationProperties {
+                                resource_id: queue_resource_id,
+                            },
+                        },
+                        filter: EventSubscriptionFilter {
+                            included_event_types,
+                            subject_begins_with: format!(
+                                "/blobServices/default/containers/{}/blobs/",
+                                container_name
+                            ),
+                            is_subject_case_sensitive: false,
+                        },
+                        event_delivery_schema: "CloudEventSchemaV1_0".to_string(),
+                    },
+                },
+            )
+            .await
+            .context(ErrorData::CloudPlatformError {
+                message: format!(
+                    "Failed to create Event Grid subscription '{}' for storage '{}'",
+                    event_subscription_name, storage_ref.id
+                ),
+                resource_id: Some(worker_config.id.clone()),
+            })?;
+
+        if let Some(provisioning_state) = event_subscription
+            .properties
+            .and_then(|properties| properties.provisioning_state)
+        {
+            if !provisioning_state.eq_ignore_ascii_case("Succeeded") {
+                info!(
+                    worker=%worker_config.id,
+                    subscription=%event_subscription_name,
+                    state=%provisioning_state,
+                    "Waiting for Event Grid storage subscription"
+                );
+                return Ok(DaprComponentOperation::Pending(Duration::from_secs(5)));
+            }
+        }
+
         info!(
             worker=%worker_config.id,
             component=%component_name,
-            "Successfully created Dapr blob storage component"
+            subscription=%event_subscription_name,
+            "Azure storage trigger delivery is ready"
         );
 
         Ok(DaprComponentOperation::Completed)
@@ -4482,6 +4830,119 @@ impl AzureWorkerController {
         Ok(DaprComponentOperation::Completed)
     }
 
+    async fn delete_storage_trigger_infrastructure(
+        &mut self,
+        ctx: &ResourceControllerContext<'_>,
+    ) -> Result<()> {
+        if self.storage_trigger_infrastructure.is_empty() {
+            return Ok(());
+        }
+
+        let azure_config = ctx.get_azure_config()?;
+        let event_grid_client = ctx
+            .service_provider
+            .get_azure_event_grid_client(azure_config)?;
+        let authorization_client = ctx
+            .service_provider
+            .get_azure_authorization_client(azure_config)?;
+        let service_bus_client = ctx
+            .service_provider
+            .get_azure_service_bus_management_client(azure_config)?;
+
+        for infrastructure in self.storage_trigger_infrastructure.clone() {
+            match event_grid_client
+                .delete_event_subscription(
+                    infrastructure.source_resource_id.clone(),
+                    infrastructure.event_subscription_name.clone(),
+                )
+                .await
+            {
+                Ok(()) => info!(
+                    subscription=%infrastructure.event_subscription_name,
+                    "Deleted Event Grid storage subscription"
+                ),
+                Err(error) => {
+                    return Err(error.context(ErrorData::CloudPlatformError {
+                        message: format!(
+                            "Failed to delete Event Grid storage subscription '{}'",
+                            infrastructure.event_subscription_name
+                        ),
+                        resource_id: Some(ctx.desired_config.id().to_string()),
+                    }));
+                }
+            }
+
+            if let Some(assignment_id) = infrastructure.receiver_role_assignment_id {
+                match authorization_client
+                    .delete_role_assignment_by_id(assignment_id.clone())
+                    .await
+                {
+                    Ok(_) => info!(
+                        assignment_id=%assignment_id,
+                        "Deleted storage-trigger receiver role assignment"
+                    ),
+                    Err(error)
+                        if matches!(
+                            error.error,
+                            Some(CloudClientErrorData::RemoteResourceNotFound { .. })
+                        ) =>
+                    {
+                        info!(
+                            assignment_id=%assignment_id,
+                            "Storage-trigger receiver role assignment was already deleted"
+                        );
+                    }
+                    Err(error) => {
+                        return Err(error.context(ErrorData::CloudPlatformError {
+                            message: format!(
+                                "Failed to delete storage-trigger receiver role assignment '{}'",
+                                assignment_id
+                            ),
+                            resource_id: Some(ctx.desired_config.id().to_string()),
+                        }));
+                    }
+                }
+            }
+
+            match service_bus_client
+                .delete_queue(
+                    infrastructure.service_bus_resource_group,
+                    infrastructure.namespace_name,
+                    infrastructure.queue_name.clone(),
+                )
+                .await
+            {
+                Ok(()) => info!(
+                    queue=%infrastructure.queue_name,
+                    "Deleted storage-trigger Service Bus queue"
+                ),
+                Err(error)
+                    if matches!(
+                        error.error,
+                        Some(CloudClientErrorData::RemoteResourceNotFound { .. })
+                    ) =>
+                {
+                    info!(
+                        queue=%infrastructure.queue_name,
+                        "Storage-trigger Service Bus queue was already deleted"
+                    );
+                }
+                Err(error) => {
+                    return Err(error.context(ErrorData::CloudPlatformError {
+                        message: format!(
+                            "Failed to delete storage-trigger Service Bus queue '{}'",
+                            infrastructure.queue_name
+                        ),
+                        resource_id: Some(ctx.desired_config.id().to_string()),
+                    }));
+                }
+            }
+        }
+
+        self.storage_trigger_infrastructure.clear();
+        Ok(())
+    }
+
     /// Deletes all Dapr components using best-effort approach
     async fn delete_all_dapr_components(
         &mut self,
@@ -4557,6 +5018,7 @@ impl AzureWorkerController {
             pending_operation_url: None,
             pending_operation_retry_after: None,
             dapr_components: Vec::new(),
+            storage_trigger_infrastructure: Vec::new(),
             fqdn: None,
             certificate_id: None,
             keyvault_cert_id: None,
@@ -4605,7 +5067,10 @@ mod tests {
     use httpmock::MockServer;
     use rstest::rstest;
 
-    use super::{current_unix_timestamp_secs, dns_name_from_url, AZURE_RBAC_WAIT_POLL_SECS};
+    use super::{
+        azure_storage_event_types, current_unix_timestamp_secs, dns_name_from_url,
+        get_azure_storage_event_subscription_name, AZURE_RBAC_WAIT_POLL_SECS,
+    };
     use crate::core::{controller_test::SingleControllerExecutor, MockPlatformServiceProvider};
     use crate::error::ErrorData;
     use crate::infra_requirements::azure_utils::is_azure_authorization_propagation_error;
@@ -4614,6 +5079,44 @@ mod tests {
         AzureWorkerController,
     };
     use crate::AzureWorkerState;
+
+    #[test]
+    fn azure_storage_trigger_maps_only_supported_event_types() {
+        assert_eq!(
+            azure_storage_event_types(
+                &[
+                    "created".to_string(),
+                    "deleted".to_string(),
+                    "tierChanged".to_string(),
+                ],
+                "worker",
+            )
+            .unwrap(),
+            vec![
+                "Microsoft.Storage.BlobCreated",
+                "Microsoft.Storage.BlobDeleted",
+                "Microsoft.Storage.BlobTierChanged",
+            ]
+        );
+        assert!(azure_storage_event_types(&["metadataUpdated".to_string()], "worker").is_err());
+    }
+
+    #[test]
+    fn azure_storage_event_subscription_name_is_stable_and_within_limit() {
+        let first = get_azure_storage_event_subscription_name(
+            "worker-with-a-very-long-name-that-needs-truncating",
+            "storage-with-a-very-long-name-that-needs-truncating",
+        );
+        let second = get_azure_storage_event_subscription_name(
+            "worker-with-a-very-long-name-that-needs-truncating",
+            "storage-with-a-very-long-name-that-needs-truncating",
+        );
+        assert_eq!(first, second);
+        assert!(first.len() <= 64);
+        assert!(first
+            .chars()
+            .all(|character| character.is_ascii_alphanumeric()));
+    }
 
     #[test]
     fn strips_scheme_and_path_from_dns_endpoint_url() {
@@ -5880,6 +6383,7 @@ mod tests {
             pending_operation_url: None,
             pending_operation_retry_after: None,
             dapr_components: Vec::new(),
+            storage_trigger_infrastructure: Vec::new(),
             fqdn: None,
             certificate_id: None,
             keyvault_cert_id: None,

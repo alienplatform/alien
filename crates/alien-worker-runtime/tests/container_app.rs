@@ -366,27 +366,35 @@ async fn test_containerapp_azure_blob_storage_event(
     let event_time = Utc::now();
 
     let client = reqwest::Client::new();
-    let url = format!("http://127.0.0.1:{}/", ctx.transport_port);
+    let url = format!(
+        "http://127.0.0.1:{}/blobstorage-test-worker-storage",
+        ctx.transport_port
+    );
 
-    let event_data = json!({
-        "api": "PutBlob",
-        "blobType": "BlockBlob",
-        "url": format!("https://mystorageaccount.blob.core.windows.net/testcontainer/{}", test_key),
-        "contentType": "application/zip",
-        "contentLength": 1024,
-        "etag": "test-etag"
+    // Event Grid writes a structured CloudEvent to Service Bus. The Dapr input
+    // binding then posts that message body to /{component-name}.
+    let cloud_event = json!({
+        "specversion": "1.0",
+        "id": Uuid::new_v4().to_string(),
+        "type": "Microsoft.Storage.BlobCreated",
+        "source": "/subscriptions/{subscription-id}/resourceGroups/{resource-group}/providers/Microsoft.Storage/storageAccounts/mystorageaccount",
+        "time": event_time.to_rfc3339(),
+        "subject": format!("/blobServices/default/containers/testcontainer/blobs/{}", test_key),
+        "datacontenttype": "application/json",
+        "data": {
+            "api": "PutBlob",
+            "blobType": "BlockBlob",
+            "url": format!("https://mystorageaccount.blob.core.windows.net/testcontainer/{}", test_key),
+            "contentType": "application/zip",
+            "contentLength": 1024,
+            "eTag": "test-etag"
+        }
     });
 
     let response = client
         .post(&url)
-        .header("ce-id", Uuid::new_v4().to_string())
-        .header("ce-type", "Microsoft.Storage.BlobCreated")
-        .header("ce-source", "/subscriptions/{subscription-id}/resourceGroups/{resource-group}/providers/Microsoft.Storage/storageAccounts/mystorageaccount")
-        .header("ce-specversion", "1.0")
-        .header("ce-time", event_time.to_rfc3339())
-        .header("ce-subject", format!("/blobServices/default/containers/testcontainer/blobs/{}", test_key))
         .header("Content-Type", "application/json")
-        .body(event_data.to_string())
+        .body(cloud_event.to_string())
         .timeout(Duration::from_secs(10))
         .send()
         .await
@@ -400,6 +408,12 @@ async fn test_containerapp_azure_blob_storage_event(
 
     // Wait for event processing
     tokio::time::sleep(Duration::from_secs(2)).await;
+
+    let stored_event = check_event_stored(ctx.transport_port, "storage", &test_key)
+        .await?
+        .context("Azure storage event should have been delivered and stored in KV")?;
+    assert_eq!(stored_event["bucket"], "testcontainer");
+    assert_eq!(stored_event["key"], test_key);
 
     info!("Azure Blob Storage CloudEvent PASSED");
     Ok(())

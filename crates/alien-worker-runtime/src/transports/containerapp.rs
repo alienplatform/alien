@@ -145,6 +145,7 @@ async fn handle_request(
     let is_dapr = request.headers().get("dapr-content-type").is_some()
         || path.contains("/pubsub/")
         || path.starts_with("/servicebus-")
+        || path.starts_with("/blobstorage-")
         || ce_type.as_deref() == Some("com.dapr.event.sent");
 
     if is_timer_trigger {
@@ -194,6 +195,10 @@ async fn handle_timer_trigger(request: Request<Body>, state: &TransportState) ->
 async fn handle_dapr_message(request: Request<Body>, state: &TransportState) -> Response<Body> {
     debug!("Processing Dapr message");
 
+    if request.uri().path().starts_with("/blobstorage-") {
+        return handle_dapr_storage_message(request, state).await;
+    }
+
     // Collect body for CloudEvent parsing
     let (parts, body) = request.into_parts();
     let body_bytes = match body.collect().await {
@@ -223,6 +228,61 @@ async fn handle_dapr_message(request: Request<Body>, state: &TransportState) -> 
             (StatusCode::BAD_REQUEST, "Invalid Dapr event").into_response()
         }
     }
+}
+
+/// Handle an Event Grid CloudEvent delivered through a Service Bus Dapr input binding.
+async fn handle_dapr_storage_message(
+    request: Request<Body>,
+    state: &TransportState,
+) -> Response<Body> {
+    let body_bytes = match request.into_body().collect().await {
+        Ok(collected) => collected.to_bytes(),
+        Err(error) => {
+            error!(%error, "Failed to read Dapr storage-trigger request body");
+            return (StatusCode::BAD_REQUEST, "Failed to read body").into_response();
+        }
+    };
+
+    let json: serde_json::Value = match serde_json::from_slice(&body_bytes) {
+        Ok(json) => json,
+        Err(error) => {
+            error!(%error, "Failed to parse Dapr storage-trigger body as JSON");
+            return (StatusCode::BAD_REQUEST, "Invalid storage CloudEvent").into_response();
+        }
+    };
+
+    let cloud_events = if json.is_array() {
+        serde_json::from_value::<Vec<cloudevents::Event>>(json)
+    } else {
+        serde_json::from_value::<cloudevents::Event>(json).map(|event| vec![event])
+    };
+    let cloud_events = match cloud_events {
+        Ok(events) if !events.is_empty() => events,
+        Ok(_) => {
+            return (StatusCode::BAD_REQUEST, "Empty storage CloudEvent batch").into_response();
+        }
+        Err(error) => {
+            error!(%error, "Failed to decode Dapr storage-trigger CloudEvent");
+            return (StatusCode::BAD_REQUEST, "Invalid storage CloudEvent").into_response();
+        }
+    };
+
+    for cloud_event in cloud_events {
+        let event_type = cloud_event.ty().to_string();
+        let storage_events = match azure_storage_cloudevent_to_storage_events(cloud_event) {
+            Ok(storage_events) => storage_events,
+            Err(error) => {
+                error!(%error, %event_type, "Failed to parse Dapr Azure storage CloudEvent");
+                return (StatusCode::BAD_REQUEST, "Invalid storage event").into_response();
+            }
+        };
+        let response = send_storage_events(storage_events, &state.control_server).await;
+        if !response.status().is_success() {
+            return response;
+        }
+    }
+
+    StatusCode::OK.into_response()
 }
 
 /// Handle raw Dapr message (input binding or non-CloudEvent format).

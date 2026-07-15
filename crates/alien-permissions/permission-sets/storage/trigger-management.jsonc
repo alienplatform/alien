@@ -31,6 +31,26 @@
           }
         }
       }
+    ],
+    "azure": [
+      {
+        "grant": {
+          "actions": [
+            "Microsoft.EventGrid/eventSubscriptions/read",
+            "Microsoft.EventGrid/eventSubscriptions/write",
+            "Microsoft.EventGrid/eventSubscriptions/delete"
+          ],
+          "dataActions": []
+        },
+        "binding": {
+          "stack": {
+            "scope": "/subscriptions/${subscriptionId}/resourceGroups/${resourceGroup}"
+          },
+          "resource": {
+            "scope": "/subscriptions/${subscriptionId}/resourceGroups/${resourceGroup}"
+          }
+        }
+      }
     ]
   }
 }

@@ -5167,21 +5167,22 @@ impl GcpWorkerController {
                 .push(topic_short_name.clone());
         }
 
-        // 2. Grant the GCS service agent publish permissions on the topic
-        //    The GCS service agent email uses the project ID as a fallback when
-        //    project_number is not available.
-        let gcs_service_agent = if let Some(ref project_number) = gcp_config.project_number {
-            format!(
-                "serviceAccount:service-{}@gs-project-accounts.iam.gserviceaccount.com",
-                project_number
-            )
-        } else {
-            // Fall back to project_id-based format (works for numeric project IDs)
-            format!(
-                "serviceAccount:service-{}@gs-project-accounts.iam.gserviceaccount.com",
-                gcp_config.project_id
-            )
-        };
+        // 2. Ask Cloud Storage for its managed service account before granting it
+        //    publish permissions. Deriving the email from the project number does
+        //    not ensure that the service account has been provisioned yet.
+        let gcs_project_service_account = gcs_client.get_project_service_account().await.context(
+            ErrorData::CloudPlatformError {
+                message: format!(
+                    "Failed to get the Cloud Storage service account for project '{}'",
+                    gcp_config.project_id
+                ),
+                resource_id: Some(worker_config.id.clone()),
+            },
+        )?;
+        let gcs_service_agent = format!(
+            "serviceAccount:{}",
+            gcs_project_service_account.email_address
+        );
 
         let iam_policy = alien_gcp_clients::iam::IamPolicy::builder()
             .version(1)
