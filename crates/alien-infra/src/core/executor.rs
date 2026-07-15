@@ -1254,8 +1254,41 @@ impl StackExecutor {
                     resource_id, current_state.status
                 );
 
+                let mut update_state = current_state.clone();
+                if update_state.status == ResourceStatus::UpdateFailed {
+                    update_state
+                        .retry_failed()
+                        .context(ErrorData::InfrastructureError {
+                            message:
+                                "Failed to restore resource before applying updated configuration"
+                                    .to_string(),
+                            operation: Some("retry_update".to_string()),
+                            resource_id: Some(resource_id.clone()),
+                        })?;
+
+                    // A failed update resumes from the exact handler that failed. Its context
+                    // reads the desired resource, so applying the new config here is sufficient;
+                    // starting a second update flow would discard that retry point.
+                    if update_state.status == ResourceStatus::Updating {
+                        let desired_config = self.resources.get(resource_id).ok_or_else(|| {
+                            AlienError::new(ErrorData::InfrastructureError {
+                                message: format!(
+                                    "Resource '{}' not found in desired config during update retry",
+                                    resource_id
+                                ),
+                                operation: Some("update_dependencies".to_string()),
+                                resource_id: Some(resource_id.clone()),
+                            })
+                        })?;
+                        update_state.config = new_config.clone();
+                        update_state.dependencies = desired_config.dependencies.clone();
+                        initial_transitions.insert(resource_id.clone(), update_state);
+                        continue;
+                    }
+                }
+
                 // Try to get the controller and transition to update
-                match current_state.get_internal_controller() {
+                match update_state.get_internal_controller() {
                     Ok(Some(mut controller)) => {
                         match controller.transition_to_update() {
                             Ok(()) => {
@@ -1279,7 +1312,7 @@ impl StackExecutor {
                                     }
                                 };
 
-                                let updated_state = current_state.with_updates(|state| {
+                                let updated_state = update_state.with_updates(|state| {
                                     state.config = new_config.clone(); // Set to new desired config
                                     state.previous_config = Some(current_state.config.clone()); // Store old config
                                     state.dependencies = desired_config.dependencies.clone(); // Update dependencies to match new config
@@ -1301,7 +1334,7 @@ impl StackExecutor {
                                     resource_id, e
                                 );
                                 // Create a failed update state and preserve current controller state for retry
-                                let failed_update_state = current_state.with_updates(|state| {
+                                let failed_update_state = update_state.with_updates(|state| {
                                     state.status = ResourceStatus::UpdateFailed;
                                     state.error = Some(e.into_generic());
                                     state.retry_attempt = 0;
