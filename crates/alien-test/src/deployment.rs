@@ -4,6 +4,7 @@
 //! for creating deployments, waiting for status, invoking commands, upgrading,
 //! and tearing down.
 
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -11,6 +12,17 @@ use serde_json::Value;
 use tracing::debug;
 
 use crate::manager::TestManager;
+
+const DELETION_POLL_INTERVAL: Duration = Duration::from_secs(1);
+
+/// Terminal result of the operator-owned runtime deletion phase.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum DeletionOutcome {
+    /// The deployment had no setup-owned resources and is fully deleted.
+    Deleted,
+    /// Runtime resources are gone; the client must delete setup-owned resources.
+    SetupTeardownRequired,
+}
 
 /// A handle to a deployment created through a [`TestManager`].
 pub struct TestDeployment {
@@ -28,6 +40,10 @@ pub struct TestDeployment {
     manager: Arc<TestManager>,
     /// Foreground agent child process. Killed when the deployment is dropped.
     _foreground_agent: Option<tokio::process::Child>,
+    /// Local provider state used by both the operator and setup teardown.
+    local_state_directory: Option<PathBuf>,
+    /// Owns a foreground operator's temporary state directory.
+    _foreground_data_dir: Option<tempfile::TempDir>,
 }
 
 impl Drop for TestDeployment {
@@ -70,13 +86,31 @@ impl TestDeployment {
             token,
             manager,
             _foreground_agent: None,
+            local_state_directory: None,
+            _foreground_data_dir: None,
         }
     }
 
-    /// Attach a foreground agent child process to this deployment.
-    /// The process will be killed when the deployment is dropped.
-    pub fn set_foreground_agent(&mut self, child: tokio::process::Child) {
+    /// Attach a foreground agent and retain ownership of its state directory.
+    /// The process is killed and the directory removed when the deployment is dropped.
+    pub fn set_foreground_agent(
+        &mut self,
+        child: tokio::process::Child,
+        state_directory: tempfile::TempDir,
+    ) {
         self._foreground_agent = Some(child);
+        self.local_state_directory = Some(state_directory.path().to_path_buf());
+        self._foreground_data_dir = Some(state_directory);
+    }
+
+    /// Record the state directory owned by an installed Local operator service.
+    pub(crate) fn set_local_service_state_directory(&mut self, state_directory: PathBuf) {
+        self.local_state_directory = Some(state_directory);
+    }
+
+    /// Return the Local provider state directory needed for setup teardown.
+    pub(crate) fn local_state_directory(&self) -> Option<&Path> {
+        self.local_state_directory.as_deref()
     }
 
     /// Kill the foreground agent and wait for it to exit.
@@ -335,6 +369,71 @@ impl TestDeployment {
         debug!(deployment = %self.id, "deployment destroyed");
         Ok(())
     }
+
+    /// Wait for a pull operator to finish the deletion state machine.
+    ///
+    /// Pull deletion is asynchronous: the manager records `delete-pending`,
+    /// then the operator observes it and tears down the local workloads. The
+    /// caller must keep that operator alive until this method returns.
+    pub(crate) async fn wait_until_deleted(
+        &self,
+        timeout: Duration,
+    ) -> Result<DeletionOutcome, Box<dyn std::error::Error>> {
+        let deadline = tokio::time::Instant::now() + timeout;
+        loop {
+            let status = match self
+                .manager
+                .client()
+                .get_deployment()
+                .id(&self.id)
+                .send()
+                .await
+            {
+                Ok(response) => response.status.to_string(),
+                Err(alien_manager_api::Error::UnexpectedResponse(response))
+                    if response.status() == reqwest::StatusCode::NOT_FOUND =>
+                {
+                    return Ok(DeletionOutcome::Deleted);
+                }
+                Err(alien_manager_api::Error::ErrorResponse(response))
+                    if response.status() == reqwest::StatusCode::NOT_FOUND =>
+                {
+                    return Ok(DeletionOutcome::Deleted);
+                }
+                Err(error) => {
+                    return Err(format!(
+                        "Failed to get deployment {} while waiting for deletion: {}",
+                        self.id, error
+                    )
+                    .into());
+                }
+            };
+
+            if let Some(outcome) = deletion_outcome(&status)? {
+                return Ok(outcome);
+            }
+            debug!(deployment_id = %self.id, %status, "waiting for deployment deletion");
+            if tokio::time::Instant::now() >= deadline {
+                return Err(format!(
+                    "Timed out waiting for deployment {} deletion handoff (last status: {status})",
+                    self.id
+                )
+                .into());
+            }
+            tokio::time::sleep(DELETION_POLL_INTERVAL).await;
+        }
+    }
+}
+
+fn deletion_outcome(status: &str) -> Result<Option<DeletionOutcome>, Box<dyn std::error::Error>> {
+    match status {
+        "deleted" | "destroyed" => Ok(Some(DeletionOutcome::Deleted)),
+        "teardown-required" | "teardown-failed" => Ok(Some(DeletionOutcome::SetupTeardownRequired)),
+        "delete-failed" => {
+            Err(format!("Deployment deletion reached terminal status: {status}").into())
+        }
+        _ => Ok(None),
+    }
 }
 
 pub(crate) async fn terminate_foreground_agent(
@@ -412,6 +511,37 @@ fn public_url_from_stack_state(state_value: &Value) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn deletion_statuses_distinguish_progress_handoff_and_completion() {
+        for (status, expected) in [
+            ("delete-pending", None),
+            ("deleting", None),
+            (
+                "teardown-required",
+                Some(DeletionOutcome::SetupTeardownRequired),
+            ),
+            (
+                "teardown-failed",
+                Some(DeletionOutcome::SetupTeardownRequired),
+            ),
+            ("deleted", Some(DeletionOutcome::Deleted)),
+            ("destroyed", Some(DeletionOutcome::Deleted)),
+        ] {
+            assert_eq!(
+                deletion_outcome(status).expect("status should be accepted"),
+                expected,
+                "{status}"
+            );
+        }
+
+        let error = deletion_outcome("delete-failed")
+            .expect_err("runtime deletion failure must not be treated as setup handoff");
+        assert_eq!(
+            error.to_string(),
+            "Deployment deletion reached terminal status: delete-failed"
+        );
+    }
 
     #[cfg(unix)]
     #[tokio::test]

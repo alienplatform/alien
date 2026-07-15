@@ -1044,7 +1044,7 @@ jobs:
           export AWS_SECRET_ACCESS_KEY="$AWS_TARGET_SECRET_ACCESS_KEY"
           export AWS_SESSION_TOKEN="${AWS_TARGET_SESSION_TOKEN:-}"
           export AWS_DEFAULT_REGION="$AWS_TARGET_REGION"
-          for suffix in "" "-awscr" "-awsct" "-cfawscr" "-tfawscr" "-tfekscr" "-tfeksfs" "-awsr" "-awst" "-cfaws" "-tfaws" "-tfeks"; do
+          for suffix in "" "-awscr" "-awsct" "-cfawscr" "-tfawscr" "-tfekscr" "-tfeksfs" "-tfeksrt" "-tfeksrm" "-awsr" "-awst" "-cfaws" "-tfaws" "-tfeks"; do
             export ALIEN_E2E_RESOURCE_PREFIX="e2e-${ALIEN_E2E_SLOT}${suffix}"
             ./scripts/cleanup-aws-e2e-resources.sh
           done
@@ -1655,7 +1655,7 @@ jobs:
           export AWS_SECRET_ACCESS_KEY="$AWS_TARGET_SECRET_ACCESS_KEY"
           export AWS_SESSION_TOKEN="${AWS_TARGET_SESSION_TOKEN:-}"
           export AWS_DEFAULT_REGION="$AWS_TARGET_REGION"
-          for suffix in "" "-awscr" "-awsct" "-cfawscr" "-tfawscr" "-tfekscr" "-tfeksfs" "-awsr" "-awst" "-cfaws" "-tfaws" "-tfeks"; do
+          for suffix in "" "-awscr" "-awsct" "-cfawscr" "-tfawscr" "-tfekscr" "-tfeksfs" "-tfeksrt" "-tfeksrm" "-awsr" "-awst" "-cfaws" "-tfaws" "-tfeks"; do
             export ALIEN_E2E_RESOURCE_PREFIX="e2e-${ALIEN_E2E_SLOT}${suffix}"
             ./scripts/cleanup-aws-e2e-resources.sh
           done

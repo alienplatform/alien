@@ -7,7 +7,7 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
 
-use alien_core::{Platform, Stack};
+use alien_core::{ClientConfig, Platform, Stack};
 use anyhow::Context;
 use tracing::info;
 
@@ -16,6 +16,8 @@ use crate::config::TestConfig;
 use crate::deployment::TestDeployment;
 use crate::managed_secret::provision_managed_test_secret;
 use crate::manager::TestManager;
+
+const LOCAL_DELETION_TIMEOUT: Duration = Duration::from_secs(120);
 
 // ---------------------------------------------------------------------------
 // Enums
@@ -439,20 +441,19 @@ impl TestContext {
     /// resources are released even when a test panics. Errors are logged
     /// but never propagated.
     pub async fn cleanup(mut self) {
-        // 1. Dump agent logs for debugging, then stop the agent.
-        if let Some(agent) = self.agent.take() {
-            if let Some(ref cid) = agent.container_id {
-                let logs = crate::operator::docker_container_logs(cid).await;
-                tracing::info!(container_id = %cid, "Agent container logs:\n{}", logs);
+        // A local pull operator owns the deletion state machine, so keep it
+        // running until deletion reaches a terminal state. Other platforms
+        // retain their existing cleanup order: stop the runtime first, then
+        // let cloud/setup artifact cleanup perform the authoritative teardown.
+        let defer_operator_cleanup = self.platform == Platform::Local;
+        let mut agent = self.agent.take();
+        if !defer_operator_cleanup {
+            if let Some(agent) = agent.take() {
+                cleanup_operator(agent).await;
             }
-            if agent.installed_as_service {
-                let logs = crate::operator::collect_service_logs().await;
-                tracing::info!("Agent service logs:\n{}", logs);
-            }
-            agent.cleanup().await;
         }
 
-        // 2. Mark the deployment as delete-pending via the manager API.
+        // Mark the deployment as delete-pending via the manager API.
         // The manager chooses the resource cleanup set from deployment ownership.
         let destroy_enqueued = match self.deployment.destroy().await {
             Ok(()) => true,
@@ -470,6 +471,9 @@ impl TestContext {
             // Still run setup artifact cleanup below. It is the owner of
             // setup-created resources and should not depend on manager cleanup.
             self.deployment.kill_foreground_agent().await;
+            if let Some(agent) = agent.take() {
+                cleanup_operator(agent).await;
+            }
 
             for cleanup in self.distribution_cleanups {
                 cleanup.cleanup().await;
@@ -479,8 +483,8 @@ impl TestContext {
             return;
         }
 
-        // 3. Drive the deletion state machine with target credentials so
-        //    cloud resources are actually torn down before the test exits.
+        // Drive the deletion state machine with target credentials so cloud
+        // resources are actually torn down before the test exits.
         if matches!(
             self.platform,
             Platform::Aws | Platform::Gcp | Platform::Azure
@@ -502,11 +506,22 @@ impl TestContext {
                     );
                 }
             }
+        } else if self.platform == Platform::Local {
+            if let Err(error) = complete_local_deletion(&self.deployment, &self.manager).await {
+                tracing::warn!(
+                    deployment = %self.deployment.id,
+                    %error,
+                    "cleanup: local operator did not complete deployment deletion"
+                );
+            }
         }
 
         // Kill the foreground agent process and wait for it to exit.
         // This prevents orphaned agent processes from spamming logs after the test.
         self.deployment.kill_foreground_agent().await;
+        if let Some(agent) = agent.take() {
+            cleanup_operator(agent).await;
+        }
 
         for cleanup in self.distribution_cleanups {
             cleanup.cleanup().await;
@@ -514,6 +529,52 @@ impl TestContext {
 
         info!(deployment = %self.deployment.id, "cleanup: complete");
     }
+}
+
+async fn cleanup_operator(agent: crate::operator::TestAlienOperator) {
+    if let Some(ref cid) = agent.container_id {
+        let logs = crate::operator::docker_container_logs(cid).await;
+        tracing::info!(container_id = %cid, "Agent container logs:\n{}", logs);
+    }
+    if agent.installed_as_service {
+        let logs = crate::operator::collect_service_logs().await;
+        tracing::info!("Agent service logs:\n{}", logs);
+    }
+    agent.cleanup().await;
+}
+
+async fn complete_local_deletion(
+    deployment: &TestDeployment,
+    manager: &Arc<TestManager>,
+) -> anyhow::Result<()> {
+    let outcome = deployment
+        .wait_until_deleted(LOCAL_DELETION_TIMEOUT)
+        .await
+        .map_err(|error| anyhow::anyhow!(error.to_string()))?;
+
+    if outcome == crate::deployment::DeletionOutcome::Deleted {
+        return Ok(());
+    }
+
+    let state_directory = deployment
+        .local_state_directory()
+        .context("Local deployment state directory is unavailable for setup teardown")?;
+    info!(
+        deployment = %deployment.id,
+        state_directory = %state_directory.display(),
+        "runtime deletion handed off to client-side setup teardown"
+    );
+
+    alien_deploy_cli::commands::push_deletion(
+        manager.client(),
+        &deployment.id,
+        Platform::Local,
+        ClientConfig::Local {
+            state_directory: state_directory.to_string_lossy().into_owned(),
+        },
+    )
+    .await
+    .map_err(|error| anyhow::anyhow!("Local setup teardown failed: {error}"))
 }
 
 // ---------------------------------------------------------------------------
@@ -1080,6 +1141,11 @@ pub async fn run_alien_deploy_up(
         .ok()
         .filter(|v| v == "0" || v == "false")
         .is_none();
+    let foreground_data_dir = if foreground {
+        Some(tempfile::tempdir().context("Failed to create foreground operator data directory")?)
+    } else {
+        None
+    };
 
     // Service mode requires root on Linux/macOS (systemd/launchd).
     let use_sudo =
@@ -1123,11 +1189,12 @@ pub async fn run_alien_deploy_up(
         cmd.arg("--foreground");
         // Use a temp directory for agent state so tests don't interfere with
         // each other or with a user's real agent data at ~/.alien/agent-data.
-        let agent_data_dir = tempfile::tempdir().expect("failed to create temp dir for agent data");
-        cmd.arg("--data-dir").arg(agent_data_dir.path());
-        // Keep the tempdir alive — it'll be cleaned up when the test ends.
-        // Leak it intentionally; OS cleans up /tmp on reboot anyway.
-        std::mem::forget(agent_data_dir);
+        cmd.arg("--data-dir").arg(
+            foreground_data_dir
+                .as_ref()
+                .context("Foreground operator data directory was not initialized")?
+                .path(),
+        );
     }
 
     // Ensure the locally-built alien-operator binary is used instead of
@@ -1259,7 +1326,14 @@ pub async fn run_alien_deploy_up(
     );
 
     if let Some(child) = _foreground_child {
-        deployment.set_foreground_agent(child);
+        deployment.set_foreground_agent(
+            child,
+            foreground_data_dir.context("Foreground operator data directory ownership was lost")?,
+        );
+    } else if platform == Platform::Local {
+        deployment.set_local_service_state_directory(std::path::PathBuf::from(
+            alien_deploy_cli::commands::operator::default_service_data_dir(),
+        ));
     }
 
     Ok(deployment)
@@ -1678,27 +1752,29 @@ async fn cleanup_failed_setup(
 ) {
     tracing::warn!(deployment_id = %deployment.id, "Running cleanup after setup failure");
 
-    // Stop the agent first
-    if let Some(agent) = agent {
-        if let Some(ref cid) = agent.container_id {
-            let logs = crate::operator::docker_container_logs(cid).await;
-            tracing::info!(container_id = %cid, "Agent container logs:\n{}", logs);
+    let defer_operator_cleanup = platform == Platform::Local;
+    let mut agent = agent;
+    if !defer_operator_cleanup {
+        if let Some(agent) = agent.take() {
+            cleanup_operator(agent).await;
         }
-        agent.cleanup().await;
     }
 
     // Mark deployment as delete-pending
-    if let Err(e) = deployment.destroy().await {
-        tracing::warn!(
-            deployment = %deployment.id,
-            error = %e,
-            "cleanup: failed to trigger destroy"
-        );
-        return;
-    }
+    let destroy_enqueued = match deployment.destroy().await {
+        Ok(()) => true,
+        Err(error) => {
+            tracing::warn!(
+                deployment = %deployment.id,
+                %error,
+                "cleanup: failed to trigger destroy"
+            );
+            false
+        }
+    };
 
     // Drive cloud resource deletion with target credentials
-    if matches!(platform, Platform::Aws | Platform::Gcp | Platform::Azure) {
+    if destroy_enqueued && matches!(platform, Platform::Aws | Platform::Gcp | Platform::Azure) {
         let config = TestConfig::from_env();
         if config.has_platform(platform) {
             if let Err(e) =
@@ -1711,6 +1787,19 @@ async fn cleanup_failed_setup(
                 );
             }
         }
+    } else if destroy_enqueued && platform == Platform::Local {
+        if let Err(error) = complete_local_deletion(deployment, manager).await {
+            tracing::warn!(
+                deployment = %deployment.id,
+                %error,
+                "cleanup: local operator did not complete deployment deletion after setup failure"
+            );
+        }
+    }
+
+    deployment.kill_foreground_agent().await;
+    if let Some(agent) = agent.take() {
+        cleanup_operator(agent).await;
     }
 
     tracing::info!(deployment = %deployment.id, "cleanup after setup failure: complete");
