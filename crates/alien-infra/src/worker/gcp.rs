@@ -4899,6 +4899,7 @@ impl GcpWorkerController {
                 dependency_id: queue_ref.id.clone(),
             })
         })?;
+        let topic_full_name = format!("projects/{}/topics/{}", gcp_config.project_id, topic_name);
 
         // Generate push subscription name: stack-prefix-worker-id-queue-id
         let subscription_name = format!(
@@ -4955,7 +4956,7 @@ impl GcpWorkerController {
 
         let subscription = Subscription {
             name: Some(subscription_name.clone()),
-            topic: Some(topic_name.clone()),
+            topic: Some(topic_full_name.clone()),
             push_config: Some(push_config),
             ack_deadline_seconds: Some(worker_config.timeout_seconds as i32),
             retain_acked_messages: Some(false),
@@ -4978,7 +4979,7 @@ impl GcpWorkerController {
 
         info!(
             worker=%worker_config.id,
-            topic=%topic_name,
+            topic=%topic_full_name,
             subscription=%subscription_name,
             endpoint=%push_endpoint,
             "Creating Pub/Sub push subscription"
@@ -5926,6 +5927,18 @@ mod tests {
         mock_cloudrun: Arc<MockCloudRunApi>,
         mock_compute: Option<Arc<MockComputeApi>>,
     ) -> Arc<MockPlatformServiceProvider> {
+        setup_mock_service_provider_with_pubsub(
+            mock_cloudrun,
+            mock_compute,
+            Arc::new(MockPubSubApi::new()),
+        )
+    }
+
+    fn setup_mock_service_provider_with_pubsub(
+        mock_cloudrun: Arc<MockCloudRunApi>,
+        mock_compute: Option<Arc<MockComputeApi>>,
+        mock_pubsub: Arc<MockPubSubApi>,
+    ) -> Arc<MockPlatformServiceProvider> {
         let mut mock_provider = MockPlatformServiceProvider::new();
 
         mock_provider
@@ -5944,8 +5957,6 @@ mod tests {
             .expect_get_gcp_iam_client()
             .returning(move |_| Ok(mock_iam.clone()));
 
-        // Mock PubSub client for commands infrastructure cleanup
-        let mock_pubsub = Arc::new(MockPubSubApi::new());
         mock_provider
             .expect_get_gcp_pubsub_client()
             .returning(move |_| Ok(mock_pubsub.clone()));
@@ -6385,6 +6396,49 @@ mod tests {
     }
 
     // ─────────────── SPECIFIC VALIDATION TESTS ─────────────────
+
+    #[tokio::test]
+    async fn queue_push_subscription_uses_fully_qualified_topic_name() {
+        use crate::queue::gcp::{GcpQueueController, GcpQueueState};
+
+        let worker = function_with_queue_trigger();
+        let function_name = format!("test-{}", worker.id);
+        let mock_cloudrun = setup_mock_client_for_creation_and_update(&function_name, false);
+
+        let mut mock_pubsub = MockPubSubApi::new();
+        mock_pubsub
+            .expect_create_subscription()
+            .withf(|subscription_id, subscription| {
+                subscription_id == "test-queue-func-test-queue"
+                    && subscription.topic.as_deref()
+                        == Some("projects/test-project-123/topics/test-test-queue")
+            })
+            .times(1)
+            .returning(|_, subscription| Ok(subscription));
+
+        let mock_provider =
+            setup_mock_service_provider_with_pubsub(mock_cloudrun, None, Arc::new(mock_pubsub));
+        let queue_controller = GcpQueueController {
+            state: GcpQueueState::Ready,
+            topic_name: Some("test-test-queue".to_string()),
+            subscription_name: Some("test-test-queue-sub".to_string()),
+            _internal_stay_count: None,
+        };
+
+        let mut executor = SingleControllerExecutor::builder()
+            .resource(worker)
+            .controller(GcpWorkerController::default())
+            .platform(Platform::Gcp)
+            .service_provider(mock_provider)
+            .with_test_dependencies()
+            .with_dependency(test_queue(), queue_controller)
+            .build()
+            .await
+            .unwrap();
+
+        executor.run_until_terminal().await.unwrap();
+        assert_eq!(executor.status(), ResourceStatus::Running);
+    }
 
     /// Test that verifies public workers get IAM policy update
     #[tokio::test]
