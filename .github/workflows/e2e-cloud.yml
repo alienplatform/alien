@@ -164,6 +164,8 @@ jobs:
       has_cloudformation: ${{ steps.set.outputs.has_cloudformation }}
       needs_x86_64: ${{ steps.set.outputs.needs_x86_64 }}
       needs_aarch64: ${{ steps.set.outputs.needs_aarch64 }}
+      needs_bindings_x86_64: ${{ steps.set.outputs.needs_bindings_x86_64 }}
+      needs_bindings_aarch64: ${{ steps.set.outputs.needs_bindings_aarch64 }}
       build_images: ${{ steps.set.outputs.build_images }}
       build_base_image: ${{ steps.set.outputs.build_base_image }}
       build_operator_image: ${{ steps.set.outputs.build_operator_image }}
@@ -199,6 +201,8 @@ jobs:
             echo "has_cloudformation=false" >> $GITHUB_OUTPUT
             echo "needs_x86_64=false" >> $GITHUB_OUTPUT
             echo "needs_aarch64=false" >> $GITHUB_OUTPUT
+            echo "needs_bindings_x86_64=false" >> $GITHUB_OUTPUT
+            echo "needs_bindings_aarch64=false" >> $GITHUB_OUTPUT
             echo "build_images=true" >> $GITHUB_OUTPUT
             echo "build_base_image=true" >> $GITHUB_OUTPUT
             echo "build_operator_image=true" >> $GITHUB_OUTPUT
@@ -271,7 +275,7 @@ jobs:
               PUSH_ENTRIES=$(echo "$PUSH_ENTRIES" | jq -c '. + [{"name":"push-aws-comprehensive-rust","test_filter":"push_aws_comprehensive_rust","needs_oidc":false,"resource_suffix":"awscr"}]')
             fi
             if [ "$APP" = "All" ] || [ "$APP" = "comprehensive-ts" ]; then
-              PUSH_ENTRIES=$(echo "$PUSH_ENTRIES" | jq -c '. + [{"name":"push-aws-comprehensive-ts","test_filter":"push_aws_comprehensive_ts","needs_oidc":false,"resource_suffix":"awsct"}]')
+              PUSH_ENTRIES=$(echo "$PUSH_ENTRIES" | jq -c '. + [{"name":"push-aws-comprehensive-ts","test_filter":"push_aws_comprehensive_ts","needs_oidc":false,"resource_suffix":"awsct","bindings_arch":"aarch64"}]')
             fi
           fi
           if [ "$PUSH_GCP_CLI" = "true" ]; then
@@ -279,7 +283,7 @@ jobs:
               PUSH_ENTRIES=$(echo "$PUSH_ENTRIES" | jq -c '. + [{"name":"push-gcp-comprehensive-rust","test_filter":"push_gcp_comprehensive_rust","needs_oidc":false,"resource_suffix":"gcpcr"}]')
             fi
             if [ "$APP" = "All" ] || [ "$APP" = "comprehensive-ts" ]; then
-              PUSH_ENTRIES=$(echo "$PUSH_ENTRIES" | jq -c '. + [{"name":"push-gcp-comprehensive-ts","test_filter":"push_gcp_comprehensive_ts","needs_oidc":false,"resource_suffix":"gcpct"}]')
+              PUSH_ENTRIES=$(echo "$PUSH_ENTRIES" | jq -c '. + [{"name":"push-gcp-comprehensive-ts","test_filter":"push_gcp_comprehensive_ts","needs_oidc":false,"resource_suffix":"gcpct","bindings_arch":"x86_64"}]')
             fi
           fi
           if [ "$PUSH_AZURE_CLI" = "true" ]; then
@@ -287,7 +291,7 @@ jobs:
               PUSH_ENTRIES=$(echo "$PUSH_ENTRIES" | jq -c '. + [{"name":"push-azure-comprehensive-rust","test_filter":"push_azure_comprehensive_rust","needs_oidc":true,"resource_suffix":"azcr"}]')
             fi
             if [ "$APP" = "All" ] || [ "$APP" = "comprehensive-ts" ]; then
-              PUSH_ENTRIES=$(echo "$PUSH_ENTRIES" | jq -c '. + [{"name":"push-azure-comprehensive-ts","test_filter":"push_azure_comprehensive_ts","needs_oidc":true,"resource_suffix":"azct"}]')
+              PUSH_ENTRIES=$(echo "$PUSH_ENTRIES" | jq -c '. + [{"name":"push-azure-comprehensive-ts","test_filter":"push_azure_comprehensive_ts","needs_oidc":true,"resource_suffix":"azct","bindings_arch":"x86_64"}]')
             fi
           fi
 
@@ -356,13 +360,13 @@ jobs:
           fi
           if [ "$APP" = "All" ] || [ "$APP" = "full-stack-microservices" ]; then
             if [ "$KUBERNETES_AWS_TERRAFORM_HELM" = "true" ]; then
-              TERRAFORM_ENTRIES=$(echo "$TERRAFORM_ENTRIES" | jq -c '. + [{"name":"terraform-eks-helm-pull-full-stack-microservices","test_filter":"terraform_eks_helm_pull_full_stack_microservices","needs_oidc":false,"resource_suffix":"tfeksfs"}]')
+              TERRAFORM_ENTRIES=$(echo "$TERRAFORM_ENTRIES" | jq -c '. + [{"name":"terraform-eks-helm-pull-full-stack-microservices","test_filter":"terraform_eks_helm_pull_full_stack_microservices","needs_oidc":false,"resource_suffix":"tfeksfs","bindings_arch":"aarch64"}]')
             fi
             if [ "$KUBERNETES_GCP_TERRAFORM_HELM" = "true" ]; then
-              TERRAFORM_ENTRIES=$(echo "$TERRAFORM_ENTRIES" | jq -c '. + [{"name":"terraform-gke-helm-pull-full-stack-microservices","test_filter":"terraform_gke_helm_pull_full_stack_microservices","needs_oidc":false,"resource_suffix":"tfgkefs"}]')
+              TERRAFORM_ENTRIES=$(echo "$TERRAFORM_ENTRIES" | jq -c '. + [{"name":"terraform-gke-helm-pull-full-stack-microservices","test_filter":"terraform_gke_helm_pull_full_stack_microservices","needs_oidc":false,"resource_suffix":"tfgkefs","bindings_arch":"x86_64"}]')
             fi
             if [ "$KUBERNETES_AZURE_TERRAFORM_HELM" = "true" ]; then
-              TERRAFORM_ENTRIES=$(echo "$TERRAFORM_ENTRIES" | jq -c '. + [{"name":"terraform-aks-helm-pull-full-stack-microservices","test_filter":"terraform_aks_helm_pull_full_stack_microservices","needs_oidc":true,"resource_suffix":"tfaksfs"}]')
+              TERRAFORM_ENTRIES=$(echo "$TERRAFORM_ENTRIES" | jq -c '. + [{"name":"terraform-aks-helm-pull-full-stack-microservices","test_filter":"terraform_aks_helm_pull_full_stack_microservices","needs_oidc":true,"resource_suffix":"tfaksfs","bindings_arch":"x86_64"}]')
             fi
           fi
           # One managed Kubernetes target is enough to prove the runtime-less
@@ -371,7 +375,7 @@ jobs:
           # providers would only multiply cloud cost and runtime.
           if [ "$APP" = "All" ] || [ "$APP" = "command-routing-ts" ]; then
             if [ "$KUBERNETES_AWS_TERRAFORM_HELM" = "true" ]; then
-              TERRAFORM_ENTRIES=$(echo "$TERRAFORM_ENTRIES" | jq -c '. + [{"name":"terraform-eks-helm-pull-command-routing-ts","test_filter":"terraform_eks_helm_pull_command_routing_ts","needs_oidc":false,"resource_suffix":"tfeksrt"}]')
+              TERRAFORM_ENTRIES=$(echo "$TERRAFORM_ENTRIES" | jq -c '. + [{"name":"terraform-eks-helm-pull-command-routing-ts","test_filter":"terraform_eks_helm_pull_command_routing_ts","needs_oidc":false,"resource_suffix":"tfeksrt","bindings_arch":"aarch64"}]')
             fi
           fi
           # One mixed app proves both missing runtime-less SDK paths in a
@@ -379,7 +383,7 @@ jobs:
           # pull receivers, and a target-scoped command-name collision.
           if [ "$APP" = "All" ] || [ "$APP" = "runtime-less-mixed" ]; then
             if [ "$KUBERNETES_AWS_TERRAFORM_HELM" = "true" ]; then
-              TERRAFORM_ENTRIES=$(echo "$TERRAFORM_ENTRIES" | jq -c '. + [{"name":"terraform-eks-helm-pull-runtime-less-mixed","test_filter":"terraform_eks_helm_pull_runtime_less_mixed","needs_oidc":false,"resource_suffix":"tfeksrm"}]')
+              TERRAFORM_ENTRIES=$(echo "$TERRAFORM_ENTRIES" | jq -c '. + [{"name":"terraform-eks-helm-pull-runtime-less-mixed","test_filter":"terraform_eks_helm_pull_runtime_less_mixed","needs_oidc":false,"resource_suffix":"tfeksrm","bindings_arch":"aarch64"}]')
             fi
           fi
 
@@ -394,6 +398,20 @@ jobs:
 
           HAS_TERRAFORM=$([ "$(echo "$TERRAFORM_ENTRIES" | jq 'length')" -gt 0 ] && echo true || echo false)
           HAS_CLOUDFORMATION=$([ "$(echo "$CLOUDFORMATION_ENTRIES" | jq 'length')" -gt 0 ] && echo true || echo false)
+
+          # TypeScript resources compile the in-process bindings addon into the
+          # target executable. Build each Linux addon natively: the ARM E2E
+          # runner cannot cross-build the x86_64 napi cdylib (or vice versa).
+          NEEDS_BINDINGS_X86_64=false
+          NEEDS_BINDINGS_AARCH64=false
+          if jq -n -e --argjson push "$PUSH_ENTRIES" --argjson terraform "$TERRAFORM_ENTRIES" \
+            'any(($push + $terraform)[]; .bindings_arch? == "aarch64")' >/dev/null; then
+            NEEDS_BINDINGS_AARCH64=true
+          fi
+          if jq -n -e --argjson push "$PUSH_ENTRIES" --argjson terraform "$TERRAFORM_ENTRIES" \
+            'any(($push + $terraform)[]; .bindings_arch? == "x86_64")' >/dev/null; then
+            NEEDS_BINDINGS_X86_64=true
+          fi
 
           # Architecture needs: AWS→aarch64, GCP/Azure→x86_64
           ANY_TESTS=false
@@ -420,6 +438,8 @@ jobs:
           echo "has_cloudformation=$HAS_CLOUDFORMATION" >> $GITHUB_OUTPUT
           echo "needs_x86_64=$NEEDS_X86_64" >> $GITHUB_OUTPUT
           echo "needs_aarch64=$NEEDS_AARCH64" >> $GITHUB_OUTPUT
+          echo "needs_bindings_x86_64=$NEEDS_BINDINGS_X86_64" >> $GITHUB_OUTPUT
+          echo "needs_bindings_aarch64=$NEEDS_BINDINGS_AARCH64" >> $GITHUB_OUTPUT
           echo "build_images=$BUILD_IMAGES" >> $GITHUB_OUTPUT
           echo "build_base_image=$BUILD_BASE_IMAGE" >> $GITHUB_OUTPUT
           echo "build_operator_image=$BUILD_AGENT_IMAGE" >> $GITHUB_OUTPUT
@@ -434,7 +454,8 @@ jobs:
   build-x86_64:
     needs: [compute-matrix]
     if: >-
-      needs.compute-matrix.outputs.build_images == 'true' &&
+      (needs.compute-matrix.outputs.build_images == 'true' ||
+       needs.compute-matrix.outputs.needs_bindings_x86_64 == 'true') &&
       needs.compute-matrix.outputs.needs_x86_64 == 'true'
     runs-on: depot-ubuntu-24.04-16
     timeout-minutes: 45
@@ -451,7 +472,26 @@ jobs:
           targets: x86_64-unknown-linux-musl
           install-protoc: "true"
 
+      - uses: pnpm/action-setup@v4
+        if: needs.compute-matrix.outputs.needs_bindings_x86_64 == 'true'
+        with:
+          version: 10.11.0
+
+      - uses: actions/setup-node@v4
+        if: needs.compute-matrix.outputs.needs_bindings_x86_64 == 'true'
+        with:
+          node-version: 22
+          cache: pnpm
+
+      - uses: oven-sh/setup-bun@v2
+        if: needs.compute-matrix.outputs.needs_bindings_x86_64 == 'true'
+
+      - name: Install JS dependencies
+        if: needs.compute-matrix.outputs.needs_bindings_x86_64 == 'true'
+        run: pnpm install --frozen-lockfile
+
       - name: Build alien-worker-runtime + alien-operator (x86_64)
+        if: needs.compute-matrix.outputs.build_images == 'true'
         run: |
           PACKAGES=()
           if [ "${{ needs.compute-matrix.outputs.build_base_image }}" = "true" ]; then
@@ -461,6 +501,29 @@ jobs:
             PACKAGES+=("-p" "alien-operator")
           fi
           depot cargo build --release "${PACKAGES[@]}" --target x86_64-unknown-linux-musl
+
+      - name: Build TypeScript bindings addon (x86_64)
+        if: needs.compute-matrix.outputs.needs_bindings_x86_64 == 'true'
+        run: |
+          pnpm --filter @alienplatform/bindings exec napi build \
+            --platform --release --target x86_64-unknown-linux-gnu \
+            --cwd "$GITHUB_WORKSPACE/crates/alien-bindings-node"
+
+      - name: Verify TypeScript bindings addon (x86_64)
+        if: needs.compute-matrix.outputs.needs_bindings_x86_64 == 'true'
+        env:
+          ADDON_PATH: crates/alien-bindings-node/alien-bindings-node.linux-x64-gnu.node
+        run: |
+          file "$ADDON_PATH" | grep -q 'x86-64'
+          node -e 'const a=require(require("node:path").resolve(process.env.ADDON_PATH)); if (!a.version()) throw new Error("native version() returned empty")'
+          bun -e 'const a=require(require("node:path").resolve(process.env.ADDON_PATH)); if (!a.version()) throw new Error("native version() returned empty")'
+
+      - uses: actions/upload-artifact@v4
+        if: needs.compute-matrix.outputs.needs_bindings_x86_64 == 'true'
+        with:
+          name: alien-bindings-node-linux-x64-gnu
+          path: crates/alien-bindings-node/alien-bindings-node.linux-x64-gnu.node
+          retention-days: 1
 
       - uses: actions/upload-artifact@v4
         if: needs.compute-matrix.outputs.build_base_image == 'true'
@@ -479,7 +542,8 @@ jobs:
   build-aarch64:
     needs: [compute-matrix]
     if: >-
-      needs.compute-matrix.outputs.build_images == 'true' &&
+      (needs.compute-matrix.outputs.build_images == 'true' ||
+       needs.compute-matrix.outputs.needs_bindings_aarch64 == 'true') &&
       needs.compute-matrix.outputs.needs_aarch64 == 'true'
     runs-on: depot-ubuntu-24.04-arm-16
     timeout-minutes: 45
@@ -496,7 +560,26 @@ jobs:
           targets: aarch64-unknown-linux-musl
           install-protoc: "true"
 
+      - uses: pnpm/action-setup@v4
+        if: needs.compute-matrix.outputs.needs_bindings_aarch64 == 'true'
+        with:
+          version: 10.11.0
+
+      - uses: actions/setup-node@v4
+        if: needs.compute-matrix.outputs.needs_bindings_aarch64 == 'true'
+        with:
+          node-version: 22
+          cache: pnpm
+
+      - uses: oven-sh/setup-bun@v2
+        if: needs.compute-matrix.outputs.needs_bindings_aarch64 == 'true'
+
+      - name: Install JS dependencies
+        if: needs.compute-matrix.outputs.needs_bindings_aarch64 == 'true'
+        run: pnpm install --frozen-lockfile
+
       - name: Build alien-worker-runtime + alien-operator (aarch64)
+        if: needs.compute-matrix.outputs.build_images == 'true'
         run: |
           PACKAGES=()
           if [ "${{ needs.compute-matrix.outputs.build_base_image }}" = "true" ]; then
@@ -506,6 +589,29 @@ jobs:
             PACKAGES+=("-p" "alien-operator")
           fi
           depot cargo build --release "${PACKAGES[@]}" --target aarch64-unknown-linux-musl
+
+      - name: Build TypeScript bindings addon (aarch64)
+        if: needs.compute-matrix.outputs.needs_bindings_aarch64 == 'true'
+        run: |
+          pnpm --filter @alienplatform/bindings exec napi build \
+            --platform --release --target aarch64-unknown-linux-gnu \
+            --cwd "$GITHUB_WORKSPACE/crates/alien-bindings-node"
+
+      - name: Verify TypeScript bindings addon (aarch64)
+        if: needs.compute-matrix.outputs.needs_bindings_aarch64 == 'true'
+        env:
+          ADDON_PATH: crates/alien-bindings-node/alien-bindings-node.linux-arm64-gnu.node
+        run: |
+          file "$ADDON_PATH" | grep -q 'aarch64'
+          node -e 'const a=require(require("node:path").resolve(process.env.ADDON_PATH)); if (!a.version()) throw new Error("native version() returned empty")'
+          bun -e 'const a=require(require("node:path").resolve(process.env.ADDON_PATH)); if (!a.version()) throw new Error("native version() returned empty")'
+
+      - uses: actions/upload-artifact@v4
+        if: needs.compute-matrix.outputs.needs_bindings_aarch64 == 'true'
+        with:
+          name: alien-bindings-node-linux-arm64-gnu
+          path: crates/alien-bindings-node/alien-bindings-node.linux-arm64-gnu.node
+          retention-days: 1
 
       - uses: actions/upload-artifact@v4
         if: needs.compute-matrix.outputs.build_base_image == 'true'
@@ -971,7 +1077,7 @@ jobs:
   # ── E2E push test matrix ───────────────────────────────────────────
 
   push-test:
-    needs: [compute-matrix, setup, build-base-image]
+    needs: [compute-matrix, setup, build-x86_64, build-aarch64, build-base-image]
     if: |
       !cancelled() && !failure() &&
       needs.compute-matrix.outputs.has_push == 'true'
@@ -990,6 +1096,20 @@ jobs:
       CARGO_NET_GIT_FETCH_WITH_CLI: "true"
     steps:
       - uses: actions/checkout@v4
+
+      - name: Download TypeScript bindings addon (x86_64)
+        if: matrix.bindings_arch == 'x86_64'
+        uses: actions/download-artifact@v4
+        with:
+          name: alien-bindings-node-linux-x64-gnu
+          path: crates/alien-bindings-node
+
+      - name: Download TypeScript bindings addon (aarch64)
+        if: matrix.bindings_arch == 'aarch64'
+        uses: actions/download-artifact@v4
+        with:
+          name: alien-bindings-node-linux-arm64-gnu
+          path: crates/alien-bindings-node
 
       - name: Configure git credentials
         run: git config --global url."https://x-access-token:${{ secrets.REPO_ACCESS_TOKEN }}@github.com/".insteadOf "https://github.com/"
@@ -1179,7 +1299,7 @@ jobs:
   # ── E2E Terraform distribution matrix ──────────────────────────────
 
   terraform-test:
-    needs: [compute-matrix, setup, build-base-image, build-operator-image]
+    needs: [compute-matrix, setup, build-x86_64, build-aarch64, build-base-image, build-operator-image]
     if: |
       !cancelled() && !failure() &&
       needs.compute-matrix.outputs.has_terraform == 'true'
@@ -1194,6 +1314,20 @@ jobs:
       CARGO_NET_GIT_FETCH_WITH_CLI: "true"
     steps:
       - uses: actions/checkout@v4
+
+      - name: Download TypeScript bindings addon (x86_64)
+        if: matrix.bindings_arch == 'x86_64'
+        uses: actions/download-artifact@v4
+        with:
+          name: alien-bindings-node-linux-x64-gnu
+          path: crates/alien-bindings-node
+
+      - name: Download TypeScript bindings addon (aarch64)
+        if: matrix.bindings_arch == 'aarch64'
+        uses: actions/download-artifact@v4
+        with:
+          name: alien-bindings-node-linux-arm64-gnu
+          path: crates/alien-bindings-node
 
       - name: Configure git credentials
         run: git config --global url."https://x-access-token:${{ secrets.REPO_ACCESS_TOKEN }}@github.com/".insteadOf "https://github.com/"
