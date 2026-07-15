@@ -30,6 +30,11 @@ export class AlienManager extends ClientSDK {
     return (this._leases ??= new Leases(this._options));
   }
 
+  private _credentials?: Credentials;
+  get credentials(): Credentials {
+    return (this._credentials ??= new Credentials(this._options));
+  }
+
   private _deploymentGroups?: DeploymentGroups;
   get deploymentGroups(): DeploymentGroups {
     return (this._deploymentGroups ??= new DeploymentGroups(this._options));
@@ -48,11 +53,6 @@ export class AlienManager extends ClientSDK {
   private _releases?: Releases;
   get releases(): Releases {
     return (this._releases ??= new Releases(this._options));
-  }
-
-  private _credentials?: Credentials;
-  get credentials(): Credentials {
-    return (this._credentials ??= new Credentials(this._options));
   }
 
   private _stackImport?: StackImport;

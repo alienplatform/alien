@@ -50,6 +50,11 @@
     }
   },
   "sideEffects": false,
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/alienplatform/alien.git",
+    "directory": "client-sdks/manager/typescript"
+  },
   "scripts": {
     "lint": "eslint --cache --max-warnings=0 src",
     "build": "tsc",

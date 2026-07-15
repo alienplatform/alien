@@ -33,6 +33,14 @@ export type CreateCommandRequest = {
    * Body specification supporting inline and storage modes
    */
   params: BodySpec;
+  /**
+   * Optional explicit target resource ID within the deployment's stack.
+   *
+   * @remarks
+   * When omitted, the target is resolved server-side (single-target shorthand):
+   * exactly one command-capable resource must exist, or resolution fails.
+   */
+  targetResourceId?: string | null | undefined;
 };
 
 /** @internal */
@@ -42,6 +50,7 @@ export type CreateCommandRequest$Outbound = {
   deploymentId: string;
   idempotencyKey?: string | null | undefined;
   params: BodySpec$Outbound;
+  targetResourceId?: string | null | undefined;
 };
 
 /** @internal */
@@ -54,6 +63,7 @@ export const CreateCommandRequest$outboundSchema: z.ZodType<
   deploymentId: z.string(),
   idempotencyKey: z.nullable(z.string()).optional(),
   params: BodySpec$outboundSchema,
+  targetResourceId: z.nullable(z.string()).optional(),
 });
 
 export function createCommandRequestToJSON(

@@ -6,11 +6,13 @@ import * as z from "zod/v4";
 import { safeParse } from "../lib/schemas.js";
 import { Result as SafeParseResult } from "../types/fp.js";
 import { BodySpec, BodySpec$inboundSchema } from "./bodyspec.js";
+import { CommandTarget, CommandTarget$inboundSchema } from "./commandtarget.js";
 import { SDKValidationError } from "./errors/sdkvalidationerror.js";
 import {
   ResponseHandling,
   ResponseHandling$inboundSchema,
 } from "./responsehandling.js";
+import { TraceContext, TraceContext$inboundSchema } from "./tracecontext.js";
 
 /**
  * Commands envelope sent to deployments
@@ -48,6 +50,11 @@ export type Envelope = {
    * Response handling configuration for deployments
    */
   responseHandling: ResponseHandling;
+  /**
+   * Identifies the specific resource a command is addressed to.
+   */
+  target: CommandTarget;
+  traceContext?: TraceContext | null | undefined;
 };
 
 /** @internal */
@@ -62,6 +69,8 @@ export const Envelope$inboundSchema: z.ZodType<Envelope, unknown> = z.object({
   params: BodySpec$inboundSchema,
   protocol: z.string(),
   responseHandling: ResponseHandling$inboundSchema,
+  target: CommandTarget$inboundSchema,
+  traceContext: z.nullable(TraceContext$inboundSchema).optional(),
 });
 
 export function envelopeFromJSON(

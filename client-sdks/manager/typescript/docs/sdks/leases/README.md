@@ -27,6 +27,10 @@ const alienManager = new AlienManager({
 async function run() {
   const result = await alienManager.leases.acquireLeases({
     deploymentId: "<id>",
+    target: {
+      resourceId: "<id>",
+      resourceType: "container",
+    },
   });
 
   console.log(result);
@@ -53,6 +57,10 @@ const alienManager = new AlienManagerCore({
 async function run() {
   const res = await leasesAcquireLeases(alienManager, {
     deploymentId: "<id>",
+    target: {
+      resourceId: "<id>",
+      resourceType: "container",
+    },
   });
   if (res.ok) {
     const { value: result } = res;

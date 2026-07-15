@@ -9,10 +9,10 @@ import { SDKValidationError } from "./errors/sdkvalidationerror.js";
 
 export type AgentSyncResponse = {
   /**
-   * Public URL for the commands API. Cloud-deployed workers use this
+   * Public URL for the commands API. Operators and app-owned receivers use
    *
    * @remarks
-   * to poll for pending commands instead of the agent's local sync URL.
+   * it to lease pending commands instead of the agent's local sync URL.
    */
   commandsUrl?: string | null | undefined;
   /**
