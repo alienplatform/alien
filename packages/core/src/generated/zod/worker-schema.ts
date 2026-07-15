@@ -17,7 +17,7 @@ export const WorkerSchema = z.object({
     get "code"(){
                 return WorkerCodeSchema.describe("Specifies the source of the worker's executable code.\nThis can be a pre-built container image or source code that the system will build.")
               },
-"commandsEnabled": z.optional(z.boolean().default(false).describe("Whether the worker can receive remote commands via the Commands protocol.\nWhen enabled, the runtime polls the manager for pending commands and executes registered handlers.")),
+"commandsEnabled": z.optional(z.boolean().default(false).describe("Whether the worker can receive remote commands via the Commands protocol.\nWhen enabled, the platform pushes commands into the Worker runtime,\nwhich executes registered handlers.")),
 "concurrencyLimit": z.int().min(0).describe("Maximum number of concurrent executions allowed for the worker.\nNone means platform default applies.").nullish(),
 "environment": z.optional(z.object({
     
@@ -34,7 +34,7 @@ get "publicEndpoints"(){
 get "readinessProbe"(){
                 return z.union([ReadinessProbeSchema, z.null()]).optional()
               },
-"timeoutSeconds": z.optional(z.int().min(0).default(180).describe("Maximum execution time for the worker in seconds.\nConstraints: 1‑3600 seconds (platform-specific limits may apply)\nDefault: 30")),
+"timeoutSeconds": z.optional(z.int().min(1).max(3600).default(180).describe("Maximum execution time for the worker in seconds.\nConstraints: 1‑3600 seconds (platform-specific limits may apply)\nDefault: 30")),
 get "triggers"(){
                 return z.array(WorkerTriggerSchema.describe("Defines what triggers a worker execution.")).describe("List of triggers that define what events automatically invoke this worker.\nIf empty, the worker is only invokable directly via HTTP calls or platform-specific invocation APIs.\nWhen configured, the worker will be automatically invoked when any of the specified trigger conditions are met.")
               }

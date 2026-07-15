@@ -762,7 +762,7 @@ impl DeploymentLoop {
     /// Includes:
     /// - `ALIEN_DEPLOYMENT_ID`
     /// - `ALIEN_DEPLOYMENT_NAME`
-    /// - Commands polling configuration
+    /// - Command delivery configuration
     async fn build_environment_variables(
         &self,
         deployment_id: &str,
@@ -785,21 +785,16 @@ impl DeploymentLoop {
             target_resources: None,
         });
 
-        // 3a. Worker command polling — only inject for K8s/Local.
-        // Cloud workers (Lambda, Cloud Run, Container Apps) receive commands via
-        // platform-native push (InvokeFunction, Pub/Sub, Service Bus) — no polling
-        // needed, regardless of deployment model. K8s/Local run as containers that
-        // must poll. This gate is WORKER-push-specific.
-        let needs_polling = matches!(
+        // 3a. Local/Kubernetes Worker push authentication. Cloud-native Worker
+        // transports authenticate through their platform instead.
+        let needs_http_push_auth = matches!(
             deployment.platform,
             alien_core::Platform::Kubernetes | alien_core::Platform::Local
         );
 
-        if needs_polling {
-            let commands_base = self.config.commands_base_url();
+        if needs_http_push_auth {
             vars.extend(
-                commands_polling_env_vars(
-                    commands_base,
+                worker_commands_push_env_vars(
                     deployment.deployment_token.as_deref(),
                     deployment_stack,
                 )
@@ -811,7 +806,7 @@ impl DeploymentLoop {
         // Unlike workers, Containers and Daemons always deliver commands via Pull
         // (ALIEN-219 delivery rule: Container/Daemon → Pull regardless of platform),
         // so the receiver contract must reach them everywhere, not just K8s/Local.
-        // The `needs_polling` gate above is deliberately NOT applied here: its
+        // The Worker-only gate above is deliberately NOT applied here: its
         // justification (cloud *workers* use platform-native push) does not hold
         // for Container/Daemon receivers. The snapshot reaches Container/Daemon env
         // on any platform through the platform-independent per-resource dispatch in
@@ -869,28 +864,20 @@ impl DeploymentLoop {
     }
 }
 
-/// Builds the commands polling environment variables (`ALIEN_COMMANDS_POLLING_ENABLED`,
-/// `ALIEN_COMMANDS_POLLING_URL`, `ALIEN_COMMANDS_TOKEN`,
-/// `ALIEN_COMMANDS_TARGET_RESOURCE_ID`), each scoped via `target_resources` to a
-/// single command-enabled Worker. Nothing is injected deployment-wide: a
-/// commands-disabled Worker receiving `POLLING_ENABLED=true` would crash at
-/// startup (the runtime fail-fast-requires the target id once polling is on)
-/// and would otherwise run a pointless polling loop. The commands token comes
-/// from the deployment record — the manager is the sole injector of
-/// `ALIEN_COMMANDS_TOKEN`. Container/Daemon receiver env is wired separately,
-/// below.
-fn commands_polling_env_vars(
-    commands_base_url: String,
+/// Builds the scoped token that authenticates Local/Kubernetes command pushes
+/// into each command-enabled Worker runtime. Container/Daemon receiver env is
+/// wired separately below.
+fn worker_commands_push_env_vars(
     deployment_token: Option<&str>,
     deployment_stack: &alien_core::Stack,
 ) -> Result<Vec<EnvironmentVariable>, alien_error::AlienError<alien_core::ErrorData>> {
-    deployment_stack.worker_command_polling_env_vars(&commands_base_url, deployment_token)
+    deployment_stack.worker_command_push_env_vars(deployment_token)
 }
 
 /// Builds the command *receiver* environment variables (`ALIEN_COMMANDS_URL`,
 /// `ALIEN_COMMANDS_TOKEN`, `ALIEN_COMMANDS_TARGET_RESOURCE_ID`,
 /// `ALIEN_COMMANDS_TARGET_RESOURCE_TYPE`), each scoped via `target_resources` to a
-/// single command-enabled Container or Daemon. Unlike the worker polling quartet,
+/// single command-enabled Container or Daemon. Unlike Worker push auth,
 /// this is injected on every platform: Container/Daemon always deliver via Pull
 /// (ALIEN-219). `ALIEN_DEPLOYMENT_ID` is not re-emitted here — it is already
 /// injected deployment-wide above. The commands token comes from the deployment
@@ -968,10 +955,10 @@ fn failed_state_for_credential_error(
 #[cfg(test)]
 mod tests {
     use super::{
-        active_work_statuses, commands_polling_env_vars, commands_receiver_env_vars,
-        get_or_create_local_bindings_provider, has_remote_stack_management_outputs,
-        manager_candidate_statuses, needs_provision_capability, parse_status,
-        retryable_failed_statuses, should_wait_for_credential_handoff,
+        active_work_statuses, commands_receiver_env_vars, get_or_create_local_bindings_provider,
+        has_remote_stack_management_outputs, manager_candidate_statuses,
+        needs_provision_capability, parse_status, retryable_failed_statuses,
+        should_wait_for_credential_handoff, worker_commands_push_env_vars,
     };
     use alien_core::{
         Container, ContainerCode, Daemon, DaemonCode, DeploymentStatus, Platform,
@@ -1325,7 +1312,7 @@ mod tests {
     }
 
     #[test]
-    fn commands_polling_env_vars_scopes_quartet_per_command_enabled_worker() {
+    fn worker_commands_push_env_vars_scopes_token_per_command_enabled_worker() {
         let worker_a = Worker::new("worker-a".to_string())
             .code(WorkerCode::Image {
                 image: "worker:latest".to_string(),
@@ -1340,8 +1327,7 @@ mod tests {
             .permissions("execution".to_string())
             .commands_enabled(true)
             .build();
-        // Commands-disabled Worker: must get NOTHING — a deployment-wide
-        // POLLING_ENABLED=true would crash it at startup (runtime fail-fast).
+        // Commands-disabled Worker must not expose a command push endpoint.
         let worker_off = Worker::new("worker-off".to_string())
             .code(WorkerCode::Image {
                 image: "worker:latest".to_string(),
@@ -1354,12 +1340,8 @@ mod tests {
             .add(worker_off, ResourceLifecycle::Live)
             .build();
 
-        let vars = commands_polling_env_vars(
-            "https://manager.example.test/v1".to_string(),
-            Some("ax_dep_test"),
-            &stack,
-        )
-        .expect("token present");
+        let vars =
+            worker_commands_push_env_vars(Some("ax_dep_test"), &stack).expect("token present");
 
         // Nothing deployment-wide; nothing scoped to the disabled worker.
         assert!(vars.iter().all(|v| {
@@ -1367,26 +1349,16 @@ mod tests {
                 || v.target_resources == Some(vec!["worker-b".to_string()])
         }));
 
-        // Full quartet per command-enabled worker.
+        // One secret token per command-enabled worker.
         for worker_id in ["worker-a", "worker-b"] {
             let scoped: Vec<_> = vars
                 .iter()
                 .filter(|v| v.target_resources == Some(vec![worker_id.to_string()]))
                 .collect();
-            assert_eq!(scoped.len(), 4, "expected quartet for {worker_id}");
-            assert!(scoped.iter().any(|v| {
-                v.name == alien_core::ENV_ALIEN_COMMANDS_POLLING_ENABLED && v.value == "true"
-            }));
-            assert!(scoped.iter().any(|v| {
-                v.name == alien_core::ENV_ALIEN_COMMANDS_POLLING_URL
-                    && v.value == "https://manager.example.test/v1"
-            }));
+            assert_eq!(scoped.len(), 1, "expected one token for {worker_id}");
             assert!(scoped.iter().any(
                 |v| v.name == alien_core::ENV_ALIEN_COMMANDS_TOKEN && v.value == "ax_dep_test"
             ));
-            assert!(scoped.iter().any(|v| {
-                v.name == alien_core::ENV_ALIEN_COMMANDS_TARGET_RESOURCE_ID && v.value == worker_id
-            }));
         }
     }
 
@@ -1424,8 +1396,8 @@ mod tests {
             .build();
         // Commands-disabled container: must get NOTHING.
         let container_off = command_container("container-off", false);
-        // Commands-enabled worker: gets the polling quartet, never the receiver
-        // contract — must not be a receiver scope target.
+        // Commands-enabled Worker uses runtime push, never the receiver
+        // contract, and must not be a receiver scope target.
         let worker = Worker::new("worker-c".to_string())
             .code(WorkerCode::Image {
                 image: "worker:latest".to_string(),
@@ -1453,11 +1425,10 @@ mod tests {
             v.target_resources == Some(vec!["container-a".to_string()])
                 || v.target_resources == Some(vec!["daemon-b".to_string()])
         }));
-        // No polling leakage and no deployment-wide DEPLOYMENT_ID re-emitted here.
-        assert!(!vars.iter().any(|v| {
-            v.name == alien_core::ENV_ALIEN_COMMANDS_POLLING_ENABLED
-                || v.name == alien_core::ENV_ALIEN_DEPLOYMENT_ID
-        }));
+        // No deployment-wide DEPLOYMENT_ID is re-emitted here.
+        assert!(!vars
+            .iter()
+            .any(|v| v.name == alien_core::ENV_ALIEN_DEPLOYMENT_ID));
 
         for (resource_id, expected_type) in [("container-a", "container"), ("daemon-b", "daemon")] {
             let scoped: Vec<_> = vars

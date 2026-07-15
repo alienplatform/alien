@@ -100,7 +100,7 @@ docker run ghcr.io/alienplatform/alien-operator \
 ║                         ║      HTTPS        ║  │                              │   ║
 ║  Releases        ◀──────╬───────────────────╬──│── alien-operator                │   ║
 ║  Telemetry       ◀──────╬───────────────────╬──│──  ┏━━━━━━━━━━┓              │   ║
-║  Commands        ◀──────╬───────────────────╬──│──  ┃ Worker ┃              │   ║
+║  Worker commands ◀──────╬───────────────────╬──│──  ┃ Worker ┃              │   ║
 ║                         ║                   ║  │    ┗━━━━━━━━━━┛              │   ║
 ║                         ║                   ║  │    ┏━━━━━━━━━━┓              │   ║
 ╚═════════════════════════╝                   ║  │    ┃ Storage  ┃              │   ║
@@ -111,6 +111,11 @@ docker run ghcr.io/alienplatform/alien-operator \
 ```
 
 Both models give you the same capabilities: updates, telemetry, remote commands. See [Deployment Models](https://alien.dev/docs/deploying/deployment-models).
+
+The Operator reconciles releases and relays pending Worker commands to the
+targeted Worker runtime; the Worker never polls the command server. Containers
+and Daemons run an app-owned pull receiver. Every command is scoped to one
+target.
 
 ## One codebase, every cloud
 
@@ -126,6 +131,7 @@ const api = new alien.Worker("api")
   .code({ type: "source", src: "./api", toolchain: { type: "typescript" } })
   .link(data)
   .link(secrets)
+  .commandsEnabled(true)
   .publicEndpoint("api")
   .build()
 
@@ -183,7 +189,7 @@ import { command, storage } from "@alienplatform/sdk"
 const files = storage("files")
 
 command("read-file", async ({ path }) => {
-  const { data } = await files.get(path)
+  const data = await files.get(path)
   return { content: new TextDecoder().decode(data) }
 })
 ```
@@ -191,7 +197,10 @@ command("read-file", async ({ path }) => {
 Invoke it from your backend:
 
 ```typescript
-const result = await commands.invoke("read-file", {
+import { CommandsClient } from "@alienplatform/commands"
+
+const commands = new CommandsClient({ managerUrl, deploymentId, token })
+const result = await commands.target("api").invoke("read-file", {
   path: "report.csv"
 })
 ```

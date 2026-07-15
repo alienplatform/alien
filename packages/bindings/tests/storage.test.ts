@@ -10,10 +10,13 @@ import { storage } from "../src/index.js"
 import type { Storage } from "../src/index.js"
 import { cleanupTempDirs, localStorageBindingEnv } from "./helpers/local-binding-env.js"
 
+let bunFixtureIndex = 0
+
 function freshStorage(): Storage {
-  const name = `storage-${randomUUID()}`
-  const { env } = localStorageBindingEnv(name)
-  return storage(name, { env })
+  const isBun = process.env.BUN_EXPECTED === "1"
+  const name = isBun ? `bun-storage-${bunFixtureIndex++}` : `storage-${randomUUID()}`
+  if (!isBun) localStorageBindingEnv(name)
+  return storage(name)
 }
 
 describe("storage (local file-tree provider)", () => {

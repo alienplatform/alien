@@ -29,6 +29,9 @@ pub use k8s_environment_secrets::*;
 #[cfg(all(test, feature = "kubernetes"))]
 pub(crate) mod kubernetes_manifest_test_support;
 
+#[cfg(feature = "kubernetes")]
+pub(crate) mod kubernetes_errors;
+
 mod azure_permissions_helper;
 pub use azure_permissions_helper::*;
 

@@ -17,7 +17,6 @@ mod vault;
 use crate::error::map_alien_error;
 use alien_bindings::Bindings;
 use napi_derive::napi;
-use std::collections::HashMap;
 use std::sync::Arc;
 
 pub use kv::KvHandle;
@@ -42,23 +41,10 @@ pub struct BindingsHandle {
 
 #[napi]
 impl BindingsHandle {
-    /// Construct from the process environment, optionally overlaid with
-    /// `env_override`.
-    ///
-    /// - `None` → resolve from `std::env::vars()`.
-    /// - `Some(overrides)` → merge `std::env::vars()` with `overrides` (override
-    ///   wins) and resolve from the merged map.
+    /// Construct from the process environment.
     #[napi(constructor)]
-    pub fn new(env_override: Option<HashMap<String, String>>) -> napi::Result<Self> {
-        let bindings = match env_override {
-            None => Bindings::from_env(),
-            Some(overrides) => {
-                let mut env: HashMap<String, String> = std::env::vars().collect();
-                env.extend(overrides);
-                Bindings::from_env_map(env)
-            }
-        }
-        .map_err(map_alien_error)?;
+    pub fn new() -> napi::Result<Self> {
+        let bindings = Bindings::from_env().map_err(map_alien_error)?;
         Ok(Self {
             inner: Arc::new(bindings),
         })

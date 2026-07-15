@@ -52,6 +52,7 @@ url = { workspace = true, features = ["serde"] }
 uuid = { workspace = true, features = ["v4", "serde"] }
 hyper-util = { workspace = true, features = ["full"] }
 tokio-stream = { workspace = true }
+tokio-util = { workspace = true, features = ["rt"] }
 bon = { workspace = true, features = ["experimental-overwritable"] }
 config = { workspace = true }
 libc = "0.2"
@@ -93,3 +94,4 @@ lambda_http = { workspace = true }
 aws_lambda_events = { workspace = true }
 test-context = { workspace = true }
 async-trait = { workspace = true }
+tonic = { workspace = true }

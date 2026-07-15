@@ -155,8 +155,7 @@ impl LocalBindingsProvider {
             state_dir: state_dir.clone(),
         });
 
-        // Create worker manager with the provider (for bindings access)
-        // ARC polling is configured via environment variables (ALIEN_COMMANDS_POLLING_*, ALIEN_AGENT_ID)
+        // Create worker manager with the provider (for bindings access).
         let (worker_manager, worker_task) = LocalWorkerManager::new_with_shutdown(
             state_dir,
             provider.clone(),

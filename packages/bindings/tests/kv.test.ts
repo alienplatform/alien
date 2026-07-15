@@ -11,10 +11,13 @@ import { kv } from "../src/index.js"
 import type { Kv } from "../src/index.js"
 import { cleanupTempDirs, localKvBindingEnv } from "./helpers/local-binding-env.js"
 
+let bunFixtureIndex = 0
+
 function freshKv(): Kv {
-  const name = `kv-${randomUUID()}`
-  const { env } = localKvBindingEnv(name)
-  return kv(name, { env })
+  const isBun = process.env.BUN_EXPECTED === "1"
+  const name = isBun ? `bun-kv-${bunFixtureIndex++}` : `kv-${randomUUID()}`
+  if (!isBun) localKvBindingEnv(name)
+  return kv(name)
 }
 
 describe("kv (local turso-backed provider)", () => {

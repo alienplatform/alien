@@ -126,6 +126,14 @@ async fn daemon_runs_as_direct_child_with_resolved_env() {
     env_vars.insert("MY_SECRET".to_string(), "s3cr3t-value".to_string());
     // Markers that must never reach the app on the local platform:
     env_vars.insert("ALIEN_SECRETS".to_string(), "vault://ignored".to_string());
+    env_vars.insert(
+        "ALIEN_RUNTIME_SECRETS".to_string(),
+        "vault://ignored-runtime".to_string(),
+    );
+    env_vars.insert(
+        "OTEL_EXPORTER_OTLP_HEADERS".to_string(),
+        "authorization=Bearer direct-token".to_string(),
+    );
 
     manager
         .start_daemon(
@@ -134,7 +142,10 @@ async fn daemon_runs_as_direct_child_with_resolved_env() {
             alien_local::DaemonLaunchOptions {
                 // The resolved secret's NAME is runtime-only: the value must
                 // reach the process env but never the persisted metadata.
-                runtime_only_env_names: vec!["MY_SECRET".to_string()],
+                runtime_only_env_names: vec![
+                    "MY_SECRET".to_string(),
+                    "OTEL_EXPORTER_OTLP_HEADERS".to_string(),
+                ],
                 ..Default::default()
             },
         )
@@ -168,6 +179,7 @@ async fn daemon_runs_as_direct_child_with_resolved_env() {
     // Env audit: no vault-load marker, no worker-runtime transport/gRPC signals.
     for forbidden in [
         "ALIEN_SECRETS",
+        "ALIEN_RUNTIME_SECRETS",
         "ALIEN_TRANSPORT",
         "ALIEN_WORKER_GRPC_ADDRESS",
         "ALIEN_BINDINGS_GRPC_ADDRESS",
@@ -194,6 +206,11 @@ async fn daemon_runs_as_direct_child_with_resolved_env() {
         Some("s3cr3t-value"),
         "resolved secret must reach the app as a plain env var"
     );
+    assert_eq!(
+        env.get("OTEL_EXPORTER_OTLP_HEADERS").map(String::as_str),
+        Some("authorization=Bearer direct-token"),
+        "runtime-less local Daemon must receive direct monitoring auth"
+    );
 
     // The persisted metadata must NOT contain the secret value ("password
     // never persisted" invariant): a crash restart uses the in-memory live
@@ -210,9 +227,14 @@ async fn daemon_runs_as_direct_child_with_resolved_env() {
         "resolved secret value must never persist to metadata.json: {persisted}"
     );
     assert!(
+        !persisted.contains("direct-token"),
+        "monitoring credential must never persist to metadata.json: {persisted}"
+    );
+    assert!(
         persisted.contains("MY_SECRET"),
         "the secret's NAME must persist (runtime_only_env_names) so restarts know the shape"
     );
+    assert!(persisted.contains("OTEL_EXPORTER_OTLP_HEADERS"));
 
     manager
         .stop_daemon("gateway")

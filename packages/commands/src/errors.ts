@@ -1,7 +1,7 @@
 /**
  * Command sender error definitions.
  *
- * Migrated from `@alienplatform/sdk/commands` — the seven `defineError`
+ * Migrated from the former `@alienplatform/sdk/commands` subpath — the seven `defineError`
  * definitions the sender raises. Each is built with `defineError` from
  * `@alienplatform/core` so it carries the shared `AlienError` identity.
  */

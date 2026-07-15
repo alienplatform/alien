@@ -233,7 +233,7 @@ export class Daemon {
 
   /**
    * Enables or disables the Commands protocol for the daemon.
-   * When enabled, the runtime polls the manager for pending commands and executes registered handlers.
+   * When enabled, an app-owned receiver can lease this Daemon's pending commands and execute registered handlers.
    * Default: false.
    * @param enabled Whether to enable commands for this daemon.
    * @returns The Daemon builder instance.

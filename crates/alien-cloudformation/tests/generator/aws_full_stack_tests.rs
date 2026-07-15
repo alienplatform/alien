@@ -54,6 +54,7 @@ fn aws_full_stack_with_create_network_renders_audit_ready_template() {
             wildcard_subdomains: false,
         })
         .timeout_seconds(60)
+        .expect("literal Worker timeout is within supported range")
         .memory_mb(512)
         .environment([("RUST_LOG".to_string(), "info".to_string())].into())
         .link(&assets)

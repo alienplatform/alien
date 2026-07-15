@@ -62,6 +62,7 @@ fn aws_function_basic_lambda() {
                 })
                 .permissions("execution".to_string())
                 .timeout_seconds(30)
+                .expect("literal Worker timeout is within supported range")
                 .memory_mb(256)
                 .build(),
             ResourceLifecycle::Live,
@@ -124,6 +125,7 @@ fn aws_function_public_ingress_emits_apigw_v2() {
                     wildcard_subdomains: false,
                 })
                 .timeout_seconds(60)
+                .expect("literal Worker timeout is within supported range")
                 .memory_mb(512)
                 .build(),
             ResourceLifecycle::Live,

@@ -30,11 +30,18 @@ use crate::INLINE_MAX_BYTES;
 /// boundary (Azure Table Storage) to account for JSON wrapping overhead.
 const KV_VALUE_THRESHOLD: usize = 20_000;
 
+fn is_definite_dispatch_rejection(error: &crate::error::Error) -> bool {
+    matches!(
+        error.error.as_ref(),
+        Some(ErrorData::TransportDispatchRejected { .. })
+    )
+}
+
 pub mod axum_handlers;
 pub mod command_registry;
-pub mod dispatchers;
 pub mod storage;
 
+pub use crate::dispatchers::{CommandDispatcher, NullCommandDispatcher};
 pub use axum_handlers::{
     create_axum_router, CommandPayloadResponse, HasCommandServer, StorePayloadRequest,
 };
@@ -43,7 +50,6 @@ pub use command_registry::{
     CommandEnvelopeData, CommandMetadata, CommandRegistry, CommandStatus, InMemoryCommandRegistry,
     ResolvedCommandTarget,
 };
-pub use dispatchers::{CommandDispatcher, NullCommandDispatcher};
 
 // =============================================================================
 // KV Data Structures (Operational Data Only)
@@ -138,16 +144,18 @@ impl CommandServer {
     }
 
     /// Maximum allowed response token lifetime (2 hours).
-    /// Tokens are issued with 1-hour expiry; this cap provides headroom for clock skew
-    /// while rejecting tokens with absurdly far-future expiration.
     const MAX_RESPONSE_TOKEN_LIFETIME_SECS: i64 = 7200;
+    /// Worker execution can run for 1 hour and the operator lease adds 60
+    /// seconds of response-submission headroom. Response credentials therefore
+    /// need to outlive both; 2 hours stays within the verifier cap.
+    const RESPONSE_CREDENTIAL_LIFETIME_SECS: u64 = 7200;
 
     /// Sign a response URL for a specific command.
     ///
     /// Returns `(hmac_hex, expires_epoch)`. The HMAC is computed over
     /// `"arc.v1:{command_id}:{expires}"` using the server's signing key.
     fn sign_response_url(&self, command_id: &str) -> (String, i64) {
-        let expires = Utc::now().timestamp() + 3600; // 1 hour
+        let expires = Utc::now().timestamp() + Self::RESPONSE_CREDENTIAL_LIFETIME_SECS as i64;
         let message = format!("commands.v1:{}:{}", command_id, expires);
 
         type HmacSha256 = Hmac<Sha256>;
@@ -336,19 +344,21 @@ impl CommandServer {
             match delivery_mode {
                 CommandDeliveryMode::Push => {
                     // Push delivery: dispatch immediately
-                    self.dispatch_command_push(&command_id, &request.deployment_id)
+                    let state = self
+                        .dispatch_command_push(&command_id, &request.deployment_id)
                         .await?;
-                    (CommandState::Dispatched, "poll")
+                    (state, "poll")
                 }
                 CommandDeliveryMode::Pull => {
-                    // Pull delivery: create pending index, target will poll
+                    // Pull delivery: create a pending index for a receiver or
+                    // environment-local operator relay.
                     self.create_pending_index(
                         &request.deployment_id,
                         &metadata.target.resource_id,
                         &command_id,
                     )
                     .await?;
-                    debug!("Command {} ready for pull (target will poll)", command_id);
+                    debug!("Command {} ready for target-scoped lease", command_id);
                     (CommandState::Pending, "poll")
                 }
             }
@@ -424,8 +434,7 @@ impl CommandServer {
         let final_state = match metadata.delivery_mode {
             CommandDeliveryMode::Push => {
                 self.dispatch_command_push(command_id, &status.deployment_id)
-                    .await?;
-                CommandState::Dispatched
+                    .await?
             }
             CommandDeliveryMode::Pull => {
                 self.create_pending_index(
@@ -1641,7 +1650,11 @@ impl CommandServer {
 
     // --- Dispatch ---
 
-    async fn dispatch_command_push(&self, command_id: &str, deployment_id: &str) -> Result<()> {
+    async fn dispatch_command_push(
+        &self,
+        command_id: &str,
+        deployment_id: &str,
+    ) -> Result<CommandState> {
         // Get metadata from registry
         let metadata = self
             .command_registry
@@ -1668,36 +1681,59 @@ impl CommandServer {
         // validates state == Dispatched — the old dispatch-then-mark order
         // could reject that submit (losing the response) or stomp its
         // terminal state back to Dispatched.
-        self.command_registry
-            .update_command_state(
-                command_id,
-                CommandState::Dispatched,
-                Some(Utc::now()),
-                None,
-                None,
-                None,
-            )
-            .await?;
-
-        // Dispatch via transport
-        if let Err(e) = self.command_dispatcher.dispatch(&envelope).await {
-            // Best-effort revert so the command can be retried rather than
-            // sitting Dispatched with nothing in flight. Conditional-free is
-            // fine here: nothing else can have submitted for an envelope
-            // that was never delivered.
-            let _ = self
+        if !self
+            .command_registry
+            .mark_dispatched_if_not_terminal(command_id, Utc::now())
+            .await?
+        {
+            return Ok(self
                 .command_registry
-                .update_command_state(command_id, CommandState::Pending, None, None, None, None)
-                .await;
-            return Err(e.context(ErrorData::TransportDispatchFailed {
+                .get_command_status(command_id)
+                .await?
+                .map(|status| status.state)
+                .unwrap_or(CommandState::Dispatched));
+        }
+
+        // A definite pre-delivery rejection (connection refusal, request
+        // builder failure, or any HTTP status other than the runtime's exact
+        // 202 acceptance) is safe to record as terminal DELIVERY_FAILED.
+        // Other transport errors are ambiguous: the target may have accepted
+        // the envelope before the response was lost. Keep those Dispatched so
+        // a late response remains valid and return the durable ID for polling;
+        // reverting/retrying could execute the command twice.
+        if let Err(error) = self.command_dispatcher.dispatch(&envelope).await {
+            if is_definite_dispatch_rejection(&error) {
+                let delivery_failure = CommandResponse::error(
+                    "DELIVERY_FAILED",
+                    "Worker runtime did not accept command delivery",
+                );
+                self.submit_command_response(command_id, delivery_failure)
+                    .await?;
+                warn!(
+                    command_id,
+                    deployment_id,
+                    error = %error,
+                    "Push dispatch was definitely rejected; command marked Failed"
+                );
+                return Ok(CommandState::Failed);
+            }
+
+            let error = error.context(ErrorData::TransportDispatchFailed {
                 message: "Failed to dispatch command".to_string(),
                 transport_type: None,
                 target: Some(deployment_id.to_string()),
-            }));
+            });
+            warn!(
+                command_id,
+                deployment_id,
+                error = %error,
+                "Push dispatch acknowledgement failed; command remains Dispatched for a possible late response"
+            );
+            return Ok(CommandState::Dispatched);
         }
 
-        info!("Command {} dispatched via push", command_id);
-        Ok(())
+        info!("Command {} dispatched via push", envelope.command_id);
+        Ok(CommandState::Dispatched)
     }
 
     async fn build_envelope(
@@ -1741,21 +1777,21 @@ impl CommandServer {
         }
 
         // If params are still Storage (either too large or re-inline failed),
-        // ensure they have a presigned GET request
+        // always mint a fresh GET request. A command may remain Pending longer
+        // than the URL minted at upload completion, and leasing must never hand
+        // a Worker an already-expired storage credential.
         if let BodySpec::Storage {
             size,
-            storage_get_request,
+            storage_get_request: _,
             storage_put_used,
         } = &params
         {
-            if storage_get_request.is_none() {
-                let get_request = self.generate_storage_get_request(command_id).await?;
-                params = BodySpec::Storage {
-                    size: *size,
-                    storage_get_request: Some(get_request),
-                    storage_put_used: *storage_put_used,
-                };
-            }
+            let get_request = self.generate_storage_get_request(command_id).await?;
+            params = BodySpec::Storage {
+                size: *size,
+                storage_get_request: Some(get_request),
+                storage_put_used: *storage_put_used,
+            };
         }
 
         Ok(Envelope::new(
@@ -1772,7 +1808,7 @@ impl CommandServer {
 
     async fn create_response_handling(&self, command_id: &str) -> Result<ResponseHandling> {
         let upload_path = StoragePath::from(format!("arc/commands/{}/response", command_id));
-        let expires_in = Duration::from_secs(3600);
+        let expires_in = Duration::from_secs(Self::RESPONSE_CREDENTIAL_LIFETIME_SECS);
         let presigned = self
             .storage
             .presigned_put(&upload_path, expires_in)
@@ -1862,6 +1898,23 @@ impl CommandServer {
 mod idempotency_key_tests {
     use super::*;
     use crate::server::{validate_command_name, validate_command_target_id};
+
+    #[test]
+    fn definite_dispatch_rejection_is_classified_by_typed_error_data() {
+        let rejected = AlienError::new(ErrorData::TransportDispatchRejected {
+            message: "not accepted".to_string(),
+            transport_type: Some("http".to_string()),
+            target: Some("command-id".to_string()),
+        });
+        assert!(is_definite_dispatch_rejection(&rejected));
+
+        let ambiguous = AlienError::new(ErrorData::TransportDispatchFailed {
+            message: "acknowledgement lost".to_string(),
+            transport_type: Some("http".to_string()),
+            target: Some("command-id".to_string()),
+        });
+        assert!(!is_definite_dispatch_rejection(&ambiguous));
+    }
 
     /// Idempotency keys are `{dep}:{rid}:{command}:{key}`. If a target id could
     /// contain ':', the `rid` segment would be ambiguous: the two triples

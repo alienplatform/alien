@@ -152,6 +152,7 @@ async fn typescript_source_image_shapes_per_compute_type() {
         })
         .memory_mb(512)
         .timeout_seconds(60)
+        .expect("literal Worker timeout is within supported range")
         .permissions("execution".to_string())
         .build();
     let container = Container::new("shape-container".to_string())

@@ -1,14 +1,14 @@
 # alien-worker-runtime
 
-In-container runtime — starts user code with injected bindings and routes requests via platform-specific transports.
+In-container Worker runtime — starts user code and translates platform invocations into the Worker app protocol.
 
 ## Startup Sequence
 
-1. Starts a gRPC server (bindings + control service)
-2. Loads secrets from vault (including commands token)
+1. Starts the Worker app protocol server (Control + WaitUntil)
+2. Loads Worker secrets from vault, keeping runtime-only secrets out of user code
 3. Starts the application as a subprocess
 4. Waits for the app to register its HTTP port
-5. Starts commands polling (if enabled)
+5. Enables authenticated command push when configured
 6. Starts the platform-appropriate transport
 
 ## Transports
@@ -17,13 +17,13 @@ Platform-specific request routing:
 - **Lambda** — AWS Lambda event handler
 - **Cloud Run** — HTTP transport for GCP
 - **Container Apps** — Azure HTTP transport
-- **Local** — Local development transport
-- **Commands polling** — Pull-based command polling from manager
+- **Local/HTTP** — HTTP forwarding plus authenticated Worker command push
 
-## Bindings Integration
+## Bindings
 
-Creates a `BindingsProvider` (from `alien-bindings`) and exposes it via gRPC. Applications call the gRPC server to access storage, KV, vault, and other bindings.
+Applications use `alien-bindings` directly in-process. Binding operations are
+not part of the Worker app protocol.
 
 `BindingsSource` controls how bindings are obtained:
 - `FromEnvironment` — Production: create providers from env vars
-- `Provided` — Dev/test: use pre-built `BindingsProvider`
+- `Provider` — Dev/test: use a pre-built provider

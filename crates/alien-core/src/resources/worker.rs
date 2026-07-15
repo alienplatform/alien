@@ -170,10 +170,21 @@ pub struct Worker {
 
     /// Maximum execution time for the worker in seconds.
     /// Constraints: 1‑3600 seconds (platform-specific limits may apply)
-    /// Default: 30
-    #[builder(default = default_timeout_seconds())]
-    #[serde(default = "default_timeout_seconds")]
-    #[cfg_attr(feature = "openapi", schema(default = default_timeout_seconds))]
+    /// Default: 180
+    #[builder(
+        default = default_timeout_seconds(),
+        with = |timeout_seconds: u32| -> crate::Result<_> {
+            validate_timeout_seconds(timeout_seconds)
+        }
+    )]
+    #[serde(
+        default = "default_timeout_seconds",
+        deserialize_with = "deserialize_timeout_seconds"
+    )]
+    #[cfg_attr(
+        feature = "openapi",
+        schema(default = default_timeout_seconds, minimum = 1, maximum = 3600)
+    )]
     pub timeout_seconds: u32,
 
     /// Key-value pairs to set as environment variables for the worker.
@@ -182,7 +193,8 @@ pub struct Worker {
     pub environment: HashMap<String, String>,
 
     /// Whether the worker can receive remote commands via the Commands protocol.
-    /// When enabled, the runtime polls the manager for pending commands and executes registered handlers.
+    /// When enabled, the platform pushes commands into the Worker runtime,
+    /// which executes registered handlers.
     #[builder(default = default_commands_enabled())]
     #[serde(default = "default_commands_enabled")]
     #[cfg_attr(feature = "openapi", schema(default = default_commands_enabled))]
@@ -242,6 +254,28 @@ fn default_memory_mb() -> u32 {
 
 fn default_timeout_seconds() -> u32 {
     180
+}
+
+/// Longest Worker execution supported by every Commands delivery path.
+pub const MAX_WORKER_TIMEOUT_SECONDS: u32 = 3600;
+
+fn deserialize_timeout_seconds<'de, D>(deserializer: D) -> std::result::Result<u32, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let value = u32::deserialize(deserializer)?;
+    validate_timeout_seconds(value).map_err(serde::de::Error::custom)
+}
+
+fn validate_timeout_seconds(timeout_seconds: u32) -> Result<u32> {
+    if (1..=MAX_WORKER_TIMEOUT_SECONDS).contains(&timeout_seconds) {
+        return Ok(timeout_seconds);
+    }
+
+    Err(AlienError::new(ErrorData::WorkerTimeoutInvalid {
+        timeout_seconds,
+        max_timeout_seconds: MAX_WORKER_TIMEOUT_SECONDS,
+    }))
 }
 
 fn default_commands_enabled() -> bool {
@@ -734,6 +768,72 @@ mod tests {
         assert_eq!(worker.commands_enabled, false);
         assert_eq!(worker.memory_mb, 256);
         assert_eq!(worker.timeout_seconds, 180);
+    }
+
+    #[test]
+    fn worker_deserialization_rejects_timeout_outside_supported_range() {
+        let worker = Worker::new("timeout-worker".to_string())
+            .code(WorkerCode::Image {
+                image: "test-image".to_string(),
+            })
+            .permissions("execution".to_string())
+            .build();
+        let mut value = serde_json::to_value(worker).expect("serialize worker");
+
+        value["timeoutSeconds"] = serde_json::json!(0);
+        assert!(serde_json::from_value::<Worker>(value.clone()).is_err());
+
+        value["timeoutSeconds"] = serde_json::json!(MAX_WORKER_TIMEOUT_SECONDS + 1);
+        assert!(serde_json::from_value::<Worker>(value).is_err());
+    }
+
+    #[test]
+    fn worker_builder_rejects_zero_timeout() {
+        let Err(error) = Worker::new("timeout-worker".to_string()).timeout_seconds(0) else {
+            panic!("zero timeout must be rejected");
+        };
+
+        assert_eq!(error.code, "WORKER_TIMEOUT_INVALID");
+        assert_eq!(error.http_status_code, Some(400));
+    }
+
+    #[test]
+    fn worker_builder_rejects_timeout_above_maximum() {
+        let Err(error) = Worker::new("timeout-worker".to_string())
+            .timeout_seconds(MAX_WORKER_TIMEOUT_SECONDS + 1)
+        else {
+            panic!("timeout above maximum must be rejected");
+        };
+
+        assert_eq!(error.code, "WORKER_TIMEOUT_INVALID");
+    }
+
+    #[test]
+    fn worker_builder_accepts_minimum_timeout() {
+        let worker = Worker::new("timeout-worker".to_string())
+            .timeout_seconds(1)
+            .expect("minimum timeout is valid")
+            .code(WorkerCode::Image {
+                image: "test-image".to_string(),
+            })
+            .permissions("execution".to_string())
+            .build();
+
+        assert_eq!(worker.timeout_seconds, 1);
+    }
+
+    #[test]
+    fn worker_builder_accepts_maximum_timeout() {
+        let worker = Worker::new("timeout-worker".to_string())
+            .timeout_seconds(MAX_WORKER_TIMEOUT_SECONDS)
+            .expect("maximum timeout is valid")
+            .code(WorkerCode::Image {
+                image: "test-image".to_string(),
+            })
+            .permissions("execution".to_string())
+            .build();
+
+        assert_eq!(worker.timeout_seconds, MAX_WORKER_TIMEOUT_SECONDS);
     }
 
     #[test]

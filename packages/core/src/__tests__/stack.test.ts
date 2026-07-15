@@ -306,6 +306,16 @@ describe("Stack builder validation", () => {
     expect(stack).toMatchSnapshot()
   })
 
+  it.each([0, 3601])("rejects unsupported Worker timeout %s", (timeoutSeconds) => {
+    expect(() =>
+      new alien.Worker("slow-worker")
+        .code({ type: "image", image: SHARED_IMAGE })
+        .permissions("execution")
+        .timeoutSeconds(timeoutSeconds)
+        .build(),
+    ).toThrow()
+  })
+
   it("builds and validates a stack with Build and ArtifactRegistry resources", () => {
     // Artifact registry for storing build artifacts
     const registry = new alien.ArtifactRegistry("my-artifact-registry").build()

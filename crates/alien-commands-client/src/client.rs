@@ -400,7 +400,7 @@ impl CommandsClient {
                     .send()
                     .await
                     .map_err(|e| CommandError::StorageOperationFailed {
-                        reason: format!("Storage download failed: {}", e),
+                        reason: format!("Storage download failed: {}", e.without_url()),
                     })?;
 
                 if !resp.status().is_success() {
@@ -411,7 +411,10 @@ impl CommandsClient {
 
                 resp.bytes().await.map(|b| b.to_vec()).map_err(|e| {
                     CommandError::StorageOperationFailed {
-                        reason: format!("Failed to read storage response bytes: {}", e),
+                        reason: format!(
+                            "Failed to read storage response bytes: {}",
+                            e.without_url()
+                        ),
                     }
                 })
             }
@@ -625,5 +628,32 @@ mod target_tests {
         let body = client.build_create_body("generate-report", "e30=", Some(&options));
 
         assert_eq!(body["targetResourceId"], "worker-9");
+    }
+
+    #[tokio::test]
+    async fn storage_transport_error_does_not_expose_presigned_url_token() {
+        let secret = "do-not-log-response-token";
+        let client = CommandsClient::new("http://localhost:9090", "dep_123", "token");
+        let request = StorageGetRequest {
+            backend: StorageBackend {
+                backend_type: "http".to_string(),
+                url: Some(format!(
+                    "http://127.0.0.1:0/blob?response_token={secret}&expires=1"
+                )),
+                method: Some("GET".to_string()),
+                headers: None,
+                file_path: None,
+            },
+        };
+
+        let error = client
+            .download_from_storage(&request)
+            .await
+            .expect_err("port zero must reject the storage download");
+        let display = error.to_string();
+        let debug = format!("{error:?}");
+
+        assert!(!display.contains(secret), "display error leaked token");
+        assert!(!debug.contains(secret), "debug error leaked token");
     }
 }

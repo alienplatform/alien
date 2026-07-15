@@ -109,7 +109,8 @@ pub struct TestManager {
     /// Handle to the background task running the server.
     server_handle: Option<tokio::task::JoinHandle<()>>,
     /// Ngrok tunnel handle. Kept alive so the tunnel stays open for the
-    /// duration of the test. Cloud-deployed workers poll this URL for commands.
+    /// duration of the test. Cloud-deployed Workers use it for command response
+    /// and large-payload callbacks.
     _ngrok_tunnel: Option<crate::ngrok::NgrokTunnel>,
 }
 
@@ -149,24 +150,22 @@ impl TestManager {
         let port = find_free_port();
         let url = format!("http://127.0.0.1:{}", port);
 
-        // 2b. Start ngrok tunnel if configured. Cloud-deployed workers
-        //     (Lambda, Cloud Run, Container Apps) need to reach the local
-        //     manager for commands polling. The ngrok URL becomes the
-        //     manager's `base_url` so `ALIEN_COMMANDS_POLLING_URL` points
-        //     to the publicly reachable tunnel.
+        // 2b. Start ngrok tunnel if configured. Cloud-deployed workers need a
+        //     public route back to the local manager for command response and
+        //     large-payload callbacks.
         let has_ngrok_token = std::env::var("NGROK_AUTHTOKEN")
             .ok()
             .filter(|s| !s.is_empty())
             .is_some();
         let ngrok_tunnel = if has_ngrok_token {
-            info!(%port, "Starting ephemeral ngrok tunnel for commands polling");
+            info!(%port, "Starting ephemeral ngrok tunnel for command callbacks");
             match crate::ngrok::start_tunnel(port).await {
                 Ok(tunnel) => {
                     info!(tunnel_url = %tunnel.url, "Ngrok tunnel ready");
                     Some(tunnel)
                 }
                 Err(e) => {
-                    tracing::warn!(error = %e, "Failed to start ngrok tunnel, commands polling will use localhost");
+                    tracing::warn!(error = %e, "Failed to start ngrok tunnel; command callbacks will use localhost");
                     None
                 }
             }

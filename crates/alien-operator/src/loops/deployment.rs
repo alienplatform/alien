@@ -299,7 +299,7 @@ async fn run_deployment_continuously(state: &OperatorState) -> Result<usize> {
 /// Enrich a deployment config with operator-specific settings.
 ///
 /// Applies public_endpoints and stack_settings from operator config,
-/// and injects commands polling env vars for K8s/Local platforms.
+/// and injects command delivery env vars for K8s/Local platforms.
 /// External bindings are part of stack_settings and flow through naturally.
 async fn enrich_config(
     mut config: DeploymentConfig,
@@ -331,48 +331,37 @@ async fn enrich_config(
     }
     config.observe_all_namespaces = operator_config.observe_all_namespaces;
 
-    // Inject commands polling env vars only for K8s/Local containers.
-    // Serverless functions (Lambda, Cloud Run, Container Apps) receive commands
-    // via platform-native push (InvokeFunction, Pub/Sub, Service Bus) regardless
-    // of the deployment model (push vs pull).
-    let needs_polling = matches!(platform, Platform::Kubernetes | Platform::Local);
+    // Local/Kubernetes Workers expose an authenticated runtime-owned push
+    // endpoint. Cloud-native Worker transports authenticate through their
+    // platform instead.
+    let needs_http_push_auth = matches!(platform, Platform::Kubernetes | Platform::Local);
 
-    if needs_polling {
+    if needs_http_push_auth {
         if let Some(ref sync_config) = operator_config.sync {
             let commands_url = match db.get_commands_url().await {
                 Ok(Some(url)) => url,
-                _ => format!("{}/v1", sync_config.url),
+                _ => format!("{}/v1", sync_config.url.as_str().trim_end_matches('/')),
             };
 
             let mut vars = config.environment_variables.variables.clone();
 
-            // Polling quartet (ENABLED/URL/TOKEN/TARGET_RESOURCE_ID), each var
-            // scoped via `target_resources` to a single command-enabled Worker.
-            // Nothing is injected deployment-wide: a commands-disabled Worker
-            // receiving POLLING_ENABLED=true would crash at startup (the
-            // runtime fail-fast-requires the target id once polling is on) and
-            // would otherwise run a pointless polling loop. Container/Daemon
-            // receiver env is wired separately, below.
-            //
-            // SECURITY: The sync token is reused as the commands polling token.
-            // This means deployed application code has access to the operator's sync token.
-            // TODO: Issue a separate, scoped commands-only token during initialization
-            // to limit the blast radius if the application is compromised.
-            // See: security/04-CRITICAL-sync-token-reused-as-commands-token.md
+            // The Manager authenticates command delivery with the deployment's
+            // sync token. The Worker runtime keeps it out of the application
+            // child environment; Container/Daemon receivers necessarily read it.
             if let Some(stack) = stack {
                 vars.extend(
                     stack
-                        .worker_command_polling_env_vars(&commands_url, Some(&sync_config.token))
+                        .worker_command_push_env_vars(Some(&sync_config.token))
                         .context(ErrorData::ConfigurationError {
-                            message: "Failed to build worker command polling env".to_string(),
+                            message: "Failed to build Worker command push auth env".to_string(),
                         })?,
                 );
                 // Container/Daemon command receiver env (ALIEN_COMMANDS_URL/TOKEN/
                 // TARGET_RESOURCE_ID/TARGET_RESOURCE_TYPE), scoped per resource.
                 // Container/Daemon always deliver via Pull (ALIEN-219); the operator
                 // only ever manages K8s/Local, so this block already covers every
-                // platform it serves. Reuses the operator sync token, matching the
-                // worker polling token handling above (same security TODO applies).
+                // platform it serves. It uses the same deployment-token auth
+                // contract as Worker push handling above.
                 vars.extend(
                     stack
                         .receiver_command_env_vars(&commands_url, Some(&sync_config.token))
@@ -408,7 +397,7 @@ async fn enrich_config(
 
             config.environment_variables.variables = vars;
 
-            info!("Injected commands polling configuration for K8s/Local deployment");
+            info!("Injected command delivery configuration for K8s/Local deployment");
         }
     }
 
@@ -580,7 +569,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn enrich_config_scopes_polling_quartet_per_command_enabled_worker() {
+    async fn enrich_config_scopes_push_token_per_command_enabled_worker() {
         let temp_dir = tempfile::tempdir().unwrap();
         let encryption_key = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
         let db = OperatorDb::new(temp_dir.path().to_str().unwrap(), encryption_key)
@@ -613,9 +602,7 @@ mod tests {
             .permissions("execution".to_string())
             .commands_enabled(true)
             .build();
-        // Commands-disabled Worker: must receive NONE of the polling vars —
-        // a deployment-wide POLLING_ENABLED=true would crash it at startup
-        // (the runtime fail-fast-requires the target id once polling is on).
+        // Commands-disabled Worker must not expose a command push endpoint.
         let worker_off = alien_core::Worker::new("worker-off".to_string())
             .code(alien_core::WorkerCode::Image {
                 image: "worker:latest".to_string(),
@@ -632,45 +619,29 @@ mod tests {
             .await
             .unwrap();
 
-        let polling_var_names = [
-            alien_core::ENV_ALIEN_COMMANDS_POLLING_ENABLED,
-            alien_core::ENV_ALIEN_COMMANDS_POLLING_URL,
-            alien_core::ENV_ALIEN_COMMANDS_TOKEN,
-            alien_core::ENV_ALIEN_COMMANDS_TARGET_RESOURCE_ID,
-        ];
-        let polling_vars: Vec<_> = enriched
+        let push_vars: Vec<_> = enriched
             .environment_variables
             .variables
             .iter()
-            .filter(|var| polling_var_names.contains(&var.name.as_str()))
+            .filter(|var| var.name == alien_core::ENV_ALIEN_COMMANDS_TOKEN)
             .collect();
 
-        // Every polling var is scoped to exactly one command-enabled Worker —
+        // Every push token is scoped to exactly one command-enabled Worker —
         // nothing deployment-wide, nothing scoped to the disabled Worker.
-        assert!(polling_vars.iter().all(|var| {
+        assert!(push_vars.iter().all(|var| {
             var.target_resources == Some(vec!["worker-a".to_string()])
                 || var.target_resources == Some(vec!["worker-b".to_string()])
         }));
 
-        // Full quartet per command-enabled Worker, with its own target id.
+        // One token per command-enabled Worker.
         for worker_id in ["worker-a", "worker-b"] {
-            let scoped: Vec<_> = polling_vars
+            let scoped: Vec<_> = push_vars
                 .iter()
                 .filter(|var| var.target_resources == Some(vec![worker_id.to_string()]))
                 .collect();
-            assert_eq!(scoped.len(), 4, "expected quartet for {worker_id}");
-            assert!(scoped.iter().any(|var| {
-                var.name == alien_core::ENV_ALIEN_COMMANDS_POLLING_ENABLED && var.value == "true"
-            }));
-            assert!(scoped
-                .iter()
-                .any(|var| var.name == alien_core::ENV_ALIEN_COMMANDS_POLLING_URL));
+            assert_eq!(scoped.len(), 1, "expected one token for {worker_id}");
             assert!(scoped.iter().any(|var| {
                 var.name == alien_core::ENV_ALIEN_COMMANDS_TOKEN && var.value == "ax_dep_test"
-            }));
-            assert!(scoped.iter().any(|var| {
-                var.name == alien_core::ENV_ALIEN_COMMANDS_TARGET_RESOURCE_ID
-                    && var.value == worker_id
             }));
         }
     }
@@ -755,12 +726,11 @@ mod tests {
                 4,
                 "expected 4 receiver vars for {resource_id}"
             );
-            // Same commands URL the operator derives for polling: the sync URL
-            // (a parsed `Url`, hence trailing slash) with `/v1` appended.
+            // Same normalized commands URL the operator derives for receivers.
             assert!(scoped
                 .iter()
                 .any(|var| var.name == alien_core::ENV_ALIEN_COMMANDS_URL
-                    && var.value == "https://manager.example.com//v1"));
+                    && var.value == "https://manager.example.com/v1"));
             assert!(scoped.iter().any(|var| {
                 var.name == alien_core::ENV_ALIEN_COMMANDS_TOKEN && var.value == "ax_dep_test"
             }));

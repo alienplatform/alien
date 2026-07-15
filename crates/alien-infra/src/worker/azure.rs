@@ -3946,7 +3946,7 @@ impl AzureWorkerController {
         // Build complete environment using shared logic
         // IMPORTANT: Start with func.environment which includes injected vars from DeploymentConfig
         let complete_env = EnvironmentVariableBuilder::try_new(&func.environment)?
-            .add_worker_runtime_env_vars(ctx, &func.id)?
+            .add_worker_runtime_env_vars(ctx, &func.id, func.timeout_seconds)?
             .add_linked_resources(&func.links, ctx, &func.id)
             .await?
             .add_self_worker_binding(&func.id, self_binding_params.as_ref())?

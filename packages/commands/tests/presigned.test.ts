@@ -10,7 +10,7 @@ import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { AlienError } from "@alienplatform/core"
 import { describe, expect, it } from "vitest"
-import { downloadPresigned, uploadPresigned } from "../src/presigned.js"
+import { downloadPresigned, redactUrlForError, uploadPresigned } from "../src/presigned.js"
 import type { PresignedRequest } from "../src/protocol.js"
 
 const FUTURE = new Date(Date.now() + 60_000).toISOString()
@@ -49,6 +49,18 @@ async function expectStorageError(promise: Promise<unknown>, reason: string): Pr
 }
 
 describe("downloadPresigned", () => {
+  it("redacts credentials from diagnostic URLs", () => {
+    const secret = "do-not-log-this-token"
+    const sanitized = redactUrlForError(
+      `https://user:${secret}@storage.test/object?X-Amz-Signature=${secret}#fragment`,
+    )
+
+    expect(sanitized).toBe("https://storage.test/object")
+    expect(sanitized).not.toContain(secret)
+    expect(redactUrlForError(`/response?response_token=${secret}`)).toBe("/response")
+    expect(redactUrlForError(`not a URL containing ${secret}`)).toBe("<invalid-url>")
+  })
+
   it("rejects an expired presigned request before touching the backend", async () => {
     let fetched = false
     const fetchImpl = (async () => {
@@ -88,9 +100,38 @@ describe("downloadPresigned", () => {
     const fetchImpl = (async () =>
       new Response("denied", { status: 403, statusText: "Forbidden" })) as unknown as typeof fetch
     await expectStorageError(
-      downloadPresigned(httpRequest("http://storage.test/x"), { fetchImpl, allowLocal: false }),
+      downloadPresigned(httpRequest("http://storage.test/x?signature=do-not-log"), {
+        fetchImpl,
+        allowLocal: false,
+      }),
       "HTTP 403",
     )
+
+    const error = (await downloadPresigned(
+      httpRequest("http://storage.test/x?signature=do-not-log"),
+      { fetchImpl, allowLocal: false },
+    ).catch(value => value)) as AlienError
+    expect(JSON.stringify(error)).not.toContain("do-not-log")
+    expect(error.context).toMatchObject({ url: "http://storage.test/x" })
+  })
+
+  it("does not retain a signed URL when fetch rejects", async () => {
+    const secret = "do-not-log-fetch-token"
+    const signedUrl = `http://storage.test/x?signature=${secret}`
+    const fetchImpl = (async () => {
+      throw new Error(`request to ${signedUrl} failed`)
+    }) as unknown as typeof fetch
+
+    const error = (await downloadPresigned(httpRequest(signedUrl), {
+      fetchImpl,
+      allowLocal: false,
+    }).catch(value => value)) as AlienError
+
+    expect(JSON.stringify(error)).not.toContain(secret)
+    expect(error.context).toMatchObject({
+      url: "http://storage.test/x",
+      reason: "HTTP request failed before a response was received",
+    })
   })
 
   it("reads a local file when allowLocal is true", async () => {

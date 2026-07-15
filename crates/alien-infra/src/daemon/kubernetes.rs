@@ -2,11 +2,12 @@ use std::collections::BTreeMap;
 use std::time::Duration;
 use tracing::{debug, info};
 
-use crate::container::kubernetes::is_already_exists;
+use crate::core::kubernetes_errors::is_remote_resource_conflict;
 use crate::core::{
-    kubernetes_branded_resource_labels, kubernetes_runtime_pod_labels, projected_env_vars,
-    reconcile_environment_secret, EnvSecretRotationTracker, EnvironmentVariableBuilder,
-    KubernetesEnvSecretPlan, ResourceControllerContext,
+    delete_environment_secret, direct_monitoring_auth_headers, kubernetes_branded_resource_labels,
+    kubernetes_runtime_pod_labels, projected_env_vars,
+    reconcile_environment_secret_with_additional_secrets, EnvSecretRotationTracker,
+    EnvironmentVariableBuilder, KubernetesEnvSecretPlan, ResourceControllerContext,
 };
 use crate::error::{ErrorData, Result};
 use crate::kubernetes_public_endpoint::{
@@ -22,6 +23,7 @@ use alien_core::{
     branded_tag_key, kubernetes_resource_name, kubernetes_service_account_name, public_url_host,
     Daemon, DaemonCode, DaemonOutputs, PublicEndpointOutput, ResourceOutputs, ResourceStatus,
     ALIEN_MANAGED_BY_TAG_KEY, ALIEN_MANAGED_BY_TAG_VALUE, DEFAULT_ALIEN_LABEL_DOMAIN,
+    ENV_ALIEN_RUNTIME_SECRETS,
 };
 use alien_error::{AlienError, Context, ContextError};
 use alien_macros::controller;
@@ -93,9 +95,16 @@ impl KubernetesDaemonController {
         // for any Secret-kind env var scoped to this Daemon — notably the
         // command receiver's `ALIEN_COMMANDS_TOKEN`. Matches the container path:
         // each key is rendered as a `secretKeyRef` in the DaemonSet manifest.
-        let env_secret_plan =
-            reconcile_environment_secret("daemon", &config.id, &daemon_set_name, &namespace, ctx)
-                .await?;
+        let monitoring_headers = direct_monitoring_auth_headers(ctx);
+        let env_secret_plan = reconcile_environment_secret_with_additional_secrets(
+            "daemon",
+            &config.id,
+            &daemon_set_name,
+            &namespace,
+            &monitoring_headers,
+            ctx,
+        )
+        .await?;
         self.env_secret.record(env_secret_plan.as_ref());
 
         let daemonset = self
@@ -119,7 +128,7 @@ impl KubernetesDaemonController {
             // and state persistence (or an orphan from a prior deploy) hits
             // AlreadyExists. Adopt the existing DaemonSet when it carries our
             // managed-by labels — mirrors the container controller.
-            Err(err) if is_already_exists(&err) => {
+            Err(err) if is_remote_resource_conflict(&err) => {
                 let existing = workload_client
                     .get_daemonset(&namespace, &daemon_set_name)
                     .await
@@ -334,9 +343,16 @@ impl KubernetesDaemonController {
 
         // Reconcile the env Secret so token/secret changes propagate on update
         // and the pod-template checksum annotation rolls the DaemonSet.
-        let env_secret_plan =
-            reconcile_environment_secret("daemon", &config.id, daemon_set_name, namespace, ctx)
-                .await?;
+        let monitoring_headers = direct_monitoring_auth_headers(ctx);
+        let env_secret_plan = reconcile_environment_secret_with_additional_secrets(
+            "daemon",
+            &config.id,
+            daemon_set_name,
+            namespace,
+            &monitoring_headers,
+            ctx,
+        )
+        .await?;
         self.env_secret.record(env_secret_plan.as_ref());
 
         let mut new_daemonset = self
@@ -452,6 +468,14 @@ impl KubernetesDaemonController {
                         Some(CloudClientErrorData::RemoteResourceNotFound { .. })
                     ) =>
                 {
+                    delete_environment_secret(
+                        "daemon",
+                        &config.id,
+                        daemon_set_name,
+                        namespace,
+                        ctx,
+                    )
+                    .await?;
                     self.daemon_set_name = None;
                     self.namespace = None;
                     return Ok(HandlerAction::Continue {
@@ -510,6 +534,14 @@ impl KubernetesDaemonController {
                         Some(CloudClientErrorData::RemoteResourceNotFound { .. })
                     ) =>
                 {
+                    delete_environment_secret(
+                        "daemon",
+                        &config.id,
+                        daemon_set_name,
+                        namespace,
+                        ctx,
+                    )
+                    .await?;
                     self.daemon_set_name = None;
                     self.namespace = None;
                     return Ok(HandlerAction::Continue {
@@ -554,10 +586,12 @@ impl KubernetesDaemonController {
             return Ok(false);
         };
         let config = ctx.desired_resource_config::<Daemon>()?;
-        Ok(self.env_secret.drifted(
+        let monitoring_headers = direct_monitoring_auth_headers(ctx);
+        Ok(self.env_secret.drifted_with_additional_secrets(
             &config.id,
             daemon_set_name,
             &ctx.deployment_config.environment_variables.variables,
+            &monitoring_headers,
         ))
     }
 
@@ -705,6 +739,7 @@ impl KubernetesDaemonController {
 
         let env_builder = EnvironmentVariableBuilder::try_new(&config.environment)?
             .add_daemon_runtime_env_vars(ctx)?
+            .add_direct_monitoring_auth_headers(ctx)
             // Cross-target parity with the local controller: apps read
             // ALIEN_PUBLIC_ENDPOINTS_JSON to build their own absolute URLs.
             .add_current_resource_public_endpoint(ctx, &config.id)?
@@ -717,12 +752,13 @@ impl KubernetesDaemonController {
         // `ALIEN_COMMANDS_TOKEN` Secret is projected via secretKeyRef like any
         // other resource secret (handled below).
 
-        let (env_map, bindings) = env_builder.build_with_bindings();
+        let (mut env_map, bindings) = env_builder.build_with_bindings();
+        env_map.remove(ENV_ALIEN_RUNTIME_SECRETS);
 
         // Daemons project Secret-kind env vars (e.g. ALIEN_COMMANDS_TOKEN) as
         // secretKeyRefs and never load secrets at runtime, so the ALIEN_SECRETS
         // vault-load pointer is stripped from the manifest.
-        let env_vars = projected_env_vars(env_secret_plan, bindings, env_map, true)?;
+        let env_vars = projected_env_vars(env_secret_plan, bindings, env_map)?;
 
         let container = Container {
             name: "daemon".to_string(),
@@ -899,11 +935,15 @@ mod tests {
         assert_secret_key_ref, daemonset_env, pod_template_checksum_annotation, secret_env_var,
         KubernetesManifestTestHarness,
     };
-    use crate::core::{environment_secret_plan, ResourceController};
+    use crate::core::{
+        direct_monitoring_auth_headers, environment_secret_plan,
+        environment_secret_plan_with_additional_secrets, ResourceController,
+        OTEL_EXPORTER_OTLP_HEADERS, OTEL_EXPORTER_OTLP_METRICS_HEADERS,
+    };
     use alien_core::{
-        Resource, ENV_ALIEN_COMMANDS_POLLING_ENABLED, ENV_ALIEN_COMMANDS_POLLING_URL,
-        ENV_ALIEN_COMMANDS_TOKEN, ENV_ALIEN_LAMBDA_MODE, ENV_ALIEN_RUNTIME_SEND_OTLP,
-        ENV_ALIEN_SECRETS, ENV_ALIEN_TRANSPORT, ENV_ALIEN_WORKER_GRPC_ADDRESS,
+        OtlpConfig, Resource, ENV_ALIEN_COMMANDS_TOKEN, ENV_ALIEN_LAMBDA_MODE,
+        ENV_ALIEN_RUNTIME_SEND_OTLP, ENV_ALIEN_SECRETS, ENV_ALIEN_TRANSPORT,
+        ENV_ALIEN_WORKER_GRPC_ADDRESS,
     };
 
     fn manifest_test_daemon(environment: &[(&str, &str)]) -> Daemon {
@@ -947,9 +987,25 @@ mod tests {
                 ENV_ALIEN_SECRETS,
                 "{\"keys\":[\"APP_SECRET\"],\"hash\":\"legacy\"}",
             ),
+            (ENV_ALIEN_RUNTIME_SECRETS, "vault://legacy-runtime"),
         ]);
-        let plan = environment_secret_plan("agent", "agent", &variables).expect("plan");
-        let harness = KubernetesManifestTestHarness::new(Resource::new(config.clone()), variables);
+        let harness =
+            KubernetesManifestTestHarness::new(Resource::new(config.clone()), variables.clone())
+                .with_monitoring(OtlpConfig {
+                    logs_endpoint: "https://manager.test/v1/logs".to_string(),
+                    logs_auth_header: "authorization=Bearer logs-token".to_string(),
+                    metrics_endpoint: Some("https://manager.test/v1/metrics".to_string()),
+                    metrics_auth_header: Some("authorization=Bearer metrics-token".to_string()),
+                    resource_attributes: Default::default(),
+                });
+        let monitoring_headers = direct_monitoring_auth_headers(&harness.ctx());
+        let plan = environment_secret_plan_with_additional_secrets(
+            "agent",
+            "agent",
+            &variables,
+            &monitoring_headers,
+        )
+        .expect("plan");
         let controller = manifest_test_controller();
 
         let daemonset = controller
@@ -970,11 +1026,16 @@ mod tests {
         // App secret and the command receiver token are native projections.
         assert_secret_key_ref(&env, "APP_SECRET", "agent-env");
         assert_secret_key_ref(&env, ENV_ALIEN_COMMANDS_TOKEN, "agent-env");
+        assert_secret_key_ref(&env, OTEL_EXPORTER_OTLP_HEADERS, "agent-env");
+        assert_secret_key_ref(&env, OTEL_EXPORTER_OTLP_METRICS_HEADERS, "agent-env");
 
         // The runtime vault-load pointer never reaches the manifest.
         assert!(
-            !env.iter().any(|var| var.name == ENV_ALIEN_SECRETS),
-            "ALIEN_SECRETS must not appear in a Kubernetes DaemonSet manifest"
+            !env.iter().any(|var| matches!(
+                var.name.as_str(),
+                ENV_ALIEN_SECRETS | ENV_ALIEN_RUNTIME_SECRETS
+            )),
+            "vault pointers must not appear in a Kubernetes DaemonSet manifest"
         );
 
         // Plain vars still flow through.
@@ -990,8 +1051,6 @@ mod tests {
             ENV_ALIEN_WORKER_GRPC_ADDRESS,
             ENV_ALIEN_RUNTIME_SEND_OTLP,
             ENV_ALIEN_LAMBDA_MODE,
-            ENV_ALIEN_COMMANDS_POLLING_ENABLED,
-            ENV_ALIEN_COMMANDS_POLLING_URL,
         ] {
             assert!(
                 !env.iter().any(|var| var.name == name),

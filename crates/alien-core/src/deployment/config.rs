@@ -143,10 +143,10 @@ pub const ALIEN_SYSTEM_RESOURCE_ATTRIBUTE: &str = "alien.system";
 ///
 /// When set, injected compute runtimes export captured application logs
 /// through the given endpoint via OTLP/HTTP; which resources are injected
-/// is platform-dependent. Workers and daemons read auth headers from a
-/// runtime-only secret — never from application environment variables.
-/// Containers have no runtime wrapper, so they get the endpoint and auth
-/// header as plain OTEL env vars for the application's own exporter.
+/// is platform-dependent. Workers read auth headers from a runtime-only
+/// secret. Runtime-less Containers and Daemons receive standard OTEL auth
+/// variables only at the final hosting boundary: Local passes them directly
+/// to the process and Kubernetes projects them from a per-workload Secret.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 #[serde(rename_all = "camelCase")]

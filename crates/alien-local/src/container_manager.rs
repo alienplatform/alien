@@ -11,7 +11,7 @@
 //! - Streams container logs to dev command
 
 use crate::error::{ErrorData, Result};
-use alien_core::{ENV_ALIEN_COMMANDS_POLLING_URL, ENV_ALIEN_COMMANDS_URL};
+use alien_core::ENV_ALIEN_COMMANDS_URL;
 use alien_error::{AlienError, Context, IntoAlienError};
 use bollard::container::{
     Config, CreateContainerOptions, ListContainersOptions, LogOutput, LogsOptions,
@@ -36,12 +36,8 @@ const NETWORK_NAME: &str = "deployment-network";
 /// `host.docker.internal` so a container running inside Docker can reach the
 /// host. User-provided env vars are left untouched (they may intentionally use
 /// localhost). Includes the command receiver base URL (`ALIEN_COMMANDS_URL`)
-/// alongside the worker polling URL — both point at the local manager.
-const DEV_SERVER_URL_VARS: &[&str] = &[
-    "OTEL_EXPORTER_OTLP_LOGS_ENDPOINT",
-    ENV_ALIEN_COMMANDS_POLLING_URL,
-    ENV_ALIEN_COMMANDS_URL,
-];
+/// because it points at the local manager.
+const DEV_SERVER_URL_VARS: &[&str] = &["OTEL_EXPORTER_OTLP_LOGS_ENDPOINT", ENV_ALIEN_COMMANDS_URL];
 
 /// Rewrite `://localhost:` to `://host.docker.internal:` for the known
 /// Alien-injected dev-server URL env vars only.
@@ -800,10 +796,6 @@ impl LocalContainerManager {
             env_vars.extend(binding_env_vars);
         }
 
-        // Command polling is configured via environment variables (ALIEN_COMMANDS_POLLING_*)
-        // The runtime CLI will read ALIEN_AGENT_ID, ALIEN_COMMANDS_POLLING_ENABLED, etc. from env
-        // No need to inject here - it should come from the deployment configuration
-
         let env: Vec<String> = env_vars
             .iter()
             .map(|(k, v)| format!("{}={}", k, v))
@@ -1323,14 +1315,10 @@ mod tests {
     use super::*;
 
     #[test]
-    fn rewrites_localhost_for_command_receiver_and_polling_urls() {
+    fn rewrites_localhost_for_command_receiver_url() {
         let mut env = HashMap::new();
         env.insert(
             ENV_ALIEN_COMMANDS_URL.to_string(),
-            "http://localhost:8080/v1".to_string(),
-        );
-        env.insert(
-            ENV_ALIEN_COMMANDS_POLLING_URL.to_string(),
             "http://localhost:8080/v1".to_string(),
         );
         // A user var pointing at localhost must be left alone.
@@ -1348,10 +1336,6 @@ mod tests {
 
         assert_eq!(
             env[ENV_ALIEN_COMMANDS_URL],
-            "http://host.docker.internal:8080/v1"
-        );
-        assert_eq!(
-            env[ENV_ALIEN_COMMANDS_POLLING_URL],
             "http://host.docker.internal:8080/v1"
         );
         assert_eq!(env["USER_API_URL"], "http://localhost:9000");

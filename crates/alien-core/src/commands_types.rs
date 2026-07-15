@@ -10,6 +10,10 @@ use utoipa::ToSchema;
 /// Protocol version identifier
 pub const COMMANDS_PROTOCOL_VERSION: &str = "arc.v1";
 
+/// Runtime-owned HTTP endpoint for pushing commands to Local and Kubernetes
+/// Workers. Worker transports handle this path before app HTTP forwarding.
+pub const WORKER_COMMAND_PUSH_PATH: &str = "/_alien/commands";
+
 /// Default inline size limit in bytes (150 KB)
 /// This is the most conservative platform limit (Azure Service Bus Standard at 256KB)
 /// with headroom for base64 encoding (~4/3 inflation) and envelope metadata.
@@ -308,7 +312,8 @@ impl CommandTargetType {
 pub enum CommandDeliveryMode {
     /// The manager pushes the command directly to the target (e.g. Lambda invoke).
     Push,
-    /// The target polls the manager for pending commands.
+    /// A target-scoped receiver or an environment-local operator relay leases
+    /// the command from the manager. Operator relays still push into Workers.
     Pull,
 }
 

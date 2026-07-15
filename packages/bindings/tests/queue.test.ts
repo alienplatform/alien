@@ -14,10 +14,13 @@ import { queue } from "../src/index.js"
 import type { Queue } from "../src/index.js"
 import { cleanupTempDirs, localQueueBindingEnv, only } from "./helpers/local-binding-env.js"
 
+let bunFixtureIndex = 0
+
 function freshQueue(): Queue {
-  const name = `queue-${randomUUID()}`
-  const { env } = localQueueBindingEnv(name)
-  return queue(name, { env })
+  const isBun = process.env.BUN_EXPECTED === "1"
+  const name = isBun ? `bun-queue-${bunFixtureIndex++}` : `queue-${randomUUID()}`
+  if (!isBun) localQueueBindingEnv(name)
+  return queue(name)
 }
 
 describe("queue (local turso-backed provider)", () => {

@@ -58,6 +58,15 @@ export function bindingEnvVarName(bindingName: string): string {
  * per-file isolation doesn't, but the same call is a harmless no-op there).
  */
 const createdDirs = new Set<string>()
+const createdEnvKeys = new Set<string>()
+
+/** Install a fixture in the process environment used by the public factories. */
+export function installBindingEnv(env: Record<string, string>): void {
+  for (const [key, value] of Object.entries(env)) {
+    process.env[key] = value
+    if (key !== "ALIEN_DEPLOYMENT_TYPE") createdEnvKeys.add(key)
+  }
+}
 
 /** Create a fresh, empty temp directory for one binding's on-disk state. */
 export function makeTempDir(label: string): string {
@@ -76,6 +85,8 @@ export function cleanupTempDirs(): void {
     rmSync(dir, { recursive: true, force: true })
   }
   createdDirs.clear()
+  for (const key of createdEnvKeys) delete process.env[key]
+  createdEnvKeys.clear()
 }
 
 /** An env map plus the temp directory backing it, for tests that want to inspect disk state. */
@@ -89,7 +100,7 @@ export function localStorageBindingEnv(
   bindingName: string,
   dir = makeTempDir(`storage-${bindingName}`),
 ): LocalBindingFixture {
-  return {
+  const fixture = {
     dir,
     env: {
       ...LOCAL_DEPLOYMENT_ENV,
@@ -99,6 +110,8 @@ export function localStorageBindingEnv(
       }),
     },
   }
+  installBindingEnv(fixture.env)
+  return fixture
 }
 
 /** Build the env for a `local-kv` binding rooted at a fresh temp dir. */
@@ -110,13 +123,15 @@ export function localKvBindingEnv(
   const binding: Record<string, unknown> = { service: "local-kv", dataDir: dir }
   if (options.keyPrefix !== undefined) binding.keyPrefix = options.keyPrefix
 
-  return {
+  const fixture = {
     dir,
     env: {
       ...LOCAL_DEPLOYMENT_ENV,
       [bindingEnvVarName(bindingName)]: JSON.stringify(binding),
     },
   }
+  installBindingEnv(fixture.env)
+  return fixture
 }
 
 /** Build the env for a `local-queue` binding rooted at a fresh temp dir. */
@@ -124,7 +139,7 @@ export function localQueueBindingEnv(
   bindingName: string,
   dir = makeTempDir(`queue-${bindingName}`),
 ): LocalBindingFixture {
-  return {
+  const fixture = {
     dir,
     env: {
       ...LOCAL_DEPLOYMENT_ENV,
@@ -134,6 +149,8 @@ export function localQueueBindingEnv(
       }),
     },
   }
+  installBindingEnv(fixture.env)
+  return fixture
 }
 
 /** Build the env for a `local-vault` binding rooted at a fresh temp dir. */
@@ -142,7 +159,7 @@ export function localVaultBindingEnv(
   vaultName: string,
   dir = makeTempDir(`vault-${bindingName}`),
 ): LocalBindingFixture {
-  return {
+  const fixture = {
     dir,
     env: {
       ...LOCAL_DEPLOYMENT_ENV,
@@ -153,6 +170,8 @@ export function localVaultBindingEnv(
       }),
     },
   }
+  installBindingEnv(fixture.env)
+  return fixture
 }
 
 /** Return the sole element of `items`, throwing (with a useful message) if there isn't exactly one. */

@@ -5,7 +5,7 @@
 //! - Commands envelope parsing and response submission
 //! - CloudEvents parsing from HTTP headers
 
-use std::time::Duration;
+use std::{future::Future, sync::Arc, time::Duration};
 
 use alien_commands::Envelope;
 use alien_worker_protocol::{
@@ -19,28 +19,249 @@ use axum::{
     body::{Body, Bytes},
     http::{header, Request, Response, StatusCode},
     response::IntoResponse,
+    Router,
 };
 use chrono::{DateTime, Utc};
 use cloudevents::EventBuilder;
-use futures_util::TryStreamExt;
+use futures_util::{StreamExt, TryStreamExt};
 use http_body_util::BodyExt;
 use prost_types::Timestamp;
-use tracing::{debug, error};
+use tokio::{net::TcpListener, sync::broadcast, sync::Semaphore, time::Instant};
+use tokio_util::sync::CancellationToken;
+use tracing::{debug, error, warn};
 
-/// Timeout for one command round-trip through the app (`send_task`).
-///
-/// 300 seconds, matching the queue/storage/cron `send_task` timeout and the
-/// forward client's read timeout. The Cloud Run transport previously used
-/// 120s — a value inherited from the Lambda transport, where the 180s
-/// function timeout forces headroom to submit an error response before the
-/// platform kills the invocation. Cloud Run and Container Apps have no such
-/// cap, so commands get the full task window; the transport still bounds the
-/// wait, so a hung handler yields an error response instead of leasing
-/// forever.
-pub(crate) const COMMAND_TASK_TIMEOUT: Duration = Duration::from_secs(300);
+fn http_server_join_result(
+    joined: std::result::Result<std::io::Result<()>, tokio::task::JoinError>,
+) -> std::io::Result<()> {
+    match joined {
+        Ok(result) => result,
+        Err(error) => Err(std::io::Error::other(error)),
+    }
+}
+
+const FORCED_HTTP_SHUTDOWN_WAIT: Duration = Duration::from_secs(1);
+
+/// Serve one Axum transport and bound graceful shutdown even when a proxied
+/// response stream never ends. `on_shutdown` lets a transport stop admitting
+/// work before Axum begins draining its already-accepted requests.
+pub(super) async fn serve_with_bounded_shutdown(
+    listener: TcpListener,
+    app: Router,
+    mut shutdown_rx: broadcast::Receiver<()>,
+    proxy_shutdown: CancellationToken,
+    shutdown_grace: Duration,
+    transport_name: &'static str,
+    on_shutdown: impl FnOnce(),
+) -> std::io::Result<()> {
+    let (graceful_tx, graceful_rx) = tokio::sync::oneshot::channel::<()>();
+    let mut server_task = tokio::spawn(async move {
+        axum::serve(listener, app)
+            .with_graceful_shutdown(async move {
+                let _ = graceful_rx.await;
+            })
+            .await
+    });
+
+    tokio::select! {
+        joined = &mut server_task => http_server_join_result(joined),
+        _ = shutdown_rx.recv() => {
+            on_shutdown();
+            tracing::info!(transport = transport_name, "HTTP transport received shutdown signal");
+            let _ = graceful_tx.send(());
+            match tokio::time::timeout(shutdown_grace, &mut server_task).await {
+                Ok(joined) => http_server_join_result(joined),
+                Err(_) => {
+                    warn!(
+                        transport = transport_name,
+                        grace_seconds = shutdown_grace.as_secs_f64(),
+                        "Active HTTP requests exceeded shutdown grace; closing proxy streams"
+                    );
+                    proxy_shutdown.cancel();
+                    match tokio::time::timeout(FORCED_HTTP_SHUTDOWN_WAIT, &mut server_task).await {
+                        Ok(joined) => http_server_join_result(joined),
+                        Err(_) => {
+                            server_task.abort();
+                            let _ = server_task.await;
+                            Ok(())
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
 
 /// Timeout for event (queue/storage/cron) `send_task` round-trips.
 pub(crate) const EVENT_TASK_TIMEOUT: Duration = Duration::from_secs(300);
+
+/// Bound one pushed command by both its configured Worker timeout and the
+/// envelope deadline. `None` means the deadline has already elapsed and the
+/// application must not receive the command.
+fn command_task_timeout(
+    configured_timeout: Duration,
+    deadline: Option<DateTime<Utc>>,
+    now: DateTime<Utc>,
+) -> Option<Duration> {
+    let deadline_timeout = match deadline {
+        Some(deadline) => (deadline - now).to_std().ok(),
+        None => Some(configured_timeout),
+    }?;
+    let timeout = configured_timeout.min(deadline_timeout);
+    (!timeout.is_zero()).then_some(timeout)
+}
+
+/// Absolute budget for one pushed command, measured from HTTP receipt.
+///
+/// The same deadline covers the runtime queue, storage-backed params decode,
+/// and application execution. Response submission has its own 30-second HTTP
+/// timeout and fits inside the operator's additional 60-second lease headroom.
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct CommandBudget {
+    deadline: Instant,
+}
+
+impl CommandBudget {
+    pub(crate) fn from_envelope(
+        configured_timeout: Duration,
+        deadline: Option<DateTime<Utc>>,
+    ) -> Option<Self> {
+        Self::from_times(configured_timeout, deadline, Utc::now(), Instant::now())
+    }
+
+    fn from_times(
+        configured_timeout: Duration,
+        deadline: Option<DateTime<Utc>>,
+        now_utc: DateTime<Utc>,
+        now: Instant,
+    ) -> Option<Self> {
+        command_task_timeout(configured_timeout, deadline, now_utc).map(|timeout| Self {
+            deadline: now + timeout,
+        })
+    }
+
+    fn remaining(self) -> Option<Duration> {
+        self.deadline
+            .checked_duration_since(Instant::now())
+            .filter(|remaining| !remaining.is_zero())
+    }
+
+    async fn run<F>(self, future: F) -> std::result::Result<F::Output, ()>
+    where
+        F: Future,
+    {
+        let Some(remaining) = self.remaining() else {
+            return Err(());
+        };
+        tokio::time::timeout(remaining, future)
+            .await
+            .map_err(|_| ())
+    }
+}
+
+enum CommandPreparation {
+    Ready(ArcCommand),
+    DecodeFailed(alien_commands::Error),
+    BudgetElapsed,
+}
+
+/// Decode a pushed command under the same absolute budget used for queueing
+/// and application execution. A missing budget is checked before the decode
+/// future is polled, so an already-expired storage command performs no GET.
+async fn prepare_pushed_command(
+    envelope: &Envelope,
+    budget: Option<CommandBudget>,
+) -> CommandPreparation {
+    let Some(budget) = budget else {
+        return CommandPreparation::BudgetElapsed;
+    };
+
+    match budget.run(envelope_to_command(envelope)).await {
+        Ok(Ok(command)) => CommandPreparation::Ready(command),
+        Ok(Err(error)) => CommandPreparation::DecodeFailed(error),
+        Err(()) => CommandPreparation::BudgetElapsed,
+    }
+}
+
+/// Process one HTTP-pushed command under a runtime-scoped concurrency permit.
+/// Waiting for the permit consumes the command's absolute budget, so queued
+/// commands cannot outlive their lease and later execute as duplicates.
+pub(crate) async fn process_pushed_command(
+    envelope: Envelope,
+    control_server: Arc<ControlGrpcServer>,
+    concurrency: Arc<Semaphore>,
+    budget: Option<CommandBudget>,
+) {
+    let Some(budget) = budget else {
+        submit_budget_error(&envelope, "before command processing began").await;
+        return;
+    };
+
+    let permit = match budget.run(concurrency.acquire_owned()).await {
+        Ok(Ok(permit)) => permit,
+        Ok(Err(error)) => {
+            error!(
+                command_id = %envelope.command_id,
+                error = %error,
+                "Command concurrency gate closed unexpectedly"
+            );
+            submit_processing_error(&envelope, "Command concurrency gate is unavailable").await;
+            return;
+        }
+        Err(()) => {
+            submit_budget_error(&envelope, "while waiting for execution capacity").await;
+            return;
+        }
+    };
+
+    process_command_with_budget(&envelope, &control_server, Some(budget)).await;
+
+    drop(permit);
+}
+
+/// Process a command received from a native platform push. The budget begins
+/// before storage params are fetched, matching the Local/Kubernetes HTTP push
+/// path. Returns `false` only for a params-decode error so transports that use
+/// non-2xx responses for native delivery retries can preserve that behavior.
+pub(crate) async fn process_received_command(
+    envelope: &Envelope,
+    control_server: &ControlGrpcServer,
+    configured_timeout: Duration,
+) -> bool {
+    let budget = CommandBudget::from_envelope(configured_timeout, envelope.deadline);
+    process_command_with_budget(envelope, control_server, budget).await
+}
+
+async fn process_command_with_budget(
+    envelope: &Envelope,
+    control_server: &ControlGrpcServer,
+    budget: Option<CommandBudget>,
+) -> bool {
+    match prepare_pushed_command(envelope, budget).await {
+        CommandPreparation::Ready(command) => {
+            if let Err(error) = handle_command(envelope, &command, control_server, budget).await {
+                error!(
+                    command_id = %envelope.command_id,
+                    error = %error,
+                    "Failed to process pushed command"
+                );
+            }
+            true
+        }
+        CommandPreparation::DecodeFailed(error) => {
+            error!(
+                command_id = %envelope.command_id,
+                error = %error,
+                "Failed to decode pushed command params"
+            );
+            submit_decode_error(envelope, &error).await;
+            false
+        }
+        CommandPreparation::BudgetElapsed => {
+            submit_budget_error(envelope, "while decoding command params").await;
+            true
+        }
+    }
+}
 
 /// Create a shared reqwest client for forwarding HTTP requests.
 ///
@@ -67,6 +288,7 @@ pub async fn forward_http_request(
     client: &reqwest::Client,
     request: Request<Body>,
     app_port: u16,
+    shutdown: CancellationToken,
 ) -> Response<Body> {
     let method = request.method().clone();
     let uri = request.uri().clone();
@@ -77,7 +299,12 @@ pub async fn forward_http_request(
     let target_url = format!("http://127.0.0.1:{}{}", app_port, path_and_query);
 
     // Collect request body
-    let body_bytes = match request.into_body().collect().await {
+    let body_bytes = match tokio::select! {
+        body = request.into_body().collect() => body,
+        _ = shutdown.cancelled() => {
+            return (StatusCode::SERVICE_UNAVAILABLE, "Runtime is shutting down").into_response();
+        }
+    } {
         Ok(collected) => collected.to_bytes(),
         Err(e) => {
             error!(error = %e, "Failed to read request body");
@@ -102,7 +329,14 @@ pub async fn forward_http_request(
     req_builder = req_builder.body(body_bytes.to_vec());
 
     // Send request and stream response
-    match req_builder.send().await {
+    let forwarded = tokio::select! {
+        response = req_builder.send() => response,
+        _ = shutdown.cancelled() => {
+            return (StatusCode::SERVICE_UNAVAILABLE, "Runtime is shutting down").into_response();
+        }
+    };
+
+    match forwarded {
         Ok(resp) => {
             let status = StatusCode::from_u16(resp.status().as_u16()).unwrap_or(StatusCode::OK);
             let resp_headers = resp.headers().clone();
@@ -110,7 +344,8 @@ pub async fn forward_http_request(
             // Stream the response body instead of buffering it
             let byte_stream = resp
                 .bytes_stream()
-                .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e));
+                .map_err(std::io::Error::other)
+                .take_until(shutdown.cancelled_owned());
             let stream_body = Body::from_stream(byte_stream);
 
             let mut response = Response::builder().status(status);
@@ -166,43 +401,63 @@ pub(crate) async fn handle_command(
     envelope: &Envelope,
     command: &ArcCommand,
     control_server: &ControlGrpcServer,
+    budget: Option<CommandBudget>,
 ) -> std::result::Result<(), String> {
     let command_id = &command.command_id;
     let command_name = &command.command_name;
 
     tracing::info!(command_id = %command_id, command = %command_name, "Command received");
 
-    let task = Task {
-        task_id: command.command_id.clone(),
-        payload: Some(control::task::Payload::ArcCommand(command.clone())),
-    };
+    let command_response = match budget.and_then(CommandBudget::remaining) {
+        None => {
+            warn!(
+                command_id = %command_id,
+                deadline = ?envelope.deadline,
+                "Command deadline elapsed before execution; skipping application handler"
+            );
+            alien_commands::CommandResponse::error(
+                "COMMAND_EXPIRED",
+                format!("Command '{}' has expired", command.command_name),
+            )
+        }
+        Some(timeout) => {
+            let task = Task {
+                task_id: command.command_id.clone(),
+                payload: Some(control::task::Payload::ArcCommand(command.clone())),
+            };
 
-    debug!(command_id = %command_id, "Sending command task to application via gRPC");
-    let command_response = match control_server.send_task(task, COMMAND_TASK_TIMEOUT).await {
-        Ok(result) => {
             debug!(
                 command_id = %command_id,
-                success = result.success,
-                response_size = result.response_data.len(),
-                "Received command result from application"
+                timeout_seconds = timeout.as_secs_f64(),
+                "Sending command task to application via gRPC"
             );
-            if result.success {
-                alien_commands::CommandResponse::success(&result.response_data)
-            } else {
-                alien_commands::CommandResponse::error(
-                    result.error_code.unwrap_or_else(|| "UNKNOWN".to_string()),
-                    result
-                        .error_message
-                        .unwrap_or_else(|| "Unknown error".to_string()),
-                )
+            match control_server.send_task(task, timeout).await {
+                Ok(result) => {
+                    debug!(
+                        command_id = %command_id,
+                        success = result.success,
+                        response_size = result.response_data.len(),
+                        "Received command result from application"
+                    );
+                    if result.success {
+                        alien_commands::CommandResponse::success(&result.response_data)
+                    } else {
+                        alien_commands::CommandResponse::error(
+                            result.error_code.unwrap_or_else(|| "UNKNOWN".to_string()),
+                            result
+                                .error_message
+                                .unwrap_or_else(|| "Unknown error".to_string()),
+                        )
+                    }
+                }
+                Err(e) => {
+                    error!(command_id = %command_id, error = %e, "Command task failed — send_task error");
+                    alien_commands::CommandResponse::error(
+                        "PROCESSING_FAILED",
+                        format!("Command processing failed: {}", e),
+                    )
+                }
             }
-        }
-        Err(e) => {
-            error!(command_id = %command_id, error = %e, "Command task failed — send_task error");
-            alien_commands::CommandResponse::error(
-                "PROCESSING_FAILED",
-                format!("Command processing failed: {}", e),
-            )
         }
     };
 
@@ -267,20 +522,11 @@ pub(crate) async fn send_queue_message(
 pub(crate) async fn dispatch_queue_messages(
     queue_messages: Vec<alien_core::QueueMessage>,
     control_server: &ControlGrpcServer,
+    command_timeout: Duration,
 ) -> Response<Body> {
     for qm in queue_messages {
         if let Some(envelope) = try_parse_envelope(&qm) {
-            match envelope_to_command(&envelope).await {
-                Ok(command) => {
-                    if let Err(e) = handle_command(&envelope, &command, control_server).await {
-                        error!(error = %e, "Failed to handle command");
-                    }
-                }
-                Err(e) => {
-                    error!(command_id = %envelope.command_id, error = %e, "Failed to decode command params");
-                    submit_decode_error(&envelope, &e).await;
-                }
-            }
+            process_received_command(&envelope, control_server, command_timeout).await;
         } else if let Err(e) = send_queue_message(&qm, control_server).await {
             error!(error = %e, "Failed to send queue message");
             return (StatusCode::INTERNAL_SERVER_ERROR, "Failed to process event").into_response();
@@ -399,6 +645,37 @@ pub(crate) async fn submit_decode_error(envelope: &Envelope, error: &alien_comma
             command_id = %envelope.command_id,
             error = %submit_err,
             "Failed to submit decode-error response"
+        );
+    }
+}
+
+async fn submit_budget_error(envelope: &Envelope, phase: &str) {
+    warn!(
+        command_id = %envelope.command_id,
+        command = %envelope.command,
+        phase,
+        "Command budget elapsed; skipping remaining work"
+    );
+    let response = alien_commands::CommandResponse::error(
+        "COMMAND_EXPIRED",
+        format!("Command '{}' expired {phase}", envelope.command),
+    );
+    if let Err(error) = alien_commands::runtime::submit_response(envelope, response).await {
+        error!(
+            command_id = %envelope.command_id,
+            error = %error,
+            "Failed to submit command-expired response"
+        );
+    }
+}
+
+async fn submit_processing_error(envelope: &Envelope, message: &str) {
+    let response = alien_commands::CommandResponse::error("PROCESSING_FAILED", message);
+    if let Err(error) = alien_commands::runtime::submit_response(envelope, response).await {
+        error!(
+            command_id = %envelope.command_id,
+            error = %error,
+            "Failed to submit command-processing error response"
         );
     }
 }
@@ -523,4 +800,158 @@ fn parse_cloudevent_from_http_impl(
     }
 
     builder.build().map_err(|e| format!("Build error: {}", e))
+}
+
+#[cfg(test)]
+mod tests {
+    use std::{
+        collections::HashMap,
+        sync::atomic::{AtomicUsize, Ordering},
+    };
+
+    use alien_core::presigned::{PresignedOperation, PresignedRequest};
+    use axum::{routing::get, Router};
+    use chrono::Duration as ChronoDuration;
+
+    use super::*;
+
+    #[test]
+    fn command_timeout_supports_full_worker_window() {
+        let now = Utc::now();
+
+        assert_eq!(
+            command_task_timeout(Duration::from_secs(3600), None, now),
+            Some(Duration::from_secs(3600))
+        );
+    }
+
+    #[test]
+    fn command_timeout_uses_earlier_envelope_deadline() {
+        let now = Utc::now();
+
+        assert_eq!(
+            command_task_timeout(
+                Duration::from_secs(3600),
+                Some(now + ChronoDuration::seconds(75)),
+                now,
+            ),
+            Some(Duration::from_secs(75))
+        );
+    }
+
+    #[test]
+    fn expired_command_has_no_execution_budget() {
+        let now = Utc::now();
+
+        assert_eq!(
+            command_task_timeout(
+                Duration::from_secs(3600),
+                Some(now - ChronoDuration::milliseconds(1)),
+                now,
+            ),
+            None
+        );
+    }
+
+    fn storage_envelope(url: String, deadline: Option<DateTime<Utc>>) -> Envelope {
+        let mut envelope = alien_commands::test_utils::test_simple_envelope("command-id", "run");
+        envelope.deadline = deadline;
+        envelope.params = alien_commands::BodySpec::Storage {
+            size: Some(2),
+            storage_get_request: Some(PresignedRequest::new_http(
+                url,
+                "GET".to_string(),
+                HashMap::new(),
+                PresignedOperation::Get,
+                "commands/command-id/params".to_string(),
+                Utc::now() + ChronoDuration::minutes(5),
+            )),
+            storage_put_used: Some(true),
+        };
+        envelope
+    }
+
+    #[tokio::test]
+    async fn expired_storage_command_never_fetches_params() {
+        let requests = Arc::new(AtomicUsize::new(0));
+        let requests_in_handler = requests.clone();
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let server = tokio::spawn(async move {
+            axum::serve(
+                listener,
+                Router::new().route(
+                    "/params",
+                    get(move || {
+                        let requests = requests_in_handler.clone();
+                        async move {
+                            requests.fetch_add(1, Ordering::SeqCst);
+                            "{}"
+                        }
+                    }),
+                ),
+            )
+            .await
+            .unwrap();
+        });
+        let envelope = storage_envelope(
+            format!("http://{address}/params"),
+            Some(Utc::now() - ChronoDuration::seconds(1)),
+        );
+        let budget = CommandBudget::from_envelope(Duration::from_secs(60), envelope.deadline);
+
+        let result = prepare_pushed_command(&envelope, budget).await;
+
+        assert!(matches!(result, CommandPreparation::BudgetElapsed));
+        assert_eq!(requests.load(Ordering::SeqCst), 0);
+        server.abort();
+    }
+
+    #[tokio::test]
+    async fn storage_params_get_is_bounded_by_the_total_command_budget() {
+        let requests = Arc::new(AtomicUsize::new(0));
+        let requests_in_handler = requests.clone();
+        let started = Arc::new(tokio::sync::Notify::new());
+        let started_in_handler = started.clone();
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let server = tokio::spawn(async move {
+            axum::serve(
+                listener,
+                Router::new().route(
+                    "/params",
+                    get(move || {
+                        let requests = requests_in_handler.clone();
+                        let started = started_in_handler.clone();
+                        async move {
+                            requests.fetch_add(1, Ordering::SeqCst);
+                            started.notify_one();
+                            std::future::pending::<&'static str>().await
+                        }
+                    }),
+                ),
+            )
+            .await
+            .unwrap();
+        });
+        let envelope = storage_envelope(format!("http://{address}/params"), None);
+        // Keep enough headroom for this network-backed test even when the full
+        // suite is running many async tests concurrently. The pending response
+        // still proves the one command budget terminates the GET.
+        let budget = CommandBudget::from_envelope(Duration::from_secs(2), None);
+        let decode = tokio::spawn(async move { prepare_pushed_command(&envelope, budget).await });
+
+        tokio::time::timeout(Duration::from_secs(5), started.notified())
+            .await
+            .expect("params GET must begin before the command budget expires");
+
+        let result = tokio::time::timeout(Duration::from_secs(5), decode)
+            .await
+            .expect("command budget must bound the params GET")
+            .expect("decode task must join");
+
+        assert!(matches!(result, CommandPreparation::BudgetElapsed));
+        assert_eq!(requests.load(Ordering::SeqCst), 1);
+        server.abort();
+    }
 }

@@ -8,9 +8,17 @@
  */
 
 import { randomUUID } from "node:crypto"
-import { describe, expect, it } from "vitest"
+import { afterEach, describe, expect, it } from "vitest"
 import { AlienError, BindingNotConfiguredError, kv, storage } from "../src/index.js"
-import { LOCAL_DEPLOYMENT_ENV, bindingEnvVarName } from "./helpers/local-binding-env.js"
+import {
+  LOCAL_DEPLOYMENT_ENV,
+  bindingEnvVarName,
+  cleanupTempDirs,
+  installBindingEnv,
+} from "./helpers/local-binding-env.js"
+
+afterEach(cleanupTempDirs)
+const isBun = process.env.BUN_EXPECTED === "1"
 
 describe("bindingEnvVarName", () => {
   it("derives storage('my-files') -> ALIEN_MY_FILES_BINDING", () => {
@@ -21,7 +29,8 @@ describe("bindingEnvVarName", () => {
 describe("missing binding", () => {
   it("throws BindingNotConfiguredError with {binding, envVar, code} on the first operation", async () => {
     const name = `missing-${randomUUID()}`
-    const s = storage(name, { env: LOCAL_DEPLOYMENT_ENV })
+    installBindingEnv(LOCAL_DEPLOYMENT_ENV)
+    const s = storage(name)
 
     const err = await s.head("whatever").catch((e: unknown) => e)
 
@@ -35,10 +44,11 @@ describe("missing binding", () => {
 
 describe("malformed binding JSON", () => {
   it("throws BINDING_CONFIG_INVALID naming the env var", async () => {
-    const name = `bad-json-${randomUUID()}`
-    const s = storage(name, {
-      env: { ...LOCAL_DEPLOYMENT_ENV, [bindingEnvVarName(name)]: "not-json" },
-    })
+    const name = isBun ? "bun-bad-json" : `bad-json-${randomUUID()}`
+    if (!isBun) {
+      installBindingEnv({ ...LOCAL_DEPLOYMENT_ENV, [bindingEnvVarName(name)]: "not-json" })
+    }
+    const s = storage(name)
 
     const err = await s.head("whatever").catch((e: unknown) => e)
 
@@ -51,16 +61,17 @@ describe("malformed binding JSON", () => {
 
 describe("unsupported provider tag", () => {
   it("throws UNSUPPORTED_BINDING_PROVIDER for a recognized-but-unimplemented kv provider", async () => {
-    const name = `redis-${randomUUID()}`
-    const k = kv(name, {
-      env: {
+    const name = isBun ? "bun-redis" : `redis-${randomUUID()}`
+    if (!isBun) {
+      installBindingEnv({
         ...LOCAL_DEPLOYMENT_ENV,
         [bindingEnvVarName(name)]: JSON.stringify({
           service: "redis",
           connectionUrl: "redis://localhost:6379",
         }),
-      },
-    })
+      })
+    }
+    const k = kv(name)
 
     const err = await k.exists("whatever").catch((e: unknown) => e)
 

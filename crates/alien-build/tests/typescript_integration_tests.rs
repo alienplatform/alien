@@ -71,6 +71,7 @@ fn create_test_function(name: &str, code: WorkerCode) -> Worker {
         .code(code)
         .memory_mb(512)
         .timeout_seconds(60)
+        .expect("literal Worker timeout is within supported range")
         .environment(HashMap::new())
         .permissions("execution".to_string())
         .build()

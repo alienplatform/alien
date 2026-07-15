@@ -11,12 +11,12 @@ import type {
 } from "../loader.js"
 
 /**
- * A fake addon that records every `BindingsHandle` env argument and returns
+ * A fake addon that records every `BindingsHandle` construction and returns
  * trivial resource handles, so factory behavior can be exercised without the
  * real `.node`.
  */
-function fakeAddon(): { addon: NativeAddon; envs: (Record<string, string> | null | undefined)[] } {
-  const envs: (Record<string, string> | null | undefined)[] = []
+function fakeAddon(): { addon: NativeAddon; constructions: unknown[] } {
+  const constructions: unknown[] = []
 
   const storageHandle: RawStorageHandle = {
     get: async () => Buffer.from("x"),
@@ -57,8 +57,8 @@ function fakeAddon(): { addon: NativeAddon; envs: (Record<string, string> | null
   }
 
   class FakeBindingsHandle {
-    constructor(env?: Record<string, string> | null) {
-      envs.push(env)
+    constructor() {
+      constructions.push(undefined)
     }
     storage = bindings.storage
     kv = bindings.kv
@@ -71,7 +71,7 @@ function fakeAddon(): { addon: NativeAddon; envs: (Record<string, string> | null
       BindingsHandle: FakeBindingsHandle as unknown as NativeAddon["BindingsHandle"],
       version: () => "test",
     },
-    envs,
+    constructions,
   }
 }
 
@@ -116,46 +116,24 @@ describe("createFactories laziness", () => {
   })
 
   it("materializes the BindingsHandle once and caches it across operations", async () => {
-    const { addon, envs } = fakeAddon()
+    const { addon, constructions } = fakeAddon()
     const { storage } = createFactories(() => addon)
 
     const s = storage("files")
     await s.head("a")
     await s.head("b")
 
-    expect(envs).toHaveLength(1)
+    expect(constructions).toHaveLength(1)
   })
 
   it("returns an independent handle per factory call", async () => {
-    const { addon, envs } = fakeAddon()
+    const { addon, constructions } = fakeAddon()
     const { storage } = createFactories(() => addon)
 
     await storage("files").head("a")
     await storage("files").head("b")
 
-    expect(envs).toHaveLength(2)
-  })
-})
-
-describe("createFactories env filtering", () => {
-  it("drops undefined env values before crossing into the addon", async () => {
-    const { addon, envs } = fakeAddon()
-    const { storage } = createFactories(() => addon)
-
-    await storage("files", {
-      env: { KEEP: "1", DROP: undefined, ALSO_KEEP: "2" },
-    }).head("a")
-
-    expect(envs[0]).toEqual({ KEEP: "1", ALSO_KEEP: "2" })
-  })
-
-  it("passes undefined when no env override is given", async () => {
-    const { addon, envs } = fakeAddon()
-    const { kv } = createFactories(() => addon)
-
-    await kv("cache").exists("k")
-
-    expect(envs[0]).toBeUndefined()
+    expect(constructions).toHaveLength(2)
   })
 })
 

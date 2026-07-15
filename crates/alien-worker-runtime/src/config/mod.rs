@@ -16,6 +16,7 @@ use crate::{error::ErrorData, otlp, Result};
 use alien_error::AlienError;
 
 const ENV_ALIEN_RUNTIME_SEND_OTLP: &str = "ALIEN_RUNTIME_SEND_OTLP";
+const DEFAULT_COMMAND_TIMEOUT_SECONDS: u64 = 300;
 
 /// A log line from the application subprocess.
 #[derive(Debug, Clone)]
@@ -73,46 +74,32 @@ pub struct RuntimeConfig {
     /// gRPC bindings address
     #[builder(default = "127.0.0.1:51351".to_string())]
     pub bindings_address: String,
-    /// Commands polling configuration
-    pub commands_polling: Option<CommandsPollingConfig>,
     /// How to export captured application logs
     #[builder(default = LogExporter::None)]
     pub log_exporter: LogExporter,
+    /// Maximum time to wait for a pushed command to finish in the application.
+    #[builder(default = Duration::from_secs(DEFAULT_COMMAND_TIMEOUT_SECONDS))]
+    pub command_timeout: Duration,
 }
 
 impl std::fmt::Debug for RuntimeConfig {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let mut env_var_keys = self.env_vars.keys().collect::<Vec<_>>();
+        env_var_keys.sort_unstable();
+
         f.debug_struct("RuntimeConfig")
             .field("transport", &self.transport)
             .field("transport_port", &self.transport_port)
             .field("lambda_mode", &self.lambda_mode)
             .field("command", &self.command)
             .field("working_dir", &self.working_dir)
-            .field("env_vars", &self.env_vars)
+            .field("env_var_count", &env_var_keys.len())
+            .field("env_var_keys", &env_var_keys)
             .field("bindings_address", &self.bindings_address)
-            .field("commands_polling", &self.commands_polling)
             .field("log_exporter", &self.log_exporter)
+            .field("command_timeout", &self.command_timeout)
             .finish()
     }
-}
-
-/// Commands polling configuration
-#[derive(Debug, Clone)]
-pub struct CommandsPollingConfig {
-    /// Polling URL
-    pub url: String,
-    /// Polling interval
-    pub interval: Duration,
-    /// Deployment ID - required for commands polling to work correctly
-    /// Should come from ALIEN_DEPLOYMENT_ID environment variable
-    pub deployment_id: String,
-    /// Target resource ID this runtime polls command leases for — its own
-    /// resource id within the deployment's stack. Should come from the
-    /// ALIEN_COMMANDS_TARGET_RESOURCE_ID environment variable.
-    pub target_resource_id: String,
-    /// Authentication token for commands server
-    /// Should come from ALIEN_COMMANDS_TOKEN environment variable
-    pub token: String,
 }
 
 impl RuntimeConfig {
@@ -126,12 +113,7 @@ impl RuntimeConfig {
     pub fn from_cli_struct(cli: Cli) -> Result<Self> {
         cli.validate()?;
 
-        // Don't build programmatic commands config from CLI - let CommandsPolling::from_env() handle it
-        // Token may come from vault secrets (loaded after config), not just env vars
-        let commands_polling = None;
-
         // Populate env_vars from process environment for standalone binary
-        // This allows CommandsPolling::from_env() to read ALIEN_COMMANDS_POLLING_* vars
         let env_vars: HashMap<String, String> = std::env::vars().collect();
         let log_exporter = LogExporter::from_env_vars(&env_vars);
 
@@ -148,9 +130,36 @@ impl RuntimeConfig {
             working_dir: None,
             env_vars,
             bindings_address: cli.bindings_address,
-            commands_polling,
             log_exporter,
+            command_timeout: Duration::from_secs(cli.worker_timeout_seconds),
         })
+    }
+
+    /// Read the controller-injected Worker timeout used by embedded runtimes.
+    /// Missing values retain compatibility with metadata created before this
+    /// runtime setting existed.
+    pub fn command_timeout_from_env_vars(env_vars: &HashMap<String, String>) -> Result<Duration> {
+        let Some(value) = env_vars.get(alien_core::ENV_ALIEN_WORKER_TIMEOUT_SECONDS) else {
+            return Ok(Duration::from_secs(DEFAULT_COMMAND_TIMEOUT_SECONDS));
+        };
+
+        let timeout_seconds = value.parse::<u64>().map_err(|error| {
+            AlienError::new(ErrorData::ConfigurationInvalid {
+                message: format!("Worker timeout must be an integer number of seconds: {error}"),
+                field: Some(alien_core::ENV_ALIEN_WORKER_TIMEOUT_SECONDS.to_string()),
+            })
+        })?;
+        if !(1..=u64::from(alien_core::MAX_WORKER_TIMEOUT_SECONDS)).contains(&timeout_seconds) {
+            return Err(AlienError::new(ErrorData::ConfigurationInvalid {
+                message: format!(
+                    "Worker timeout must be between 1 and {} seconds",
+                    alien_core::MAX_WORKER_TIMEOUT_SECONDS
+                ),
+                field: Some(alien_core::ENV_ALIEN_WORKER_TIMEOUT_SECONDS.to_string()),
+            }));
+        }
+
+        Ok(Duration::from_secs(timeout_seconds))
     }
 
     /// Validate the configuration
@@ -162,13 +171,17 @@ impl RuntimeConfig {
             }));
         }
 
-        if let Some(ref commands) = self.commands_polling {
-            if commands.url.is_empty() {
-                return Err(AlienError::new(ErrorData::ConfigurationInvalid {
-                    message: "Commands polling URL is required when polling is enabled".to_string(),
-                    field: Some("commands_polling.url".to_string()),
-                }));
-            }
+        if self.command_timeout.is_zero()
+            || self.command_timeout
+                > Duration::from_secs(u64::from(alien_core::MAX_WORKER_TIMEOUT_SECONDS))
+        {
+            return Err(AlienError::new(ErrorData::ConfigurationInvalid {
+                message: format!(
+                    "Worker timeout must be between 1 and {} seconds",
+                    alien_core::MAX_WORKER_TIMEOUT_SECONDS
+                ),
+                field: Some("command_timeout".to_string()),
+            }));
         }
 
         Ok(())
@@ -289,6 +302,7 @@ mod tests {
 
         assert_eq!(config.transport, TransportType::Lambda);
         assert_eq!(config.command, vec!["bun", "index.ts"]);
+        assert_eq!(config.command_timeout, Duration::from_secs(300));
     }
 
     #[test]
@@ -306,6 +320,78 @@ mod tests {
         assert_eq!(config.command, vec!["./app"]);
         assert_eq!(config.working_dir, Some(PathBuf::from("/app")));
         assert_eq!(config.env_vars.get("MY_VAR"), Some(&"value".to_string()));
+        assert_eq!(config.command_timeout, Duration::from_secs(300));
+    }
+
+    #[test]
+    fn command_timeout_reads_controller_environment() {
+        let env_vars = HashMap::from([(
+            alien_core::ENV_ALIEN_WORKER_TIMEOUT_SECONDS.to_string(),
+            "3600".to_string(),
+        )]);
+
+        assert_eq!(
+            RuntimeConfig::command_timeout_from_env_vars(&env_vars).unwrap(),
+            Duration::from_secs(3600)
+        );
+    }
+
+    #[test]
+    fn command_timeout_rejects_invalid_controller_environment() {
+        for value in ["0", "3601", "not-a-number"] {
+            let env_vars = HashMap::from([(
+                alien_core::ENV_ALIEN_WORKER_TIMEOUT_SECONDS.to_string(),
+                value.to_string(),
+            )]);
+
+            assert!(RuntimeConfig::command_timeout_from_env_vars(&env_vars).is_err());
+        }
+    }
+
+    #[test]
+    fn programmatic_config_rejects_worker_timeout_above_one_hour() {
+        let config = RuntimeConfig::builder()
+            .transport(TransportType::Local)
+            .command(vec!["app".to_string()])
+            .command_timeout(Duration::from_secs(3601))
+            .build();
+
+        let error = config.validate().expect_err("timeout above one hour");
+        assert!(error.to_string().contains("between 1 and 3600"));
+    }
+
+    #[test]
+    fn runtime_config_debug_never_prints_environment_values() {
+        let config = RuntimeConfig::builder()
+            .transport(TransportType::Local)
+            .command(vec!["./app".to_string()])
+            .working_dir(PathBuf::from("/app"))
+            .env_vars(HashMap::from([
+                (
+                    "ALIEN_COMMANDS_TOKEN".to_string(),
+                    "commands-token-value".to_string(),
+                ),
+                (
+                    "OTEL_EXPORTER_OTLP_HEADERS".to_string(),
+                    "authorization=Bearer otlp-secret".to_string(),
+                ),
+                ("APP_SECRET".to_string(), "app-secret-value".to_string()),
+            ]))
+            .build();
+
+        let debug = format!("{config:?}");
+
+        assert!(debug.contains("env_var_count: 3"));
+        assert!(debug.contains("ALIEN_COMMANDS_TOKEN"));
+        assert!(debug.contains("OTEL_EXPORTER_OTLP_HEADERS"));
+        assert!(debug.contains("APP_SECRET"));
+        for secret_value in [
+            "commands-token-value",
+            "authorization=Bearer otlp-secret",
+            "app-secret-value",
+        ] {
+            assert!(!debug.contains(secret_value));
+        }
     }
 
     #[test]

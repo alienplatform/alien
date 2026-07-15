@@ -8,15 +8,6 @@ fn alien_context_accessors_return_the_application_bindings_facade() {
     let _: fn(&AlienContext) -> Arc<Bindings> = AlienContext::get_bindings;
 }
 
-#[test]
-#[expect(deprecated, reason = "this test protects the migration aliases")]
-fn legacy_application_binding_method_names_remain_available() {
-    let _ = Bindings::load_storage;
-    let _ = Bindings::load_kv;
-    let _ = Bindings::load_queue;
-    let _ = Bindings::load_vault;
-}
-
 #[tokio::test]
 async fn bindings_facade_exposes_all_four_application_binding_kinds() {
     let bindings =

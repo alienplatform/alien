@@ -4,17 +4,6 @@
  * `alien-bindings` handles; the native (napi) surface is an internal detail.
  */
 
-/** Options accepted by every binding factory. */
-export interface BindingOptions {
-  /**
-   * Environment overrides layered on top of `process.env` when the binding is
-   * resolved. `undefined` values are dropped before crossing into the addon
-   * (which accepts only `Record<string, string>`), so callers may spread
-   * optional config without pre-filtering.
-   */
-  env?: Record<string, string | undefined>
-}
-
 /** Metadata for a single stored object. */
 export interface ObjectMeta {
   /** Object location (path) within the store. */

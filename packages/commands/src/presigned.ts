@@ -21,6 +21,8 @@ export interface PresignedTransferOptions {
   fetchImpl?: typeof fetch
   /** Allow the local filesystem backend (see module docs for the policy). */
   allowLocal: boolean
+  /** Optional caller-owned deadline/cancellation signal. */
+  signal?: AbortSignal
 }
 
 type Operation = "download" | "upload"
@@ -32,9 +34,32 @@ type Operation = "download" | "upload"
  */
 const PRESIGNED_TIMEOUT_MS = 120_000
 
+/** Keep the transfer cap while also respecting the caller's absolute budget. */
+function transferSignal(callerSignal: AbortSignal | undefined): AbortSignal {
+  const timeoutSignal = AbortSignal.timeout(PRESIGNED_TIMEOUT_MS)
+  return callerSignal === undefined ? timeoutSignal : AbortSignal.any([timeoutSignal, callerSignal])
+}
+
+/** Remove bearer-equivalent URL credentials before reporting a failure. */
+export function redactUrlForError(raw: string): string {
+  try {
+    const parsed = new URL(raw)
+    parsed.username = ""
+    parsed.password = ""
+    parsed.search = ""
+    parsed.hash = ""
+    return parsed.toString()
+  } catch {
+    if (raw.startsWith("/") && !raw.startsWith("//")) {
+      return raw.split(/[?#]/, 1)[0] || "<invalid-url>"
+    }
+    return "<invalid-url>"
+  }
+}
+
 /** URL used in error reports for a presigned request. */
 function errorUrl(request: PresignedRequest): string {
-  return request.backend.type === "http" ? request.backend.url : "local"
+  return request.backend.type === "http" ? redactUrlForError(request.backend.url) : "local"
 }
 
 /** Reject a presigned request that expired before we could use it. */
@@ -96,16 +121,27 @@ export async function downloadPresigned(
 
   if (request.backend.type === "http") {
     const fetchImpl = options.fetchImpl ?? fetch
-    const response = await fetchImpl(request.backend.url, {
-      method: request.backend.method,
-      headers: request.backend.headers,
-      signal: AbortSignal.timeout(PRESIGNED_TIMEOUT_MS),
-    })
+    let response: Response
+    try {
+      response = await fetchImpl(request.backend.url, {
+        method: request.backend.method,
+        headers: request.backend.headers,
+        signal: transferSignal(options.signal),
+      })
+    } catch {
+      throw new AlienError(
+        StorageOperationFailedError.create({
+          operation: "download",
+          url: redactUrlForError(request.backend.url),
+          reason: "HTTP request failed before a response was received",
+        }),
+      )
+    }
     if (!response.ok) {
       throw new AlienError(
         StorageOperationFailedError.create({
           operation: "download",
-          url: request.backend.url,
+          url: redactUrlForError(request.backend.url),
           reason: `HTTP ${response.status} ${response.statusText}`,
         }),
       )
@@ -131,17 +167,28 @@ export async function uploadPresigned(
 
   if (request.backend.type === "http") {
     const fetchImpl = options.fetchImpl ?? fetch
-    const response = await fetchImpl(request.backend.url, {
-      method: request.backend.method,
-      headers: request.backend.headers,
-      body: bytes,
-      signal: AbortSignal.timeout(PRESIGNED_TIMEOUT_MS),
-    })
+    let response: Response
+    try {
+      response = await fetchImpl(request.backend.url, {
+        method: request.backend.method,
+        headers: request.backend.headers,
+        body: bytes,
+        signal: transferSignal(options.signal),
+      })
+    } catch {
+      throw new AlienError(
+        StorageOperationFailedError.create({
+          operation: "upload",
+          url: redactUrlForError(request.backend.url),
+          reason: "HTTP request failed before a response was received",
+        }),
+      )
+    }
     if (!response.ok) {
       throw new AlienError(
         StorageOperationFailedError.create({
           operation: "upload",
-          url: request.backend.url,
+          url: redactUrlForError(request.backend.url),
           reason: `Storage upload failed with status ${response.status}`,
         }),
       )

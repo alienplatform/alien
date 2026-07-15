@@ -409,7 +409,7 @@ export class Container {
 
   /**
    * Enables or disables the Commands protocol for the container.
-   * When enabled, the container polls the manager for pending commands and executes registered handlers.
+   * When enabled, an app-owned receiver can lease this Container's pending commands and execute registered handlers.
    * Default: false.
    * @param enabled Whether to enable commands for this container.
    * @returns The Container builder instance.

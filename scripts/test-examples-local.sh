@@ -39,19 +39,14 @@ else
   cargo build -p alien-cli --bin alien
 fi
 
-build_filters=()
-if [[ "${ALIEN_EXAMPLES_REUSE_BUILT_PACKAGES:-}" != "true" ]]; then
-  build_filters+=(--filter @alienplatform/platform-api)
-  build_filters+=(--filter @alienplatform/core)
-  build_filters+=(--filter @alienplatform/bindings)
-  build_filters+=(--filter @alienplatform/commands)
-  build_filters+=(--filter @alienplatform/sdk)
-  build_filters+=(--filter @alienplatform/testing)
-fi
-
-if (( ${#build_filters[@]} > 0 )); then
-  pnpm -r "${build_filters[@]}" run build
-fi
+pnpm -r \
+  --filter @alienplatform/platform-api \
+  --filter @alienplatform/core \
+  --filter @alienplatform/bindings \
+  --filter @alienplatform/commands \
+  --filter @alienplatform/sdk \
+  --filter @alienplatform/testing \
+  run build
 
 node - "$EXAMPLES_PACKAGE_JSON" "$ROOT_DIR" <<'NODE'
 const fs = require("fs");

@@ -22,9 +22,6 @@ pub const ENV_ALIEN_DEPLOYMENT_NAME: &str = "ALIEN_DEPLOYMENT_NAME";
 /// resource-scoped credentials.
 pub const ENV_ALIEN_RESOURCE_ID: &str = "ALIEN_RESOURCE_ID";
 pub const ENV_ALIEN_PUBLIC_ENDPOINTS_JSON: &str = "ALIEN_PUBLIC_ENDPOINTS_JSON";
-pub const ENV_ALIEN_COMMANDS_POLLING_ENABLED: &str = "ALIEN_COMMANDS_POLLING_ENABLED";
-pub const ENV_ALIEN_COMMANDS_POLLING_URL: &str = "ALIEN_COMMANDS_POLLING_URL";
-pub const ENV_ALIEN_COMMANDS_POLLING_INTERVAL_SECS: &str = "ALIEN_COMMANDS_POLLING_INTERVAL_SECS";
 pub const ENV_ALIEN_COMMANDS_TOKEN: &str = "ALIEN_COMMANDS_TOKEN";
 /// File containing the command receiver bearer token. Receivers re-read this
 /// file after an unauthorized response so controllers can rotate credentials
@@ -42,10 +39,7 @@ pub const ENV_ALIEN_COMMANDS_POLL_MAX_INTERVAL_MS: &str = "ALIEN_COMMANDS_POLL_M
 pub const ENV_ALIEN_COMMANDS_POLL_JITTER: &str = "ALIEN_COMMANDS_POLL_JITTER";
 /// Graceful command receiver drain timeout, in milliseconds.
 pub const ENV_ALIEN_COMMANDS_DRAIN_TIMEOUT_MS: &str = "ALIEN_COMMANDS_DRAIN_TIMEOUT_MS";
-/// Identifies which stack resource a command-capable runtime is polling
-/// leases for (its own resource id within the deployment's stack). Consumed
-/// by runtime polling in a later ALIEN-219 task; declared here so it's
-/// reserved from day one.
+/// Identifies which stack resource an app-owned command receiver leases for.
 pub const ENV_ALIEN_COMMANDS_TARGET_RESOURCE_ID: &str = "ALIEN_COMMANDS_TARGET_RESOURCE_ID";
 /// Base URL of the command server API an app-owned pull `Receiver`
 /// (Container/Daemon) leases commands from. Pinned by the receiver contract
@@ -66,8 +60,8 @@ pub const ENV_ALIEN_COMMANDS_TARGET_RESOURCE_TYPE: &str = "ALIEN_COMMANDS_TARGET
 /// environment contract. Managed cloud workloads use projected identities.
 pub const ENV_ALIEN_MANAGER_URL: &str = "ALIEN_MANAGER_URL";
 /// Deployment bearer token an external/bootstrap mint client presents to the
-/// manager. Kept distinct from [`ENV_ALIEN_COMMANDS_TOKEN`], which is scoped to
-/// command polling. Managed workload controllers do not inject this token.
+/// manager. Kept distinct from [`ENV_ALIEN_COMMANDS_TOKEN`], which authenticates
+/// command delivery. Managed workload controllers do not inject this token.
 pub const ENV_ALIEN_DEPLOYMENT_TOKEN: &str = "ALIEN_DEPLOYMENT_TOKEN";
 /// Service-account binding name the minting resolver asks the manager to mint
 /// credentials for. Required by the external/bootstrap mint request contract.
@@ -80,6 +74,10 @@ pub const ENV_ALIEN_DEPLOYMENT_SERVICE_ACCOUNT: &str = "ALIEN_DEPLOYMENT_SERVICE
 /// application it spawns; the app connects as the gRPC client. Presence of this
 /// variable is what selects the worker-protocol gRPC channel in the app SDK.
 pub const ENV_ALIEN_WORKER_GRPC_ADDRESS: &str = "ALIEN_WORKER_GRPC_ADDRESS";
+/// Configured maximum Worker command execution time, in seconds. Controllers
+/// inject this from the trusted Worker resource rather than accepting a
+/// user-provided override.
+pub const ENV_ALIEN_WORKER_TIMEOUT_SECONDS: &str = "ALIEN_WORKER_TIMEOUT_SECONDS";
 pub const ENV_AWS_ACCOUNT_ID: &str = "AWS_ACCOUNT_ID";
 pub const ENV_AWS_REGION: &str = "AWS_REGION";
 pub const ENV_AZURE_CLIENT_ID: &str = "AZURE_CLIENT_ID";
@@ -479,9 +477,7 @@ pub fn is_reserved_runtime_environment_name(name: &str) -> bool {
         || matches!(
             name,
             ENV_ALIEN_WORKER_GRPC_ADDRESS
-                | ENV_ALIEN_COMMANDS_POLLING_ENABLED
-                | ENV_ALIEN_COMMANDS_POLLING_INTERVAL_SECS
-                | ENV_ALIEN_COMMANDS_POLLING_URL
+                | ENV_ALIEN_WORKER_TIMEOUT_SECONDS
                 | ENV_ALIEN_COMMANDS_TOKEN
                 | ENV_ALIEN_COMMANDS_TOKEN_FILE
                 | ENV_ALIEN_COMMANDS_LEASE_SECONDS
@@ -576,6 +572,13 @@ mod tests {
             ENV_ALIEN_WORKER_GRPC_ADDRESS
         ));
         assert_eq!(ENV_ALIEN_WORKER_GRPC_ADDRESS, "ALIEN_WORKER_GRPC_ADDRESS");
+        assert!(is_reserved_runtime_environment_name(
+            ENV_ALIEN_WORKER_TIMEOUT_SECONDS
+        ));
+        assert_eq!(
+            ENV_ALIEN_WORKER_TIMEOUT_SECONDS,
+            "ALIEN_WORKER_TIMEOUT_SECONDS"
+        );
         assert!(is_reserved_runtime_environment_name(
             "ALIEN_STORAGE_BINDING"
         ));

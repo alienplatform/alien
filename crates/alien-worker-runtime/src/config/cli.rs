@@ -1,7 +1,6 @@
 //! CLI argument parsing for alien-worker-runtime.
 
 use clap::{Parser, ValueEnum};
-use std::time::Duration;
 
 use crate::error::{ErrorData, Result};
 use alien_error::AlienError;
@@ -47,36 +46,9 @@ pub struct Cli {
     #[arg(long, env = "PORT", default_value_t = 8080)]
     pub local_port: u16,
 
-    // Commands Polling options
-    /// Enable commands polling
-    #[arg(long, env = "ALIEN_COMMANDS_POLLING_ENABLED")]
-    pub commands_polling_enabled: bool,
-
-    /// Commands polling URL
-    #[arg(long, env = "ALIEN_COMMANDS_POLLING_URL")]
-    pub commands_polling_url: Option<String>,
-
-    /// Commands polling interval in seconds
-    #[arg(
-        long,
-        env = "ALIEN_COMMANDS_POLLING_INTERVAL_SECS",
-        default_value_t = 5
-    )]
-    pub commands_polling_interval_secs: u64,
-
-    /// Deployment ID for commands polling (required when commands polling is enabled)
-    #[arg(long, env = "ALIEN_DEPLOYMENT_ID")]
-    pub deployment_id: Option<String>,
-
-    /// Target resource ID this runtime polls command leases for — its own
-    /// resource id within the deployment's stack (required when commands
-    /// polling is enabled).
-    #[arg(long, env = "ALIEN_COMMANDS_TARGET_RESOURCE_ID")]
-    pub commands_target_resource_id: Option<String>,
-
-    /// Commands polling authentication token
-    #[arg(long, env = "ALIEN_COMMANDS_TOKEN")]
-    pub commands_token: Option<String>,
+    /// Maximum time a pushed command may execute in the Worker application.
+    #[arg(long, env = "ALIEN_WORKER_TIMEOUT_SECONDS", default_value_t = 300)]
+    pub worker_timeout_seconds: u64,
 }
 
 impl Cli {
@@ -103,37 +75,19 @@ impl Cli {
             }));
         }
 
-        if self.commands_polling_enabled {
-            if self.commands_polling_url.is_none() {
-                return Err(AlienError::new(ErrorData::ConfigurationInvalid {
-                    message: "Commands polling URL required when polling is enabled".to_string(),
-                    field: Some("ALIEN_COMMANDS_POLLING_URL".to_string()),
-                }));
-            }
-            if self.deployment_id.is_none() {
-                return Err(AlienError::new(ErrorData::ConfigurationInvalid {
-                    message: "Deployment ID required when commands polling is enabled".to_string(),
-                    field: Some("ALIEN_DEPLOYMENT_ID".to_string()),
-                }));
-            }
-            if self.commands_target_resource_id.is_none() {
-                return Err(AlienError::new(ErrorData::ConfigurationInvalid {
-                    message:
-                        "ALIEN_COMMANDS_TARGET_RESOURCE_ID required when commands polling is enabled"
-                            .to_string(),
-                    field: Some("ALIEN_COMMANDS_TARGET_RESOURCE_ID".to_string()),
-                }));
-            }
-            // Note: commands_token validation deferred to CommandsPolling::from_env()
-            // Token can come from env var OR vault secrets (loaded after config)
+        if !(1..=u64::from(alien_core::MAX_WORKER_TIMEOUT_SECONDS))
+            .contains(&self.worker_timeout_seconds)
+        {
+            return Err(AlienError::new(ErrorData::ConfigurationInvalid {
+                message: format!(
+                    "Worker timeout must be between 1 and {} seconds",
+                    alien_core::MAX_WORKER_TIMEOUT_SECONDS
+                ),
+                field: Some("worker_timeout_seconds".to_string()),
+            }));
         }
 
         Ok(())
-    }
-
-    /// Get commands polling interval as Duration
-    pub fn commands_polling_interval_duration(&self) -> Duration {
-        Duration::from_secs(self.commands_polling_interval_secs)
     }
 }
 
@@ -182,6 +136,7 @@ mod tests {
         let cli = Cli::try_parse_from(["alien-worker-runtime", "--", "bun", "index.ts"]).unwrap();
         assert_eq!(cli.command, vec!["bun", "index.ts"]);
         assert_eq!(cli.transport, TransportType::Lambda);
+        assert_eq!(cli.worker_timeout_seconds, 300);
     }
 
     #[test]
@@ -232,66 +187,47 @@ mod tests {
     }
 
     #[test]
-    fn test_validate_commands_polling() {
-        // Missing URL and deployment_id
+    fn test_parse_worker_timeout() {
         let cli = Cli::try_parse_from([
             "alien-worker-runtime",
-            "--commands-polling-enabled",
+            "--worker-timeout-seconds",
+            "3600",
             "--",
             "app",
         ])
         .unwrap();
-        assert!(cli.validate().is_err());
 
-        // Missing deployment_id
-        let cli = Cli::try_parse_from([
-            "alien-worker-runtime",
-            "--commands-polling-enabled",
-            "--commands-polling-url",
-            "http://example.com",
-            "--",
-            "app",
-        ])
-        .unwrap();
-        let err = cli.validate().expect_err("should require deployment_id");
-        assert_eq!(err.code, "CONFIGURATION_INVALID");
-        assert!(err.message.contains("Deployment ID"));
+        assert_eq!(cli.worker_timeout_seconds, 3600);
+        cli.validate().unwrap();
+    }
 
-        // Missing target resource id
+    #[test]
+    fn test_validate_rejects_zero_worker_timeout() {
         let cli = Cli::try_parse_from([
             "alien-worker-runtime",
-            "--commands-polling-enabled",
-            "--commands-polling-url",
-            "http://example.com",
-            "--deployment-id",
-            "test-agent-123",
+            "--worker-timeout-seconds",
+            "0",
             "--",
             "app",
         ])
         .unwrap();
-        let err = cli
-            .validate()
-            .expect_err("should require commands target resource id");
-        assert_eq!(err.code, "CONFIGURATION_INVALID");
-        assert!(err.message.contains("ALIEN_COMMANDS_TARGET_RESOURCE_ID"));
 
-        // Required fields present (token not required at config time)
+        let error = cli.validate().unwrap_err();
+        assert!(error.to_string().contains("between 1 and 3600"));
+    }
+
+    #[test]
+    fn test_validate_rejects_worker_timeout_above_one_hour() {
         let cli = Cli::try_parse_from([
             "alien-worker-runtime",
-            "--commands-polling-enabled",
-            "--commands-polling-url",
-            "http://example.com",
-            "--deployment-id",
-            "test-agent-123",
-            "--commands-target-resource-id",
-            "worker-1",
+            "--worker-timeout-seconds",
+            "3601",
             "--",
             "app",
         ])
         .unwrap();
-        assert!(
-            cli.validate().is_ok(),
-            "Token validation deferred to runtime"
-        );
+
+        let error = cli.validate().unwrap_err();
+        assert!(error.to_string().contains("between 1 and 3600"));
     }
 }

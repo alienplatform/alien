@@ -214,6 +214,52 @@ describe("CommandsClient.invoke", () => {
     const result = await client(server.baseUrl).invoke("fetch-big", {}, FAST_POLL)
     expect(result).toEqual(stored)
   })
+
+  it("does not expose a presigned URL token when storage JSON decoding fails", async () => {
+    const secret = "do-not-log-response-token"
+    server = await startStubServer((req): RouteResult => {
+      if (req.method === "POST" && req.path === "/v1/commands") return { json: createResponse() }
+      if (req.method === "GET" && req.path.startsWith("/blob?")) {
+        return { text: "not valid JSON" }
+      }
+      return {
+        json: {
+          commandId: "cmd_1",
+          state: "SUCCEEDED",
+          attempt: 1,
+          target: { resourceId: "container-1", resourceType: "container" },
+          response: {
+            status: "success",
+            response: {
+              mode: "storage",
+              size: 14,
+              storageGetRequest: {
+                backend: {
+                  type: "http",
+                  url: `${server?.baseUrl}/blob?response_token=${secret}&expires=1`,
+                  method: "GET",
+                  headers: {},
+                },
+                expiration: new Date(Date.now() + 60_000).toISOString(),
+                operation: "get",
+                path: "blob",
+              },
+            },
+          },
+        },
+      }
+    })
+
+    const error = await client(server.baseUrl)
+      .invoke("fetch-invalid-json", {}, FAST_POLL)
+      .catch((cause: unknown) => cause)
+
+    expect(error).toBeInstanceOf(AlienError)
+    expect((error as AlienError).code).toBe("STORAGE_OPERATION_FAILED")
+    expect((error as AlienError).context).toMatchObject({ url: `${server.baseUrl}/blob` })
+    expect(JSON.stringify(error)).not.toContain(secret)
+    expect(String(error)).not.toContain(secret)
+  })
 })
 
 describe("CommandsClient storage decode edge cases", () => {

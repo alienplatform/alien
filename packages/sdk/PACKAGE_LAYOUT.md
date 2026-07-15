@@ -1,28 +1,28 @@
 # `@alienplatform/sdk` — package layout contract
 
-> Contract document. The names, subpaths, error codes, and dependency rules below
-> are binding for the tasks that implement and enforce them. Implementers may not
-> rename anything pinned here. Items whose owner is a later task are marked
-> **OPEN (task NN)** and must not be decided in this file.
+> Current contract. The names, subpaths, and dependency rules below describe the
+> package as shipped and are enforced by package-layout tests.
 
 ## Purpose
 
-`@alienplatform/sdk` stays published as the ergonomic facade for Worker apps. It
+`@alienplatform/sdk` is the ergonomic facade for Worker apps. It
 provides the Worker handler APIs and re-exports the app-facing binding factories
 from [`@alienplatform/bindings`](../bindings/PACKAGE_LAYOUT.md), so a Worker author
 installs one package. Worker protocol dependencies (nice-grpc, generated Worker
 protocol clients) are confined to the `./worker-runtime` subpath.
 
-The direct command surface moves out of this package: `CommandsClient` lives in
+The direct command surface is separate: `CommandsClient` lives in
 [`@alienplatform/commands`](../commands/PACKAGE_LAYOUT.md), and direct bindings live
 in [`@alienplatform/bindings`](../bindings/PACKAGE_LAYOUT.md).
 
-### Current state (truthful baseline)
+### Current layout
 
-- Current `exports` are `.` and `./commands`.
-- Worker/gRPC protocol code lives in `src/{channel,events,commands,wait-until,grpc-utils}.ts`,
-  `src/bindings/*`, and `src/generated/*`.
-- `src/commands/` (the `CommandsClient`) is already pure `fetch` + HTTP.
+- Public exports are `.`, `./worker-runtime`, and `./native`.
+- Worker/gRPC protocol code lives under `src/worker-runtime/`.
+- The root facade re-exports app-facing binding factories; their implementation
+  lives in `@alienplatform/bindings`.
+- `CommandsClient` and the Container/Daemon pull receiver live in
+  `@alienplatform/commands`, not in this package.
 
 ## Public surface — from `"."` (facade)
 
@@ -38,10 +38,9 @@ in [`@alienplatform/bindings`](../bindings/PACKAGE_LAYOUT.md).
 | `Storage`, `Kv`, `Queue`, `Vault` | type | re-export from `@alienplatform/bindings` | Facade re-export of the instance types. |
 | error re-exports | error | from `@alienplatform/bindings` and `@alienplatform/core` | Includes `BindingNotConfiguredError`; `AlienError`. |
 
-### Deleted from the current root surface
+### Removed from the root surface
 
-Recorded here as contract; execution is tasks 03/17. These names must be gone from
-`"."` after the split:
+These names must remain absent from `"."`:
 
 - `worker()`, `build()`, `artifactRegistry()`, `serviceAccount()` — non-app binding
   factories.
@@ -51,8 +50,8 @@ Recorded here as contract; execution is tasks 03/17. These names must be gone fr
 - gRPC-era binding errors that the direct bindings package replaces:
   `GrpcConnectionError`, `GrpcCallError`, `BindingNotFoundError` (superseded by
   `BINDING_NOT_CONFIGURED` in `@alienplatform/bindings`).
-- `getPostgresConnection` / `PostgresConnection` — destination is **OPEN**;
-  this file does not decide where Postgres connection resolution moves.
+- `getPostgresConnection` / `PostgresConnection`; applications resolve their own
+  Postgres connections.
 
 ## Subpaths
 
@@ -65,17 +64,25 @@ exports:
   its signature is pinned by `src/worker-runtime`.
 - Worker protocol client internals consumed by generated Worker bootstraps.
 
-Generated Worker bootstraps import this exact subpath (tasks 03/13 depend on it).
+Generated Worker bootstraps import this exact subpath.
+
+### `./native`
+
+The embedded-addon bridge for compiled Workers. It re-exports
+`installEmbeddedAddon` from `@alienplatform/bindings/native` so generated Worker
+bootstraps can register the staged native addon without deep-importing a
+transitive dependency.
 
 ### `./commands` — DELETED
 
-The old `./commands` subpath is removed. Its `CommandsClient` functionality moves to
+The old `./commands` subpath is removed. Its `CommandsClient` functionality lives in
 [`@alienplatform/commands`](../commands/PACKAGE_LAYOUT.md). The package
 must not continue to export `./commands`.
 
 ## Exports map
 
-`"."` and `./worker-runtime` only. Every condition carries `types`. No deep imports.
+`"."`, `./worker-runtime`, and `./native` only. Every condition carries `types`.
+No deep imports.
 
 ```jsonc
 {
@@ -86,6 +93,10 @@ must not continue to export `./commands`.
   "./worker-runtime": {
     "types": "./dist/worker-runtime/index.d.ts",
     "import": "./dist/worker-runtime/index.js"
+  },
+  "./native": {
+    "types": "./dist/native.d.ts",
+    "import": "./dist/native.js"
   }
 }
 ```
@@ -94,11 +105,10 @@ must not continue to export `./commands`.
 
 - `"type": "module"` (ESM-first).
 - `"sideEffects": false`.
-- `"exports"` and per-condition `"types"` exactly as above; `"types"` top-level for
-  legacy resolvers; declarations shipped.
-- `description` and `keywords` (updated to drop the standalone-commands framing).
-- Support note: Bun and Node ≥ 18.
-- `dependencies`: `@alienplatform/bindings` and `@alienplatform/core`.
+- `"exports"` and per-condition `"types"` exactly as above; declarations shipped.
+- `description` and `keywords` describe the Worker facade.
+- Runtime dependencies include `@alienplatform/bindings`, `@alienplatform/core`,
+  and the Worker protocol libraries used only by `./worker-runtime`.
 
 ## Dependency boundaries
 
@@ -106,8 +116,8 @@ must not continue to export `./commands`.
   `./worker-runtime` source directory.
 - No generated binding-service proto clients anywhere in the package. Only Worker
   protocol proto is permitted, and only under `./worker-runtime`.
-- MUST NOT still export `./commands`.
-- MUST NOT still ship generated binding-service proto clients.
+- MUST NOT export `./commands`.
+- MUST NOT ship generated binding-service proto clients.
 - Depends on [`@alienplatform/bindings`](../bindings/PACKAGE_LAYOUT.md) and
   `@alienplatform/core`.
 
@@ -120,37 +130,24 @@ must not continue to export `./commands`.
   `onQueueMessage`, `waitUntil`) is protocol-only at the facade; the Worker runtime
   wiring lives behind `./worker-runtime`.
 
-## Decisions
+## Handler and runtime details
 
-Task 03 owns the signatures the contract left open; recorded here as executed.
-
-- **DECIDED(03)** `command(name, handler): void`, `onStorageEvent(bucket, handler,
+- `command(name, handler): void`, `onStorageEvent(bucket, handler,
   options?): () => void`, `onCronEvent(schedule, handler): () => void`,
   `onQueueMessage(queue, handler): () => void`, `waitUntil(promise): void`. These
   are protocol-only registrars in `src/worker-runtime/registry.ts` (no gRPC); the
   facade root re-exports them. State is held on `globalThis` under a
   `Symbol.for` key so the facade bundle and the `./worker-runtime` bundle share
   one registry.
-- **DECIDED(03)** `runWorker(app?: unknown): Promise<void>` (in `./worker-runtime`).
+- `runWorker(app?: unknown): Promise<void>` lives in `./worker-runtime`.
   `app` is the user module's default export (an object with a `fetch` method for
   HTTP apps) or `undefined`. `runWorker` connects over
   `ALIEN_WORKER_GRPC_ADDRESS`, serves the HTTP handler and registers its port,
-  registers the app's handlers, then runs the task-dispatch loop, draining
-  `waitUntil` on shutdown. The generated bootstrap is ~8 lines: import the user
-  module, `runWorker(userModule).catch(...)`.
-- **DECIDED(03)** `getPostgresConnection` / `PostgresConnection` are **DELETED from
-  the SDK**. Neither pinned export list admits a connection-only Postgres helper;
-  connection resolution belongs to applications that use Postgres rather than
-  the runtime-less SDK facade. The OSS comprehensive TypeScript E2E app keeps a
-  local/external-only resolver next to its Postgres test handler.
-- **DECIDED(03)** `AlienContext.forRemoteDeployment(deploymentId, token)` is
-  **deferred**. `AlienContext` is deleted from the public surface and
-  no remote-bindings protocol exists to implement it cheaply atop current code;
-  introducing one is out of scope for the facade split. The docs pin remains for
-  17 to satisfy when the remote-bindings entry lands.
+  registers the app's handlers, then runs the task-dispatch loop. `waitUntil`
+  tasks are reported as they are registered; graceful drain on process shutdown
+  is not currently part of this contract.
 
 ## Status
 
-- The split is executed. The package-layout consumer test checks the packed
-  manifests and contents directly.
+- The package-layout consumer test checks packed manifests and contents directly.
 - This file is the contract; it defines no runtime code.

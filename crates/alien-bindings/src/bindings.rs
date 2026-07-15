@@ -69,21 +69,9 @@ impl Bindings {
         self.provider.load_storage(binding_name).await
     }
 
-    /// Loads an object storage binding.
-    #[deprecated(note = "use Bindings::storage")]
-    pub async fn load_storage(&self, binding_name: &str) -> Result<Arc<dyn Storage>> {
-        self.storage(binding_name).await
-    }
-
     /// Loads the key-value store binding named `binding_name`.
     pub async fn kv(&self, binding_name: &str) -> Result<Arc<dyn Kv>> {
         self.provider.load_kv(binding_name).await
-    }
-
-    /// Loads a key-value store binding.
-    #[deprecated(note = "use Bindings::kv")]
-    pub async fn load_kv(&self, binding_name: &str) -> Result<Arc<dyn Kv>> {
-        self.kv(binding_name).await
     }
 
     /// Loads the queue binding named `binding_name`.
@@ -91,21 +79,9 @@ impl Bindings {
         self.provider.load_queue(binding_name).await
     }
 
-    /// Loads a queue binding.
-    #[deprecated(note = "use Bindings::queue")]
-    pub async fn load_queue(&self, binding_name: &str) -> Result<Arc<dyn Queue>> {
-        self.queue(binding_name).await
-    }
-
     /// Loads the vault (secrets) binding named `binding_name`.
     pub async fn vault(&self, binding_name: &str) -> Result<Arc<dyn Vault>> {
         self.provider.load_vault(binding_name).await
-    }
-
-    /// Loads a vault binding.
-    #[deprecated(note = "use Bindings::vault")]
-    pub async fn load_vault(&self, binding_name: &str) -> Result<Arc<dyn Vault>> {
-        self.vault(binding_name).await
     }
 }
 

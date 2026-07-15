@@ -129,6 +129,7 @@ pub(crate) fn function_custom_config() -> Worker {
         .permissions("default-profile".to_string())
         .memory_mb(512)
         .timeout_seconds(120)
+        .expect("literal Worker timeout is within supported range")
         .build()
 }
 
@@ -158,6 +159,7 @@ pub(crate) fn function_complete_test() -> Worker {
             image: "123456789012.dkr.ecr.us-east-1.amazonaws.com/my-repo:latest".to_string(),
         })
         .timeout_seconds(30)
+        .expect("literal Worker timeout is within supported range")
         .memory_mb(128)
         .environment(env_vars)
         .permissions("default-profile".to_string())

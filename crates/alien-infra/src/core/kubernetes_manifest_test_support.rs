@@ -13,8 +13,9 @@ use crate::core::{
 };
 use alien_core::{
     ClientConfig, DeploymentConfig, EnvironmentVariable, EnvironmentVariableType,
-    EnvironmentVariablesSnapshot, ExternalBindings, ManagementPermissions, PermissionProfile,
-    PermissionsConfig, Platform, Resource, Stack, StackSettings, StackState,
+    EnvironmentVariablesSnapshot, ExternalBindings, KubernetesClientConfig, ManagementPermissions,
+    OtlpConfig, PermissionProfile, PermissionsConfig, Platform, Resource, Stack, StackSettings,
+    StackState,
 };
 use indexmap::IndexMap;
 use k8s_openapi::api::apps::v1::{DaemonSet, Deployment};
@@ -128,11 +129,35 @@ impl KubernetesManifestTestHarness {
         }
     }
 
+    pub(crate) fn with_monitoring(mut self, monitoring: OtlpConfig) -> Self {
+        self.deployment_config.monitoring = Some(monitoring);
+        self
+    }
+
+    pub(crate) fn with_service_provider(
+        mut self,
+        service_provider: Arc<dyn PlatformServiceProvider>,
+    ) -> Self {
+        self.service_provider = service_provider;
+        self
+    }
+
     pub(crate) fn ctx(&self) -> ResourceControllerContext<'_> {
         ResourceControllerContext {
             desired_config: &self.resource,
             platform: Platform::Kubernetes,
-            client_config: ClientConfig::Test,
+            client_config: ClientConfig::Kubernetes(Box::new(KubernetesClientConfig::Manual {
+                server_url: "https://kubernetes.test".to_string(),
+                certificate_authority_data: None,
+                insecure_skip_tls_verify: Some(true),
+                client_certificate_data: None,
+                client_key_data: None,
+                token: None,
+                username: None,
+                password: None,
+                namespace: Some("test-ns".to_string()),
+                additional_headers: Default::default(),
+            })),
             state: &self.state,
             resource_prefix: "test",
             registry: &self.registry,

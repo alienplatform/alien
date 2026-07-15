@@ -24,7 +24,7 @@
     "build:addon": "napi build --platform --release --cwd ../../crates/alien-bindings-node",
     "prepare": "npm run build",
     "test": "vitest run",
-    "test:bun": "BUN_EXPECTED=1 bun test",
+    "test:bun": "bun scripts/run-bun-tests.mjs",
     "test:ts": "tsc --noEmit",
     "smoke": "node scripts/smoke-envelope.mjs",
     "format-and-lint": "biome check .",

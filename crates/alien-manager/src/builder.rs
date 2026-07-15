@@ -476,11 +476,15 @@ impl AlienManagerBuilder {
                     self.release_store.clone().unwrap(),
                 ));
 
-            let command_dispatcher: Arc<dyn alien_commands::server::CommandDispatcher> =
-                Arc::new(crate::commands::DefaultCommandDispatcher::new(
+            let command_dispatcher: Arc<dyn alien_commands::server::CommandDispatcher> = Arc::new(
+                crate::commands::DefaultCommandDispatcher::new(
                     self.deployment_store.clone().unwrap(),
                     self.credential_resolver.clone().unwrap(),
-                ));
+                )
+                .context(ErrorData::ServerInitFailed {
+                    reason: "Failed to create bounded command dispatcher".to_string(),
+                })?,
+            );
 
             // -- Primary bindings provider (embedded local registry) --
             // Always start the embedded local registry. It serves as the fallback

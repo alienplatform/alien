@@ -1168,6 +1168,8 @@ dependencies = [
  "test-context",
  "tokio",
  "tokio-stream",
+ "tokio-util",
+ "tonic",
  "tracing",
  "tracing-subscriber",
  "url",

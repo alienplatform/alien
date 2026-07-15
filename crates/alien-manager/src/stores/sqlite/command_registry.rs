@@ -37,9 +37,9 @@ impl SqliteCommandRegistry {
         }
     }
 
-    /// Derive the Worker delivery context for this deployment: Push only when
-    /// the platform has a push path (not Kubernetes or Local) AND the stack
-    /// settings use the Push deployment model; otherwise Pull.
+    /// Derive the Worker delivery context for this deployment. Kubernetes uses
+    /// an environment-local operator relay. Local and cloud honor deployment
+    /// model: embedded Local is Push; remote Local is Pull through its operator.
     ///
     /// This platform-dependent derivation stays manager-side; the pinned
     /// per-type rule (Container/Daemon always Pull) lives in the shared
@@ -48,11 +48,10 @@ impl SqliteCommandRegistry {
         platform: Platform,
         stack_deployment_model: DeploymentModel,
     ) -> CommandDeliveryMode {
-        let platform_has_push_path = !matches!(platform, Platform::Kubernetes | Platform::Local);
-        if platform_has_push_path && stack_deployment_model == DeploymentModel::Push {
-            CommandDeliveryMode::Push
-        } else {
-            CommandDeliveryMode::Pull
+        match platform {
+            Platform::Kubernetes => CommandDeliveryMode::Pull,
+            _ if stack_deployment_model == DeploymentModel::Push => CommandDeliveryMode::Push,
+            _ => CommandDeliveryMode::Pull,
         }
     }
 
@@ -679,6 +678,35 @@ mod tests {
         )
         .unwrap();
         assert_eq!(mode, CommandDeliveryMode::Push);
+    }
+
+    #[test]
+    fn worker_delivery_mode_routes_environment_local_platforms() {
+        for model in [DeploymentModel::Push, DeploymentModel::Pull] {
+            assert_eq!(
+                SqliteCommandRegistry::worker_delivery_mode(Platform::Kubernetes, model),
+                CommandDeliveryMode::Pull,
+                "Kubernetes manager delivery is leased by the in-cluster operator"
+            );
+        }
+
+        for platform in [
+            Platform::Local,
+            Platform::Aws,
+            Platform::Gcp,
+            Platform::Azure,
+        ] {
+            assert_eq!(
+                SqliteCommandRegistry::worker_delivery_mode(platform, DeploymentModel::Push),
+                CommandDeliveryMode::Push,
+                "{platform:?} Push deployments dispatch directly"
+            );
+            assert_eq!(
+                SqliteCommandRegistry::worker_delivery_mode(platform, DeploymentModel::Pull),
+                CommandDeliveryMode::Pull,
+                "{platform:?} Pull deployments dispatch through their operator"
+            );
+        }
     }
 
     /// A pre-ALIEN-219 command row has NULL target columns. Status reads must

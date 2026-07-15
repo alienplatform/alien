@@ -17,7 +17,7 @@ get "code"(){
                 return DaemonCodeSchema
               },
 "command": z.array(z.string()).describe("Command to override the image default.").nullish(),
-"commandsEnabled": z.optional(z.boolean().default(false)),
+"commandsEnabled": z.optional(z.boolean().default(false).describe("Whether an app-owned command receiver can lease pending commands for\nthis Daemon and execute registered handlers.")),
 get "cpu"(){
                 return ResourceSpecSchema.describe("Resource specification with min/desired values.").optional()
               },

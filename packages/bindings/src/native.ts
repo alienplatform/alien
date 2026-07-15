@@ -50,7 +50,6 @@ export const vault = factories.vault
 export { AlienError, BindingNotConfiguredError, defineError } from "./errors.js"
 
 export type {
-  BindingOptions,
   Kv,
   KvScanItem,
   KvScanResult,

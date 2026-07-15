@@ -1011,7 +1011,7 @@ impl OperatorDb {
         Ok(())
     }
 
-    /// Get the commands URL (public URL for cloud functions to poll commands).
+    /// Get the commands URL used by the operator relay and app-owned receivers.
     pub async fn get_commands_url(&self) -> Result<Option<String>> {
         let conn = self.conn.lock().await;
 

@@ -5,7 +5,8 @@ use alien_core::{
     AwsEnvironmentInfo, AzureEnvironmentInfo, ClientConfig, ComputeKind, DeploymentConfig,
     EnvironmentInfo, EnvironmentVariable, EnvironmentVariableType, EnvironmentVariablesSnapshot,
     GcpEnvironmentInfo, LocalEnvironmentInfo, OtlpConfig, Platform, ResourceStatus, SecretDelivery,
-    Stack, StackState, TestEnvironmentInfo, ENV_ALIEN_RUNTIME_SECRETS, ENV_ALIEN_SECRETS,
+    Stack, StackState, TestEnvironmentInfo, ENV_ALIEN_COMMANDS_TOKEN, ENV_ALIEN_RUNTIME_SECRETS,
+    ENV_ALIEN_SECRETS,
 };
 use alien_error::{AlienError, Context, IntoAlienError as _};
 use alien_gcp_clients::{ResourceManagerApi, ResourceManagerClient};
@@ -17,8 +18,6 @@ use tracing::{debug, info};
 const OTEL_RESOURCE_ATTRIBUTES: &str = "OTEL_RESOURCE_ATTRIBUTES";
 const OTEL_EXPORTER_OTLP_LOGS_ENDPOINT: &str = "OTEL_EXPORTER_OTLP_LOGS_ENDPOINT";
 const OTEL_EXPORTER_OTLP_METRICS_ENDPOINT: &str = "OTEL_EXPORTER_OTLP_METRICS_ENDPOINT";
-const OTEL_EXPORTER_OTLP_HEADERS: &str = "OTEL_EXPORTER_OTLP_HEADERS";
-const OTEL_EXPORTER_OTLP_METRICS_HEADERS: &str = "OTEL_EXPORTER_OTLP_METRICS_HEADERS";
 const OTEL_SERVICE_NAME: &str = "OTEL_SERVICE_NAME";
 // These vault secret key strings keep the historical `__alien_runtime_otlp_*`
 // spelling on purpose. They are looked up by name in already-deployed stacks'
@@ -27,6 +26,7 @@ const OTEL_SERVICE_NAME: &str = "OTEL_SERVICE_NAME";
 // no-migration option and keep the wire keys stable (ALIEN-224).
 const RUNTIME_OTLP_LOGS_AUTH_HEADER_SECRET: &str = "__alien_runtime_otlp_logs_auth_header";
 const RUNTIME_OTLP_METRICS_AUTH_HEADER_SECRET: &str = "__alien_runtime_otlp_metrics_auth_header";
+const SECRETS_SYNC_SCHEMA_VERSION: &[u8] = b"\0vault-sync:no-app-command-token:v2\0";
 
 /// Collect environment information from cloud platforms
 pub async fn collect_environment_info(
@@ -171,10 +171,14 @@ struct AlienSecretsConfig {
 ///   the keys are listed in ALIEN_SECRETS and alien-worker-runtime loads the
 ///   actual values from the "secrets" vault at startup.
 ///
-/// The secrets vault is a dependency of every compute resource (added by
-/// `SecretsVaultMutation`). The executor won't start a function until its
-/// vault dependency is Running, so ALIEN_SECRETS is always safe to inject.
-pub fn inject_environment_variables(stack: &mut Stack, config: &DeploymentConfig) -> Result<()> {
+/// `SecretsVaultMutation` links the secrets vault only to Worker wrappers that
+/// can consume vault pointers. Native-projected workloads use the deployment
+/// environment snapshot directly and receive no workload vault grant.
+pub fn inject_environment_variables(
+    stack: &mut Stack,
+    config: &DeploymentConfig,
+    platform: Platform,
+) -> Result<()> {
     info!("Injecting environment variables into compute resources");
 
     let snapshot = &config.environment_variables;
@@ -186,7 +190,7 @@ pub fn inject_environment_variables(stack: &mut Stack, config: &DeploymentConfig
             || resource_type == alien_core::Container::RESOURCE_TYPE
             || resource_type == alien_core::Daemon::RESOURCE_TYPE
         {
-            inject_into_compute_resource(resource_name, resource_entry, snapshot)?;
+            inject_into_compute_resource(resource_name, resource_entry, snapshot, platform)?;
         }
     }
 
@@ -231,12 +235,14 @@ fn otlp_injection_covers_containers_and_daemons(platform: Platform) -> bool {
 ///   has already set `OTEL_SERVICE_NAME` via plain or secret env vars.
 /// - `OTEL_RESOURCE_ATTRIBUTES`       — deployment-level resource attributes
 ///   such as `alien.deployment_id`, merged with any user-provided value.
-/// - `ALIEN_RUNTIME_SECRETS`          — workers and daemons only; points
+/// - `ALIEN_RUNTIME_SECRETS`          — workers only; points
 ///   alien-worker-runtime at runtime-owned vault secrets. These are not forwarded to
 ///   the child application process.
-/// - `OTEL_EXPORTER_OTLP_HEADERS` (and `..._METRICS_HEADERS`) — containers
-///   only; a container has no alien-worker-runtime wrapper to resolve the vault
-///   pointer, so its auth header goes in as the standard plain OTEL env var.
+///
+/// Runtime-less Containers and Daemons do not store auth headers in their
+/// resource config. Their platform controller reads the values directly from
+/// `DeploymentConfig.monitoring` at provisioning time: Local passes them to
+/// the process, while Kubernetes projects them from a per-workload Secret.
 pub fn inject_monitoring_environment_variables(
     stack: &mut Stack,
     monitoring: &OtlpConfig,
@@ -254,7 +260,7 @@ pub fn inject_monitoring_environment_variables(
 
     for (resource_name, resource_entry) in &mut stack.resources {
         let resource_type = resource_entry.config.resource_type();
-        let is_container = resource_type == alien_core::Container::RESOURCE_TYPE;
+        let is_worker = resource_type == alien_core::Worker::RESOURCE_TYPE;
 
         let environment = if resource_type == alien_core::Worker::RESOURCE_TYPE {
             Some(
@@ -288,7 +294,9 @@ pub fn inject_monitoring_environment_variables(
                     })?
                     .environment,
             )
-        } else if covers_containers_and_daemons && is_container {
+        } else if covers_containers_and_daemons
+            && resource_type == alien_core::Container::RESOURCE_TYPE
+        {
             Some(
                 &mut resource_entry
                     .config
@@ -335,22 +343,7 @@ pub fn inject_monitoring_environment_variables(
                     metrics_endpoint.clone(),
                 );
             }
-            if is_container {
-                env.insert(
-                    OTEL_EXPORTER_OTLP_HEADERS.to_string(),
-                    monitoring.logs_auth_header.clone(),
-                );
-                if monitoring.metrics_endpoint.is_some() {
-                    let metrics_header = monitoring
-                        .metrics_auth_header
-                        .as_ref()
-                        .unwrap_or(&monitoring.logs_auth_header);
-                    env.insert(
-                        OTEL_EXPORTER_OTLP_METRICS_HEADERS.to_string(),
-                        metrics_header.clone(),
-                    );
-                }
-            } else {
+            if is_worker {
                 let runtime_secrets = AlienRuntimeSecretsConfig {
                     otlp_logs_auth_header: Some(RUNTIME_OTLP_LOGS_AUTH_HEADER_SECRET.to_string()),
                     otlp_metrics_auth_header: monitoring
@@ -417,6 +410,7 @@ fn inject_into_compute_resource(
     resource_name: &str,
     resource_entry: &mut alien_core::ResourceEntry,
     snapshot: &EnvironmentVariablesSnapshot,
+    platform: Platform,
 ) -> Result<()> {
     if let Some(worker) = resource_entry.config.downcast_mut::<alien_core::Worker>() {
         inject_into_environment(
@@ -424,6 +418,7 @@ fn inject_into_compute_resource(
             ComputeKind::Worker,
             &mut worker.environment,
             snapshot,
+            platform,
         )
     } else if let Some(container) = resource_entry
         .config
@@ -434,6 +429,7 @@ fn inject_into_compute_resource(
             ComputeKind::Container,
             &mut container.environment,
             snapshot,
+            platform,
         )
     } else if let Some(daemon) = resource_entry.config.downcast_mut::<alien_core::Daemon>() {
         inject_into_environment(
@@ -441,6 +437,7 @@ fn inject_into_compute_resource(
             ComputeKind::Daemon,
             &mut daemon.environment,
             snapshot,
+            platform,
         )
     } else {
         Err(AlienError::new(ErrorData::InternalError {
@@ -457,6 +454,7 @@ fn inject_into_environment(
     kind: ComputeKind,
     environment: &mut HashMap<String, String>,
     snapshot: &EnvironmentVariablesSnapshot,
+    platform: Platform,
 ) -> Result<()> {
     // Filter variables that apply to this resource
     let applicable_vars: Vec<&EnvironmentVariable> = snapshot
@@ -481,10 +479,14 @@ fn inject_into_environment(
     let secret_keys: Vec<String> = applicable_vars
         .iter()
         .filter(|v| v.var_type == EnvironmentVariableType::Secret)
+        // The command token authenticates the hosting runtime itself. It is injected at the
+        // platform's final launch boundary and must never become an application-readable vault
+        // secret or appear in the application's ALIEN_SECRETS load list.
+        .filter(|v| v.name != ENV_ALIEN_COMMANDS_TOKEN)
         .map(|v| v.name.clone())
         .collect();
 
-    if SecretDelivery::resolve(kind).is_native_projection() {
+    if SecretDelivery::resolve(platform, kind).is_native_projection() {
         // The hosting layer projects these secrets natively before process
         // start (Kubernetes secretKeyRef, local supervisor plain env, Horizon
         // workload secrets); injecting ALIEN_SECRETS here would leak a
@@ -559,42 +561,44 @@ pub async fn sync_secrets_to_vault(
     config: &DeploymentConfig,
     runtime_metadata: &mut alien_core::RuntimeMetadata,
 ) -> Result<bool> {
-    let snapshot = &config.environment_variables;
     let sync_hash = secrets_sync_hash(config);
+    let desired_secrets = desired_vault_secrets(config);
+    let desired_secret_names = desired_secrets.keys().cloned().collect::<Vec<_>>();
 
     if client_config.platform() == Platform::Machines {
         debug!("Machines platform syncs workload secrets through the runtime controller");
         runtime_metadata.last_synced_env_vars_hash = Some(sync_hash);
+        runtime_metadata.last_synced_secret_names.clear();
         return Ok(false);
     }
 
-    // Check if we've already synced this exact snapshot
+    // The hash avoids redundant value writes, while the exact owned-key
+    // inventory is what makes deletion safe. Old metadata without the
+    // inventory deliberately performs one full reconcile to establish it.
     if let Some(last_synced_hash) = &runtime_metadata.last_synced_env_vars_hash {
-        if last_synced_hash == &sync_hash {
+        if last_synced_hash == &sync_hash
+            && runtime_metadata.last_synced_secret_names == desired_secret_names
+        {
             debug!("Secrets already synced for hash {}, skipping", sync_hash);
             return Ok(false);
         }
     }
 
-    // Filter for secret-type variables from snapshot
-    let secret_vars: Vec<&EnvironmentVariable> = snapshot
-        .variables
-        .iter()
-        .filter(|v| v.var_type == EnvironmentVariableType::Secret)
-        .collect();
+    let removed_secret_names =
+        vault_secret_names_to_remove(&runtime_metadata.last_synced_secret_names, &desired_secrets);
 
-    // Skip if no secrets to sync
-    if secret_vars.is_empty() && config.monitoring.is_none() {
-        debug!("No secrets to sync to vault");
-        // Still update the hash to mark as synced
+    if desired_secrets.is_empty() && removed_secret_names.is_empty() {
+        debug!("No deployment-owned secrets to reconcile in vault");
         runtime_metadata.last_synced_env_vars_hash = Some(sync_hash);
+        runtime_metadata.last_synced_secret_names = desired_secret_names;
         return Ok(false);
     }
 
     info!(
-        "Syncing {} user secrets to vault (hash: {})",
-        secret_vars.len(),
-        sync_hash
+        "Reconciling {} desired and {} removed deployment-owned vault secrets (hash: {})",
+        desired_secrets.len(),
+        removed_secret_names.len(),
+        sync_hash,
     );
 
     // Create provider using deployment credentials
@@ -613,51 +617,85 @@ pub async fn sync_secrets_to_vault(
             reason: "Failed to load secrets vault".to_string(),
         })?;
 
-    // Sync each secret from snapshot (values already decrypted)
-    for env_var in secret_vars {
+    // Set desired values first so renames never create a window with neither
+    // the old nor new key available. Values are already decrypted.
+    for (name, value) in &desired_secrets {
         vault
-            .set_secret(&env_var.name, &env_var.value)
+            .set_secret(name, value)
             .await
             .context(ErrorData::SecretSyncFailed {
                 vault_name: "secrets".to_string(),
-                reason: format!("Failed to set secret '{}'", env_var.name),
+                reason: format!("Failed to set secret '{name}'"),
             })?;
-        debug!("Synced secret '{}' to vault", env_var.name);
+        debug!("Synced deployment-owned secret '{name}' to vault");
     }
+
+    // Delete names recorded by a previous successful sync. The command token is the sole
+    // exception: it is a reserved, control-plane-owned key that pre-v2 sync wrote without an
+    // ownership inventory. The sync-schema hash forces one idempotent cleanup after upgrade.
+    // Never list or infer any other ownership from the shared vault.
+    for name in &removed_secret_names {
+        vault
+            .delete_secret(name)
+            .await
+            .context(ErrorData::SecretSyncFailed {
+                vault_name: "secrets".to_string(),
+                reason: format!("Failed to delete removed secret '{name}'"),
+            })?;
+        debug!("Deleted removed deployment-owned secret '{name}' from vault");
+    }
+
+    // Record ownership only after every mutation succeeds. A partial failure
+    // leaves the prior inventory in place so the next reconcile retries.
+    runtime_metadata.last_synced_env_vars_hash = Some(sync_hash);
+    runtime_metadata.last_synced_secret_names = desired_secret_names;
+
+    info!("Successfully reconciled deployment-owned vault secrets");
+    Ok(true)
+}
+
+fn desired_vault_secrets(config: &DeploymentConfig) -> BTreeMap<String, String> {
+    let mut desired = config
+        .environment_variables
+        .variables
+        .iter()
+        .filter(|var| var.var_type == EnvironmentVariableType::Secret)
+        .filter(|var| var.name != ENV_ALIEN_COMMANDS_TOKEN)
+        .map(|var| (var.name.clone(), var.value.clone()))
+        .collect::<BTreeMap<_, _>>();
 
     if let Some(monitoring) = &config.monitoring {
-        vault
-            .set_secret(
-                RUNTIME_OTLP_LOGS_AUTH_HEADER_SECRET,
-                &monitoring.logs_auth_header,
-            )
-            .await
-            .context(ErrorData::SecretSyncFailed {
-                vault_name: "secrets".to_string(),
-                reason: "Failed to set runtime OTLP logs auth header".to_string(),
-            })?;
-
+        desired.insert(
+            RUNTIME_OTLP_LOGS_AUTH_HEADER_SECRET.to_string(),
+            monitoring.logs_auth_header.clone(),
+        );
         if monitoring.metrics_endpoint.is_some() {
-            let metrics_header = monitoring
-                .metrics_auth_header
-                .as_ref()
-                .unwrap_or(&monitoring.logs_auth_header);
-            vault
-                .set_secret(RUNTIME_OTLP_METRICS_AUTH_HEADER_SECRET, metrics_header)
-                .await
-                .context(ErrorData::SecretSyncFailed {
-                    vault_name: "secrets".to_string(),
-                    reason: "Failed to set runtime OTLP metrics auth header".to_string(),
-                })?;
+            desired.insert(
+                RUNTIME_OTLP_METRICS_AUTH_HEADER_SECRET.to_string(),
+                monitoring
+                    .metrics_auth_header
+                    .clone()
+                    .unwrap_or_else(|| monitoring.logs_auth_header.clone()),
+            );
         }
-        debug!("Synced runtime OTLP auth secrets to vault");
     }
 
-    // Update metadata to mark this snapshot as synced
-    runtime_metadata.last_synced_env_vars_hash = Some(sync_hash);
+    desired
+}
 
-    info!("Successfully synced all secrets to vault");
-    Ok(true)
+fn vault_secret_names_to_remove(
+    previously_owned: &[String],
+    desired: &BTreeMap<String, String>,
+) -> Vec<String> {
+    let mut removed = previously_owned
+        .iter()
+        .filter(|name| !desired.contains_key(*name))
+        .cloned()
+        .collect::<Vec<_>>();
+    if !removed.iter().any(|name| name == ENV_ALIEN_COMMANDS_TOKEN) {
+        removed.push(ENV_ALIEN_COMMANDS_TOKEN.to_string());
+    }
+    removed
 }
 
 fn runtime_monitoring_secrets_hash(monitoring: &OtlpConfig) -> String {
@@ -678,6 +716,7 @@ fn runtime_monitoring_secrets_hash(monitoring: &OtlpConfig) -> String {
 
 fn secrets_sync_hash(config: &DeploymentConfig) -> String {
     let mut hasher = Sha256::new();
+    hasher.update(SECRETS_SYNC_SCHEMA_VERSION);
     hasher.update(config.environment_variables.hash.as_bytes());
     if let Some(monitoring) = &config.monitoring {
         hasher.update(b"\0runtime-monitoring\0");
@@ -814,6 +853,9 @@ pub fn deployment_headline_error_from_state(
 mod tests {
     use super::*;
 
+    const OTEL_EXPORTER_OTLP_HEADERS: &str = "OTEL_EXPORTER_OTLP_HEADERS";
+    const OTEL_EXPORTER_OTLP_METRICS_HEADERS: &str = "OTEL_EXPORTER_OTLP_METRICS_HEADERS";
+
     #[test]
     fn test_matches_resource_pattern_null() {
         // None means all resources
@@ -864,7 +906,8 @@ mod tests {
 
     use alien_core::{
         ExternalBindings, Platform, Resource, ResourceEntry, ResourceLifecycle, ResourceStatus,
-        RuntimeMetadata, StackResourceState, StackSettings, Worker, WorkerCode,
+        RuntimeMetadata, StackResourceState, StackSettings, Vault, VaultBinding, Worker,
+        WorkerCode,
     };
     use alien_error::GenericError;
     use indexmap::IndexMap;
@@ -1035,12 +1078,16 @@ mod tests {
     fn test_inject_adds_alien_secrets_when_secret_vars_present() {
         let snapshot = make_snapshot(
             &[("PLAIN_VAR", "pv")],
-            &[("SECRET_TOKEN", "st"), ("SECRET_KEY", "sk")],
+            &[
+                ("SECRET_TOKEN", "st"),
+                ("SECRET_KEY", "sk"),
+                (ENV_ALIEN_COMMANDS_TOKEN, "runtime-only"),
+            ],
         );
         let config = make_config(snapshot);
         let mut stack = make_single_function_stack("worker");
 
-        inject_environment_variables(&mut stack, &config).unwrap();
+        inject_environment_variables(&mut stack, &config, Platform::Aws).unwrap();
 
         let func = stack
             .resources
@@ -1058,11 +1105,13 @@ mod tests {
         let parsed: AlienSecretsConfig = serde_json::from_str(alien_secrets_raw).unwrap();
         assert!(parsed.keys.contains(&"SECRET_TOKEN".to_string()));
         assert!(parsed.keys.contains(&"SECRET_KEY".to_string()));
+        assert!(!parsed.keys.contains(&ENV_ALIEN_COMMANDS_TOKEN.to_string()));
         assert_eq!(parsed.hash, "test-hash");
 
         // Secret values NOT injected as plain env vars
         assert!(!func.environment.contains_key("SECRET_TOKEN"));
         assert!(!func.environment.contains_key("SECRET_KEY"));
+        assert!(!func.environment.contains_key(ENV_ALIEN_COMMANDS_TOKEN));
     }
 
     #[test]
@@ -1071,7 +1120,7 @@ mod tests {
         let config = make_config(snapshot);
         let mut stack = make_single_function_stack("worker");
 
-        inject_environment_variables(&mut stack, &config).unwrap();
+        inject_environment_variables(&mut stack, &config, Platform::Aws).unwrap();
 
         let func = stack
             .resources
@@ -1097,7 +1146,7 @@ mod tests {
         let config = make_config(snapshot);
         let mut stack = make_single_function_stack("worker");
 
-        inject_environment_variables(&mut stack, &config).unwrap();
+        inject_environment_variables(&mut stack, &config, Platform::Aws).unwrap();
 
         let func = stack
             .resources
@@ -1112,28 +1161,16 @@ mod tests {
     }
 
     #[test]
-    fn kubernetes_projects_container_and_daemon_secrets_worker_keeps_pointer() {
+    fn kubernetes_projects_all_compute_secrets_natively() {
         let snapshot = make_snapshot(&[("APP_ENV", "prod")], &[("APP_SECRET", "s3cret")]);
         let config = make_config(snapshot);
         let mut stack = make_compute_stack();
 
-        inject_environment_variables(&mut stack, &config).unwrap();
+        inject_environment_variables(&mut stack, &config, Platform::Kubernetes).unwrap();
 
-        // Worker still ships the runtime wrapper: it keeps the vault-load
-        // pointer on Kubernetes (ALIEN-227 leaves Workers untouched).
-        let worker_env = resource_env(&stack, "worker");
-        let pointer: AlienSecretsConfig = serde_json::from_str(
-            worker_env
-                .get(ENV_ALIEN_SECRETS)
-                .expect("worker keeps ALIEN_SECRETS on Kubernetes"),
-        )
-        .unwrap();
-        assert_eq!(pointer.keys, vec!["APP_SECRET".to_string()]);
-        assert_eq!(pointer.hash, "test-hash");
-
-        // Container and Daemon secrets are projected natively (secretKeyRef)
-        // by the Kubernetes controllers: no pointer, no raw value here.
-        for id in ["web", "agent"] {
+        // Kubernetes controllers project all compute secrets via secretKeyRef:
+        // no pointer and no raw value enters the resource config.
+        for id in ["worker", "web", "agent"] {
             let env = resource_env(&stack, id);
             assert!(
                 !env.contains_key(ENV_ALIEN_SECRETS),
@@ -1152,27 +1189,29 @@ mod tests {
     }
 
     #[test]
-    fn vault_pointer_is_worker_only_on_every_platform() {
+    fn vault_pointer_is_limited_to_worker_hosts_without_native_projection() {
         // Runtime-less Containers/Daemons have nothing that could load the
         // ALIEN_SECRETS pointer; the hosting layer projects their secrets
-        // natively before process start on every platform (ALIEN-211). Only
-        // the Worker — which ships the runtime wrapper — keeps the pointer.
+        // natively before process start on every platform (ALIEN-211).
+        // Workers keep it only on hosts without native projection.
         for platform in [
             Platform::Local,
             Platform::Test,
             Platform::Aws,
             Platform::Kubernetes,
+            Platform::Machines,
         ] {
             let snapshot = make_snapshot(&[], &[("APP_SECRET", "s3cret")]);
             let config = make_config(snapshot);
             let mut stack = make_compute_stack();
 
-            inject_environment_variables(&mut stack, &config).unwrap();
+            inject_environment_variables(&mut stack, &config, platform).unwrap();
 
             let worker_env = resource_env(&stack, "worker");
-            assert!(
+            assert_eq!(
                 worker_env.contains_key(ENV_ALIEN_SECRETS),
-                "{platform:?}: worker keeps ALIEN_SECRETS"
+                !matches!(platform, Platform::Kubernetes | Platform::Machines),
+                "{platform:?}: Worker pointer must match host delivery"
             );
             for id in ["web", "agent"] {
                 let env = resource_env(&stack, id);
@@ -1311,6 +1350,12 @@ mod tests {
         }
     }
 
+    fn pre_v2_snapshot_only_sync_hash(config: &DeploymentConfig) -> String {
+        let mut hasher = Sha256::new();
+        hasher.update(config.environment_variables.hash.as_bytes());
+        format!("{:x}", hasher.finalize())
+    }
+
     #[tokio::test]
     async fn machines_skips_stack_vault_secret_sync() {
         let mut config = make_config(make_snapshot(&[], &[("API_TOKEN", "secret")]));
@@ -1332,6 +1377,230 @@ mod tests {
             runtime_metadata.last_synced_env_vars_hash.as_deref(),
             Some(expected_hash.as_str())
         );
+        assert!(runtime_metadata.last_synced_secret_names.is_empty());
+    }
+
+    #[test]
+    fn vault_reconcile_deletes_owned_names_and_reserved_legacy_command_token() {
+        let mut config = make_config(make_snapshot(&[], &[("KEEP", "current")]));
+        config.monitoring = Some(OtlpConfig {
+            logs_endpoint: "https://manager.test/v1/logs".to_string(),
+            logs_auth_header: "authorization=Bearer current".to_string(),
+            metrics_endpoint: None,
+            metrics_auth_header: None,
+            resource_attributes: HashMap::new(),
+        });
+        let desired = desired_vault_secrets(&config);
+        let previously_owned = vec![
+            "KEEP".to_string(),
+            "REMOVED".to_string(),
+            RUNTIME_OTLP_LOGS_AUTH_HEADER_SECRET.to_string(),
+            RUNTIME_OTLP_METRICS_AUTH_HEADER_SECRET.to_string(),
+        ];
+
+        let removed = vault_secret_names_to_remove(&previously_owned, &desired);
+
+        assert_eq!(
+            removed,
+            vec![
+                "REMOVED".to_string(),
+                RUNTIME_OTLP_METRICS_AUTH_HEADER_SECRET.to_string(),
+                ENV_ALIEN_COMMANDS_TOKEN.to_string(),
+            ]
+        );
+        assert!(desired.contains_key("KEEP"));
+        assert!(desired.contains_key(RUNTIME_OTLP_LOGS_AUTH_HEADER_SECRET));
+        assert!(!removed.contains(&"UNRELATED".to_string()));
+    }
+
+    #[test]
+    fn token_only_legacy_metadata_cannot_take_the_empty_reconcile_fast_path() {
+        let removed = vault_secret_names_to_remove(&[], &BTreeMap::new());
+        assert_eq!(removed, vec![ENV_ALIEN_COMMANDS_TOKEN.to_string()]);
+    }
+
+    #[test]
+    fn desired_vault_secrets_excludes_runtime_command_token() {
+        let config = make_config(make_snapshot(
+            &[],
+            &[
+                ("APP_SECRET", "app-value"),
+                (ENV_ALIEN_COMMANDS_TOKEN, "runtime-only"),
+            ],
+        ));
+
+        let desired = desired_vault_secrets(&config);
+
+        assert_eq!(desired.get("APP_SECRET"), Some(&"app-value".to_string()));
+        assert!(!desired.contains_key(ENV_ALIEN_COMMANDS_TOKEN));
+    }
+
+    #[tokio::test]
+    async fn vault_sync_removes_stale_owned_values_and_preserves_unrelated_values() {
+        let temp = tempfile::TempDir::new().expect("temp dir");
+        let state_dir = temp.path().to_string_lossy().to_string();
+        let client_config = ClientConfig::Local {
+            state_directory: state_dir.clone(),
+        };
+
+        let mut vault_state = StackResourceState::new_pending(
+            Vault::RESOURCE_TYPE.to_string(),
+            Resource::new(Vault::new("secrets".to_string()).build()),
+            Some(ResourceLifecycle::Frozen),
+            Vec::new(),
+        );
+        vault_state.status = ResourceStatus::Running;
+        vault_state.remote_binding_params = Some(
+            serde_json::to_value(VaultBinding::local("secrets", &state_dir))
+                .expect("local vault binding"),
+        );
+        let mut stack_state = StackState::new(Platform::Local);
+        stack_state
+            .resources
+            .insert("secrets".to_string(), vault_state);
+
+        let provider = BindingsProvider::from_stack_state(&stack_state, client_config.clone())
+            .expect("bindings provider");
+        let vault = provider.load_vault("secrets").await.expect("local vault");
+        vault
+            .set_secret("UNRELATED", "keep-me")
+            .await
+            .expect("seed unrelated value");
+        vault
+            .set_secret(ENV_ALIEN_COMMANDS_TOKEN, "legacy-runtime-token")
+            .await
+            .expect("seed previously synced runtime token");
+
+        let mut first = make_config(make_snapshot(
+            &[],
+            &[
+                ("KEEP", "v1"),
+                ("REMOVE", "old"),
+                (ENV_ALIEN_COMMANDS_TOKEN, "current-runtime-token"),
+            ],
+        ));
+        first.environment_variables.hash = "first".to_string();
+        first.monitoring = Some(make_monitoring_with_metrics());
+        let mut metadata = RuntimeMetadata::default();
+        // This is the real pre-inventory upgrade case: the old hash exists, but there is no list
+        // of owned names. The reserved token still has to be deleted from the shared vault.
+        metadata.last_synced_env_vars_hash = Some("legacy".to_string());
+        metadata.last_synced_secret_names.clear();
+        assert!(
+            sync_secrets_to_vault(&stack_state, &client_config, &first, &mut metadata)
+                .await
+                .expect("first sync")
+        );
+        assert!(vault.get_secret(ENV_ALIEN_COMMANDS_TOKEN).await.is_err());
+        assert_eq!(
+            vault
+                .get_secret("KEEP")
+                .await
+                .expect("ordinary app secret remains available"),
+            "v1"
+        );
+        assert!(!metadata
+            .last_synced_secret_names
+            .contains(&ENV_ALIEN_COMMANDS_TOKEN.to_string()));
+
+        let mut second = make_config(make_snapshot(&[], &[("KEEP", "v2")]));
+        second.environment_variables.hash = "second".to_string();
+        second.monitoring = Some(OtlpConfig {
+            logs_endpoint: "https://manager.test/v1/logs".to_string(),
+            logs_auth_header: "authorization=Bearer next".to_string(),
+            metrics_endpoint: None,
+            metrics_auth_header: None,
+            resource_attributes: HashMap::new(),
+        });
+        assert!(
+            sync_secrets_to_vault(&stack_state, &client_config, &second, &mut metadata)
+                .await
+                .expect("second sync")
+        );
+
+        assert_eq!(vault.get_secret("KEEP").await.expect("kept value"), "v2");
+        assert_eq!(
+            vault
+                .get_secret("UNRELATED")
+                .await
+                .expect("unrelated value"),
+            "keep-me"
+        );
+        assert!(vault.get_secret("REMOVE").await.is_err());
+        assert!(vault
+            .get_secret(RUNTIME_OTLP_METRICS_AUTH_HEADER_SECRET)
+            .await
+            .is_err());
+        assert_eq!(
+            metadata.last_synced_secret_names,
+            vec![
+                "KEEP".to_string(),
+                RUNTIME_OTLP_LOGS_AUTH_HEADER_SECRET.to_string(),
+            ]
+        );
+
+        let mut third = make_config(make_snapshot(&[], &[]));
+        third.environment_variables.hash = "third".to_string();
+        assert!(
+            sync_secrets_to_vault(&stack_state, &client_config, &third, &mut metadata)
+                .await
+                .expect("delete-only sync")
+        );
+        assert!(vault.get_secret("KEEP").await.is_err());
+        assert!(vault
+            .get_secret(RUNTIME_OTLP_LOGS_AUTH_HEADER_SECRET)
+            .await
+            .is_err());
+        assert_eq!(
+            vault
+                .get_secret("UNRELATED")
+                .await
+                .expect("unrelated survives delete-only sync"),
+            "keep-me"
+        );
+        assert!(metadata.last_synced_secret_names.is_empty());
+
+        // A deployment upgraded from the pre-v2 sync can have only a stored hash: there was no
+        // owned-name inventory, and the token may be its only secret. The schema hash must force
+        // this reconcile past the empty-desired fast path and delete the reserved legacy value.
+        vault
+            .set_secret(ENV_ALIEN_COMMANDS_TOKEN, "legacy-token-only")
+            .await
+            .expect("reseed legacy token-only value");
+        let mut token_only = make_config(make_snapshot(
+            &[],
+            &[(ENV_ALIEN_COMMANDS_TOKEN, "current-runtime-token")],
+        ));
+        token_only.environment_variables.hash = "token-only".to_string();
+        let old_hash = pre_v2_snapshot_only_sync_hash(&token_only);
+        let policy_hash = secrets_sync_hash(&token_only);
+        assert_ne!(old_hash, policy_hash);
+        let mut legacy_metadata = RuntimeMetadata::default();
+        legacy_metadata.last_synced_env_vars_hash = Some(old_hash);
+
+        assert!(sync_secrets_to_vault(
+            &stack_state,
+            &client_config,
+            &token_only,
+            &mut legacy_metadata,
+        )
+        .await
+        .expect("legacy token-only cleanup"));
+        assert!(vault.get_secret(ENV_ALIEN_COMMANDS_TOKEN).await.is_err());
+        assert!(legacy_metadata.last_synced_secret_names.is_empty());
+        assert_eq!(
+            legacy_metadata.last_synced_env_vars_hash.as_deref(),
+            Some(policy_hash.as_str())
+        );
+        assert!(!sync_secrets_to_vault(
+            &stack_state,
+            &client_config,
+            &token_only,
+            &mut legacy_metadata,
+        )
+        .await
+        .expect("already-clean token-only sync is idempotent"));
+        assert!(vault.get_secret(ENV_ALIEN_COMMANDS_TOKEN).await.is_err());
     }
 
     fn resource_env<'a>(stack: &'a Stack, id: &str) -> &'a HashMap<String, String> {
@@ -1404,35 +1673,28 @@ mod tests {
                 );
             }
 
-            for id in ["worker", "agent"] {
+            let worker_env = resource_env(&stack, "worker");
+            assert!(
+                worker_env.contains_key(ENV_ALIEN_RUNTIME_SECRETS),
+                "{platform:?}: Worker gets the runtime-secrets pointer"
+            );
+
+            for id in ["web", "agent"] {
                 let env = resource_env(&stack, id);
                 assert!(
-                    env.contains_key(ENV_ALIEN_RUNTIME_SECRETS),
-                    "{platform:?}: '{id}' gets the runtime-secrets pointer"
+                    !env.contains_key(ENV_ALIEN_RUNTIME_SECRETS),
+                    "{platform:?}: runtime-less '{id}' must not get a runtime-secrets pointer"
                 );
-                assert!(
-                    !env.contains_key(OTEL_EXPORTER_OTLP_HEADERS),
-                    "{platform:?}: '{id}' must not carry a plain auth header"
-                );
+                for header in [
+                    OTEL_EXPORTER_OTLP_HEADERS,
+                    OTEL_EXPORTER_OTLP_METRICS_HEADERS,
+                ] {
+                    assert!(
+                        !env.contains_key(header),
+                        "{platform:?}: runtime-less '{id}' must not store raw monitoring header '{header}' in resource config"
+                    );
+                }
             }
-
-            let container_env = resource_env(&stack, "web");
-            assert_eq!(
-                container_env.get(OTEL_EXPORTER_OTLP_HEADERS).unwrap(),
-                "authorization=Bearer logs-token",
-                "{platform:?}: container gets the plain logs auth header"
-            );
-            assert_eq!(
-                container_env
-                    .get(OTEL_EXPORTER_OTLP_METRICS_HEADERS)
-                    .unwrap(),
-                "authorization=Bearer logs-token",
-                "{platform:?}: container metrics header falls back to the logs header"
-            );
-            assert!(
-                !container_env.contains_key(ENV_ALIEN_RUNTIME_SECRETS),
-                "{platform:?}: container must not get the runtime-secrets pointer"
-            );
         }
     }
 }

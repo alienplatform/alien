@@ -23,7 +23,6 @@ import type {
   RawVaultHandle,
 } from "./loader.js"
 import type {
-  BindingOptions,
   Kv,
   KvScanResult,
   KvSetOptions,
@@ -35,16 +34,6 @@ import type {
   Vault,
 } from "./types.js"
 
-/** Drop `undefined` values so the addon receives a plain `Record<string,string>`. */
-function filterEnv(env: BindingOptions["env"]): Record<string, string> | undefined {
-  if (!env) return undefined
-  const out: Record<string, string> = {}
-  for (const [key, value] of Object.entries(env)) {
-    if (value !== undefined) out[key] = value
-  }
-  return out
-}
-
 /**
  * Build a lazy, cached resolver for one resource handle. The returned function
  * loads the addon, constructs a `BindingsHandle`, and resolves the resource
@@ -53,17 +42,15 @@ function filterEnv(env: BindingOptions["env"]): Record<string, string> | undefin
 function lazyHandle<THandle>(
   getAddon: () => NativeAddon,
   name: string,
-  options: BindingOptions | undefined,
   resolve: (bindings: RawBindingsHandle, name: string) => Promise<THandle>,
 ): () => Promise<THandle> {
-  const env = filterEnv(options?.env)
   let pending: Promise<THandle> | undefined
 
   return () => {
     if (!pending) {
       pending = (async () => {
         const addon = getAddon()
-        const bindings = new addon.BindingsHandle(env)
+        const bindings = new addon.BindingsHandle()
         return await resolve(bindings, name)
       })().catch(err => {
         // Do not cache a failed materialization; allow a later retry.
@@ -174,23 +161,22 @@ function makeVault(handle: () => Promise<RawVaultHandle>): Vault {
 
 /** The public factory surface. */
 export interface Factories {
-  storage(name: string, options?: BindingOptions): Storage
-  kv(name: string, options?: BindingOptions): Kv
-  queue(name: string, options?: BindingOptions): Queue
-  vault(name: string, options?: BindingOptions): Vault
+  storage(name: string): Storage
+  kv(name: string): Kv
+  queue(name: string): Queue
+  vault(name: string): Vault
 }
 
 /** Build the four factories bound to a given addon provider. */
 export function createFactories(getAddon: () => NativeAddon): Factories {
   return {
-    storage: (name, options) =>
-      makeStorage(lazyHandle(getAddon, name, options, (b, n) => b.storage(n))),
-    kv: (name, options) => makeKv(lazyHandle(getAddon, name, options, (b, n) => b.kv(n))),
-    queue: (name, options) =>
+    storage: name => makeStorage(lazyHandle(getAddon, name, (b, n) => b.storage(n))),
+    kv: name => makeKv(lazyHandle(getAddon, name, (b, n) => b.kv(n))),
+    queue: name =>
       makeQueue(
-        lazyHandle(getAddon, name, options, (b, n) => b.queue(n)),
+        lazyHandle(getAddon, name, (b, n) => b.queue(n)),
         name,
       ),
-    vault: (name, options) => makeVault(lazyHandle(getAddon, name, options, (b, n) => b.vault(n))),
+    vault: name => makeVault(lazyHandle(getAddon, name, (b, n) => b.vault(n))),
   }
 }

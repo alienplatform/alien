@@ -161,13 +161,25 @@ impl crate::traits::Vault for KubernetesSecretVault {
     async fn delete_secret(&self, secret_name: &str) -> Result<()> {
         let secret_resource_name = self.secret_resource_name(secret_name);
 
-        self.client
+        match self
+            .client
             .delete_secret(&self.namespace, &secret_resource_name)
             .await
-            .context(ErrorData::CloudPlatformError {
-                message: format!("Failed to delete secret '{}'", secret_name),
+        {
+            Ok(()) => Ok(()),
+            Err(error)
+                if matches!(
+                    error.error,
+                    Some(alien_client_core::ErrorData::RemoteResourceNotFound { .. })
+                ) =>
+            {
+                Ok(())
+            }
+            Err(error) => Err(error.context(ErrorData::CloudPlatformError {
+                message: format!("Failed to delete secret '{secret_name}'"),
                 resource_id: None,
-            })
+            })),
+        }
     }
 
     /// List secret names by selecting the Secret resources this vault manages

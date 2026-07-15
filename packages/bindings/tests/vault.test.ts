@@ -10,10 +10,13 @@ import { AlienError, vault } from "../src/index.js"
 import type { Vault } from "../src/index.js"
 import { cleanupTempDirs, localVaultBindingEnv } from "./helpers/local-binding-env.js"
 
+let bunFixtureIndex = 0
+
 function freshVault(): Vault {
-  const name = `vault-${randomUUID()}`
-  const { env } = localVaultBindingEnv(name, "secrets")
-  return vault(name, { env })
+  const isBun = process.env.BUN_EXPECTED === "1"
+  const name = isBun ? `bun-vault-${bunFixtureIndex++}` : `vault-${randomUUID()}`
+  if (!isBun) localVaultBindingEnv(name, "secrets")
+  return vault(name)
 }
 
 describe("vault (local secrets.json provider)", () => {

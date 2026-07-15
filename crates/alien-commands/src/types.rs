@@ -3,8 +3,7 @@ pub use alien_core::commands_types::*;
 
 /// Default interval between lease polls, in seconds.
 ///
-/// Shared by every pull-side poller of the commands protocol (the worker
-/// runtime's `commands_polling` transport and the app-owned `Receiver`).
+/// Used by app-owned pull receivers.
 pub const DEFAULT_POLL_INTERVAL_SECS: u64 = 5;
 
 /// Default maximum number of leases requested per poll.

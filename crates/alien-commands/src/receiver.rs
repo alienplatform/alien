@@ -93,7 +93,7 @@ use tracing::{debug, error, info, warn};
 
 use crate::{
     error::{ErrorData, Result},
-    runtime::{command_budget, decode_params_bytes, submit_response, LeaseClient},
+    runtime::{command_budget, decode_params_bytes, submit_response_before, LeaseClient},
     types::{
         CommandResponse, CommandTarget, CommandTargetType, LeaseInfo, LeaseRequest, TraceContext,
         DEFAULT_DRAIN_TIMEOUT_MS, DEFAULT_LEASE_SECONDS, DEFAULT_MAX_LEASES,
@@ -787,10 +787,11 @@ pub async fn process_lease(handler: Option<BoxedHandler>, lease: LeaseInfo, targ
         "Processing command"
     );
 
+    let execution_budget = command_budget(envelope.deadline, lease_expires_at);
     let response = execute_lease(
         handler,
         &envelope,
-        lease_expires_at,
+        execution_budget,
         attempt,
         target.clone(),
         CancellationToken::new(),
@@ -799,7 +800,7 @@ pub async fn process_lease(handler: Option<BoxedHandler>, lease: LeaseInfo, targ
     .expect("uncancelled process_lease always produces a response");
     let handler_status = command_response_status(&response).to_string();
 
-    let submit_status = match submit_response(&envelope, response).await {
+    let submit_status = match submit_response_before(&envelope, response, lease_expires_at).await {
         Ok(()) => "submitted",
         Err(e) => {
             error!(
@@ -842,10 +843,11 @@ async fn process_receiver_lease(
     } = lease;
     let deadline = envelope.deadline;
 
+    let execution_budget = command_budget(envelope.deadline, lease_expires_at);
     let Some(response) = execute_lease(
         handler,
         &envelope,
-        lease_expires_at,
+        execution_budget,
         attempt,
         target.clone(),
         cancellation,
@@ -866,7 +868,7 @@ async fn process_receiver_lease(
     };
 
     let handler_status = command_response_status(&response).to_string();
-    let submit_status = match submit_response(&envelope, response).await {
+    let submit_status = match submit_response_before(&envelope, response, lease_expires_at).await {
         Ok(()) => "submitted",
         Err(error) => {
             error!(
@@ -896,7 +898,7 @@ async fn process_receiver_lease(
 async fn execute_lease(
     handler: Option<BoxedHandler>,
     envelope: &crate::types::Envelope,
-    lease_expires_at: DateTime<Utc>,
+    budget: DateTime<Utc>,
     attempt: u32,
     target: CommandTarget,
     cancellation: CancellationToken,
@@ -908,31 +910,35 @@ async fn execute_lease(
         ));
     };
 
-    let input = match decode_params_bytes(envelope).await {
-        Ok(input) => input,
-        Err(e) => return Some(CommandResponse::error(&e.code, e.to_string())),
-    };
-
-    let budget = command_budget(envelope.deadline, lease_expires_at);
-    let ctx = Context {
-        input,
-        deadline: Some(budget),
-        command_id: envelope.command_id.clone(),
-        target,
-        trace_context: envelope.trace_context.clone(),
-        attempt,
-        cancellation: cancellation.clone(),
-    };
-
     let remaining = (budget - Utc::now()).to_std().unwrap_or(Duration::ZERO);
+    if remaining.is_zero() {
+        cancellation.cancel();
+        return Some(handler_timeout_response(envelope, budget));
+    }
+    let execution = async {
+        let input = match decode_params_bytes(envelope).await {
+            Ok(input) => input,
+            Err(error) => return CommandResponse::error(&error.code, error.to_string()),
+        };
+        let ctx = Context {
+            input,
+            deadline: Some(budget),
+            command_id: envelope.command_id.clone(),
+            target,
+            trace_context: envelope.trace_context.clone(),
+            attempt,
+            cancellation: cancellation.clone(),
+        };
+        match handler(ctx).await {
+            Ok(bytes) => CommandResponse::success(&bytes),
+            Err(message) => CommandResponse::error(ERROR_CODE_HANDLER_ERROR, message),
+        }
+    };
 
     tokio::select! {
         biased;
         _ = cancellation.cancelled() => None,
-        result = handler(ctx) => Some(match result {
-            Ok(bytes) => CommandResponse::success(&bytes),
-            Err(message) => CommandResponse::error(ERROR_CODE_HANDLER_ERROR, message),
-        }),
+        response = execution => Some(response),
         _ = tokio::time::sleep(remaining) => {
             // Budget expired: the handler future is dropped (aborted) by
             // this select; cancel the token for cooperative work it spawned.
@@ -943,20 +949,27 @@ async fn execute_lease(
                 budget = %budget,
                 "Command exceeded its execution budget, aborting handler"
             );
-            Some(CommandResponse::error(
-                ERROR_CODE_HANDLER_TIMEOUT,
-                format!(
-                    "Command '{}' exceeded its execution budget ({budget})",
-                    envelope.command
-                ),
-            ))
+            Some(handler_timeout_response(envelope, budget))
         }
     }
 }
 
+fn handler_timeout_response(
+    envelope: &crate::types::Envelope,
+    budget: DateTime<Utc>,
+) -> CommandResponse {
+    CommandResponse::error(
+        ERROR_CODE_HANDLER_TIMEOUT,
+        format!(
+            "Command '{}' exceeded its execution budget ({budget})",
+            envelope.command
+        ),
+    )
+}
+
 fn require_env<'a>(env: &'a HashMap<String, String>, var: &str) -> Result<&'a String> {
     match env.get(var) {
-        Some(value) if !value.is_empty() => Ok(value),
+        Some(value) if !value.trim().is_empty() => Ok(value),
         Some(_) => Err(AlienError::new(ErrorData::CommandReceiverConfigInvalid {
             message: format!("{var} must not be empty"),
             env_var: var.to_string(),
@@ -970,7 +983,7 @@ fn require_env<'a>(env: &'a HashMap<String, String>, var: &str) -> Result<&'a St
 
 fn optional_env<'a>(env: &'a HashMap<String, String>, var: &str) -> Result<Option<&'a String>> {
     match env.get(var) {
-        Some(value) if !value.is_empty() => Ok(Some(value)),
+        Some(value) if !value.trim().is_empty() => Ok(Some(value)),
         Some(_) => Err(AlienError::new(ErrorData::CommandReceiverConfigInvalid {
             message: format!("{var} must not be empty"),
             env_var: var.to_string(),
@@ -1012,6 +1025,7 @@ mod tests {
 
     use alien_core::presigned::{PresignedOperation, PresignedRequest};
     use chrono::Duration as ChronoDuration;
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
     use super::*;
     use crate::types::{BodySpec, Envelope, ResponseHandling};
@@ -1226,6 +1240,15 @@ mod tests {
     }
 
     #[test]
+    fn from_env_vars_whitespace_only_token_rejected() {
+        let mut env = full_env();
+        env.insert(ENV_ALIEN_COMMANDS_TOKEN.to_string(), " \t\n ".to_string());
+        let err = Receiver::from_env_vars(&env).expect_err("blank token must fail");
+        assert_eq!(err.code, "COMMAND_RECEIVER_CONFIG_INVALID");
+        assert!(err.message.contains(ENV_ALIEN_COMMANDS_TOKEN));
+    }
+
+    #[test]
     fn from_env_vars_invalid_url_rejected() {
         let mut env = full_env();
         env.insert(ENV_ALIEN_COMMANDS_URL.to_string(), "not a url".to_string());
@@ -1251,8 +1274,8 @@ mod tests {
 
     #[test]
     fn from_env_vars_rejects_worker_target_type() {
-        // A receiver is the Container/Daemon path; the worker runtime has its
-        // own polling transport. Never guess a Worker target.
+        // A receiver is the Container/Daemon path; Workers use runtime push.
+        // Never guess a Worker target.
         let mut env = full_env();
         env.insert(
             ENV_ALIEN_COMMANDS_TARGET_RESOURCE_TYPE.to_string(),
@@ -1386,10 +1409,11 @@ mod tests {
             traceparent: "00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01".to_string(),
             tracestate: Some("vendor=opaque-value".to_string()),
         });
+        let budget = command_budget(None, Utc::now() + ChronoDuration::seconds(60));
         let response = execute_lease(
             Some(handler),
             &envelope,
-            Utc::now() + ChronoDuration::seconds(60),
+            budget,
             3,
             envelope.target.clone(),
             CancellationToken::new(),
@@ -1429,10 +1453,11 @@ mod tests {
         let cancellation_for_task = cancellation.clone();
         let target = envelope.target.clone();
         let task = tokio::spawn(async move {
+            let budget = command_budget(None, Utc::now() + ChronoDuration::seconds(60));
             execute_lease(
                 Some(handler),
                 &envelope,
-                Utc::now() + ChronoDuration::seconds(60),
+                budget,
                 1,
                 target,
                 cancellation_for_task,
@@ -1448,10 +1473,11 @@ mod tests {
     #[tokio::test]
     async fn execute_lease_unknown_command() {
         let envelope = test_envelope("nobody-home", None);
+        let budget = command_budget(None, Utc::now() + ChronoDuration::seconds(60));
         let response = execute_lease(
             None,
             &envelope,
-            Utc::now() + ChronoDuration::seconds(60),
+            budget,
             1,
             envelope.target.clone(),
             CancellationToken::new(),
@@ -1472,10 +1498,11 @@ mod tests {
         });
 
         let envelope = test_envelope("burn", None);
+        let budget = command_budget(None, Utc::now() + ChronoDuration::seconds(60));
         let response = execute_lease(
             Some(handler),
             &envelope,
-            Utc::now() + ChronoDuration::seconds(60),
+            budget,
             1,
             envelope.target.clone(),
             CancellationToken::new(),
@@ -1487,6 +1514,104 @@ mod tests {
         };
         assert_eq!(code, ERROR_CODE_HANDLER_ERROR);
         assert!(message.contains("database on fire"));
+    }
+
+    #[tokio::test]
+    async fn storage_decode_and_handler_share_one_execution_budget() {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("bind params server");
+        let address = listener.local_addr().expect("params server address");
+        let server = tokio::spawn(async move {
+            let (mut socket, _) = listener.accept().await.expect("accept params request");
+            let mut request = [0_u8; 1024];
+            socket
+                .read(&mut request)
+                .await
+                .expect("read params request");
+            tokio::time::sleep(Duration::from_millis(500)).await;
+            let body = br#"{"fromStorage":true}"#;
+            let headers = format!(
+                "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+                body.len()
+            );
+            socket
+                .write_all(headers.as_bytes())
+                .await
+                .expect("write params headers");
+            socket.write_all(body).await.expect("write params body");
+        });
+
+        let handler_called = Arc::new(AtomicBool::new(false));
+        let called_in_handler = handler_called.clone();
+        let handler = box_handler(move |_ctx: Context| {
+            called_in_handler.store(true, Ordering::SeqCst);
+            async move { Ok(serde_json::json!({ "shouldNotRun": true })) }
+        });
+        let mut envelope = test_envelope("slow-storage", None);
+        envelope.params = BodySpec::storage_with_request(
+            20,
+            PresignedRequest::new_http(
+                format!("http://{address}/params"),
+                "GET".to_string(),
+                HashMap::new(),
+                PresignedOperation::Get,
+                "params".to_string(),
+                Utc::now() + ChronoDuration::hours(1),
+            ),
+        );
+        let lease_expires_at =
+            Utc::now() + ChronoDuration::seconds(5) + ChronoDuration::milliseconds(100);
+        let budget = command_budget(envelope.deadline, lease_expires_at);
+
+        let response = execute_lease(
+            Some(handler),
+            &envelope,
+            budget,
+            1,
+            envelope.target.clone(),
+            CancellationToken::new(),
+        )
+        .await;
+
+        let Some(CommandResponse::Error { code, .. }) = response else {
+            panic!("slow storage decode must consume the command budget");
+        };
+        assert_eq!(code, ERROR_CODE_HANDLER_TIMEOUT);
+        assert!(
+            !handler_called.load(Ordering::SeqCst),
+            "handler must not run after storage decode consumes the budget"
+        );
+        server.abort();
+    }
+
+    #[tokio::test]
+    async fn response_submission_is_capped_by_absolute_lease_expiry() {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("bind response server");
+        let address = listener.local_addr().expect("response server address");
+        let server = tokio::spawn(async move {
+            let (_socket, _) = listener.accept().await.expect("accept response request");
+            std::future::pending::<()>().await;
+        });
+
+        let mut envelope = test_envelope("submit", None);
+        envelope.response_handling.submit_response_url = format!("http://{address}/response");
+        let lease_expires_at = Utc::now() + ChronoDuration::milliseconds(75);
+        let started = std::time::Instant::now();
+        let error =
+            submit_response_before(&envelope, CommandResponse::success(b"ok"), lease_expires_at)
+                .await
+                .expect_err("blackholed submission must stop at lease expiry");
+
+        assert!(
+            started.elapsed() < Duration::from_secs(1),
+            "submission exceeded the absolute lease expiry: {:?}",
+            started.elapsed()
+        );
+        assert_eq!(error.code, "HTTP_OPERATION_FAILED");
+        server.abort();
     }
 
     #[tokio::test(start_paused = true)]
@@ -1509,10 +1634,11 @@ mod tests {
 
         // Budget from the envelope deadline: 2s, well below the lease expiry.
         let envelope = test_envelope("slow", Some(Utc::now() + ChronoDuration::seconds(2)));
+        let budget = command_budget(envelope.deadline, Utc::now() + ChronoDuration::seconds(60));
         let response = execute_lease(
             Some(handler),
             &envelope,
-            Utc::now() + ChronoDuration::seconds(60),
+            budget,
             1,
             envelope.target.clone(),
             CancellationToken::new(),

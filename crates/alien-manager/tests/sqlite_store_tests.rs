@@ -1508,7 +1508,8 @@ async fn resolve_target_unknown_is_404() {
 
 #[tokio::test]
 async fn resolve_target_worker_on_kubernetes_is_pull() {
-    // K8s has no push path, so a worker target is Pull even under the Push model.
+    // K8s manager delivery is Pull to the in-cluster operator, which then
+    // pushes the command into the Worker runtime.
     let stack = Stack::new("s".to_string())
         .add(worker("w1", true), ResourceLifecycle::Live)
         .build();
@@ -1520,7 +1521,7 @@ async fn resolve_target_worker_on_kubernetes_is_pull() {
 }
 
 #[tokio::test]
-async fn resolve_target_worker_on_local_is_pull() {
+async fn resolve_target_worker_on_local_is_push() {
     let stack = Stack::new("s".to_string())
         .add(worker("w1", true), ResourceLifecycle::Live)
         .build();
@@ -1528,7 +1529,7 @@ async fn resolve_target_worker_on_local_is_pull() {
         registry_with_release(stack, Platform::Local, StackSettings::default()).await;
 
     let resolved = registry.resolve_target(&dep_id, None).await.unwrap();
-    assert_eq!(resolved.delivery_mode, CommandDeliveryMode::Pull);
+    assert_eq!(resolved.delivery_mode, CommandDeliveryMode::Push);
 }
 
 #[tokio::test]

@@ -19,6 +19,7 @@ server = [
     "alien-aws-clients",
     "alien-gcp-clients",
     "alien-azure-clients",
+    "alien-client-core",
     "tokio",
     "hmac",
     "sha2",
@@ -29,6 +30,7 @@ runtime = [
     "reqwest",
     "bytes",
     "futures",
+    "tokio",
 ]
 # App-owned pull command receiver for Containers/Daemons (ALIEN-221).
 # Deliberately light: protocol types + HTTP only. Must NOT pull the heavy
@@ -44,6 +46,7 @@ dispatchers = [
     "alien-aws-clients",
     "alien-gcp-clients",
     "alien-azure-clients",
+    "alien-client-core",
     "reqwest",
 ]
 openapi = ["utoipa", "alien-error/openapi", "alien-bindings/openapi", "alien-core/openapi"]

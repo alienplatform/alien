@@ -26,7 +26,7 @@ get "code"(){
                 return ContainerCodeSchema.describe("Specifies the source of the container's executable code.")
               },
 "command": z.array(z.string()).describe("Command to override image default").nullish(),
-"commandsEnabled": z.optional(z.boolean().default(false).describe("Whether the container can receive remote commands via the Commands protocol.\nWhen enabled, the container polls the manager for pending commands and executes registered handlers.")),
+"commandsEnabled": z.optional(z.boolean().default(false).describe("Whether the container can receive remote commands via the Commands protocol.\nWhen enabled, an app-owned command receiver can lease pending commands\nfor this Container and execute registered handlers.")),
 get "cpu"(){
                 return ResourceSpecSchema.describe("Resource specification with min/desired values.")
               },

@@ -58,9 +58,9 @@ pub struct OperatorConfig {
     #[builder(default = 10)]
     pub telemetry_interval_seconds: u64,
 
-    /// Commands dispatch poll interval in seconds (for cloud function platforms).
+    /// Commands dispatch poll interval in seconds.
     /// The operator polls the manager's lease API at this interval and dispatches
-    /// leased commands to the deployed function via platform-native push.
+    /// leased commands to the Worker via its platform push transport.
     #[builder(default = 5)]
     pub commands_interval_seconds: u64,
 

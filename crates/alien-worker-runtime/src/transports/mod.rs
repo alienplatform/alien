@@ -5,13 +5,12 @@
 //! - StorageEvent
 //! - QueueMessage
 //! - CronEvent
-//! - ArcCommand (commands polling)
+//! - ArcCommand (platform push)
 
 #[cfg(feature = "aws")]
 pub mod lambda;
 
 pub mod cloudrun;
-pub mod commands_polling;
 pub mod containerapp;
 pub mod local;
 pub mod shared;

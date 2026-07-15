@@ -1006,6 +1006,88 @@ mod tests {
         assert_eq!(complete_response.state, CommandState::Dispatched);
     }
 
+    /// A transport error is an ambiguous acknowledgement: the target may have
+    /// accepted the envelope before the response was lost. The command must
+    /// stay Dispatched so a late response remains valid. Creation still returns
+    /// the durable command ID, avoiding an unknown orphan and an immediate
+    /// duplicate when default clients retry without an idempotency key.
+    #[tokio::test]
+    async fn ambiguous_push_failure_keeps_dispatched_and_accepts_late_response() {
+        let server = TestCommandServer::new().await;
+        let dispatcher = server
+            .mock_dispatcher()
+            .expect("push test server uses the mock dispatcher");
+        dispatcher.set_should_fail(true).await;
+
+        let created = server
+            .create_command(test_inline_create_command(
+                "push-agent",
+                "ambiguous-dispatch",
+            ))
+            .await
+            .expect("ambiguous acknowledgement must still return the durable command ID");
+        assert_eq!(created.state, CommandState::Dispatched);
+        dispatcher.assert_dispatch_count(0).await;
+
+        let status = server
+            .get_command_status(&created.command_id)
+            .await
+            .expect("command status");
+        assert_eq!(status.command_id, created.command_id);
+        assert_eq!(status.state, CommandState::Dispatched);
+        assert_eq!(status.attempt, 1);
+
+        server
+            .submit_command_response(
+                &created.command_id,
+                test_success_response(b"completed after ambiguous acknowledgement"),
+            )
+            .await
+            .expect("late response remains valid");
+        server.assert_command_succeeded(&created.command_id).await;
+    }
+
+    #[tokio::test]
+    async fn definite_push_rejection_becomes_terminal_delivery_failure() {
+        let server = TestCommandServer::new().await;
+        let dispatcher = server
+            .mock_dispatcher()
+            .expect("push test server uses the mock dispatcher");
+        dispatcher.set_should_reject(true).await;
+
+        let created = server
+            .create_command(test_inline_create_command(
+                "push-agent",
+                "definite-rejection",
+            ))
+            .await
+            .expect("definite rejection must return the durable terminal command ID");
+        assert_eq!(created.state, CommandState::Failed);
+
+        let status = server
+            .get_command_status(&created.command_id)
+            .await
+            .expect("command status");
+        assert_eq!(status.state, CommandState::Failed);
+        let Some(CommandResponse::Error { code, message, .. }) = status.response else {
+            panic!("definite delivery rejection must persist an error response");
+        };
+        assert_eq!(code, "DELIVERY_FAILED");
+        assert_eq!(message, "Worker runtime did not accept command delivery");
+
+        let late = server
+            .submit_command_response(
+                &created.command_id,
+                test_success_response(b"must not replace delivery failure"),
+            )
+            .await;
+        assert!(
+            late.is_ok(),
+            "terminal duplicate submissions are idempotent"
+        );
+        server.assert_command_failed(&created.command_id).await;
+    }
+
     /// Test lease operations
     #[tokio::test]
     async fn test_lease_operations() {
@@ -1052,6 +1134,109 @@ mod tests {
         server
             .assert_command_state(&response.command_id, CommandState::Pending)
             .await;
+    }
+
+    #[tokio::test]
+    async fn max_timeout_lease_receives_response_credentials_beyond_lease_headroom() {
+        let server = TestCommandServer::builder().with_pull_mode().build().await;
+        let created = server
+            .create_command(test_inline_create_command("max-timeout", "run"))
+            .await
+            .unwrap();
+        let lease = server
+            .acquire_lease(
+                "max-timeout",
+                LeaseRequest {
+                    deployment_id: "max-timeout".to_string(),
+                    target: server.default_target.clone(),
+                    max_leases: 1,
+                    lease_seconds: 3660,
+                },
+            )
+            .await
+            .unwrap()
+            .leases
+            .into_iter()
+            .next()
+            .expect("max-timeout lease");
+        assert_eq!(lease.command_id, created.command_id);
+
+        let submit = url::Url::parse("http://manager.invalid")
+            .unwrap()
+            .join(&lease.envelope.response_handling.submit_response_url)
+            .unwrap();
+        let expires = submit
+            .query_pairs()
+            .find_map(|(key, value)| (key == "expires").then(|| value.parse::<i64>().unwrap()))
+            .expect("response token expiry");
+        let required = Utc::now() + chrono::Duration::seconds(3660);
+        assert!(
+            expires > required.timestamp(),
+            "response token must outlive max execution plus lease headroom"
+        );
+        assert!(
+            lease
+                .envelope
+                .response_handling
+                .storage_upload_request
+                .expiration
+                > required,
+            "response upload credential must outlive max execution plus lease headroom"
+        );
+    }
+
+    #[tokio::test]
+    async fn delayed_storage_command_lease_refreshes_expired_params_get() {
+        let server = TestCommandServer::builder().with_pull_mode().build().await;
+        let created = server
+            .create_command(test_storage_create_command(
+                "delayed-storage",
+                "run",
+                200_000,
+            ))
+            .await
+            .unwrap();
+        server
+            .upload_complete(&created.command_id, test_upload_complete_request(200_000))
+            .await
+            .unwrap();
+
+        let mut stored = server
+            .command_server
+            .get_params(&created.command_id)
+            .await
+            .unwrap()
+            .expect("stored params");
+        let BodySpec::Storage {
+            storage_get_request: Some(request),
+            ..
+        } = &mut stored
+        else {
+            panic!("storage params with GET request");
+        };
+        request.expiration = Utc::now() - chrono::Duration::hours(1);
+        server
+            .command_server
+            .store_params(&created.command_id, &stored)
+            .await
+            .unwrap();
+
+        let lease = server
+            .acquire_single_lease("delayed-storage")
+            .await
+            .unwrap()
+            .expect("delayed command lease");
+        let BodySpec::Storage {
+            storage_get_request: Some(fresh),
+            ..
+        } = lease.envelope.params
+        else {
+            panic!("leased storage params with fresh GET request");
+        };
+        assert!(
+            fresh.expiration > Utc::now() + chrono::Duration::minutes(50),
+            "leasing must replace the stale upload-time params URL"
+        );
     }
 
     /// Test response submission and idempotency
@@ -1335,6 +1520,7 @@ mod tests {
 /// racing the original whose lease expired): exactly one wins the terminal
 /// transition, the loser is swallowed as a duplicate, and the recorded state
 /// matches the served response — a terminal record is never overwritten.
+#[cfg(feature = "test-utils")]
 #[tokio::test]
 async fn concurrent_opposite_submits_keep_state_and_response_consistent() {
     use alien_commands::test_utils::*;
@@ -1386,6 +1572,7 @@ async fn concurrent_opposite_submits_keep_state_and_response_consistent() {
 /// cleaned) — the same path also covers PendingUpload commands whose params
 /// upload never completed, since the reaper transitions ANY non-terminal
 /// state.
+#[cfg(feature = "test-utils")]
 #[tokio::test]
 async fn deadline_reaper_expires_overdue_commands() {
     use alien_commands::test_utils::*;

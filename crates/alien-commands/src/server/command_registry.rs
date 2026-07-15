@@ -216,9 +216,10 @@ pub trait CommandRegistry: Send + Sync {
     ///   (more than one) or `NO_COMMAND_TARGETS` (none).
     ///
     /// The returned delivery mode is derived from the target: Container and
-    /// Daemon targets are always Pull; Worker targets are Push only when the
-    /// deployment's platform has a push path (not Kubernetes/Local) AND its
-    /// stack settings use the Push deployment model, else Pull.
+    /// Daemon targets are always Pull. Worker delivery is resolved from the
+    /// deployment model and platform: Kubernetes uses its in-cluster operator
+    /// relay, Local supports embedded Push and remote Pull, and cloud Workers
+    /// use their provider push path only for Push deployments.
     async fn resolve_target(
         &self,
         deployment_id: &str,
@@ -691,7 +692,8 @@ mod tests {
             .unwrap();
         assert_eq!(push_worker.delivery_mode, CommandDeliveryMode::Push);
 
-        // No push path (e.g. Kubernetes/Local, or stack deployment_model == Pull).
+        // A manager-side pending path (e.g. Kubernetes operator relay, or a
+        // cloud stack whose deployment model is Pull).
         let pull_registry =
             InMemoryCommandRegistry::with_worker_delivery_mode(CommandDeliveryMode::Pull);
         pull_registry

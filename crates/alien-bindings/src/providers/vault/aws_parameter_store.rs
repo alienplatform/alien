@@ -1,6 +1,6 @@
 use crate::error::{ErrorData, Result};
 use alien_aws_clients::ssm::{GetParameterRequest, PutParameterRequest, SsmApi, SsmClient};
-use alien_error::Context;
+use alien_error::{Context, ContextError};
 use async_trait::async_trait;
 use std::sync::Arc;
 
@@ -94,15 +94,21 @@ impl crate::traits::Vault for AwsParameterStoreVault {
     async fn delete_secret(&self, secret_name: &str) -> Result<()> {
         let full_name = self.full_parameter_name(secret_name);
 
-        self.client
-            .delete_parameter(&full_name)
-            .await
-            .context(ErrorData::CloudPlatformError {
-                message: format!("Failed to delete parameter '{}'", full_name),
+        match self.client.delete_parameter(&full_name).await {
+            Ok(_) => Ok(()),
+            Err(error)
+                if matches!(
+                    error.error,
+                    Some(alien_client_core::ErrorData::RemoteResourceNotFound { .. })
+                ) =>
+            {
+                Ok(())
+            }
+            Err(error) => Err(error.context(ErrorData::CloudPlatformError {
+                message: format!("Failed to delete parameter '{full_name}'"),
                 resource_id: None,
-            })?;
-
-        Ok(())
+            })),
+        }
     }
 
     /// Listing is withheld: SSM parameter names are flat (`{vault_prefix}-{name}`),

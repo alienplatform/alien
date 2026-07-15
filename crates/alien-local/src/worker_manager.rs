@@ -19,6 +19,8 @@ use tracing::{debug, info, warn};
 /// This manager maintains persistent state and provides auto-recovery:
 /// - Worker metadata is saved to disk for crash recovery
 /// - Background task monitors health and auto-recovers crashed workers
+/// - Workers with runtime-only environment values are restarted by their controller so those
+///   values are resolved from the current desired configuration rather than persisted here
 /// - Graceful shutdown via shared signal
 ///
 /// # State Scoping
@@ -248,6 +250,14 @@ impl LocalWorkerManager {
             }
         }
 
+        if Self::requires_fresh_controller_environment(&metadata) {
+            info!(
+                worker_id = %metadata.worker_id,
+                "Skipping metadata-only recovery; controller must rebuild runtime-only environment"
+            );
+            return Ok(());
+        }
+
         info!(worker_id = %metadata.worker_id, "Recovering worker from previous run");
 
         // Restart the worker using metadata
@@ -255,6 +265,7 @@ impl LocalWorkerManager {
             &metadata.worker_id,
             metadata.env_vars,
             metadata.runtime_only_binding_names,
+            metadata.runtime_only_env_names,
             state_dir,
             workers,
             bindings_provider,
@@ -308,6 +319,14 @@ impl LocalWorkerManager {
                     }
                 }
 
+                if Self::requires_fresh_controller_environment(&metadata) {
+                    info!(
+                        worker_id = %worker_id,
+                        "Leaving crashed Worker stopped so its controller can rebuild runtime-only environment"
+                    );
+                    continue;
+                }
+
                 warn!(worker_id = %worker_id, "Auto-restarting worker...");
 
                 // Restart using metadata
@@ -315,6 +334,7 @@ impl LocalWorkerManager {
                     &metadata.worker_id,
                     metadata.env_vars,
                     metadata.runtime_only_binding_names,
+                    metadata.runtime_only_env_names,
                     state_dir,
                     workers,
                     bindings_provider.clone(),
@@ -467,11 +487,13 @@ impl LocalWorkerManager {
         id: &str,
         env_vars: HashMap<String, String>,
         runtime_only_binding_names: Vec<String>,
+        runtime_only_env_names: Vec<String>,
     ) -> Result<String> {
         Self::start_worker_internal(
             id,
             env_vars,
             runtime_only_binding_names,
+            runtime_only_env_names,
             &self.state_dir,
             &self.workers,
             self.bindings_provider.clone(),
@@ -483,7 +505,9 @@ impl LocalWorkerManager {
     /// each named runtime-only binding's key removed — keyed on the names, not on what re-resolved,
     /// so a secret never persists even if live re-resolution returns nothing (e.g. the resource
     /// vanished between env-build and start) — while the live env keeps the re-resolved secret. Pure
-    /// (no IO) so the "password never persisted" invariant is unit-testable on the artifact we write.
+    /// (no IO) so the "password never persisted" invariant is unit-testable on the artifact we
+    /// write. The command token is always classified runtime-only here as a final defense even if a
+    /// caller omits its name.
     pub(crate) fn plan_worker_launch(
         id: &str,
         extracted_dir: &PathBuf,
@@ -496,12 +520,20 @@ impl LocalWorkerManager {
     ) -> (WorkerMetadata, HashMap<String, String>) {
         let mut persisted_env = passed_env.clone();
         let mut live_env = passed_env;
+        let mut runtime_only_env_names = runtime_only_env_names.to_vec();
+        if live_env.contains_key(alien_core::ENV_ALIEN_COMMANDS_TOKEN)
+            && !runtime_only_env_names
+                .iter()
+                .any(|name| name == alien_core::ENV_ALIEN_COMMANDS_TOKEN)
+        {
+            runtime_only_env_names.push(alien_core::ENV_ALIEN_COMMANDS_TOKEN.to_string());
+        }
         for name in &runtime_only_binding_names {
             persisted_env.remove(&alien_core::bindings::binding_env_var_name(name));
         }
         // Resolved deployment secrets (including ALIEN_COMMANDS_TOKEN) never
         // persist either — same invariant as the binding secrets above.
-        for name in runtime_only_env_names {
+        for name in &runtime_only_env_names {
             persisted_env.remove(name);
         }
         for (_name, entry) in resolved {
@@ -515,7 +547,7 @@ impl LocalWorkerManager {
             working_dir: existing.working_dir.clone(),
             transport_port,
             runtime_only_binding_names,
-            runtime_only_env_names: runtime_only_env_names.to_vec(),
+            runtime_only_env_names,
             stop_grace_period_seconds: existing.stop_grace_period_seconds,
         };
         (metadata, live_env)
@@ -526,16 +558,22 @@ impl LocalWorkerManager {
         id: &str,
         env_vars: HashMap<String, String>,
         runtime_only_binding_names: Vec<String>,
+        runtime_only_env_names: Vec<String>,
         state_dir: &PathBuf,
         workers: &Arc<Mutex<HashMap<String, WorkerRuntime>>>,
         bindings_provider: Arc<dyn alien_bindings::BindingsProviderApi>,
     ) -> Result<String> {
-        // Check if already running
+        // Keep healthy starts idempotent, but do not let a finished task masquerade as a live
+        // Worker while its controller is trying to relaunch with freshly resolved secrets.
         {
-            let workers_guard = workers.lock().await;
+            let mut workers_guard = workers.lock().await;
             if let Some(runtime) = workers_guard.get(id) {
-                debug!(worker_id = %id, "Worker already running");
-                return Ok(runtime.worker_url.clone());
+                if !runtime.task_handle.is_finished() {
+                    debug!(worker_id = %id, "Worker already running");
+                    return Ok(runtime.worker_url.clone());
+                }
+                workers_guard.remove(id);
+                debug!(worker_id = %id, "Removed finished Worker before fresh launch");
             }
         }
 
@@ -607,7 +645,7 @@ impl LocalWorkerManager {
             Some(port),
             env_vars,
             runtime_only_binding_names,
-            &[],
+            &runtime_only_env_names,
             &resolved_bindings,
         );
 
@@ -623,6 +661,12 @@ impl LocalWorkerManager {
         // env_vars and pass it to the embedded alien-worker-runtime so it can send logs via OTLP.
         // Same parsing as the daemon path, so it shares that helper.
         let log_exporter = log_exporter_from_env(&runtime_env_vars, id);
+        let command_timeout =
+            alien_worker_runtime::RuntimeConfig::command_timeout_from_env_vars(&runtime_env_vars)
+                .into_alien_error()
+                .context(ErrorData::Other {
+                    message: "Invalid Worker command timeout configuration".to_string(),
+                })?;
 
         let runtime_config = alien_worker_runtime::RuntimeConfig::builder()
             .transport(alien_worker_runtime::TransportType::Local)
@@ -632,6 +676,7 @@ impl LocalWorkerManager {
             .working_dir(PathBuf::from(&working_dir))
             .env_vars(runtime_env_vars)
             .log_exporter(log_exporter)
+            .command_timeout(command_timeout)
             .build();
 
         Self::save_metadata_static(state_dir, &updated_metadata)?;
@@ -676,6 +721,12 @@ impl LocalWorkerManager {
 
             // Check if we've exceeded the timeout
             if start.elapsed() > max_wait {
+                // The runtime has not been published in `workers` yet, so this
+                // local handle is its only owner. Abort and join it before
+                // returning; otherwise Tokio detaches the task and a delayed
+                // startup can leave an untracked listener behind.
+                runtime_task.abort();
+                let _ = runtime_task.await;
                 return Err(AlienError::new(ErrorData::Other {
                     message: format!(
                         "Worker '{}' transport did not become ready within {:?}",
@@ -735,14 +786,24 @@ impl LocalWorkerManager {
         Ok(worker_url)
     }
 
+    fn requires_fresh_controller_environment(metadata: &WorkerMetadata) -> bool {
+        !metadata.runtime_only_env_names.is_empty()
+    }
+
     /// Stops a worker runtime (keeps extracted image directory and metadata for recovery).
     ///
     /// # Arguments
     /// * `id` - Worker identifier
     pub async fn stop_worker(&self, id: &str) -> Result<()> {
-        let mut workers = self.workers.lock().await;
+        // Remove under the lock, then drain outside it. A command may run for
+        // the full Worker timeout, and unrelated Worker lifecycle operations
+        // must remain available while this runtime terminalizes accepted work.
+        let runtime = {
+            let mut workers = self.workers.lock().await;
+            workers.remove(id)
+        };
 
-        if let Some(runtime) = workers.remove(id) {
+        if let Some(runtime) = runtime {
             // Send shutdown signal (triggers wait_until drain, OTLP flush)
             if let Err(e) = runtime.shutdown_tx.send(()) {
                 warn!(
@@ -932,7 +993,9 @@ impl LocalWorkerManager {
     /// Checks if a worker is currently running.
     pub async fn is_running(&self, id: &str) -> bool {
         let workers = self.workers.lock().await;
-        workers.contains_key(id)
+        workers
+            .get(id)
+            .is_some_and(|runtime| !runtime.task_handle.is_finished())
     }
 
     /// Checks if a daemon is currently running.
@@ -1488,6 +1551,86 @@ mod tests {
             .get("ALIEN_PGDB_BINDING")
             .is_some_and(|v| v.contains("s3cr3t")));
         assert_eq!(live.get("FOO"), Some(&"bar".to_string()));
+    }
+
+    #[test]
+    fn plan_worker_launch_keeps_command_token_live_but_out_of_metadata() {
+        let existing = WorkerMetadata {
+            worker_id: "command-worker".to_string(),
+            extracted_path: PathBuf::from("/w"),
+            env_vars: HashMap::new(),
+            runtime_command: vec!["bun".to_string()],
+            working_dir: None,
+            transport_port: None,
+            runtime_only_binding_names: Vec::new(),
+            runtime_only_env_names: Vec::new(),
+            stop_grace_period_seconds: None,
+        };
+        let base = HashMap::from([
+            ("APP_ENV".to_string(), "production".to_string()),
+            (
+                alien_core::ENV_ALIEN_COMMANDS_TOKEN.to_string(),
+                "current-runtime-token".to_string(),
+            ),
+        ]);
+        let (metadata, live) = LocalWorkerManager::plan_worker_launch(
+            "command-worker",
+            &PathBuf::from("/w"),
+            &existing,
+            Some(3000),
+            base,
+            Vec::new(),
+            &[],
+            &[],
+        );
+
+        assert_eq!(
+            live.get(alien_core::ENV_ALIEN_COMMANDS_TOKEN),
+            Some(&"current-runtime-token".to_string())
+        );
+        assert_eq!(
+            metadata.env_vars.get("APP_ENV"),
+            Some(&"production".to_string())
+        );
+        assert!(!metadata
+            .env_vars
+            .contains_key(alien_core::ENV_ALIEN_COMMANDS_TOKEN));
+        assert_eq!(
+            metadata.runtime_only_env_names,
+            vec![alien_core::ENV_ALIEN_COMMANDS_TOKEN.to_string()]
+        );
+
+        let json = serde_json::to_string(&metadata).expect("metadata serializes");
+        assert!(!json.contains("current-runtime-token"));
+        assert!(LocalWorkerManager::requires_fresh_controller_environment(
+            &metadata
+        ));
+    }
+
+    #[test]
+    fn only_runtime_only_environment_requires_controller_owned_recovery() {
+        let ordinary = WorkerMetadata {
+            worker_id: "ordinary".to_string(),
+            extracted_path: PathBuf::from("/w"),
+            env_vars: HashMap::new(),
+            runtime_command: Vec::new(),
+            working_dir: None,
+            transport_port: None,
+            runtime_only_binding_names: vec!["database".to_string()],
+            runtime_only_env_names: Vec::new(),
+            stop_grace_period_seconds: None,
+        };
+        assert!(!LocalWorkerManager::requires_fresh_controller_environment(
+            &ordinary
+        ));
+
+        let command_worker = WorkerMetadata {
+            runtime_only_env_names: vec![alien_core::ENV_ALIEN_COMMANDS_TOKEN.to_string()],
+            ..ordinary
+        };
+        assert!(LocalWorkerManager::requires_fresh_controller_environment(
+            &command_worker
+        ));
     }
 
     /// Nothing resolved (non-Postgres links, external Postgres, or absent on recover) → env untouched

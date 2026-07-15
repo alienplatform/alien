@@ -5,8 +5,8 @@ use std::time::Duration;
 use tracing::{debug, info};
 
 use crate::core::{
-    applicable_secret_environment_variables, environment_variables::EnvironmentVariableBuilder,
-    ResourceControllerContext,
+    applicable_secret_environment_variables, direct_monitoring_auth_headers,
+    environment_variables::EnvironmentVariableBuilder, ResourceControllerContext,
 };
 use crate::error::{ErrorData, Result};
 use alien_core::{
@@ -121,6 +121,7 @@ impl LocalDaemonController {
 
         let mut env_builder = EnvironmentVariableBuilder::try_new(&config.environment)?
             .add_daemon_runtime_env_vars(ctx)?
+            .add_direct_monitoring_auth_headers(ctx)
             .add_current_resource_public_endpoint(ctx, &config.id)?
             .add_linked_resources(&config.links, ctx, &config.id)
             .await?;
@@ -149,6 +150,14 @@ impl LocalDaemonController {
             env_vars.insert(var.name.clone(), var.value.clone());
             runtime_only_env_names.push(var.name.clone());
         }
+        // Monitoring credentials are controller-owned. Apply them after user
+        // secrets so a same-name snapshot value cannot replace the credential
+        // selected by DeploymentConfig.monitoring.
+        let monitoring_headers = direct_monitoring_auth_headers(ctx);
+        env_vars.extend(monitoring_headers.clone());
+        runtime_only_env_names.extend(monitoring_headers.into_keys());
+        runtime_only_env_names.sort();
+        runtime_only_env_names.dedup();
 
         // Linked Postgres resources carry a runtime-only secret (the password). Name them so the
         // worker manager delivers the binding to the process but never persists it to metadata.

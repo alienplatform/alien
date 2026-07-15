@@ -272,7 +272,8 @@ pub struct Container {
     pub command: Option<Vec<String>>,
 
     /// Whether the container can receive remote commands via the Commands protocol.
-    /// When enabled, the container polls the manager for pending commands and executes registered handlers.
+    /// When enabled, an app-owned command receiver can lease pending commands
+    /// for this Container and execute registered handlers.
     #[builder(default = default_commands_enabled())]
     #[serde(default = "default_commands_enabled")]
     #[cfg_attr(feature = "openapi", schema(default = default_commands_enabled))]

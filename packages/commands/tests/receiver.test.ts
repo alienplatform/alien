@@ -37,6 +37,7 @@ afterEach(async () => {
   receiverStop = undefined
   running = undefined
   route = () => ({ status: 404 })
+  vi.restoreAllMocks()
 })
 
 /** Start the stub once; its port never changes. Set the real route afterwards. */
@@ -170,6 +171,17 @@ describe("createCommandReceiver env validation", () => {
     }
     expect((err as AlienError).code).toBe("COMMAND_RECEIVER_CONFIG_INVALID")
     expect((err as AlienError).context).toMatchObject({ envVar: "ALIEN_COMMANDS_URL" })
+  })
+
+  it("rejects a whitespace-only command token", () => {
+    let err: unknown
+    try {
+      createCommandReceiver({ env: { ...FULL_ENV, ALIEN_COMMANDS_TOKEN: " \t\n " } })
+    } catch (error) {
+      err = error
+    }
+    expect((err as AlienError).code).toBe("COMMAND_RECEIVER_CONFIG_INVALID")
+    expect((err as AlienError).context).toMatchObject({ envVar: "ALIEN_COMMANDS_TOKEN" })
   })
 
   it("rejects the worker target type", () => {
@@ -517,6 +529,89 @@ describe("CommandReceiver.run", () => {
     await waitFor(() => submitBody("cmd_1") !== undefined)
     const body = submitBody("cmd_1") as Extract<CommandResponse, { status: "success" }>
     expect(decodeInline(body)).toEqual(params)
+  })
+
+  it("counts a slow storage GET against the same budget as the handler", async () => {
+    server = await openServer()
+    const env = envelope({
+      baseUrl: server.baseUrl,
+      params: {
+        mode: "storage",
+        size: 20,
+        storageGetRequest: {
+          backend: { type: "http", url: `${server.baseUrl}/slow-blob`, method: "GET", headers: {} },
+          expiration: new Date(Date.now() + 60_000).toISOString(),
+          operation: "get",
+          path: "slow-blob",
+        },
+      },
+    })
+    const serve = leaseOnce([
+      lease(env, { leaseExpiresAt: new Date(Date.now() + 5_150).toISOString() }),
+    ])
+    route = async req => {
+      if (req.method === "GET" && req.path === "/slow-blob") {
+        await new Promise(resolve => setTimeout(resolve, 500))
+        return { text: JSON.stringify({ late: true }) }
+      }
+      return serve(req) ?? { status: 200 }
+    }
+
+    let handlerCalled = false
+    const r = createCommandReceiver({
+      env: { ...FULL_ENV, ALIEN_COMMANDS_URL: `${server.baseUrl}/v1/` },
+      pollIntervalMs: 5,
+      pollJitter: 0,
+    })
+    r.handle("echo", () => {
+      handlerCalled = true
+      return { shouldNotRun: true }
+    })
+    receiverStop = () => r.stop()
+    running = r.run()
+
+    await waitFor(() => submitBody("cmd_1") !== undefined)
+    const body = submitBody("cmd_1") as Extract<CommandResponse, { status: "error" }>
+    expect(body.code).toBe("HANDLER_TIMEOUT")
+    expect(handlerCalled).toBe(false)
+  })
+
+  it("caps response submission by the absolute lease expiry", async () => {
+    const infoSpy = vi.spyOn(console, "info").mockImplementation(() => {})
+    const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {})
+    server = await openServer()
+    const env = envelope({ baseUrl: server.baseUrl })
+    const serve = leaseOnce([
+      lease(env, { leaseExpiresAt: new Date(Date.now() + 100).toISOString() }),
+    ])
+    route = async req => {
+      if (req.method === "PUT" && req.path === "/v1/commands/cmd_1/response") {
+        await new Promise(resolve => setTimeout(resolve, 500))
+        return { status: 200 }
+      }
+      return serve(req) ?? { status: 200 }
+    }
+
+    let handlerCalled = false
+    const r = createCommandReceiver({
+      env: { ...FULL_ENV, ALIEN_COMMANDS_URL: `${server.baseUrl}/v1/` },
+      pollIntervalMs: 5,
+      pollJitter: 0,
+    })
+    r.handle("echo", () => {
+      handlerCalled = true
+      return { shouldNotRun: true }
+    })
+    receiverStop = () => r.stop()
+    const started = Date.now()
+    running = r.run()
+
+    await waitFor(() =>
+      infoSpy.mock.calls.some(call => String(call[0]).includes('"submitStatus":"failed"')),
+    )
+    expect(Date.now() - started).toBeLessThan(400)
+    expect(handlerCalled).toBe(false)
+    expect(errorSpy).toHaveBeenCalled()
   })
 
   it("overflows a large response to a presigned storage PUT", async () => {
@@ -898,12 +993,14 @@ describe("CommandReceiver.run", () => {
   })
 
   it("does not submit twice when the submit fails (no ack → redelivery)", async () => {
+    const echoedSecret = "must-never-reach-command-receiver-logs"
+    const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {})
     server = await openServer()
     const env = envelope({ baseUrl: server.baseUrl })
     const serve = leaseOnce([lease(env)])
     route = req => {
       if (req.method === "PUT" && req.path === "/v1/commands/cmd_1/response") {
-        return { status: 500, text: "nope" }
+        return { status: 500, text: `echoed response_token=${echoedSecret}` }
       }
       return serve(req) ?? { status: 200 }
     }
@@ -928,6 +1025,8 @@ describe("CommandReceiver.run", () => {
       req => req.method === "PUT" && req.path === "/v1/commands/cmd_1/response",
     )
     expect(submits).toHaveLength(1)
+    expect(errorSpy).toHaveBeenCalled()
+    expect(JSON.stringify(errorSpy.mock.calls)).not.toContain(echoedSecret)
   })
 
   it.each([409, 410])(

@@ -135,15 +135,7 @@ impl crate::traits::Vault for LocalVault {
     async fn delete_secret(&self, secret_name: &str) -> Result<()> {
         let mut secrets = self.load_secrets().await?;
 
-        secrets.remove(secret_name).ok_or_else(|| {
-            AlienError::new(ErrorData::CloudPlatformError {
-                message: format!(
-                    "Secret '{}' not found in vault '{}'",
-                    secret_name, self.vault_name
-                ),
-                resource_id: None,
-            })
-        })?;
+        secrets.remove(secret_name);
 
         self.save_secrets(&secrets).await
     }
@@ -206,6 +198,10 @@ mod tests {
         vault.set_secret("keep", "1").await.expect("set keep");
         vault.set_secret("drop", "2").await.expect("set drop");
         vault.delete_secret("drop").await.expect("delete drop");
+        vault
+            .delete_secret("drop")
+            .await
+            .expect("repeated delete is idempotent");
 
         let names = vault.list_secrets().await.expect("list should succeed");
         assert_eq!(

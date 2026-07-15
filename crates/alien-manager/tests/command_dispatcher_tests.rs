@@ -48,7 +48,7 @@ async fn fresh_db() -> Arc<SqliteDatabase> {
 }
 
 /// Create a running AWS deployment (empty stack state) and return its id.
-async fn running_deployment(store: &SqliteDeploymentStore) -> String {
+async fn running_deployment(store: &SqliteDeploymentStore, platform: Platform) -> String {
     let group = store
         .create_deployment_group(
             &subject(),
@@ -67,7 +67,7 @@ async fn running_deployment(store: &SqliteDeploymentStore) -> String {
                 deployment_protocol_version: alien_core::CURRENT_DEPLOYMENT_PROTOCOL_VERSION,
                 name: "dep".to_string(),
                 deployment_group_id: group.id,
-                platform: Platform::Aws,
+                platform,
                 base_platform: None,
                 stack_settings: StackSettings::default(),
                 stack_state: StackState::new(Platform::Aws),
@@ -78,7 +78,7 @@ async fn running_deployment(store: &SqliteDeploymentStore) -> String {
                 desired_release_id: None,
                 import_source: None,
                 setup_metadata: None,
-                setup_target: "aws".to_string(),
+                setup_target: platform.to_string().to_lowercase(),
                 setup_fingerprint: "test".to_string(),
                 setup_fingerprint_version: 1,
                 deployment_token: None,
@@ -119,9 +119,9 @@ fn envelope(deployment_id: &str, target: CommandTarget) -> Envelope {
 async fn non_worker_target_is_rejected_before_dispatch() {
     let db = fresh_db().await;
     let store = Arc::new(SqliteDeploymentStore::new(db));
-    let dep_id = running_deployment(&store).await;
+    let dep_id = running_deployment(&store, Platform::Aws).await;
 
-    let dispatcher = DefaultCommandDispatcher::new(store, Arc::new(UnusedResolver));
+    let dispatcher = DefaultCommandDispatcher::new(store, Arc::new(UnusedResolver)).unwrap();
 
     // A Container target reaching the push dispatcher is a routing bug (they
     // are always Pull) — it must be rejected loudly, not dispatched.
@@ -130,7 +130,7 @@ async fn non_worker_target_is_rejected_before_dispatch() {
         CommandTarget::new("c1", CommandTargetType::Container),
     );
     let err = dispatcher.dispatch(&env).await.unwrap_err();
-    assert_eq!(err.code, "OPERATION_NOT_SUPPORTED");
+    assert_eq!(err.code, "TRANSPORT_DISPATCH_REJECTED");
     assert!(
         err.message.contains("pull delivery") || err.message.contains("Container"),
         "unexpected message: {}",
@@ -142,9 +142,9 @@ async fn non_worker_target_is_rejected_before_dispatch() {
 async fn worker_target_output_lookup_is_keyed_by_envelope_target() {
     let db = fresh_db().await;
     let store = Arc::new(SqliteDeploymentStore::new(db));
-    let dep_id = running_deployment(&store).await;
+    let dep_id = running_deployment(&store, Platform::Aws).await;
 
-    let dispatcher = DefaultCommandDispatcher::new(store, Arc::new(UnusedResolver));
+    let dispatcher = DefaultCommandDispatcher::new(store, Arc::new(UnusedResolver)).unwrap();
 
     // The worker id comes straight from the envelope target; with an empty
     // stack state the outputs lookup fails, and the error names that exact id
@@ -154,9 +154,27 @@ async fn worker_target_output_lookup_is_keyed_by_envelope_target() {
         CommandTarget::new("worker-xyz", CommandTargetType::Worker),
     );
     let err = dispatcher.dispatch(&env).await.unwrap_err();
+    assert_eq!(err.code, "TRANSPORT_DISPATCH_REJECTED");
     assert!(
         err.message.contains("worker-xyz"),
         "error should name the envelope's target worker, got: {}",
         err.message
     );
+}
+
+#[tokio::test]
+async fn kubernetes_is_rejected_before_output_lookup_or_network_dispatch() {
+    let db = fresh_db().await;
+    let store = Arc::new(SqliteDeploymentStore::new(db));
+    let dep_id = running_deployment(&store, Platform::Kubernetes).await;
+    let dispatcher = DefaultCommandDispatcher::new(store, Arc::new(UnusedResolver)).unwrap();
+    let env = envelope(
+        &dep_id,
+        CommandTarget::new("worker-without-outputs", CommandTargetType::Worker),
+    );
+
+    let err = dispatcher.dispatch(&env).await.unwrap_err();
+
+    assert_eq!(err.code, "TRANSPORT_DISPATCH_REJECTED");
+    assert!(err.message.contains("operator relay"));
 }

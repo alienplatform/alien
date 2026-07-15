@@ -28,7 +28,7 @@ the same wire protocol.
 | `CommandReceiverOptions` | type | constructor options | `{ env?, fetch?, pollIntervalMs?, pollMaxIntervalMs?, pollJitter?, leaseSeconds?, maxLeases?, drainTimeoutMs? }`. Constructor values override environment values. |
 | `CommandReceiver` | type | receiver handle | `.handle(name: string, handler)` registers a handler; `.run(): Promise<void>` leases and dispatches. Handler context includes input, cancellation, deadline, command identity, attempt, target identity, and optional W3C trace context. |
 | `CommandReceiverConfigInvalidError` | error | `defineError({ code: "COMMAND_RECEIVER_CONFIG_INVALID", context: { … } })` | Thrown when receiver env config is empty/invalid. Context names the offending identity, token-source, or tuning variable. **DECIDED(09).** |
-| sender error types | error | migrated from the current `@alienplatform/sdk/commands` error set | Sender-error set DECIDED(08) — the seven migrated errors; see the DECIDED(08) section. |
+| sender error types | error | migrated from the former `@alienplatform/sdk/commands` error set | Sender-error set DECIDED(08) — the seven migrated errors; see the DECIDED(08) section. |
 | shared error primitives | re-export | `AlienError`, `defineError` (from `@alienplatform/core`) | Re-exported for consumer error handling. |
 
 ### Receiver environment contract
@@ -43,11 +43,11 @@ exactly so the two are behavior-identical twins.
 | Env var | Requirement | DECIDED(09) |
 |---|---|---|
 | `ALIEN_COMMANDS_URL` | Base URL of the command server. | Pinned since this file's creation. |
-| `ALIEN_COMMANDS_TOKEN` | Bearer token for outbound requests. Required unless `ALIEN_COMMANDS_TOKEN_FILE` is set. | Reused from the existing worker command-polling token variable. |
+| `ALIEN_COMMANDS_TOKEN` | Bearer token for outbound requests. Required unless `ALIEN_COMMANDS_TOKEN_FILE` is set. | Shared command-auth variable; the receiver uses it only for its outbound lease and response requests. |
 | `ALIEN_COMMANDS_TOKEN_FILE` | File containing the bearer token. Reread once after a 401 to support rotation. | Alternative to the literal token. |
 | `ALIEN_DEPLOYMENT_ID` | Deployment the leased commands belong to. | Reused; lease requests require it. |
 | `ALIEN_COMMANDS_TARGET_RESOURCE_ID` | This resource's id within the deployment's stack. | Reused from the existing target-resource variable. |
-| `ALIEN_COMMANDS_TARGET_RESOURCE_TYPE` | `container` \| `daemon`, lowercase; any other value (e.g. `worker`) is rejected. | New. Lease requests need a typed target and a receiver must not guess it — the worker runtime hardcodes `worker`; a Container/Daemon receiver gets its type injected. |
+| `ALIEN_COMMANDS_TARGET_RESOURCE_TYPE` | `container` \| `daemon`, lowercase; any other value (e.g. `worker`) is rejected. | Lease requests need a typed target and a receiver must not guess it. Worker targets use Worker push delivery; a Container/Daemon receiver gets its type injected. |
 
 ## Exports map
 
@@ -198,7 +198,7 @@ The OPEN(08) type decisions, now pinned.
   `{ managerUrl: string; deploymentId: string; token: string; timeoutMs?: number; allowLocalStorage?: boolean }`
   (`timeoutMs` = default invoke timeout, 60000ms; `allowLocalStorage` gates the
   `local` storage backend for dev).
-- **Exported sender-error set** (migrated from `@alienplatform/sdk/commands`,
+- **Exported sender-error set** (migrated from the former `@alienplatform/sdk/commands` subpath,
   all `defineError` from `@alienplatform/core`): `CommandCreationFailedError`
   (`COMMAND_CREATION_FAILED`), `CommandTimeoutError` (`COMMAND_TIMEOUT`),
   `DeploymentCommandError` (`DEPLOYMENT_COMMAND_ERROR`), `CommandExpiredError`

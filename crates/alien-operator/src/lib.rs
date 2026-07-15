@@ -168,13 +168,10 @@ pub async fn run_operator_with_cancel_and_debug_loop(
         None
     };
 
-    // Start commands dispatch loop for cloud function platforms.
-    // The loop self-guards: it exits immediately for K8s/Local/airgapped.
-    let commands_handle = if !config.is_airgapped()
-        && matches!(
-            config.platform,
-            Platform::Aws | Platform::Gcp | Platform::Azure
-        ) {
+    // Start commands dispatch for native cloud push transports and the
+    // Kubernetes/Local environment-local relays. An embedded Local deployment
+    // uses direct push, while a remote Local deployment uses this relay.
+    let commands_handle = if should_run_commands_loop(config.platform, config.is_airgapped()) {
         Some(tokio::spawn({
             let state = state.clone();
             async move {
@@ -266,6 +263,41 @@ pub async fn run_operator_with_cancel_and_debug_loop(
 
     info!("Operator shutdown complete");
     Ok(())
+}
+
+fn should_run_commands_loop(platform: Platform, airgapped: bool) -> bool {
+    !airgapped
+        && matches!(
+            platform,
+            Platform::Aws
+                | Platform::Gcp
+                | Platform::Azure
+                | Platform::Kubernetes
+                | Platform::Local
+        )
+}
+
+#[cfg(test)]
+mod command_loop_routing_tests {
+    use super::should_run_commands_loop;
+    use alien_core::Platform;
+
+    #[test]
+    fn kubernetes_and_local_start_environment_local_command_relays() {
+        for platform in [
+            Platform::Aws,
+            Platform::Gcp,
+            Platform::Azure,
+            Platform::Kubernetes,
+            Platform::Local,
+        ] {
+            assert!(should_run_commands_loop(platform, false));
+            assert!(!should_run_commands_loop(platform, true));
+        }
+        for platform in [Platform::Machines, Platform::Test] {
+            assert!(!should_run_commands_loop(platform, false));
+        }
+    }
 }
 
 /// Operator state shared across loops.

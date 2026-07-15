@@ -2,22 +2,22 @@
 //!
 //! The runtime:
 //! 1. Starts gRPC server (bindings + control service)
-//! 2. Loads secrets from vault (includes commands token)
+//! 2. Loads application secrets and runtime-only telemetry credentials
 //! 3. Starts the application subprocess
 //! 4. Waits for app to register HTTP port
-//! 5. Starts commands polling (if enabled)
+//! 5. Enables authenticated Worker command push when configured
 //! 6. Starts the appropriate transport
 
 use std::{collections::HashMap, process::Stdio, sync::Arc};
 
 use alien_bindings::BindingsProvider;
 use alien_core::{
+    ENV_ALIEN_COMMANDS_TOKEN, ENV_ALIEN_CURRENT_WORKER_BINDING_NAME, ENV_ALIEN_DEPLOYMENT_ID,
     ENV_ALIEN_RUNTIME_SECRETS, ENV_ALIEN_SECRETS, ENV_ALIEN_TRANSPORT,
     ENV_ALIEN_WORKER_GRPC_ADDRESS,
 };
 use alien_error::{AlienError, Context};
 use alien_worker_protocol::{run_grpc_server, ControlGrpcServer, WaitUntilGrpcServer};
-use reqwest::Url;
 use serde::Deserialize;
 use tokio::{
     io::{AsyncBufReadExt, BufReader},
@@ -33,8 +33,7 @@ use crate::{
     error::{ErrorData, Result},
     otlp::{flush_otlp_logs, init_otlp_logging_from_config, shutdown_otlp_logs},
     transports::{
-        cloudrun::CloudRunTransport, commands_polling::CommandsPolling,
-        containerapp::ContainerAppTransport, local::LocalTransport,
+        cloudrun::CloudRunTransport, containerapp::ContainerAppTransport, local::LocalTransport,
     },
 };
 
@@ -44,6 +43,13 @@ struct RuntimeSecretsConfig {
     otlp_logs_auth_header: Option<String>,
     otlp_metrics_auth_header: Option<String>,
     hash: String,
+}
+
+#[derive(Clone)]
+struct CommandPushConfig {
+    token: String,
+    deployment_id: String,
+    worker_resource_id: String,
 }
 
 /// Global state for WaitUntilGrpcServer
@@ -91,6 +97,8 @@ pub async fn run(
     shutdown_rx: broadcast::Receiver<()>,
     bindings: BindingsSource,
 ) -> Result<()> {
+    config.validate()?;
+
     // Note: For standalone binary (main.rs), init_tracing() is called before run()
     // For embedded runtime (LocalFunctionManager), parent already initialized tracing
     // LogExporter config tells stream_output() how to handle logs
@@ -172,6 +180,8 @@ pub async fn run(
         init_otlp_logging_from_config(otlp_config)?;
     }
 
+    let command_push = command_push_config(&config, &secrets)?;
+
     // 3. Start application subprocess with secrets
     let mut child = start_application(&config, &secrets, log_exporter).await?;
 
@@ -217,80 +227,19 @@ pub async fn run(
         }
     }
 
-    // 5. Start commands polling if enabled
-    // Two ways to configure commands polling:
-    // 1. Programmatic config via RuntimeConfig.commands_polling
-    // 2. Environment variables
-    let commands_polling_handle = if let Some(ref commands_config) = config.commands_polling {
-        // Programmatic config path
-        info!(
-            url = %commands_config.url,
-            deployment_id = %commands_config.deployment_id,
-            "Starting commands polling from RuntimeConfig"
-        );
-
-        let url = Url::parse(&commands_config.url).map_err(|e| {
-            AlienError::new(ErrorData::ConfigurationInvalid {
-                message: format!("Invalid commands polling URL: {}", e),
-                field: Some("commands_polling.url".to_string()),
-            })
-        })?;
-
-        // Build the `…/commands/leases` endpoint once, failing fast if the base
-        // URL cannot carry the path (permanent config error, not transient).
-        let lease_client =
-            alien_commands::runtime::LeaseClient::from_base(&url, commands_config.token.clone())
-                .ok_or_else(|| {
-                    AlienError::new(ErrorData::ConfigurationInvalid {
-                        message: format!(
-                    "Invalid commands polling URL '{url}': must be an HTTP/HTTPS URL with a path"
-                ),
-                        field: Some("commands_polling.url".to_string()),
-                    })
-                })?;
-
-        let commands_polling = CommandsPolling::new(
-            lease_client,
-            commands_config.interval,
-            commands_config.deployment_id.clone(),
-            commands_config.target_resource_id.clone(),
-            control_server.clone(),
-        );
-
-        Some(tokio::spawn(async move {
-            if let Err(e) = commands_polling.run().await {
-                error!(error = %e, "Commands polling error");
-            }
-        }))
-    } else if let Some(commands_polling) =
-        CommandsPolling::from_env(&config.env_vars, &secrets, control_server.clone())?
-    {
-        // Environment variable config (standard path for all deployments)
-        Some(tokio::spawn(async move {
-            if let Err(e) = commands_polling.run().await {
-                error!(error = %e, "Commands polling error");
-            }
-        }))
-    } else {
-        debug!("Commands polling not configured");
-        None
-    };
-
+    // 5. Local/Kubernetes Workers receive authenticated command pushes on a
+    // runtime-owned HTTP path. Absence of the token leaves that path disabled.
     // 6. Start transport and run main loop
     let result = run_transport(
         &config,
         control_server,
         app_http_port,
+        command_push,
         wait_until_server,
         &mut child,
         shutdown_rx,
     )
     .await;
-
-    // Cleanup
-    if let Some(handle) = commands_polling_handle {
-        handle.abort();
-    }
 
     if let Err(e) = shutdown_otlp_logs().await {
         warn!(error = %e, "Failed to shutdown OTLP logs");
@@ -304,50 +253,75 @@ async fn run_transport(
     config: &RuntimeConfig,
     control_server: Arc<ControlGrpcServer>,
     app_http_port: Option<u16>,
+    command_push: Option<CommandPushConfig>,
     wait_until_server: Arc<WaitUntilGrpcServer>,
     child: &mut Child,
     mut shutdown_rx: broadcast::Receiver<()>,
 ) -> Result<()> {
-    // Create separate shutdown receiver for transport
-    let transport_shutdown_rx = shutdown_rx.resubscribe();
+    // Own the transport shutdown channel here. This lets every branch that
+    // wins the lifecycle race stop intake and await the transport task instead
+    // of dropping its JoinHandle (which would detach it in Tokio).
+    let (transport_shutdown_tx, transport_shutdown_rx) = broadcast::channel(1);
 
     // Spawn the transport as a task
-    let transport_handle: JoinHandle<Result<()>> = spawn_transport(
+    let mut transport_handle: JoinHandle<Result<()>> = spawn_transport(
         config.transport,
         config.transport_port,
         config.lambda_mode,
+        config.command_timeout,
         control_server,
         app_http_port,
+        command_push,
         transport_shutdown_rx,
     )?;
 
     // Wait for shutdown, child exit, or transport completion
     tokio::select! {
         shutdown_result = shutdown_rx.recv() => {
-            handle_shutdown(shutdown_result, wait_until_server, child).await
+            let _ = transport_shutdown_tx.send(());
+            let transport_result = await_transport(&mut transport_handle).await;
+            let child_result = handle_shutdown(shutdown_result, wait_until_server, child).await;
+            transport_result.and(child_result)
         }
 
         child_status = child.wait() => {
-            handle_child_exit(child_status)
+            let child_result = handle_child_exit(child_status);
+            let _ = transport_shutdown_tx.send(());
+            let transport_result = await_transport(&mut transport_handle).await;
+            child_result.and(transport_result)
         }
 
-        transport_result = transport_handle => {
-            match transport_result {
-                Ok(Ok(_)) => {
-                    info!("Transport exited");
-                    Ok(())
-                }
-                Ok(Err(e)) => {
-                    error!(error = %e, "Transport error");
-                    Err(e)
-                }
-                Err(e) => {
-                    error!(error = %e, "Transport task panicked");
-                    Err(AlienError::new(ErrorData::Other {
-                        message: format!("Transport panicked: {}", e),
-                    }))
-                }
-            }
+        transport_result = &mut transport_handle => {
+            let transport_result = transport_result_value(transport_result);
+            // A transport startup failure or unexpected exit must not leave
+            // the application child alive after the runtime returns.
+            let child_result = graceful_shutdown(wait_until_server, child).await;
+            transport_result.and(child_result)
+        }
+    }
+}
+
+async fn await_transport(transport_handle: &mut JoinHandle<Result<()>>) -> Result<()> {
+    transport_result_value(transport_handle.await)
+}
+
+fn transport_result_value(
+    transport_result: std::result::Result<Result<()>, tokio::task::JoinError>,
+) -> Result<()> {
+    match transport_result {
+        Ok(Ok(_)) => {
+            info!("Transport exited");
+            Ok(())
+        }
+        Ok(Err(e)) => {
+            error!(error = %e, "Transport error");
+            Err(e)
+        }
+        Err(e) => {
+            error!(error = %e, "Transport task panicked");
+            Err(AlienError::new(ErrorData::Other {
+                message: format!("Transport panicked: {}", e),
+            }))
         }
     }
 }
@@ -357,13 +331,16 @@ fn spawn_transport(
     transport_type: TransportType,
     transport_port: u16,
     lambda_mode: crate::config::LambdaMode,
+    command_timeout: std::time::Duration,
     control_server: Arc<ControlGrpcServer>,
     app_http_port: Option<u16>,
+    command_push: Option<CommandPushConfig>,
     shutdown_rx: broadcast::Receiver<()>,
 ) -> Result<JoinHandle<Result<()>>> {
     match transport_type {
         TransportType::CloudRun => {
-            let mut transport = CloudRunTransport::new(transport_port, control_server, shutdown_rx);
+            let mut transport = CloudRunTransport::new(transport_port, control_server, shutdown_rx)
+                .with_command_timeout(command_timeout);
             if let Some(port) = app_http_port {
                 transport = transport.with_app_port(port);
             }
@@ -372,7 +349,8 @@ fn spawn_transport(
 
         TransportType::ContainerApp => {
             let mut transport =
-                ContainerAppTransport::new(transport_port, control_server, shutdown_rx);
+                ContainerAppTransport::new(transport_port, control_server, shutdown_rx)
+                    .with_command_timeout(command_timeout);
             if let Some(port) = app_http_port {
                 transport = transport.with_app_port(port);
             }
@@ -381,17 +359,33 @@ fn spawn_transport(
 
         TransportType::Http => {
             let mut transport =
-                LocalTransport::exposed(transport_port, control_server, shutdown_rx);
+                LocalTransport::exposed(transport_port, control_server, shutdown_rx)
+                    .with_command_timeout(command_timeout);
             if let Some(port) = app_http_port {
                 transport = transport.with_app_port(port);
+            }
+            if let Some(config) = command_push {
+                transport = transport.with_command_push(
+                    config.token,
+                    config.deployment_id,
+                    config.worker_resource_id,
+                );
             }
             Ok(tokio::spawn(async move { transport.run().await }))
         }
 
         TransportType::Local => {
-            let mut transport = LocalTransport::new(transport_port, control_server, shutdown_rx);
+            let mut transport = LocalTransport::new(transport_port, control_server, shutdown_rx)
+                .with_command_timeout(command_timeout);
             if let Some(port) = app_http_port {
                 transport = transport.with_app_port(port);
+            }
+            if let Some(config) = command_push {
+                transport = transport.with_command_push(
+                    config.token,
+                    config.deployment_id,
+                    config.worker_resource_id,
+                );
             }
             Ok(tokio::spawn(async move { transport.run().await }))
         }
@@ -400,12 +394,20 @@ fn spawn_transport(
         TransportType::Lambda => {
             use crate::transports::lambda::LambdaTransport;
 
-            // Lambda transport doesn't use shutdown_rx (polls Lambda Runtime API)
             let mut transport = LambdaTransport::new(lambda_mode, control_server);
             if let Some(port) = app_http_port {
                 transport = transport.with_app_port(port);
             }
-            Ok(tokio::spawn(async move { transport.run().await }))
+            // Lambda polls the Runtime API and has no native shutdown receiver.
+            // Race that owned future against the same internal shutdown signal
+            // so run_transport can still join it without detaching/aborting.
+            let mut shutdown_rx = shutdown_rx;
+            Ok(tokio::spawn(async move {
+                tokio::select! {
+                    result = transport.run() => result,
+                    _ = shutdown_rx.recv() => Ok(()),
+                }
+            }))
         }
 
         #[cfg(not(feature = "aws"))]
@@ -549,6 +551,9 @@ async fn start_application(
     };
 
     let mut cmd = Command::new(&program);
+    // The runtime owns this subprocess. If its task is cancelled during local
+    // startup or process shutdown, dropping the Child must not orphan the app.
+    cmd.kill_on_drop(true);
     if config.command.len() > 1 {
         cmd.args(&config.command[1..]);
     }
@@ -558,9 +563,17 @@ async fn start_application(
         cmd.current_dir(working_dir);
     }
 
+    // Runtime-only credentials may be present in this process's inherited
+    // environment (the normal standalone Kubernetes path). Skipping an
+    // explicit `cmd.env` is not enough: child processes inherit every parent
+    // variable unless it is removed from the command environment.
+    for name in [ENV_ALIEN_COMMANDS_TOKEN, ENV_ALIEN_RUNTIME_SECRETS] {
+        cmd.env_remove(name);
+    }
+
     // Set custom environment variables
     for (key, value) in &config.env_vars {
-        if key == ENV_ALIEN_RUNTIME_SECRETS {
+        if runtime_only_env(key) {
             continue;
         }
         cmd.env(key, value);
@@ -568,6 +581,9 @@ async fn start_application(
 
     // Set secrets loaded from vault
     for (key, value) in secrets {
+        if runtime_only_env(key) {
+            continue;
+        }
         cmd.env(key, value);
     }
 
@@ -609,6 +625,63 @@ async fn start_application(
     }
 
     Ok(child)
+}
+
+fn runtime_only_env(name: &str) -> bool {
+    matches!(name, ENV_ALIEN_RUNTIME_SECRETS | ENV_ALIEN_COMMANDS_TOKEN)
+}
+
+fn command_push_config(
+    config: &RuntimeConfig,
+    secrets: &HashMap<String, String>,
+) -> Result<Option<CommandPushConfig>> {
+    let Some(token) = secrets
+        .get(ENV_ALIEN_COMMANDS_TOKEN)
+        .or_else(|| config.env_vars.get(ENV_ALIEN_COMMANDS_TOKEN))
+        .cloned()
+    else {
+        return Ok(None);
+    };
+    if token.trim().is_empty() {
+        return Err(AlienError::new(ErrorData::ConfigurationInvalid {
+            message: format!("{ENV_ALIEN_COMMANDS_TOKEN} must not be empty or whitespace"),
+            field: Some(ENV_ALIEN_COMMANDS_TOKEN.to_string()),
+        }));
+    }
+
+    let worker_resource_id = config
+        .env_vars
+        .get(ENV_ALIEN_CURRENT_WORKER_BINDING_NAME)
+        .filter(|resource_id| !resource_id.is_empty())
+        .cloned()
+        .ok_or_else(|| {
+            AlienError::new(ErrorData::ConfigurationInvalid {
+                message: format!(
+                    "{ENV_ALIEN_CURRENT_WORKER_BINDING_NAME} is required when command push is enabled"
+                ),
+                field: Some(ENV_ALIEN_CURRENT_WORKER_BINDING_NAME.to_string()),
+            })
+        })?;
+
+    let deployment_id = config
+        .env_vars
+        .get(ENV_ALIEN_DEPLOYMENT_ID)
+        .filter(|deployment_id| !deployment_id.is_empty())
+        .cloned()
+        .ok_or_else(|| {
+            AlienError::new(ErrorData::ConfigurationInvalid {
+                message: format!(
+                    "{ENV_ALIEN_DEPLOYMENT_ID} is required when command push is enabled"
+                ),
+                field: Some(ENV_ALIEN_DEPLOYMENT_ID.to_string()),
+            })
+        })?;
+
+    Ok(Some(CommandPushConfig {
+        token,
+        deployment_id,
+        worker_resource_id,
+    }))
 }
 
 async fn load_runtime_secrets(
@@ -846,39 +919,5 @@ pub fn setup_shutdown_on_signals() -> (broadcast::Sender<()>, broadcast::Receive
 }
 
 #[cfg(test)]
-mod tests {
-    use std::collections::HashMap;
-
-    use alien_core::{ENV_ALIEN_TRANSPORT, ENV_ALIEN_WORKER_GRPC_ADDRESS};
-
-    use super::{application_runtime_env, RuntimeConfig, TransportType};
-
-    #[test]
-    fn application_runtime_env_uses_only_worker_transports() {
-        for (transport, expected) in [
-            (TransportType::Lambda, "lambda"),
-            (TransportType::CloudRun, "cloud-run"),
-            (TransportType::ContainerApp, "container-app"),
-            (TransportType::Http, "http"),
-            (TransportType::Local, "local"),
-        ] {
-            let config = RuntimeConfig::builder()
-                .transport(transport)
-                .transport_port(61000)
-                .command(vec!["app".to_string()])
-                .bindings_address("127.0.0.1:60000".to_string())
-                .build();
-
-            let env = application_runtime_env(&config)
-                .into_iter()
-                .collect::<HashMap<_, _>>();
-
-            assert_eq!(
-                env.get(ENV_ALIEN_WORKER_GRPC_ADDRESS),
-                Some(&"127.0.0.1:60000".to_string())
-            );
-            assert_eq!(env.get(ENV_ALIEN_TRANSPORT), Some(&expected.to_string()));
-            assert_eq!(env.get("PORT"), None);
-        }
-    }
-}
+#[path = "runtime_tests.rs"]
+mod tests;

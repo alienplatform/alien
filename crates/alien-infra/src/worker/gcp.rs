@@ -4567,7 +4567,7 @@ impl GcpWorkerController {
         let self_binding_params = self.get_binding_params()?;
 
         let env_vars = EnvironmentVariableBuilder::try_new(initial_env)?
-            .add_worker_runtime_env_vars(ctx, &worker_config.id)?
+            .add_worker_runtime_env_vars(ctx, &worker_config.id, worker_config.timeout_seconds)?
             .add_linked_resources(links, ctx, function_name_for_error_logging)
             .await?
             .add_self_worker_binding(&worker_config.id, self_binding_params.as_ref())?

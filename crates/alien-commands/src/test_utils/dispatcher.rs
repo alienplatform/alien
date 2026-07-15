@@ -27,6 +27,7 @@ pub enum MockDispatcherMode {
 pub struct MockDispatcher {
     dispatched: Arc<Mutex<VecDeque<DispatchedEnvelope>>>,
     should_fail: Arc<Mutex<bool>>,
+    should_reject: Arc<Mutex<bool>>,
     mode: MockDispatcherMode,
 }
 
@@ -50,6 +51,7 @@ impl MockDispatcher {
         Self {
             dispatched: Arc::new(Mutex::new(VecDeque::new())),
             should_fail: Arc::new(Mutex::new(false)),
+            should_reject: Arc::new(Mutex::new(false)),
             mode: MockDispatcherMode::Push,
         }
     }
@@ -59,6 +61,7 @@ impl MockDispatcher {
         Self {
             dispatched: Arc::new(Mutex::new(VecDeque::new())),
             should_fail: Arc::new(Mutex::new(false)),
+            should_reject: Arc::new(Mutex::new(false)),
             mode: MockDispatcherMode::Pull,
         }
     }
@@ -114,6 +117,11 @@ impl MockDispatcher {
     pub async fn set_should_fail(&self, should_fail: bool) {
         let mut fail_flag = self.should_fail.lock().await;
         *fail_flag = should_fail;
+    }
+
+    /// Configure the next dispatch as a definite pre-delivery rejection.
+    pub async fn set_should_reject(&self, should_reject: bool) {
+        *self.should_reject.lock().await = should_reject;
     }
 
     /// Get dispatched envelopes for a specific command name
@@ -181,6 +189,20 @@ impl Default for MockDispatcher {
 #[async_trait]
 impl CommandDispatcher for MockDispatcher {
     async fn dispatch(&self, envelope: &Envelope) -> Result<()> {
+        {
+            let mut should_reject = self.should_reject.lock().await;
+            if *should_reject {
+                *should_reject = false;
+                return Err(alien_error::AlienError::new(
+                    crate::error::ErrorData::TransportDispatchRejected {
+                        message: "Mock dispatcher rejected delivery".to_string(),
+                        transport_type: Some("mock".to_string()),
+                        target: Some(envelope.command_id.clone()),
+                    },
+                ));
+            }
+        }
+
         // Check if we should simulate a failure
         {
             let mut should_fail = self.should_fail.lock().await;

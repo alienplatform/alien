@@ -14,11 +14,14 @@
  */
 
 import { readFileSync, writeFileSync } from "node:fs"
+import { resolve } from "node:path"
 import { fileURLToPath } from "node:url"
 
 const TRIPLES = ["darwin-arm64", "darwin-x64", "linux-x64-gnu", "linux-arm64-gnu"]
 
-const wrapperManifest = fileURLToPath(new URL("../package.json", import.meta.url))
+const wrapperManifest = process.argv[2]
+  ? resolve(process.argv[2])
+  : fileURLToPath(new URL("../package.json", import.meta.url))
 const pkg = JSON.parse(readFileSync(wrapperManifest, "utf8"))
 const { version } = pkg
 

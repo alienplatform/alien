@@ -26,7 +26,7 @@ use chrono::Utc;
 /// `ALIEN_RUNTIME_SECRETS`) from a projected environment.
 ///
 /// Containers never receive `ALIEN_SECRETS` anymore
-/// (`SecretDelivery::resolve(Container)` is `NativeProjection` on every
+/// (`SecretDelivery::resolve(Local, Container)` is `NativeProjection` on every
 /// platform), so this is defense in depth: it keeps a pointer minted by an
 /// OLDER manager's env snapshot — or by any future regression — out of the
 /// runtime-less container, whose secrets arrive as concrete env vars. The
@@ -200,6 +200,7 @@ impl LocalContainerController {
         // container manager at spawn, so there is no container "runtime" env plan here.
         let mut env_vars = EnvironmentVariableBuilder::try_new(&config.environment)?
             .add_standard_alien_env_vars(ctx)?
+            .add_direct_monitoring_auth_headers(ctx)
             .add_current_resource_public_endpoint(ctx, &config.id)?
             .add_linked_resources(&config.links, ctx, &config.id)
             .await?
@@ -211,6 +212,9 @@ impl LocalContainerController {
         ) {
             env_vars.insert(var.name.clone(), var.value.clone());
         }
+        // Monitoring credentials are controller-owned and must win over a
+        // same-name value from the deployment environment snapshot.
+        env_vars.extend(crate::core::direct_monitoring_auth_headers(ctx));
 
         // Local Postgres inlines its password in the binding (no secret store) and `get_binding_params`
         // strips it from the synced copy, so re-resolve the full binding from the manager's 0600

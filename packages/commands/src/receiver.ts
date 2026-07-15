@@ -42,7 +42,7 @@ import {
   InvalidEnvelopeError,
   StorageOperationFailedError,
 } from "./errors.js"
-import { downloadPresigned, uploadPresigned } from "./presigned.js"
+import { downloadPresigned, redactUrlForError, uploadPresigned } from "./presigned.js"
 import type {
   BodySpec,
   CommandResponse,
@@ -240,7 +240,7 @@ function requireEnv(env: Record<string, string | undefined>, name: string): stri
       CommandReceiverConfigInvalidError.create({ envVar: name, reason: `${name} is required` }),
     )
   }
-  if (value === "") {
+  if (value.trim() === "") {
     throw new AlienError(
       CommandReceiverConfigInvalidError.create({
         envVar: name,
@@ -256,7 +256,7 @@ function optionalNonEmpty(
   name: string,
 ): string | undefined {
   const value = env[name]
-  if (value === "") {
+  if (value?.trim() === "") {
     throw new AlienError(
       CommandReceiverConfigInvalidError.create({
         envVar: name,
@@ -603,7 +603,11 @@ class PullCommandReceiver implements CommandReceiver {
    * command is redelivered.
    */
   private async processLease(lease: LeaseInfo, controller: AbortController): Promise<void> {
-    const response = await this.executeLease(lease, controller)
+    const executionBudget = commandBudget(
+      lease.envelope.deadline ?? undefined,
+      lease.leaseExpiresAt,
+    )
+    const response = await this.executeLease(lease, controller, executionBudget)
     if (response === undefined) {
       await this.releaseLease(lease.leaseId)
       return
@@ -611,7 +615,7 @@ class PullCommandReceiver implements CommandReceiver {
     const handlerStatus = commandResponseStatus(response)
     let submitStatus: SubmitStatus = "submitted"
     try {
-      await this.submitResponse(lease.envelope, response)
+      await this.submitResponse(lease.envelope, response, lease.leaseExpiresAt)
     } catch (error) {
       // No ack: the lease will expire and the command is redelivered.
       submitStatus = "failed"
@@ -639,8 +643,9 @@ class PullCommandReceiver implements CommandReceiver {
   private async executeLease(
     lease: LeaseInfo,
     controller: AbortController,
+    budget: Date,
   ): Promise<CommandResponse | undefined> {
-    const { envelope, leaseExpiresAt, attempt } = lease
+    const { envelope, attempt } = lease
     const handler = this.handlers.get(envelope.command)
     if (!handler) {
       return errorResponse(
@@ -649,31 +654,33 @@ class PullCommandReceiver implements CommandReceiver {
       )
     }
 
-    let input: Uint8Array
-    try {
-      input = await decodeParamsBytes(envelope, this.fetchImpl)
-    } catch (error) {
-      // Decode failure is submitted under the decode error's own code, not a
-      // receiver-specific one (DECIDED(09)).
-      const code = error instanceof AlienError ? error.code : ERROR_CODE_HANDLER_ERROR
-      return errorResponse(code, error instanceof Error ? error.message : String(error))
+    const execute = async (): Promise<CommandResponse> => {
+      let input: Uint8Array
+      try {
+        input = await decodeParamsBytes(envelope, this.fetchImpl, controller.signal)
+      } catch (error) {
+        // Decode failure is submitted under the decode error's own code, not a
+        // receiver-specific one (DECIDED(09)).
+        const code = error instanceof AlienError ? error.code : ERROR_CODE_HANDLER_ERROR
+        return errorResponse(code, error instanceof Error ? error.message : String(error))
+      }
+
+      const ctx: CommandContext = {
+        input,
+        signal: controller.signal,
+        deadline: budget,
+        commandId: envelope.commandId,
+        attempt,
+        target: {
+          resourceId: this.config.resourceId,
+          resourceType: this.config.resourceType,
+        },
+        traceContext: envelope.traceContext ?? undefined,
+      }
+      return invokeHandler(handler, ctx)
     }
 
-    const budget = commandBudget(envelope.deadline ?? undefined, leaseExpiresAt)
-    const ctx: CommandContext = {
-      input,
-      signal: controller.signal,
-      deadline: budget,
-      commandId: envelope.commandId,
-      attempt,
-      target: {
-        resourceId: this.config.resourceId,
-        resourceType: this.config.resourceType,
-      },
-      traceContext: envelope.traceContext ?? undefined,
-    }
-
-    return runUnderBudget(handler, ctx, budget, controller, envelope.command)
+    return runUnderBudget(execute, budget, controller, envelope.command)
   }
 
   private async releaseLease(leaseId: string): Promise<void> {
@@ -696,7 +703,25 @@ class PullCommandReceiver implements CommandReceiver {
     }
   }
 
-  private async submitResponse(envelope: Envelope, response: CommandResponse): Promise<void> {
+  private async submitResponse(
+    envelope: Envelope,
+    response: CommandResponse,
+    leaseExpiresAt: string,
+  ): Promise<void> {
+    const remainingLeaseMs = new Date(leaseExpiresAt).getTime() - Date.now()
+    if (remainingLeaseMs <= 0) {
+      throw new AlienError(
+        StorageOperationFailedError.create({
+          operation: "upload",
+          url: redactUrlForError(envelope.responseHandling.submitResponseUrl),
+          reason: "Lease expired before response submission could start",
+        }),
+      )
+    }
+    // One signal covers storage overflow plus the final status PUT. Reusing it
+    // prevents either stage from starting a fresh timeout and extending the
+    // lease. The normal 30-second control cap still applies.
+    const submissionSignal = AbortSignal.timeout(Math.min(CONTROL_TIMEOUT_MS, remainingLeaseMs))
     let finalResponse = response
 
     if (response.status === "success" && response.response.mode === "inline") {
@@ -704,7 +729,11 @@ class PullCommandReceiver implements CommandReceiver {
       const maxInline = envelope.responseHandling.maxInlineBytes
       if (bytes.byteLength > maxInline) {
         // Large response: upload to storage first, then reference it.
-        await this.uploadResponseToStorage(envelope.responseHandling.storageUploadRequest, bytes)
+        await this.uploadResponseToStorage(
+          envelope.responseHandling.storageUploadRequest,
+          bytes,
+          submissionSignal,
+        )
         finalResponse = {
           status: "success",
           response: { mode: "storage", size: bytes.byteLength, storagePutUsed: true },
@@ -724,20 +753,32 @@ class PullCommandReceiver implements CommandReceiver {
       envelope.responseHandling.submitResponseUrl,
       this.config.url,
     )
-    const res = await this.fetchImpl(submitUrl, {
-      method: "PUT",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(finalResponse),
-      signal: AbortSignal.timeout(CONTROL_TIMEOUT_MS),
-    })
-
-    if (!res.ok && res.status !== 409 && res.status !== 410) {
-      const body = await res.text().catch(() => "")
+    let res: Response
+    try {
+      res = await this.fetchImpl(submitUrl, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(finalResponse),
+        signal: submissionSignal,
+      })
+    } catch {
       throw new AlienError(
         StorageOperationFailedError.create({
           operation: "upload",
-          url: submitUrl,
-          reason: `Response submission failed with status ${res.status}: ${body}`,
+          url: redactUrlForError(submitUrl),
+          reason: "Response submission failed before a response was received",
+        }),
+      )
+    }
+
+    if (!res.ok && res.status !== 409 && res.status !== 410) {
+      throw new AlienError(
+        StorageOperationFailedError.create({
+          operation: "upload",
+          url: redactUrlForError(submitUrl),
+          // A failing endpoint may echo the bearer-equivalent response token
+          // or another signed URL, so its body is not diagnostic-safe.
+          reason: `Response submission failed with status ${res.status}`,
         }),
       )
     }
@@ -746,10 +787,12 @@ class PullCommandReceiver implements CommandReceiver {
   private async uploadResponseToStorage(
     request: PresignedRequest,
     bytes: Uint8Array,
+    signal: AbortSignal,
   ): Promise<void> {
     await uploadPresigned(request, bytes, {
       fetchImpl: this.fetchImpl,
       allowLocal: RECEIVER_ALLOW_LOCAL,
+      signal,
     })
   }
 
@@ -850,25 +893,6 @@ export function buildReleaseEndpoint(baseUrl: string, leaseId: string): string {
 }
 
 /**
- * Rebase a manager-minted absolute URL onto the origin of the receiver's
- * configured commands URL, preserving path and query.
- *
- * The manager builds envelope URLs (e.g. the pre-authorized response-submit
- * URL) from its own base address. Across a container or NAT boundary that
- * address may not be reachable from the receiver — the platform corrects
- * `ALIEN_COMMANDS_URL` for the receiver's network (leases already flow
- * through it), so the same origin must be used for every other endpoint on
- * that manager. Returns the URL unchanged when either side fails to parse
- * (an unparseable target fails at fetch time with the real error; the
- * configured base was already validated at receiver construction).
- *
- * Known limitation: only the origin is swapped — a reverse proxy that mounts
- * the manager under a path prefix the manager itself does not know (base
- * `https://edge/prefix/v1` vs minted `…/v1/commands/…`) still breaks, because
- * the prefix cannot be reconstructed client-side. The manager's own base-URL
- * path (e.g. `/v1`) rides inside the minted path and is preserved.
- */
-/**
  * Resolve root-relative envelope URLs in place against the configured
  * commands endpoint's origin.
  *
@@ -905,6 +929,25 @@ export function resolveEnvelopeUrls(envelope: Envelope, commandsBaseUrl: string)
   }
 }
 
+/**
+ * Rebase a manager-minted absolute URL onto the origin of the receiver's
+ * configured commands URL, preserving path and query.
+ *
+ * The manager builds envelope URLs (e.g. the pre-authorized response-submit
+ * URL) from its own base address. Across a container or NAT boundary that
+ * address may not be reachable from the receiver — the platform corrects
+ * `ALIEN_COMMANDS_URL` for the receiver's network (leases already flow
+ * through it), so the same origin must be used for every other endpoint on
+ * that manager. Returns the URL unchanged when either side fails to parse
+ * (an unparseable target fails at fetch time with the real error; the
+ * configured base was already validated at receiver construction).
+ *
+ * Known limitation: only the origin is swapped — a reverse proxy that mounts
+ * the manager under a path prefix the manager itself does not know (base
+ * `https://edge/prefix/v1` vs minted `…/v1/commands/…`) still breaks, because
+ * the prefix cannot be reconstructed client-side. The manager's own base-URL
+ * path (e.g. `/v1`) rides inside the minted path and is preserved.
+ */
 export function rebaseOntoCommandsOrigin(target: string, commandsBaseUrl: string): string {
   try {
     const targetUrl = new URL(target)
@@ -919,28 +962,31 @@ export function rebaseOntoCommandsOrigin(target: string, commandsBaseUrl: string
 }
 
 /**
- * Run the handler racing a budget timer. On budget expiry the `signal` fires,
- * the handler promise is abandoned (its later settlement is ignored — only this
- * function's return is ever submitted), and a `HANDLER_TIMEOUT` is returned.
+ * Run params decoding plus the handler under one budget timer. On budget
+ * expiry the `signal` fires, the operation promise is abandoned (its later
+ * settlement is ignored), and a `HANDLER_TIMEOUT` is returned.
  */
 async function runUnderBudget(
-  handler: CommandHandler,
-  ctx: CommandContext,
+  operation: () => Promise<CommandResponse>,
   budget: Date,
   controller: AbortController,
   command: string,
 ): Promise<CommandResponse | undefined> {
   const remainingMs = Math.max(0, budget.getTime() - Date.now())
+  if (remainingMs === 0) {
+    controller.abort()
+    return handlerTimeoutResponse(command, budget)
+  }
 
   let timer: ReturnType<typeof setTimeout> | undefined
   const budgetPromise = new Promise<{ kind: "timeout" }>(resolve => {
     timer = setTimeout(() => resolve({ kind: "timeout" }), remainingMs)
   })
 
-  const handlerPromise = Promise.resolve()
-    .then(() => handler(ctx))
+  const operationPromise = Promise.resolve()
+    .then(operation)
     .then(
-      value => ({ kind: "return" as const, value }),
+      response => ({ kind: "return" as const, response }),
       (error: unknown) => ({ kind: "throw" as const, error }),
     )
 
@@ -954,7 +1000,7 @@ async function runUnderBudget(
     })
   })
 
-  const outcome = await Promise.race([handlerPromise, budgetPromise, shutdownPromise])
+  const outcome = await Promise.race([operationPromise, budgetPromise, shutdownPromise])
   if (timer !== undefined) {
     clearTimeout(timer)
   }
@@ -963,15 +1009,12 @@ async function runUnderBudget(
     // Budget expired: fire the signal for cooperative work; abandon the handler
     // promise so a late settlement can't double-submit.
     controller.abort()
-    void handlerPromise.catch(() => {})
-    return errorResponse(
-      ERROR_CODE_HANDLER_TIMEOUT,
-      `Command '${command}' exceeded its execution budget (${budget.toISOString()})`,
-    )
+    void operationPromise.catch(() => {})
+    return handlerTimeoutResponse(command, budget)
   }
 
   if (outcome.kind === "shutdown") {
-    void handlerPromise.catch(() => {})
+    void operationPromise.catch(() => {})
     return undefined
   }
 
@@ -980,10 +1023,33 @@ async function runUnderBudget(
     return errorResponse(handlerErrorCode(outcome.error), message)
   }
 
+  return outcome.response
+}
+
+function handlerTimeoutResponse(command: string, budget: Date): CommandResponse {
+  return errorResponse(
+    ERROR_CODE_HANDLER_TIMEOUT,
+    `Command '${command}' exceeded its execution budget (${budget.toISOString()})`,
+  )
+}
+
+/** Invoke and JSON-encode a handler without creating a new execution budget. */
+async function invokeHandler(
+  handler: CommandHandler,
+  ctx: CommandContext,
+): Promise<CommandResponse> {
+  let value: unknown
+  try {
+    value = await handler(ctx)
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error)
+    return errorResponse(handlerErrorCode(error), message)
+  }
+
   // Success: JSON-encode the return value (DECIDED(09)).
   let json: string
   try {
-    json = JSON.stringify(outcome.value) ?? "null"
+    json = JSON.stringify(value) ?? "null"
   } catch (error) {
     return errorResponse(
       ERROR_CODE_HANDLER_ERROR,
@@ -1009,6 +1075,7 @@ function handlerErrorCode(error: unknown): string {
 export async function decodeParamsBytes(
   envelope: Envelope,
   fetchImpl: typeof fetch,
+  signal?: AbortSignal,
 ): Promise<Uint8Array> {
   const params = envelope.params
   if (params.mode === "inline") {
@@ -1028,6 +1095,7 @@ export async function decodeParamsBytes(
   return downloadPresigned(params.storageGetRequest, {
     fetchImpl,
     allowLocal: RECEIVER_ALLOW_LOCAL,
+    signal,
   })
 }
 

@@ -8,6 +8,7 @@
 
 use std::net::SocketAddr;
 use std::sync::Arc;
+use std::time::Duration;
 
 use alien_worker_protocol::ControlGrpcServer;
 use axum::{
@@ -23,11 +24,12 @@ use cloudevents::AttributesReader;
 use http_body_util::BodyExt;
 use tokio::net::TcpListener;
 use tokio::sync::broadcast;
+use tokio_util::sync::CancellationToken;
 use tracing::{debug, error, info, warn};
 
 use super::shared::{
     create_forward_client, dispatch_queue_messages, forward_http_request,
-    parse_cloudevent_from_http, send_cron_event, send_storage_events,
+    parse_cloudevent_from_http, send_cron_event, send_storage_events, serve_with_bounded_shutdown,
 };
 use crate::error::{ErrorData, Result};
 use crate::events::gcp::{
@@ -40,8 +42,12 @@ pub struct CloudRunTransport {
     port: u16,
     control_server: Arc<ControlGrpcServer>,
     app_http_port: Option<u16>,
+    command_timeout: Duration,
+    http_shutdown_grace: Duration,
     shutdown_rx: broadcast::Receiver<()>,
 }
+
+const DEFAULT_HTTP_SHUTDOWN_GRACE: Duration = Duration::from_secs(5);
 
 impl CloudRunTransport {
     pub fn new(
@@ -53,6 +59,8 @@ impl CloudRunTransport {
             port,
             control_server,
             app_http_port: None,
+            command_timeout: Duration::from_secs(300),
+            http_shutdown_grace: DEFAULT_HTTP_SHUTDOWN_GRACE,
             shutdown_rx,
         }
     }
@@ -62,16 +70,24 @@ impl CloudRunTransport {
         self
     }
 
+    pub fn with_command_timeout(mut self, timeout: Duration) -> Self {
+        self.command_timeout = timeout;
+        self
+    }
+
     /// Run the transport
-    pub async fn run(mut self) -> Result<()> {
+    pub async fn run(self) -> Result<()> {
         let addr = SocketAddr::from(([0, 0, 0, 0], self.port));
 
         info!(port = self.port, "Starting Cloud Run transport");
 
+        let proxy_shutdown = CancellationToken::new();
         let state = TransportState {
             control_server: self.control_server,
             app_http_port: self.app_http_port,
+            command_timeout: self.command_timeout,
             http_client: create_forward_client(),
+            proxy_shutdown: proxy_shutdown.clone(),
         };
 
         let app = Router::new()
@@ -89,12 +105,17 @@ impl CloudRunTransport {
 
         info!(addr = %addr, "Cloud Run transport listening");
 
-        axum::serve(listener, app)
-            .with_graceful_shutdown(async move {
-                self.shutdown_rx.recv().await.ok();
-                info!("Cloud Run transport received shutdown signal");
-            })
-            .await
+        let server_result = serve_with_bounded_shutdown(
+            listener,
+            app,
+            self.shutdown_rx,
+            proxy_shutdown,
+            self.http_shutdown_grace,
+            "cloudrun",
+            || {},
+        )
+        .await;
+        server_result
             .into_alien_error()
             .context(ErrorData::TransportStartupFailed {
                 transport_name: "cloudrun".to_string(),
@@ -111,7 +132,9 @@ impl CloudRunTransport {
 struct TransportState {
     control_server: Arc<ControlGrpcServer>,
     app_http_port: Option<u16>,
+    command_timeout: Duration,
     http_client: reqwest::Client,
+    proxy_shutdown: CancellationToken,
 }
 
 async fn handle_request(
@@ -169,7 +192,13 @@ async fn handle_request(
         // Not a PubSub push message — reconstruct request and forward to app
         let request = Request::from_parts(parts, Body::from(body_bytes));
         if let Some(app_port) = state.app_http_port {
-            return forward_http_request(&state.http_client, request, app_port).await;
+            return forward_http_request(
+                &state.http_client,
+                request,
+                app_port,
+                state.proxy_shutdown.clone(),
+            )
+            .await;
         }
 
         error!("No app HTTP port registered");
@@ -178,7 +207,13 @@ async fn handle_request(
 
     // Forward HTTP request to app
     if let Some(app_port) = state.app_http_port {
-        return forward_http_request(&state.http_client, request, app_port).await;
+        return forward_http_request(
+            &state.http_client,
+            request,
+            app_port,
+            state.proxy_shutdown.clone(),
+        )
+        .await;
     }
 
     error!("No app HTTP port registered");
@@ -269,7 +304,10 @@ async fn handle_pubsub_cloudevent(
     state: &TransportState,
 ) -> Response<Body> {
     match pubsub_cloudevent_to_queue_messages(cloud_event) {
-        Ok(queue_messages) => dispatch_queue_messages(queue_messages, &state.control_server).await,
+        Ok(queue_messages) => {
+            dispatch_queue_messages(queue_messages, &state.control_server, state.command_timeout)
+                .await
+        }
         Err(e) => {
             error!(error = %e, "Failed to parse Pub/Sub CloudEvent");
             (StatusCode::BAD_REQUEST, "Invalid Pub/Sub event").into_response()
@@ -337,5 +375,5 @@ async fn handle_pubsub_push_message(
         attempt_count: None,
     };
 
-    dispatch_queue_messages(vec![qm], &state.control_server).await
+    dispatch_queue_messages(vec![qm], &state.control_server, state.command_timeout).await
 }

@@ -1,12 +1,13 @@
 use std::time::{Duration, Instant};
 
-use alien_core::{MessagePayload, QueueMessage};
-use alien_error::{AlienError, Context, IntoAlienError};
+use alien_core::{presigned::redact_url_for_error, MessagePayload, QueueMessage};
+use alien_error::{AlienError, Context, ContextError, IntoAlienError, IntoAlienErrorDirect};
 use chrono::{DateTime, Utc};
 use tracing::debug;
 
 use crate::{
-    error::{ErrorData, Result},
+    error::{Error, ErrorData, Result},
+    resolve_envelope_urls,
     types::{BodySpec, CommandResponse, Envelope, LeaseInfo, LeaseRequest, LeaseResponse},
     PROTOCOL_VERSION,
 };
@@ -15,10 +16,13 @@ use crate::{
 /// execution budget. Stopping this far before the lease actually expires
 /// guarantees the runtime finishes (or abandons) the command while the lease
 /// is still held, so an expired lease is never redelivered by the manager
-/// while a duplicate is still in flight. Shared by every pull-side poller —
-/// the app-owned `Receiver` and the worker runtime's commands-polling
-/// transport. Twin of the TypeScript receiver's `LEASE_SAFETY_MARGIN_MS`.
+/// while a duplicate is still in flight. Used by the app-owned pull
+/// `Receiver`; twin of the TypeScript receiver's `LEASE_SAFETY_MARGIN_MS`.
 pub const LEASE_SAFETY_MARGIN: Duration = Duration::from_secs(5);
+
+/// Response upload plus final status submission must finish inside the
+/// operator's additional 60-second lease headroom.
+const COMMAND_RESPONSE_SUBMISSION_TIMEOUT: Duration = Duration::from_secs(30);
 
 /// Per-command execution budget: `min(envelope.deadline, lease_expiry −
 /// [`LEASE_SAFETY_MARGIN`])`. The LEASE bound is clamped to now; an
@@ -26,9 +30,8 @@ pub const LEASE_SAFETY_MARGIN: Duration = Duration::from_secs(5);
 /// `HANDLER_TIMEOUT`, which is the correct outcome for a command delivered
 /// after its deadline. There is
 /// no lease-renew call in the protocol, so the safety-margined lease expiry
-/// always bounds the budget. Shared by both pull-side pollers so the worker
-/// runtime and the app-owned receiver enforce identical semantics. Twin of
-/// the TypeScript receiver's `commandBudget`.
+/// always bounds the budget. Twin of the TypeScript receiver's
+/// `commandBudget`.
 pub fn command_budget(
     deadline: Option<DateTime<Utc>>,
     lease_expires_at: DateTime<Utc>,
@@ -187,105 +190,213 @@ pub async fn decode_params_bytes(envelope: &Envelope) -> Result<Vec<u8>> {
 /// - Large responses are uploaded to storage first, then submitted with storage reference
 #[cfg(any(feature = "runtime", feature = "receiver"))]
 pub async fn submit_response(envelope: &Envelope, response: CommandResponse) -> Result<()> {
-    use reqwest::Client;
+    submit_response_with_timeout(envelope, response, COMMAND_RESPONSE_SUBMISSION_TIMEOUT).await
+}
 
-    let start_time = Instant::now();
+/// Submit a command response without running beyond an absolute lease expiry.
+///
+/// The normal 30-second submission cap still applies, but a receiver holding a
+/// shorter remaining lease must use that smaller budget. Computing the
+/// remaining duration here, immediately before the upload/submission flow,
+/// prevents either stage from extending the lease deadline.
+#[cfg(feature = "receiver")]
+pub(crate) async fn submit_response_before(
+    envelope: &Envelope,
+    response: CommandResponse,
+    lease_expires_at: DateTime<Utc>,
+) -> Result<()> {
+    let remaining_lease = (lease_expires_at - Utc::now())
+        .to_std()
+        .unwrap_or(Duration::ZERO);
+    submit_response_with_timeout(
+        envelope,
+        response,
+        COMMAND_RESPONSE_SUBMISSION_TIMEOUT.min(remaining_lease),
+    )
+    .await
+}
 
-    // Create client with connection pooling to prevent FD exhaustion
-    let client = Client::builder()
-        .timeout(Duration::from_secs(30))
-        .pool_max_idle_per_host(2)
-        .pool_idle_timeout(Some(Duration::from_secs(60)))
-        .build()
-        .into_alien_error()
-        .context(ErrorData::Other {
-            message: "Failed to create HTTP client".to_string(),
-        })?;
+#[cfg(any(feature = "runtime", feature = "receiver"))]
+async fn submit_response_with_timeout(
+    envelope: &Envelope,
+    response: CommandResponse,
+    timeout: Duration,
+) -> Result<()> {
+    let operation = async {
+        let start_time = Instant::now();
+        let client = reqwest::Client::builder()
+            .timeout(COMMAND_RESPONSE_SUBMISSION_TIMEOUT)
+            .pool_max_idle_per_host(2)
+            .pool_idle_timeout(Some(Duration::from_secs(60)))
+            .build()
+            .into_alien_error()
+            .context(ErrorData::Other {
+                message: "Failed to create HTTP client".to_string(),
+            })?;
+        let (final_response, mut pending_upload) = prepare_response_submission(envelope, response)?;
+        let mut retry_delay = Duration::from_millis(100);
+        loop {
+            match submit_response_attempt(&client, envelope, &final_response, &mut pending_upload)
+                .await
+            {
+                Ok(()) => {
+                    debug!(
+                        command_id = %envelope.command_id,
+                        processing_ms = start_time.elapsed().as_millis(),
+                        response_type = if final_response.is_success() { "success" } else { "error" },
+                        "Command response submitted successfully"
+                    );
+                    return Ok(());
+                }
+                Err(SubmissionAttemptError::Permanent(error)) => return Err(error),
+                Err(SubmissionAttemptError::Retryable(error)) => {
+                    debug!(
+                        command_id = %envelope.command_id,
+                        error_code = %error.code,
+                        retry_delay_ms = retry_delay.as_millis(),
+                        "Transient command response submission failure; retrying"
+                    );
+                    tokio::time::sleep(retry_delay).await;
+                    retry_delay = (retry_delay * 2).min(Duration::from_secs(1));
+                }
+            }
+        }
+    };
 
-    // Check if response body needs storage upload
-    let final_response = match &response {
+    match tokio::time::timeout(timeout, operation).await {
+        Ok(result) => result,
+        Err(error) => Err(error
+            .into_alien_error()
+            .context(ErrorData::HttpOperationFailed {
+                message: format!(
+                    "Command response upload/submission exceeded its {} ms headroom budget",
+                    timeout.as_millis()
+                ),
+                method: None,
+                url: Some(redact_url_for_error(
+                    &envelope.response_handling.submit_response_url,
+                )),
+            })),
+    }
+}
+
+#[cfg(any(feature = "runtime", feature = "receiver"))]
+enum SubmissionAttemptError {
+    Retryable(Error),
+    Permanent(Error),
+}
+
+#[cfg(any(feature = "runtime", feature = "receiver"))]
+fn prepare_response_submission(
+    envelope: &Envelope,
+    response: CommandResponse,
+) -> Result<(CommandResponse, Option<bytes::Bytes>)> {
+    match &response {
         CommandResponse::Success { response: body } => {
             let body_size = body.size().unwrap_or(0);
 
             if body_size > envelope.response_handling.max_inline_bytes {
-                // Large response: upload to storage first
-                debug!(
-                    command_id = %envelope.command_id,
-                    body_size = body_size,
-                    max_inline = envelope.response_handling.max_inline_bytes,
-                    "Uploading large response body to storage"
-                );
-
-                // Get the bytes from the body
                 let body_bytes = body.decode_inline().ok_or_else(|| {
                     AlienError::new(ErrorData::Other {
                         message: "Cannot upload storage body - expected inline body".to_string(),
                     })
                 })?;
-
-                // Upload to storage using the presigned request
-                let upload_response = envelope
-                    .response_handling
-                    .storage_upload_request
-                    .execute(Some(bytes::Bytes::from(body_bytes.clone())))
-                    .await
-                    .into_alien_error()
-                    .context(ErrorData::StorageOperationFailed {
-                        message: "Failed to upload response to storage".to_string(),
-                        operation: Some("put".to_string()),
-                        path: Some(
-                            envelope
-                                .response_handling
-                                .storage_upload_request
-                                .path
-                                .clone(),
-                        ),
-                    })?;
-
-                if upload_response.status_code < 200 || upload_response.status_code >= 300 {
-                    return Err(AlienError::new(ErrorData::StorageOperationFailed {
-                        message: format!(
-                            "Storage upload failed with status {}",
-                            upload_response.status_code
-                        ),
-                        operation: Some("put".to_string()),
-                        path: Some(
-                            envelope
-                                .response_handling
-                                .storage_upload_request
-                                .path
-                                .clone(),
-                        ),
-                    }));
-                }
-
-                debug!(
-                    command_id = %envelope.command_id,
-                    upload_status = upload_response.status_code,
-                    "Response body uploaded to storage successfully"
-                );
-
-                // Create storage body spec
-                CommandResponse::Success {
-                    response: BodySpec::Storage {
-                        size: Some(body_bytes.len() as u64),
-                        storage_get_request: None, // Server will fill this in
-                        storage_put_used: Some(true),
+                Ok((
+                    CommandResponse::Success {
+                        response: BodySpec::Storage {
+                            size: Some(body_bytes.len() as u64),
+                            storage_get_request: None,
+                            storage_put_used: Some(true),
+                        },
                     },
-                }
+                    Some(bytes::Bytes::from(body_bytes)),
+                ))
             } else {
-                response.clone()
+                Ok((response, None))
             }
         }
-        CommandResponse::Error { .. } => response.clone(),
-    };
+        CommandResponse::Error { .. } => Ok((response, None)),
+    }
+}
+
+#[cfg(any(feature = "runtime", feature = "receiver"))]
+async fn submit_response_attempt(
+    client: &reqwest::Client,
+    envelope: &Envelope,
+    final_response: &CommandResponse,
+    pending_upload: &mut Option<bytes::Bytes>,
+) -> std::result::Result<(), SubmissionAttemptError> {
+    if let Some(body_bytes) = pending_upload.as_ref() {
+        debug!(
+            command_id = %envelope.command_id,
+            body_size = body_bytes.len(),
+            max_inline = envelope.response_handling.max_inline_bytes,
+            "Uploading large response body to storage"
+        );
+
+        let upload_result = envelope
+            .response_handling
+            .storage_upload_request
+            .execute_with_client(client, Some(body_bytes.clone()))
+            .await;
+        let upload_response = match upload_result {
+            Ok(response) => response,
+            Err(error) => {
+                let retryable = error.retryable;
+                let error = error.context(ErrorData::StorageOperationFailed {
+                    message: "Failed to upload response to storage".to_string(),
+                    operation: Some("put".to_string()),
+                    path: Some(
+                        envelope
+                            .response_handling
+                            .storage_upload_request
+                            .path
+                            .clone(),
+                    ),
+                });
+                return Err(if retryable {
+                    SubmissionAttemptError::Retryable(error)
+                } else {
+                    SubmissionAttemptError::Permanent(error)
+                });
+            }
+        };
+
+        if upload_response.status_code < 200 || upload_response.status_code >= 300 {
+            let status = upload_response.status_code;
+            let error = AlienError::new(ErrorData::StorageOperationFailed {
+                message: format!("Storage upload failed with status {}", status),
+                operation: Some("put".to_string()),
+                path: Some(
+                    envelope
+                        .response_handling
+                        .storage_upload_request
+                        .path
+                        .clone(),
+                ),
+            });
+            return Err(if status == 408 || status == 429 || status >= 500 {
+                SubmissionAttemptError::Retryable(error)
+            } else {
+                SubmissionAttemptError::Permanent(error)
+            });
+        }
+
+        debug!(
+            command_id = %envelope.command_id,
+            upload_status = upload_response.status_code,
+            "Response body uploaded to storage successfully"
+        );
+        *pending_upload = None;
+    }
 
     // Submit response to command server using the URL from the envelope
     let submit_url = &envelope.response_handling.submit_response_url;
+    let safe_submit_url = redact_url_for_error(submit_url);
 
     debug!(
         command_id = %envelope.command_id,
-        url = %submit_url,
+        url = %safe_submit_url,
         "Submitting command response"
     );
 
@@ -295,42 +406,55 @@ pub async fn submit_response(envelope: &Envelope, response: CommandResponse) -> 
             response: final_response.clone(),
         })
         .send()
-        .await
-        .into_alien_error()
-        .context(ErrorData::HttpOperationFailed {
-            message: "Failed to submit response".to_string(),
-            method: Some("PUT".to_string()),
-            url: Some(submit_url.clone()),
-        })?;
+        .await;
+    let http_response =
+        match http_response {
+            Ok(response) => response,
+            Err(error) => {
+                let retryable = !error.is_builder();
+                let error = error.without_url().into_alien_error().context(
+                    ErrorData::HttpOperationFailed {
+                        message: "Failed to submit response".to_string(),
+                        method: Some("PUT".to_string()),
+                        url: Some(safe_submit_url.clone()),
+                    },
+                );
+                return Err(if retryable {
+                    SubmissionAttemptError::Retryable(error)
+                } else {
+                    SubmissionAttemptError::Permanent(error)
+                });
+            }
+        };
 
     if !http_response.status().is_success()
         && http_response.status() != reqwest::StatusCode::CONFLICT
         && http_response.status() != reqwest::StatusCode::GONE
     {
         let status = http_response.status();
-        let error_body = http_response.text().await.unwrap_or_default();
-        return Err(AlienError::new(ErrorData::HttpOperationFailed {
-            message: format!(
-                "Response submission failed with status {}: {}",
-                status, error_body
-            ),
+        let error = AlienError::new(ErrorData::HttpOperationFailed {
+            // A failing endpoint may echo the bearer-equivalent response
+            // token or another signed URL, so its body is not diagnostic-safe.
+            message: format!("Response submission failed with status {status}"),
             method: Some("PUT".to_string()),
-            url: Some(submit_url.clone()),
-        }));
+            url: Some(safe_submit_url),
+        });
+        return Err(
+            if status == reqwest::StatusCode::REQUEST_TIMEOUT
+                || status == reqwest::StatusCode::TOO_MANY_REQUESTS
+                || status.is_server_error()
+            {
+                SubmissionAttemptError::Retryable(error)
+            } else {
+                SubmissionAttemptError::Permanent(error)
+            },
+        );
     }
-
-    debug!(
-        command_id = %envelope.command_id,
-        processing_ms = start_time.elapsed().as_millis(),
-        response_type = if final_response.is_success() { "success" } else { "error" },
-        "Command response submitted successfully"
-    );
 
     Ok(())
 }
 
-/// Shared lease-acquisition client for the pull-side pollers — the app-owned
-/// `Receiver` and the worker runtime's commands-polling transport.
+/// Shared lease-acquisition client for app-owned pull receivers.
 ///
 /// Holds the fully-qualified `…/commands/leases` endpoint, the bearer token,
 /// and a pooled HTTP client. The endpoint is built **once** at construction
@@ -392,7 +516,7 @@ impl LeaseClient {
     }
 
     /// Acquire leases with a caller-supplied token. Receivers use this for
-    /// file-backed token rotation; the worker runtime keeps using [`Self::acquire`].
+    /// file-backed token rotation; [`Self::acquire`] uses the configured token.
     pub async fn acquire_with_token(
         &self,
         request: &LeaseRequest,
@@ -505,38 +629,6 @@ impl LeaseClient {
     }
 }
 
-/// Resolve root-relative envelope URLs against the consumer's configured
-/// commands endpoint origin. See [`LeaseClient::acquire`] — this is the
-/// single ingestion point for lease-served envelopes, so downstream code
-/// (`submit_response`, params decoding, presigned uploads) always sees
-/// absolute URLs, exactly as before relative minting existed.
-pub fn resolve_envelope_urls(envelope: &mut Envelope, base: &reqwest::Url) {
-    let origin = base.origin().ascii_serialization();
-    let resolve = |target: &mut String| {
-        if target.starts_with('/') {
-            *target = format!("{origin}{target}");
-        }
-    };
-
-    resolve(&mut envelope.response_handling.submit_response_url);
-    if let alien_core::presigned::PresignedRequestBackend::Http { url, .. } =
-        &mut envelope.response_handling.storage_upload_request.backend
-    {
-        resolve(url);
-    }
-    if let alien_core::commands_types::BodySpec::Storage {
-        storage_get_request: Some(request),
-        ..
-    } = &mut envelope.params
-    {
-        if let alien_core::presigned::PresignedRequestBackend::Http { url, .. } =
-            &mut request.backend
-        {
-            resolve(url);
-        }
-    }
-}
-
 /// Create a simple success response for testing
 pub fn create_test_response(data: &[u8]) -> CommandResponse {
     CommandResponse::success(data)
@@ -551,7 +643,42 @@ pub fn create_test_error(code: &str, message: &str) -> CommandResponse {
 mod tests {
     use super::*;
     use alien_core::presigned::{PresignedOperation, PresignedRequest};
+    use axum::{extract::State, http::StatusCode, routing::put, Router};
     use chrono::Utc;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::sync::Arc;
+
+    async fn fail_once_then_accept(State(attempts): State<Arc<AtomicUsize>>) -> StatusCode {
+        if attempts.fetch_add(1, Ordering::SeqCst) == 0 {
+            StatusCode::SERVICE_UNAVAILABLE
+        } else {
+            StatusCode::OK
+        }
+    }
+
+    async fn reject_permanently(State(attempts): State<Arc<AtomicUsize>>) -> StatusCode {
+        attempts.fetch_add(1, Ordering::SeqCst);
+        StatusCode::BAD_REQUEST
+    }
+
+    #[derive(Clone)]
+    struct UploadThenRetryState {
+        uploads: Arc<AtomicUsize>,
+        submissions: Arc<AtomicUsize>,
+    }
+
+    async fn accept_upload(State(state): State<UploadThenRetryState>) -> StatusCode {
+        state.uploads.fetch_add(1, Ordering::SeqCst);
+        StatusCode::OK
+    }
+
+    async fn fail_first_submission(State(state): State<UploadThenRetryState>) -> StatusCode {
+        if state.submissions.fetch_add(1, Ordering::SeqCst) == 0 {
+            StatusCode::SERVICE_UNAVAILABLE
+        } else {
+            StatusCode::OK
+        }
+    }
 
     fn create_test_envelope() -> Envelope {
         Envelope {
@@ -632,6 +759,185 @@ mod tests {
             envelope.response_handling.submit_response_url,
             "https://commands.example.com/commands/cmd_123/response"
         );
+    }
+
+    #[tokio::test]
+    async fn submit_response_error_does_not_expose_response_token() {
+        let secret = "do-not-log-response-token";
+        let mut envelope = create_test_envelope();
+        envelope.response_handling.submit_response_url =
+            format!("http://127.0.0.1:0/response?response_token={secret}&expires=1");
+
+        let error = submit_response_with_timeout(
+            &envelope,
+            create_test_response(b"ok"),
+            Duration::from_millis(50),
+        )
+        .await
+        .expect_err("port zero must reject the response submission");
+        let serialized = serde_json::to_string(&error).unwrap();
+        let debug = format!("{error:?}");
+
+        assert!(
+            !serialized.contains(secret),
+            "serialized error leaked token"
+        );
+        assert!(!debug.contains(secret), "debug error leaked token");
+        assert!(serialized.contains("http://127.0.0.1:0/response"));
+    }
+
+    #[tokio::test]
+    async fn response_upload_and_submit_share_one_bounded_redacted_timeout() {
+        let upload_secret = "do-not-log-upload-signature";
+        let response_secret = "do-not-log-response-token";
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let server = tokio::spawn(async move {
+            let (_socket, _) = listener.accept().await.unwrap();
+            std::future::pending::<()>().await;
+        });
+
+        let mut envelope = create_test_envelope();
+        envelope.response_handling.max_inline_bytes = 1;
+        envelope.response_handling.submit_response_url =
+            format!("http://{address}/response?response_token={response_secret}");
+        envelope.response_handling.storage_upload_request = PresignedRequest::new_http(
+            format!("http://{address}/upload?signature={upload_secret}"),
+            "PUT".to_string(),
+            std::collections::HashMap::new(),
+            PresignedOperation::Put,
+            "test-path".to_string(),
+            Utc::now() + chrono::Duration::hours(1),
+        );
+
+        let error = submit_response_with_timeout(
+            &envelope,
+            create_test_response(b"large-response"),
+            Duration::from_millis(50),
+        )
+        .await
+        .expect_err("blackholed response upload must time out");
+        let serialized = serde_json::to_string(&error).unwrap();
+        let debug = format!("{error:?}");
+
+        for secret in [upload_secret, response_secret] {
+            assert!(
+                !serialized.contains(secret),
+                "serialized error leaked token"
+            );
+            assert!(!debug.contains(secret), "debug error leaked token");
+        }
+        assert!(serialized.contains(&format!("http://{address}/response")));
+        server.abort();
+    }
+
+    #[tokio::test]
+    async fn transient_final_put_is_retried_within_submission_budget() {
+        let attempts = Arc::new(AtomicUsize::new(0));
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let server_attempts = attempts.clone();
+        let server = tokio::spawn(async move {
+            axum::serve(
+                listener,
+                Router::new()
+                    .route("/response", put(fail_once_then_accept))
+                    .with_state(server_attempts),
+            )
+            .await
+            .unwrap();
+        });
+
+        let mut envelope = create_test_envelope();
+        envelope.response_handling.submit_response_url = format!("http://{address}/response");
+        submit_response_with_timeout(
+            &envelope,
+            create_test_response(b"ok"),
+            Duration::from_secs(2),
+        )
+        .await
+        .expect("second PUT should terminalize the command");
+
+        assert_eq!(attempts.load(Ordering::SeqCst), 2);
+        server.abort();
+    }
+
+    #[tokio::test]
+    async fn retrying_final_put_does_not_repeat_successful_blob_upload() {
+        let state = UploadThenRetryState {
+            uploads: Arc::new(AtomicUsize::new(0)),
+            submissions: Arc::new(AtomicUsize::new(0)),
+        };
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let server_state = state.clone();
+        let server = tokio::spawn(async move {
+            axum::serve(
+                listener,
+                Router::new()
+                    .route("/upload", put(accept_upload))
+                    .route("/response", put(fail_first_submission))
+                    .with_state(server_state),
+            )
+            .await
+            .unwrap();
+        });
+
+        let mut envelope = create_test_envelope();
+        envelope.response_handling.max_inline_bytes = 1;
+        envelope.response_handling.submit_response_url = format!("http://{address}/response");
+        envelope.response_handling.storage_upload_request = PresignedRequest::new_http(
+            format!("http://{address}/upload"),
+            "PUT".to_string(),
+            std::collections::HashMap::new(),
+            PresignedOperation::Put,
+            "test-path".to_string(),
+            Utc::now() + chrono::Duration::hours(1),
+        );
+
+        submit_response_with_timeout(
+            &envelope,
+            create_test_response(b"large-response"),
+            Duration::from_secs(2),
+        )
+        .await
+        .expect("retrying the terminal PUT should not re-upload its blob");
+
+        assert_eq!(state.uploads.load(Ordering::SeqCst), 1);
+        assert_eq!(state.submissions.load(Ordering::SeqCst), 2);
+        server.abort();
+    }
+
+    #[tokio::test]
+    async fn permanent_final_put_rejection_is_not_retried() {
+        let attempts = Arc::new(AtomicUsize::new(0));
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let server_attempts = attempts.clone();
+        let server = tokio::spawn(async move {
+            axum::serve(
+                listener,
+                Router::new()
+                    .route("/response", put(reject_permanently))
+                    .with_state(server_attempts),
+            )
+            .await
+            .unwrap();
+        });
+
+        let mut envelope = create_test_envelope();
+        envelope.response_handling.submit_response_url = format!("http://{address}/response");
+        let error = submit_response_with_timeout(
+            &envelope,
+            create_test_response(b"ok"),
+            Duration::from_secs(2),
+        )
+        .await
+        .expect_err("400 is a permanent submission rejection");
+
+        assert_eq!(attempts.load(Ordering::SeqCst), 1);
+        assert!(error.message.contains("400"));
+        server.abort();
     }
 
     #[test]

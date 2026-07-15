@@ -209,6 +209,25 @@ pub enum ErrorData {
         target: Option<String>,
     },
 
+    /// Transport rejected a command before accepting it for execution.
+    ///
+    /// Unlike an acknowledgement timeout, this is a definite non-delivery:
+    /// the command server may safely record a terminal delivery failure.
+    #[error(
+        code = "TRANSPORT_DISPATCH_REJECTED",
+        message = "Transport rejected dispatch: {message}",
+        retryable = "false",
+        internal = "false"
+    )]
+    TransportDispatchRejected {
+        /// Safe description that contains no endpoint credentials or body.
+        message: String,
+        /// Transport type that rejected the command.
+        transport_type: Option<String>,
+        /// Command identifier (never a credential-bearing URL).
+        target: Option<String>,
+    },
+
     /// Command envelope validation or parsing failed.
     #[error(
         code = "INVALID_ENVELOPE",

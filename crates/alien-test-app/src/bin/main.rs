@@ -334,8 +334,6 @@ async fn inspect_request(Json(payload): Json<serde_json::Value>) -> Json<Inspect
 /// Allowed environment variable names that can be read via the HTTP endpoint.
 const ALLOWED_ENV_VARS: &[&str] = &[
     "ALIEN_DEPLOYMENT_ID",
-    "ALIEN_COMMANDS_POLLING_URL",
-    "ALIEN_COMMANDS_POLLING_ENABLED",
     "ALIEN_WORKER_GRPC_ADDRESS",
     "PORT",
     "ALIEN_PLATFORM",

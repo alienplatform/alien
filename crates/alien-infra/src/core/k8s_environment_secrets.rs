@@ -1,12 +1,15 @@
 use std::collections::{BTreeMap, HashMap};
 
-use alien_core::{EnvironmentVariable, EnvironmentVariableType, ENV_ALIEN_SECRETS};
+#[cfg(test)]
+use alien_core::EnvironmentVariableType;
+use alien_core::{EnvironmentVariable, ENV_ALIEN_SECRETS};
 use alien_error::{Context, ContextError};
 use k8s_openapi::api::core::v1::{EnvVar, EnvVarSource, Secret, SecretKeySelector};
 use k8s_openapi::apimachinery::pkg::apis::meta::v1::ObjectMeta;
 use k8s_openapi::ByteString;
 use serde::{Deserialize, Serialize};
 
+use crate::core::environment_variables::applicable_secret_environment_variables;
 use crate::core::k8s_secret_bindings::extract_binding_secrets;
 use crate::core::ResourceControllerContext;
 use crate::error::{ErrorData, Result};
@@ -18,42 +21,27 @@ pub struct KubernetesEnvSecretPlan {
     pub keys: Vec<String>,
 }
 
-fn matches_environment_target(resource_id: &str, target_resources: &Option<Vec<String>>) -> bool {
-    match target_resources {
-        None => true,
-        Some(patterns) if patterns.is_empty() => false,
-        Some(patterns) => patterns.iter().any(|pattern| {
-            if let Some(prefix) = pattern.strip_suffix('*') {
-                resource_id.starts_with(prefix)
-            } else {
-                resource_id == pattern
-            }
-        }),
-    }
-}
-
-pub(crate) fn applicable_secret_environment_variables<'a>(
+fn environment_secret_values(
     resource_id: &str,
-    variables: &'a [EnvironmentVariable],
-) -> Vec<&'a EnvironmentVariable> {
-    variables
-        .iter()
-        .filter(|var| var.var_type == EnvironmentVariableType::Secret)
-        .filter(|var| matches_environment_target(resource_id, &var.target_resources))
-        .collect()
+    variables: &[EnvironmentVariable],
+    additional_secrets: &BTreeMap<String, String>,
+) -> BTreeMap<String, String> {
+    let mut values = applicable_secret_environment_variables(resource_id, variables)
+        .into_iter()
+        .map(|var| (var.name.clone(), var.value.clone()))
+        .collect::<BTreeMap<_, _>>();
+    values.extend(additional_secrets.clone());
+    values
 }
 
-fn secret_checksum(secret_vars: &[&EnvironmentVariable]) -> String {
+fn secret_checksum(secret_values: &BTreeMap<String, String>) -> String {
     use sha2::{Digest, Sha256};
 
-    let mut vars = secret_vars.to_vec();
-    vars.sort_by(|left, right| left.name.cmp(&right.name));
-
     let mut hasher = Sha256::new();
-    for var in vars {
-        hasher.update(var.name.as_bytes());
+    for (name, value) in secret_values {
+        hasher.update(name.as_bytes());
         hasher.update(b"=");
-        hasher.update(var.value.as_bytes());
+        hasher.update(value.as_bytes());
         hasher.update(b"\n");
     }
 
@@ -71,18 +59,31 @@ pub fn environment_secret_plan(
     workload_name: &str,
     variables: &[EnvironmentVariable],
 ) -> Option<KubernetesEnvSecretPlan> {
-    let secret_vars = applicable_secret_environment_variables(resource_id, variables);
-    if secret_vars.is_empty() {
+    environment_secret_plan_with_additional_secrets(
+        resource_id,
+        workload_name,
+        variables,
+        &BTreeMap::new(),
+    )
+}
+
+/// Derives a workload Secret plan that also includes controller-owned values
+/// read directly from `DeploymentConfig` at provisioning time.
+pub fn environment_secret_plan_with_additional_secrets(
+    resource_id: &str,
+    workload_name: &str,
+    variables: &[EnvironmentVariable],
+    additional_secrets: &BTreeMap<String, String>,
+) -> Option<KubernetesEnvSecretPlan> {
+    let secret_values = environment_secret_values(resource_id, variables, additional_secrets);
+    if secret_values.is_empty() {
         return None;
     }
 
     Some(KubernetesEnvSecretPlan {
         secret_name: format!("{workload_name}-env"),
-        checksum: secret_checksum(&secret_vars),
-        keys: secret_vars
-            .iter()
-            .map(|var| var.name.clone())
-            .collect::<Vec<_>>(),
+        checksum: secret_checksum(&secret_values),
+        keys: secret_values.keys().cloned().collect(),
     })
 }
 
@@ -92,7 +93,7 @@ fn environment_secret_manifest(
     plan: &KubernetesEnvSecretPlan,
     resource_id: &str,
     namespace: &str,
-    secret_vars: &[&EnvironmentVariable],
+    secret_values: &BTreeMap<String, String>,
 ) -> Secret {
     Secret {
         metadata: ObjectMeta {
@@ -110,12 +111,102 @@ fn environment_secret_manifest(
         },
         type_: Some("Opaque".to_string()),
         data: Some(
-            secret_vars
+            secret_values
                 .iter()
-                .map(|var| (var.name.clone(), ByteString(var.value.as_bytes().to_vec())))
+                .map(|(name, value)| (name.clone(), ByteString(value.as_bytes().to_vec())))
                 .collect(),
         ),
         ..Default::default()
+    }
+}
+
+fn environment_secret_is_owned(secret: &Secret, resource_id: &str) -> bool {
+    secret.metadata.labels.as_ref().is_some_and(|labels| {
+        labels.get("managed-by").map(String::as_str) == Some("runtime")
+            && labels.get("resource-id").map(String::as_str) == Some(resource_id)
+    })
+}
+
+fn ensure_environment_secret_is_owned(
+    secret: &Secret,
+    secret_name: &str,
+    resource_id: &str,
+) -> Result<()> {
+    if environment_secret_is_owned(secret, resource_id) {
+        return Ok(());
+    }
+
+    Err(alien_error::AlienError::new(
+        ErrorData::ResourceConfigInvalid {
+            message: format!(
+                "Refusing to mutate Kubernetes Secret '{secret_name}' because it is not owned by resource '{resource_id}'"
+            ),
+            resource_id: Some(resource_id.to_string()),
+        },
+    ))
+}
+
+/// Deletes the controller-owned per-workload environment Secret. Missing
+/// Secrets are already deleted; a same-name Secret without our ownership
+/// labels is never touched.
+pub async fn delete_environment_secret(
+    resource_kind: &str,
+    resource_id: &str,
+    workload_name: &str,
+    namespace: &str,
+    ctx: &ResourceControllerContext<'_>,
+) -> Result<()> {
+    let secret_name = format!("{workload_name}-env");
+    let kubernetes_config = ctx.get_kubernetes_config()?;
+    let secrets_client = ctx
+        .service_provider
+        .get_kubernetes_secrets_client(kubernetes_config)
+        .await?;
+
+    let existing = match secrets_client.get_secret(namespace, &secret_name).await {
+        Ok(secret) => secret,
+        Err(error)
+            if matches!(
+                error.error,
+                Some(alien_client_core::ErrorData::RemoteResourceNotFound { .. })
+            ) =>
+        {
+            return Ok(());
+        }
+        Err(error) => {
+            return Err(error.context(ErrorData::CloudPlatformError {
+                message: format!(
+                    "Failed to read environment Secret before deleting {resource_kind} '{resource_id}'"
+                ),
+                resource_id: Some(resource_id.to_string()),
+            }));
+        }
+    };
+    if !environment_secret_is_owned(&existing, resource_id) {
+        tracing::debug!(
+            secret_name = %secret_name,
+            resource_id = %resource_id,
+            "Leaving same-name Kubernetes Secret untouched because it is not owned by this workload"
+        );
+        return Ok(());
+    }
+
+    match secrets_client.delete_secret(namespace, &secret_name).await {
+        Ok(()) => Ok(()),
+        Err(error)
+            if matches!(
+                error.error,
+                Some(alien_client_core::ErrorData::RemoteResourceNotFound { .. })
+            ) =>
+        {
+            Ok(())
+        }
+        Err(error) => Err(error.context(ErrorData::CloudPlatformError {
+            message: format!(
+                "Failed to delete environment Secret for {resource_kind} '{resource_id}'"
+            ),
+            resource_id: Some(resource_id.to_string()),
+        })),
     }
 }
 
@@ -126,13 +217,39 @@ pub async fn reconcile_environment_secret(
     namespace: &str,
     ctx: &ResourceControllerContext<'_>,
 ) -> Result<Option<KubernetesEnvSecretPlan>> {
+    reconcile_environment_secret_with_additional_secrets(
+        resource_kind,
+        resource_id,
+        workload_name,
+        namespace,
+        &BTreeMap::new(),
+        ctx,
+    )
+    .await
+}
+
+pub async fn reconcile_environment_secret_with_additional_secrets(
+    resource_kind: &str,
+    resource_id: &str,
+    workload_name: &str,
+    namespace: &str,
+    additional_secrets: &BTreeMap<String, String>,
+    ctx: &ResourceControllerContext<'_>,
+) -> Result<Option<KubernetesEnvSecretPlan>> {
     let variables = &ctx.deployment_config.environment_variables.variables;
-    let Some(plan) = environment_secret_plan(resource_id, workload_name, variables) else {
+    let Some(plan) = environment_secret_plan_with_additional_secrets(
+        resource_id,
+        workload_name,
+        variables,
+        additional_secrets,
+    ) else {
+        delete_environment_secret(resource_kind, resource_id, workload_name, namespace, ctx)
+            .await?;
         return Ok(None);
     };
 
-    let secret_vars = applicable_secret_environment_variables(resource_id, variables);
-    let mut secret = environment_secret_manifest(&plan, resource_id, namespace, &secret_vars);
+    let secret_values = environment_secret_values(resource_id, variables, additional_secrets);
+    let mut secret = environment_secret_manifest(&plan, resource_id, namespace, &secret_values);
     let secret_name = plan.secret_name.clone();
 
     let kubernetes_config = ctx.get_kubernetes_config()?;
@@ -155,6 +272,7 @@ pub async fn reconcile_environment_secret(
                         ),
                         resource_id: Some(resource_id.to_string()),
                     })?;
+                ensure_environment_secret_is_owned(&existing, &secret_name, resource_id)?;
                 secret.metadata.resource_version = existing.metadata.resource_version;
                 secrets_client
                     .update_secret(namespace, &secret_name, &secret)
@@ -209,17 +327,14 @@ fn secret_key_ref_env_var(name: &str, secret_name: &str, secret_key: &str) -> En
 /// 3. `env_map` — the remaining plain env vars; a name already projected as a
 ///    secret above wins and is never overwritten with an inline value.
 ///
-/// When `strip_alien_secrets` is set, the `ALIEN_SECRETS` vault-load pointer is
-/// dropped from `env_map`. Kubernetes Containers and Daemons project their
-/// secrets natively via `secretKeyRef` and never load them at runtime, so the
-/// pointer must never reach the manifest; this strip also covers configs
-/// injected by older managers that still collapsed secrets into that pointer.
-/// Workers keep the pointer — they load secrets from the vault at runtime.
+/// The legacy `ALIEN_SECRETS` vault-load pointer is dropped from `env_map`.
+/// Kubernetes workloads project secrets natively via `secretKeyRef`, so the
+/// pointer must never reach a pod manifest. This also covers configs injected
+/// by older managers that still collapsed secrets into that pointer.
 pub fn projected_env_vars(
     plan: Option<&KubernetesEnvSecretPlan>,
     bindings: Vec<(String, serde_json::Value)>,
     env_map: HashMap<String, String>,
-    strip_alien_secrets: bool,
 ) -> Result<Vec<EnvVar>> {
     let mut env_vars = Vec::new();
 
@@ -255,7 +370,7 @@ pub fn projected_env_vars(
     }
 
     for (key, value) in env_map {
-        if strip_alien_secrets && key == ENV_ALIEN_SECRETS {
+        if key == ENV_ALIEN_SECRETS {
             continue;
         }
         if !env_vars.iter().any(|ev| ev.name == key) {
@@ -300,8 +415,28 @@ impl EnvSecretRotationTracker {
         workload_name: &str,
         variables: &[EnvironmentVariable],
     ) -> bool {
-        let current = environment_secret_plan(resource_id, workload_name, variables)
-            .map(|plan| plan.checksum);
+        self.drifted_with_additional_secrets(
+            resource_id,
+            workload_name,
+            variables,
+            &BTreeMap::new(),
+        )
+    }
+
+    pub fn drifted_with_additional_secrets(
+        &self,
+        resource_id: &str,
+        workload_name: &str,
+        variables: &[EnvironmentVariable],
+        additional_secrets: &BTreeMap<String, String>,
+    ) -> bool {
+        let current = environment_secret_plan_with_additional_secrets(
+            resource_id,
+            workload_name,
+            variables,
+            additional_secrets,
+        )
+        .map(|plan| plan.checksum);
         current != self.checksum
     }
 }
@@ -309,7 +444,14 @@ impl EnvSecretRotationTracker {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use alien_core::ENV_ALIEN_COMMANDS_TOKEN;
+    use crate::core::kubernetes_manifest_test_support::KubernetesManifestTestHarness;
+    use crate::core::{
+        direct_monitoring_auth_headers, MockPlatformServiceProvider, OTEL_EXPORTER_OTLP_HEADERS,
+        OTEL_EXPORTER_OTLP_METRICS_HEADERS,
+    };
+    use alien_core::{OtlpConfig, Resource, Vault, ENV_ALIEN_COMMANDS_TOKEN};
+    use alien_k8s_clients::secrets::{MockSecretsApi, SecretsApi};
+    use std::sync::Arc;
 
     fn secret_var(name: &str, value: &str, targets: Option<Vec<&str>>) -> EnvironmentVariable {
         EnvironmentVariable {
@@ -355,8 +497,8 @@ mod tests {
         assert_eq!(
             plan.keys,
             vec![
-                "APP_SECRET".to_string(),
-                ENV_ALIEN_COMMANDS_TOKEN.to_string()
+                ENV_ALIEN_COMMANDS_TOKEN.to_string(),
+                "APP_SECRET".to_string()
             ]
         );
         assert!(!plan.checksum.is_empty());
@@ -386,9 +528,9 @@ mod tests {
             secret_var(ENV_ALIEN_COMMANDS_TOKEN, "tok", Some(vec!["web"])),
         ];
         let plan = environment_secret_plan("web", "web", &variables).expect("plan");
-        let secret_vars = applicable_secret_environment_variables("web", &variables);
+        let secret_values = environment_secret_values("web", &variables, &BTreeMap::new());
 
-        let secret = environment_secret_manifest(&plan, "web", "test-ns", &secret_vars);
+        let secret = environment_secret_manifest(&plan, "web", "test-ns", &secret_values);
 
         assert_eq!(secret.metadata.name.as_deref(), Some("web-env"));
         assert_eq!(secret.metadata.namespace.as_deref(), Some("test-ns"));
@@ -410,5 +552,198 @@ mod tests {
             data.get(ENV_ALIEN_COMMANDS_TOKEN),
             Some(&ByteString(b"tok".to_vec()))
         );
+    }
+
+    #[test]
+    fn controller_owned_secrets_are_planned_and_override_snapshot_values() {
+        let variables = vec![secret_var(
+            OTEL_EXPORTER_OTLP_HEADERS,
+            "stale-user-value",
+            None,
+        )];
+        let additional = BTreeMap::from([
+            (
+                OTEL_EXPORTER_OTLP_HEADERS.to_string(),
+                "authorization=Bearer current".to_string(),
+            ),
+            (
+                OTEL_EXPORTER_OTLP_METRICS_HEADERS.to_string(),
+                "authorization=Bearer metrics".to_string(),
+            ),
+        ]);
+        let plan =
+            environment_secret_plan_with_additional_secrets("web", "web", &variables, &additional)
+                .expect("plan");
+        let values = environment_secret_values("web", &variables, &additional);
+        let secret = environment_secret_manifest(&plan, "web", "test-ns", &values);
+
+        assert_eq!(
+            plan.keys,
+            vec![
+                OTEL_EXPORTER_OTLP_HEADERS.to_string(),
+                OTEL_EXPORTER_OTLP_METRICS_HEADERS.to_string(),
+            ]
+        );
+        assert_eq!(
+            secret.data.expect("data").get(OTEL_EXPORTER_OTLP_HEADERS),
+            Some(&ByteString(b"authorization=Bearer current".to_vec()))
+        );
+    }
+
+    #[test]
+    fn direct_monitoring_headers_use_logs_fallback_when_metrics_auth_is_missing() {
+        let harness = KubernetesManifestTestHarness::new(
+            Resource::new(Vault::new("agent".to_string()).build()),
+            vec![],
+        )
+        .with_monitoring(OtlpConfig {
+            logs_endpoint: "https://manager.test/v1/logs".to_string(),
+            logs_auth_header: "authorization=Bearer logs".to_string(),
+            metrics_endpoint: Some("https://manager.test/v1/metrics".to_string()),
+            metrics_auth_header: None,
+            resource_attributes: Default::default(),
+        });
+
+        let headers = direct_monitoring_auth_headers(&harness.ctx());
+
+        assert_eq!(
+            headers.get(OTEL_EXPORTER_OTLP_HEADERS).map(String::as_str),
+            Some("authorization=Bearer logs")
+        );
+        assert_eq!(
+            headers
+                .get(OTEL_EXPORTER_OTLP_METRICS_HEADERS)
+                .map(String::as_str),
+            Some("authorization=Bearer logs")
+        );
+    }
+
+    #[test]
+    fn rotation_tracker_detects_controller_owned_secret_changes_and_removal() {
+        let before = BTreeMap::from([(
+            OTEL_EXPORTER_OTLP_HEADERS.to_string(),
+            "authorization=Bearer v1".to_string(),
+        )]);
+        let rotated = BTreeMap::from([(
+            OTEL_EXPORTER_OTLP_HEADERS.to_string(),
+            "authorization=Bearer v2".to_string(),
+        )]);
+        let plan = environment_secret_plan_with_additional_secrets("agent", "agent", &[], &before)
+            .expect("monitoring plan");
+        let mut tracker = EnvSecretRotationTracker::default();
+        tracker.record(Some(&plan));
+
+        assert!(!tracker.drifted_with_additional_secrets("agent", "agent", &[], &before));
+        assert!(tracker.drifted_with_additional_secrets("agent", "agent", &[], &rotated));
+        assert!(tracker.drifted_with_additional_secrets("agent", "agent", &[], &BTreeMap::new()));
+    }
+
+    #[test]
+    fn environment_secret_cleanup_requires_exact_ownership_labels() {
+        let owned = Secret {
+            metadata: ObjectMeta {
+                name: Some("web-env".to_string()),
+                labels: Some(BTreeMap::from([
+                    ("managed-by".to_string(), "runtime".to_string()),
+                    ("resource-id".to_string(), "web".to_string()),
+                ])),
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        assert!(ensure_environment_secret_is_owned(&owned, "web-env", "web").is_ok());
+        assert!(ensure_environment_secret_is_owned(&owned, "web-env", "other").is_err());
+
+        let unmanaged = Secret {
+            metadata: ObjectMeta {
+                name: Some("web-env".to_string()),
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        assert!(ensure_environment_secret_is_owned(&unmanaged, "web-env", "web").is_err());
+    }
+
+    #[tokio::test]
+    async fn reconcile_without_desired_values_deletes_owned_workload_secret() {
+        let existing = Secret {
+            metadata: ObjectMeta {
+                name: Some("agent-env".to_string()),
+                labels: Some(BTreeMap::from([
+                    ("managed-by".to_string(), "runtime".to_string()),
+                    ("resource-id".to_string(), "agent".to_string()),
+                ])),
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        let mut secrets = MockSecretsApi::new();
+        secrets
+            .expect_get_secret()
+            .withf(|namespace, name| namespace == "test-ns" && name == "agent-env")
+            .times(1)
+            .return_once(move |_, _| Ok(existing));
+        secrets
+            .expect_delete_secret()
+            .withf(|namespace, name| namespace == "test-ns" && name == "agent-env")
+            .times(1)
+            .return_once(|_, _| Ok(()));
+        let secrets: Arc<dyn SecretsApi> = Arc::new(secrets);
+        let mut provider = MockPlatformServiceProvider::new();
+        provider
+            .expect_get_kubernetes_secrets_client()
+            .times(1)
+            .returning(move |_| Ok(secrets.clone()));
+        let harness = KubernetesManifestTestHarness::new(
+            Resource::new(Vault::new("agent".to_string()).build()),
+            vec![],
+        )
+        .with_service_provider(Arc::new(provider));
+
+        let plan =
+            reconcile_environment_secret("daemon", "agent", "agent", "test-ns", &harness.ctx())
+                .await
+                .expect("cleanup reconcile");
+
+        assert!(plan.is_none());
+    }
+
+    #[tokio::test]
+    async fn reconcile_without_desired_values_preserves_unowned_same_name_secret() {
+        let existing = Secret {
+            metadata: ObjectMeta {
+                name: Some("agent-env".to_string()),
+                labels: Some(BTreeMap::from([(
+                    "managed-by".to_string(),
+                    "someone-else".to_string(),
+                )])),
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        let mut secrets = MockSecretsApi::new();
+        secrets
+            .expect_get_secret()
+            .times(1)
+            .return_once(move |_, _| Ok(existing));
+        secrets.expect_delete_secret().times(0);
+        let secrets: Arc<dyn SecretsApi> = Arc::new(secrets);
+        let mut provider = MockPlatformServiceProvider::new();
+        provider
+            .expect_get_kubernetes_secrets_client()
+            .times(1)
+            .returning(move |_| Ok(secrets.clone()));
+        let harness = KubernetesManifestTestHarness::new(
+            Resource::new(Vault::new("agent".to_string()).build()),
+            vec![],
+        )
+        .with_service_provider(Arc::new(provider));
+
+        let plan =
+            reconcile_environment_secret("daemon", "agent", "agent", "test-ns", &harness.ctx())
+                .await
+                .expect("non-owned cleanup reconcile");
+
+        assert!(plan.is_none());
     }
 }

@@ -21,6 +21,7 @@ use serde_json::{json, Value};
 use tokio::net::lookup_host;
 use tracing::info;
 
+use crate::core::kubernetes_errors::is_remote_resource_conflict;
 #[cfg(feature = "aws")]
 use crate::core::split_certificate_chain;
 use crate::core::ResourceControllerContext;
@@ -1366,7 +1367,7 @@ async fn upsert_service(
 ) -> Result<()> {
     match client.create_service(namespace, &service).await {
         Ok(_) => Ok(()),
-        Err(e) if is_already_exists(&e) => {
+        Err(e) if is_remote_resource_conflict(&e) => {
             let existing = client.get_service(namespace, name).await.context(
                 ErrorData::CloudPlatformError {
                     message: format!("Failed to get Service '{}' before update", name),
@@ -1429,7 +1430,7 @@ async fn upsert_tls_secret(
 
     match client.create_secret(namespace, &secret).await {
         Ok(_) => Ok(()),
-        Err(e) if is_already_exists(&e) => {
+        Err(e) if is_remote_resource_conflict(&e) => {
             let existing = client.get_secret(namespace, name).await.context(
                 ErrorData::CloudPlatformError {
                     message: format!("Failed to get TLS Secret '{}' before update", name),
@@ -1462,7 +1463,7 @@ async fn upsert_ingress(
 ) -> Result<()> {
     match client.create_ingress(namespace, &ingress).await {
         Ok(_) => Ok(()),
-        Err(e) if is_already_exists(&e) => {
+        Err(e) if is_remote_resource_conflict(&e) => {
             let existing = client.get_ingress(namespace, name).await.context(
                 ErrorData::CloudPlatformError {
                     message: format!("Failed to get Ingress '{}' before update", name),
@@ -1495,7 +1496,7 @@ async fn upsert_gateway(
 ) -> Result<()> {
     match client.create_gateway(namespace, &gateway).await {
         Ok(_) => Ok(()),
-        Err(e) if is_already_exists(&e) => {
+        Err(e) if is_remote_resource_conflict(&e) => {
             let existing = client.get_gateway(namespace, name).await.context(
                 ErrorData::CloudPlatformError {
                     message: format!("Failed to get Gateway '{}' before update", name),
@@ -1528,7 +1529,7 @@ async fn upsert_http_route(
 ) -> Result<()> {
     match client.create_http_route(namespace, &route).await {
         Ok(_) => Ok(()),
-        Err(e) if is_already_exists(&e) => {
+        Err(e) if is_remote_resource_conflict(&e) => {
             let existing = client.get_http_route(namespace, name).await.context(
                 ErrorData::CloudPlatformError {
                     message: format!("Failed to get HTTPRoute '{}' before update", name),
@@ -1564,7 +1565,7 @@ async fn upsert_gke_health_check_policy(
         .await
     {
         Ok(_) => Ok(()),
-        Err(e) if is_already_exists(&e) => {
+        Err(e) if is_remote_resource_conflict(&e) => {
             let existing = client
                 .get_gke_health_check_policy(namespace, name)
                 .await
@@ -1604,7 +1605,7 @@ async fn upsert_azure_health_check_policy(
         .await
     {
         Ok(_) => Ok(()),
-        Err(e) if is_already_exists(&e) => {
+        Err(e) if is_remote_resource_conflict(&e) => {
             let existing = client
                 .get_azure_health_check_policy(namespace, name)
                 .await
@@ -1910,11 +1911,6 @@ fn copy_resource_version(resource: &mut Value, existing: &Value) {
     {
         resource["metadata"]["resourceVersion"] = Value::String(resource_version.to_string());
     }
-}
-
-fn is_already_exists(error: &alien_client_core::Error) -> bool {
-    let err = format!("{error}");
-    err.contains("AlreadyExists") || err.contains("409")
 }
 
 fn aws_hosted_zone_id(profile: &KubernetesIngressRouteProfile) -> Option<String> {

@@ -19,6 +19,10 @@ pub use azure_import::AzureWorkerImporter;
 #[cfg(feature = "kubernetes")]
 mod kubernetes;
 #[cfg(feature = "kubernetes")]
+mod kubernetes_command_service;
+#[cfg(feature = "kubernetes")]
+mod kubernetes_deployment;
+#[cfg(feature = "kubernetes")]
 pub use kubernetes::*;
 
 #[cfg(feature = "local")]

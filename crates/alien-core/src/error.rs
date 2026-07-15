@@ -41,6 +41,19 @@ pub enum ErrorData {
     )]
     InvalidResourceUpdate { resource_id: String, reason: String },
 
+    /// Worker execution timeout is outside the supported range.
+    #[error(
+        code = "WORKER_TIMEOUT_INVALID",
+        message = "Worker timeoutSeconds must be between 1 and {max_timeout_seconds} seconds, got {timeout_seconds}",
+        retryable = "false",
+        internal = "false",
+        http_status_code = 400
+    )]
+    WorkerTimeoutInvalid {
+        timeout_seconds: u32,
+        max_timeout_seconds: u32,
+    },
+
     /// The resource exists but has not produced any outputs yet.
     #[error(
         code = "RESOURCE_HAS_NO_OUTPUTS",

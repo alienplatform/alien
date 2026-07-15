@@ -323,25 +323,21 @@ jobs:
             os: macos
             target: aarch64-apple-darwin
             triple: darwin-arm64
-            smoke: true
             expect_arch: arm64
           - runner: depot-macos-15
             os: macos
             target: x86_64-apple-darwin
             triple: darwin-x64
-            smoke: false
             expect_arch: x86_64
           - runner: depot-ubuntu-24.04-16
             os: linux
             target: x86_64-unknown-linux-gnu
             triple: linux-x64-gnu
-            smoke: true
             expect_arch: x86-64
           - runner: depot-ubuntu-24.04-arm-16
             os: linux
             target: aarch64-unknown-linux-gnu
             triple: linux-arm64-gnu
-            smoke: false
             expect_arch: aarch64
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 60
@@ -400,9 +396,6 @@ jobs:
           node-version: 22
           cache: pnpm
 
-      - uses: oven-sh/setup-bun@v2
-        if: matrix.smoke
-
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
 
@@ -423,14 +416,6 @@ jobs:
       - name: Assert staged binary architecture
         run: file "packages/bindings/npm/${{ matrix.triple }}/alien-bindings-node.${{ matrix.triple }}.node" | grep -q "${{ matrix.expect_arch }}"
 
-      # Smoke (ticket requirement): a published-shape install with NO build
-      # toolchain must load the prebuilt .node and run a real local op. darwin-x64
-      # can't execute on the arm mac, and linux-arm64 has no darwin/linux-x64
-      # host here, so the two natively-executable halves are smoked.
-      - name: Smoke prebuild (no toolchain)
-        if: matrix.smoke
-        run: bash scripts/smoke-addon-prebuild.sh "${{ matrix.triple }}"
-
       - name: Upload addon artifact
         uses: actions/upload-artifact@v4
         with:
@@ -438,14 +423,85 @@ jobs:
           retention-days: 1
           path: packages/bindings/npm/${{ matrix.triple }}/alien-bindings-node.${{ matrix.triple }}.node
 
+  # This job deliberately has no Rust compiler or protoc setup. It
+  # starts from the already-built artifacts and proves that a consumer whose
+  # only direct dependency is @alienplatform/bindings gets the right optional
+  # platform package. Native runners additionally exercise npm + Node and Bun
+  # installs with a real local-provider KV operation.
+  smoke-addon:
+    needs: [prepare, build-addon]
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: depot-macos-15
+            triple: darwin-arm64
+            execute: true
+          - runner: depot-macos-15
+            triple: darwin-x64
+            execute: false
+          - runner: depot-ubuntu-24.04-16
+            triple: linux-x64-gnu
+            execute: true
+          - runner: depot-ubuntu-24.04-arm-16
+            triple: linux-arm64-gnu
+            execute: true
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.dry_run && github.sha || format('v{0}', needs.prepare.outputs.version) }}
+
+      - name: Apply computed version for dry run
+        if: ${{ inputs.dry_run }}
+        uses: actions/download-artifact@v4
+        with:
+          name: release-version-manifests
+          path: .
+
+      - name: Validate bindings release version lockstep
+        env:
+          VERSION: ${{ needs.prepare.outputs.version }}
+        run: node packages/bindings/scripts/validate-release-version.mjs "$VERSION"
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10.11.0
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+
+      - uses: oven-sh/setup-bun@v2
+        if: matrix.execute
+
+      - name: Install JavaScript dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Download staged addon (${{ matrix.triple }})
+        uses: actions/download-artifact@v4
+        with:
+          name: addon-${{ matrix.triple }}
+          path: packages/bindings/npm/${{ matrix.triple }}
+
+      - name: Verify wrapper-only prebuild install (${{ matrix.triple }})
+        env:
+          EXECUTE_NATIVE: ${{ matrix.execute }}
+        run: |
+          args=("${{ matrix.triple }}")
+          if [ "$EXECUTE_NATIVE" = "true" ]; then args+=(--execute); fi
+          bash scripts/smoke-addon-prebuild.sh "${args[@]}"
+
   publish-bindings:
-    needs: [prepare, build-addon, publish-npm]
+    needs: [prepare, smoke-addon, publish-npm]
     # publish-npm skips on dry_run, so a bare `needs` would cascade-skip the
     # dry-run path this job deliberately supports. On a real release, wait for
     # publish-npm to succeed: the wrapper's package.json pins
     # `@alienplatform/core: ^<release>`, so publishing it while core's publish
     # failed leaves every `npm install @alienplatform/bindings` ETARGET-broken.
-    if: always() && needs.build-addon.result == 'success' && (inputs.dry_run || needs.publish-npm.result == 'success')
+    if: always() && needs.smoke-addon.result == 'success' && (inputs.dry_run || needs.publish-npm.result == 'success')
     runs-on: depot-ubuntu-24.04-arm-4
     timeout-minutes: 30
     steps:
@@ -505,12 +561,26 @@ jobs:
       - name: Publish platform prebuild packages (first)
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+          VERSION: ${{ needs.prepare.outputs.version }}
         run: |
-          DRY=""
-          if [ "${{ inputs.dry_run }}" = "true" ]; then DRY="--dry-run"; fi
           for triple in darwin-arm64 darwin-x64 linux-x64-gnu linux-arm64-gnu; do
-            echo "Publishing @alienplatform/bindings-${triple}..."
-            ( cd "packages/bindings/npm/${triple}" && npm publish --access public $DRY )
+            package="@alienplatform/bindings-${triple}"
+            if [ "${{ inputs.dry_run }}" = "true" ]; then
+              echo "Dry-running ${package}@${VERSION}..."
+              ( cd "packages/bindings/npm/${triple}" && npm publish --access public --dry-run )
+              continue
+            fi
+
+            # npm has no multi-package transaction. Publishing every platform
+            # before the wrapper keeps incomplete releases unreachable, while
+            # this existence check makes a retry resume after a partial publish.
+            published="$(npm view "${package}@${VERSION}" version 2>/dev/null || true)"
+            if [ "$published" = "$VERSION" ]; then
+              echo "${package}@${VERSION} is already published; continuing"
+            else
+              echo "Publishing ${package}@${VERSION}..."
+              ( cd "packages/bindings/npm/${triple}" && npm publish --access public )
+            fi
           done
 
       # Inject exact-version optionalDependencies explicitly (see the script) —
@@ -521,10 +591,19 @@ jobs:
       - name: Publish wrapper (last)
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+          VERSION: ${{ needs.prepare.outputs.version }}
         run: |
-          DRY=""
-          if [ "${{ inputs.dry_run }}" = "true" ]; then DRY="--dry-run"; fi
-          pnpm --filter @alienplatform/bindings publish --access public --no-git-checks $DRY
+          if [ "${{ inputs.dry_run }}" = "true" ]; then
+            pnpm --filter @alienplatform/bindings publish --access public --no-git-checks --dry-run
+            exit 0
+          fi
+
+          published="$(npm view "@alienplatform/bindings@${VERSION}" version 2>/dev/null || true)"
+          if [ "$published" = "$VERSION" ]; then
+            echo "@alienplatform/bindings@${VERSION} is already published; continuing"
+          else
+            pnpm --filter @alienplatform/bindings publish --access public --no-git-checks
+          fi
 
   # ─── Binary builds (4 targets, all parallel) ───────────────────────
 

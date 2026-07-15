@@ -1482,7 +1482,7 @@
               "string",
               "null"
             ],
-            "description": "Public URL for the commands API. Cloud-deployed workers use this\nto poll for pending commands instead of the agent's local sync URL."
+            "description": "Public URL for the commands API. Operators and app-owned receivers use\nit to lease pending commands instead of the agent's local sync URL."
           },
           "currentState": {
             "description": "Authoritative deployment state from the manager.\n\nReturned when a pull deployment attaches with an empty local state while\nthe manager already has imported or previously reconciled state."

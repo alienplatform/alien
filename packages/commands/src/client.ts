@@ -1,7 +1,7 @@
 /**
  * Command sender — invoke commands on remote Alien deployments.
  *
- * Migrated from `@alienplatform/sdk/commands`. Pure `fetch`; no gRPC, no
+ * Migrated from the former `@alienplatform/sdk/commands` subpath. Pure `fetch`; no gRPC, no
  * bindings. Handles:
  * - Base64 encoding/decoding of input and responses
  * - Large payload download via storage presigned transfers
@@ -29,7 +29,7 @@ import {
   ResponseDecodingFailedError,
   StorageOperationFailedError,
 } from "./errors.js"
-import { downloadPresigned } from "./presigned.js"
+import { downloadPresigned, redactUrlForError } from "./presigned.js"
 import type {
   BodySpec,
   CommandResponse,
@@ -137,7 +137,9 @@ async function decodeBodySpec(
 
     const request = body.storageGetRequest
     const url =
-      request.backend.type === "http" ? request.backend.url : `local://${request.backend.filePath}`
+      request.backend.type === "http"
+        ? redactUrlForError(request.backend.url)
+        : `local://${request.backend.filePath}`
 
     try {
       // POLICY: the sender only touches the local (dev-only) backend when the

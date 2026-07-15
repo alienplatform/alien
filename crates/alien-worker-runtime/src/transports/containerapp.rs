@@ -8,6 +8,7 @@
 
 use std::net::SocketAddr;
 use std::sync::Arc;
+use std::time::Duration;
 
 use alien_worker_protocol::ControlGrpcServer;
 use axum::{
@@ -23,12 +24,13 @@ use cloudevents::AttributesReader;
 use http_body_util::BodyExt;
 use tokio::net::TcpListener;
 use tokio::sync::broadcast;
+use tokio_util::sync::CancellationToken;
 use tracing::{debug, error, info, warn};
 
 use super::shared::{
-    create_forward_client, dispatch_queue_messages, envelope_to_command, forward_http_request,
-    handle_command, parse_cloudevent_from_http_with_extensions, send_cron_event,
-    send_queue_message, send_storage_events, submit_decode_error,
+    create_forward_client, dispatch_queue_messages, forward_http_request,
+    parse_cloudevent_from_http_with_extensions, process_received_command, send_cron_event,
+    send_queue_message, send_storage_events, serve_with_bounded_shutdown,
 };
 use crate::error::{ErrorData, Result};
 use crate::events::azure::{
@@ -41,8 +43,12 @@ pub struct ContainerAppTransport {
     port: u16,
     control_server: Arc<ControlGrpcServer>,
     app_http_port: Option<u16>,
+    command_timeout: Duration,
+    http_shutdown_grace: Duration,
     shutdown_rx: broadcast::Receiver<()>,
 }
+
+const DEFAULT_HTTP_SHUTDOWN_GRACE: Duration = Duration::from_secs(5);
 
 impl ContainerAppTransport {
     pub fn new(
@@ -54,6 +60,8 @@ impl ContainerAppTransport {
             port,
             control_server,
             app_http_port: None,
+            command_timeout: Duration::from_secs(300),
+            http_shutdown_grace: DEFAULT_HTTP_SHUTDOWN_GRACE,
             shutdown_rx,
         }
     }
@@ -63,16 +71,24 @@ impl ContainerAppTransport {
         self
     }
 
+    pub fn with_command_timeout(mut self, timeout: Duration) -> Self {
+        self.command_timeout = timeout;
+        self
+    }
+
     /// Run the transport
-    pub async fn run(mut self) -> Result<()> {
+    pub async fn run(self) -> Result<()> {
         let addr = SocketAddr::from(([0, 0, 0, 0], self.port));
 
         info!(port = self.port, "Starting Container App transport");
 
+        let proxy_shutdown = CancellationToken::new();
         let state = TransportState {
             control_server: self.control_server,
             app_http_port: self.app_http_port,
+            command_timeout: self.command_timeout,
             http_client: create_forward_client(),
+            proxy_shutdown: proxy_shutdown.clone(),
         };
 
         let app = Router::new()
@@ -90,12 +106,17 @@ impl ContainerAppTransport {
 
         info!(addr = %addr, "Container App transport listening");
 
-        axum::serve(listener, app)
-            .with_graceful_shutdown(async move {
-                self.shutdown_rx.recv().await.ok();
-                info!("Container App transport received shutdown signal");
-            })
-            .await
+        let server_result = serve_with_bounded_shutdown(
+            listener,
+            app,
+            self.shutdown_rx,
+            proxy_shutdown,
+            self.http_shutdown_grace,
+            "containerapp",
+            || {},
+        )
+        .await;
+        server_result
             .into_alien_error()
             .context(ErrorData::TransportStartupFailed {
                 transport_name: "containerapp".to_string(),
@@ -112,7 +133,9 @@ impl ContainerAppTransport {
 struct TransportState {
     control_server: Arc<ControlGrpcServer>,
     app_http_port: Option<u16>,
+    command_timeout: Duration,
     http_client: reqwest::Client,
+    proxy_shutdown: CancellationToken,
 }
 
 async fn handle_request(
@@ -162,7 +185,13 @@ async fn handle_request(
 
     // Forward HTTP request to app
     if let Some(app_port) = state.app_http_port {
-        return forward_http_request(&state.http_client, request, app_port).await;
+        return forward_http_request(
+            &state.http_client,
+            request,
+            app_port,
+            state.proxy_shutdown.clone(),
+        )
+        .await;
     }
 
     error!("No app HTTP port registered");
@@ -222,7 +251,10 @@ async fn handle_dapr_message(request: Request<Body>, state: &TransportState) -> 
 
     // Process as Dapr CloudEvent (Service Bus message)
     match dapr_cloudevent_to_queue_messages(cloud_event) {
-        Ok(queue_messages) => dispatch_queue_messages(queue_messages, &state.control_server).await,
+        Ok(queue_messages) => {
+            dispatch_queue_messages(queue_messages, &state.control_server, state.command_timeout)
+                .await
+        }
         Err(e) => {
             error!(error = %e, "Failed to parse Dapr CloudEvent");
             (StatusCode::BAD_REQUEST, "Invalid Dapr event").into_response()
@@ -303,20 +335,12 @@ async fn handle_raw_dapr_message(body_bytes: &Bytes, state: &TransportState) -> 
     if let Ok(envelope) = serde_json::from_value::<alien_commands::Envelope>(json_value.clone()) {
         if !envelope.command_id.is_empty() {
             info!(command_id = %envelope.command_id, "Received command via Dapr input binding");
-            match envelope_to_command(&envelope).await {
-                Ok(command) => {
-                    if let Err(e) = handle_command(&envelope, &command, &state.control_server).await
-                    {
-                        error!(error = %e, "Failed to handle command");
-                    }
-                    return StatusCode::OK.into_response();
-                }
-                Err(e) => {
-                    error!(command_id = %envelope.command_id, error = %e, "Failed to decode command params");
-                    submit_decode_error(&envelope, &e).await;
-                    return (StatusCode::BAD_REQUEST, "Failed to decode command").into_response();
-                }
+            if process_received_command(&envelope, &state.control_server, state.command_timeout)
+                .await
+            {
+                return StatusCode::OK.into_response();
             }
+            return (StatusCode::BAD_REQUEST, "Failed to decode command").into_response();
         }
     }
 
