@@ -1030,6 +1030,7 @@ dependencies = [
  "dockdash",
  "dotenvy",
  "hex",
+ "libc",
  "ngrok",
  "rand 0.9.4",
  "reqwest 0.12.28",

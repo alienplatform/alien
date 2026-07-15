@@ -1108,6 +1108,11 @@ pub async fn run_alien_deploy_up(
         // so agent logs are visible in test output and pipes don't fill up.
         cmd.stdout(std::process::Stdio::inherit())
             .stderr(std::process::Stdio::inherit());
+        // Isolate the complete foreground customer flow. alien-deploy starts
+        // alien-operator, so Unix teardown must signal the group rather than
+        // killing only the wrapper and orphaning its child.
+        #[cfg(unix)]
+        cmd.process_group(0);
     } else {
         // In service mode the process exits quickly. Capture output for error reporting.
         cmd.stdout(std::process::Stdio::piped())
@@ -1179,7 +1184,10 @@ pub async fn run_alien_deploy_up(
             }
 
             if start.elapsed() > max_wait {
-                child.kill().await.ok();
+                if let Err(error) = crate::deployment::terminate_foreground_agent(&mut child).await
+                {
+                    tracing::warn!(%error, "Failed to stop timed-out foreground agent");
+                }
                 anyhow::bail!("Timed out waiting for foreground agent to create deployment");
             }
         }

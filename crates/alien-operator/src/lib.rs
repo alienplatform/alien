@@ -94,6 +94,13 @@ pub async fn run_operator_with_cancel_and_debug_loop(
         "Starting operator"
     );
 
+    // Local runtimes are real child processes owned by LocalBindingsProvider.
+    // Keep a shutdown handle before moving the service provider into shared
+    // operator state so cancellation can drain those children before exit.
+    let local_bindings = service_provider
+        .as_ref()
+        .and_then(|provider| provider.get_local_bindings_provider());
+
     // Initialize encrypted database
     let db = Arc::new(db::OperatorDb::new(&config.data_dir, &config.encryption_key).await?);
 
@@ -252,6 +259,11 @@ pub async fn run_operator_with_cancel_and_debug_loop(
     // Give loops a moment to finish current work
     tokio::time::sleep(std::time::Duration::from_secs(2)).await;
 
+    if let Some(local_bindings) = local_bindings {
+        info!("Stopping local runtimes...");
+        local_bindings.shutdown().await;
+    }
+
     info!("Operator shutdown complete");
     Ok(())
 }
@@ -265,4 +277,105 @@ pub struct OperatorState {
     pub service_provider: Option<Arc<dyn alien_infra::PlatformServiceProvider>>,
     /// Cancellation token for graceful shutdown.
     pub cancel: CancellationToken,
+}
+
+#[cfg(all(test, unix))]
+mod tests {
+    use super::*;
+    use std::{collections::HashMap, path::Path, time::Duration};
+
+    use alien_local::{DaemonLaunchOptions, LocalBindingsProvider};
+
+    #[tokio::test]
+    async fn cancellation_stops_local_daemon_processes() {
+        let temp = tempfile::tempdir().expect("create test directory");
+        let daemon_dir = temp.path().join("daemons").join("test-daemon");
+        std::fs::create_dir_all(&daemon_dir).expect("create daemon directory");
+
+        let pid_file = temp.path().join("daemon.pid");
+        let script = daemon_dir.join("run.sh");
+        std::fs::write(
+            &script,
+            format!(
+                "#!/bin/sh\necho $$ > '{}'\nwhile :; do sleep 1; done\n",
+                pid_file.display()
+            ),
+        )
+        .expect("write daemon script");
+        std::fs::write(
+            daemon_dir.join("metadata.json"),
+            serde_json::to_vec(&serde_json::json!({
+                "worker_id": "test-daemon",
+                "extracted_path": daemon_dir.to_string_lossy(),
+                "env_vars": {},
+                "runtime_command": ["/bin/sh", script.to_string_lossy()],
+                "working_dir": null,
+                "transport_port": null,
+                "runtime_only_binding_names": [],
+            }))
+            .expect("serialize daemon metadata"),
+        )
+        .expect("write daemon metadata");
+
+        let local_bindings = LocalBindingsProvider::new(temp.path()).expect("create provider");
+        local_bindings
+            .worker_manager()
+            .start_daemon(
+                "test-daemon",
+                HashMap::new(),
+                DaemonLaunchOptions {
+                    stop_grace_period_seconds: Some(2),
+                    ..Default::default()
+                },
+            )
+            .await
+            .expect("start daemon");
+
+        let pid = read_pid(&pid_file).await;
+        assert!(
+            process_exists(pid),
+            "daemon should be alive before shutdown"
+        );
+
+        let provider: Arc<dyn alien_infra::PlatformServiceProvider> = Arc::new(
+            alien_infra::DefaultPlatformServiceProvider::with_local_bindings(local_bindings),
+        );
+        let cancel = CancellationToken::new();
+        cancel.cancel();
+        let config = OperatorConfig::builder()
+            .platform(Platform::Local)
+            .data_dir(temp.path().to_string_lossy().to_string())
+            .encryption_key("0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef")
+            .otlp_server_port(0)
+            .build();
+
+        run_operator_with_cancel(config, Some(provider), cancel)
+            .await
+            .expect("operator shutdown should succeed");
+
+        assert!(
+            !process_exists(pid),
+            "operator cancellation must stop local daemon pid {pid}"
+        );
+    }
+
+    async fn read_pid(path: &Path) -> u32 {
+        tokio::time::timeout(Duration::from_secs(5), async {
+            loop {
+                if let Ok(value) = tokio::fs::read_to_string(path).await {
+                    if let Ok(pid) = value.trim().parse() {
+                        return pid;
+                    }
+                }
+                tokio::time::sleep(Duration::from_millis(20)).await;
+            }
+        })
+        .await
+        .expect("daemon pid should be written")
+    }
+
+    fn process_exists(pid: u32) -> bool {
+        // SAFETY: signal 0 performs an existence/permission check only.
+        unsafe { libc::kill(pid as libc::pid_t, 0) == 0 }
+    }
 }

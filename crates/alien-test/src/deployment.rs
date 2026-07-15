@@ -33,6 +33,17 @@ pub struct TestDeployment {
 impl Drop for TestDeployment {
     fn drop(&mut self) {
         if let Some(ref mut child) = self._foreground_agent {
+            #[cfg(unix)]
+            if let Some(pid) = child.id() {
+                // SAFETY: this child was created as the leader of an isolated
+                // process group. SIGTERM reaches both alien-deploy and its
+                // alien-operator child. Async teardown below is authoritative;
+                // Drop is only a best-effort fallback.
+                unsafe {
+                    libc::kill(-(pid as libc::pid_t), libc::SIGTERM);
+                }
+            }
+            #[cfg(windows)]
             let _ = child.start_kill();
         }
     }
@@ -71,11 +82,8 @@ impl TestDeployment {
     /// Kill the foreground agent and wait for it to exit.
     pub async fn kill_foreground_agent(&mut self) {
         if let Some(ref mut child) = self._foreground_agent {
-            let _ = child.start_kill();
-            match tokio::time::timeout(std::time::Duration::from_secs(5), child.wait()).await {
-                Ok(Ok(_)) => {}
-                Ok(Err(e)) => tracing::warn!(error = %e, "Failed to wait for agent exit"),
-                Err(_) => tracing::warn!("Timed out waiting for agent to exit"),
+            if let Err(error) = terminate_foreground_agent(child).await {
+                tracing::warn!(%error, "Failed to stop foreground agent cleanly");
             }
         }
         self._foreground_agent = None;
@@ -329,6 +337,48 @@ impl TestDeployment {
     }
 }
 
+pub(crate) async fn terminate_foreground_agent(
+    child: &mut tokio::process::Child,
+) -> std::io::Result<()> {
+    #[cfg(unix)]
+    if let Some(pid) = child.id() {
+        // SAFETY: this child is the leader of the isolated foreground process
+        // group created by the E2E harness. SIGTERM reaches the deploy wrapper
+        // and operator; operator shutdown drains separately-grouped runtimes.
+        let result = unsafe { libc::kill(-(pid as libc::pid_t), libc::SIGTERM) };
+        if result != 0 {
+            let error = std::io::Error::last_os_error();
+            if error.raw_os_error() != Some(libc::ESRCH) {
+                return Err(error);
+            }
+        }
+    }
+
+    #[cfg(windows)]
+    child.start_kill()?;
+
+    match tokio::time::timeout(Duration::from_secs(45), child.wait()).await {
+        Ok(status) => {
+            status?;
+        }
+        Err(_) => {
+            tracing::warn!("Foreground agent group did not exit gracefully; killing it");
+            #[cfg(unix)]
+            if let Some(pid) = child.id() {
+                // SAFETY: same isolated process group as above.
+                unsafe {
+                    libc::kill(-(pid as libc::pid_t), libc::SIGKILL);
+                }
+            }
+            #[cfg(windows)]
+            child.start_kill()?;
+            child.wait().await?;
+        }
+    }
+
+    Ok(())
+}
+
 fn public_url_from_resource_outputs(outputs: &alien_core::ResourceOutputs) -> Option<String> {
     if let Some(worker) = outputs.downcast_ref::<alien_core::WorkerOutputs>() {
         return worker
@@ -362,6 +412,47 @@ fn public_url_from_stack_state(state_value: &Value) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn foreground_agent_teardown_signals_the_process_group() {
+        let temp = tempfile::tempdir().expect("create test directory");
+        let marker = temp.path().join("terminated");
+        let ready = temp.path().join("ready");
+
+        let mut child = tokio::process::Command::new("/bin/sh")
+            .arg("-c")
+            .arg(
+                r#"
+trap 'echo wrapper >> "$MARKER"; exit 0' TERM
+/bin/sh -c 'trap '\''echo child >> "$MARKER"; exit 0'\'' TERM; echo ready > "$READY"; while :; do sleep 1; done' &
+while [ ! -f "$READY" ]; do sleep 0.01; done
+wait
+"#,
+            )
+            .env("MARKER", &marker)
+            .env("READY", &ready)
+            .process_group(0)
+            .kill_on_drop(true)
+            .spawn()
+            .expect("spawn isolated process group");
+
+        tokio::time::timeout(Duration::from_secs(5), async {
+            while !ready.exists() {
+                tokio::time::sleep(Duration::from_millis(20)).await;
+            }
+        })
+        .await
+        .expect("descendant should become ready");
+
+        terminate_foreground_agent(&mut child)
+            .await
+            .expect("terminate foreground process group");
+
+        let terminated = std::fs::read_to_string(marker).expect("read termination marker");
+        assert!(terminated.lines().any(|line| line == "wrapper"));
+        assert!(terminated.lines().any(|line| line == "child"));
+    }
 
     #[test]
     fn resource_output_url_uses_explicit_container_url_first() {
