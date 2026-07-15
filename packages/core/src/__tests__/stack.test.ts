@@ -306,7 +306,7 @@ describe("Stack builder validation", () => {
     expect(stack).toMatchSnapshot()
   })
 
-  it.each([0, 3601])("rejects unsupported Worker timeout %s", (timeoutSeconds) => {
+  it.each([0, 3601])("rejects unsupported Worker timeout %s", timeoutSeconds => {
     expect(() =>
       new alien.Worker("slow-worker")
         .code({ type: "image", image: SHARED_IMAGE })
