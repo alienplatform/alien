@@ -107,12 +107,10 @@ on:
         description: "Run local agent in foreground (no service install, no sudo)"
         type: boolean
         default: true
-      aws_target:
-        description: "AWS target account"
-        type: choice
-        default: aws-target-1
-        options:
-          - aws-target-1
+      recover_stale_terraform_lock:
+        description: "Force-unlock the shared HCP Terraform workspace before setup (manual recovery only)"
+        type: boolean
+        default: false
       gcp_target:
         description: "GCP target project"
         type: choice
@@ -838,6 +836,16 @@ jobs:
         env:
           TF_TOKEN_app_terraform_io: ${{ secrets.TF_API_TOKEN }}
 
+      - name: Recover confirmed stale Terraform lock
+        if: inputs.recover_stale_terraform_lock == true
+        working-directory: infra/test
+        # The workflow-level E2E concurrency group must be idle before this
+        # manual switch is used. HCP identifies this workspace lock by its
+        # organization/name pair in Terraform's lock error.
+        run: terraform force-unlock -force alienplatform/alien-test-infra
+        env:
+          TF_TOKEN_app_terraform_io: ${{ secrets.TF_API_TOKEN }}
+
       - name: Import existing EKS bootstrap resources
         if: inputs.run_kubernetes_aws_terraform_helm == true
         working-directory: infra/test
@@ -1015,7 +1023,7 @@ jobs:
             --azure azure-target-1
           ./scripts/select-e2e-targets.sh \
             --env-file .env.test \
-            --aws "${{ inputs.aws_target || 'aws-target-1' }}" \
+            --aws aws-target-1 \
             --gcp "${{ inputs.gcp_target || 'gcp-target-3' }}" \
             --azure "${{ inputs.azure_target || 'azure-target-1' }}"
           printf "\nALIEN_E2E_SLOT='%s'\n" "$ALIEN_E2E_SLOT" >> .env.test
