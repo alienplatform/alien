@@ -749,7 +749,8 @@ class PullCommandReceiver implements CommandReceiver {
     // One signal covers storage overflow plus the final status PUT. Reusing it
     // prevents either stage from starting a fresh timeout and extending the
     // lease. The normal 30-second control cap still applies.
-    const submissionSignal = AbortSignal.timeout(Math.min(CONTROL_TIMEOUT_MS, remainingLeaseMs))
+    const submissionTimeoutMs = Math.min(CONTROL_TIMEOUT_MS, remainingLeaseMs)
+    const submissionSignal = AbortSignal.timeout(submissionTimeoutMs)
     let finalResponse = response
 
     if (response.status === "success" && response.response.mode === "inline") {
@@ -781,12 +782,12 @@ class PullCommandReceiver implements CommandReceiver {
         body: JSON.stringify(finalResponse),
         signal: submissionSignal,
       })
-    } catch {
-      throw new AlienError(
+    } catch (error) {
+      throw (await AlienError.from(error)).withContext(
         StorageOperationFailedError.create({
           operation: "upload",
           url: redactUrlForError(submitUrl),
-          reason: "Response submission failed before a response was received",
+          reason: describeResponseSubmissionFailure(error, submissionSignal, submissionTimeoutMs),
         }),
       )
     }
@@ -1183,4 +1184,36 @@ function logError(message: string, error: unknown): void {
 
 function describeError(error: unknown): string {
   return error instanceof Error ? error.message : String(error)
+}
+
+function describeResponseSubmissionFailure(
+  error: unknown,
+  signal: AbortSignal,
+  timeoutMs: number,
+): string {
+  if (signal.aborted) {
+    return `Response submission timed out after ${timeoutMs}ms before a response was received`
+  }
+
+  const details = safeTransportErrorDetails(error)
+  return details === undefined
+    ? "Response submission failed before a response was received"
+    : `Response submission failed before a response was received (${details})`
+}
+
+function safeTransportErrorDetails(error: unknown): string | undefined {
+  if (!(error instanceof Error)) return undefined
+
+  const name = safeDiagnosticToken(error.name)
+  const causeCode =
+    typeof error.cause === "object" && error.cause !== null && "code" in error.cause
+      ? safeDiagnosticToken(error.cause.code)
+      : undefined
+
+  if (name !== undefined && causeCode !== undefined) return `${name}; cause=${causeCode}`
+  return name
+}
+
+function safeDiagnosticToken(value: unknown): string | undefined {
+  return typeof value === "string" && /^[A-Za-z0-9_.-]{1,64}$/.test(value) ? value : undefined
 }

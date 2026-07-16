@@ -1176,6 +1176,42 @@ describe("CommandReceiver.run", () => {
     expect(JSON.stringify(errorSpy.mock.calls)).not.toContain(echoedSecret)
   })
 
+  it("logs safe transport diagnostics when response submission fails before HTTP", async () => {
+    const secret = "response_token=must-never-reach-command-receiver-logs"
+    const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {})
+    server = await openServer()
+    const env = envelope({ baseUrl: server.baseUrl })
+    env.responseHandling.submitResponseUrl += `?${secret}`
+    const serve = leaseOnce([lease(env)])
+    route = req => serve(req) ?? { status: 200 }
+
+    const failingFetch: typeof fetch = async (input, init) => {
+      if (init?.method === "PUT") {
+        const error = new TypeError(`fetch failed for ${secret}`)
+        Object.defineProperty(error, "cause", {
+          value: { code: "ECONNRESET", message: secret },
+        })
+        throw error
+      }
+      return fetch(input, init)
+    }
+
+    const r = createCommandReceiver({
+      env: { ...FULL_ENV, ALIEN_COMMANDS_URL: `${server.baseUrl}/v1/` },
+      fetch: failingFetch,
+      pollIntervalMs: 5,
+    })
+    r.handle("echo", () => ({ ok: true }))
+    receiverStop = () => r.stop()
+    running = r.run()
+
+    await waitFor(() => errorSpy.mock.calls.length >= 1)
+    const logs = JSON.stringify(errorSpy.mock.calls)
+    expect(logs).toContain("TypeError")
+    expect(logs).toContain("ECONNRESET")
+    expect(logs).not.toContain(secret)
+  })
+
   it.each([409, 410])(
     "tolerates an idempotent %s response to duplicate submission",
     async status => {
