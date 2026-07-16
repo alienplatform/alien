@@ -554,10 +554,12 @@ mod tests {
             .arg("-c")
             .arg(
                 r#"
-trap 'echo wrapper >> "$MARKER"; exit 0' TERM
+child_pid=
+trap 'echo wrapper >> "$MARKER"; wait "$child_pid"; exit 0' TERM
 /bin/sh -c 'trap '\''echo child >> "$MARKER"; exit 0'\'' TERM; echo ready > "$READY"; while :; do sleep 1; done' &
+child_pid=$!
 while [ ! -f "$READY" ]; do sleep 0.01; done
-wait
+wait "$child_pid"
 "#,
             )
             .env("MARKER", &marker)
