@@ -821,7 +821,7 @@ resource "azurerm_storage_container" "assets" {
 
 resource "azurerm_role_assignment" "assets_reader_management_assignment_0" {
   name               = uuidv5("oid", "deployment:azure:storage-role-assign:${local.resource_prefix}:assets:reader:management:0")
-  scope              = "${azurerm_storage_account.default_storage_account.id}/blobServices/default/containers/${azurerm_storage_container.assets.name}"
+  scope              = "/subscriptions/${var.azure_subscription_id}/resourceGroups/${var.azure_resource_group_name}/providers/Microsoft.Storage/storageAccounts/${azurerm_storage_account.default_storage_account.name}"
   role_definition_id = "/subscriptions/${var.azure_subscription_id}/providers/Microsoft.Authorization/roleDefinitions/acdd72a7-3385-48ef-bd42-f606fba81ae7"
   principal_id       = azurerm_user_assigned_identity.management.principal_id
   depends_on = [

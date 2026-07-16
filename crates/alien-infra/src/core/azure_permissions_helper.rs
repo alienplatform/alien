@@ -981,6 +981,33 @@ mod tests {
     use alien_azure_clients::authorization::MockAuthorizationApi;
     use alien_client_core::ErrorData as CloudClientErrorData;
 
+    #[test]
+    fn storage_data_assignments_use_generated_container_scope() {
+        let permission_context = PermissionContext::new()
+            .with_subscription_id("sub-123")
+            .with_resource_group("rg-123")
+            .with_storage_account_name("account-123")
+            .with_resource_name("content");
+        let expected_scope = "/subscriptions/sub-123/resourceGroups/rg-123/providers/Microsoft.Storage/storageAccounts/account-123/blobServices/default/containers/content";
+
+        for permission_set_id in ["storage/data-read", "storage/data-write"] {
+            let permission_set = alien_permissions::get_permission_set(permission_set_id)
+                .expect("storage data permission set");
+            let grant_plan = AzureRuntimePermissionsGenerator::new()
+                .generate_grant_plan(permission_set, BindingTarget::Resource, &permission_context)
+                .expect("storage data grant plan");
+            assert_eq!(
+                grant_plan.bindings.len(),
+                1,
+                "{permission_set_id} should emit one Azure role binding"
+            );
+            assert_eq!(
+                grant_plan.bindings[0].scope, expected_scope,
+                "{permission_set_id} must be scoped to the referenced blob container"
+            );
+        }
+    }
+
     #[tokio::test]
     async fn storage_trigger_assignment_uses_generated_resource_group_scope() {
         let permission_set = alien_permissions::get_permission_set("storage/trigger-management")

@@ -499,8 +499,8 @@ mod tests {
     const STORAGE_BLOB_DATA_CONTRIBUTOR_ROLE_ID: &str = "ba92f5b4-2d11-453d-a403-e96b0029c9fe";
     const RESOURCE_GROUP_SCOPE: &str =
         "\"/subscriptions/${var.azure_subscription_id}/resourceGroups/${var.azure_resource_group_name}\"";
-    const STORAGE_ACCOUNT_SCOPE: &str =
-        "\"/subscriptions/${var.azure_subscription_id}/resourceGroups/${var.azure_resource_group_name}/providers/Microsoft.Storage/storageAccounts/${azurerm_storage_account.default_storage_account.name}\"";
+    const STORAGE_CONTAINER_SCOPE: &str =
+        "\"/subscriptions/${var.azure_subscription_id}/resourceGroups/${var.azure_resource_group_name}/providers/Microsoft.Storage/storageAccounts/${azurerm_storage_account.default_storage_account.name}/blobServices/default/containers/${replace(lower(\"${local.resource_prefix}-files\"), \"_\", \"-\")}\"";
 
     #[test]
     fn generated_storage_assignments_preserve_each_permission_binding_scope() {
@@ -572,8 +572,8 @@ mod tests {
             .find(|block| block.contains(STORAGE_BLOB_DATA_CONTRIBUTOR_ROLE_ID))
             .expect("storage/data-write assignment");
         assert!(
-            data_write.contains(STORAGE_ACCOUNT_SCOPE),
-            "storage/data-write must retain its generated storage-account scope:\n{data_write}"
+            data_write.contains(STORAGE_CONTAINER_SCOPE),
+            "storage/data-write must retain its generated container scope:\n{data_write}"
         );
 
         let trigger_management = assignments
@@ -585,10 +585,8 @@ mod tests {
             "storage/trigger-management must retain its generated resource-group scope:\n{trigger_management}"
         );
         assert!(
-            assignments
-                .iter()
-                .all(|block| !block.contains("blobServices/default/containers")),
-            "storage assignments must not be unconditionally narrowed to the blob container"
+            !trigger_management.contains("blobServices/default/containers"),
+            "storage/trigger-management must not be narrowed to the blob container"
         );
     }
 }
