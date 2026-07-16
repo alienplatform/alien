@@ -7,6 +7,11 @@ packages/core/openapi.json linguist-generated=true
 crates/alien-azure-clients/openapi/** linguist-generated=true
 crates/alien-azure-clients/src/azure/models/mod.rs linguist-generated=true
 
+# Speakeasy-generated client SDK sources, docs, and lockfile.
+client-sdks/*/typescript/src/** linguist-generated=true
+client-sdks/*/typescript/docs/** linguist-generated=true
+client-sdks/*/typescript/.speakeasy/gen.lock linguist-generated=true
+
 # Kubb schema output.
 packages/core/src/generated/** linguist-generated=true
 
