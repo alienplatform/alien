@@ -490,6 +490,8 @@ jobs:
 
       - uses: oven-sh/setup-bun@v2
         if: needs.compute-matrix.outputs.needs_bindings_x86_64 == 'true'
+        with:
+          bun-version: "1.3.14"
 
       - name: Install JS dependencies
         if: needs.compute-matrix.outputs.needs_bindings_x86_64 == 'true'
@@ -578,6 +580,8 @@ jobs:
 
       - uses: oven-sh/setup-bun@v2
         if: needs.compute-matrix.outputs.needs_bindings_aarch64 == 'true'
+        with:
+          bun-version: "1.3.14"
 
       - name: Install JS dependencies
         if: needs.compute-matrix.outputs.needs_bindings_aarch64 == 'true'
@@ -1181,6 +1185,8 @@ jobs:
           version: 0.16.0
 
       - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: "1.3.14"
 
       - uses: pnpm/action-setup@v4
         with:
@@ -1272,6 +1278,8 @@ jobs:
           version: 0.16.0
 
       - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: "1.3.14"
 
       - uses: pnpm/action-setup@v4
         with:
@@ -1412,6 +1420,8 @@ jobs:
           version: 0.16.0
 
       - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: "1.3.14"
 
       - uses: pnpm/action-setup@v4
         with:
@@ -1583,6 +1593,8 @@ jobs:
           version: 0.16.0
 
       - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: "1.3.14"
 
       - uses: pnpm/action-setup@v4
         with:
