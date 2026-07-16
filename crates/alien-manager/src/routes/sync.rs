@@ -429,14 +429,17 @@ async fn reconcile(
         Err(e) => return e.into_response(),
     };
 
-    crate::registry_access::cleanup_deleted_registry_access(
+    if let Err(error) = crate::registry_access::cleanup_deleted_registry_access(
         state.deployment_store.as_ref(),
         &state.bindings_provider,
         &state.target_bindings_providers,
         &req.deployment_id,
         &final_state,
     )
-    .await;
+    .await
+    {
+        return error.into_response();
+    }
 
     // Derive native image host for Lambda/Cloud Run so push clients
     // can set it on their local DeploymentConfig.
@@ -1099,14 +1102,17 @@ async fn agent_sync(
                             "Failed to reconcile agent-reported state"
                         );
                     } else {
-                        crate::registry_access::cleanup_deleted_registry_access(
+                        if let Err(error) = crate::registry_access::cleanup_deleted_registry_access(
                             state.deployment_store.as_ref(),
                             &state.bindings_provider,
                             &state.target_bindings_providers,
                             &req.deployment_id,
                             &agent_state,
                         )
-                        .await;
+                        .await
+                        {
+                            return error.into_response();
+                        }
                     }
                 }
             }

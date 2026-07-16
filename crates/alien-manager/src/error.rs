@@ -115,6 +115,18 @@ pub enum ErrorData {
         platform: Platform,
     },
 
+    /// Registry permissions could not be removed during deployment cleanup.
+    #[error(
+        code = "REGISTRY_ACCESS_CLEANUP_FAILED",
+        message = "Registry access cleanup failed for deployment '{deployment_id}': {reason}",
+        retryable = "true",
+        internal = "true"
+    )]
+    RegistryAccessCleanupFailed {
+        deployment_id: String,
+        reason: String,
+    },
+
     /// Command not found
     #[error(
         code = "COMMAND_NOT_FOUND",

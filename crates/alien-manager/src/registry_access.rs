@@ -18,9 +18,11 @@ use alien_core::{
     AwsEnvironmentInfo, DeploymentState, DeploymentStatus, EnvironmentInfo, GcpEnvironmentInfo,
     Platform, RemoteStackManagementOutputs, RuntimeMetadata, Stack, StackState, Worker, WorkerCode,
 };
+use alien_error::{AlienError, Context};
 use tracing::{debug, info, warn};
 
 use crate::auth::Subject;
+use crate::error::{ErrorData, Result};
 use crate::traits::deployment_store::{DeploymentFilter, DeploymentRecord};
 use crate::traits::DeploymentStore;
 
@@ -84,7 +86,7 @@ async fn revoke_registry_access(
     stack_state: Option<&StackState>,
     deployment_store: &dyn DeploymentStore,
     deployment_id: &str,
-) {
+) -> Result<()> {
     if let EnvironmentInfo::Gcp(GcpEnvironmentInfo { project_number, .. }) = environment_info {
         if let Some(service_account_email) = extract_rsm_access_configuration(stack_state) {
             remove_registry_access(
@@ -97,11 +99,12 @@ async fn revoke_registry_access(
                     service_account_emails: vec![service_account_email],
                 }),
                 "deployment-owned registry access",
+                deployment_id,
             )
-            .await;
+            .await?;
         }
 
-        let deployments = match deployment_store
+        let deployments = deployment_store
             .list_deployments(
                 &Subject::system(),
                 &DeploymentFilter {
@@ -110,18 +113,11 @@ async fn revoke_registry_access(
                 },
             )
             .await
-        {
-            Ok(deployments) => deployments,
-            Err(error) => {
-                warn!(
-                    deployment_id = %deployment_id,
-                    project_number = %project_number,
-                    error = %error,
-                    "Cannot safely revoke shared Cloud Run registry access because active consumers could not be checked"
-                );
-                return;
-            }
-        };
+            .context(ErrorData::RegistryAccessCleanupFailed {
+                deployment_id: deployment_id.to_string(),
+                reason: "active GCP deployments could not be checked before revoking shared access"
+                    .to_string(),
+            })?;
 
         if deployments.iter().any(|deployment| {
             is_other_active_gcp_project_consumer(deployment, deployment_id, project_number)
@@ -131,7 +127,7 @@ async fn revoke_registry_access(
                 project_number = %project_number,
                 "Keeping shared Cloud Run registry access for another active deployment"
             );
-            return;
+            return Ok(());
         }
 
         let project_numbers = if project_number.is_empty() {
@@ -149,13 +145,14 @@ async fn revoke_registry_access(
                 service_account_emails: Vec::new(),
             }),
             "last project consumer's shared registry access",
+            deployment_id,
         )
-        .await;
-        return;
+        .await?;
+        return Ok(());
     }
 
     let Some(access) = build_cross_account_access(environment_info, stack_state) else {
-        return;
+        return Ok(());
     };
     remove_registry_access(
         artifact_registry,
@@ -163,8 +160,9 @@ async fn revoke_registry_access(
         environment_info,
         access,
         "registry cross-account access",
+        deployment_id,
     )
-    .await;
+    .await
 }
 
 async fn remove_registry_access(
@@ -173,29 +171,23 @@ async fn remove_registry_access(
     environment_info: &EnvironmentInfo,
     access: CrossAccountAccess,
     access_kind: &str,
-) {
-    match artifact_registry
+    deployment_id: &str,
+) -> Result<()> {
+    artifact_registry
         .remove_cross_account_access(repo_id, access)
         .await
-    {
-        Ok(()) => {
-            info!(
-                repo_id = %repo_id,
-                platform = %environment_info.platform(),
-                access_kind = %access_kind,
-                "Registry access revoked"
-            );
-        }
-        Err(e) => {
-            warn!(
-                repo_id = %repo_id,
-                platform = %environment_info.platform(),
-                access_kind = %access_kind,
-                error = %e,
-                "Failed to revoke registry access"
-            );
-        }
-    }
+        .context(ErrorData::RegistryAccessCleanupFailed {
+            deployment_id: deployment_id.to_string(),
+            reason: format!("failed to revoke {access_kind} for repository '{repo_id}'"),
+        })?;
+
+    info!(
+        repo_id = %repo_id,
+        platform = %environment_info.platform(),
+        access_kind = %access_kind,
+        "Registry access revoked"
+    );
+    Ok(())
 }
 
 fn is_other_active_gcp_project_consumer(
@@ -311,37 +303,63 @@ pub async fn cleanup_deleted_registry_access(
     target_bindings_providers: &HashMap<Platform, Arc<dyn BindingsProviderApi>>,
     deployment_id: &str,
     state: &DeploymentState,
-) {
+) -> Result<()> {
     if state.status != DeploymentStatus::Deleted {
-        return;
+        return Ok(());
     }
     let Some(environment_info) = state.environment_info.as_ref() else {
-        return;
+        return Ok(());
     };
     let platform = environment_info.platform();
+    if !matches!(platform, Platform::Aws | Platform::Gcp) {
+        return Ok(());
+    }
+    let registry_access_granted = state
+        .runtime_metadata
+        .as_ref()
+        .is_some_and(|metadata| metadata.registry_access_granted);
+    // A successful initial grant can precede the remote-management identity
+    // becoming available, in which case `registry_access_granted` remains
+    // false so reconciliation retries the complete grant. Still clean up that
+    // partial grant when the deployment is deleted.
+    if !registry_access_granted && !has_worker_image(state) {
+        return Ok(());
+    }
+
     let Some(artifact_registry) =
         load_artifact_registry(bindings_provider, target_bindings_providers, &platform).await
     else {
-        return;
+        return Err(AlienError::new(ErrorData::RegistryAccessCleanupFailed {
+            deployment_id: deployment_id.to_string(),
+            reason: format!("artifact registry binding for '{platform}' is unavailable"),
+        }));
     };
 
-    // The shared deployment-image repository is named after
-    // `upstream_repository_prefix()` — the same identifier the proxy routes
-    // pushes to and `alien release` writes images to.
-    let repo_id = artifact_registry.upstream_repository_prefix();
-    if repo_id.is_empty() {
-        return;
+    let repo_ids = repository_ids_for_access(artifact_registry.as_ref(), state);
+    if repo_ids.is_empty() {
+        return if registry_access_granted {
+            Err(AlienError::new(ErrorData::RegistryAccessCleanupFailed {
+                deployment_id: deployment_id.to_string(),
+                reason: "repository identifiers for the recorded registry grant are unavailable"
+                    .to_string(),
+            }))
+        } else {
+            Ok(())
+        };
     }
 
-    revoke_registry_access(
-        artifact_registry.as_ref(),
-        &repo_id,
-        environment_info,
-        state.stack_state.as_ref(),
-        deployment_store,
-        deployment_id,
-    )
-    .await;
+    for repo_id in repo_ids {
+        revoke_registry_access(
+            artifact_registry.as_ref(),
+            &repo_id,
+            environment_info,
+            state.stack_state.as_ref(),
+            deployment_store,
+            deployment_id,
+        )
+        .await?;
+    }
+    Ok(())
 }
 
 fn repository_ids_for_access(
@@ -426,6 +444,31 @@ fn has_worker_image_in_repository_prefix(state: &DeploymentState, prefix: &str) 
             .as_ref()
             .and_then(|runtime_metadata| runtime_metadata.prepared_stack.as_ref())
             .is_some_and(|stack| stack_has_worker_image_in_repository_prefix(stack, prefix))
+}
+
+fn has_worker_image(state: &DeploymentState) -> bool {
+    state
+        .current_release
+        .as_ref()
+        .is_some_and(|release| stack_has_worker_image(&release.stack))
+        || state
+            .target_release
+            .as_ref()
+            .is_some_and(|release| stack_has_worker_image(&release.stack))
+        || state
+            .runtime_metadata
+            .as_ref()
+            .and_then(|runtime_metadata| runtime_metadata.prepared_stack.as_ref())
+            .is_some_and(stack_has_worker_image)
+}
+
+fn stack_has_worker_image(stack: &Stack) -> bool {
+    stack.resources().any(|(_id, entry)| {
+        entry
+            .config
+            .downcast_ref::<Worker>()
+            .is_some_and(|worker| matches!(&worker.code, WorkerCode::Image { .. }))
+    })
 }
 
 fn stack_has_worker_image_in_repository_prefix(stack: &Stack, prefix: &str) -> bool {
@@ -597,7 +640,7 @@ pub async fn load_artifact_registry(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use alien_bindings::error::{ErrorData as BindingErrorData, Result};
+    use alien_bindings::error::{ErrorData as BindingErrorData, Result as BindingResult};
     use alien_bindings::traits::{
         ArtifactRegistryCredentials, ArtifactRegistryPermissions, BindingsProviderApi,
         CrossAccountPermissions, RepositoryResponse,
@@ -609,6 +652,7 @@ mod tests {
     #[derive(Debug)]
     struct TestArtifactRegistry {
         prefix: String,
+        fail_remove: bool,
     }
 
     impl alien_bindings::traits::Binding for TestArtifactRegistry {}
@@ -623,11 +667,11 @@ mod tests {
             self.prefix.clone()
         }
 
-        async fn create_repository(&self, _repo_name: &str) -> Result<RepositoryResponse> {
+        async fn create_repository(&self, _repo_name: &str) -> BindingResult<RepositoryResponse> {
             unimplemented!("not needed for registry access repo-id tests")
         }
 
-        async fn get_repository(&self, _repo_id: &str) -> Result<RepositoryResponse> {
+        async fn get_repository(&self, _repo_id: &str) -> BindingResult<RepositoryResponse> {
             unimplemented!("not needed for registry access repo-id tests")
         }
 
@@ -635,7 +679,7 @@ mod tests {
             &self,
             _repo_id: &str,
             _access: CrossAccountAccess,
-        ) -> Result<()> {
+        ) -> BindingResult<()> {
             unimplemented!("not needed for registry access repo-id tests")
         }
 
@@ -643,14 +687,20 @@ mod tests {
             &self,
             _repo_id: &str,
             _access: CrossAccountAccess,
-        ) -> Result<()> {
-            unimplemented!("not needed for registry access repo-id tests")
+        ) -> BindingResult<()> {
+            if self.fail_remove {
+                Err(AlienError::new(BindingErrorData::Other {
+                    message: "simulated registry IAM failure".to_string(),
+                }))
+            } else {
+                Ok(())
+            }
         }
 
         async fn get_cross_account_access(
             &self,
             _repo_id: &str,
-        ) -> Result<CrossAccountPermissions> {
+        ) -> BindingResult<CrossAccountPermissions> {
             unimplemented!("not needed for registry access repo-id tests")
         }
 
@@ -659,11 +709,11 @@ mod tests {
             _repo_id: &str,
             _permissions: ArtifactRegistryPermissions,
             _ttl_seconds: Option<u32>,
-        ) -> Result<ArtifactRegistryCredentials> {
+        ) -> BindingResult<ArtifactRegistryCredentials> {
             unimplemented!("not needed for registry access repo-id tests")
         }
 
-        async fn delete_repository(&self, _repo_id: &str) -> Result<()> {
+        async fn delete_repository(&self, _repo_id: &str) -> BindingResult<()> {
             unimplemented!("not needed for registry access repo-id tests")
         }
     }
@@ -687,7 +737,7 @@ mod tests {
         async fn load_artifact_registry(
             &self,
             binding_name: &str,
-        ) -> Result<Arc<dyn ArtifactRegistry>> {
+        ) -> BindingResult<Arc<dyn ArtifactRegistry>> {
             if binding_name == self.binding_name {
                 Ok(self.registry.clone())
             } else {
@@ -698,60 +748,63 @@ mod tests {
         async fn load_storage(
             &self,
             binding_name: &str,
-        ) -> Result<Arc<dyn alien_bindings::traits::Storage>> {
+        ) -> BindingResult<Arc<dyn alien_bindings::traits::Storage>> {
             Err(missing_binding(binding_name))
         }
 
         async fn load_build(
             &self,
             binding_name: &str,
-        ) -> Result<Arc<dyn alien_bindings::traits::Build>> {
+        ) -> BindingResult<Arc<dyn alien_bindings::traits::Build>> {
             Err(missing_binding(binding_name))
         }
 
         async fn load_vault(
             &self,
             binding_name: &str,
-        ) -> Result<Arc<dyn alien_bindings::traits::Vault>> {
+        ) -> BindingResult<Arc<dyn alien_bindings::traits::Vault>> {
             Err(missing_binding(binding_name))
         }
 
-        async fn load_kv(&self, binding_name: &str) -> Result<Arc<dyn alien_bindings::traits::Kv>> {
+        async fn load_kv(
+            &self,
+            binding_name: &str,
+        ) -> BindingResult<Arc<dyn alien_bindings::traits::Kv>> {
             Err(missing_binding(binding_name))
         }
 
         async fn load_postgres(
             &self,
             binding_name: &str,
-        ) -> Result<Arc<dyn alien_bindings::traits::Postgres>> {
+        ) -> BindingResult<Arc<dyn alien_bindings::traits::Postgres>> {
             Err(missing_binding(binding_name))
         }
 
         async fn load_queue(
             &self,
             binding_name: &str,
-        ) -> Result<Arc<dyn alien_bindings::traits::Queue>> {
+        ) -> BindingResult<Arc<dyn alien_bindings::traits::Queue>> {
             Err(missing_binding(binding_name))
         }
 
         async fn load_worker(
             &self,
             binding_name: &str,
-        ) -> Result<Arc<dyn alien_bindings::traits::Worker>> {
+        ) -> BindingResult<Arc<dyn alien_bindings::traits::Worker>> {
             Err(missing_binding(binding_name))
         }
 
         async fn load_container(
             &self,
             binding_name: &str,
-        ) -> Result<Arc<dyn alien_bindings::traits::Container>> {
+        ) -> BindingResult<Arc<dyn alien_bindings::traits::Container>> {
             Err(missing_binding(binding_name))
         }
 
         async fn load_service_account(
             &self,
             binding_name: &str,
-        ) -> Result<Arc<dyn alien_bindings::traits::ServiceAccount>> {
+        ) -> BindingResult<Arc<dyn alien_bindings::traits::ServiceAccount>> {
             Err(missing_binding(binding_name))
         }
     }
@@ -859,9 +912,11 @@ mod tests {
     async fn load_artifact_registry_prefers_target_provider() {
         let primary_registry: Arc<dyn ArtifactRegistry> = Arc::new(TestArtifactRegistry {
             prefix: "artifacts/default".to_string(),
+            fail_remove: false,
         });
         let target_registry: Arc<dyn ArtifactRegistry> = Arc::new(TestArtifactRegistry {
             prefix: "alien-e2e".to_string(),
+            fail_remove: false,
         });
         let primary_provider: Arc<dyn BindingsProviderApi> = Arc::new(TestBindingsProvider {
             binding_name: "artifact-registry",
@@ -889,6 +944,7 @@ mod tests {
     fn aws_registry_access_skips_container_only_stack() {
         let registry = TestArtifactRegistry {
             prefix: "alien-artifacts-prj_test".to_string(),
+            fail_remove: false,
         };
         let state = aws_state_with_stack(Stack::new("test-stack".to_string()).build());
 
@@ -899,6 +955,7 @@ mod tests {
     fn aws_registry_access_uses_worker_image_repository() {
         let registry = TestArtifactRegistry {
             prefix: "alien-artifacts-prj_test".to_string(),
+            fail_remove: false,
         };
         let state = aws_state_with_stack(worker_stack(
             "manager.example.com/alien-artifacts-prj_test:test-worker-abc123",
@@ -914,6 +971,7 @@ mod tests {
     fn registry_access_skips_empty_repository_prefix() {
         let registry = TestArtifactRegistry {
             prefix: String::new(),
+            fail_remove: false,
         };
         let state = gcp_state_with_stack(worker_stack(
             "manager.example.com/prj_test/test-worker:abc123",
@@ -926,6 +984,7 @@ mod tests {
     fn gcp_registry_access_requires_worker_image_under_prefix() {
         let registry = TestArtifactRegistry {
             prefix: "test-project/alien-artifacts".to_string(),
+            fail_remove: false,
         };
         let state = gcp_state_with_stack(worker_stack(
             "manager.example.com/test-project/alien-artifacts/test-worker:abc123",
@@ -965,5 +1024,38 @@ mod tests {
             "dep_deleted",
             "123456789012"
         ));
+    }
+
+    #[tokio::test]
+    async fn registry_cleanup_propagates_permission_removal_failure() {
+        let registry = TestArtifactRegistry {
+            prefix: "alien-artifacts-prj_test".to_string(),
+            fail_remove: true,
+        };
+        let environment_info = EnvironmentInfo::Aws(AwsEnvironmentInfo {
+            account_id: "123456789012".to_string(),
+            region: "us-east-2".to_string(),
+        });
+        let access = build_cross_account_access(&environment_info, None)
+            .expect("AWS registry access should be configured");
+
+        let error = remove_registry_access(
+            &registry,
+            "alien-artifacts-prj_test",
+            &environment_info,
+            access,
+            "registry cross-account access",
+            "dep_test",
+        )
+        .await
+        .expect_err("permission removal failure must block cleanup");
+
+        assert_eq!(error.code, "REGISTRY_ACCESS_CLEANUP_FAILED");
+        assert!(error.retryable);
+        assert!(error.internal);
+        assert_eq!(
+            error.source.as_ref().map(|source| source.code.as_str()),
+            Some("BINDINGS_ERROR")
+        );
     }
 }

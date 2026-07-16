@@ -96,7 +96,8 @@ impl DeploymentLoopTransport for ManagerTransport {
             deployment_id,
             &updated_state,
         )
-        .await;
+        .await
+        .map_err(|error| error.into_generic())?;
 
         // Only return updated state if something actually changed.
         let state_changed = updated_state.runtime_metadata != state.runtime_metadata;
