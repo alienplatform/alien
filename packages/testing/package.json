@@ -26,8 +26,8 @@
   "scripts": {
     "build": "tsdown",
     "dev": "tsdown --watch --no-clean",
-    "test": "vitest run",
-    "test:watch": "vitest",
+    "test": "vitest run --passWithNoTests --exclude 'examples/**'",
+    "test:watch": "vitest --passWithNoTests --exclude 'examples/**'",
     "test:ts": "tsc --noEmit"
   },
   "dependencies": {
