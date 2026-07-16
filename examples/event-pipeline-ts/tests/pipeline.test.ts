@@ -22,12 +22,9 @@ describe("event-pipeline-ts", () => {
 
   it("should process queue messages end-to-end", async () => {
     // Send a message to the queue via command
-    const sendResult = await deployment.invokeCommand<SendResult>(
-      "send-test-message",
-      {
-        message: "hello from queue",
-      },
-    )
+    const sendResult = await deployment.invokeCommand<SendResult>("send-test-message", {
+      message: "hello from queue",
+    })
     expect(sendResult.sent).toBe(true)
 
     // Wait for the LocalTriggerService to poll the queue and deliver

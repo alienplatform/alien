@@ -32,8 +32,7 @@ function bindingEnvVarName(bindingName: string): string {
 function encodeUserinfo(value: string): string {
   return encodeURIComponent(value).replace(
     /[!'()*]/g,
-    character =>
-      `%${character.charCodeAt(0).toString(16).toUpperCase().padStart(2, "0")}`,
+    character => `%${character.charCodeAt(0).toString(16).toUpperCase().padStart(2, "0")}`,
   )
 }
 
