@@ -878,11 +878,11 @@ jobs:
             echo "EKS OIDC provider $provider_arn does not exist; Terraform will create it."
           fi
 
-          suffix="$(terraform state show module.aws.random_id.suffix | awk -F'"' '/hex =/ { print $2; exit }')"
-          if [ -z "$suffix" ]; then
-            echo "Could not resolve shared EKS suffix; Terraform will create missing bootstrap resources if needed."
+          if [[ ! "$cluster_name" =~ ^alien-e2e-([0-9a-f]+)$ ]]; then
+            echo "Could not derive the shared EKS suffix from cluster name '$cluster_name'; Terraform will create missing bootstrap resources if needed."
             exit 0
           fi
+          suffix="${BASH_REMATCH[1]}"
 
           ebs_role_name="alien-e2e-eks-ebs-csi-${suffix}"
           if ! terraform state show module.aws.aws_iam_role.e2e_eks_ebs_csi >/dev/null 2>&1; then
