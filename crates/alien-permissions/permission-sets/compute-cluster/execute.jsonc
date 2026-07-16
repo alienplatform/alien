@@ -44,7 +44,7 @@
           }
         }
       },
-      // horizond resolves typed workload SecretRefs with the VM's ambient
+      // The machine hosting layer resolves typed workload SecretRefs with the VM's ambient
       // identity before starting the container. Keep reads inside this
       // deployment's SSM namespace: the shared app-secret vault plus the
       // controller-owned command-token path.
@@ -177,7 +177,7 @@
           }
         }
       },
-      // Machine-wide Horizon secret resolution. The condition restricts the
+      // Machine-wide workload secret resolution. The condition restricts the
       // predefined accessor role to Secret Manager values owned by this stack.
       {
         "grant": {
@@ -187,14 +187,14 @@
           "stack": {
             "scope": "projects/${projectName}",
             "condition": {
-              "title": "HorizonStackSecretsRead",
+              "title": "ComputeClusterStackSecretsRead",
               "expression": "(resource.type == \"secretmanager.googleapis.com/Secret\" || resource.type == \"secretmanager.googleapis.com/SecretVersion\") && resource.name.startsWith(\"projects/${projectNumber}/secrets/${stackPrefix}-\")"
             }
           },
           "resource": {
             "scope": "projects/${projectName}",
             "condition": {
-              "title": "HorizonStackSecretsRead",
+              "title": "ComputeClusterStackSecretsRead",
               "expression": "(resource.type == \"secretmanager.googleapis.com/Secret\" || resource.type == \"secretmanager.googleapis.com/SecretVersion\") && resource.name.startsWith(\"projects/${projectNumber}/secrets/${stackPrefix}-\")"
             }
           }

@@ -13,7 +13,7 @@ export const ResourceEntrySchema = z.object({
                 return BaseResourceSchema.describe("Resource that can hold any resource type in the Alien system. All resources share common 'type' and 'id' fields with additional type-specific properties.")
               },
 get "dependencies"(){
-                return z.array(ResourceRefSchema.describe("New ResourceRef that works with any resource type.\nThis can eventually replace the enum-based ResourceRef for full extensibility.")).describe("Additional dependencies for this resource beyond those defined in the resource itself.\nThe total dependencies are: resource.get_dependencies() + this list")
+                return z.array(ResourceRefSchema.describe("Reference to a resource by its stable id and resource type.")).describe("Additional dependencies for this resource beyond those defined in the resource itself.\nThe total dependencies are: resource.get_dependencies() + this list")
               },
 get "lifecycle"(){
                 return ResourceLifecycleSchema.describe("Describes the lifecycle of a resource within a stack, determining how it's managed and deployed.")

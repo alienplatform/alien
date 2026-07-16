@@ -372,9 +372,13 @@ mod tests {
     use super::*;
     use alien_bindings::BindingsProvider;
     use alien_core::{
-        AwsClientConfig, AwsCredentials, AwsEnvironmentInfo, AzureClientConfig, AzureCredentials,
-        AzureEnvironmentInfo, GcpClientConfig, GcpCredentials, GcpEnvironmentInfo,
+        bindings::ServiceAccountBinding, AwsClientConfig, AwsCredentials, AwsEnvironmentInfo,
+        AzureClientConfig, AzureCredentials, AzureEnvironmentInfo, GcpClientConfig, GcpCredentials,
+        GcpEnvironmentInfo, GcpServiceOverrides, RemoteStackManagement,
+        RemoteStackManagementOutputs, Resource, ResourceLifecycle, ResourceOutputs, ResourceStatus,
+        StackResourceState, StackState,
     };
+    use chrono::Utc;
 
     #[test]
     fn azure_target_environment_overrides_subscription_and_region_but_keeps_managing_tenant() {
@@ -449,6 +453,111 @@ mod tests {
         assert_eq!(gcp.project_id, "target-project");
         assert_eq!(gcp.region, "us-east1");
         assert_eq!(gcp.project_number.as_deref(), Some("123456789"));
+    }
+
+    fn gcp_handoff_deployment() -> DeploymentRecord {
+        let remote_management = RemoteStackManagement::new("management".to_string()).build();
+        let mut stack_state =
+            StackState::with_resource_prefix(Platform::Gcp, "test-prefix".to_string());
+        stack_state.resources.insert(
+            remote_management.id.clone(),
+            StackResourceState::builder()
+                .resource_type(RemoteStackManagement::RESOURCE_TYPE.to_string())
+                .status(ResourceStatus::Running)
+                .config(Resource::new(remote_management))
+                .outputs(ResourceOutputs::new(RemoteStackManagementOutputs {
+                    management_resource_id: "deployment@target-project.iam.gserviceaccount.com"
+                        .to_string(),
+                    access_configuration: "deployment@target-project.iam.gserviceaccount.com"
+                        .to_string(),
+                }))
+                .lifecycle(ResourceLifecycle::Frozen)
+                .dependencies(vec![])
+                .build(),
+        );
+
+        DeploymentRecord {
+            id: "deployment".to_string(),
+            workspace_id: "default".to_string(),
+            project_id: "default".to_string(),
+            name: "deployment".to_string(),
+            deployment_group_id: "group".to_string(),
+            platform: Platform::Gcp,
+            deployment_protocol_version: alien_core::CURRENT_DEPLOYMENT_PROTOCOL_VERSION,
+            base_platform: None,
+            status: "provisioning".to_string(),
+            stack_settings: None,
+            stack_state: Some(stack_state),
+            environment_info: Some(EnvironmentInfo::Gcp(GcpEnvironmentInfo {
+                project_id: "target-project".to_string(),
+                project_number: "987654321".to_string(),
+                region: "us-east1".to_string(),
+            })),
+            runtime_metadata: None,
+            current_release_id: None,
+            desired_release_id: None,
+            import_source: None,
+            setup_method: None,
+            setup_metadata: None,
+            setup_target: None,
+            setup_fingerprint: None,
+            setup_fingerprint_version: None,
+            user_environment_variables: None,
+            management_config: None,
+            deployment_config: None,
+            deployment_token: None,
+            retry_requested: false,
+            locked_by: None,
+            locked_at: None,
+            created_at: Utc::now(),
+            updated_at: None,
+            error: None,
+        }
+    }
+
+    #[tokio::test]
+    async fn gcp_materialization_failure_is_classified_for_bounded_handoff_retry() {
+        let base_config = ClientConfig::Gcp(Box::new(GcpClientConfig {
+            project_id: "managing-project".to_string(),
+            region: "us-central1".to_string(),
+            credentials: GcpCredentials::AccessToken {
+                token: "source-token".to_string(),
+            },
+            service_overrides: Some(GcpServiceOverrides {
+                endpoints: HashMap::from([(
+                    "iamcredentials".to_string(),
+                    "http://127.0.0.1:9".to_string(),
+                )]),
+            }),
+            project_number: Some("123456789".to_string()),
+        }));
+        let bindings = HashMap::from([(
+            "management".to_string(),
+            serde_json::to_value(ServiceAccountBinding::gcp_service_account(
+                "management@managing-project.iam.gserviceaccount.com",
+                "management-unique-id",
+            ))
+            .expect("management binding should serialize"),
+        )]);
+        let provider: Arc<dyn BindingsProviderApi> = Arc::new(
+            BindingsProvider::new(base_config, bindings)
+                .expect("GCP management bindings provider should be valid"),
+        );
+        let resolver = ImpersonationCredentialResolver::new(
+            provider.clone(),
+            HashMap::from([(Platform::Gcp, provider)]),
+            HashSet::from([Platform::Gcp]),
+        );
+
+        let error = resolver
+            .resolve_from_env(&gcp_handoff_deployment(), HashMap::new())
+            .await
+            .expect_err("failed target token materialization must fail credential handoff");
+
+        assert_eq!(
+            error.code, "REMOTE_CREDENTIAL_HANDOFF_FAILED",
+            "the real resolver path must expose the code consumed by the bounded provisioning retry"
+        );
     }
 
     #[test]

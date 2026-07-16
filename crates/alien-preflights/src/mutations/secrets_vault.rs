@@ -100,7 +100,7 @@ impl StackMutation for SecretsVaultMutation {
     }
 }
 
-/// Horizon machine identities receive narrowly scoped read access to the
+/// Compute-cluster machine identities receive narrowly scoped read access to the
 /// deployment secrets vault. Make the Frozen vault an explicit dependency so
 /// provider-specific ComputeCluster controllers never assign that access
 /// against a vault whose outputs or cloud resource do not exist yet.
@@ -123,7 +123,7 @@ fn add_vault_dependency_to_compute_clusters(stack: &mut Stack, vault_id: &str) {
         debug!(
             compute_cluster = %resource_id,
             vault = %vault_id,
-            "Made the Horizon compute cluster depend on its deployment secrets vault"
+            "Made the compute cluster depend on its deployment secrets vault"
         );
     }
 }

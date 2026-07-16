@@ -7,8 +7,8 @@
  * in-process handlers, and submits responses through the envelope's
  * response-handling flow (inline or presigned storage upload).
  *
- * Pure `fetch`; no bindings, no gRPC. See `PACKAGE_LAYOUT.md` DECIDED(09) for
- * the binding semantics this file implements:
+ * Pure `fetch`; no bindings, no gRPC. The receiver implements these public
+ * command-delivery semantics:
  * - required identity plus token-or-token-file env, with fail-fast validation
  * - execution budget = `min(envelope.deadline, leaseExpiresAt − safety margin)`;
  *   on expiry the handler's `signal` fires and a `HANDLER_TIMEOUT` is submitted
@@ -40,6 +40,7 @@ import { AlienError, LeaseResponseSchema } from "@alienplatform/core"
 import {
   CommandReceiverConfigInvalidError,
   InvalidEnvelopeError,
+  ManagerHttpError,
   StorageOperationFailedError,
 } from "./errors.js"
 import { downloadPresigned, redactUrlForError, uploadPresigned } from "./presigned.js"
@@ -70,11 +71,11 @@ export const ERROR_CODE_HANDLER_TIMEOUT = "HANDLER_TIMEOUT"
 /** Error code submitted when a handler throws/rejects (or its response fails to serialize). */
 export const ERROR_CODE_HANDLER_ERROR = "HANDLER_ERROR"
 
-/** Lease poll interval, in ms (DECIDED(09) — 5s). */
+/** Lease poll interval, in ms. */
 const DEFAULT_POLL_INTERVAL_MS = 5_000
 /** Max leases requested per poll. One process executes one command at a time by default. */
 const DEFAULT_MAX_LEASES = 1
-/** Requested lease duration, in seconds (DECIDED(09) — 60). */
+/** Requested lease duration, in seconds. */
 const DEFAULT_LEASE_SECONDS = 60
 /** Maximum interval reached by the empty/error poll backoff. */
 const DEFAULT_POLL_MAX_INTERVAL_MS = 30_000
@@ -117,15 +118,15 @@ const ENV_ALIEN_COMMANDS_DRAIN_TIMEOUT_MS = "ALIEN_COMMANDS_DRAIN_TIMEOUT_MS"
 /**
  * Per-command context passed to a {@link CommandHandler}.
  *
- * DECIDED(08) — the concrete handler-context field types. These are the twin of
- * the Rust `Context` struct (`input`/`deadline`/`command_id`/`attempt`/
- * `cancellation`), the last mapping to `signal` here.
+ * These fields match the Rust `Context` struct
+ * (`input`/`deadline`/`command_id`/`attempt`/`cancellation`), the last mapping
+ * to `signal` here.
  */
 export interface CommandContext {
   /**
    * Decoded command param bytes — the same bytes the params envelope carries
-   * after decode, prior to any handler-side parsing (DECIDED(09), byte-for-byte
-   * twin identity with the Rust receiver's `ctx.input`).
+   * after decode, prior to any handler-side parsing. This is byte-for-byte
+   * identical to the Rust receiver's `ctx.input`.
    */
   input: Uint8Array
   /**
@@ -136,7 +137,7 @@ export interface CommandContext {
   signal: AbortSignal
   /**
    * The effective execution budget: `min(envelope.deadline, leaseExpiresAt)`.
-   * Always present while a lease is held (DECIDED(09)).
+   * Always present while a lease is held.
    */
   deadline: Date
   /** Unique command identifier. */
@@ -176,6 +177,8 @@ export interface CommandReceiver {
    * lease poll *starts* once draining begins; a poll already in flight
    * completes and its leases are dispatched. In-flight commands may finish
    * within the drain timeout; remaining handlers are aborted and released.
+   * Retryable or unknown transport failures continue polling; non-retryable
+   * {@link AlienError}s terminate the receiver after draining.
    */
   run(): Promise<void>
   /** Signal the receiver to drain and stop (see {@link CommandReceiver.run}). */
@@ -474,6 +477,7 @@ class PullCommandReceiver implements CommandReceiver {
   async run(): Promise<void> {
     const inFlight = new Set<Promise<void>>()
     let nextPollMs = this.pollIntervalMs
+    let terminalError: AlienError | undefined
 
     // Mirrors the Rust run loop: check shutdown at the top of each iteration
     // (no new poll starts once draining begins), acquire leases (a poll already
@@ -481,18 +485,29 @@ class PullCommandReceiver implements CommandReceiver {
     while (!this.shutdown.signal.aborted) {
       let leases: LeaseInfo[] = []
       let sleepMs = nextPollMs
-      try {
-        leases = await this.acquireLeases()
-        if (leases.length > 0) {
-          sleepMs = this.pollIntervalMs
-          nextPollMs = this.pollIntervalMs
-        } else {
+      const available = Math.max(0, this.maxLeases - this.active.size)
+      if (available === 0) {
+        sleepMs = this.pollIntervalMs
+        nextPollMs = this.pollIntervalMs
+      } else {
+        try {
+          leases = await this.acquireLeases(available)
+          if (leases.length > 0) {
+            sleepMs = this.pollIntervalMs
+            nextPollMs = this.pollIntervalMs
+          } else {
+            nextPollMs = this.nextBackoff(nextPollMs)
+          }
+        } catch (error) {
+          if (error instanceof AlienError && !error.retryable) {
+            terminalError = error
+            break
+          }
+          // Retryable Alien errors and unknown transport errors are logged and
+          // retried next interval.
+          logWarn("Failed to acquire command leases, will retry", error)
           nextPollMs = this.nextBackoff(nextPollMs)
         }
-      } catch (error) {
-        // Transient lease errors are logged and retried next interval.
-        logWarn("Failed to acquire command leases, will retry", error)
-        nextPollMs = this.nextBackoff(nextPollMs)
       }
 
       for (const lease of leases) {
@@ -528,6 +543,7 @@ class PullCommandReceiver implements CommandReceiver {
       for (const active of this.active.values()) active.controller.abort()
     }
     await Promise.all([...inFlight])
+    if (terminalError !== undefined) throw terminalError
   }
 
   private nextBackoff(current: number): number {
@@ -540,34 +556,47 @@ class PullCommandReceiver implements CommandReceiver {
   }
 
   /** Build the lease request this receiver sends (pure — unit-testable). */
-  private buildLeaseRequest(): LeaseRequest {
+  private buildLeaseRequest(maxLeases: number): LeaseRequest {
     return {
       deploymentId: this.config.deploymentId,
       target: {
         resourceId: this.config.resourceId,
         resourceType: this.config.resourceType,
       },
-      maxLeases: this.maxLeases,
+      maxLeases,
       leaseSeconds: this.leaseSeconds,
     }
   }
 
-  private async acquireLeases(): Promise<LeaseInfo[]> {
+  private async acquireLeases(maxLeases: number): Promise<LeaseInfo[]> {
     const endpoint = buildLeaseEndpoint(this.config.url)
     const response = await this.authenticatedFetch(endpoint, {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
       },
-      body: JSON.stringify(this.buildLeaseRequest()),
+      body: JSON.stringify(this.buildLeaseRequest(maxLeases)),
       // fetch has no default timeout; a hung lease call would freeze the
       // whole poll loop, so cap it well under the lease duration.
       signal: AbortSignal.timeout(CONTROL_TIMEOUT_MS),
     })
 
     if (!response.ok) {
-      const body = await response.text().catch(() => "")
-      throw new Error(`Lease request failed with status ${response.status}: ${body}`)
+      const context = {
+        method: "POST",
+        url: endpoint,
+        status: response.status,
+        statusText: response.statusText,
+      }
+      const definition = ManagerHttpError.create(context)
+      throw new AlienError({
+        code: definition.metadata.code,
+        message: definition.metadata.message(context),
+        retryable: response.status === 408 || response.status === 429 || response.status >= 500,
+        internal: definition.metadata.internal,
+        httpStatusCode: definition.metadata.httpStatusCode,
+        context,
+      })
     }
 
     const parsed = parseWireResponse(LeaseResponseSchema, await response.json(), "POST", endpoint)
@@ -659,7 +688,7 @@ class PullCommandReceiver implements CommandReceiver {
         input = await decodeParamsBytes(envelope, this.fetchImpl, controller.signal)
       } catch (error) {
         // Decode failure is submitted under the decode error's own code, not a
-        // receiver-specific one (DECIDED(09)).
+        // receiver-specific one.
         const code = error instanceof AlienError ? error.code : ERROR_CODE_HANDLER_ERROR
         return errorResponse(code, error instanceof Error ? error.message : String(error))
       }
@@ -1015,7 +1044,7 @@ async function invokeHandler(
     return errorResponse(handlerErrorCode(error), message)
   }
 
-  // Success: JSON-encode the return value (DECIDED(09)).
+  // Success: JSON-encode the return value.
   let json: string
   try {
     json = JSON.stringify(value) ?? "null"
@@ -1037,9 +1066,9 @@ function handlerErrorCode(error: unknown): string {
 }
 
 /**
- * Decode command param bytes from an envelope (DECIDED(09) — `ctx.input`):
- * inline base64 → raw bytes; storage → GET the presigned request, use the body
- * bytes. Never JSON-parses (that is the handler's job).
+ * Decode command param bytes for `ctx.input`: inline base64 → raw bytes;
+ * storage → GET the presigned request and use the body bytes. Never JSON-parses
+ * (that is the handler's job).
  */
 export async function decodeParamsBytes(
   envelope: Envelope,
@@ -1097,8 +1126,7 @@ const STRICT_BASE64_PATTERN = /^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za
 /**
  * Decode inline command params bytes, matching the Rust twin's strict
  * `base64::engine::general_purpose::STANDARD` decode: any input outside the
- * canonical alphabet/padding fails with `INVALID_ENVELOPE`
- * (DECIDED(09) — twin-pinned; see `PACKAGE_LAYOUT.md`).
+ * canonical alphabet/padding fails with `INVALID_ENVELOPE`.
  */
 function decodeInlineParamsBase64(inlineBase64: string): Uint8Array {
   if (!STRICT_BASE64_PATTERN.test(inlineBase64)) {

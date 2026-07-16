@@ -37,7 +37,7 @@ fn definitely_not_delivered(envelope: &Envelope, message: impl Into<String>) -> 
 /// and dispatches via the platform-specific mechanism.
 ///
 /// Only Worker targets ever reach this push dispatcher — Container/Daemon
-/// targets are always Pull (per the ALIEN-219 delivery rule) and are served by
+/// targets are always Pull and are served by
 /// the pending-index poll path, never dispatched here.
 pub struct DefaultCommandDispatcher {
     deployment_store: Arc<dyn DeploymentStore>,

@@ -2087,10 +2087,14 @@ fn merge_runtime_values(
 }
 
 fn runtime_values() -> anyhow::Result<Value> {
-    let image = std::env::var("ALIEN_TEST_OVERRIDE_AGENT_IMAGE")
+    let image = std::env::var("ALIEN_TEST_OVERRIDE_OPERATOR_IMAGE")
         .ok()
         .filter(|image| !image.is_empty())
         .unwrap_or_else(|| "ghcr.io/alienplatform/alien-operator:latest".to_string());
+    runtime_values_for_image(&image)
+}
+
+fn runtime_values_for_image(image: &str) -> anyhow::Result<Value> {
     let (repository, tag) = split_image_tag(&image)?;
     let mut runtime = serde_json::json!({
         "image": {
@@ -2170,7 +2174,7 @@ fn merge_missing_values(
 fn split_image_tag(image: &str) -> anyhow::Result<(String, String)> {
     if image.contains('@') {
         anyhow::bail!(
-            "ALIEN_TEST_OVERRIDE_AGENT_IMAGE must use a tag for Helm E2E installs; digest references are not supported yet"
+            "ALIEN_TEST_OVERRIDE_OPERATOR_IMAGE must use a tag for Helm E2E installs; digest references are not supported yet"
         );
     }
     let last_slash = image.rfind('/');
@@ -4556,6 +4560,37 @@ mod tests {
 
         assert_eq!(key.len(), 64);
         assert!(key.chars().all(|c| c.is_ascii_hexdigit()));
+    }
+
+    #[test]
+    fn runtime_values_use_exact_operator_image() {
+        temp_env::with_var(
+            "ALIEN_TEST_OVERRIDE_OPERATOR_IMAGE",
+            Some("ghcr.io/alienplatform/alien-operator:test-head"),
+            || {
+                let values = runtime_values()
+                    .expect("runtime values should use the requested operator image");
+                let yaml = to_helm_values_yaml(&serde_json::json!({
+                    "runtime": values,
+                }))
+                .expect("runtime values should render as Helm values");
+                let rendered: Value =
+                    serde_yaml::from_str(&yaml).expect("rendered Helm values should parse");
+
+                assert_eq!(
+                    rendered.pointer("/runtime/image/repository"),
+                    Some(&Value::from("ghcr.io/alienplatform/alien-operator"))
+                );
+                assert_eq!(
+                    rendered.pointer("/runtime/image/tag"),
+                    Some(&Value::from("test-head"))
+                );
+                assert_eq!(
+                    rendered.pointer("/runtime/image/pullPolicy"),
+                    Some(&Value::from("IfNotPresent"))
+                );
+            },
+        );
     }
 
     #[test]

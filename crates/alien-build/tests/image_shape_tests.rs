@@ -1,4 +1,4 @@
-//! ALIEN-225 image-shape and native-binding build tests.
+//! Image-shape and native-binding build tests.
 //!
 //! Asserts the final build model on real `bun build --compile` outputs:
 //!

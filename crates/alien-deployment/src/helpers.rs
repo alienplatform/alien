@@ -23,7 +23,7 @@ const OTEL_SERVICE_NAME: &str = "OTEL_SERVICE_NAME";
 // spelling on purpose. They are looked up by name in already-deployed stacks'
 // vaults; renaming them to match the `alien-worker-runtime` crate rename would
 // orphan the existing secrets on every live deployment. We deliberately take the
-// no-migration option and keep the wire keys stable (ALIEN-224).
+// no-migration option and keep the wire keys stable.
 const RUNTIME_OTLP_LOGS_AUTH_HEADER_SECRET: &str = "__alien_runtime_otlp_logs_auth_header";
 const RUNTIME_OTLP_METRICS_AUTH_HEADER_SECRET: &str = "__alien_runtime_otlp_metrics_auth_header";
 const SECRETS_SYNC_SCHEMA_VERSION: &[u8] = b"\0vault-sync:no-app-command-token:v2\0";
@@ -488,8 +488,8 @@ fn inject_into_environment(
 
     if SecretDelivery::resolve(platform, kind).is_native_projection() {
         // The hosting layer projects these secrets natively before process
-        // start (Kubernetes secretKeyRef, local supervisor plain env, Horizon
-        // workload secrets); injecting ALIEN_SECRETS here would leak a
+        // start (Kubernetes secretKeyRef, local supervisor plain env, or native
+        // cloud container secret injection); injecting ALIEN_SECRETS here would leak a
         // dangling vault-load pointer into a runtime-less workload.
         if !secret_keys.is_empty() {
             debug!(
@@ -1192,7 +1192,7 @@ mod tests {
     fn vault_pointer_is_limited_to_worker_hosts_without_native_projection() {
         // Runtime-less Containers/Daemons have nothing that could load the
         // ALIEN_SECRETS pointer; the hosting layer projects their secrets
-        // natively before process start on every platform (ALIEN-211).
+        // natively before process start on every platform.
         // Workers keep it only on hosts without native projection.
         for platform in [
             Platform::Local,

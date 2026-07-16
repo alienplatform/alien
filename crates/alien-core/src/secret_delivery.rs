@@ -42,7 +42,8 @@ pub enum SecretDelivery {
     VaultPointer,
     /// The hosting layer delivers each applicable secret natively before the
     /// process starts — Kubernetes `valueFrom.secretKeyRef`, the local
-    /// supervisor's resolved plain env, or Horizon workload secrets — so no
+    /// supervisor's resolved plain env, or the cloud container host's native
+    /// secret projection — so no
     /// vault-load pointer is ever injected.
     NativeProjection,
 }
@@ -52,11 +53,11 @@ impl SecretDelivery {
     ///
     /// - Kubernetes and Machines hosting layers project Worker secrets before
     ///   process start. Other Worker hosts use the runtime vault pointer.
-    /// - Containers and Daemons are runtime-less on EVERY platform
-    ///   (ALIEN-211): nothing in the workload can load a vault pointer, so
+    /// - Containers and Daemons are runtime-less on every platform:
+    ///   nothing in the workload can load a vault pointer, so
     ///   the hosting layer projects secrets natively before process start
-    ///   (Kubernetes secretKeyRef, local supervisor plain env, Horizon
-    ///   workload secrets) and the pointer must never be minted for them.
+    ///   (Kubernetes secretKeyRef, local supervisor plain env, or native cloud
+    ///   container secret injection) and the pointer must never be minted for them.
     ///
     /// The match is exhaustive over both enums so a new platform or compute
     /// kind forces an explicit delivery choice here.

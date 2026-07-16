@@ -317,17 +317,17 @@ pub fn exclusion_reason(
     match binding {
         Binding::Worker => Some("Worker binding test app endpoint not yet implemented"),
         Binding::Container => Some("Container binding requires managed container infrastructure"),
-        // The TypeScript comprehensive app's surface is storage/kv/queue/vault
-        // (ALIEN-214: the manager/controller-internal artifact-registry and
+        // The TypeScript comprehensive app's surface is storage/kv/queue/vault.
+        // The manager/controller-internal artifact-registry and
         // service-account flows were split out of the TS SDK and are not
-        // reachable through any handler the TS app can serve). The Rust
+        // reachable through any handler the TS app can serve. The Rust
         // comprehensive app still exercises these two bindings. Build is not
         // listed here because it is excluded for every app by the arm below.
         Binding::ArtifactRegistry | Binding::ServiceAccount
             if app == TestApp::ComprehensiveTs =>
         {
             Some(
-                "TS comprehensive app has no artifact-registry/service-account handlers post-ALIEN-214 SDK split",
+                "TS comprehensive app has no artifact-registry/service-account handlers after the SDK facade split",
             )
         }
         Binding::Build => Some("Build binding not yet stable across all platforms"),

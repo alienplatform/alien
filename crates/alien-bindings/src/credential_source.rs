@@ -6,7 +6,7 @@
 //! access path).
 //!
 //! Managed cloud workloads use their platform-projected service account or
-//! Horizon metadata; they do not receive deployment bearer tokens. Minting is
+//! machine-host metadata; they do not receive deployment bearer tokens. Minting is
 //! an explicitly configured fallback for external/bootstrap integrations that
 //! cannot use that native identity path. Such a client POSTs to
 //! `{ALIEN_MANAGER_URL}/v1/credentials/mint` with a deployment token and

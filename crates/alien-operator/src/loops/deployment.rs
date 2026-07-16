@@ -358,7 +358,7 @@ async fn enrich_config(
                 );
                 // Container/Daemon command receiver env (ALIEN_COMMANDS_URL/TOKEN/
                 // TARGET_RESOURCE_ID/TARGET_RESOURCE_TYPE), scoped per resource.
-                // Container/Daemon always deliver via Pull (ALIEN-219); the operator
+                // Container/Daemon always deliver via Pull; the operator
                 // only ever manages K8s/Local, so this block already covers every
                 // platform it serves. It uses the same deployment-token auth
                 // contract as Worker push handling above.

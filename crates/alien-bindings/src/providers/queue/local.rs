@@ -681,7 +681,7 @@ mod tests {
         );
     }
 
-    // ---- ALIEN-217 localqueue.v1 semantics proofs ----
+    // ---- localqueue.v1 semantics proofs ----
 
     #[tokio::test]
     async fn test_visibility_timeout_redelivery_increments_attempt() {
@@ -833,7 +833,7 @@ mod tests {
         assert_eq!(count, 0, "purge must delete every row, leased or not");
     }
 
-    // ---- ALIEN-217 multi-process-safety proof ----
+    // ---- Multi-process-safety proof ----
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
     async fn test_two_handle_concurrent_receive_no_double_delivery() {

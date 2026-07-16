@@ -3086,10 +3086,7 @@ export type DeploymentDetailResponsePreparedStackConfig = {
 };
 
 /**
- * New ResourceRef that works with any resource type.
- *
- * @remarks
- * This can eventually replace the enum-based ResourceRef for full extensibility.
+ * Reference to a resource by its stable id and resource type.
  */
 export type DeploymentDetailResponsePreparedStackDependency = {
   id: string;

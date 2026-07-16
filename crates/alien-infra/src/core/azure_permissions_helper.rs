@@ -40,6 +40,23 @@ struct PlannedRoleAssignment {
 }
 
 impl AzurePermissionsHelper {
+    fn role_assignment_scope(
+        permission_set_id: &str,
+        generated_scope: &str,
+        resource_scope: &Scope,
+        azure_config: &alien_azure_clients::AzureClientConfig,
+    ) -> String {
+        // Azure queues share one preflight-created Service Bus namespace. The
+        // legacy permission templates derive a per-queue namespace from
+        // `${resourceName}-sb`, so the controller's concrete scope is the only
+        // authoritative queue or shared-namespace resource ID.
+        if matches!(permission_set_id, "queue/data-read" | "queue/data-write") {
+            resource_scope.to_resource_id_string(azure_config)
+        } else {
+            generated_scope.to_string()
+        }
+    }
+
     fn role_definition_scope_for_assignment_scope(scope: &Scope) -> Scope {
         match scope {
             Scope::Resource {
@@ -303,6 +320,12 @@ impl AzurePermissionsHelper {
             .into_iter()
             .enumerate()
             .map(|(binding_index, binding)| {
+                let assignment_scope = Self::role_assignment_scope(
+                    &binding.permission_set_id,
+                    &binding.scope,
+                    resource_scope,
+                    azure_config,
+                );
                 let role_definition_id = Self::resource_role_definition_id(
                     ctx.resource_prefix,
                     profile_name,
@@ -321,7 +344,7 @@ impl AzurePermissionsHelper {
                 .to_string();
 
                 PlannedRoleAssignment {
-                    scope: binding.scope,
+                    scope: assignment_scope,
                     role_assignment_id,
                     principal_id: managed_identity_principal_id.clone(),
                     role_definition_id,
@@ -805,6 +828,12 @@ impl AzurePermissionsHelper {
             .into_iter()
             .enumerate()
             .map(|(binding_index, binding)| {
+                let assignment_scope = Self::role_assignment_scope(
+                    &binding.permission_set_id,
+                    &binding.scope,
+                    resource_scope,
+                    azure_config,
+                );
                 let role_definition_id = match &binding.role_definition {
                     AzureRoleDefinitionRef::Predefined { role_definition_id } => {
                         role_definition_id.clone()
@@ -834,7 +863,7 @@ impl AzurePermissionsHelper {
                 .to_string();
 
                 PlannedRoleAssignment {
-                    scope: binding.scope,
+                    scope: assignment_scope,
                     role_assignment_id,
                     principal_id: management_principal_id.clone(),
                     role_definition_id,
@@ -979,7 +1008,90 @@ fn azure_role_key_segment(key: &str) -> String {
 mod tests {
     use super::*;
     use alien_azure_clients::authorization::MockAuthorizationApi;
+    use alien_azure_clients::{AzureClientConfig, AzureCredentials};
     use alien_client_core::ErrorData as CloudClientErrorData;
+
+    fn azure_config() -> AzureClientConfig {
+        AzureClientConfig {
+            subscription_id: "sub-123".to_string(),
+            tenant_id: "tenant-123".to_string(),
+            region: None,
+            credentials: AzureCredentials::AccessToken {
+                token: "test-token".to_string(),
+            },
+            service_overrides: None,
+        }
+    }
+
+    #[test]
+    fn queue_data_assignments_use_the_controller_service_bus_scope() {
+        let azure_config = azure_config();
+        let shared_namespace_scope = Scope::Resource {
+            resource_group_name: "rg-123".to_string(),
+            resource_provider: "Microsoft.ServiceBus".to_string(),
+            parent_resource_path: None,
+            resource_type: "namespaces".to_string(),
+            resource_name: "shared-bus".to_string(),
+        };
+        let concrete_queue_scope = Scope::Resource {
+            resource_group_name: "rg-123".to_string(),
+            resource_provider: "Microsoft.ServiceBus".to_string(),
+            parent_resource_path: Some("namespaces/shared-bus".to_string()),
+            resource_type: "queues".to_string(),
+            resource_name: "orders".to_string(),
+        };
+        let stale_generated_scope = "/subscriptions/sub-123/resourceGroups/rg-123/providers/Microsoft.ServiceBus/namespaces/orders-sb/queues/orders";
+
+        for permission_set_id in ["queue/data-read", "queue/data-write"] {
+            assert_eq!(
+                AzurePermissionsHelper::role_assignment_scope(
+                    permission_set_id,
+                    stale_generated_scope,
+                    &shared_namespace_scope,
+                    &azure_config,
+                ),
+                "/subscriptions/sub-123/resourceGroups/rg-123/providers/Microsoft.ServiceBus/namespaces/shared-bus",
+                "wildcard queue data access must target the real shared namespace"
+            );
+            assert_eq!(
+                AzurePermissionsHelper::role_assignment_scope(
+                    permission_set_id,
+                    stale_generated_scope,
+                    &concrete_queue_scope,
+                    &azure_config,
+                ),
+                "/subscriptions/sub-123/resourceGroups/rg-123/providers/Microsoft.ServiceBus/namespaces/shared-bus/queues/orders",
+                "resource-scoped queue data access must target the real queue"
+            );
+        }
+    }
+
+    #[test]
+    fn non_queue_assignments_preserve_the_generated_binding_scope() {
+        let azure_config = azure_config();
+        let concrete_container_scope = Scope::Resource {
+            resource_group_name: "rg-123".to_string(),
+            resource_provider: "Microsoft.Storage".to_string(),
+            parent_resource_path: Some(
+                "storageAccounts/account-123/blobServices/default".to_string(),
+            ),
+            resource_type: "containers".to_string(),
+            resource_name: "content".to_string(),
+        };
+        let generated_resource_group_scope =
+            "/subscriptions/sub-123/resourceGroups/rg-123".to_string();
+
+        assert_eq!(
+            AzurePermissionsHelper::role_assignment_scope(
+                "storage/trigger-management",
+                &generated_resource_group_scope,
+                &concrete_container_scope,
+                &azure_config,
+            ),
+            generated_resource_group_scope,
+            "permissions that intentionally bind above the concrete resource must keep their generated scope"
+        );
+    }
 
     #[test]
     fn storage_data_assignments_use_generated_container_scope() {

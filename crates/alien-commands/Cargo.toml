@@ -32,7 +32,7 @@ runtime = [
     "futures",
     "tokio",
 ]
-# App-owned pull command receiver for Containers/Daemons (ALIEN-221).
+# App-owned pull command receiver for Containers and Daemons.
 # Deliberately light: protocol types + HTTP only. Must NOT pull the heavy
 # `server` deps (axum, object_store, cloud clients) — verify with:
 #   cargo tree -p alien-commands --no-default-features --features receiver

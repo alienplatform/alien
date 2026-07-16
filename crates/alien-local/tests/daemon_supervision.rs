@@ -1,6 +1,6 @@
 //! Integration tests for runtime-less local Daemon supervision.
 //!
-//! These prove the ALIEN-226 end state for local Daemons *without* needing Docker or a real
+//! These prove local Daemon supervision *without* needing Docker or a real
 //! OCI build: the app binary is spawned as a DIRECT child of the supervisor (no runtime
 //! wrapper), the supervisor captures the app's output, and the child's environment is the
 //! resolved one — plain bindings and receiver config present, the vault-load marker
@@ -91,7 +91,7 @@ fn parse_env(dump: &str) -> HashMap<String, String> {
 
 /// The daemon app runs as a direct child of the supervisor and its environment is the resolved
 /// one — receiver config and bindings present, the vault-load marker and worker-runtime transport
-/// signals absent. This single test covers the ALIEN-226 done-when checks a Daemon can prove
+/// signals absent. This test covers the Daemon guarantees that can be proven
 /// without Docker: process-tree parentage and the local Daemon env audit.
 #[tokio::test]
 async fn daemon_runs_as_direct_child_with_resolved_env() {

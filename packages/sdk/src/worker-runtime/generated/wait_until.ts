@@ -11,7 +11,7 @@ import { Duration } from "./google/protobuf/duration.js";
 
 export const protobufPackage = "alien_worker.wait_until";
 
-/** Request to notify runtime about a new registered task. */
+/** Request to notify the Worker runtime about a new registered task. */
 export interface NotifyTaskRegisteredRequest {
   /** Unique identifier for the application instance. */
   applicationId: string;
@@ -24,7 +24,7 @@ export interface NotifyTaskRegisteredResponse {
   success: boolean;
 }
 
-/** Request to wait for drain signal from runtime. */
+/** Request to wait for a drain signal from the Worker runtime. */
 export interface WaitForDrainSignalRequest {
   /** Unique identifier for the application instance. */
   applicationId: string;
@@ -56,7 +56,7 @@ export interface NotifyDrainCompleteRequest {
 }
 
 export interface NotifyDrainCompleteResponse {
-  /** Acknowledgment from runtime. */
+  /** Acknowledgment from the Worker runtime. */
   acknowledged: boolean;
 }
 
@@ -659,13 +659,13 @@ export const GetTaskCountResponse: MessageFns<GetTaskCountResponse> = {
   },
 };
 
-/** Service for coordinating wait_until tasks between application and runtime. */
+/** Service for coordinating wait_until tasks between a Worker application and its runtime. */
 export type WaitUntilServiceDefinition = typeof WaitUntilServiceDefinition;
 export const WaitUntilServiceDefinition = {
   name: "WaitUntilService",
   fullName: "alien_worker.wait_until.WaitUntilService",
   methods: {
-    /** Application notifies runtime that it has registered a new task. */
+    /** Application notifies the Worker runtime that it has registered a new task. */
     notifyTaskRegistered: {
       name: "NotifyTaskRegistered",
       requestType: NotifyTaskRegisteredRequest,
@@ -675,8 +675,8 @@ export const WaitUntilServiceDefinition = {
       options: {},
     },
     /**
-     * Application calls this to wait for a drain signal from runtime.
-     * This is a blocking call that returns when runtime decides it's time to drain.
+     * Application calls this to wait for a drain signal from the Worker runtime.
+     * This is a blocking call that returns when the Worker runtime decides it's time to drain.
      */
     waitForDrainSignal: {
       name: "WaitForDrainSignal",
@@ -686,7 +686,7 @@ export const WaitUntilServiceDefinition = {
       responseStream: false,
       options: {},
     },
-    /** Application notifies runtime that it has completed draining all tasks. */
+    /** Application notifies the Worker runtime that it has completed draining all tasks. */
     notifyDrainComplete: {
       name: "NotifyDrainComplete",
       requestType: NotifyDrainCompleteRequest,
@@ -695,7 +695,7 @@ export const WaitUntilServiceDefinition = {
       responseStream: false,
       options: {},
     },
-    /** Runtime can query how many tasks are currently registered (for monitoring). */
+    /** Worker runtime can query how many tasks are currently registered (for monitoring). */
     getTaskCount: {
       name: "GetTaskCount",
       requestType: GetTaskCountRequest,
@@ -708,25 +708,25 @@ export const WaitUntilServiceDefinition = {
 } as const;
 
 export interface WaitUntilServiceImplementation<CallContextExt = {}> {
-  /** Application notifies runtime that it has registered a new task. */
+  /** Application notifies the Worker runtime that it has registered a new task. */
   notifyTaskRegistered(
     request: NotifyTaskRegisteredRequest,
     context: CallContext & CallContextExt,
   ): Promise<DeepPartial<NotifyTaskRegisteredResponse>>;
   /**
-   * Application calls this to wait for a drain signal from runtime.
-   * This is a blocking call that returns when runtime decides it's time to drain.
+   * Application calls this to wait for a drain signal from the Worker runtime.
+   * This is a blocking call that returns when the Worker runtime decides it's time to drain.
    */
   waitForDrainSignal(
     request: WaitForDrainSignalRequest,
     context: CallContext & CallContextExt,
   ): Promise<DeepPartial<WaitForDrainSignalResponse>>;
-  /** Application notifies runtime that it has completed draining all tasks. */
+  /** Application notifies the Worker runtime that it has completed draining all tasks. */
   notifyDrainComplete(
     request: NotifyDrainCompleteRequest,
     context: CallContext & CallContextExt,
   ): Promise<DeepPartial<NotifyDrainCompleteResponse>>;
-  /** Runtime can query how many tasks are currently registered (for monitoring). */
+  /** Worker runtime can query how many tasks are currently registered (for monitoring). */
   getTaskCount(
     request: GetTaskCountRequest,
     context: CallContext & CallContextExt,
@@ -734,25 +734,25 @@ export interface WaitUntilServiceImplementation<CallContextExt = {}> {
 }
 
 export interface WaitUntilServiceClient<CallOptionsExt = {}> {
-  /** Application notifies runtime that it has registered a new task. */
+  /** Application notifies the Worker runtime that it has registered a new task. */
   notifyTaskRegistered(
     request: DeepPartial<NotifyTaskRegisteredRequest>,
     options?: CallOptions & CallOptionsExt,
   ): Promise<NotifyTaskRegisteredResponse>;
   /**
-   * Application calls this to wait for a drain signal from runtime.
-   * This is a blocking call that returns when runtime decides it's time to drain.
+   * Application calls this to wait for a drain signal from the Worker runtime.
+   * This is a blocking call that returns when the Worker runtime decides it's time to drain.
    */
   waitForDrainSignal(
     request: DeepPartial<WaitForDrainSignalRequest>,
     options?: CallOptions & CallOptionsExt,
   ): Promise<WaitForDrainSignalResponse>;
-  /** Application notifies runtime that it has completed draining all tasks. */
+  /** Application notifies the Worker runtime that it has completed draining all tasks. */
   notifyDrainComplete(
     request: DeepPartial<NotifyDrainCompleteRequest>,
     options?: CallOptions & CallOptionsExt,
   ): Promise<NotifyDrainCompleteResponse>;
-  /** Runtime can query how many tasks are currently registered (for monitoring). */
+  /** Worker runtime can query how many tasks are currently registered (for monitoring). */
   getTaskCount(
     request: DeepPartial<GetTaskCountRequest>,
     options?: CallOptions & CallOptionsExt,

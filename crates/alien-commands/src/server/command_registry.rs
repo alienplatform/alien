@@ -99,10 +99,8 @@ struct CommandRecord {
 /// idempotency key (`{dep}:{rid}:{command}:{key}`).
 ///
 /// An id containing `:` could forge or collide with another target's key
-/// segments, so it is rejected at the commands layer with a typed error. This
-/// is the targeted ALIEN-219 guard: only `:` is enforced here. Full
-/// `[A-Za-z0-9-_]` charset validation in alien-core (a wider blast radius) is a
-/// documented follow-up; the error message still cites the intended charset.
+/// segments, so it is rejected at the commands layer with a typed error. Only
+/// the delimiter that can forge index segments is enforced at this layer.
 pub fn validate_command_target_id(resource_id: &str) -> Result<()> {
     if resource_id.contains(':') {
         return Err(AlienError::new(ErrorData::CommandTargetIdInvalid {
@@ -129,7 +127,7 @@ pub fn validate_command_name(command: &str) -> Result<()> {
     Ok(())
 }
 
-/// Pinned ALIEN-219 target-selection rules — the single implementation both the
+/// Target-selection rules shared by both the
 /// in-memory and SQLite registries route through.
 ///
 /// - `requested = Some(id)`: the id must be well-formed (no `:`) and name an

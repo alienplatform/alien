@@ -113,7 +113,7 @@ impl Reader {
     }
 
     /// Row counts for a namespace: number of segments and total vectors
-    /// across them. Backs the `stats` command handler (ALIEN-221 example),
+    /// across them. Backs the `stats` command handler,
     /// invoked through the app-owned pull command receiver rather than an
     /// HTTP route.
     pub async fn stats(&self, namespace: &str) -> Result<StatsResponse> {

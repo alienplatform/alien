@@ -6,7 +6,7 @@
 
 * [listInventory](#listinventory)
 * [listOverview](#listoverview)
-* [listDeployments](#listdeployments) - List deployments where the specified infrastructure resource is installed.
+* [listDeployments](#listdeployments)
 * [getDeploymentDetail](#getdeploymentdetail)
 
 ## listInventory
@@ -162,8 +162,6 @@ run();
 | errors.AlienDefaultError | 4XX, 5XX                 | \*/\*                    |
 
 ## listDeployments
-
-List deployments where the specified infrastructure resource is installed.
 
 ### Example Usage
 

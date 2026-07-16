@@ -1,6 +1,6 @@
 //! Integration tests for the pull command `Receiver` against the real
 //! in-crate command server (the same `TestCommandServer` harness the
-//! ALIEN-219 integration tests use): lease over HTTP, dispatch to in-process
+//! command-routing integration tests use): lease over HTTP, dispatch to in-process
 //! handlers, submit responses through the envelope's real inline/presigned
 //! flow.
 
@@ -8,6 +8,7 @@
 
 use std::collections::HashMap;
 use std::io::Write;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
@@ -132,6 +133,118 @@ async fn receiver_round_trips_success_response() {
     assert!(budget > chrono::Utc::now(), "budget must be in the future");
     assert_eq!(target.resource_id, server.default_target.resource_id);
     assert_eq!(target.resource_type, CommandTargetType::Daemon);
+
+    shutdown.shutdown();
+    run.await
+        .expect("run task join")
+        .expect("run returns Ok on shutdown");
+}
+
+#[tokio::test]
+async fn receiver_does_not_lease_beyond_max_concurrency() {
+    let (server, env) = pull_server_and_env().await;
+
+    let calls = Arc::new(AtomicUsize::new(0));
+    let first_started = Arc::new(tokio::sync::Notify::new());
+    let release_first = Arc::new(tokio::sync::Notify::new());
+    let mut receiver = Receiver::from_env_vars(&env)
+        .expect("receiver should build from env")
+        .with_max_leases(1)
+        .with_poll_interval(POLL_INTERVAL);
+    receiver.handle("bounded", {
+        let calls = Arc::clone(&calls);
+        let first_started = Arc::clone(&first_started);
+        let release_first = Arc::clone(&release_first);
+        move |_ctx| {
+            let calls = Arc::clone(&calls);
+            let first_started = Arc::clone(&first_started);
+            let release_first = Arc::clone(&release_first);
+            async move {
+                if calls.fetch_add(1, Ordering::SeqCst) == 0 {
+                    first_started.notify_one();
+                    release_first.notified().await;
+                }
+                Ok(serde_json::json!({ "ok": true }))
+            }
+        }
+    });
+    let shutdown = receiver.shutdown_handle();
+    let run = tokio::spawn(async move { receiver.run().await });
+
+    let first = server
+        .create_command(test_inline_create_command(DEPLOYMENT_ID, "bounded"))
+        .await
+        .expect("create first");
+    let second = server
+        .create_command(test_inline_create_command(DEPLOYMENT_ID, "bounded"))
+        .await
+        .expect("create second");
+    first_started.notified().await;
+
+    tokio::time::sleep(POLL_INTERVAL * 4).await;
+    let second_while_first_active = server
+        .get_command_status(&second.command_id)
+        .await
+        .expect("second status while first active");
+    assert_eq!(
+        second_while_first_active.state,
+        CommandState::Pending,
+        "maxLeases=1 must cap total active handlers, not only one poll response"
+    );
+
+    release_first.notify_one();
+    for command_id in [&first.command_id, &second.command_id] {
+        let status = server
+            .wait_for_completion(command_id, Duration::from_secs(5))
+            .await
+            .expect("command should complete");
+        assert_eq!(status.state, CommandState::Succeeded);
+    }
+
+    shutdown.shutdown();
+    run.await
+        .expect("run task join")
+        .expect("run returns Ok on shutdown");
+}
+
+#[tokio::test]
+async fn panicked_handler_releases_receiver_capacity() {
+    let (server, env) = pull_server_and_env().await;
+
+    let calls = Arc::new(AtomicUsize::new(0));
+    let mut receiver = Receiver::from_env_vars(&env)
+        .expect("receiver should build from env")
+        .with_max_leases(1)
+        .with_poll_interval(POLL_INTERVAL);
+    receiver.handle("panic-once", {
+        let calls = Arc::clone(&calls);
+        move |_ctx| {
+            let calls = Arc::clone(&calls);
+            async move {
+                if calls.fetch_add(1, Ordering::SeqCst) == 0 {
+                    panic!("synthetic handler panic");
+                }
+                Ok(serde_json::json!({ "ok": true }))
+            }
+        }
+    });
+    let shutdown = receiver.shutdown_handle();
+    let run = tokio::spawn(async move { receiver.run().await });
+
+    server
+        .create_command(test_inline_create_command(DEPLOYMENT_ID, "panic-once"))
+        .await
+        .expect("create command whose handler panics");
+    let second = server
+        .create_command(test_inline_create_command(DEPLOYMENT_ID, "panic-once"))
+        .await
+        .expect("create command after panic");
+
+    let status = server
+        .wait_for_completion(&second.command_id, Duration::from_secs(5))
+        .await
+        .expect("receiver should continue polling after a handler panic");
+    assert_eq!(status.state, CommandState::Succeeded);
 
     shutdown.shutdown();
     run.await

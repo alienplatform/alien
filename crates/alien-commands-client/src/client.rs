@@ -70,7 +70,7 @@ struct CommandStatusResponse {
     state: String,
     #[serde(default)]
     response: Option<CommandResponseBody>,
-    /// The resolved target this command was addressed to (ALIEN-219). Carried
+    /// The resolved target this command was addressed to. Carried
     /// on the wire for observability; the polling logic keys off `state` only.
     #[serde(default)]
     #[allow(dead_code)]
@@ -543,7 +543,7 @@ impl TargetedCommands<'_> {
 
 #[cfg(test)]
 mod target_tests {
-    //! ALIEN-219: proves the client-side surface for command targets compiles
+    //! Proves the client-side surface for command targets compiles
     //! and round-trips over the wire — not the server's routing behavior
     //! (that's covered by alien-commands' integration tests).
 
@@ -564,8 +564,8 @@ mod target_tests {
     }
 
     /// The client's internal status response type deserializes a status JSON
-    /// payload that carries a resolved `target` (server-side ALIEN-219
-    /// addition), proving the generated/hand-written client type is
+    /// payload that carries a resolved `target`, proving the
+    /// generated/hand-written client type is
     /// wire-compatible with the server's `CommandStatusResponse`.
     #[test]
     fn command_status_response_deserializes_target() {
@@ -586,7 +586,7 @@ mod target_tests {
         assert_eq!(target.resource_type, alien_core::CommandTargetType::Worker);
     }
 
-    /// ALIEN-221: `CommandsClient::target(...)` presets `target_resource_id`
+    /// `CommandsClient::target(...)` presets `target_resource_id`
     /// on an otherwise-empty options value.
     #[test]
     fn target_builder_presets_target_resource_id() {
@@ -598,7 +598,7 @@ mod target_tests {
         assert_eq!(options.target_resource_id.as_deref(), Some("worker-9"));
     }
 
-    /// ALIEN-221: the builder's target wins over an explicit
+    /// The builder's target wins over an explicit
     /// `target_resource_id` the caller already set on `InvokeOptions` — a
     /// conflict here is a programmer error, not something this builder
     /// tries to reconcile at runtime (see `CommandsClient::target` docs).
@@ -617,7 +617,7 @@ mod target_tests {
         assert_eq!(options.target_resource_id.as_deref(), Some("worker-9"));
     }
 
-    /// ALIEN-221: the target builder's preset ends up in the actual JSON
+    /// The target builder's preset ends up in the actual JSON
     /// body `create()` sends, as `targetResourceId`.
     #[test]
     fn target_builder_presets_field_in_create_request_body() {

@@ -107,7 +107,6 @@ impl LocalBindingsProvider {
     /// ```no_run
     /// use alien_local::LocalBindingsProvider;
     /// use std::path::PathBuf;
-    /// # use std::sync::Arc;
     ///
     /// # fn example() -> alien_local::Result<Arc<LocalBindingsProvider>> {
     /// let state_dir = PathBuf::from("~/.alien-cli/dep_1234567890abcdef");

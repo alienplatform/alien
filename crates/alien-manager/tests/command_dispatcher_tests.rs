@@ -1,4 +1,4 @@
-//! ALIEN-219: DefaultCommandDispatcher routes by the envelope's target.
+//! DefaultCommandDispatcher routes by the envelope's target.
 //!
 //! The dispatcher no longer scans the release stack for a commands-enabled
 //! worker — the envelope names the exact Worker resource, and only Worker

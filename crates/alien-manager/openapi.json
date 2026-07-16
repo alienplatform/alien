@@ -13968,7 +13968,7 @@
       },
       "ResourceRef": {
         "type": "object",
-        "description": "New ResourceRef that works with any resource type.\nThis can eventually replace the enum-based ResourceRef for full extensibility.",
+        "description": "Reference to a resource by its stable id and resource type.",
         "required": [
           "type",
           "id"

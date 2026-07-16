@@ -241,7 +241,7 @@ async fn lease_and_dispatch_target(
     target: &PushTarget,
     dispatcher: &dyn CommandDispatcher,
 ) -> Result<usize, String> {
-    // ALIEN-219: `LeaseRequest.target` names the specific push-capable Worker
+    // `LeaseRequest.target` names the specific push-capable Worker
     // this lease is for; the manager scans only that target's pending index.
     let lease_request = LeaseRequest {
         target: CommandTarget::new(target.resource_id.clone(), CommandTargetType::Worker),

@@ -622,7 +622,7 @@ mod tests {
         );
     }
 
-    // ---- ALIEN-217 multi-process-safety proofs ----
+    // ---- Multi-process-safety proofs ----
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
     async fn test_conditional_put_atomicity_across_handles() {

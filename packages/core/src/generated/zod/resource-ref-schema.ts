@@ -7,13 +7,13 @@ import * as z from "zod";
 import { ResourceTypeSchema } from "./resource-type-schema.js";
 
 /**
- * @description New ResourceRef that works with any resource type.\nThis can eventually replace the enum-based ResourceRef for full extensibility.
+ * @description Reference to a resource by its stable id and resource type.
  */
 export const ResourceRefSchema = z.object({
     "id": z.string(),
 get "type"(){
                 return ResourceTypeSchema.describe("Resource type identifier that determines the specific kind of resource. This field is used for polymorphic deserialization and resource-specific behavior.")
               }
-    }).describe("New ResourceRef that works with any resource type.\nThis can eventually replace the enum-based ResourceRef for full extensibility.")
+    }).describe("Reference to a resource by its stable id and resource type.")
 
 export type ResourceRef = z.infer<typeof ResourceRefSchema>

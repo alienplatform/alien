@@ -818,9 +818,9 @@ impl DeploymentLoop {
         }
 
         // 3b. Container/Daemon command receiver env — injected on EVERY platform.
-        // Unlike workers, Containers and Daemons always deliver commands via Pull
-        // (ALIEN-219 delivery rule: Container/Daemon → Pull regardless of platform),
-        // so the receiver contract must reach them everywhere, not just K8s/Local.
+        // Unlike workers, Containers and Daemons always deliver commands via
+        // Pull, regardless of platform, so the receiver contract must reach
+        // them everywhere, not just K8s/Local.
         // The Worker-only gate above is deliberately NOT applied here: its
         // justification (cloud *workers* use platform-native push) does not hold
         // for Container/Daemon receivers. The snapshot reaches Container/Daemon env
@@ -892,9 +892,9 @@ fn worker_commands_push_env_vars(
 /// Builds the command *receiver* environment variables (`ALIEN_COMMANDS_URL`,
 /// `ALIEN_COMMANDS_TOKEN`, `ALIEN_COMMANDS_TARGET_RESOURCE_ID`,
 /// `ALIEN_COMMANDS_TARGET_RESOURCE_TYPE`), each scoped via `target_resources` to a
-/// single command-enabled Container or Daemon. Unlike Worker push auth,
-/// this is injected on every platform: Container/Daemon always deliver via Pull
-/// (ALIEN-219). `ALIEN_DEPLOYMENT_ID` is not re-emitted here — it is already
+/// single command-enabled Container or Daemon. Unlike Worker push auth, this is
+/// injected on every platform because Container/Daemon always deliver via Pull.
+/// `ALIEN_DEPLOYMENT_ID` is not re-emitted here — it is already
 /// injected deployment-wide above. The commands token comes from the deployment
 /// record — the manager is the sole injector of `ALIEN_COMMANDS_TOKEN`.
 fn commands_receiver_env_vars(

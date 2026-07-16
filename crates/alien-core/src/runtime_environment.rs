@@ -42,8 +42,8 @@ pub const ENV_ALIEN_COMMANDS_DRAIN_TIMEOUT_MS: &str = "ALIEN_COMMANDS_DRAIN_TIME
 /// Identifies which stack resource an app-owned command receiver leases for.
 pub const ENV_ALIEN_COMMANDS_TARGET_RESOURCE_ID: &str = "ALIEN_COMMANDS_TARGET_RESOURCE_ID";
 /// Base URL of the command server API an app-owned pull `Receiver`
-/// (Container/Daemon) leases commands from. Pinned by the receiver contract
-/// (ALIEN-221) — the TypeScript receiver reads the same variable. Missing or
+/// (Container/Daemon) leases commands from. Pinned by the receiver contract;
+/// the TypeScript receiver reads the same variable. Missing or
 /// invalid values fail fast with `COMMAND_RECEIVER_CONFIG_INVALID`. Injected
 /// by the manager and operator controllers, scoped per command-enabled
 /// resource.
@@ -52,7 +52,7 @@ pub const ENV_ALIEN_COMMANDS_URL: &str = "ALIEN_COMMANDS_URL";
 /// `daemon`). Lease requests require a typed target and a receiver must not
 /// guess it (the worker runtime hardcodes `worker`; a Container/Daemon
 /// receiver gets its type injected). Companion to
-/// [`ENV_ALIEN_COMMANDS_TARGET_RESOURCE_ID`]; ALIEN-221.
+/// [`ENV_ALIEN_COMMANDS_TARGET_RESOURCE_ID`].
 pub const ENV_ALIEN_COMMANDS_TARGET_RESOURCE_TYPE: &str = "ALIEN_COMMANDS_TARGET_RESOURCE_TYPE";
 /// Base URL of the deployment's manager. The client-side minting-backed
 /// credential resolver ([`alien-bindings`]) posts to `{ALIEN_MANAGER_URL}/v1/credentials/mint`

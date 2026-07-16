@@ -92,7 +92,7 @@ pub(crate) enum Commands {
     State,
     /// How the command is delivered to its target (Push/Pull).
     ///
-    /// ALIEN-219 end-state: this is the delivery-mode column. The physical
+    /// This is the delivery-mode column. The physical
     /// column keeps its historical name `deployment_model` (via the `iden`
     /// override) so no data migration is needed — `DeploymentModel` and
     /// `CommandDeliveryMode` both serialize to the same `"push"`/`"pull"`
@@ -109,7 +109,7 @@ pub(crate) enum Commands {
     RequestSizeBytes,
     ResponseSizeBytes,
     Error,
-    /// The command's resolved target resource id (ALIEN-219). NULL on rows
+    /// The command's resolved target resource id. NULL on rows
     /// written before this migration (legacy deployment-scoped commands).
     TargetResourceId,
     /// The command's resolved target resource type (worker/container/daemon).
@@ -339,7 +339,7 @@ pub async fn run_migrations(db: &SqliteDatabase) -> Result<(), AlienError> {
         "ALTER TABLE releases ADD COLUMN project_id TEXT NOT NULL DEFAULT 'default'",
         "ALTER TABLE deployment_groups ADD COLUMN workspace_id TEXT NOT NULL DEFAULT 'default'",
         "ALTER TABLE deployment_groups ADD COLUMN project_id TEXT NOT NULL DEFAULT 'default'",
-        // ALIEN-219: command target columns. Nullable — legacy rows written
+        // Command target columns. Nullable — legacy rows written
         // before this migration carry NULL and are treated as pre-target
         // commands (readable in status, never leasable/dispatchable).
         "ALTER TABLE commands ADD COLUMN target_resource_id TEXT",

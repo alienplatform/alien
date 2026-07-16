@@ -1,18 +1,16 @@
 //! BYOC database example: writer/reader containers over durable object
 //! storage (see the crate README for the architecture).
 //!
-//! ## Command receiver gating (ALIEN-221)
+//! ## Command receiver gating
 //!
 //! The reader container also demonstrates the app-owned pull command
 //! receiver (`alien_commands::Receiver`): it registers a `stats` handler and
-//! leases commands for itself alongside serving its HTTP API. Because the
-//! receiver's environment (`ALIEN_COMMANDS_URL` and friends) isn't injected
-//! by the platform until a later task, [`spawn_command_receiver`] treats a
-//! missing/invalid receiver environment as "not configured" rather than a
-//! fatal error: it logs and returns, leaving the HTTP API fully functional.
-//! This keeps the example runnable today and automatically picks up real
-//! command leasing once the platform wires injection — no code change
-//! needed here.
+//! leases commands for itself alongside serving its HTTP API when command
+//! receiving is enabled for the resource. A deployment with no
+//! `ALIEN_COMMANDS_*` variables runs the HTTP API without a receiver. Once any
+//! receiver variable is present, the complete configuration is required and
+//! receiver termination stops the process rather than leaving a healthy HTTP
+//! API that can no longer process commands.
 
 mod error;
 mod handlers;
@@ -33,7 +31,7 @@ use axum::{
     Router,
 };
 use clap::Parser;
-use std::{net::SocketAddr, str::FromStr, sync::Arc};
+use std::{collections::HashMap, future::Future, net::SocketAddr, str::FromStr, sync::Arc};
 use tower_http::{cors::CorsLayer, trace::TraceLayer};
 use tracing_subscriber::{fmt, layer::SubscriberExt, util::SubscriberInitExt, EnvFilter};
 
@@ -122,30 +120,36 @@ async fn main() -> Result<()> {
     tracing::info!("Storage binding loaded: {}", storage.get_url());
 
     // Create router based on mode
-    let app = match mode {
+    let (app, command_receiver) = match mode {
         Mode::Writer => {
             let writer = Arc::new(Writer::new(storage));
             let state = WriterState { writer };
 
-            Router::new()
-                .route("/health", get(health))
-                .route("/api/v1/namespaces/{namespace}/upsert", post(upsert))
-                .with_state(state)
+            (
+                Router::new()
+                    .route("/health", get(health))
+                    .route("/api/v1/namespaces/{namespace}/upsert", post(upsert))
+                    .with_state(state),
+                None,
+            )
         }
         Mode::Reader => {
             let reader = Arc::new(Reader::new(storage));
-
-            // Spawns as a background task and returns immediately; see the
-            // module doc note above for why a missing receiver environment
-            // is not fatal here.
-            spawn_command_receiver(reader.clone());
+            let env = std::env::vars().collect();
+            let mut command_receiver = command_receiver_from_env(&env)?;
+            if let Some(receiver) = &mut command_receiver {
+                register_stats_handler(receiver, reader.clone());
+            }
 
             let state = ReaderState { reader };
 
-            Router::new()
-                .route("/health", get(health))
-                .route("/api/v1/namespaces/{namespace}/query", post(query))
-                .with_state(state)
+            (
+                Router::new()
+                    .route("/health", get(health))
+                    .route("/api/v1/namespaces/{namespace}/query", post(query))
+                    .with_state(state),
+                command_receiver,
+            )
         }
     };
 
@@ -162,37 +166,42 @@ async fn main() -> Result<()> {
         .await
         .map_err(|e| Error::Configuration(format!("Failed to bind to {}: {}", addr, e)))?;
 
-    axum::serve(listener, app)
-        .await
-        .map_err(|e| Error::Generic(format!("Server error: {}", e)))?;
+    let server = async move {
+        axum::serve(listener, app)
+            .await
+            .map_err(|error| Error::Generic(format!("Server error: {error}")))
+    };
+    let command_receiver = command_receiver.map(|receiver| async move {
+        receiver
+            .run()
+            .await
+            .map_err(|error| Error::CommandReceiver(error.to_string()))
+    });
 
-    Ok(())
+    supervise_services(server, command_receiver).await
 }
 
-/// Registers the `stats` command handler and starts the pull command
-/// receiver as a background task, alongside the axum server started by
-/// `main`.
+/// Builds the pull command receiver when command configuration is present.
 ///
-/// Gated (see the module doc note): if the receiver's environment
-/// (`ALIEN_COMMANDS_URL` and friends) is absent or invalid,
-/// `Receiver::from_env()` returns an error, which is logged and swallowed
-/// here rather than propagated — the container keeps running its HTTP API
-/// either way. This keeps the example runnable before the platform wires
-/// receiver-env injection for this resource (a later ALIEN-221 task); once
-/// injection lands, the same container starts leasing commands with no
-/// code change.
-fn spawn_command_receiver(reader: Arc<Reader>) {
-    let mut receiver = match alien_commands::Receiver::from_env() {
-        Ok(receiver) => receiver,
-        Err(error) => {
-            tracing::info!(
-                %error,
-                "Command receiver environment not configured; skipping receiver startup"
-            );
-            return;
-        }
-    };
+/// No `ALIEN_COMMANDS_*` variables means commands are intentionally disabled.
+/// If any such variable is injected, the receiver validates the complete
+/// configuration and startup fails on missing or invalid values.
+fn command_receiver_from_env(
+    env: &HashMap<String, String>,
+) -> Result<Option<alien_commands::Receiver>> {
+    if !env.keys().any(|key| key.starts_with("ALIEN_COMMANDS_")) {
+        tracing::info!("Command receiver not configured; skipping receiver startup");
+        return Ok(None);
+    }
 
+    let receiver = alien_commands::Receiver::from_env_vars(env).map_err(|error| {
+        Error::Configuration(format!("Invalid command receiver configuration: {error}"))
+    })?;
+
+    Ok(Some(receiver))
+}
+
+fn register_stats_handler(receiver: &mut alien_commands::Receiver, reader: Arc<Reader>) {
     receiver.handle("stats", move |ctx| {
         let reader = reader.clone();
         async move {
@@ -201,10 +210,104 @@ fn spawn_command_receiver(reader: Arc<Reader>) {
             Ok(stats)
         }
     });
+}
 
-    tokio::spawn(async move {
-        if let Err(error) = receiver.run().await {
-            tracing::error!(%error, "Command receiver stopped with an error");
-        }
-    });
+/// Runs the HTTP server and optional receiver as one service. If the receiver
+/// terminates, the process fails instead of continuing with a command-dead
+/// health endpoint.
+async fn supervise_services<Server, CommandReceiver>(
+    server: Server,
+    command_receiver: Option<CommandReceiver>,
+) -> Result<()>
+where
+    Server: Future<Output = Result<()>>,
+    CommandReceiver: Future<Output = Result<()>>,
+{
+    let Some(command_receiver) = command_receiver else {
+        return server.await;
+    };
+
+    tokio::select! {
+        result = server => result,
+        result = command_receiver => match result {
+            Ok(()) => Err(Error::CommandReceiver(
+                "receiver stopped unexpectedly".to_string(),
+            )),
+            Err(error) => Err(error),
+        },
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn absent_command_environment_disables_receiver() {
+        let env = HashMap::from([(
+            "ALIEN_DEPLOYMENT_ID".to_string(),
+            "deployment-without-commands".to_string(),
+        )]);
+
+        let receiver = command_receiver_from_env(&env).expect("absent optional config is valid");
+
+        assert!(receiver.is_none());
+    }
+
+    #[test]
+    fn partial_command_environment_fails_startup() {
+        let env = HashMap::from([(
+            "ALIEN_COMMANDS_URL".to_string(),
+            "https://commands.example.com/v1/".to_string(),
+        )]);
+
+        let error =
+            command_receiver_from_env(&env).expect_err("partial command config must fail startup");
+
+        assert!(
+            matches!(error, Error::Configuration(message) if message.contains("ALIEN_COMMANDS_TOKEN"))
+        );
+    }
+
+    #[test]
+    fn invalid_command_environment_fails_startup() {
+        let env = HashMap::from([
+            ("ALIEN_COMMANDS_URL".to_string(), "not a URL".to_string()),
+            ("ALIEN_COMMANDS_TOKEN".to_string(), "token".to_string()),
+            ("ALIEN_DEPLOYMENT_ID".to_string(), "deployment".to_string()),
+            (
+                "ALIEN_COMMANDS_TARGET_RESOURCE_ID".to_string(),
+                "reader".to_string(),
+            ),
+            (
+                "ALIEN_COMMANDS_TARGET_RESOURCE_TYPE".to_string(),
+                "container".to_string(),
+            ),
+        ]);
+
+        let error =
+            command_receiver_from_env(&env).expect_err("invalid command config must fail startup");
+
+        assert!(
+            matches!(error, Error::Configuration(message) if message.contains("ALIEN_COMMANDS_URL"))
+        );
+    }
+
+    #[tokio::test]
+    async fn terminal_receiver_error_fails_the_service() {
+        let server = std::future::pending::<Result<()>>();
+        let receiver = async {
+            Err(Error::CommandReceiver(
+                "terminal receiver failure".to_string(),
+            ))
+        };
+
+        let error = supervise_services(server, Some(receiver))
+            .await
+            .expect_err("receiver failure must stop the service");
+
+        assert!(
+            matches!(error, Error::CommandReceiver(message) if message == "terminal receiver failure")
+        );
+    }
 }

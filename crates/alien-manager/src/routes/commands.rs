@@ -84,7 +84,7 @@ pub fn router() -> Router<AppState> {
 ///
 /// Auth: Admin or DeploymentGroup token (must own the target deployment's group).
 ///
-/// ALIEN-219: authorization is intentionally deployment-scoped. There is no
+/// Authorization is intentionally deployment-scoped. There is no
 /// per-resource auth primitive (the finest auth grain is the deployment), so
 /// naming a `targetResourceId` grants no extra access. Target selection is
 /// validated server-side by the registry as an EXISTENCE/CAPABILITY check

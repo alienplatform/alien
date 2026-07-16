@@ -1,6 +1,6 @@
 /**
- * Small static guard for the public TypeScript package boundaries in
- * ALIEN-213. Runtime, declaration, tarball, and native-embed behavior belongs
+ * Small static guard for the public TypeScript package boundaries.
+ * Runtime, declaration, tarball, and native-embed behavior belongs
  * to the executable package-layout consumer; this file checks only rules a
  * source/manifest scan can prove reliably.
  */

@@ -578,7 +578,7 @@ mod tests {
     }
 
     // ===============================================
-    // TARGET ROUTING (ALIEN-219)
+    // TARGET ROUTING
     // ===============================================
 
     /// Status responses and lease envelopes carry the resolved target

@@ -1832,7 +1832,7 @@ mod tests {
 
     #[test]
     fn command_receiver_token_flows_through_secret_plan_scoped_per_resource() {
-        // ALIEN-222: the receiver's `ALIEN_COMMANDS_TOKEN` is a Secret-kind env
+        // The receiver's `ALIEN_COMMANDS_TOKEN` is a Secret-kind env
         // var scoped per Container/Daemon. `applicable_secret_environment_variables`
         // is what drives `KubernetesEnvSecretPlan.keys` → each key rendered as a
         // `secretKeyRef` in the container/daemon manifests. This asserts the token
@@ -1921,7 +1921,7 @@ mod tests {
         assert_eq!(ports[0].target_port, Some(IntOrString::Int(3000)));
     }
 
-    // ── Typed manifest tests (ALIEN-227) ────────────────────────────
+    // ── Typed manifest tests ─────────────────────────────────────────
     //
     // These build the actual k8s-openapi objects the controller submits and
     // assert on the typed fields — no string snapshots.

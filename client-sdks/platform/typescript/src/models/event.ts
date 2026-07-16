@@ -1070,12 +1070,12 @@ export type DataBuildingResource = {
   type: "BuildingResource";
 };
 
-export type DataDownloadingAlienRuntime = {
+export type DataDownloadingAlienWorkerRuntime = {
   /**
    * Target triple for the runtime
    */
   targetTriple: string;
-  type: "DownloadingAlienRuntime";
+  type: "DownloadingAlienWorkerRuntime";
   /**
    * URL being downloaded from
    */
@@ -1115,7 +1115,7 @@ export type EventDataUnion =
   | DataFinished
   | DataBuildingStack
   | DataRunningPreflights
-  | DataDownloadingAlienRuntime
+  | DataDownloadingAlienWorkerRuntime
   | DataBuildingResource
   | DataBuildingImage
   | DataPushingImage
@@ -1299,7 +1299,7 @@ export type Event = {
     | DataFinished
     | DataBuildingStack
     | DataRunningPreflights
-    | DataDownloadingAlienRuntime
+    | DataDownloadingAlienWorkerRuntime
     | DataBuildingResource
     | DataBuildingImage
     | DataPushingImage
@@ -2500,22 +2500,22 @@ export function dataBuildingResourceFromJSON(
 }
 
 /** @internal */
-export const DataDownloadingAlienRuntime$inboundSchema: z.ZodType<
-  DataDownloadingAlienRuntime,
+export const DataDownloadingAlienWorkerRuntime$inboundSchema: z.ZodType<
+  DataDownloadingAlienWorkerRuntime,
   unknown
 > = z.object({
   targetTriple: z.string(),
-  type: z.literal("DownloadingAlienRuntime"),
+  type: z.literal("DownloadingAlienWorkerRuntime"),
   url: z.string(),
 });
 
-export function dataDownloadingAlienRuntimeFromJSON(
+export function dataDownloadingAlienWorkerRuntimeFromJSON(
   jsonString: string,
-): SafeParseResult<DataDownloadingAlienRuntime, SDKValidationError> {
+): SafeParseResult<DataDownloadingAlienWorkerRuntime, SDKValidationError> {
   return safeParse(
     jsonString,
-    (x) => DataDownloadingAlienRuntime$inboundSchema.parse(JSON.parse(x)),
-    `Failed to parse 'DataDownloadingAlienRuntime' from JSON`,
+    (x) => DataDownloadingAlienWorkerRuntime$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'DataDownloadingAlienWorkerRuntime' from JSON`,
   );
 }
 
@@ -2599,7 +2599,7 @@ export const EventDataUnion$inboundSchema: z.ZodType<EventDataUnion, unknown> =
     z.lazy(() => DataFinished$inboundSchema),
     z.lazy(() => DataBuildingStack$inboundSchema),
     z.lazy(() => DataRunningPreflights$inboundSchema),
-    z.lazy(() => DataDownloadingAlienRuntime$inboundSchema),
+    z.lazy(() => DataDownloadingAlienWorkerRuntime$inboundSchema),
     z.lazy(() => DataBuildingResource$inboundSchema),
     z.lazy(() => DataBuildingImage$inboundSchema),
     z.lazy(() => DataPushingImage$inboundSchema),
@@ -2763,7 +2763,7 @@ export const Event$inboundSchema: z.ZodType<Event, unknown> = z.object({
     z.lazy(() => DataFinished$inboundSchema),
     z.lazy(() => DataBuildingStack$inboundSchema),
     z.lazy(() => DataRunningPreflights$inboundSchema),
-    z.lazy(() => DataDownloadingAlienRuntime$inboundSchema),
+    z.lazy(() => DataDownloadingAlienWorkerRuntime$inboundSchema),
     z.lazy(() => DataBuildingResource$inboundSchema),
     z.lazy(() => DataBuildingImage$inboundSchema),
     z.lazy(() => DataPushingImage$inboundSchema),

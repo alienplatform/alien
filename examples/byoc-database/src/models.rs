@@ -70,7 +70,7 @@ pub struct HealthResponse {
     pub status: String,
 }
 
-/// Request for the `stats` command handler (ALIEN-221 example): row counts
+/// Request for the `stats` command handler: row counts
 /// for a namespace, driven through the app-owned pull command receiver
 /// rather than the HTTP API.
 #[derive(Debug, Serialize, Deserialize)]

@@ -29,7 +29,7 @@ get "healthCheck"(){
               },
 "id": z.string(),
 get "links"(){
-                return z.array(ResourceRefSchema.describe("New ResourceRef that works with any resource type.\nThis can eventually replace the enum-based ResourceRef for full extensibility."))
+                return z.array(ResourceRefSchema.describe("Reference to a resource by its stable id and resource type."))
               },
 get "memory"(){
                 return ResourceSpecSchema.describe("Resource specification with min/desired values.").optional()

@@ -110,7 +110,7 @@ impl SqliteCommandRegistry {
             request_size_bytes: request_size.map(|n| n as u64),
             response_size_bytes: response_size.map(|n| n as u64),
             error: p.optional_json(12, "error").map_err(to_cmd_err)?,
-            // ALIEN-219: status is a read-only path, so it tolerates legacy
+            // Status is a read-only path, so it tolerates legacy
             // rows written before target columns existed (NULL target). Such
             // rows can never be leased or dispatched (they are absent from the
             // per-target pending index), so a synthesized deployment-scoped
@@ -130,7 +130,7 @@ impl SqliteCommandRegistry {
         let delivery_mode_str: String = p.string(4, "delivery_mode").map_err(to_cmd_err)?;
         let command_id = p.string(0, "id").map_err(to_cmd_err)?;
 
-        // ALIEN-219: envelope data feeds the lease/dispatch path, which must
+        // Envelope data feeds the lease/dispatch path, which must
         // never deliver to the wrong resource. A legacy row without a target
         // (NULL columns) cannot be safely dispatched, so we fail loudly rather
         // than synthesize a target. In practice such rows are unreachable here
@@ -141,7 +141,7 @@ impl SqliteCommandRegistry {
             .ok_or_else(|| {
                 alien_error::AlienError::new(CommandErrorData::Other {
                     message: format!(
-                        "Command '{}' predates ALIEN-219 target columns and cannot be \
+                        "Command '{}' predates command-target columns and cannot be \
                          leased or dispatched (no resolved target)",
                         command_id
                     ),
@@ -318,7 +318,7 @@ impl CommandRegistry for SqliteCommandRegistry {
         // the resolved target; it is stored in the delivery-mode column (whose
         // physical name is still `deployment_model` — same "push"/"pull"
         // strings). The resolved target's id and type are stored in the
-        // dedicated ALIEN-219 columns.
+        // dedicated command-target columns.
         let delivery_mode_str = serialize_enum(&target.delivery_mode);
         let target_type_str = serialize_enum(&target.target.resource_type);
 
@@ -568,7 +568,7 @@ fn serialize_enum<T: serde::Serialize>(value: &T) -> String {
 }
 
 /// Parse the target columns into a [`CommandTarget`], or `None` for a legacy
-/// row that predates ALIEN-219 (NULL/empty `target_resource_id`).
+/// row that predates command-target columns (NULL/empty `target_resource_id`).
 fn parse_target_columns(
     p: &RowParser,
     id_idx: usize,
@@ -718,7 +718,7 @@ mod tests {
         }
     }
 
-    /// A pre-ALIEN-219 command row has NULL target columns. Status reads must
+    /// A legacy command row has NULL target columns. Status reads must
     /// tolerate it (read-only path), while envelope/lease reads must fail
     /// loudly rather than synthesize a target that could misdeliver.
     #[tokio::test]
@@ -741,7 +741,7 @@ mod tests {
         // Envelope/lease read fails loudly — never synthesizes a target.
         let err = reg.get_command_metadata("legacy-cmd").await.unwrap_err();
         assert!(
-            err.message.contains("predates ALIEN-219"),
+            err.message.contains("predates command-target columns"),
             "expected a loud legacy error, got: {}",
             err.message
         );

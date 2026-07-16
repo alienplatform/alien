@@ -1466,10 +1466,7 @@ export type SyncAcquireResponseDeploymentCurrentReleaseConfig = {
 };
 
 /**
- * New ResourceRef that works with any resource type.
- *
- * @remarks
- * This can eventually replace the enum-based ResourceRef for full extensibility.
+ * Reference to a resource by its stable id and resource type.
  */
 export type SyncAcquireResponseDeploymentCurrentReleaseDependency = {
   id: string;
@@ -3287,10 +3284,7 @@ export type SyncAcquireResponseDeploymentPreparedStackConfig = {
 };
 
 /**
- * New ResourceRef that works with any resource type.
- *
- * @remarks
- * This can eventually replace the enum-based ResourceRef for full extensibility.
+ * Reference to a resource by its stable id and resource type.
  */
 export type SyncAcquireResponseDeploymentPreparedStackDependency = {
   id: string;
@@ -3498,10 +3492,7 @@ export type SyncAcquireResponseDeploymentControllerPlatformUnion =
   | any;
 
 /**
- * New ResourceRef that works with any resource type.
- *
- * @remarks
- * This can eventually replace the enum-based ResourceRef for full extensibility.
+ * Reference to a resource by its stable id and resource type.
  */
 export type SyncAcquireResponseDeploymentStackStateDependency = {
   id: string;
@@ -5259,10 +5250,7 @@ export type SyncAcquireResponseDeploymentTargetReleaseConfig = {
 };
 
 /**
- * New ResourceRef that works with any resource type.
- *
- * @remarks
- * This can eventually replace the enum-based ResourceRef for full extensibility.
+ * Reference to a resource by its stable id and resource type.
  */
 export type SyncAcquireResponseDeploymentTargetReleaseDependency = {
   id: string;

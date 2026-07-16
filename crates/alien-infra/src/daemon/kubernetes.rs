@@ -748,7 +748,7 @@ impl KubernetesDaemonController {
 
         // Command-enabled Daemons no longer get `ALIEN_TRANSPORT=passthrough`.
         // Their receiver config (`ALIEN_COMMANDS_*`) is injected per-resource into
-        // `config.environment` by the manager/operator snapshot (ALIEN-222); the
+        // `config.environment` by the manager/operator snapshot; the
         // `ALIEN_COMMANDS_TOKEN` Secret is projected via secretKeyRef like any
         // other resource secret (handled below).
 

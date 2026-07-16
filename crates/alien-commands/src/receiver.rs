@@ -477,13 +477,14 @@ impl Receiver {
     ///
     /// Polls `POST {url}/commands/leases` every poll interval, dispatches
     /// each leased command to its handler concurrently, and submits
-    /// responses. Transient lease errors are logged and retried on the next
-    /// interval. Returns after [`ShutdownHandle::shutdown`]: no new lease
-    /// poll starts once draining begins (a poll already in flight still
-    /// completes and its leases are processed). In-flight commands may finish
-    /// during the configured drain timeout; after it expires, remaining
-    /// handlers are cancelled and their leases are released. See the module
-    /// docs' "Shutdown" section for the precise semantics.
+    /// responses. Retryable lease errors are logged and retried on the next
+    /// interval; non-retryable errors terminate the receiver. Returns after
+    /// [`ShutdownHandle::shutdown`]: no new lease poll starts once draining
+    /// begins (a poll already in flight still completes and its leases are
+    /// processed). In-flight commands may finish during the configured drain
+    /// timeout; after it expires, remaining handlers are cancelled and their
+    /// leases are released. See the module docs' "Shutdown" section for the
+    /// precise semantics.
     pub async fn run(&self) -> Result<()> {
         info!(
             endpoint = %self.lease_client.endpoint(),
@@ -497,15 +498,32 @@ impl Receiver {
         let mut active = HashMap::<String, ActiveLease>::new();
         let mut next_poll = self.poll_interval;
 
-        loop {
+        let terminal_error = loop {
             if self.shutdown.is_cancelled() {
-                break;
+                break None;
+            }
+
+            // Completed handlers free capacity for the next lease request.
+            while let Some(result) = in_flight.try_join_next() {
+                if let Ok((command_id, lease_id)) = result {
+                    remove_active_lease(&mut active, &command_id, &lease_id);
+                }
             }
 
             let mut sleep_for = next_poll;
-            match self.acquire_leases().await {
+            let available = available_lease_capacity(self.max_leases, active.len());
+            let leases = if available == 0 {
+                sleep_for = self.poll_interval;
+                next_poll = self.poll_interval;
+                Ok(Vec::new())
+            } else {
+                self.acquire_leases(available).await
+            };
+            match leases {
                 Ok(leases) => {
-                    next_poll = if leases.is_empty() {
+                    next_poll = if available == 0 {
+                        self.poll_interval
+                    } else if leases.is_empty() {
                         self.next_backoff(next_poll)
                     } else {
                         sleep_for = self.poll_interval;
@@ -539,23 +557,32 @@ impl Receiver {
                         let lease_client = self.lease_client.clone();
                         let token_source = self.token_source.clone();
                         in_flight.spawn(async move {
-                            process_receiver_lease(
+                            let processing = tokio::spawn(process_receiver_lease(
                                 handler,
                                 lease,
                                 target,
                                 cancellation,
                                 lease_client,
                                 token_source,
-                            )
-                            .await;
+                            ));
+                            if let Err(error) = processing.await {
+                                warn!(
+                                    %command_id,
+                                    %lease_id,
+                                    panicked = error.is_panic(),
+                                    cancelled = error.is_cancelled(),
+                                    "Command handler task terminated unexpectedly"
+                                );
+                            }
                             (command_id, lease_id)
                         });
                     }
                 }
-                Err(e) => {
-                    warn!(error = %e, "Failed to acquire command leases, will retry");
+                Err(error) if error.retryable => {
+                    warn!(%error, "Failed to acquire command leases, will retry");
                     next_poll = self.next_backoff(next_poll);
                 }
+                Err(error) => break Some(error),
             }
 
             // Reap finished commands so the set doesn't grow unbounded.
@@ -566,10 +593,10 @@ impl Receiver {
             }
 
             tokio::select! {
-                _ = self.shutdown.cancelled() => break,
+                _ = self.shutdown.cancelled() => break None,
                 _ = tokio::time::sleep(self.with_jitter(sleep_for)) => {}
             }
-        }
+        };
 
         if !in_flight.is_empty() {
             info!(
@@ -601,22 +628,22 @@ impl Receiver {
         }
 
         info!("Command receiver stopped");
-        Ok(())
+        terminal_error.map_or(Ok(()), Err)
     }
 
     /// Build the lease request this receiver sends. Pure (no I/O) so the
     /// request shape is directly unit-testable.
-    fn build_lease_request(&self) -> LeaseRequest {
+    fn build_lease_request(&self, max_leases: usize) -> LeaseRequest {
         LeaseRequest {
             deployment_id: self.deployment_id.clone(),
             target: self.target.clone(),
-            max_leases: self.max_leases,
+            max_leases,
             lease_seconds: self.lease_seconds,
         }
     }
 
-    async fn acquire_leases(&self) -> Result<Vec<LeaseInfo>> {
-        let request = self.build_lease_request();
+    async fn acquire_leases(&self, max_leases: usize) -> Result<Vec<LeaseInfo>> {
+        let request = self.build_lease_request(max_leases);
         let token = self.token_source.read(false).await?;
         let result = self.lease_client.acquire_with_token(&request, &token).await;
         if result
@@ -666,6 +693,10 @@ fn remove_active_lease(
     {
         active.remove(command_id);
     }
+}
+
+fn available_lease_capacity(max_leases: usize, active_leases: usize) -> usize {
+    max_leases.saturating_sub(active_leases)
 }
 
 async fn release_lease_with_rotation(
@@ -1100,6 +1131,34 @@ mod tests {
         std::fs::remove_file(path).expect("remove token file");
     }
 
+    #[tokio::test]
+    async fn run_returns_terminal_token_file_error() {
+        let path = std::env::temp_dir().join(format!(
+            "alien-command-token-missing-{}-{}",
+            std::process::id(),
+            SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .expect("clock after epoch")
+                .as_nanos()
+        ));
+        let mut env = full_env();
+        env.remove(ENV_ALIEN_COMMANDS_TOKEN);
+        env.insert(
+            ENV_ALIEN_COMMANDS_TOKEN_FILE.to_string(),
+            path.display().to_string(),
+        );
+        let receiver = Receiver::from_env_vars(&env).expect("valid file-token config");
+
+        let error = receiver
+            .run()
+            .await
+            .expect_err("a missing token file is a terminal configuration error");
+
+        assert_eq!(error.code, "COMMAND_RECEIVER_CONFIG_INVALID");
+        assert!(!error.retryable);
+        assert!(error.message.contains("Failed to read command token file"));
+    }
+
     #[test]
     fn env_tunables_parse_and_builder_overrides_win() {
         let mut env = full_env();
@@ -1258,14 +1317,22 @@ mod tests {
     }
 
     #[test]
-    fn lease_request_carries_typed_target_and_defaults() {
+    fn lease_request_carries_typed_target_and_available_capacity() {
         let receiver = Receiver::from_env_vars(&full_env()).expect("valid env");
-        let request = receiver.build_lease_request();
+        let request = receiver.build_lease_request(2);
         assert_eq!(request.deployment_id, "dep-123");
         assert_eq!(request.target.resource_id, "agent");
         assert_eq!(request.target.resource_type, CommandTargetType::Daemon);
-        assert_eq!(request.max_leases, DEFAULT_MAX_LEASES);
+        assert_eq!(request.max_leases, 2);
         assert_eq!(request.lease_seconds, DEFAULT_LEASE_SECONDS);
+    }
+
+    #[test]
+    fn active_leases_limit_future_poll_capacity() {
+        assert_eq!(available_lease_capacity(3, 0), 3);
+        assert_eq!(available_lease_capacity(3, 2), 1);
+        assert_eq!(available_lease_capacity(3, 3), 0);
+        assert_eq!(available_lease_capacity(3, 4), 0);
     }
 
     #[test]

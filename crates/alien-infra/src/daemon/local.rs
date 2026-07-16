@@ -128,7 +128,7 @@ impl LocalDaemonController {
 
         // Command-enabled Daemons no longer get `ALIEN_TRANSPORT=passthrough`.
         // Their receiver config (`ALIEN_COMMANDS_*`) is injected per-resource into
-        // `config.environment` by the manager/operator snapshot (ALIEN-222) and
+        // `config.environment` by the manager/operator snapshot and
         // flows in through `EnvironmentVariableBuilder::try_new(&config.environment)`.
 
         if let Some(endpoint) = config.public_endpoints.first() {

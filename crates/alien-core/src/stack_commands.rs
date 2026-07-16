@@ -94,8 +94,7 @@ impl Stack {
     /// `target_resources` so every var reaches only its own resource.
     ///
     /// Workers receive platform pushes; Containers and Daemons run the pull
-    /// receiver, which reads a fixed contract of vars (PACKAGE_LAYOUT
-    /// DECIDED(09), ALIEN-221/222):
+    /// receiver, which reads this fixed environment contract:
     ///   - `ALIEN_COMMANDS_URL` (Plain) — base receiver URL
     ///   - `ALIEN_COMMANDS_TOKEN` (Secret, only if a token is present)
     ///   - `ALIEN_COMMANDS_TARGET_RESOURCE_ID` (Plain) — this resource's id

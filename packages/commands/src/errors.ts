@@ -134,8 +134,7 @@ export const ResponseDecodingFailedError = defineError({
  *
  * The Rust twin (`alien_commands::error::ErrorData::InvalidEnvelope`) raises
  * the identical code (`INVALID_ENVELOPE`) for the same failures, so envelope
- * decode failures are twin-pinned across both receivers (see
- * `PACKAGE_LAYOUT.md` DECIDED(09)).
+ * decode failures stay aligned across both receivers.
  */
 export const InvalidEnvelopeError = defineError({
   code: "INVALID_ENVELOPE",

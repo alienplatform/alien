@@ -372,7 +372,7 @@ impl EnvironmentVariableBuilder {
 
     /// Add the complete scalar runtime environment for a Daemon.
     ///
-    /// Daemons run runtime-less under direct supervision (ALIEN-226): the
+    /// Daemons run runtime-less under direct supervision: the
     /// contract is the standard platform-identity set only — no transport var,
     /// no self-binding var. Command-enabled Daemons receive their pull-receiver
     /// config (`ALIEN_COMMANDS_*`) per-resource through `config.environment`,
@@ -666,7 +666,7 @@ mod tests {
         assert_eq!(bindings.len(), 0);
     }
 
-    /// Executable form of the ALIEN-229 Done-when grep: neither the Container
+    /// Ensures neither the Container
     /// nor the Daemon compute env plan may inject any retired worker/binding env
     /// var on any platform. Fails loudly if a forbidden name reappears in either
     /// static plan (the controller manifest tests guard the rendered manifests).

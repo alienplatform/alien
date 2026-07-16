@@ -84,15 +84,15 @@ pub enum ErrorData {
         deployment_id: String,
     },
 
-    /// A command target resource id contains a character that would break the
-    /// `:`-delimited pending-index / idempotency key grammar.
+    /// A command target resource id contains `:`, which would break the
+    /// pending-index and idempotency-key delimiter grammar.
     ///
-    /// 400: the request (or a stored target) is malformed. Resource ids must
-    /// match the documented `[A-Za-z0-9-_]` charset — in particular they may
-    /// never contain `:`, which delimits key segments.
+    /// 400: the request (or a stored target) is malformed. The commands layer
+    /// permits every resource-id character except `:`, which delimits key
+    /// segments.
     #[error(
         code = "COMMAND_TARGET_ID_INVALID",
-        message = "Command target id '{resource_id}' is invalid: ids must match [A-Za-z0-9-_] and cannot contain ':'",
+        message = "Command target id '{resource_id}' is invalid: ids cannot contain ':'",
         retryable = "false",
         internal = "false",
         http_status_code = 400
@@ -130,6 +130,23 @@ pub enum ErrorData {
         /// Command API operation that was rejected
         operation: String,
         /// Commands API URL that rejected the token
+        url: String,
+    },
+
+    /// The command receiver request was permanently rejected by the commands API.
+    #[error(
+        code = "COMMAND_RECEIVER_REQUEST_REJECTED",
+        message = "Command receiver request was rejected with HTTP {status} during {operation}",
+        retryable = "false",
+        internal = "false",
+        http_status_code = 502
+    )]
+    CommandReceiverRequestRejected {
+        /// Command API operation that was rejected
+        operation: String,
+        /// HTTP status returned by the commands API
+        status: u16,
+        /// Commands API URL that rejected the request
         url: String,
     },
 

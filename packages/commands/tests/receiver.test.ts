@@ -826,6 +826,46 @@ describe("CommandReceiver.run", () => {
     await running
   })
 
+  it("does not poll beyond maxLeases while a handler is still active", async () => {
+    server = await openServer()
+    const env = envelope({ baseUrl: server.baseUrl })
+    const serve = leaseOnce([lease(env)])
+    route = req => serve(req) ?? { status: 200 }
+
+    let handlerStarted = false
+    let finish!: () => void
+    const gate = new Promise<void>(resolve => {
+      finish = resolve
+    })
+    const r = createCommandReceiver({
+      env: { ...FULL_ENV, ALIEN_COMMANDS_URL: `${server.baseUrl}/v1/` },
+      maxLeases: 1,
+      pollIntervalMs: 5,
+      pollJitter: 0,
+    })
+    r.handle("echo", async () => {
+      handlerStarted = true
+      await gate
+      return { ok: true }
+    })
+    receiverStop = () => {
+      finish()
+      r.stop()
+    }
+    running = r.run()
+
+    await waitFor(() => handlerStarted)
+    await new Promise(resolve => setTimeout(resolve, 30))
+    expect(
+      server.requests.filter(req => req.method === "POST" && req.path === "/v1/commands/leases"),
+    ).toHaveLength(1)
+
+    finish()
+    await waitFor(() => submitBody("cmd_1") !== undefined)
+    r.stop()
+    await running
+  })
+
   it("rereads a token file and retries once when lease acquisition returns 401", async () => {
     const directory = await mkdtemp(join(tmpdir(), "alien-command-token-"))
     const tokenFile = join(directory, "token")
@@ -876,6 +916,58 @@ describe("CommandReceiver.run", () => {
     } finally {
       await rm(directory, { recursive: true, force: true })
     }
+  })
+
+  it("run rejects a terminal missing-token-file error", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "alien-command-token-missing-"))
+    const tokenFile = join(directory, "token")
+    try {
+      const envWithoutToken: Record<string, string | undefined> = {
+        ...FULL_ENV,
+        ALIEN_COMMANDS_TOKEN_FILE: tokenFile,
+      }
+      envWithoutToken.ALIEN_COMMANDS_TOKEN = undefined
+      const r = createCommandReceiver({
+        env: envWithoutToken,
+        pollIntervalMs: 5,
+        pollJitter: 0,
+      })
+
+      await expect(r.run()).rejects.toMatchObject({
+        code: "COMMAND_RECEIVER_CONFIG_INVALID",
+        retryable: false,
+        context: { envVar: "ALIEN_COMMANDS_TOKEN_FILE" },
+      })
+    } finally {
+      await rm(directory, { recursive: true, force: true })
+    }
+  })
+
+  it("run rejects a terminal lease HTTP error without retrying", async () => {
+    server = await openServer()
+    route = req => {
+      if (req.method === "POST" && req.path === "/v1/commands/leases") {
+        return { status: 403, text: "forbidden" }
+      }
+      return { status: 404 }
+    }
+    const r = createCommandReceiver({
+      env: { ...FULL_ENV, ALIEN_COMMANDS_URL: `${server.baseUrl}/v1/` },
+      pollIntervalMs: 5,
+      pollJitter: 0,
+    })
+
+    await expect(r.run()).rejects.toMatchObject({
+      code: "MANAGER_HTTP_ERROR",
+      retryable: false,
+      context: {
+        method: "POST",
+        status: 403,
+      },
+    })
+    expect(
+      server.requests.filter(req => req.method === "POST" && req.path === "/v1/commands/leases"),
+    ).toHaveLength(1)
   })
 
   it("submits INVALID_ENVELOPE for malformed inline base64 params (twin of Rust's decode_params_bytes)", async () => {

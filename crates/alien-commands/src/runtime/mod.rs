@@ -509,8 +509,8 @@ impl LeaseClient {
     }
 
     /// Acquire leases: POST `request` with the bearer token and parse the
-    /// `LeaseResponse`. Errors as `HTTP_OPERATION_FAILED` (transport or
-    /// non-success status) or `SERIALIZATION_FAILED` (unparseable body).
+    /// `LeaseResponse`. Transport, 408, 429, and 5xx failures are retryable;
+    /// other non-success statuses are permanent request rejections.
     pub async fn acquire(&self, request: &LeaseRequest) -> Result<Vec<LeaseInfo>> {
         self.acquire_with_token(request, &self.token).await
     }
@@ -545,11 +545,20 @@ impl LeaseClient {
 
         if !response.status().is_success() {
             let status = response.status();
-            let body = response.text().await.unwrap_or_default();
-            return Err(AlienError::new(ErrorData::HttpOperationFailed {
-                message: format!("Lease request failed with status {status}: {body}"),
-                method: Some("POST".to_string()),
-                url: Some(self.endpoint.to_string()),
+            if status == reqwest::StatusCode::REQUEST_TIMEOUT
+                || status == reqwest::StatusCode::TOO_MANY_REQUESTS
+                || status.is_server_error()
+            {
+                return Err(AlienError::new(ErrorData::HttpOperationFailed {
+                    message: format!("Lease request failed with status {status}"),
+                    method: Some("POST".to_string()),
+                    url: Some(self.endpoint.to_string()),
+                }));
+            }
+            return Err(AlienError::new(ErrorData::CommandReceiverRequestRejected {
+                operation: "lease acquisition".to_string(),
+                status: status.as_u16(),
+                url: self.endpoint.to_string(),
             }));
         }
 
@@ -618,9 +627,8 @@ impl LeaseClient {
         }
 
         let status = response.status();
-        let body = response.text().await.unwrap_or_default();
         Err(AlienError::new(ErrorData::HttpOperationFailed {
-            message: format!("Lease release failed with status {status}: {body}"),
+            message: format!("Lease release failed with status {status}"),
             method: Some("POST".to_string()),
             url: Some(endpoint.to_string()),
         }))
@@ -641,7 +649,7 @@ pub fn create_test_error(code: &str, message: &str) -> CommandResponse {
 mod tests {
     use super::*;
     use alien_core::presigned::{PresignedOperation, PresignedRequest};
-    use axum::{extract::State, http::StatusCode, routing::put, Router};
+    use axum::{extract::State, http::StatusCode, routing::post, routing::put, Router};
     use chrono::Utc;
     use std::sync::atomic::{AtomicUsize, Ordering};
     use std::sync::Arc;
@@ -657,6 +665,18 @@ mod tests {
     async fn reject_permanently(State(attempts): State<Arc<AtomicUsize>>) -> StatusCode {
         attempts.fetch_add(1, Ordering::SeqCst);
         StatusCode::BAD_REQUEST
+    }
+
+    async fn reject_lease_permanently(
+        State(attempts): State<Arc<AtomicUsize>>,
+    ) -> (StatusCode, &'static str) {
+        attempts.fetch_add(1, Ordering::SeqCst);
+        (StatusCode::FORBIDDEN, "sensitive-provider-error-body")
+    }
+
+    async fn reject_lease_transiently(State(attempts): State<Arc<AtomicUsize>>) -> StatusCode {
+        attempts.fetch_add(1, Ordering::SeqCst);
+        StatusCode::SERVICE_UNAVAILABLE
     }
 
     #[derive(Clone)]
@@ -959,6 +979,81 @@ mod tests {
 
         assert_eq!(attempts.load(Ordering::SeqCst), 1);
         assert!(error.message.contains("400"));
+        server.abort();
+    }
+
+    fn test_lease_request() -> LeaseRequest {
+        LeaseRequest {
+            deployment_id: "dep_123".to_string(),
+            target: crate::types::CommandTarget::new(
+                "agent",
+                crate::types::CommandTargetType::Daemon,
+            ),
+            max_leases: 1,
+            lease_seconds: 60,
+        }
+    }
+
+    #[tokio::test]
+    async fn permanent_lease_rejection_is_non_retryable_and_redacted() {
+        let attempts = Arc::new(AtomicUsize::new(0));
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let server_attempts = attempts.clone();
+        let server = tokio::spawn(async move {
+            axum::serve(
+                listener,
+                Router::new()
+                    .route("/commands/leases", post(reject_lease_permanently))
+                    .with_state(server_attempts),
+            )
+            .await
+            .unwrap();
+        });
+        let base = reqwest::Url::parse(&format!("http://{address}")).unwrap();
+        let client = LeaseClient::from_base(&base, "token".to_string()).unwrap();
+
+        let error = client
+            .acquire(&test_lease_request())
+            .await
+            .expect_err("403 must terminate the receiver");
+
+        assert_eq!(attempts.load(Ordering::SeqCst), 1);
+        assert_eq!(error.code, "COMMAND_RECEIVER_REQUEST_REJECTED");
+        assert!(!error.retryable);
+        assert!(!serde_json::to_string(&error)
+            .unwrap()
+            .contains("sensitive-provider-error-body"));
+        server.abort();
+    }
+
+    #[tokio::test]
+    async fn transient_lease_rejection_remains_retryable() {
+        let attempts = Arc::new(AtomicUsize::new(0));
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let server_attempts = attempts.clone();
+        let server = tokio::spawn(async move {
+            axum::serve(
+                listener,
+                Router::new()
+                    .route("/commands/leases", post(reject_lease_transiently))
+                    .with_state(server_attempts),
+            )
+            .await
+            .unwrap();
+        });
+        let base = reqwest::Url::parse(&format!("http://{address}")).unwrap();
+        let client = LeaseClient::from_base(&base, "token".to_string()).unwrap();
+
+        let error = client
+            .acquire(&test_lease_request())
+            .await
+            .expect_err("503 must be retryable");
+
+        assert_eq!(attempts.load(Ordering::SeqCst), 1);
+        assert_eq!(error.code, "HTTP_OPERATION_FAILED");
+        assert!(error.retryable);
         server.abort();
     }
 

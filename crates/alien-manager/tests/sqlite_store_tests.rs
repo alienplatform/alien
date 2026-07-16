@@ -13,7 +13,7 @@ use alien_manager::stores::sqlite::{
     SqliteTokenStore,
 };
 
-// ALIEN-219 command-target resolution test imports.
+// Command-target resolution test imports.
 use alien_commands::server::CommandRegistry;
 use alien_core::{CommandDeliveryMode, CommandState, CommandTarget, CommandTargetType};
 use alien_core::{
@@ -1309,7 +1309,7 @@ async fn release_not_found() {
 }
 
 // =============================================================================
-// ALIEN-219: SqliteCommandRegistry target resolution + migration
+// SqliteCommandRegistry target resolution + migration
 // =============================================================================
 
 fn worker(id: &str, commands_enabled: bool) -> Worker {

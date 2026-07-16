@@ -584,7 +584,7 @@ fn default_lease_seconds() -> u64 {
     60
 }
 
-// NOTE(ALIEN-219): `LeaseRequest` no longer implements `Default`. Its `target`
+// `LeaseRequest` does not implement `Default`. Its `target`
 // field is required and there is no sensible default resource to lease for —
 // a fabricated default here would be a footgun (silently leasing for the wrong
 // resource). The single prior caller (test-only) now constructs the request

@@ -17,7 +17,7 @@ Developer-friendly & type-safe Typescript SDK specifically catered to leverage _
 <!-- Start Summary [summary] -->
 ## Summary
 
-Alien API: Manage Alien workspaces, deployments, packages, commands, and infrastructure.
+
 <!-- End Summary [summary] -->
 
 <!-- Start Table of Contents [toc] -->
@@ -313,7 +313,7 @@ run();
 
 * [listInventory](docs/sdks/resources/README.md#listinventory)
 * [listOverview](docs/sdks/resources/README.md#listoverview)
-* [listDeployments](docs/sdks/resources/README.md#listdeployments) - List deployments where the specified infrastructure resource is installed.
+* [listDeployments](docs/sdks/resources/README.md#listdeployments)
 * [getDeploymentDetail](docs/sdks/resources/README.md#getdeploymentdetail)
 
 ### [Sync](docs/sdks/sync/README.md)
@@ -477,7 +477,7 @@ To read more about standalone functions, check [FUNCTIONS.md](./FUNCTIONS.md).
 - [`releasesListBranches`](docs/sdks/releases/README.md#listbranches) - List distinct git branches across releases. Used for filter dropdowns.
 - [`resolveResolve`](docs/sdks/resolve/README.md#resolve) - Resolve manager for a project and platform
 - [`resourcesGetDeploymentDetail`](docs/sdks/resources/README.md#getdeploymentdetail)
-- [`resourcesListDeployments`](docs/sdks/resources/README.md#listdeployments) - List deployments where the specified infrastructure resource is installed.
+- [`resourcesListDeployments`](docs/sdks/resources/README.md#listdeployments)
 - [`resourcesListInventory`](docs/sdks/resources/README.md#listinventory)
 - [`resourcesListOverview`](docs/sdks/resources/README.md#listoverview)
 - [`syncAcquire`](docs/sdks/sync/README.md#acquire) - Acquire a batch of deployments for processing. Used by Manager to atomically lock deployments matching filters. Each deployment in the batch must be released after processing.

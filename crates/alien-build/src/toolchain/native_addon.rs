@@ -217,9 +217,8 @@ if (nativeEntry) process.stdout.write(route + "\n" + nativeEntry);
 /// Worker, whose bindings copy lives under the SDK's dependency. This function
 /// is exercised by the SDK-entry compiled-artifact oracle
 /// (`packages/package-layout/steps/compile.ts` covers the `/native` entry;
-/// the Worker/SDK entry is proven by the ALIEN-211 deploy E2E and the manual
-/// `bun build --compile` check documented in the PR), not a hermetic unit test,
-/// since faithful resolution requires bun and a real installed layout.
+/// the Worker/SDK entry is covered by deployment E2E), not a hermetic unit
+/// test, since faithful resolution requires bun and a real installed layout.
 async fn resolve_bindings_dist_dir(
     src_dir: &Path,
     resource_name: &str,

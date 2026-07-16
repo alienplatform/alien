@@ -150,9 +150,9 @@ impl TestManager {
         let port = find_free_port();
         let url = format!("http://127.0.0.1:{}", port);
 
-        // 2b. Start ngrok tunnel if configured. Cloud-deployed workers need a
-        //     public route back to the local manager for command response and
-        //     large-payload callbacks.
+        // 2b. Start ngrok tunnel if configured. Cloud-deployed workers and
+        //     Docker-hosted local runtimes need a public route back to the
+        //     manager for command response and large-payload callbacks.
         let has_ngrok_token = std::env::var("NGROK_AUTHTOKEN")
             .ok()
             .filter(|s| !s.is_empty())

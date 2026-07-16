@@ -1737,8 +1737,8 @@ export const SendTaskResultResponse: MessageFns<SendTaskResultResponse> = {
 };
 
 /**
- * Service for runtime-application control communication.
- * The runtime hosts this service, and applications connect to it.
+ * Service for Worker runtime-to-application control communication.
+ * The Worker runtime hosts this service, and Worker applications connect to it.
  */
 export type ControlServiceDefinition = typeof ControlServiceDefinition;
 export const ControlServiceDefinition = {
@@ -1765,7 +1765,7 @@ export const ControlServiceDefinition = {
     },
     /**
      * App waits for tasks - this is a server-streaming RPC
-     * Runtime sends tasks as they arrive, app processes them
+     * Worker runtime sends tasks as they arrive; the app processes them.
      */
     waitForTasks: {
       name: "WaitForTasks",
@@ -1800,7 +1800,7 @@ export interface ControlServiceImplementation<CallContextExt = {}> {
   ): Promise<DeepPartial<RegisterEventHandlerResponse>>;
   /**
    * App waits for tasks - this is a server-streaming RPC
-   * Runtime sends tasks as they arrive, app processes them
+   * Worker runtime sends tasks as they arrive; the app processes them.
    */
   waitForTasks(
     request: WaitForTasksRequest,
@@ -1826,7 +1826,7 @@ export interface ControlServiceClient<CallOptionsExt = {}> {
   ): Promise<RegisterEventHandlerResponse>;
   /**
    * App waits for tasks - this is a server-streaming RPC
-   * Runtime sends tasks as they arrive, app processes them
+   * Worker runtime sends tasks as they arrive; the app processes them.
    */
   waitForTasks(request: DeepPartial<WaitForTasksRequest>, options?: CallOptions & CallOptionsExt): AsyncIterable<Task>;
   /** App sends result for a processed task */

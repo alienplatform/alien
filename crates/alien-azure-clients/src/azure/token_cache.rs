@@ -67,6 +67,14 @@ impl AzureTokenCache {
         Ok(token)
     }
 
+    /// Invalidates a cached token after Azure rejects it as unauthorized.
+    ///
+    /// The next request for this scope will acquire a fresh token from the
+    /// configured credential source instead of reusing the rejected token.
+    pub async fn invalidate_bearer_token_with_scope(&self, scope: &str) {
+        self.cache.lock().await.remove(scope);
+    }
+
     pub fn config(&self) -> &AzureClientConfig {
         &self.config
     }

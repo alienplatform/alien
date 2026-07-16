@@ -33,9 +33,6 @@ export class Resources extends ClientSDK {
     ));
   }
 
-  /**
-   * List deployments where the specified infrastructure resource is installed.
-   */
   async listDeployments(
     request: operations.ListResourceDeploymentsRequest,
     options?: RequestOptions,
