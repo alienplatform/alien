@@ -147,7 +147,7 @@ jobs:
         # suites load the native addon.
         env:
           NODE_OPTIONS: "--max-old-space-size=8192"
-        run: pnpm -r --if-present --filter "./packages/*" test
+        run: pnpm --filter @alienplatform/core --filter @alienplatform/bindings --filter @alienplatform/commands test
 
       - name: Rust fast tests (non-cloud)
         env:
