@@ -185,6 +185,9 @@ jobs:
       - uses: depot/setup-action@v1
 
       - uses: mozilla-actions/sccache-action@v0.0.9
+        continue-on-error: true
+        with:
+          version: v0.16.0
 
       - name: Install protoc
         run: sudo apt-get update && sudo apt-get install -y protobuf-compiler
@@ -755,7 +758,10 @@ jobs:
 
       - name: Install sccache
         if: steps.binary-cache.outputs.cache-hit != 'true'
+        continue-on-error: true
         uses: mozilla-actions/sccache-action@v0.0.9
+        with:
+          version: v0.16.0
 
       - name: Install protoc
         if: steps.binary-cache.outputs.cache-hit != 'true'
@@ -820,7 +826,10 @@ jobs:
       # depot cargo is Linux/macOS only — use sccache directly on Windows
       - name: Install sccache
         if: steps.binary-cache.outputs.cache-hit != 'true'
+        continue-on-error: true
         uses: mozilla-actions/sccache-action@v0.0.9
+        with:
+          version: v0.16.0
 
       - name: Install build tools (protoc, nasm, cmake)
         if: steps.binary-cache.outputs.cache-hit != 'true'

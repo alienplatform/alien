@@ -27,7 +27,13 @@ runs:
       uses: depot/setup-action@v1
 
     - name: Install sccache
+      continue-on-error: true
       uses: mozilla-actions/sccache-action@v0.0.9
+      with:
+        # Avoid the action's latest-release API lookup, which can fail during
+        # transient GitHub API outages. Cache setup is an optimization, so a
+        # download failure must fall back to an uncached Rust build.
+        version: v0.16.0
 
     - name: Configure git credentials for cargo git deps
       shell: bash
