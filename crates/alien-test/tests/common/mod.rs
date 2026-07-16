@@ -68,7 +68,10 @@ macro_rules! e2e_test_context {
             }
 
             async fn teardown(self) {
-                self.ctx.cleanup().await;
+                self.ctx
+                    .cleanup()
+                    .await
+                    .expect("E2E cleanup must reach a safe terminal state");
             }
         }
     };

@@ -29,6 +29,16 @@ use uuid::Uuid;
 /// Helper for applying Azure resource-scoped permissions
 pub struct AzurePermissionsHelper;
 
+#[derive(Debug)]
+struct PlannedRoleAssignment {
+    scope: String,
+    role_assignment_id: String,
+    principal_id: String,
+    role_definition_id: String,
+    permission_set_id: String,
+    failure_message: String,
+}
+
 impl AzurePermissionsHelper {
     fn role_definition_scope_for_assignment_scope(scope: &Scope) -> Scope {
         match scope {
@@ -63,6 +73,87 @@ impl AzurePermissionsHelper {
         resource_type: &str,
         resource_scope: Scope,
         permission_context: &PermissionContext,
+    ) -> Result<()> {
+        let mut role_assignment_ids = Vec::new();
+        Self::reconcile_resource_scoped_permissions(
+            ctx,
+            resource_id,
+            resource_type,
+            resource_scope,
+            permission_context,
+            &mut role_assignment_ids,
+            true,
+        )
+        .await
+    }
+
+    /// Compute every deterministic assignment ID without mutating Azure.
+    pub(crate) async fn plan_resource_scoped_role_assignment_ids(
+        ctx: &ResourceControllerContext<'_>,
+        resource_id: &str,
+        resource_type: &str,
+        resource_scope: Scope,
+        permission_context: &PermissionContext,
+    ) -> Result<Vec<String>> {
+        let mut role_assignment_ids = Vec::new();
+        Self::reconcile_resource_scoped_permissions(
+            ctx,
+            resource_id,
+            resource_type,
+            resource_scope,
+            permission_context,
+            &mut role_assignment_ids,
+            false,
+        )
+        .await?;
+        Ok(role_assignment_ids)
+    }
+
+    /// Apply a previously checkpointed assignment plan.
+    pub(crate) async fn apply_resource_scoped_permissions_from_checkpoint(
+        ctx: &ResourceControllerContext<'_>,
+        resource_id: &str,
+        resource_type: &str,
+        resource_scope: Scope,
+        permission_context: &PermissionContext,
+        checkpointed_role_assignment_ids: &[String],
+    ) -> Result<()> {
+        let expected_role_assignment_ids = Self::plan_resource_scoped_role_assignment_ids(
+            ctx,
+            resource_id,
+            resource_type,
+            resource_scope.clone(),
+            permission_context,
+        )
+        .await?;
+        if expected_role_assignment_ids != checkpointed_role_assignment_ids {
+            return Err(AlienError::new(ErrorData::ResourceConfigInvalid {
+                message: "Azure role assignment plan changed before it was applied".to_string(),
+                resource_id: Some(resource_id.to_string()),
+            }));
+        }
+
+        let mut applied_role_assignment_ids = checkpointed_role_assignment_ids.to_vec();
+        Self::reconcile_resource_scoped_permissions(
+            ctx,
+            resource_id,
+            resource_type,
+            resource_scope,
+            permission_context,
+            &mut applied_role_assignment_ids,
+            true,
+        )
+        .await
+    }
+
+    async fn reconcile_resource_scoped_permissions(
+        ctx: &ResourceControllerContext<'_>,
+        resource_id: &str,
+        resource_type: &str,
+        resource_scope: Scope,
+        permission_context: &PermissionContext,
+        role_assignment_ids: &mut Vec<String>,
+        apply: bool,
     ) -> Result<()> {
         let azure_config = ctx.get_azure_config()?;
         let authorization_client = ctx
@@ -114,17 +205,21 @@ impl AzurePermissionsHelper {
                     &generator,
                     permission_context,
                     &resource_scope,
+                    role_assignment_ids,
+                    apply,
                 )
                 .await?;
             }
         }
 
-        Self::apply_management_permissions(
+        Self::apply_management_permissions_tracking_assignment_ids(
             ctx,
             resource_id,
             resource_type,
             &resource_scope,
             permission_context,
+            role_assignment_ids,
+            apply,
         )
         .await?;
 
@@ -141,6 +236,8 @@ impl AzurePermissionsHelper {
         generator: &AzureRuntimePermissionsGenerator,
         permission_context: &PermissionContext,
         resource_scope: &Scope,
+        role_assignment_ids: &mut Vec<String>,
+        apply: bool,
     ) -> Result<()> {
         // Get the managed identity ID for this profile
         let managed_identity_id = Self::get_managed_identity_id_for_profile(ctx, profile_name)?;
@@ -190,83 +287,70 @@ impl AzurePermissionsHelper {
             bindings.extend(grant_plan.bindings);
         }
 
-        Self::ensure_profile_custom_role_definitions(
-            ctx,
-            authorization_client,
-            profile_name,
-            custom_roles,
-            &role_definition_scope,
-            azure_config,
-        )
-        .await?;
+        if apply {
+            Self::ensure_profile_custom_role_definitions(
+                ctx,
+                authorization_client,
+                profile_name,
+                custom_roles,
+                &role_definition_scope,
+                azure_config,
+            )
+            .await?;
+        }
 
-        let bindings = dedupe_azure_role_bindings(bindings);
-        let futures = bindings
+        let assignments = dedupe_azure_role_bindings(bindings)
             .into_iter()
             .enumerate()
             .map(|(binding_index, binding)| {
-                let authorization_client = authorization_client.clone();
-                let managed_identity_id = managed_identity_id.clone();
-                let managed_identity_principal_id = managed_identity_principal_id.clone();
-                let azure_config = azure_config.clone();
-                let role_definition_scope = role_definition_scope.clone();
-
-                async move {
-                    info!(
-                        profile = %profile_name,
-                        managed_identity = %managed_identity_id,
-                        "Applying Azure role assignments"
-                    );
-
-                    let role_definition_id = Self::resource_role_definition_id(
-                        ctx.resource_prefix,
-                        profile_name,
-                        &binding,
-                        &role_definition_scope,
-                        &azure_config,
-                    );
-
-                    let role_assignment_id = Uuid::new_v5(
-                        &Uuid::NAMESPACE_OID,
-                        format!(
-                            "deployment:azure:res-role-assign:{}:{}:{}:{}",
-                            ctx.resource_prefix, resource_id, profile_name, binding_index
-                        )
-                        .as_bytes(),
+                let role_definition_id = Self::resource_role_definition_id(
+                    ctx.resource_prefix,
+                    profile_name,
+                    &binding,
+                    &role_definition_scope,
+                    azure_config,
+                );
+                let role_assignment_id = Uuid::new_v5(
+                    &Uuid::NAMESPACE_OID,
+                    format!(
+                        "deployment:azure:res-role-assign:{}:{}:{}:{}",
+                        ctx.resource_prefix, resource_id, profile_name, binding_index
                     )
-                    .to_string();
+                    .as_bytes(),
+                )
+                .to_string();
 
-                    Self::create_role_assignment(
-                        &authorization_client,
-                        &azure_config,
-                        resource_scope,
-                        &role_assignment_id,
-                        &managed_identity_principal_id,
-                        &role_definition_id,
-                    )
-                    .await
-                    .context(ErrorData::CloudPlatformError {
-                        message: format!(
-                            "Failed to create role assignment for permission set '{}'",
-                            binding.permission_set_id
-                        ),
-                        resource_id: Some(resource_id.to_string()),
-                    })?;
-
-                    info!(
-                        role_assignment_id = %role_assignment_id,
-                        principal_id = %managed_identity_principal_id,
-                        role_definition_id = %role_definition_id,
-                        "Successfully created Azure role assignment"
-                    );
-
-                    Ok::<_, AlienError<ErrorData>>(())
+                PlannedRoleAssignment {
+                    scope: binding.scope,
+                    role_assignment_id,
+                    principal_id: managed_identity_principal_id.clone(),
+                    role_definition_id,
+                    failure_message: format!(
+                        "Failed to create role assignment for permission set '{}'",
+                        binding.permission_set_id
+                    ),
+                    permission_set_id: binding.permission_set_id,
                 }
-            });
+            })
+            .collect();
 
-        futures::future::try_join_all(futures).await?;
-
-        Ok(())
+        info!(
+            profile = %profile_name,
+            managed_identity = %managed_identity_id,
+            "Applying Azure role assignments"
+        );
+        if apply {
+            Self::apply_planned_role_assignments(
+                authorization_client,
+                resource_id,
+                assignments,
+                role_assignment_ids,
+            )
+            .await
+        } else {
+            Self::record_planned_role_assignment_ids(&assignments, role_assignment_ids);
+            Ok(())
+        }
     }
 
     fn resource_role_definition_id(
@@ -456,9 +540,28 @@ impl AzurePermissionsHelper {
         principal_id: &str,
         role_definition_id: &str,
     ) -> Result<()> {
-        let full_assignment_id =
-            authorization_client.build_role_assignment_id(scope, role_assignment_id.to_string());
+        let scope = scope.to_resource_id_string(azure_config);
 
+        Self::create_role_assignment_at_scope(
+            authorization_client,
+            &scope,
+            role_assignment_id,
+            principal_id,
+            role_definition_id,
+        )
+        .await?;
+        Ok(())
+    }
+
+    async fn create_role_assignment_at_scope(
+        authorization_client: &Arc<dyn AuthorizationApi>,
+        scope: &str,
+        role_assignment_id: &str,
+        principal_id: &str,
+        role_definition_id: &str,
+    ) -> Result<String> {
+        let scope = format!("/{}", scope.trim_matches('/'));
+        let full_assignment_id = Self::role_assignment_resource_id(&scope, role_assignment_id);
         let role_assignment = RoleAssignment {
             id: None,
             name: None,
@@ -466,7 +569,7 @@ impl AzurePermissionsHelper {
             properties: Some(RoleAssignmentProperties {
                 principal_id: principal_id.to_string(),
                 role_definition_id: role_definition_id.to_string(),
-                scope: Some(scope.to_resource_id_string(azure_config)),
+                scope: Some(scope),
                 principal_type: RoleAssignmentPropertiesPrincipalType::ServicePrincipal,
                 condition: None,
                 condition_version: None,
@@ -482,14 +585,76 @@ impl AzurePermissionsHelper {
         };
 
         authorization_client
-            .create_or_update_role_assignment_by_id(full_assignment_id, &role_assignment)
+            .create_or_update_role_assignment_by_id(full_assignment_id.clone(), &role_assignment)
             .await
             .context(ErrorData::CloudPlatformError {
                 message: "Failed to create Azure role assignment".to_string(),
                 resource_id: Some(role_assignment_id.to_string()),
             })?;
 
+        Ok(full_assignment_id)
+    }
+
+    fn role_assignment_resource_id(scope: &str, role_assignment_id: &str) -> String {
+        let scope = format!("/{}", scope.trim_matches('/'));
+        format!("{scope}/providers/Microsoft.Authorization/roleAssignments/{role_assignment_id}")
+    }
+
+    async fn apply_planned_role_assignments(
+        authorization_client: &Arc<dyn AuthorizationApi>,
+        resource_id: &str,
+        assignments: Vec<PlannedRoleAssignment>,
+        role_assignment_ids: &mut Vec<String>,
+    ) -> Result<()> {
+        Self::record_planned_role_assignment_ids(&assignments, role_assignment_ids);
+
+        let futures = assignments.into_iter().map(|assignment| {
+            let authorization_client = authorization_client.clone();
+            let resource_id = resource_id.to_string();
+
+            async move {
+                Self::create_role_assignment_at_scope(
+                    &authorization_client,
+                    &assignment.scope,
+                    &assignment.role_assignment_id,
+                    &assignment.principal_id,
+                    &assignment.role_definition_id,
+                )
+                .await
+                .context(ErrorData::CloudPlatformError {
+                    message: assignment.failure_message,
+                    resource_id: Some(resource_id),
+                })?;
+
+                info!(
+                    role_assignment_id = %assignment.role_assignment_id,
+                    principal_id = %assignment.principal_id,
+                    role_definition_id = %assignment.role_definition_id,
+                    permission_set = %assignment.permission_set_id,
+                    "Successfully created Azure role assignment"
+                );
+
+                Ok::<_, AlienError<ErrorData>>(())
+            }
+        });
+
+        futures::future::try_join_all(futures).await?;
         Ok(())
+    }
+
+    fn record_planned_role_assignment_ids(
+        assignments: &[PlannedRoleAssignment],
+        role_assignment_ids: &mut Vec<String>,
+    ) {
+        for assignment in assignments {
+            let full_assignment_id = Self::role_assignment_resource_id(
+                &assignment.scope,
+                &assignment.role_assignment_id,
+            );
+            if !role_assignment_ids.contains(&full_assignment_id) {
+                role_assignment_ids.push(full_assignment_id);
+            }
+        }
     }
 
     /// Apply management resource-scoped permissions (non-provision sets) for the
@@ -502,6 +667,29 @@ impl AzurePermissionsHelper {
         resource_type: &str,
         resource_scope: &Scope,
         permission_context: &PermissionContext,
+    ) -> Result<()> {
+        let mut role_assignment_ids = Vec::new();
+        Self::apply_management_permissions_tracking_assignment_ids(
+            ctx,
+            resource_id,
+            resource_type,
+            resource_scope,
+            permission_context,
+            &mut role_assignment_ids,
+            true,
+        )
+        .await?;
+        Ok(())
+    }
+
+    async fn apply_management_permissions_tracking_assignment_ids(
+        ctx: &ResourceControllerContext<'_>,
+        resource_id: &str,
+        resource_type: &str,
+        resource_scope: &Scope,
+        permission_context: &PermissionContext,
+        role_assignment_ids: &mut Vec<String>,
+        apply: bool,
     ) -> Result<()> {
         let management_profile = match ctx.desired_stack.management().profile() {
             Some(profile) => profile,
@@ -602,86 +790,75 @@ impl AzurePermissionsHelper {
             bindings.extend(grant_plan.bindings);
         }
 
-        Self::ensure_management_custom_role_definitions(
-            ctx,
-            &authorization_client,
-            custom_roles,
-            &role_definition_scope,
-            azure_config,
-        )
-        .await?;
+        if apply {
+            Self::ensure_management_custom_role_definitions(
+                ctx,
+                &authorization_client,
+                custom_roles,
+                &role_definition_scope,
+                azure_config,
+            )
+            .await?;
+        }
 
-        let bindings = dedupe_azure_role_bindings(bindings);
-        let futures = bindings
+        let assignments = dedupe_azure_role_bindings(bindings)
             .into_iter()
             .enumerate()
             .map(|(binding_index, binding)| {
-                let authorization_client = authorization_client.clone();
-                let management_principal_id = management_principal_id.clone();
-                let azure_config = azure_config.clone();
-                let role_definition_scope = role_definition_scope.clone();
-
-                async move {
-                    let role_definition_id = match &binding.role_definition {
-                        AzureRoleDefinitionRef::Predefined { role_definition_id } => {
-                            role_definition_id.clone()
-                        }
-                        AzureRoleDefinitionRef::Custom { key } => {
-                            let role_definition_id =
-                                Self::management_resource_custom_role_definition_uuid(
-                                    ctx.resource_prefix,
-                                    &binding.permission_set_id,
-                                    key,
-                                );
-                            format!(
-                                "/{}/providers/Microsoft.Authorization/roleDefinitions/{}",
-                                role_definition_scope.to_scope_string(&azure_config),
-                                role_definition_id
-                            )
-                        }
-                    };
-
-                    let role_assignment_id = Uuid::new_v5(
-                        &Uuid::NAMESPACE_OID,
+                let role_definition_id = match &binding.role_definition {
+                    AzureRoleDefinitionRef::Predefined { role_definition_id } => {
+                        role_definition_id.clone()
+                    }
+                    AzureRoleDefinitionRef::Custom { key } => {
+                        let role_definition_id =
+                            Self::management_resource_custom_role_definition_uuid(
+                                ctx.resource_prefix,
+                                &binding.permission_set_id,
+                                key,
+                            );
                         format!(
-                            "deployment:azure:mgmt-res-role-assign:{}:{}:{}",
-                            ctx.resource_prefix, resource_id, binding_index
+                            "/{}/providers/Microsoft.Authorization/roleDefinitions/{}",
+                            role_definition_scope.to_scope_string(azure_config),
+                            role_definition_id
                         )
-                        .as_bytes(),
+                    }
+                };
+                let role_assignment_id = Uuid::new_v5(
+                    &Uuid::NAMESPACE_OID,
+                    format!(
+                        "deployment:azure:mgmt-res-role-assign:{}:{}:{}",
+                        ctx.resource_prefix, resource_id, binding_index
                     )
-                    .to_string();
+                    .as_bytes(),
+                )
+                .to_string();
 
-                    Self::create_role_assignment(
-                        &authorization_client,
-                        &azure_config,
-                        resource_scope,
-                        &role_assignment_id,
-                        &management_principal_id,
-                        &role_definition_id,
-                    )
-                    .await
-                    .context(ErrorData::CloudPlatformError {
-                        message: format!(
-                            "Failed to create management role assignment for '{}'",
-                            binding.permission_set_id
-                        ),
-                        resource_id: Some(resource_id.to_string()),
-                    })?;
-
-                    info!(
-                        principal_id = %management_principal_id,
-                        permission_set = %binding.permission_set_id,
-                        role_definition_id = %role_definition_id,
-                        "Management role assignment created for resource"
-                    );
-
-                    Ok::<_, AlienError<ErrorData>>(())
+                PlannedRoleAssignment {
+                    scope: binding.scope,
+                    role_assignment_id,
+                    principal_id: management_principal_id.clone(),
+                    role_definition_id,
+                    failure_message: format!(
+                        "Failed to create management role assignment for '{}'",
+                        binding.permission_set_id
+                    ),
+                    permission_set_id: binding.permission_set_id,
                 }
-            });
+            })
+            .collect();
 
-        futures::future::try_join_all(futures).await?;
-
-        Ok(())
+        if apply {
+            Self::apply_planned_role_assignments(
+                &authorization_client,
+                resource_id,
+                assignments,
+                role_assignment_ids,
+            )
+            .await
+        } else {
+            Self::record_planned_role_assignment_ids(&assignments, role_assignment_ids);
+            Ok(())
+        }
     }
 
     /// Get the management UAMI principal ID from the RSM controller
@@ -796,4 +973,131 @@ fn azure_role_key_segment(key: &str) -> String {
         })
         .filter(|segment| !segment.is_empty())
         .unwrap_or_else(|| "custom".to_string())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use alien_azure_clients::authorization::MockAuthorizationApi;
+    use alien_client_core::ErrorData as CloudClientErrorData;
+
+    #[tokio::test]
+    async fn storage_trigger_assignment_uses_generated_resource_group_scope() {
+        let permission_set = alien_permissions::get_permission_set("storage/trigger-management")
+            .expect("storage trigger management permission set");
+        let permission_context = PermissionContext::new()
+            .with_subscription_id("sub-123")
+            .with_resource_group("rg-123")
+            .with_resource_name("storage-account/blobServices/default/containers/content");
+        let grant_plan = AzureRuntimePermissionsGenerator::new()
+            .generate_grant_plan(permission_set, BindingTarget::Resource, &permission_context)
+            .expect("storage trigger management grant plan");
+        let binding = grant_plan
+            .bindings
+            .first()
+            .expect("storage trigger management role binding");
+        let expected_scope = "/subscriptions/sub-123/resourceGroups/rg-123";
+        assert_eq!(binding.scope, expected_scope);
+
+        let mut authorization = MockAuthorizationApi::new();
+        authorization
+            .expect_create_or_update_role_assignment_by_id()
+            .withf(move |assignment_id, assignment| {
+                let Some(properties) = assignment.properties.as_ref() else {
+                    return false;
+                };
+                assignment_id
+                    == &format!(
+                        "{expected_scope}/providers/Microsoft.Authorization/roleAssignments/assignment-123"
+                    )
+                    && properties.scope.as_deref() == Some(expected_scope)
+                    && properties.principal_id == "principal-123"
+                    && properties.role_definition_id == "role-definition-123"
+                    && matches!(
+                        properties.principal_type,
+                        RoleAssignmentPropertiesPrincipalType::ServicePrincipal
+                    )
+            })
+            .times(1)
+            .returning(|_, assignment| Ok(assignment.clone()));
+        let authorization: Arc<dyn AuthorizationApi> = Arc::new(authorization);
+
+        let assignment_id = AzurePermissionsHelper::create_role_assignment_at_scope(
+            &authorization,
+            &binding.scope,
+            "assignment-123",
+            "principal-123",
+            "role-definition-123",
+        )
+        .await
+        .expect("role assignment at generated binding scope");
+        assert_eq!(
+            assignment_id,
+            "/subscriptions/sub-123/resourceGroups/rg-123/providers/Microsoft.Authorization/roleAssignments/assignment-123"
+        );
+    }
+
+    #[tokio::test]
+    async fn partial_assignment_failure_preserves_complete_cleanup_progress() {
+        let success_scope = "/subscriptions/sub-123/resourceGroups/rg-123";
+        let failure_scope = "/subscriptions/sub-123/resourceGroups/rg-123/providers/Microsoft.Storage/storageAccounts/account-123";
+        let mut authorization = MockAuthorizationApi::new();
+        authorization
+            .expect_create_or_update_role_assignment_by_id()
+            .times(2)
+            .returning(|assignment_id, assignment| {
+                if assignment_id.ends_with("/assignment-failure") {
+                    Err(AlienError::new(
+                        CloudClientErrorData::RemoteServiceUnavailable {
+                            message: "injected second-assignment failure".to_string(),
+                        },
+                    ))
+                } else {
+                    Ok(assignment.clone())
+                }
+            });
+        let authorization: Arc<dyn AuthorizationApi> = Arc::new(authorization);
+        let assignments = vec![
+            PlannedRoleAssignment {
+                scope: success_scope.to_string(),
+                role_assignment_id: "assignment-success".to_string(),
+                principal_id: "principal-123".to_string(),
+                role_definition_id: "role-definition-123".to_string(),
+                permission_set_id: "storage/data-write".to_string(),
+                failure_message: "Failed to create first role assignment".to_string(),
+            },
+            PlannedRoleAssignment {
+                scope: failure_scope.to_string(),
+                role_assignment_id: "assignment-failure".to_string(),
+                principal_id: "principal-123".to_string(),
+                role_definition_id: "role-definition-456".to_string(),
+                permission_set_id: "storage/trigger-management".to_string(),
+                failure_message: "Failed to create second role assignment".to_string(),
+            },
+        ];
+        let mut role_assignment_ids = Vec::new();
+
+        let error = AzurePermissionsHelper::apply_planned_role_assignments(
+            &authorization,
+            "storage-123",
+            assignments,
+            &mut role_assignment_ids,
+        )
+        .await
+        .expect_err("the injected assignment failure must be propagated");
+
+        assert_eq!(error.code, "CLOUD_PLATFORM_ERROR");
+        assert_eq!(
+            role_assignment_ids,
+            vec![
+                format!(
+                    "{success_scope}/providers/Microsoft.Authorization/roleAssignments/assignment-success"
+                ),
+                format!(
+                    "{failure_scope}/providers/Microsoft.Authorization/roleAssignments/assignment-failure"
+                ),
+            ],
+            "all deterministic assignment IDs must be available for cleanup after partial success"
+        );
+    }
 }

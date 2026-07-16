@@ -10,6 +10,10 @@
 //!
 //! Platform tooling that needs provider construction or managed resource kinds
 //! such as builds and artifact registries uses `alien_bindings` directly.
+//! Worker applications enable the `worker` Cargo feature and use the
+//! `worker` module for task, event, lifecycle, and `waitUntil` APIs. The
+//! feature is not enabled by default, so direct-binding-only applications do
+//! not depend on the Worker protocol.
 //!
 //! # Example
 //!
@@ -57,22 +61,6 @@
 //! use alien_sdk::http_client;
 //! ```
 //!
-//! [`AlienContext`] exposes the same four-kind [`Bindings`] facade, not the
-//! provider API:
-//!
-//! ```compile_fail
-//! fn load_internal_binding(ctx: &alien_sdk::AlienContext) {
-//!     let _ = ctx.bindings().load_build("builder");
-//! }
-//! ```
-//!
-//! ```compile_fail
-//! fn inspect_managed_resource(ctx: &alien_sdk::AlienContext) {
-//!     let _ = ctx.get_current_worker();
-//!     let _ = ctx.get_current_container();
-//! }
-//! ```
-
 pub use alien_bindings::{Bindings, ErrorData, Kv, Queue, Result, Storage, Vault};
 
 /// Errors returned by the application binding and Worker APIs.
@@ -96,8 +84,32 @@ pub mod traits {
     };
 }
 
-pub mod alien_context;
+#[cfg(feature = "worker")]
+mod alien_context;
+#[cfg(feature = "worker")]
 mod wait_until;
 
-pub use alien_context::{AlienContext, CronEvent, QueueMessage, StorageEvent};
-pub use wait_until::{DrainConfig, DrainResponse, WaitUntil, WaitUntilContext};
+/// Worker-only task, event, lifecycle, and `waitUntil` APIs.
+#[cfg(feature = "worker")]
+pub mod worker {
+    //! Worker task, event, lifecycle, and `waitUntil` APIs.
+    //!
+    //! `AlienContext` exposes the same four-kind application [`Bindings`]
+    //! facade, not the internal provider API:
+    //!
+    //! ```compile_fail
+    //! fn load_internal_binding(ctx: &alien_sdk::worker::AlienContext) {
+    //!     let _ = ctx.bindings().load_build("builder");
+    //! }
+    //! ```
+    //!
+    //! ```compile_fail
+    //! fn inspect_managed_resource(ctx: &alien_sdk::worker::AlienContext) {
+    //!     let _ = ctx.get_current_worker();
+    //!     let _ = ctx.get_current_container();
+    //! }
+    //! ```
+
+    pub use crate::alien_context::{AlienContext, CronEvent, QueueMessage, StorageEvent};
+    pub use crate::wait_until::{DrainConfig, DrainResponse, WaitUntil, WaitUntilContext};
+}

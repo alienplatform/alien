@@ -13,12 +13,12 @@ use alien_core::{
     Container, ContainerCode, ContainerHeartbeatData, ContainerOutputs, ContainerStatus,
     EnvironmentVariable, EnvironmentVariableType, HeartbeatBackend, Kv,
     LocalContainerHeartbeatData, LocalRuntimeUnitKind, LocalRuntimeUnitStatus, ObservedHealth,
-    Platform, Postgres, ProviderLifecycleState, ResourceHeartbeat, ResourceHeartbeatData,
+    Platform, Postgres, ProviderLifecycleState, Queue, ResourceHeartbeat, ResourceHeartbeatData,
     ResourceOutputs as CoreResourceOutputs, ResourceStatus, Storage, Vault,
     WorkloadHeartbeatStatus,
 };
 use alien_error::{AlienError, Context, IntoAlienError as _};
-use alien_local::{ContainerConfig, ContainerInfo};
+use alien_local::{BindMount, ContainerConfig, ContainerInfo, LocalQueueManager};
 use alien_macros::controller;
 use chrono::Utc;
 
@@ -60,6 +60,30 @@ fn applicable_secret_environment_variables<'a>(
         .filter(|var| var.var_type == EnvironmentVariableType::Secret)
         .filter(|var| matches_environment_target(resource_id, &var.target_resources))
         .collect()
+}
+
+fn local_queue_bind_mount(
+    queue_manager: Option<&LocalQueueManager>,
+    resource_id: &str,
+) -> Result<BindMount> {
+    let queue_manager = queue_manager.ok_or_else(|| {
+        AlienError::new(ErrorData::LocalServicesNotAvailable {
+            service_name: "LocalQueueManager".to_string(),
+        })
+    })?;
+    let host_path = queue_manager.get_queue_path(resource_id).context(
+        ErrorData::ResourceControllerConfigError {
+            resource_id: resource_id.to_string(),
+            message: "Failed to resolve local Queue path for container mount".to_string(),
+        },
+    )?;
+
+    Ok(BindMount {
+        host_path,
+        container_path: format!("/mnt/queue/{resource_id}"),
+        resource_id: resource_id.to_string(),
+        shared_with_host_workloads: true,
+    })
 }
 
 /// Local Container controller.
@@ -120,7 +144,7 @@ impl LocalContainerController {
         // Determine if this container should be exposed publicly.
         let expose_public = !config.public_endpoints.is_empty();
 
-        // First, collect bind mounts for linked filesystem resources (Storage, KV, Vault)
+        // First, collect bind mounts for linked filesystem resources (Storage, KV, Queue, Vault)
         // We need to know the container paths before building env vars so we can rewrite bindings
         let mut bind_mounts = Vec::new();
 
@@ -144,6 +168,7 @@ impl LocalContainerController {
                 host_path: tmp_host_path,
                 container_path: "/tmp".to_string(),
                 resource_id: "tmp".to_string(),
+                shared_with_host_workloads: false,
             });
         }
 
@@ -161,6 +186,7 @@ impl LocalContainerController {
                                 host_path,
                                 container_path: format!("/mnt/storage/{}", linked_resource_id),
                                 resource_id: linked_resource_id.to_string(),
+                                shared_with_host_workloads: true,
                             });
                         }
                     }
@@ -173,9 +199,18 @@ impl LocalContainerController {
                                 host_path,
                                 container_path: format!("/mnt/kv/{}", linked_resource_id),
                                 resource_id: linked_resource_id.to_string(),
+                                shared_with_host_workloads: true,
                             });
                         }
                     }
+                }
+                // Check if it's a Queue resource
+                else if resource_config.downcast_ref::<Queue>().is_some() {
+                    let queue_manager = ctx.service_provider.get_local_queue_manager();
+                    bind_mounts.push(local_queue_bind_mount(
+                        queue_manager.as_deref(),
+                        linked_resource_id,
+                    )?);
                 }
                 // Check if it's a Vault resource
                 else if resource_config.downcast_ref::<Vault>().is_some() {
@@ -185,6 +220,7 @@ impl LocalContainerController {
                                 host_path,
                                 container_path: format!("/mnt/vault/{}", linked_resource_id),
                                 resource_id: linked_resource_id.to_string(),
+                                shared_with_host_workloads: true,
                             });
                         }
                     }
@@ -610,6 +646,28 @@ fn emit_local_container_heartbeat(
 mod tests {
     use super::*;
     use std::collections::HashMap;
+
+    #[test]
+    fn local_queue_mount_requires_queue_manager() {
+        let error = local_queue_bind_mount(None, "jobs")
+            .expect_err("a linked Queue must not silently skip its container mount");
+
+        assert_eq!(error.code, "LOCAL_SERVICES_NOT_AVAILABLE");
+        assert!(error.message.contains("LocalQueueManager"));
+    }
+
+    #[test]
+    fn local_queue_mount_reports_missing_queue_path() {
+        let state_dir = tempfile::tempdir().expect("tempdir");
+        let queue_manager = LocalQueueManager::new(state_dir.path().to_path_buf());
+
+        let error = local_queue_bind_mount(Some(&queue_manager), "jobs")
+            .expect_err("a linked Queue without local state must fail before container startup");
+
+        assert_eq!(error.code, "RESOURCE_CONTROLLER_CONFIG_ERROR");
+        assert!(error.message.contains("jobs"));
+        assert!(error.message.contains("Failed to resolve local Queue path"));
+    }
 
     #[test]
     fn strips_vault_secret_pointers_but_keeps_delivered_secrets_and_plain_vars() {

@@ -655,7 +655,7 @@ impl LocalWorkerManager {
                 message: "Failed to find free port for gRPC server".to_string(),
             })
         })?;
-        let bindings_address = format!("127.0.0.1:{}", grpc_port);
+        let worker_grpc_address = format!("127.0.0.1:{}", grpc_port);
 
         // Build log exporter configuration. For local workers, we extract OTLP config from
         // env_vars and pass it to the embedded alien-worker-runtime so it can send logs via OTLP.
@@ -671,7 +671,7 @@ impl LocalWorkerManager {
         let runtime_config = alien_worker_runtime::RuntimeConfig::builder()
             .transport(alien_worker_runtime::TransportType::Local)
             .transport_port(port)
-            .bindings_address(bindings_address)
+            .worker_grpc_address(worker_grpc_address)
             .command(existing_metadata.runtime_command.clone())
             .working_dir(PathBuf::from(&working_dir))
             .env_vars(runtime_env_vars)
@@ -690,7 +690,7 @@ impl LocalWorkerManager {
             alien_worker_runtime::run(
                 runtime_config,
                 shutdown_rx,
-                alien_worker_runtime::BindingsSource::Provider(bindings_provider),
+                alien_worker_runtime::RuntimeDependencies::Provider(bindings_provider),
             )
             .await
             .context(ErrorData::Other {

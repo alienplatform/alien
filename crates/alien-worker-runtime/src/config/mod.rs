@@ -71,9 +71,9 @@ pub struct RuntimeConfig {
     /// Environment variables to pass to the application
     #[builder(default)]
     pub env_vars: HashMap<String, String>,
-    /// gRPC bindings address
+    /// Worker app protocol gRPC server address.
     #[builder(default = "127.0.0.1:51351".to_string())]
-    pub bindings_address: String,
+    pub worker_grpc_address: String,
     /// How to export captured application logs
     #[builder(default = LogExporter::None)]
     pub log_exporter: LogExporter,
@@ -95,7 +95,7 @@ impl std::fmt::Debug for RuntimeConfig {
             .field("working_dir", &self.working_dir)
             .field("env_var_count", &env_var_keys.len())
             .field("env_var_keys", &env_var_keys)
-            .field("bindings_address", &self.bindings_address)
+            .field("worker_grpc_address", &self.worker_grpc_address)
             .field("log_exporter", &self.log_exporter)
             .field("command_timeout", &self.command_timeout)
             .finish()
@@ -129,7 +129,7 @@ impl RuntimeConfig {
             command: cli.command,
             working_dir: None,
             env_vars,
-            bindings_address: cli.bindings_address,
+            worker_grpc_address: cli.worker_grpc_address,
             log_exporter,
             command_timeout: Duration::from_secs(cli.worker_timeout_seconds),
         })

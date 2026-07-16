@@ -330,10 +330,19 @@ impl AlienManagerBuilder {
 
             if has_impersonation && !target_bindings.is_empty() {
                 let primary_provider = target_bindings.values().next().unwrap().clone();
+                let management_binding_platforms = [
+                    (Platform::Aws, toml_config.impersonation.aws.is_some()),
+                    (Platform::Gcp, toml_config.impersonation.gcp.is_some()),
+                    (Platform::Azure, toml_config.impersonation.azure.is_some()),
+                ]
+                .into_iter()
+                .filter_map(|(platform, configured)| configured.then_some(platform))
+                .collect();
                 self.credential_resolver = Some(Arc::new(
                     crate::providers::impersonation_credentials::ImpersonationCredentialResolver::new(
                         primary_provider,
                         target_bindings.clone(),
+                        management_binding_platforms,
                     ),
                 ));
                 info!("Cross-account mode: using ImpersonationCredentialResolver");

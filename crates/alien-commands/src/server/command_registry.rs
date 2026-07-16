@@ -251,7 +251,10 @@ pub trait CommandRegistry: Send + Sync {
     /// Returns None if command doesn't exist.
     async fn get_command_status(&self, command_id: &str) -> Result<Option<CommandStatus>>;
 
-    /// Update command state during lifecycle (dispatched, completed, failed).
+    /// Atomically update a non-terminal command's lifecycle state.
+    ///
+    /// Returns `false` when the command became terminal before the update.
+    /// Terminal transitions use [`Self::complete_command`] instead.
     async fn update_command_state(
         &self,
         command_id: &str,
@@ -260,7 +263,7 @@ pub trait CommandRegistry: Send + Sync {
         completed_at: Option<DateTime<Utc>>,
         response_size_bytes: Option<u64>,
         error: Option<serde_json::Value>,
-    ) -> Result<()>;
+    ) -> Result<bool>;
 
     /// Atomically transition a command from any NON-terminal state to the
     /// given terminal `state`.
@@ -475,10 +478,13 @@ impl CommandRegistry for InMemoryCommandRegistry {
         completed_at: Option<DateTime<Utc>>,
         response_size_bytes: Option<u64>,
         error: Option<serde_json::Value>,
-    ) -> Result<()> {
+    ) -> Result<bool> {
         let mut commands = self.commands.write().await;
 
         if let Some(record) = commands.get_mut(command_id) {
+            if record.state.is_terminal() {
+                return Ok(false);
+            }
             record.state = state;
 
             if let Some(ts) = dispatched_at {
@@ -496,9 +502,10 @@ impl CommandRegistry for InMemoryCommandRegistry {
             if let Some(err) = error {
                 record.error = Some(err);
             }
+            return Ok(true);
         }
 
-        Ok(())
+        Ok(false)
     }
 
     async fn complete_command(
@@ -746,6 +753,58 @@ mod tests {
             .unwrap();
         assert_eq!(envelope_data.target, expected);
         assert_eq!(envelope_data.delivery_mode, CommandDeliveryMode::Pull);
+    }
+
+    #[tokio::test]
+    async fn non_terminal_update_cannot_resurrect_completed_command() {
+        let registry = InMemoryCommandRegistry::new();
+        registry
+            .register_target("daemon-1", CommandTargetType::Daemon)
+            .await
+            .unwrap();
+        let target = registry.resolve_target("dep-1", None).await.unwrap();
+        let command = registry
+            .create_command(
+                "dep-1",
+                "run",
+                &target,
+                CommandState::Dispatched,
+                None,
+                None,
+            )
+            .await
+            .unwrap();
+
+        assert!(registry
+            .complete_command(
+                &command.command_id,
+                CommandState::Succeeded,
+                Utc::now(),
+                None,
+                None,
+            )
+            .await
+            .unwrap());
+        assert!(!registry
+            .update_command_state(
+                &command.command_id,
+                CommandState::Pending,
+                None,
+                None,
+                None,
+                None,
+            )
+            .await
+            .unwrap());
+        assert_eq!(
+            registry
+                .get_command_status(&command.command_id)
+                .await
+                .unwrap()
+                .unwrap()
+                .state,
+            CommandState::Succeeded
+        );
     }
 
     #[tokio::test]

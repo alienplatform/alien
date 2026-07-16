@@ -3,14 +3,14 @@
 //! These tests verify the complete worker lifecycle:
 //! 1. Build TypeScript app using alien-build (the real build system)
 //! 2. Extract the OCI image using worker manager
-//! 3. Start the worker (which registers with runtime via gRPC)
+//! 3. Start the Worker (which registers through the Worker app protocol)
 //! 4. Make HTTP requests to verify it works
 //! 5. Stop the worker gracefully
 //!
 //! The test uses examples/basic-worker-ts — a real Alien app that:
 //! - Exports a Hono app with a /health endpoint
 //! - Registers a command handler (invoked only when a command is pushed)
-//! - Serves HTTP requests via the Alien runtime
+//! - Serves HTTP requests through the Alien Worker Runtime
 
 use alien_build::settings::{BuildSettings, PlatformBuildSettings};
 use alien_core::permissions::{PermissionProfile, PermissionsConfig};

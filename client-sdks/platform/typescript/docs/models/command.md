@@ -13,16 +13,18 @@ let value: Command = {
   name: "<value>",
   state: "SUCCEEDED",
   deploymentModel: "push",
-  attempt: 9009.54,
-  deadline: new Date("2025-08-12T01:46:10.944Z"),
-  requestSizeBytes: 7714.06,
-  responseSizeBytes: 9249.44,
-  createdAt: new Date("2025-06-13T18:52:36.177Z"),
-  dispatchedAt: new Date("2025-08-18T01:19:40.077Z"),
-  completedAt: new Date("2024-12-27T01:09:12.395Z"),
-  error: {
-    "key": "<value>",
+  target: {
+    resourceId: "<id>",
+    resourceType: "daemon",
   },
+  attempt: 5374.76,
+  deadline: new Date("2026-04-25T11:03:46.219Z"),
+  requestSizeBytes: 9249.44,
+  responseSizeBytes: 2161.25,
+  createdAt: new Date("2025-08-18T01:19:40.077Z"),
+  dispatchedAt: new Date("2024-12-27T01:09:12.395Z"),
+  completedAt: new Date("2025-03-08T10:27:35.115Z"),
+  error: {},
 };
 ```
 
@@ -36,7 +38,8 @@ let value: Command = {
 | `workspaceId`                                                                                 | *string*                                                                                      | :heavy_check_mark:                                                                            | Unique identifier for the workspace.                                                          | ws_It13CUaGEhLLAB87simX0                                                                      |
 | `name`                                                                                        | *string*                                                                                      | :heavy_check_mark:                                                                            | Command name (e.g., 'analyze-repository', 'sync-data')                                        |                                                                                               |
 | `state`                                                                                       | [models.CommandState](../models/commandstate.md)                                              | :heavy_check_mark:                                                                            | Command states in the Commands protocol lifecycle                                             |                                                                                               |
-| `deploymentModel`                                                                             | [models.CommandDeploymentModel](../models/commanddeploymentmodel.md)                          | :heavy_check_mark:                                                                            | Deployment model captured from deployment at creation time                                    |                                                                                               |
+| `deploymentModel`                                                                             | [models.CommandDeploymentModel](../models/commanddeploymentmodel.md)                          | :heavy_check_mark:                                                                            | Delivery mode for this command (push/pull), derived from the target at creation time          |                                                                                               |
+| `target`                                                                                      | [models.CommandTarget](../models/commandtarget.md)                                            | :heavy_check_mark:                                                                            | Resource the command is addressed to; null on commands created before target routing          |                                                                                               |
 | `attempt`                                                                                     | *number*                                                                                      | :heavy_check_mark:                                                                            | Current attempt number                                                                        |                                                                                               |
 | `deadline`                                                                                    | [Date](https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/Date) | :heavy_check_mark:                                                                            | Optional deadline for command execution                                                       |                                                                                               |
 | `requestSizeBytes`                                                                            | *number*                                                                                      | :heavy_check_mark:                                                                            | Size of command params in bytes                                                               |                                                                                               |

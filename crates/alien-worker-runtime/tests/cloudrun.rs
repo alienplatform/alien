@@ -9,8 +9,9 @@
 
 use alien_core::bindings;
 use alien_worker_protocol::{run_grpc_server, ControlGrpcServer, WaitUntilGrpcServer};
-use alien_worker_runtime::{run, BindingsSource, RuntimeConfig, TransportType};
+use alien_worker_runtime::{run, RuntimeConfig, RuntimeDependencies, TransportType};
 use anyhow::Context;
+use base64::{engine::general_purpose, Engine as _};
 use chrono::Utc;
 use port_check::free_local_port;
 use serde_json::json;
@@ -163,13 +164,13 @@ impl AsyncTestContext for CloudRunTestContext {
         // provider). The CloudRun transport under test is selected explicitly via
         // RuntimeConfig::transport, independent of this deployment type. The runtime
         // injects ALIEN_WORKER_GRPC_ADDRESS for the child from RuntimeConfig's
-        // bindings_address; its presence is what selects the worker-protocol (control
+        // worker_grpc_address; its presence is what selects the Worker protocol (Control
         // + wait_until) gRPC channel that this test's server provides.
         env_vars.insert("ALIEN_DEPLOYMENT_TYPE".to_string(), "local".to_string());
 
         // The event handlers in alien-test-app persist events into the `test-kv`
         // binding and the read-back endpoints load it. With bindings resolved
-        // in-process (no binding gRPC), give the child app its own local test-kv
+        // in-process (never through the Worker protocol), give the child app its own local test-kv
         // binding so the storage/queue event round-trips still work end-to-end.
         let app_data_dir =
             tempfile::tempdir().expect("Failed to create app data dir for test-kv binding");
@@ -191,7 +192,7 @@ impl AsyncTestContext for CloudRunTestContext {
             .transport(TransportType::CloudRun)
             .transport_port(transport_port)
             .command(vec![test_app_path.to_str().unwrap().to_string()])
-            .bindings_address(grpc_resources.grpc_address.clone())
+            .worker_grpc_address(grpc_resources.grpc_address.clone())
             .env_vars(env_vars)
             .build();
 
@@ -209,7 +210,7 @@ impl AsyncTestContext for CloudRunTestContext {
             run(
                 config,
                 shutdown_rx,
-                BindingsSource::ExternalGrpc {
+                RuntimeDependencies::ExternalWorkerProtocol {
                     wait_until_server,
                     control_server,
                 },
@@ -416,6 +417,69 @@ async fn test_cloudrun_gcs_storage_event(ctx: &mut CloudRunTestContext) -> anyho
 #[test_context(CloudRunTestContext)]
 #[tokio::test]
 #[instrument]
+async fn test_cloudrun_gcs_pubsub_notification(
+    ctx: &mut CloudRunTestContext,
+) -> anyhow::Result<()> {
+    info!("Testing wrapped GCS Pub/Sub notification...");
+    let test_key = format!("test/pubsub-{}.txt", Uuid::new_v4());
+    let event_time = Utc::now();
+    let object_data = json!({
+        "bucket": "test-alien-bucket",
+        "name": test_key,
+        "size": "42",
+        "contentType": "text/plain",
+        "etag": "test-pubsub-etag",
+        "generation": "1752619211123000",
+        "storageClass": "STANDARD"
+    });
+    let push_body = json!({
+        "message": {
+            "data": general_purpose::STANDARD.encode(object_data.to_string()),
+            "messageId": Uuid::new_v4().to_string(),
+            "publishTime": event_time.to_rfc3339(),
+            "attributes": {
+                "notificationConfig": "projects/_/buckets/test-alien-bucket/notificationConfigs/6",
+                "eventType": "OBJECT_FINALIZE",
+                "payloadFormat": "JSON_API_V1",
+                "bucketId": "test-alien-bucket",
+                "objectId": test_key,
+                "objectGeneration": "1752619211123000",
+                "eventTime": event_time.to_rfc3339()
+            }
+        },
+        "subscription": "projects/my-project/subscriptions/storage-notification-sub"
+    });
+
+    let response = reqwest::Client::new()
+        .post(format!("http://127.0.0.1:{}/", ctx.transport_port))
+        .header("Content-Type", "application/json")
+        .body(push_body.to_string())
+        .timeout(Duration::from_secs(10))
+        .send()
+        .await
+        .context("Failed to send wrapped GCS Pub/Sub notification")?;
+
+    assert!(
+        response.status().is_success(),
+        "GCS Pub/Sub notification should succeed: {}",
+        response.status()
+    );
+
+    let stored_event = check_event_stored(ctx.transport_port, "storage", &test_key)
+        .await?
+        .context("Wrapped GCS notification should reach the storage handler")?;
+    assert_eq!(stored_event["bucket"], "test-alien-bucket");
+    assert_eq!(stored_event["key"], test_key);
+    assert_eq!(stored_event["eventType"], "Created");
+    assert_eq!(stored_event["size"], 42);
+
+    info!("Wrapped GCS Pub/Sub notification PASSED");
+    Ok(())
+}
+
+#[test_context(CloudRunTestContext)]
+#[tokio::test]
+#[instrument]
 async fn test_cloudrun_cloud_scheduler(ctx: &mut CloudRunTestContext) -> anyhow::Result<()> {
     info!("Testing Cloud Scheduler event...");
     let schedule_name = format!("test-cron-{}", Uuid::new_v4());
@@ -463,7 +527,6 @@ async fn test_cloudrun_pubsub_queue_message(ctx: &mut CloudRunTestContext) -> an
     let event_time = Utc::now();
 
     // Base64 encode message data
-    use base64::{engine::general_purpose, Engine as _};
     let message_content = json!({"orderId": "order-123", "amount": 50.0});
     let encoded_data = general_purpose::STANDARD.encode(message_content.to_string());
 

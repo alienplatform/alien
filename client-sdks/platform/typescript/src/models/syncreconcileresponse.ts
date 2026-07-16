@@ -3298,6 +3298,14 @@ export type SyncReconcileResponseRuntimeMetadata = {
    * Used to avoid redundant sync operations during incremental deployment
    */
   lastSyncedEnvVarsHash?: string | null | undefined;
+  /**
+   * Exact vault keys owned by the deployment secret synchronizer. This
+   *
+   * @remarks
+   * inventory lets a later snapshot delete removed keys without listing or
+   * touching unrelated values in the same vault.
+   */
+  lastSyncedSecretNames?: Array<string> | undefined;
   preparedStack?: SyncReconcileResponsePreparedStack | any | null | undefined;
   /**
    * Whether cross-account registry access has been successfully granted.
@@ -8655,10 +8663,10 @@ export type SyncReconcileResponseManagementConfigUnion =
  *
  * When set, injected compute runtimes export captured application logs
  * through the given endpoint via OTLP/HTTP; which resources are injected
- * is platform-dependent. Workers and daemons read auth headers from a
- * runtime-only secret — never from application environment variables.
- * Containers have no runtime wrapper, so they get the endpoint and auth
- * header as plain OTEL env vars for the application's own exporter.
+ * is platform-dependent. Workers read auth headers from a runtime-only
+ * secret. Runtime-less Containers and Daemons receive standard OTEL auth
+ * variables only at the final hosting boundary: Local passes them directly
+ * to the process and Kubernetes projects them from a per-workload Secret.
  */
 export type SyncReconcileResponseMonitoring = {
   /**
@@ -16694,6 +16702,7 @@ export const SyncReconcileResponseRuntimeMetadata$inboundSchema: z.ZodType<
   unknown
 > = z.object({
   lastSyncedEnvVarsHash: z.nullable(z.string()).optional(),
+  lastSyncedSecretNames: z.array(z.string()).optional(),
   preparedStack: z.nullable(
     z.union([
       z.lazy(() => SyncReconcileResponsePreparedStack$inboundSchema),

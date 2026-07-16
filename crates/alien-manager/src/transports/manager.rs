@@ -89,6 +89,15 @@ impl DeploymentLoopTransport for ManagerTransport {
             )
             .await?;
 
+        crate::registry_access::cleanup_deleted_registry_access(
+            self.deployment_store.as_ref(),
+            &self.bindings_provider,
+            &self.target_bindings_providers,
+            deployment_id,
+            &updated_state,
+        )
+        .await;
+
         // Only return updated state if something actually changed.
         let state_changed = updated_state.runtime_metadata != state.runtime_metadata;
 

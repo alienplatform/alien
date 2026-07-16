@@ -10,7 +10,7 @@ alien-core = { workspace = true }
 alien-error = { workspace = true }
 alien-worker-runtime = { workspace = true }
 alien-bindings = { workspace = true }
-alien-worker-protocol = { workspace = true }
+alien-worker-protocol = { workspace = true, features = ["server"] }
 
 # Async runtime
 tokio = { workspace = true, features = ["full"] }

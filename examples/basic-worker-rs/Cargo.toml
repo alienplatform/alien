@@ -8,7 +8,7 @@ name = "basic-worker"
 path = "src/bin/main.rs"
 
 [dependencies]
-alien-sdk = { workspace = true, features = ["grpc", "local"] }
+alien-sdk = { workspace = true, features = ["worker", "local"] }
 anyhow = { workspace = true }
 axum = { workspace = true, features = ["tokio", "json", "http1"] }
 serde = { workspace = true, features = ["derive"] }

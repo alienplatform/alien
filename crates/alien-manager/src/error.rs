@@ -1,7 +1,10 @@
 //! Error types for alien-manager.
 
+use alien_core::Platform;
 use alien_error::AlienErrorData;
 use serde::{Deserialize, Serialize};
+
+pub(crate) const REMOTE_CREDENTIAL_HANDOFF_FAILED_CODE: &str = "REMOTE_CREDENTIAL_HANDOFF_FAILED";
 
 /// Errors for alien-manager operations.
 #[derive(Debug, Clone, AlienErrorData, Serialize, Deserialize)]
@@ -98,6 +101,19 @@ pub enum ErrorData {
         http_status_code = 404
     )]
     ReleaseNotFound { release_id: String },
+
+    /// The target-side management identity could not yet be impersonated.
+    #[error(
+        code = "REMOTE_CREDENTIAL_HANDOFF_FAILED",
+        message = "Remote credential handoff failed for deployment '{deployment_id}' on '{platform}'",
+        retryable = "true",
+        internal = "inherit",
+        human = "transparent"
+    )]
+    RemoteCredentialHandoffFailed {
+        deployment_id: String,
+        platform: Platform,
+    },
 
     /// Command not found
     #[error(

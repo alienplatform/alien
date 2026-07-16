@@ -8,7 +8,7 @@
 
 use alien_bindings::{BindingsProvider, BindingsProviderApi};
 use alien_error::{Context, IntoAlienError};
-use alien_sdk::{AlienContext, ErrorData as BindingsErrorData};
+use alien_sdk::{worker::AlienContext, ErrorData as BindingsErrorData};
 use alien_test_server::{handlers, models::AppState};
 use axum::{
     routing::{get, post},

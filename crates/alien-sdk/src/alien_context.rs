@@ -1,4 +1,4 @@
-//! AlienContext - Main SDK entry point for Alien applications.
+//! AlienContext - Main SDK entry point for Alien Worker applications.
 //!
 //! Provides access to:
 //! - Resource bindings (storage, kv, queue, vault, etc.)
@@ -9,7 +9,6 @@
 use serde::{de::DeserializeOwned, Serialize};
 use std::{collections::HashMap, future::Future, pin::Pin, sync::Arc};
 use tokio::sync::{Mutex, RwLock};
-#[cfg(feature = "grpc")]
 use tokio_stream::StreamExt as _;
 use tracing::{debug, error, info, warn};
 
@@ -20,7 +19,6 @@ use crate::{
 use alien_bindings::error::{ErrorData, Result};
 use alien_error::{AlienError, Context, IntoAlienError};
 
-#[cfg(feature = "grpc")]
 use alien_worker_protocol::control::{
     control_service_client::ControlServiceClient, send_task_result_request::Result as TaskResult,
     task::Payload as TaskPayload, RegisterEventHandlerRequest, RegisterHttpServerRequest,
@@ -83,7 +81,7 @@ impl Default for Handlers {
     }
 }
 
-/// Main context for Alien applications that provides access to:
+/// Main context for Alien Worker applications that provides access to:
 /// - Resource bindings (storage, kv, queue, vault, etc.)
 /// - Event handlers (storage events, cron events, queue messages, commands)
 /// - Background tasks (wait_until)
@@ -100,7 +98,6 @@ pub struct AlienContext {
     /// Registered event handlers
     handlers: Arc<RwLock<Handlers>>,
     /// gRPC control client (lazy initialized)
-    #[cfg(feature = "grpc")]
     control_client: Arc<Mutex<Option<ControlServiceClient<tonic::transport::Channel>>>>,
 }
 
@@ -130,7 +127,6 @@ impl AlienContext {
             app_id,
             env_vars: env_vars.clone(),
             handlers: Arc::new(RwLock::new(Handlers::default())),
-            #[cfg(feature = "grpc")]
             control_client: Arc::new(Mutex::new(None)),
         })
     }
@@ -144,13 +140,11 @@ impl AlienContext {
             bindings,
             env_vars: std::env::vars().collect(),
             handlers: Arc::new(RwLock::new(Handlers::default())),
-            #[cfg(feature = "grpc")]
             control_client: Arc::new(Mutex::new(None)),
         }
     }
 
     /// Gets the gRPC control client, creating it if needed
-    #[cfg(feature = "grpc")]
     async fn get_control_client(&self) -> Result<ControlServiceClient<tonic::transport::Channel>> {
         let mut client_guard = self.control_client.lock().await;
 
@@ -351,8 +345,8 @@ impl AlienContext {
 
     // ==================== HTTP SERVER ====================
 
-    /// Registers the application's HTTP server port with the runtime.
-    /// The runtime will forward HTTP requests to this port.
+    /// Registers the application's HTTP server port with the Worker runtime.
+    /// The Worker runtime will forward HTTP requests to this port.
     ///
     /// # Example
     /// ```ignore
@@ -360,9 +354,8 @@ impl AlienContext {
     /// let port = listener.local_addr()?.port();
     /// ctx.register_http_server(port).await?;
     /// ```
-    #[cfg(feature = "grpc")]
     pub async fn register_http_server(&self, port: u16) -> Result<()> {
-        info!(port = port, "Registering HTTP server with runtime");
+        info!(port = port, "Registering HTTP server with Worker runtime");
 
         let mut client = self.get_control_client().await?;
 
@@ -382,16 +375,9 @@ impl AlienContext {
         Ok(())
     }
 
-    #[cfg(not(feature = "grpc"))]
-    pub async fn register_http_server(&self, _port: u16) -> Result<()> {
-        Err(AlienError::new(ErrorData::FeatureNotEnabled {
-            feature: "grpc".to_string(),
-        }))
-    }
-
     // ==================== EVENT LOOP ====================
 
-    /// Enters the main event loop and processes events from the runtime.
+    /// Enters the main event loop and processes events from the Worker runtime.
     /// This blocks until shutdown is signaled.
     ///
     /// Call this after registering all event handlers.
@@ -402,12 +388,11 @@ impl AlienContext {
     /// ctx.on_command("process", cmd_handler);
     /// ctx.run().await?;
     /// ```
-    #[cfg(feature = "grpc")]
     pub async fn run(&self) -> Result<()> {
         info!(app_id = %self.app_id, "Entering event loop");
 
-        // Register handlers with runtime
-        self.register_handlers_with_runtime().await?;
+        // Register handlers with the Worker runtime.
+        self.register_handlers_with_worker_runtime().await?;
 
         // Get control client and start task stream
         let mut client = self.get_control_client().await?;
@@ -451,16 +436,8 @@ impl AlienContext {
         Ok(())
     }
 
-    #[cfg(not(feature = "grpc"))]
-    pub async fn run(&self) -> Result<()> {
-        Err(AlienError::new(ErrorData::FeatureNotEnabled {
-            feature: "grpc".to_string(),
-        }))
-    }
-
-    /// Register all handlers with the runtime
-    #[cfg(feature = "grpc")]
-    async fn register_handlers_with_runtime(&self) -> Result<()> {
+    /// Register all handlers with the Worker runtime.
+    async fn register_handlers_with_worker_runtime(&self) -> Result<()> {
         let handlers = self.handlers.read().await;
         let mut client = self.get_control_client().await?;
 
@@ -479,7 +456,7 @@ impl AlienContext {
                     method: "RegisterEventHandler".to_string(),
                     reason: "Failed to register storage handler".to_string(),
                 })?;
-            debug!(handler_type = "storage", resource = %resource, "Registered handler with runtime");
+            debug!(handler_type = "storage", resource = %resource, "Registered handler with Worker runtime");
         }
 
         // Register cron handlers
@@ -497,7 +474,7 @@ impl AlienContext {
                     method: "RegisterEventHandler".to_string(),
                     reason: "Failed to register cron handler".to_string(),
                 })?;
-            debug!(handler_type = "cron", resource = %schedule, "Registered handler with runtime");
+            debug!(handler_type = "cron", resource = %schedule, "Registered handler with Worker runtime");
         }
 
         // Register queue handlers
@@ -515,7 +492,7 @@ impl AlienContext {
                     method: "RegisterEventHandler".to_string(),
                     reason: "Failed to register queue handler".to_string(),
                 })?;
-            debug!(handler_type = "queue", resource = %queue, "Registered handler with runtime");
+            debug!(handler_type = "queue", resource = %queue, "Registered handler with Worker runtime");
         }
 
         // Register command handlers
@@ -533,14 +510,13 @@ impl AlienContext {
                     method: "RegisterEventHandler".to_string(),
                     reason: "Failed to register command handler".to_string(),
                 })?;
-            debug!(handler_type = "command", resource = %command, "Registered handler with runtime");
+            debug!(handler_type = "command", resource = %command, "Registered handler with Worker runtime");
         }
 
         Ok(())
     }
 
-    /// Handle a single task from the runtime
-    #[cfg(feature = "grpc")]
+    /// Handle a single task from the Worker runtime.
     async fn handle_task(&self, task: Task) -> Result<()> {
         let task_id = task.task_id.clone();
         debug!(task_id = %task_id, "Handling task");
@@ -603,7 +579,7 @@ impl AlienContext {
             }
         };
 
-        // For non-command tasks, send result to runtime
+        // For non-command tasks, send the result to the Worker runtime.
         if !is_command {
             self.send_task_result(&task_id, result).await?;
         }
@@ -656,7 +632,6 @@ impl AlienContext {
         }
     }
 
-    #[cfg(feature = "grpc")]
     async fn handle_command(
         &self,
         event_id: &str,
@@ -691,7 +666,6 @@ impl AlienContext {
         result
     }
 
-    #[cfg(feature = "grpc")]
     async fn send_task_result(&self, task_id: &str, result: Result<()>) -> Result<()> {
         let mut client = self.get_control_client().await?;
 
@@ -723,7 +697,6 @@ impl AlienContext {
         Ok(())
     }
 
-    #[cfg(feature = "grpc")]
     async fn send_command_response(
         &self,
         task_id: &str,
@@ -763,7 +736,7 @@ impl AlienContext {
     // ==================== WAIT UNTIL ====================
 
     /// Registers a background task that will run even after the main handler returns.
-    /// The task runs in the application process and is tracked by the runtime for proper shutdown coordination.
+    /// The task runs in the application process and is tracked by the Worker runtime for proper shutdown coordination.
     pub fn wait_until<F, Fut>(&self, task_fn: F) -> Result<()>
     where
         F: FnOnce() -> Fut + Send + 'static,

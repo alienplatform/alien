@@ -563,12 +563,10 @@ impl LeaseClient {
                     data_type: Some("LeaseResponse".to_string()),
                 })?;
 
-        // Lease-served envelopes carry manager URLs as root-relative paths
-        // (the manager cannot know an address reachable from behind this
-        // consumer's network boundary; this endpoint — corrected by the
-        // platform for exactly that — is the address to resolve against).
-        // Absolute URLs pass through: cloud-presigned storage and envelopes
-        // from managers that predate relative minting.
+        // Lease-served envelopes carry manager URLs relative to the lease
+        // endpoint. Resolving against the endpoint that succeeded preserves
+        // both its reachable origin and any reverse-proxy path prefix.
+        // Absolute cloud-presigned storage URLs pass through byte-for-byte.
         for lease in &mut lease_response.leases {
             resolve_envelope_urls(&mut lease.envelope, &self.endpoint);
         }
@@ -710,54 +708,78 @@ mod tests {
         }
     }
 
-    /// Root-relative envelope URLs resolve against the configured commands
-    /// endpoint's origin; absolute URLs (cloud presigned, older managers)
-    /// pass through untouched. Twin of the TS `resolveEnvelopeUrls` test.
+    /// Path-relative manager URLs resolve against the exact lease endpoint,
+    /// retaining its reverse-proxy prefix. Absolute cloud-presigned URLs pass
+    /// through byte-for-byte. Twin of the TS `resolveEnvelopeUrls` test.
     #[test]
     fn resolve_envelope_urls_resolves_relative_and_keeps_absolute() {
-        let base = reqwest::Url::parse("http://host.docker.internal:9090/v1").unwrap();
+        let base =
+            reqwest::Url::parse("https://edge.example.com/tenant/v1/commands/leases").unwrap();
 
         let mut envelope = create_test_envelope();
         envelope.response_handling.submit_response_url =
-            "/v1/commands/cmd_123/response?response_token=t&expires=1".to_string();
-        resolve_envelope_urls(&mut envelope, &base);
-        assert_eq!(
-            envelope.response_handling.submit_response_url,
-            "http://host.docker.internal:9090/v1/commands/cmd_123/response?response_token=t&expires=1",
-            "relative submit URL must resolve against the endpoint origin"
-        );
-        // The cloud-presigned upload URL is absolute and must never be touched.
-        match &envelope.response_handling.storage_upload_request.backend {
-            alien_core::presigned::PresignedRequestBackend::Http { url, .. } => {
-                assert_eq!(url, "https://storage.example.com/upload");
-            }
-            other => panic!("unexpected backend: {other:?}"),
-        }
-
-        // A manager-served (relative) upload URL resolves too.
-        let mut envelope = create_test_envelope();
+            "cmd_123/response?response_token=t&expires=1".to_string();
         if let alien_core::presigned::PresignedRequestBackend::Http { url, .. } =
             &mut envelope.response_handling.storage_upload_request.backend
         {
-            *url = "/v1/commands/cmd_123/response-blob?sig=x".to_string();
+            *url = "../storage/response-blob?sig=x".to_string();
         }
+        envelope.params = BodySpec::Storage {
+            size: Some(2048),
+            storage_get_request: Some(PresignedRequest::new_http(
+                "cmd_123/params?sig=params".to_string(),
+                "GET".to_string(),
+                std::collections::HashMap::new(),
+                PresignedOperation::Get,
+                "commands/cmd_123/params".to_string(),
+                Utc::now() + chrono::Duration::hours(1),
+            )),
+            storage_put_used: Some(true),
+        };
+
         resolve_envelope_urls(&mut envelope, &base);
+        assert_eq!(
+            envelope.response_handling.submit_response_url,
+            "https://edge.example.com/tenant/v1/commands/cmd_123/response?response_token=t&expires=1",
+            "relative submit URL must retain the endpoint prefix"
+        );
         match &envelope.response_handling.storage_upload_request.backend {
             alien_core::presigned::PresignedRequestBackend::Http { url, .. } => {
                 assert_eq!(
                     url,
-                    "http://host.docker.internal:9090/v1/commands/cmd_123/response-blob?sig=x"
+                    "https://edge.example.com/tenant/v1/storage/response-blob?sig=x"
                 );
             }
             other => panic!("unexpected backend: {other:?}"),
         }
+        let BodySpec::Storage {
+            storage_get_request: Some(params),
+            ..
+        } = &envelope.params
+        else {
+            panic!("storage params request");
+        };
+        assert_eq!(
+            params.url(),
+            "https://edge.example.com/tenant/v1/commands/cmd_123/params?sig=params"
+        );
 
-        // Absolute submit URLs pass through unchanged (older managers).
+        // Absolute URLs pass through unchanged, including their signed query.
         let mut envelope = create_test_envelope();
+        let cloud_url = "https://storage.example.com/upload?X-Signature=DoNotCanonicalize%2FValue";
+        if let alien_core::presigned::PresignedRequestBackend::Http { url, .. } =
+            &mut envelope.response_handling.storage_upload_request.backend
+        {
+            *url = cloud_url.to_string();
+        }
         resolve_envelope_urls(&mut envelope, &base);
         assert_eq!(
             envelope.response_handling.submit_response_url,
             "https://commands.example.com/commands/cmd_123/response"
+        );
+        assert_eq!(
+            envelope.response_handling.storage_upload_request.url(),
+            cloud_url
         );
     }
 

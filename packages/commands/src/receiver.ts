@@ -571,13 +571,12 @@ class PullCommandReceiver implements CommandReceiver {
     }
 
     const parsed = parseWireResponse(LeaseResponseSchema, await response.json(), "POST", endpoint)
-    // Lease-served envelopes carry manager URLs as root-relative paths (the
-    // manager cannot know an address reachable from behind this consumer's
-    // network boundary; the configured URL — corrected by the platform for
-    // exactly that — is the address to resolve against). Absolute URLs pass
-    // through: cloud-presigned storage and older managers.
+    // Lease-served envelopes carry manager URLs relative to the exact lease
+    // endpoint. Resolving against the endpoint that succeeded preserves both
+    // its reachable origin and any reverse-proxy path prefix. Absolute cloud-
+    // presigned storage URLs pass through byte-for-byte.
     for (const lease of parsed.leases) {
-      resolveEnvelopeUrls(lease.envelope, this.config.url)
+      resolveEnvelopeUrls(lease.envelope, endpoint)
     }
     return parsed.leases
   }
@@ -741,18 +740,10 @@ class PullCommandReceiver implements CommandReceiver {
       }
     }
 
-    // The submit URL is fully qualified and pre-authorized by the envelope, so
-    // it carries no bearer header (matching the Rust twin's submit path). It is
-    // rebased onto the receiver's configured commands URL first: the manager
-    // mints it from its own base (e.g. `http://localhost:9090`), which is not
-    // reachable from behind a container/NAT boundary, while the configured URL
-    // is the address the platform already corrected for this network (leases
-    // flow through it). The submit endpoint lives on the same manager, so an
-    // origin swap preserves the pre-authorized path and response token.
-    const submitUrl = rebaseOntoCommandsOrigin(
-      envelope.responseHandling.submitResponseUrl,
-      this.config.url,
-    )
+    // Lease ingestion resolves the pre-authorized submit reference against the
+    // exact endpoint used to acquire it. It is fully qualified here and carries
+    // no bearer header, matching the Rust twin's submit path.
+    const submitUrl = envelope.responseHandling.submitResponseUrl
     let res: Response
     try {
       res = await this.fetchImpl(submitUrl, {
@@ -893,26 +884,36 @@ export function buildReleaseEndpoint(baseUrl: string, leaseId: string): string {
 }
 
 /**
- * Resolve root-relative envelope URLs in place against the configured
- * commands endpoint's origin.
+ * Resolve path-relative envelope URLs in place against the exact lease
+ * endpoint used to acquire them.
  *
- * Lease-served envelopes carry manager URLs as root-relative paths — the
- * manager cannot know an address that is reachable from behind every
- * consumer's network boundary, while the configured commands URL is exactly
- * that address. Absolute URLs pass through unchanged: cloud-presigned
- * storage requests and envelopes from managers that predate relative
- * minting. Twin of the Rust `resolve_envelope_urls`.
+ * The manager cannot know an address reachable from behind every consumer's
+ * network boundary or a reverse-proxy prefix added outside the manager. The
+ * successful lease endpoint contains both. Absolute cloud-presigned storage
+ * URLs pass through byte-for-byte. Twin of Rust `resolve_envelope_urls`.
  */
-export function resolveEnvelopeUrls(envelope: Envelope, commandsBaseUrl: string): void {
-  let origin: string
+export function resolveEnvelopeUrls(envelope: Envelope, leaseEndpoint: string): void {
+  let base: URL
   try {
-    origin = new URL(commandsBaseUrl).origin
+    base = new URL(leaseEndpoint)
   } catch {
     // Unparseable base (already rejected at construction): leave the
     // envelope as served.
     return
   }
-  const resolve = (url: string) => (url.startsWith("/") ? `${origin}${url}` : url)
+  const resolve = (target: string) => {
+    if (target.startsWith("//")) return target
+    try {
+      new URL(target)
+      return target
+    } catch {
+      try {
+        return new URL(target, base).toString()
+      } catch {
+        return target
+      }
+    }
+  }
 
   envelope.responseHandling.submitResponseUrl = resolve(envelope.responseHandling.submitResponseUrl)
   const upload = envelope.responseHandling.storageUploadRequest
@@ -926,38 +927,6 @@ export function resolveEnvelopeUrls(envelope: Envelope, commandsBaseUrl: string)
     envelope.params.storageGetRequest.backend.url = resolve(
       envelope.params.storageGetRequest.backend.url,
     )
-  }
-}
-
-/**
- * Rebase a manager-minted absolute URL onto the origin of the receiver's
- * configured commands URL, preserving path and query.
- *
- * The manager builds envelope URLs (e.g. the pre-authorized response-submit
- * URL) from its own base address. Across a container or NAT boundary that
- * address may not be reachable from the receiver — the platform corrects
- * `ALIEN_COMMANDS_URL` for the receiver's network (leases already flow
- * through it), so the same origin must be used for every other endpoint on
- * that manager. Returns the URL unchanged when either side fails to parse
- * (an unparseable target fails at fetch time with the real error; the
- * configured base was already validated at receiver construction).
- *
- * Known limitation: only the origin is swapped — a reverse proxy that mounts
- * the manager under a path prefix the manager itself does not know (base
- * `https://edge/prefix/v1` vs minted `…/v1/commands/…`) still breaks, because
- * the prefix cannot be reconstructed client-side. The manager's own base-URL
- * path (e.g. `/v1`) rides inside the minted path and is preserved.
- */
-export function rebaseOntoCommandsOrigin(target: string, commandsBaseUrl: string): string {
-  try {
-    const targetUrl = new URL(target)
-    const baseUrl = new URL(commandsBaseUrl)
-    if (targetUrl.origin === baseUrl.origin) {
-      return target
-    }
-    return `${baseUrl.origin}${targetUrl.pathname}${targetUrl.search}`
-  } catch {
-    return target
   }
 }
 

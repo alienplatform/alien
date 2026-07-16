@@ -1,9 +1,8 @@
 # `@alienplatform/bindings` — package layout contract
 
 > Contract document. The names, subpaths, error codes, and dependency rules below
-> are binding for the tasks that implement and enforce them. Implementers may not
-> rename anything pinned here. Items whose owner is a later task are marked
-> **OPEN (task NN)** and must not be decided in this file.
+> define the package's public compatibility contract. Changes to them require a
+> corresponding package API and release review.
 
 ## Purpose
 

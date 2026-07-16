@@ -20,6 +20,10 @@ use alien_core::{
 };
 use tracing::{debug, info, warn};
 
+use crate::auth::Subject;
+use crate::traits::deployment_store::{DeploymentFilter, DeploymentRecord};
+use crate::traits::DeploymentStore;
+
 /// Ensures cross-account registry access is granted for a deployment.
 ///
 /// Returns `true` if access was fully granted — including the management
@@ -78,12 +82,98 @@ async fn revoke_registry_access(
     repo_id: &str,
     environment_info: &EnvironmentInfo,
     stack_state: Option<&StackState>,
+    deployment_store: &dyn DeploymentStore,
+    deployment_id: &str,
 ) {
-    let access = match build_cross_account_access(environment_info, stack_state) {
-        Some(a) => a,
-        None => return,
-    };
+    if let EnvironmentInfo::Gcp(GcpEnvironmentInfo { project_number, .. }) = environment_info {
+        if let Some(service_account_email) = extract_rsm_access_configuration(stack_state) {
+            remove_registry_access(
+                artifact_registry,
+                repo_id,
+                environment_info,
+                CrossAccountAccess::Gcp(GcpCrossAccountAccess {
+                    project_numbers: Vec::new(),
+                    allowed_service_types: Vec::new(),
+                    service_account_emails: vec![service_account_email],
+                }),
+                "deployment-owned registry access",
+            )
+            .await;
+        }
 
+        let deployments = match deployment_store
+            .list_deployments(
+                &Subject::system(),
+                &DeploymentFilter {
+                    platforms: Some(vec![Platform::Gcp]),
+                    ..Default::default()
+                },
+            )
+            .await
+        {
+            Ok(deployments) => deployments,
+            Err(error) => {
+                warn!(
+                    deployment_id = %deployment_id,
+                    project_number = %project_number,
+                    error = %error,
+                    "Cannot safely revoke shared Cloud Run registry access because active consumers could not be checked"
+                );
+                return;
+            }
+        };
+
+        if deployments.iter().any(|deployment| {
+            is_other_active_gcp_project_consumer(deployment, deployment_id, project_number)
+        }) {
+            debug!(
+                deployment_id = %deployment_id,
+                project_number = %project_number,
+                "Keeping shared Cloud Run registry access for another active deployment"
+            );
+            return;
+        }
+
+        let project_numbers = if project_number.is_empty() {
+            Vec::new()
+        } else {
+            vec![project_number.clone()]
+        };
+        remove_registry_access(
+            artifact_registry,
+            repo_id,
+            environment_info,
+            CrossAccountAccess::Gcp(GcpCrossAccountAccess {
+                project_numbers,
+                allowed_service_types: vec![ComputeServiceType::Worker],
+                service_account_emails: Vec::new(),
+            }),
+            "last project consumer's shared registry access",
+        )
+        .await;
+        return;
+    }
+
+    let Some(access) = build_cross_account_access(environment_info, stack_state) else {
+        return;
+    };
+    remove_registry_access(
+        artifact_registry,
+        repo_id,
+        environment_info,
+        access,
+        "registry cross-account access",
+    )
+    .await;
+}
+
+async fn remove_registry_access(
+    artifact_registry: &dyn ArtifactRegistry,
+    repo_id: &str,
+    environment_info: &EnvironmentInfo,
+    access: CrossAccountAccess,
+    access_kind: &str,
+) {
     match artifact_registry
         .remove_cross_account_access(repo_id, access)
         .await
@@ -92,18 +182,36 @@ async fn revoke_registry_access(
             info!(
                 repo_id = %repo_id,
                 platform = %environment_info.platform(),
-                "Registry cross-account access revoked"
+                access_kind = %access_kind,
+                "Registry access revoked"
             );
         }
         Err(e) => {
             warn!(
                 repo_id = %repo_id,
                 platform = %environment_info.platform(),
+                access_kind = %access_kind,
                 error = %e,
-                "Failed to revoke registry cross-account access"
+                "Failed to revoke registry access"
             );
         }
     }
+}
+
+fn is_other_active_gcp_project_consumer(
+    deployment: &DeploymentRecord,
+    deleted_deployment_id: &str,
+    project_number: &str,
+) -> bool {
+    deployment.id != deleted_deployment_id
+        && deployment.status != "deleted"
+        && matches!(
+            &deployment.environment_info,
+            Some(EnvironmentInfo::Gcp(GcpEnvironmentInfo {
+                project_number: other_project_number,
+                ..
+            })) if other_project_number == project_number
+        )
 }
 
 /// Loads the artifact registry from the bindings provider and applies the
@@ -129,34 +237,10 @@ pub async fn reconcile_registry_access(
     let platform = environment_info.platform();
     let status = &state.status;
 
-    // Deletion always runs (to clean up).
+    // Cleanup runs after the Deleted state is persisted. Doing it here would
+    // let two concurrent deletions both observe the other deployment as active,
+    // leaving the shared project-level grant behind.
     if *status == DeploymentStatus::Deleted {
-        let artifact_registry =
-            match load_artifact_registry(bindings_provider, target_bindings_providers, &platform)
-                .await
-            {
-                Some(ar) => ar,
-                None => return,
-            };
-
-        // The shared deployment-image repository is named after
-        // `upstream_repository_prefix()` — the same identifier the proxy
-        // routes pushes to and `alien release` writes images to. Empty means
-        // the platform has no such repo (Azure ACR pushes to the registry
-        // root; Local doesn't support cross-account).
-        let repo_id = artifact_registry.upstream_repository_prefix();
-        if repo_id.is_empty() {
-            return;
-        }
-
-        // Revoke cross-account access (AWS/GCP only; Azure/Local are no-ops).
-        revoke_registry_access(
-            artifact_registry.as_ref(),
-            &repo_id,
-            environment_info,
-            state.stack_state.as_ref(),
-        )
-        .await;
         return;
     }
 
@@ -213,6 +297,51 @@ pub async fn reconcile_registry_access(
             .get_or_insert_with(RuntimeMetadata::default);
         rm.registry_access_granted = true;
     }
+}
+
+/// Revokes registry access after a Deleted state has been persisted.
+///
+/// Cloud Run's service agent is project-scoped, so multiple deployments in
+/// the same GCP project share one GAR reader grant. The final active consumer
+/// removes that shared grant; every deployment still removes its own remote
+/// management service-account grant.
+pub async fn cleanup_deleted_registry_access(
+    deployment_store: &dyn DeploymentStore,
+    bindings_provider: &Option<Arc<dyn BindingsProviderApi>>,
+    target_bindings_providers: &HashMap<Platform, Arc<dyn BindingsProviderApi>>,
+    deployment_id: &str,
+    state: &DeploymentState,
+) {
+    if state.status != DeploymentStatus::Deleted {
+        return;
+    }
+    let Some(environment_info) = state.environment_info.as_ref() else {
+        return;
+    };
+    let platform = environment_info.platform();
+    let Some(artifact_registry) =
+        load_artifact_registry(bindings_provider, target_bindings_providers, &platform).await
+    else {
+        return;
+    };
+
+    // The shared deployment-image repository is named after
+    // `upstream_repository_prefix()` — the same identifier the proxy routes
+    // pushes to and `alien release` writes images to.
+    let repo_id = artifact_registry.upstream_repository_prefix();
+    if repo_id.is_empty() {
+        return;
+    }
+
+    revoke_registry_access(
+        artifact_registry.as_ref(),
+        &repo_id,
+        environment_info,
+        state.stack_state.as_ref(),
+        deployment_store,
+        deployment_id,
+    )
+    .await;
 }
 
 fn repository_ids_for_access(
@@ -686,6 +815,46 @@ mod tests {
             .build()
     }
 
+    fn gcp_deployment_record(id: &str, status: &str, project_number: &str) -> DeploymentRecord {
+        DeploymentRecord {
+            id: id.to_string(),
+            workspace_id: "default".to_string(),
+            project_id: "default".to_string(),
+            name: id.to_string(),
+            deployment_group_id: "dg_test".to_string(),
+            platform: Platform::Gcp,
+            deployment_protocol_version: 1,
+            base_platform: None,
+            status: status.to_string(),
+            stack_settings: None,
+            stack_state: None,
+            environment_info: Some(EnvironmentInfo::Gcp(GcpEnvironmentInfo {
+                project_number: project_number.to_string(),
+                project_id: "test-project".to_string(),
+                region: "us-central1".to_string(),
+            })),
+            runtime_metadata: None,
+            current_release_id: None,
+            desired_release_id: None,
+            import_source: None,
+            setup_method: None,
+            setup_metadata: None,
+            setup_target: None,
+            setup_fingerprint: None,
+            setup_fingerprint_version: None,
+            user_environment_variables: None,
+            management_config: None,
+            deployment_config: None,
+            deployment_token: None,
+            retry_requested: false,
+            locked_by: None,
+            locked_at: None,
+            created_at: chrono::Utc::now(),
+            updated_at: None,
+            error: None,
+        }
+    }
+
     #[tokio::test]
     async fn load_artifact_registry_prefers_target_provider() {
         let primary_registry: Arc<dyn ArtifactRegistry> = Arc::new(TestArtifactRegistry {
@@ -766,5 +935,35 @@ mod tests {
             repository_ids_for_access(&registry, &state),
             vec!["test-project/alien-artifacts".to_string()]
         );
+    }
+
+    #[test]
+    fn gcp_shared_registry_access_is_kept_only_for_active_project_consumers() {
+        let running_same_project = gcp_deployment_record("dep_other", "running", "123456789012");
+        assert!(is_other_active_gcp_project_consumer(
+            &running_same_project,
+            "dep_deleted",
+            "123456789012"
+        ));
+
+        let deleted_same_project = gcp_deployment_record("dep_other", "deleted", "123456789012");
+        assert!(!is_other_active_gcp_project_consumer(
+            &deleted_same_project,
+            "dep_deleted",
+            "123456789012"
+        ));
+
+        let running_other_project = gcp_deployment_record("dep_other", "running", "999999999999");
+        assert!(!is_other_active_gcp_project_consumer(
+            &running_other_project,
+            "dep_deleted",
+            "123456789012"
+        ));
+
+        assert!(!is_other_active_gcp_project_consumer(
+            &gcp_deployment_record("dep_deleted", "running", "123456789012"),
+            "dep_deleted",
+            "123456789012"
+        ));
     }
 }

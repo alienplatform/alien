@@ -5,16 +5,7 @@ use tokio::sync::{oneshot, Mutex};
 use tonic::{Request, Response, Status};
 use tracing::{debug, info, warn};
 
-// Module for the generated gRPC code.
-pub mod alien_worker {
-    pub mod wait_until {
-        tonic::include_proto!("alien_worker.wait_until");
-        pub const FILE_DESCRIPTOR_SET: &[u8] =
-            tonic::include_file_descriptor_set!("alien_worker.wait_until_descriptor");
-    }
-}
-
-use alien_worker::wait_until::{
+use crate::wait_until::{
     wait_until_service_server::{WaitUntilService, WaitUntilServiceServer},
     GetTaskCountRequest, GetTaskCountResponse, NotifyDrainCompleteRequest,
     NotifyDrainCompleteResponse, NotifyTaskRegisteredRequest, NotifyTaskRegisteredResponse,
@@ -48,7 +39,7 @@ impl WaitUntilGrpcServer {
     }
 
     /// Trigger drain for all registered applications.
-    /// This is called by the runtime when it's time to drain (e.g., on SIGTERM or Lambda INVOKE end).
+    /// This is called by the Worker runtime when it's time to drain (e.g., on SIGTERM or Lambda INVOKE end).
     pub async fn trigger_drain_all(
         &self,
         reason: &str,

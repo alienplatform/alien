@@ -1,5 +1,5 @@
 use alien_worker_runtime::{
-    init_tracing, run, setup_shutdown_on_signals, BindingsSource, Error, Result, RuntimeConfig,
+    init_tracing, run, setup_shutdown_on_signals, Error, Result, RuntimeConfig, RuntimeDependencies,
 };
 use tracing::{error, info};
 
@@ -44,7 +44,7 @@ async fn async_main() -> Result<()> {
 
     init_tracing()?;
 
-    info!("Initializing Alien Runtime...");
+    info!("Initializing Alien Worker Runtime...");
 
     // Load configuration from CLI arguments and environment variables
     let config = RuntimeConfig::from_cli()?;
@@ -58,8 +58,8 @@ async fn async_main() -> Result<()> {
     // Set up shutdown handling for Ctrl+C and SIGTERM
     let (_shutdown_tx, shutdown_rx) = setup_shutdown_on_signals();
 
-    // Run the runtime with bindings from environment
-    run(config, shutdown_rx, BindingsSource::FromEnvironment).await?;
+    // Run with the direct secret provider configured from the environment.
+    run(config, shutdown_rx, RuntimeDependencies::FromEnvironment).await?;
 
     Ok(())
 }

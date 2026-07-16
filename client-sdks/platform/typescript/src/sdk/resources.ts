@@ -34,7 +34,7 @@ export class Resources extends ClientSDK {
   }
 
   /**
-   * List distinct deployments that have commands, including deployment group info. Use for filter dropdowns in the dashboard.
+   * List deployments where the specified infrastructure resource is installed.
    */
   async listDeployments(
     request: operations.ListResourceDeploymentsRequest,

@@ -757,14 +757,12 @@ mod tests {
         );
     }
 
-    /// Lease-served envelopes carry manager URLs as root-relative paths: the
-    /// pull consumer resolves them against its own configured commands
-    /// endpoint, because the manager cannot know an address reachable from
-    /// behind the consumer's network boundary (a container's
-    /// `host.docker.internal`, a BYOC tunnel). The signed query parameters
-    /// must survive the relativization untouched.
+    /// Lease-served envelopes carry manager URLs relative to the exact lease
+    /// endpoint. The pull consumer resolves them against the endpoint it
+    /// reached, preserving both a network-corrected origin and any reverse-
+    /// proxy prefix. Signed query parameters must survive untouched.
     #[tokio::test]
-    async fn test_leased_envelope_manager_urls_are_root_relative() {
+    async fn test_leased_envelope_manager_urls_are_path_relative() {
         let server = TestCommandServer::builder().with_pull_mode().build().await;
 
         let mut request = test_inline_create_command("relative-agent", "relative-urls");
@@ -788,12 +786,8 @@ mod tests {
 
         let submit = &envelope.response_handling.submit_response_url;
         assert!(
-            submit.starts_with('/'),
-            "lease-served submit URL must be root-relative, got '{submit}'"
-        );
-        assert!(
-            submit.contains(&format!("/commands/{}/response", created.command_id)),
-            "relative submit URL must keep the manager path, got '{submit}'"
+            submit.starts_with(&format!("{}/response?", created.command_id)),
+            "submit URL must be relative to the lease endpoint, got '{submit}'"
         );
         assert!(
             submit.contains("response_token="),

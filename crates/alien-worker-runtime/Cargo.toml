@@ -26,7 +26,7 @@ local = ["alien-bindings/local"]
 [dependencies]
 alien-commands = { workspace = true, default-features = false, features = ["runtime"] }
 alien-bindings = { workspace = true, default-features = false }
-alien-worker-protocol = { workspace = true }
+alien-worker-protocol = { workspace = true, features = ["server"] }
 alien-core = { workspace = true }
 alien-error = { workspace = true }
 async-trait = { workspace = true }

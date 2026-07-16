@@ -12,7 +12,6 @@ use std::{
     time::Duration,
 };
 use tokio::{sync::Mutex, task::JoinHandle, time::timeout};
-#[cfg(feature = "grpc")]
 use tonic::transport::Channel;
 use tracing::{debug, error, info, warn};
 use uuid::Uuid;
@@ -20,7 +19,6 @@ use uuid::Uuid;
 #[cfg(feature = "openapi")]
 use utoipa::ToSchema;
 
-#[cfg(feature = "grpc")]
 use alien_worker_protocol::wait_until::{
     wait_until_service_client::WaitUntilServiceClient, NotifyDrainCompleteRequest,
     NotifyTaskRegisteredRequest, WaitForDrainSignalRequest,
@@ -56,8 +54,8 @@ pub struct DrainConfig {
 /// [`WaitUntilContext`] directly.
 #[async_trait]
 pub trait WaitUntil: Send + Sync + std::fmt::Debug {
-    /// Waits for a drain signal from the runtime.
-    /// This is a blocking call that returns when the runtime decides it's time to drain.
+    /// Waits for a drain signal from the Worker runtime.
+    /// This is a blocking call that returns when the Worker runtime decides it's time to drain.
     async fn wait_for_drain_signal(&self, timeout: Option<Duration>) -> Result<DrainConfig>;
 
     /// Drains all currently registered tasks.
@@ -67,12 +65,12 @@ pub trait WaitUntil: Send + Sync + std::fmt::Debug {
     /// Gets the current number of registered tasks.
     async fn get_task_count(&self) -> Result<u32>;
 
-    /// Notifies the runtime that draining is complete.
+    /// Notifies the Worker runtime that draining is complete.
     async fn notify_drain_complete(&self, response: DrainResponse) -> Result<()>;
 }
 
 /// A context for managing wait_until tasks within an application.
-/// This handles local task execution and coordinates with the runtime via gRPC.
+/// This handles local task execution and coordinates with the Worker runtime via gRPC.
 #[derive(Debug)]
 pub struct WaitUntilContext {
     /// Unique identifier for this application instance.
@@ -81,8 +79,7 @@ pub struct WaitUntilContext {
     tasks: Arc<Mutex<HashMap<String, JoinHandle<()>>>>,
     /// Task counter for generating unique task IDs.
     task_counter: AtomicU32,
-    /// gRPC client for communicating with the runtime.
-    #[cfg(feature = "grpc")]
+    /// gRPC client for communicating with the Worker runtime.
     grpc_client: Option<WaitUntilServiceClient<Channel>>,
     /// Whether we're currently draining tasks.
     draining: Arc<Mutex<bool>>,
@@ -97,7 +94,6 @@ impl WaitUntilContext {
             application_id: app_id,
             tasks: Arc::new(Mutex::new(HashMap::new())),
             task_counter: AtomicU32::new(0),
-            #[cfg(feature = "grpc")]
             grpc_client: None,
             draining: Arc::new(Mutex::new(false)),
         }
@@ -117,38 +113,29 @@ impl WaitUntilContext {
     ) -> Result<Self> {
         let app_id = application_id.unwrap_or_else(|| Uuid::new_v4().to_string());
 
-        #[cfg(feature = "grpc")]
-        {
-            // The worker-protocol drain channel is selected by the presence of the
-            // ALIEN_WORKER_GRPC_ADDRESS env var — the runtime sets it for the app it
-            // spawns. Without it, wait_until runs in-process.
-            if let Some(grpc_address) = env_vars.get(alien_core::ENV_ALIEN_WORKER_GRPC_ADDRESS) {
-                // Create gRPC client
-                let channel = Self::create_grpc_channel(grpc_address.clone()).await?;
-                let grpc_client = WaitUntilServiceClient::new(channel);
+        // The worker-protocol drain channel is selected by the presence of the
+        // ALIEN_WORKER_GRPC_ADDRESS env var — the Worker runtime sets it for the app it
+        // spawns. Without it, wait_until runs in-process.
+        if let Some(grpc_address) = env_vars.get(alien_core::ENV_ALIEN_WORKER_GRPC_ADDRESS) {
+            // Create gRPC client
+            let channel = Self::create_grpc_channel(grpc_address.clone()).await?;
+            let grpc_client = WaitUntilServiceClient::new(channel);
 
-                return Ok(Self {
-                    application_id: app_id,
-                    tasks: Arc::new(Mutex::new(HashMap::new())),
-                    task_counter: AtomicU32::new(0),
-                    grpc_client: Some(grpc_client),
-                    draining: Arc::new(Mutex::new(false)),
-                });
-            }
-
-            // No gRPC needed - run in-process
-            Ok(Self::new(Some(app_id)))
+            return Ok(Self {
+                application_id: app_id,
+                tasks: Arc::new(Mutex::new(HashMap::new())),
+                task_counter: AtomicU32::new(0),
+                grpc_client: Some(grpc_client),
+                draining: Arc::new(Mutex::new(false)),
+            });
         }
 
-        #[cfg(not(feature = "grpc"))]
-        {
-            Ok(Self::new(Some(app_id)))
-        }
+        // No gRPC needed - run in-process
+        Ok(Self::new(Some(app_id)))
     }
 
     /// Creates a gRPC channel from an address string.
     /// This creates a dedicated channel for wait_until with proper timeout and keep-alive configuration.
-    #[cfg(feature = "grpc")]
     async fn create_grpc_channel(grpc_address: String) -> Result<Channel> {
         use std::time::Duration;
 
@@ -182,7 +169,6 @@ impl WaitUntilContext {
     }
 
     /// Creates a new WaitUntilContext with a gRPC client.
-    #[cfg(feature = "grpc")]
     pub fn new_with_grpc_client(
         application_id: Option<String>,
         grpc_client: WaitUntilServiceClient<Channel>,
@@ -198,8 +184,7 @@ impl WaitUntilContext {
         }
     }
 
-    /// Sets the gRPC client for communicating with the runtime.
-    #[cfg(feature = "grpc")]
+    /// Sets the gRPC client for communicating with the Worker runtime.
     pub fn set_grpc_client(&mut self, client: WaitUntilServiceClient<Channel>) {
         self.grpc_client = Some(client);
     }
@@ -209,90 +194,86 @@ impl WaitUntilContext {
         &self.application_id
     }
 
-    /// Starts a background task that waits for drain signals from the runtime.
+    /// Starts a background task that waits for drain signals from the Worker runtime.
     /// This should be called once when the application starts.
     pub async fn start_drain_listener(&self) -> Result<()> {
-        #[cfg(feature = "grpc")]
-        {
-            if let Some(mut client) = self.grpc_client.clone() {
-                let app_id = self.application_id.clone();
-                let context = self.clone_for_background();
+        if let Some(mut client) = self.grpc_client.clone() {
+            let app_id = self.application_id.clone();
+            let context = self.clone_for_background();
 
-                tokio::spawn(async move {
-                    loop {
-                        debug!(app_id = %app_id, "Waiting for drain signal from runtime");
+            tokio::spawn(async move {
+                loop {
+                    debug!(app_id = %app_id, "Waiting for drain signal from Worker runtime");
 
-                        let request = WaitForDrainSignalRequest {
-                            application_id: app_id.clone(),
-                            timeout: Some(prost_types::Duration {
-                                seconds: 300, // 5 minute timeout
-                                nanos: 0,
-                            }),
-                        };
+                    let request = WaitForDrainSignalRequest {
+                        application_id: app_id.clone(),
+                        timeout: Some(prost_types::Duration {
+                            seconds: 300, // 5 minute timeout
+                            nanos: 0,
+                        }),
+                    };
 
-                        match client.wait_for_drain_signal(request).await {
-                            Ok(response) => {
-                                let resp = response.into_inner();
-                                if resp.should_drain {
-                                    info!(
-                                        app_id = %app_id,
-                                        reason = %resp.drain_reason,
-                                        "Received drain signal from runtime"
-                                    );
+                    match client.wait_for_drain_signal(request).await {
+                        Ok(response) => {
+                            let resp = response.into_inner();
+                            if resp.should_drain {
+                                info!(
+                                    app_id = %app_id,
+                                    reason = %resp.drain_reason,
+                                    "Received drain signal from Worker runtime"
+                                );
 
-                                    let drain_timeout = resp
-                                        .drain_timeout
-                                        .map(|d| Duration::from_secs(d.seconds as u64))
-                                        .unwrap_or(Duration::from_secs(10));
+                                let drain_timeout = resp
+                                    .drain_timeout
+                                    .map(|d| Duration::from_secs(d.seconds as u64))
+                                    .unwrap_or(Duration::from_secs(10));
 
-                                    let config = DrainConfig {
-                                        timeout: drain_timeout,
-                                        reason: resp.drain_reason,
-                                    };
+                                let config = DrainConfig {
+                                    timeout: drain_timeout,
+                                    reason: resp.drain_reason,
+                                };
 
-                                    // Drain all tasks
-                                    match context.drain_all(config).await {
-                                        Ok(drain_response) => {
-                                            // Notify runtime that draining is complete
-                                            let complete_request = NotifyDrainCompleteRequest {
-                                                application_id: app_id.clone(),
-                                                tasks_drained: drain_response.tasks_drained,
-                                                success: drain_response.success,
-                                                error_message: drain_response.error_message,
-                                            };
+                                // Drain all tasks
+                                match context.drain_all(config).await {
+                                    Ok(drain_response) => {
+                                        // Notify the Worker runtime that draining is complete.
+                                        let complete_request = NotifyDrainCompleteRequest {
+                                            application_id: app_id.clone(),
+                                            tasks_drained: drain_response.tasks_drained,
+                                            success: drain_response.success,
+                                            error_message: drain_response.error_message,
+                                        };
 
-                                            if let Err(e) =
-                                                client.notify_drain_complete(complete_request).await
-                                            {
-                                                error!(app_id = %app_id, error = %e, "Failed to notify runtime of drain completion");
-                                            } else {
-                                                info!(app_id = %app_id, "Successfully notified runtime of drain completion");
-                                            }
+                                        if let Err(e) =
+                                            client.notify_drain_complete(complete_request).await
+                                        {
+                                            error!(app_id = %app_id, error = %e, "Failed to notify Worker runtime of drain completion");
+                                        } else {
+                                            info!(app_id = %app_id, "Successfully notified Worker runtime of drain completion");
                                         }
-                                        Err(e) => {
-                                            error!(app_id = %app_id, error = %e, "Failed to drain tasks");
-                                            // Still notify runtime of the failure
-                                            let complete_request = NotifyDrainCompleteRequest {
-                                                application_id: app_id.clone(),
-                                                tasks_drained: 0,
-                                                success: false,
-                                                error_message: Some(e.to_string()),
-                                            };
-                                            let _ = client
-                                                .notify_drain_complete(complete_request)
-                                                .await;
-                                        }
+                                    }
+                                    Err(e) => {
+                                        error!(app_id = %app_id, error = %e, "Failed to drain tasks");
+                                        // Still notify the Worker runtime of the failure.
+                                        let complete_request = NotifyDrainCompleteRequest {
+                                            application_id: app_id.clone(),
+                                            tasks_drained: 0,
+                                            success: false,
+                                            error_message: Some(e.to_string()),
+                                        };
+                                        let _ =
+                                            client.notify_drain_complete(complete_request).await;
                                     }
                                 }
                             }
-                            Err(e) => {
-                                warn!(app_id = %app_id, error = %e, "Failed to wait for drain signal, retrying in 5 seconds");
-                                tokio::time::sleep(Duration::from_secs(5)).await;
-                            }
+                        }
+                        Err(e) => {
+                            warn!(app_id = %app_id, error = %e, "Failed to wait for drain signal, retrying in 5 seconds");
+                            tokio::time::sleep(Duration::from_secs(5)).await;
                         }
                     }
-                });
-            }
+                }
+            });
         }
 
         Ok(())
@@ -304,31 +285,27 @@ impl WaitUntilContext {
             application_id: self.application_id.clone(),
             tasks: Arc::clone(&self.tasks),
             task_counter: AtomicU32::new(self.task_counter.load(Ordering::Relaxed)),
-            #[cfg(feature = "grpc")]
             grpc_client: self.grpc_client.clone(),
             draining: Arc::clone(&self.draining),
         }
     }
 
-    /// Notifies the runtime that a task has been registered (if gRPC client is available).
+    /// Notifies the Worker runtime that a task has been registered (if a gRPC client is available).
     async fn notify_task_registered(&self, task_description: String) -> Result<()> {
-        #[cfg(feature = "grpc")]
-        {
-            if let Some(mut client) = self.grpc_client.clone() {
-                let request = NotifyTaskRegisteredRequest {
-                    application_id: self.application_id.clone(),
-                    task_description: Some(task_description),
-                };
+        if let Some(mut client) = self.grpc_client.clone() {
+            let request = NotifyTaskRegisteredRequest {
+                application_id: self.application_id.clone(),
+                task_description: Some(task_description),
+            };
 
-                client
-                    .notify_task_registered(request)
-                    .await
-                    .into_alien_error()
-                    .context(ErrorData::HttpRequestFailed {
-                        url: "grpc://wait_until_service".to_string(),
-                        method: "notify_task_registered".to_string(),
-                    })?;
-            }
+            client
+                .notify_task_registered(request)
+                .await
+                .into_alien_error()
+                .context(ErrorData::HttpRequestFailed {
+                    url: "grpc://wait_until_service".to_string(),
+                    method: "notify_task_registered".to_string(),
+                })?;
         }
 
         Ok(())
@@ -337,7 +314,7 @@ impl WaitUntilContext {
 
 impl WaitUntilContext {
     /// Registers a new wait_until task that will be executed immediately.
-    /// The task runs in the application process but is tracked by the runtime.
+    /// The task runs in the application process but is tracked by the Worker runtime.
     pub fn wait_until<F, Fut>(&self, task_fn: F) -> Result<()>
     where
         F: FnOnce() -> Fut + Send + 'static,
@@ -378,11 +355,11 @@ impl WaitUntilContext {
             tasks_guard.insert(task_key.clone(), handle);
         }
 
-        // Notify the runtime in a background task (non-blocking)
+        // Notify the Worker runtime in a background task (non-blocking).
         let context_clone = self.clone_for_background();
         tokio::spawn(async move {
             if let Err(e) = context_clone.notify_task_registered(task_description).await {
-                warn!(app_id = %context_clone.application_id, task_id = %task_key, error = %e, "Failed to notify runtime of task registration");
+                warn!(app_id = %context_clone.application_id, task_id = %task_key, error = %e, "Failed to notify Worker runtime of task registration");
             }
         });
 
@@ -396,40 +373,37 @@ impl WaitUntil for WaitUntilContext {
         &self,
         timeout_duration: Option<Duration>,
     ) -> Result<DrainConfig> {
-        #[cfg(feature = "grpc")]
-        {
-            if let Some(mut client) = self.grpc_client.clone() {
-                let timeout_proto = timeout_duration.map(|d| prost_types::Duration {
-                    seconds: d.as_secs() as i64,
-                    nanos: d.subsec_nanos() as i32,
+        if let Some(mut client) = self.grpc_client.clone() {
+            let timeout_proto = timeout_duration.map(|d| prost_types::Duration {
+                seconds: d.as_secs() as i64,
+                nanos: d.subsec_nanos() as i32,
+            });
+
+            let request = WaitForDrainSignalRequest {
+                application_id: self.application_id.clone(),
+                timeout: timeout_proto,
+            };
+
+            let response = client
+                .wait_for_drain_signal(request)
+                .await
+                .into_alien_error()
+                .context(ErrorData::HttpRequestFailed {
+                    url: "grpc://wait_until_service".to_string(),
+                    method: "wait_for_drain_signal".to_string(),
+                })?;
+
+            let resp = response.into_inner();
+            if resp.should_drain {
+                let drain_timeout = resp
+                    .drain_timeout
+                    .map(|d| Duration::from_secs(d.seconds as u64))
+                    .unwrap_or(Duration::from_secs(10));
+
+                return Ok(DrainConfig {
+                    timeout: drain_timeout,
+                    reason: resp.drain_reason,
                 });
-
-                let request = WaitForDrainSignalRequest {
-                    application_id: self.application_id.clone(),
-                    timeout: timeout_proto,
-                };
-
-                let response = client
-                    .wait_for_drain_signal(request)
-                    .await
-                    .into_alien_error()
-                    .context(ErrorData::HttpRequestFailed {
-                        url: "grpc://wait_until_service".to_string(),
-                        method: "wait_for_drain_signal".to_string(),
-                    })?;
-
-                let resp = response.into_inner();
-                if resp.should_drain {
-                    let drain_timeout = resp
-                        .drain_timeout
-                        .map(|d| Duration::from_secs(d.seconds as u64))
-                        .unwrap_or(Duration::from_secs(10));
-
-                    return Ok(DrainConfig {
-                        timeout: drain_timeout,
-                        reason: resp.drain_reason,
-                    });
-                }
             }
         }
 
@@ -517,25 +491,22 @@ impl WaitUntil for WaitUntilContext {
     }
 
     async fn notify_drain_complete(&self, response: DrainResponse) -> Result<()> {
-        #[cfg(feature = "grpc")]
-        {
-            if let Some(mut client) = self.grpc_client.clone() {
-                let request = NotifyDrainCompleteRequest {
-                    application_id: self.application_id.clone(),
-                    tasks_drained: response.tasks_drained,
-                    success: response.success,
-                    error_message: response.error_message,
-                };
+        if let Some(mut client) = self.grpc_client.clone() {
+            let request = NotifyDrainCompleteRequest {
+                application_id: self.application_id.clone(),
+                tasks_drained: response.tasks_drained,
+                success: response.success,
+                error_message: response.error_message,
+            };
 
-                client
-                    .notify_drain_complete(request)
-                    .await
-                    .into_alien_error()
-                    .context(ErrorData::HttpRequestFailed {
-                        url: "grpc://wait_until_service".to_string(),
-                        method: "notify_drain_complete".to_string(),
-                    })?;
-            }
+            client
+                .notify_drain_complete(request)
+                .await
+                .into_alien_error()
+                .context(ErrorData::HttpRequestFailed {
+                    url: "grpc://wait_until_service".to_string(),
+                    method: "notify_drain_complete".to_string(),
+                })?;
         }
 
         Ok(())

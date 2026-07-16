@@ -1,13 +1,9 @@
 use crate::{
-    control_service::{
-        alien_worker::control::FILE_DESCRIPTOR_SET as CONTROL_FILE_DESCRIPTOR_SET,
-        ControlGrpcServer,
-    },
+    control::FILE_DESCRIPTOR_SET as CONTROL_FILE_DESCRIPTOR_SET,
+    control_service::ControlGrpcServer,
     error::{ErrorData, Result},
-    wait_until_service::{
-        alien_worker::wait_until::FILE_DESCRIPTOR_SET as WAIT_UNTIL_FILE_DESCRIPTOR_SET,
-        WaitUntilGrpcServer,
-    },
+    wait_until::FILE_DESCRIPTOR_SET as WAIT_UNTIL_FILE_DESCRIPTOR_SET,
+    wait_until_service::WaitUntilGrpcServer,
     MAX_GRPC_MESSAGE_SIZE,
 };
 use alien_error::{Context, IntoAlienError};
@@ -28,9 +24,8 @@ pub struct GrpcServerHandles {
 /// Configures and runs the worker app protocol gRPC server.
 ///
 /// This server hosts the worker-protocol services (Control + WaitUntil) that
-/// coordinate the runtime with the application it manages. The bindings
-/// themselves are resolved in-process by the runtime's direct provider, so no
-/// per-binding gRPC service is registered here.
+/// coordinate the Worker runtime with the application it manages. Binding calls
+/// are resolved directly by the application and never traverse this server.
 pub async fn run_grpc_server(addr_str: &str) -> Result<GrpcServerHandles> {
     let addr: std::net::SocketAddr =
         addr_str
@@ -44,7 +39,7 @@ pub async fn run_grpc_server(addr_str: &str) -> Result<GrpcServerHandles> {
     info!("Configuring gRPC server for {}", addr);
 
     // The worker-protocol gRPC server is unauthenticated by design — it's
-    // intra-machine IPC between the runtime and the application code it
+    // intra-machine IPC between the Worker runtime and the application code it
     // manages, and they share a trust boundary. Binding to a non-loopback
     // address erases that assumption (think `0.0.0.0` from a misconfigured
     // ALIEN_WORKER_GRPC_ADDRESS, `--network=host` Docker, or shared-pod sidecar).

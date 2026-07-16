@@ -18,6 +18,7 @@ use crate::managed_secret::provision_managed_test_secret;
 use crate::manager::TestManager;
 
 const LOCAL_DELETION_TIMEOUT: Duration = Duration::from_secs(120);
+const DISTRIBUTION_DELETION_HANDOFF_TIMEOUT: Duration = Duration::from_secs(600);
 
 // ---------------------------------------------------------------------------
 // Enums
@@ -335,7 +336,7 @@ pub fn exclusion_reason(
         }
         // Bun-compiled TypeScript binaries on Windows have a runtime issue where
         // setTimeout/async tasks in detached promises (waitUntil) don't execute.
-        // All other gRPC bindings work; only background tasks are affected.
+        // All direct binding checks work; only background tasks are affected.
         Binding::WaitUntil
             if platform == Platform::Local
                 && app == TestApp::ComprehensiveTs
@@ -435,17 +436,21 @@ pub struct TestContext {
 }
 
 impl TestContext {
-    /// Best-effort cleanup: destroy the deployment and stop any agent.
+    /// Destroy the deployment, stop its operator, and remove external artifacts.
     ///
     /// Designed to be called from `AsyncTestContext::teardown()` so that
-    /// resources are released even when a test panics. Errors are logged
-    /// but never propagated.
-    pub async fn cleanup(mut self) {
-        // A local pull operator owns the deletion state machine, so keep it
-        // running until deletion reaches a terminal state. Other platforms
-        // retain their existing cleanup order: stop the runtime first, then
-        // let cloud/setup artifact cleanup perform the authoritative teardown.
-        let defer_operator_cleanup = self.platform == Platform::Local;
+    /// resources are released even when a test panics. Unsafe handoffs and
+    /// artifact teardown failures are returned so the E2E cannot pass while
+    /// leaking resources or discarding recovery state.
+    pub async fn cleanup(mut self) -> anyhow::Result<()> {
+        let has_distribution_cleanups = !self.distribution_cleanups.is_empty();
+        self.distribution_cleanups
+            .sort_by_key(|cleanup| cleanup.cleanup_order());
+
+        // Keep a pull operator alive until runtime deletion reaches a terminal
+        // handoff. Distribution artifacts must not be removed while that
+        // operator may still need their setup-created access path.
+        let defer_operator_cleanup = self.platform == Platform::Local || has_distribution_cleanups;
         let mut agent = self.agent.take();
         if !defer_operator_cleanup {
             if let Some(agent) = agent.take() {
@@ -467,28 +472,41 @@ impl TestContext {
             }
         };
 
-        if !destroy_enqueued {
-            // Still run setup artifact cleanup below. It is the owner of
-            // setup-created resources and should not depend on manager cleanup.
-            self.deployment.kill_foreground_agent().await;
-            if let Some(agent) = agent.take() {
-                cleanup_operator(agent).await;
-            }
-
-            for cleanup in self.distribution_cleanups {
-                cleanup.cleanup().await;
-            }
-
-            info!(deployment = %self.deployment.id, "cleanup: complete");
-            return;
-        }
-
         // Drive the deletion state machine with target credentials so cloud
         // resources are actually torn down before the test exits.
-        if matches!(
-            self.platform,
-            Platform::Aws | Platform::Gcp | Platform::Azure
-        ) {
+        let mut distribution_cleanup_ready = true;
+        if has_distribution_cleanups {
+            // If enqueueing deletion failed, make one immediate status check.
+            // A 404 or terminal teardown status proves external cleanup is
+            // safe; an active/unknown deployment means setup artifacts must be
+            // retained so live resources do not lose their credentials or
+            // scaffolding.
+            let handoff_timeout = if destroy_enqueued {
+                DISTRIBUTION_DELETION_HANDOFF_TIMEOUT
+            } else {
+                Duration::ZERO
+            };
+            match self.deployment.wait_until_deleted(handoff_timeout).await {
+                Ok(outcome) => info!(
+                    deployment = %self.deployment.id,
+                    ?outcome,
+                    "cleanup: runtime deletion handed off to setup artifact owner"
+                ),
+                Err(error) => {
+                    distribution_cleanup_ready = false;
+                    tracing::warn!(
+                        deployment = %self.deployment.id,
+                        %error,
+                        "cleanup: retaining distribution artifacts because runtime deletion did not reach a safe handoff"
+                    );
+                }
+            }
+        } else if destroy_enqueued
+            && matches!(
+                self.platform,
+                Platform::Aws | Platform::Gcp | Platform::Azure
+            )
+        {
             let config = crate::config::TestConfig::from_env();
             if config.has_platform(self.platform) {
                 if let Err(e) = crate::setup::teardown_target(
@@ -505,8 +523,14 @@ impl TestContext {
                         "cleanup: teardown_target failed (resources may be orphaned)"
                     );
                 }
+            } else {
+                tracing::warn!(
+                    deployment = %self.deployment.id,
+                    platform = %self.platform,
+                    "cleanup: target credentials unavailable for deployment teardown"
+                );
             }
-        } else if self.platform == Platform::Local {
+        } else if destroy_enqueued && self.platform == Platform::Local {
             if let Err(error) = complete_local_deletion(&self.deployment, &self.manager).await {
                 tracing::warn!(
                     deployment = %self.deployment.id,
@@ -519,15 +543,62 @@ impl TestContext {
         // Kill the foreground agent process and wait for it to exit.
         // This prevents orphaned agent processes from spamming logs after the test.
         self.deployment.kill_foreground_agent().await;
-        if let Some(agent) = agent.take() {
+        if let Some(mut agent) = agent.take() {
+            let helm_cleanup_is_tracked = agent
+                .helm_release
+                .as_ref()
+                .zip(agent.helm_namespace.as_ref())
+                .is_some_and(|(release, namespace)| {
+                    self.distribution_cleanups.iter().any(|cleanup| {
+                        matches!(
+                            cleanup,
+                            crate::distribution::DistributionArtifactCleanup::Helm {
+                                release: tracked_release,
+                                namespace: tracked_namespace,
+                                ..
+                            } if tracked_release == release && tracked_namespace == namespace
+                        )
+                    })
+                });
+            if helm_cleanup_is_tracked {
+                // The tracked artifact owns uninstall and namespace deletion so
+                // failures are propagated and the release is handled exactly once.
+                agent.helm_release = None;
+                agent.helm_namespace = None;
+            }
             cleanup_operator(agent).await;
         }
 
-        for cleanup in self.distribution_cleanups {
-            cleanup.cleanup().await;
+        if !distribution_cleanup_ready {
+            let recovery = self
+                .distribution_cleanups
+                .into_iter()
+                .map(|cleanup| cleanup.preserve_for_recovery())
+                .collect::<Vec<_>>()
+                .join("\n");
+            anyhow::bail!(
+                "Distribution cleanup stopped before setup teardown because live-resource deletion did not reach a safe handoff. Recovery artifacts:\n{recovery}"
+            );
+        }
+
+        let mut cleanups = self.distribution_cleanups.into_iter();
+        while let Some(cleanup) = cleanups.next() {
+            if let Err(error) = cleanup.cleanup().await {
+                let retained = cleanups
+                    .map(|cleanup| cleanup.preserve_for_recovery())
+                    .collect::<Vec<_>>()
+                    .join("\n");
+                if retained.is_empty() {
+                    return Err(error);
+                }
+                return Err(error.context(format!(
+                    "Subsequent distribution artifacts were retained to preserve cleanup order:\n{retained}"
+                )));
+            }
         }
 
         info!(deployment = %self.deployment.id, "cleanup: complete");
+        Ok(())
     }
 }
 

@@ -79,12 +79,12 @@ pub enum ErrorData {
 
     /// Failed to download alien-worker-runtime binary.
     #[error(
-        code = "ALIEN_RUNTIME_DOWNLOAD_FAILED",
+        code = "ALIEN_WORKER_RUNTIME_DOWNLOAD_FAILED",
         message = "Failed to download alien-worker-runtime from '{url}': {reason}",
         retryable = "true",
         internal = "false"
     )]
-    AlienRuntimeDownloadFailed {
+    AlienWorkerRuntimeDownloadFailed {
         /// URL that was being downloaded from
         url: String,
         /// Reason for the download failure

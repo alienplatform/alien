@@ -605,9 +605,10 @@ impl TestManager {
 
     /// Build impersonation config section from management credentials.
     ///
-    /// Maps test management credentials into `ServiceAccountBinding` entries
-    /// so the manager's target bindings providers can load the management
-    /// identity for cross-account access.
+    /// Maps test management identities that support service-account
+    /// impersonation into bindings. Azure uses the actual environment workload
+    /// identity for bootstrap and the generated remote identity after handoff,
+    /// so it must not be represented as a managed-identity binding.
     fn build_impersonation_config(
         config: Option<&TestConfig>,
         platforms: &[Platform],
@@ -653,18 +654,7 @@ impl TestManager {
                         BindingValue::value(unique_id),
                     ));
                 }
-                Platform::Azure => {
-                    let mgmt = match config.azure_mgmt.as_ref() {
-                        Some(m) => m,
-                        None => continue,
-                    };
-                    if mgmt.oidc_issuer.is_none() || mgmt.oidc_subject.is_none() {
-                        continue;
-                    }
-                    section.azure = Some(ServiceAccountBinding::azure_managed_identity(
-                        "oidc", "oidc", "oidc",
-                    ));
-                }
+                Platform::Azure => {}
                 _ => {}
             }
         }

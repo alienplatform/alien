@@ -67,7 +67,7 @@ impl LocalWorkerManager {
     /// Starts a daemon under direct local supervision.
     ///
     /// The daemon's app binary is spawned as the MAIN process — a direct child of this
-    /// supervisor with no runtime wrapper. There is no gRPC bindings/control server, no
+    /// supervisor with no runtime wrapper. There is no Worker app protocol/control server, no
     /// `ALIEN_TRANSPORT`, no `ALIEN_WORKER_GRPC_ADDRESS`, and no `ALIEN_SECRETS` marker in the
     /// child environment: the controller resolves bindings and secrets into plain env vars
     /// before start, and a command-enabled daemon runs its own app-owned receiver from the

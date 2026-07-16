@@ -574,9 +574,9 @@ mod tests {
             params,
             ResponseHandling {
                 max_inline_bytes: 1024,
-                submit_response_url: "/v1/commands/command/response?token=response".to_string(),
+                submit_response_url: "command/response?token=response".to_string(),
                 storage_upload_request: http_request(
-                    "/v1/commands/command/response/body?token=upload",
+                    "command/response/body?token=upload",
                     PresignedOperation::Put,
                 ),
             },
@@ -675,18 +675,19 @@ mod tests {
     fn operator_normalizes_inline_response_urls_before_dispatch() {
         let mut response = lease_response(BodySpec::inline(b"{}"));
         let commands_endpoint =
-            reqwest::Url::parse("http://host.docker.internal:9090/v1/commands/leases").unwrap();
+            reqwest::Url::parse("http://host.docker.internal:9090/tenant/v1/commands/leases")
+                .unwrap();
 
         normalize_leased_envelopes(&mut response, &commands_endpoint);
 
         let envelope = &response.leases[0].envelope;
         assert_eq!(
             envelope.response_handling.submit_response_url,
-            "http://host.docker.internal:9090/v1/commands/command/response?token=response"
+            "http://host.docker.internal:9090/tenant/v1/commands/command/response?token=response"
         );
         assert_eq!(
             envelope.response_handling.storage_upload_request.url(),
-            "http://host.docker.internal:9090/v1/commands/command/response/body?token=upload"
+            "http://host.docker.internal:9090/tenant/v1/commands/command/response/body?token=upload"
         );
     }
 
@@ -695,7 +696,7 @@ mod tests {
         let mut response = lease_response(BodySpec::Storage {
             size: Some(2048),
             storage_get_request: Some(http_request(
-                "/v1/commands/command/params?token=params",
+                "command/params?token=params",
                 PresignedOperation::Get,
             )),
             storage_put_used: Some(true),
@@ -708,7 +709,8 @@ mod tests {
             PresignedOperation::Put,
         );
         let commands_endpoint =
-            reqwest::Url::parse("http://host.docker.internal:9090/v1/commands/leases").unwrap();
+            reqwest::Url::parse("http://host.docker.internal:9090/tenant/v1/commands/leases")
+                .unwrap();
 
         normalize_leased_envelopes(&mut response, &commands_endpoint);
 
@@ -722,7 +724,7 @@ mod tests {
         };
         assert_eq!(
             params.url(),
-            "http://host.docker.internal:9090/v1/commands/command/params?token=params"
+            "http://host.docker.internal:9090/tenant/v1/commands/command/params?token=params"
         );
         assert_eq!(
             envelope.response_handling.storage_upload_request.url(),

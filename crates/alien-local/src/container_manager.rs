@@ -182,6 +182,10 @@ pub struct BindMount {
     pub container_path: String,
     /// Resource ID (for logging only)
     pub resource_id: String,
+    /// Whether a host-side Alien workload also opens files in this directory.
+    /// When true, local containers must create files as the host operator user
+    /// so native workloads can reopen them.
+    pub shared_with_host_workloads: bool,
 }
 
 /// Result of starting a container.
@@ -883,10 +887,24 @@ impl LocalContainerManager {
             },
         );
 
+        // Local file-backed bindings are shared with host-side workloads
+        // (notably runtime-less Daemons) and with the operator's health
+        // probes. Run a container that receives those bind mounts as the
+        // operator's Unix uid/gid so every process creates SQLite/WAL and
+        // storage files with the same ownership. Leaving the image's user in
+        // place lets the first container process create files the host-side
+        // daemon cannot reopen (EACCES), even though both were given the same
+        // binding path.
+        //
+        // Containers without linked-resource bind mounts keep the image's
+        // declared user unchanged.
+        let user = shared_bind_mount_user(&config.bind_mounts);
+
         // Build container config
         let container_config = Config {
             image: Some(image.clone()),
             cmd: config.command.clone(),
+            user,
             hostname: Some(container_id.to_string()),
             env: Some(env),
             exposed_ports,
@@ -1310,9 +1328,60 @@ impl LocalContainerManager {
     }
 }
 
+/// Return the host identity a bind-mounted local workload must share with the
+/// operator and native Daemons. Docker accepts numeric `uid:gid` values even
+/// when the image has no matching passwd entry.
+#[cfg(target_os = "linux")]
+fn shared_bind_mount_user(bind_mounts: &[BindMount]) -> Option<String> {
+    if !bind_mounts
+        .iter()
+        .any(|mount| mount.shared_with_host_workloads)
+    {
+        return None;
+    }
+
+    // SAFETY: geteuid/getegid are side-effect-free process identity queries.
+    let (uid, gid) = unsafe { (libc::geteuid(), libc::getegid()) };
+    if uid == 0 {
+        return None;
+    }
+    Some(format!("{uid}:{gid}"))
+}
+
+#[cfg(not(target_os = "linux"))]
+fn shared_bind_mount_user(_bind_mounts: &[BindMount]) -> Option<String> {
+    // Docker Desktop mediates bind mounts through its VM/file-sharing layer;
+    // host uid/gid values do not identify the container user there.
+    None
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn test_bind_mount(shared_with_host_workloads: bool) -> BindMount {
+        BindMount {
+            host_path: PathBuf::from("/tmp/alien-test-binding"),
+            container_path: "/mnt/test".to_string(),
+            resource_id: "test".to_string(),
+            shared_with_host_workloads,
+        }
+    }
+
+    #[test]
+    fn tmp_only_bind_mount_preserves_the_image_user() {
+        assert_eq!(shared_bind_mount_user(&[test_bind_mount(false)]), None);
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn shared_bind_mount_uses_the_non_root_host_identity() {
+        // SAFETY: geteuid/getegid are side-effect-free process identity queries.
+        let (uid, gid) = unsafe { (libc::geteuid(), libc::getegid()) };
+        let expected = (uid != 0).then(|| format!("{uid}:{gid}"));
+
+        assert_eq!(shared_bind_mount_user(&[test_bind_mount(true)]), expected);
+    }
 
     #[test]
     fn rewrites_localhost_for_command_receiver_url() {

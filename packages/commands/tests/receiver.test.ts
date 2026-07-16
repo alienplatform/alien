@@ -643,6 +643,61 @@ describe("CommandReceiver.run", () => {
     }
   })
 
+  it("keeps a reverse-proxy prefix for storage upload and response submission", async () => {
+    server = await openServer()
+    const env = envelope({ baseUrl: "http://manager.internal" })
+    env.responseHandling.maxInlineBytes = 5
+    env.responseHandling.submitResponseUrl = "cmd_1/response?response_token=submit-token&expires=1"
+    env.responseHandling.storageUploadRequest.backend = {
+      type: "http",
+      url: "../storage-put?signature=upload-token",
+      method: "PUT",
+      headers: {},
+    }
+
+    let served = false
+    route = req => {
+      if (req.method === "POST" && req.path === "/tenant/v1/commands/leases") {
+        if (served) return { json: { leases: [] } }
+        served = true
+        return { json: { leases: [lease(env)] } }
+      }
+      if (
+        req.method === "PUT" &&
+        (req.path === "/tenant/v1/storage-put?signature=upload-token" ||
+          req.path === "/tenant/v1/commands/cmd_1/response?response_token=submit-token&expires=1")
+      ) {
+        return { status: 200 }
+      }
+      return { status: 404 }
+    }
+
+    const receiver = createCommandReceiver({
+      env: { ...FULL_ENV, ALIEN_COMMANDS_URL: `${server.baseUrl}/tenant/v1/` },
+      pollIntervalMs: 5,
+      pollJitter: 0,
+    })
+    receiver.handle("echo", () => ({ payload: "x".repeat(64) }))
+    receiverStop = () => receiver.stop()
+    running = receiver.run()
+
+    await waitFor(() =>
+      Boolean(
+        server?.requests.some(
+          req =>
+            req.method === "PUT" &&
+            req.path === "/tenant/v1/commands/cmd_1/response?response_token=submit-token&expires=1",
+        ),
+      ),
+    )
+
+    expect(
+      server.requests.some(
+        req => req.method === "PUT" && req.path === "/tenant/v1/storage-put?signature=upload-token",
+      ),
+    ).toBe(true)
+  })
+
   it("drains: stop() lets the in-flight command finish and stops further lease polls", async () => {
     server = await openServer()
     const env = envelope({ baseUrl: server.baseUrl })
@@ -1065,33 +1120,58 @@ describe("CommandReceiver.run", () => {
 })
 
 describe("resolveEnvelopeUrls", () => {
-  it("resolves root-relative manager URLs against the configured origin and keeps absolute URLs", async () => {
+  it("resolves manager references against the lease endpoint and keeps cloud URLs exact", async () => {
     const { resolveEnvelopeUrls } = await import("../src/receiver.js")
 
-    // Relative manager URLs (lease-served) resolve against the origin of the
-    // configured commands URL — including a manager-served upload URL —
-    // while an absolute cloud-presigned URL passes through untouched.
+    // Every manager-served field retains the external prefix and signed query.
     const env = envelope({ baseUrl: "http://ignored.example.com" })
-    env.responseHandling.submitResponseUrl =
-      "/v1/commands/cmd_1/response?response_token=t&expires=1"
+    env.responseHandling.submitResponseUrl = "cmd_1/response?response_token=t&expires=1"
     env.responseHandling.storageUploadRequest.backend = {
       type: "http",
-      url: "/v1/commands/cmd_1/response-blob?sig=x",
+      url: "../storage/response-blob?sig=x",
       method: "PUT",
       headers: {},
     }
-    resolveEnvelopeUrls(env, "http://host.docker.internal:9090/v1")
+    env.params = {
+      mode: "storage",
+      size: 2048,
+      storageGetRequest: {
+        backend: {
+          type: "http",
+          url: "cmd_1/params?sig=params",
+          method: "GET",
+          headers: {},
+        },
+        expiration: new Date(Date.now() + 3_600_000).toISOString(),
+        operation: "get",
+        path: "commands/cmd_1/params",
+      },
+      storagePutUsed: true,
+    }
+    resolveEnvelopeUrls(env, "https://edge.example.com/tenant/v1/commands/leases")
     expect(env.responseHandling.submitResponseUrl).toBe(
-      "http://host.docker.internal:9090/v1/commands/cmd_1/response?response_token=t&expires=1",
+      "https://edge.example.com/tenant/v1/commands/cmd_1/response?response_token=t&expires=1",
     )
     expect(env.responseHandling.storageUploadRequest.backend).toMatchObject({
-      url: "http://host.docker.internal:9090/v1/commands/cmd_1/response-blob?sig=x",
+      url: "https://edge.example.com/tenant/v1/storage/response-blob?sig=x",
+    })
+    expect(env.params.storageGetRequest?.backend).toMatchObject({
+      url: "https://edge.example.com/tenant/v1/commands/cmd_1/params?sig=params",
     })
 
+    // Do not parse and reserialize cloud-presigned URLs: signatures can be
+    // sensitive to their exact byte representation.
     const absolute = envelope({ baseUrl: "https://commands.example.com" })
-    resolveEnvelopeUrls(absolute, "http://host.docker.internal:9090/v1")
-    expect(absolute.responseHandling.submitResponseUrl).toBe(
-      "https://commands.example.com/v1/commands/cmd_1/response",
-    )
+    const cloudUrl = "https://storage.example.com/upload?X-Signature=DoNotCanonicalize%2FValue"
+    absolute.responseHandling.storageUploadRequest.backend = {
+      type: "http",
+      url: cloudUrl,
+      method: "PUT",
+      headers: {},
+    }
+    resolveEnvelopeUrls(absolute, "https://edge.example.com/tenant/v1/commands/leases")
+    expect(absolute.responseHandling.storageUploadRequest.backend).toMatchObject({
+      url: cloudUrl,
+    })
   })
 })

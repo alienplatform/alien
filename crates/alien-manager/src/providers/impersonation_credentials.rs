@@ -4,7 +4,7 @@
 //! Used when `[impersonation]` is configured in alien-manager.toml.
 //! The management SA is loaded from the per-platform target bindings provider.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
 use alien_bindings::traits::ImpersonationRequest;
@@ -13,6 +13,7 @@ use alien_core::{ClientConfig, DeploymentStatus, EnvironmentInfo, ManagementConf
 use alien_error::{AlienError, Context, GenericError, IntoAlienError};
 use async_trait::async_trait;
 
+use crate::error::ErrorData;
 use crate::traits::{CredentialResolver, DeploymentRecord, ResolvedCredentials};
 
 /// Resolves cloud credentials for push-model deployments via service account impersonation.
@@ -23,16 +24,22 @@ use crate::traits::{CredentialResolver, DeploymentRecord, ResolvedCredentials};
 pub struct ImpersonationCredentialResolver {
     bindings_provider: Arc<dyn BindingsProviderApi>,
     target_providers: HashMap<Platform, Arc<dyn BindingsProviderApi>>,
+    management_binding_platforms: HashSet<Platform>,
+    environment_resolver: super::environment_credentials::EnvironmentCredentialResolver,
 }
 
 impl ImpersonationCredentialResolver {
     pub fn new(
         bindings_provider: Arc<dyn BindingsProviderApi>,
         target_providers: HashMap<Platform, Arc<dyn BindingsProviderApi>>,
+        management_binding_platforms: HashSet<Platform>,
     ) -> Self {
         Self {
             bindings_provider,
             target_providers,
+            management_binding_platforms,
+            environment_resolver:
+                super::environment_credentials::EnvironmentCredentialResolver::new(),
         }
     }
 
@@ -41,11 +48,12 @@ impl ImpersonationCredentialResolver {
             .get(&platform)
             .unwrap_or(&self.bindings_provider)
     }
-}
 
-#[async_trait]
-impl CredentialResolver for ImpersonationCredentialResolver {
-    async fn resolve(&self, deployment: &DeploymentRecord) -> Result<ClientConfig, AlienError> {
+    async fn resolve_from_env(
+        &self,
+        deployment: &DeploymentRecord,
+        env: HashMap<String, String>,
+    ) -> Result<ClientConfig, AlienError> {
         let platform = deployment.platform;
 
         if platform == Platform::Test {
@@ -66,6 +74,13 @@ impl CredentialResolver for ImpersonationCredentialResolver {
             return Ok(ClientConfig::Test);
         }
 
+        if !self.management_binding_platforms.contains(&platform) {
+            return self
+                .environment_resolver
+                .resolve_from_env(deployment, env)
+                .await;
+        }
+
         let status = parse_status(&deployment.status);
 
         // InitialSetup is still setup-owned. Even after the remote stack
@@ -84,7 +99,7 @@ impl CredentialResolver for ImpersonationCredentialResolver {
             let provider = self.provider_for_target(platform);
             let base_config = impersonate_management_sa(&**provider, platform).await?;
 
-            let resolver = alien_infra::RemoteAccessResolver::new(std::env::vars().collect());
+            let resolver = alien_infra::RemoteAccessResolver::new(env);
             let resolved = resolver
                 .resolve(
                     base_config,
@@ -92,9 +107,11 @@ impl CredentialResolver for ImpersonationCredentialResolver {
                     deployment.environment_info.as_ref(),
                 )
                 .await
-                .context(GenericError {
-                    message: "Failed to resolve remote access from stack state".to_string(),
-                })?;
+                .context(ErrorData::RemoteCredentialHandoffFailed {
+                    deployment_id: deployment.id.clone(),
+                    platform,
+                })
+                .map_err(AlienError::into_generic)?;
 
             return Ok(resolved);
         }
@@ -106,11 +123,29 @@ impl CredentialResolver for ImpersonationCredentialResolver {
             ),
         }))
     }
+}
+
+#[async_trait]
+impl CredentialResolver for ImpersonationCredentialResolver {
+    async fn resolve(&self, deployment: &DeploymentRecord) -> Result<ClientConfig, AlienError> {
+        self.resolve_from_env(deployment, std::env::vars().collect())
+            .await
+    }
 
     async fn resolve_with_capability(
         &self,
         deployment: &DeploymentRecord,
     ) -> Result<ResolvedCredentials, AlienError> {
+        if !self
+            .management_binding_platforms
+            .contains(&deployment.platform)
+        {
+            return self
+                .environment_resolver
+                .resolve_with_capability(deployment)
+                .await;
+        }
+
         let client_config = self.resolve(deployment).await?;
         let status = parse_status(&deployment.status);
         let has_provision_capability = matches!(
@@ -133,6 +168,13 @@ impl CredentialResolver for ImpersonationCredentialResolver {
     ) -> Result<Option<ManagementConfig>, AlienError> {
         if uses_control_plane_credentials(platform) {
             return Ok(None);
+        }
+
+        if !self.management_binding_platforms.contains(&platform) {
+            return self
+                .environment_resolver
+                .resolve_management_config(platform)
+                .await;
         }
 
         let provider = self.provider_for_target(platform);
@@ -266,7 +308,7 @@ fn management_config_from_info(
     }
 }
 
-fn apply_target_environment(
+pub(crate) fn apply_target_environment(
     client_config: ClientConfig,
     environment_info: Option<&EnvironmentInfo>,
 ) -> Result<ClientConfig, AlienError> {
@@ -306,17 +348,18 @@ fn apply_target_environment(
     }
 }
 
-fn parse_status(status: &str) -> DeploymentStatus {
+pub(crate) fn parse_status(status: &str) -> DeploymentStatus {
     serde_json::from_value(serde_json::Value::String(status.to_string()))
         .unwrap_or(DeploymentStatus::Pending)
 }
 
-fn uses_direct_management_credentials(status: DeploymentStatus) -> bool {
+pub(crate) fn uses_direct_management_credentials(status: DeploymentStatus) -> bool {
     matches!(
         status,
         DeploymentStatus::Pending
             | DeploymentStatus::PreflightsFailed
             | DeploymentStatus::InitialSetup
+            | DeploymentStatus::InitialSetupFailed
     )
 }
 
@@ -327,6 +370,7 @@ fn uses_control_plane_credentials(platform: Platform) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use alien_bindings::BindingsProvider;
     use alien_core::{
         AwsClientConfig, AwsCredentials, AwsEnvironmentInfo, AzureClientConfig, AzureCredentials,
         AzureEnvironmentInfo, GcpClientConfig, GcpCredentials, GcpEnvironmentInfo,
@@ -418,11 +462,45 @@ mod tests {
         assert!(uses_direct_management_credentials(
             DeploymentStatus::InitialSetup
         ));
+        assert!(uses_direct_management_credentials(
+            DeploymentStatus::InitialSetupFailed
+        ));
         assert!(!uses_direct_management_credentials(
             DeploymentStatus::Provisioning
         ));
         assert!(!uses_direct_management_credentials(
             DeploymentStatus::Running
+        ));
+    }
+
+    #[tokio::test]
+    async fn unconfigured_azure_delegates_to_environment_credentials() {
+        let provider: Arc<dyn BindingsProviderApi> = Arc::new(
+            BindingsProvider::new(ClientConfig::Test, HashMap::new())
+                .expect("empty test provider should be valid"),
+        );
+        let resolver = ImpersonationCredentialResolver::new(
+            provider.clone(),
+            HashMap::from([(Platform::Aws, provider)]),
+            HashSet::from([Platform::Aws]),
+        );
+
+        let resolved = resolver
+            .resolve_from_env(
+                &super::super::environment_credentials::tests::azure_deployment("initial-setup"),
+                super::super::environment_credentials::tests::azure_env(),
+            )
+            .await
+            .expect("unconfigured Azure should use its environment credentials");
+        let azure = resolved
+            .azure_config()
+            .expect("Azure config should resolve");
+
+        assert_eq!(azure.subscription_id, "target-subscription");
+        assert!(matches!(
+            &azure.credentials,
+            AzureCredentials::WorkloadIdentity { client_id, .. }
+                if client_id == "management-client"
         ));
     }
 

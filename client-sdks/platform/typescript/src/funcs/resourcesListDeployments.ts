@@ -25,6 +25,9 @@ import * as operations from "../models/operations/index.js";
 import { APICall, APIPromise } from "../types/async.js";
 import { Result } from "../types/fp.js";
 
+/**
+ * List deployments where the specified infrastructure resource is installed.
+ */
 export function resourcesListDeployments(
   client: AlienCore,
   request: operations.ListResourceDeploymentsRequest,

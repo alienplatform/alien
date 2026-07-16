@@ -5,7 +5,7 @@ fn process_failure_is_reported_as_structured_json() {
     let output = Command::new(env!("CARGO_BIN_EXE_alien-worker-runtime"))
         .env("ALIEN_DEPLOYMENT_TYPE", "local")
         .args([
-            "--bindings-address",
+            "--worker-grpc-address",
             "127.0.0.1:0",
             "--transport",
             "local",

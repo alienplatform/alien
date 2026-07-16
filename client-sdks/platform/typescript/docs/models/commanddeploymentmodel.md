@@ -1,6 +1,6 @@
 # CommandDeploymentModel
 
-Deployment model captured from deployment at creation time
+Delivery mode for this command (push/pull), derived from the target at creation time
 
 ## Example Usage
 

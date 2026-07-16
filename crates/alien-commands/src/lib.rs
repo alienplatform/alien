@@ -68,13 +68,16 @@ pub const PROTOCOL_VERSION: &str = "arc.v1";
 /// trusted commands endpoint used to acquire that lease.
 ///
 /// The manager cannot know which address is reachable from a deployment's
-/// network boundary, so lease responses use root-relative URLs for manager
-/// endpoints. Cloud-presigned absolute URLs remain unchanged.
+/// network boundary or which path prefix its reverse proxy adds, so lease
+/// responses use path-relative references for manager endpoints.
+/// Cloud-presigned absolute URLs remain byte-for-byte unchanged.
 pub fn resolve_envelope_urls(envelope: &mut Envelope, base: &url::Url) {
-    let origin = base.origin().ascii_serialization();
     let resolve = |target: &mut String| {
-        if target.starts_with('/') {
-            *target = format!("{origin}{target}");
+        if url::Url::parse(target).is_ok() || target.starts_with("//") {
+            return;
+        }
+        if let Ok(resolved) = base.join(target) {
+            *target = resolved.to_string();
         }
     };
 

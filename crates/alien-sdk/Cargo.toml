@@ -6,7 +6,7 @@ description = "Alien SDK for Rust — app bindings for storage, KV, queues, and 
 license-file.workspace = true
 
 [features]
-default = ["grpc", "all-platforms"]
+default = ["all-platforms"]
 all-platforms = ["alien-bindings/all-platforms"]
 aws = ["alien-bindings/aws"]
 gcp = ["alien-bindings/gcp"]
@@ -14,10 +14,10 @@ azure = ["alien-bindings/azure"]
 kubernetes = ["alien-bindings/kubernetes"]
 local = ["alien-bindings/local"]
 test = ["alien-bindings/test"]
-# The worker app protocol (Control + WaitUntil gRPC) lives in
-# alien-worker-protocol; `grpc` pulls the app-side clients used by AlienContext /
-# WaitUntilContext plus the tonic runtime they need.
-grpc = ["dep:alien-worker-protocol", "dep:tonic", "dep:prost-types", "dep:tokio-stream"]
+# The Worker app protocol (Control + WaitUntil gRPC) lives in
+# alien-worker-protocol; `worker` pulls only the app-side clients used by
+# worker::AlienContext / worker::WaitUntilContext and their tonic runtime.
+worker = ["dep:alien-worker-protocol", "dep:tonic", "dep:prost-types", "dep:tokio-stream"]
 openapi = ["alien-bindings/openapi", "dep:utoipa"]
 platform-sdk = ["alien-bindings/platform-sdk"]
 
@@ -34,7 +34,7 @@ tokio = { workspace = true, features = ["sync", "macros", "rt", "time"] }
 tracing = { workspace = true }
 uuid = { workspace = true, features = ["v4", "serde"] }
 
-# gRPC (app-side worker-protocol clients only; server + protocol live in alien-worker-protocol)
+# Worker protocol clients only; server implementation is excluded.
 alien-worker-protocol = { workspace = true, optional = true }
 tonic = { workspace = true, optional = true }
 prost-types = { workspace = true, optional = true }

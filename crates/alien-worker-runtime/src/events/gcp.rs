@@ -172,6 +172,122 @@ fn parse_gcp_size(size_str: Option<String>) -> Result<Option<u64>, Error> {
     }
 }
 
+fn storage_event_from_object_data(
+    provider_event_type: &str,
+    event_type: StorageEventType,
+    timestamp: DateTime<Utc>,
+    storage_object_data: StorageObjectData,
+) -> Result<StorageEvents, Error> {
+    let bucket_name = storage_object_data.bucket.clone().ok_or_else(|| {
+        AlienError::new(ErrorData::EventProcessingFailed {
+            event_type: provider_event_type.to_string(),
+            reason: "Missing field: data.bucket".to_string(),
+        })
+    })?;
+    let object_key = storage_object_data.name.clone().ok_or_else(|| {
+        AlienError::new(ErrorData::EventProcessingFailed {
+            event_type: provider_event_type.to_string(),
+            reason: "Missing field: data.name".to_string(),
+        })
+    })?;
+    let size = parse_gcp_size(storage_object_data.size.clone())?;
+
+    Ok(StorageEvents(vec![StorageEvent {
+        event_type,
+        bucket_name,
+        object_key,
+        timestamp,
+        size,
+        etag: storage_object_data.etag,
+        content_type: storage_object_data.content_type,
+        metadata: storage_object_data.metadata,
+        copy_source: None,
+        previous_tier: None,
+        current_tier: storage_object_data.storage_class,
+        region: None,
+        version_id: storage_object_data.generation,
+    }]))
+}
+
+/// Convert a Cloud Storage Pub/Sub notification into storage events.
+///
+/// Cloud Storage notification configurations publish ordinary Pub/Sub
+/// messages, not Storage CloudEvents. `Ok(None)` means the Pub/Sub message is
+/// not a Cloud Storage notification and should continue through queue/command
+/// dispatch.
+pub fn gcs_pubsub_notification_to_storage_events(
+    data: &[u8],
+    attributes: &HashMap<String, String>,
+    publish_time: Option<DateTime<Utc>>,
+) -> Result<Option<StorageEvents>, Error> {
+    if !attributes.contains_key("notificationConfig") {
+        return Ok(None);
+    }
+
+    let provider_event_type = attributes.get("eventType").ok_or_else(|| {
+        AlienError::new(ErrorData::EventProcessingFailed {
+            event_type: "GCS Pub/Sub notification".to_string(),
+            reason: "Missing message attribute: eventType".to_string(),
+        })
+    })?;
+    let payload_format = attributes.get("payloadFormat").ok_or_else(|| {
+        AlienError::new(ErrorData::EventProcessingFailed {
+            event_type: provider_event_type.clone(),
+            reason: "Missing message attribute: payloadFormat".to_string(),
+        })
+    })?;
+    if payload_format != "JSON_API_V1" {
+        return Err(AlienError::new(ErrorData::EventProcessingFailed {
+            event_type: provider_event_type.clone(),
+            reason: format!("Unsupported GCS notification payload format '{payload_format}'"),
+        }));
+    }
+
+    let event_type = match provider_event_type.as_str() {
+        "OBJECT_FINALIZE" => StorageEventType::Created,
+        "OBJECT_DELETE" => StorageEventType::Deleted,
+        "OBJECT_ARCHIVE" => StorageEventType::TierChanged,
+        "OBJECT_METADATA_UPDATE" => StorageEventType::MetadataUpdated,
+        _ => {
+            return Err(AlienError::new(ErrorData::EventProcessingFailed {
+                event_type: provider_event_type.clone(),
+                reason: "Unsupported GCS notification event type".to_string(),
+            }));
+        }
+    };
+
+    let timestamp = match attributes.get("eventTime") {
+        Some(event_time) => DateTime::parse_from_rfc3339(event_time)
+            .into_alien_error()
+            .context(ErrorData::EventProcessingFailed {
+                event_type: provider_event_type.clone(),
+                reason: "Invalid message attribute: eventTime".to_string(),
+            })?
+            .with_timezone(&Utc),
+        None => publish_time.ok_or_else(|| {
+            AlienError::new(ErrorData::EventProcessingFailed {
+                event_type: provider_event_type.clone(),
+                reason: "GCS notification has no eventTime or Pub/Sub publishTime".to_string(),
+            })
+        })?,
+    };
+
+    let storage_object_data: StorageObjectData = serde_json::from_slice(data)
+        .into_alien_error()
+        .context(ErrorData::EventProcessingFailed {
+            event_type: provider_event_type.clone(),
+            reason: "Failed to parse JSON_API_V1 object payload".to_string(),
+        })?;
+
+    storage_event_from_object_data(
+        provider_event_type,
+        event_type,
+        timestamp,
+        storage_object_data,
+    )
+    .map(Some)
+}
+
 /// Extract topic/queue name from GCP subscription path
 fn extract_topic_name_from_subscription(subscription: &str) -> String {
     // Extract topic name from subscription path like:
@@ -321,41 +437,12 @@ pub fn storage_cloudevent_to_storage_events(event: Event) -> Result<StorageEvent
         }
     };
 
-    let bucket_name = storage_object_data.bucket.clone().ok_or_else(|| {
-        AlienError::new(ErrorData::EventProcessingFailed {
-            event_type: event_type_str.to_string(),
-            reason: "Missing field: data.bucket".to_string(),
-        })
-    })?;
-    let object_key = storage_object_data.name.clone().ok_or_else(|| {
-        AlienError::new(ErrorData::EventProcessingFailed {
-            event_type: event_type_str.to_string(),
-            reason: "Missing field: data.name".to_string(),
-        })
-    })?;
-
-    let size = parse_gcp_size(storage_object_data.size.clone())?;
-
-    // GCS CloudEvents don't include region information
-    let region = None;
-
-    let storage_event = StorageEvent {
-        event_type: alien_event_type,
-        bucket_name,
-        object_key,
+    storage_event_from_object_data(
+        event_type_str,
+        alien_event_type,
         timestamp,
-        size,
-        etag: storage_object_data.etag.clone(),
-        content_type: storage_object_data.content_type.clone(),
-        metadata: storage_object_data.metadata.clone(),
-        copy_source: None,
-        previous_tier: None,
-        current_tier: storage_object_data.storage_class.clone(),
-        region,
-        version_id: storage_object_data.generation.clone(),
-    };
-
-    Ok(StorageEvents(vec![storage_event]))
+        storage_object_data,
+    )
 }
 
 #[cfg(test)]
@@ -367,6 +454,69 @@ mod tests {
 
     fn parse_datetime(s: &str) -> DateTime<Utc> {
         DateTime::parse_from_rfc3339(s).unwrap().with_timezone(&Utc)
+    }
+
+    #[test]
+    fn gcs_pubsub_notification_converts_json_api_payload_to_storage_event() {
+        let event_time = "2026-07-15T22:40:11.123Z";
+        let data = serde_json::to_vec(&json!({
+            "bucket": "test-alien-bucket",
+            "name": "events/example.txt",
+            "size": "27",
+            "contentType": "text/plain",
+            "etag": "etag-123",
+            "generation": "1752619211123000",
+            "storageClass": "STANDARD",
+            "metadata": { "source": "e2e" }
+        }))
+        .unwrap();
+        let attributes = HashMap::from([
+            (
+                "notificationConfig".to_string(),
+                "projects/_/buckets/test-alien-bucket/notificationConfigs/6".to_string(),
+            ),
+            ("eventType".to_string(), "OBJECT_FINALIZE".to_string()),
+            ("payloadFormat".to_string(), "JSON_API_V1".to_string()),
+            ("bucketId".to_string(), "test-alien-bucket".to_string()),
+            ("objectId".to_string(), "events/example.txt".to_string()),
+            (
+                "objectGeneration".to_string(),
+                "1752619211123000".to_string(),
+            ),
+            ("eventTime".to_string(), event_time.to_string()),
+        ]);
+
+        let storage_events = gcs_pubsub_notification_to_storage_events(&data, &attributes, None)
+            .unwrap()
+            .expect("GCS notification should be recognized");
+
+        assert_eq!(storage_events.0.len(), 1);
+        let event = &storage_events.0[0];
+        assert_eq!(event.event_type, StorageEventType::Created);
+        assert_eq!(event.bucket_name, "test-alien-bucket");
+        assert_eq!(event.object_key, "events/example.txt");
+        assert_eq!(event.timestamp, parse_datetime(event_time));
+        assert_eq!(event.size, Some(27));
+        assert_eq!(event.content_type.as_deref(), Some("text/plain"));
+        assert_eq!(event.etag.as_deref(), Some("etag-123"));
+        assert_eq!(event.version_id.as_deref(), Some("1752619211123000"));
+        assert_eq!(event.current_tier.as_deref(), Some("STANDARD"));
+        assert_eq!(
+            event.metadata.get("source").map(String::as_str),
+            Some("e2e")
+        );
+    }
+
+    #[test]
+    fn ordinary_pubsub_message_is_not_classified_as_storage_notification() {
+        let data = br#"{"orderId":"order-123"}"#;
+        let attributes = HashMap::from([("source".to_string(), "orders".to_string())]);
+
+        assert!(
+            gcs_pubsub_notification_to_storage_events(data, &attributes, Some(Utc::now()))
+                .unwrap()
+                .is_none()
+        );
     }
 
     #[test]

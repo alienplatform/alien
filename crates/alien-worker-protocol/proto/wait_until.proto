@@ -4,23 +4,23 @@ package alien_worker.wait_until;
 
 import "google/protobuf/duration.proto";
 
-// Service for coordinating wait_until tasks between application and runtime.
+// Service for coordinating wait_until tasks between a Worker application and its runtime.
 service WaitUntilService {
-    // Application notifies runtime that it has registered a new task.
+    // Application notifies the Worker runtime that it has registered a new task.
     rpc NotifyTaskRegistered(NotifyTaskRegisteredRequest) returns (NotifyTaskRegisteredResponse);
     
-    // Application calls this to wait for a drain signal from runtime.
-    // This is a blocking call that returns when runtime decides it's time to drain.
+    // Application calls this to wait for a drain signal from the Worker runtime.
+    // This is a blocking call that returns when the Worker runtime decides it's time to drain.
     rpc WaitForDrainSignal(WaitForDrainSignalRequest) returns (WaitForDrainSignalResponse);
     
-    // Application notifies runtime that it has completed draining all tasks.
+    // Application notifies the Worker runtime that it has completed draining all tasks.
     rpc NotifyDrainComplete(NotifyDrainCompleteRequest) returns (NotifyDrainCompleteResponse);
     
-    // Runtime can query how many tasks are currently registered (for monitoring).
+    // Worker runtime can query how many tasks are currently registered (for monitoring).
     rpc GetTaskCount(GetTaskCountRequest) returns (GetTaskCountResponse);
 }
 
-// Request to notify runtime about a new registered task.
+// Request to notify the Worker runtime about a new registered task.
 message NotifyTaskRegisteredRequest {
     // Unique identifier for the application instance.
     string application_id = 1;
@@ -33,7 +33,7 @@ message NotifyTaskRegisteredResponse {
     bool success = 1;
 }
 
-// Request to wait for drain signal from runtime.
+// Request to wait for a drain signal from the Worker runtime.
 message WaitForDrainSignalRequest {
     // Unique identifier for the application instance.
     string application_id = 1;
@@ -63,7 +63,7 @@ message NotifyDrainCompleteRequest {
 }
 
 message NotifyDrainCompleteResponse {
-    // Acknowledgment from runtime.
+    // Acknowledgment from the Worker runtime.
     bool acknowledged = 1;
 }
 
@@ -76,4 +76,4 @@ message GetTaskCountRequest {
 message GetTaskCountResponse {
     // Number of currently registered tasks.
     uint32 task_count = 1;
-} 
+}

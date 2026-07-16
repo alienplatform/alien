@@ -308,7 +308,7 @@ fn application_runtime_env_uses_only_worker_transports() {
             .transport(transport)
             .transport_port(61000)
             .command(vec!["app".to_string()])
-            .bindings_address("127.0.0.1:60000".to_string())
+            .worker_grpc_address("127.0.0.1:60000".to_string())
             .build();
 
         let env = application_runtime_env(&config)

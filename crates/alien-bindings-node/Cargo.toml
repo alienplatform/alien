@@ -9,9 +9,9 @@ license-file.workspace = true
 crate-type = ["cdylib", "rlib"]
 
 [features]
-# Mirror alien-bindings' platform features, minus `grpc`. The addon is a pure
-# argument/error translation layer; it forwards every provider feature to
-# alien-bindings and never enables the gRPC stack.
+# Mirror alien-bindings' platform features. The addon is a pure argument/error
+# translation layer; it forwards every provider feature and never includes the
+# Worker protocol.
 default = ["all-platforms"]
 all-platforms = ["aws", "gcp", "azure", "kubernetes", "local", "test"]
 aws = ["alien-bindings/aws"]

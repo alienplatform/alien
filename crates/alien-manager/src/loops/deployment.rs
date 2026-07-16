@@ -30,6 +30,7 @@ use alien_local::LocalBindingsProvider;
 
 use crate::auth::Subject;
 use crate::config::ManagerConfig;
+use crate::error::REMOTE_CREDENTIAL_HANDOFF_FAILED_CODE;
 use crate::traits::deployment_store::{DeploymentFilter, DeploymentRecord, ReconcileData};
 use crate::traits::{CredentialResolver, DeploymentStore, ReleaseStore, ServerBindings};
 use crate::transports::ManagerTransport;
@@ -43,6 +44,11 @@ pub(crate) const MAX_CONCURRENT_DEPLOYMENTS: usize = 4;
 const MAX_ACQUIRE_BATCHES_PER_TICK: usize = 16;
 /// Suggested delay threshold (ms) — if step suggests waiting longer, yield.
 const SUGGESTED_DELAY_THRESHOLD_MS: u64 = 500;
+/// Google documents IAM policy changes as typically propagating within two
+/// minutes, but potentially taking seven minutes or longer. Keep the first
+/// target-side token exchange retryable for a bounded window after setup hands
+/// the deployment to Provisioning.
+const GCP_CREDENTIAL_HANDOFF_GRACE_PERIOD: Duration = Duration::from_secs(10 * 60);
 
 /// Build a `HorizonMachineImage` from `ALIEN_BYO_HORIZON_AMI_AMD64`/`_ARM64`
 /// + `AWS_REGION` env vars. Returns `None` when no AMI env vars are set so
@@ -412,11 +418,20 @@ impl DeploymentLoop {
         {
             Ok(resolved) => resolved,
             Err(e) => {
-                if should_wait_for_credential_handoff(status, &deployment) {
+                let handoff_retry_remaining = gcp_credential_handoff_retry_remaining(
+                    status,
+                    &deployment,
+                    &e,
+                    chrono::Utc::now(),
+                );
+                if should_wait_for_credential_handoff(status, &deployment)
+                    || handoff_retry_remaining.is_some()
+                {
                     warn!(
                         deployment_id = %deployment_id,
                         status = ?status,
                         platform = ?deployment.platform,
+                        retry_window_remaining_secs = ?handoff_retry_remaining.map(|duration| duration.as_secs()),
                         error = %e,
                         "Credentials unavailable for deployment phase; waiting for another driver or credential handoff"
                     );
@@ -912,6 +927,37 @@ fn has_remote_stack_management_outputs(stack_state: &alien_core::StackState) -> 
     })
 }
 
+fn gcp_credential_handoff_retry_remaining(
+    status: DeploymentStatus,
+    deployment: &DeploymentRecord,
+    error: &AlienError,
+    now: chrono::DateTime<chrono::Utc>,
+) -> Option<Duration> {
+    if status != DeploymentStatus::Provisioning
+        || deployment.platform != alien_core::Platform::Gcp
+        || error.code != REMOTE_CREDENTIAL_HANDOFF_FAILED_CODE
+        || !deployment
+            .stack_state
+            .as_ref()
+            .is_some_and(has_remote_stack_management_outputs)
+    {
+        return None;
+    }
+
+    // Provisioning is persisted by the setup-to-runtime transition, so
+    // updated_at is the durable start of this handoff window. created_at keeps
+    // older/imported records bounded if they lack an update timestamp.
+    let handoff_started_at = deployment.updated_at.unwrap_or(deployment.created_at);
+    let elapsed = now
+        .signed_duration_since(handoff_started_at)
+        .to_std()
+        .unwrap_or(Duration::ZERO);
+
+    GCP_CREDENTIAL_HANDOFF_GRACE_PERIOD
+        .checked_sub(elapsed)
+        .filter(|remaining| !remaining.is_zero())
+}
+
 fn failed_state_for_credential_error(
     deployment: &DeploymentRecord,
     status: DeploymentStatus,
@@ -955,10 +1001,11 @@ fn failed_state_for_credential_error(
 #[cfg(test)]
 mod tests {
     use super::{
-        active_work_statuses, commands_receiver_env_vars, get_or_create_local_bindings_provider,
-        has_remote_stack_management_outputs, manager_candidate_statuses,
-        needs_provision_capability, parse_status, retryable_failed_statuses,
-        should_wait_for_credential_handoff, worker_commands_push_env_vars,
+        active_work_statuses, commands_receiver_env_vars, gcp_credential_handoff_retry_remaining,
+        get_or_create_local_bindings_provider, has_remote_stack_management_outputs,
+        manager_candidate_statuses, needs_provision_capability, parse_status,
+        retryable_failed_statuses, should_wait_for_credential_handoff,
+        worker_commands_push_env_vars, GCP_CREDENTIAL_HANDOFF_GRACE_PERIOD,
     };
     use alien_core::{
         Container, ContainerCode, Daemon, DaemonCode, DeploymentStatus, Platform,
@@ -967,11 +1014,14 @@ mod tests {
         StackState, Worker, WorkerCode,
     };
     use alien_deployment::loop_contract::{classify_status, LoopOperation};
+    use alien_error::AlienError;
     use chrono::Utc;
     use std::collections::HashMap;
     use std::sync::Mutex;
+    use std::time::Duration;
     use tempfile::TempDir;
 
+    use crate::error::ErrorData;
     use crate::traits::deployment_store::DeploymentRecord;
 
     fn deployment_record(
@@ -1173,6 +1223,102 @@ mod tests {
                 "{status:?} should be classified as manager-owned"
             );
         }
+    }
+
+    #[test]
+    fn gcp_provisioning_retries_target_credential_handoff_during_grace_period() {
+        let now = Utc::now();
+        let mut deployment = deployment_record(
+            DeploymentStatus::Provisioning,
+            Some(stack_state_with_remote_management_outputs(true)),
+        );
+        deployment.platform = Platform::Gcp;
+        deployment.updated_at = Some(now - chrono::Duration::minutes(2));
+        let error = AlienError::new(ErrorData::RemoteCredentialHandoffFailed {
+            deployment_id: deployment.id.clone(),
+            platform: Platform::Gcp,
+        })
+        .into_generic();
+
+        let remaining = gcp_credential_handoff_retry_remaining(
+            DeploymentStatus::Provisioning,
+            &deployment,
+            &error,
+            now,
+        )
+        .expect("fresh GCP handoff failure should remain retryable");
+
+        assert_eq!(
+            remaining,
+            GCP_CREDENTIAL_HANDOFF_GRACE_PERIOD - Duration::from_secs(2 * 60)
+        );
+    }
+
+    #[test]
+    fn gcp_provisioning_handoff_becomes_hard_failure_after_grace_period() {
+        let now = Utc::now();
+        let mut deployment = deployment_record(
+            DeploymentStatus::Provisioning,
+            Some(stack_state_with_remote_management_outputs(true)),
+        );
+        deployment.platform = Platform::Gcp;
+        deployment.updated_at = Some(
+            now - chrono::Duration::from_std(GCP_CREDENTIAL_HANDOFF_GRACE_PERIOD)
+                .expect("grace period should fit chrono duration"),
+        );
+        let error = AlienError::new(ErrorData::RemoteCredentialHandoffFailed {
+            deployment_id: deployment.id.clone(),
+            platform: Platform::Gcp,
+        })
+        .into_generic();
+
+        assert_eq!(
+            gcp_credential_handoff_retry_remaining(
+                DeploymentStatus::Provisioning,
+                &deployment,
+                &error,
+                now,
+            ),
+            None,
+            "handoff retry must be bounded"
+        );
+
+        let failed = super::failed_state_for_credential_error(
+            &deployment,
+            DeploymentStatus::Provisioning,
+            None,
+            "release",
+            error,
+        );
+        assert_eq!(failed.status, DeploymentStatus::ProvisioningFailed);
+        assert_eq!(
+            failed.error.expect("hard failure should retain error").code,
+            "REMOTE_CREDENTIAL_HANDOFF_FAILED"
+        );
+    }
+
+    #[test]
+    fn provisioning_does_not_retry_unrelated_credential_failures() {
+        let now = Utc::now();
+        let mut deployment = deployment_record(
+            DeploymentStatus::Provisioning,
+            Some(stack_state_with_remote_management_outputs(true)),
+        );
+        deployment.platform = Platform::Gcp;
+        deployment.updated_at = Some(now);
+        let error = AlienError::new(alien_error::GenericError {
+            message: "management binding is missing".to_string(),
+        });
+
+        assert_eq!(
+            gcp_credential_handoff_retry_remaining(
+                DeploymentStatus::Provisioning,
+                &deployment,
+                &error,
+                now,
+            ),
+            None
+        );
     }
 
     #[test]

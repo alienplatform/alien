@@ -1,7 +1,14 @@
-use std::{collections::HashMap, sync::Arc};
+use std::collections::HashMap;
 
-use alien_sdk::{AlienContext, Bindings};
+use alien_sdk::Bindings;
 
+#[cfg(feature = "worker")]
+use std::sync::Arc;
+
+#[cfg(feature = "worker")]
+use alien_sdk::worker::AlienContext;
+
+#[cfg(feature = "worker")]
 #[test]
 fn alien_context_accessors_return_the_application_bindings_facade() {
     let _: for<'a> fn(&'a AlienContext) -> &'a Bindings = AlienContext::bindings;

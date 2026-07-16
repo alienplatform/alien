@@ -5,7 +5,7 @@ use clap::{Parser, ValueEnum};
 use crate::error::{ErrorData, Result};
 use alien_error::AlienError;
 
-/// Alien Runtime - runs applications on any platform.
+/// Alien Worker Runtime - translates platform invocations into Worker tasks.
 #[derive(Parser, Debug)]
 #[command(name = "alien-worker-runtime")]
 #[command(version, about, long_about = None)]
@@ -24,7 +24,7 @@ pub struct Cli {
         env = "ALIEN_WORKER_GRPC_ADDRESS",
         default_value = "127.0.0.1:51351"
     )]
-    pub bindings_address: String,
+    pub worker_grpc_address: String,
 
     // Lambda options
     /// Lambda mode (buffered or streaming)
@@ -163,6 +163,29 @@ mod tests {
 
         assert_eq!(cli.transport, TransportType::Http);
         assert_eq!(cli.local_port, 8080);
+    }
+
+    #[test]
+    fn test_worker_protocol_address_uses_worker_named_flag() {
+        let cli = Cli::try_parse_from([
+            "alien-worker-runtime",
+            "--worker-grpc-address",
+            "127.0.0.1:60000",
+            "--",
+            "app",
+        ])
+        .expect("Worker-named protocol address flag should parse");
+
+        assert_eq!(cli.worker_grpc_address, "127.0.0.1:60000");
+
+        Cli::try_parse_from([
+            "alien-worker-runtime",
+            "--bindings-address",
+            "127.0.0.1:60000",
+            "--",
+            "app",
+        ])
+        .expect_err("binding-era protocol address flag must not remain as an alias");
     }
 
     #[test]

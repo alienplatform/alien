@@ -8,7 +8,7 @@
 //! - Minimal bindings usage (Storage, KV)
 
 use alien_error::{Context, IntoAlienError};
-use alien_sdk::{AlienContext, ErrorData as BindingsErrorData};
+use alien_sdk::{worker::AlienContext, ErrorData as BindingsErrorData};
 use axum::{
     extract::{Path, State},
     http::StatusCode,

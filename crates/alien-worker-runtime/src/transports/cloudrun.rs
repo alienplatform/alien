@@ -19,6 +19,7 @@ use axum::{
     routing::any,
     Router,
 };
+use base64::{engine::general_purpose, Engine as _};
 use chrono::Utc;
 use cloudevents::AttributesReader;
 use http_body_util::BodyExt;
@@ -33,7 +34,8 @@ use super::shared::{
 };
 use crate::error::{ErrorData, Result};
 use crate::events::gcp::{
-    pubsub_cloudevent_to_queue_messages, storage_cloudevent_to_storage_events,
+    gcs_pubsub_notification_to_storage_events, pubsub_cloudevent_to_queue_messages,
+    storage_cloudevent_to_storage_events,
 };
 use alien_error::{Context, IntoAlienError};
 
@@ -331,6 +333,8 @@ struct PubSubPushMessageData {
     attributes: Option<std::collections::HashMap<String, String>>,
     /// Message ID
     message_id: Option<String>,
+    /// Message publish time
+    publish_time: Option<chrono::DateTime<Utc>>,
 }
 
 /// Handle a Pub/Sub push message (non-CloudEvent format)
@@ -338,8 +342,6 @@ async fn handle_pubsub_push_message(
     push_msg: PubSubPushMessage,
     state: &TransportState,
 ) -> Response<Body> {
-    use base64::{engine::general_purpose, Engine as _};
-
     let data = match &push_msg.message.data {
         Some(d) => match general_purpose::STANDARD.decode(d) {
             Ok(decoded) => decoded,
@@ -352,6 +354,21 @@ async fn handle_pubsub_push_message(
     };
 
     let attributes = push_msg.message.attributes.unwrap_or_default();
+    match gcs_pubsub_notification_to_storage_events(
+        &data,
+        &attributes,
+        push_msg.message.publish_time,
+    ) {
+        Ok(Some(storage_events)) => {
+            return send_storage_events(storage_events, &state.control_server).await;
+        }
+        Ok(None) => {}
+        Err(error) => {
+            error!(error = %error, "Failed to parse GCS Pub/Sub notification");
+            return (StatusCode::BAD_REQUEST, "Invalid storage event").into_response();
+        }
+    }
+
     let message_id = push_msg
         .message
         .message_id

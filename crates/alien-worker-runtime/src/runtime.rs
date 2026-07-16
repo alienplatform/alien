@@ -1,7 +1,7 @@
-//! Alien Runtime - runs applications on any platform.
+//! Alien Worker Runtime - translates platform invocations into Worker tasks.
 //!
 //! The runtime:
-//! 1. Starts gRPC server (bindings + control service)
+//! 1. Starts the Worker app protocol server (Control + WaitUntil)
 //! 2. Loads application secrets and runtime-only telemetry credentials
 //! 3. Starts the application subprocess
 //! 4. Waits for app to register HTTP port
@@ -68,34 +68,33 @@ pub fn get_control_server() -> Option<Arc<ControlGrpcServer>> {
     CONTROL_SERVER.get().cloned()
 }
 
-/// Specifies how the runtime should obtain bindings.
-pub enum BindingsSource {
-    /// Create bindings provider from environment variables (cloud platform).
-    /// This is the default for production deployments.
+/// Dependencies used to start the Worker runtime.
+pub enum RuntimeDependencies {
+    /// Create the secret provider from environment variables and start the
+    /// Worker app protocol server (cloud platform).
     FromEnvironment,
 
-    /// Use a custom bindings provider (local platform).
-    /// The CLI creates a LocalBindingsProvider and passes it here.
+    /// Use a custom direct provider for Worker secret projection and start the
+    /// Worker app protocol server (local platform).
     Provider(Arc<dyn alien_bindings::BindingsProviderApi>),
 
-    /// Use externally-provided gRPC handles (testing).
-    /// Tests start their own gRPC server with test bindings and pass the handles here.
-    ExternalGrpc {
+    /// Use externally provided Worker app protocol handles (testing).
+    ExternalWorkerProtocol {
         wait_until_server: Arc<WaitUntilGrpcServer>,
         control_server: Arc<ControlGrpcServer>,
     },
 }
 
-/// Run the Alien runtime.
+/// Run the Alien Worker Runtime.
 ///
 /// # Arguments
 /// * `config` - Runtime configuration
 /// * `shutdown_rx` - Shutdown signal receiver
-/// * `bindings` - How to obtain bindings (environment, custom provider, or external gRPC)
+/// * `dependencies` - Secret-provider and Worker-protocol dependencies
 pub async fn run(
     config: RuntimeConfig,
     shutdown_rx: broadcast::Receiver<()>,
-    bindings: BindingsSource,
+    dependencies: RuntimeDependencies,
 ) -> Result<()> {
     config.validate()?;
 
@@ -107,38 +106,36 @@ pub async fn run(
         transport = ?config.transport,
         command = ?config.command,
         log_exporter = ?config.log_exporter,
-        "Starting Alien runtime"
+        "Starting Alien Worker Runtime"
     );
 
-    // 1. Start gRPC server (or use external handles for testing)
-    let (wait_until_server, control_server, bindings_provider) = match bindings {
-        BindingsSource::ExternalGrpc {
+    // 1. Start the Worker app protocol server (or use external handles for testing).
+    let (wait_until_server, control_server, bindings_provider) = match dependencies {
+        RuntimeDependencies::ExternalWorkerProtocol {
             wait_until_server,
             control_server,
         } => {
-            info!("Using externally-provided gRPC handles (testing mode)");
+            info!("Using externally provided Worker app protocol handles (testing mode)");
             // No provider available in test mode
             (wait_until_server, control_server, None)
         }
-        BindingsSource::Provider(provider) => {
-            info!("Using custom bindings provider (local platform)");
+        RuntimeDependencies::Provider(provider) => {
+            info!("Using custom provider for Worker secret projection (local platform)");
             let (wait, control, prov) =
-                start_grpc_server(&config.bindings_address, Some(provider)).await?;
+                start_worker_protocol_server(&config.worker_grpc_address, provider).await?;
             (wait, control, Some(prov))
         }
-        BindingsSource::FromEnvironment => {
-            info!("Creating lazy bindings provider from environment (cloud platform)");
+        RuntimeDependencies::FromEnvironment => {
+            info!("Creating lazy provider for Worker secret projection (cloud platform)");
             let provider = Arc::new(
                 BindingsProvider::from_env_lazy(std::env::vars().collect()).context(
-                    ErrorData::BindingsOperationFailed {
-                        address: config.bindings_address.clone(),
-                        provider: None,
+                    ErrorData::SecretProviderInitializationFailed {
                         message: "Failed to create bindings provider".to_string(),
                     },
                 )?,
             );
             let (wait, control, prov) =
-                start_grpc_server(&config.bindings_address, Some(provider)).await?;
+                start_worker_protocol_server(&config.worker_grpc_address, provider).await?;
             (wait, control, Some(prov))
         }
     };
@@ -458,62 +455,56 @@ fn handle_child_exit(
     }
 }
 
-/// Start gRPC server with bindings, control, and wait_until services.
-///
-/// If a custom bindings_provider is provided (local platform), use it directly.
-/// Otherwise (cloud platform), create bindings provider from environment.
-async fn start_grpc_server(
+/// Start the Worker app protocol server and retain the provider used for
+/// Worker secret projection.
+async fn start_worker_protocol_server(
     address: &str,
-    bindings_provider: Option<Arc<dyn alien_bindings::BindingsProviderApi>>,
+    secret_provider: Arc<dyn alien_bindings::BindingsProviderApi>,
 ) -> Result<(
     Arc<WaitUntilGrpcServer>,
     Arc<ControlGrpcServer>,
     Arc<dyn alien_bindings::BindingsProviderApi>,
 )> {
-    info!(address = %address, "Starting gRPC server");
-
-    // Use custom provider if provided, otherwise create from environment
-    let provider: Arc<dyn alien_bindings::BindingsProviderApi> =
-        if let Some(custom_provider) = bindings_provider {
-            custom_provider
-        } else {
-            Arc::new(
-                BindingsProvider::from_env(std::env::vars().collect())
-                    .await
-                    .context(ErrorData::BindingsOperationFailed {
-                        address: address.to_string(),
-                        provider: None,
-                        message: "Failed to create bindings provider".to_string(),
-                    })?,
-            )
-        };
+    info!(address = %address, "Starting Worker app protocol server");
 
     let handles = run_grpc_server(address)
         .await
-        .context(ErrorData::BindingsOperationFailed {
-            address: address.to_string(),
-            provider: None,
-            message: "Failed to start gRPC server".to_string(),
+        .context(ErrorData::HandlerStartupFailed {
+            message: format!("Failed to start Worker app protocol server at {address}"),
+            handler_type: Some("worker-app-protocol".to_string()),
         })?;
 
-    // Wait for server ready
-    match handles.readiness_receiver.await {
-        Ok(_) => info!("gRPC server ready"),
-        Err(_) => warn!("gRPC readiness channel closed"),
+    // A closed readiness channel means the protocol server did not start.
+    if handles.readiness_receiver.await.is_err() {
+        return Err(AlienError::new(ErrorData::HandlerStartupFailed {
+            message: format!(
+                "Worker app protocol readiness channel closed before listening at {address}"
+            ),
+            handler_type: Some("worker-app-protocol".to_string()),
+        }));
     }
+    info!(address = %address, "Worker app protocol server ready");
 
     // Spawn server task
     let addr = address.to_string();
     tokio::spawn(async move {
         match handles.server_task.await {
-            Ok(Ok(_)) => info!(address = %addr, "gRPC server exited"),
-            Ok(Err(e)) => error!(error = %e, address = %addr, "gRPC server error"),
-            Err(e) => error!(error = %e, address = %addr, "gRPC server panicked"),
+            Ok(Ok(_)) => info!(address = %addr, "Worker app protocol server exited"),
+            Ok(Err(e)) => {
+                error!(error = %e, address = %addr, "Worker app protocol server error")
+            }
+            Err(e) => {
+                error!(error = %e, address = %addr, "Worker app protocol server panicked")
+            }
         }
     });
 
-    info!(address = %address, "gRPC server started");
-    Ok((handles.wait_until_server, handles.control_server, provider))
+    info!(address = %address, "Worker app protocol server started");
+    Ok((
+        handles.wait_until_server,
+        handles.control_server,
+        secret_provider,
+    ))
 }
 
 /// Start the application subprocess with secrets loaded from vault.
@@ -766,7 +757,7 @@ fn application_runtime_env(config: &RuntimeConfig) -> Vec<(&'static str, String)
     vec![
         (
             ENV_ALIEN_WORKER_GRPC_ADDRESS,
-            config.bindings_address.clone(),
+            config.worker_grpc_address.clone(),
         ),
         (
             ENV_ALIEN_TRANSPORT,

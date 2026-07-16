@@ -41,6 +41,8 @@ impl ResourceImporter for AzureStorageImporter {
             state: AzureStorageState::Ready,
             container_name: Some(data.container_name),
             storage_account_name: Some(data.storage_account_name),
+            role_assignment_ids: Vec::new(),
+            role_assignments_planned: true,
             _internal_stay_count: None,
         };
         make_imported_state(controller, ctx)

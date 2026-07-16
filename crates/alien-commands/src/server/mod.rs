@@ -416,9 +416,22 @@ impl CommandServer {
         self.store_params(command_id, &params).await?;
 
         // 4. Update registry to Pending state
-        self.command_registry
+        let transitioned = self
+            .command_registry
             .update_command_state(command_id, CommandState::Pending, None, None, None, None)
             .await?;
+        if !transitioned {
+            let current_state = self
+                .command_registry
+                .get_command_status(command_id)
+                .await?
+                .map(|current| current.state)
+                .unwrap_or(status.state);
+            return Err(AlienError::new(ErrorData::InvalidStateTransition {
+                from: current_state.as_ref().to_string(),
+                to: CommandState::Pending.as_ref().to_string(),
+            }));
+        }
 
         // 5. Get delivery mode from registry and handle dispatch
         let metadata = self
@@ -891,14 +904,13 @@ impl CommandServer {
             }
 
             // 8. Build envelope. Lease-served envelopes carry manager URLs
-            // as root-relative paths: a pull consumer resolves them against
-            // its own configured commands endpoint — the one address the
-            // platform corrected for that consumer's network (a container's
-            // `host.docker.internal`, a BYOC daemon's tunnel URL) — because
-            // the manager cannot know an address that is reachable from
-            // behind every consumer's boundary. Push envelopes keep absolute
-            // URLs: push transports have no configured base, and reaching
-            // the manager's public address is inherent to push delivery.
+            // as path-relative references from the lease endpoint: a pull
+            // consumer resolves them against the exact endpoint it reached,
+            // preserving both a network-corrected origin and any reverse-
+            // proxy path prefix the manager cannot know. Push envelopes keep
+            // absolute URLs: push transports have no configured base, and
+            // reaching the manager's public address is inherent to push
+            // delivery.
             let mut envelope = self.build_envelope(&command_id, &metadata, params).await?;
             Self::relativize_manager_urls(&mut envelope, &self.base_url);
 
@@ -914,30 +926,44 @@ impl CommandServer {
         Ok(LeaseResponse { leases })
     }
 
-    /// Rewrite manager-origin URLs in a lease-served envelope to
-    /// root-relative paths (see the call site in [`Self::acquire_lease`]).
-    /// Only URLs on the server's own origin are rewritten — cloud-presigned
-    /// storage URLs live on other origins and pass through absolute.
+    /// Rewrite manager-origin URLs in a lease-served envelope to references
+    /// relative to that lease endpoint (see [`Self::acquire_lease`]). Only
+    /// same-origin URLs can be made relative, so cloud-presigned storage URLs
+    /// pass through byte-for-byte.
     fn relativize_manager_urls(envelope: &mut Envelope, base_url: &str) {
-        let Ok(base) = reqwest::Url::parse(base_url) else {
-            // An unparseable base cannot produce a strippable prefix; leave
+        let Ok(mut lease_endpoint) = reqwest::Url::parse(base_url) else {
+            // An unparseable base cannot produce relative references; leave
             // the envelope absolute (the pre-relative behavior).
             return;
         };
-        let origin = base.origin().ascii_serialization();
-        let strip = |target: &mut String| {
-            if let Some(rest) = target.strip_prefix(&origin) {
-                if rest.starts_with('/') {
-                    *target = rest.to_string();
-                }
+        let Ok(mut segments) = lease_endpoint.path_segments_mut() else {
+            return;
+        };
+        segments.pop_if_empty().push("commands").push("leases");
+        drop(segments);
+        lease_endpoint.set_query(None);
+        lease_endpoint.set_fragment(None);
+
+        let relativize = |target: &mut String| {
+            let Ok(mut target_url) = reqwest::Url::parse(target.as_str()) else {
+                return;
+            };
+            let suffix = target
+                .find(['?', '#'])
+                .map(|index| target[index..].to_string())
+                .unwrap_or_default();
+            target_url.set_query(None);
+            target_url.set_fragment(None);
+            if let Some(relative) = lease_endpoint.make_relative(&target_url) {
+                *target = format!("{relative}{suffix}");
             }
         };
 
-        strip(&mut envelope.response_handling.submit_response_url);
+        relativize(&mut envelope.response_handling.submit_response_url);
         if let alien_core::presigned::PresignedRequestBackend::Http { url, .. } =
             &mut envelope.response_handling.storage_upload_request.backend
         {
-            strip(url);
+            relativize(url);
         }
         if let BodySpec::Storage {
             storage_get_request: Some(request),
@@ -947,7 +973,7 @@ impl CommandServer {
             if let alien_core::presigned::PresignedRequestBackend::Http { url, .. } =
                 &mut request.backend
             {
-                strip(url);
+                relativize(url);
             }
         }
     }
@@ -977,16 +1003,23 @@ impl CommandServer {
             self.delete_lease(command_id).await?;
             let _ = self.kv.delete(&format!("lease:{}", lease_id)).await;
 
-            // 3. Increment attempt in registry
-            self.command_registry.increment_attempt(command_id).await?;
-
-            // 4. Update registry state back to Pending
-            self.command_registry
+            // 3. Return the command to Pending only while it is still
+            // non-terminal. A racing response/deadline completion wins.
+            let released = self
+                .command_registry
                 .update_command_state(command_id, CommandState::Pending, None, None, None, None)
                 .await?;
+            if released {
+                // 4. Increment the attempt only for a command that was
+                // actually released for redelivery.
+                self.command_registry.increment_attempt(command_id).await?;
+            }
 
             // Note: Pending index is NOT removed on lease, so command is still there
-            debug!("Lease {} released for command {}", lease_id, command_id);
+            debug!(
+                released,
+                "Lease {} released for command {}", lease_id, command_id
+            );
         }
 
         Ok(())
@@ -1891,6 +1924,89 @@ impl CommandServer {
                 })
             })
             .map(|s| s.to_string())
+    }
+}
+
+#[cfg(test)]
+mod relative_url_tests {
+    use super::*;
+    use alien_core::presigned::PresignedOperation;
+    use std::collections::HashMap;
+
+    fn http_request(url: &str, operation: PresignedOperation) -> PresignedRequest {
+        PresignedRequest::new_http(
+            url.to_string(),
+            match operation {
+                PresignedOperation::Get => "GET",
+                PresignedOperation::Put => "PUT",
+                PresignedOperation::Delete => "DELETE",
+            }
+            .to_string(),
+            HashMap::new(),
+            operation,
+            "commands/test".to_string(),
+            Utc::now() + chrono::Duration::minutes(5),
+        )
+    }
+
+    #[test]
+    fn leased_manager_urls_are_relative_to_lease_endpoint() {
+        let mut envelope = Envelope::new(
+            "deployment",
+            CommandTarget::new("daemon", CommandTargetType::Daemon),
+            "command",
+            1,
+            None,
+            "run",
+            BodySpec::Storage {
+                size: Some(2048),
+                storage_get_request: Some(http_request(
+                    "http://manager.internal/storage/params?signature=params",
+                    PresignedOperation::Get,
+                )),
+                storage_put_used: Some(true),
+            },
+            ResponseHandling {
+                max_inline_bytes: 1024,
+                submit_response_url:
+                    "http://manager.internal/v1/commands/command/response?response_token=DoNotCanonicalize%2FValue&expires=1"
+                        .to_string(),
+                storage_upload_request: http_request(
+                    "http://manager.internal/v1/storage/response?signature=DoNotCanonicalize%2FUpload",
+                    PresignedOperation::Put,
+                ),
+            },
+        );
+
+        CommandServer::relativize_manager_urls(&mut envelope, "http://manager.internal/v1");
+
+        assert_eq!(
+            envelope.response_handling.submit_response_url,
+            "command/response?response_token=DoNotCanonicalize%2FValue&expires=1"
+        );
+        assert_eq!(
+            envelope.response_handling.storage_upload_request.url(),
+            "../storage/response?signature=DoNotCanonicalize%2FUpload"
+        );
+        let BodySpec::Storage {
+            storage_get_request: Some(params),
+            ..
+        } = &envelope.params
+        else {
+            panic!("storage params request");
+        };
+        assert_eq!(params.url(), "../../storage/params?signature=params");
+
+        envelope.response_handling.storage_upload_request = http_request(
+            "https://storage.example.com/result?signature=cloud",
+            PresignedOperation::Put,
+        );
+        CommandServer::relativize_manager_urls(&mut envelope, "http://manager.internal/v1");
+        assert_eq!(
+            envelope.response_handling.storage_upload_request.url(),
+            "https://storage.example.com/result?signature=cloud",
+            "cloud-presigned URLs must remain byte-for-byte absolute"
+        );
     }
 }
 

@@ -1,9 +1,9 @@
-//! Control service for runtime-application communication.
+//! Control service for Worker runtime-to-application communication.
 //!
 //! This service handles:
 //! - HTTP server registration
 //! - Event handler registration  
-//! - Task streaming from runtime to app
+//! - Task streaming from Worker runtime to app
 //! - Task result submission
 
 use std::{collections::HashMap, pin::Pin, sync::Arc};
@@ -12,16 +12,7 @@ use tokio_stream::Stream;
 use tonic::{Request, Response, Status};
 use tracing::{debug, info, warn};
 
-pub mod alien_worker {
-    pub mod control {
-        tonic::include_proto!("alien_worker.control");
-
-        pub const FILE_DESCRIPTOR_SET: &[u8] =
-            tonic::include_file_descriptor_set!("alien_worker.control_descriptor");
-    }
-}
-
-use alien_worker::control::{
+use crate::control::{
     control_service_server::{ControlService, ControlServiceServer},
     RegisterEventHandlerRequest, RegisterEventHandlerResponse, RegisterHttpServerRequest,
     RegisterHttpServerResponse, SendTaskResultRequest, SendTaskResultResponse, Task,
@@ -61,7 +52,7 @@ impl Default for ControlState {
 pub struct ControlGrpcServer {
     /// Shared state
     state: Arc<RwLock<ControlState>>,
-    /// Task sender - runtime sends tasks here
+    /// Task sender - the Worker runtime sends tasks here.
     task_tx: broadcast::Sender<Task>,
     /// Result channels - keyed by task_id
     result_channels: Arc<Mutex<HashMap<String, mpsc::Sender<Result<TaskResult, String>>>>>,
@@ -177,7 +168,7 @@ impl ControlGrpcServer {
     }
 
     /// Send a task to the application and wait for the result.
-    /// This is used for all task types - the runtime must wait for the app to process
+    /// This is used for all task types - the Worker runtime must wait for the app to process
     /// before acknowledging to the platform (storage/cron/queue) or submitting responses (commands).
     pub async fn send_task(
         &self,
@@ -326,11 +317,11 @@ impl ControlService for ControlGrpcServer {
         let task_id = req.task_id;
 
         let (result, result_desc) = match req.result {
-            Some(alien_worker::control::send_task_result_request::Result::Success(ref s)) => {
+            Some(crate::control::send_task_result_request::Result::Success(ref s)) => {
                 let desc = format!("success, response_data_len={}", s.response_data.len());
                 (Ok(TaskResult::success(s.response_data.clone())), desc)
             }
-            Some(alien_worker::control::send_task_result_request::Result::Error(ref e)) => {
+            Some(crate::control::send_task_result_request::Result::Error(ref e)) => {
                 let desc = format!("error, code={}, message={}", e.code, e.message);
                 (
                     Ok(TaskResult::error(e.code.clone(), e.message.clone())),

@@ -3102,6 +3102,14 @@ export type SyncListResponseRuntimeMetadata = {
    * Used to avoid redundant sync operations during incremental deployment
    */
   lastSyncedEnvVarsHash?: string | null | undefined;
+  /**
+   * Exact vault keys owned by the deployment secret synchronizer. This
+   *
+   * @remarks
+   * inventory lets a later snapshot delete removed keys without listing or
+   * touching unrelated values in the same vault.
+   */
+  lastSyncedSecretNames?: Array<string> | undefined;
   preparedStack?: SyncListResponsePreparedStack | any | null | undefined;
   /**
    * Whether cross-account registry access has been successfully granted.
@@ -7720,6 +7728,7 @@ export const SyncListResponseRuntimeMetadata$inboundSchema: z.ZodType<
   unknown
 > = z.object({
   lastSyncedEnvVarsHash: z.nullable(z.string()).optional(),
+  lastSyncedSecretNames: z.array(z.string()).optional(),
   preparedStack: z.nullable(
     z.union([
       z.lazy(() => SyncListResponsePreparedStack$inboundSchema),

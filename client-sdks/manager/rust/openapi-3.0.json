@@ -1467,7 +1467,7 @@
         "properties": {
           "commandsUrl": {
             "type": "string",
-            "description": "Public URL for the commands API. Cloud-deployed workers use this\nto poll for pending commands instead of the agent's local sync URL.",
+            "description": "Public URL for the commands API. Operators and app-owned receivers use\nit to lease pending commands instead of the agent's local sync URL.",
             "nullable": true
           },
           "currentState": {

@@ -9,7 +9,7 @@
 
 use alien_core::bindings;
 use alien_worker_protocol::{run_grpc_server, ControlGrpcServer, WaitUntilGrpcServer};
-use alien_worker_runtime::{run, BindingsSource, RuntimeConfig, TransportType};
+use alien_worker_runtime::{run, RuntimeConfig, RuntimeDependencies, TransportType};
 use anyhow::Context;
 use chrono::Utc;
 use port_check::free_local_port;
@@ -163,13 +163,13 @@ impl AsyncTestContext for ContainerAppTestContext {
         // provider). The ContainerApp transport under test is selected explicitly via
         // RuntimeConfig::transport, independent of this deployment type. The runtime
         // injects ALIEN_WORKER_GRPC_ADDRESS for the child from RuntimeConfig's
-        // bindings_address; its presence is what selects the worker-protocol (control
+        // worker_grpc_address; its presence is what selects the Worker protocol (Control
         // + wait_until) gRPC channel that this test's server provides.
         env_vars.insert("ALIEN_DEPLOYMENT_TYPE".to_string(), "local".to_string());
 
         // The event handlers in alien-test-app persist events into the `test-kv`
         // binding and the read-back endpoints load it. With bindings resolved
-        // in-process (no binding gRPC), give the child app its own local test-kv
+        // in-process (never through the Worker protocol), give the child app its own local test-kv
         // binding so the storage/queue event round-trips still work end-to-end.
         let app_data_dir =
             tempfile::tempdir().expect("Failed to create app data dir for test-kv binding");
@@ -191,7 +191,7 @@ impl AsyncTestContext for ContainerAppTestContext {
             .transport(TransportType::ContainerApp)
             .transport_port(transport_port)
             .command(vec![test_app_path.to_str().unwrap().to_string()])
-            .bindings_address(grpc_resources.grpc_address.clone())
+            .worker_grpc_address(grpc_resources.grpc_address.clone())
             .env_vars(env_vars)
             .build();
 
@@ -209,7 +209,7 @@ impl AsyncTestContext for ContainerAppTestContext {
             run(
                 config,
                 shutdown_rx,
-                BindingsSource::ExternalGrpc {
+                RuntimeDependencies::ExternalWorkerProtocol {
                     wait_until_server,
                     control_server,
                 },

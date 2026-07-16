@@ -635,7 +635,10 @@ macro_rules! distribution_test_context {
             }
 
             async fn teardown(self) {
-                self.ctx.cleanup().await;
+                self.ctx
+                    .cleanup()
+                    .await
+                    .expect("distribution cleanup must reach a safe setup handoff");
             }
         }
     };
@@ -796,6 +799,20 @@ async fn terraform_gke_helm_pull_full_stack_microservices(
 }
 
 distribution_test_context!(
+    TerraformGkeHelmPullRuntimeLessMixed,
+    DistributionFlow::TerraformGkeHelmPull,
+    TestApp::RuntimeLessMixed
+);
+
+#[test_context(TerraformGkeHelmPullRuntimeLessMixed)]
+#[tokio::test]
+async fn terraform_gke_helm_pull_runtime_less_mixed(
+    ctx: &mut TerraformGkeHelmPullRuntimeLessMixed,
+) {
+    check_distribution_deployment(&mut ctx.ctx).await;
+}
+
+distribution_test_context!(
     TerraformAksHelmPullRust,
     DistributionFlow::TerraformAksHelmPull,
     TestApp::ComprehensiveRust
@@ -817,6 +834,20 @@ distribution_test_context!(
 #[tokio::test]
 async fn terraform_aks_helm_pull_full_stack_microservices(
     ctx: &mut TerraformAksHelmPullFullStackMicroservices,
+) {
+    check_distribution_deployment(&mut ctx.ctx).await;
+}
+
+distribution_test_context!(
+    TerraformAksHelmPullRuntimeLessMixed,
+    DistributionFlow::TerraformAksHelmPull,
+    TestApp::RuntimeLessMixed
+);
+
+#[test_context(TerraformAksHelmPullRuntimeLessMixed)]
+#[tokio::test]
+async fn terraform_aks_helm_pull_runtime_less_mixed(
+    ctx: &mut TerraformAksHelmPullRuntimeLessMixed,
 ) {
     check_distribution_deployment(&mut ctx.ctx).await;
 }

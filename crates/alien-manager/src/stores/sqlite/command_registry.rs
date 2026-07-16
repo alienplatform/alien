@@ -416,13 +416,18 @@ impl CommandRegistry for SqliteCommandRegistry {
         completed_at: Option<DateTime<Utc>>,
         response_size_bytes: Option<u64>,
         error: Option<serde_json::Value>,
-    ) -> alien_commands::error::Result<()> {
+    ) -> alien_commands::error::Result<bool> {
         let sql = {
             let mut query = Query::update();
             query
                 .table(Commands::Table)
                 .value(Commands::State, state.as_ref())
-                .and_where(Expr::col(Commands::Id).eq(command_id));
+                .and_where(Expr::col(Commands::Id).eq(command_id))
+                .and_where(Expr::col(Commands::State).is_not_in([
+                    CommandState::Succeeded.as_ref(),
+                    CommandState::Failed.as_ref(),
+                    CommandState::Expired.as_ref(),
+                ]));
             if let Some(d) = dispatched_at {
                 query.value(Commands::DispatchedAt, d.to_rfc3339());
             }
@@ -441,8 +446,12 @@ impl CommandRegistry for SqliteCommandRegistry {
             query.to_string(SqliteQueryBuilder)
         };
 
-        self.db.execute(&sql).await.map_err(to_cmd_err)?;
-        Ok(())
+        let rows_affected = self
+            .db
+            .execute_returning_rows_affected(&sql)
+            .await
+            .map_err(to_cmd_err)?;
+        Ok(rows_affected > 0)
     }
 
     async fn complete_command(
@@ -735,6 +744,39 @@ mod tests {
             err.message.contains("predates ALIEN-219"),
             "expected a loud legacy error, got: {}",
             err.message
+        );
+    }
+
+    #[tokio::test]
+    async fn non_terminal_update_cannot_resurrect_completed_command() {
+        let (db, reg) = registry().await;
+        db.execute(
+            "INSERT INTO commands \
+             (id, deployment_id, name, state, deployment_model, attempt, created_at, target_resource_id, target_resource_type) \
+             VALUES ('completed-cmd', 'dep-1', 'run', 'SUCCEEDED', 'pull', 1, \
+             '2020-01-01T00:00:00Z', 'daemon-1', 'daemon')",
+        )
+        .await
+        .unwrap();
+
+        assert!(!reg
+            .update_command_state(
+                "completed-cmd",
+                CommandState::Pending,
+                None,
+                None,
+                None,
+                None,
+            )
+            .await
+            .unwrap());
+        assert_eq!(
+            reg.get_command_status("completed-cmd")
+                .await
+                .unwrap()
+                .unwrap()
+                .state,
+            CommandState::Succeeded
         );
     }
 }

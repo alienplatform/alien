@@ -1,7 +1,7 @@
 use alien_error::{AlienError, AlienErrorData};
 use serde::{Deserialize, Serialize};
 
-/// Errors that occur in the Alien runtime system.
+/// Errors that occur in the Alien Worker Runtime.
 #[derive(Debug, Clone, AlienErrorData, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub enum ErrorData {
@@ -149,18 +149,14 @@ pub enum ErrorData {
         message: String,
     },
 
-    /// Alien bindings gRPC server operation failed.
+    /// Failed to initialize the direct provider used for Worker secret projection.
     #[error(
-        code = "BINDINGS_OPERATION_FAILED",
-        message = "Alien bindings operation failed: {message}",
+        code = "SECRET_PROVIDER_INITIALIZATION_FAILED",
+        message = "Worker secret provider initialization failed: {message}",
         retryable = "true",
         internal = "false"
     )]
-    BindingsOperationFailed {
-        /// gRPC server address
-        address: String,
-        /// Provider type (local, aws, gcp, etc.)
-        provider: Option<String>,
+    SecretProviderInitializationFailed {
         /// Human-readable description of the failure
         message: String,
     },

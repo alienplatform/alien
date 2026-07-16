@@ -38,6 +38,16 @@ use sha2::{Digest, Sha256};
 const CLOUD_RUN_SERVICE_NAME_MAX_LEN: usize = 49;
 const GCP_RESOURCE_NAME_MAX_LEN: usize = 63;
 const GCP_RESOURCE_NAME_HASH_LEN: usize = 8;
+const MAX_IMAGE_PULL_PERMISSION_RETRIES: u8 = 4;
+
+fn is_cross_project_image_pull_permission_error(message: &str) -> bool {
+    message.contains("serverless-robot-prod.iam.gserviceaccount.com")
+        && message.contains("artifactregistry.repositories.downloadArtifacts")
+}
+
+fn image_pull_permission_retry_delay(attempt: u8) -> Duration {
+    Duration::from_secs(10 * (1_u64 << attempt.saturating_sub(1).min(3)))
+}
 
 fn is_remote_resource_conflict(error: &AlienError<CloudClientErrorData>) -> bool {
     matches!(
@@ -262,6 +272,9 @@ pub struct GcpWorkerController {
     pub(crate) url: Option<String>,
     /// The operation name for long-running operations (for create, update, delete)
     pub(crate) operation_name: Option<String>,
+    /// Number of targeted retries after GAR IAM propagation denied an image pull.
+    #[serde(default)]
+    pub(crate) image_pull_permission_retries: u8,
     /// The Compute Engine operation name for load-balancer infrastructure.
     pub(crate) compute_operation_name: Option<String>,
     /// Region for regional Compute Engine operations. `None` means global.
@@ -516,6 +529,26 @@ impl GcpWorkerController {
         if operation.done.unwrap_or(false) {
             // Check if there was an error
             if let Some(OperationResult::Error { error }) = &operation.result {
+                if is_cross_project_image_pull_permission_error(&error.message)
+                    && self.image_pull_permission_retries < MAX_IMAGE_PULL_PERMISSION_RETRIES
+                {
+                    self.image_pull_permission_retries += 1;
+                    self.operation_name = None;
+                    let delay =
+                        image_pull_permission_retry_delay(self.image_pull_permission_retries);
+                    warn!(
+                        worker=%ctx.desired_config.id(),
+                        attempt=self.image_pull_permission_retries,
+                        max_attempts=MAX_IMAGE_PULL_PERMISSION_RETRIES,
+                        delay_seconds=delay.as_secs(),
+                        "Cloud Run image pull is waiting for the verified GAR reader grant to propagate"
+                    );
+                    return Ok(HandlerAction::Continue {
+                        state: RetryingImagePull,
+                        suggested_delay: Some(delay),
+                    });
+                }
+
                 return Err(AlienError::new(ErrorData::CloudPlatformError {
                     message: format!("Operation failed: {} (code: {})", error.message, error.code),
                     resource_id: Some(ctx.desired_config.id().to_string()),
@@ -524,6 +557,7 @@ impl GcpWorkerController {
 
             // Operation succeeded, transition to next state
             info!(operation=%operation_name, "Operation completed successfully");
+            self.image_pull_permission_retries = 0;
 
             Ok(HandlerAction::Continue {
                 state: WaitingForServiceCreation,
@@ -539,6 +573,58 @@ impl GcpWorkerController {
                 suggested_delay: Some(Duration::from_secs(5)),
             })
         }
+    }
+
+    #[handler(
+        state = RetryingImagePull,
+        on_failure = CreateFailed,
+        status = ResourceStatus::Provisioning,
+    )]
+    async fn retrying_image_pull(
+        &mut self,
+        ctx: &ResourceControllerContext<'_>,
+    ) -> Result<HandlerAction> {
+        let cfg = ctx.desired_resource_config::<Worker>()?;
+        let gcp_config = ctx.get_gcp_config()?;
+        let service_name = self.service_name.as_ref().ok_or_else(|| {
+            AlienError::new(ErrorData::ResourceControllerConfigError {
+                resource_id: cfg.id.clone(),
+                message: "Service name not set while retrying a Cloud Run image pull".to_string(),
+            })
+        })?;
+        let service = self.build_cloud_run_service(service_name, cfg, ctx).await?;
+
+        let operation = ctx
+            .service_provider
+            .get_gcp_cloudrun_client(gcp_config)?
+            .patch_service(
+                gcp_config.region.clone(),
+                service_name.clone(),
+                service,
+                Some("template".to_string()),
+                None,
+                Some(false),
+            )
+            .await
+            .context(ErrorData::CloudPlatformError {
+                message: "Failed to retry Cloud Run service after GAR permission propagation"
+                    .to_string(),
+                resource_id: Some(cfg.id.clone()),
+            })?;
+        let operation_name = operation.name.ok_or_else(|| {
+            AlienError::new(ErrorData::CloudPlatformError {
+                message: "Cloud Run image-pull retry returned without an operation name"
+                    .to_string(),
+                resource_id: Some(cfg.id.clone()),
+            })
+        })?;
+
+        self.operation_name = Some(operation_name);
+
+        Ok(HandlerAction::Continue {
+            state: CreatingService,
+            suggested_delay: Some(Duration::from_secs(2)),
+        })
     }
 
     #[handler(
@@ -610,11 +696,8 @@ impl GcpWorkerController {
                 conditions=?condition_summary,
                 "Service not yet ready after creation, waiting"
             );
-            // 240 attempts × ~9s (5s suggested + API latency) ≈ 36 minutes.
-            // Cloud Run services that pull from cross-project Artifact Registry
-            // may take 10-20 minutes while freshly-granted IAM bindings propagate.
             return Ok(HandlerAction::Stay {
-                max_times: Some(240),
+                max_times: Some(60),
                 suggested_delay: Some(Duration::from_secs(5)),
             });
         }
@@ -4464,8 +4547,16 @@ impl GcpWorkerController {
         }
 
         // Build revision template
+        let mut revision_labels = HashMap::from([("worker".to_string(), cfg.id.clone())]);
+        if self.image_pull_permission_retries > 0 {
+            revision_labels.insert(
+                "alien-image-pull-retry".to_string(),
+                self.image_pull_permission_retries.to_string(),
+            );
+        }
+
         let template = RevisionTemplate::builder()
-            .labels(HashMap::from([("worker".to_string(), cfg.id.clone())]))
+            .labels(revision_labels)
             .scaling(
                 alien_gcp_clients::cloudrun::RevisionScaling::builder()
                     .min_instance_count(0) // Scale to zero
@@ -5499,6 +5590,7 @@ impl GcpWorkerController {
             service_name: Some(function_name.to_string()),
             url: Some(format!("https://{}-abcd1234-uc.a.run.app", function_name)),
             operation_name: None,
+            image_pull_permission_retries: 0,
             compute_operation_name: None,
             compute_operation_region: None,
             push_subscriptions: Vec::new(),
@@ -5554,7 +5646,8 @@ mod tests {
     use rstest::rstest;
 
     use super::{
-        get_cloudrun_service_name, get_gcp_worker_resource_name, CLOUD_RUN_SERVICE_NAME_MAX_LEN,
+        get_cloudrun_service_name, get_gcp_worker_resource_name,
+        is_cross_project_image_pull_permission_error, CLOUD_RUN_SERVICE_NAME_MAX_LEN,
         GCP_RESOURCE_NAME_MAX_LEN,
     };
     use crate::core::MockPlatformServiceProvider;
@@ -5572,6 +5665,20 @@ mod tests {
             get_cloudrun_service_name("test-stack", "worker"),
             "test-stack-worker"
         );
+    }
+
+    #[test]
+    fn image_pull_retry_only_matches_cross_project_gar_permission_denials() {
+        assert!(is_cross_project_image_pull_permission_error(
+            "Google Cloud Run Service Agent service-123@serverless-robot-prod.iam.gserviceaccount.com \
+             was denied artifactregistry.repositories.downloadArtifacts"
+        ));
+        assert!(!is_cross_project_image_pull_permission_error(
+            "artifactregistry.repositories.downloadArtifacts denied for a user service account"
+        ));
+        assert!(!is_cross_project_image_pull_permission_error(
+            "Cloud Run revision failed its startup probe"
+        ));
     }
 
     #[test]
@@ -5755,6 +5862,26 @@ mod tests {
                 response: serde_json::json!({
                     "name": format!("projects/test-project/locations/us-central1/services/test-{}", operation_name)
                 })
+            })
+            .build()
+    }
+
+    fn create_image_pull_permission_denied_operation(operation_name: &str) -> LongRunningOperation {
+        LongRunningOperation::builder()
+            .name(format!(
+                "projects/test-project/locations/us-central1/operations/{operation_name}"
+            ))
+            .done(true)
+            .result(OperationResult::Error {
+                error: Status::builder()
+                    .code(7)
+                    .message(
+                        "Google Cloud Run Service Agent \
+                         service-123@serverless-robot-prod.iam.gserviceaccount.com must have \
+                         artifactregistry.repositories.downloadArtifacts permission"
+                            .to_string(),
+                    )
+                    .build(),
             })
             .build()
     }
@@ -6214,6 +6341,85 @@ mod tests {
 
         // Verify outputs are no longer available
         assert!(executor.outputs().is_none());
+    }
+
+    #[tokio::test]
+    async fn retries_cloud_run_revision_after_gar_reader_grant_propagates() {
+        let worker = basic_function();
+        let function_name = format!("test-{}", worker.id);
+        let operation_checks = Arc::new(AtomicUsize::new(0));
+        let operation_checks_for_mock = Arc::clone(&operation_checks);
+        let patch_calls = Arc::new(AtomicUsize::new(0));
+        let patch_calls_for_mock = Arc::clone(&patch_calls);
+
+        let mut mock_cloudrun = MockCloudRunApi::new();
+        mock_cloudrun
+            .expect_create_service()
+            .times(1)
+            .returning(|_, _, _, _| Ok(create_successful_operation_response("create-worker")));
+        mock_cloudrun
+            .expect_get_operation()
+            .times(2)
+            .returning(move |_, _| {
+                if operation_checks_for_mock.fetch_add(1, Ordering::SeqCst) == 0 {
+                    Ok(create_image_pull_permission_denied_operation(
+                        "create-worker",
+                    ))
+                } else {
+                    Ok(create_completed_operation_response("retry-worker"))
+                }
+            });
+        mock_cloudrun
+            .expect_patch_service()
+            .times(1)
+            .withf(|_, _, service, update_mask, _, allow_missing| {
+                let has_retry_label = service
+                    .template
+                    .as_ref()
+                    .and_then(|template| template.labels.as_ref())
+                    .is_some_and(|labels| {
+                        labels.get("alien-image-pull-retry").map(String::as_str) == Some("1")
+                    });
+                has_retry_label
+                    && update_mask.as_deref() == Some("template")
+                    && *allow_missing == Some(false)
+            })
+            .returning(move |_, _, _, _, _, _| {
+                patch_calls_for_mock.fetch_add(1, Ordering::SeqCst);
+                Ok(create_successful_operation_response("retry-worker"))
+            });
+        let function_name_for_get = function_name.clone();
+        mock_cloudrun
+            .expect_get_service()
+            .returning(move |_, _| Ok(create_successful_service_response(&function_name_for_get)));
+        mock_cloudrun
+            .expect_get_service_iam_policy()
+            .returning(|_, _| Ok(create_empty_iam_policy()));
+        mock_cloudrun
+            .expect_set_service_iam_policy()
+            .returning(|_, _, _| Ok(create_empty_iam_policy()));
+
+        let mock_provider = setup_mock_service_provider(Arc::new(mock_cloudrun), None);
+        let mut executor = SingleControllerExecutor::builder()
+            .resource(worker)
+            .controller(GcpWorkerController::default())
+            .platform(Platform::Gcp)
+            .service_provider(mock_provider)
+            .with_test_dependencies()
+            .build()
+            .await
+            .unwrap();
+
+        for _ in 0..30 {
+            if executor.status() == ResourceStatus::Running {
+                break;
+            }
+            executor.step().await.unwrap();
+        }
+
+        assert_eq!(executor.status(), ResourceStatus::Running);
+        assert_eq!(operation_checks.load(Ordering::SeqCst), 2);
+        assert_eq!(patch_calls.load(Ordering::SeqCst), 1);
     }
 
     // ─────────────── UPDATE FLOW TESTS ────────────────────────────────
@@ -6809,6 +7015,7 @@ mod tests {
             service_name: None, // This is the key - no service name set
             url: None,
             operation_name: None,
+            image_pull_permission_retries: 0,
             compute_operation_name: None,
             compute_operation_region: None,
             push_subscriptions: Vec::new(),
