@@ -47,10 +47,10 @@ impl AzurePermissionsHelper {
         azure_config: &alien_azure_clients::AzureClientConfig,
     ) -> String {
         // Azure queues share one preflight-created Service Bus namespace. The
-        // legacy permission templates derive a per-queue namespace from
+        // legacy queue permission templates derive a namespace from
         // `${resourceName}-sb`, so the controller's concrete scope is the only
         // authoritative queue or shared-namespace resource ID.
-        if matches!(permission_set_id, "queue/data-read" | "queue/data-write") {
+        if permission_set_id.starts_with("queue/") {
             resource_scope.to_resource_id_string(azure_config)
         } else {
             generated_scope.to_string()
@@ -1024,7 +1024,7 @@ mod tests {
     }
 
     #[test]
-    fn queue_data_assignments_use_the_controller_service_bus_scope() {
+    fn queue_assignments_use_the_controller_service_bus_scope() {
         let azure_config = azure_config();
         let shared_namespace_scope = Scope::Resource {
             resource_group_name: "rg-123".to_string(),
@@ -1042,7 +1042,13 @@ mod tests {
         };
         let stale_generated_scope = "/subscriptions/sub-123/resourceGroups/rg-123/providers/Microsoft.ServiceBus/namespaces/orders-sb/queues/orders";
 
-        for permission_set_id in ["queue/data-read", "queue/data-write"] {
+        for permission_set_id in [
+            "queue/data-read",
+            "queue/data-write",
+            "queue/heartbeat",
+            "queue/management",
+            "queue/provision",
+        ] {
             assert_eq!(
                 AzurePermissionsHelper::role_assignment_scope(
                     permission_set_id,
@@ -1051,7 +1057,7 @@ mod tests {
                     &azure_config,
                 ),
                 "/subscriptions/sub-123/resourceGroups/rg-123/providers/Microsoft.ServiceBus/namespaces/shared-bus",
-                "wildcard queue data access must target the real shared namespace"
+                "wildcard queue access must target the real shared namespace"
             );
             assert_eq!(
                 AzurePermissionsHelper::role_assignment_scope(
@@ -1061,7 +1067,7 @@ mod tests {
                     &azure_config,
                 ),
                 "/subscriptions/sub-123/resourceGroups/rg-123/providers/Microsoft.ServiceBus/namespaces/shared-bus/queues/orders",
-                "resource-scoped queue data access must target the real queue"
+                "resource-scoped queue access must target the real queue"
             );
         }
     }
