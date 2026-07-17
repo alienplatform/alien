@@ -1928,6 +1928,10 @@ jobs:
         run: |
           set -u
           set -a && source .env.test && set +a
+          if [[ ! "${ALIEN_E2E_SLOT:-}" =~ ^[0-9]{2}$ ]]; then
+            echo "ALIEN_E2E_SLOT must be a two-digit slot before Azure cleanup" >&2
+            exit 1
+          fi
           az login --service-principal \
             -u "$AZURE_TARGET_CLIENT_ID" -p "$AZURE_TARGET_CLIENT_SECRET" --tenant "$AZURE_TARGET_TENANT_ID" \
             --output none || true
@@ -1944,7 +1948,7 @@ jobs:
             esac
             if [[ ! "$rg" =~ ^[a-z][0-9a-f]{7}-default-resource-group$ ]] \
               && [[ ! "$rg" =~ ^alien-e2e-[0-9a-f]{8}$ ]] \
-              && [[ ! "$rg" =~ ^e2e-[0-9]{2}(-[a-z0-9]+)?- ]]; then
+              && [[ ! "$rg" =~ ^e2e-${ALIEN_E2E_SLOT}- ]]; then
               continue
             fi
             MATCHED_GROUPS+=("$rg")
@@ -1977,7 +1981,7 @@ jobs:
             [ -n "$vault_name" ] || continue
             if [[ ! "$vault_name" =~ ^[a-z][0-9a-f]{7}- ]] \
               && [[ ! "$vault_name" =~ ^alien-e2e-[0-9a-f]{8} ]] \
-              && [[ ! "$vault_name" =~ ^e2e-[0-9]{2}(-[a-z0-9]+)?- ]]; then
+              && [[ ! "$vault_name" =~ ^e2e-${ALIEN_E2E_SLOT}- ]]; then
               continue
             fi
             echo "Purging soft-deleted Key Vault: $vault_name"
@@ -1992,7 +1996,7 @@ jobs:
           while IFS=$'\t' read -r assignment_id assignment_description; do
             [ -n "$assignment_id" ] || continue
             [ -n "${assignment_description:-}" ] || continue
-            if [[ "$assignment_description" =~ ^management\ uami\ .*\((e2e-[0-9]{2}(-[a-z0-9]+)?|alien-e2e-[0-9a-f]{8}|[a-z][0-9a-f]{7})\)$ ]]; then
+            if [[ "$assignment_description" =~ ^management\ uami\ .*\((e2e-${ALIEN_E2E_SLOT}(-[a-z0-9]+)?|alien-e2e-[0-9a-f]{8}|[a-z][0-9a-f]{7})\)$ ]]; then
               echo "Deleting role assignment: $assignment_id ($assignment_description)"
               az role assignment delete --ids "$assignment_id" || true
             fi
