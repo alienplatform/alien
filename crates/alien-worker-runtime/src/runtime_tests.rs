@@ -12,7 +12,8 @@ use tokio::sync::broadcast;
 
 use super::{
     application_runtime_env, command_push_config, run_transport, runtime_only_env,
-    start_application, RuntimeConfig, TransportType,
+    start_application, RuntimeConfig, TransportType, ENV_ALIEN_BINDINGS_GRPC_ADDRESS,
+    ENV_ALIEN_BINDINGS_MODE,
 };
 
 const SUBPROCESS_DRIVER: &str = "ALIEN_TEST_RUNTIME_ENV_SUBPROCESS_DRIVER";
@@ -296,7 +297,7 @@ fn application_environment_observer() {
 }
 
 #[test]
-fn application_runtime_env_uses_only_worker_transports() {
+fn application_runtime_env_injects_both_worker_protocol_address_names() {
     for (transport, expected) in [
         (TransportType::Lambda, "lambda"),
         (TransportType::CloudRun, "cloud-run"),
@@ -319,6 +320,11 @@ fn application_runtime_env_uses_only_worker_transports() {
             env.get(ENV_ALIEN_WORKER_GRPC_ADDRESS),
             Some(&"127.0.0.1:60000".to_string())
         );
+        assert_eq!(
+            env.get(ENV_ALIEN_BINDINGS_GRPC_ADDRESS),
+            Some(&"127.0.0.1:60000".to_string())
+        );
+        assert_eq!(env.get(ENV_ALIEN_BINDINGS_MODE), Some(&"grpc".to_string()));
         assert_eq!(env.get(ENV_ALIEN_TRANSPORT), Some(&expected.to_string()));
         assert_eq!(env.get("PORT"), None);
     }

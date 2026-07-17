@@ -9,10 +9,17 @@ use std::{
         atomic::{AtomicU32, Ordering},
         Arc,
     },
+    task::{Context as TaskContext, Poll},
     time::Duration,
 };
 use tokio::{sync::Mutex, task::JoinHandle, time::timeout};
-use tonic::transport::Channel;
+use tonic::{
+    codegen::{
+        http::{Request as HttpRequest, Response as HttpResponse, Uri},
+        Service,
+    },
+    transport::Channel,
+};
 use tracing::{debug, error, info, warn};
 use uuid::Uuid;
 
@@ -21,8 +28,144 @@ use utoipa::ToSchema;
 
 use alien_worker_protocol::wait_until::{
     wait_until_service_client::WaitUntilServiceClient, NotifyDrainCompleteRequest,
-    NotifyTaskRegisteredRequest, WaitForDrainSignalRequest,
+    NotifyDrainCompleteResponse, NotifyTaskRegisteredRequest, NotifyTaskRegisteredResponse,
+    WaitForDrainSignalRequest, WaitForDrainSignalResponse,
 };
+
+pub(crate) const ENV_ALIEN_BINDINGS_GRPC_ADDRESS: &str = "ALIEN_BINDINGS_GRPC_ADDRESS";
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum WorkerProtocolGeneration {
+    Current,
+    Legacy,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) struct WorkerProtocolEndpoint<'a> {
+    pub address: &'a str,
+    pub generation: WorkerProtocolGeneration,
+}
+
+pub(crate) fn worker_protocol_endpoint<'a>(
+    env_vars: &'a HashMap<String, String>,
+) -> Option<WorkerProtocolEndpoint<'a>> {
+    env_vars
+        .get(alien_core::ENV_ALIEN_WORKER_GRPC_ADDRESS)
+        .map(|address| WorkerProtocolEndpoint {
+            address,
+            generation: WorkerProtocolGeneration::Current,
+        })
+        .or_else(|| {
+            env_vars
+                .get(ENV_ALIEN_BINDINGS_GRPC_ADDRESS)
+                .map(|address| WorkerProtocolEndpoint {
+                    address,
+                    generation: WorkerProtocolGeneration::Legacy,
+                })
+        })
+}
+
+#[derive(Clone, Debug)]
+pub(crate) struct WorkerProtocolChannel {
+    inner: Channel,
+    generation: WorkerProtocolGeneration,
+}
+
+impl WorkerProtocolChannel {
+    pub fn new(inner: Channel, generation: WorkerProtocolGeneration) -> Self {
+        Self { inner, generation }
+    }
+}
+
+impl Service<HttpRequest<tonic::body::Body>> for WorkerProtocolChannel {
+    type Response = HttpResponse<tonic::body::Body>;
+    type Error = tonic::transport::Error;
+    type Future = <Channel as Service<HttpRequest<tonic::body::Body>>>::Future;
+
+    fn poll_ready(
+        &mut self,
+        context: &mut TaskContext<'_>,
+    ) -> Poll<std::result::Result<(), Self::Error>> {
+        self.inner.poll_ready(context)
+    }
+
+    fn call(&mut self, mut request: HttpRequest<tonic::body::Body>) -> Self::Future {
+        if self.generation == WorkerProtocolGeneration::Legacy {
+            if let Some(uri) = legacy_worker_protocol_uri(request.uri().path()) {
+                *request.uri_mut() = uri;
+            }
+        }
+        self.inner.call(request)
+    }
+}
+
+fn legacy_worker_protocol_uri(path: &str) -> Option<Uri> {
+    match path {
+        "/alien_worker.control.ControlService/RegisterHttpServer" => Some(Uri::from_static(
+            "/alien_bindings.control.ControlService/RegisterHttpServer",
+        )),
+        "/alien_worker.control.ControlService/RegisterEventHandler" => Some(Uri::from_static(
+            "/alien_bindings.control.ControlService/RegisterEventHandler",
+        )),
+        "/alien_worker.control.ControlService/WaitForTasks" => Some(Uri::from_static(
+            "/alien_bindings.control.ControlService/WaitForTasks",
+        )),
+        "/alien_worker.control.ControlService/SendTaskResult" => Some(Uri::from_static(
+            "/alien_bindings.control.ControlService/SendTaskResult",
+        )),
+        "/alien_worker.wait_until.WaitUntilService/NotifyTaskRegistered" => Some(Uri::from_static(
+            "/alien_bindings.wait_until.WaitUntilService/NotifyTaskRegistered",
+        )),
+        "/alien_worker.wait_until.WaitUntilService/WaitForDrainSignal" => Some(Uri::from_static(
+            "/alien_bindings.wait_until.WaitUntilService/WaitForDrainSignal",
+        )),
+        "/alien_worker.wait_until.WaitUntilService/NotifyDrainComplete" => Some(Uri::from_static(
+            "/alien_bindings.wait_until.WaitUntilService/NotifyDrainComplete",
+        )),
+        "/alien_worker.wait_until.WaitUntilService/GetTaskCount" => Some(Uri::from_static(
+            "/alien_bindings.wait_until.WaitUntilService/GetTaskCount",
+        )),
+        _ => None,
+    }
+}
+
+#[derive(Clone, Debug)]
+enum WaitUntilGrpcClient {
+    Direct(WaitUntilServiceClient<Channel>),
+    Runtime(WaitUntilServiceClient<WorkerProtocolChannel>),
+}
+
+impl WaitUntilGrpcClient {
+    async fn notify_task_registered(
+        &mut self,
+        request: NotifyTaskRegisteredRequest,
+    ) -> std::result::Result<tonic::Response<NotifyTaskRegisteredResponse>, tonic::Status> {
+        match self {
+            Self::Direct(client) => client.notify_task_registered(request).await,
+            Self::Runtime(client) => client.notify_task_registered(request).await,
+        }
+    }
+
+    async fn wait_for_drain_signal(
+        &mut self,
+        request: WaitForDrainSignalRequest,
+    ) -> std::result::Result<tonic::Response<WaitForDrainSignalResponse>, tonic::Status> {
+        match self {
+            Self::Direct(client) => client.wait_for_drain_signal(request).await,
+            Self::Runtime(client) => client.wait_for_drain_signal(request).await,
+        }
+    }
+
+    async fn notify_drain_complete(
+        &mut self,
+        request: NotifyDrainCompleteRequest,
+    ) -> std::result::Result<tonic::Response<NotifyDrainCompleteResponse>, tonic::Status> {
+        match self {
+            Self::Direct(client) => client.notify_drain_complete(request).await,
+            Self::Runtime(client) => client.notify_drain_complete(request).await,
+        }
+    }
+}
 
 /// Response from drain operations.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -80,7 +223,7 @@ pub struct WaitUntilContext {
     /// Task counter for generating unique task IDs.
     task_counter: AtomicU32,
     /// gRPC client for communicating with the Worker runtime.
-    grpc_client: Option<WaitUntilServiceClient<Channel>>,
+    grpc_client: Option<WaitUntilGrpcClient>,
     /// Whether we're currently draining tasks.
     draining: Arc<Mutex<bool>>,
 }
@@ -113,13 +256,13 @@ impl WaitUntilContext {
     ) -> Result<Self> {
         let app_id = application_id.unwrap_or_else(|| Uuid::new_v4().to_string());
 
-        // The worker-protocol drain channel is selected by the presence of the
-        // ALIEN_WORKER_GRPC_ADDRESS env var — the Worker runtime sets it for the app it
-        // spawns. Without it, wait_until runs in-process.
-        if let Some(grpc_address) = env_vars.get(alien_core::ENV_ALIEN_WORKER_GRPC_ADDRESS) {
-            // Create gRPC client
-            let channel = Self::create_grpc_channel(grpc_address.clone()).await?;
-            let grpc_client = WaitUntilServiceClient::new(channel);
+        // Current runtimes inject both names. Prefer the current name while
+        // retaining compatibility with runtimes released before the rename.
+        if let Some(endpoint) = worker_protocol_endpoint(env_vars) {
+            let channel = Self::create_grpc_channel(endpoint.address).await?;
+            let grpc_client = WaitUntilGrpcClient::Runtime(WaitUntilServiceClient::new(
+                WorkerProtocolChannel::new(channel, endpoint.generation),
+            ));
 
             return Ok(Self {
                 application_id: app_id,
@@ -136,12 +279,12 @@ impl WaitUntilContext {
 
     /// Creates a gRPC channel from an address string.
     /// This creates a dedicated channel for wait_until with proper timeout and keep-alive configuration.
-    async fn create_grpc_channel(grpc_address: String) -> Result<Channel> {
+    async fn create_grpc_channel(grpc_address: &str) -> Result<Channel> {
         use std::time::Duration;
 
         // Ensure the address has a scheme, default to http if not present
         let endpoint_uri = if grpc_address.contains("://") {
-            grpc_address.clone()
+            grpc_address.to_string()
         } else {
             format!("http://{}", grpc_address)
         };
@@ -160,7 +303,7 @@ impl WaitUntilContext {
 
         let channel = endpoint.connect().await.into_alien_error().context(
             ErrorData::GrpcConnectionFailed {
-                endpoint: grpc_address.clone(),
+                endpoint: grpc_address.to_string(),
                 reason: "Failed to establish gRPC connection".to_string(),
             },
         )?;
@@ -179,14 +322,14 @@ impl WaitUntilContext {
             application_id: app_id,
             tasks: Arc::new(Mutex::new(HashMap::new())),
             task_counter: AtomicU32::new(0),
-            grpc_client: Some(grpc_client),
+            grpc_client: Some(WaitUntilGrpcClient::Direct(grpc_client)),
             draining: Arc::new(Mutex::new(false)),
         }
     }
 
     /// Sets the gRPC client for communicating with the Worker runtime.
     pub fn set_grpc_client(&mut self, client: WaitUntilServiceClient<Channel>) {
-        self.grpc_client = Some(client);
+        self.grpc_client = Some(WaitUntilGrpcClient::Direct(client));
     }
 
     /// Gets the application ID.
@@ -510,5 +653,91 @@ impl WaitUntil for WaitUntilContext {
         }
 
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn worker_protocol_endpoint_accepts_legacy_runtime_address() {
+        let env_vars = HashMap::from([(
+            ENV_ALIEN_BINDINGS_GRPC_ADDRESS.to_string(),
+            "127.0.0.1:51000".to_string(),
+        )]);
+
+        assert_eq!(
+            worker_protocol_endpoint(&env_vars),
+            Some(WorkerProtocolEndpoint {
+                address: "127.0.0.1:51000",
+                generation: WorkerProtocolGeneration::Legacy,
+            })
+        );
+    }
+
+    #[test]
+    fn worker_protocol_endpoint_prefers_current_runtime_address() {
+        let env_vars = HashMap::from([
+            (
+                alien_core::ENV_ALIEN_WORKER_GRPC_ADDRESS.to_string(),
+                "127.0.0.1:52000".to_string(),
+            ),
+            (
+                ENV_ALIEN_BINDINGS_GRPC_ADDRESS.to_string(),
+                "127.0.0.1:51000".to_string(),
+            ),
+        ]);
+
+        assert_eq!(
+            worker_protocol_endpoint(&env_vars),
+            Some(WorkerProtocolEndpoint {
+                address: "127.0.0.1:52000",
+                generation: WorkerProtocolGeneration::Current,
+            })
+        );
+    }
+
+    #[test]
+    fn legacy_worker_protocol_uri_rewrites_all_generated_rpc_paths() {
+        for (current, legacy) in [
+            (
+                "/alien_worker.control.ControlService/RegisterHttpServer",
+                "/alien_bindings.control.ControlService/RegisterHttpServer",
+            ),
+            (
+                "/alien_worker.control.ControlService/RegisterEventHandler",
+                "/alien_bindings.control.ControlService/RegisterEventHandler",
+            ),
+            (
+                "/alien_worker.control.ControlService/WaitForTasks",
+                "/alien_bindings.control.ControlService/WaitForTasks",
+            ),
+            (
+                "/alien_worker.control.ControlService/SendTaskResult",
+                "/alien_bindings.control.ControlService/SendTaskResult",
+            ),
+            (
+                "/alien_worker.wait_until.WaitUntilService/NotifyTaskRegistered",
+                "/alien_bindings.wait_until.WaitUntilService/NotifyTaskRegistered",
+            ),
+            (
+                "/alien_worker.wait_until.WaitUntilService/WaitForDrainSignal",
+                "/alien_bindings.wait_until.WaitUntilService/WaitForDrainSignal",
+            ),
+            (
+                "/alien_worker.wait_until.WaitUntilService/NotifyDrainComplete",
+                "/alien_bindings.wait_until.WaitUntilService/NotifyDrainComplete",
+            ),
+            (
+                "/alien_worker.wait_until.WaitUntilService/GetTaskCount",
+                "/alien_bindings.wait_until.WaitUntilService/GetTaskCount",
+            ),
+        ] {
+            assert_eq!(
+                legacy_worker_protocol_uri(current).as_ref().map(Uri::path),
+                Some(legacy)
+            );
+        }
     }
 }

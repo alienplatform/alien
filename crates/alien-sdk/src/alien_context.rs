@@ -13,7 +13,7 @@ use tokio_stream::StreamExt as _;
 use tracing::{debug, error, info, warn};
 
 use crate::{
-    wait_until::{WaitUntil, WaitUntilContext},
+    wait_until::{worker_protocol_endpoint, WaitUntil, WaitUntilContext, WorkerProtocolChannel},
     Bindings,
 };
 use alien_bindings::error::{ErrorData, Result};
@@ -98,7 +98,7 @@ pub struct AlienContext {
     /// Registered event handlers
     handlers: Arc<RwLock<Handlers>>,
     /// gRPC control client (lazy initialized)
-    control_client: Arc<Mutex<Option<ControlServiceClient<tonic::transport::Channel>>>>,
+    control_client: Arc<Mutex<Option<ControlServiceClient<WorkerProtocolChannel>>>>,
 }
 
 impl AlienContext {
@@ -145,23 +145,24 @@ impl AlienContext {
     }
 
     /// Gets the gRPC control client, creating it if needed
-    async fn get_control_client(&self) -> Result<ControlServiceClient<tonic::transport::Channel>> {
+    async fn get_control_client(&self) -> Result<ControlServiceClient<WorkerProtocolChannel>> {
         let mut client_guard = self.control_client.lock().await;
 
         if let Some(client) = client_guard.as_ref() {
             return Ok(client.clone());
         }
 
-        let grpc_address = self
-            .env_vars
-            .get(alien_core::ENV_ALIEN_WORKER_GRPC_ADDRESS)
-            .ok_or_else(|| {
-                AlienError::new(ErrorData::EnvironmentVariableMissing {
-                    variable_name: alien_core::ENV_ALIEN_WORKER_GRPC_ADDRESS.to_string(),
-                })
-            })?;
+        let endpoint_config = worker_protocol_endpoint(&self.env_vars).ok_or_else(|| {
+            AlienError::new(ErrorData::EnvironmentVariableMissing {
+                variable_name: alien_core::ENV_ALIEN_WORKER_GRPC_ADDRESS.to_string(),
+            })
+        })?;
 
-        let endpoint = format!("http://{}", grpc_address);
+        let endpoint = if endpoint_config.address.contains("://") {
+            endpoint_config.address.to_string()
+        } else {
+            format!("http://{}", endpoint_config.address)
+        };
         let channel = tonic::transport::Channel::from_shared(endpoint.clone())
             .into_alien_error()
             .context(ErrorData::GrpcConnectionFailed {
@@ -176,7 +177,10 @@ impl AlienContext {
                 reason: "Failed to connect to gRPC server".to_string(),
             })?;
 
-        let client = ControlServiceClient::new(channel);
+        let client = ControlServiceClient::new(WorkerProtocolChannel::new(
+            channel,
+            endpoint_config.generation,
+        ));
         *client_guard = Some(client.clone());
         Ok(client)
     }

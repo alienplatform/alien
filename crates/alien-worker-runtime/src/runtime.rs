@@ -37,6 +37,9 @@ use crate::{
     },
 };
 
+const ENV_ALIEN_BINDINGS_GRPC_ADDRESS: &str = "ALIEN_BINDINGS_GRPC_ADDRESS";
+const ENV_ALIEN_BINDINGS_MODE: &str = "ALIEN_BINDINGS_MODE";
+
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct RuntimeSecretsConfig {
@@ -751,14 +754,19 @@ fn configure_application_runtime_env(cmd: &mut Command, config: &RuntimeConfig) 
 }
 
 fn application_runtime_env(config: &RuntimeConfig) -> Vec<(&'static str, String)> {
-    // Setting ALIEN_WORKER_GRPC_ADDRESS is what selects the worker-protocol gRPC
-    // channel in the app SDK — its presence is the mode switch, so no separate
-    // mode flag is injected.
+    // Both address names point to the same dual-namespace server during the
+    // protocol rollout. Current SDKs prefer the Worker name; older SDKs use the
+    // Bindings name, and older Rust SDKs also require the legacy mode marker.
     vec![
         (
             ENV_ALIEN_WORKER_GRPC_ADDRESS,
             config.worker_grpc_address.clone(),
         ),
+        (
+            ENV_ALIEN_BINDINGS_GRPC_ADDRESS,
+            config.worker_grpc_address.clone(),
+        ),
+        (ENV_ALIEN_BINDINGS_MODE, "grpc".to_string()),
         (
             ENV_ALIEN_TRANSPORT,
             application_transport_env_value(config.transport).to_string(),
