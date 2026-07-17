@@ -164,6 +164,19 @@ locals {
         pullPrincipalId = azurerm_user_assigned_identity.registry_pull.principal_id
         pushPrincipalId = azurerm_user_assigned_identity.registry_push.principal_id
       }
+    },
+    {
+      id   = "builder"
+      type = "build"
+      importData = {
+        subscriptionId = var.azure_subscription_id
+        resourceGroup  = var.azure_resource_group_name
+        registryName   = azurerm_container_registry.registry.name
+        taskName       = azurerm_container_registry_task.builder.name
+        buildEnvVars = {
+          PROFILE = "release"
+        }
+      }
     }
   ]
 }
@@ -248,6 +261,31 @@ resource "azurerm_role_assignment" "registry_push_role" {
   ]
 }
 
+=== builder.tf ===
+resource "azurerm_container_registry_task" "builder" {
+  name                  = length("${local.resource_prefix}-builder") <= 50 ? "${local.resource_prefix}-builder" : format("%s-%s", trim(substr("${local.resource_prefix}-builder", 0, 41), "-"), substr(sha1("${local.resource_prefix}-builder"), 0, 8))
+  container_registry_id = azurerm_container_registry.registry.id
+  is_system_task        = false
+
+  platform {
+    os           = "Linux"
+    architecture = "amd64"
+  }
+
+  encoded_step {
+    task_content  = "version: v1.1.0\nsteps:\n  - cmd: echo \"alien build placeholder\"\n"
+    value_content = "PROFILE: \"release\""
+  }
+
+  identity {
+    type = "SystemAssigned"
+  }
+
+  depends_on = [
+    azurerm_resource_group.default_resource_group
+  ]
+}
+
 === registration.tf ===
 resource "terraform_data" "deployment_registration" {
   input = {
@@ -271,7 +309,8 @@ resource "terraform_data" "deployment_registration" {
     azurerm_user_assigned_identity.registry_pull,
     azurerm_role_assignment.registry_pull_role,
     azurerm_user_assigned_identity.registry_push,
-    azurerm_role_assignment.registry_push_role
+    azurerm_role_assignment.registry_push_role,
+    azurerm_container_registry_task.builder
   ]
 }
 

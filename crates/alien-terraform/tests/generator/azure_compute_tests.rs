@@ -48,7 +48,7 @@ fn azure_build_renders_acr_task() {
                 .permissions("execution".to_string())
                 .environment([("PROFILE".to_string(), "release".to_string())].into())
                 .build(),
-            ResourceLifecycle::Live,
+            ResourceLifecycle::Frozen,
         )
         .build();
     let module = render(&stack, TerraformTarget::Azure, StackSettings::default());
