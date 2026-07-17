@@ -14,7 +14,8 @@ use alien_azure_clients::models::authorization_role_assignments::{
 use alien_azure_clients::models::authorization_role_definitions::{
     Permission, RoleDefinition, RoleDefinitionProperties,
 };
-use alien_error::{AlienError, Context};
+use alien_client_core::ErrorData as CloudClientErrorData;
+use alien_error::{AlienError, Context, ContextError};
 use alien_permissions::{
     generators::{
         dedupe_azure_role_bindings, AzureCustomRole, AzureRoleBinding, AzureRoleDefinitionRef,
@@ -607,15 +608,38 @@ impl AzurePermissionsHelper {
             }),
         };
 
-        authorization_client
+        let result = authorization_client
             .create_or_update_role_assignment_by_id(full_assignment_id.clone(), &role_assignment)
-            .await
-            .context(ErrorData::CloudPlatformError {
+            .await;
+
+        if let Err(error) = result {
+            if Self::is_existing_role_assignment_conflict(&error) {
+                warn!(
+                    role_assignment_id = %full_assignment_id,
+                    principal_id = %principal_id,
+                    role_definition_id = %role_definition_id,
+                    "Equivalent Azure role assignment already exists; reusing the existing grant"
+                );
+                return Ok(full_assignment_id);
+            }
+
+            return Err(error.context(ErrorData::CloudPlatformError {
                 message: "Failed to create Azure role assignment".to_string(),
                 resource_id: Some(role_assignment_id.to_string()),
-            })?;
+            }));
+        }
 
         Ok(full_assignment_id)
+    }
+
+    fn is_existing_role_assignment_conflict(error: &AlienError<CloudClientErrorData>) -> bool {
+        matches!(
+            error.error.as_ref(),
+            Some(CloudClientErrorData::RemoteResourceConflict { message, .. })
+                if message
+                    .to_ascii_lowercase()
+                    .contains("role assignment already exists")
+        )
     }
 
     fn role_assignment_resource_id(scope: &str, role_assignment_id: &str) -> String {
@@ -1009,8 +1033,6 @@ mod tests {
     use super::*;
     use alien_azure_clients::authorization::MockAuthorizationApi;
     use alien_azure_clients::{AzureClientConfig, AzureCredentials};
-    use alien_client_core::ErrorData as CloudClientErrorData;
-
     fn azure_config() -> AzureClientConfig {
         AzureClientConfig {
             subscription_id: "sub-123".to_string(),
@@ -1180,6 +1202,69 @@ mod tests {
             assignment_id,
             "/subscriptions/sub-123/resourceGroups/rg-123/providers/Microsoft.Authorization/roleAssignments/assignment-123"
         );
+    }
+
+    #[tokio::test]
+    async fn existing_equivalent_role_assignment_is_idempotent() {
+        let mut authorization = MockAuthorizationApi::new();
+        authorization
+            .expect_create_or_update_role_assignment_by_id()
+            .times(1)
+            .returning(|_, _| {
+                Err(AlienError::new(
+                    CloudClientErrorData::RemoteResourceConflict {
+                        resource_type: "role assignment".to_string(),
+                        resource_name: "assignment-123".to_string(),
+                        message: "The role assignment already exists. The ID of the existing role assignment is '/subscriptions/sub-123/existing-assignment'.".to_string(),
+                    },
+                ))
+            });
+        let authorization: Arc<dyn AuthorizationApi> = Arc::new(authorization);
+
+        let assignment_id = AzurePermissionsHelper::create_role_assignment_at_scope(
+            &authorization,
+            "/subscriptions/sub-123/resourceGroups/rg-123",
+            "assignment-123",
+            "principal-123",
+            "role-definition-123",
+        )
+        .await
+        .expect("an equivalent role assignment must satisfy the desired grant");
+
+        assert_eq!(
+            assignment_id,
+            "/subscriptions/sub-123/resourceGroups/rg-123/providers/Microsoft.Authorization/roleAssignments/assignment-123"
+        );
+    }
+
+    #[tokio::test]
+    async fn unrelated_role_assignment_conflict_is_propagated() {
+        let mut authorization = MockAuthorizationApi::new();
+        authorization
+            .expect_create_or_update_role_assignment_by_id()
+            .times(1)
+            .returning(|_, _| {
+                Err(AlienError::new(
+                    CloudClientErrorData::RemoteResourceConflict {
+                        resource_type: "role assignment".to_string(),
+                        resource_name: "assignment-123".to_string(),
+                        message: "Concurrent role assignment update".to_string(),
+                    },
+                ))
+            });
+        let authorization: Arc<dyn AuthorizationApi> = Arc::new(authorization);
+
+        let error = AzurePermissionsHelper::create_role_assignment_at_scope(
+            &authorization,
+            "/subscriptions/sub-123/resourceGroups/rg-123",
+            "assignment-123",
+            "principal-123",
+            "role-definition-123",
+        )
+        .await
+        .expect_err("an unrelated conflict must remain actionable");
+
+        assert_eq!(error.code, "CLOUD_PLATFORM_ERROR");
     }
 
     #[tokio::test]
