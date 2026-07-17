@@ -748,6 +748,13 @@ async fn load_runtime_secrets(
 }
 
 fn configure_application_runtime_env(cmd: &mut Command, config: &RuntimeConfig) {
+    // The Worker protocol server only hosts Control + WaitUntil. Legacy SDKs
+    // interpret this marker as "send resource bindings over gRPC", so remove
+    // it even when the runtime process or deployment environment supplied it.
+    // Without the marker, legacy SDKs keep bindings in-process while still
+    // using the legacy address below for the Worker protocol services.
+    cmd.env_remove(ENV_ALIEN_BINDINGS_MODE);
+
     for (key, value) in application_runtime_env(config) {
         cmd.env(key, value);
     }
@@ -756,7 +763,7 @@ fn configure_application_runtime_env(cmd: &mut Command, config: &RuntimeConfig) 
 fn application_runtime_env(config: &RuntimeConfig) -> Vec<(&'static str, String)> {
     // Both address names point to the same dual-namespace server during the
     // protocol rollout. Current SDKs prefer the Worker name; older SDKs use the
-    // Bindings name, and older Rust SDKs also require the legacy mode marker.
+    // Bindings name for Control + WaitUntil.
     vec![
         (
             ENV_ALIEN_WORKER_GRPC_ADDRESS,
@@ -766,7 +773,6 @@ fn application_runtime_env(config: &RuntimeConfig) -> Vec<(&'static str, String)
             ENV_ALIEN_BINDINGS_GRPC_ADDRESS,
             config.worker_grpc_address.clone(),
         ),
-        (ENV_ALIEN_BINDINGS_MODE, "grpc".to_string()),
         (
             ENV_ALIEN_TRANSPORT,
             application_transport_env_value(config.transport).to_string(),

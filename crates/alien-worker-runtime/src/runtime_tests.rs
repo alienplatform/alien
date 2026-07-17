@@ -236,6 +236,7 @@ fn application_subprocess_cannot_inherit_runtime_only_credentials() {
         ])
         .env(SUBPROCESS_DRIVER, "1")
         .env(ENV_ALIEN_COMMANDS_TOKEN, "must-not-reach-application")
+        .env(ENV_ALIEN_BINDINGS_MODE, "grpc")
         .env(
             ENV_ALIEN_RUNTIME_SECRETS,
             "must-not-reach-application-either",
@@ -269,6 +270,7 @@ async fn runtime_only_environment_subprocess_driver() {
         .env_vars(HashMap::from([
             (APPLICATION_OBSERVER.to_string(), "1".to_string()),
             (USER_VISIBLE_ENV.to_string(), "visible".to_string()),
+            (ENV_ALIEN_BINDINGS_MODE.to_string(), "grpc".to_string()),
         ]))
         .build();
 
@@ -291,6 +293,10 @@ fn application_environment_observer() {
     );
     assert_eq!(
         std::env::var(ENV_ALIEN_RUNTIME_SECRETS),
+        Err(std::env::VarError::NotPresent)
+    );
+    assert_eq!(
+        std::env::var(ENV_ALIEN_BINDINGS_MODE),
         Err(std::env::VarError::NotPresent)
     );
     assert_eq!(std::env::var(USER_VISIBLE_ENV).as_deref(), Ok("visible"));
@@ -324,7 +330,7 @@ fn application_runtime_env_injects_both_worker_protocol_address_names() {
             env.get(ENV_ALIEN_BINDINGS_GRPC_ADDRESS),
             Some(&"127.0.0.1:60000".to_string())
         );
-        assert_eq!(env.get(ENV_ALIEN_BINDINGS_MODE), Some(&"grpc".to_string()));
+        assert_eq!(env.get(ENV_ALIEN_BINDINGS_MODE), None);
         assert_eq!(env.get(ENV_ALIEN_TRANSPORT), Some(&expected.to_string()));
         assert_eq!(env.get("PORT"), None);
     }
