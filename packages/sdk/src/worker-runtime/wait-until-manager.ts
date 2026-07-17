@@ -12,12 +12,10 @@
  */
 
 import { type Channel, createClient } from "nice-grpc"
-import {
-  type WaitUntilServiceClient as GeneratedClient,
-  WaitUntilServiceDefinition,
-} from "./generated/wait_until.js"
+import type { WaitUntilServiceClient as GeneratedClient } from "./generated/wait_until.js"
 import { wrapGrpcCall } from "./grpc-utils.js"
 import { setOnTaskRegistered } from "./registry.js"
+import type { getWaitUntilServiceDefinition } from "./service-definitions.js"
 
 /**
  * WaitUntil manager for coordinating background tasks with the runtime.
@@ -28,8 +26,12 @@ export class WaitUntilManager {
   private readonly client: GeneratedClient
   private readonly applicationId: string
 
-  constructor(channel: Channel, applicationId: string) {
-    this.client = createClient(WaitUntilServiceDefinition, channel)
+  constructor(
+    channel: Channel,
+    applicationId: string,
+    service: ReturnType<typeof getWaitUntilServiceDefinition>,
+  ) {
+    this.client = createClient(service, channel)
     this.applicationId = applicationId
   }
 

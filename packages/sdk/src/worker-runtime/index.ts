@@ -14,10 +14,13 @@
  */
 
 import { createClient } from "nice-grpc"
-import { getGrpcEndpoint, getOrCreateChannel } from "./channel.js"
+import { getGrpcEndpointConfig, getOrCreateChannel } from "./channel.js"
 import { EventLoop } from "./event-loop.js"
-import { ControlServiceDefinition } from "./generated/control.js"
 import { wrapGrpcCall } from "./grpc-utils.js"
+import {
+  getControlServiceDefinition,
+  getWaitUntilServiceDefinition,
+} from "./service-definitions.js"
 import { WaitUntilManager } from "./wait-until-manager.js"
 
 // Minimal ambient declaration for the Bun runtime global. Worker binaries run
@@ -72,9 +75,11 @@ function resolveFetchHandler(
  *   method for HTTP apps), or `undefined` for handler-only Workers.
  */
 export async function runWorker(app?: unknown): Promise<void> {
-  const address = getGrpcEndpoint()
+  const { address, generation } = getGrpcEndpointConfig()
   const channel = await getOrCreateChannel(address)
   const instanceId = generateInstanceId()
+  const controlService = getControlServiceDefinition(generation)
+  const waitUntilService = getWaitUntilServiceDefinition(generation)
 
   // Serve the HTTP handler (or a minimal readiness server) and register the
   // port. Workers always listen on loopback with a dynamic port:
@@ -91,16 +96,16 @@ export async function runWorker(app?: unknown): Promise<void> {
     idleTimeout: 255,
   })
 
-  await registerHttpServer(channel, server.port)
+  await registerHttpServer(channel, server.port, controlService)
 
   // Report each waitUntil background task to the runtime as it is registered.
   // Graceful drain-on-shutdown (waiting for tracked tasks before exit) is a
   // planned future feature — see wait-until-manager.ts.
-  const waitUntilManager = new WaitUntilManager(channel, instanceId)
+  const waitUntilManager = new WaitUntilManager(channel, instanceId, waitUntilService)
   waitUntilManager.install()
 
   // Register handlers and enter the dispatch loop (runs until the process exits).
-  const eventLoop = new EventLoop(channel, instanceId)
+  const eventLoop = new EventLoop(channel, instanceId, address, controlService)
   await eventLoop.registerHandlers()
   await eventLoop.start()
 }
@@ -111,8 +116,9 @@ export async function runWorker(app?: unknown): Promise<void> {
 async function registerHttpServer(
   channel: Awaited<ReturnType<typeof getOrCreateChannel>>,
   port: number,
+  service: ReturnType<typeof getControlServiceDefinition>,
 ): Promise<void> {
-  const client = createClient(ControlServiceDefinition, channel)
+  const client = createClient(service, channel)
   await wrapGrpcCall("ControlService", "RegisterHttpServer", async () => {
     await client.registerHttpServer({ port })
   })

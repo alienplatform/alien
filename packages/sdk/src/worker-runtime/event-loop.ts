@@ -6,15 +6,14 @@
 
 import type { StorageEvent, StorageEventType } from "@alienplatform/core"
 import { type Channel, createClient } from "nice-grpc"
-import { createGrpcChannel, getGrpcEndpoint } from "./channel.js"
-import {
-  ControlServiceDefinition,
-  type ControlServiceClient as GeneratedClient,
-  type ArcCommand as ProtoArcCommand,
-  type CronEvent as ProtoCronEvent,
-  type QueueMessage as ProtoQueueMessage,
-  type StorageEvent as ProtoStorageEvent,
-  type Task,
+import { createGrpcChannel } from "./channel.js"
+import type {
+  ControlServiceClient as GeneratedClient,
+  ArcCommand as ProtoArcCommand,
+  CronEvent as ProtoCronEvent,
+  QueueMessage as ProtoQueueMessage,
+  StorageEvent as ProtoStorageEvent,
+  Task,
 } from "./generated/control.js"
 import { wrapGrpcCall } from "./grpc-utils.js"
 import {
@@ -24,6 +23,7 @@ import {
   getEventHandlers,
   runCommand,
 } from "./registry.js"
+import type { getControlServiceDefinition } from "./service-definitions.js"
 
 /**
  * Event loop runner for processing tasks from the runtime.
@@ -34,11 +34,20 @@ export class EventLoop {
   private readonly client: GeneratedClient
   private sendClient: GeneratedClient | undefined
   private readonly applicationId: string
+  private readonly endpoint: string
+  private readonly service: ReturnType<typeof getControlServiceDefinition>
   private running = false
 
-  constructor(channel: Channel, applicationId: string) {
-    this.client = createClient(ControlServiceDefinition, channel)
+  constructor(
+    channel: Channel,
+    applicationId: string,
+    endpoint: string,
+    service: ReturnType<typeof getControlServiceDefinition>,
+  ) {
+    this.client = createClient(service, channel)
     this.applicationId = applicationId
+    this.endpoint = endpoint
+    this.service = service
   }
 
   /**
@@ -48,9 +57,8 @@ export class EventLoop {
    */
   private async getSendClient(): Promise<GeneratedClient> {
     if (!this.sendClient) {
-      const endpoint = getGrpcEndpoint()
-      const sendChannel = await createGrpcChannel(endpoint)
-      this.sendClient = createClient(ControlServiceDefinition, sendChannel)
+      const sendChannel = await createGrpcChannel(this.endpoint)
+      this.sendClient = createClient(this.service, sendChannel)
     }
     return this.sendClient
   }

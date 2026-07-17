@@ -20,6 +20,13 @@ const GRPC_ENDPOINT_VAR = "ALIEN_WORKER_GRPC_ADDRESS"
 /** Address name injected by released runtimes from before the Worker protocol rename. */
 const LEGACY_GRPC_ENDPOINT_VAR = "ALIEN_BINDINGS_GRPC_ADDRESS"
 
+export type WorkerProtocolGeneration = "current" | "legacy"
+
+export interface GrpcEndpointConfig {
+  address: string
+  generation: WorkerProtocolGeneration
+}
+
 /** Cached channels by address */
 const channelCache = new Map<string, Channel>()
 
@@ -29,18 +36,28 @@ export type GrpcChannel = Channel
 /**
  * Get the gRPC endpoint from environment variables.
  */
-export function getGrpcEndpoint(): string {
-  const endpoint = process.env[GRPC_ENDPOINT_VAR] ?? process.env[LEGACY_GRPC_ENDPOINT_VAR]
-  if (!endpoint) {
-    throw new AlienError(
-      MissingEnvVarError.create({
-        variable: GRPC_ENDPOINT_VAR,
-        description:
-          "This variable is set by alien-worker-runtime when running inside the Alien environment.",
-      }),
-    )
+export function getGrpcEndpointConfig(): GrpcEndpointConfig {
+  const currentEndpoint = process.env[GRPC_ENDPOINT_VAR]
+  if (currentEndpoint) {
+    return { address: currentEndpoint, generation: "current" }
   }
-  return endpoint
+
+  const legacyEndpoint = process.env[LEGACY_GRPC_ENDPOINT_VAR]
+  if (legacyEndpoint) {
+    return { address: legacyEndpoint, generation: "legacy" }
+  }
+
+  throw new AlienError(
+    MissingEnvVarError.create({
+      variable: GRPC_ENDPOINT_VAR,
+      description:
+        "This variable is set by alien-worker-runtime when running inside the Alien environment.",
+    }),
+  )
+}
+
+export function getGrpcEndpoint(): string {
+  return getGrpcEndpointConfig().address
 }
 
 /**
