@@ -1221,8 +1221,8 @@ jobs:
       - name: Run E2E push test
         env:
           NGROK_AUTHTOKEN: ${{ secrets.NGROK_AUTHTOKEN }}
-          DOCKER_USERNAME: ${{ github.actor }}
-          DOCKER_PASSWORD: ${{ secrets.GITHUB_TOKEN }}
+          DOCKER_USERNAME: ${{ (needs.compute-matrix.outputs.build_base_image == 'true' || startsWith(inputs.base_image_override, 'ghcr.io/alienplatform/alien-base:')) && github.actor || '' }}
+          DOCKER_PASSWORD: ${{ (needs.compute-matrix.outputs.build_base_image == 'true' || startsWith(inputs.base_image_override, 'ghcr.io/alienplatform/alien-base:')) && secrets.GITHUB_TOKEN || '' }}
           ALIEN_OVERRIDE_BASE_IMAGE: ${{ inputs.base_image_override || (needs.compute-matrix.outputs.build_base_image == 'true' && needs.build-base-image.outputs.base_image || '') }}
           ALIEN_E2E_NETWORK_MODE: ${{ needs.compute-matrix.outputs.network_mode }}
         run: |
@@ -1320,8 +1320,8 @@ jobs:
       - name: Run E2E CloudFormation distribution test
         env:
           NGROK_AUTHTOKEN: ${{ secrets.NGROK_AUTHTOKEN }}
-          DOCKER_USERNAME: ${{ github.actor }}
-          DOCKER_PASSWORD: ${{ secrets.GITHUB_TOKEN }}
+          DOCKER_USERNAME: ${{ (needs.compute-matrix.outputs.build_base_image == 'true' || startsWith(inputs.base_image_override, 'ghcr.io/alienplatform/alien-base:')) && github.actor || '' }}
+          DOCKER_PASSWORD: ${{ (needs.compute-matrix.outputs.build_base_image == 'true' || startsWith(inputs.base_image_override, 'ghcr.io/alienplatform/alien-base:')) && secrets.GITHUB_TOKEN || '' }}
           ALIEN_OVERRIDE_BASE_IMAGE: ${{ inputs.base_image_override || (needs.compute-matrix.outputs.build_base_image == 'true' && needs.build-base-image.outputs.base_image || '') }}
           ALIEN_E2E_NETWORK_MODE: ${{ needs.compute-matrix.outputs.network_mode }}
         run: |
@@ -1517,8 +1517,8 @@ jobs:
       - name: Run E2E Terraform distribution test
         env:
           NGROK_AUTHTOKEN: ${{ secrets.NGROK_AUTHTOKEN }}
-          DOCKER_USERNAME: ${{ github.actor }}
-          DOCKER_PASSWORD: ${{ secrets.GITHUB_TOKEN }}
+          DOCKER_USERNAME: ${{ (needs.compute-matrix.outputs.build_base_image == 'true' || startsWith(inputs.base_image_override, 'ghcr.io/alienplatform/alien-base:')) && github.actor || '' }}
+          DOCKER_PASSWORD: ${{ (needs.compute-matrix.outputs.build_base_image == 'true' || startsWith(inputs.base_image_override, 'ghcr.io/alienplatform/alien-base:')) && secrets.GITHUB_TOKEN || '' }}
           ALIEN_OVERRIDE_BASE_IMAGE: ${{ inputs.base_image_override || (needs.compute-matrix.outputs.build_base_image == 'true' && needs.build-base-image.outputs.base_image || '') }}
           ALIEN_TEST_OVERRIDE_OPERATOR_IMAGE: ${{ inputs.operator_image_override || (needs.compute-matrix.outputs.build_operator_image == 'true' && needs.build-operator-image.outputs.operator_image || '') }}
           ALIEN_E2E_NETWORK_MODE: ${{ needs.compute-matrix.outputs.network_mode }}
