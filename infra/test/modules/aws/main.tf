@@ -375,9 +375,12 @@ resource "aws_eks_node_group" "e2e" {
   instance_types = ["t4g.medium"]
 
   scaling_config {
-    desired_size = 2
+    # The two-node baseline is fully consumed by cluster add-ons at the
+    # t4g.medium pod limit. Keep a third ARM64 workload node available because
+    # this test cluster does not run an autoscaler.
+    desired_size = 3
     max_size     = 3
-    min_size     = 2
+    min_size     = 3
   }
 
   update_config {
