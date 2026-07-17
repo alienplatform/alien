@@ -211,6 +211,7 @@ jobs:
             alien-client-config \
             alien-permissions \
             alien-bindings \
+            alien-worker-protocol \
             alien-sdk \
             alien-commands \
             alien-commands-client; do
