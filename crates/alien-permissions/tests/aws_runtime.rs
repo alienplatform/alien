@@ -67,10 +67,7 @@ fn compute_cluster_execute_reads_only_stack_secret_parameters() {
 
     assert_eq!(
         statement.resource,
-        vec![
-            "arn:aws:ssm:us-east-1:123456789012:parameter/my-stack-secrets-*".to_string(),
-            "arn:aws:ssm:us-east-1:123456789012:parameter/alien/my-stack/*".to_string(),
-        ]
+        vec!["arn:aws:ssm:us-east-1:123456789012:parameter/my-stack-secrets-*".to_string()]
     );
     assert!(!statement.resource.iter().any(|resource| resource == "*"));
 }

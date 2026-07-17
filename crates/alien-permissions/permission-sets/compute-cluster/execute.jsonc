@@ -46,8 +46,7 @@
       },
       // The machine hosting layer resolves typed workload SecretRefs with the VM's ambient
       // identity before starting the container. Keep reads inside this
-      // deployment's SSM namespace: the shared app-secret vault plus the
-      // controller-owned command-token path.
+      // deployment's setup-owned app-secret vault.
       {
         "grant": {
           "actions": ["ssm:GetParameter"]
@@ -55,14 +54,12 @@
         "binding": {
           "stack": {
             "resources": [
-              "arn:aws:ssm:${awsRegion}:${awsAccountId}:parameter/${stackPrefix}-secrets-*",
-              "arn:aws:ssm:${awsRegion}:${awsAccountId}:parameter/alien/${stackPrefix}/*"
+              "arn:aws:ssm:${awsRegion}:${awsAccountId}:parameter/${stackPrefix}-secrets-*"
             ]
           },
           "resource": {
             "resources": [
-              "arn:aws:ssm:${awsRegion}:${awsAccountId}:parameter/${stackPrefix}-secrets-*",
-              "arn:aws:ssm:${awsRegion}:${awsAccountId}:parameter/alien/${stackPrefix}/*"
+              "arn:aws:ssm:${awsRegion}:${awsAccountId}:parameter/${stackPrefix}-secrets-*"
             ]
           }
         }
