@@ -17,6 +17,9 @@ const DEFAULT_CHANNEL_OPTIONS: ChannelOptions = {
 /** Environment variable containing the Worker protocol gRPC endpoint */
 const GRPC_ENDPOINT_VAR = "ALIEN_WORKER_GRPC_ADDRESS"
 
+/** Address name injected by released runtimes from before the Worker protocol rename. */
+const LEGACY_GRPC_ENDPOINT_VAR = "ALIEN_BINDINGS_GRPC_ADDRESS"
+
 /** Cached channels by address */
 const channelCache = new Map<string, Channel>()
 
@@ -27,7 +30,7 @@ export type GrpcChannel = Channel
  * Get the gRPC endpoint from environment variables.
  */
 export function getGrpcEndpoint(): string {
-  const endpoint = process.env[GRPC_ENDPOINT_VAR]
+  const endpoint = process.env[GRPC_ENDPOINT_VAR] ?? process.env[LEGACY_GRPC_ENDPOINT_VAR]
   if (!endpoint) {
     throw new AlienError(
       MissingEnvVarError.create({

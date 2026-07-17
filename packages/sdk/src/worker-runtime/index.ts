@@ -13,10 +13,8 @@
  * it is registered (graceful drain-on-shutdown is a planned future feature).
  */
 
-import { AlienError } from "@alienplatform/core"
 import { createClient } from "nice-grpc"
-import { getOrCreateChannel } from "./channel.js"
-import { MissingEnvVarError } from "./errors.js"
+import { getGrpcEndpoint, getOrCreateChannel } from "./channel.js"
 import { EventLoop } from "./event-loop.js"
 import { ControlServiceDefinition } from "./generated/control.js"
 import { wrapGrpcCall } from "./grpc-utils.js"
@@ -74,17 +72,7 @@ function resolveFetchHandler(
  *   method for HTTP apps), or `undefined` for handler-only Workers.
  */
 export async function runWorker(app?: unknown): Promise<void> {
-  const address = process.env.ALIEN_WORKER_GRPC_ADDRESS
-  if (!address) {
-    throw new AlienError(
-      MissingEnvVarError.create({
-        variable: "ALIEN_WORKER_GRPC_ADDRESS",
-        description:
-          "This variable is set by alien-worker-runtime when running inside the Alien environment.",
-      }),
-    )
-  }
-
+  const address = getGrpcEndpoint()
   const channel = await getOrCreateChannel(address)
   const instanceId = generateInstanceId()
 
