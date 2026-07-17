@@ -51,6 +51,21 @@ fn rewrite_dev_server_localhost_urls(env_vars: &mut HashMap<String, String>) {
     }
 }
 
+#[derive(Debug, PartialEq, Eq)]
+struct OciProcessOverride {
+    entrypoint: Option<Vec<String>>,
+    cmd: Option<Vec<String>>,
+}
+
+fn oci_process_override(command: Option<&[String]>) -> OciProcessOverride {
+    OciProcessOverride {
+        entrypoint: command
+            .filter(|command| !command.is_empty())
+            .map(|command| command.to_vec()),
+        cmd: None,
+    }
+}
+
 /// Allocates a host port, preferring a saved port if available.
 ///
 /// This enables transparent recovery - when a container is recreated,
@@ -900,10 +915,15 @@ impl LocalContainerManager {
         // declared user unchanged.
         let user = shared_bind_mount_user(&config.bind_mounts);
 
+        // `ContainerConfig::command` has Kubernetes `command` semantics: it
+        // replaces the image ENTRYPOINT rather than becoming its CMD.
+        let process_override = oci_process_override(config.command.as_deref());
+
         // Build container config
         let container_config = Config {
             image: Some(image.clone()),
-            cmd: config.command.clone(),
+            entrypoint: process_override.entrypoint,
+            cmd: process_override.cmd,
             user,
             hostname: Some(container_id.to_string()),
             env: Some(env),
@@ -1411,6 +1431,21 @@ mod tests {
         assert_eq!(
             env["OTEL_EXPORTER_OTLP_LOGS_ENDPOINT"],
             "https://otel.example.test/v1/logs"
+        );
+    }
+
+    #[test]
+    fn configured_command_replaces_the_image_entrypoint() {
+        let command = vec!["/agent".to_string(), "--poll".to_string()];
+
+        let process_override = oci_process_override(Some(&command));
+
+        assert_eq!(
+            process_override,
+            OciProcessOverride {
+                entrypoint: Some(command),
+                cmd: None,
+            }
         );
     }
 }
