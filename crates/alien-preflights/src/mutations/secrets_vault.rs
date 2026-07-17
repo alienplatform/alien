@@ -89,7 +89,11 @@ impl StackMutation for SecretsVaultMutation {
             link_vault_to_worker_runtimes(&mut stack, secrets_vault_id)?;
             add_vault_read_permissions_to_worker_profiles(&mut stack, secrets_vault_id)?;
         }
-        add_vault_dependency_to_compute_clusters(&mut stack, secrets_vault_id);
+        add_vault_dependency_to_compute_clusters(
+            &mut stack,
+            secrets_vault_id,
+            stack_state.platform,
+        );
 
         // Step 4: Add vault data permissions to management profile for the secrets vault.
         // This allows the control plane to sync secret environment variables without
@@ -104,7 +108,17 @@ impl StackMutation for SecretsVaultMutation {
 /// deployment secrets vault. Make the Frozen vault an explicit dependency so
 /// provider-specific ComputeCluster controllers never assign that access
 /// against a vault whose outputs or cloud resource do not exist yet.
-fn add_vault_dependency_to_compute_clusters(stack: &mut Stack, vault_id: &str) {
+///
+/// AWS Parameter Store vaults are namespaces rather than provisioned resources.
+/// Their setup emitters only produce IAM policy attachments, so treating those
+/// attachments as the vault dependency target creates a cycle between the
+/// compute role, vault policies, and execution role. The compute role already
+/// carries its scoped Parameter Store access and has no vault resource to await.
+fn add_vault_dependency_to_compute_clusters(stack: &mut Stack, vault_id: &str, platform: Platform) {
+    if platform == Platform::Aws {
+        return;
+    }
+
     let vault_ref = ResourceRef::new(Vault::RESOURCE_TYPE, vault_id);
 
     for (resource_id, entry) in &mut stack.resources {
@@ -312,9 +326,8 @@ mod tests {
         }
     }
 
-    #[test]
-    fn compute_cluster_depends_on_secrets_vault_exactly_once() {
-        let mut stack = Stack {
+    fn compute_cluster_stack() -> Stack {
+        Stack {
             id: "test-stack".to_string(),
             resources: IndexMap::from([(
                 "compute".to_string(),
@@ -333,10 +346,29 @@ mod tests {
             },
             supported_platforms: None,
             inputs: vec![],
-        };
+        }
+    }
 
-        add_vault_dependency_to_compute_clusters(&mut stack, "secrets");
-        add_vault_dependency_to_compute_clusters(&mut stack, "secrets");
+    #[test]
+    fn aws_compute_cluster_skips_namespace_only_vault_dependency() {
+        let mut stack = compute_cluster_stack();
+
+        add_vault_dependency_to_compute_clusters(&mut stack, "secrets", Platform::Aws);
+
+        assert!(stack
+            .resources
+            .get("compute")
+            .expect("compute cluster")
+            .dependencies
+            .is_empty());
+    }
+
+    #[test]
+    fn compute_cluster_depends_on_provisioned_vault_exactly_once() {
+        let mut stack = compute_cluster_stack();
+
+        add_vault_dependency_to_compute_clusters(&mut stack, "secrets", Platform::Azure);
+        add_vault_dependency_to_compute_clusters(&mut stack, "secrets", Platform::Azure);
 
         let dependencies = &stack
             .resources
