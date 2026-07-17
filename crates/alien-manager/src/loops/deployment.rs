@@ -563,7 +563,8 @@ impl DeploymentLoop {
         )
         .await;
 
-        let mut config = if let Some(mut config) = deployment.deployment_config.clone() {
+        let mut config = if let Some(config) = deployment.deployment_config.clone() {
+            let mut config = with_environment_snapshot(config, environment_variables);
             if config.deployment_name.is_none() {
                 config.deployment_name = Some(deployment.name.clone());
             }
@@ -905,6 +906,14 @@ fn commands_receiver_env_vars(
     deployment_stack.receiver_command_env_vars(&commands_base_url, deployment_token)
 }
 
+fn with_environment_snapshot(
+    mut config: DeploymentConfig,
+    environment_variables: EnvironmentVariablesSnapshot,
+) -> DeploymentConfig {
+    config.environment_variables = environment_variables;
+    config
+}
+
 fn should_wait_for_credential_handoff(
     status: DeploymentStatus,
     deployment: &DeploymentRecord,
@@ -1004,14 +1013,17 @@ mod tests {
         active_work_statuses, commands_receiver_env_vars, gcp_credential_handoff_retry_remaining,
         get_or_create_local_bindings_provider, has_remote_stack_management_outputs,
         manager_candidate_statuses, needs_provision_capability, parse_status,
-        retryable_failed_statuses, should_wait_for_credential_handoff,
+        retryable_failed_statuses, should_wait_for_credential_handoff, with_environment_snapshot,
         worker_commands_push_env_vars, GCP_CREDENTIAL_HANDOFF_GRACE_PERIOD,
     };
     use alien_core::{
-        Container, ContainerCode, Daemon, DaemonCode, DeploymentStatus, Platform,
+        Container, ContainerCode, Daemon, DaemonCode, DeploymentConfig, DeploymentStatus,
+        EnvironmentVariable, EnvironmentVariableType, EnvironmentVariablesSnapshot, Platform,
         RemoteStackManagement, RemoteStackManagementOutputs, Resource, ResourceLifecycle,
         ResourceOutputs, ResourceSpec, ResourceStatus, Stack, StackResourceState, StackSettings,
-        StackState, Worker, WorkerCode,
+        StackState, Worker, WorkerCode, ENV_ALIEN_COMMANDS_TARGET_RESOURCE_ID,
+        ENV_ALIEN_COMMANDS_TARGET_RESOURCE_TYPE, ENV_ALIEN_COMMANDS_TOKEN, ENV_ALIEN_COMMANDS_URL,
+        ENV_ALIEN_DEPLOYMENT_ID, ENV_ALIEN_DEPLOYMENT_NAME,
     };
     use alien_deployment::loop_contract::{classify_status, LoopOperation};
     use alien_error::AlienError;
@@ -1527,6 +1539,121 @@ mod tests {
             builder.commands_enabled(true).build()
         } else {
             builder.build()
+        }
+    }
+
+    #[test]
+    fn platform_config_replaces_empty_environment_snapshot_for_command_daemon() {
+        let daemon = Daemon::new("debug-daemon".to_string())
+            .code(DaemonCode::Image {
+                image: "daemon:latest".to_string(),
+            })
+            .permissions("daemon-execution".to_string())
+            .commands_enabled(true)
+            .build();
+        let stack = Stack::new("manager-platform-config-stack".to_string())
+            .add(daemon, ResourceLifecycle::Live)
+            .build();
+        let empty_snapshot = EnvironmentVariablesSnapshot {
+            variables: Vec::new(),
+            hash: "stale-empty-snapshot".to_string(),
+            created_at: "2026-01-01T00:00:00Z".to_string(),
+        };
+        let provided_config = DeploymentConfig::builder()
+            .stack_settings(StackSettings::default())
+            .environment_variables(empty_snapshot)
+            .allow_frozen_changes(false)
+            .external_bindings(Default::default())
+            .build();
+        let mut deployment = deployment_record(DeploymentStatus::Provisioning, None);
+        deployment.deployment_token = Some("ax_dep_test".to_string());
+        deployment.deployment_config = Some(provided_config);
+
+        let mut fresh_variables = vec![
+            EnvironmentVariable {
+                name: ENV_ALIEN_DEPLOYMENT_ID.to_string(),
+                value: deployment.id.clone(),
+                var_type: EnvironmentVariableType::Plain,
+                target_resources: None,
+            },
+            EnvironmentVariable {
+                name: ENV_ALIEN_DEPLOYMENT_NAME.to_string(),
+                value: deployment.name.clone(),
+                var_type: EnvironmentVariableType::Plain,
+                target_resources: None,
+            },
+        ];
+        fresh_variables.extend(
+            commands_receiver_env_vars(
+                "https://manager.example.test/v1".to_string(),
+                deployment.deployment_token.as_deref(),
+                &stack,
+            )
+            .expect("command-enabled daemon should produce receiver variables"),
+        );
+        let fresh_snapshot = EnvironmentVariablesSnapshot {
+            variables: fresh_variables,
+            hash: "fresh-snapshot".to_string(),
+            created_at: "2026-01-02T00:00:00Z".to_string(),
+        };
+
+        let effective_config = with_environment_snapshot(
+            deployment
+                .deployment_config
+                .expect("platform deployment should supply a config snapshot"),
+            fresh_snapshot.clone(),
+        );
+
+        assert_eq!(effective_config.environment_variables, fresh_snapshot);
+        let variables = &effective_config.environment_variables.variables;
+        assert_eq!(variables.len(), 6);
+        for (name, value, var_type, target_resources) in [
+            (
+                ENV_ALIEN_DEPLOYMENT_ID,
+                "dep_test",
+                EnvironmentVariableType::Plain,
+                None,
+            ),
+            (
+                ENV_ALIEN_DEPLOYMENT_NAME,
+                "test",
+                EnvironmentVariableType::Plain,
+                None,
+            ),
+            (
+                ENV_ALIEN_COMMANDS_URL,
+                "https://manager.example.test/v1",
+                EnvironmentVariableType::Plain,
+                Some(vec!["debug-daemon".to_string()]),
+            ),
+            (
+                ENV_ALIEN_COMMANDS_TOKEN,
+                "ax_dep_test",
+                EnvironmentVariableType::Secret,
+                Some(vec!["debug-daemon".to_string()]),
+            ),
+            (
+                ENV_ALIEN_COMMANDS_TARGET_RESOURCE_ID,
+                "debug-daemon",
+                EnvironmentVariableType::Plain,
+                Some(vec!["debug-daemon".to_string()]),
+            ),
+            (
+                ENV_ALIEN_COMMANDS_TARGET_RESOURCE_TYPE,
+                "daemon",
+                EnvironmentVariableType::Plain,
+                Some(vec!["debug-daemon".to_string()]),
+            ),
+        ] {
+            assert!(
+                variables.iter().any(|variable| {
+                    variable.name == name
+                        && variable.value == value
+                        && variable.var_type == var_type
+                        && variable.target_resources == target_resources
+                }),
+                "missing or incorrect environment variable {name}"
+            );
         }
     }
 
