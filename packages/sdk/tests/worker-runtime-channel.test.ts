@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest"
-import { getGrpcEndpoint } from "./channel.js"
+import { getGrpcEndpoint } from "../src/worker-runtime/channel.js"
 
 const WORKER_GRPC_ADDRESS = "ALIEN_WORKER_GRPC_ADDRESS"
 const LEGACY_GRPC_ADDRESS = "ALIEN_BINDINGS_GRPC_ADDRESS"
