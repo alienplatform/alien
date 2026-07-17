@@ -1340,6 +1340,7 @@ jobs:
     environment: e2e-tests
     strategy:
       fail-fast: false
+      max-parallel: ${{ (inputs.run_kubernetes_aws_terraform_helm || inputs.run_kubernetes_gcp_terraform_helm || inputs.run_kubernetes_azure_terraform_helm) && 1 || 4 }}
       matrix: ${{ fromJSON(needs.compute-matrix.outputs.terraform_matrix) }}
     runs-on: depot-ubuntu-24.04-16
     timeout-minutes: 90
