@@ -62,6 +62,18 @@ pub(super) async fn reconcile_command_service(
                     ),
                     resource_id: Some(config.id.clone()),
                 })?;
+            if command_service_is_compatible_shared_worker_service(
+                &existing,
+                service_name,
+                &config.id,
+            ) {
+                debug!(
+                    worker_id = %config.id,
+                    service_name,
+                    "Reusing compatible Helm-managed Worker Service for command push"
+                );
+                return Ok(());
+            }
             ensure_command_service_is_owned(&existing, service_name, &config.id)?;
             if command_service_managed_fields_match(&service, &existing) {
                 debug!(
@@ -200,6 +212,43 @@ fn command_service_is_owned(service: &Service, service_name: &str, resource_id: 
             && labels.get("app").map(String::as_str) == Some(service_name)
             && labels.get("resource-id").map(String::as_str) == Some(resource_id)
     })
+}
+
+fn command_service_is_compatible_shared_worker_service(
+    service: &Service,
+    service_name: &str,
+    resource_id: &str,
+) -> bool {
+    let labels_match =
+        service.metadata.labels.as_ref().is_some_and(|labels| {
+            labels.get("resource-id").map(String::as_str) == Some(resource_id)
+        });
+    let Some(spec) = service.spec.as_ref() else {
+        return false;
+    };
+    let selector_matches = spec.selector.as_ref().is_some_and(|selector| {
+        selector.get("app").map(String::as_str) == Some(service_name)
+            && selector.get("managed-by").map(String::as_str) == Some("deployment")
+            && selector.get("component").map(String::as_str) == Some("worker")
+    });
+    let port_matches = spec.ports.as_ref().is_some_and(|ports| {
+        ports.iter().any(|port| {
+            port.port == 80
+                && port.target_port.as_ref() == Some(&IntOrString::Int(8080))
+                && port
+                    .protocol
+                    .as_deref()
+                    .is_none_or(|protocol| protocol == "TCP")
+        })
+    });
+
+    labels_match
+        && spec
+            .type_
+            .as_deref()
+            .is_none_or(|service_type| service_type == "ClusterIP")
+        && selector_matches
+        && port_matches
 }
 
 fn ensure_command_service_is_owned(
@@ -463,6 +512,58 @@ mod tests {
             .await
             .expect_err("foreign Service must not be adopted");
         assert_eq!(error.code, "RESOURCE_CONFIG_INVALID");
+    }
+
+    #[tokio::test]
+    async fn reconcile_reuses_compatible_helm_managed_worker_service() {
+        let config = worker(true);
+        let mut helm_service = service(BTreeMap::from([(
+            "resource-id".to_string(),
+            "worker".to_string(),
+        )]));
+        helm_service.spec = Some(ServiceSpec {
+            type_: Some("ClusterIP".to_string()),
+            selector: Some(BTreeMap::from([
+                ("app".to_string(), "test-worker".to_string()),
+                ("managed-by".to_string(), "deployment".to_string()),
+                ("component".to_string(), "worker".to_string()),
+            ])),
+            ports: Some(vec![ServicePort {
+                name: Some("http".to_string()),
+                protocol: Some("TCP".to_string()),
+                port: 80,
+                target_port: Some(IntOrString::Int(8080)),
+                ..Default::default()
+            }]),
+            ..Default::default()
+        });
+
+        let mut services = MockServiceApi::new();
+        services
+            .expect_create_service()
+            .times(1)
+            .return_once(|_, _| {
+                Err(AlienError::new(
+                    CloudClientErrorData::RemoteResourceConflict {
+                        resource_type: "Service".to_string(),
+                        resource_name: "test-worker".to_string(),
+                        message: "AlreadyExists".to_string(),
+                    },
+                ))
+            });
+        services
+            .expect_get_service()
+            .times(1)
+            .return_once(move |_, _| Ok(helm_service));
+        services.expect_update_service().times(0);
+        let services: Arc<dyn ServiceApi> = Arc::new(services);
+        let harness =
+            KubernetesManifestTestHarness::new(alien_core::Resource::new(config.clone()), vec![])
+                .with_service_provider(provider_with_service_client(services));
+
+        reconcile_command_service(&config, "test-worker", "test-ns", &harness.ctx())
+            .await
+            .expect("compatible Helm-managed Worker Service can carry command push traffic");
     }
 
     #[tokio::test]
