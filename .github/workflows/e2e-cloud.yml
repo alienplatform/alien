@@ -270,26 +270,26 @@ jobs:
           PUSH_ENTRIES='[]'
           if [ "$PUSH_AWS_CLI" = "true" ]; then
             if [ "$APP" = "All" ] || [ "$APP" = "comprehensive-rust" ]; then
-              PUSH_ENTRIES=$(echo "$PUSH_ENTRIES" | jq -c '. + [{"name":"push-aws-comprehensive-rust","test_filter":"push_aws_comprehensive_rust","needs_oidc":false,"resource_suffix":"awscr"}]')
+              PUSH_ENTRIES=$(echo "$PUSH_ENTRIES" | jq -c '. + [{"name":"push-aws-comprehensive-rust","test_filter":"push_aws_comprehensive_rust","needs_oidc":false,"resource_suffix":"awscr","timeout_minutes":60}]')
             fi
             if [ "$APP" = "All" ] || [ "$APP" = "comprehensive-ts" ]; then
-              PUSH_ENTRIES=$(echo "$PUSH_ENTRIES" | jq -c '. + [{"name":"push-aws-comprehensive-ts","test_filter":"push_aws_comprehensive_ts","needs_oidc":false,"resource_suffix":"awsct","bindings_arch":"aarch64"}]')
+              PUSH_ENTRIES=$(echo "$PUSH_ENTRIES" | jq -c '. + [{"name":"push-aws-comprehensive-ts","test_filter":"push_aws_comprehensive_ts","needs_oidc":false,"resource_suffix":"awsct","bindings_arch":"aarch64","timeout_minutes":60}]')
             fi
           fi
           if [ "$PUSH_GCP_CLI" = "true" ]; then
             if [ "$APP" = "All" ] || [ "$APP" = "comprehensive-rust" ]; then
-              PUSH_ENTRIES=$(echo "$PUSH_ENTRIES" | jq -c '. + [{"name":"push-gcp-comprehensive-rust","test_filter":"push_gcp_comprehensive_rust","needs_oidc":false,"resource_suffix":"gcpcr"}]')
+              PUSH_ENTRIES=$(echo "$PUSH_ENTRIES" | jq -c '. + [{"name":"push-gcp-comprehensive-rust","test_filter":"push_gcp_comprehensive_rust","needs_oidc":false,"resource_suffix":"gcpcr","timeout_minutes":60}]')
             fi
             if [ "$APP" = "All" ] || [ "$APP" = "comprehensive-ts" ]; then
-              PUSH_ENTRIES=$(echo "$PUSH_ENTRIES" | jq -c '. + [{"name":"push-gcp-comprehensive-ts","test_filter":"push_gcp_comprehensive_ts","needs_oidc":false,"resource_suffix":"gcpct","bindings_arch":"x86_64"}]')
+              PUSH_ENTRIES=$(echo "$PUSH_ENTRIES" | jq -c '. + [{"name":"push-gcp-comprehensive-ts","test_filter":"push_gcp_comprehensive_ts","needs_oidc":false,"resource_suffix":"gcpct","bindings_arch":"x86_64","timeout_minutes":60}]')
             fi
           fi
           if [ "$PUSH_AZURE_CLI" = "true" ]; then
             if [ "$APP" = "All" ] || [ "$APP" = "comprehensive-rust" ]; then
-              PUSH_ENTRIES=$(echo "$PUSH_ENTRIES" | jq -c '. + [{"name":"push-azure-comprehensive-rust","test_filter":"push_azure_comprehensive_rust","needs_oidc":true,"resource_suffix":"azcr"}]')
+              PUSH_ENTRIES=$(echo "$PUSH_ENTRIES" | jq -c '. + [{"name":"push-azure-comprehensive-rust","test_filter":"push_azure_comprehensive_rust","needs_oidc":true,"resource_suffix":"azcr","timeout_minutes":75}]')
             fi
             if [ "$APP" = "All" ] || [ "$APP" = "comprehensive-ts" ]; then
-              PUSH_ENTRIES=$(echo "$PUSH_ENTRIES" | jq -c '. + [{"name":"push-azure-comprehensive-ts","test_filter":"push_azure_comprehensive_ts","needs_oidc":true,"resource_suffix":"azct","bindings_arch":"x86_64"}]')
+              PUSH_ENTRIES=$(echo "$PUSH_ENTRIES" | jq -c '. + [{"name":"push-azure-comprehensive-ts","test_filter":"push_azure_comprehensive_ts","needs_oidc":true,"resource_suffix":"azct","bindings_arch":"x86_64","timeout_minutes":75}]')
             fi
           fi
 
@@ -1110,7 +1110,7 @@ jobs:
       fail-fast: false
       matrix: ${{ fromJSON(needs.compute-matrix.outputs.push_matrix) }}
     runs-on: depot-ubuntu-24.04-arm-8
-    timeout-minutes: 60
+    timeout-minutes: ${{ matrix.timeout_minutes }}
     env:
       CARGO_INCREMENTAL: "0"
       CARGO_NET_GIT_FETCH_WITH_CLI: "true"
@@ -1690,7 +1690,7 @@ jobs:
       needs.compute-matrix.outputs.skip_cleanup != 'true' &&
       needs.setup.result == 'success'
     runs-on: depot-ubuntu-24.04-arm
-    timeout-minutes: 30
+    timeout-minutes: 45
     steps:
       - uses: actions/checkout@v4
 

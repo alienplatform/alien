@@ -683,7 +683,19 @@ fn parse_azure_error_details(body: &str) -> Option<AzureErrorDetails> {
 const AZURE_TRANSIENT_BAD_REQUEST_CODES: &[&str] = &[
     // Role definition assignableScopes update hasn't propagated yet.
     "RoleAssignmentScopeNotAssignableToRoleDefinition",
+    // A PUT raced with an earlier create or update that is still in progress.
+    "ResourceCannotBeUpdatedDuringProvisioning",
 ];
+
+fn is_transient_azure_bad_request(code: Option<&str>, message: &str) -> bool {
+    code.is_some_and(|code| {
+        AZURE_TRANSIENT_BAD_REQUEST_CODES
+            .iter()
+            .any(|transient_code| code.eq_ignore_ascii_case(transient_code))
+    }) || message
+        .to_ascii_lowercase()
+        .contains("cannot be updated during provisioning")
+}
 
 /// Creates an HttpResponseError with full HTTP details and adds appropriate service-specific context.
 ///
@@ -718,12 +730,13 @@ pub fn create_azure_http_error_with_context(
     // Add service-specific context based on Azure error code and HTTP status
     let service_context = match (status, azure_error_code) {
         // Azure propagation delays — transient, not truly invalid input
-        (StatusCode::BAD_REQUEST, Some(code))
-            if AZURE_TRANSIENT_BAD_REQUEST_CODES.contains(&code) =>
+        (StatusCode::BAD_REQUEST, code)
+            if is_transient_azure_bad_request(code, azure_error_body) =>
         {
             ErrorData::RemoteResourceConflict {
                 message: format!(
-                    "Transient Azure error for {res_type} '{res_name}' ({code}): {azure_error_body}"
+                    "Transient Azure error for {res_type} '{res_name}' ({}): {azure_error_body}",
+                    code.unwrap_or("unclassified")
                 ),
                 resource_type: res_type.into(),
                 resource_name: res_name.into(),
@@ -844,5 +857,51 @@ mod tests {
         assert_eq!(err.code, "REMOTE_SERVICE_UNAVAILABLE");
         assert!(err.retryable);
         assert!(err.message.contains("Bad Gateway"));
+    }
+
+    #[test]
+    fn resource_update_during_provisioning_is_retryable_conflict() {
+        let err = create_azure_http_error_with_context(
+            StatusCode::BAD_REQUEST,
+            "CreateOrUpdateEventSubscription",
+            "Event Grid subscription",
+            "storage-events",
+            r#"{
+                "error": {
+                    "code": "BadRequest",
+                    "message": "Resource cannot be updated during provisioning"
+                }
+            }"#,
+            "https://management.azure.com/test",
+            None,
+        );
+
+        assert_eq!(err.code, "REMOTE_RESOURCE_CONFLICT");
+        assert!(err.retryable);
+        assert!(err
+            .message
+            .contains("cannot be updated during provisioning"));
+    }
+
+    #[test]
+    fn resource_update_during_provisioning_code_is_retryable_conflict() {
+        let err = create_azure_http_error_with_context(
+            StatusCode::BAD_REQUEST,
+            "CreateOrUpdateEventSubscription",
+            "Event Grid subscription",
+            "storage-events",
+            r#"{
+                "error": {
+                    "code": "ResourceCannotBeUpdatedDuringProvisioning",
+                    "message": "The resource is busy"
+                }
+            }"#,
+            "https://management.azure.com/test",
+            None,
+        );
+
+        assert_eq!(err.code, "REMOTE_RESOURCE_CONFLICT");
+        assert!(err.retryable);
+        assert!(err.message.contains("The resource is busy"));
     }
 }
