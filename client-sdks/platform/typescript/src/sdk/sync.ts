@@ -3,6 +3,7 @@
  */
 
 import { syncAcquire } from "../funcs/syncAcquire.js";
+import { syncContext } from "../funcs/syncContext.js";
 import { syncList } from "../funcs/syncList.js";
 import { syncReconcile } from "../funcs/syncReconcile.js";
 import { syncRelease } from "../funcs/syncRelease.js";
@@ -20,6 +21,20 @@ export class Sync extends ClientSDK {
     options?: RequestOptions,
   ): Promise<models.SyncListResponse> {
     return unwrapAsync(syncList(
+      this,
+      request,
+      options,
+    ));
+  }
+
+  /**
+   * Get computed deployment state and configuration for a manager-side operation without acquiring the deployment reconciliation lock.
+   */
+  async context(
+    request?: operations.SyncContextRequest | undefined,
+    options?: RequestOptions,
+  ): Promise<models.SyncAcquireResponseDeployment> {
+    return unwrapAsync(syncContext(
       this,
       request,
       options,

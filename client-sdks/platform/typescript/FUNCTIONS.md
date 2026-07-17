@@ -2,7 +2,7 @@
 
 > [!NOTE]
 > This section is useful if you are using a bundler and targetting browsers and
-> runtimes where the size of an application affects performance and load times. 
+> runtimes where the size of an application affects performance and load times.
 
 Every method in this SDK is also available as a standalone function. This
 alternative API is suitable when targetting the browser or serverless runtimes

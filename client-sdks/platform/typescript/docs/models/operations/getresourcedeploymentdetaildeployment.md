@@ -24,6 +24,7 @@ let value: GetResourceDeploymentDetailDeployment = {
   currentCount: 894151,
   readyCount: 664200,
   observedAt: new Date("2026-05-21T17:39:43.812Z"),
+  desiredImage: "<value>",
 };
 ```
 
@@ -49,3 +50,4 @@ let value: GetResourceDeploymentDetailDeployment = {
 | `currentCount`                                                                                | *number*                                                                                      | :heavy_check_mark:                                                                            | N/A                                                                                           |
 | `readyCount`                                                                                  | *number*                                                                                      | :heavy_check_mark:                                                                            | N/A                                                                                           |
 | `observedAt`                                                                                  | [Date](https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/Date) | :heavy_check_mark:                                                                            | N/A                                                                                           |
+| `desiredImage`                                                                                | *string*                                                                                      | :heavy_check_mark:                                                                            | N/A                                                                                           |

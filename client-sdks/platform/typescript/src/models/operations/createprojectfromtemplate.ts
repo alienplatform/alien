@@ -26,9 +26,46 @@ export const TemplatePathRequest = {
 export type TemplatePathRequest = ClosedEnum<typeof TemplatePathRequest>;
 
 /**
+ * Target OS and architecture for compiled binaries.
+ *
+ * @remarks
+ *
+ * Used as keys in package output maps (CLI binaries, Terraform providers, etc.)
+ * and for cross-compilation target selection during builds.
+ */
+export const CreateProjectFromTemplateBinaryTargetRequest = {
+  WindowsX64: "windows-x64",
+  LinuxX64: "linux-x64",
+  LinuxArm64: "linux-arm64",
+  DarwinArm64: "darwin-arm64",
+} as const;
+/**
+ * Target OS and architecture for compiled binaries.
+ *
+ * @remarks
+ *
+ * Used as keys in package output maps (CLI binaries, Terraform providers, etc.)
+ * and for cross-compilation target selection during builds.
+ */
+export type CreateProjectFromTemplateBinaryTargetRequest = ClosedEnum<
+  typeof CreateProjectFromTemplateBinaryTargetRequest
+>;
+
+/**
  * CLI package configuration. If null, CLI packages will not be generated.
  */
 export type CreateProjectFromTemplateCliRequest = {
+  /**
+   * Binary targets required by this package's setup consumer.
+   *
+   * @remarks
+   *
+   * Older package rows omit this field and retain the historical all-target
+   * behavior. Callers creating new packages should state their target set.
+   */
+  binaryTargets?:
+    | Array<CreateProjectFromTemplateBinaryTargetRequest>
+    | undefined;
   /**
    * Human-friendly display name for help banners and about text
    */
@@ -251,9 +288,46 @@ export type CreateProjectFromTemplateDeploymentPortalAppearance = {
 };
 
 /**
+ * Target OS and architecture for compiled binaries.
+ *
+ * @remarks
+ *
+ * Used as keys in package output maps (CLI binaries, Terraform providers, etc.)
+ * and for cross-compilation target selection during builds.
+ */
+export const CreateProjectFromTemplateBinaryTargetResponse = {
+  WindowsX64: "windows-x64",
+  LinuxX64: "linux-x64",
+  LinuxArm64: "linux-arm64",
+  DarwinArm64: "darwin-arm64",
+} as const;
+/**
+ * Target OS and architecture for compiled binaries.
+ *
+ * @remarks
+ *
+ * Used as keys in package output maps (CLI binaries, Terraform providers, etc.)
+ * and for cross-compilation target selection during builds.
+ */
+export type CreateProjectFromTemplateBinaryTargetResponse = ClosedEnum<
+  typeof CreateProjectFromTemplateBinaryTargetResponse
+>;
+
+/**
  * CLI package configuration. If null, CLI packages will not be generated.
  */
 export type CreateProjectFromTemplateCliResponse = {
+  /**
+   * Binary targets required by this package's setup consumer.
+   *
+   * @remarks
+   *
+   * Older package rows omit this field and retain the historical all-target
+   * behavior. Callers creating new packages should state their target set.
+   */
+  binaryTargets?:
+    | Array<CreateProjectFromTemplateBinaryTargetResponse>
+    | undefined;
   /**
    * Human-friendly display name for help banners and about text
    */
@@ -508,7 +582,14 @@ export const TemplatePathRequest$outboundSchema: z.ZodEnum<
 > = z.enum(TemplatePathRequest);
 
 /** @internal */
+export const CreateProjectFromTemplateBinaryTargetRequest$outboundSchema:
+  z.ZodEnum<typeof CreateProjectFromTemplateBinaryTargetRequest> = z.enum(
+    CreateProjectFromTemplateBinaryTargetRequest,
+  );
+
+/** @internal */
 export type CreateProjectFromTemplateCliRequest$Outbound = {
+  binaryTargets?: Array<string> | undefined;
   displayName: string;
   name: string;
   enabled: boolean;
@@ -519,6 +600,9 @@ export const CreateProjectFromTemplateCliRequest$outboundSchema: z.ZodType<
   CreateProjectFromTemplateCliRequest$Outbound,
   CreateProjectFromTemplateCliRequest
 > = z.object({
+  binaryTargets: z.array(
+    CreateProjectFromTemplateBinaryTargetRequest$outboundSchema,
+  ).optional(),
   displayName: z.string(),
   name: z.string(),
   enabled: z.boolean(),
@@ -834,10 +918,19 @@ export function createProjectFromTemplateDeploymentPortalAppearanceFromJSON(
 }
 
 /** @internal */
+export const CreateProjectFromTemplateBinaryTargetResponse$inboundSchema:
+  z.ZodEnum<typeof CreateProjectFromTemplateBinaryTargetResponse> = z.enum(
+    CreateProjectFromTemplateBinaryTargetResponse,
+  );
+
+/** @internal */
 export const CreateProjectFromTemplateCliResponse$inboundSchema: z.ZodType<
   CreateProjectFromTemplateCliResponse,
   unknown
 > = z.object({
+  binaryTargets: z.array(
+    CreateProjectFromTemplateBinaryTargetResponse$inboundSchema,
+  ).optional(),
   displayName: z.string(),
   name: z.string(),
   enabled: z.boolean(),

@@ -115,9 +115,42 @@ export type ConfigCloudformation = {
 };
 
 /**
+ * Target OS and architecture for compiled binaries.
+ *
+ * @remarks
+ *
+ * Used as keys in package output maps (CLI binaries, Terraform providers, etc.)
+ * and for cross-compilation target selection during builds.
+ */
+export const PackageBinaryTarget = {
+  WindowsX64: "windows-x64",
+  LinuxX64: "linux-x64",
+  LinuxArm64: "linux-arm64",
+  DarwinArm64: "darwin-arm64",
+} as const;
+/**
+ * Target OS and architecture for compiled binaries.
+ *
+ * @remarks
+ *
+ * Used as keys in package output maps (CLI binaries, Terraform providers, etc.)
+ * and for cross-compilation target selection during builds.
+ */
+export type PackageBinaryTarget = ClosedEnum<typeof PackageBinaryTarget>;
+
+/**
  * Branding configuration for the deploy CLI binary.
  */
 export type ConfigCli = {
+  /**
+   * Binary targets required by this package's setup consumer.
+   *
+   * @remarks
+   *
+   * Older package rows omit this field and retain the historical all-target
+   * behavior. Callers creating new packages should state their target set.
+   */
+  binaryTargets?: Array<PackageBinaryTarget> | undefined;
   /**
    * Human-friendly display name for help banners and about text
    */
@@ -380,6 +413,10 @@ export type PackageBuildInfo = {
    */
   horizonSha: string;
   /**
+   * Horizon release channel manifest embedded into the generated CLI.
+   */
+  machineBundleManifestUrl?: string | null | undefined;
+  /**
    * Platform source commit used to build packages-builder and private extensions.
    */
   platformSha: string;
@@ -423,6 +460,18 @@ export type PackageOutputsUnion =
   | OutputsTerraform
   | OutputsCloudformation
   | any;
+
+/**
+ * Coarse package build phase
+ */
+export const BuildPhase = {
+  Building: "building",
+  Publishing: "publishing",
+} as const;
+/**
+ * Coarse package build phase
+ */
+export type BuildPhase = ClosedEnum<typeof BuildPhase>;
 
 export type Package = {
   /**
@@ -496,6 +545,18 @@ export type Package = {
   retries: number;
   lockedAt?: Date | null | undefined;
   lockedBy?: string | null | undefined;
+  /**
+   * Expiration of the current builder lease
+   */
+  leaseExpiresAt?: Date | null | undefined;
+  /**
+   * Coarse package build phase
+   */
+  buildPhase?: BuildPhase | null | undefined;
+  /**
+   * Last successful builder lease renewal or phase change
+   */
+  lastProgressAt?: Date | null | undefined;
   createdAt: Date;
   updatedAt: Date;
   completedAt?: Date | null | undefined;
@@ -591,7 +652,13 @@ export function configCloudformationFromJSON(
 }
 
 /** @internal */
+export const PackageBinaryTarget$inboundSchema: z.ZodEnum<
+  typeof PackageBinaryTarget
+> = z.enum(PackageBinaryTarget);
+
+/** @internal */
 export const ConfigCli$inboundSchema: z.ZodType<ConfigCli, unknown> = z.object({
+  binaryTargets: z.array(PackageBinaryTarget$inboundSchema).optional(),
   displayName: z.string(),
   name: z.string(),
   type: z.literal("cli"),
@@ -855,6 +922,7 @@ export const PackageBuildInfo$inboundSchema: z.ZodType<
 > = z.object({
   alienSha: z.string(),
   horizonSha: z.string(),
+  machineBundleManifestUrl: z.nullable(z.string()).optional(),
   platformSha: z.string(),
   sourceAgentBinarySha256: z.nullable(z.string()).optional(),
   sourceCliBinarySha256: z.string(),
@@ -916,6 +984,11 @@ export function packageOutputsUnionFromJSON(
 }
 
 /** @internal */
+export const BuildPhase$inboundSchema: z.ZodEnum<typeof BuildPhase> = z.enum(
+  BuildPhase,
+);
+
+/** @internal */
 export const Package$inboundSchema: z.ZodType<Package, unknown> = z.object({
   id: z.string(),
   projectId: z.string(),
@@ -950,6 +1023,13 @@ export const Package$inboundSchema: z.ZodType<Package, unknown> = z.object({
     z.iso.datetime({ offset: true }).transform(v => new Date(v)),
   ).optional(),
   lockedBy: z.nullable(z.string()).optional(),
+  leaseExpiresAt: z.nullable(
+    z.iso.datetime({ offset: true }).transform(v => new Date(v)),
+  ).optional(),
+  buildPhase: z.nullable(BuildPhase$inboundSchema).optional(),
+  lastProgressAt: z.nullable(
+    z.iso.datetime({ offset: true }).transform(v => new Date(v)),
+  ).optional(),
   createdAt: z.iso.datetime({ offset: true }).transform(v => new Date(v)),
   updatedAt: z.iso.datetime({ offset: true }).transform(v => new Date(v)),
   completedAt: z.nullable(

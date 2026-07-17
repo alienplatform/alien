@@ -68,13 +68,14 @@ pub fn convert_sdk_error(err: Error<types::ApiError>) -> AlienError<GenericError
         Error::ErrorResponse(response) => {
             let status = response.status().as_u16();
             let api_error = response.into_inner();
-            let context = context_with_request_id(api_error.context, None);
+            let context =
+                context_with_request_id(api_error.context, api_error.request_id.as_deref());
 
             AlienError {
                 code: api_error.code.to_string(),
                 message: api_error.message.to_string(),
                 context,
-                hint: None,
+                hint: api_error.hint,
                 retryable: api_error.retryable,
                 internal: false, // API errors sent to clients are external by nature
                 http_status_code: Some(status),
@@ -378,6 +379,39 @@ mod tests {
 
         assert_eq!(context["workspace"], "demo");
         assert_eq!(context["requestId"], "req_123");
+    }
+
+    #[tokio::test]
+    async fn documented_api_error_preserves_hint_and_request_id() {
+        let response = http::Response::builder()
+            .status(409)
+            .body(
+                serde_json::json!({
+                    "code": "DEPLOYMENT_OPERATION_NOT_ALLOWED",
+                    "message": "The deployment cannot be redeployed from this state",
+                    "hint": "Retry the desired release or pin a different release",
+                    "requestId": "req_recovery_123",
+                    "retryable": false,
+                    "internal": false
+                })
+                .to_string(),
+            )
+            .expect("test response should build");
+        let response = reqwest::Response::from(response);
+        let response = ResponseValue::from_response::<types::ApiError>(response)
+            .await
+            .expect("API error body should deserialize");
+
+        let error = convert_sdk_error(Error::ErrorResponse(response));
+
+        assert_eq!(
+            error.hint.as_deref(),
+            Some("Retry the desired release or pin a different release")
+        );
+        assert_eq!(
+            error.context.as_ref().unwrap()["requestId"],
+            "req_recovery_123"
+        );
     }
 
     #[tokio::test]

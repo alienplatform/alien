@@ -676,8 +676,16 @@ async fn test_update_flow_happy_path_promotes_release() {
     assert_eq!(state.status, DeploymentStatus::Running);
     let v1_release = state.current_release.clone().unwrap();
 
-    // Start update to v2 - use a different function resource ID to avoid conflicts
-    let stack_v2 = create_test_stack("test-stack", "test-function"); // Keep same resource for simpler update
+    // Start an actual config update to v2.
+    let mut stack_v2 = create_test_stack("test-stack", "test-function");
+    let worker_v2 = Worker::new("test-function".to_string())
+        .code(WorkerCode::Image {
+            image: "test:v2".to_string(),
+        })
+        .permissions("default".to_string())
+        .build();
+    stack_v2.resources.get_mut("test-function").unwrap().config =
+        alien_core::Resource::new(worker_v2);
     let release_v2 = ReleaseInfo {
         release_id: Some("rel_v2".to_string()),
         version: Some("2.0.0".to_string()),
@@ -706,6 +714,36 @@ async fn test_update_flow_happy_path_promotes_release() {
         state.current_release.as_ref().unwrap().release_id,
         v1_release.release_id,
         "should have updated from v1"
+    );
+}
+
+#[tokio::test]
+async fn running_pull_actor_starts_update_when_target_release_changes() {
+    let config = create_test_config("hash_v1", false);
+    let mut state = run_to_completion(
+        create_initial_state(create_test_stack("test-stack", "test-function")),
+        config.clone(),
+    )
+    .await;
+
+    let release_v2 = ReleaseInfo {
+        release_id: Some("rel_v2".to_string()),
+        version: Some("2.0.0".to_string()),
+        description: None,
+        stack: create_test_stack("test-stack", "test-function"),
+    };
+    state.target_release = Some(release_v2.clone());
+
+    let first_update_step = alien_deployment::step(state, config.clone(), ClientConfig::Test, None)
+        .await
+        .expect("running actor should accept the new desired release");
+    assert_eq!(first_update_step.state.status, DeploymentStatus::Updating);
+
+    let completed = run_to_completion(first_update_step.state, config).await;
+    assert_eq!(completed.status, DeploymentStatus::Running);
+    assert_eq!(
+        completed.current_release.as_ref().unwrap().release_id,
+        release_v2.release_id
     );
 }
 

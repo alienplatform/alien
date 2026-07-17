@@ -1,0 +1,21 @@
+# SyncAcquireResponseDeploymentTargetReleaseOverrideAwGrant
+
+Grant permissions for a specific cloud platform
+
+## Example Usage
+
+```typescript
+import { SyncAcquireResponseDeploymentTargetReleaseOverrideAwGrant } from "@alienplatform/platform-api/models";
+
+let value: SyncAcquireResponseDeploymentTargetReleaseOverrideAwGrant = {};
+```
+
+## Fields
+
+| Field                                                          | Type                                                           | Required                                                       | Description                                                    |
+| -------------------------------------------------------------- | -------------------------------------------------------------- | -------------------------------------------------------------- | -------------------------------------------------------------- |
+| `actions`                                                      | *string*[]                                                     | :heavy_minus_sign:                                             | AWS IAM actions (only for AWS)                                 |
+| `dataActions`                                                  | *string*[]                                                     | :heavy_minus_sign:                                             | Azure actions (only for Azure)                                 |
+| `permissions`                                                  | *string*[]                                                     | :heavy_minus_sign:                                             | GCP permissions that require an exact residual custom role.    |
+| `predefinedRoles`                                              | *string*[]                                                     | :heavy_minus_sign:                                             | Provider predefined roles to bind directly.                    |
+| `residualPermissions`                                          | *string*[]                                                     | :heavy_minus_sign:                                             | GCP residual custom permissions to pair with predefined roles. |
