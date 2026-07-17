@@ -81,13 +81,11 @@ impl ImpersonationCredentialResolver {
                 .await;
         }
 
-        let status = parse_status(&deployment.status);
-
-        // InitialSetup is still setup-owned. Even after the remote stack
-        // management identity exists in state, setup credentials must finish
-        // attaching its management policies and creating the remaining Frozen
-        // resources. Runtime impersonation starts after handoff.
-        if uses_direct_management_credentials(status) {
+        // InitialSetup remains setup-owned until the remote stack management
+        // identity is imported. Poll-only setup methods hand the deployment to
+        // the runtime manager at that point, so continuing with the managing
+        // identity would send target resource operations to the wrong account.
+        if uses_direct_impersonation_credentials(&deployment) {
             let provider = self.provider_for_target(platform);
             let base_config = impersonate_management_sa(&**provider, platform).await?;
             return apply_target_environment(base_config, deployment.environment_info.as_ref());
@@ -363,6 +361,23 @@ pub(crate) fn uses_direct_management_credentials(status: DeploymentStatus) -> bo
     )
 }
 
+fn uses_direct_impersonation_credentials(deployment: &DeploymentRecord) -> bool {
+    let status = parse_status(&deployment.status);
+
+    match status {
+        DeploymentStatus::Pending | DeploymentStatus::PreflightsFailed => true,
+        DeploymentStatus::InitialSetup | DeploymentStatus::InitialSetupFailed => {
+            deployment.stack_state.as_ref().is_none_or(|stack_state| {
+                !stack_state.resources.values().any(|resource_state| {
+                    resource_state.resource_type == "remote-stack-management"
+                        && resource_state.outputs.is_some()
+                })
+            })
+        }
+        _ => false,
+    }
+}
+
 fn uses_control_plane_credentials(platform: Platform) -> bool {
     matches!(platform, Platform::Machines)
 }
@@ -561,25 +576,30 @@ mod tests {
     }
 
     #[test]
-    fn initial_setup_uses_direct_management_credentials_until_handoff() {
-        assert!(uses_direct_management_credentials(
-            DeploymentStatus::Pending
-        ));
-        assert!(uses_direct_management_credentials(
-            DeploymentStatus::PreflightsFailed
-        ));
-        assert!(uses_direct_management_credentials(
-            DeploymentStatus::InitialSetup
-        ));
-        assert!(uses_direct_management_credentials(
-            DeploymentStatus::InitialSetupFailed
-        ));
-        assert!(!uses_direct_management_credentials(
-            DeploymentStatus::Provisioning
-        ));
-        assert!(!uses_direct_management_credentials(
-            DeploymentStatus::Running
-        ));
+    fn initial_setup_switches_impersonated_credentials_when_remote_management_is_ready() {
+        let mut deployment = gcp_handoff_deployment();
+
+        for status in ["pending", "preflights-failed"] {
+            deployment.status = status.to_string();
+            assert!(uses_direct_impersonation_credentials(&deployment));
+        }
+
+        deployment.stack_state = None;
+        for status in ["initial-setup", "initial-setup-failed"] {
+            deployment.status = status.to_string();
+            assert!(uses_direct_impersonation_credentials(&deployment));
+        }
+
+        deployment.stack_state = gcp_handoff_deployment().stack_state;
+        for status in [
+            "initial-setup",
+            "initial-setup-failed",
+            "provisioning",
+            "running",
+        ] {
+            deployment.status = status.to_string();
+            assert!(!uses_direct_impersonation_credentials(&deployment));
+        }
     }
 
     #[tokio::test]
