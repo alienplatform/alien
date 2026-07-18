@@ -4677,42 +4677,64 @@ impl AzureWorkerController {
             self.dapr_components.push(component_name.clone());
         }
 
-        let included_event_types = azure_storage_event_types(events, &worker_config.id)?;
         let event_grid_client = ctx
             .service_provider
             .get_azure_event_grid_client(azure_config)?;
-        let event_subscription = event_grid_client
-            .create_or_update_event_subscription(
-                source_resource_id,
-                event_subscription_name.clone(),
-                EventSubscriptionRequest {
-                    properties: EventSubscriptionRequestProperties {
-                        destination: ServiceBusQueueDestination {
-                            endpoint_type: "ServiceBusQueue".to_string(),
-                            properties: ServiceBusQueueDestinationProperties {
-                                resource_id: queue_resource_id,
+        let event_subscription = match event_grid_client
+            .get_event_subscription(source_resource_id.clone(), event_subscription_name.clone())
+            .await
+        {
+            Ok(event_subscription) => event_subscription,
+            Err(error)
+                if matches!(
+                    error.error,
+                    Some(CloudClientErrorData::RemoteResourceNotFound { .. })
+                ) =>
+            {
+                let included_event_types = azure_storage_event_types(events, &worker_config.id)?;
+                event_grid_client
+                    .create_or_update_event_subscription(
+                        source_resource_id,
+                        event_subscription_name.clone(),
+                        EventSubscriptionRequest {
+                            properties: EventSubscriptionRequestProperties {
+                                destination: ServiceBusQueueDestination {
+                                    endpoint_type: "ServiceBusQueue".to_string(),
+                                    properties: ServiceBusQueueDestinationProperties {
+                                        resource_id: queue_resource_id,
+                                    },
+                                },
+                                filter: EventSubscriptionFilter {
+                                    included_event_types,
+                                    subject_begins_with: format!(
+                                        "/blobServices/default/containers/{}/blobs/",
+                                        container_name
+                                    ),
+                                    is_subject_case_sensitive: false,
+                                },
+                                event_delivery_schema: "CloudEventSchemaV1_0".to_string(),
                             },
                         },
-                        filter: EventSubscriptionFilter {
-                            included_event_types,
-                            subject_begins_with: format!(
-                                "/blobServices/default/containers/{}/blobs/",
-                                container_name
-                            ),
-                            is_subject_case_sensitive: false,
-                        },
-                        event_delivery_schema: "CloudEventSchemaV1_0".to_string(),
-                    },
-                },
-            )
-            .await
-            .context(ErrorData::CloudPlatformError {
-                message: format!(
-                    "Failed to create Event Grid subscription '{}' for storage '{}'",
-                    event_subscription_name, storage_ref.id
-                ),
-                resource_id: Some(worker_config.id.clone()),
-            })?;
+                    )
+                    .await
+                    .context(ErrorData::CloudPlatformError {
+                        message: format!(
+                            "Failed to create Event Grid subscription '{}' for storage '{}'",
+                            event_subscription_name, storage_ref.id
+                        ),
+                        resource_id: Some(worker_config.id.clone()),
+                    })?
+            }
+            Err(error) => {
+                return Err(error.context(ErrorData::CloudPlatformError {
+                    message: format!(
+                        "Failed to inspect Event Grid subscription '{}' for storage '{}'",
+                        event_subscription_name, storage_ref.id
+                    ),
+                    resource_id: Some(worker_config.id.clone()),
+                }));
+            }
+        };
 
         if let Some(provisioning_state) = event_subscription
             .properties

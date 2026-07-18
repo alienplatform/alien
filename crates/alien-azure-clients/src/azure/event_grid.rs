@@ -21,6 +21,12 @@ pub trait EventGridApi: Send + Sync + std::fmt::Debug {
         parameters: EventSubscriptionRequest,
     ) -> Result<EventSubscription>;
 
+    async fn get_event_subscription(
+        &self,
+        source_resource_id: String,
+        event_subscription_name: String,
+    ) -> Result<EventSubscription>;
+
     async fn delete_event_subscription(
         &self,
         source_resource_id: String,
@@ -126,6 +132,51 @@ impl EventGridApi for AzureEventGridClient {
             })
     }
 
+    async fn get_event_subscription(
+        &self,
+        source_resource_id: String,
+        event_subscription_name: String,
+    ) -> Result<EventSubscription> {
+        let token = self
+            .token_cache
+            .get_bearer_token_with_scope("https://management.azure.com/.default")
+            .await?;
+        let url = self.event_subscription_url(&source_resource_id, &event_subscription_name);
+        let request = AzureRequestBuilder::new(Method::GET, url.clone())
+            .content_length("")
+            .build()?;
+        let signed = self.base.sign_request(request, &token).await?;
+        let response = self
+            .base
+            .execute_request(signed, "GetEventSubscription", &event_subscription_name)
+            .await?;
+        let response_status = response.status().as_u16();
+        let response_body =
+            response
+                .text()
+                .await
+                .into_alien_error()
+                .context(ErrorData::HttpRequestFailed {
+                    message: format!(
+                        "Event Grid GetEventSubscription: failed to read response body for '{}'",
+                        event_subscription_name
+                    ),
+                })?;
+
+        serde_json::from_str(&response_body)
+            .into_alien_error()
+            .context(ErrorData::HttpResponseError {
+                message: format!(
+                    "Event Grid GetEventSubscription: JSON parse error. Body: {}",
+                    response_body
+                ),
+                url,
+                http_status: response_status,
+                http_request_text: None,
+                http_response_text: Some(response_body),
+            })
+    }
+
     async fn delete_event_subscription(
         &self,
         source_resource_id: String,
@@ -207,7 +258,7 @@ pub struct EventSubscriptionProperties {
 mod tests {
     use std::collections::HashMap;
 
-    use httpmock::{Method::DELETE, Method::PUT, MockServer};
+    use httpmock::{Method::DELETE, Method::GET, Method::PUT, MockServer};
     use serde_json::json;
 
     use super::*;
@@ -291,6 +342,42 @@ mod tests {
                 .and_then(|properties| properties.provisioning_state)
                 .as_deref(),
             Some("Succeeded")
+        );
+    }
+
+    #[tokio::test]
+    async fn gets_event_subscription_and_decodes_provisioning_state() {
+        let server = MockServer::start_async().await;
+        let source = "/subscriptions/sub/resourceGroups/storage-rg/providers/Microsoft.Storage/storageAccounts/files";
+        let get_mock = server
+            .mock_async(|when, then| {
+                when.method(GET)
+                    .path(format!(
+                        "{source}/providers/Microsoft.EventGrid/eventSubscriptions/storage-sub"
+                    ))
+                    .query_param("api-version", EVENT_GRID_API_VERSION);
+                then.status(200).json_body(json!({
+                    "id": format!(
+                        "{source}/providers/Microsoft.EventGrid/eventSubscriptions/storage-sub"
+                    ),
+                    "name": "storage-sub",
+                    "properties": { "provisioningState": "Creating" }
+                }));
+            })
+            .await;
+
+        let subscription = test_client(&server)
+            .get_event_subscription(source.to_string(), "storage-sub".to_string())
+            .await
+            .expect("event subscription should be retrieved");
+
+        get_mock.assert_async().await;
+        assert_eq!(
+            subscription
+                .properties
+                .and_then(|properties| properties.provisioning_state)
+                .as_deref(),
+            Some("Creating")
         );
     }
 
