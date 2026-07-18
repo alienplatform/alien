@@ -1,8 +1,18 @@
 speakeasyVersion: 1.680.11
-sources: {}
+sources:
+    platform-api:
+        sourceNamespace: platform-api
+        sourceRevisionDigest: sha256:de7a42a474ed9687e24bd32b61a9daac6ad146a676831e493eccf313be9eb067
+        sourceBlobDigest: sha256:2ed87c1452613359815807494bb55dcef61ca3017d619ae0d9a07dff1f869117
+        tags:
+            - latest
+            - 1.0.0
 targets:
     platform-typescript:
         source: platform-api
+        sourceNamespace: platform-api
+        sourceRevisionDigest: sha256:de7a42a474ed9687e24bd32b61a9daac6ad146a676831e493eccf313be9eb067
+        sourceBlobDigest: sha256:2ed87c1452613359815807494bb55dcef61ca3017d619ae0d9a07dff1f869117
 workflow:
     workflowVersion: 1.0.0
     speakeasyVersion: 1.680.11
@@ -10,6 +20,8 @@ workflow:
         platform-api:
             inputs:
                 - location: ../openapi.json
+            registry:
+                location: registry.speakeasyapi.dev/alien-ehq/alien/platform-api
     targets:
         platform-typescript:
             target: typescript
