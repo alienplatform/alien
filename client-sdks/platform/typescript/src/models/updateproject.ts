@@ -81,9 +81,44 @@ export type UpdateProjectDeploymentPortalAppearance = {
 };
 
 /**
+ * Target OS and architecture for compiled binaries.
+ *
+ * @remarks
+ *
+ * Used as keys in package output maps (CLI binaries, Terraform providers, etc.)
+ * and for cross-compilation target selection during builds.
+ */
+export const UpdateProjectBinaryTarget = {
+  WindowsX64: "windows-x64",
+  LinuxX64: "linux-x64",
+  LinuxArm64: "linux-arm64",
+  DarwinArm64: "darwin-arm64",
+} as const;
+/**
+ * Target OS and architecture for compiled binaries.
+ *
+ * @remarks
+ *
+ * Used as keys in package output maps (CLI binaries, Terraform providers, etc.)
+ * and for cross-compilation target selection during builds.
+ */
+export type UpdateProjectBinaryTarget = ClosedEnum<
+  typeof UpdateProjectBinaryTarget
+>;
+
+/**
  * CLI package configuration. If null, CLI packages will not be generated.
  */
 export type UpdateProjectCli = {
+  /**
+   * Binary targets required by this package's setup consumer.
+   *
+   * @remarks
+   *
+   * Older package rows omit this field and retain the historical all-target
+   * behavior. Callers creating new packages should state their target set.
+   */
+  binaryTargets?: Array<UpdateProjectBinaryTarget> | undefined;
   /**
    * Human-friendly display name for help banners and about text
    */
@@ -327,7 +362,13 @@ export function updateProjectDeploymentPortalAppearanceToJSON(
 }
 
 /** @internal */
+export const UpdateProjectBinaryTarget$outboundSchema: z.ZodEnum<
+  typeof UpdateProjectBinaryTarget
+> = z.enum(UpdateProjectBinaryTarget);
+
+/** @internal */
 export type UpdateProjectCli$Outbound = {
+  binaryTargets?: Array<string> | undefined;
   displayName: string;
   name: string;
   enabled: boolean;
@@ -338,6 +379,7 @@ export const UpdateProjectCli$outboundSchema: z.ZodType<
   UpdateProjectCli$Outbound,
   UpdateProjectCli
 > = z.object({
+  binaryTargets: z.array(UpdateProjectBinaryTarget$outboundSchema).optional(),
   displayName: z.string(),
   name: z.string(),
   enabled: z.boolean(),

@@ -20,7 +20,40 @@ export type DataDeploymentDeletionRequested = {
   type: "DeploymentDeletionRequested";
 };
 
+/**
+ * Type of authenticated principal that requested an event.
+ */
+export const EventKind2 = {
+  User: "user",
+  ServiceAccount: "serviceAccount",
+} as const;
+/**
+ * Type of authenticated principal that requested an event.
+ */
+export type EventKind2 = ClosedEnum<typeof EventKind2>;
+
+/**
+ * Authenticated principal that requested a deployment intent event.
+ */
+export type Actor2 = {
+  /**
+   * User email when the principal is a user.
+   */
+  email?: string | null | undefined;
+  /**
+   * Stable user or service-account identifier.
+   */
+  id: string;
+  /**
+   * Type of authenticated principal that requested an event.
+   */
+  kind: EventKind2;
+};
+
+export type ActorUnion2 = Actor2 | any;
+
 export type DataDeploymentEnvironmentUpdated = {
+  actor?: Actor2 | any | null | undefined;
   /**
    * Names of the environment variables that changed (added, removed, or modified)
    */
@@ -71,6 +104,38 @@ export type DataDeploymentRedeployRequested = {
   releaseId: string;
   type: "DeploymentRedeployRequested";
 };
+
+/**
+ * Type of authenticated principal that requested an event.
+ */
+export const EventKind1 = {
+  User: "user",
+  ServiceAccount: "serviceAccount",
+} as const;
+/**
+ * Type of authenticated principal that requested an event.
+ */
+export type EventKind1 = ClosedEnum<typeof EventKind1>;
+
+/**
+ * Authenticated principal that requested a deployment intent event.
+ */
+export type Actor1 = {
+  /**
+   * User email when the principal is a user.
+   */
+  email?: string | null | undefined;
+  /**
+   * Stable user or service-account identifier.
+   */
+  id: string;
+  /**
+   * Type of authenticated principal that requested an event.
+   */
+  kind: EventKind1;
+};
+
+export type ActorUnion1 = Actor1 | any;
 
 /**
  * Canonical error container that provides a structured way to represent errors
@@ -161,6 +226,7 @@ export type PreviousError = {
 export type PreviousErrorUnion = PreviousError | any;
 
 export type DataDeploymentRetryRequested = {
+  actor?: Actor1 | any | null | undefined;
   /**
    * ID of the release that the failed attempt was targeting, if known
    */
@@ -706,10 +772,7 @@ export type EventControllerPlatformEnum = ClosedEnum<
 export type EventControllerPlatformUnion = EventControllerPlatformEnum | any;
 
 /**
- * New ResourceRef that works with any resource type.
- *
- * @remarks
- * This can eventually replace the enum-based ResourceRef for full extensibility.
+ * Reference to a resource by its stable id and resource type.
  */
 export type EventDependency = {
   id: string;
@@ -1070,12 +1133,12 @@ export type DataBuildingResource = {
   type: "BuildingResource";
 };
 
-export type DataDownloadingAlienWorkerRuntime = {
+export type DataDownloadingAlienRuntime = {
   /**
    * Target triple for the runtime
    */
   targetTriple: string;
-  type: "DownloadingAlienWorkerRuntime";
+  type: "DownloadingAlienRuntime";
   /**
    * URL being downloaded from
    */
@@ -1115,7 +1178,7 @@ export type EventDataUnion =
   | DataFinished
   | DataBuildingStack
   | DataRunningPreflights
-  | DataDownloadingAlienWorkerRuntime
+  | DataDownloadingAlienRuntime
   | DataBuildingResource
   | DataBuildingImage
   | DataPushingImage
@@ -1299,7 +1362,7 @@ export type Event = {
     | DataFinished
     | DataBuildingStack
     | DataRunningPreflights
-    | DataDownloadingAlienWorkerRuntime
+    | DataDownloadingAlienRuntime
     | DataBuildingResource
     | DataBuildingImage
     | DataPushingImage
@@ -1373,10 +1436,48 @@ export function dataDeploymentDeletionRequestedFromJSON(
 }
 
 /** @internal */
+export const EventKind2$inboundSchema: z.ZodEnum<typeof EventKind2> = z.enum(
+  EventKind2,
+);
+
+/** @internal */
+export const Actor2$inboundSchema: z.ZodType<Actor2, unknown> = z.object({
+  email: z.nullable(z.string()).optional(),
+  id: z.string(),
+  kind: EventKind2$inboundSchema,
+});
+
+export function actor2FromJSON(
+  jsonString: string,
+): SafeParseResult<Actor2, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => Actor2$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'Actor2' from JSON`,
+  );
+}
+
+/** @internal */
+export const ActorUnion2$inboundSchema: z.ZodType<ActorUnion2, unknown> = z
+  .union([z.lazy(() => Actor2$inboundSchema), z.any()]);
+
+export function actorUnion2FromJSON(
+  jsonString: string,
+): SafeParseResult<ActorUnion2, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => ActorUnion2$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'ActorUnion2' from JSON`,
+  );
+}
+
+/** @internal */
 export const DataDeploymentEnvironmentUpdated$inboundSchema: z.ZodType<
   DataDeploymentEnvironmentUpdated,
   unknown
 > = z.object({
+  actor: z.nullable(z.union([z.lazy(() => Actor2$inboundSchema), z.any()]))
+    .optional(),
   changedKeys: z.array(z.string()),
   deploymentId: z.string(),
   type: z.literal("DeploymentEnvironmentUpdated"),
@@ -1454,6 +1555,42 @@ export function dataDeploymentRedeployRequestedFromJSON(
 }
 
 /** @internal */
+export const EventKind1$inboundSchema: z.ZodEnum<typeof EventKind1> = z.enum(
+  EventKind1,
+);
+
+/** @internal */
+export const Actor1$inboundSchema: z.ZodType<Actor1, unknown> = z.object({
+  email: z.nullable(z.string()).optional(),
+  id: z.string(),
+  kind: EventKind1$inboundSchema,
+});
+
+export function actor1FromJSON(
+  jsonString: string,
+): SafeParseResult<Actor1, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => Actor1$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'Actor1' from JSON`,
+  );
+}
+
+/** @internal */
+export const ActorUnion1$inboundSchema: z.ZodType<ActorUnion1, unknown> = z
+  .union([z.lazy(() => Actor1$inboundSchema), z.any()]);
+
+export function actorUnion1FromJSON(
+  jsonString: string,
+): SafeParseResult<ActorUnion1, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => ActorUnion1$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'ActorUnion1' from JSON`,
+  );
+}
+
+/** @internal */
 export const PreviousError$inboundSchema: z.ZodType<PreviousError, unknown> = z
   .object({
     code: z.string(),
@@ -1497,6 +1634,8 @@ export const DataDeploymentRetryRequested$inboundSchema: z.ZodType<
   DataDeploymentRetryRequested,
   unknown
 > = z.object({
+  actor: z.nullable(z.union([z.lazy(() => Actor1$inboundSchema), z.any()]))
+    .optional(),
   attemptedReleaseId: z.nullable(z.string()).optional(),
   deploymentId: z.string(),
   previousError: z.nullable(
@@ -2500,22 +2639,22 @@ export function dataBuildingResourceFromJSON(
 }
 
 /** @internal */
-export const DataDownloadingAlienWorkerRuntime$inboundSchema: z.ZodType<
-  DataDownloadingAlienWorkerRuntime,
+export const DataDownloadingAlienRuntime$inboundSchema: z.ZodType<
+  DataDownloadingAlienRuntime,
   unknown
 > = z.object({
   targetTriple: z.string(),
-  type: z.literal("DownloadingAlienWorkerRuntime"),
+  type: z.literal("DownloadingAlienRuntime"),
   url: z.string(),
 });
 
-export function dataDownloadingAlienWorkerRuntimeFromJSON(
+export function dataDownloadingAlienRuntimeFromJSON(
   jsonString: string,
-): SafeParseResult<DataDownloadingAlienWorkerRuntime, SDKValidationError> {
+): SafeParseResult<DataDownloadingAlienRuntime, SDKValidationError> {
   return safeParse(
     jsonString,
-    (x) => DataDownloadingAlienWorkerRuntime$inboundSchema.parse(JSON.parse(x)),
-    `Failed to parse 'DataDownloadingAlienWorkerRuntime' from JSON`,
+    (x) => DataDownloadingAlienRuntime$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'DataDownloadingAlienRuntime' from JSON`,
   );
 }
 
@@ -2599,7 +2738,7 @@ export const EventDataUnion$inboundSchema: z.ZodType<EventDataUnion, unknown> =
     z.lazy(() => DataFinished$inboundSchema),
     z.lazy(() => DataBuildingStack$inboundSchema),
     z.lazy(() => DataRunningPreflights$inboundSchema),
-    z.lazy(() => DataDownloadingAlienWorkerRuntime$inboundSchema),
+    z.lazy(() => DataDownloadingAlienRuntime$inboundSchema),
     z.lazy(() => DataBuildingResource$inboundSchema),
     z.lazy(() => DataBuildingImage$inboundSchema),
     z.lazy(() => DataPushingImage$inboundSchema),
@@ -2763,7 +2902,7 @@ export const Event$inboundSchema: z.ZodType<Event, unknown> = z.object({
     z.lazy(() => DataFinished$inboundSchema),
     z.lazy(() => DataBuildingStack$inboundSchema),
     z.lazy(() => DataRunningPreflights$inboundSchema),
-    z.lazy(() => DataDownloadingAlienWorkerRuntime$inboundSchema),
+    z.lazy(() => DataDownloadingAlienRuntime$inboundSchema),
     z.lazy(() => DataBuildingResource$inboundSchema),
     z.lazy(() => DataBuildingImage$inboundSchema),
     z.lazy(() => DataPushingImage$inboundSchema),

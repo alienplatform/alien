@@ -38,13 +38,13 @@ const value: models.DataRunningPreflights = {
 };
 ```
 
-### `models.DataDownloadingAlienWorkerRuntime`
+### `models.DataDownloadingAlienRuntime`
 
 ```typescript
-const value: models.DataDownloadingAlienWorkerRuntime = {
+const value: models.DataDownloadingAlienRuntime = {
   targetTriple: "<value>",
-  type: "DownloadingAlienWorkerRuntime",
-  url: "https://decent-toaster.info",
+  type: "DownloadingAlienRuntime",
+  url: "https://dim-jellyfish.com/",
 };
 ```
 

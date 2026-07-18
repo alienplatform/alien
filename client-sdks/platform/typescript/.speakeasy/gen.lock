@@ -1,12 +1,12 @@
 lockVersion: 2.0.0
 id: bc51eaa5-3f88-4290-b64f-cae16746dd5d
 management:
-  docChecksum: 14e1868dd44a5a53b8893024d7451974
+  docChecksum: e7b4825b4942fd548cdba2c883984f9e
   docVersion: 1.0.0
   speakeasyVersion: 1.680.11
   generationVersion: 2.788.15
   releaseVersion: 1.14.3
-  configChecksum: 93b8334fcb2657fc4ac1b8d35b84e527
+  configChecksum: 63869a3d2a5d56230cef83f771a82d02
 persistentEdits:
   generation_id: db6ac3e5-6bcc-4de5-a81f-eb659048385d
   pristine_commit_hash: 13c44a72093f4387918cbb07b6c85d4fbfa92cc6
@@ -78,6 +78,14 @@ trackedFiles:
     id: 8334265c22b7
     last_write_checksum: sha1:ba9619bd55828ba54a5df057af093ebd804e9c87
     pristine_git_object: 0c79a99c40f36b1af14cafb0772f94d03eda20a0
+  docs/models/actor1.md:
+    last_write_checksum: sha1:bf623ff81028fd9d927beb267200936f7cededd3
+  docs/models/actor2.md:
+    last_write_checksum: sha1:4839fe1be0a5fb30d846ae66359473a2fa1501c5
+  docs/models/actorunion1.md:
+    last_write_checksum: sha1:766370184186d4162137336ff1ebd84640042df0
+  docs/models/actorunion2.md:
+    last_write_checksum: sha1:1341324a1c15ff23f787ba2212475a072d2579b4
   docs/models/allocatable.md:
     id: f5e4ed9861ea
     last_write_checksum: sha1:57e689252e391d47f3d94ef7e87c95c1f13cb24f
@@ -178,6 +186,8 @@ trackedFiles:
     id: 3e5133e0ccf4
     last_write_checksum: sha1:7e51bd175aea71babdaab475cf4dee5252533451
     pristine_git_object: 63003c959639415571049440ac4064aa60ee8a2a
+  docs/models/buildphase.md:
+    last_write_checksum: sha1:e5e2e979bd69fa37e8dade60e41909ffc8e9f0f2
   docs/models/cancelmachinesmachinedrainresponse.md:
     id: 0d40d8090a0f
     last_write_checksum: sha1:d92fe2d1b4ab038a644d23bc6d49e51e611e4874
@@ -416,7 +426,7 @@ trackedFiles:
     pristine_git_object: 358b460d9c2a90515ee15dda258293ec66e00846
   docs/models/configcli.md:
     id: f2a93fd8d093
-    last_write_checksum: sha1:820edae166c706f39b7dfaccd80ae4d1e4b1d421
+    last_write_checksum: sha1:85add425e5820b0ecbfa30193b9d72b4ae615ac2
     pristine_git_object: a976815812581a2566d13b05287d4eb50593d03f
   docs/models/configcloudformation.md:
     id: 0bc9db769bdb
@@ -3112,7 +3122,7 @@ trackedFiles:
     pristine_git_object: 1382144047447077b25f1bee22e2a0aa1151ec8f
   docs/models/datadeploymentenvironmentupdated.md:
     id: 10f44b4d8678
-    last_write_checksum: sha1:99ef7ebeb1cf1b3394017658552a170a52df8b1f
+    last_write_checksum: sha1:8a51455193787a89d194e4463aa60092e3a222e1
     pristine_git_object: b4e94540150e8d8a78a23b0fe78b73517d2f3897
   docs/models/datadeploymentfailed.md:
     id: 5af8ee73d66f
@@ -3140,12 +3150,10 @@ trackedFiles:
     pristine_git_object: 5f9000befc4fba080419e704fc621ca7f52dce78
   docs/models/datadeploymentretryrequested.md:
     id: ef7906ef5135
-    last_write_checksum: sha1:4fe2c4c8f6905513603895b490f1825b06ad6dd2
+    last_write_checksum: sha1:43b309068048d924c373cf27c6e652cef6600512
     pristine_git_object: 034e56f22ba47377e4309b3895f09245faff2971
-  docs/models/datadownloadingalienworkerruntime.md:
-    id: b09e3afbd575
-    last_write_checksum: sha1:8380452dd7eae41a068f3fa522cc2136726243b5
-    pristine_git_object: 83fad97f1257095a504b0cb73feb918b47bd92ad
+  docs/models/datadownloadingalienruntime.md:
+    last_write_checksum: sha1:9bf5130186142021d64e0f6dbea7dcec4bdb954e
   docs/models/dataemptyingbuckets.md:
     id: 48eb0000bfe6
     last_write_checksum: sha1:05b9d191726a460f68704e27767d525b1c369137
@@ -4996,7 +5004,7 @@ trackedFiles:
     pristine_git_object: d5f502b348f1de67c0c22889241c756cc4a44333
   docs/models/deploymentdetailresponsestackstatedependency.md:
     id: 966684e302eb
-    last_write_checksum: sha1:edda66af30969679a65214b83b92002328b1ece5
+    last_write_checksum: sha1:2b7d8e3ddd89160ac5b581b0fdaa1b5a8891631e
     pristine_git_object: 58fe38359495ee0febc104eaeb2ee38d883f6d3f
   docs/models/deploymentdetailresponsestackstateplatform.md:
     id: 9c5482ad50d2
@@ -6596,7 +6604,7 @@ trackedFiles:
     pristine_git_object: f8f0b191035138375319c5008ef644eee441079e
   docs/models/deploymentstackstatedependency.md:
     id: b43c29112dad
-    last_write_checksum: sha1:13e05ca98ddf0154fbaae51f2e9d5923b023fcef
+    last_write_checksum: sha1:bd2ac86a50f0b979dfde3891e419b96dc9e824d3
     pristine_git_object: d444bb29b8de5a7b9d0635e58cdbebcca973af3d
   docs/models/deploymentstackstateplatform.md:
     id: 12b6b77812eb
@@ -6852,12 +6860,16 @@ trackedFiles:
     pristine_git_object: 1013223491ee42ff9eaf960e15aa0a5c211b519c
   docs/models/eventdataunion.md:
     id: 5af073344910
-    last_write_checksum: sha1:a70e89e7c218e2bfd1c2993abbd367e26270e391
+    last_write_checksum: sha1:cba36fabfff539fc14600022191bac1609b992a9
     pristine_git_object: fc796097eb5c99354b56af0166a7734799f10d2a
   docs/models/eventdependency.md:
     id: 8b54666b2bdb
-    last_write_checksum: sha1:aff88b967ecba56fdd0809af9f00c50c91db8462
+    last_write_checksum: sha1:99707895c4e521f7f47cce37ee6dc12394445bb5
     pristine_git_object: 8284bcb45e2596dfea6a928356719bf612cd59bd
+  docs/models/eventkind1.md:
+    last_write_checksum: sha1:18fbb87844cf845b4d2204438bcd9b0672a2f670
+  docs/models/eventkind2.md:
+    last_write_checksum: sha1:9f859c72c06d1e0a52d244d02bdb0ee0b509faf0
   docs/models/eventlifecycleenum.md:
     id: 731d608bd042
     last_write_checksum: sha1:b98f8f01488cce84c55365a26c722a064077e6ee
@@ -10798,13 +10810,17 @@ trackedFiles:
     id: 0d6ba95c7ef9
     last_write_checksum: sha1:6351871e5ffaf492b8279ba025a641e546d83763
     pristine_git_object: 722cc0efc98a7fd1dc334d522fdc351e9fcbc331
+  docs/models/operations/createprojectbinarytargetrequest.md:
+    last_write_checksum: sha1:73554bbccdb59c734538182c464e864b8eab8cbc
+  docs/models/operations/createprojectbinarytargetresponse.md:
+    last_write_checksum: sha1:d0cabb3d908e9b769d57ed1e979a38c1aeb4eac6
   docs/models/operations/createprojectclirequest.md:
     id: 1765dce7c10a
-    last_write_checksum: sha1:f569ca88577bf0cb53771f3a1147224a1a8694c4
+    last_write_checksum: sha1:88014d10a5d5f22c3fd4c31ec7726df34388e51d
     pristine_git_object: 34dbe4a8f3827fdee129fc144aecb2f19ba1f99f
   docs/models/operations/createprojectcliresponse.md:
     id: 23f5cf44ba45
-    last_write_checksum: sha1:52db8835fbf6a6524d00477ffeb9843c753281b9
+    last_write_checksum: sha1:3516a8089b367c0d0a5fa42ad889187d89a89245
     pristine_git_object: 0a4094886a1f3976ea2aebf4028eb96b096bc972
   docs/models/operations/createprojectcloudformationrequest.md:
     id: bc13f08e99c4
@@ -10822,13 +10838,17 @@ trackedFiles:
     id: 2a386b30e234
     last_write_checksum: sha1:323ae32164c4dc0f39431aa8c92aa1f4de03d1c9
     pristine_git_object: 7fa670a8c65ab8cb45eafe4a557a8911c2c04040
+  docs/models/operations/createprojectfromtemplatebinarytargetrequest.md:
+    last_write_checksum: sha1:bcc8fe1c1d0ec65160ee239c15fd6bfd6498e597
+  docs/models/operations/createprojectfromtemplatebinarytargetresponse.md:
+    last_write_checksum: sha1:a9e9b508aee15ab7d82d46685819400508e6d544
   docs/models/operations/createprojectfromtemplateclirequest.md:
     id: 9737f89b8aae
-    last_write_checksum: sha1:3feceb4bbed45f880dd38065da3ea18a5a6c7424
+    last_write_checksum: sha1:f93af539787e7699d2445bb2ab68e5a595b63165
     pristine_git_object: 2cf2c3784c604dca8dfe24bf56481b86b20f40dc
   docs/models/operations/createprojectfromtemplatecliresponse.md:
     id: a4718aa3f0c1
-    last_write_checksum: sha1:728a64b6ce1ff318707ceb47ab3ca45860176257
+    last_write_checksum: sha1:ce77a98fe9f9c4d65c38321f563b072929b68c3f
     pristine_git_object: 0d2dd7ff9cfd2b98a4e0490182c86f849cc22e4a
   docs/models/operations/createprojectfromtemplatecloudformationrequest.md:
     id: edf3cca72bd7
@@ -11756,7 +11776,7 @@ trackedFiles:
     pristine_git_object: aeb8f482cc74a6afc002dd7dde70a5124a2a2053
   docs/models/operations/deleteprojectrequest.md:
     id: 48b7d1a72221
-    last_write_checksum: sha1:62d1bc92962c48071ccc5a386db88a1f34223945
+    last_write_checksum: sha1:b9635053635eb82578a0d70bcc53f85a14c0d14c
     pristine_git_object: 03dcda06b20f95a6c694efe2dee62be41dd42a76
   docs/models/operations/deleteworkspacerequest.md:
     id: c3a6fd8ac219
@@ -11964,7 +11984,7 @@ trackedFiles:
     pristine_git_object: 85163b98e627004ddd4ee2fd61c8aa27f47c8ac6
   docs/models/operations/getdeploymentstatsrequest.md:
     id: 034555bbd656
-    last_write_checksum: sha1:46a395f53afb80edc6919c442e5b307d433ac49d
+    last_write_checksum: sha1:4b3877275fc83038c918e5cc6f9c5c12f5c13e2c
     pristine_git_object: 05e11221ed4935e995b87c0f81ada8952ad6a851
   docs/models/operations/getdeploymentstatsstatus.md:
     id: 1eaf0af49a7a
@@ -12024,23 +12044,23 @@ trackedFiles:
     pristine_git_object: b43d36a10e0634ac16f13a21e17f31bcb6d81933
   docs/models/operations/getprojectactivereleaserequest.md:
     id: 0a329eadfcdb
-    last_write_checksum: sha1:6d64cdb24c20abbbdb11f5be6e2540cd2aa23eb7
+    last_write_checksum: sha1:cc97fa336ca8c7d4c5fcf0574e077ea105fbc26a
     pristine_git_object: 7394426b348f7cbc481d569af548a06a2bb17eb3
   docs/models/operations/getprojectdeploymentlinksetuprequest.md:
     id: 1956481b3f80
-    last_write_checksum: sha1:d334673b701d8d370bf02c62ceac036ccf9aba89
+    last_write_checksum: sha1:517741b7d1bf0d01c645c09ce9d97b9482d13883
     pristine_git_object: ede0c6046fefe0190842f48338e79ba657be4e8c
   docs/models/operations/getprojectdeploymentportaldomainrequest.md:
     id: b9babbda355e
-    last_write_checksum: sha1:d08d61124abb9aac34ce093fa962695b9d9e1066
+    last_write_checksum: sha1:331d1a8cb948ac50ce38cd0dbcbb4091b4221bcb
     pristine_git_object: fb6e1258cee8e65edecbfbc9692579b50d89a239
   docs/models/operations/getprojectgcpoauthproviderrequest.md:
     id: "683776069141"
-    last_write_checksum: sha1:478e52102464bafb4d3d4471cd1814dccd9f36f9
+    last_write_checksum: sha1:a0ca6eb2d82c9fa35d7269c47ce007e453496e16
     pristine_git_object: 0b2f1505a775822e562ab65d98ff748d1e6aae9b
   docs/models/operations/getprojectrequest.md:
     id: c8b582ab72a0
-    last_write_checksum: sha1:63778b85e495ae5438f53c0bb7015085339c2aa5
+    last_write_checksum: sha1:e73dfda66377dd7c355d0a549c09e830d9092ef2
     pristine_git_object: b725d77f1b34e50770bf8c935a0663618208042f
   docs/models/operations/getprojecttemplateurlsaws.md:
     id: de9aa6dbb151
@@ -12048,7 +12068,7 @@ trackedFiles:
     pristine_git_object: 907c804e7f83274235f51f937aebb43a9b71a714
   docs/models/operations/getprojecttemplateurlsrequest.md:
     id: 16cd605e973a
-    last_write_checksum: sha1:632f1d2df9cc92039c1b0cdbc6e9c8be3ab198f1
+    last_write_checksum: sha1:f2f4cf4b415207eda9b77e18348b7b045cce1ad2
     pristine_git_object: 3c7b4569637bbc3cd71bddff00453224c31ad235
   docs/models/operations/getprojecttemplateurlsresponse.md:
     id: 35c5b937ae36
@@ -12068,15 +12088,15 @@ trackedFiles:
     pristine_git_object: ecbd7db6766d5b1d4f299fad9b8a7838d0400e99
   docs/models/operations/getresourcedeploymentdetaildeployment.md:
     id: 7598d8a42676
-    last_write_checksum: sha1:3963a62282b11461d5157f4f345d50bcd495ee18
+    last_write_checksum: sha1:c1e86334cc51ea5af44faa6cd66d10911cb3cbe5
     pristine_git_object: 16efd5c03b836344bf57f5798d3f90597a993f2a
   docs/models/operations/getresourcedeploymentdetailrequest.md:
     id: d2e5d03fbf7d
-    last_write_checksum: sha1:b38517152cda05b5a090a89d15cdc112b5f516e7
+    last_write_checksum: sha1:0a1d7ae05d089005a4dacd3d8e4569b62551a8ca
     pristine_git_object: 71e01fff5e4dbdeedfa05d562f031a285e5e9a6f
   docs/models/operations/getresourcedeploymentdetailresponse.md:
     id: e5b08a917f2b
-    last_write_checksum: sha1:d2900639190aed735706cd97770ecc3289c3becc
+    last_write_checksum: sha1:4f3ba727c6cf39e927989d81acc7d31188a4d1cd
     pristine_git_object: b2e25d5385275f12923f3e26318ea7f52c535145
   docs/models/operations/getresourcedeploymentdetailsource1.md:
     id: b08fdc05513b
@@ -12764,7 +12784,7 @@ trackedFiles:
     pristine_git_object: b9b0d6b23c2b2d173e89282c7915e249bf030e0f
   docs/models/operations/listapikeysrequest.md:
     id: d184dc4cdcab
-    last_write_checksum: sha1:d5df74d53da3bd3c0a88770138450254c058c0af
+    last_write_checksum: sha1:a6be74f445f2498004114364628f31c9b5768480
     pristine_git_object: 9cb5b7260776bdc0e09a42e8be6bb42e33b3e4a5
   docs/models/operations/listapikeysresponse.md:
     id: feed1d8bc9c0
@@ -12780,11 +12800,11 @@ trackedFiles:
     pristine_git_object: 6ba801938c7d24e9dcc50e73a6514a0e6b6eaefa
   docs/models/operations/listcommanddeploymentsrequest.md:
     id: 11aedc766e42
-    last_write_checksum: sha1:c4d47f7bc0dfd636b6095e6c2701dbce8d10a938
+    last_write_checksum: sha1:a1f0d195c4d0b768cdcc01fb6d83b711ec2fe8ac
     pristine_git_object: fdcf8290df50e2081d2d325ee425edad0d517753
   docs/models/operations/listcommandnamesrequest.md:
     id: 4d4817aff7b4
-    last_write_checksum: sha1:052151e1a0838aa3a8d7da668f10c75de1aa02b7
+    last_write_checksum: sha1:96dd2bea4cf230aa3bf04a7d31e73a955039038a
     pristine_git_object: 8e73e1f870a14400df1b8d94da2ad0ecba0b987b
   docs/models/operations/listcommandsinclude.md:
     id: c2685f20e71f
@@ -12792,7 +12812,7 @@ trackedFiles:
     pristine_git_object: 4c1ddcb1d59ac62b75c30cc341952d8630ee8aa2
   docs/models/operations/listcommandsrequest.md:
     id: 3cc236e8a7a3
-    last_write_checksum: sha1:8dbac806a68d28907de291aa9f8d074ea7df4f43
+    last_write_checksum: sha1:6e7189bd0c23b9d3b4276fcdc3a9235d17401b4b
     pristine_git_object: 59b6fbb5ae3ffdf022ea407cc8b255802deb4651
   docs/models/operations/listcommandsresponse.md:
     id: 0f1c06183015
@@ -12808,7 +12828,7 @@ trackedFiles:
     pristine_git_object: 183620f2812c8a7cbfa79ba71e409f4993bd2771
   docs/models/operations/listdebugsessionsrequest.md:
     id: 7fe38f95bc7d
-    last_write_checksum: sha1:b59fa93c9e4a09fad9b751c05dbc1ca04ed659a2
+    last_write_checksum: sha1:c447a343d0480986a2b7f80cbddddc2562c25903
     pristine_git_object: f7eb891727d3899b2f383dc510be735e8b024b9c
   docs/models/operations/listdeploymentfilterdeploymentgroupsitem.md:
     id: 2bfe92db3ace
@@ -12816,7 +12836,7 @@ trackedFiles:
     pristine_git_object: fda47ac70d0ee0f922383ce625adcd7c56a53aa2
   docs/models/operations/listdeploymentfilterdeploymentgroupsrequest.md:
     id: 961dd8047c04
-    last_write_checksum: sha1:9da36f9f40489db371f1e9c5fdcce495ea9143e2
+    last_write_checksum: sha1:8c9a4458f8b99fff64f420cc142e000085e3ab23
     pristine_git_object: 2ff755670ac3325aba614c16dd43753475da29f5
   docs/models/operations/listdeploymentfilterdeploymentgroupsresponse.md:
     id: f84ac956fa62
@@ -12828,7 +12848,7 @@ trackedFiles:
     pristine_git_object: cd5f5bfc4b96861df7e537ae6773d564d1b9070b
   docs/models/operations/listdeploymentfilterenvironmentsrequest.md:
     id: 653ec6b5d3de
-    last_write_checksum: sha1:febca4b2d8260a76d2f5ac8c09ea492b1a11b3df
+    last_write_checksum: sha1:ffea8bc841a4d52231433bb741577712285348d5
     pristine_git_object: 4f0e478800d82a850a4dfac00448b18f9310ec25
   docs/models/operations/listdeploymentfilterenvironmentsresponse.md:
     id: bf4be3523974
@@ -12848,7 +12868,7 @@ trackedFiles:
     pristine_git_object: a510020423596f03ec33405300e9072220887bfa
   docs/models/operations/listdeploymentgroupsrequest.md:
     id: 046f58f925f8
-    last_write_checksum: sha1:a52824dbe73fd77b78803b5a0a6ffa1648a40715
+    last_write_checksum: sha1:71e767d6113d789f020f732dcc0a4727aa6e1a9d
     pristine_git_object: 905ecb6a2489345fa2800c3502085699cbb651dd
   docs/models/operations/listdeploymentgroupsresponse.md:
     id: 5e579afb744e
@@ -12864,7 +12884,7 @@ trackedFiles:
     pristine_git_object: 1a399d3c0e68ac2ad6ad5528e136d4273994a89f
   docs/models/operations/listdeploymentsrequest.md:
     id: 854523666c28
-    last_write_checksum: sha1:04a000713b868c50deefb80d44136242be879d45
+    last_write_checksum: sha1:58c3f203994bbdd033f54b65834ecd8f925d3765
     pristine_git_object: 44fe69b8a24ebeac6bc6c7e62ecfae357be40780
   docs/models/operations/listdeploymentsresponse.md:
     id: b3b1e4f8a3b8
@@ -12884,7 +12904,7 @@ trackedFiles:
     pristine_git_object: 86d53e2967c889ab89b3722f63fc0bc1a906207c
   docs/models/operations/listeventsrequest.md:
     id: 4c63e4d672e2
-    last_write_checksum: sha1:c5332db6d4dc98b177e2a1466aa01ae036817007
+    last_write_checksum: sha1:b22ccc8fe7beafa01c56c56b19975ba2ee384bb6
     pristine_git_object: 73dfec390e1140b6b3b5c5714bd98402fa2ce4ad
   docs/models/operations/listeventsresponse.md:
     id: 4ce22aaeca78
@@ -12912,7 +12932,7 @@ trackedFiles:
     pristine_git_object: 66e3ae185f4eb3b5b9e9a70d65db00821d8e26fb
   docs/models/operations/listinventoryrequest.md:
     id: 0a145ea5a74a
-    last_write_checksum: sha1:f59a7a01de769f47d73aaabc49c65231360c3318
+    last_write_checksum: sha1:b2856109c6af1d15acbb614dddb5745f33d8dd69
     pristine_git_object: 077d610764a97ed8d309c3e103a3cef88a927594
   docs/models/operations/listinventoryresponse.md:
     id: bda0e373c6bd
@@ -12944,7 +12964,7 @@ trackedFiles:
     pristine_git_object: 8eb625b21ce6e3f8514330d0bb750327a7c7b92e
   docs/models/operations/listpackagesrequest.md:
     id: 2a8e5e099f9a
-    last_write_checksum: sha1:99f536a8ba8852b2c275575c118f409f86e8f4d8
+    last_write_checksum: sha1:5c4291b9bf6ea75deec756367e4fd07549703256
     pristine_git_object: 226c29e1c86bc3f5d617d8f7a0f270f8117bf48e
   docs/models/operations/listpackagesresponse.md:
     id: f0805ea4f3ac
@@ -12972,7 +12992,7 @@ trackedFiles:
     pristine_git_object: ffc1fad25c02f9a42969166116d184172a0663e7
   docs/models/operations/listreleaseauthorsrequest.md:
     id: da2003a8e133
-    last_write_checksum: sha1:50517bf46a43bc3bfca785f760f684cb20296b2f
+    last_write_checksum: sha1:868d00f3f8f6e47074a2120547b89707adfda76c
     pristine_git_object: 0e93ce2c5258dd8a7c23992b3b0fdc4711fcb45b
   docs/models/operations/listreleaseauthorsresponse.md:
     id: 44c53579b082
@@ -12980,7 +13000,7 @@ trackedFiles:
     pristine_git_object: e96ac52f4f242f45dc3c5333a4fb16b403984a71
   docs/models/operations/listreleasebranchesrequest.md:
     id: 95e3ba8f993c
-    last_write_checksum: sha1:c98b71eb1f387256131ff7d66cda3695a00b8218
+    last_write_checksum: sha1:3ac92aa0baa1c2993dc052928949443d33e0e4bd
     pristine_git_object: d667f3dc3a0068e304f3ede31aea84a598c7a195
   docs/models/operations/listreleasebranchesresponse.md:
     id: f2ac65d89a63
@@ -12992,7 +13012,7 @@ trackedFiles:
     pristine_git_object: 1f958a0e30d63f146477ccccf8ee73727706ae89
   docs/models/operations/listreleasesrequest.md:
     id: 5055faa42f8c
-    last_write_checksum: sha1:a97f5e29249f2d6808a2f9865c466a58bf999f73
+    last_write_checksum: sha1:b2c6d9bc1c03f1cdc1a75d046b0b83d0f3996845
     pristine_git_object: 6e361a453e2aceb49431157936d13fe88cd552db
   docs/models/operations/listreleasesresponse.md:
     id: fe20d3e71b3f
@@ -13008,7 +13028,7 @@ trackedFiles:
     pristine_git_object: e77f502e8a66d5bcddc7f4cdb313a0776db8eb9a
   docs/models/operations/listresourcedeploymentsrequest.md:
     id: b1f4b0e060d8
-    last_write_checksum: sha1:f978775320d812d2460b1e4889d9276ac8349b72
+    last_write_checksum: sha1:6b6c13eb54938c2cce7a27c3e58741b181b8ef0c
     pristine_git_object: 5ae1639f46ec4e92f0eeb1f684c7060369b33b40
   docs/models/operations/listresourcedeploymentsresponse.md:
     id: 0c93efaed40a
@@ -13020,7 +13040,7 @@ trackedFiles:
     pristine_git_object: c51c26234d7e30cffb865529a77a45b060f5b07a
   docs/models/operations/listresourceoverviewrequest.md:
     id: 97eb9730d0ef
-    last_write_checksum: sha1:376194c888f015eb076ff68ca3465263e7f8a5bd
+    last_write_checksum: sha1:97f9ce02ce27b23856adb0bc313e29ed422e22c5
     pristine_git_object: 27dca352e694d0447251b21831b8755d24951d2c
   docs/models/operations/listresourceoverviewresource.md:
     id: 0ffd3a0fed80
@@ -14836,11 +14856,11 @@ trackedFiles:
     pristine_git_object: 7406c1e2c3b90b8c3542a84515df99f5233d029d
   docs/models/operations/updateprojectgcpoauthproviderrequest.md:
     id: 1b4c3f5addcc
-    last_write_checksum: sha1:463c390e635320ae1d0f52a8f177bb093e67b1c4
+    last_write_checksum: sha1:bb79cae88ba48e631864d34b5fd71a201b017126
     pristine_git_object: 339c12f8fe86d9f2f23ce607cbcf887e2885b769
   docs/models/operations/updateprojectrequest.md:
     id: c8277360927c
-    last_write_checksum: sha1:d06e9017fa631c795f935b1bead4ae972b639058
+    last_write_checksum: sha1:e1c4a668825b76cae7f976f3dd35900d6281cec8
     pristine_git_object: 844f5b16f44e11e397c874a897852aef1e5a8c0b
   docs/models/operations/updateuserprofilerequest.md:
     id: 1e59616c750f
@@ -15148,12 +15168,14 @@ trackedFiles:
     pristine_git_object: 79ba5c60a44df38ce9cab2f8d1bacdde954a535e
   docs/models/package.md:
     id: 7b09da6a8154
-    last_write_checksum: sha1:c6bd9c342159f2cfb1f96448dacae2736e59e917
+    last_write_checksum: sha1:1ad2d936d112ad29ea3930b8554077450f0e89a5
     pristine_git_object: 48e584bd20a3217d010b16f31f21078c26ca797f
   docs/models/packagebinaries.md:
     id: 61b1eb966f94
     last_write_checksum: sha1:a3ee68d12251d08142c8fe3e47dbb29458c9465a
     pristine_git_object: 72f22a3a21832b7f879c08f04bd5400dcb2a56f4
+  docs/models/packagebinarytarget.md:
+    last_write_checksum: sha1:0f5a942e6d0c91e9ea309d846ede9d6e14c0e2f1
   docs/models/packagebuildinfo.md:
     id: 4eecc7d04187
     last_write_checksum: sha1:1832ab6374f65dbd852ead9e22da3461e1748f88
@@ -16172,7 +16194,7 @@ trackedFiles:
     pristine_git_object: c31edaad220c84f7981bcda494acb1ffe5358374
   docs/models/prepareddeploymentstackdependency.md:
     id: cb1bd307808a
-    last_write_checksum: sha1:12d0df4e86ea39919f8244d5df5ec00aea293d64
+    last_write_checksum: sha1:41c54283ddbb0ec4d73782ba7c289d4dd6085087
     pristine_git_object: b7607916f6369d233cd01a7d4f076e9f19d89de7
   docs/models/prepareddeploymentstackenv.md:
     id: ef1aa2ce7a64
@@ -16636,7 +16658,7 @@ trackedFiles:
     pristine_git_object: 608d3e8122ddbedd40a9e69acb248ff6ce885c70
   docs/models/prepareoperatormanifestpackagerequest.md:
     id: 04bb11736ecd
-    last_write_checksum: sha1:f4acd3bf586e2169fd3f6d3d93cd886e41792ed4
+    last_write_checksum: sha1:daf2ab9d90399f45acb4638052a22b5ff0b0c25d
     pristine_git_object: 16df9186a55623cb2cae05753589e976b18c37cd
   docs/models/prepareoperatormanifestpackageresponse.md:
     id: 59c211527900
@@ -16806,9 +16828,11 @@ trackedFiles:
     id: 90bdd121a0a9
     last_write_checksum: sha1:787151be1dca8cb6094b180c2c220d5352478bf4
     pristine_git_object: 8d2be9fdcf24e018ee89ec179544f84cf03960d1
+  docs/models/projectbinarytarget.md:
+    last_write_checksum: sha1:a06ab3911701ff6e612ea69e05d61879e13f6ca1
   docs/models/projectcli.md:
     id: d287fd97b3da
-    last_write_checksum: sha1:9dccb75d92f8c8ac3ffaa5781de1e311d1ae6060
+    last_write_checksum: sha1:b3276f1ae97367ae429d088ec0fc64329e7fe6db
     pristine_git_object: 9b74c0b197441cfb658b211883b9dfad50dc5cb0
   docs/models/projectcloudformation.md:
     id: ceb28f9b7f14
@@ -16846,9 +16870,11 @@ trackedFiles:
     id: cd5b6325772d
     last_write_checksum: sha1:42f6338c43eb0c750b63a02578ff59c77d50737d
     pristine_git_object: 7269adbd3afaee4490905d13fd13353f040ad708
+  docs/models/projectlistitemresponsebinarytarget.md:
+    last_write_checksum: sha1:461c7e0db036e93c71c04f48058ab91989fe078b
   docs/models/projectlistitemresponsecli.md:
     id: c55037e94e3e
-    last_write_checksum: sha1:e7f2dae2a7f98a7689139204c5ab36e39df7771d
+    last_write_checksum: sha1:39c8c4bb1c951935d95917f4fac9dfcc170a6dac
     pristine_git_object: 53e0fe3577f4a76b85145d3d73251e2bf93ddc5e
   docs/models/projectlistitemresponsecloudformation.md:
     id: 81926910a850
@@ -17104,7 +17130,7 @@ trackedFiles:
     pristine_git_object: 63d20e6502d5b79b6ce214a8fa46d39de6c32cf1
   docs/models/renderoperatormanifestrequest.md:
     id: 4e0c2e089734
-    last_write_checksum: sha1:0a18be9f5c52e480f4dd68fb64a5b566456a8d87
+    last_write_checksum: sha1:a9965505d4ffd40b9f1b658823a8487ec05566b5
     pristine_git_object: 9ef744ee5c8459d598f8eaff0a44870ea11d35d8
   docs/models/renderoperatormanifestrequestformat.md:
     id: c22db87cc442
@@ -22184,7 +22210,7 @@ trackedFiles:
     pristine_git_object: 7dde7453f9883f3b5543b29c9a0736d52df6a5ba
   docs/models/synclistresponsestackstatedependency.md:
     id: d2b9ad5a37a9
-    last_write_checksum: sha1:2075a044c80fad3512caf7a458b738a10bbb3e7e
+    last_write_checksum: sha1:81ca436c9ddf72557fbf70874c0eed5ae1471d4b
     pristine_git_object: 63c4b1c11ae03bdff525a9ed339cf572b3a83d68
   docs/models/synclistresponsestackstateplatform.md:
     id: 964ade8cc2bb
@@ -26714,9 +26740,11 @@ trackedFiles:
     id: a49881ef0934
     last_write_checksum: sha1:2afac1e97455fd9da2ba77ad5e87c0362419bc18
     pristine_git_object: e274752824525f2ace785e39c8031db060bf1489
+  docs/models/updateprojectbinarytarget.md:
+    last_write_checksum: sha1:172e5dff1ef41f3530ee047c670947b05ee749e5
   docs/models/updateprojectcli.md:
     id: 02a0f4b5f95c
-    last_write_checksum: sha1:d2784b68ccf8eaeed5f30cca20572f48e3c6c9da
+    last_write_checksum: sha1:b587431f554ec4f482614bb7100f805c149a5ad6
     pristine_git_object: 9c83df9062a611b5c0475af5de33405c66407875
   docs/models/updateprojectcloudformation.md:
     id: 23afb1d4960a
@@ -26976,7 +27004,7 @@ trackedFiles:
     pristine_git_object: 3ab72dac669daa20a387032aeff49aecfdbf7c91
   docs/sdks/deployments/README.md:
     id: e7c5559ab768
-    last_write_checksum: sha1:521d8b9d524a877c6b5ae55648f769980e5727de
+    last_write_checksum: sha1:04086e8826d7cc980e3cebebc6608fb3bdb29b43
     pristine_git_object: 268c082c13e5df90c861fbc9a7ad8a12f4d4d23b
   docs/sdks/domains/README.md:
     id: 06e9beb4063b
@@ -27256,7 +27284,7 @@ trackedFiles:
     pristine_git_object: 074b12741d7cdc438bab70cfa81c9f84730c3709
   src/funcs/deploymentsPinRelease.ts:
     id: fc058c79ad16
-    last_write_checksum: sha1:cdfd403e8d0885d4250bb49024d50389faee5e3c
+    last_write_checksum: sha1:4088652bd9c23f25b7dfdf9f0c4d3b35843e997d
     pristine_git_object: 18d7297e23645a934571a676214b5965ee5ed58a
   src/funcs/deploymentsRedeploy.ts:
     id: e6a049912ff7
@@ -27852,7 +27880,7 @@ trackedFiles:
     pristine_git_object: 9ebaaa9820ac80a522625b15c811dc7988f85952
   src/models/deployment.ts:
     id: 26e71f87af0c
-    last_write_checksum: sha1:067b0b246226141dae73560e7535181bee14b1a4
+    last_write_checksum: sha1:f1e0894bc4b8ef3576abfad0e160868357d0d887
     pristine_git_object: 8710819fe0c4b8978abc34f6da7ad8732e893f8b
   src/models/deploymentcomputeplan.ts:
     id: 4f61336f1204
@@ -27864,7 +27892,7 @@ trackedFiles:
     pristine_git_object: ac3c0dd3ee7a3ae8f66bf1839ef396ec87be4d51
   src/models/deploymentdetailresponse.ts:
     id: f3d0b380668f
-    last_write_checksum: sha1:b9b363a709118ae393aa3dbe088e0412cfa73d91
+    last_write_checksum: sha1:1db6e71990665a4b9fe7a7acad055b84e8ccce1a
     pristine_git_object: 3b6ae1e99a22b8d28f7a842e1dc7098933d813f6
   src/models/deploymentgroup.ts:
     id: ddf1c24537b3
@@ -28048,7 +28076,7 @@ trackedFiles:
     pristine_git_object: db00022e05d55600252f401eb0e6ab46278e0b07
   src/models/event.ts:
     id: 7d1800694a8b
-    last_write_checksum: sha1:6d19cce8f2ddc697fcb60db6441a2e411d2bd00b
+    last_write_checksum: sha1:85528e848f955f576d9432c5830330987d48c0db
     pristine_git_object: 26560b4527531f8e0a873c0e043fcd91058b2ffc
   src/models/forwardimportrequest.ts:
     id: 2f3eeed18289
@@ -28276,11 +28304,11 @@ trackedFiles:
     pristine_git_object: ff83fc57ac611ac861042e818cf55413b1eaf292
   src/models/operations/createproject.ts:
     id: 906aef1b7711
-    last_write_checksum: sha1:3894c44afd24c016fb6068d9f271287e4c137e43
+    last_write_checksum: sha1:822139123a99a64b3b8fc91c96c3c0227c94cb32
     pristine_git_object: 5058ea07610861714e95f60543c1bf1b3d6297bd
   src/models/operations/createprojectfromtemplate.ts:
     id: a86500746e28
-    last_write_checksum: sha1:24db25a3f373f5d53e423b90f39bb46893952a82
+    last_write_checksum: sha1:cd5d2e004b627b2af13099d11a2b3588363413b9
     pristine_git_object: 9c45382c175c972bc8a215f6044afea720358797
   src/models/operations/createrelease.ts:
     id: dd0994083c1b
@@ -28440,7 +28468,7 @@ trackedFiles:
     pristine_git_object: 4f2edd99c25ed8cb5cfe69eaffe32727b18da120
   src/models/operations/getresourcedeploymentdetail.ts:
     id: 61664b1aea1b
-    last_write_checksum: sha1:53a4e2f73e39b035ade722ccd466babd704819d3
+    last_write_checksum: sha1:e11460c1755aa85d3f0d2d30e70fbb8960588974
     pristine_git_object: 9ff4d9a3a4b7b1baccd21f110cb71e65bf8f136e
   src/models/operations/getsetupregistrationoperation.ts:
     id: c1cf70012dca
@@ -28756,7 +28784,7 @@ trackedFiles:
     pristine_git_object: 35cf96689dd14675c62a729d0a1428d1f6cfad02
   src/models/package.ts:
     id: 463500e07740
-    last_write_checksum: sha1:76ac9dfd48d5e0de8048482d1fc7765ef0f9451d
+    last_write_checksum: sha1:50287ceecd7f0651953996c90dcd043e94b3b70d
     pristine_git_object: e6346220d5224f79a89603c8176bf14f3c7f56e4
   src/models/persistimporteddeploymentrequest.ts:
     id: c11c3fd39cc0
@@ -28772,7 +28800,7 @@ trackedFiles:
     pristine_git_object: 7659c51ec64005ee30fa3c3e312f3438c978b596
   src/models/prepareddeploymentstack.ts:
     id: b17514615ef4
-    last_write_checksum: sha1:503e5758f7ad4a8c60d3738698b7502ae721163c
+    last_write_checksum: sha1:33fceb79c02510246ad5989993d8f6ea74d5ed49
     pristine_git_object: 450415b4601a228aeec91bb347a62d4e0700c398
   src/models/prepareoperatormanifestpackagerequest.ts:
     id: bef77d7a5cb6
@@ -28792,7 +28820,7 @@ trackedFiles:
     pristine_git_object: ff42baa7853e7e91af84d8a2123c5824a9d9045c
   src/models/project.ts:
     id: 6d341934d773
-    last_write_checksum: sha1:0a9fdc92293bf2c889260139bee17cdea334d140
+    last_write_checksum: sha1:d0ecedd00ba750e86dc273367bce1845290cb3f7
     pristine_git_object: fac9d66695314a50578fe51a745ec08bfac2c28c
   src/models/projectgcpoauthprovider.ts:
     id: fab70ede1870
@@ -28800,7 +28828,7 @@ trackedFiles:
     pristine_git_object: 7436ccb9b2ea7cbf64c203c17bc2a0a0d469db92
   src/models/projectlistitemresponse.ts:
     id: b07ac2938422
-    last_write_checksum: sha1:1ebf2f02f2244bdaa5516415e7f2f3a0722bcd6a
+    last_write_checksum: sha1:95621ab266bab7e571569b3eb97c401cdc6c0eb1
     pristine_git_object: 823216b87426e561f5b3a86b203a019d096b33e0
   src/models/projectreleaseinfo.ts:
     id: cab90b13eab7
@@ -28956,7 +28984,7 @@ trackedFiles:
     pristine_git_object: 6ddafba33ac1493e17f3877263a563faf0a072bf
   src/models/synclistresponse.ts:
     id: 9c42028a90f9
-    last_write_checksum: sha1:e30b465110b867b3af9593e63c120eee2bdfcb42
+    last_write_checksum: sha1:5ae3199a8ee203763e4a8be5e3c4b720254fb440
     pristine_git_object: 1a7dd3c151f12a849584fc2f280f43b994e70fc5
   src/models/syncreconcilerequest.ts:
     id: 8881baf7e7c9
@@ -29012,7 +29040,7 @@ trackedFiles:
     pristine_git_object: 8c5fd9f7943c685c7ad0795dad7332953d0fcc41
   src/models/updateproject.ts:
     id: de1a5842b62d
-    last_write_checksum: sha1:b13fa5b67ca0275d7fd1ff20c9b596b73e80ad31
+    last_write_checksum: sha1:b4b2c39c36bef7fc6ea7e8a5289e7268bb59bd85
     pristine_git_object: a5e7f5b0df9e906eb36b17e3c0f16623633ebb2e
   src/models/updateprojectgcpoauthprovider.ts:
     id: dd2bff436723
@@ -29088,7 +29116,7 @@ trackedFiles:
     pristine_git_object: b2c398b7a128be6b3796824d57748fcdc8f28b17
   src/sdk/deployments.ts:
     id: 80d6fb28a717
-    last_write_checksum: sha1:5dab9801fe5b1b19b912f921e958c549bfef2668
+    last_write_checksum: sha1:97d4621742f2b79b33bf0b8c58a75658d19d0d8c
     pristine_git_object: fcf205177be53bb58961e3cb36c0044faa90b087
   src/sdk/domains.ts:
     id: 70955e5c763b
@@ -29421,11 +29449,59 @@ examples:
           application/json: {"code": "<value>", "message": "<value>", "retryable": false, "internal": false}
         "500":
           application/json: {"code": "<value>", "message": "<value>", "retryable": false, "internal": false}
+    projectName:
+      parameters:
+        path:
+          idOrName: "my-project"
+        query:
+          workspace: "my-workspace"
+      responses:
+        "200":
+          application/json: {"id": "prj_mcytp6z3j91f7tn5ryqsfwtr", "name": "my-app", "gitRepository": {"type": "github", "repo": "alien/my-agent"}, "domainId": "dom_469m0agk8luj4s16sakmmpdd", "defaultManagers": {"aws": "mgr_enxscjrqiiu2lrc672hwwuc5", "gcp": "mgr_enxscjrqiiu2lrc672hwwuc5", "azure": "mgr_enxscjrqiiu2lrc672hwwuc5", "kubernetes": "mgr_enxscjrqiiu2lrc672hwwuc5", "machines": "mgr_enxscjrqiiu2lrc672hwwuc5", "local": "mgr_enxscjrqiiu2lrc672hwwuc5"}, "createdAt": "2024-07-26T02:09:00.327Z", "workspaceId": "ws_It13CUaGEhLLAB87simX0"}
+        "404":
+          application/json: {"code": "<value>", "message": "<value>", "retryable": false, "internal": false}
+        "500":
+          application/json: {"code": "<value>", "message": "<value>", "retryable": false, "internal": false}
+    projectId:
+      parameters:
+        path:
+          idOrName: "prj_mcytp6z3j91f7tn5ryqsfwtr"
+        query:
+          workspace: "my-workspace"
+      responses:
+        "200":
+          application/json: {"id": "prj_mcytp6z3j91f7tn5ryqsfwtr", "name": "my-app", "gitRepository": {"type": "github", "repo": "alien/my-agent"}, "domainId": "dom_469m0agk8luj4s16sakmmpdd", "defaultManagers": {"aws": "mgr_enxscjrqiiu2lrc672hwwuc5", "gcp": "mgr_enxscjrqiiu2lrc672hwwuc5", "azure": "mgr_enxscjrqiiu2lrc672hwwuc5", "kubernetes": "mgr_enxscjrqiiu2lrc672hwwuc5", "machines": "mgr_enxscjrqiiu2lrc672hwwuc5", "local": "mgr_enxscjrqiiu2lrc672hwwuc5"}, "createdAt": "2024-07-26T02:09:00.327Z", "workspaceId": "ws_It13CUaGEhLLAB87simX0"}
+        "404":
+          application/json: {"code": "<value>", "message": "<value>", "retryable": false, "internal": false}
+        "500":
+          application/json: {"code": "<value>", "message": "<value>", "retryable": false, "internal": false}
   deleteProject:
     speakeasy-default-delete-project:
       parameters:
         path:
           idOrName: "my-project"
+        query:
+          workspace: "my-workspace"
+      responses:
+        "400":
+          application/json: {"code": "<value>", "message": "<value>", "retryable": false, "internal": true}
+        "500":
+          application/json: {"code": "<value>", "message": "<value>", "retryable": false, "internal": true}
+    projectName:
+      parameters:
+        path:
+          idOrName: "my-project"
+        query:
+          workspace: "my-workspace"
+      responses:
+        "400":
+          application/json: {"code": "<value>", "message": "<value>", "retryable": false, "internal": true}
+        "500":
+          application/json: {"code": "<value>", "message": "<value>", "retryable": false, "internal": true}
+    projectId:
+      parameters:
+        path:
+          idOrName: "prj_mcytp6z3j91f7tn5ryqsfwtr"
         query:
           workspace: "my-workspace"
       responses:
@@ -29442,6 +29518,36 @@ examples:
           workspace: "my-workspace"
       requestBody:
         application/json: {"gitRepository": null, "domainId": "dom_469m0agk8luj4s16sakmmpdd", "defaultManagers": null}
+      responses:
+        "200":
+          application/json: {"id": "prj_mcytp6z3j91f7tn5ryqsfwtr", "name": "my-app", "gitRepository": {"type": "github", "repo": "alien/my-agent"}, "domainId": "dom_469m0agk8luj4s16sakmmpdd", "defaultManagers": {"aws": "mgr_enxscjrqiiu2lrc672hwwuc5", "gcp": "mgr_enxscjrqiiu2lrc672hwwuc5", "azure": "mgr_enxscjrqiiu2lrc672hwwuc5", "kubernetes": "mgr_enxscjrqiiu2lrc672hwwuc5", "machines": "mgr_enxscjrqiiu2lrc672hwwuc5", "local": "mgr_enxscjrqiiu2lrc672hwwuc5"}, "createdAt": "2025-03-21T10:44:37.375Z", "workspaceId": "ws_It13CUaGEhLLAB87simX0"}
+        "404":
+          application/json: {"code": "<value>", "message": "<value>", "retryable": false, "internal": true}
+        "500":
+          application/json: {"code": "<value>", "message": "<value>", "retryable": false, "internal": true}
+    projectName:
+      parameters:
+        path:
+          idOrName: "my-project"
+        query:
+          workspace: "my-workspace"
+      requestBody:
+        application/json: {"gitRepository": null, "domainId": "dom_469m0agk8luj4s16sakmmpdd", "defaultManagers": {"aws": "mgr_enxscjrqiiu2lrc672hwwuc5", "gcp": "mgr_enxscjrqiiu2lrc672hwwuc5", "azure": "mgr_enxscjrqiiu2lrc672hwwuc5", "kubernetes": "mgr_enxscjrqiiu2lrc672hwwuc5", "machines": "mgr_enxscjrqiiu2lrc672hwwuc5", "local": "mgr_enxscjrqiiu2lrc672hwwuc5"}}
+      responses:
+        "200":
+          application/json: {"id": "prj_mcytp6z3j91f7tn5ryqsfwtr", "name": "my-app", "gitRepository": {"type": "github", "repo": "alien/my-agent"}, "domainId": "dom_469m0agk8luj4s16sakmmpdd", "defaultManagers": {"aws": "mgr_enxscjrqiiu2lrc672hwwuc5", "gcp": "mgr_enxscjrqiiu2lrc672hwwuc5", "azure": "mgr_enxscjrqiiu2lrc672hwwuc5", "kubernetes": "mgr_enxscjrqiiu2lrc672hwwuc5", "machines": "mgr_enxscjrqiiu2lrc672hwwuc5", "local": "mgr_enxscjrqiiu2lrc672hwwuc5"}, "createdAt": "2025-03-21T10:44:37.375Z", "workspaceId": "ws_It13CUaGEhLLAB87simX0"}
+        "404":
+          application/json: {"code": "<value>", "message": "<value>", "retryable": false, "internal": true}
+        "500":
+          application/json: {"code": "<value>", "message": "<value>", "retryable": false, "internal": true}
+    projectId:
+      parameters:
+        path:
+          idOrName: "prj_mcytp6z3j91f7tn5ryqsfwtr"
+        query:
+          workspace: "my-workspace"
+      requestBody:
+        application/json: {"gitRepository": null, "domainId": "dom_469m0agk8luj4s16sakmmpdd", "defaultManagers": {"aws": "mgr_enxscjrqiiu2lrc672hwwuc5", "gcp": "mgr_enxscjrqiiu2lrc672hwwuc5", "azure": "mgr_enxscjrqiiu2lrc672hwwuc5", "kubernetes": "mgr_enxscjrqiiu2lrc672hwwuc5", "machines": "mgr_enxscjrqiiu2lrc672hwwuc5", "local": "mgr_enxscjrqiiu2lrc672hwwuc5"}}
       responses:
         "200":
           application/json: {"id": "prj_mcytp6z3j91f7tn5ryqsfwtr", "name": "my-app", "gitRepository": {"type": "github", "repo": "alien/my-agent"}, "domainId": "dom_469m0agk8luj4s16sakmmpdd", "defaultManagers": {"aws": "mgr_enxscjrqiiu2lrc672hwwuc5", "gcp": "mgr_enxscjrqiiu2lrc672hwwuc5", "azure": "mgr_enxscjrqiiu2lrc672hwwuc5", "kubernetes": "mgr_enxscjrqiiu2lrc672hwwuc5", "machines": "mgr_enxscjrqiiu2lrc672hwwuc5", "local": "mgr_enxscjrqiiu2lrc672hwwuc5"}, "createdAt": "2025-03-21T10:44:37.375Z", "workspaceId": "ws_It13CUaGEhLLAB87simX0"}
@@ -29477,11 +29583,63 @@ examples:
           application/json: {"code": "<value>", "message": "<value>", "retryable": false, "internal": true}
         "500":
           application/json: {"code": "<value>", "message": "<value>", "retryable": false, "internal": true}
+    projectName:
+      parameters:
+        path:
+          idOrName: "my-project"
+        query:
+          workspace: "my-workspace"
+      responses:
+        "200":
+          application/json: {}
+        "404":
+          application/json: {"code": "<value>", "message": "<value>", "retryable": false, "internal": true}
+        "500":
+          application/json: {"code": "<value>", "message": "<value>", "retryable": false, "internal": true}
+    projectId:
+      parameters:
+        path:
+          idOrName: "prj_mcytp6z3j91f7tn5ryqsfwtr"
+        query:
+          workspace: "my-workspace"
+      responses:
+        "200":
+          application/json: {}
+        "404":
+          application/json: {"code": "<value>", "message": "<value>", "retryable": false, "internal": true}
+        "500":
+          application/json: {"code": "<value>", "message": "<value>", "retryable": false, "internal": true}
   getProjectActiveRelease:
     speakeasy-default-get-project-active-release:
       parameters:
         path:
           idOrName: "my-project"
+        query:
+          workspace: "my-workspace"
+      responses:
+        "200":
+          application/json: "<value>"
+        "404":
+          application/json: {"code": "<value>", "message": "<value>", "retryable": false, "internal": false}
+        "500":
+          application/json: {"code": "<value>", "message": "<value>", "retryable": false, "internal": false}
+    projectName:
+      parameters:
+        path:
+          idOrName: "my-project"
+        query:
+          workspace: "my-workspace"
+      responses:
+        "200":
+          application/json: "<value>"
+        "404":
+          application/json: {"code": "<value>", "message": "<value>", "retryable": false, "internal": false}
+        "500":
+          application/json: {"code": "<value>", "message": "<value>", "retryable": false, "internal": false}
+    projectId:
+      parameters:
+        path:
+          idOrName: "prj_mcytp6z3j91f7tn5ryqsfwtr"
         query:
           workspace: "my-workspace"
       responses:
@@ -29497,6 +29655,28 @@ examples:
         query:
           workspace: "my-workspace"
           project: "my-project"
+          limit: 20
+      responses:
+        "200":
+          application/json: {"items": [{"id": "dg_r27ict8c7vcgsumpj90ackf7b", "name": "prod-us-east-1", "projectId": "prj_mcytp6z3j91f7tn5ryqsfwtr", "workspaceId": "ws_It13CUaGEhLLAB87simX0", "maxDeployments": 100, "createdAt": "2026-01-21T08:26:22.710Z"}], "nextCursor": "<value>"}
+        "500":
+          application/json: {"code": "<value>", "message": "<value>", "retryable": false, "internal": true}
+    projectName:
+      parameters:
+        query:
+          workspace: "my-workspace"
+          project: "my-project"
+          limit: 20
+      responses:
+        "200":
+          application/json: {"items": [{"id": "dg_r27ict8c7vcgsumpj90ackf7b", "name": "prod-us-east-1", "projectId": "prj_mcytp6z3j91f7tn5ryqsfwtr", "workspaceId": "ws_It13CUaGEhLLAB87simX0", "maxDeployments": 100, "createdAt": "2026-01-21T08:26:22.710Z"}], "nextCursor": "<value>"}
+        "500":
+          application/json: {"code": "<value>", "message": "<value>", "retryable": false, "internal": true}
+    projectId:
+      parameters:
+        query:
+          workspace: "my-workspace"
+          project: "prj_mcytp6z3j91f7tn5ryqsfwtr"
           limit: 20
       responses:
         "200":
@@ -29589,6 +29769,32 @@ examples:
           application/json: {"code": "<value>", "message": "<value>", "retryable": false, "internal": true}
         "500":
           application/json: {"code": "<value>", "message": "<value>", "retryable": false, "internal": true}
+    projectName:
+      parameters:
+        query:
+          workspace: "my-workspace"
+          project: "my-project"
+          limit: 20
+      responses:
+        "200":
+          application/json: {"items": [], "nextCursor": "<value>"}
+        "404":
+          application/json: {"code": "<value>", "message": "<value>", "retryable": false, "internal": true}
+        "500":
+          application/json: {"code": "<value>", "message": "<value>", "retryable": false, "internal": true}
+    projectId:
+      parameters:
+        query:
+          workspace: "my-workspace"
+          project: "prj_mcytp6z3j91f7tn5ryqsfwtr"
+          limit: 20
+      responses:
+        "200":
+          application/json: {"items": [], "nextCursor": "<value>"}
+        "404":
+          application/json: {"code": "<value>", "message": "<value>", "retryable": false, "internal": true}
+        "500":
+          application/json: {"code": "<value>", "message": "<value>", "retryable": false, "internal": true}
   getPackage:
     speakeasy-default-get-package:
       parameters:
@@ -29641,6 +29847,28 @@ examples:
           application/json: {"items": [], "nextCursor": "<value>"}
         "500":
           application/json: {"code": "<value>", "message": "<value>", "retryable": false, "internal": true}
+    projectName:
+      parameters:
+        query:
+          project: "my-project"
+          workspace: "my-workspace"
+          limit: 20
+      responses:
+        "200":
+          application/json: {"items": [], "nextCursor": "<value>"}
+        "500":
+          application/json: {"code": "<value>", "message": "<value>", "retryable": false, "internal": true}
+    projectId:
+      parameters:
+        query:
+          project: "prj_mcytp6z3j91f7tn5ryqsfwtr"
+          workspace: "my-workspace"
+          limit: 20
+      responses:
+        "200":
+          application/json: {"items": [], "nextCursor": "<value>"}
+        "500":
+          application/json: {"code": "<value>", "message": "<value>", "retryable": false, "internal": true}
   createRelease:
     speakeasy-default-create-release:
       parameters:
@@ -29667,12 +29895,56 @@ examples:
           application/json: {"items": ["<value 1>"]}
         "500":
           application/json: {"code": "<value>", "message": "<value>", "retryable": false, "internal": true}
+    projectName:
+      parameters:
+        query:
+          workspace: "my-workspace"
+          project: "my-project"
+          limit: 50
+      responses:
+        "200":
+          application/json: {"items": ["<value 1>"]}
+        "500":
+          application/json: {"code": "<value>", "message": "<value>", "retryable": false, "internal": true}
+    projectId:
+      parameters:
+        query:
+          workspace: "my-workspace"
+          project: "prj_mcytp6z3j91f7tn5ryqsfwtr"
+          limit: 50
+      responses:
+        "200":
+          application/json: {"items": ["<value 1>"]}
+        "500":
+          application/json: {"code": "<value>", "message": "<value>", "retryable": false, "internal": true}
   listReleaseAuthors:
     speakeasy-default-list-release-authors:
       parameters:
         query:
           workspace: "my-workspace"
           project: "my-project"
+          limit: 50
+      responses:
+        "200":
+          application/json: {"items": []}
+        "500":
+          application/json: {"code": "<value>", "message": "<value>", "retryable": false, "internal": true}
+    projectName:
+      parameters:
+        query:
+          workspace: "my-workspace"
+          project: "my-project"
+          limit: 50
+      responses:
+        "200":
+          application/json: {"items": []}
+        "500":
+          application/json: {"code": "<value>", "message": "<value>", "retryable": false, "internal": true}
+    projectId:
+      parameters:
+        query:
+          workspace: "my-workspace"
+          project: "prj_mcytp6z3j91f7tn5ryqsfwtr"
           limit: 50
       responses:
         "200":
@@ -29707,6 +29979,32 @@ examples:
           application/json: {"code": "<value>", "message": "<value>", "retryable": false, "internal": false}
         "400":
           application/json: {"code": "<value>", "message": "<value>", "retryable": false, "internal": false}
+    projectName:
+      parameters:
+        query:
+          project: "my-project"
+          workspace: "my-workspace"
+          limit: 20
+      responses:
+        "200":
+          application/json: {"items": [{"id": "dep_0c29fq4a2yjb7kx3smwdgxlc", "name": "<value>", "status": "update-failed", "projectId": "prj_mcytp6z3j91f7tn5ryqsfwtr", "platform": "aws", "deploymentProtocolVersion": 539991, "deploymentGroupId": "dg_r27ict8c7vcgsumpj90ackf7b", "currentReleaseId": "rel_WbhQgksrawSKIpEN0NAssHX9", "desiredReleaseId": "rel_WbhQgksrawSKIpEN0NAssHX9", "pinnedReleaseId": "rel_WbhQgksrawSKIpEN0NAssHX9", "retryRequested": false, "createdAt": "2025-06-08T07:12:39.784Z", "updatedAt": "2026-09-03T12:53:35.429Z", "managerId": "mgr_enxscjrqiiu2lrc672hwwuc5", "workspaceId": "ws_It13CUaGEhLLAB87simX0", "release": {"id": "rel_WbhQgksrawSKIpEN0NAssHX9", "version": "<value>", "gitMetadata": {"commitSha": "dc36199b2234c6586ebe05ec94078a895c707e29", "commitMessage": "add method to measure Interaction to Next Paint (INP) (#36490)", "commitRef": "main", "commitDate": "2026-03-16T12:00:00Z", "dirty": true, "remoteUrl": "https://github.com/alienplatform/alien", "commitAuthorName": "John Doe", "commitAuthorEmail": "john@example.com", "commitAuthorLogin": "johndoe", "commitAuthorAvatarUrl": "https://github.com/johndoe.png"}, "createdAt": "2025-09-26T19:28:26.059Z"}, "deploymentGroup": {"id": "dg_r27ict8c7vcgsumpj90ackf7b", "name": "prod-us-east-1"}, "project": {"id": "prj_mcytp6z3j91f7tn5ryqsfwtr", "name": "my-app"}}], "nextCursor": "<value>"}
+        "400":
+          application/json: {"code": "<value>", "message": "<value>", "retryable": false, "internal": false}
+        "500":
+          application/json: {"code": "<value>", "message": "<value>", "retryable": false, "internal": false}
+    projectId:
+      parameters:
+        query:
+          project: "prj_mcytp6z3j91f7tn5ryqsfwtr"
+          workspace: "my-workspace"
+          limit: 20
+      responses:
+        "200":
+          application/json: {"items": [{"id": "dep_0c29fq4a2yjb7kx3smwdgxlc", "name": "<value>", "status": "update-failed", "projectId": "prj_mcytp6z3j91f7tn5ryqsfwtr", "platform": "aws", "deploymentProtocolVersion": 539991, "deploymentGroupId": "dg_r27ict8c7vcgsumpj90ackf7b", "currentReleaseId": "rel_WbhQgksrawSKIpEN0NAssHX9", "desiredReleaseId": "rel_WbhQgksrawSKIpEN0NAssHX9", "pinnedReleaseId": "rel_WbhQgksrawSKIpEN0NAssHX9", "retryRequested": false, "createdAt": "2025-06-08T07:12:39.784Z", "updatedAt": "2026-09-03T12:53:35.429Z", "managerId": "mgr_enxscjrqiiu2lrc672hwwuc5", "workspaceId": "ws_It13CUaGEhLLAB87simX0", "release": {"id": "rel_WbhQgksrawSKIpEN0NAssHX9", "version": "<value>", "gitMetadata": {"commitSha": "dc36199b2234c6586ebe05ec94078a895c707e29", "commitMessage": "add method to measure Interaction to Next Paint (INP) (#36490)", "commitRef": "main", "commitDate": "2026-03-16T12:00:00Z", "dirty": true, "remoteUrl": "https://github.com/alienplatform/alien", "commitAuthorName": "John Doe", "commitAuthorEmail": "john@example.com", "commitAuthorLogin": "johndoe", "commitAuthorAvatarUrl": "https://github.com/johndoe.png"}, "createdAt": "2025-09-26T19:28:26.059Z"}, "deploymentGroup": {"id": "dg_r27ict8c7vcgsumpj90ackf7b", "name": "prod-us-east-1"}, "project": {"id": "prj_mcytp6z3j91f7tn5ryqsfwtr", "name": "my-app"}}], "nextCursor": "<value>"}
+        "400":
+          application/json: {"code": "<value>", "message": "<value>", "retryable": false, "internal": false}
+        "500":
+          application/json: {"code": "<value>", "message": "<value>", "retryable": false, "internal": false}
   createDeployment:
     speakeasy-default-create-deployment:
       parameters:
@@ -29734,6 +30032,26 @@ examples:
           application/json: {"total": 9426.09, "byStatus": {"key": 4600.18, "key1": 7873.34}, "byPlatform": {}, "byCurrentRelease": {"key": 5962.42, "key1": 4600.18, "key2": 7873.34}, "byPinnedRelease": {}}
         "500":
           application/json: {"code": "<value>", "message": "<value>", "retryable": false, "internal": true}
+    projectName:
+      parameters:
+        query:
+          workspace: "my-workspace"
+          project: "my-project"
+      responses:
+        "200":
+          application/json: {"total": 9426.09, "byStatus": {"key": 4600.18, "key1": 7873.34}, "byPlatform": {}, "byCurrentRelease": {}, "byPinnedRelease": {"key": 6084.2}}
+        "500":
+          application/json: {"code": "<value>", "message": "<value>", "retryable": false, "internal": true}
+    projectId:
+      parameters:
+        query:
+          workspace: "my-workspace"
+          project: "prj_mcytp6z3j91f7tn5ryqsfwtr"
+      responses:
+        "200":
+          application/json: {"total": 9426.09, "byStatus": {"key": 4600.18, "key1": 7873.34}, "byPlatform": {}, "byCurrentRelease": {}, "byPinnedRelease": {"key": 6084.2}}
+        "500":
+          application/json: {"code": "<value>", "message": "<value>", "retryable": false, "internal": true}
   listDeploymentFilterPlatforms:
     speakeasy-default-list-deployment-filter-platforms:
       parameters:
@@ -29751,6 +30069,28 @@ examples:
         query:
           workspace: "my-workspace"
           project: "my-project"
+          limit: 20
+      responses:
+        "200":
+          application/json: {"items": []}
+        "500":
+          application/json: {"code": "<value>", "message": "<value>", "retryable": false, "internal": false}
+    projectName:
+      parameters:
+        query:
+          workspace: "my-workspace"
+          project: "my-project"
+          limit: 20
+      responses:
+        "200":
+          application/json: {"items": []}
+        "500":
+          application/json: {"code": "<value>", "message": "<value>", "retryable": false, "internal": false}
+    projectId:
+      parameters:
+        query:
+          workspace: "my-workspace"
+          project: "prj_mcytp6z3j91f7tn5ryqsfwtr"
           limit: 20
       responses:
         "200":
@@ -30069,6 +30409,28 @@ examples:
           application/json: {"items": [{"id": "apikey_ye96yxs1tjnrrwulp8frh", "description": "boohoo fluffy kissingly ashamed undergo mysteriously under merge into", "keyPrefix": "<value>", "type": "project", "role": "<value>", "workspaceId": "<id>", "projectId": "<id>", "deploymentId": "<id>", "deploymentGroupId": "<id>", "managerId": "<id>", "enabled": false, "createdAt": "2025-11-28T20:20:46.851Z", "expiresAt": "2026-10-27T00:55:49.913Z", "lastUsedAt": "2026-05-29T11:23:21.416Z", "revokedAt": null, "deploymentSetupConfig": {"metadata": {}, "policy": {"allowedPlatforms": ["local"], "allowedSetupMethods": []}, "environmentVariables": []}, "createdByUser": {"id": "<id>", "email": "Terrill_Boyle38@hotmail.com", "image": "https://picsum.photos/seed/t5L87g/3189/2262"}}], "nextCursor": "<value>"}
         "500":
           application/json: {"code": "<value>", "message": "<value>", "retryable": false, "internal": true}
+    projectName:
+      parameters:
+        query:
+          workspace: "my-workspace"
+          project: "my-project"
+          limit: 20
+      responses:
+        "200":
+          application/json: {"items": [{"id": "apikey_ye96yxs1tjnrrwulp8frh", "description": "boohoo fluffy kissingly ashamed undergo mysteriously under merge into", "keyPrefix": "<value>", "type": "project", "role": "<value>", "workspaceId": "<id>", "projectId": "<id>", "deploymentId": "<id>", "deploymentGroupId": "<id>", "managerId": "<id>", "enabled": false, "createdAt": "2025-11-28T20:20:46.851Z", "expiresAt": "2026-10-27T00:55:49.913Z", "lastUsedAt": "2026-05-29T11:23:21.416Z", "revokedAt": null, "deploymentSetupConfig": {"metadata": {"key": "<value>", "key1": "<value>", "key2": "<value>"}, "policy": {"allowedPlatforms": ["machines"], "allowedSetupMethods": []}, "environmentVariables": [{"name": "<value>", "type": "plain", "targetResources": ["<value 1>", "<value 2>", "<value 3>"]}]}, "createdByUser": {"id": "<id>", "email": "Marianne.Kris76@yahoo.com", "image": "https://loremflickr.com/1065/3743?lock=3982874682130320"}}], "nextCursor": "<value>"}
+        "500":
+          application/json: {"code": "<value>", "message": "<value>", "retryable": false, "internal": false}
+    projectId:
+      parameters:
+        query:
+          workspace: "my-workspace"
+          project: "prj_mcytp6z3j91f7tn5ryqsfwtr"
+          limit: 20
+      responses:
+        "200":
+          application/json: {"items": [{"id": "apikey_ye96yxs1tjnrrwulp8frh", "description": "boohoo fluffy kissingly ashamed undergo mysteriously under merge into", "keyPrefix": "<value>", "type": "project", "role": "<value>", "workspaceId": "<id>", "projectId": "<id>", "deploymentId": "<id>", "deploymentGroupId": "<id>", "managerId": "<id>", "enabled": false, "createdAt": "2025-11-28T20:20:46.851Z", "expiresAt": "2026-10-27T00:55:49.913Z", "lastUsedAt": "2026-05-29T11:23:21.416Z", "revokedAt": null, "deploymentSetupConfig": {"metadata": {"key": "<value>", "key1": "<value>", "key2": "<value>"}, "policy": {"allowedPlatforms": ["machines"], "allowedSetupMethods": []}, "environmentVariables": [{"name": "<value>", "type": "plain", "targetResources": ["<value 1>", "<value 2>", "<value 3>"]}]}, "createdByUser": {"id": "<id>", "email": "Marianne.Kris76@yahoo.com", "image": "https://loremflickr.com/1065/3743?lock=3982874682130320"}}], "nextCursor": "<value>"}
+        "500":
+          application/json: {"code": "<value>", "message": "<value>", "retryable": false, "internal": false}
   createAPIKey:
     speakeasy-default-create-API-key:
       parameters:
@@ -30203,6 +30565,28 @@ examples:
           application/json: {"items": [{"id": "event_MtSA24M3pWuAkQYxgZxuRI", "deploymentId": "dep_0c29fq4a2yjb7kx3smwdgxlc", "releaseId": "rel_WbhQgksrawSKIpEN0NAssHX9", "debugSessionId": "dbg_HOXmkmT9UPYlsnxqSNlEGoXL", "data": {"type": "GeneratingCloudFormationTemplate"}, "state": {"failed": {}}, "projectId": "prj_mcytp6z3j91f7tn5ryqsfwtr", "createdAt": "2025-07-04T19:05:05.908Z", "workspaceId": "ws_It13CUaGEhLLAB87simX0"}], "nextCursor": null}
         "500":
           application/json: {"code": "<value>", "message": "<value>", "retryable": false, "internal": false}
+    projectName:
+      parameters:
+        query:
+          workspace: "my-workspace"
+          project: "my-project"
+          limit: 20
+      responses:
+        "200":
+          application/json: {"items": [{"id": "event_MtSA24M3pWuAkQYxgZxuRI", "deploymentId": "dep_0c29fq4a2yjb7kx3smwdgxlc", "releaseId": "rel_WbhQgksrawSKIpEN0NAssHX9", "debugSessionId": "dbg_HOXmkmT9UPYlsnxqSNlEGoXL", "data": {"strategyName": "<value>", "type": "PreparingEnvironment"}, "state": {"failed": {}}, "projectId": "prj_mcytp6z3j91f7tn5ryqsfwtr", "createdAt": "2025-07-04T19:05:05.908Z", "workspaceId": "ws_It13CUaGEhLLAB87simX0"}], "nextCursor": null}
+        "500":
+          application/json: {"code": "<value>", "message": "<value>", "retryable": false, "internal": false}
+    projectId:
+      parameters:
+        query:
+          workspace: "my-workspace"
+          project: "prj_mcytp6z3j91f7tn5ryqsfwtr"
+          limit: 20
+      responses:
+        "200":
+          application/json: {"items": [{"id": "event_MtSA24M3pWuAkQYxgZxuRI", "deploymentId": "dep_0c29fq4a2yjb7kx3smwdgxlc", "releaseId": "rel_WbhQgksrawSKIpEN0NAssHX9", "debugSessionId": "dbg_HOXmkmT9UPYlsnxqSNlEGoXL", "data": {"strategyName": "<value>", "type": "PreparingEnvironment"}, "state": {"failed": {}}, "projectId": "prj_mcytp6z3j91f7tn5ryqsfwtr", "createdAt": "2025-07-04T19:05:05.908Z", "workspaceId": "ws_It13CUaGEhLLAB87simX0"}], "nextCursor": null}
+        "500":
+          application/json: {"code": "<value>", "message": "<value>", "retryable": false, "internal": false}
   getEvent:
     speakeasy-default-get-event:
       parameters:
@@ -30228,6 +30612,30 @@ examples:
       responses:
         "200":
           application/json: {"items": [{"id": "cmd_2sxjXxvOYct7IohT3ukliAzf", "deploymentId": "dep_0c29fq4a2yjb7kx3smwdgxlc", "projectId": "prj_mcytp6z3j91f7tn5ryqsfwtr", "workspaceId": "ws_It13CUaGEhLLAB87simX0", "name": "<value>", "state": "SUCCEEDED", "deploymentModel": "pull", "target": {"resourceId": "<id>", "resourceType": "container"}, "attempt": 767.59, "deadline": "2025-03-06T06:45:15.408Z", "requestSizeBytes": 4467.17, "responseSizeBytes": 9502.64, "createdAt": "2026-08-03T01:55:30.969Z", "dispatchedAt": "2026-04-24T10:39:27.972Z", "completedAt": "2025-04-15T07:22:06.891Z", "error": {}, "deployment": {"id": "dep_0c29fq4a2yjb7kx3smwdgxlc", "name": "<value>", "managerId": "<id>"}, "project": {"id": "prj_mcytp6z3j91f7tn5ryqsfwtr", "name": "<value>"}}], "nextCursor": "<value>"}
+        "500":
+          application/json: {"code": "<value>", "message": "<value>", "retryable": false, "internal": true}
+    projectName:
+      parameters:
+        query:
+          workspace: "my-workspace"
+          project: "my-project"
+          deploymentId: "dep_0c29fq4a2yjb7kx3smwdgxlc"
+          limit: 20
+      responses:
+        "200":
+          application/json: {"items": [{"id": "cmd_2sxjXxvOYct7IohT3ukliAzf", "deploymentId": "dep_0c29fq4a2yjb7kx3smwdgxlc", "projectId": "prj_mcytp6z3j91f7tn5ryqsfwtr", "workspaceId": "ws_It13CUaGEhLLAB87simX0", "name": "<value>", "state": "SUCCEEDED", "deploymentModel": "pull", "target": {"resourceId": "<id>", "resourceType": "worker"}, "attempt": 3925.92, "deadline": "2025-05-04T14:25:58.628Z", "requestSizeBytes": 9502.64, "responseSizeBytes": 8858.61, "createdAt": "2026-04-24T10:39:27.972Z", "dispatchedAt": "2025-04-15T07:22:06.891Z", "completedAt": "2024-05-19T15:04:40.929Z", "error": {}, "deployment": {"id": "dep_0c29fq4a2yjb7kx3smwdgxlc", "name": "<value>", "managerId": "<id>"}, "project": {"id": "prj_mcytp6z3j91f7tn5ryqsfwtr", "name": "<value>"}}], "nextCursor": "<value>"}
+        "500":
+          application/json: {"code": "<value>", "message": "<value>", "retryable": false, "internal": true}
+    projectId:
+      parameters:
+        query:
+          workspace: "my-workspace"
+          project: "prj_mcytp6z3j91f7tn5ryqsfwtr"
+          deploymentId: "dep_0c29fq4a2yjb7kx3smwdgxlc"
+          limit: 20
+      responses:
+        "200":
+          application/json: {"items": [{"id": "cmd_2sxjXxvOYct7IohT3ukliAzf", "deploymentId": "dep_0c29fq4a2yjb7kx3smwdgxlc", "projectId": "prj_mcytp6z3j91f7tn5ryqsfwtr", "workspaceId": "ws_It13CUaGEhLLAB87simX0", "name": "<value>", "state": "SUCCEEDED", "deploymentModel": "pull", "target": {"resourceId": "<id>", "resourceType": "worker"}, "attempt": 3925.92, "deadline": "2025-05-04T14:25:58.628Z", "requestSizeBytes": 9502.64, "responseSizeBytes": 8858.61, "createdAt": "2026-04-24T10:39:27.972Z", "dispatchedAt": "2025-04-15T07:22:06.891Z", "completedAt": "2024-05-19T15:04:40.929Z", "error": {}, "deployment": {"id": "dep_0c29fq4a2yjb7kx3smwdgxlc", "name": "<value>", "managerId": "<id>"}, "project": {"id": "prj_mcytp6z3j91f7tn5ryqsfwtr", "name": "<value>"}}], "nextCursor": "<value>"}
         "500":
           application/json: {"code": "<value>", "message": "<value>", "retryable": false, "internal": true}
   createCommand:
@@ -30257,12 +30665,52 @@ examples:
           application/json: {"names": ["<value 1>", "<value 2>", "<value 3>"]}
         "500":
           application/json: {"code": "<value>", "message": "<value>", "retryable": false, "internal": true}
+    projectName:
+      parameters:
+        query:
+          workspace: "my-workspace"
+          project: "my-project"
+      responses:
+        "200":
+          application/json: {"names": ["<value 1>", "<value 2>", "<value 3>"]}
+        "500":
+          application/json: {"code": "<value>", "message": "<value>", "retryable": false, "internal": true}
+    projectId:
+      parameters:
+        query:
+          workspace: "my-workspace"
+          project: "prj_mcytp6z3j91f7tn5ryqsfwtr"
+      responses:
+        "200":
+          application/json: {"names": ["<value 1>", "<value 2>", "<value 3>"]}
+        "500":
+          application/json: {"code": "<value>", "message": "<value>", "retryable": false, "internal": true}
   listCommandDeployments:
     speakeasy-default-list-command-deployments:
       parameters:
         query:
           workspace: "my-workspace"
           project: "my-project"
+      responses:
+        "200":
+          application/json: {"deployments": []}
+        "500":
+          application/json: {"code": "<value>", "message": "<value>", "retryable": false, "internal": false}
+    projectName:
+      parameters:
+        query:
+          workspace: "my-workspace"
+          project: "my-project"
+      responses:
+        "200":
+          application/json: {"deployments": []}
+        "500":
+          application/json: {"code": "<value>", "message": "<value>", "retryable": false, "internal": false}
+    projectId:
+      parameters:
+        query:
+          workspace: "my-workspace"
+          project: "prj_mcytp6z3j91f7tn5ryqsfwtr"
       responses:
         "200":
           application/json: {"deployments": []}
@@ -30600,6 +31048,32 @@ examples:
           application/json: {"code": "<value>", "message": "<value>", "retryable": false, "internal": false}
         "500":
           application/json: {"code": "<value>", "message": "<value>", "retryable": false, "internal": false}
+    projectName:
+      parameters:
+        path:
+          idOrName: "my-project"
+        query:
+          workspace: "my-workspace"
+      responses:
+        "200":
+          application/json: {"mode": "custom", "clientId": "1234567890-abc123.apps.googleusercontent.com", "hasClientSecret": true, "redirectUris": ["https://lonely-noon.net/", "https://awful-flood.info", "https://neighboring-pliers.com/"]}
+        "404":
+          application/json: {"code": "<value>", "message": "<value>", "retryable": false, "internal": false}
+        "500":
+          application/json: {"code": "<value>", "message": "<value>", "retryable": false, "internal": false}
+    projectId:
+      parameters:
+        path:
+          idOrName: "prj_mcytp6z3j91f7tn5ryqsfwtr"
+        query:
+          workspace: "my-workspace"
+      responses:
+        "200":
+          application/json: {"mode": "alien-managed", "redirectUris": []}
+        "404":
+          application/json: {"code": "<value>", "message": "<value>", "retryable": false, "internal": false}
+        "500":
+          application/json: {"code": "<value>", "message": "<value>", "retryable": false, "internal": false}
   updateProjectGcpOAuthProvider:
     speakeasy-default-update-project-gcp-O-auth-provider:
       parameters:
@@ -30612,6 +31086,36 @@ examples:
       responses:
         "200":
           application/json: {"mode": "custom", "clientId": "1234567890-abc123.apps.googleusercontent.com", "hasClientSecret": true, "redirectUris": []}
+        "400":
+          application/json: {"code": "<value>", "message": "<value>", "retryable": false, "internal": true}
+        "500":
+          application/json: {"code": "<value>", "message": "<value>", "retryable": false, "internal": true}
+    projectName:
+      parameters:
+        path:
+          idOrName: "my-project"
+        query:
+          workspace: "my-workspace"
+      requestBody:
+        application/json: {"mode": "custom", "clientId": "1234567890-abc123.apps.googleusercontent.com"}
+      responses:
+        "200":
+          application/json: {"mode": "custom", "clientId": "1234567890-abc123.apps.googleusercontent.com", "hasClientSecret": true, "redirectUris": []}
+        "400":
+          application/json: {"code": "<value>", "message": "<value>", "retryable": false, "internal": true}
+        "500":
+          application/json: {"code": "<value>", "message": "<value>", "retryable": false, "internal": true}
+    projectId:
+      parameters:
+        path:
+          idOrName: "prj_mcytp6z3j91f7tn5ryqsfwtr"
+        query:
+          workspace: "my-workspace"
+      requestBody:
+        application/json: {"mode": "alien-managed"}
+      responses:
+        "200":
+          application/json: {"mode": "alien-managed", "redirectUris": ["https://lustrous-stitcher.name/"]}
         "400":
           application/json: {"code": "<value>", "message": "<value>", "retryable": false, "internal": true}
         "500":
@@ -30645,6 +31149,34 @@ examples:
           application/json: {"code": "<value>", "message": "<value>", "retryable": false, "internal": false}
         "500":
           application/json: {"code": "<value>", "message": "<value>", "retryable": false, "internal": false}
+    projectName:
+      parameters:
+        path:
+          area: "container"
+        query:
+          workspace: "my-workspace"
+          project: "my-project"
+      responses:
+        "200":
+          application/json: {"resources": [{"resourceType": "<value>", "resourceId": "<id>", "name": "<value>", "backend": "<value>", "controllerPlatform": "<value>", "health": "<value>", "lifecycle": "<value>", "message": "<value>", "partial": false, "providerStale": true, "platformStale": false, "desiredCount": 634367, "currentCount": 238410, "readyCount": 370127, "deploymentCount": 901215, "attentionCount": 681724, "lastObservedAt": "2026-06-14T04:31:28.641Z"}]}
+        "404":
+          application/json: {"code": "<value>", "message": "<value>", "retryable": false, "internal": true}
+        "500":
+          application/json: {"code": "<value>", "message": "<value>", "retryable": false, "internal": true}
+    projectId:
+      parameters:
+        path:
+          area: "daemon"
+        query:
+          workspace: "my-workspace"
+          project: "prj_mcytp6z3j91f7tn5ryqsfwtr"
+      responses:
+        "200":
+          application/json: {"resources": [{"resourceType": "<value>", "resourceId": "<id>", "name": "<value>", "backend": "<value>", "controllerPlatform": "<value>", "health": "<value>", "lifecycle": "<value>", "message": "<value>", "partial": false, "providerStale": true, "platformStale": false, "desiredCount": 634367, "currentCount": 238410, "readyCount": 370127, "deploymentCount": 901215, "attentionCount": 681724, "lastObservedAt": "2026-06-14T04:31:28.641Z"}]}
+        "404":
+          application/json: {"code": "<value>", "message": "<value>", "retryable": false, "internal": true}
+        "500":
+          application/json: {"code": "<value>", "message": "<value>", "retryable": false, "internal": true}
   listResourceDeployments:
     speakeasy-default-list-resource-deployments:
       parameters:
@@ -30654,6 +31186,36 @@ examples:
         query:
           workspace: "my-workspace"
           project: "my-project"
+      responses:
+        "200":
+          application/json: {"resourceType": "<value>", "resourceId": "<id>", "deployments": [{"deploymentId": "<id>", "deploymentName": "<value>", "deploymentGroupId": "<id>", "deploymentGroupName": "<value>", "resourceType": "<value>", "resourceId": "<id>", "backend": "<value>", "controllerPlatform": "<value>", "health": "<value>", "lifecycle": "<value>", "message": "<value>", "partial": true, "providerStale": false, "platformStale": false, "desiredCount": 532749, "currentCount": null, "readyCount": null, "observedAt": "2026-07-21T14:21:12.830Z"}]}
+        "404":
+          application/json: {"code": "<value>", "message": "<value>", "retryable": false, "internal": false}
+        "500":
+          application/json: {"code": "<value>", "message": "<value>", "retryable": false, "internal": false}
+    projectName:
+      parameters:
+        path:
+          area: "worker"
+          resourceId: "<id>"
+        query:
+          workspace: "my-workspace"
+          project: "my-project"
+      responses:
+        "200":
+          application/json: {"resourceType": "<value>", "resourceId": "<id>", "deployments": [{"deploymentId": "<id>", "deploymentName": "<value>", "deploymentGroupId": "<id>", "deploymentGroupName": "<value>", "resourceType": "<value>", "resourceId": "<id>", "backend": "<value>", "controllerPlatform": "<value>", "health": "<value>", "lifecycle": "<value>", "message": "<value>", "partial": true, "providerStale": false, "platformStale": false, "desiredCount": 532749, "currentCount": null, "readyCount": null, "observedAt": "2026-07-21T14:21:12.830Z"}]}
+        "404":
+          application/json: {"code": "<value>", "message": "<value>", "retryable": false, "internal": false}
+        "500":
+          application/json: {"code": "<value>", "message": "<value>", "retryable": false, "internal": false}
+    projectId:
+      parameters:
+        path:
+          area: "daemon"
+          resourceId: "<id>"
+        query:
+          workspace: "my-workspace"
+          project: "prj_mcytp6z3j91f7tn5ryqsfwtr"
       responses:
         "200":
           application/json: {"resourceType": "<value>", "resourceId": "<id>", "deployments": [{"deploymentId": "<id>", "deploymentName": "<value>", "deploymentGroupId": "<id>", "deploymentGroupName": "<value>", "resourceType": "<value>", "resourceId": "<id>", "backend": "<value>", "controllerPlatform": "<value>", "health": "<value>", "lifecycle": "<value>", "message": "<value>", "partial": true, "providerStale": false, "platformStale": false, "desiredCount": 532749, "currentCount": null, "readyCount": null, "observedAt": "2026-07-21T14:21:12.830Z"}]}
@@ -30674,6 +31236,38 @@ examples:
       responses:
         "200":
           application/json: {"deployment": {"deploymentId": "<id>", "deploymentName": "<value>", "deploymentGroupId": "<id>", "deploymentGroupName": "<value>", "resourceType": "<value>", "resourceId": "<id>", "backend": "<value>", "controllerPlatform": "<value>", "health": "<value>", "lifecycle": "<value>", "message": "<value>", "partial": true, "providerStale": true, "platformStale": false, "desiredCount": 307152, "currentCount": 43341, "readyCount": 478814, "observedAt": "2025-01-22T09:51:43.656Z"}, "heartbeat": {"status": "available", "deploymentId": "<id>", "resourceId": "<id>", "resourceType": "<value>", "backend": "<value>", "controllerPlatform": "<value>", "observedAt": "2026-01-08T18:18:44.602Z", "staleAt": "2024-12-28T15:46:09.313Z", "platformStale": true, "heartbeat": {"backend": "azure", "controllerPlatform": "test", "data": {"data": {"enabled": true, "projectId": "<id>", "serviceName": "<value>", "status": {"collectionIssues": [], "health": "unhealthy", "lifecycle": "scaling", "partial": true, "stale": true}, "backend": "gcpServiceUsage"}, "resourceType": "service_activation"}, "observedAt": "2025-03-24T16:48:20.431Z", "raw": [{"body": "<value>", "collectedAt": "2026-06-28T23:50:07.248Z", "format": "json", "source": "<value>", "truncated": false}], "resourceId": "<id>", "resourceType": "<value>"}, "raw": ["<value 1>", "<value 2>", "<value 3>"]}}
+        "404":
+          application/json: {"code": "<value>", "message": "<value>", "retryable": false, "internal": false}
+        "500":
+          application/json: {"code": "<value>", "message": "<value>", "retryable": false, "internal": false}
+    projectName:
+      parameters:
+        path:
+          area: "daemon"
+          deploymentId: "<id>"
+          resourceId: "<id>"
+        query:
+          workspace: "my-workspace"
+          project: "my-project"
+      responses:
+        "200":
+          application/json: {"deployment": {"deploymentId": "<id>", "deploymentName": "<value>", "deploymentGroupId": "<id>", "deploymentGroupName": "<value>", "resourceType": "<value>", "resourceId": "<id>", "backend": "<value>", "controllerPlatform": "<value>", "health": "<value>", "lifecycle": "<value>", "message": "<value>", "partial": true, "providerStale": true, "platformStale": false, "desiredCount": 307152, "currentCount": 43341, "readyCount": 478814, "observedAt": "2025-01-22T09:51:43.656Z", "desiredImage": "<value>"}, "heartbeat": {"status": "available", "deploymentId": "<id>", "resourceId": "<id>", "resourceType": "<value>", "backend": "<value>", "controllerPlatform": "<value>", "observedAt": "2025-10-23T22:15:26.399Z", "staleAt": "2026-06-28T23:50:07.248Z", "platformStale": true, "heartbeat": {"backend": "external", "controllerPlatform": "local", "data": {"data": {"capacityGroups": [{"currentMachines": 36555, "desiredMachines": 657157, "groupId": "<id>"}], "name": "<value>", "nodes": {}, "providerFleets": [], "status": {"collectionIssues": [{"message": "<value>", "reason": "api-unavailable", "severity": "info", "source": "<value>"}], "health": "unhealthy", "lifecycle": "deleted", "partial": true, "stale": false}, "backend": "aws"}, "resourceType": "compute-cluster"}, "observedAt": "2025-08-26T13:59:59.097Z", "raw": [{"body": "<value>", "collectedAt": "2026-11-30T05:27:05.915Z", "format": "yaml", "source": "<value>", "truncated": true}], "resourceId": "<id>", "resourceType": "<value>"}, "raw": []}}
+        "404":
+          application/json: {"code": "<value>", "message": "<value>", "retryable": false, "internal": false}
+        "500":
+          application/json: {"code": "<value>", "message": "<value>", "retryable": false, "internal": false}
+    projectId:
+      parameters:
+        path:
+          area: "container"
+          deploymentId: "<id>"
+          resourceId: "<id>"
+        query:
+          workspace: "my-workspace"
+          project: "prj_mcytp6z3j91f7tn5ryqsfwtr"
+      responses:
+        "200":
+          application/json: {"deployment": {"deploymentId": "<id>", "deploymentName": "<value>", "deploymentGroupId": "<id>", "deploymentGroupName": "<value>", "resourceType": "<value>", "resourceId": "<id>", "backend": "<value>", "controllerPlatform": "<value>", "health": "<value>", "lifecycle": "<value>", "message": "<value>", "partial": true, "providerStale": true, "platformStale": false, "desiredCount": 307152, "currentCount": 43341, "readyCount": 478814, "observedAt": "2025-01-22T09:51:43.656Z", "desiredImage": "<value>"}, "heartbeat": {"status": "available", "deploymentId": "<id>", "resourceId": "<id>", "resourceType": "<value>", "backend": "<value>", "controllerPlatform": "<value>", "observedAt": "2025-10-23T22:15:26.399Z", "staleAt": "2026-06-28T23:50:07.248Z", "platformStale": true, "heartbeat": {"backend": "external", "controllerPlatform": "local", "data": {"data": {"capacityGroups": [{"currentMachines": 36555, "desiredMachines": 657157, "groupId": "<id>"}], "name": "<value>", "nodes": {}, "providerFleets": [], "status": {"collectionIssues": [{"message": "<value>", "reason": "api-unavailable", "severity": "info", "source": "<value>"}], "health": "unhealthy", "lifecycle": "deleted", "partial": true, "stale": false}, "backend": "aws"}, "resourceType": "compute-cluster"}, "observedAt": "2025-08-26T13:59:59.097Z", "raw": [{"body": "<value>", "collectedAt": "2026-11-30T05:27:05.915Z", "format": "yaml", "source": "<value>", "truncated": true}], "resourceId": "<id>", "resourceType": "<value>"}, "raw": []}}
         "404":
           application/json: {"code": "<value>", "message": "<value>", "retryable": false, "internal": false}
         "500":
@@ -30737,6 +31331,32 @@ examples:
           application/json: {"code": "<value>", "message": "<value>", "retryable": false, "internal": false}
         "500":
           application/json: {"code": "<value>", "message": "<value>", "retryable": false, "internal": false}
+    projectName:
+      parameters:
+        path:
+          idOrName: "my-project"
+        query:
+          workspace: "my-workspace"
+      responses:
+        "200":
+          application/json: {"deploymentPortalEndpoint": {"id": "dend_1bb6gdvm1bs74acqkjstcgv", "workspaceId": "ws_It13CUaGEhLLAB87simX0", "domainId": "dom_469m0agk8luj4s16sakmmpdd", "kind": "manager_api", "owner": {"type": "project", "id": "<id>"}, "hostname": "joyous-pasta.name", "status": "provisioning", "managedDnsRecords": [{"name": "<value>", "type": "<value>", "value": "<value>"}], "retryAttempts": 33218, "createdAt": "2026-03-07T21:33:59.867Z", "updatedAt": "2026-03-17T04:05:17.218Z"}, "packageEndpoint": {"id": "dend_1bb6gdvm1bs74acqkjstcgv", "workspaceId": "ws_It13CUaGEhLLAB87simX0", "domainId": "dom_469m0agk8luj4s16sakmmpdd", "kind": "manager_api", "owner": {"type": "project", "id": "<id>"}, "hostname": "gorgeous-captain.com", "status": "waiting_for_domain", "managedDnsRecords": [], "retryAttempts": 778351, "createdAt": "2025-04-30T10:16:52.541Z", "updatedAt": "2024-04-30T21:28:01.544Z"}}
+        "404":
+          application/json: {"code": "<value>", "message": "<value>", "retryable": false, "internal": true}
+        "500":
+          application/json: {"code": "<value>", "message": "<value>", "retryable": false, "internal": true}
+    projectId:
+      parameters:
+        path:
+          idOrName: "prj_mcytp6z3j91f7tn5ryqsfwtr"
+        query:
+          workspace: "my-workspace"
+      responses:
+        "200":
+          application/json: {"deploymentPortalEndpoint": {"id": "dend_1bb6gdvm1bs74acqkjstcgv", "workspaceId": "ws_It13CUaGEhLLAB87simX0", "domainId": "dom_469m0agk8luj4s16sakmmpdd", "kind": "manager_api", "owner": {"type": "project", "id": "<id>"}, "hostname": "joyous-pasta.name", "status": "provisioning", "managedDnsRecords": [{"name": "<value>", "type": "<value>", "value": "<value>"}], "retryAttempts": 33218, "createdAt": "2026-03-07T21:33:59.867Z", "updatedAt": "2026-03-17T04:05:17.218Z"}, "packageEndpoint": {"id": "dend_1bb6gdvm1bs74acqkjstcgv", "workspaceId": "ws_It13CUaGEhLLAB87simX0", "domainId": "dom_469m0agk8luj4s16sakmmpdd", "kind": "manager_api", "owner": {"type": "project", "id": "<id>"}, "hostname": "gorgeous-captain.com", "status": "waiting_for_domain", "managedDnsRecords": [], "retryAttempts": 778351, "createdAt": "2025-04-30T10:16:52.541Z", "updatedAt": "2024-04-30T21:28:01.544Z"}}
+        "404":
+          application/json: {"code": "<value>", "message": "<value>", "retryable": false, "internal": true}
+        "500":
+          application/json: {"code": "<value>", "message": "<value>", "retryable": false, "internal": true}
   putProjectDeploymentPortalDomain:
     speakeasy-default-put-project-deployment-portal-domain:
       parameters:
@@ -30801,6 +31421,26 @@ examples:
         query:
           workspace: "my-workspace"
           project: "my-project"
+      responses:
+        "200":
+          application/json: {"items": []}
+        "500":
+          application/json: {"code": "<value>", "message": "<value>", "retryable": false, "internal": true}
+    projectName:
+      parameters:
+        query:
+          workspace: "my-workspace"
+          project: "my-project"
+      responses:
+        "200":
+          application/json: {"items": []}
+        "500":
+          application/json: {"code": "<value>", "message": "<value>", "retryable": false, "internal": true}
+    projectId:
+      parameters:
+        query:
+          workspace: "my-workspace"
+          project: "prj_mcytp6z3j91f7tn5ryqsfwtr"
       responses:
         "200":
           application/json: {"items": []}
@@ -30945,6 +31585,30 @@ examples:
           application/json: {"code": "<value>", "message": "<value>", "retryable": false, "internal": true}
         "500":
           application/json: {"code": "<value>", "message": "<value>", "retryable": false, "internal": true}
+    projectName:
+      parameters:
+        query:
+          workspace: "my-workspace"
+          project: "my-project"
+      responses:
+        "200":
+          application/json: {"resources": []}
+        "404":
+          application/json: {"code": "<value>", "message": "<value>", "retryable": false, "internal": true}
+        "500":
+          application/json: {"code": "<value>", "message": "<value>", "retryable": false, "internal": true}
+    projectId:
+      parameters:
+        query:
+          workspace: "my-workspace"
+          project: "prj_mcytp6z3j91f7tn5ryqsfwtr"
+      responses:
+        "200":
+          application/json: {"resources": []}
+        "404":
+          application/json: {"code": "<value>", "message": "<value>", "retryable": false, "internal": true}
+        "500":
+          application/json: {"code": "<value>", "message": "<value>", "retryable": false, "internal": true}
   createFirstPartyDeploymentSession:
     speakeasy-default-create-first-party-deployment-session:
       parameters:
@@ -30988,6 +31652,30 @@ examples:
         query:
           workspace: "my-workspace"
           project: "my-project"
+          deploymentId: "dep_0c29fq4a2yjb7kx3smwdgxlc"
+          limit: 20
+      responses:
+        "200":
+          application/json: {"items": [], "nextCursor": "<value>"}
+        "500":
+          application/json: {"code": "<value>", "message": "<value>", "retryable": false, "internal": false}
+    projectName:
+      parameters:
+        query:
+          workspace: "my-workspace"
+          project: "my-project"
+          deploymentId: "dep_0c29fq4a2yjb7kx3smwdgxlc"
+          limit: 20
+      responses:
+        "200":
+          application/json: {"items": [], "nextCursor": "<value>"}
+        "500":
+          application/json: {"code": "<value>", "message": "<value>", "retryable": false, "internal": false}
+    projectId:
+      parameters:
+        query:
+          workspace: "my-workspace"
+          project: "prj_mcytp6z3j91f7tn5ryqsfwtr"
           deploymentId: "dep_0c29fq4a2yjb7kx3smwdgxlc"
           limit: 20
       responses:
@@ -31156,6 +31844,32 @@ examples:
       parameters:
         path:
           idOrName: "my-project"
+        query:
+          workspace: "my-workspace"
+      responses:
+        "200":
+          application/json: {"activeRelease": {"id": "rel_WbhQgksrawSKIpEN0NAssHX9", "version": "<value>", "stack": {}}, "visiblePackageTypes": [], "visibleSetupMethods": []}
+        "404":
+          application/json: {"code": "<value>", "message": "<value>", "retryable": false, "internal": true}
+        "500":
+          application/json: {"code": "<value>", "message": "<value>", "retryable": false, "internal": true}
+    projectName:
+      parameters:
+        path:
+          idOrName: "my-project"
+        query:
+          workspace: "my-workspace"
+      responses:
+        "200":
+          application/json: {"activeRelease": {"id": "rel_WbhQgksrawSKIpEN0NAssHX9", "version": "<value>", "stack": {}}, "visiblePackageTypes": [], "visibleSetupMethods": []}
+        "404":
+          application/json: {"code": "<value>", "message": "<value>", "retryable": false, "internal": true}
+        "500":
+          application/json: {"code": "<value>", "message": "<value>", "retryable": false, "internal": true}
+    projectId:
+      parameters:
+        path:
+          idOrName: "prj_mcytp6z3j91f7tn5ryqsfwtr"
         query:
           workspace: "my-workspace"
       responses:

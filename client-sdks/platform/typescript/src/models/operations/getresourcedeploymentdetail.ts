@@ -50,6 +50,7 @@ export type GetResourceDeploymentDetailDeployment = {
   currentCount: number | null;
   readyCount: number | null;
   observedAt: Date;
+  desiredImage: string | null;
 };
 
 export type HeartbeatMissing = {
@@ -7319,6 +7320,7 @@ export const GetResourceDeploymentDetailDeployment$inboundSchema: z.ZodType<
   currentCount: z.nullable(z.int()),
   readyCount: z.nullable(z.int()),
   observedAt: z.iso.datetime({ offset: true }).transform(v => new Date(v)),
+  desiredImage: z.nullable(z.string()),
 });
 
 export function getResourceDeploymentDetailDeploymentFromJSON(

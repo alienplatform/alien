@@ -628,6 +628,10 @@ pub struct HorizonContainerHeartbeatData {
     pub status: WorkloadHeartbeatStatus,
     pub container_id: String,
     pub image: Option<String>,
+    #[serde(default)]
+    pub observed_image: Option<String>,
+    #[serde(default)]
+    pub latest_update_timestamp: Option<String>,
     pub scheduling_mode: HorizonWorkloadSchedulingMode,
     pub replicas: WorkloadReplicaStatus,
     pub cpu: Option<MetricSample>,
@@ -700,6 +704,8 @@ pub struct AwsDaemonHeartbeatData {
     pub healthy_instances: u32,
     pub unavailable_instances: u32,
     pub command_supported: bool,
+    #[serde(default)]
+    pub observed_image: Option<String>,
     pub latest_update_timestamp: String,
     pub daemon_instances: Vec<ManagedRuntimeUnitStatus>,
     pub events: Vec<ManagedRuntimeEventSnapshot>,
@@ -722,6 +728,8 @@ pub struct GcpDaemonHeartbeatData {
     pub healthy_instances: u32,
     pub unavailable_instances: u32,
     pub command_supported: bool,
+    #[serde(default)]
+    pub observed_image: Option<String>,
     pub latest_update_timestamp: String,
     pub daemon_instances: Vec<ManagedRuntimeUnitStatus>,
     pub events: Vec<ManagedRuntimeEventSnapshot>,
@@ -744,6 +752,8 @@ pub struct AzureDaemonHeartbeatData {
     pub healthy_instances: u32,
     pub unavailable_instances: u32,
     pub command_supported: bool,
+    #[serde(default)]
+    pub observed_image: Option<String>,
     pub latest_update_timestamp: String,
     pub daemon_instances: Vec<ManagedRuntimeUnitStatus>,
     pub events: Vec<ManagedRuntimeEventSnapshot>,
@@ -766,6 +776,8 @@ pub struct MachinesDaemonHeartbeatData {
     pub healthy_instances: u32,
     pub unavailable_instances: u32,
     pub command_supported: bool,
+    #[serde(default)]
+    pub observed_image: Option<String>,
     pub latest_update_timestamp: String,
     pub daemon_instances: Vec<ManagedRuntimeUnitStatus>,
     pub events: Vec<ManagedRuntimeEventSnapshot>,

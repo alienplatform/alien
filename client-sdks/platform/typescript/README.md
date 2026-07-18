@@ -218,7 +218,7 @@ run();
 * [getSetupRegistrationOperation](docs/sdks/deployments/README.md#getsetupregistrationoperation) - Get setup registration operation status.
 * [delete](docs/sdks/deployments/README.md#delete) - Delete, detach, or forget a deployment by ID.
 * [redeploy](docs/sdks/deployments/README.md#redeploy) - Redeploy a running deployment with the same release and fresh environment variables. Sets status to update-pending.
-* [pinRelease](docs/sdks/deployments/README.md#pinrelease) - Pin or unpin deployment to a specific release. Only works for running deployments. Controller will automatically trigger update to target release.
+* [pinRelease](docs/sdks/deployments/README.md#pinrelease) - Pin or unpin a running or runtime-failed deployment. Running deployments start an update; failed deployments retry toward the selected release.
 * [retry](docs/sdks/deployments/README.md#retry) - Retry a failed deployment operation. Uses alien-infra's retry mechanisms to resume from exact failure point.
 * [getInputs](docs/sdks/deployments/README.md#getinputs) - Get the active input definitions and current non-secret values for a deployment.
 * [updateInputs](docs/sdks/deployments/README.md#updateinputs) - Update runtime stack inputs, rebuild their environment-variable mappings, and request a deployment update when runtime configuration changes.
@@ -413,7 +413,7 @@ To read more about standalone functions, check [FUNCTIONS.md](./FUNCTIONS.md).
 - [`deploymentsList`](docs/sdks/deployments/README.md#list) - Retrieve all deployments.
 - [`deploymentsListFilterDeploymentGroups`](docs/sdks/deployments/README.md#listfilterdeploymentgroups) - List deployment groups with deployment counts. Used for filter dropdowns.
 - [`deploymentsListFilterEnvironments`](docs/sdks/deployments/README.md#listfilterenvironments) - List distinct effective environments used by deployments. Used for filter dropdowns.
-- [`deploymentsPinRelease`](docs/sdks/deployments/README.md#pinrelease) - Pin or unpin deployment to a specific release. Only works for running deployments. Controller will automatically trigger update to target release.
+- [`deploymentsPinRelease`](docs/sdks/deployments/README.md#pinrelease) - Pin or unpin a running or runtime-failed deployment. Running deployments start an update; failed deployments retry toward the selected release.
 - [`deploymentsRedeploy`](docs/sdks/deployments/README.md#redeploy) - Redeploy a running deployment with the same release and fresh environment variables. Sets status to update-pending.
 - [`deploymentsRetry`](docs/sdks/deployments/README.md#retry) - Retry a failed deployment operation. Uses alien-infra's retry mechanisms to resume from exact failure point.
 - [`deploymentsSetFirstPartyDeploymentInputs`](docs/sdks/deployments/README.md#setfirstpartydeploymentinputs) - Store operator-provided input values on a first-party deployment session token so CLI/local deploys apply them.

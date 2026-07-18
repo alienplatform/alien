@@ -17,7 +17,7 @@
 * [getSetupRegistrationOperation](#getsetupregistrationoperation) - Get setup registration operation status.
 * [delete](#delete) - Delete, detach, or forget a deployment by ID.
 * [redeploy](#redeploy) - Redeploy a running deployment with the same release and fresh environment variables. Sets status to update-pending.
-* [pinRelease](#pinrelease) - Pin or unpin deployment to a specific release. Only works for running deployments. Controller will automatically trigger update to target release.
+* [pinRelease](#pinrelease) - Pin or unpin a running or runtime-failed deployment. Running deployments start an update; failed deployments retry toward the selected release.
 * [retry](#retry) - Retry a failed deployment operation. Uses alien-infra's retry mechanisms to resume from exact failure point.
 * [getInputs](#getinputs) - Get the active input definitions and current non-secret values for a deployment.
 * [updateInputs](#updateinputs) - Update runtime stack inputs, rebuild their environment-variable mappings, and request a deployment update when runtime configuration changes.
@@ -867,7 +867,7 @@ async function run() {
             id: "<id>",
             type: "<value>",
             importData: {
-  
+
             },
           },
         ],
@@ -1140,7 +1140,7 @@ run();
 
 ## pinRelease
 
-Pin or unpin deployment to a specific release. Only works for running deployments. Controller will automatically trigger update to target release.
+Pin or unpin a running or runtime-failed deployment. Running deployments start an update; failed deployments retry toward the selected release.
 
 ### Example Usage
 

@@ -10,7 +10,8 @@ use utoipa::OpenApi;
     info(
         title = "Alien Manager API",
         version = "1.0.0",
-        description = "Control plane for Alien applications. Manages deployments, releases, commands, and telemetry."
+        description = "Control plane for Alien applications. Manages deployments, releases, commands, and telemetry.",
+        license(name = "FSL-1.1-Apache-2.0")
     ),
     paths(
         // Health

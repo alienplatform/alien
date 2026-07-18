@@ -1,6 +1,6 @@
 {
   "name": "@alienplatform/manager-api",
-  "version": "1.14.2",
+  "version": "1.15.0",
   "author": "Alien Software, Inc. <hi@alien.dev>",
   "homepage": "https://alien.dev",
   "license": "FSL-1.1-Apache-2.0",
@@ -64,8 +64,8 @@
     
   },
   "devDependencies": {
-    "@eslint/js": "^9.19.0",
-    "eslint": "^9.19.0",
+    "@eslint/js": "^9.26.0",
+    "eslint": "^9.26.0",
     "globals": "^15.14.0",
     "typescript": "~5.8.3",
     "typescript-eslint": "^8.26.0"

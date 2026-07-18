@@ -101,7 +101,9 @@ export type ContainerHeartbeatDataHorizonPlatform = {
   cpu?: MetricSample | null | undefined;
   events: Array<ManagedRuntimeEventSnapshot>;
   image?: string | null | undefined;
+  latestUpdateTimestamp?: string | null | undefined;
   memory?: MetricSample | null | undefined;
+  observedImage?: string | null | undefined;
   replicaUnits: Array<ManagedRuntimeUnitStatus>;
   replicas: WorkloadReplicaStatus;
   schedulingMode: HorizonWorkloadSchedulingMode;
@@ -217,7 +219,9 @@ export type ContainerHeartbeatDataHorizonPlatform$Outbound = {
   cpu?: MetricSample$Outbound | null | undefined;
   events: Array<ManagedRuntimeEventSnapshot$Outbound>;
   image?: string | null | undefined;
+  latestUpdateTimestamp?: string | null | undefined;
   memory?: MetricSample$Outbound | null | undefined;
+  observedImage?: string | null | undefined;
   replicaUnits: Array<ManagedRuntimeUnitStatus$Outbound>;
   replicas: WorkloadReplicaStatus$Outbound;
   schedulingMode: string;
@@ -235,7 +239,9 @@ export const ContainerHeartbeatDataHorizonPlatform$outboundSchema: z.ZodType<
   cpu: z.nullable(MetricSample$outboundSchema).optional(),
   events: z.array(ManagedRuntimeEventSnapshot$outboundSchema),
   image: z.nullable(z.string()).optional(),
+  latestUpdateTimestamp: z.nullable(z.string()).optional(),
   memory: z.nullable(MetricSample$outboundSchema).optional(),
+  observedImage: z.nullable(z.string()).optional(),
   replicaUnits: z.array(ManagedRuntimeUnitStatus$outboundSchema),
   replicas: WorkloadReplicaStatus$outboundSchema,
   schedulingMode: HorizonWorkloadSchedulingMode$outboundSchema,

@@ -4,7 +4,7 @@
     "title": "Alien Manager API",
     "description": "Control plane for Alien applications. Manages deployments, releases, commands, and telemetry.",
     "license": {
-      "name": ""
+      "name": "FSL-1.1-Apache-2.0"
     },
     "version": "1.0.0"
   },
@@ -2158,6 +2158,12 @@
           "latestUpdateTimestamp": {
             "type": "string"
           },
+          "observedImage": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
           "status": {
             "$ref": "#/components/schemas/WorkloadHeartbeatStatus"
           },
@@ -4150,6 +4156,12 @@
           },
           "latestUpdateTimestamp": {
             "type": "string"
+          },
+          "observedImage": {
+            "type": [
+              "string",
+              "null"
+            ]
           },
           "status": {
             "$ref": "#/components/schemas/WorkloadHeartbeatStatus"
@@ -7902,6 +7914,12 @@
           "latestUpdateTimestamp": {
             "type": "string"
           },
+          "observedImage": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
           "status": {
             "$ref": "#/components/schemas/WorkloadHeartbeatStatus"
           },
@@ -8753,6 +8771,12 @@
               "null"
             ]
           },
+          "latestUpdateTimestamp": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
           "memory": {
             "oneOf": [
               {
@@ -8761,6 +8785,12 @@
               {
                 "$ref": "#/components/schemas/MetricSample"
               }
+            ]
+          },
+          "observedImage": {
+            "type": [
+              "string",
+              "null"
             ]
           },
           "replicaUnits": {
@@ -11809,6 +11839,12 @@
           },
           "latestUpdateTimestamp": {
             "type": "string"
+          },
+          "observedImage": {
+            "type": [
+              "string",
+              "null"
+            ]
           },
           "status": {
             "$ref": "#/components/schemas/WorkloadHeartbeatStatus"

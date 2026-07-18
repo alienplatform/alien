@@ -97,6 +97,7 @@ export type DaemonHeartbeatDataMachines = {
   horizonStatusMessage?: string | null | undefined;
   horizonStatusReason?: string | null | undefined;
   latestUpdateTimestamp: string;
+  observedImage?: string | null | undefined;
   status: WorkloadHeartbeatStatus;
   unavailableInstances: number;
   backend: "machines";
@@ -116,6 +117,7 @@ export type DaemonHeartbeatDataAzure = {
   horizonStatusMessage?: string | null | undefined;
   horizonStatusReason?: string | null | undefined;
   latestUpdateTimestamp: string;
+  observedImage?: string | null | undefined;
   status: WorkloadHeartbeatStatus;
   unavailableInstances: number;
   backend: "azure";
@@ -135,6 +137,7 @@ export type DaemonHeartbeatDataGcp = {
   horizonStatusMessage?: string | null | undefined;
   horizonStatusReason?: string | null | undefined;
   latestUpdateTimestamp: string;
+  observedImage?: string | null | undefined;
   status: WorkloadHeartbeatStatus;
   unavailableInstances: number;
   backend: "gcp";
@@ -154,6 +157,7 @@ export type DaemonHeartbeatDataAws = {
   horizonStatusMessage?: string | null | undefined;
   horizonStatusReason?: string | null | undefined;
   latestUpdateTimestamp: string;
+  observedImage?: string | null | undefined;
   status: WorkloadHeartbeatStatus;
   unavailableInstances: number;
   backend: "aws";
@@ -268,6 +272,7 @@ export type DaemonHeartbeatDataMachines$Outbound = {
   horizonStatusMessage?: string | null | undefined;
   horizonStatusReason?: string | null | undefined;
   latestUpdateTimestamp: string;
+  observedImage?: string | null | undefined;
   status: WorkloadHeartbeatStatus$Outbound;
   unavailableInstances: number;
   backend: "machines";
@@ -291,6 +296,7 @@ export const DaemonHeartbeatDataMachines$outboundSchema: z.ZodType<
   horizonStatusMessage: z.nullable(z.string()).optional(),
   horizonStatusReason: z.nullable(z.string()).optional(),
   latestUpdateTimestamp: z.string(),
+  observedImage: z.nullable(z.string()).optional(),
   status: WorkloadHeartbeatStatus$outboundSchema,
   unavailableInstances: z.int(),
   backend: z.literal("machines"),
@@ -321,6 +327,7 @@ export type DaemonHeartbeatDataAzure$Outbound = {
   horizonStatusMessage?: string | null | undefined;
   horizonStatusReason?: string | null | undefined;
   latestUpdateTimestamp: string;
+  observedImage?: string | null | undefined;
   status: WorkloadHeartbeatStatus$Outbound;
   unavailableInstances: number;
   backend: "azure";
@@ -344,6 +351,7 @@ export const DaemonHeartbeatDataAzure$outboundSchema: z.ZodType<
   horizonStatusMessage: z.nullable(z.string()).optional(),
   horizonStatusReason: z.nullable(z.string()).optional(),
   latestUpdateTimestamp: z.string(),
+  observedImage: z.nullable(z.string()).optional(),
   status: WorkloadHeartbeatStatus$outboundSchema,
   unavailableInstances: z.int(),
   backend: z.literal("azure"),
@@ -372,6 +380,7 @@ export type DaemonHeartbeatDataGcp$Outbound = {
   horizonStatusMessage?: string | null | undefined;
   horizonStatusReason?: string | null | undefined;
   latestUpdateTimestamp: string;
+  observedImage?: string | null | undefined;
   status: WorkloadHeartbeatStatus$Outbound;
   unavailableInstances: number;
   backend: "gcp";
@@ -395,6 +404,7 @@ export const DaemonHeartbeatDataGcp$outboundSchema: z.ZodType<
   horizonStatusMessage: z.nullable(z.string()).optional(),
   horizonStatusReason: z.nullable(z.string()).optional(),
   latestUpdateTimestamp: z.string(),
+  observedImage: z.nullable(z.string()).optional(),
   status: WorkloadHeartbeatStatus$outboundSchema,
   unavailableInstances: z.int(),
   backend: z.literal("gcp"),
@@ -423,6 +433,7 @@ export type DaemonHeartbeatDataAws$Outbound = {
   horizonStatusMessage?: string | null | undefined;
   horizonStatusReason?: string | null | undefined;
   latestUpdateTimestamp: string;
+  observedImage?: string | null | undefined;
   status: WorkloadHeartbeatStatus$Outbound;
   unavailableInstances: number;
   backend: "aws";
@@ -446,6 +457,7 @@ export const DaemonHeartbeatDataAws$outboundSchema: z.ZodType<
   horizonStatusMessage: z.nullable(z.string()).optional(),
   horizonStatusReason: z.nullable(z.string()).optional(),
   latestUpdateTimestamp: z.string(),
+  observedImage: z.nullable(z.string()).optional(),
   status: WorkloadHeartbeatStatus$outboundSchema,
   unavailableInstances: z.int(),
   backend: z.literal("aws"),

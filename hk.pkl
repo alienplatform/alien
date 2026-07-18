@@ -1,0 +1,34 @@
+amends "package://github.com/jdx/hk/releases/download/v1.48.0/hk@1.48.0#/Config.pkl"
+import "package://github.com/jdx/hk/releases/download/v1.48.0/hk@1.48.0#/Builtins.pkl"
+
+stash_untracked = false
+
+local fast_steps = new Mapping<String, Step> {
+    ["biome"] = (Builtins.biome) {
+        check = "pnpm exec biome check --no-errors-on-unmatched {{files}}"
+        fix = "pnpm exec biome check --write --no-errors-on-unmatched {{files}}"
+    }
+    ["check-added-large-files"] = Builtins.check_added_large_files
+    ["check-merge-conflict"] = Builtins.check_merge_conflict
+    ["newlines"] = Builtins.newlines
+    ["rustfmt"] = (Builtins.rustfmt) {
+        check = "rustfmt --check --edition 2021 {{files}}"
+        fix = "rustfmt --edition 2021 {{files}}"
+    }
+    ["trailing-whitespace"] = Builtins.trailing_whitespace
+}
+
+hooks {
+    ["pre-commit"] {
+        fix = true
+        stash = "git"
+        steps = fast_steps
+    }
+    ["check"] {
+        steps = fast_steps
+    }
+    ["fix"] {
+        fix = true
+        steps = fast_steps
+    }
+}

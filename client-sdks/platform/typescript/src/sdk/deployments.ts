@@ -212,7 +212,7 @@ export class Deployments extends ClientSDK {
   }
 
   /**
-   * Pin or unpin deployment to a specific release. Only works for running deployments. Controller will automatically trigger update to target release.
+   * Pin or unpin a running or runtime-failed deployment. Running deployments start an update; failed deployments retry toward the selected release.
    */
   async pinRelease(
     request: operations.PinDeploymentReleaseRequest,

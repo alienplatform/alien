@@ -16,6 +16,8 @@ generation:
     requestResponseComponentNamesFeb2024: true
     securityFeb2025: true
     sharedErrorComponentsApr2025: true
+    sharedNestedComponentsJan2026: false
+    nameOverrideFeb2026: false
   auth:
     oAuth2ClientCredentialsEnabled: false
     oAuth2PasswordEnabled: false
@@ -25,13 +27,14 @@ generation:
   schemas:
     allOfMergeStrategy: shallowMerge
   requestBodyFieldName: ""
+  versioningStrategy: automatic
   persistentEdits: {}
   tests:
     generateTests: false
     generateNewTests: true
     skipResponseBodyAssertions: false
 typescript:
-  version: 1.14.2
+  version: 1.15.0
   acceptHeaderEnum: true
   additionalDependencies:
     dependencies: {}
@@ -46,6 +49,7 @@ typescript:
       url: https://github.com/alienplatform/alien.git
   additionalScripts: {}
   alwaysIncludeInboundAndOutbound: false
+  apiPromiseHelpers: false
   author: Alien Software, Inc. <hi@alien.dev>
   baseErrorName: AlienManagerError
   clientServerStatusCodesAsErrors: true
@@ -56,7 +60,10 @@ typescript:
   enableReactQuery: false
   enumFormat: union
   envVarPrefix: ALIEN_MANAGER
+  eventStreamClassName: EventStream
   exportZodModelNamespace: false
+  fixEnumNameSanitization: false
+  flatAdditionalProperties: false
   flattenGlobalSecurity: true
   flatteningOrder: parameters-first
   formStringArrayEncodeMode: encoded-string
@@ -75,6 +82,7 @@ typescript:
   inputModelSuffix: input
   jsonpath: rfc9535
   laxMode: strict
+  legacyFileNaming: true
   maxMethodParams: 0
   methodArguments: infer-optional-args
   modelPropertyCasing: camel
@@ -83,10 +91,15 @@ typescript:
   outputModelSuffix: output
   packageName: '@alienplatform/manager-api'
   preApplyUnionDiscriminators: true
+  preserveModelFieldNames: false
+  privateIdentifierPrefix: '#'
+  requestExtras: false
   responseFormat: flat
   sseFlatResponse: true
   templateVersion: v2
   unionStrategy: left-to-right
   usageSDKInitImports: []
   useIndexModules: true
+  useOxlint: false
+  useTsgo: false
   zodVersion: v4

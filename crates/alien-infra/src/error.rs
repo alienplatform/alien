@@ -439,6 +439,24 @@ pub enum ErrorData {
         /// The cluster ID involved, if applicable
         cluster_id: Option<String>,
     },
+
+    /// A managed workload reached a provider-reported terminal runtime failure.
+    #[error(
+        code = "MANAGED_WORKLOAD_FAILED",
+        message = "Managed workload '{resource_id}' failed ({reason}): {message}",
+        retryable = "false",
+        internal = "false"
+    )]
+    ManagedWorkloadFailed {
+        /// Alien resource ID of the failed workload.
+        resource_id: String,
+        /// Provider lifecycle status at observation time.
+        status: String,
+        /// Provider machine-readable failure reason.
+        reason: String,
+        /// Provider human-readable failure detail.
+        message: String,
+    },
 }
 
 pub type Result<T> = alien_error::Result<T, ErrorData>;
