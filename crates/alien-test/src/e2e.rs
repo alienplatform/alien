@@ -19,6 +19,8 @@ use crate::manager::TestManager;
 
 const LOCAL_DELETION_TIMEOUT: Duration = Duration::from_secs(120);
 const DISTRIBUTION_DELETION_HANDOFF_TIMEOUT: Duration = Duration::from_secs(600);
+const DEFAULT_DEPLOYMENT_RUNNING_TIMEOUT: Duration = Duration::from_secs(600);
+const AZURE_DEPLOYMENT_RUNNING_TIMEOUT: Duration = Duration::from_secs(1_800);
 
 // ---------------------------------------------------------------------------
 // Enums
@@ -1441,9 +1443,32 @@ pub fn is_platform_available(
     }
 }
 
+fn deployment_running_timeout(platform: Platform) -> Duration {
+    match platform {
+        Platform::Azure => AZURE_DEPLOYMENT_RUNNING_TIMEOUT,
+        _ => DEFAULT_DEPLOYMENT_RUNNING_TIMEOUT,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn azure_readiness_budget_accounts_for_slow_control_plane_propagation() {
+        assert_eq!(
+            deployment_running_timeout(Platform::Azure),
+            Duration::from_secs(1_800)
+        );
+        assert_eq!(
+            deployment_running_timeout(Platform::Aws),
+            Duration::from_secs(600)
+        );
+        assert_eq!(
+            deployment_running_timeout(Platform::Gcp),
+            Duration::from_secs(600)
+        );
+    }
 
     #[test]
     fn managed_kubernetes_flows_use_kubernetes_runtime_with_cloud_base() {
@@ -1743,7 +1768,7 @@ pub async fn setup(
     // For push: the manager's deployment loop drives this after alien-deploy deploy completes.
     // For pull: the alien-operator drives this via sync + deployment loop.
     let wait_result = deployment
-        .wait_until_running(Duration::from_secs(600))
+        .wait_until_running(deployment_running_timeout(platform))
         .await
         .map_err(|e| e.to_string());
 
