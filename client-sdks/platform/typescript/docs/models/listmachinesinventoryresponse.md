@@ -29,7 +29,15 @@ let value: ListMachinesInventoryResponse = {
       ],
       drainForce: false,
       lastHeartbeat: "<value>",
-      replicaCount: 716534,
+      localOverrides: [
+        {
+          baseAssignmentHash: "<value>",
+          lifecycle: "<value>",
+          replicaId: "<id>",
+          workloadName: "<value>",
+        },
+      ],
+      replicaCount: 938471,
     },
   ],
 };
