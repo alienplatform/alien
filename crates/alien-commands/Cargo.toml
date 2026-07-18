@@ -38,6 +38,7 @@ runtime = [
 #   cargo tree -p alien-commands --no-default-features --features receiver
 receiver = [
     "reqwest",
+    "reqwest/rustls-tls",
     "bytes",
     "tokio",
     "tokio-util",
