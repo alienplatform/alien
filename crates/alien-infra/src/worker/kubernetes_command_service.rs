@@ -228,7 +228,7 @@ fn command_service_is_compatible_shared_worker_service(
     };
     let selector_matches = spec.selector.as_ref().is_some_and(|selector| {
         selector.get("app").map(String::as_str) == Some(service_name)
-            && selector.get("managed-by").map(String::as_str) == Some("deployment")
+            && selector.get("managed-by").map(String::as_str) == Some("runtime")
             && selector.get("component").map(String::as_str) == Some("worker")
     });
     let port_matches = spec.ports.as_ref().is_some_and(|ports| {
@@ -340,8 +340,9 @@ mod tests {
     };
 
     use super::{
-        build_command_service, command_service_is_owned, delete_command_service,
-        reconcile_command_service, reconcile_ready_command_service,
+        build_command_service, command_service_is_compatible_shared_worker_service,
+        command_service_is_owned, delete_command_service, reconcile_command_service,
+        reconcile_ready_command_service,
     };
 
     fn worker(commands_enabled: bool) -> Worker {
@@ -409,6 +410,35 @@ mod tests {
             None,
             "ownership labels must not narrow the pod selector"
         );
+    }
+
+    #[test]
+    fn legacy_deployment_selector_is_not_a_compatible_shared_worker_service() {
+        let mut legacy_service = service(BTreeMap::from([(
+            "resource-id".to_string(),
+            "worker".to_string(),
+        )]));
+        legacy_service.spec = Some(ServiceSpec {
+            type_: Some("ClusterIP".to_string()),
+            selector: Some(BTreeMap::from([
+                ("app".to_string(), "test-worker".to_string()),
+                ("managed-by".to_string(), "deployment".to_string()),
+                ("component".to_string(), "worker".to_string()),
+            ])),
+            ports: Some(vec![ServicePort {
+                protocol: Some("TCP".to_string()),
+                port: 80,
+                target_port: Some(IntOrString::Int(8080)),
+                ..Default::default()
+            }]),
+            ..Default::default()
+        });
+
+        assert!(!command_service_is_compatible_shared_worker_service(
+            &legacy_service,
+            "test-worker",
+            "worker"
+        ));
     }
 
     #[tokio::test]
@@ -525,7 +555,7 @@ mod tests {
             type_: Some("ClusterIP".to_string()),
             selector: Some(BTreeMap::from([
                 ("app".to_string(), "test-worker".to_string()),
-                ("managed-by".to_string(), "deployment".to_string()),
+                ("managed-by".to_string(), "runtime".to_string()),
                 ("component".to_string(), "worker".to_string()),
             ])),
             ports: Some(vec![ServicePort {
