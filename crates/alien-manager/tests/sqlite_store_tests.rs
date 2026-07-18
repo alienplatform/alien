@@ -103,6 +103,43 @@ async fn create_test_deployment_with_settings(
         .unwrap()
 }
 
+fn test_deployment_state(
+    status: DeploymentStatus,
+    stack_state: Option<StackState>,
+) -> DeploymentState {
+    DeploymentState {
+        status,
+        platform: Platform::Aws,
+        current_release: None,
+        target_release: None,
+        stack_state,
+        error: None,
+        environment_info: None,
+        runtime_metadata: None,
+        retry_requested: false,
+        protocol_version: alien_core::DEPLOYMENT_PROTOCOL_VERSION,
+    }
+}
+
+fn test_reconcile_data(
+    deployment_id: &str,
+    session: &str,
+    status: DeploymentStatus,
+    stack_state: Option<StackState>,
+) -> ReconcileData {
+    ReconcileData {
+        deployment_id: deployment_id.to_string(),
+        session: session.to_string(),
+        state: test_deployment_state(status, stack_state),
+        update_heartbeat: false,
+        suggested_delay_ms: None,
+        heartbeats: vec![],
+        observed_inventory_batches: vec![],
+        capabilities: vec![],
+        operator_version: None,
+    }
+}
+
 // =============================================================================
 // DeploymentStore tests
 // =============================================================================
@@ -788,6 +825,130 @@ async fn reconcile_succeeds_under_other_session_lock() {
     assert_eq!(fetched.status, "running");
     // The lock is unaffected — still held by session-A.
     assert_eq!(fetched.locked_by.as_deref(), Some("session-A"));
+}
+
+#[tokio::test]
+async fn stale_reconcile_preserves_runtime_delete_status_and_latest_stack_state() {
+    let db = fresh_db().await;
+    let store = SqliteDeploymentStore::new(db);
+    let group_id = create_test_group(&store).await;
+
+    for (index, (delete_status, expected_status)) in [
+        (DeploymentStatus::DeletePending, "delete-pending"),
+        (DeploymentStatus::Deleting, "deleting"),
+        (DeploymentStatus::DeleteFailed, "delete-failed"),
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        let deployment = create_test_deployment(
+            &store,
+            &group_id,
+            &format!("delete-race-{index}"),
+            Platform::Aws,
+        )
+        .await;
+        let session = format!("session-{index}");
+        let acquired = store
+            .acquire(
+                &test_subject(),
+                &session,
+                &DeploymentFilter {
+                    deployment_ids: Some(vec![deployment.id.clone()]),
+                    ..Default::default()
+                },
+                1,
+            )
+            .await
+            .unwrap();
+        assert_eq!(acquired.len(), 1);
+
+        store
+            .set_delete_pending(&test_subject(), &deployment.id)
+            .await
+            .unwrap();
+        if delete_status != DeploymentStatus::DeletePending {
+            store
+                .reconcile(
+                    &test_subject(),
+                    test_reconcile_data(&deployment.id, &session, delete_status, None),
+                )
+                .await
+                .unwrap();
+        }
+
+        let latest_stack_state = StackState::new(Platform::Aws);
+        let expected_resource_prefix = latest_stack_state.resource_prefix.clone();
+        store
+            .reconcile(
+                &test_subject(),
+                test_reconcile_data(
+                    &deployment.id,
+                    &session,
+                    DeploymentStatus::Running,
+                    Some(latest_stack_state),
+                ),
+            )
+            .await
+            .unwrap();
+
+        let fetched = store
+            .get_deployment(&test_subject(), &deployment.id)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(fetched.status, expected_status);
+        assert_eq!(
+            fetched
+                .stack_state
+                .expect("stale reconcile should persist its latest stack state")
+                .resource_prefix,
+            expected_resource_prefix
+        );
+        assert_eq!(fetched.locked_by.as_deref(), Some(session.as_str()));
+
+        store
+            .release(&test_subject(), &deployment.id, &session)
+            .await
+            .unwrap();
+    }
+}
+
+#[tokio::test]
+async fn reconcile_allows_runtime_delete_progress() {
+    let db = fresh_db().await;
+    let store = SqliteDeploymentStore::new(db);
+    let group_id = create_test_group(&store).await;
+    let deployment =
+        create_test_deployment(&store, &group_id, "delete-progress", Platform::Aws).await;
+
+    store
+        .set_delete_pending(&test_subject(), &deployment.id)
+        .await
+        .unwrap();
+
+    for (status, expected_status) in [
+        (DeploymentStatus::Deleting, "deleting"),
+        (DeploymentStatus::DeleteFailed, "delete-failed"),
+        (DeploymentStatus::Deleting, "deleting"),
+        (DeploymentStatus::TeardownRequired, "teardown-required"),
+        (DeploymentStatus::Deleted, "deleted"),
+    ] {
+        store
+            .reconcile(
+                &test_subject(),
+                test_reconcile_data(&deployment.id, "delete-session", status, None),
+            )
+            .await
+            .unwrap();
+
+        let fetched = store
+            .get_deployment(&test_subject(), &deployment.id)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(fetched.status, expected_status);
+    }
 }
 
 #[tokio::test]
