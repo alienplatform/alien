@@ -5,7 +5,12 @@
 //! across all tests for performance optimization.
 
 use anyhow::Context;
-use std::{path::PathBuf, process::Command as StdCommand, sync::Once};
+use std::{
+    net::{Ipv4Addr, TcpListener},
+    path::PathBuf,
+    process::Command as StdCommand,
+    sync::Once,
+};
 use tracing::{debug, info};
 use workspace_root::get_workspace_root;
 
@@ -125,4 +130,26 @@ fn build_alien_test_app_impl() -> anyhow::Result<PathBuf> {
 /// Returns the absolute path to the alien-test-app binary.
 pub fn get_test_app_path() -> anyhow::Result<PathBuf> {
     ensure_alien_test_app_built()
+}
+
+/// Allocates distinct loopback ports for the child application and its transport.
+///
+/// Both listeners stay bound until both ports have been selected, preventing the
+/// operating system from returning the same ephemeral port for each endpoint.
+pub fn distinct_free_local_ports() -> anyhow::Result<(u16, u16)> {
+    let application_listener = TcpListener::bind((Ipv4Addr::LOCALHOST, 0))
+        .context("Failed to allocate child application port")?;
+    let transport_listener = TcpListener::bind((Ipv4Addr::LOCALHOST, 0))
+        .context("Failed to allocate runtime transport port")?;
+
+    let application_port = application_listener
+        .local_addr()
+        .context("Failed to read child application port")?
+        .port();
+    let transport_port = transport_listener
+        .local_addr()
+        .context("Failed to read runtime transport port")?
+        .port();
+
+    Ok((application_port, transport_port))
 }
