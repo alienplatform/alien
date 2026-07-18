@@ -14,7 +14,7 @@ use alien_worker_protocol::ControlGrpcServer;
 use axum::{
     body::{Body, Bytes},
     extract::State,
-    http::{Request, Response, StatusCode},
+    http::{Method, Request, Response, StatusCode},
     response::IntoResponse,
     routing::any,
     Router,
@@ -150,6 +150,7 @@ async fn handle_request(
     // Check for Azure Timer trigger (Container Apps Jobs)
     let is_timer_trigger =
         request.headers().get("X-Azure-Timer").is_some() || path.starts_with("/api/timer");
+    let is_dapr_cron = path.starts_with("/cron-");
 
     // Check for CloudEvents (Azure Blob events)
     let ce_type = request
@@ -175,6 +176,10 @@ async fn handle_request(
         return handle_timer_trigger(request, &state).await;
     }
 
+    if is_dapr_cron {
+        return handle_dapr_cron_trigger(&method, &path, &state).await;
+    }
+
     if is_dapr {
         return handle_dapr_message(request, &state).await;
     }
@@ -196,6 +201,24 @@ async fn handle_request(
 
     error!("No app HTTP port registered");
     (StatusCode::SERVICE_UNAVAILABLE, "No application registered").into_response()
+}
+
+/// Handle Dapr cron binding discovery and delivery at its component-named endpoint.
+async fn handle_dapr_cron_trigger(
+    method: &Method,
+    path: &str,
+    state: &TransportState,
+) -> Response<Body> {
+    if method == Method::OPTIONS {
+        return StatusCode::NO_CONTENT.into_response();
+    }
+    if method != Method::POST {
+        return StatusCode::METHOD_NOT_ALLOWED.into_response();
+    }
+
+    let schedule_name = path.trim_start_matches('/').to_string();
+    info!(%schedule_name, "Dapr cron trigger received");
+    send_cron_event(schedule_name, Utc::now(), &state.control_server).await
 }
 
 /// Handle Azure Timer trigger events

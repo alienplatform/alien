@@ -460,6 +460,63 @@ async fn test_containerapp_azure_timer_trigger(
 #[test_context(ContainerAppTestContext)]
 #[tokio::test]
 #[instrument]
+async fn test_containerapp_dapr_cron_binding(
+    ctx: &mut ContainerAppTestContext,
+) -> anyhow::Result<()> {
+    info!("Testing Dapr cron input binding...");
+    let component_name = format!("cron-test-worker-{}", Uuid::new_v4());
+
+    let client = reqwest::Client::new();
+    let url = format!("http://127.0.0.1:{}/{}", ctx.transport_port, component_name);
+
+    let discovery_response = client
+        .request(reqwest::Method::OPTIONS, &url)
+        .timeout(Duration::from_secs(10))
+        .send()
+        .await
+        .context("Failed to discover Dapr cron binding endpoint")?;
+    assert!(
+        discovery_response.status().is_success(),
+        "Dapr cron binding discovery should succeed: {}",
+        discovery_response.status()
+    );
+
+    assert!(
+        check_event_stored(ctx.transport_port, "cron", &component_name)
+            .await?
+            .is_none(),
+        "Dapr OPTIONS discovery must not emit a cron event"
+    );
+
+    let response = client
+        .post(&url)
+        .header("Content-Type", "application/json")
+        .body("{}")
+        .timeout(Duration::from_secs(10))
+        .send()
+        .await
+        .context("Failed to send Dapr cron binding event")?;
+
+    assert!(
+        response.status().is_success(),
+        "Dapr cron binding request should succeed: {}",
+        response.status()
+    );
+
+    tokio::time::sleep(Duration::from_secs(2)).await;
+
+    let stored_event = check_event_stored(ctx.transport_port, "cron", &component_name)
+        .await?
+        .context("Dapr cron event should have been delivered and stored in KV")?;
+    assert_eq!(stored_event["scheduleName"], component_name);
+    assert!(stored_event["scheduledTime"].is_string());
+    info!("Dapr cron input binding PASSED");
+    Ok(())
+}
+
+#[test_context(ContainerAppTestContext)]
+#[tokio::test]
+#[instrument]
 async fn test_containerapp_dapr_queue_message(
     ctx: &mut ContainerAppTestContext,
 ) -> anyhow::Result<()> {
