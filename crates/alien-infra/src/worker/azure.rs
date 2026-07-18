@@ -617,18 +617,50 @@ impl AzureWorkerController {
             }
         }
 
-        // Storage triggers use Event Grid -> a dedicated Service Bus queue ->
-        // a Dapr Service Bus input binding. Pre-create that chain before the
-        // Container App so its receiver role can propagate while the app starts.
+        // Pre-create every trigger input component before the Container App. The
+        // Dapr sidecar loads scoped components when the app revision starts; adding
+        // queue or cron components only after that revision is running leaves the
+        // input binding inactive. Storage triggers additionally create Event Grid ->
+        // a dedicated Service Bus queue, and their receiver role can propagate while
+        // the app starts.
+        let mut cron_index = 0usize;
         for trigger in &func_cfg.triggers {
-            let alien_core::WorkerTrigger::Storage { storage, events } = trigger else {
-                continue;
+            let operation = match trigger {
+                alien_core::WorkerTrigger::Queue { queue } => {
+                    self.create_dapr_service_bus_component(
+                        ctx,
+                        &container_app_name,
+                        func_cfg,
+                        queue,
+                    )
+                    .await?
+                }
+                alien_core::WorkerTrigger::Storage { storage, events } => {
+                    self.create_azure_storage_trigger(
+                        ctx,
+                        &container_app_name,
+                        func_cfg,
+                        storage,
+                        events,
+                    )
+                    .await?
+                }
+                alien_core::WorkerTrigger::Schedule { cron } => {
+                    let operation = self
+                        .create_dapr_cron_component(
+                            ctx,
+                            &container_app_name,
+                            func_cfg,
+                            cron,
+                            cron_index,
+                        )
+                        .await?;
+                    cron_index += 1;
+                    operation
+                }
             };
 
-            match self
-                .create_azure_storage_trigger(ctx, &container_app_name, func_cfg, storage, events)
-                .await?
-            {
+            match operation {
                 DaprComponentOperation::Completed => {}
                 DaprComponentOperation::LongRunning(delay) => {
                     return Ok(HandlerAction::Continue {
@@ -667,7 +699,7 @@ impl AzureWorkerController {
         let func_cfg = ctx.desired_resource_config::<Worker>()?;
         let operation_url = self.pending_operation_url.clone().ok_or_else(|| {
             AlienError::new(ErrorData::InfrastructureError {
-                message: "No pending operation URL recorded for commands Dapr component"
+                message: "No pending operation URL recorded for pre-created Dapr component"
                     .to_string(),
                 operation: Some(
                     "waiting_for_pre_create_commands_dapr_component_operation".to_string(),
@@ -690,7 +722,7 @@ impl AzureWorkerController {
             .check_status(&lro, "CreateOrUpdateDaprComponent", &func_cfg.id)
             .await
             .context(ErrorData::CloudPlatformError {
-                message: "Azure ARM operation failed for commands Dapr component".to_string(),
+                message: "Azure ARM operation failed for pre-created Dapr component".to_string(),
                 resource_id: Some(func_cfg.id.clone()),
             })?;
 

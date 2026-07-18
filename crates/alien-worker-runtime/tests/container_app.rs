@@ -520,14 +520,17 @@ async fn test_containerapp_dapr_cron_binding(
 async fn test_containerapp_dapr_queue_message(
     ctx: &mut ContainerAppTestContext,
 ) -> anyhow::Result<()> {
-    info!("Testing Dapr Service Bus CloudEvent (queue message)...");
+    info!("Testing Dapr Service Bus raw input binding message...");
     let message_id = format!("msg-{}", Uuid::new_v4());
-    let event_time = Utc::now();
+    let marker = format!("queue-marker-{}", Uuid::new_v4());
 
-    // Build Dapr CloudEvent format
+    // Azure Service Bus input bindings deliver the raw message body, without
+    // CloudEvent headers or an envelope added by Dapr.
     let event_data = json!({
+        "id": message_id.clone(),
         "orderId": "order-123",
-        "amount": 50.0
+        "amount": 50.0,
+        "marker": marker.clone()
     });
 
     let client = reqwest::Client::new();
@@ -557,23 +560,16 @@ async fn test_containerapp_dapr_queue_message(
 
     let response = client
         .post(&url)
-        .header("ce-id", &message_id)
-        .header("ce-type", "com.dapr.event.sent")
-        .header("ce-source", "servicebus")
-        .header("ce-specversion", "1.0")
-        .header("ce-time", event_time.to_rfc3339())
-        .header("ce-topic", "test-queue")
-        .header("ce-pubsubname", "servicebus")
         .header("Content-Type", "application/json")
         .body(event_data.to_string())
         .timeout(Duration::from_secs(10))
         .send()
         .await
-        .context("Failed to send Dapr CloudEvent")?;
+        .context("Failed to send Dapr raw input binding message")?;
 
     assert!(
         response.status().is_success(),
-        "Dapr CloudEvent request should succeed: {}",
+        "Dapr raw input binding request should succeed: {}",
         response.status()
     );
 
@@ -585,6 +581,12 @@ async fn test_containerapp_dapr_queue_message(
         .await?
         .context("Queue message should have been delivered and stored in KV")?;
     assert_eq!(stored_message["messageId"], message_id);
+    let stored_payload: serde_json::Value = serde_json::from_str(
+        stored_message["payload"]
+            .as_str()
+            .context("Stored queue payload should be a JSON string")?,
+    )?;
+    assert_eq!(stored_payload["marker"], marker);
     info!("Dapr queue message PASSED");
 
     Ok(())
