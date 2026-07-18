@@ -842,11 +842,11 @@ fn validate_stack_inputs_for_terraform(inputs: &[StackInputDefinition]) -> Resul
     }))
 }
 
-fn terraform_stack_input_variable_name(input: &StackInputDefinition) -> String {
+pub(crate) fn terraform_stack_input_variable_name(input: &StackInputDefinition) -> String {
     format!("input_{}", snake_case_identifier(&input.id))
 }
 
-fn snake_case_identifier(value: &str) -> String {
+pub(crate) fn snake_case_identifier(value: &str) -> String {
     let mut output = String::new();
     let mut previous_was_separator = true;
     for ch in value.chars() {

@@ -1,4 +1,5 @@
 use crate::{
+    emitters::aws::helpers::gate_condition_name,
     registry::CfRegistry,
     template::{
         CfExpression, CfMapping, CfOutput, CfParameter, CfResource, CfRule, CfRuleAssertion,
@@ -16,7 +17,7 @@ use alien_core::{
 use alien_error::AlienError;
 use indexmap::{indexmap, IndexMap};
 use serde_json::{json, Value};
-use std::collections::HashSet;
+use std::collections::{BTreeSet, HashSet};
 
 const TEMPLATE_VERSION: &str = "2010-09-09";
 const LANGUAGE_EXTENSIONS_TRANSFORM: &str = "AWS::LanguageExtensions";
@@ -331,6 +332,7 @@ pub fn generate_cloudformation_template(
     );
     let resources = CfExpression::list(registration_resources);
 
+    add_permission_gate_conditions(&mut template, stack, &stack_inputs)?;
     apply_resource_dependencies(stack, &emitted_resource_ids, &mut template);
 
     if let Some(service_token) = options.registration.service_token(&mut template)? {
@@ -414,7 +416,18 @@ fn stack_input_parameter(input: &StackInputDefinition) -> CfParameter {
             | StackInputKind::Enum => "String".to_string(),
         },
         description: Some(input.description.clone()),
-        default: input.default.as_ref().map(stack_input_default_expression),
+        // An optional secret can't declare a default (the SDK forbids it), but a
+        // CloudFormation parameter with no Default is required — the console
+        // blocks Create until it's filled. Emit an empty default so a deployer
+        // can skip an optional secret input rather than being forced to supply one.
+        default: input
+            .default
+            .as_ref()
+            .map(stack_input_default_expression)
+            .or_else(|| {
+                (!input.required && matches!(input.kind, StackInputKind::Secret))
+                    .then(|| CfExpression::from(""))
+            }),
         allowed_values: validation
             .and_then(|validation| validation.values.as_ref())
             .map(|values| values.iter().cloned().map(CfExpression::from).collect()),
@@ -648,7 +661,7 @@ fn logical_names(stack: &Stack) -> Result<IndexMap<String, String>> {
     Ok(names)
 }
 
-fn sanitize_logical_id(input: &str) -> String {
+pub(crate) fn sanitize_logical_id(input: &str) -> String {
     let mut out = String::new();
     let mut capitalize_next = true;
 
@@ -2052,6 +2065,95 @@ fn comma_list_parameter(description: &str, default: Vec<String>) -> CfParameter 
 
 fn equals_ref(parameter: &str, value: &str) -> CfExpression {
     CfExpression::equals(CfExpression::ref_(parameter), CfExpression::from(value))
+}
+
+/// Register `Fn::Equals` conditions for permission gates that emitted
+/// resources actually reference.
+///
+/// Registered post-emission and only when referenced — cfn-lint (mandatory in
+/// tests) rejects unused conditions. A gate whose input is not a parameter on
+/// this target loses its condition instead (unconditional emission is the
+/// superset, matching `PermissionGateMutation`'s keep-on-unresolvable rule).
+/// Any remaining condition reference with no definition is a hard error.
+fn add_permission_gate_conditions(
+    template: &mut CfTemplate,
+    stack: &Stack,
+    stack_inputs: &[StackInputDefinition],
+) -> Result<()> {
+    let mut registrable: IndexMap<String, (String, String)> = IndexMap::new();
+    let mut unregistrable: BTreeSet<String> = BTreeSet::new();
+    // Sanitizing input+value into the condition name can collide two distinct
+    // gates (e.g. `modeOn`+`x` and `mode`+`on-x`); a silent last-wins would
+    // evaluate one gate's policies against the other's input, so any divergent
+    // collision is a hard error. Same-gate duplicates dedupe.
+    let mut gate_identities: IndexMap<String, (String, String)> = IndexMap::new();
+    for gate in &stack.permissions().gates {
+        let name = gate_condition_name(gate);
+        let identity = (gate.input_id.clone(), gate.enabled_value.clone());
+        if let Some(existing) = gate_identities.get(&name) {
+            if *existing != identity {
+                return Err(AlienError::new(ErrorData::OperationNotSupported {
+                    operation: "gate CloudFormation permission grant".to_string(),
+                    reason: format!(
+                        "permission gates on inputs '{}' and '{}' collide on condition name '{}'",
+                        existing.0, gate.input_id, name
+                    ),
+                }));
+            }
+        } else {
+            gate_identities.insert(name.clone(), identity);
+        }
+        let parameter_input = stack_inputs.iter().find(|input| input.id == gate.input_id);
+        match parameter_input {
+            Some(input) => {
+                registrable.insert(
+                    name,
+                    (
+                        stack_input_parameter_name(input),
+                        gate.enabled_value.clone(),
+                    ),
+                );
+            }
+            None => {
+                unregistrable.insert(name);
+            }
+        }
+    }
+
+    let mut referenced: BTreeSet<String> = BTreeSet::new();
+    for resource in template.resources.values_mut() {
+        let Some(condition) = resource.condition.clone() else {
+            continue;
+        };
+        if registrable.contains_key(&condition) {
+            referenced.insert(condition);
+        } else if unregistrable.contains(&condition) {
+            resource.condition = None;
+        }
+    }
+
+    for name in &referenced {
+        let (parameter, value) = &registrable[name];
+        template
+            .conditions
+            .insert(name.clone(), equals_ref(parameter, value));
+    }
+
+    for resource in template.resources.values() {
+        if let Some(condition) = &resource.condition {
+            if !template.conditions.contains_key(condition) {
+                return Err(AlienError::new(ErrorData::TemplateSerializationFailed {
+                    format: "CloudFormation".to_string(),
+                    reason: format!(
+                        "resource '{}' references undefined condition '{}'",
+                        resource.logical_id, condition
+                    ),
+                }));
+            }
+        }
+    }
+
+    Ok(())
 }
 
 fn condition_ref(condition: &str) -> CfExpression {

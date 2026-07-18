@@ -8,13 +8,16 @@
 use crate::{
     emitter::CfEmitter,
     emitters::aws::helpers::{
-        cf_from_json, required_logical_id, resource_config, service_trust_policy, stack_name, tags,
+        cf_from_json, iam_policy_resource, iam_policy_statements, permission_gate_condition,
+        required_logical_id, resource_config, service_trust_policy, stack_name, tags,
         uniquify_iam_statement_sids, INLINE_POLICY_NAME,
     },
+    generator::sanitize_logical_id,
     template::{CfExpression, CfResource},
 };
 use alien_core::{
-    import::EmitContext, Build, ComputeCluster, ErrorData, Result, ServiceAccount, Worker,
+    import::EmitContext, Build, ComputeCluster, ErrorData, PermissionSet, Result, ServiceAccount,
+    Worker,
 };
 use alien_error::{AlienError, Context, IntoAlienError};
 use alien_permissions::{
@@ -49,7 +52,28 @@ impl CfEmitter for AwsServiceAccountEmitter {
         // the same effective IAM, so the managed-policy attachment
         // would be a real drift, not a free safety net.
 
-        let policy = service_account_policy_document(ctx, service_account)?;
+        // Gated sets leave the merged policy so CloudFormation can exclude
+        // them per deploy; ungated order is untouched so zero-gate stacks
+        // render byte-identically.
+        let profile_name = service_account.id.strip_suffix("-sa");
+        let mut merged_sets: Vec<&PermissionSet> = Vec::new();
+        let mut gated_sets: Vec<(&PermissionSet, String)> = Vec::new();
+        let mut seen_gated: BTreeSet<&str> = BTreeSet::new();
+        for permission_set in &service_account.stack_permission_sets {
+            let condition = profile_name.and_then(|profile| {
+                permission_gate_condition(ctx, profile, &permission_set.id, &["*"])
+            });
+            match condition {
+                Some(condition) => {
+                    if seen_gated.insert(permission_set.id.as_str()) {
+                        gated_sets.push((permission_set, condition));
+                    }
+                }
+                None => merged_sets.push(permission_set),
+            }
+        }
+
+        let policy = service_account_policy_document(&merged_sets, service_account)?;
         if let Some(policy) = policy {
             role.properties.insert(
                 "Policies".to_string(),
@@ -61,7 +85,36 @@ impl CfEmitter for AwsServiceAccountEmitter {
         }
         role.properties.insert("Tags".to_string(), tags(ctx));
 
-        Ok(vec![role])
+        let mut resources = vec![role];
+        if let Some(profile) = profile_name {
+            let context = permission_context().with_resource_name(service_account.id.clone());
+            for (permission_set, condition) in gated_sets {
+                let Some(statements) = iam_policy_statements(
+                    permission_set,
+                    BindingTarget::Stack,
+                    &context,
+                    &format!("service account '{}'", service_account.id),
+                )?
+                else {
+                    continue;
+                };
+                let policy_id =
+                    format!("{role_id}Gated{}", sanitize_logical_id(&permission_set.id));
+                let policy_name = CfExpression::sub(format!(
+                    "${{AWS::StackName}}-{profile}-{}",
+                    permission_set.id.replace('/', "-")
+                ));
+                resources.push(iam_policy_resource(
+                    policy_id,
+                    policy_name,
+                    statements,
+                    &role_id,
+                    Some(condition),
+                ));
+            }
+        }
+
+        Ok(resources)
     }
 
     fn emit_import_ref(&self, ctx: &EmitContext<'_>) -> Result<CfExpression> {
@@ -158,19 +211,20 @@ fn service_account_trust_policy(
 }
 
 fn service_account_policy_document(
-    _ctx: &EmitContext<'_>,
+    permission_sets: &[&PermissionSet],
     service_account: &ServiceAccount,
 ) -> Result<Option<CfExpression>> {
     let mut statements = Vec::new();
     let generator = AwsCloudFormationPermissionsGenerator::new();
     let context = permission_context().with_resource_name(service_account.id.clone());
 
-    for permission_set in &service_account.stack_permission_sets {
+    for permission_set in permission_sets {
         let policy = generator
             .generate_policy(permission_set, BindingTarget::Stack, &context)
-            .context(ErrorData::GenericError {
-                message: format!(
-                    "failed to generate AWS CloudFormation policy for service account '{}'",
+            .context(ErrorData::TemplateSerializationFailed {
+                format: "CloudFormation IAM policy".to_string(),
+                reason: format!(
+                    "failed to generate policy for service account '{}'",
                     service_account.id
                 ),
             })?;

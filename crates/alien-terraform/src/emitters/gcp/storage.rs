@@ -8,6 +8,7 @@
 use crate::{
     block::{attr, block, nested, resource_block},
     emitter::{TfEmitter, TfFragment},
+    emitters::gates::{permission_gate_count, TrackedPermissionRef},
     emitters::gcp::helpers::{
         binding_label_for_role, downcast, emit_custom_roles_for_bindings, labels,
         permission_context, required_label, resource_prefix_template, role_expression_for_binding,
@@ -16,8 +17,8 @@ use crate::{
     expr,
 };
 use alien_core::{
-    import::EmitContext, LifecycleRule, PermissionProfile, PermissionSetReference,
-    RemoteStackManagement, Result, ServiceAccount, Storage,
+    import::EmitContext, LifecycleRule, PermissionProfile, RemoteStackManagement, Result,
+    ServiceAccount, Storage,
 };
 use alien_error::Context;
 use alien_permissions::{
@@ -152,15 +153,16 @@ fn public_iam_binding(label: &str) -> hcl::structure::Block {
 }
 
 fn emit_storage_iam(ctx: &EmitContext<'_>, fragment: &mut TfFragment, label: &str) -> Result<()> {
-    for (owner_label, permission_refs) in storage_permission_owners(ctx) {
-        let member = service_account_member_for_label(&owner_label);
-        let context = permission_context(&owner_label, ctx.stack.id())
+    for owner in storage_permission_owners(ctx) {
+        let member = service_account_member_for_label(&owner.label);
+        let context = permission_context(&owner.label, ctx.stack.id())
             .with_resource_name(format!("${{google_storage_bucket.{label}.name}}"));
         let generator = GcpRuntimePermissionsGenerator::new();
 
-        for permission_ref in permission_refs {
-            let Some(permission_set) =
-                permission_ref.resolve(|name| alien_permissions::get_permission_set(name).cloned())
+        for tracked_ref in owner.refs {
+            let Some(permission_set) = tracked_ref
+                .reference
+                .resolve(|name| alien_permissions::get_permission_set(name).cloned())
             else {
                 continue;
             };
@@ -168,6 +170,15 @@ fn emit_storage_iam(ctx: &EmitContext<'_>, fragment: &mut TfFragment, label: &st
                 continue;
             }
 
+            let gate_count = match &owner.profile {
+                Some(profile) => permission_gate_count(
+                    ctx,
+                    profile,
+                    &permission_set.id,
+                    &tracked_ref.origin_keys(ctx.resource_id),
+                )?,
+                None => None,
+            };
             let grant_plan = generator
                 .generate_grant_plan(&permission_set, BindingTarget::Resource, &context)
                 .context(alien_core::ErrorData::GenericError {
@@ -182,14 +193,18 @@ fn emit_storage_iam(ctx: &EmitContext<'_>, fragment: &mut TfFragment, label: &st
             for (idx, binding) in bindings.into_iter().enumerate() {
                 let role_label = binding_label_for_role(&binding.role, &custom_roles)?;
                 let role = role_expression_for_binding(&binding.role, &custom_roles)?;
-                let mut body = vec![
+                let mut body = Vec::new();
+                if let Some(gate_count) = &gate_count {
+                    body.push(attr("count", gate_count.clone()));
+                }
+                body.extend([
                     attr(
                         "bucket",
                         expr::traversal(["google_storage_bucket", label, "name"]),
                     ),
                     attr("role", role),
                     attr("member", member.clone()),
-                ];
+                ]);
                 if let Some(condition) = binding.condition {
                     body.push(nested(block(
                         "condition",
@@ -202,7 +217,7 @@ fn emit_storage_iam(ctx: &EmitContext<'_>, fragment: &mut TfFragment, label: &st
                 }
                 fragment.resource_blocks.push(resource_block(
                     "google_storage_bucket_iam_member",
-                    &format!("{role_label}_{label}_{owner_label}_storage_{idx}"),
+                    &format!("{role_label}_{label}_{}_storage_{idx}", owner.label),
                     body,
                 ));
             }
@@ -212,7 +227,13 @@ fn emit_storage_iam(ctx: &EmitContext<'_>, fragment: &mut TfFragment, label: &st
     Ok(())
 }
 
-fn storage_permission_owners(ctx: &EmitContext<'_>) -> Vec<(String, Vec<PermissionSetReference>)> {
+struct StorageOwner {
+    label: String,
+    profile: Option<String>,
+    refs: Vec<TrackedPermissionRef>,
+}
+
+fn storage_permission_owners(ctx: &EmitContext<'_>) -> Vec<StorageOwner> {
     let mut owners = Vec::new();
     for (profile_name, profile) in ctx.stack.permission_profiles() {
         let refs = storage_permission_refs(profile, ctx.resource_id);
@@ -221,7 +242,11 @@ fn storage_permission_owners(ctx: &EmitContext<'_>) -> Vec<(String, Vec<Permissi
         }
         let service_account_id = format!("{profile_name}-sa");
         if let Some((label, _service_account)) = service_account_for_id(ctx, &service_account_id) {
-            owners.push((label.to_string(), refs));
+            owners.push(StorageOwner {
+                label: label.to_string(),
+                profile: Some(profile_name.clone()),
+                refs,
+            });
         }
     }
 
@@ -229,7 +254,11 @@ fn storage_permission_owners(ctx: &EmitContext<'_>) -> Vec<(String, Vec<Permissi
         let refs = storage_permission_refs(profile, ctx.resource_id);
         if !refs.is_empty() {
             if let Some(label) = remote_stack_management_label(ctx) {
-                owners.push((label.to_string(), refs));
+                owners.push(StorageOwner {
+                    label: label.to_string(),
+                    profile: None,
+                    refs,
+                });
             }
         }
     }
@@ -240,14 +269,20 @@ fn storage_permission_owners(ctx: &EmitContext<'_>) -> Vec<(String, Vec<Permissi
 fn storage_permission_refs(
     profile: &PermissionProfile,
     resource_id: &str,
-) -> Vec<PermissionSetReference> {
-    let mut refs = Vec::new();
-    let mut seen_ids = std::collections::HashSet::new();
+) -> Vec<TrackedPermissionRef> {
+    let mut refs: Vec<TrackedPermissionRef> = Vec::new();
 
     if let Some(resource_refs) = profile.0.get(resource_id) {
         for permission_ref in resource_refs {
-            if seen_ids.insert(permission_ref.id().to_string()) {
-                refs.push(permission_ref.clone());
+            if !refs
+                .iter()
+                .any(|tracked| tracked.reference.id() == permission_ref.id())
+            {
+                refs.push(TrackedPermissionRef {
+                    reference: permission_ref.clone(),
+                    in_resource: true,
+                    in_wildcard: false,
+                });
             }
         }
     }
@@ -257,8 +292,17 @@ fn storage_permission_refs(
             .iter()
             .filter(|permission_ref| permission_ref.id().starts_with("storage/"))
         {
-            if seen_ids.insert(permission_ref.id().to_string()) {
-                refs.push(permission_ref.clone());
+            if let Some(tracked) = refs
+                .iter_mut()
+                .find(|tracked| tracked.reference.id() == permission_ref.id())
+            {
+                tracked.in_wildcard = true;
+            } else {
+                refs.push(TrackedPermissionRef {
+                    reference: permission_ref.clone(),
+                    in_resource: false,
+                    in_wildcard: true,
+                });
             }
         }
     }

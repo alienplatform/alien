@@ -10,12 +10,14 @@ use crate::{
     emitters::aws::helpers::{
         aws_terraform_permission_context, downcast, emit_iam_role_policy_for_target_with_label,
         iam_policy_name_sanitize, required_label, resource_prefix_template, tags,
+        TrackedPermissionRef,
     },
+    emitters::gates::permission_gate_count,
     expr,
 };
 use alien_core::{
-    import::EmitContext, LifecycleRule, PermissionProfile, PermissionSetReference,
-    RemoteStackManagement, Result, ServiceAccount, Storage,
+    import::EmitContext, LifecycleRule, PermissionProfile, RemoteStackManagement, Result,
+    ServiceAccount, Storage,
 };
 use alien_permissions::BindingTarget;
 use hcl::expr::Expression;
@@ -233,13 +235,14 @@ fn bucket_id(label: &str) -> Expression {
 }
 
 fn emit_storage_iam(ctx: &EmitContext<'_>, fragment: &mut TfFragment, label: &str) -> Result<()> {
-    for (owner_label, permission_refs) in storage_permission_owners(ctx) {
+    for owner in storage_permission_owners(ctx) {
         let context = aws_terraform_permission_context()
             .with_resource_name(format!("${{aws_s3_bucket.{label}.bucket}}"));
 
-        for (idx, permission_ref) in permission_refs.iter().enumerate() {
-            let Some(permission_set) =
-                permission_ref.resolve(|name| alien_permissions::get_permission_set(name).cloned())
+        for (idx, tracked_ref) in owner.refs.iter().enumerate() {
+            let Some(permission_set) = tracked_ref
+                .reference
+                .resolve(|name| alien_permissions::get_permission_set(name).cloned())
             else {
                 continue;
             };
@@ -247,8 +250,18 @@ fn emit_storage_iam(ctx: &EmitContext<'_>, fragment: &mut TfFragment, label: &st
                 continue;
             }
 
+            let gate_count = match &owner.profile {
+                Some(profile) => permission_gate_count(
+                    ctx,
+                    profile,
+                    &permission_set.id,
+                    &tracked_ref.origin_keys(ctx.resource_id),
+                )?,
+                None => None,
+            };
             let policy_label = format!(
-                "{label}_{owner_label}_{}_{idx}",
+                "{label}_{}_{}_{idx}",
+                owner.label,
                 iam_policy_name_sanitize(&permission_set.id)
             );
             let policy_name = iam_policy_name_sanitize(&format!(
@@ -258,12 +271,13 @@ fn emit_storage_iam(ctx: &EmitContext<'_>, fragment: &mut TfFragment, label: &st
 
             emit_iam_role_policy_for_target_with_label(
                 fragment,
-                &owner_label,
+                &owner.label,
                 &permission_set,
                 &policy_label,
                 &policy_name,
                 &context,
                 BindingTarget::Resource,
+                gate_count,
             )?;
         }
     }
@@ -271,7 +285,13 @@ fn emit_storage_iam(ctx: &EmitContext<'_>, fragment: &mut TfFragment, label: &st
     Ok(())
 }
 
-fn storage_permission_owners(ctx: &EmitContext<'_>) -> Vec<(String, Vec<PermissionSetReference>)> {
+struct StorageOwner {
+    label: String,
+    profile: Option<String>,
+    refs: Vec<TrackedPermissionRef>,
+}
+
+fn storage_permission_owners(ctx: &EmitContext<'_>) -> Vec<StorageOwner> {
     let mut owners = Vec::new();
     for (profile_name, profile) in ctx.stack.permission_profiles() {
         let refs = storage_permission_refs(profile, ctx.resource_id);
@@ -281,7 +301,11 @@ fn storage_permission_owners(ctx: &EmitContext<'_>) -> Vec<(String, Vec<Permissi
 
         let service_account_id = format!("{profile_name}-sa");
         if let Some((label, _service_account)) = service_account_for_id(ctx, &service_account_id) {
-            owners.push((label.to_string(), refs));
+            owners.push(StorageOwner {
+                label: label.to_string(),
+                profile: Some(profile_name.clone()),
+                refs,
+            });
         }
     }
 
@@ -289,7 +313,11 @@ fn storage_permission_owners(ctx: &EmitContext<'_>) -> Vec<(String, Vec<Permissi
         let refs = storage_permission_refs(profile, ctx.resource_id);
         if !refs.is_empty() {
             if let Some(label) = remote_stack_management_label(ctx) {
-                owners.push((label.to_string(), refs));
+                owners.push(StorageOwner {
+                    label: label.to_string(),
+                    profile: None,
+                    refs,
+                });
             }
         }
     }
@@ -300,14 +328,20 @@ fn storage_permission_owners(ctx: &EmitContext<'_>) -> Vec<(String, Vec<Permissi
 fn storage_permission_refs(
     profile: &PermissionProfile,
     resource_id: &str,
-) -> Vec<PermissionSetReference> {
-    let mut refs = Vec::new();
-    let mut seen_ids = std::collections::HashSet::new();
+) -> Vec<TrackedPermissionRef> {
+    let mut refs: Vec<TrackedPermissionRef> = Vec::new();
 
     if let Some(resource_refs) = profile.0.get(resource_id) {
         for permission_ref in resource_refs {
-            if seen_ids.insert(permission_ref.id().to_string()) {
-                refs.push(permission_ref.clone());
+            if !refs
+                .iter()
+                .any(|tracked| tracked.reference.id() == permission_ref.id())
+            {
+                refs.push(TrackedPermissionRef {
+                    reference: permission_ref.clone(),
+                    in_resource: true,
+                    in_wildcard: false,
+                });
             }
         }
     }
@@ -317,8 +351,17 @@ fn storage_permission_refs(
             .iter()
             .filter(|permission_ref| permission_ref.id().starts_with("storage/"))
         {
-            if seen_ids.insert(permission_ref.id().to_string()) {
-                refs.push(permission_ref.clone());
+            if let Some(tracked) = refs
+                .iter_mut()
+                .find(|tracked| tracked.reference.id() == permission_ref.id())
+            {
+                tracked.in_wildcard = true;
+            } else {
+                refs.push(TrackedPermissionRef {
+                    reference: permission_ref.clone(),
+                    in_resource: false,
+                    in_wildcard: true,
+                });
             }
         }
     }

@@ -25,6 +25,7 @@ use crate::{
         downcast, permission_context, required_label, service_account_principal_id,
         setup_execution_role_label, setup_management_role_label,
     },
+    emitters::gates::{permission_gate_count, TrackedPermissionRef},
     expr,
 };
 use alien_core::{
@@ -181,13 +182,19 @@ fn emit_storage_permissions(
             continue;
         };
 
-        for permission_set_ref in permission_set_refs {
-            let permission_set = resolve_permission_set(permission_set_ref, ctx.resource_id)?;
+        for tracked_ref in permission_set_refs {
+            let permission_set = resolve_permission_set(&tracked_ref.reference, ctx.resource_id)?;
             if permission_set.id.ends_with("/provision") || permission_set.platforms.azure.is_none()
             {
                 continue;
             }
 
+            let gate_count = permission_gate_count(
+                ctx,
+                &profile_name,
+                &permission_set.id,
+                &tracked_ref.origin_keys(ctx.resource_id),
+            )?;
             let generator = AzureRuntimePermissionsGenerator::new();
             let permission_context = permission_context(storage_label)
                 .with_resource_name(container_name_expr_string(ctx.resource_id))
@@ -232,6 +239,7 @@ fn emit_storage_permissions(
                     expr::template(binding.scope.clone()),
                     role_definition_id,
                     principal_id_expr.clone(),
+                    gate_count.clone(),
                 );
             }
         }
@@ -248,7 +256,7 @@ fn emit_storage_permissions(
     ]);
 
     for permission_set_ref in management_permission_refs(ctx) {
-        let permission_set = resolve_permission_set(permission_set_ref, ctx.resource_id)?;
+        let permission_set = resolve_permission_set(&permission_set_ref, ctx.resource_id)?;
         if permission_set.id.ends_with("/provision") || permission_set.platforms.azure.is_none() {
             continue;
         }
@@ -296,6 +304,7 @@ fn emit_storage_permissions(
                 expr::template(binding.scope.clone()),
                 role_definition_id,
                 principal_id_expr.clone(),
+                None,
             );
         }
     }
@@ -348,28 +357,34 @@ fn emit_role_assignment(
     scope: Expression,
     role_definition_id: Expression,
     principal_id_expr: Expression,
+    gate_count: Option<Expression>,
 ) {
     let role_label = sanitize_role_label(role_name);
+    let mut body = Vec::new();
+    if let Some(gate_count) = gate_count {
+        body.push(attr("count", gate_count));
+    }
+    body.extend([
+        attr(
+            "name",
+            expr::raw(&format!(
+                "uuidv5(\"oid\", \"deployment:azure:storage-role-assign:${{local.resource_prefix}}:{storage_id}:{role_label}:{principal_label}:{binding_index}\")"
+            )),
+        ),
+        attr("scope", scope),
+        attr("role_definition_id", role_definition_id),
+        attr("principal_id", principal_id_expr),
+    ]);
     fragment.resource_blocks.push(resource_block(
         "azurerm_role_assignment",
         &format!("{storage_label}_{role_label}_{principal_label}_assignment_{binding_index}"),
-        [
-            attr(
-                "name",
-                expr::raw(&format!(
-                    "uuidv5(\"oid\", \"deployment:azure:storage-role-assign:${{local.resource_prefix}}:{storage_id}:{role_label}:{principal_label}:{binding_index}\")"
-                )),
-            ),
-            attr("scope", scope),
-            attr("role_definition_id", role_definition_id),
-            attr("principal_id", principal_id_expr),
-        ],
+        body,
     ));
 }
 
-fn storage_permission_owners<'a>(
-    ctx: &'a EmitContext<'_>,
-) -> Vec<(String, Vec<&'a PermissionSetReference>)> {
+fn storage_permission_owners(
+    ctx: &EmitContext<'_>,
+) -> Vec<(String, Vec<TrackedPermissionRef>)> {
     let mut owners = Vec::new();
     for (profile_name, profile) in ctx.stack.permission_profiles() {
         let refs = resource_permission_refs(profile, ctx.resource_id);
@@ -381,24 +396,33 @@ fn storage_permission_owners<'a>(
     owners
 }
 
-fn management_permission_refs<'a>(ctx: &'a EmitContext<'_>) -> Vec<&'a PermissionSetReference> {
+fn management_permission_refs(ctx: &EmitContext<'_>) -> Vec<PermissionSetReference> {
     let Some(profile) = ctx.stack.management().profile() else {
         return Vec::new();
     };
     resource_permission_refs(profile, ctx.resource_id)
+        .into_iter()
+        .map(|tracked| tracked.reference)
+        .collect()
 }
 
-fn resource_permission_refs<'a>(
-    profile: &'a PermissionProfile,
+fn resource_permission_refs(
+    profile: &PermissionProfile,
     resource_id: &str,
-) -> Vec<&'a PermissionSetReference> {
-    let mut refs = Vec::new();
-    let mut seen_ids = std::collections::HashSet::new();
+) -> Vec<TrackedPermissionRef> {
+    let mut refs: Vec<TrackedPermissionRef> = Vec::new();
 
     if let Some(resource_refs) = profile.0.get(resource_id) {
         for permission_ref in resource_refs {
-            if seen_ids.insert(permission_ref.id().to_string()) {
-                refs.push(permission_ref);
+            if !refs
+                .iter()
+                .any(|tracked| tracked.reference.id() == permission_ref.id())
+            {
+                refs.push(TrackedPermissionRef {
+                    reference: permission_ref.clone(),
+                    in_resource: true,
+                    in_wildcard: false,
+                });
             }
         }
     }
@@ -408,8 +432,17 @@ fn resource_permission_refs<'a>(
             .iter()
             .filter(|permission_ref| permission_ref.id().starts_with("storage/"))
         {
-            if seen_ids.insert(permission_ref.id().to_string()) {
-                refs.push(permission_ref);
+            if let Some(tracked) = refs
+                .iter_mut()
+                .find(|tracked| tracked.reference.id() == permission_ref.id())
+            {
+                tracked.in_wildcard = true;
+            } else {
+                refs.push(TrackedPermissionRef {
+                    reference: permission_ref.clone(),
+                    in_resource: false,
+                    in_wildcard: true,
+                });
             }
         }
     }

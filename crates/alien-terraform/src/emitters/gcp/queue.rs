@@ -8,6 +8,7 @@
 use crate::{
     block::{attr, block, nested, resource_block},
     emitter::{TfEmitter, TfFragment},
+    emitters::gates::{permission_gate_count, TrackedPermissionRef},
     emitters::gcp::helpers::{
         binding_label_for_role, downcast, emit_custom_roles_for_bindings, labels,
         permission_context, required_label, resource_prefix_template, role_expression_for_binding,
@@ -119,15 +120,16 @@ impl TfEmitter for GcpQueueEmitter {
 }
 
 fn emit_queue_iam(ctx: &EmitContext<'_>, fragment: &mut TfFragment, label: &str) -> Result<()> {
-    for (owner_label, permission_refs) in queue_permission_owners(ctx) {
-        let member = service_account_member_for_label(&owner_label);
-        let context = permission_context(&owner_label, ctx.stack.id())
+    for owner in queue_permission_owners(ctx) {
+        let member = service_account_member_for_label(&owner.label);
+        let context = permission_context(&owner.label, ctx.stack.id())
             .with_resource_name(format!("${{google_pubsub_topic.{label}.name}}"));
         let generator = GcpRuntimePermissionsGenerator::new();
 
-        for permission_ref in permission_refs {
-            let Some(permission_set) =
-                permission_ref.resolve(|name| alien_permissions::get_permission_set(name).cloned())
+        for tracked_ref in owner.refs {
+            let Some(permission_set) = tracked_ref
+                .reference
+                .resolve(|name| alien_permissions::get_permission_set(name).cloned())
             else {
                 continue;
             };
@@ -135,6 +137,15 @@ fn emit_queue_iam(ctx: &EmitContext<'_>, fragment: &mut TfFragment, label: &str)
                 continue;
             }
 
+            let gate_count = match &owner.profile {
+                Some(profile) => permission_gate_count(
+                    ctx,
+                    profile,
+                    &permission_set.id,
+                    &tracked_ref.origin_keys(ctx.resource_id),
+                )?,
+                None => None,
+            };
             let grant_plan = generator
                 .generate_grant_plan(&permission_set, BindingTarget::Resource, &context)
                 .map_err(|err| {
@@ -154,35 +165,41 @@ fn emit_queue_iam(ctx: &EmitContext<'_>, fragment: &mut TfFragment, label: &str)
                 };
                 let role_label = binding_label_for_role(&binding.role, &custom_roles)?;
                 let role = role_expression_for_binding(&binding.role, &custom_roles)?;
+                let mut body = Vec::new();
+                if let Some(gate_count) = &gate_count {
+                    body.push(attr("count", gate_count.clone()));
+                }
                 match resource_kind {
                     GcpBindingResourceKind::PubsubTopic => {
+                        body.extend([
+                            attr("project", expr::raw("var.gcp_project")),
+                            attr(
+                                "topic",
+                                expr::traversal(["google_pubsub_topic", label, "name"]),
+                            ),
+                            attr("role", role),
+                            attr("member", member.clone()),
+                        ]);
                         fragment.resource_blocks.push(resource_block(
                             "google_pubsub_topic_iam_member",
-                            &format!("{role_label}_{label}_{owner_label}_topic_{idx}"),
-                            [
-                                attr("project", expr::raw("var.gcp_project")),
-                                attr(
-                                    "topic",
-                                    expr::traversal(["google_pubsub_topic", label, "name"]),
-                                ),
-                                attr("role", role),
-                                attr("member", member.clone()),
-                            ],
+                            &format!("{role_label}_{label}_{}_topic_{idx}", owner.label),
+                            body,
                         ));
                     }
                     GcpBindingResourceKind::PubsubSubscription => {
+                        body.extend([
+                            attr("project", expr::raw("var.gcp_project")),
+                            attr(
+                                "subscription",
+                                expr::traversal(["google_pubsub_subscription", label, "name"]),
+                            ),
+                            attr("role", role),
+                            attr("member", member.clone()),
+                        ]);
                         fragment.resource_blocks.push(resource_block(
                             "google_pubsub_subscription_iam_member",
-                            &format!("{role_label}_{label}_{owner_label}_subscription_{idx}"),
-                            [
-                                attr("project", expr::raw("var.gcp_project")),
-                                attr(
-                                    "subscription",
-                                    expr::traversal(["google_pubsub_subscription", label, "name"]),
-                                ),
-                                attr("role", role),
-                                attr("member", member.clone()),
-                            ],
+                            &format!("{role_label}_{label}_{}_subscription_{idx}", owner.label),
+                            body,
                         ));
                     }
                     GcpBindingResourceKind::ArtifactRegistryRepository => {}
@@ -194,18 +211,26 @@ fn emit_queue_iam(ctx: &EmitContext<'_>, fragment: &mut TfFragment, label: &str)
     Ok(())
 }
 
-fn queue_permission_owners(
-    ctx: &EmitContext<'_>,
-) -> Vec<(String, Vec<alien_core::PermissionSetReference>)> {
+struct QueueOwner {
+    label: String,
+    profile: Option<String>,
+    refs: Vec<TrackedPermissionRef>,
+}
+
+fn queue_permission_owners(ctx: &EmitContext<'_>) -> Vec<QueueOwner> {
     let mut owners = Vec::new();
     for (profile_name, profile) in ctx.stack.permission_profiles() {
-        let mut refs = queue_permission_refs(profile, ctx.resource_id);
+        let refs = queue_permission_refs(profile, ctx.resource_id);
         if refs.is_empty() {
             continue;
         }
         let service_account_id = format!("{profile_name}-sa");
         if let Some(label) = ctx.name_for(&service_account_id) {
-            owners.push((label.to_string(), std::mem::take(&mut refs)));
+            owners.push(QueueOwner {
+                label: label.to_string(),
+                profile: Some(profile_name.clone()),
+                refs,
+            });
         }
     }
 
@@ -216,7 +241,11 @@ fn queue_permission_owners(
                 entry.config.resource_type() == alien_core::RemoteStackManagement::RESOURCE_TYPE
             }) {
                 if let Some(label) = ctx.name_for(management_id) {
-                    owners.push((label.to_string(), refs));
+                    owners.push(QueueOwner {
+                        label: label.to_string(),
+                        profile: None,
+                        refs,
+                    });
                 }
             }
         }
@@ -228,13 +257,19 @@ fn queue_permission_owners(
 fn queue_permission_refs(
     profile: &alien_core::PermissionProfile,
     resource_id: &str,
-) -> Vec<alien_core::PermissionSetReference> {
-    let mut refs = Vec::new();
-    let mut seen = std::collections::HashSet::new();
+) -> Vec<TrackedPermissionRef> {
+    let mut refs: Vec<TrackedPermissionRef> = Vec::new();
     if let Some(resource_refs) = profile.0.get(resource_id) {
         for permission_ref in resource_refs {
-            if seen.insert(permission_ref.id().to_string()) {
-                refs.push(permission_ref.clone());
+            if !refs
+                .iter()
+                .any(|tracked| tracked.reference.id() == permission_ref.id())
+            {
+                refs.push(TrackedPermissionRef {
+                    reference: permission_ref.clone(),
+                    in_resource: true,
+                    in_wildcard: false,
+                });
             }
         }
     }
@@ -243,8 +278,17 @@ fn queue_permission_refs(
             .iter()
             .filter(|permission_ref| permission_ref.id().starts_with("queue/"))
         {
-            if seen.insert(permission_ref.id().to_string()) {
-                refs.push(permission_ref.clone());
+            if let Some(tracked) = refs
+                .iter_mut()
+                .find(|tracked| tracked.reference.id() == permission_ref.id())
+            {
+                tracked.in_wildcard = true;
+            } else {
+                refs.push(TrackedPermissionRef {
+                    reference: permission_ref.clone(),
+                    in_resource: false,
+                    in_wildcard: true,
+                });
             }
         }
     }

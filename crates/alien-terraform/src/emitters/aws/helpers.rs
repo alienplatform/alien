@@ -27,6 +27,8 @@ use hcl::{
     structure::{Block, Structure},
 };
 
+pub use crate::emitters::gates::TrackedPermissionRef;
+
 /// Downcast `ctx.resource.config` to the typed resource definition or
 /// return a typed `UnexpectedResourceType` error.
 pub fn downcast<'a, T: ResourceDefinition>(
@@ -331,6 +333,7 @@ pub fn emit_iam_role_policy(
     permission_set: &PermissionSet,
     policy_label_index: usize,
     context: &PermissionContext,
+    gate_count: Option<Expression>,
 ) -> Result<()> {
     emit_iam_role_policy_for_target(
         fragment,
@@ -339,6 +342,7 @@ pub fn emit_iam_role_policy(
         policy_label_index,
         context,
         BindingTarget::Stack,
+        gate_count,
     )
 }
 
@@ -349,6 +353,7 @@ pub fn emit_iam_role_policy_for_target(
     policy_label_index: usize,
     context: &PermissionContext,
     target: BindingTarget,
+    gate_count: Option<Expression>,
 ) -> Result<()> {
     emit_iam_role_policy_for_target_with_label(
         fragment,
@@ -362,6 +367,7 @@ pub fn emit_iam_role_policy_for_target(
         ),
         context,
         target,
+        gate_count,
     )
 }
 
@@ -373,6 +379,7 @@ pub fn emit_iam_role_policy_for_target_with_label(
     policy_name: &str,
     context: &PermissionContext,
     target: BindingTarget,
+    gate_count: Option<Expression>,
 ) -> Result<()> {
     if permission_set.platforms.aws.is_none() {
         return Ok(());
@@ -394,15 +401,16 @@ pub fn emit_iam_role_policy_for_target_with_label(
         },
     )?;
     let policy_expr = jsonencode_policy_value(policy_value);
-    fragment.resource_blocks.push(resource_block(
-        "aws_iam_role_policy",
-        policy_label,
-        [
-            attr("name", Expression::String(policy_name.to_string())),
-            attr("role", expr::traversal(["aws_iam_role", role_label, "id"])),
-            attr("policy", policy_expr),
-        ],
-    ));
+    let mut body: Vec<Structure> = Vec::new();
+    if let Some(gate_count) = gate_count {
+        body.push(attr("count", gate_count));
+    }
+    body.push(attr("name", Expression::String(policy_name.to_string())));
+    body.push(attr("role", expr::traversal(["aws_iam_role", role_label, "id"])));
+    body.push(attr("policy", policy_expr));
+    fragment
+        .resource_blocks
+        .push(resource_block("aws_iam_role_policy", policy_label, body));
     Ok(())
 }
 

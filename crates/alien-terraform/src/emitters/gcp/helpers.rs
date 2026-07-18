@@ -232,6 +232,7 @@ pub fn emit_custom_role_and_bindings(
     member_override: &Expression,
     permission_set: &PermissionSet,
     context: &PermissionContext,
+    gate_count: Option<Expression>,
 ) -> Result<()> {
     emit_custom_role_and_bindings_for_target(
         fragment,
@@ -240,6 +241,7 @@ pub fn emit_custom_role_and_bindings(
         permission_set,
         context,
         BindingTarget::Stack,
+        gate_count,
     )
 }
 
@@ -250,6 +252,7 @@ pub fn emit_custom_role_and_bindings_for_target(
     permission_set: &PermissionSet,
     context: &PermissionContext,
     target: BindingTarget,
+    gate_count: Option<Expression>,
 ) -> Result<()> {
     if permission_set.platforms.gcp.is_none() {
         return Ok(());
@@ -266,13 +269,22 @@ pub fn emit_custom_role_and_bindings_for_target(
             ),
         })?;
     let bindings = grant_plan.bindings_for_target(GcpBindingTargetScope::Project);
+    // An unbound role grants nothing, so only the member resources carry the gate
+    // count; role blocks keep their own var.gcp_manage_custom_roles gate.
     let custom_roles = emit_custom_roles_for_bindings(fragment, &grant_plan, &bindings)?;
 
     for (idx, binding) in bindings.into_iter().enumerate() {
         let role = role_expression_for_binding(&binding.role, &custom_roles)?;
         let role_label = binding_label_for_role(&binding.role, &custom_roles)?;
         let binding_label = format!("{role_label}_{sa_label}_binding_{idx}",);
-        push_iam_member(fragment, &binding_label, role, member_override, &binding)?;
+        push_iam_member(
+            fragment,
+            &binding_label,
+            role,
+            member_override,
+            &binding,
+            gate_count.as_ref(),
+        )?;
     }
 
     Ok(())
@@ -402,6 +414,7 @@ pub(crate) fn push_iam_member(
     role: Expression,
     member_override: &Expression,
     binding: &GcpIamBinding,
+    gate_count: Option<&Expression>,
 ) -> Result<()> {
     let mut body: Vec<Structure> =
         vec![attr("role", role), attr("member", member_override.clone())];
@@ -420,6 +433,10 @@ pub(crate) fn push_iam_member(
             }));
         }
     };
+
+    if let Some(gate_count) = gate_count {
+        body.insert(0, attr("count", gate_count.clone()));
+    }
 
     if let Some(condition) = &binding.condition {
         // The expression has already been interpolated by

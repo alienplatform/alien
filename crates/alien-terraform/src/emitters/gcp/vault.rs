@@ -8,6 +8,7 @@
 use crate::{
     block::{attr, data_block},
     emitter::{TfEmitter, TfFragment},
+    emitters::gates::{permission_gate_count, TrackedPermissionRef},
     emitters::gcp::helpers::{
         downcast, emit_custom_role_and_bindings_for_target, permission_context, required_label,
         service_account_member_for_label,
@@ -39,19 +40,26 @@ impl TfEmitter for GcpVaultEmitter {
             ));
         }
 
-        for (owner_label, permission_set_refs) in vault_permission_owners {
-            let member = service_account_member_for_label(&owner_label);
-            let role_owner_label = format!("{owner_label}_{vault_label}");
-            let context = permission_context(&owner_label, ctx.stack.id())
+        for owner in vault_permission_owners {
+            let member = service_account_member_for_label(&owner.label);
+            let role_owner_label = format!("{}_{vault_label}", owner.label);
+            let context = permission_context(&owner.label, ctx.stack.id())
                 .with_resource_name(format!("${{local.resource_prefix}}-{}", vault.id()));
 
-            for permission_set_ref in permission_set_refs {
-                if let Some(permission_set) = permission_set_ref
+            for tracked_ref in owner.refs {
+                if let Some(permission_set) = tracked_ref
+                    .reference
                     .resolve(|name| alien_permissions::get_permission_set(name).cloned())
                 {
                     if permission_set.id.ends_with("/provision") {
                         continue;
                     }
+                    let gate_count = permission_gate_count(
+                        ctx,
+                        &owner.profile,
+                        &permission_set.id,
+                        &tracked_ref.origin_keys(ctx.resource_id),
+                    )?;
                     let binding_owner_label =
                         binding_owner_label(&role_owner_label, &permission_set.id);
                     emit_custom_role_and_bindings_for_target(
@@ -61,6 +69,7 @@ impl TfEmitter for GcpVaultEmitter {
                         &permission_set,
                         &context,
                         BindingTarget::Resource,
+                        gate_count,
                     )?;
                 }
             }
@@ -91,6 +100,7 @@ impl TfEmitter for GcpVaultEmitter {
                     &permission_set,
                     &context,
                     BindingTarget::Resource,
+                    None,
                 )?;
             }
         }
@@ -132,44 +142,60 @@ fn remote_stack_management_label<'a>(ctx: &'a EmitContext<'_>) -> Option<&'a str
     })
 }
 
-fn management_permission_refs<'a>(ctx: &'a EmitContext<'_>) -> Vec<&'a PermissionSetReference> {
+fn management_permission_refs(ctx: &EmitContext<'_>) -> Vec<PermissionSetReference> {
     let Some(profile) = ctx.stack.management().profile() else {
         return Vec::new();
     };
     resource_permission_refs(profile, ctx.resource_id)
+        .into_iter()
+        .map(|tracked| tracked.reference)
+        .collect()
 }
 
-fn vault_permission_owners(ctx: &EmitContext<'_>) -> Vec<(String, Vec<PermissionSetReference>)> {
+struct VaultOwner {
+    label: String,
+    profile: String,
+    refs: Vec<TrackedPermissionRef>,
+}
+
+fn vault_permission_owners(ctx: &EmitContext<'_>) -> Vec<VaultOwner> {
     let mut owners = Vec::new();
     for (profile_name, profile) in ctx.stack.permission_profiles() {
-        let refs = resource_permission_refs(profile, ctx.resource_id)
-            .into_iter()
-            .cloned()
-            .collect::<Vec<_>>();
+        let refs = resource_permission_refs(profile, ctx.resource_id);
         if refs.is_empty() {
             continue;
         }
 
         let service_account_id = format!("{profile_name}-sa");
         if let Some((label, _service_account)) = service_account_for_id(ctx, &service_account_id) {
-            owners.push((label.to_string(), refs));
+            owners.push(VaultOwner {
+                label: label.to_string(),
+                profile: profile_name.clone(),
+                refs,
+            });
         }
     }
 
     owners
 }
 
-fn resource_permission_refs<'a>(
-    profile: &'a PermissionProfile,
+fn resource_permission_refs(
+    profile: &PermissionProfile,
     resource_id: &str,
-) -> Vec<&'a PermissionSetReference> {
-    let mut refs = Vec::new();
-    let mut seen_ids = std::collections::HashSet::new();
+) -> Vec<TrackedPermissionRef> {
+    let mut refs: Vec<TrackedPermissionRef> = Vec::new();
 
     if let Some(resource_refs) = profile.0.get(resource_id) {
         for permission_ref in resource_refs {
-            if seen_ids.insert(permission_ref.id().to_string()) {
-                refs.push(permission_ref);
+            if !refs
+                .iter()
+                .any(|tracked| tracked.reference.id() == permission_ref.id())
+            {
+                refs.push(TrackedPermissionRef {
+                    reference: permission_ref.clone(),
+                    in_resource: true,
+                    in_wildcard: false,
+                });
             }
         }
     }
@@ -179,8 +205,17 @@ fn resource_permission_refs<'a>(
             .iter()
             .filter(|permission_ref| permission_ref.id().starts_with("vault/"))
         {
-            if seen_ids.insert(permission_ref.id().to_string()) {
-                refs.push(permission_ref);
+            if let Some(tracked) = refs
+                .iter_mut()
+                .find(|tracked| tracked.reference.id() == permission_ref.id())
+            {
+                tracked.in_wildcard = true;
+            } else {
+                refs.push(TrackedPermissionRef {
+                    reference: permission_ref.clone(),
+                    in_resource: false,
+                    in_wildcard: true,
+                });
             }
         }
     }

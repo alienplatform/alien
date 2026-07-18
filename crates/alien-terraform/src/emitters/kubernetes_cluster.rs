@@ -679,6 +679,7 @@ fn emit_eks_cluster_management_iam(
             &iam_policy_name_sanitize(&format!("{}-{}-{idx}", ctx.resource_id, permission_set.id)),
             &context,
             BindingTarget::Resource,
+            None,
         )?;
     }
 

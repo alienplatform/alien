@@ -14,6 +14,7 @@ use crate::{
         aws_terraform_permission_context, downcast, emit_iam_role_policy, iam_role_name_template,
         jsonencode, required_label, service_assume_role_policy, tags,
     },
+    emitters::gates::permission_gate_count,
     expr,
 };
 use alien_core::{import::EmitContext, Build, ComputeCluster, Result, ServiceAccount, Worker};
@@ -48,10 +49,22 @@ impl TfEmitter for AwsServiceAccountEmitter {
             ],
         ));
 
+        let profile_name = service_account.id.strip_suffix("-sa");
         let context =
             aws_terraform_permission_context().with_resource_name(service_account.id.clone());
         for (index, permission_set) in service_account.stack_permission_sets.iter().enumerate() {
-            emit_iam_role_policy(&mut fragment, label, permission_set, index, &context)?;
+            let gate_count = match profile_name {
+                Some(profile) => permission_gate_count(ctx, profile, &permission_set.id, &["*"])?,
+                None => None,
+            };
+            emit_iam_role_policy(
+                &mut fragment,
+                label,
+                permission_set,
+                index,
+                &context,
+                gate_count,
+            )?;
         }
 
         Ok(fragment)

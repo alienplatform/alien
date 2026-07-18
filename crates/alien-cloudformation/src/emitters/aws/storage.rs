@@ -9,17 +9,18 @@ use crate::{
     emitter::CfEmitter,
     emitters::aws::{
         helpers::{
-            cf_from_json, required_logical_id, resource_config, service_account_role_id,
-            storage_notification_configuration, storage_notification_dependencies, tags,
-            uniquify_iam_statement_sids,
+            cf_from_json, permission_gate_condition, required_logical_id, resource_config,
+            service_account_role_id, storage_notification_configuration,
+            storage_notification_dependencies, tags, uniquify_iam_statement_sids,
+            TrackedPermissionRef,
         },
         service_account::permission_context,
     },
     template::{CfExpression, CfResource},
 };
 use alien_core::{
-    import::EmitContext, ErrorData, PermissionProfile, PermissionSetReference,
-    RemoteStackManagement, Result, ServiceAccount, Storage,
+    import::EmitContext, ErrorData, PermissionProfile, RemoteStackManagement, Result,
+    ServiceAccount, Storage,
 };
 use alien_error::{AlienError, Context, IntoAlienError};
 use alien_permissions::{generators::AwsCloudFormationPermissionsGenerator, BindingTarget};
@@ -249,10 +250,11 @@ fn storage_iam_policies(
     let context =
         permission_context().with_resource_name(format!("${{AWS::StackName}}-{}", storage.id()));
 
-    for (owner_index, (role_id, permission_refs)) in storage_permission_owners(ctx) {
-        for (permission_index, permission_ref) in permission_refs.iter().enumerate() {
-            let Some(permission_set) =
-                permission_ref.resolve(|name| alien_permissions::get_permission_set(name).cloned())
+    for (owner_index, (profile_name, role_id, permission_refs)) in storage_permission_owners(ctx) {
+        for (permission_index, tracked_ref) in permission_refs.iter().enumerate() {
+            let Some(permission_set) = tracked_ref
+                .reference
+                .resolve(|name| alien_permissions::get_permission_set(name).cloned())
             else {
                 continue;
             };
@@ -262,8 +264,9 @@ fn storage_iam_policies(
 
             let policy = generator
                 .generate_policy(&permission_set, BindingTarget::Resource, &context)
-                .context(ErrorData::GenericError {
-                    message: format!(
+                .context(ErrorData::TemplateSerializationFailed {
+                    format: "CloudFormation IAM policy".to_string(),
+                    reason: format!(
                         "failed to generate AWS CloudFormation storage IAM policy for '{}'",
                         storage.id()
                     ),
@@ -316,6 +319,15 @@ fn storage_iam_policies(
             );
             policy_resource.depends_on.push(bucket_id.to_string());
             policy_resource.depends_on.push(role_id.clone());
+            // Gates never apply to the management owner (`profile_name` = None).
+            policy_resource.condition = profile_name.as_deref().and_then(|profile| {
+                permission_gate_condition(
+                    ctx,
+                    profile,
+                    &permission_set.id,
+                    &tracked_ref.origin_keys(ctx.resource_id),
+                )
+            });
             resources.push(policy_resource);
         }
     }
@@ -366,7 +378,7 @@ fn storage_resource_is_object_arn(resource: &CfExpression) -> bool {
 
 fn storage_permission_owners(
     ctx: &EmitContext<'_>,
-) -> Vec<(usize, (String, Vec<PermissionSetReference>))> {
+) -> Vec<(usize, (Option<String>, String, Vec<TrackedPermissionRef>))> {
     let mut owners = Vec::new();
     for (profile_name, profile) in ctx.stack.permission_profiles() {
         let refs = storage_permission_refs(profile, ctx.resource_id);
@@ -377,7 +389,7 @@ fn storage_permission_owners(
         let service_account_id = format!("{profile_name}-sa");
         if service_account_for_id(ctx, &service_account_id).is_some() {
             if let Some(role_id) = service_account_role_id(ctx, profile_name) {
-                owners.push((role_id, refs));
+                owners.push((Some(profile_name.clone()), role_id, refs));
             }
         }
     }
@@ -386,7 +398,7 @@ fn storage_permission_owners(
         let refs = storage_permission_refs(profile, ctx.resource_id);
         if !refs.is_empty() {
             if let Some(role_id) = remote_stack_management_role_id(ctx) {
-                owners.push((role_id, refs));
+                owners.push((None, role_id, refs));
             }
         }
     }
@@ -397,14 +409,20 @@ fn storage_permission_owners(
 fn storage_permission_refs(
     profile: &PermissionProfile,
     resource_id: &str,
-) -> Vec<PermissionSetReference> {
-    let mut refs = Vec::new();
-    let mut seen_ids = std::collections::HashSet::new();
+) -> Vec<TrackedPermissionRef> {
+    let mut refs: Vec<TrackedPermissionRef> = Vec::new();
 
     if let Some(resource_refs) = profile.0.get(resource_id) {
         for permission_ref in resource_refs {
-            if seen_ids.insert(permission_ref.id().to_string()) {
-                refs.push(permission_ref.clone());
+            if !refs
+                .iter()
+                .any(|tracked| tracked.reference.id() == permission_ref.id())
+            {
+                refs.push(TrackedPermissionRef {
+                    reference: permission_ref.clone(),
+                    in_resource: true,
+                    in_wildcard: false,
+                });
             }
         }
     }
@@ -414,8 +432,17 @@ fn storage_permission_refs(
             .iter()
             .filter(|permission_ref| permission_ref.id().starts_with("storage/"))
         {
-            if seen_ids.insert(permission_ref.id().to_string()) {
-                refs.push(permission_ref.clone());
+            if let Some(tracked) = refs
+                .iter_mut()
+                .find(|tracked| tracked.reference.id() == permission_ref.id())
+            {
+                tracked.in_wildcard = true;
+            } else {
+                refs.push(TrackedPermissionRef {
+                    reference: permission_ref.clone(),
+                    in_resource: false,
+                    in_wildcard: true,
+                });
             }
         }
     }

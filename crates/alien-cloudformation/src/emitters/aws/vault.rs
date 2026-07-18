@@ -10,8 +10,8 @@ use crate::{
     emitter::CfEmitter,
     emitters::aws::{
         helpers::{
-            cf_from_json, required_logical_id, resource_config, service_account_role_id,
-            uniquify_iam_statement_sids,
+            cf_from_json, permission_gate_condition, required_logical_id, resource_config,
+            service_account_role_id, uniquify_iam_statement_sids, TrackedPermissionRef,
         },
         service_account::permission_context,
     },
@@ -95,10 +95,11 @@ fn vault_iam_policies(ctx: &EmitContext<'_>, vault: &Vault) -> Result<Vec<CfReso
     let context =
         permission_context().with_resource_name(format!("${{AWS::StackName}}-{}", vault.id()));
 
-    for (owner_index, (role_id, permission_refs)) in vault_permission_owners(ctx) {
-        for (permission_index, permission_ref) in permission_refs.iter().enumerate() {
-            let Some(permission_set) =
-                permission_ref.resolve(|name| alien_permissions::get_permission_set(name).cloned())
+    for (owner_index, (profile_name, role_id, permission_refs)) in vault_permission_owners(ctx) {
+        for (permission_index, tracked_ref) in permission_refs.iter().enumerate() {
+            let Some(permission_set) = tracked_ref
+                .reference
+                .resolve(|name| alien_permissions::get_permission_set(name).cloned())
             else {
                 continue;
             };
@@ -108,8 +109,9 @@ fn vault_iam_policies(ctx: &EmitContext<'_>, vault: &Vault) -> Result<Vec<CfReso
 
             let policy = generator
                 .generate_policy(&permission_set, BindingTarget::Resource, &context)
-                .context(ErrorData::GenericError {
-                    message: format!(
+                .context(ErrorData::TemplateSerializationFailed {
+                    format: "CloudFormation IAM policy".to_string(),
+                    reason: format!(
                         "failed to generate AWS CloudFormation vault IAM policy for '{}'",
                         vault.id()
                     ),
@@ -157,6 +159,12 @@ fn vault_iam_policies(ctx: &EmitContext<'_>, vault: &Vault) -> Result<Vec<CfReso
                 CfExpression::list([CfExpression::ref_(&role_id)]),
             );
             policy_resource.depends_on.push(role_id.clone());
+            policy_resource.condition = permission_gate_condition(
+                ctx,
+                &profile_name,
+                &permission_set.id,
+                &tracked_ref.origin_keys(ctx.resource_id),
+            );
             resources.push(policy_resource);
         }
     }
@@ -185,8 +193,9 @@ fn management_vault_policy_document(
 
         let policy = generator
             .generate_policy(&permission_set, BindingTarget::Resource, &context)
-            .context(ErrorData::GenericError {
-                message: "failed to generate AWS vault management IAM policy".to_string(),
+            .context(ErrorData::TemplateSerializationFailed {
+                format: "CloudFormation IAM policy".to_string(),
+                reason: "failed to generate AWS vault management IAM policy".to_string(),
             })?;
         let policy_value = serde_json::to_value(policy).into_alien_error().context(
             ErrorData::TemplateSerializationFailed {
@@ -219,24 +228,33 @@ fn management_vault_policy_document(
     ])))
 }
 
-fn management_permission_refs<'a>(ctx: &'a EmitContext<'_>) -> Vec<&'a PermissionSetReference> {
+fn management_permission_refs(ctx: &EmitContext<'_>) -> Vec<PermissionSetReference> {
     let Some(profile) = ctx.stack.management().profile() else {
         return Vec::new();
     };
     resource_permission_refs(profile, ctx.resource_id)
+        .into_iter()
+        .map(|tracked| tracked.reference)
+        .collect()
 }
 
-fn resource_permission_refs<'a>(
-    profile: &'a PermissionProfile,
+fn resource_permission_refs(
+    profile: &PermissionProfile,
     resource_id: &str,
-) -> Vec<&'a PermissionSetReference> {
-    let mut refs = Vec::new();
-    let mut seen_ids = std::collections::HashSet::new();
+) -> Vec<TrackedPermissionRef> {
+    let mut refs: Vec<TrackedPermissionRef> = Vec::new();
 
     if let Some(resource_refs) = profile.0.get(resource_id) {
         for permission_ref in resource_refs {
-            if seen_ids.insert(permission_ref.id().to_string()) {
-                refs.push(permission_ref);
+            if !refs
+                .iter()
+                .any(|tracked| tracked.reference.id() == permission_ref.id())
+            {
+                refs.push(TrackedPermissionRef {
+                    reference: permission_ref.clone(),
+                    in_resource: true,
+                    in_wildcard: false,
+                });
             }
         }
     }
@@ -246,8 +264,17 @@ fn resource_permission_refs<'a>(
             .iter()
             .filter(|permission_ref| permission_ref.id().starts_with("vault/"))
         {
-            if seen_ids.insert(permission_ref.id().to_string()) {
-                refs.push(permission_ref);
+            if let Some(tracked) = refs
+                .iter_mut()
+                .find(|tracked| tracked.reference.id() == permission_ref.id())
+            {
+                tracked.in_wildcard = true;
+            } else {
+                refs.push(TrackedPermissionRef {
+                    reference: permission_ref.clone(),
+                    in_resource: false,
+                    in_wildcard: true,
+                });
             }
         }
     }
@@ -257,13 +284,10 @@ fn resource_permission_refs<'a>(
 
 fn vault_permission_owners(
     ctx: &EmitContext<'_>,
-) -> Vec<(usize, (String, Vec<PermissionSetReference>))> {
+) -> Vec<(usize, (String, String, Vec<TrackedPermissionRef>))> {
     let mut owners = Vec::new();
     for (profile_name, profile) in ctx.stack.permission_profiles() {
-        let refs = resource_permission_refs(profile, ctx.resource_id)
-            .into_iter()
-            .cloned()
-            .collect::<Vec<_>>();
+        let refs = resource_permission_refs(profile, ctx.resource_id);
         if refs.is_empty() {
             continue;
         }
@@ -271,7 +295,7 @@ fn vault_permission_owners(
         let service_account_id = format!("{profile_name}-sa");
         if service_account_for_id(ctx, &service_account_id).is_some() {
             if let Some(role_id) = service_account_role_id(ctx, profile_name) {
-                owners.push((role_id, refs));
+                owners.push((profile_name.clone(), role_id, refs));
             }
         }
     }

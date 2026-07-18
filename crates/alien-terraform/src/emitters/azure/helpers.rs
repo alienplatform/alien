@@ -26,6 +26,7 @@
 use crate::{
     block::{attr, block, nested, resource_block},
     emitter::TfFragment,
+    emitters::gates::PermissionGateExpression,
     expr,
 };
 use alien_core::{
@@ -38,8 +39,8 @@ use alien_permissions::{
     generators::{AzureRoleDefinitionRef, AzureRuntimePermissionsGenerator},
     BindingTarget, PermissionContext,
 };
-use hcl::expr::Expression;
-use std::collections::HashSet;
+use hcl::{expr::Expression, structure::Structure};
+use std::collections::{HashMap, HashSet};
 
 /// Downcast `ctx.resource.config` to the typed resource definition or
 /// return a typed `UnexpectedResourceType` error.
@@ -263,7 +264,8 @@ pub fn emit_role_definition_and_assignments(
     principal_id_expr: Expression,
     permission_set: &PermissionSet,
     context: &PermissionContext,
-    seen_predefined_assignments: &mut HashSet<(String, String)>,
+    seen_predefined_assignments: &mut PredefinedAssignmentClaims,
+    gate: Option<&PermissionGateExpression>,
 ) -> Result<()> {
     // Skip when the set declares no Azure grants — `None` OR an explicit empty list. A set can
     // intentionally grant nothing on Azure while still granting on other clouds (e.g.
@@ -306,40 +308,120 @@ pub fn emit_role_definition_and_assignments(
     }
 
     for binding in &grant_plan.bindings {
-        if let AzureRoleDefinitionRef::Predefined { role_definition_id } = &binding.role_definition
-        {
-            if !seen_predefined_assignments
-                .insert((binding.scope.clone(), role_definition_id.clone()))
-            {
-                continue;
-            }
-        }
-
         let role_segment = role_binding_segment(binding);
         let assignment_label = format!("{sa_label}_{role_segment}_assignment");
-        let role_definition_id = role_definition_id_expression(&binding.role_definition, sa_label);
+        let role_definition_expr = role_definition_id_expression(&binding.role_definition, sa_label);
 
-        fragment.resource_blocks.push(resource_block(
-            "azurerm_role_assignment",
+        if let AzureRoleDefinitionRef::Predefined { role_definition_id } = &binding.role_definition
+        {
+            let claim_key = (binding.scope.clone(), role_definition_id.clone());
+            let gate_key = gate.map(|gate| (gate.input_id.clone(), gate.enabled_value.clone()));
+            // Ungated-wins keeps the superset; conflicting gates fail fast —
+            // silent first-wins would under-grant.
+            if let Some(claim) = seen_predefined_assignments.claims.get_mut(&claim_key) {
+                match (&claim.gate, &gate_key) {
+                    (None, _) => continue,
+                    (Some(existing), Some(new)) if existing == new => continue,
+                    (Some(_), None) => {
+                        fragment.resource_blocks[claim.block_index] = role_assignment_block(
+                            &assignment_label,
+                            service_account_id,
+                            &role_segment,
+                            &binding.scope,
+                            role_definition_expr,
+                            &principal_id_expr,
+                            None,
+                        );
+                        claim.gate = None;
+                        continue;
+                    }
+                    (Some(existing), Some(new)) => {
+                        return Err(AlienError::new(ErrorData::OperationNotSupported {
+                            operation: "gate Azure role assignment".to_string(),
+                            reason: format!(
+                                "conflicting permission gates on role '{}' at scope '{}': \
+                                 stack inputs '{}={}' and '{}={}' cannot gate the same role assignment",
+                                binding.role_name,
+                                binding.scope,
+                                existing.0,
+                                existing.1,
+                                new.0,
+                                new.1
+                            ),
+                        }));
+                    }
+                }
+            }
+            seen_predefined_assignments.claims.insert(
+                claim_key,
+                PredefinedAssignmentClaim {
+                    gate: gate_key,
+                    block_index: fragment.resource_blocks.len(),
+                },
+            );
+        }
+
+        fragment.resource_blocks.push(role_assignment_block(
             &assignment_label,
-            [
-                attr(
-                    "name",
-                    expr::raw(&format!(
-                        "uuidv5(\"oid\", \"deployment:azure:role-assign:{}:{}:${{{}}}\")",
-                        service_account_id,
-                        role_segment,
-                        render_expression_for_uuidv5(&principal_id_expr)
-                    )),
-                ),
-                attr("scope", expr::template(binding.scope.clone())),
-                attr("role_definition_id", role_definition_id),
-                attr("principal_id", principal_id_expr.clone()),
-            ],
+            service_account_id,
+            &role_segment,
+            &binding.scope,
+            role_definition_expr,
+            &principal_id_expr,
+            gate,
         ));
     }
 
     Ok(())
+}
+
+/// Predefined-role assignments already emitted for one principal, keyed by
+/// `(scope, role_definition_id)` together with the gate that claimed them.
+/// Block indices stay valid because every call sharing one tracker appends
+/// to the same fragment and never removes blocks.
+#[derive(Default)]
+pub struct PredefinedAssignmentClaims {
+    claims: HashMap<(String, String), PredefinedAssignmentClaim>,
+}
+
+struct PredefinedAssignmentClaim {
+    gate: Option<(String, String)>,
+    block_index: usize,
+}
+
+fn role_assignment_block(
+    assignment_label: &str,
+    service_account_id: &str,
+    role_segment: &str,
+    scope: &str,
+    role_definition_id: Expression,
+    principal_id_expr: &Expression,
+    gate: Option<&PermissionGateExpression>,
+) -> hcl::Block {
+    let mut seed = format!(
+        "deployment:azure:role-assign:{}:{}:${{{}}}",
+        service_account_id,
+        role_segment,
+        render_expression_for_uuidv5(principal_id_expr)
+    );
+    if let Some(gate) = gate {
+        // The gate is part of the assignment's identity: a gated variant must get
+        // a distinct GUID so it never collides with the ungated assignment.
+        seed.push_str(&format!(":gated:{}={}", gate.input_id, gate.enabled_value));
+    }
+
+    let mut body: Vec<Structure> = Vec::new();
+    if let Some(gate) = gate {
+        body.push(attr("count", gate.count.clone()));
+    }
+    body.push(attr(
+        "name",
+        expr::raw(&format!("uuidv5(\"oid\", \"{seed}\")")),
+    ));
+    body.push(attr("scope", expr::template(scope.to_string())));
+    body.push(attr("role_definition_id", role_definition_id));
+    body.push(attr("principal_id", principal_id_expr.clone()));
+    resource_block("azurerm_role_assignment", assignment_label, body)
 }
 
 /// Emit setup-owned Azure role definitions used later by live resource
@@ -714,5 +796,193 @@ fn traversal_root(expr: &Expression) -> String {
     match expr {
         Expression::Variable(v) => v.as_str().to_string(),
         other => format!("{:?}", other),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn gate(input_id: &str, enabled_value: &str) -> PermissionGateExpression {
+        PermissionGateExpression {
+            input_id: input_id.to_string(),
+            enabled_value: enabled_value.to_string(),
+            count: expr::raw(format!(
+                "(var.input_{input_id} == null || tostring(var.input_{input_id}) == \"{enabled_value}\") ? 1 : 0"
+            )),
+        }
+    }
+
+    fn emit_storage_data_write(
+        fragment: &mut TfFragment,
+        claims: &mut PredefinedAssignmentClaims,
+        gate: Option<&PermissionGateExpression>,
+    ) -> Result<()> {
+        let permission_set = alien_permissions::get_permission_set("storage/data-write")
+            .expect("storage/data-write should be a built-in permission set")
+            .clone();
+        emit_role_definition_and_assignments(
+            fragment,
+            "execution_sa",
+            "execution-sa",
+            0,
+            expr::traversal([
+                "azurerm_user_assigned_identity",
+                "execution_sa",
+                "principal_id",
+            ]),
+            &permission_set,
+            &permission_context("execution_sa"),
+            claims,
+            gate,
+        )
+    }
+
+    fn rendered_role_assignments(fragment: &TfFragment) -> Vec<String> {
+        fragment
+            .resource_blocks
+            .iter()
+            .filter(|block| {
+                block
+                    .labels
+                    .first()
+                    .is_some_and(|label| label.as_str() == "azurerm_role_assignment")
+            })
+            .map(|block| {
+                hcl::format::to_string(&hcl::Body::from(vec![Structure::Block(block.clone())]))
+                    .expect("role assignment block should render")
+            })
+            .collect()
+    }
+
+    #[test]
+    fn conflicting_gates_on_one_predefined_assignment_fail() {
+        let mut fragment = TfFragment::default();
+        let mut claims = PredefinedAssignmentClaims::default();
+
+        emit_storage_data_write(
+            &mut fragment,
+            &mut claims,
+            Some(&gate("queueMode", "on")),
+        )
+        .expect("first gated claim should emit");
+        let error = emit_storage_data_write(
+            &mut fragment,
+            &mut claims,
+            Some(&gate("kvEnabled", "true")),
+        )
+        .expect_err("a different gate on the same (scope, role) must fail");
+
+        let message = error.to_string();
+        assert!(
+            message.contains("queueMode=on"),
+            "error must name the first gate: {message}"
+        );
+        assert!(
+            message.contains("kvEnabled=true"),
+            "error must name the second gate: {message}"
+        );
+    }
+
+    #[test]
+    fn gated_assignment_carries_count_and_extended_name_seed() {
+        let mut fragment = TfFragment::default();
+        let mut claims = PredefinedAssignmentClaims::default();
+
+        emit_storage_data_write(
+            &mut fragment,
+            &mut claims,
+            Some(&gate("queueMode", "on")),
+        )
+        .expect("gated claim should emit");
+
+        let assignments = rendered_role_assignments(&fragment);
+        assert_eq!(assignments.len(), 1);
+        assert!(
+            assignments[0].contains("var.input_queueMode"),
+            "gated assignment must carry the gate count: {}",
+            assignments[0]
+        );
+        assert!(
+            assignments[0].contains(":gated:queueMode=on"),
+            "gated assignment must extend the uuidv5 seed: {}",
+            assignments[0]
+        );
+    }
+
+    #[test]
+    fn ungated_claim_supersedes_earlier_gated_assignment() {
+        let mut fragment = TfFragment::default();
+        let mut claims = PredefinedAssignmentClaims::default();
+
+        emit_storage_data_write(
+            &mut fragment,
+            &mut claims,
+            Some(&gate("queueMode", "on")),
+        )
+        .expect("gated claim should emit");
+        emit_storage_data_write(&mut fragment, &mut claims, None)
+            .expect("ungated claim should supersede the gated one");
+
+        let assignments = rendered_role_assignments(&fragment);
+        assert_eq!(
+            assignments.len(),
+            1,
+            "one (scope, role) claim must produce one assignment block"
+        );
+        assert!(
+            !assignments[0].contains("var.input_"),
+            "superseded assignment must lose the gate count: {}",
+            assignments[0]
+        );
+        assert!(
+            !assignments[0].contains(":gated:"),
+            "superseded assignment must revert to the base name seed: {}",
+            assignments[0]
+        );
+    }
+
+    #[test]
+    fn gated_claim_after_ungated_assignment_is_skipped() {
+        let mut fragment = TfFragment::default();
+        let mut claims = PredefinedAssignmentClaims::default();
+
+        emit_storage_data_write(&mut fragment, &mut claims, None)
+            .expect("ungated claim should emit");
+        emit_storage_data_write(
+            &mut fragment,
+            &mut claims,
+            Some(&gate("queueMode", "on")),
+        )
+        .expect("gated duplicate should be skipped, not fail");
+
+        let assignments = rendered_role_assignments(&fragment);
+        assert_eq!(assignments.len(), 1);
+        assert!(
+            !assignments[0].contains("var.input_"),
+            "ungated assignment must stay ungated: {}",
+            assignments[0]
+        );
+    }
+
+    #[test]
+    fn identically_gated_duplicate_claim_is_skipped() {
+        let mut fragment = TfFragment::default();
+        let mut claims = PredefinedAssignmentClaims::default();
+
+        emit_storage_data_write(
+            &mut fragment,
+            &mut claims,
+            Some(&gate("queueMode", "on")),
+        )
+        .expect("gated claim should emit");
+        emit_storage_data_write(
+            &mut fragment,
+            &mut claims,
+            Some(&gate("queueMode", "on")),
+        )
+        .expect("same gate on the same (scope, role) should dedupe");
+
+        assert_eq!(rendered_role_assignments(&fragment).len(), 1);
     }
 }

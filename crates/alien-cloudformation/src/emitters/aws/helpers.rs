@@ -11,10 +11,13 @@ use alien_core::{
     RemoteStackManagement, ResourceDefinition, ResourceRef, ResourceType, Result, ServiceAccount,
     Storage, Worker, ALIEN_MANAGED_BY_TAG_KEY, ALIEN_RESOURCE_TAG_KEY, ALIEN_STACK_TAG_KEY,
 };
-use alien_error::AlienError;
+use alien_error::{AlienError, Context, IntoAlienError};
 use indexmap::IndexMap;
 use serde_json::Value as JsonValue;
 use std::collections::BTreeSet;
+
+/// Re-exported so the Terraform and CloudFormation emitters share one definition.
+pub use alien_core::TrackedPermissionRef;
 
 pub const PARAM_MANAGING_ROLE_ARN: &str = "ManagingRoleArn";
 pub const PARAM_MANAGING_ACCOUNT_ID: &str = "ManagingAccountId";
@@ -32,6 +35,100 @@ const CONDITION_NETWORK_MODE_CREATE: &str = "NetworkModeCreate";
 const CONDITION_NETWORK_MODE_USE_EXISTING: &str = "NetworkModeUseExisting";
 
 pub const INLINE_POLICY_NAME: &str = "deployment-permissions";
+
+/// CloudFormation Condition name for a gate: the `When<Input><Value>` prefix
+/// reads in the template as "policy exists when the input equals the value".
+pub fn gate_condition_name(gate: &alien_core::permissions::PermissionGate) -> String {
+    format!(
+        "When{}{}",
+        crate::generator::sanitize_logical_id(&gate.input_id),
+        crate::generator::sanitize_logical_id(&gate.enabled_value)
+    )
+}
+
+/// Condition name to apply to a permission set's emitted policy, if the set
+/// is gated for this emitter's platform across every origin key.
+pub fn permission_gate_condition(
+    ctx: &EmitContext<'_>,
+    profile: &str,
+    permission_set_id: &str,
+    origin_keys: &[&str],
+) -> Option<String> {
+    ctx.stack
+        .deployer_permission_gate(ctx.platform, profile, permission_set_id, origin_keys)
+        .map(gate_condition_name)
+}
+
+/// Render a permission set to CloudFormation IAM statements.
+///
+/// Returns `Ok(None)` for a set with no statements on this platform.
+pub fn iam_policy_statements(
+    permission_set: &alien_core::PermissionSet,
+    binding_target: alien_permissions::BindingTarget,
+    context: &alien_permissions::PermissionContext,
+    subject: &str,
+) -> Result<Option<Vec<CfExpression>>> {
+    let generator = alien_permissions::generators::AwsCloudFormationPermissionsGenerator::new();
+    let policy = generator
+        .generate_policy(permission_set, binding_target, context)
+        .context(ErrorData::TemplateSerializationFailed {
+            format: "CloudFormation IAM policy".to_string(),
+            reason: format!("failed to generate policy for {subject}"),
+        })?;
+    let policy_value =
+        serde_json::to_value(policy)
+            .into_alien_error()
+            .context(ErrorData::TemplateSerializationFailed {
+                format: "CloudFormation IAM policy".to_string(),
+                reason: format!("serde rejected the generated policy for {subject}"),
+            })?;
+    let CfExpression::Object(mut policy_object) = cf_from_json(policy_value)? else {
+        return Err(AlienError::new(ErrorData::TemplateSerializationFailed {
+            format: "CloudFormation IAM policy".to_string(),
+            reason: format!("policy for {subject} did not serialize to a JSON object"),
+        }));
+    };
+    let Some(CfExpression::List(statements)) = policy_object.shift_remove("Statement") else {
+        return Err(AlienError::new(ErrorData::TemplateSerializationFailed {
+            format: "CloudFormation IAM policy".to_string(),
+            reason: format!("policy for {subject} has no Statement list"),
+        }));
+    };
+
+    if statements.is_empty() {
+        return Ok(None);
+    }
+    Ok(Some(statements))
+}
+
+/// Build a standalone `AWS::IAM::Policy` attached to the given role.
+pub fn iam_policy_resource(
+    logical_id: String,
+    policy_name: CfExpression,
+    statements: Vec<CfExpression>,
+    role_id: &str,
+    condition: Option<String>,
+) -> CfResource {
+    let mut policy = CfResource::new(logical_id, "AWS::IAM::Policy".to_string());
+    policy.properties.insert("PolicyName".to_string(), policy_name);
+    policy.properties.insert(
+        "PolicyDocument".to_string(),
+        CfExpression::object([
+            ("Version", CfExpression::from("2012-10-17")),
+            (
+                "Statement",
+                CfExpression::list(uniquify_iam_statement_sids(statements)),
+            ),
+        ]),
+    );
+    policy.properties.insert(
+        "Roles".to_string(),
+        CfExpression::list([CfExpression::ref_(role_id)]),
+    );
+    policy.depends_on.push(role_id.to_string());
+    policy.condition = condition;
+    policy
+}
 
 /// Downcast `ctx.resource.config` to the typed resource definition or return
 /// a typed `UnexpectedResourceType` error.
@@ -347,6 +444,22 @@ pub fn service_account_role_id(ctx: &EmitContext<'_>, profile_name: &str) -> Opt
         .find(|(id, _entry)| id.as_str() == service_account_id)?;
     entry.config.downcast_ref::<ServiceAccount>()?;
     Some(format!("{}Role", ctx.name_for(&service_account_id)?))
+}
+
+/// Look up the IAM role logical id for the stack's remote-stack-management
+/// resource, if one exists.
+pub fn remote_stack_management_role_id(ctx: &EmitContext<'_>) -> Option<String> {
+    ctx.stack.resources().find_map(|(id, entry)| {
+        if entry.config.resource_type() != RemoteStackManagement::RESOURCE_TYPE {
+            return None;
+        }
+        let logical_id = ctx.name_for(id)?;
+        if logical_id == "Management" {
+            Some("ManagementRole".to_string())
+        } else {
+            Some(format!("{logical_id}Role"))
+        }
+    })
 }
 
 /// IAM permissions for a function's link to another resource. Returns one

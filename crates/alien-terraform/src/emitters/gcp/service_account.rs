@@ -13,6 +13,7 @@
 use crate::{
     block::{attr, resource_block},
     emitter::{TfEmitter, TfFragment},
+    emitters::gates::permission_gate_count,
     emitters::gcp::helpers::{
         binding_label_for_role, downcast, emit_custom_roles_for_bindings, permission_context,
         push_iam_member, required_label, role_expression_for_binding, service_account_id_template,
@@ -66,7 +67,12 @@ impl TfEmitter for GcpServiceAccountEmitter {
         // Member expression for re-use by all bindings.
         let member = service_account_member_for_label(label);
 
+        let profile_name = service_account.id.strip_suffix("-sa");
         for permission_set in &service_account.stack_permission_sets {
+            let gate_count = match profile_name {
+                Some(profile) => permission_gate_count(ctx, profile, &permission_set.id, &["*"])?,
+                None => None,
+            };
             let context = permission_context(label, ctx.stack.id());
             emit_project_bindings(
                 &mut fragment,
@@ -76,10 +82,11 @@ impl TfEmitter for GcpServiceAccountEmitter {
                 &context,
                 BindingTarget::Stack,
                 "stack",
+                gate_count,
             )?;
         }
 
-        if let Some(profile_name) = service_account.id.strip_suffix("-sa") {
+        if let Some(profile_name) = profile_name {
             if let Some(profile) = ctx.stack.permission_profiles().get(profile_name) {
                 for (resource_id, permission_set_refs) in &profile.0 {
                     if resource_id == "*" {
@@ -89,6 +96,12 @@ impl TfEmitter for GcpServiceAccountEmitter {
                         .with_resource_name(format!("${{local.resource_prefix}}-{resource_id}"));
                     for permission_set_ref in permission_set_refs {
                         if let Some(permission_set) = resolve_permission_set(permission_set_ref) {
+                            let gate_count = permission_gate_count(
+                                ctx,
+                                profile_name,
+                                &permission_set.id,
+                                &[resource_id.as_str()],
+                            )?;
                             emit_project_bindings(
                                 &mut fragment,
                                 label,
@@ -97,6 +110,7 @@ impl TfEmitter for GcpServiceAccountEmitter {
                                 &context,
                                 BindingTarget::Resource,
                                 resource_id,
+                                gate_count,
                             )?;
                         }
                     }
@@ -150,6 +164,7 @@ fn emit_project_bindings(
     context: &PermissionContext,
     binding_target: BindingTarget,
     scope_label: &str,
+    gate_count: Option<Expression>,
 ) -> Result<()> {
     if permission_set.platforms.gcp.is_none() {
         return Ok(());
@@ -180,7 +195,14 @@ fn emit_project_bindings(
             scope_label,
             idx,
         );
-        push_iam_member(fragment, &binding_label, role, member, &binding)?;
+        push_iam_member(
+            fragment,
+            &binding_label,
+            role,
+            member,
+            &binding,
+            gate_count.as_ref(),
+        )?;
     }
 
     Ok(())
