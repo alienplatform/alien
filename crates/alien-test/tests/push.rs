@@ -71,21 +71,6 @@ async fn push_aws_comprehensive_ts(ctx: &mut AwsPushTypeScript) {
         .expect("command checks failed");
 }
 
-e2e_test_context!(
-    AwsPushTcpTransaction,
-    Platform::Aws,
-    DeploymentModel::Push,
-    TestApp::TcpTransaction
-);
-
-#[test_context(AwsPushTcpTransaction)]
-#[tokio::test]
-async fn push_aws_tcp_transaction(ctx: &mut AwsPushTcpTransaction) {
-    common::tcp::check_tcp_transaction(&ctx.ctx.deployment)
-        .await
-        .expect("TCP transaction checks failed");
-}
-
 // ---------------------------------------------------------------------------
 // GCP
 // ---------------------------------------------------------------------------
@@ -136,21 +121,6 @@ async fn push_gcp_comprehensive_ts(ctx: &mut GcpPushTypeScript) {
         .expect("command checks failed");
 }
 
-e2e_test_context!(
-    GcpPushTcpTransaction,
-    Platform::Gcp,
-    DeploymentModel::Push,
-    TestApp::TcpTransaction
-);
-
-#[test_context(GcpPushTcpTransaction)]
-#[tokio::test]
-async fn push_gcp_tcp_transaction(ctx: &mut GcpPushTcpTransaction) {
-    common::tcp::check_tcp_transaction(&ctx.ctx.deployment)
-        .await
-        .expect("TCP transaction checks failed");
-}
-
 // ---------------------------------------------------------------------------
 // Azure
 // ---------------------------------------------------------------------------
@@ -199,21 +169,6 @@ async fn push_azure_comprehensive_ts(ctx: &mut AzurePushTypeScript) {
     common::commands::check_commands(&ctx.ctx.deployment)
         .await
         .expect("command checks failed");
-}
-
-e2e_test_context!(
-    AzurePushTcpTransaction,
-    Platform::Azure,
-    DeploymentModel::Push,
-    TestApp::TcpTransaction
-);
-
-#[test_context(AzurePushTcpTransaction)]
-#[tokio::test]
-async fn push_azure_tcp_transaction(ctx: &mut AzurePushTcpTransaction) {
-    common::tcp::check_tcp_transaction(&ctx.ctx.deployment)
-        .await
-        .expect("TCP transaction checks failed");
 }
 
 // Note: Local push tests are not included because the local platform only

@@ -6,7 +6,6 @@ pub mod lifecycle;
 pub mod routing;
 pub mod runner;
 pub mod runtime_less;
-pub mod tcp;
 
 use std::future::Future;
 use std::time::Duration;

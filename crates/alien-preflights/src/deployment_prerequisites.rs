@@ -9,7 +9,7 @@ use crate::error::Result;
 use crate::{CheckResult, DeploymentPrerequisiteCheck};
 use alien_core::{
     validate_binding_type, ComputeBackend, ComputeCluster, Container, Daemon, DeploymentConfig,
-    EnvironmentVariable, KubernetesCluster, PermissionSet, Platform, ResourceEntry,
+    EnvironmentVariable, ExposeProtocol, KubernetesCluster, PermissionSet, Platform, ResourceEntry,
     ResourceLifecycle, Stack, StackState, Worker,
 };
 use alien_permissions::{
@@ -32,7 +32,11 @@ fn resources_requiring_domain_metadata(stack: &Stack) -> Vec<String> {
 
     for (resource_id, entry) in stack.resources() {
         if let Some(container) = entry.config.downcast_ref::<Container>() {
-            if !container.public_endpoints.is_empty() {
+            if container
+                .public_endpoints
+                .iter()
+                .any(|endpoint| endpoint.protocol == ExposeProtocol::Http)
+            {
                 resources.push(format!("container '{}' (public endpoint)", resource_id));
             }
         }
@@ -530,7 +534,7 @@ mod tests {
         bindings::{KvBinding, StorageBinding},
         permissions::PermissionsConfig,
         CertificateStatus, ContainerCode, DnsRecordStatus, DomainMetadata, EnvironmentVariable,
-        EnvironmentVariableType, EnvironmentVariablesSnapshot, ExposeProtocol, ExternalBinding,
+        EnvironmentVariableType, EnvironmentVariablesSnapshot, ExternalBinding, HealthCheck,
         PublicEndpoint, Resource, ResourceDomainInfo, ResourceEntry, ResourceLifecycle,
         ResourceSpec, Storage, Worker, WorkerCode, WorkerPublicEndpoint,
     };
@@ -683,6 +687,45 @@ mod tests {
         }
     }
 
+    fn create_public_tcp_container_with_http_health_entry(id: &str) -> ResourceEntry {
+        ResourceEntry {
+            config: Resource::new(
+                Container::new(id.to_string())
+                    .code(ContainerCode::Image {
+                        image: "test:latest".to_string(),
+                    })
+                    .cpu(ResourceSpec {
+                        min: "0.25".to_string(),
+                        desired: "0.5".to_string(),
+                    })
+                    .memory(ResourceSpec {
+                        min: "256Mi".to_string(),
+                        desired: "512Mi".to_string(),
+                    })
+                    .replicas(1)
+                    .permissions("default".to_string())
+                    .public_endpoint(PublicEndpoint {
+                        name: "transactions".to_string(),
+                        port: 7000,
+                        protocol: ExposeProtocol::Tcp,
+                        host_label: None,
+                        wildcard_subdomains: false,
+                    })
+                    .health_check(HealthCheck {
+                        path: "/health".to_string(),
+                        port: Some(8080),
+                        method: "GET".to_string(),
+                        timeout_seconds: 1,
+                        failure_threshold: 3,
+                    })
+                    .build(),
+            ),
+            lifecycle: ResourceLifecycle::Live,
+            dependencies: Vec::new(),
+            remote_access: false,
+        }
+    }
+
     fn create_public_function_entry(id: &str) -> ResourceEntry {
         ResourceEntry {
             config: Resource::new(
@@ -808,6 +851,20 @@ mod tests {
     async fn domain_metadata_not_required_for_public_functions_on_cloud() {
         let mut resources = IndexMap::new();
         resources.insert("web".to_string(), create_public_function_entry("web"));
+        let stack = create_stack(resources);
+        let config = deployment_config();
+        let check = DomainMetadataRequiredCheck;
+
+        assert!(!check.should_run(&stack, &stack_state(Platform::Aws), &config));
+    }
+
+    #[tokio::test]
+    async fn domain_metadata_not_required_for_public_tcp_with_private_http_health_check() {
+        let mut resources = IndexMap::new();
+        resources.insert(
+            "transactions".to_string(),
+            create_public_tcp_container_with_http_health_entry("transactions"),
+        );
         let stack = create_stack(resources);
         let config = deployment_config();
         let check = DomainMetadataRequiredCheck;

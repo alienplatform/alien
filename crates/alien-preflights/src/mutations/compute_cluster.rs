@@ -672,7 +672,15 @@ fn build_capacity_group_for_id(
     let mut group = CapacityGroup {
         group_id: group_id.to_string(),
         instance_type: None,
-        profile: None,
+        // Preserve the portable workload requirements until materialization.
+        // The selected provider machine profile replaces this value below.
+        profile: Some(MachineProfile {
+            cpu: effective.max_cpu_per_container.to_string(),
+            memory_bytes: effective.max_memory_per_container,
+            ephemeral_storage_bytes: effective.max_ephemeral_storage_bytes,
+            architecture: effective.architecture,
+            gpu: effective.gpu.clone(),
+        }),
         min_size: default_min_machines(&effective),
         max_size: default_max_machines(&effective),
         scale_policy: None,
@@ -806,9 +814,9 @@ fn aggregate_workload_requirements(containers: &[&Container]) -> Result<Workload
 mod tests {
     use super::*;
     use alien_core::{
-        ComputeChoiceRange, ComputePoolSelection, ComputeSettings, ContainerAutoscaling,
-        ContainerCode, DaemonCode, EnvironmentVariablesSnapshot, ExternalBindings, NetworkSettings,
-        ResourceSpec, StackSettings,
+        compute_planner::plan_compute, ComputeChoiceRange, ComputePoolSelection, ComputeSettings,
+        ContainerAutoscaling, ContainerCode, DaemonCode, EnvironmentVariablesSnapshot,
+        ExternalBindings, NetworkSettings, ResourceSpec, StackSettings,
     };
     use indexmap::IndexMap;
 
@@ -921,6 +929,41 @@ mod tests {
             assert_eq!(group.min_size, 1);
             assert_eq!(group.max_size, 10);
         }
+    }
+
+    #[test]
+    fn small_workload_accepts_planner_recommended_machine() {
+        let mut container = test_container("transaction-service", "0.25", "256Mi");
+        container.replicas = Some(2);
+        let stack = Stack::new("tcp-transaction".to_string())
+            .add(container.clone(), ResourceLifecycle::Live)
+            .build();
+        let plan = plan_compute(&stack, Platform::Aws, None).expect("compute plan should build");
+        let recommendation = plan
+            .pools
+            .first()
+            .expect("general pool should be planned")
+            .recommended
+            .clone();
+        let config = DeploymentConfig::builder()
+            .stack_settings(StackSettings {
+                compute: Some(ComputeSettings {
+                    pools: [("general".to_string(), recommendation.clone())]
+                        .into_iter()
+                        .collect(),
+                }),
+                ..StackSettings::default()
+            })
+            .environment_variables(empty_env_snapshot())
+            .allow_frozen_changes(false)
+            .external_bindings(ExternalBindings::default())
+            .build();
+
+        let group =
+            build_capacity_group_for_id("general", &[&container], Platform::Aws, false, &config)
+                .expect("planner recommendation should materialize");
+
+        assert_eq!(group.instance_type.as_deref(), recommendation.machine());
     }
 
     #[tokio::test]
