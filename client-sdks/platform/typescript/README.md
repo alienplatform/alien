@@ -149,8 +149,8 @@ run();
 * [list](docs/sdks/apikeys/README.md#list) - Retrieve all API keys for the current workspace.
 * [create](docs/sdks/apikeys/README.md#create) - Create a new API key.
 * [get](docs/sdks/apikeys/README.md#get) - Retrieve a specific API key.
-* [revoke](docs/sdks/apikeys/README.md#revoke) - Revoke (soft delete) an API key.
 * [update](docs/sdks/apikeys/README.md#update) - Update an API key (enable/disable, change description).
+* [revoke](docs/sdks/apikeys/README.md#revoke) - Revoke (soft delete) an API key.
 * [deleteMultiple](docs/sdks/apikeys/README.md#deletemultiple) - Permanently delete multiple API keys.
 
 ### [Auth](docs/sdks/auth/README.md)
@@ -172,15 +172,15 @@ run();
 * [create](docs/sdks/commands/README.md#create) - Create command metadata. Called by manager when processing commands. Returns project info for routing decisions.
 * [listNames](docs/sdks/commands/README.md#listnames) - List distinct command names. Use for filter dropdowns in the dashboard.
 * [listDeployments](docs/sdks/commands/README.md#listdeployments) - List distinct deployments that have commands, including deployment group info. Use for filter dropdowns in the dashboard.
-* [get](docs/sdks/commands/README.md#get) - Retrieve a command by ID.
 * [update](docs/sdks/commands/README.md#update) - Update command state. Called by manager when command is dispatched or completes.
+* [get](docs/sdks/commands/README.md#get) - Retrieve a command by ID.
 
 ### [DebugSessions](docs/sdks/debugsessions/README.md)
 
 * [list](docs/sdks/debugsessions/README.md#list) - Retrieve debug sessions for dashboard audit. Filters: project, deployment, state, mode.
 * [create](docs/sdks/debugsessions/README.md#create) - Create a debug-session audit row. Called by the manager when a pull or push debug tunnel is opened. Workspace + project derived from deployment.
-* [get](docs/sdks/debugsessions/README.md#get) - Retrieve a debug session by ID.
 * [update](docs/sdks/debugsessions/README.md#update) - Update debug-session state. Called by manager on tunnel attach, close, or deadline expiry.
+* [get](docs/sdks/debugsessions/README.md#get) - Retrieve a debug session by ID.
 
 ### [Deployment](docs/sdks/deployment/README.md)
 
@@ -190,12 +190,12 @@ run();
 
 ### [DeploymentGroups](docs/sdks/deploymentgroups/README.md)
 
-* [listDeploymentGroups](docs/sdks/deploymentgroups/README.md#listdeploymentgroups) - List deployment groups
 * [createDeploymentGroup](docs/sdks/deploymentgroups/README.md#createdeploymentgroup) - Create a new deployment group
+* [listDeploymentGroups](docs/sdks/deploymentgroups/README.md#listdeploymentgroups) - List deployment groups
 * [ensureDeploymentGroupByName](docs/sdks/deploymentgroups/README.md#ensuredeploymentgroupbyname) - Get or create a deployment group by project and name
 * [getDeploymentGroup](docs/sdks/deploymentgroups/README.md#getdeploymentgroup) - Get deployment group details
-* [deleteDeploymentGroup](docs/sdks/deploymentgroups/README.md#deletedeploymentgroup) - Delete deployment group
 * [updateDeploymentGroup](docs/sdks/deploymentgroups/README.md#updatedeploymentgroup) - Update deployment group
+* [deleteDeploymentGroup](docs/sdks/deploymentgroups/README.md#deletedeploymentgroup) - Delete deployment group
 * [createDeploymentGroupToken](docs/sdks/deploymentgroups/README.md#createdeploymentgrouptoken) - Create deployment group token
 * [createFirstPartyDeploymentSession](docs/sdks/deploymentgroups/README.md#createfirstpartydeploymentsession) - Create first-party deployment session
 
@@ -214,8 +214,10 @@ run();
 * [getSetupRegistrationOperation](docs/sdks/deployments/README.md#getsetupregistrationoperation) - Get setup registration operation status.
 * [delete](docs/sdks/deployments/README.md#delete) - Delete, detach, or forget a deployment by ID.
 * [redeploy](docs/sdks/deployments/README.md#redeploy) - Redeploy a running deployment with the same release and fresh environment variables. Sets status to update-pending.
-* [pinRelease](docs/sdks/deployments/README.md#pinrelease) - Pin or unpin deployment to a specific release. Only works for running deployments. Controller will automatically trigger update to target release.
+* [pinRelease](docs/sdks/deployments/README.md#pinrelease) - Pin or unpin a running or runtime-failed deployment. Running deployments start an update; failed deployments retry toward the selected release.
 * [retry](docs/sdks/deployments/README.md#retry) - Retry a failed deployment operation. Uses alien-infra's retry mechanisms to resume from exact failure point.
+* [getInputs](docs/sdks/deployments/README.md#getinputs) - Get the active input definitions and current non-secret values for a deployment.
+* [updateInputs](docs/sdks/deployments/README.md#updateinputs) - Update runtime stack inputs, rebuild their environment-variable mappings, and request a deployment update when runtime configuration changes.
 * [updateEnvironmentVariables](docs/sdks/deployments/README.md#updateenvironmentvariables) - Update a deployment's environment variables. If the deployment is running and not locked, the status will be changed to update-pending to trigger a deployment.
 * [createToken](docs/sdks/deployments/README.md#createtoken) - Create a deployment token (deployment-scoped API key). The deployment must exist before creating a token.
 
@@ -240,14 +242,14 @@ run();
 * [rotateJoinToken](docs/sdks/machines/README.md#rotatejointoken)
 * [revokeJoinToken](docs/sdks/machines/README.md#revokejointoken)
 * [listInventory](docs/sdks/machines/README.md#listinventory)
-* [drainMachine](docs/sdks/machines/README.md#drainmachine)
 * [cancelMachineDrain](docs/sdks/machines/README.md#cancelmachinedrain)
+* [drainMachine](docs/sdks/machines/README.md#drainmachine)
 * [removeMachine](docs/sdks/machines/README.md#removemachine)
 
 ### [Managers](docs/sdks/managers/README.md)
 
-* [list](docs/sdks/managers/README.md#list) - Retrieve all managers.
 * [create](docs/sdks/managers/README.md#create) - Create a new manager.
+* [list](docs/sdks/managers/README.md#list) - Retrieve all managers.
 * [retrySetup](docs/sdks/managers/README.md#retrysetup) - Revoke previous private-manager setup tokens and issue a fresh setup token/config.
 * [retry](docs/sdks/managers/README.md#retry) - Retry private-manager setup. Returns a fresh setup action before the internal deployment exists, or requests retry for the internal deployment after it exists.
 * [cancelSetup](docs/sdks/managers/README.md#cancelsetup) - Cancel pending private-manager setup, revoke setup/runtime tokens, and remove the undeployed manager record.
@@ -281,8 +283,8 @@ run();
 * [list](docs/sdks/projects/README.md#list) - Retrieve all projects.
 * [create](docs/sdks/projects/README.md#create) - Create a new project.
 * [get](docs/sdks/projects/README.md#get) - Retrieve a project by ID or name.
-* [delete](docs/sdks/projects/README.md#delete) - Delete a project. The project must have no deployments.
 * [update](docs/sdks/projects/README.md#update) - Update a project.
+* [delete](docs/sdks/projects/README.md#delete) - Delete a project. The project must have no deployments.
 * [getGcpOAuthProvider](docs/sdks/projects/README.md#getgcpoauthprovider) - Retrieve redacted project-level Google Cloud OAuth provider settings.
 * [updateGcpOAuthProvider](docs/sdks/projects/README.md#updategcpoauthprovider) - Update project-level Google Cloud OAuth provider settings.
 * [getDeploymentPortalDomain](docs/sdks/projects/README.md#getdeploymentportaldomain) - Get the deployment portal domain binding for a project.
@@ -313,6 +315,7 @@ run();
 ### [Sync](docs/sdks/sync/README.md)
 
 * [list](docs/sdks/sync/README.md#list) - List full deployment records for manager operational loops. This endpoint is intentionally separate from the public deployments list, which returns lightweight UI rows.
+* [context](docs/sdks/sync/README.md#context) - Get computed deployment state and configuration for a manager-side operation without acquiring the deployment reconciliation lock.
 * [acquire](docs/sdks/sync/README.md#acquire) - Acquire a batch of deployments for processing. Used by Manager to atomically lock deployments matching filters. Each deployment in the batch must be released after processing.
 * [reconcile](docs/sdks/sync/README.md#reconcile) - Reconcile deployment state. Push model requests that include a session verify lock ownership. Pull model state reports are accepted as authz-gated agent progress even when they carry an agent-sync session. Accepts full DeploymentState after step() execution.
 * [release](docs/sdks/sync/README.md#release) - Release a deployment lock. Must be called after processing an acquired deployment, even if processing failed. This is critical to avoid deadlocks.
@@ -332,12 +335,12 @@ run();
 
 * [list](docs/sdks/workspaces/README.md#list) - Retrieve all workspaces.
 * [get](docs/sdks/workspaces/README.md#get) - Retrieve a workspace by ID.
-* [delete](docs/sdks/workspaces/README.md#delete) - Delete a workspace. The workspace must have no projects.
 * [update](docs/sdks/workspaces/README.md#update) - Update a workspace.
+* [delete](docs/sdks/workspaces/README.md#delete) - Delete a workspace. The workspace must have no projects.
 * [listMembers](docs/sdks/workspaces/README.md#listmembers) - List all members of a workspace.
 * [addMember](docs/sdks/workspaces/README.md#addmember) - Add a member to a workspace by email. The user must already have an account.
-* [removeMember](docs/sdks/workspaces/README.md#removemember) - Remove a member from a workspace.
 * [updateMember](docs/sdks/workspaces/README.md#updatemember) - Update a workspace member's role.
+* [removeMember](docs/sdks/workspaces/README.md#removemember) - Remove a member from a workspace.
 * [dismissOnboarding](docs/sdks/workspaces/README.md#dismissonboarding) - Mark the Getting Started walkthrough as dismissed for a workspace. The dashboard stops auto-promoting onboarding once this is set; users can still re-enter the walkthrough via the help menu.
 
 </details>
@@ -395,17 +398,19 @@ To read more about standalone functions, check [FUNCTIONS.md](./FUNCTIONS.md).
 - [`deploymentsDelete`](docs/sdks/deployments/README.md#delete) - Delete, detach, or forget a deployment by ID.
 - [`deploymentsGet`](docs/sdks/deployments/README.md#get) - Retrieve a deployment by ID.
 - [`deploymentsGetInfo`](docs/sdks/deployments/README.md#getinfo) - Get deployment connection information including command endpoint and resource URLs.
+- [`deploymentsGetInputs`](docs/sdks/deployments/README.md#getinputs) - Get the active input definitions and current non-secret values for a deployment.
 - [`deploymentsGetSetupRegistrationOperation`](docs/sdks/deployments/README.md#getsetupregistrationoperation) - Get setup registration operation status.
 - [`deploymentsGetStats`](docs/sdks/deployments/README.md#getstats) - Get aggregated deployment statistics. Returns total count and breakdown by status.
 - [`deploymentsImport`](docs/sdks/deployments/README.md#import) - Import a deployment from resolved setup infrastructure such as CloudFormation, Terraform, or Helm.
 - [`deploymentsList`](docs/sdks/deployments/README.md#list) - Retrieve all deployments.
 - [`deploymentsListFilterDeploymentGroups`](docs/sdks/deployments/README.md#listfilterdeploymentgroups) - List deployment groups with deployment counts. Used for filter dropdowns.
 - [`deploymentsListFilterEnvironments`](docs/sdks/deployments/README.md#listfilterenvironments) - List distinct effective environments used by deployments. Used for filter dropdowns.
-- [`deploymentsPinRelease`](docs/sdks/deployments/README.md#pinrelease) - Pin or unpin deployment to a specific release. Only works for running deployments. Controller will automatically trigger update to target release.
+- [`deploymentsPinRelease`](docs/sdks/deployments/README.md#pinrelease) - Pin or unpin a running or runtime-failed deployment. Running deployments start an update; failed deployments retry toward the selected release.
 - [`deploymentsRedeploy`](docs/sdks/deployments/README.md#redeploy) - Redeploy a running deployment with the same release and fresh environment variables. Sets status to update-pending.
 - [`deploymentsRetry`](docs/sdks/deployments/README.md#retry) - Retry a failed deployment operation. Uses alien-infra's retry mechanisms to resume from exact failure point.
 - [`deploymentsSetFirstPartyDeploymentInputs`](docs/sdks/deployments/README.md#setfirstpartydeploymentinputs) - Store operator-provided input values on a first-party deployment session token so CLI/local deploys apply them.
 - [`deploymentsUpdateEnvironmentVariables`](docs/sdks/deployments/README.md#updateenvironmentvariables) - Update a deployment's environment variables. If the deployment is running and not locked, the status will be changed to update-pending to trigger a deployment.
+- [`deploymentsUpdateInputs`](docs/sdks/deployments/README.md#updateinputs) - Update runtime stack inputs, rebuild their environment-variable mappings, and request a deployment update when runtime configuration changes.
 - [`domainsCreate`](docs/sdks/domains/README.md#create) - Create a workspace domain and optional initial endpoints.
 - [`domainsCreateEndpoint`](docs/sdks/domains/README.md#createendpoint) - Create an endpoint under a workspace domain.
 - [`domainsDelete`](docs/sdks/domains/README.md#delete) - Delete a workspace domain.
@@ -468,6 +473,7 @@ To read more about standalone functions, check [FUNCTIONS.md](./FUNCTIONS.md).
 - [`resourcesListInventory`](docs/sdks/resources/README.md#listinventory)
 - [`resourcesListOverview`](docs/sdks/resources/README.md#listoverview)
 - [`syncAcquire`](docs/sdks/sync/README.md#acquire) - Acquire a batch of deployments for processing. Used by Manager to atomically lock deployments matching filters. Each deployment in the batch must be released after processing.
+- [`syncContext`](docs/sdks/sync/README.md#context) - Get computed deployment state and configuration for a manager-side operation without acquiring the deployment reconciliation lock.
 - [`syncList`](docs/sdks/sync/README.md#list) - List full deployment records for manager operational loops. This endpoint is intentionally separate from the public deployments list, which returns lightweight UI rows.
 - [`syncReconcile`](docs/sdks/sync/README.md#reconcile) - Reconcile deployment state. Push model requests that include a session verify lock ownership. Pull model state reports are accepted as authz-gated agent progress even when they carry an agent-sync session. Accepts full DeploymentState after step() execution.
 - [`syncRelease`](docs/sdks/sync/README.md#release) - Release a deployment lock. Must be called after processing an acquired deployment, even if processing failed. This is critical to avoid deadlocks.

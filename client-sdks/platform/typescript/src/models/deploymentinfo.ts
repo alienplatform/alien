@@ -204,6 +204,10 @@ export type DeploymentInfoBuildInfo = {
    */
   horizonSha: string;
   /**
+   * Horizon release channel manifest embedded into the generated CLI.
+   */
+  machineBundleManifestUrl?: string | null | undefined;
+  /**
    * Platform source commit used to build packages-builder and private extensions.
    */
   platformSha: string;
@@ -951,6 +955,7 @@ export const DeploymentInfoBuildInfo$inboundSchema: z.ZodType<
 > = z.object({
   alienSha: z.string(),
   horizonSha: z.string(),
+  machineBundleManifestUrl: z.nullable(z.string()).optional(),
   platformSha: z.string(),
   sourceAgentBinarySha256: z.nullable(z.string()).optional(),
   sourceCliBinarySha256: z.string(),

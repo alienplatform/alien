@@ -8,6 +8,7 @@ import { deploymentsCreateToken } from "../funcs/deploymentsCreateToken.js";
 import { deploymentsDelete } from "../funcs/deploymentsDelete.js";
 import { deploymentsGet } from "../funcs/deploymentsGet.js";
 import { deploymentsGetInfo } from "../funcs/deploymentsGetInfo.js";
+import { deploymentsGetInputs } from "../funcs/deploymentsGetInputs.js";
 import { deploymentsGetSetupRegistrationOperation } from "../funcs/deploymentsGetSetupRegistrationOperation.js";
 import { deploymentsGetStats } from "../funcs/deploymentsGetStats.js";
 import { deploymentsImport } from "../funcs/deploymentsImport.js";
@@ -19,6 +20,7 @@ import { deploymentsRedeploy } from "../funcs/deploymentsRedeploy.js";
 import { deploymentsRetry } from "../funcs/deploymentsRetry.js";
 import { deploymentsSetFirstPartyDeploymentInputs } from "../funcs/deploymentsSetFirstPartyDeploymentInputs.js";
 import { deploymentsUpdateEnvironmentVariables } from "../funcs/deploymentsUpdateEnvironmentVariables.js";
+import { deploymentsUpdateInputs } from "../funcs/deploymentsUpdateInputs.js";
 import { ClientSDK, RequestOptions } from "../lib/sdks.js";
 import * as models from "../models/index.js";
 import * as operations from "../models/operations/index.js";
@@ -210,7 +212,7 @@ export class Deployments extends ClientSDK {
   }
 
   /**
-   * Pin or unpin deployment to a specific release. Only works for running deployments. Controller will automatically trigger update to target release.
+   * Pin or unpin a running or runtime-failed deployment. Running deployments start an update; failed deployments retry toward the selected release.
    */
   async pinRelease(
     request: operations.PinDeploymentReleaseRequest,
@@ -231,6 +233,34 @@ export class Deployments extends ClientSDK {
     options?: RequestOptions,
   ): Promise<operations.RetryDeploymentResponse> {
     return unwrapAsync(deploymentsRetry(
+      this,
+      request,
+      options,
+    ));
+  }
+
+  /**
+   * Get the active input definitions and current non-secret values for a deployment.
+   */
+  async getInputs(
+    request: operations.GetDeploymentInputsRequest,
+    options?: RequestOptions,
+  ): Promise<models.DeploymentInputsResponse> {
+    return unwrapAsync(deploymentsGetInputs(
+      this,
+      request,
+      options,
+    ));
+  }
+
+  /**
+   * Update runtime stack inputs, rebuild their environment-variable mappings, and request a deployment update when runtime configuration changes.
+   */
+  async updateInputs(
+    request: operations.UpdateDeploymentInputsRequest,
+    options?: RequestOptions,
+  ): Promise<models.UpdateDeploymentInputsResponse> {
+    return unwrapAsync(deploymentsUpdateInputs(
       this,
       request,
       options,

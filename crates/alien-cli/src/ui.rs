@@ -363,6 +363,35 @@ mod event_tests {
 
         assert!(rendered.contains("(request id: req_123)"));
     }
+
+    #[tokio::test]
+    async fn manager_http_error_reaches_human_output_with_recovery_context() {
+        let response = http::Response::builder()
+            .status(400)
+            .header("x-request-id", "req_recovery_456")
+            .body(
+                serde_json::json!({
+                    "code": "DEPLOYMENT_OPERATION_NOT_ALLOWED",
+                    "message": "The deployment cannot be redeployed from this state",
+                    "hint": "Retry the desired release or pin a different release",
+                    "retryable": false,
+                    "internal": false,
+                    "httpStatusCode": 400
+                })
+                .to_string(),
+            )
+            .expect("test response should build");
+        let error = alien_manager_api::convert_sdk_error_reading_body(
+            alien_manager_api::Error::UnexpectedResponse(reqwest::Response::from(response)),
+        )
+        .await;
+        let rendered = render_human_error(&error);
+
+        assert!(rendered.contains("The deployment cannot be redeployed from this state"));
+        assert!(rendered.contains("Retry the desired release or pin a different release"));
+        assert!(rendered.contains("(request id: req_recovery_456)"));
+        assert!(!rendered.contains("Unexpected response"));
+    }
 }
 
 // ---------------------------------------------------------------------------

@@ -71,20 +71,6 @@ export class Commands extends ClientSDK {
   }
 
   /**
-   * Retrieve a command by ID.
-   */
-  async get(
-    request: operations.GetCommandRequest,
-    options?: RequestOptions,
-  ): Promise<models.Command> {
-    return unwrapAsync(commandsGet(
-      this,
-      request,
-      options,
-    ));
-  }
-
-  /**
    * Update command state. Called by manager when command is dispatched or completes.
    */
   async update(
@@ -92,6 +78,20 @@ export class Commands extends ClientSDK {
     options?: RequestOptions,
   ): Promise<models.Command> {
     return unwrapAsync(commandsUpdate(
+      this,
+      request,
+      options,
+    ));
+  }
+
+  /**
+   * Retrieve a command by ID.
+   */
+  async get(
+    request: operations.GetCommandRequest,
+    options?: RequestOptions,
+  ): Promise<models.Command> {
+    return unwrapAsync(commandsGet(
       this,
       request,
       options,

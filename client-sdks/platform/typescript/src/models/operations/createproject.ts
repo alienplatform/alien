@@ -38,9 +38,44 @@ export type GitRepositoryRequest = {
 };
 
 /**
+ * Target OS and architecture for compiled binaries.
+ *
+ * @remarks
+ *
+ * Used as keys in package output maps (CLI binaries, Terraform providers, etc.)
+ * and for cross-compilation target selection during builds.
+ */
+export const CreateProjectBinaryTargetRequest = {
+  WindowsX64: "windows-x64",
+  LinuxX64: "linux-x64",
+  LinuxArm64: "linux-arm64",
+  DarwinArm64: "darwin-arm64",
+} as const;
+/**
+ * Target OS and architecture for compiled binaries.
+ *
+ * @remarks
+ *
+ * Used as keys in package output maps (CLI binaries, Terraform providers, etc.)
+ * and for cross-compilation target selection during builds.
+ */
+export type CreateProjectBinaryTargetRequest = ClosedEnum<
+  typeof CreateProjectBinaryTargetRequest
+>;
+
+/**
  * CLI package configuration. If null, CLI packages will not be generated.
  */
 export type CreateProjectCliRequest = {
+  /**
+   * Binary targets required by this package's setup consumer.
+   *
+   * @remarks
+   *
+   * Older package rows omit this field and retain the historical all-target
+   * behavior. Callers creating new packages should state their target set.
+   */
+  binaryTargets?: Array<CreateProjectBinaryTargetRequest> | undefined;
   /**
    * Human-friendly display name for help banners and about text
    */
@@ -250,9 +285,44 @@ export type CreateProjectDeploymentPortalAppearance = {
 };
 
 /**
+ * Target OS and architecture for compiled binaries.
+ *
+ * @remarks
+ *
+ * Used as keys in package output maps (CLI binaries, Terraform providers, etc.)
+ * and for cross-compilation target selection during builds.
+ */
+export const CreateProjectBinaryTargetResponse = {
+  WindowsX64: "windows-x64",
+  LinuxX64: "linux-x64",
+  LinuxArm64: "linux-arm64",
+  DarwinArm64: "darwin-arm64",
+} as const;
+/**
+ * Target OS and architecture for compiled binaries.
+ *
+ * @remarks
+ *
+ * Used as keys in package output maps (CLI binaries, Terraform providers, etc.)
+ * and for cross-compilation target selection during builds.
+ */
+export type CreateProjectBinaryTargetResponse = ClosedEnum<
+  typeof CreateProjectBinaryTargetResponse
+>;
+
+/**
  * CLI package configuration. If null, CLI packages will not be generated.
  */
 export type CreateProjectCliResponse = {
+  /**
+   * Binary targets required by this package's setup consumer.
+   *
+   * @remarks
+   *
+   * Older package rows omit this field and retain the historical all-target
+   * behavior. Callers creating new packages should state their target set.
+   */
+  binaryTargets?: Array<CreateProjectBinaryTargetResponse> | undefined;
   /**
    * Human-friendly display name for help banners and about text
    */
@@ -487,7 +557,13 @@ export function gitRepositoryRequestToJSON(
 }
 
 /** @internal */
+export const CreateProjectBinaryTargetRequest$outboundSchema: z.ZodEnum<
+  typeof CreateProjectBinaryTargetRequest
+> = z.enum(CreateProjectBinaryTargetRequest);
+
+/** @internal */
 export type CreateProjectCliRequest$Outbound = {
+  binaryTargets?: Array<string> | undefined;
   displayName: string;
   name: string;
   enabled: boolean;
@@ -498,6 +574,8 @@ export const CreateProjectCliRequest$outboundSchema: z.ZodType<
   CreateProjectCliRequest$Outbound,
   CreateProjectCliRequest
 > = z.object({
+  binaryTargets: z.array(CreateProjectBinaryTargetRequest$outboundSchema)
+    .optional(),
   displayName: z.string(),
   name: z.string(),
   enabled: z.boolean(),
@@ -780,10 +858,17 @@ export function createProjectDeploymentPortalAppearanceFromJSON(
 }
 
 /** @internal */
+export const CreateProjectBinaryTargetResponse$inboundSchema: z.ZodEnum<
+  typeof CreateProjectBinaryTargetResponse
+> = z.enum(CreateProjectBinaryTargetResponse);
+
+/** @internal */
 export const CreateProjectCliResponse$inboundSchema: z.ZodType<
   CreateProjectCliResponse,
   unknown
 > = z.object({
+  binaryTargets: z.array(CreateProjectBinaryTargetResponse$inboundSchema)
+    .optional(),
   displayName: z.string(),
   name: z.string(),
   enabled: z.boolean(),

@@ -1876,6 +1876,10 @@
           "latestUpdateTimestamp": {
             "type": "string"
           },
+          "observedImage": {
+            "type": "string",
+            "nullable": true
+          },
           "status": {
             "$ref": "#/components/schemas/WorkloadHeartbeatStatus"
           },
@@ -3274,6 +3278,10 @@
           },
           "latestUpdateTimestamp": {
             "type": "string"
+          },
+          "observedImage": {
+            "type": "string",
+            "nullable": true
           },
           "status": {
             "$ref": "#/components/schemas/WorkloadHeartbeatStatus"
@@ -6079,6 +6087,10 @@
           "latestUpdateTimestamp": {
             "type": "string"
           },
+          "observedImage": {
+            "type": "string",
+            "nullable": true
+          },
           "status": {
             "$ref": "#/components/schemas/WorkloadHeartbeatStatus"
           },
@@ -6698,8 +6710,16 @@
             "type": "string",
             "nullable": true
           },
+          "latestUpdateTimestamp": {
+            "type": "string",
+            "nullable": true
+          },
           "memory": {
             "$ref": "#/components/schemas/MetricSample",
+            "nullable": true
+          },
+          "observedImage": {
+            "type": "string",
             "nullable": true
           },
           "replicaUnits": {
@@ -9046,6 +9066,10 @@
           },
           "latestUpdateTimestamp": {
             "type": "string"
+          },
+          "observedImage": {
+            "type": "string",
+            "nullable": true
           },
           "status": {
             "$ref": "#/components/schemas/WorkloadHeartbeatStatus"

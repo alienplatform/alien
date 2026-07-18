@@ -26,7 +26,7 @@ import { APICall, APIPromise } from "../types/async.js";
 import { Result } from "../types/fp.js";
 
 /**
- * Pin or unpin deployment to a specific release. Only works for running deployments. Controller will automatically trigger update to target release.
+ * Pin or unpin a running or runtime-failed deployment. Running deployments start an update; failed deployments retry toward the selected release.
  */
 export function deploymentsPinRelease(
   client: AlienCore,

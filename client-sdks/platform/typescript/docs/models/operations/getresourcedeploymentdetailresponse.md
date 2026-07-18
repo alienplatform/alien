@@ -27,6 +27,7 @@ let value: GetResourceDeploymentDetailResponse = {
     currentCount: 979572,
     readyCount: 601933,
     observedAt: new Date("2026-03-21T07:30:12.263Z"),
+    desiredImage: "<value>",
   },
   heartbeat: {
     status: "missing",

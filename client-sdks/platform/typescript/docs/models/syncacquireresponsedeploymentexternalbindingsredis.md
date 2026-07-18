@@ -1,0 +1,24 @@
+# SyncAcquireResponseDeploymentExternalBindingsRedis
+
+Redis KV binding configuration
+
+## Example Usage
+
+```typescript
+import { SyncAcquireResponseDeploymentExternalBindingsRedis } from "@alienplatform/platform-api/models";
+
+let value: SyncAcquireResponseDeploymentExternalBindingsRedis = {
+  service: "redis",
+  type: "kv",
+};
+```
+
+## Fields
+
+| Field                                                                                                                | Type                                                                                                                 | Required                                                                                                             | Description                                                                                                          |
+| -------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------- |
+| `connectionUrl`                                                                                                      | *models.SyncAcquireResponseDeploymentConnectionUrlUnion*                                                             | :heavy_minus_sign:                                                                                                   | Represents a value that can be either a concrete value, a template expression,<br/>or a reference to a Kubernetes Secret |
+| `database`                                                                                                           | *any*                                                                                                                | :heavy_minus_sign:                                                                                                   | N/A                                                                                                                  |
+| `keyPrefix`                                                                                                          | *any*                                                                                                                | :heavy_minus_sign:                                                                                                   | N/A                                                                                                                  |
+| `service`                                                                                                            | *"redis"*                                                                                                            | :heavy_check_mark:                                                                                                   | N/A                                                                                                                  |
+| `type`                                                                                                               | [models.SyncAcquireResponseDeploymentTypeKv4](../models/syncacquireresponsedeploymenttypekv4.md)                     | :heavy_check_mark:                                                                                                   | N/A                                                                                                                  |

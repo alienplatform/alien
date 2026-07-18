@@ -1010,6 +1010,25 @@ impl StackExecutor {
     pub async fn step(&self, state: StackState) -> Result<StepResult> {
         validate_stack_controller_state_versions(&state)?;
 
+        let mut state = state;
+        for (resource_id, resource_state) in &mut state.resources {
+            if resource_state.status != ResourceStatus::UpdateFailed {
+                continue;
+            }
+            let Some(desired) = self.resources.get(resource_id) else {
+                continue;
+            };
+            if resource_state.config != desired.resource {
+                continue;
+            }
+            if resource_state.retry_failed()? {
+                debug!(
+                    "Resumed unchanged failed update for '{}' before planning",
+                    resource_id
+                );
+            }
+        }
+
         let mut next_state = state.clone(); // Clone the input state to modify
 
         // --- Planning Phase ---
@@ -1254,40 +1273,7 @@ impl StackExecutor {
                     resource_id, current_state.status
                 );
 
-                let mut update_state = current_state.clone();
-                if update_state.status == ResourceStatus::UpdateFailed
-                    && update_state.has_last_failed_state()
-                {
-                    update_state
-                        .retry_failed()
-                        .context(ErrorData::InfrastructureError {
-                            message:
-                                "Failed to restore resource before applying updated configuration"
-                                    .to_string(),
-                            operation: Some("retry_update".to_string()),
-                            resource_id: Some(resource_id.clone()),
-                        })?;
-
-                    // A failed update resumes from the exact handler that failed. Its context
-                    // reads the desired resource, so applying the new config here is sufficient;
-                    // starting a second update flow would discard that retry point.
-                    if update_state.status == ResourceStatus::Updating {
-                        let desired_config = self.resources.get(resource_id).ok_or_else(|| {
-                            AlienError::new(ErrorData::InfrastructureError {
-                                message: format!(
-                                    "Resource '{}' not found in desired config during update retry",
-                                    resource_id
-                                ),
-                                operation: Some("update_dependencies".to_string()),
-                                resource_id: Some(resource_id.clone()),
-                            })
-                        })?;
-                        update_state.config = new_config.clone();
-                        update_state.dependencies = desired_config.dependencies.clone();
-                        initial_transitions.insert(resource_id.clone(), update_state);
-                        continue;
-                    }
-                }
+                let update_state = current_state.clone();
 
                 // Try to get the controller and transition to update
                 match update_state.get_internal_controller() {
@@ -1322,7 +1308,8 @@ impl StackExecutor {
                                     state.outputs = controller.get_outputs();
                                     state.retry_attempt = 0;
                                     state.error = None; // Clear error when starting update
-                                                        // Update internal state with the mutated controller
+                                    state.last_failed_state = None;
+                                    // Update internal state with the mutated controller
                                     if let Err(e) = state.set_internal_controller(Some(controller))
                                     {
                                         error!("Failed to serialize controller state: {}", e);

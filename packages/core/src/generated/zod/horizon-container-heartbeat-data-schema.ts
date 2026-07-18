@@ -21,9 +21,11 @@ get "events"(){
                 return z.array(ManagedRuntimeEventSnapshotSchema)
               },
 "image": z.string().nullish(),
+"latestUpdateTimestamp": z.string().nullish(),
 get "memory"(){
                 return z.union([MetricSampleSchema, z.null()]).optional()
               },
+"observedImage": z.string().nullish(),
 get "replicaUnits"(){
                 return z.array(ManagedRuntimeUnitStatusSchema)
               },

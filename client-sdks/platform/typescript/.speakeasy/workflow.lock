@@ -1,0 +1,16 @@
+speakeasyVersion: 1.680.11
+sources: {}
+targets:
+    platform-typescript:
+        source: platform-api
+workflow:
+    workflowVersion: 1.0.0
+    speakeasyVersion: 1.680.11
+    sources:
+        platform-api:
+            inputs:
+                - location: ../openapi.json
+    targets:
+        platform-typescript:
+            target: typescript
+            source: platform-api
