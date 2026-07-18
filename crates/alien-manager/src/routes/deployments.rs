@@ -189,6 +189,8 @@ pub struct ResourceEntry {
     pub resource_type: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub public_url: Option<String>,
+    #[serde(skip_serializing_if = "std::collections::HashMap::is_empty")]
+    pub public_endpoints: std::collections::HashMap<String, PublicEndpointOutput>,
 }
 
 fn representative_public_url(
@@ -677,26 +679,29 @@ async fn get_deployment_info(
     let mut resources = std::collections::HashMap::new();
     if let Some(stack_state) = &deployment.stack_state {
         for (resource_id, resource_state) in &stack_state.resources {
-            let public_url = match resource_state.resource_type.as_str() {
+            let public_endpoints = match resource_state.resource_type.as_str() {
                 "worker" => stack_state
                     .get_resource_outputs::<WorkerOutputs>(resource_id)
                     .ok()
-                    .and_then(|o| representative_public_url(&o.public_endpoints)),
+                    .map(|output| output.public_endpoints.clone()),
                 "container" => stack_state
                     .get_resource_outputs::<ContainerOutputs>(resource_id)
                     .ok()
-                    .and_then(|o| representative_public_url(&o.public_endpoints)),
+                    .map(|output| output.public_endpoints.clone()),
                 "daemon" => stack_state
                     .get_resource_outputs::<DaemonOutputs>(resource_id)
                     .ok()
-                    .and_then(|o| representative_public_url(&o.public_endpoints)),
+                    .map(|output| output.public_endpoints.clone()),
                 _ => None,
-            };
+            }
+            .unwrap_or_default();
+            let public_url = representative_public_url(&public_endpoints);
             resources.insert(
                 resource_id.clone(),
                 ResourceEntry {
                     resource_type: resource_state.resource_type.clone(),
                     public_url,
+                    public_endpoints,
                 },
             );
         }
