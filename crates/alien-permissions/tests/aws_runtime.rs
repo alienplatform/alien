@@ -50,7 +50,7 @@ fn test_aws_observe_generates_account_wide_read_policy() {
 }
 
 #[test]
-fn compute_cluster_execute_reads_only_stack_secret_parameters() {
+fn compute_cluster_execute_does_not_read_workload_secrets() {
     let generator = AwsRuntimePermissionsGenerator::new();
     let permission_set =
         get_permission_set("compute-cluster/execute").expect("permission set exists");
@@ -59,17 +59,23 @@ fn compute_cluster_execute_reads_only_stack_secret_parameters() {
     let result = generator
         .generate_policy(permission_set, BindingTarget::Stack, &context)
         .expect("compute cluster execute policy should generate");
-    let statement = result
+    let actions = result
         .statement
         .iter()
-        .find(|statement| statement.action == ["ssm:GetParameter"])
-        .expect("scoped SSM read statement");
+        .flat_map(|statement| statement.action.iter().map(String::as_str))
+        .collect::<Vec<_>>();
 
-    assert_eq!(
-        statement.resource,
-        vec!["arn:aws:ssm:us-east-1:123456789012:parameter/my-stack-secrets-*".to_string()]
-    );
-    assert!(!statement.resource.iter().any(|resource| resource == "*"));
+    for action in [
+        "ssm:GetParameter",
+        "ssm:GetParameters",
+        "ssm:GetParametersByPath",
+        "secretsmanager:GetSecretValue",
+    ] {
+        assert!(
+            !actions.contains(&action),
+            "machine role must not grant {action}"
+        );
+    }
 }
 
 #[test]

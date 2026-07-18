@@ -83,7 +83,7 @@ fn test_azure_observe_generates_subscription_scoped_read_grant_plan() {
 }
 
 #[test]
-fn compute_cluster_execute_does_not_guess_the_setup_owned_secrets_vault() {
+fn compute_cluster_execute_does_not_read_workload_secrets() {
     let generator = AzureRuntimePermissionsGenerator::new();
     let permission_set =
         get_permission_set("compute-cluster/execute").expect("permission set exists");
@@ -94,13 +94,16 @@ fn compute_cluster_execute_does_not_guess_the_setup_owned_secrets_vault() {
     let result = generator
         .generate_grant_plan(permission_set, BindingTarget::Stack, &context)
         .expect("compute cluster execute grant plan should generate");
-    assert!(
-        result
-            .bindings
-            .iter()
-            .all(|binding| binding.role_name != "Key Vault Secrets User"),
-        "the provider controller must grant the exact generated Key Vault scope"
-    );
+
+    assert!(result
+        .bindings
+        .iter()
+        .all(|binding| binding.role_name != "Key Vault Secrets User"));
+    assert!(result.custom_roles.iter().all(|role| !role
+        .role_definition
+        .data_actions
+        .iter()
+        .any(|action| action == "Microsoft.KeyVault/vaults/secrets/read")));
 }
 
 #[test]
