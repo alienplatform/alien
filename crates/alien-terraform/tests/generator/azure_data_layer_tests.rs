@@ -11,10 +11,13 @@
 //! preflight pipeline is what wires them up at runtime. The tests stay
 //! self-contained.
 
-use super::helpers::{assert_terraform_valid, render, snapshot_module};
+use super::helpers::{
+    assert_terraform_valid, normalize_module_whitespace, render, snapshot_module,
+};
 use alien_core::{
     AzureResourceGroup, AzureServiceBusNamespace, AzureStorageAccount, Kv, LifecycleRule,
-    PermissionProfile, Queue, ResourceLifecycle, ResourceRef, ServiceAccount, Stack, StackSettings,
+    PermissionGate, PermissionProfile, PermissionsConfig, Queue, ResourceLifecycle, ResourceRef,
+    ServiceAccount, Stack, StackInputDefinition, StackInputKind, StackInputProvider, StackSettings,
     Storage, Vault,
 };
 use alien_terraform::{generate_terraform_module, TerraformOptions, TerraformTarget, TfRegistry};
@@ -273,4 +276,150 @@ fn azure_data_layer_renders_complete_stack() {
     let module = render(&stack, TerraformTarget::Azure, StackSettings::default());
     snapshot_module("azure_data_layer_full", &module);
     assert_terraform_valid(&module, "azure_data_layer_full");
+}
+
+/// A minimal deployer input used only to drive a permission gate.
+fn gate_input(id: &str, kind: StackInputKind) -> StackInputDefinition {
+    StackInputDefinition {
+        id: id.to_string(),
+        kind,
+        provided_by: vec![StackInputProvider::Deployer],
+        required: false,
+        label: id.to_string(),
+        description: "Gate input.".to_string(),
+        placeholder: None,
+        default: None,
+        platforms: None,
+        validation: None,
+        env: vec![],
+    }
+}
+
+#[test]
+fn azure_kv_resource_permissions_emit_table_role_assignment() {
+    let stack = Stack::new("acme-kv-permissions".to_string())
+        .permissions(PermissionsConfig::new().with_profile(
+            "app",
+            PermissionProfile::new().resource("metadata", ["kv/data-write"]),
+        ))
+        .add(resource_group(), ResourceLifecycle::Frozen)
+        .add(storage_account(), ResourceLifecycle::Frozen)
+        .add(Kv::new("metadata".to_string()).build(), ResourceLifecycle::Frozen)
+        .add(ServiceAccount::new("app-sa".to_string()).build(), ResourceLifecycle::Frozen)
+        .build();
+    let module = render(&stack, TerraformTarget::Azure, StackSettings::default());
+    snapshot_module("azure_kv_resource_permissions", &module);
+    let rendered = module.iter().map(|(_, contents)| contents).collect::<String>();
+
+    // The predefined role ID for "Storage Table Data Contributor" must appear.
+    assert!(rendered.contains("0a9a7e1f-b9d0-4cc4-a60d-0319b160aaa3"));
+    assert!(rendered.contains("tableServices/default/tables"));
+    assert!(rendered.contains("azurerm_storage_table.metadata.name"));
+    assert!(rendered.contains("azurerm_user_assigned_identity.app_sa.principal_id"));
+    assert_terraform_valid(&module, "azure_kv_resource_permissions");
+}
+
+#[test]
+fn azure_queue_resource_permissions_emit_queue_role_assignment() {
+    let stack = Stack::new("acme-queue-permissions".to_string())
+        .permissions(PermissionsConfig::new().with_profile(
+            "app",
+            PermissionProfile::new().resource("jobs", ["queue/data-write"]),
+        ))
+        .add(resource_group(), ResourceLifecycle::Frozen)
+        .add(service_bus_namespace(), ResourceLifecycle::Frozen)
+        .add(Queue::new("jobs".to_string()).build(), ResourceLifecycle::Frozen)
+        .add(ServiceAccount::new("app-sa".to_string()).build(), ResourceLifecycle::Frozen)
+        .build();
+    let module = render(&stack, TerraformTarget::Azure, StackSettings::default());
+    snapshot_module("azure_queue_resource_permissions", &module);
+    let rendered = module.iter().map(|(_, contents)| contents).collect::<String>();
+
+    // The predefined role ID for "Azure Service Bus Data Sender" must appear.
+    assert!(rendered.contains("69a216fc-b8fb-44d8-bc22-1f3c2cd27a39"));
+    assert!(rendered.contains("azurerm_servicebus_queue.jobs.id"));
+    assert!(rendered.contains("azurerm_user_assigned_identity.app_sa.principal_id"));
+    assert_terraform_valid(&module, "azure_queue_resource_permissions");
+}
+
+#[test]
+fn azure_gated_permission_grants_follow_stack_inputs() {
+    // A global grant is gated on an enum input and a resource grant on a
+    // boolean input; the queue grant is left ungated. A gated role assignment
+    // carries an input-conditioned count (fail-closed: absent unless the input
+    // matches) and extends its uuidv5 name seed so the two modes never collide.
+    let profile = PermissionProfile::new()
+        .global(["storage/data-write"])
+        .resource("metadata", ["kv/data-write"])
+        .resource("jobs", ["queue/data-write"]);
+    let mut permissions = PermissionsConfig::new().with_profile("execution", profile.clone());
+    permissions.gates = vec![
+        PermissionGate {
+            profile: "execution".to_string(),
+            resource: "*".to_string(),
+            permission_set_id: "storage/data-write".to_string(),
+            input_id: "storageMode".to_string(),
+            enabled_value: "enabled".to_string(),
+        },
+        PermissionGate {
+            profile: "execution".to_string(),
+            resource: "metadata".to_string(),
+            permission_set_id: "kv/data-write".to_string(),
+            input_id: "kvEnabled".to_string(),
+            enabled_value: "true".to_string(),
+        },
+    ];
+    let service_account =
+        ServiceAccount::from_permission_profile("execution-sa".to_string(), &profile, |name| {
+            alien_permissions::get_permission_set(name).cloned()
+        })
+        .expect("service account should resolve from profile");
+
+    let stack = Stack::new("acme-gated".to_string())
+        .permissions(permissions)
+        .inputs(vec![
+            gate_input("storageMode", StackInputKind::Enum),
+            gate_input("kvEnabled", StackInputKind::Boolean),
+        ])
+        .add(resource_group(), ResourceLifecycle::Frozen)
+        .add(storage_account(), ResourceLifecycle::Frozen)
+        .add(service_bus_namespace(), ResourceLifecycle::Frozen)
+        .add(service_account, ResourceLifecycle::Frozen)
+        .add(Kv::new("metadata".to_string()).build(), ResourceLifecycle::Frozen)
+        .add(Queue::new("jobs".to_string()).build(), ResourceLifecycle::Frozen)
+        .build();
+    let module = render(&stack, TerraformTarget::Azure, StackSettings::default());
+    snapshot_module("azure_gated_permission_grants", &module);
+
+    let normalized = normalize_module_whitespace(&module);
+    assert!(
+        normalized.contains(
+            "count = var.input_storage_mode == null ? 0 : (tostring(var.input_storage_mode) == \"enabled\" ? 1 : 0)"
+        ),
+        "gated storage/data-write stack assignment must carry the enum-input count"
+    );
+    assert!(
+        normalized.contains(":gated:storageMode=enabled"),
+        "gated stack assignment must extend the uuidv5 name seed so the two modes never collide"
+    );
+    assert!(
+        normalized.contains(
+            "count = var.input_kv_enabled == null ? 0 : (tostring(var.input_kv_enabled) == \"true\" ? 1 : 0)"
+        ),
+        "gated kv/data-write resource assignment must carry the boolean-input count"
+    );
+    assert_eq!(
+        normalized.matches("count = var.input_").count(),
+        2,
+        "only the two gated role assignments may carry input counts"
+    );
+    assert!(
+        normalized.contains("scope = azurerm_servicebus_queue.jobs.id"),
+        "ungated queue/data-write assignment must still be emitted at the queue scope"
+    );
+    assert!(
+        normalized.contains("tableServices/default/tables"),
+        "kv assignment must scope to the table ARM path"
+    );
+    assert_terraform_valid(&module, "azure_gated_permission_grants");
 }

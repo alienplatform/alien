@@ -93,6 +93,47 @@ pub fn render_sample(
     yaml
 }
 
+/// Evaluate a template condition the way CloudFormation would, against
+/// explicit parameter values with fallback to each parameter's `Default`.
+/// Supports `Ref` and `Fn::Equals` — everything the permission-gate
+/// feature emits.
+pub fn evaluate_condition(
+    template: &serde_json::Value,
+    condition_name: &str,
+    parameter_values: &[(&str, &str)],
+) -> bool {
+    let condition = &template["Conditions"][condition_name];
+    let operands = condition["Fn::Equals"]
+        .as_array()
+        .unwrap_or_else(|| panic!("condition '{condition_name}' should be an Fn::Equals"));
+    assert_eq!(
+        operands.len(),
+        2,
+        "Fn::Equals in '{condition_name}' should have two operands"
+    );
+
+    let resolve = |operand: &serde_json::Value| -> String {
+        if let Some(literal) = operand.as_str() {
+            return literal.to_string();
+        }
+        let parameter = operand["Ref"].as_str().unwrap_or_else(|| {
+            panic!("unsupported operand {operand} in condition '{condition_name}'")
+        });
+        if let Some((_name, value)) = parameter_values
+            .iter()
+            .find(|(name, _value)| *name == parameter)
+        {
+            return (*value).to_string();
+        }
+        template["Parameters"][parameter]["Default"]
+            .as_str()
+            .unwrap_or_else(|| panic!("parameter '{parameter}' has no provided value or Default"))
+            .to_string()
+    };
+
+    resolve(&operands[0]) == resolve(&operands[1])
+}
+
 /// Sample registry that maps a single sample resource type to an
 /// emitter that produces a tagged S3 bucket. The shape is small enough
 /// to keep generator-level snapshot diffs focused on the orchestration

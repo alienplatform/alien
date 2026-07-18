@@ -61,6 +61,18 @@ pub fn snapshot_module(name: &str, module: &ModuleFiles) {
     insta::assert_snapshot!(name, buf);
 }
 
+/// Collapse each line's whitespace runs to single spaces across all rendered
+/// files. HCL re-pads `=` alignment when sibling attributes change, so tests
+/// must assert normalized literals, never exact padding.
+pub fn normalize_module_whitespace(module: &ModuleFiles) -> String {
+    module
+        .iter()
+        .flat_map(|(_, contents)| contents.lines())
+        .map(|line| line.split_whitespace().collect::<Vec<_>>().join(" "))
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
 /// Run `terraform fmt -check` + `terraform validate` against the rendered
 /// module. Pass the test scenario as `context` for diagnostics.
 pub fn assert_terraform_valid(module: &ModuleFiles, context: &str) {

@@ -1,0 +1,504 @@
+---
+source: crates/alien-terraform/tests/generator/helpers.rs
+expression: buf
+---
+=== versions.tf ===
+terraform {
+  required_version = ">= 1.5.0"
+
+  required_providers {
+    azurerm = {
+      source  = "hashicorp/azurerm"
+      version = ">= 3.100"
+    }
+    random = {
+      source  = "hashicorp/random"
+      version = ">= 3.6"
+    }
+  }
+}
+
+=== variables.tf ===
+variable "resource_prefix" {
+  type        = string
+  description = "Optional stable physical resource prefix. Leave empty to generate one."
+  default     = ""
+
+  validation {
+    condition     = var.resource_prefix == "" || (can(regex("^[a-z][a-z0-9-]{1,38}[a-z0-9]$", var.resource_prefix)) && length(regexall("--", var.resource_prefix)) == 0)
+    error_message = "resource_prefix must be 3-40 characters: lowercase letters, numbers, and hyphens; start with a letter; end with a letter or number; and not contain consecutive hyphens."
+  }
+}
+
+variable "name" {
+  type        = string
+  description = "Human-readable application name shown in setup and cloud IAM review metadata."
+}
+
+variable "token" {
+  type        = string
+  description = "Install token from the application setup page. This is the same token used by the deploy CLI --token flag."
+  sensitive   = true
+}
+
+variable "management_url" {
+  type        = string
+  description = "Optional management endpoint used by pull-style runtimes."
+  default     = ""
+}
+
+variable "deployment_model" {
+  type        = string
+  description = "How runtime updates are delivered after setup."
+  default     = "push"
+
+  validation {
+    condition     = contains(["push", "pull"], var.deployment_model)
+    error_message = "deployment_model must be one of: push, pull."
+  }
+}
+
+variable "advanced_settings_json" {
+  type        = string
+  description = "Advanced JSON-encoded deployment settings. Most installations should use the typed variables in this module instead."
+  default     = "{}"
+  sensitive   = true
+}
+
+variable "advanced_settings_overlay_json" {
+  type        = string
+  description = "JSON-encoded deployment settings merged over the package defaults. Use this for partial advanced-setting overrides that must preserve generated defaults such as compute selections."
+  default     = "{}"
+  sensitive   = true
+}
+
+variable "updates_mode" {
+  type        = string
+  description = "How application updates are delivered after setup."
+  default     = "auto"
+
+  validation {
+    condition     = contains(["auto", "approval-required"], var.updates_mode)
+    error_message = "updates_mode must be one of: auto, approval-required."
+  }
+}
+
+variable "telemetry_mode" {
+  type        = string
+  description = "How logs, metrics, and traces are collected."
+  default     = "auto"
+
+  validation {
+    condition     = contains(["off", "auto", "approval-required"], var.telemetry_mode)
+    error_message = "telemetry_mode must be one of: off, auto, approval-required."
+  }
+}
+
+variable "heartbeats_mode" {
+  type        = string
+  description = "Whether runtime health checks are enabled."
+  default     = "on"
+
+  validation {
+    condition     = contains(["off", "on"], var.heartbeats_mode)
+    error_message = "heartbeats_mode must be one of: off, on."
+  }
+}
+
+variable "azure_location" {
+  type        = string
+  description = "Azure location."
+  default     = "eastus"
+}
+
+variable "azure_subscription_id" {
+  type        = string
+  description = "Azure subscription ID hosting the stack."
+}
+
+variable "azure_resource_group_name" {
+  type        = string
+  description = "Azure resource group name."
+}
+
+variable "input_storage_mode" {
+  type        = string
+  description = "storageMode Gate input."
+  default     = null
+  nullable    = true
+}
+
+variable "input_kv_enabled" {
+  type        = bool
+  description = "kvEnabled Gate input."
+  default     = null
+  nullable    = true
+}
+
+=== providers.tf ===
+provider "azurerm" {
+  resource_provider_registrations = "none"
+
+  features {}
+}
+
+=== resource_prefix.tf ===
+resource "random_id" "resource_prefix" {
+  byte_length = 4
+}
+
+=== locals.tf ===
+locals {
+  resource_prefix              = var.resource_prefix == "" ? format("a%s", random_id.resource_prefix.hex) : var.resource_prefix
+  deployment_name              = var.name
+  deployment_platform          = "azure"
+  deployment_target            = "azure"
+  deployment_region            = var.azure_location
+  deployment_management_config = null
+  advanced_settings            = merge(jsondecode(var.advanced_settings_json), jsondecode(var.advanced_settings_overlay_json))
+  deployment_settings          = merge(local.advanced_settings, { deploymentModel = var.deployment_model, updates = var.updates_mode, telemetry = var.telemetry_mode, heartbeats = var.heartbeats_mode })
+  deployment_resources = [
+    {
+      id   = "default-resource-group"
+      type = "azure_resource_group"
+      importData = {
+        subscriptionId = var.azure_subscription_id
+        resourceGroup  = azurerm_resource_group.default_resource_group.name
+        location       = azurerm_resource_group.default_resource_group.location
+      }
+    },
+    {
+      id   = "default-storage-account"
+      type = "azure_storage_account"
+      importData = {
+        subscriptionId     = var.azure_subscription_id
+        resourceGroup      = var.azure_resource_group_name
+        storageAccountName = azurerm_storage_account.default_storage_account.name
+        resourceId         = azurerm_storage_account.default_storage_account.id
+        blobEndpoint       = azurerm_storage_account.default_storage_account.primary_blob_endpoint
+        fileEndpoint       = azurerm_storage_account.default_storage_account.primary_file_endpoint
+        queueEndpoint      = azurerm_storage_account.default_storage_account.primary_queue_endpoint
+        tableEndpoint      = azurerm_storage_account.default_storage_account.primary_table_endpoint
+      }
+    },
+    {
+      id   = "default-service-bus-namespace"
+      type = "azure_service_bus_namespace"
+      importData = {
+        subscriptionId = var.azure_subscription_id
+        resourceGroup  = var.azure_resource_group_name
+        namespaceName  = azurerm_servicebus_namespace.default_service_bus_namespace.name
+        endpoint       = "${azurerm_servicebus_namespace.default_service_bus_namespace.name}.servicebus.windows.net"
+      }
+    },
+    {
+      id   = "execution-sa"
+      type = "service-account"
+      importData = {
+        subscriptionId          = var.azure_subscription_id
+        resourceGroup           = var.azure_resource_group_name
+        identityId              = azurerm_user_assigned_identity.execution_sa.id
+        principalId             = azurerm_user_assigned_identity.execution_sa.principal_id
+        clientId                = azurerm_user_assigned_identity.execution_sa.client_id
+        stackPermissionsApplied = true
+      }
+    },
+    {
+      id   = "metadata"
+      type = "kv"
+      importData = {
+        subscriptionId     = var.azure_subscription_id
+        resourceGroup      = var.azure_resource_group_name
+        storageAccountName = azurerm_storage_account.default_storage_account.name
+        tableName          = azurerm_storage_table.metadata.name
+        tableEndpoint      = azurerm_storage_account.default_storage_account.primary_table_endpoint
+      }
+    },
+    {
+      id   = "jobs"
+      type = "queue"
+      importData = {
+        subscriptionId = var.azure_subscription_id
+        resourceGroup  = var.azure_resource_group_name
+        namespaceName  = azurerm_servicebus_namespace.default_service_bus_namespace.name
+        queueName      = azurerm_servicebus_queue.jobs.name
+      }
+    }
+  ]
+}
+
+=== default_resource_group.tf ===
+resource "azurerm_resource_group" "default_resource_group" {
+  name     = var.azure_resource_group_name
+  location = var.azure_location
+  tags = {
+    "managed-by"    = "setup"
+    deployment      = local.resource_prefix
+    resource        = "default-resource-group"
+    "resource-type" = "resource-group"
+  }
+}
+
+=== default_storage_account.tf ===
+resource "azurerm_storage_account" "default_storage_account" {
+  name                            = substr(replace(lower("${local.resource_prefix}default"), "-", ""), 0, 24)
+  resource_group_name             = var.azure_resource_group_name
+  location                        = var.azure_location
+  account_tier                    = "Standard"
+  account_replication_type        = "LRS"
+  account_kind                    = "StorageV2"
+  access_tier                     = "Hot"
+  min_tls_version                 = "TLS1_2"
+  allow_nested_items_to_be_public = false
+  https_traffic_only_enabled      = true
+  tags = {
+    "managed-by"    = "setup"
+    deployment      = local.resource_prefix
+    resource        = "default-storage-account"
+    "resource-type" = "storage-account"
+  }
+
+  blob_properties {
+    versioning_enabled  = false
+    change_feed_enabled = false
+  }
+
+  depends_on = [
+    azurerm_resource_group.default_resource_group
+  ]
+}
+
+=== default_service_bus_namespace.tf ===
+resource "azurerm_servicebus_namespace" "default_service_bus_namespace" {
+  name                = format("%s-bus-%s", trim(substr(lower("a-${local.resource_prefix}"), 0, 37), "-"), substr(sha1(local.resource_prefix), 0, 8))
+  resource_group_name = var.azure_resource_group_name
+  location            = var.azure_location
+  sku                 = "Standard"
+  tags = {
+    "managed-by"    = "setup"
+    deployment      = local.resource_prefix
+    resource        = "default-service-bus-namespace"
+    "resource-type" = "service-bus-namespace"
+  }
+  depends_on = [
+    azurerm_resource_group.default_resource_group
+  ]
+}
+
+=== execution_sa.tf ===
+resource "azurerm_user_assigned_identity" "execution_sa" {
+  name                = "${local.resource_prefix}-execution-sa"
+  resource_group_name = var.azure_resource_group_name
+  location            = var.azure_location
+  tags = {
+    "managed-by"    = "setup"
+    deployment      = local.resource_prefix
+    resource        = "execution-sa"
+    "resource-type" = "service-account"
+  }
+  depends_on = [
+    azurerm_resource_group.default_resource_group
+  ]
+}
+
+resource "azurerm_role_assignment" "execution_sa_storage_blob_data_contributor___var_azure_resource_group_name__assignment" {
+  count              = var.input_storage_mode == null ? 0 : (tostring(var.input_storage_mode) == "enabled" ? 1 : 0)
+  name               = uuidv5("oid", "deployment:azure:role-assign:execution-sa:storage_blob_data_contributor___var_azure_resource_group_name_:${azurerm_user_assigned_identity.execution_sa.principal_id}:gated:storageMode=enabled")
+  scope              = "/subscriptions/${var.azure_subscription_id}/resourceGroups/${var.azure_resource_group_name}"
+  role_definition_id = "/subscriptions/${var.azure_subscription_id}/providers/Microsoft.Authorization/roleDefinitions/ba92f5b4-2d11-453d-a403-e96b0029c9fe"
+  principal_id       = azurerm_user_assigned_identity.execution_sa.principal_id
+  depends_on = [
+    azurerm_resource_group.default_resource_group
+  ]
+}
+
+=== metadata.tf ===
+resource "azurerm_storage_table" "metadata" {
+  name                 = substr(lower(replace("kv${local.resource_prefix}metadata", "/[^A-Za-z0-9]/", "")), 0, 63)
+  storage_account_name = azurerm_storage_account.default_storage_account.name
+  depends_on = [
+    azurerm_resource_group.default_resource_group
+  ]
+}
+
+resource "azurerm_role_assignment" "metadata_storage_table_data_contributor_execution_assignment_0" {
+  count              = var.input_kv_enabled == null ? 0 : (tostring(var.input_kv_enabled) == "true" ? 1 : 0)
+  name               = uuidv5("oid", "deployment:azure:kv-role-assign:${local.resource_prefix}:metadata:storage_table_data_contributor:execution:0")
+  scope              = "${azurerm_storage_account.default_storage_account.id}/tableServices/default/tables/${azurerm_storage_table.metadata.name}"
+  role_definition_id = "/subscriptions/${var.azure_subscription_id}/providers/Microsoft.Authorization/roleDefinitions/0a9a7e1f-b9d0-4cc4-a60d-0319b160aaa3"
+  principal_id       = azurerm_user_assigned_identity.execution_sa.principal_id
+  depends_on = [
+    azurerm_resource_group.default_resource_group
+  ]
+}
+
+=== jobs.tf ===
+resource "azurerm_servicebus_queue" "jobs" {
+  name                                 = "${local.resource_prefix}-jobs"
+  namespace_id                         = azurerm_servicebus_namespace.default_service_bus_namespace.id
+  partitioning_enabled                 = false
+  lock_duration                        = "PT30S"
+  default_message_ttl                  = "P14D"
+  max_delivery_count                   = 10
+  dead_lettering_on_message_expiration = true
+  depends_on = [
+    azurerm_resource_group.default_resource_group
+  ]
+}
+
+resource "azurerm_role_assignment" "jobs_azure_service_bus_data_sender_execution_assignment_0" {
+  name               = uuidv5("oid", "deployment:azure:queue-role-assign:${local.resource_prefix}:jobs:azure_service_bus_data_sender:execution:0")
+  scope              = azurerm_servicebus_queue.jobs.id
+  role_definition_id = "/subscriptions/${var.azure_subscription_id}/providers/Microsoft.Authorization/roleDefinitions/69a216fc-b8fb-44d8-bc22-1f3c2cd27a39"
+  principal_id       = azurerm_user_assigned_identity.execution_sa.principal_id
+  depends_on = [
+    azurerm_resource_group.default_resource_group
+  ]
+}
+
+=== registration.tf ===
+resource "terraform_data" "deployment_registration" {
+  input = {
+    platform                    = local.deployment_platform
+    token                       = var.token
+    name                        = var.name
+    resource_prefix             = local.resource_prefix
+    setup_target                = ""
+    setup_import_format_version = 1
+    setup_fingerprint           = ""
+    setup_fingerprint_version   = 0
+    management_url              = var.management_url
+    management_config           = local.deployment_management_config
+    stack_settings              = local.deployment_settings
+    resources                   = local.deployment_resources
+    inputValues                 = merge({}, var.input_storage_mode == null ? {} : { storageMode = var.input_storage_mode }, var.input_kv_enabled == null ? {} : { kvEnabled = var.input_kv_enabled })
+  }
+  depends_on = [
+    azurerm_resource_group.default_resource_group,
+    azurerm_storage_account.default_storage_account,
+    azurerm_servicebus_namespace.default_service_bus_namespace,
+    azurerm_user_assigned_identity.execution_sa,
+    azurerm_role_assignment.execution_sa_storage_blob_data_contributor___var_azure_resource_group_name__assignment,
+    azurerm_storage_table.metadata,
+    azurerm_role_assignment.metadata_storage_table_data_contributor_execution_assignment_0,
+    azurerm_servicebus_queue.jobs,
+    azurerm_role_assignment.jobs_azure_service_bus_data_sender_execution_assignment_0
+  ]
+}
+
+=== outputs.tf ===
+output "deployment_target" {
+  value       = "azure"
+  description = "Terraform module target."
+}
+
+output "deployment_resource_prefix" {
+  value       = local.resource_prefix
+  description = "Physical resource prefix."
+}
+
+output "deployment_platform" {
+  value       = local.deployment_platform
+  description = "Target platform."
+}
+
+output "deployment_region" {
+  value       = local.deployment_region
+  description = "Target cloud region or location."
+}
+
+output "deployment_setup_target" {
+  value       = ""
+  description = "Setup target."
+}
+
+output "deployment_setup_import_format_version" {
+  value       = 1
+  description = "Setup registration payload format version."
+}
+
+output "deployment_setup_fingerprint" {
+  value       = ""
+  description = "Setup compatibility fingerprint."
+}
+
+output "deployment_setup_fingerprint_version" {
+  value       = 0
+  description = "Setup fingerprint algorithm version."
+}
+
+output "deployment_management_config" {
+  value       = jsonencode(local.deployment_management_config)
+  description = "Deployment registration management configuration JSON."
+}
+
+output "deployment_stack_settings" {
+  value       = jsonencode(local.deployment_settings)
+  description = "Deployment registration settings JSON."
+  sensitive   = true
+}
+
+output "deployment_resources" {
+  value       = jsonencode(local.deployment_resources)
+  description = "Deployment registration resource metadata JSON."
+}
+
+=== README.md ===
+# Deployment setup - acme-gated
+
+Target: `azure`.
+
+This module creates setup-owned infrastructure, grants the management access needed after setup, and prepares deployment registration metadata. Review the generated `.tf` files before applying; each resource file maps to one setup resource.
+
+## Inputs
+
+Required:
+
+- `token`: install token from the setup page.
+- `name`: deployment name to include in the registration metadata.
+
+Common optional settings:
+
+- `resource_prefix`: stable physical-name prefix. Leave empty to generate one.
+- `management_url`: optional management endpoint used by pull-style runtimes.
+- `deployment_model`: `push` or `pull`.
+- `updates_mode`: `auto` or `approval-required`.
+- `telemetry_mode`: `off`, `auto`, or `approval-required`.
+- `heartbeats_mode`: `off` or `on`.
+- `advanced_settings_json`: complete advanced deployment settings JSON. Most installs should keep the generated default.
+- `advanced_settings_overlay_json`: partial advanced settings merged over package defaults, preserving generated values such as compute selections.
+
+Azure settings:
+
+- `azure_subscription_id`: target subscription ID.
+- `azure_location`: Azure location.
+- `azure_resource_group_name`: target resource group name.
+- `azure_managing_tenant_id`, `azure_oidc_issuer`, `azure_oidc_subject`: management identity trust settings when this setup grants Azure management access.
+
+Application inputs:
+- `input_storage_mode`: storageMode (optional). Gate input.
+- `input_kv_enabled`: kvEnabled (optional). Gate input.
+
+## Run
+
+Use your organization's normal backend and approval workflow. A typical local review looks like:
+
+```bash
+export TF_VAR_name="acme-gated"
+export TF_VAR_token="..."
+terraform init
+terraform validate
+terraform plan -out=tfplan
+terraform apply tfplan
+```
+
+## Registration
+
+This module exposes `deployment_management_config`, `deployment_stack_settings`, and `deployment_resources` outputs for registration flows managed outside Terraform.
+
+## Outputs
+
+- `deployment_management_config`: management endpoint and credential-boundary metadata.
+- `deployment_stack_settings`: deployment settings JSON assembled from typed variables, package defaults, and advanced-setting overlays.
+- `deployment_resources`: setup-owned resource metadata handed to the deployment runtime.
+- `deployment_id` and `deployment_token`: emitted only when Terraform performs registration.

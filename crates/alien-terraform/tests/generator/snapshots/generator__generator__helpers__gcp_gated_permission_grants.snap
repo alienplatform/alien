@@ -1,0 +1,523 @@
+---
+source: crates/alien-terraform/tests/generator/helpers.rs
+expression: buf
+---
+=== versions.tf ===
+terraform {
+  required_version = ">= 1.5.0"
+
+  required_providers {
+    google = {
+      source  = "hashicorp/google"
+      version = ">= 5.0"
+    }
+    time = {
+      source  = "hashicorp/time"
+      version = ">= 0.9"
+    }
+    random = {
+      source  = "hashicorp/random"
+      version = ">= 3.6"
+    }
+  }
+}
+
+=== variables.tf ===
+variable "resource_prefix" {
+  type        = string
+  description = "Optional stable physical resource prefix. Leave empty to generate one."
+  default     = ""
+
+  validation {
+    condition     = var.resource_prefix == "" || (can(regex("^[a-z][a-z0-9-]{1,38}[a-z0-9]$", var.resource_prefix)) && length(regexall("--", var.resource_prefix)) == 0)
+    error_message = "resource_prefix must be 3-40 characters: lowercase letters, numbers, and hyphens; start with a letter; end with a letter or number; and not contain consecutive hyphens."
+  }
+}
+
+variable "name" {
+  type        = string
+  description = "Human-readable application name shown in setup and cloud IAM review metadata."
+}
+
+variable "token" {
+  type        = string
+  description = "Install token from the application setup page. This is the same token used by the deploy CLI --token flag."
+  sensitive   = true
+}
+
+variable "management_url" {
+  type        = string
+  description = "Optional management endpoint used by pull-style runtimes."
+  default     = ""
+}
+
+variable "deployment_model" {
+  type        = string
+  description = "How runtime updates are delivered after setup."
+  default     = "push"
+
+  validation {
+    condition     = contains(["push", "pull"], var.deployment_model)
+    error_message = "deployment_model must be one of: push, pull."
+  }
+}
+
+variable "advanced_settings_json" {
+  type        = string
+  description = "Advanced JSON-encoded deployment settings. Most installations should use the typed variables in this module instead."
+  default     = "{}"
+  sensitive   = true
+}
+
+variable "advanced_settings_overlay_json" {
+  type        = string
+  description = "JSON-encoded deployment settings merged over the package defaults. Use this for partial advanced-setting overrides that must preserve generated defaults such as compute selections."
+  default     = "{}"
+  sensitive   = true
+}
+
+variable "updates_mode" {
+  type        = string
+  description = "How application updates are delivered after setup."
+  default     = "auto"
+
+  validation {
+    condition     = contains(["auto", "approval-required"], var.updates_mode)
+    error_message = "updates_mode must be one of: auto, approval-required."
+  }
+}
+
+variable "telemetry_mode" {
+  type        = string
+  description = "How logs, metrics, and traces are collected."
+  default     = "auto"
+
+  validation {
+    condition     = contains(["off", "auto", "approval-required"], var.telemetry_mode)
+    error_message = "telemetry_mode must be one of: off, auto, approval-required."
+  }
+}
+
+variable "heartbeats_mode" {
+  type        = string
+  description = "Whether runtime health checks are enabled."
+  default     = "on"
+
+  validation {
+    condition     = contains(["off", "on"], var.heartbeats_mode)
+    error_message = "heartbeats_mode must be one of: off, on."
+  }
+}
+
+variable "gcp_project" {
+  type        = string
+  description = "GCP project ID."
+}
+
+variable "gcp_region" {
+  type        = string
+  description = "GCP region."
+  default     = "us-central1"
+}
+
+variable "managing_service_account_email" {
+  type        = string
+  description = "Email of the management service account allowed to impersonate setup-created identities. Empty disables the binding."
+  default     = ""
+}
+
+variable "gcp_manage_custom_roles" {
+  type        = bool
+  description = "Whether this module creates the GCP project custom roles it binds. Set to false when those roles are managed outside this stack."
+  default     = true
+}
+
+variable "gcp_custom_role_prefix" {
+  type        = string
+  description = "Prefix used for GCP project custom role IDs when gcp_manage_custom_roles is false. Empty uses resource_prefix."
+  default     = ""
+}
+
+variable "input_queue_mode" {
+  type        = string
+  description = "queueMode Gate input."
+  default     = null
+  nullable    = true
+}
+
+variable "input_kv_enabled" {
+  type        = bool
+  description = "kvEnabled Gate input."
+  default     = null
+  nullable    = true
+}
+
+=== providers.tf ===
+provider "google" {
+  project = var.gcp_project
+  region  = var.gcp_region
+}
+
+=== resource_prefix.tf ===
+resource "random_id" "resource_prefix" {
+  byte_length = 4
+}
+
+=== locals.tf ===
+locals {
+  resource_prefix              = var.resource_prefix == "" ? format("a%s", random_id.resource_prefix.hex) : var.resource_prefix
+  deployment_name              = var.name
+  gcp_custom_role_prefix       = substr(replace(lower(var.gcp_custom_role_prefix == "" ? local.resource_prefix : var.gcp_custom_role_prefix), "-", "_"), 0, 18)
+  deployment_platform          = "gcp"
+  deployment_target            = "gcp"
+  deployment_region            = var.gcp_region
+  deployment_management_config = null
+  advanced_settings            = merge(jsondecode(var.advanced_settings_json), jsondecode(var.advanced_settings_overlay_json))
+  deployment_settings          = merge(local.advanced_settings, { deploymentModel = var.deployment_model, updates = var.updates_mode, telemetry = var.telemetry_mode, heartbeats = var.heartbeats_mode })
+  deployment_resources = [
+    {
+      id   = "execution-sa"
+      type = "service-account"
+      importData = {
+        projectId               = var.gcp_project
+        serviceAccountEmail     = google_service_account.execution_sa.email
+        serviceAccountUniqueId  = google_service_account.execution_sa.unique_id
+        stackPermissionsApplied = true
+      }
+    },
+    {
+      id   = "metadata"
+      type = "kv"
+      importData = {
+        projectId  = var.gcp_project
+        databaseId = google_firestore_database.metadata.name
+        location   = google_firestore_database.metadata.location_id
+      }
+    },
+    {
+      id   = "jobs"
+      type = "queue"
+      importData = {
+        projectId        = var.gcp_project
+        topicId          = google_pubsub_topic.jobs.name
+        topicName        = google_pubsub_topic.jobs.id
+        subscriptionId   = google_pubsub_subscription.jobs.name
+        subscriptionName = google_pubsub_subscription.jobs.id
+      }
+    },
+    {
+      id   = "assets"
+      type = "storage"
+      importData = {
+        bucketName     = google_storage_bucket.assets.name
+        bucketSelfLink = google_storage_bucket.assets.self_link
+        projectId      = var.gcp_project
+        location       = google_storage_bucket.assets.location
+      }
+    }
+  ]
+}
+
+=== execution_sa.tf ===
+resource "google_service_account" "execution_sa" {
+  project      = var.gcp_project
+  account_id   = format("%s-%s", trim(substr(replace(lower(format("a-%s-execution_sa", local.resource_prefix)), "_", "-"), 0, 21), "-"), substr(sha1(replace(lower(format("%s-execution_sa", local.resource_prefix)), "_", "-")), 0, 8))
+  display_name = "${local.deployment_name}: Runtime service account (execution-sa)"
+  description  = "Runtime cloud identity for ${local.deployment_name}. Resource prefix: ${local.resource_prefix}. Resource: execution_sa."
+}
+
+resource "google_project_iam_member" "datastore_user_execution_sa_binding_0" {
+  count   = var.input_kv_enabled == null ? 0 : (tostring(var.input_kv_enabled) == "true" ? 1 : 0)
+  project = var.gcp_project
+  role    = "roles/datastore.user"
+  member  = "serviceAccount:${google_service_account.execution_sa.email}"
+}
+
+resource "google_project_iam_custom_role" "gcp_role_sign_cloud_storage_download_urls" {
+  count       = var.gcp_manage_custom_roles ? 1 : 0
+  project     = var.gcp_project
+  role_id     = format("role_%s_sign_cloud_storage_download_urls", local.gcp_custom_role_prefix)
+  title       = "${local.deployment_name}: Sign Cloud Storage Download URLs"
+  description = "Used by ${local.deployment_name}. Sign Cloud Storage download URLs on behalf of this application's service account. Resource prefix: ${local.resource_prefix}."
+  stage       = "GA"
+  permissions = [
+    "iam.serviceAccounts.signBlob"
+  ]
+}
+
+resource "google_project_iam_member" "gcp_role_sign_cloud_storage_download_urls_execution_sa_binding_0" {
+  project = var.gcp_project
+  role    = var.gcp_manage_custom_roles ? google_project_iam_custom_role.gcp_role_sign_cloud_storage_download_urls[0].name : format("projects/%s/roles/role_%s_sign_cloud_storage_download_urls", var.gcp_project, local.gcp_custom_role_prefix)
+  member  = "serviceAccount:${google_service_account.execution_sa.email}"
+}
+
+=== metadata.tf ===
+resource "google_firestore_database" "metadata" {
+  name                        = "${local.resource_prefix}-metadata"
+  project                     = var.gcp_project
+  location_id                 = var.gcp_region
+  type                        = "FIRESTORE_NATIVE"
+  concurrency_mode            = "OPTIMISTIC"
+  app_engine_integration_mode = "DISABLED"
+  delete_protection_state     = "DELETE_PROTECTION_DISABLED"
+  deletion_policy             = "DELETE"
+}
+
+=== jobs.tf ===
+resource "google_pubsub_topic" "jobs" {
+  name    = "${local.resource_prefix}-jobs"
+  project = var.gcp_project
+  labels = {
+    "managed-by"    = "setup"
+    deployment      = local.resource_prefix
+    resource        = "jobs"
+    "resource-type" = "queue"
+  }
+}
+
+resource "google_pubsub_subscription" "jobs" {
+  name                       = "${local.resource_prefix}-jobs-default"
+  project                    = var.gcp_project
+  topic                      = google_pubsub_topic.jobs.id
+  ack_deadline_seconds       = 60
+  message_retention_duration = "604800s"
+  enable_message_ordering    = false
+
+  expiration_policy {
+    ttl = ""
+  }
+
+  labels = {
+    "managed-by"    = "setup"
+    deployment      = local.resource_prefix
+    resource        = "jobs"
+    "resource-type" = "queue"
+  }
+}
+
+resource "google_pubsub_topic_iam_member" "pubsub_publisher_jobs_execution_sa_topic_0" {
+  count   = var.input_queue_mode == null ? 0 : (tostring(var.input_queue_mode) == "on" ? 1 : 0)
+  project = var.gcp_project
+  topic   = google_pubsub_topic.jobs.name
+  role    = "roles/pubsub.publisher"
+  member  = "serviceAccount:${google_service_account.execution_sa.email}"
+}
+
+resource "google_pubsub_subscription_iam_member" "pubsub_subscriber_jobs_execution_sa_subscription_1" {
+  count        = var.input_queue_mode == null ? 0 : (tostring(var.input_queue_mode) == "on" ? 1 : 0)
+  project      = var.gcp_project
+  subscription = google_pubsub_subscription.jobs.name
+  role         = "roles/pubsub.subscriber"
+  member       = "serviceAccount:${google_service_account.execution_sa.email}"
+}
+
+resource "google_pubsub_subscription_iam_member" "pubsub_viewer_jobs_execution_sa_subscription_2" {
+  count        = var.input_queue_mode == null ? 0 : (tostring(var.input_queue_mode) == "on" ? 1 : 0)
+  project      = var.gcp_project
+  subscription = google_pubsub_subscription.jobs.name
+  role         = "roles/pubsub.viewer"
+  member       = "serviceAccount:${google_service_account.execution_sa.email}"
+}
+
+=== assets.tf ===
+resource "google_storage_bucket" "assets" {
+  name                        = "${local.resource_prefix}-assets"
+  project                     = var.gcp_project
+  location                    = upper(var.gcp_region)
+  storage_class               = "STANDARD"
+  uniform_bucket_level_access = true
+  force_destroy               = true
+  public_access_prevention    = "enforced"
+  labels = {
+    "managed-by"    = "setup"
+    deployment      = local.resource_prefix
+    resource        = "assets"
+    "resource-type" = "storage"
+  }
+}
+
+resource "google_project_iam_custom_role" "gcp_role_read_cloud_storage_objects" {
+  count       = var.gcp_manage_custom_roles ? 1 : 0
+  project     = var.gcp_project
+  role_id     = format("role_%s_read_cloud_storage_objects", local.gcp_custom_role_prefix)
+  title       = "${local.deployment_name}: Read Cloud Storage Objects"
+  description = "Used by ${local.deployment_name}. Read objects and object metadata from application-owned Cloud Storage buckets. Resource prefix: ${local.resource_prefix}."
+  stage       = "GA"
+  permissions = [
+    "storage.buckets.get",
+    "storage.buckets.list",
+    "storage.multipartUploads.list",
+    "storage.multipartUploads.listParts",
+    "storage.objects.get",
+    "storage.objects.getIamPolicy",
+    "storage.objects.list"
+  ]
+}
+
+resource "google_storage_bucket_iam_member" "gcp_role_read_cloud_storage_objects_assets_execution_sa_storage_0" {
+  bucket = google_storage_bucket.assets.name
+  role   = var.gcp_manage_custom_roles ? google_project_iam_custom_role.gcp_role_read_cloud_storage_objects[0].name : format("projects/%s/roles/role_%s_read_cloud_storage_objects", var.gcp_project, local.gcp_custom_role_prefix)
+  member = "serviceAccount:${google_service_account.execution_sa.email}"
+}
+
+=== iam_propagation.tf ===
+resource "time_sleep" "gcp_iam_propagation" {
+  create_duration = "120s"
+  depends_on = [
+    google_project_iam_member.datastore_user_execution_sa_binding_0,
+    google_project_iam_member.gcp_role_sign_cloud_storage_download_urls_execution_sa_binding_0
+  ]
+}
+
+=== registration.tf ===
+resource "terraform_data" "deployment_registration" {
+  input = {
+    platform                    = local.deployment_platform
+    token                       = var.token
+    name                        = var.name
+    resource_prefix             = local.resource_prefix
+    setup_target                = ""
+    setup_import_format_version = 1
+    setup_fingerprint           = ""
+    setup_fingerprint_version   = 0
+    management_url              = var.management_url
+    management_config           = local.deployment_management_config
+    stack_settings              = local.deployment_settings
+    resources                   = local.deployment_resources
+    inputValues                 = merge({}, var.input_queue_mode == null ? {} : { queueMode = var.input_queue_mode }, var.input_kv_enabled == null ? {} : { kvEnabled = var.input_kv_enabled })
+  }
+  depends_on = [
+    google_service_account.execution_sa,
+    google_project_iam_member.datastore_user_execution_sa_binding_0,
+    google_project_iam_custom_role.gcp_role_sign_cloud_storage_download_urls,
+    google_project_iam_member.gcp_role_sign_cloud_storage_download_urls_execution_sa_binding_0,
+    google_firestore_database.metadata,
+    google_pubsub_topic.jobs,
+    google_pubsub_subscription.jobs,
+    google_pubsub_topic_iam_member.pubsub_publisher_jobs_execution_sa_topic_0,
+    google_pubsub_subscription_iam_member.pubsub_subscriber_jobs_execution_sa_subscription_1,
+    google_pubsub_subscription_iam_member.pubsub_viewer_jobs_execution_sa_subscription_2,
+    google_storage_bucket.assets,
+    google_project_iam_custom_role.gcp_role_read_cloud_storage_objects,
+    google_storage_bucket_iam_member.gcp_role_read_cloud_storage_objects_assets_execution_sa_storage_0,
+    time_sleep.gcp_iam_propagation
+  ]
+}
+
+=== outputs.tf ===
+output "deployment_target" {
+  value       = "gcp"
+  description = "Terraform module target."
+}
+
+output "deployment_resource_prefix" {
+  value       = local.resource_prefix
+  description = "Physical resource prefix."
+}
+
+output "deployment_platform" {
+  value       = local.deployment_platform
+  description = "Target platform."
+}
+
+output "deployment_region" {
+  value       = local.deployment_region
+  description = "Target cloud region or location."
+}
+
+output "deployment_setup_target" {
+  value       = ""
+  description = "Setup target."
+}
+
+output "deployment_setup_import_format_version" {
+  value       = 1
+  description = "Setup registration payload format version."
+}
+
+output "deployment_setup_fingerprint" {
+  value       = ""
+  description = "Setup compatibility fingerprint."
+}
+
+output "deployment_setup_fingerprint_version" {
+  value       = 0
+  description = "Setup fingerprint algorithm version."
+}
+
+output "deployment_management_config" {
+  value       = jsonencode(local.deployment_management_config)
+  description = "Deployment registration management configuration JSON."
+}
+
+output "deployment_stack_settings" {
+  value       = jsonencode(local.deployment_settings)
+  description = "Deployment registration settings JSON."
+  sensitive   = true
+}
+
+output "deployment_resources" {
+  value       = jsonencode(local.deployment_resources)
+  description = "Deployment registration resource metadata JSON."
+}
+
+=== README.md ===
+# Deployment setup - acme-gated
+
+Target: `gcp`.
+
+This module creates setup-owned infrastructure, grants the management access needed after setup, and prepares deployment registration metadata. Review the generated `.tf` files before applying; each resource file maps to one setup resource.
+
+## Inputs
+
+Required:
+
+- `token`: install token from the setup page.
+- `name`: deployment name to include in the registration metadata.
+
+Common optional settings:
+
+- `resource_prefix`: stable physical-name prefix. Leave empty to generate one.
+- `management_url`: optional management endpoint used by pull-style runtimes.
+- `deployment_model`: `push` or `pull`.
+- `updates_mode`: `auto` or `approval-required`.
+- `telemetry_mode`: `off`, `auto`, or `approval-required`.
+- `heartbeats_mode`: `off` or `on`.
+- `advanced_settings_json`: complete advanced deployment settings JSON. Most installs should keep the generated default.
+- `advanced_settings_overlay_json`: partial advanced settings merged over package defaults, preserving generated values such as compute selections.
+
+GCP settings:
+
+- `gcp_project`: target GCP project ID.
+- `gcp_region`: target GCP region.
+- `managing_service_account_email`: management service account allowed to impersonate setup-created identities.
+- `gcp_manage_custom_roles`: whether this module creates project custom roles.
+- `gcp_custom_role_prefix`: custom role ID prefix when roles are managed outside this module.
+
+Application inputs:
+- `input_queue_mode`: queueMode (optional). Gate input.
+- `input_kv_enabled`: kvEnabled (optional). Gate input.
+
+## Run
+
+Use your organization's normal backend and approval workflow. A typical local review looks like:
+
+```bash
+export TF_VAR_name="acme-gated"
+export TF_VAR_token="..."
+terraform init
+terraform validate
+terraform plan -out=tfplan
+terraform apply tfplan
+```
+
+## Registration
+
+This module exposes `deployment_management_config`, `deployment_stack_settings`, and `deployment_resources` outputs for registration flows managed outside Terraform.
+
+## Outputs
+
+- `deployment_management_config`: management endpoint and credential-boundary metadata.
+- `deployment_stack_settings`: deployment settings JSON assembled from typed variables, package defaults, and advanced-setting overlays.
+- `deployment_resources`: setup-owned resource metadata handed to the deployment runtime.
+- `deployment_id` and `deployment_token`: emitted only when Terraform performs registration.
