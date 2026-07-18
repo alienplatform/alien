@@ -9,7 +9,7 @@ name = "runtime-less-rust-daemon"
 path = "src/main.rs"
 
 [dependencies]
-alien-bindings = { workspace = true, features = ["kubernetes", "local"] }
+alien-bindings = { workspace = true, features = ["aws", "gcp", "azure", "kubernetes", "local"] }
 alien-commands = { workspace = true, default-features = false, features = ["receiver"] }
 serde_json = { workspace = true }
 tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }
