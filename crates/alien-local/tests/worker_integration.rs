@@ -58,6 +58,7 @@ async fn build_test_app_with_alien_build(output_dir: &std::path::Path) -> PathBu
             .cloned()
             .collect(),
         management: Default::default(),
+        gates: Vec::new(),
     };
 
     // Create a stack with just this worker

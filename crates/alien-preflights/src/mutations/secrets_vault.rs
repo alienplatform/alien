@@ -343,6 +343,7 @@ mod tests {
             permissions: PermissionsConfig {
                 profiles: IndexMap::new(),
                 management: ManagementPermissions::Auto,
+                gates: Vec::new(),
             },
             supported_platforms: None,
             inputs: vec![],
@@ -411,6 +412,7 @@ mod tests {
             permissions: PermissionsConfig {
                 profiles,
                 management: ManagementPermissions::Auto,
+                gates: Vec::new(),
             },
             supported_platforms: None,
             inputs: vec![],
@@ -556,6 +558,7 @@ mod tests {
             permissions: PermissionsConfig {
                 profiles,
                 management: ManagementPermissions::Auto,
+                gates: Vec::new(),
             },
             supported_platforms: None,
             inputs: vec![],
@@ -611,6 +614,7 @@ mod tests {
             permissions: PermissionsConfig {
                 profiles,
                 management: ManagementPermissions::Auto,
+                gates: Vec::new(),
             },
             supported_platforms: None,
             inputs: vec![],
@@ -666,6 +670,7 @@ mod tests {
             permissions: PermissionsConfig {
                 profiles: IndexMap::new(),
                 management: ManagementPermissions::Auto,
+                gates: Vec::new(),
             },
             supported_platforms: None,
             inputs: vec![],
@@ -746,6 +751,7 @@ mod tests {
             permissions: PermissionsConfig {
                 profiles,
                 management: ManagementPermissions::Auto,
+                gates: Vec::new(),
             },
             supported_platforms: None,
             inputs: vec![],
@@ -829,6 +835,7 @@ mod tests {
             permissions: PermissionsConfig {
                 profiles,
                 management: ManagementPermissions::Auto,
+                gates: Vec::new(),
             },
             supported_platforms: None,
             inputs: vec![],
@@ -898,6 +905,7 @@ mod tests {
                 management: ManagementPermissions::Extend(
                     PermissionProfile::new().global(["vault/data-write", "storage/heartbeat"]),
                 ),
+                gates: Vec::new(),
             },
             supported_platforms: None,
             inputs: vec![],
@@ -987,6 +995,7 @@ mod tests {
             permissions: PermissionsConfig {
                 profiles,
                 management: ManagementPermissions::Override(override_profile.clone()),
+                gates: Vec::new(),
             },
             supported_platforms: None,
             inputs: vec![],
@@ -1053,6 +1062,7 @@ mod tests {
             permissions: PermissionsConfig {
                 profiles,
                 management: ManagementPermissions::Auto,
+                gates: Vec::new(),
             },
             supported_platforms: None,
             inputs: vec![],

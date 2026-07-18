@@ -1000,6 +1000,7 @@ impl SingleControllerExecutorBuilder {
             permissions: alien_core::permissions::PermissionsConfig {
                 profiles: permissions,
                 management: alien_core::permissions::ManagementPermissions::Auto,
+                gates: Vec::new(),
             },
             supported_platforms: None,
             inputs: vec![],

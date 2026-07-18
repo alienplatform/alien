@@ -158,6 +158,7 @@ mod tests {
             permissions: alien_core::permissions::PermissionsConfig {
                 profiles,
                 management: alien_core::permissions::ManagementPermissions::Auto,
+                gates: Vec::new(),
             },
             supported_platforms: None,
             inputs: vec![],
@@ -183,6 +184,7 @@ mod tests {
             permissions: alien_core::permissions::PermissionsConfig {
                 profiles,
                 management: alien_core::permissions::ManagementPermissions::Auto,
+                gates: Vec::new(),
             },
             supported_platforms: None,
             inputs: vec![],
@@ -217,6 +219,7 @@ mod tests {
             permissions: alien_core::permissions::PermissionsConfig {
                 profiles,
                 management: alien_core::permissions::ManagementPermissions::Auto,
+                gates: Vec::new(),
             },
             supported_platforms: None,
             inputs: vec![],
@@ -254,6 +257,7 @@ mod tests {
             permissions: alien_core::permissions::PermissionsConfig {
                 profiles,
                 management: alien_core::permissions::ManagementPermissions::Auto,
+                gates: Vec::new(),
             },
             supported_platforms: None,
             inputs: vec![],

@@ -90,6 +90,7 @@ mod tests {
         let permissions_config = PermissionsConfig {
             profiles: profiles.clone(),
             management: ManagementPermissions::Auto,
+            gates: Vec::new(),
         };
 
         let old_stack = Stack {
@@ -140,6 +141,7 @@ mod tests {
             permissions: PermissionsConfig {
                 profiles: old_profiles,
                 management: ManagementPermissions::Auto,
+                gates: Vec::new(),
             },
             supported_platforms: None,
             inputs: vec![],
@@ -151,6 +153,7 @@ mod tests {
             permissions: PermissionsConfig {
                 profiles: new_profiles,
                 management: ManagementPermissions::Auto,
+                gates: Vec::new(),
             },
             supported_platforms: None,
             inputs: vec![],
@@ -181,6 +184,7 @@ mod tests {
             permissions: PermissionsConfig {
                 profiles: old_profiles,
                 management: ManagementPermissions::Auto,
+                gates: Vec::new(),
             },
             supported_platforms: None,
             inputs: vec![],
@@ -192,6 +196,7 @@ mod tests {
             permissions: PermissionsConfig {
                 profiles: new_profiles,
                 management: ManagementPermissions::Auto,
+                gates: Vec::new(),
             },
             supported_platforms: None,
             inputs: vec![],

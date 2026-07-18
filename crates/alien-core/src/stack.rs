@@ -101,6 +101,42 @@ impl Stack {
             None => true,
         }
     }
+
+    /// The gate a setup template may apply to a permission set, if any.
+    ///
+    /// Some only when every origin key is gated by the same input and enabled
+    /// value, and the deployer can steer that input on this platform; anything
+    /// else falls back to the ungated baseline — gates only reduce, and
+    /// `PermissionGateMutation` keeps unresolvable references the same way.
+    pub fn deployer_permission_gate(
+        &self,
+        platform: Platform,
+        profile: &str,
+        permission_set_id: &str,
+        origin_keys: &[&str],
+    ) -> Option<&crate::permissions::PermissionGate> {
+        let (first, rest) = origin_keys.split_first()?;
+        let gate = self
+            .permissions
+            .gate_for(profile, first, permission_set_id)?;
+
+        for origin in rest {
+            let other = self.permissions.gate_for(profile, origin, permission_set_id)?;
+            if other.input_id != gate.input_id || other.enabled_value != gate.enabled_value {
+                return None;
+            }
+        }
+
+        let input = self.inputs.iter().find(|input| input.id == gate.input_id)?;
+        let deployer_steerable = input
+            .provided_by
+            .contains(&crate::StackInputProvider::Deployer)
+            && input
+                .platforms
+                .as_ref()
+                .is_none_or(|platforms| platforms.contains(&platform));
+        deployer_steerable.then_some(gate)
+    }
 }
 
 impl StackBuilder {
@@ -292,6 +328,7 @@ mod tests {
             .permissions(PermissionsConfig {
                 profiles: permissions,
                 management: ManagementPermissions::Auto,
+                gates: Vec::new(),
             })
             .build();
 
@@ -435,6 +472,7 @@ mod tests {
             .permissions(PermissionsConfig {
                 profiles: permissions,
                 management: ManagementPermissions::Auto,
+                gates: Vec::new(),
             })
             .build();
 
@@ -516,5 +554,140 @@ mod tests {
         let serialized = serde_json::to_string_pretty(&stack_extend).expect("Failed to serialize");
         let deserialized: Stack = serde_json::from_str(&serialized).expect("Failed to deserialize");
         assert_eq!(stack_extend, deserialized);
+    }
+}
+
+#[cfg(test)]
+mod permission_gate_tests {
+    use super::*;
+    use crate::permissions::PermissionGate;
+    use crate::{StackInputDefinition, StackInputKind, StackInputProvider};
+
+    fn input(id: &str, provided_by: Vec<StackInputProvider>, platforms: Option<Vec<Platform>>) -> StackInputDefinition {
+        StackInputDefinition {
+            id: id.to_string(),
+            kind: StackInputKind::Enum,
+            provided_by,
+            required: false,
+            label: id.to_string(),
+            description: String::new(),
+            placeholder: None,
+            default: None,
+            platforms,
+            validation: None,
+            env: vec![],
+        }
+    }
+
+    fn gate(resource: &str, input_id: &str, enabled_value: &str) -> PermissionGate {
+        PermissionGate {
+            profile: "execution".to_string(),
+            resource: resource.to_string(),
+            permission_set_id: "queue/data-write".to_string(),
+            input_id: input_id.to_string(),
+            enabled_value: enabled_value.to_string(),
+        }
+    }
+
+    fn stack(gates: Vec<PermissionGate>, inputs: Vec<StackInputDefinition>) -> Stack {
+        let mut permissions = PermissionsConfig::new();
+        permissions.gates = gates;
+        Stack {
+            id: "test".to_string(),
+            resources: IndexMap::new(),
+            permissions,
+            supported_platforms: None,
+            inputs,
+        }
+    }
+
+    #[test]
+    fn gate_for_matches_exact_triple_only() {
+        let config = stack(vec![gate("*", "queueMode", "on")], vec![]).permissions;
+
+        assert!(config.gate_for("execution", "*", "queue/data-write").is_some());
+        assert!(config.gate_for("execution", "store", "queue/data-write").is_none());
+        assert!(config.gate_for("other", "*", "queue/data-write").is_none());
+        assert!(config.gate_for("execution", "*", "kv/data-write").is_none());
+    }
+
+    #[test]
+    fn single_gated_origin_with_deployer_input_applies() {
+        let stack = stack(
+            vec![gate("*", "queueMode", "on")],
+            vec![input("queueMode", vec![StackInputProvider::Deployer], None)],
+        );
+
+        let gate = stack
+            .deployer_permission_gate(Platform::Aws, "execution", "queue/data-write", &["*"])
+            .expect("gate should apply");
+        assert_eq!(gate.enabled_value, "on");
+    }
+
+    #[test]
+    fn partially_gated_origins_fall_back_to_ungated() {
+        let stack = stack(
+            vec![gate("store", "queueMode", "on")],
+            vec![input("queueMode", vec![StackInputProvider::Deployer], None)],
+        );
+
+        assert!(stack
+            .deployer_permission_gate(Platform::Aws, "execution", "queue/data-write", &["store", "*"])
+            .is_none());
+    }
+
+    #[test]
+    fn disagreeing_origin_gates_fall_back_to_ungated() {
+        let stack = stack(
+            vec![
+                gate("store", "queueMode", "on"),
+                gate("*", "queueMode", "off"),
+            ],
+            vec![input("queueMode", vec![StackInputProvider::Deployer], None)],
+        );
+
+        assert!(stack
+            .deployer_permission_gate(Platform::Aws, "execution", "queue/data-write", &["store", "*"])
+            .is_none());
+    }
+
+    #[test]
+    fn undeclared_input_falls_back_to_ungated() {
+        let stack = stack(vec![gate("*", "queueMode", "on")], vec![]);
+
+        assert!(stack
+            .deployer_permission_gate(Platform::Aws, "execution", "queue/data-write", &["*"])
+            .is_none());
+    }
+
+    #[test]
+    fn developer_only_input_falls_back_to_ungated() {
+        let stack = stack(
+            vec![gate("*", "queueMode", "on")],
+            vec![input("queueMode", vec![StackInputProvider::Developer], None)],
+        );
+
+        assert!(stack
+            .deployer_permission_gate(Platform::Aws, "execution", "queue/data-write", &["*"])
+            .is_none());
+    }
+
+    #[test]
+    fn platform_filtered_input_falls_back_to_ungated() {
+        let stack = stack(
+            vec![gate("*", "queueMode", "on")],
+            vec![input(
+                "queueMode",
+                vec![StackInputProvider::Deployer],
+                Some(vec![Platform::Gcp]),
+            )],
+        );
+
+        assert!(stack
+            .deployer_permission_gate(Platform::Aws, "execution", "queue/data-write", &["*"])
+            .is_none());
+        assert!(stack
+            .deployer_permission_gate(Platform::Gcp, "execution", "queue/data-write", &["*"])
+            .is_some());
     }
 }

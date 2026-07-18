@@ -13,6 +13,15 @@ export * from "./queue.js"
 export * from "./service-account.js"
 export * from "./stack.js"
 export * from "./input.js"
+// Only the public gating primitive is re-exported; the resource-gate marker
+// plumbing (resourceGateSymbol / applyResourceGate / ResourceGate) stays
+// internal to the package, reachable by the builders via a direct import.
+export {
+  type GatedPermission,
+  isGatedPermission,
+  permission,
+  type PermissionRef,
+} from "./permission.js"
 export * from "./get-resource-outputs.js"
 export * from "./error.js"
 export * from "./common-errors.js"

@@ -543,6 +543,7 @@ mod tests {
             permissions: alien_core::PermissionsConfig {
                 profiles,
                 management: alien_core::ManagementPermissions::Auto,
+                gates: Vec::new(),
             },
             supported_platforms: None,
             inputs: Vec::new(),

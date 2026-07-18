@@ -432,6 +432,7 @@ mod tests {
             permissions: PermissionsConfig {
                 profiles: IndexMap::new(),
                 management: ManagementPermissions::Auto,
+                gates: Vec::new(),
             },
             supported_platforms: None,
             inputs: vec![],

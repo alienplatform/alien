@@ -163,6 +163,7 @@ mod tests {
                     PermissionProfile::new().global(Vec::<&str>::new()),
                 )]),
                 management,
+                gates: Vec::new(),
             },
             supported_platforms: None,
             inputs: vec![],

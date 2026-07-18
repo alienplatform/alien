@@ -1,4 +1,6 @@
 import { type Kv as KvConfig, KvSchema, type ResourceType } from "./generated/index.js"
+import type { StackInputRef } from "./input.js"
+import { type ResourceGate, applyResourceGate } from "./permission.js"
 import { Resource } from "./resource.js"
 
 export type { KvOutputs, Kv as KvConfig } from "./generated/index.js"
@@ -38,6 +40,7 @@ export { KvSchema as KvConfigSchema } from "./generated/index.js"
  */
 export class Kv {
   private _config: Partial<KvConfig> = {}
+  private _enabledWhen?: ResourceGate
 
   /**
    * Creates a new KV builder.
@@ -57,16 +60,25 @@ export class Kv {
   }
 
   /**
+   * Provision this store's permission grants only while the boolean input
+   * resolves to true. Lowered at stack build into gates on the sets a profile
+   * grants for it, so the baked role lacks them when the deployer turns it off.
+   * @param input The gating boolean stack input (deployer-provided, with an env mapping).
+   */
+  public enabled(input: StackInputRef<boolean>): this {
+    this._enabledWhen = { inputId: input.id }
+    return this
+  }
+
+  /**
    * Builds and validates the KV configuration.
    * @returns An immutable Resource representing the configured KV store.
    * @throws Error if the KV configuration is invalid.
    */
   public build(): Resource {
     const config = KvSchema.parse(this._config)
-
-    return new Resource({
-      type: "kv",
-      ...config,
-    })
+    const base = { type: "kv" as const, ...config }
+    applyResourceGate(base, this._enabledWhen)
+    return new Resource(base)
   }
 }

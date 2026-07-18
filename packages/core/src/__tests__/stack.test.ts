@@ -467,6 +467,420 @@ describe("Permissions system", () => {
 
     expect(stack).toMatchSnapshot()
   })
+
+  it("splits a gated reference into a plain entry plus a permission gate", () => {
+    const io = alien.inputs({
+      dataWrite: alien.boolean({
+        providedBy: "deployer",
+        required: false,
+        label: "Data write access",
+        description: "Whether the workload may write data",
+        env: "APP_DATA_WRITE",
+      }),
+    })
+    const worker = new alien.Worker("proxy-worker")
+      .code({ type: "image", image: SHARED_IMAGE })
+      .permissions("proxy")
+      .build()
+
+    const stack = new alien.Stack("gated-stack")
+      .add(worker, "live")
+      .inputs(io)
+      .permissions({
+        profiles: {
+          proxy: {
+            "*": [alien.permission("queue/data-write").enabled(io.dataWrite), "kv/data-write"],
+          },
+        },
+      })
+      .build()
+
+    expect(stack.permissions?.profiles.proxy?.["*"]).toEqual(["queue/data-write", "kv/data-write"])
+    expect(stack.permissions?.gates).toEqual([
+      {
+        profile: "proxy",
+        resource: "*",
+        permissionSetId: "queue/data-write",
+        inputId: "dataWrite",
+        enabledValue: "true",
+      },
+    ])
+  })
+
+  it("rejects a gate whose input is not declared on the stack", () => {
+    const io = alien.inputs({
+      dataWrite: alien.boolean({
+        providedBy: "deployer",
+        required: false,
+        label: "Data write access",
+        description: "Whether the workload may write data",
+        env: "APP_DATA_WRITE",
+      }),
+    })
+
+    const stack = new alien.Stack("gated-stack").permissions({
+      profiles: {
+        proxy: { "*": [alien.permission("queue/data-write").enabled(io.dataWrite)] },
+      },
+    })
+
+    expect(() => stack.build()).toThrow(/not declared on the stack/)
+  })
+
+  it("rejects a gate whose input has no env mapping", () => {
+    const io = alien.inputs({
+      dataWrite: alien.boolean({
+        providedBy: "deployer",
+        required: false,
+        label: "Data write access",
+        description: "Whether the workload may write data",
+      }),
+    })
+
+    const stack = new alien.Stack("gated-stack")
+      .inputs(io)
+      .permissions({
+        profiles: {
+          proxy: { "*": [alien.permission("queue/data-write").enabled(io.dataWrite)] },
+        },
+      })
+
+    expect(() => stack.build()).toThrow(/env mapping/)
+  })
+
+  it("rejects gating on a secret input", () => {
+    const io = alien.inputs({
+      apiKey: alien.secret({
+        providedBy: "deployer",
+        required: false,
+        label: "API key",
+        description: "Upstream API key",
+        env: "APP_API_KEY",
+      }),
+    })
+    const stack = new alien.Stack("gated-stack")
+      .inputs(io)
+      .permissions({
+        profiles: { proxy: { "*": [alien.permission("queue/data-write").enabled(io.apiKey)] } },
+      })
+
+    expect(() => stack.build()).toThrow(/cannot gate on input/)
+  })
+
+  it("rejects a boolean gate with a non-boolean enabled value", () => {
+    const io = alien.inputs({
+      dataWrite: alien.boolean({
+        providedBy: "deployer",
+        required: false,
+        label: "Data write access",
+        description: "Whether the workload may write data",
+        env: "APP_DATA_WRITE",
+      }),
+    })
+    const stack = new alien.Stack("gated-stack")
+      .inputs(io)
+      .permissions({
+        profiles: {
+          proxy: { "*": [alien.permission("queue/data-write").enabled(io.dataWrite, "on")] },
+        },
+      })
+
+    expect(() => stack.build()).toThrow(/pass true or false/)
+  })
+
+  it("rejects an integer gate with a fractional enabled value", () => {
+    const io = alien.inputs({
+      replicas: alien.integer({
+        providedBy: "deployer",
+        required: false,
+        label: "Replicas",
+        description: "Replica count",
+        env: "APP_REPLICAS",
+      }),
+    })
+    const stack = new alien.Stack("gated-stack")
+      .inputs(io)
+      .permissions({
+        profiles: {
+          proxy: { "*": [alien.permission("queue/data-write").enabled(io.replicas, "3.5")] },
+        },
+      })
+
+    expect(() => stack.build()).toThrow(/is not an integer/)
+  })
+
+  it("rejects an enum gate whose value is outside the declared domain", () => {
+    const io = alien.inputs({
+      mode: alien.enum(["on", "off"], {
+        providedBy: "deployer",
+        required: false,
+        label: "Mode",
+        description: "Feature mode",
+        env: "APP_MODE",
+      }),
+    })
+    const stack = new alien.Stack("gated-stack")
+      .inputs(io)
+      .permissions({
+        profiles: {
+          proxy: { "*": [alien.permission("queue/data-write").enabled(io.mode, "nope")] },
+        },
+      })
+
+    expect(() => stack.build()).toThrow(/not one of/)
+  })
+
+  it("rejects gating on a developer-only input", () => {
+    const io = alien.inputs({
+      tier: alien.enum(["a", "b"], {
+        providedBy: "developer",
+        required: false,
+        label: "Tier",
+        description: "Deployment tier",
+        env: "APP_TIER",
+      }),
+    })
+    const stack = new alien.Stack("gated-stack")
+      .inputs(io)
+      .permissions({
+        profiles: { proxy: { "*": [alien.permission("queue/data-write").enabled(io.tier, "a")] } },
+      })
+
+    expect(() => stack.build()).toThrow(/deployer cannot set/)
+  })
+
+  it("lowers a resource's .enabled() into gates on its granted sets", () => {
+    const io = alien.inputs({
+      kvEnabled: alien.boolean({
+        providedBy: "deployer",
+        required: false,
+        label: "KV enabled",
+        description: "Whether the KV store is in use",
+        env: "APP_KV_ENABLED",
+      }),
+    })
+    const store = new alien.Kv("store").enabled(io.kvEnabled).build()
+    const worker = new alien.Worker("proxy-worker")
+      .code({ type: "image", image: SHARED_IMAGE })
+      .permissions("app")
+      .build()
+    const stack = new alien.Stack("gated-stack")
+      .add(store, "live")
+      .add(worker, "live")
+      .inputs(io)
+      .permissions({ profiles: { app: { store: ["kv/data-write"] } } })
+      .build()
+
+    // No alien.permission() wiring: gating the resource synthesizes the gate.
+    expect(stack.permissions?.gates).toEqual([
+      {
+        profile: "app",
+        resource: "store",
+        permissionSetId: "kv/data-write",
+        inputId: "kvEnabled",
+        enabledValue: "true",
+      },
+    ])
+  })
+
+  it("throws when a gated resource has no granted set to gate", () => {
+    const io = alien.inputs({
+      kvEnabled: alien.boolean({
+        providedBy: "deployer",
+        required: false,
+        label: "KV enabled",
+        description: "Whether the KV store is in use",
+        env: "APP_KV_ENABLED",
+      }),
+    })
+    const store = new alien.Kv("store").enabled(io.kvEnabled).build()
+    const worker = new alien.Worker("proxy-worker")
+      .code({ type: "image", image: SHARED_IMAGE })
+      .permissions("app")
+      .build()
+    const stack = new alien.Stack("gated-stack")
+      .add(store, "live")
+      .add(worker, "live")
+      .inputs(io)
+      .permissions({ profiles: { app: { "*": ["queue/data-write"] } } })
+
+    expect(() => stack.build()).toThrow(/no profile grants a "kv\/" permission set/)
+  })
+
+  it("gates a wildcard-granted set for the only resource of its type", () => {
+    const io = alien.inputs({
+      kvEnabled: alien.boolean({
+        providedBy: "deployer",
+        required: false,
+        label: "KV enabled",
+        description: "Whether the KV store is in use",
+        env: "APP_KV_ENABLED",
+      }),
+    })
+    const store = new alien.Kv("store").enabled(io.kvEnabled).build()
+    const worker = new alien.Worker("proxy-worker")
+      .code({ type: "image", image: SHARED_IMAGE })
+      .permissions("app")
+      .build()
+    const stack = new alien.Stack("gated-stack")
+      .add(store, "live")
+      .add(worker, "live")
+      .inputs(io)
+      .permissions({ profiles: { app: { "*": ["kv/data-write"] } } })
+      .build()
+
+    expect(stack.permissions?.gates).toEqual([
+      {
+        profile: "app",
+        resource: "*",
+        permissionSetId: "kv/data-write",
+        inputId: "kvEnabled",
+        enabledValue: "true",
+      },
+    ])
+  })
+
+  it("gates a shared wildcard set once when same-type resources agree on the input", () => {
+    const io = alien.inputs({
+      kvEnabled: alien.boolean({
+        providedBy: "deployer",
+        required: false,
+        label: "KV enabled",
+        description: "Whether the KV stores are in use",
+        env: "APP_KV_ENABLED",
+      }),
+    })
+    const a = new alien.Kv("a").enabled(io.kvEnabled).build()
+    const b = new alien.Kv("b").enabled(io.kvEnabled).build()
+    const worker = new alien.Worker("proxy-worker")
+      .code({ type: "image", image: SHARED_IMAGE })
+      .permissions("app")
+      .build()
+    const stack = new alien.Stack("gated-stack")
+      .add(a, "live")
+      .add(b, "live")
+      .add(worker, "live")
+      .inputs(io)
+      .permissions({ profiles: { app: { "*": ["kv/data-write"] } } })
+      .build()
+
+    expect(stack.permissions?.gates).toEqual([
+      {
+        profile: "app",
+        resource: "*",
+        permissionSetId: "kv/data-write",
+        inputId: "kvEnabled",
+        enabledValue: "true",
+      },
+    ])
+  })
+
+  it("throws when a wildcard-granted set is shared by an ungated same-type resource", () => {
+    const io = alien.inputs({
+      kvEnabled: alien.boolean({
+        providedBy: "deployer",
+        required: false,
+        label: "KV enabled",
+        description: "Whether the primary store is in use",
+        env: "APP_KV_ENABLED",
+      }),
+    })
+    const primary = new alien.Kv("primary").enabled(io.kvEnabled).build()
+    const secondary = new alien.Kv("secondary").build()
+    const worker = new alien.Worker("proxy-worker")
+      .code({ type: "image", image: SHARED_IMAGE })
+      .permissions("app")
+      .build()
+    const stack = new alien.Stack("gated-stack")
+      .add(primary, "live")
+      .add(secondary, "live")
+      .add(worker, "live")
+      .inputs(io)
+      .permissions({ profiles: { app: { "*": ["kv/data-write"] } } })
+
+    expect(() => stack.build()).toThrow(/wildcard/)
+  })
+
+  it("throws when same-type resources gate a shared wildcard set on different inputs", () => {
+    const io = alien.inputs({
+      flagA: alien.boolean({
+        providedBy: "deployer",
+        required: false,
+        label: "A",
+        description: "Store A toggle",
+        env: "APP_A",
+      }),
+      flagB: alien.boolean({
+        providedBy: "deployer",
+        required: false,
+        label: "B",
+        description: "Store B toggle",
+        env: "APP_B",
+      }),
+    })
+    const a = new alien.Kv("a").enabled(io.flagA).build()
+    const b = new alien.Kv("b").enabled(io.flagB).build()
+    const worker = new alien.Worker("proxy-worker")
+      .code({ type: "image", image: SHARED_IMAGE })
+      .permissions("app")
+      .build()
+    const stack = new alien.Stack("gated-stack")
+      .add(a, "live")
+      .add(b, "live")
+      .add(worker, "live")
+      .inputs(io)
+      .permissions({ profiles: { app: { "*": ["kv/data-write"] } } })
+
+    expect(() => stack.build()).toThrow(/wildcard/)
+  })
+
+  it("builds a valid enum gate via the permission() primitive", () => {
+    const io = alien.inputs({
+      mode: alien.enum(["on", "off"], {
+        providedBy: "deployer",
+        required: false,
+        label: "Mode",
+        description: "Feature mode",
+        env: "APP_MODE",
+      }),
+    })
+    const stack = new alien.Stack("gated-stack")
+      .inputs(io)
+      .permissions({
+        profiles: { proxy: { "*": [alien.permission("queue/data-write").enabled(io.mode, "on")] } },
+      })
+      .build()
+
+    expect(stack.permissions?.gates).toEqual([
+      {
+        profile: "proxy",
+        resource: "*",
+        permissionSetId: "queue/data-write",
+        inputId: "mode",
+        enabledValue: "on",
+      },
+    ])
+  })
+
+  it("builds a valid integer gate from a numeric enabled value", () => {
+    const io = alien.inputs({
+      replicas: alien.integer({
+        providedBy: "deployer",
+        required: false,
+        label: "Replicas",
+        description: "Replica count",
+        env: "APP_REPLICAS",
+      }),
+    })
+    const stack = new alien.Stack("gated-stack")
+      .inputs(io)
+      .permissions({
+        profiles: { proxy: { "*": [alien.permission("queue/data-write").enabled(io.replicas, 3)] } },
+      })
+      .build()
+
+    expect(stack.permissions?.gates?.[0]?.enabledValue).toBe("3")
+  })
 })
 
 describe("Build resource configuration", () => {

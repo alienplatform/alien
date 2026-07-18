@@ -94,6 +94,7 @@ use utoipa::OpenApi;
     PermissionSet,
     PermissionSetReference,
     PermissionProfile,
+    PermissionGate,
     ManagementPermissions,
     AlienEvent,
     EventChange,

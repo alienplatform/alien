@@ -231,6 +231,7 @@ mod tests {
             permissions: PermissionsConfig {
                 profiles,
                 management: ManagementPermissions::Auto,
+                gates: Vec::new(),
             },
             supported_platforms: None,
             inputs: vec![],

@@ -5,13 +5,17 @@
 
 import * as z from "zod";
 import { ManagementPermissionsSchema } from "./management-permissions-schema.js";
+import { PermissionGateSchema } from "./permission-gate-schema.js";
 import { PermissionProfileSchema } from "./permission-profile-schema.js";
 
 /**
  * @description Combined permissions configuration that contains both profiles and management
  */
 export const PermissionsConfigSchema = z.object({
-    get "management"(){
+    get "gates"(){
+                return z.array(PermissionGateSchema.describe("A deploy-time gate on a permission-set reference within a profile.\n\nThe gate lives on `PermissionsConfig` rather than on the reference itself\nbecause `PermissionProfile` is `#[serde(transparent)]` and\n`PermissionSetReference` is untagged, so neither can carry a sibling field.")).describe("Deploy-time gates on profile permission-set references").optional()
+              },
+get "management"(){
                 return ManagementPermissionsSchema.describe("Management permissions configuration for stack management access").optional()
               },
 "profiles": z.object({

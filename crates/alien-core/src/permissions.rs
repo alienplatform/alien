@@ -234,6 +234,31 @@ impl PermissionSetReference {
     }
 }
 
+/// A permission-set reference collected from a profile, tracking which profile
+/// keys referenced it (a resource id, the `"*"` wildcard, or both). Pairs with
+/// [`Stack::deployer_permission_gate`]: `origin_keys` produces the keys that
+/// method merges when resolving a grant's gate. Shared by the Terraform and
+/// CloudFormation emitters so the two cannot drift.
+pub struct TrackedPermissionRef {
+    pub reference: PermissionSetReference,
+    pub in_resource: bool,
+    pub in_wildcard: bool,
+}
+
+impl TrackedPermissionRef {
+    /// Origin keys for the gate lookup, in resource-then-wildcard order.
+    pub fn origin_keys<'a>(&self, resource_id: &'a str) -> Vec<&'a str> {
+        let mut keys = Vec::new();
+        if self.in_resource {
+            keys.push(resource_id);
+        }
+        if self.in_wildcard {
+            keys.push("*");
+        }
+        keys
+    }
+}
+
 /// Permission profile that maps resources to permission sets
 /// Key can be "*" for all resources or resource name for specific resource
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -320,6 +345,27 @@ impl Default for ManagementPermissions {
     }
 }
 
+/// A deploy-time gate on a permission-set reference within a profile.
+///
+/// The gate lives on `PermissionsConfig` rather than on the reference itself
+/// because `PermissionProfile` is `#[serde(transparent)]` and
+/// `PermissionSetReference` is untagged, so neither can carry a sibling field.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct PermissionGate {
+    /// Profile name containing the gated reference
+    pub profile: String,
+    /// Resource key within the profile ("*" or a resource name)
+    pub resource: String,
+    /// ID of the permission set being gated (e.g., "queue/data-write")
+    pub permission_set_id: String,
+    /// Stack input whose resolved value controls the gate
+    pub input_id: String,
+    /// Input value for which the permission set stays included
+    pub enabled_value: String,
+}
+
 /// Combined permissions configuration that contains both profiles and management
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
@@ -331,6 +377,9 @@ pub struct PermissionsConfig {
     /// Management permissions configuration for stack management access
     #[serde(default)]
     pub management: ManagementPermissions,
+    /// Deploy-time gates on profile permission-set references
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub gates: Vec<PermissionGate>,
 }
 
 impl PermissionsConfig {
@@ -339,6 +388,7 @@ impl PermissionsConfig {
         Self {
             profiles: IndexMap::new(),
             management: ManagementPermissions::Auto,
+            gates: Vec::new(),
         }
     }
 
@@ -352,6 +402,24 @@ impl PermissionsConfig {
     pub fn with_management(mut self, management: ManagementPermissions) -> Self {
         self.management = management;
         self
+    }
+
+    /// First gate matching (profile, resource key, permission set id), if any.
+    ///
+    /// Exact-key match mirrors `PermissionGateMutation`; divergence between
+    /// the deploy-time pruning and template emission would be a push/pull
+    /// split-brain.
+    pub fn gate_for(
+        &self,
+        profile: &str,
+        resource_key: &str,
+        permission_set_id: &str,
+    ) -> Option<&PermissionGate> {
+        self.gates.iter().find(|gate| {
+            gate.profile == profile
+                && gate.resource == resource_key
+                && gate.permission_set_id == permission_set_id
+        })
     }
 }
 

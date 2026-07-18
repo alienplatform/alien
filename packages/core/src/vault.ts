@@ -1,4 +1,6 @@
 import { type ResourceType, type Vault as VaultConfig, VaultSchema } from "./generated/index.js"
+import type { StackInputRef } from "./input.js"
+import { type ResourceGate, applyResourceGate } from "./permission.js"
 import { Resource } from "./resource.js"
 
 export type { VaultOutputs, Vault as VaultConfig } from "./generated/index.js"
@@ -15,6 +17,7 @@ export { VaultSchema as VaultConfigSchema } from "./generated/index.js"
  */
 export class Vault {
   private _config: Partial<VaultConfig> = {}
+  private _enabledWhen?: ResourceGate
 
   /**
    * Creates a new Vault builder.
@@ -34,16 +37,25 @@ export class Vault {
   }
 
   /**
+   * Provision this vault's permission grants only while the boolean input
+   * resolves to true. Lowered at stack build into gates on the sets a profile
+   * grants for it, so the baked role lacks them when the deployer turns it off.
+   * @param input The gating boolean stack input (deployer-provided, with an env mapping).
+   */
+  public enabled(input: StackInputRef<boolean>): this {
+    this._enabledWhen = { inputId: input.id }
+    return this
+  }
+
+  /**
    * Builds and validates the vault configuration.
    * @returns An immutable Resource representing the configured vault.
    * @throws Error if the vault configuration is invalid.
    */
   public build(): Resource {
     const config = VaultSchema.parse(this._config)
-
-    return new Resource({
-      type: "vault",
-      ...config,
-    })
+    const base = { type: "vault" as const, ...config }
+    applyResourceGate(base, this._enabledWhen)
+    return new Resource(base)
   }
 }

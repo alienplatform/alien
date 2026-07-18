@@ -144,6 +144,7 @@ fn create_test_stack(stack_id: &str, function_id: &str) -> Stack {
         permissions: alien_core::PermissionsConfig {
             profiles,
             management: alien_core::ManagementPermissions::Auto,
+            gates: Vec::new(),
         },
         supported_platforms: None,
         inputs: Vec::new(),
@@ -189,6 +190,7 @@ fn create_test_stack_with_storage(stack_id: &str, storage_id: &str, function_id:
         permissions: alien_core::PermissionsConfig {
             profiles,
             management: alien_core::ManagementPermissions::Auto,
+            gates: Vec::new(),
         },
         supported_platforms: None,
         inputs: Vec::new(),
@@ -640,6 +642,7 @@ async fn test_running_transitions_to_refresh_failed_on_health_check_failure() {
         permissions: alien_core::PermissionsConfig {
             profiles,
             management: alien_core::ManagementPermissions::Auto,
+            gates: Vec::new(),
         },
         supported_platforms: None,
         inputs: Vec::new(),
@@ -817,6 +820,7 @@ async fn test_update_failed_retry_gate_returns_to_update_pending() {
         permissions: alien_core::PermissionsConfig {
             profiles,
             management: alien_core::ManagementPermissions::Auto,
+            gates: Vec::new(),
         },
         supported_platforms: None,
         inputs: Vec::new(),
@@ -1018,6 +1022,7 @@ fn create_two_function_stack_one_fails(stack_id: &str) -> Stack {
         permissions: alien_core::PermissionsConfig {
             profiles,
             management: alien_core::ManagementPermissions::Auto,
+            gates: Vec::new(),
         },
         supported_platforms: None,
         inputs: Vec::new(),
@@ -1081,6 +1086,7 @@ fn create_two_function_stack_dependent_one_fails(stack_id: &str) -> Stack {
         permissions: alien_core::PermissionsConfig {
             profiles,
             management: alien_core::ManagementPermissions::Auto,
+            gates: Vec::new(),
         },
         supported_platforms: None,
         inputs: Vec::new(),

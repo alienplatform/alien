@@ -53,3 +53,20 @@ export const UnexpectedResourceTypeError = defineError({
   internal: false,
   httpStatusCode: 400,
 })
+
+/**
+ * Error thrown when a permission gate is invalid: it references an undeclared or
+ * non-deployer-steerable input, an input kind that can't drive an equality test,
+ * a value outside the input's domain, or an ambiguous/conflicting resource gate.
+ * The specific problem is carried in `reason`.
+ */
+export const PermissionGateInvalidError = defineError({
+  code: "PERMISSION_GATE_INVALID",
+  context: z.object({
+    reason: z.string(),
+  }),
+  message: ({ reason }) => reason,
+  retryable: false,
+  internal: false,
+  httpStatusCode: 400,
+})

@@ -4,6 +4,8 @@ import {
   type Storage as StorageConfig,
   StorageSchema,
 } from "./generated/index.js"
+import type { StackInputRef } from "./input.js"
+import { type ResourceGate, applyResourceGate } from "./permission.js"
 import { Resource } from "./resource.js"
 
 export type { LifecycleRule, StorageOutputs, Storage as StorageConfig } from "./generated/index.js"
@@ -13,6 +15,7 @@ export { StorageSchema as StorageConfigSchema } from "./generated/index.js"
  * Represents an object storage bucket.
  */
 export class Storage {
+  private _enabledWhen?: ResourceGate
   private _config: Partial<StorageConfig> = {
     publicRead: false,
     versioning: false,
@@ -69,16 +72,25 @@ export class Storage {
   }
 
   /**
+   * Provision this bucket's permission grants only while the boolean input
+   * resolves to true. Lowered at stack build into gates on the sets a profile
+   * grants for it, so the baked role lacks them when the deployer turns it off.
+   * @param input The gating boolean stack input (deployer-provided, with an env mapping).
+   */
+  public enabled(input: StackInputRef<boolean>): this {
+    this._enabledWhen = { inputId: input.id }
+    return this
+  }
+
+  /**
    * Builds and validates the storage configuration.
    * @returns An immutable Resource representing the configured storage bucket.
    * @throws Error if the storage configuration is invalid.
    */
   public build(): Resource {
     const config = StorageSchema.parse(this._config)
-
-    return new Resource({
-      type: "storage",
-      ...config,
-    })
+    const base = { type: "storage" as const, ...config }
+    applyResourceGate(base, this._enabledWhen)
+    return new Resource(base)
   }
 }

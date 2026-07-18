@@ -203,6 +203,7 @@ pub fn create_sample_stack(stack_id: &str) -> Stack {
         .permissions(PermissionsConfig {
             profiles: permissions,
             management: ManagementPermissions::Auto,
+            gates: Vec::new(),
         })
         .build()
 }

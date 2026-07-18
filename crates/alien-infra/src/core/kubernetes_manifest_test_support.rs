@@ -109,6 +109,7 @@ impl KubernetesManifestTestHarness {
             permissions: PermissionsConfig {
                 profiles,
                 management: ManagementPermissions::Auto,
+                gates: Vec::new(),
             },
             supported_platforms: None,
             inputs: Vec::new(),
