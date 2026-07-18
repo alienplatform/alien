@@ -531,7 +531,29 @@ async fn test_containerapp_dapr_queue_message(
     });
 
     let client = reqwest::Client::new();
-    let url = format!("http://127.0.0.1:{}/", ctx.transport_port);
+    let url = format!(
+        "http://127.0.0.1:{}/servicebus-test-worker-test-queue",
+        ctx.transport_port
+    );
+
+    let discovery_response = client
+        .request(reqwest::Method::OPTIONS, &url)
+        .timeout(Duration::from_secs(10))
+        .send()
+        .await
+        .context("Failed to discover Dapr Service Bus binding endpoint")?;
+    assert!(
+        discovery_response.status().is_success(),
+        "Dapr Service Bus binding discovery should succeed: {}",
+        discovery_response.status()
+    );
+
+    assert!(
+        check_event_stored(ctx.transport_port, "queue", &message_id)
+            .await?
+            .is_none(),
+        "Dapr OPTIONS discovery must not emit a queue message"
+    );
 
     let response = client
         .post(&url)
