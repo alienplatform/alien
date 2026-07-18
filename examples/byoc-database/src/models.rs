@@ -70,6 +70,29 @@ pub struct HealthResponse {
     pub status: String,
 }
 
+/// Request for the `stats` command handler: row counts
+/// for a namespace, driven through the app-owned pull command receiver
+/// rather than the HTTP API.
+#[derive(Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct StatsRequest {
+    /// Namespace to report row counts for
+    pub namespace: String,
+}
+
+/// Response from the `stats` command handler: segment and row counts for a
+/// namespace.
+#[derive(Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct StatsResponse {
+    /// Namespace the stats were computed for
+    pub namespace: String,
+    /// Number of segments stored for the namespace
+    pub segment_count: usize,
+    /// Total number of vector rows across all segments
+    pub vector_count: usize,
+}
+
 /// Namespace metadata stored in object storage
 /// Contains list of all segment IDs for this namespace
 #[derive(Debug, Clone, Serialize, Deserialize)]

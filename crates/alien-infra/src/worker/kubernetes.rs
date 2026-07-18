@@ -1,11 +1,8 @@
-use std::collections::BTreeMap;
 use std::time::Duration;
 use tracing::{debug, info};
 
 use crate::core::{
-    kubernetes_branded_resource_labels, kubernetes_runtime_pod_labels,
-    reconcile_environment_secret, EnvironmentVariableBuilder, KubernetesEnvSecretPlan,
-    ResourceControllerContext,
+    delete_environment_secret, reconcile_environment_secret, ResourceControllerContext,
 };
 use crate::error::{ErrorData, Result};
 use crate::kubernetes_public_endpoint::{
@@ -24,11 +21,10 @@ use alien_core::{
 use alien_error::{AlienError, Context, ContextError, IntoAlienError};
 use alien_macros::controller;
 
-use k8s_openapi::api::apps::v1::{Deployment, DeploymentSpec};
-use k8s_openapi::api::core::v1::{
-    Container, ContainerPort, EnvVar, LocalObjectReference, PodSpec, PodTemplateSpec,
+use super::kubernetes_command_service::{
+    delete_command_service, reconcile_command_service, reconcile_ready_command_service,
 };
-use k8s_openapi::apimachinery::pkg::apis::meta::v1::{LabelSelector, ObjectMeta};
+use super::kubernetes_deployment::{build_worker_deployment, kubernetes_namespace, worker_labels};
 
 #[controller]
 pub struct KubernetesWorkerController {
@@ -40,6 +36,9 @@ pub struct KubernetesWorkerController {
     pub(crate) service_name: Option<String>,
     /// The worker ID (for binding construction)
     pub(crate) worker_id: Option<String>,
+    /// Whether the internal command Service has been reconciled for this Worker.
+    #[serde(default)]
+    pub(crate) commands_enabled: bool,
     /// Public endpoint route/certificate state.
     pub(crate) public_endpoint: KubernetesPublicEndpointState,
 }
@@ -60,7 +59,7 @@ impl KubernetesWorkerController {
         info!(id=%config.id, "Initiating Kubernetes Worker creation");
 
         let function_name = kubernetes_resource_name(&ctx.resource_prefix, &config.id);
-        let namespace = self.get_kubernetes_namespace(ctx)?;
+        let namespace = kubernetes_namespace(ctx)?;
 
         // Store data needed for binding construction
         self.worker_id = Some(config.id.clone());
@@ -99,17 +98,17 @@ impl KubernetesWorkerController {
             .service_provider
             .get_kubernetes_deployment_client(kubernetes_config)
             .await?;
-        let deployment = self
-            .build_deployment(
-                config,
-                &function_name,
-                &namespace,
-                &service_account_name,
-                image_pull_secret_name.as_deref(),
-                env_secret_plan.as_ref(),
-                ctx,
-            )
-            .await?;
+        let deployment = build_worker_deployment(
+            self,
+            config,
+            &function_name,
+            &namespace,
+            &service_account_name,
+            image_pull_secret_name.as_deref(),
+            env_secret_plan.as_ref(),
+            ctx,
+        )
+        .await?;
 
         let _created_deployment = deployment_client
             .create_deployment(&namespace, &deployment)
@@ -227,7 +226,9 @@ impl KubernetesWorkerController {
                 message: "Namespace not set in state".to_string(),
             })
         })?;
-        let labels = self.build_labels(deployment_name);
+        let labels = worker_labels(deployment_name);
+        reconcile_command_service(config, deployment_name, namespace, ctx).await?;
+        self.commands_enabled = config.commands_enabled;
         let action = reconcile_kubernetes_public_endpoint(
             ctx,
             worker_public_endpoint_target(
@@ -268,14 +269,16 @@ impl KubernetesWorkerController {
         let config = ctx.desired_resource_config::<Worker>()?;
 
         // Heartbeat check: verify deployment status
-        if let (Some(deployment_name), Some(namespace)) = (&self.deployment_name, &self.namespace) {
+        if let (Some(deployment_name), Some(namespace)) =
+            (self.deployment_name.clone(), self.namespace.clone())
+        {
             let deployment_client = ctx
                 .service_provider
                 .get_kubernetes_deployment_client(kubernetes_config)
                 .await?;
 
             let deployment = deployment_client
-                .get_deployment(namespace, deployment_name)
+                .get_deployment(&namespace, &deployment_name)
                 .await
                 .context(ErrorData::CloudPlatformError {
                     message: format!("Failed to get deployment '{}'", deployment_name),
@@ -298,7 +301,16 @@ impl KubernetesWorkerController {
                 }
             }
 
-            let labels = self.build_labels(deployment_name);
+            reconcile_ready_command_service(
+                &mut self.commands_enabled,
+                config,
+                &deployment_name,
+                &namespace,
+                ctx,
+            )
+            .await?;
+
+            let labels = worker_labels(&deployment_name);
             emit_kubernetes_workload_heartbeat(
                 ctx,
                 KubernetesWorkloadHeartbeatInput {
@@ -306,7 +318,7 @@ impl KubernetesWorkerController {
                     resource_id: config.id.clone(),
                     resource_type: Worker::RESOURCE_TYPE,
                     data_kind: KubernetesWorkloadDataKind::Worker,
-                    command_supported: false,
+                    command_supported: self.commands_enabled,
                     namespace: namespace.clone(),
                     workload_name: deployment_name.clone(),
                     workload_kind: alien_core::KubernetesWorkloadKind::Deployment,
@@ -320,8 +332,8 @@ impl KubernetesWorkerController {
                 ctx,
                 worker_public_endpoint_target(
                     &config.id,
-                    deployment_name,
-                    namespace,
+                    &deployment_name,
+                    &namespace,
                     labels,
                     !config.public_endpoints.is_empty(),
                     config
@@ -419,17 +431,17 @@ impl KubernetesWorkerController {
             reconcile_environment_secret("worker", &config.id, deployment_name, namespace, ctx)
                 .await?;
 
-        let mut new_deployment = self
-            .build_deployment(
-                config,
-                deployment_name,
-                namespace,
-                &service_account_name,
-                image_pull_secret_name.as_deref(),
-                env_secret_plan.as_ref(),
-                ctx,
-            )
-            .await?;
+        let mut new_deployment = build_worker_deployment(
+            self,
+            config,
+            deployment_name,
+            namespace,
+            &service_account_name,
+            image_pull_secret_name.as_deref(),
+            env_secret_plan.as_ref(),
+            ctx,
+        )
+        .await?;
         new_deployment.metadata.resource_version = resource_version;
 
         deployment_client
@@ -539,7 +551,9 @@ impl KubernetesWorkerController {
                 message: "Namespace not set in state".to_string(),
             })
         })?;
-        let labels = self.build_labels(deployment_name);
+        let labels = worker_labels(deployment_name);
+        reconcile_command_service(config, deployment_name, namespace, ctx).await?;
+        self.commands_enabled = config.commands_enabled;
         let action = reconcile_kubernetes_public_endpoint(
             ctx,
             worker_public_endpoint_target(
@@ -591,6 +605,9 @@ impl KubernetesWorkerController {
 
         delete_kubernetes_public_endpoint(ctx, &config.id, namespace, &mut self.public_endpoint)
             .await?;
+        if let Some(service_name) = &self.service_name {
+            delete_command_service(namespace, service_name, &config.id, ctx).await?;
+        }
 
         // Delete Deployment
         if let Some(deployment_name) = &self.deployment_name {
@@ -613,6 +630,15 @@ impl KubernetesWorkerController {
                     ) =>
                 {
                     info!(deployment_name=%deployment_name, "Deployment already deleted");
+
+                    delete_environment_secret(
+                        "worker",
+                        &config.id,
+                        deployment_name,
+                        namespace,
+                        ctx,
+                    )
+                    .await?;
 
                     self.deployment_name = None;
                     self.namespace = None;
@@ -678,6 +704,15 @@ impl KubernetesWorkerController {
                 {
                     info!(deployment_name=%deployment_name, "Deployment successfully deleted");
 
+                    delete_environment_secret(
+                        "worker",
+                        &config.id,
+                        deployment_name,
+                        namespace,
+                        ctx,
+                    )
+                    .await?;
+
                     self.deployment_name = None;
                     self.namespace = None;
 
@@ -741,7 +776,18 @@ impl KubernetesWorkerController {
                         )])
                     })
                     .unwrap_or_default(),
-                commands_push_target: None, // Kubernetes uses polling
+                commands_push_target: if self.commands_enabled {
+                    self.service_name.as_ref().zip(self.namespace.as_ref()).map(
+                        |(service_name, namespace)| {
+                            format!(
+                                "http://{service_name}.{namespace}.svc.cluster.local{}",
+                                alien_core::WORKER_COMMAND_PUSH_PATH
+                            )
+                        },
+                    )
+                } else {
+                    None
+                },
             }))
         } else {
             None
@@ -781,76 +827,6 @@ impl KubernetesWorkerController {
     }
 }
 
-#[cfg(test)]
-mod output_tests {
-    use alien_core::WorkerOutputs;
-
-    use super::{KubernetesPublicEndpointState, KubernetesWorkerController, KubernetesWorkerState};
-
-    #[test]
-    fn build_outputs_includes_public_endpoint_url() {
-        let public_endpoint = KubernetesPublicEndpointState {
-            public_url: Some("https://worker.example.test".to_string()),
-            ..Default::default()
-        };
-        let controller = KubernetesWorkerController {
-            state: KubernetesWorkerState::Ready,
-            deployment_name: Some("test-worker".to_string()),
-            namespace: Some("test-namespace".to_string()),
-            service_name: Some("test-worker".to_string()),
-            worker_id: Some("worker".to_string()),
-            public_endpoint,
-            _internal_stay_count: None,
-        };
-
-        let outputs = controller.build_outputs().expect("outputs");
-        let worker_outputs = outputs
-            .downcast_ref::<WorkerOutputs>()
-            .expect("worker outputs");
-
-        assert_eq!(
-            worker_outputs
-                .public_endpoints
-                .get("default")
-                .map(|endpoint| endpoint.url.as_str()),
-            Some("https://worker.example.test")
-        );
-    }
-
-    #[test]
-    fn build_outputs_derives_public_url_from_load_balancer_endpoint() {
-        let public_endpoint = KubernetesPublicEndpointState {
-            load_balancer_endpoint: Some(alien_core::LoadBalancerEndpoint {
-                dns_name: "k8s-worker.example.elb.amazonaws.com".to_string(),
-                hosted_zone_id: None,
-            }),
-            ..Default::default()
-        };
-        let controller = KubernetesWorkerController {
-            state: KubernetesWorkerState::Ready,
-            deployment_name: Some("test-worker".to_string()),
-            namespace: Some("test-namespace".to_string()),
-            service_name: Some("test-worker".to_string()),
-            worker_id: Some("worker".to_string()),
-            public_endpoint,
-            _internal_stay_count: None,
-        };
-
-        let outputs = controller.build_outputs().expect("outputs");
-        let worker_outputs = outputs
-            .downcast_ref::<WorkerOutputs>()
-            .expect("worker outputs");
-
-        assert_eq!(
-            worker_outputs
-                .public_endpoints
-                .get("default")
-                .map(|endpoint| endpoint.url.as_str()),
-            Some("http://k8s-worker.example.elb.amazonaws.com")
-        );
-    }
-}
-
 impl KubernetesWorkerController {
     /// Creates a controller in a ready state with mock values for testing purposes.
     #[cfg(feature = "test-utils")]
@@ -861,256 +837,9 @@ impl KubernetesWorkerController {
             namespace: Some(namespace.to_string()),
             service_name: Some(function_name.to_string()),
             worker_id: Some("test-worker".to_string()),
+            commands_enabled: false,
             public_endpoint: KubernetesPublicEndpointState::default(),
             _internal_stay_count: None,
-        }
-    }
-
-    /// Builds a Kubernetes Deployment for the worker.
-    async fn build_deployment(
-        &self,
-        config: &Worker,
-        function_name: &str,
-        namespace: &str,
-        service_account_name: &str,
-        image_pull_secret_name: Option<&str>,
-        env_secret_plan: Option<&KubernetesEnvSecretPlan>,
-        ctx: &ResourceControllerContext<'_>,
-    ) -> Result<Deployment> {
-        let selector_labels = self.build_labels(function_name);
-        let labels = self.workload_labels(ctx, &config.id, selector_labels.clone());
-        let pod_labels = kubernetes_runtime_pod_labels(ctx, labels.clone());
-
-        // Determine the container image
-        let image = match &config.code {
-            WorkerCode::Image { image } => image.clone(),
-            WorkerCode::Source { .. } => {
-                // For source code, we would need to get the built image from Build resource
-                return Err(AlienError::new(ErrorData::ResourceControllerConfigError {
-                    resource_id: config.id.clone(),
-                    message: "Source-based workers not yet supported in Kubernetes platform"
-                        .to_string(),
-                }));
-            }
-        };
-
-        // Build environment variables
-        // IMPORTANT: Start with config.environment which includes injected vars from DeploymentConfig
-        use crate::core::ResourceController;
-        let env_builder = EnvironmentVariableBuilder::try_new(&config.environment)?
-            .add_worker_runtime_env_vars(ctx, &config.id)?
-            .add_linked_resources(&config.links, ctx, &config.id)
-            .await?
-            .add_self_worker_binding(&config.id, self.get_binding_params()?.as_ref())?;
-
-        let (env_map, bindings) = env_builder.build_with_bindings();
-
-        let mut env_vars = Vec::new();
-
-        if let Some(plan) = env_secret_plan {
-            for key in &plan.keys {
-                env_vars.push(EnvVar {
-                    name: key.clone(),
-                    value: None,
-                    value_from: Some(k8s_openapi::api::core::v1::EnvVarSource {
-                        secret_key_ref: Some(k8s_openapi::api::core::v1::SecretKeySelector {
-                            name: plan.secret_name.clone(),
-                            key: key.clone(),
-                            optional: Some(false),
-                        }),
-                        ..Default::default()
-                    }),
-                });
-            }
-        }
-
-        // Process bindings for Kubernetes SecretRefs
-        for (binding_name, binding_json) in bindings {
-            if let Ok(extraction) = crate::core::k8s_secret_bindings::extract_binding_secrets(
-                &binding_name,
-                &binding_json,
-            ) {
-                // Add individual secret env vars with valueFrom.secretKeyRef
-                for (env_name, secret_name, secret_key) in extraction.secret_env_vars {
-                    env_vars.push(EnvVar {
-                        name: env_name,
-                        value: None,
-                        value_from: Some(k8s_openapi::api::core::v1::EnvVarSource {
-                            secret_key_ref: Some(k8s_openapi::api::core::v1::SecretKeySelector {
-                                name: secret_name,
-                                key: secret_key,
-                                optional: Some(false),
-                            }),
-                            ..Default::default()
-                        }),
-                    });
-                }
-
-                // Add the binding JSON with $(VAR) placeholders
-                let env_key = format!(
-                    "ALIEN_{}_BINDING",
-                    binding_name.to_uppercase().replace('-', "_")
-                );
-                env_vars.push(EnvVar {
-                    name: env_key,
-                    value: Some(extraction.resolved_binding_json),
-                    value_from: None,
-                });
-            }
-        }
-
-        // Add all remaining env vars from the builder (includes user vars + injected vars)
-        for (key, value) in env_map {
-            // Skip if already added as a secret ref
-            if !env_vars.iter().any(|ev| ev.name == key) {
-                env_vars.push(EnvVar {
-                    name: key,
-                    value: Some(value),
-                    value_from: None,
-                });
-            }
-        }
-
-        let container = Container {
-            name: "worker".to_string(),
-            image: Some(image),
-            ports: Some(vec![ContainerPort {
-                container_port: 8080,
-                name: Some("http".to_string()),
-                protocol: Some("TCP".to_string()),
-                ..Default::default()
-            }]),
-            env: Some(env_vars),
-            resources: Some(k8s_openapi::api::core::v1::ResourceRequirements {
-                requests: Some({
-                    let mut requests = BTreeMap::new();
-                    requests.insert(
-                        "memory".to_string(),
-                        k8s_openapi::apimachinery::pkg::api::resource::Quantity(format!(
-                            "{}Mi",
-                            config.memory_mb
-                        )),
-                    );
-                    requests.insert(
-                        "cpu".to_string(),
-                        k8s_openapi::apimachinery::pkg::api::resource::Quantity("100m".to_string()),
-                    );
-                    requests
-                }),
-                limits: Some({
-                    let mut limits = BTreeMap::new();
-                    limits.insert(
-                        "memory".to_string(),
-                        k8s_openapi::apimachinery::pkg::api::resource::Quantity(format!(
-                            "{}Mi",
-                            config.memory_mb
-                        )),
-                    );
-                    limits.insert(
-                        "cpu".to_string(),
-                        k8s_openapi::apimachinery::pkg::api::resource::Quantity("1".to_string()),
-                    );
-                    limits
-                }),
-                ..Default::default()
-            }),
-            ..Default::default()
-        };
-
-        let image_pull_secrets = image_pull_secret_name.map(|name| {
-            vec![LocalObjectReference {
-                name: name.to_string(),
-            }]
-        });
-        let pod_annotations = env_secret_plan.map(|plan| {
-            BTreeMap::from([("env-secret-checksum".to_string(), plan.checksum.clone())])
-        });
-
-        let pod_spec = PodSpec {
-            service_account_name: Some(service_account_name.to_string()),
-            containers: vec![container],
-            restart_policy: Some("Always".to_string()),
-            image_pull_secrets,
-            ..Default::default()
-        };
-
-        let deployment = Deployment {
-            metadata: ObjectMeta {
-                name: Some(function_name.to_string()),
-                namespace: Some(namespace.to_string()),
-                labels: Some(labels.clone()),
-                ..Default::default()
-            },
-            spec: Some(DeploymentSpec {
-                replicas: Some(1),
-                selector: LabelSelector {
-                    match_labels: Some(selector_labels),
-                    ..Default::default()
-                },
-                template: PodTemplateSpec {
-                    metadata: Some(ObjectMeta {
-                        labels: Some(pod_labels),
-                        annotations: pod_annotations,
-                        ..Default::default()
-                    }),
-                    spec: Some(pod_spec),
-                },
-                ..Default::default()
-            }),
-            ..Default::default()
-        };
-
-        Ok(deployment)
-    }
-
-    /// Builds standard labels for Kubernetes resources.
-    fn build_labels(&self, function_name: &str) -> BTreeMap<String, String> {
-        let mut labels = BTreeMap::new();
-        labels.insert("app".to_string(), function_name.to_string());
-        labels.insert("managed-by".to_string(), "runtime".to_string());
-        labels.insert("component".to_string(), "worker".to_string());
-        labels
-    }
-
-    fn workload_labels(
-        &self,
-        ctx: &ResourceControllerContext<'_>,
-        resource_id: &str,
-        mut labels: BTreeMap<String, String>,
-    ) -> BTreeMap<String, String> {
-        labels.extend(kubernetes_branded_resource_labels(ctx, resource_id));
-        labels
-    }
-
-    /// Gets the Kubernetes namespace from ClientConfig
-    fn get_kubernetes_namespace(&self, ctx: &ResourceControllerContext<'_>) -> Result<String> {
-        let k8s_config = ctx.get_kubernetes_config()?;
-        match k8s_config {
-            alien_core::KubernetesClientConfig::InCluster { namespace, .. } => {
-                namespace.clone().ok_or_else(|| {
-                    AlienError::new(ErrorData::ResourceControllerConfigError {
-                        resource_id: "kubernetes".to_string(),
-                        message: "Kubernetes namespace not configured in InCluster config"
-                            .to_string(),
-                    })
-                })
-            }
-            alien_core::KubernetesClientConfig::Kubeconfig { namespace, .. } => {
-                namespace.clone().ok_or_else(|| {
-                    AlienError::new(ErrorData::ResourceControllerConfigError {
-                        resource_id: "kubernetes".to_string(),
-                        message: "Kubernetes namespace not configured in Kubeconfig".to_string(),
-                    })
-                })
-            }
-            alien_core::KubernetesClientConfig::Manual { namespace, .. } => {
-                namespace.clone().ok_or_else(|| {
-                    AlienError::new(ErrorData::ResourceControllerConfigError {
-                        resource_id: "kubernetes".to_string(),
-                        message: "Kubernetes namespace not configured in Manual config".to_string(),
-                    })
-                })
-            }
         }
     }
 }
@@ -1156,6 +885,99 @@ mod tests {
         let long_prefix = "a".repeat(50);
         let result = kubernetes_service_account_name(&long_prefix, "reader");
         assert!(result.len() <= 63);
+    }
+
+    #[test]
+    fn build_outputs_includes_public_endpoint_url() {
+        let public_endpoint = KubernetesPublicEndpointState {
+            public_url: Some("https://worker.example.test".to_string()),
+            ..Default::default()
+        };
+        let controller = KubernetesWorkerController {
+            state: KubernetesWorkerState::Ready,
+            deployment_name: Some("test-worker".to_string()),
+            namespace: Some("test-namespace".to_string()),
+            service_name: Some("test-worker".to_string()),
+            worker_id: Some("worker".to_string()),
+            commands_enabled: true,
+            public_endpoint,
+            _internal_stay_count: None,
+        };
+
+        let outputs = controller.build_outputs().expect("outputs");
+        let worker_outputs = outputs
+            .downcast_ref::<alien_core::WorkerOutputs>()
+            .expect("worker outputs");
+
+        assert_eq!(
+            worker_outputs
+                .public_endpoints
+                .get("default")
+                .map(|endpoint| endpoint.url.as_str()),
+            Some("https://worker.example.test")
+        );
+        assert_eq!(
+            worker_outputs.commands_push_target.as_deref(),
+            Some("http://test-worker.test-namespace.svc.cluster.local/_alien/commands")
+        );
+    }
+
+    #[test]
+    fn build_outputs_derives_public_url_from_load_balancer_endpoint() {
+        let public_endpoint = KubernetesPublicEndpointState {
+            load_balancer_endpoint: Some(alien_core::LoadBalancerEndpoint {
+                dns_name: "k8s-worker.example.elb.amazonaws.com".to_string(),
+                hosted_zone_id: None,
+            }),
+            ..Default::default()
+        };
+        let controller = KubernetesWorkerController {
+            state: KubernetesWorkerState::Ready,
+            deployment_name: Some("test-worker".to_string()),
+            namespace: Some("test-namespace".to_string()),
+            service_name: Some("test-worker".to_string()),
+            worker_id: Some("worker".to_string()),
+            commands_enabled: false,
+            public_endpoint,
+            _internal_stay_count: None,
+        };
+
+        let outputs = controller.build_outputs().expect("outputs");
+        let worker_outputs = outputs
+            .downcast_ref::<alien_core::WorkerOutputs>()
+            .expect("worker outputs");
+
+        assert_eq!(
+            worker_outputs
+                .public_endpoints
+                .get("default")
+                .map(|endpoint| endpoint.url.as_str()),
+            Some("http://k8s-worker.example.elb.amazonaws.com")
+        );
+        assert!(worker_outputs.commands_push_target.is_none());
+    }
+
+    #[test]
+    fn legacy_ready_state_stays_non_push_until_a_real_update() {
+        let controller: KubernetesWorkerController = serde_json::from_value(serde_json::json!({
+            "deploymentName": "test-worker",
+            "namespace": "test-ns",
+            "serviceName": "test-worker",
+            "workerId": "worker",
+            "publicEndpoint": {},
+            "state": "ready",
+            "_internalStayCount": null
+        }))
+        .expect("legacy Kubernetes Worker controller state");
+
+        assert!(!controller.commands_enabled);
+        assert!(controller
+            .build_outputs()
+            .expect("legacy outputs")
+            .downcast_ref::<alien_core::WorkerOutputs>()
+            .expect("Worker outputs")
+            .commands_push_target
+            .is_none());
     }
 }
 

@@ -83,6 +83,16 @@ pub fn router() -> Router<AppState> {
 /// Create a new command.
 ///
 /// Auth: Admin or DeploymentGroup token (must own the target deployment's group).
+///
+/// Authorization is intentionally deployment-scoped. There is no
+/// per-resource auth primitive (the finest auth grain is the deployment), so
+/// naming a `targetResourceId` grants no extra access. Target selection is
+/// validated server-side by the registry as an EXISTENCE/CAPABILITY check
+/// (does this deployment have such a command-capable resource?), not as an
+/// authorization boundary — resolution failures surface as
+/// `COMMAND_TARGET_NOT_FOUND` (404), `COMMAND_TARGET_AMBIGUOUS` (409), or
+/// `NO_COMMAND_TARGETS` (422), which map to HTTP via each error's
+/// `http_status_code`.
 async fn create_command(
     State(state): State<AppState>,
     headers: HeaderMap,
@@ -402,14 +412,32 @@ async fn acquire_leases(
 
 /// Release a lease.
 ///
-/// Auth: Any authenticated caller.
+/// Auth: Admin, DG (group), or own Deployment token — the caller must be able
+/// to act on the deployment that HOLDS the lease (the lease owner), otherwise
+/// any authenticated tenant that learned a lease_id could force-release
+/// another deployment's lease and trigger a spurious redelivery.
 async fn release_lease(
     State(state): State<AppState>,
     headers: HeaderMap,
     Path(lease_id): Path<String>,
 ) -> Response {
-    if let Err(e) = auth::require_auth(&state, &headers).await {
-        return e.into_response();
+    let subject = match auth::require_auth(&state, &headers).await {
+        Ok(s) => s,
+        Err(e) => return e.into_response(),
+    };
+
+    let owner = match state.command_server.get_lease_owner(&lease_id).await {
+        Ok(Some((_command_id, owner))) => owner,
+        Ok(None) => {
+            return alien_error::AlienError::new(alien_commands::error::ErrorData::LeaseNotFound {
+                lease_id: lease_id.clone(),
+            })
+            .into_response()
+        }
+        Err(e) => return e.into_response(),
+    };
+    if let Err(e) = require_command_access(&state, &subject, &owner).await {
+        return e;
     }
 
     match state.command_server.release_lease_by_id(&lease_id).await {

@@ -19,7 +19,7 @@ export const BuildSchema = z.object({
     }).catchall(z.string()).describe("Key-value pairs to set as environment variables for the build.")),
 "id": z.string().describe("Identifier for the build resource. Must contain only alphanumeric characters, hyphens, and underscores ([A-Za-z0-9-_]).\nMaximum 64 characters."),
 get "links"(){
-                return z.array(ResourceRefSchema.describe("New ResourceRef that works with any resource type.\nThis can eventually replace the enum-based ResourceRef for full extensibility.")).describe("List of resource references this build depends on.")
+                return z.array(ResourceRefSchema.describe("Reference to a resource by its stable id and resource type.")).describe("List of resource references this build depends on.")
               },
 "permissions": z.string().describe("Permission profile name that defines the permissions granted to this build.\nThis references a profile defined in the stack's permission definitions.")
     }).describe("Represents a build resource that executes bash scripts to build code.\nBuilds are designed to be stateless and can be triggered on-demand to compile,\ntest, or package application code.")

@@ -1,5 +1,5 @@
 use crate::{
-    error::{map_cloud_client_error, Error, ErrorData},
+    error::{binding_env_var, map_cloud_client_error, Error, ErrorData},
     providers::build::script::create_build_wrapper_script,
     traits::{Binding, Build},
 };
@@ -55,6 +55,7 @@ impl AcaBuild {
             BuildBinding::Aca(config) => config,
             _ => {
                 return Err(Error::new(ErrorData::BindingConfigInvalid {
+                    env_var: binding_env_var(&binding_name),
                     binding_name: binding_name.clone(),
                     reason: "Expected ACA binding, got different service type".to_string(),
                 }));
@@ -65,6 +66,7 @@ impl AcaBuild {
             .managed_environment_id
             .into_value(&binding_name, "managed_environment_id")
             .context(ErrorData::BindingConfigInvalid {
+                env_var: binding_env_var(&binding_name),
                 binding_name: binding_name.clone(),
                 reason: "Failed to extract managed_environment_id from binding".to_string(),
             })?;
@@ -73,6 +75,7 @@ impl AcaBuild {
             .resource_group_name
             .into_value(&binding_name, "resource_group_name")
             .context(ErrorData::BindingConfigInvalid {
+                env_var: binding_env_var(&binding_name),
                 binding_name: binding_name.clone(),
                 reason: "Failed to extract resource_group_name from binding".to_string(),
             })?;
@@ -81,6 +84,7 @@ impl AcaBuild {
             .build_env_vars
             .into_value(&binding_name, "build_env_vars")
             .context(ErrorData::BindingConfigInvalid {
+                env_var: binding_env_var(&binding_name),
                 binding_name: binding_name.clone(),
                 reason: "Failed to extract build_env_vars from binding".to_string(),
             })?;
@@ -89,6 +93,7 @@ impl AcaBuild {
             .managed_identity_id
             .into_value(&binding_name, "managed_identity_id")
             .context(ErrorData::BindingConfigInvalid {
+                env_var: binding_env_var(&binding_name),
                 binding_name: binding_name.clone(),
                 reason: "Failed to extract managed_identity_id from binding".to_string(),
             })?;
@@ -97,6 +102,7 @@ impl AcaBuild {
             .resource_prefix
             .into_value(&binding_name, "resource_prefix")
             .context(ErrorData::BindingConfigInvalid {
+                env_var: binding_env_var(&binding_name),
                 binding_name: binding_name.clone(),
                 reason: "Failed to extract resource_prefix from binding".to_string(),
             })?;
@@ -105,6 +111,7 @@ impl AcaBuild {
             .monitoring
             .into_value(&binding_name, "monitoring")
             .context(ErrorData::BindingConfigInvalid {
+                env_var: binding_env_var(&binding_name),
                 binding_name: binding_name.clone(),
                 reason: "Failed to extract monitoring from binding".to_string(),
             })?;
@@ -125,6 +132,7 @@ impl AcaBuild {
             build_env_vars,
             region: azure_config.region.clone().ok_or_else(|| {
                 Error::new(ErrorData::BindingConfigInvalid {
+                    env_var: binding_env_var(&binding_name_clone),
                     binding_name: binding_name_clone,
                     reason: "Azure region must be specified in config".to_string(),
                 })

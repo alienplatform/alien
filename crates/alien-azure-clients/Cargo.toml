@@ -46,6 +46,7 @@ dotenvy = { workspace = true }
 test-context = { workspace = true }
 regex = { workspace = true }
 anyhow = { workspace = true }
+httpmock = { workspace = true }
 base64 = { workspace = true }
 rcgen = { version = "0.13", features = ["pem"] }
 p12 = "0.6"

@@ -466,6 +466,21 @@ mod tests {
     }
 
     #[test]
+    fn load_stack_settings_requests_pull_for_local() {
+        let args = UpArgs::parse_from(["alien-deploy", "--platform", "local"]);
+        let settings =
+            load_stack_settings(&args, Platform::Local, None).expect("settings should load");
+
+        assert_eq!(settings.deployment_model, DeploymentModel::Pull);
+        let wire = serde_json::to_value(sdk_stack_settings(&settings).expect("sdk settings"))
+            .expect("settings should serialize");
+        assert_eq!(
+            wire.get("deploymentModel"),
+            Some(&serde_json::json!("pull"))
+        );
+    }
+
+    #[test]
     fn sdk_stack_settings_serializes_explicit_deployment_model() {
         let settings = StackSettings {
             deployment_model: DeploymentModel::Pull,
@@ -1808,6 +1823,16 @@ fn load_stack_settings(
     deploy_config: Option<&DeployConfigFile>,
 ) -> Result<StackSettings> {
     let mut settings = StackSettings::default();
+
+    // The manager owns the deployment model for cloud platforms (push) and
+    // Kubernetes (pull), so this CLI omits it there. Local is the exception:
+    // the manager defaults Local to push for its own embedded dev loop, while
+    // `deploy --platform local` is the remote-operator install flow — it must
+    // request pull explicitly or the manager creates a push deployment whose
+    // initial setup has no local platform services.
+    if platform == Platform::Local {
+        settings.deployment_model = DeploymentModel::Pull;
+    }
 
     if let Some(config) = deploy_config {
         if let Some(network) = config.network.clone() {

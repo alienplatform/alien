@@ -9,7 +9,7 @@ use tracing::{debug, info};
 
 /// Resource types that carry a `permissions` profile and therefore need a dependency
 /// on the corresponding `{permissions}-sa` service account.
-const PERMISSION_BEARING_RESOURCE_TYPES: &[&str] = &["container", "worker"];
+const PERMISSION_BEARING_RESOURCE_TYPES: &[&str] = &["container", "daemon", "worker"];
 
 /// Mutation that adds ServiceAccount dependencies to resources that have resource-scoped permissions.
 ///
@@ -51,7 +51,7 @@ impl StackMutation for ServiceAccountDependenciesMutation {
             alien_core::ManagementPermissions::Auto => {}
         }
 
-        // Also run if any container or worker uses a named permission profile, so we can
+        // Also run if any app compute resource uses a named permission profile, so we can
         // wire it as a declared dependency on the corresponding SA.
         for (_resource_id, entry) in &stack.resources {
             let rtype = entry.config.resource_type();
@@ -128,7 +128,7 @@ impl StackMutation for ServiceAccountDependenciesMutation {
             }
         }
 
-        // Second pass: for every container/worker with a named permission profile, add
+        // Second pass: for every app compute resource with a named permission profile, add
         // the corresponding {profile}-sa as a declared dependency.  This ensures the
         // executor waits for the SA before creating the resource and propagates SA changes
         // to the resource automatically — the consumer side of the SA dependency, not just
@@ -218,8 +218,8 @@ mod tests {
     use super::*;
     use alien_core::permissions::{ManagementPermissions, PermissionProfile, PermissionsConfig};
     use alien_core::{
-        EnvironmentVariablesSnapshot, ExternalBindings, ResourceEntry, ResourceLifecycle,
-        StackSettings, Vault,
+        Daemon, DaemonCode, EnvironmentVariablesSnapshot, ExternalBindings, ResourceEntry,
+        ResourceLifecycle, StackSettings, Vault,
     };
     use indexmap::IndexMap;
 
@@ -316,5 +316,38 @@ mod tests {
                 .any(|dependency| dependency.id() == "management-sa"),
             "plain Kubernetes management still depends on a stack-local management-sa"
         );
+    }
+
+    #[tokio::test]
+    async fn daemon_depends_on_its_permission_profile_service_account() {
+        let stack = Stack::new("daemon-stack".to_string())
+            .add(
+                ServiceAccount::new("execution-sa".to_string()).build(),
+                ResourceLifecycle::Live,
+            )
+            .add(
+                Daemon::new("agent".to_string())
+                    .code(DaemonCode::Image {
+                        image: "agent:latest".to_string(),
+                    })
+                    .permissions("execution".to_string())
+                    .build(),
+                ResourceLifecycle::Live,
+            )
+            .build();
+        let stack_state = StackState::new(Platform::Local);
+        let config = empty_config(None);
+
+        assert!(ServiceAccountDependenciesMutation.should_run(&stack, &stack_state, &config));
+        let result = ServiceAccountDependenciesMutation
+            .mutate(stack, &stack_state, &config)
+            .await
+            .unwrap();
+
+        let daemon = result.resources.get("agent").unwrap();
+        assert!(daemon.dependencies.iter().any(|dependency| {
+            dependency.resource_type() == &ServiceAccount::RESOURCE_TYPE
+                && dependency.id() == "execution-sa"
+        }));
     }
 }

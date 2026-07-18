@@ -107,6 +107,7 @@ async fn local_container_reaches_local_postgres_but_not_the_outside() {
                 volume_mount: None,
                 volume_size: None,
                 bind_mounts: vec![],
+                proxy_token: None,
             },
         )
         .await

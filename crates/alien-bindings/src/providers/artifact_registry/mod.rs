@@ -6,8 +6,6 @@ pub mod acr;
 pub mod ecr;
 #[cfg(feature = "gcp")]
 pub mod gar;
-#[cfg(feature = "grpc")]
-pub mod grpc;
 #[cfg(feature = "local")]
 pub mod local;
 
@@ -17,7 +15,5 @@ pub use acr::AcrArtifactRegistry;
 pub use ecr::EcrArtifactRegistry;
 #[cfg(feature = "gcp")]
 pub use gar::GarArtifactRegistry;
-#[cfg(feature = "grpc")]
-pub use grpc::GrpcArtifactRegistry;
 #[cfg(feature = "local")]
 pub use local::LocalArtifactRegistry;

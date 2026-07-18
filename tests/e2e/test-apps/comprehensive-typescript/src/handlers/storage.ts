@@ -7,16 +7,16 @@ const app = new Hono()
 app.post("/storage-test/:bindingName", async c => {
   const bindingName = c.req.param("bindingName")
   try {
-    const s = await storage(bindingName)
+    const s = storage(bindingName)
     const testKey = `test-${Date.now()}.txt`
     const content = "test content from e2e"
 
     // 1. Put
-    await s.put(testKey, content)
+    await s.put(testKey, new TextEncoder().encode(content))
 
     // 2. Get and verify
     const retrieved = await s.get(testKey)
-    const retrievedContent = new TextDecoder().decode(retrieved.data)
+    const retrievedContent = new TextDecoder().decode(retrieved)
     if (retrievedContent !== content) {
       return c.json({ success: false, error: "Data verification failed" }, 500)
     }
@@ -35,6 +35,26 @@ app.post("/storage-test/:bindingName", async c => {
     return c.json({ success: true, bindingName })
   } catch (error: unknown) {
     const alienError = await toExternalOperationError(error, "storage-test")
+    return c.json({ success: false, error: alienError.message, code: alienError.code }, 500)
+  }
+})
+
+// Write-only storage operation. Unlike /storage-test, the object is not deleted
+// afterwards, so the platform storage trigger observes exactly one `created`
+// event for the key and the test can read back the record the onStorageEvent
+// handler wrote via /events/storage/:key.
+app.post("/storage-write/:bindingName", async c => {
+  const bindingName = c.req.param("bindingName")
+  try {
+    const { key, content } = (await c.req.json()) as { key: string; content: string }
+    if (!key || content === undefined) {
+      return c.json({ success: false, error: "Missing key or content" }, 400)
+    }
+    const s = storage(bindingName)
+    await s.put(key, new TextEncoder().encode(content))
+    return c.json({ success: true, bindingName, key })
+  } catch (error: unknown) {
+    const alienError = await toExternalOperationError(error, "storage-write")
     return c.json({ success: false, error: alienError.message, code: alienError.code }, 500)
   }
 })

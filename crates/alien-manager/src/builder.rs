@@ -330,10 +330,19 @@ impl AlienManagerBuilder {
 
             if has_impersonation && !target_bindings.is_empty() {
                 let primary_provider = target_bindings.values().next().unwrap().clone();
+                let management_binding_platforms = [
+                    (Platform::Aws, toml_config.impersonation.aws.is_some()),
+                    (Platform::Gcp, toml_config.impersonation.gcp.is_some()),
+                    (Platform::Azure, toml_config.impersonation.azure.is_some()),
+                ]
+                .into_iter()
+                .filter_map(|(platform, configured)| configured.then_some(platform))
+                .collect();
                 self.credential_resolver = Some(Arc::new(
                     crate::providers::impersonation_credentials::ImpersonationCredentialResolver::new(
                         primary_provider,
                         target_bindings.clone(),
+                        management_binding_platforms,
                     ),
                 ));
                 info!("Cross-account mode: using ImpersonationCredentialResolver");
@@ -473,14 +482,18 @@ impl AlienManagerBuilder {
                 Arc::new(crate::stores::sqlite::SqliteCommandRegistry::new(
                     db.clone(),
                     self.deployment_store.clone().unwrap(),
+                    self.release_store.clone().unwrap(),
                 ));
 
-            let command_dispatcher: Arc<dyn alien_commands::server::CommandDispatcher> =
-                Arc::new(crate::commands::DefaultCommandDispatcher::new(
+            let command_dispatcher: Arc<dyn alien_commands::server::CommandDispatcher> = Arc::new(
+                crate::commands::DefaultCommandDispatcher::new(
                     self.deployment_store.clone().unwrap(),
-                    self.release_store.clone().unwrap(),
                     self.credential_resolver.clone().unwrap(),
-                ));
+                )
+                .context(ErrorData::ServerInitFailed {
+                    reason: "Failed to create bounded command dispatcher".to_string(),
+                })?,
+            );
 
             // -- Primary bindings provider (embedded local registry) --
             // Always start the embedded local registry. It serves as the fallback
@@ -692,7 +705,7 @@ async fn finalize(
     use alien_commands::server::CommandServer;
 
     // --- CommandServer ---
-    let command_server = Arc::new(CommandServer::new(
+    let command_server: Arc<CommandServer> = Arc::new(CommandServer::new(
         server_bindings.kv.clone(),
         server_bindings.command_storage.clone(),
         server_bindings.command_dispatcher.clone(),
@@ -710,7 +723,7 @@ async fn finalize(
         authz: authz.clone(),
         telemetry_backend: telemetry_backend.clone(),
         credential_resolver: credential_resolver.clone(),
-        command_server,
+        command_server: command_server.clone(),
         config: config.clone(),
         bindings_provider: server_bindings.bindings_provider.clone(),
         target_bindings_providers: server_bindings.target_bindings_providers.clone(),
@@ -758,6 +771,7 @@ async fn finalize(
         server_bindings,
         dev_status_tx,
         log_buffer,
+        command_server,
     })
 }
 

@@ -17,6 +17,7 @@ pub mod compute;
 pub mod container_apps;
 pub mod containerregistry;
 pub mod disks;
+pub mod event_grid;
 pub mod flexible_server;
 pub mod keyvault;
 pub mod load_balancers;
@@ -143,7 +144,7 @@ async fn get_impersonated_token(
     // with the specified scope and client context.
 
     match &config.credentials {
-        AzureCredentials::AccessToken { .. } => {
+        AzureCredentials::AccessToken { .. } | AzureCredentials::ScopedAccessTokens { .. } => {
             // If we already have an access token, we can't directly impersonate
             // In practice, you'd need to use Azure AD's on-behalf-of flow
             Err(AlienError::new(ErrorData::InvalidInput {
@@ -533,7 +534,9 @@ impl AzureClientConfigExt for AzureClientConfig {
                 client_id: config.client_id.clone(),
                 identity_endpoint: identity_endpoint.clone(),
             },
-            AzureCredentials::ServicePrincipal { .. } | AzureCredentials::AccessToken { .. } => {
+            AzureCredentials::ServicePrincipal { .. }
+            | AzureCredentials::AccessToken { .. }
+            | AzureCredentials::ScopedAccessTokens { .. } => {
                 let token = get_impersonated_token(self, &config).await?;
                 AzureCredentials::AccessToken { token }
             }
@@ -561,6 +564,17 @@ impl AzureClientConfigExt for AzureClientConfig {
     async fn get_bearer_token_with_scope(&self, scope: &str) -> Result<String> {
         match &self.credentials {
             AzureCredentials::AccessToken { token } => Ok(token.clone()),
+            AzureCredentials::ScopedAccessTokens { tokens } => tokens
+                .get(scope)
+                .cloned()
+                .ok_or_else(|| {
+                    AlienError::new(ErrorData::AuthenticationError {
+                        message: format!(
+                            "Minted Azure credentials do not include the exact requested scope '{}'",
+                            scope
+                        ),
+                    })
+                }),
             AzureCredentials::WorkloadIdentity {
                 client_id,
                 tenant_id,
@@ -811,5 +825,43 @@ impl AzureClientConfigExt for AzureClientConfig {
             },
             service_overrides: None,
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn scoped_config() -> AzureClientConfig {
+        AzureClientConfig {
+            subscription_id: "subscription".to_string(),
+            tenant_id: "tenant".to_string(),
+            region: Some("eastus".to_string()),
+            credentials: AzureCredentials::ScopedAccessTokens {
+                tokens: HashMap::from([(
+                    "https://storage.azure.com/.default".to_string(),
+                    "storage-token".to_string(),
+                )]),
+            },
+            service_overrides: None,
+        }
+    }
+
+    #[tokio::test]
+    async fn scoped_access_tokens_require_an_exact_scope_match() {
+        let config = scoped_config();
+
+        assert_eq!(
+            config
+                .get_bearer_token_with_scope("https://storage.azure.com/.default")
+                .await
+                .expect("exact scope is present"),
+            "storage-token"
+        );
+        let error = config
+            .get_bearer_token_with_scope("https://management.azure.com/.default")
+            .await
+            .expect_err("a token for another audience must not be reused");
+        assert_eq!(error.code, "AUTHENTICATION_ERROR");
     }
 }

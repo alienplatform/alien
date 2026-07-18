@@ -33,6 +33,10 @@ let value: LeaseInfo = {
       },
       submitResponseUrl: "https://unused-outlaw.net/",
     },
+    target: {
+      resourceId: "<id>",
+      resourceType: "daemon",
+    },
   },
   leaseExpiresAt: new Date("2025-06-23T02:24:27.150Z"),
   leaseId: "<id>",

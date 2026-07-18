@@ -222,6 +222,7 @@ fn create_env_vars_snapshot(hash: &str, include_secret: bool) -> EnvironmentVari
 
 fn expected_secrets_sync_hash(snapshot_hash: &str) -> String {
     let mut hasher = Sha256::new();
+    hasher.update(b"\0vault-sync:no-app-command-token:v2\0");
     hasher.update(snapshot_hash.as_bytes());
     format!("{:x}", hasher.finalize())
 }

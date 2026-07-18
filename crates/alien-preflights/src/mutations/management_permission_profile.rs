@@ -258,7 +258,7 @@ fn add_storage_trigger_source_management_permissions(
     resource_entry: &alien_core::ResourceEntry,
     resource_permission_set_ids: &mut IndexMap<String, BTreeSet<String>>,
 ) {
-    if !matches!(platform, Platform::Aws | Platform::Gcp) {
+    if !matches!(platform, Platform::Aws | Platform::Gcp | Platform::Azure) {
         return;
     }
 
@@ -572,7 +572,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn azure_storage_trigger_from_frozen_storage_does_not_get_source_management_permission() {
+    async fn azure_storage_trigger_from_frozen_storage_gets_source_management_permission() {
         let storage = Storage::new("uploads".to_string()).build();
         let worker = Worker::new("processor".to_string())
             .code(WorkerCode::Image {
@@ -606,10 +606,13 @@ mod tests {
         let ManagementPermissions::Extend(profile) = result_stack.management() else {
             panic!("Expected Extend management permissions");
         };
-        assert!(
-            !profile.0.contains_key("uploads"),
-            "Azure Dapr trigger wiring should be covered by worker/container-app permissions"
-        );
+        let storage_permissions = profile
+            .0
+            .get("uploads")
+            .expect("Azure Event Grid source management grants");
+        assert!(storage_permissions
+            .iter()
+            .any(|permission| permission.id() == "storage/trigger-management"));
     }
 
     #[tokio::test]

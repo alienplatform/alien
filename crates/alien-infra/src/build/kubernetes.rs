@@ -668,7 +668,6 @@ impl KubernetesBuildController {
 
         let env_builder = EnvironmentVariableBuilder::try_new(&config.environment)?
             .add_standard_alien_env_vars(ctx)?
-            .add_passthrough_transport_env_vars()
             .add_linked_resources(&config.links, ctx, &config.id)
             .await?;
 

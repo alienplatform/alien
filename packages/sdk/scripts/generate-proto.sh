@@ -6,12 +6,23 @@ set -e
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PACKAGE_DIR="$(dirname "$SCRIPT_DIR")"
-PROTO_DIR="$PACKAGE_DIR/../../crates/alien-bindings/proto"
-OUT_DIR="$PACKAGE_DIR/src/generated"
+# The worker app protocol (Control + WaitUntil) is the only proto surface that
+# still has source .proto files; it lives in alien-worker-protocol. The remaining
+# generated clients (storage, kv, queue, ...) have no source protos in-tree, so we
+# regenerate over the worker-protocol outputs in place rather than wiping OUT_DIR.
+PROTO_DIR="$PACKAGE_DIR/../../crates/alien-worker-protocol/proto"
+# Worker protocol clients are confined to the ./worker-runtime subpath.
+OUT_DIR="$PACKAGE_DIR/src/worker-runtime/generated"
 
-# Clean and create output directory
-rm -rf "$OUT_DIR"
 mkdir -p "$OUT_DIR"
+
+# Remove only the outputs we're about to regenerate (control + wait_until, plus
+# the google/protobuf well-known types they pull in). We deliberately don't
+# `rm -rf "$OUT_DIR"`: the other binding clients (storage, kv, queue, ...) have
+# no source .proto files in-tree, so wiping the whole directory would delete
+# generated code this script can't reproduce.
+rm -f "$OUT_DIR/control.ts" "$OUT_DIR/wait_until.ts"
+rm -f "$OUT_DIR/google/protobuf/timestamp.ts" "$OUT_DIR/google/protobuf/duration.ts"
 
 # Find protoc - prefer system installation
 if command -v protoc &> /dev/null; then

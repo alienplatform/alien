@@ -48,13 +48,13 @@ The SDK can be installed with either [npm](https://www.npmjs.com/), [pnpm](https
 ### NPM
 
 ```bash
-npm add <UNSET>
+npm add git+<UNSET>.git?subdir=client-sdks/manager/typescript
 ```
 
 ### PNPM
 
 ```bash
-pnpm add <UNSET>
+pnpm add <UNSET>#path:client-sdks/manager/typescript
 ```
 
 ### Bun
@@ -152,6 +152,7 @@ run();
 
 ### [Credentials](docs/sdks/credentials/README.md)
 
+* [mintCredentials](docs/sdks/credentials/README.md#mintcredentials)
 * [resolveCredentials](docs/sdks/credentials/README.md#resolvecredentials)
 
 ### [DeploymentGroups](docs/sdks/deploymentgroups/README.md)
@@ -245,6 +246,7 @@ To read more about standalone functions, check [FUNCTIONS.md](./FUNCTIONS.md).
 - [`commandsStoreCommandPayload`](docs/sdks/commands/README.md#storecommandpayload) - Store command payload data (params and/or response) directly into KV.
 - [`commandsSubmitResponse`](docs/sdks/commands/README.md#submitresponse) - Submit response from deployment
 - [`commandsUploadComplete`](docs/sdks/commands/README.md#uploadcomplete) - Mark upload as complete
+- [`credentialsMintCredentials`](docs/sdks/credentials/README.md#mintcredentials)
 - [`credentialsResolveCredentials`](docs/sdks/credentials/README.md#resolvecredentials)
 - [`deploymentGroupsCreateDeploymentGroup`](docs/sdks/deploymentgroups/README.md#createdeploymentgroup) - Every handler in this file runs `auth::require_auth(&state, &headers)`
 and then threads `&subject` into the `DeploymentStore` calls — see the
@@ -432,7 +434,7 @@ run();
 
 
 **Inherit from [`AlienManagerError`](./src/models/errors/alienmanagererror.ts)**:
-* [`ErrorResponse`](./src/models/errors/errorresponse.ts): Error response wrapper for API endpoints. Applicable to 8 of 32 methods.*
+* [`ErrorResponse`](./src/models/errors/errorresponse.ts): Error response wrapper for API endpoints. Applicable to 8 of 33 methods.*
 * [`ResponseValidationError`](./src/models/errors/responsevalidationerror.ts): Type mismatch between the data returned from the server and the structure expected by the SDK. See `error.rawValue` for the raw value and `error.pretty()` for a nicely formatted multi-line string.
 
 </details>
@@ -453,19 +455,23 @@ The `HTTPClient` constructor takes an optional `fetcher` argument that can be
 used to integrate a third-party HTTP client or when writing tests to mock out
 the HTTP client and feed in fixtures.
 
-The following example shows how to use the `"beforeRequest"` hook to to add a
-custom header and a timeout to requests and how to use the `"requestError"` hook
-to log errors:
+The following example shows how to:
+- route requests through a proxy server using [undici](https://www.npmjs.com/package/undici)'s ProxyAgent
+- use the `"beforeRequest"` hook to add a custom header and a timeout to requests
+- use the `"requestError"` hook to log errors
 
 ```typescript
 import { AlienManager } from "@alienplatform/manager-api";
+import { ProxyAgent } from "undici";
 import { HTTPClient } from "@alienplatform/manager-api/lib/http";
 
+const dispatcher = new ProxyAgent("http://proxy.example.com:8080");
+
 const httpClient = new HTTPClient({
-  // fetcher takes a function that has the same signature as native `fetch`.
-  fetcher: (request) => {
-    return fetch(request);
-  }
+  // 'fetcher' takes a function that has the same signature as native 'fetch'.
+  fetcher: (input, init) =>
+    // 'dispatcher' is specific to undici and not part of the standard Fetch API.
+    fetch(input, { ...init, dispatcher } as RequestInit),
 });
 
 httpClient.addHook("beforeRequest", (request) => {

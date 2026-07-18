@@ -19,6 +19,13 @@ jobs:
     env:
       CARGO_INCREMENTAL: "0"
       CARGO_NET_GIT_FETCH_WITH_CLI: "true"
+      # Bound the build/test memory peak: this job's recurring failure mode
+      # is the runner agent being starved for memory mid Rust-tests (GitHub
+      # reports "runner lost communication" with no logs). Full-width
+      # parallelism (16 rustc jobs, then 16 concurrent test binaries — many
+      # of which spawn servers and embedded databases) is what spikes it.
+      CARGO_BUILD_JOBS: "12"
+      NEXTEST_TEST_THREADS: "10"
 
     steps:
       - name: Validate PR title
@@ -37,6 +44,7 @@ jobs:
 
       - uses: dorny/paths-filter@v3
         id: changes
+        continue-on-error: true
         with:
           filters: |
             examples:
@@ -45,6 +53,12 @@ jobs:
               - 'crates/alien-cli/**'
               - 'crates/alien-deploy-cli/**'
               - 'crates/alien-operator/**'
+              # The addon crates feed the dual-runtime import and
+              # compile-embed checks — without them a PR touching only the
+              # napi layer or the bindings core skips both.
+              - 'crates/alien-bindings-node/**'
+              - 'crates/alien-bindings/**'
+              - 'crates/alien-build/**'
 
       - uses: pnpm/action-setup@v4
         with:
@@ -65,10 +79,15 @@ jobs:
       - uses: depot/setup-action@v1
 
       - uses: mozilla-actions/sccache-action@v0.0.9
+        continue-on-error: true
+        with:
+          version: v0.16.0
 
       - uses: taiki-e/install-action@nextest
 
       - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: "1.3.14"
 
       - name: Install protoc
         run: sudo apt-get update && sudo apt-get install -y protobuf-compiler
@@ -111,6 +130,31 @@ jobs:
           NODE_OPTIONS: "--max-old-space-size=8192"
         run: pnpm test:ts
 
+      - name: Build bindings dev addon (used by package and compiled-binary tests)
+        # alien-bindings-node is not a pnpm workspace member; resolve the napi
+        # CLI from package-layout's devDependencies (root frozen-lockfile
+        # install), matching the fixture's own CI recipe in run.ts. Debug
+        # profile with capped jobs: a cold --release build at full parallelism
+        # has been killing the runner mid-step (OOM); the tests only need the
+        # .node file to exist, not to be fast.
+        working-directory: crates/alien-bindings-node
+        env:
+          CARGO_BUILD_JOBS: "6"
+        run: ../../packages/package-layout/node_modules/.bin/napi build --platform
+
+      - name: Validate package layout
+        run: pnpm validate:package-layout
+
+      - name: TypeScript unit tests
+        # The per-package vitest suites (commands receiver twins, bindings
+        # loader/error mapping, core schemas) — `test:ts` above is
+        # typecheck-only, so without this step they never ran in CI. Must run
+        # after the dev-addon build: the bindings kv/queue/storage/vault
+        # suites load the native addon.
+        env:
+          NODE_OPTIONS: "--max-old-space-size=8192"
+        run: pnpm --filter @alienplatform/core --filter @alienplatform/bindings --filter @alienplatform/commands test
+
       - name: Rust fast tests (non-cloud)
         env:
           AXIOM_OTLP_ENDPOINT: https://api.axiom.co/v1/logs
@@ -126,21 +170,34 @@ jobs:
             --exclude byocdb \
             --exclude endpoint-agent \
             --exclude alien-test-server \
-            --filter-expr 'not binary_id(alien-build::build_integration_tests) and not binary_id(alien-build::rust_integration_tests) and not binary_id(alien-build::typescript_integration_tests) and not binary_id(alien-runtime::lambda) and not binary_id(alien-test::distribution) and not binary_id(alien-test::pull) and not binary_id(alien-test::push) and not binary_id(alien-manager::registry_proxy_cloud_test)'
+            --filter-expr 'not binary_id(alien-build::build_integration_tests) and not binary_id(alien-build::image_shape_tests) and not binary_id(alien-build::rust_integration_tests) and not binary_id(alien-build::typescript_integration_tests) and not binary_id(alien-worker-runtime::lambda) and not binary_id(alien-test::distribution) and not binary_id(alien-test::pull) and not binary_id(alien-test::push) and not binary_id(alien-manager::registry_proxy_cloud_test)'
 
       - name: Build all CLIs
-        if: steps.changes.outputs.examples == 'true' || github.event_name == 'workflow_dispatch' || github.ref == 'refs/heads/main'
+        if: steps.changes.outcome != 'success' || steps.changes.outputs.examples == 'true' || github.event_name == 'workflow_dispatch' || github.ref == 'refs/heads/main'
         run: depot cargo build -p alien-cli -p alien-deploy-cli -p alien-operator
 
       - name: Build TypeScript packages
-        if: steps.changes.outputs.examples == 'true' || github.event_name == 'workflow_dispatch' || github.ref == 'refs/heads/main'
+        if: steps.changes.outcome != 'success' || steps.changes.outputs.examples == 'true' || github.event_name == 'workflow_dispatch' || github.ref == 'refs/heads/main'
         env:
           NODE_OPTIONS: "--max-old-space-size=4096"
-        run: pnpm build
+        run: pnpm build && pnpm -C packages/package-layout check
+
+      - name: Command twins real-wire integration
+        if: steps.changes.outcome != 'success' || steps.changes.outputs.examples == 'true' || github.event_name == 'workflow_dispatch' || github.ref == 'refs/heads/main'
+        env:
+          NODE_OPTIONS: "--max-old-space-size=4096"
+        # Drives the TS command sender/receiver against the real Rust command
+        # server (test-command-server bin, test-utils feature). Cargo is already
+        # set up and warm from the Rust fast-tests step above; the suite fails
+        # loudly if the server can't build/start (no silent skip).
+        run: pnpm -C packages/commands test:integration
 
       - name: Run examples
-        if: steps.changes.outputs.examples == 'true' || github.event_name == 'workflow_dispatch' || github.ref == 'refs/heads/main'
+        if: steps.changes.outcome != 'success' || steps.changes.outputs.examples == 'true' || github.event_name == 'workflow_dispatch' || github.ref == 'refs/heads/main'
         env:
+          # The preceding package build already produced the local artifacts
+          # consumed by the examples; rebuilding the generated SDK can exceed
+          # the Node heap on CI runners.
           ALIEN_EXAMPLES_REUSE_BUILT_PACKAGES: "true"
           NODE_OPTIONS: "--max-old-space-size=4096"
           RUST_LOG: info

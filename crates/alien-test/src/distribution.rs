@@ -6,8 +6,10 @@
 
 use std::{collections::BTreeMap, env, path::Path, sync::Arc, time::Duration};
 
+use alien_azure_clients::azure::resource_graph::ResourceGraphQueryRequest;
 use alien_azure_clients::{
-    AzureServiceBusManagementClient, AzureTokenCache, ServiceBusManagementApi,
+    AzureResourceGraphClient, AzureServiceBusManagementClient, AzureTokenCache, ResourceGraphApi,
+    ServiceBusManagementApi,
 };
 use alien_core::{
     import::{
@@ -74,6 +76,16 @@ pub enum DistributionArtifactCleanup {
 }
 
 impl DistributionArtifactCleanup {
+    pub(crate) fn cleanup_order(&self) -> u8 {
+        match self {
+            // Helm consumes the cluster/setup resources and must be removed
+            // before Terraform or CloudFormation destroys them.
+            DistributionArtifactCleanup::Helm { .. } => 0,
+            DistributionArtifactCleanup::CloudFormation { .. }
+            | DistributionArtifactCleanup::Terraform { .. } => 1,
+        }
+    }
+
     fn command_env(&self) -> &[(String, String)] {
         match self {
             DistributionArtifactCleanup::CloudFormation { env, .. }
@@ -82,14 +94,52 @@ impl DistributionArtifactCleanup {
         }
     }
 
-    pub async fn cleanup(self) {
+    /// Preserve local state and return a credential-free recovery description.
+    /// Used when live-resource deletion never reached a safe setup handoff.
+    pub(crate) fn preserve_for_recovery(self) -> String {
+        match self {
+            DistributionArtifactCleanup::CloudFormation {
+                stack_name,
+                region,
+                workdir,
+                ..
+            } => {
+                let workdir = workdir.map(TempDir::keep);
+                format!(
+                    "CloudFormation stack '{stack_name}' in '{region}' was retained{}",
+                    workdir
+                        .as_ref()
+                        .map(|path| format!("; workdir: {}", path.display()))
+                        .unwrap_or_default()
+                )
+            }
+            DistributionArtifactCleanup::Terraform { workdir, .. } => {
+                let workdir = workdir.keep();
+                format!("Terraform state retained at {}", workdir.display())
+            }
+            DistributionArtifactCleanup::Helm {
+                release,
+                namespace,
+                kubeconfig,
+                ..
+            } => format!(
+                "Helm release '{release}' in namespace '{namespace}' was retained{}",
+                kubeconfig
+                    .as_ref()
+                    .map(|path| format!("; kubeconfig: {path}"))
+                    .unwrap_or_default()
+            ),
+        }
+    }
+
+    pub async fn cleanup(self) -> anyhow::Result<()> {
         match self {
             DistributionArtifactCleanup::CloudFormation {
                 stack_name,
                 region,
                 env,
                 retained_resources,
-                workdir: _workdir,
+                workdir,
             } => {
                 info!(%stack_name, %region, "deleting CloudFormation distribution stack");
                 let mut cmd = Command::new("aws");
@@ -103,11 +153,15 @@ impl DistributionArtifactCleanup {
                 ]);
                 apply_env(&mut cmd, &env);
                 if let Err(error) = run_command(cmd, "aws cloudformation delete-stack").await {
-                    tracing::warn!(%stack_name, %error, "CloudFormation cleanup delete-stack failed");
-                    return;
+                    let workdir = workdir.map(TempDir::keep);
+                    anyhow::bail!(
+                        "CloudFormation cleanup failed to start deletion for stack '{stack_name}' in '{region}': {error}{}",
+                        recovery_workdir_suffix(workdir.as_deref())
+                    );
                 }
 
                 let mut stack_deleted = false;
+                let mut final_wait_error = None;
                 for attempt in 1..=3 {
                     let mut wait = Command::new("aws");
                     wait.args([
@@ -136,26 +190,38 @@ impl DistributionArtifactCleanup {
                             tokio::time::sleep(Duration::from_secs(10 * attempt)).await;
                         }
                         Err(error) => {
-                            tracing::warn!(
-                                %stack_name,
-                                %error,
-                                "CloudFormation cleanup wait failed"
-                            );
+                            final_wait_error = Some(error);
                         }
                     }
                 }
 
-                if stack_deleted {
-                    if let Err(error) =
-                        cleanup_retained_cloudformation_resources(&env, &retained_resources).await
-                    {
-                        tracing::warn!(
-                            %stack_name,
-                            %error,
-                            "CloudFormation retained resource cleanup failed"
-                        );
-                    }
+                if !stack_deleted {
+                    let workdir = workdir.map(TempDir::keep);
+                    let error = final_wait_error
+                        .map(|error| error.to_string())
+                        .unwrap_or_else(|| "stack deletion did not complete".to_string());
+                    anyhow::bail!(
+                        "CloudFormation stack '{stack_name}' in '{region}' was retained after cleanup failed: {error}{}",
+                        recovery_workdir_suffix(workdir.as_deref())
+                    );
                 }
+
+                if let Err(error) =
+                    cleanup_retained_cloudformation_resources(&env, &retained_resources).await
+                {
+                    let retained_ids = retained_resources
+                        .iter()
+                        .map(|resource| resource.id.as_str())
+                        .collect::<Vec<_>>()
+                        .join(", ");
+                    let workdir = workdir.map(TempDir::keep);
+                    anyhow::bail!(
+                        "CloudFormation stack '{stack_name}' was deleted, but retained resources [{retained_ids}] still need cleanup: {error}{}",
+                        recovery_workdir_suffix(workdir.as_deref())
+                    );
+                }
+
+                Ok(())
             }
             DistributionArtifactCleanup::Terraform { workdir, env } => {
                 info!(
@@ -174,7 +240,7 @@ impl DistributionArtifactCleanup {
                     match run_command(cmd, "terraform destroy").await {
                         Ok(()) => {
                             info!("Terraform setup artifacts destroyed");
-                            break;
+                            return Ok(());
                         }
                         Err(error) if attempt < 3 => {
                             tracing::warn!(
@@ -185,13 +251,16 @@ impl DistributionArtifactCleanup {
                             tokio::time::sleep(Duration::from_secs(10 * attempt)).await;
                         }
                         Err(error) => {
-                            tracing::warn!(
-                                %error,
-                                "terraform destroy failed during cleanup"
+                            let workdir = workdir.keep();
+                            anyhow::bail!(
+                                "terraform destroy failed during cleanup: {error}. Terraform state retained at {}",
+                                workdir.display()
                             );
                         }
                     }
                 }
+
+                unreachable!("Terraform cleanup loop always succeeds or returns its final error")
             }
             DistributionArtifactCleanup::Helm {
                 release,
@@ -200,6 +269,7 @@ impl DistributionArtifactCleanup {
                 kube_context,
                 env,
             } => {
+                let mut errors = Vec::new();
                 if let Err(error) = crate::cleanup::cleanup_helm_release(
                     &release,
                     &namespace,
@@ -210,6 +280,7 @@ impl DistributionArtifactCleanup {
                 .await
                 {
                     tracing::warn!(%release, %namespace, %error, "helm cleanup failed");
+                    errors.push(format!("Helm release cleanup failed: {error}"));
                 }
                 if let Err(error) = crate::cleanup::cleanup_kubernetes_namespace(
                     &namespace,
@@ -220,10 +291,63 @@ impl DistributionArtifactCleanup {
                 .await
                 {
                     tracing::warn!(%namespace, %error, "kubernetes namespace cleanup failed");
+                    errors.push(format!("namespace cleanup failed: {error}"));
                 }
+
+                if !errors.is_empty() {
+                    anyhow::bail!(
+                        "Cleanup was incomplete for Helm release '{release}' in namespace '{namespace}'{}: {}",
+                        kubeconfig
+                            .as_deref()
+                            .map(|path| format!("; kubeconfig: {path}"))
+                            .unwrap_or_default(),
+                        errors.join("; ")
+                    );
+                }
+
+                Ok(())
             }
         }
     }
+}
+
+fn recovery_workdir_suffix(workdir: Option<&Path>) -> String {
+    workdir
+        .map(|path| format!("; workdir retained at {}", path.display()))
+        .unwrap_or_default()
+}
+
+async fn cleanup_after_setup_error(
+    cleanup: DistributionArtifactCleanup,
+    setup_error: anyhow::Error,
+) -> anyhow::Error {
+    cleanup_after_ordered_setup_error(vec![cleanup], setup_error).await
+}
+
+async fn cleanup_after_ordered_setup_error(
+    cleanups: Vec<DistributionArtifactCleanup>,
+    setup_error: anyhow::Error,
+) -> anyhow::Error {
+    let mut cleanups = cleanups.into_iter();
+    while let Some(cleanup) = cleanups.next() {
+        if let Err(cleanup_error) = cleanup.cleanup().await {
+            let retained = cleanups
+                .map(DistributionArtifactCleanup::preserve_for_recovery)
+                .collect::<Vec<_>>()
+                .join("\n");
+            let recovery = if retained.is_empty() {
+                String::new()
+            } else {
+                format!(
+                    " Subsequent distribution artifacts were retained to preserve cleanup order:\n{retained}"
+                )
+            };
+            return setup_error.context(format!(
+                "distribution artifact cleanup also failed: {cleanup_error}.{recovery}"
+            ));
+        }
+    }
+    setup_error
 }
 
 async fn cleanup_retained_cloudformation_resources(
@@ -454,7 +578,11 @@ pub async fn setup_distribution(
     match result {
         Ok(mut ctx) => {
             if let Err(error) = wait_and_finalize(&mut ctx).await {
-                ctx.cleanup().await;
+                if let Err(cleanup_error) = ctx.cleanup().await {
+                    return Err(
+                        error.context(format!("distribution cleanup also failed: {cleanup_error}"))
+                    );
+                }
                 return Err(error);
             }
             Ok(ctx)
@@ -473,7 +601,7 @@ async fn prepare_distribution(
     info!(%test_name, "Starting distribution E2E setup");
 
     let config = TestConfig::from_env();
-    if !e2e::is_platform_available(&config, platform, model, app) {
+    if !is_distribution_flow_available(flow, &config, app) {
         anyhow::bail!(
             "Skipping {}: platform credentials not available or platform not supported for this distribution flow",
             test_name,
@@ -565,6 +693,25 @@ async fn prepare_distribution(
         group_id,
         dg_token,
     })
+}
+
+fn is_distribution_flow_available(
+    flow: DistributionFlow,
+    config: &TestConfig,
+    app: TestApp,
+) -> bool {
+    if let Some(base_platform) = flow.kubernetes_base_platform() {
+        return config.has_platform(base_platform);
+    }
+
+    match flow {
+        DistributionFlow::TerraformOnpremHelmPull => {
+            [Platform::Aws, Platform::Gcp, Platform::Azure]
+                .into_iter()
+                .any(|platform| config.has_platform(platform))
+        }
+        _ => e2e::is_platform_available(config, flow.platform(), flow.deployment_model(), app),
+    }
 }
 
 fn missing_distribution_flow_config(
@@ -837,7 +984,7 @@ fn render_management_config(
             oidc_issuer: String::new(),
             oidc_subject: String::new(),
         })),
-        Platform::Kubernetes | Platform::Machines | Platform::Local | Platform::Test => None,
+        Platform::Kubernetes | Platform::Local | Platform::Machines | Platform::Test => None,
     }
 }
 
@@ -1089,10 +1236,7 @@ async fn run_cloudformation_aws(
             };
             Ok(context_from_deployment(prepared, deployment, vec![cleanup]))
         }
-        Err(error) => {
-            cleanup.cleanup().await;
-            Err(error)
-        }
+        Err(error) => Err(cleanup_after_setup_error(cleanup, error).await),
     }
 }
 
@@ -1230,8 +1374,7 @@ async fn run_cloudformation_k8s(
     let (imported, retained_resources, base_platform, region) = match create_result {
         Ok(result) => result,
         Err(error) => {
-            cleanup.cleanup().await;
-            return Err(error);
+            return Err(cleanup_after_setup_error(cleanup, error).await);
         }
     };
     if let DistributionArtifactCleanup::CloudFormation {
@@ -1245,8 +1388,7 @@ async fn run_cloudformation_k8s(
     let chart_dir = match render_helm_chart(prepared).await {
         Ok(chart_dir) => chart_dir,
         Err(error) => {
-            cleanup.cleanup().await;
-            return Err(error);
+            return Err(cleanup_after_setup_error(cleanup, error).await);
         }
     };
     let helm_target = KubernetesHelmTarget {
@@ -1271,11 +1413,17 @@ async fn run_cloudformation_k8s(
     {
         Ok(values_file) => values_file,
         Err(error) => {
-            cleanup.cleanup().await;
-            return Err(error);
+            return Err(cleanup_after_setup_error(cleanup, error).await);
         }
     };
     let release = format!("alien-e2e-{}", &uuid::Uuid::new_v4().to_string()[..8]);
+    let helm_cleanup = DistributionArtifactCleanup::Helm {
+        release: release.clone(),
+        namespace: helm_target.namespace.clone(),
+        kubeconfig: Some(helm_target.runtime.kubeconfig.clone()),
+        kube_context: None,
+        env: env.clone(),
+    };
     let agent_result = crate::operator::TestAlienOperator::helm_install_with_values(
         chart_dir.path(),
         &values_file,
@@ -1290,27 +1438,17 @@ async fn run_cloudformation_k8s(
     let agent = match agent_result {
         Ok(agent) => agent,
         Err(error) => {
-            cleanup.cleanup().await;
-            return Err(anyhow::anyhow!(
+            let error = anyhow::anyhow!(
                 "Failed to install CloudFormation Helm distribution runtime: {error}"
-            ));
+            );
+            return Err(
+                cleanup_after_ordered_setup_error(vec![helm_cleanup, cleanup], error).await,
+            );
         }
     };
 
-    let mut ctx = context_from_deployment(
-        prepared,
-        imported.deployment,
-        vec![
-            DistributionArtifactCleanup::Helm {
-                release,
-                namespace: helm_target.namespace,
-                kubeconfig: Some(helm_target.runtime.kubeconfig),
-                kube_context: None,
-                env,
-            },
-            cleanup,
-        ],
-    );
+    let mut ctx =
+        context_from_deployment(prepared, imported.deployment, vec![helm_cleanup, cleanup]);
     ctx.agent = Some(agent);
     Ok(ctx)
 }
@@ -1448,12 +1586,27 @@ async fn run_terraform_k8s(
     let result = apply_terraform_and_import(prepared, target, Some(&namespace)).await?;
     let mut helm_target = match existing_helm_target {
         Some(helm_target) => helm_target,
-        None => kubernetes_helm_target_from_outputs(&result.outputs, namespace)?,
+        None => match kubernetes_helm_target_from_outputs(&result.outputs, namespace) {
+            Ok(helm_target) => helm_target,
+            Err(error) => {
+                return Err(cleanup_after_setup_error(result.cleanup, error).await);
+            }
+        },
     };
-    materialize_kubeconfig_for_helm(&mut helm_target, &result.cleanup).await?;
+    if let Err(error) = materialize_kubeconfig_for_helm(&mut helm_target, &result.cleanup).await {
+        return Err(cleanup_after_setup_error(result.cleanup, error).await);
+    }
     let mut kubernetes_command_env = result.cleanup.command_env().to_vec();
-    configure_kubeconfig_auth_for_helm(prepared, target, &helm_target, &mut kubernetes_command_env)
-        .await?;
+    if let Err(error) = configure_kubeconfig_auth_for_helm(
+        prepared,
+        target,
+        &helm_target,
+        &mut kubernetes_command_env,
+    )
+    .await
+    {
+        return Err(cleanup_after_setup_error(result.cleanup, error).await);
+    }
     if terraform_handoff_debug_enabled() {
         return stop_before_helm_for_terraform_handoff_debug(
             prepared,
@@ -1465,8 +1618,7 @@ async fn run_terraform_k8s(
     let chart_dir = match render_helm_chart(prepared).await {
         Ok(chart_dir) => chart_dir,
         Err(error) => {
-            result.cleanup.cleanup().await;
-            return Err(error);
+            return Err(cleanup_after_setup_error(result.cleanup, error).await);
         }
     };
     let values_file = match write_manager_fetch_values(
@@ -1483,11 +1635,17 @@ async fn run_terraform_k8s(
     {
         Ok(values_file) => values_file,
         Err(error) => {
-            result.cleanup.cleanup().await;
-            return Err(error);
+            return Err(cleanup_after_setup_error(result.cleanup, error).await);
         }
     };
     let release = format!("alien-e2e-{}", &uuid::Uuid::new_v4().to_string()[..8]);
+    let helm_cleanup = DistributionArtifactCleanup::Helm {
+        release: release.clone(),
+        namespace: helm_target.namespace.clone(),
+        kubeconfig: Some(helm_target.runtime.kubeconfig.clone()),
+        kube_context: helm_target.runtime.kube_context.clone(),
+        env: kubernetes_command_env.clone(),
+    };
     let agent_result = crate::operator::TestAlienOperator::helm_install_with_values(
         chart_dir.path(),
         &values_file,
@@ -1502,26 +1660,19 @@ async fn run_terraform_k8s(
     let agent = match agent_result {
         Ok(agent) => agent,
         Err(error) => {
-            result.cleanup.cleanup().await;
-            return Err(anyhow::anyhow!(
-                "Failed to install Helm distribution runtime: {error}"
-            ));
+            let error = anyhow::anyhow!("Failed to install Helm distribution runtime: {error}");
+            return Err(cleanup_after_ordered_setup_error(
+                vec![helm_cleanup, result.cleanup],
+                error,
+            )
+            .await);
         }
     };
 
     let mut ctx = context_from_deployment(
         prepared,
         result.deployment,
-        vec![
-            result.cleanup,
-            DistributionArtifactCleanup::Helm {
-                release,
-                namespace: helm_target.namespace,
-                kubeconfig: Some(helm_target.runtime.kubeconfig),
-                kube_context: helm_target.runtime.kube_context,
-                env: kubernetes_command_env,
-            },
-        ],
+        vec![helm_cleanup, result.cleanup],
     );
     ctx.agent = Some(agent);
     Ok(ctx)
@@ -1731,10 +1882,7 @@ async fn apply_terraform_and_import(
             base_platform,
             region,
         }),
-        Err(error) => {
-            cleanup.cleanup().await;
-            Err(error)
-        }
+        Err(error) => Err(cleanup_after_setup_error(cleanup, error).await),
     }
 }
 
@@ -1939,10 +2087,14 @@ fn merge_runtime_values(
 }
 
 fn runtime_values() -> anyhow::Result<Value> {
-    let image = std::env::var("ALIEN_TEST_OVERRIDE_AGENT_IMAGE")
+    let image = std::env::var("ALIEN_TEST_OVERRIDE_OPERATOR_IMAGE")
         .ok()
         .filter(|image| !image.is_empty())
         .unwrap_or_else(|| "ghcr.io/alienplatform/alien-operator:latest".to_string());
+    runtime_values_for_image(&image)
+}
+
+fn runtime_values_for_image(image: &str) -> anyhow::Result<Value> {
     let (repository, tag) = split_image_tag(&image)?;
     let mut runtime = serde_json::json!({
         "image": {
@@ -2022,7 +2174,7 @@ fn merge_missing_values(
 fn split_image_tag(image: &str) -> anyhow::Result<(String, String)> {
     if image.contains('@') {
         anyhow::bail!(
-            "ALIEN_TEST_OVERRIDE_AGENT_IMAGE must use a tag for Helm E2E installs; digest references are not supported yet"
+            "ALIEN_TEST_OVERRIDE_OPERATOR_IMAGE must use a tag for Helm E2E installs; digest references are not supported yet"
         );
     }
     let last_slash = image.rfind('/');
@@ -2787,10 +2939,29 @@ fn gcp_management_permission_probe_should_retry(error: &alien_gcp_clients::Error
     )
 }
 
+#[derive(Debug, PartialEq, Eq)]
+enum AzureManagementPermissionProbe {
+    ServiceBus(AzureServiceBusNamespaceImportData),
+    ResourceGraph,
+}
+
+fn azure_management_permission_probe(
+    resources: &[ImportedResource],
+) -> anyhow::Result<AzureManagementPermissionProbe> {
+    if let Some(service_bus) = optional_terraform_import_data::<AzureServiceBusNamespaceImportData>(
+        resources,
+        "azure_service_bus_namespace",
+    )? {
+        return Ok(AzureManagementPermissionProbe::ServiceBus(service_bus));
+    }
+
+    Ok(AzureManagementPermissionProbe::ResourceGraph)
+}
+
 /// Terraform can finish before Azure federated credentials and role
-/// assignments are visible to ARM. Probe the imported management identity
-/// against the first live worker dependency so deployment starts only after
-/// the same identity can perform the Service Bus control-plane operation.
+/// assignments are visible to ARM. When the stack has Service Bus management
+/// permissions, exercise them directly. Otherwise query Resource Graph using
+/// the baseline observe permission that every management profile receives.
 async fn wait_for_azure_management_permissions(
     config: &TestConfig,
     outputs: &Value,
@@ -2806,10 +2977,7 @@ async fn wait_for_azure_management_permissions(
         &resources,
         "remote-stack-management",
     )?;
-    let service_bus = terraform_import_data::<AzureServiceBusNamespaceImportData>(
-        &resources,
-        "azure_service_bus_namespace",
-    )?;
+    let probe = azure_management_permission_probe(&resources)?;
 
     let token_file = std::env::var("AZURE_FEDERATED_TOKEN_FILE")
         .ok()
@@ -2829,51 +2997,74 @@ async fn wait_for_azure_management_permissions(
         },
         service_overrides: None,
     };
-    let service_bus_client = AzureServiceBusManagementClient::new(
-        reqwest::Client::new(),
-        AzureTokenCache::new(azure_config),
-    );
-    let probe_queue_name = format!(
-        "{}-iam-probe",
-        terraform_output_string(outputs, "deployment_resource_prefix")?
-    );
-
     let timeout = Duration::from_secs(300);
     let started = tokio::time::Instant::now();
     let mut attempt = 0;
-    loop {
-        attempt += 1;
-        let create_result = service_bus_client
-            .create_or_update_queue(
-                service_bus.resource_group.clone(),
-                service_bus.namespace_name.clone(),
-                probe_queue_name.clone(),
-                alien_azure_clients::models::queue::SbQueueProperties::default(),
-            )
-            .await;
+    match probe {
+        AzureManagementPermissionProbe::ServiceBus(service_bus) => {
+            let service_bus_client = AzureServiceBusManagementClient::new(
+                reqwest::Client::new(),
+                AzureTokenCache::new(azure_config),
+            );
+            let probe_queue_name = format!(
+                "{}-iam-probe",
+                terraform_output_string(outputs, "deployment_resource_prefix")?
+            );
 
-        match create_result {
-            Ok(_) => {
-                match service_bus_client
-                    .delete_queue(
+            loop {
+                attempt += 1;
+                let create_result = service_bus_client
+                    .create_or_update_queue(
                         service_bus.resource_group.clone(),
                         service_bus.namespace_name.clone(),
                         probe_queue_name.clone(),
+                        alien_azure_clients::models::queue::SbQueueProperties::default(),
                     )
-                    .await
-                {
-                    Ok(()) => {
-                        info!(
-                            client_id = %management.client_id,
-                            attempts = attempt,
-                            "Azure management IAM permissions are ready"
-                        );
-                        return Ok(());
+                    .await;
+
+                match create_result {
+                    Ok(_) => {
+                        match service_bus_client
+                            .delete_queue(
+                                service_bus.resource_group.clone(),
+                                service_bus.namespace_name.clone(),
+                                probe_queue_name.clone(),
+                            )
+                            .await
+                        {
+                            Ok(()) => {
+                                info!(
+                                    client_id = %management.client_id,
+                                    attempts = attempt,
+                                    "Azure management Service Bus permissions are ready"
+                                );
+                                return Ok(());
+                            }
+                            Err(error)
+                                if azure_management_permission_probe_should_retry(&error) =>
+                            {
+                                if started.elapsed() >= timeout {
+                                    anyhow::bail!(
+                                        "Azure management IAM delete permissions did not propagate for {} within {timeout:?}: {error}",
+                                        management.client_id
+                                    );
+                                }
+                                warn!(
+                                    client_id = %management.client_id,
+                                    attempt,
+                                    %error,
+                                    "Azure management IAM delete permissions are not ready yet"
+                                );
+                            }
+                            Err(error) => {
+                                anyhow::bail!("Azure management IAM delete probe failed: {error}");
+                            }
+                        }
                     }
                     Err(error) if azure_management_permission_probe_should_retry(&error) => {
                         if started.elapsed() >= timeout {
                             anyhow::bail!(
-                                "Azure management IAM delete permissions did not propagate for {} within {timeout:?}: {error}",
+                                "Azure management IAM permissions did not propagate for {} within {timeout:?}: {error}",
                                 management.client_id
                             );
                         }
@@ -2881,35 +3072,80 @@ async fn wait_for_azure_management_permissions(
                             client_id = %management.client_id,
                             attempt,
                             %error,
-                            "Azure management IAM delete permissions are not ready yet"
+                            "Azure management IAM permissions are not ready yet"
                         );
                     }
                     Err(error) => {
-                        anyhow::bail!("Azure management IAM delete probe failed: {error}");
+                        anyhow::bail!("Azure management IAM permission probe failed: {error}");
                     }
                 }
-            }
-            Err(error) if azure_management_permission_probe_should_retry(&error) => {
-                if started.elapsed() >= timeout {
-                    anyhow::bail!(
-                        "Azure management IAM permissions did not propagate for {} within {timeout:?}: {error}",
-                        management.client_id
-                    );
-                }
-                warn!(
-                    client_id = %management.client_id,
-                    attempt,
-                    %error,
-                    "Azure management IAM permissions are not ready yet"
-                );
-            }
-            Err(error) => {
-                anyhow::bail!("Azure management IAM permission probe failed: {error}");
+
+                tokio::time::sleep(Duration::from_secs(10)).await;
             }
         }
+        AzureManagementPermissionProbe::ResourceGraph => {
+            let resource_graph_client = AzureResourceGraphClient::new(
+                reqwest::Client::new(),
+                AzureTokenCache::new(azure_config),
+            );
+            let request = ResourceGraphQueryRequest::for_subscription(
+                management.subscription_id.clone(),
+                "Resources | take 1 | project id",
+            );
 
-        tokio::time::sleep(Duration::from_secs(10)).await;
+            loop {
+                attempt += 1;
+                match resource_graph_client.resources(request.clone()).await {
+                    Ok(_) => {
+                        info!(
+                            client_id = %management.client_id,
+                            attempts = attempt,
+                            "Azure management Resource Graph permissions are ready"
+                        );
+                        return Ok(());
+                    }
+                    Err(error) if azure_management_permission_probe_should_retry(&error) => {
+                        if started.elapsed() >= timeout {
+                            anyhow::bail!(
+                                "Azure management Resource Graph permissions did not propagate for {} within {timeout:?}: {error}",
+                                management.client_id
+                            );
+                        }
+                        warn!(
+                            client_id = %management.client_id,
+                            attempt,
+                            %error,
+                            "Azure management Resource Graph permissions are not ready yet"
+                        );
+                    }
+                    Err(error) => {
+                        anyhow::bail!(
+                            "Azure management Resource Graph permission probe failed: {error}"
+                        );
+                    }
+                }
+
+                tokio::time::sleep(Duration::from_secs(10)).await;
+            }
+        }
     }
+}
+
+fn optional_terraform_import_data<T>(
+    resources: &[ImportedResource],
+    resource_type: &str,
+) -> anyhow::Result<Option<T>>
+where
+    T: serde::de::DeserializeOwned,
+{
+    resources
+        .iter()
+        .find(|resource| resource.resource_type.as_ref() == resource_type)
+        .map(|resource| {
+            serde_json::from_value(resource.import_data.clone())
+                .with_context(|| format!("Failed to parse {resource_type} import data"))
+        })
+        .transpose()
 }
 
 fn terraform_import_data<T>(
@@ -3450,10 +3686,151 @@ mod tests {
         }
     }
 
+    fn test_config_with_platform(platform: Platform) -> TestConfig {
+        let mut config = empty_test_config();
+        match platform {
+            Platform::Aws => {
+                let credentials = AwsConfig {
+                    access_key_id: "test".to_string(),
+                    secret_access_key: "test".to_string(),
+                    session_token: None,
+                    region: "us-east-1".to_string(),
+                    account_id: Some("123456789012".to_string()),
+                };
+                config.aws_mgmt = Some(credentials.clone());
+                config.aws_target = Some(credentials);
+            }
+            Platform::Gcp => {
+                let credentials = GcpConfig {
+                    project_id: "test-project".to_string(),
+                    region: "us-central1".to_string(),
+                    credentials_json: Some("{}".to_string()),
+                    management_identity_email: None,
+                    management_identity_unique_id: None,
+                };
+                config.gcp_mgmt = Some(credentials.clone());
+                config.gcp_target = Some(credentials);
+            }
+            Platform::Azure => {
+                let credentials = AzureConfig {
+                    subscription_id: "test-subscription".to_string(),
+                    tenant_id: "test-tenant".to_string(),
+                    client_id: "test-client".to_string(),
+                    client_secret: "test-secret".to_string(),
+                    region: "eastus".to_string(),
+                    principal_id: Some("test-principal".to_string()),
+                    oidc_issuer: None,
+                    oidc_subject: None,
+                };
+                config.azure_mgmt = Some(credentials.clone());
+                config.azure_target = Some(credentials);
+            }
+            other => panic!("unsupported test platform: {other}"),
+        }
+        config
+    }
+
+    #[test]
+    fn managed_kubernetes_distribution_availability_uses_base_cloud() {
+        for (flow, base_platform) in [
+            (DistributionFlow::CloudFormationEksHelmPull, Platform::Aws),
+            (DistributionFlow::TerraformEksHelmPull, Platform::Aws),
+            (DistributionFlow::TerraformGkeHelmPull, Platform::Gcp),
+            (DistributionFlow::TerraformAksHelmPull, Platform::Azure),
+        ] {
+            assert!(is_distribution_flow_available(
+                flow,
+                &test_config_with_platform(base_platform),
+                TestApp::RuntimeLessMixed,
+            ));
+            assert!(!is_distribution_flow_available(
+                flow,
+                &empty_test_config(),
+                TestApp::RuntimeLessMixed,
+            ));
+        }
+    }
+
+    #[test]
+    fn onprem_distribution_requires_a_cloud_registry_platform() {
+        assert!(!is_distribution_flow_available(
+            DistributionFlow::TerraformOnpremHelmPull,
+            &empty_test_config(),
+            TestApp::RuntimeLessMixed,
+        ));
+        assert!(is_distribution_flow_available(
+            DistributionFlow::TerraformOnpremHelmPull,
+            &test_config_with_platform(Platform::Gcp),
+            TestApp::RuntimeLessMixed,
+        ));
+    }
+
     fn contains_resource_type(stack: &Stack, resource_type: &str) -> bool {
         stack
             .resources()
             .any(|(_, entry)| entry.config.resource_type().as_ref() == resource_type)
+    }
+
+    fn imported_resource<T: serde::Serialize>(
+        resource_type: &'static str,
+        data: &T,
+    ) -> ImportedResource {
+        ImportedResource {
+            id: resource_type.to_string(),
+            resource_type: alien_core::ResourceType::from_static(resource_type),
+            import_data: serde_json::to_value(data).expect("import data should serialize"),
+        }
+    }
+
+    #[test]
+    fn azure_management_probe_uses_service_bus_when_stack_emits_it() {
+        let service_bus = AzureServiceBusNamespaceImportData {
+            subscription_id: "subscription".to_string(),
+            resource_group: "resource-group".to_string(),
+            namespace_name: "namespace".to_string(),
+            endpoint: "namespace.servicebus.windows.net".to_string(),
+        };
+        let resources = vec![imported_resource(
+            "azure_service_bus_namespace",
+            &service_bus,
+        )];
+
+        let probe = azure_management_permission_probe(&resources)
+            .expect("probe resource should be selected");
+
+        assert_eq!(
+            probe,
+            AzureManagementPermissionProbe::ServiceBus(service_bus)
+        );
+    }
+
+    #[test]
+    fn azure_management_probe_uses_resource_graph_when_stack_has_no_service_bus() {
+        let resources = Vec::new();
+
+        let probe = azure_management_permission_probe(&resources)
+            .expect("probe resource should be selected");
+
+        assert_eq!(probe, AzureManagementPermissionProbe::ResourceGraph);
+    }
+
+    #[test]
+    fn azure_management_probe_rejects_malformed_service_bus_import_data() {
+        let resources = vec![ImportedResource {
+            id: "azure_service_bus_namespace".to_string(),
+            resource_type: alien_core::ResourceType::from_static("azure_service_bus_namespace"),
+            import_data: serde_json::json!({"resourceGroup": "resource-group"}),
+        }];
+
+        let error = azure_management_permission_probe(&resources)
+            .expect_err("malformed Service Bus data must not silently fall back");
+
+        assert!(
+            error
+                .to_string()
+                .contains("Failed to parse azure_service_bus_namespace import data"),
+            "unexpected error: {error:#}"
+        );
     }
 
     #[test]
@@ -3486,7 +3863,7 @@ mod tests {
             kubernetes: Some(KubernetesSettings {
                 cluster: Some(KubernetesClusterSettings {
                     ownership: KubernetesClusterOwnership::Managed,
-                    namespace: Some("alien-runtime".to_string()),
+                    namespace: Some("alien-worker-runtime".to_string()),
                     cloud: None,
                 }),
                 exposure: Some(KubernetesExposureSettings::Disabled),
@@ -3499,7 +3876,7 @@ mod tests {
         let kubernetes = settings.kubernetes.expect("kubernetes settings");
         let cluster = kubernetes.cluster.expect("cluster settings");
         assert_eq!(cluster.ownership, KubernetesClusterOwnership::Existing);
-        assert_eq!(cluster.namespace.as_deref(), Some("alien-runtime"));
+        assert_eq!(cluster.namespace.as_deref(), Some("alien-worker-runtime"));
         assert_eq!(
             kubernetes.exposure,
             Some(KubernetesExposureSettings::Disabled)
@@ -4183,6 +4560,37 @@ mod tests {
 
         assert_eq!(key.len(), 64);
         assert!(key.chars().all(|c| c.is_ascii_hexdigit()));
+    }
+
+    #[test]
+    fn runtime_values_use_exact_operator_image() {
+        temp_env::with_var(
+            "ALIEN_TEST_OVERRIDE_OPERATOR_IMAGE",
+            Some("ghcr.io/alienplatform/alien-operator:test-head"),
+            || {
+                let values = runtime_values()
+                    .expect("runtime values should use the requested operator image");
+                let yaml = to_helm_values_yaml(&serde_json::json!({
+                    "runtime": values,
+                }))
+                .expect("runtime values should render as Helm values");
+                let rendered: Value =
+                    serde_yaml::from_str(&yaml).expect("rendered Helm values should parse");
+
+                assert_eq!(
+                    rendered.pointer("/runtime/image/repository"),
+                    Some(&Value::from("ghcr.io/alienplatform/alien-operator"))
+                );
+                assert_eq!(
+                    rendered.pointer("/runtime/image/tag"),
+                    Some(&Value::from("test-head"))
+                );
+                assert_eq!(
+                    rendered.pointer("/runtime/image/pullPolicy"),
+                    Some(&Value::from("IfNotPresent"))
+                );
+            },
+        );
     }
 
     #[test]

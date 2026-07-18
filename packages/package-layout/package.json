@@ -1,0 +1,22 @@
+{
+  "name": "@alienplatform/package-layout",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Executable fixture that packs the publishable packages, installs them into a real npm consumer, and asserts the pinned surfaces in packages/{sdk,bindings,commands}/PACKAGE_LAYOUT.md import and typecheck on Bun and Node",
+  "keywords": ["alien", "internal", "fixture", "package-layout"],
+  "author": "Alien Software, Inc. <hi@alien.dev>",
+  "license": "FSL-1.1-Apache-2.0",
+  "homepage": "https://alien.dev",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/alienplatform/alien.git",
+    "directory": "packages/package-layout"
+  },
+  "scripts": {
+    "check": "node --experimental-strip-types run.ts"
+  },
+  "devDependencies": {
+    "@napi-rs/cli": "^3.0.0"
+  }
+}

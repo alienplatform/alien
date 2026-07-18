@@ -50,7 +50,7 @@ pub async fn handle_running(
     // as what was deployed during Provisioning. Without this, the executor detects
     // a config mismatch (prepared_stack without env vars vs stack_state with env vars)
     // and incorrectly triggers an update flow.
-    crate::helpers::inject_environment_variables(&mut target_stack, &config)?;
+    crate::helpers::inject_environment_variables(&mut target_stack, &config, current.platform)?;
 
     // Inject OTLP monitoring env vars if monitoring is configured
     if let Some(monitoring) = &config.monitoring {

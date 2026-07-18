@@ -83,7 +83,7 @@ alien-preflights = { workspace = true }
 alien-aws-clients = { workspace = true }
 alien-gcp-clients = { workspace = true }
 alien-azure-clients = { workspace = true }
-alien-k8s-clients = { workspace = true }
+alien-k8s-clients = { workspace = true, features = ["test-utils"] }
 rand = { workspace = true }
 reqwest = { workspace = true, features = ["json", "rustls-tls-webpki-roots"] }
 serde_json = { workspace = true, features = ["preserve_order"] }

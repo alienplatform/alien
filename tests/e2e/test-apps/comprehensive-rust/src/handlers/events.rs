@@ -39,15 +39,15 @@ pub async fn get_storage_event(
 
     let kv = app_state
         .ctx
-        .get_bindings()
-        .load_kv("alien-kv")
+        .bindings()
+        .kv("alien-kv")
         .await
         .context(ErrorData::BindingNotFound {
             binding_name: "alien-kv".to_string(),
         })?;
 
-    // Sanitize key: replace / with _ to match how events are stored
-    let sanitized_key = key.replace('/', "_");
+    // Sanitize key the same way the record side does
+    let sanitized_key = crate::sanitize_kv_key_part(&key);
     let kv_key = format!("storage_event:{}", sanitized_key);
     match kv.get(&kv_key).await {
         Ok(Some(data)) => {
@@ -73,15 +73,15 @@ pub async fn get_cron_event(
 
     let kv = app_state
         .ctx
-        .get_bindings()
-        .load_kv("alien-kv")
+        .bindings()
+        .kv("alien-kv")
         .await
         .context(ErrorData::BindingNotFound {
             binding_name: "alien-kv".to_string(),
         })?;
 
-    // Sanitize schedule: replace / with _ to match how events are stored
-    let sanitized_schedule = schedule.replace('/', "_");
+    // Sanitize schedule the same way the record side does
+    let sanitized_schedule = crate::sanitize_kv_key_part(&schedule);
     let kv_key = format!("cron_event:{}", sanitized_schedule);
     match kv.get(&kv_key).await {
         Ok(Some(data)) => {
@@ -107,15 +107,15 @@ pub async fn get_queue_message(
 
     let kv = app_state
         .ctx
-        .get_bindings()
-        .load_kv("alien-kv")
+        .bindings()
+        .kv("alien-kv")
         .await
         .context(ErrorData::BindingNotFound {
             binding_name: "alien-kv".to_string(),
         })?;
 
-    // Sanitize message ID: replace / with _ to match how events are stored
-    let sanitized_id = message_id.replace('/', "_");
+    // Sanitize message ID the same way the record side does
+    let sanitized_id = crate::sanitize_kv_key_part(&message_id);
     let kv_key = format!("queue_message:{}", sanitized_id);
     match kv.get(&kv_key).await {
         Ok(Some(data)) => {
@@ -138,8 +138,8 @@ pub async fn list_events(State(app_state): State<AppState>) -> Result<Json<Event
 
     let kv = app_state
         .ctx
-        .get_bindings()
-        .load_kv("alien-kv")
+        .bindings()
+        .kv("alien-kv")
         .await
         .context(ErrorData::BindingNotFound {
             binding_name: "alien-kv".to_string(),

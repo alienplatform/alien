@@ -726,6 +726,13 @@ expression: schemas
           "null"
         ]
       },
+      "privateEndpointSubnetName": {
+        "description": "Dedicated subnet name for Private Endpoints (e.g. Postgres Flexible Server). Distinct from the Container Apps infrastructure (\"private\") subnet, which a Private Endpoint cannot share.",
+        "type": [
+          "string",
+          "null"
+        ]
+      },
       "resourceGroup": {
         "description": "Resource group containing the VNet.",
         "type": "string"

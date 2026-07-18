@@ -1,5 +1,5 @@
 use crate::{
-    error::{map_cloud_client_error, ErrorData, Result},
+    error::{binding_env_var, map_cloud_client_error, ErrorData, Result},
     providers::build::script::create_build_wrapper_script,
     traits::{Binding, Build},
 };
@@ -50,6 +50,7 @@ impl CloudbuildBuild {
             BuildBinding::Cloudbuild(config) => config,
             _ => {
                 return Err(AlienError::new(ErrorData::BindingConfigInvalid {
+                    env_var: binding_env_var(&binding_name),
                     binding_name: binding_name.clone(),
                     reason: "Expected CloudBuild binding, got different service type".to_string(),
                 }));
@@ -60,6 +61,7 @@ impl CloudbuildBuild {
             .build_env_vars
             .into_value(&binding_name, "build_env_vars")
             .context(ErrorData::BindingConfigInvalid {
+                env_var: binding_env_var(&binding_name),
                 binding_name: binding_name.clone(),
                 reason: "Failed to extract build_env_vars from binding".to_string(),
             })?;
@@ -68,6 +70,7 @@ impl CloudbuildBuild {
             .service_account
             .into_value(&binding_name, "service_account")
             .context(ErrorData::BindingConfigInvalid {
+                env_var: binding_env_var(&binding_name),
                 binding_name: binding_name.clone(),
                 reason: "Failed to extract service_account from binding".to_string(),
             })?;
@@ -76,6 +79,7 @@ impl CloudbuildBuild {
             .monitoring
             .into_value(&binding_name, "monitoring")
             .context(ErrorData::BindingConfigInvalid {
+                env_var: binding_env_var(&binding_name),
                 binding_name: binding_name.clone(),
                 reason: "Failed to extract monitoring from binding".to_string(),
             })?;

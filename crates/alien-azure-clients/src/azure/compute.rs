@@ -65,7 +65,7 @@ pub trait VirtualMachineScaleSetsApi: Send + Sync + std::fmt::Debug {
     // Virtual Machine Scale Set VM Operations
     // -------------------------------------------------------------------------
 
-    /// List all VMs in a virtual machine scale set
+    /// List all VMs in a virtual machine scale set, following every nextLink page.
     async fn list_vmss_vms(
         &self,
         resource_group_name: &str,
@@ -79,6 +79,19 @@ pub trait VirtualMachineScaleSetsApi: Send + Sync + std::fmt::Debug {
         vmss_name: &str,
         instance_id: &str,
     ) -> Result<VirtualMachineScaleSetVm>;
+
+    /// Update the base64-encoded userData exposed to one VMSS VM instance.
+    ///
+    /// Azure treats this PUT as a long-running operation. The caller owns
+    /// encoding the UTF-8 payload and must not put secrets in userData.
+    async fn update_vmss_vm_user_data(
+        &self,
+        resource_group_name: &str,
+        vmss_name: &str,
+        instance_id: &str,
+        location: &str,
+        user_data_base64: &str,
+    ) -> Result<OperationResult<VirtualMachineScaleSetVm>>;
 
     /// Delete a specific VM instance in a virtual machine scale set
     async fn delete_vmss_vm(
@@ -335,50 +348,58 @@ impl VirtualMachineScaleSetsApi for AzureVmssClient {
             .get_bearer_token_with_scope("https://management.azure.com/.default")
             .await?;
 
-        let url = self.base.build_url(
+        let mut next_url = Some(self.base.build_url(
             &format!("/subscriptions/{}/resourceGroups/{}/providers/Microsoft.Compute/virtualMachineScaleSets/{}/virtualMachines", 
                      &self.token_cache.config().subscription_id, resource_group_name, vmss_name),
             Some(vec![
                 ("api-version", Self::API_VERSION.into()),
                 ("$expand", "instanceView".into()),
             ]),
-        );
+        ));
+        let mut vms = Vec::new();
 
-        let builder = AzureRequestBuilder::new(Method::GET, url.clone()).content_length("");
+        while let Some(url) = next_url {
+            let request = AzureRequestBuilder::new(Method::GET, url.clone())
+                .content_length("")
+                .build()?;
+            let signed = self.base.sign_request(request, &bearer_token).await?;
+            let response = self
+                .base
+                .execute_request(signed, "ListVmssVms", vmss_name)
+                .await?;
+            let body =
+                response
+                    .text()
+                    .await
+                    .into_alien_error()
+                    .context(ErrorData::HttpResponseError {
+                        message: format!(
+                            "Azure ListVmssVms: failed to read response body for {}",
+                            vmss_name
+                        ),
+                        url: url.clone(),
+                        http_status: 200,
+                        http_response_text: None,
+                        http_request_text: None,
+                    })?;
+            let page: VirtualMachineScaleSetVmListResult = serde_json::from_str(&body)
+                .into_alien_error()
+                .context(ErrorData::HttpResponseError {
+                    message: format!("Azure ListVmssVms: JSON parse error for {}", vmss_name),
+                    url,
+                    http_status: 200,
+                    http_response_text: Some(body.clone()),
+                    http_request_text: None,
+                })?;
 
-        let req = builder.build()?;
-        let signed = self.base.sign_request(req, &bearer_token).await?;
-        let resp = self
-            .base
-            .execute_request(signed, "ListVmssVms", vmss_name)
-            .await?;
+            vms.extend(page.value);
+            next_url = page.next_link;
+        }
 
-        let body = resp
-            .text()
-            .await
-            .into_alien_error()
-            .context(ErrorData::HttpResponseError {
-                message: format!(
-                    "Azure ListVmssVms: failed to read response body for {}",
-                    vmss_name
-                ),
-                url: url.clone(),
-                http_status: 200,
-                http_response_text: None,
-                http_request_text: None,
-            })?;
-
-        let result: VirtualMachineScaleSetVmListResult = serde_json::from_str(&body)
-            .into_alien_error()
-            .context(ErrorData::HttpResponseError {
-                message: format!("Azure ListVmssVms: JSON parse error for {}", vmss_name),
-                url,
-                http_status: 200,
-                http_response_text: Some(body.clone()),
-                http_request_text: None,
-            })?;
-
-        Ok(result)
+        Ok(VirtualMachineScaleSetVmListResult {
+            next_link: None,
+            value: vms,
+        })
     }
 
     async fn get_vmss_vm(
@@ -436,6 +457,55 @@ impl VirtualMachineScaleSetsApi for AzureVmssClient {
         )?;
 
         Ok(vm)
+    }
+
+    async fn update_vmss_vm_user_data(
+        &self,
+        resource_group_name: &str,
+        vmss_name: &str,
+        instance_id: &str,
+        location: &str,
+        user_data_base64: &str,
+    ) -> Result<OperationResult<VirtualMachineScaleSetVm>> {
+        let bearer_token = self
+            .token_cache
+            .get_bearer_token_with_scope("https://management.azure.com/.default")
+            .await?;
+
+        let url = self.base.build_url(
+            &format!(
+                "/subscriptions/{}/resourceGroups/{}/providers/Microsoft.Compute/virtualMachineScaleSets/{}/virtualMachines/{}",
+                &self.token_cache.config().subscription_id,
+                resource_group_name,
+                vmss_name,
+                instance_id
+            ),
+            Some(vec![("api-version", Self::API_VERSION.into())]),
+        );
+        let body = serde_json::to_string(&serde_json::json!({
+            "location": location,
+            "properties": {
+                "userData": user_data_base64,
+            },
+        }))
+        .into_alien_error()
+        .context(ErrorData::SerializationError {
+            message: format!(
+                "Failed to serialize VMSS VM userData update for {}/{}",
+                vmss_name, instance_id
+            ),
+        })?;
+
+        let request = AzureRequestBuilder::new(Method::PUT, url)
+            .content_type_json()
+            .content_length(&body)
+            .body(body)
+            .build()?;
+        let signed = self.base.sign_request(request, &bearer_token).await?;
+
+        self.base
+            .execute_request_with_long_running_support(signed, "UpdateVmssVmUserData", instance_id)
+            .await
     }
 
     async fn delete_vmss_vm(
@@ -844,4 +914,151 @@ pub struct RollingUpgradeProgressInfo {
     pub in_progress_instance_count: Option<i32>,
     #[serde(rename = "pendingInstanceCount")]
     pub pending_instance_count: Option<i32>,
+}
+
+#[cfg(test)]
+mod tests {
+    use std::collections::HashMap;
+    use std::time::Duration;
+
+    use httpmock::{Method::GET, Method::PUT, MockServer};
+    use serde_json::json;
+
+    use super::*;
+    use crate::azure::{AzureClientConfig, AzureClientConfigExt, ServiceOverrides};
+
+    const SUBSCRIPTION_ID: &str = "12345678-1234-1234-1234-123456789012";
+    const USER_DATA_BASE64: &str = "eyJ2ZXJzaW9uIjoxLCJob3Jpem9uSWRlbnRpdHlDbGllbnRJZCI6IjExMTExMTExLTIyMjItMzMzMy00NDQ0LTU1NTU1NTU1NTU1NSJ9";
+
+    fn test_client(server: &MockServer) -> AzureVmssClient {
+        let config = AzureClientConfig::mock().with_service_overrides(ServiceOverrides {
+            endpoints: HashMap::from([("management".to_string(), server.base_url())]),
+        });
+        AzureVmssClient::new(Client::new(), AzureTokenCache::new(config))
+    }
+
+    fn vm_path() -> String {
+        format!(
+            "/subscriptions/{SUBSCRIPTION_ID}/resourceGroups/test-rg/providers/Microsoft.Compute/virtualMachineScaleSets/test-vmss/virtualMachines/3"
+        )
+    }
+
+    #[tokio::test]
+    async fn lists_every_vmss_vm_page() {
+        let server = MockServer::start_async().await;
+        let next_link = format!("{}/vm-pages/2?continuation=next", server.base_url());
+        let first_page = server
+            .mock_async(|when, then| {
+                when.method(GET)
+                    .path(format!(
+                        "/subscriptions/{SUBSCRIPTION_ID}/resourceGroups/test-rg/providers/Microsoft.Compute/virtualMachineScaleSets/test-vmss/virtualMachines"
+                    ))
+                    .query_param("api-version", "2024-07-01")
+                    .query_param("$expand", "instanceView");
+                then.status(200).json_body(json!({
+                    "value": [{
+                        "location": "eastus",
+                        "instanceId": "3"
+                    }],
+                    "nextLink": next_link,
+                }));
+            })
+            .await;
+        let second_page = server
+            .mock_async(|when, then| {
+                when.method(GET)
+                    .path("/vm-pages/2")
+                    .query_param("continuation", "next");
+                then.status(200).json_body(json!({
+                    "value": [{
+                        "location": "eastus",
+                        "instanceId": "7"
+                    }]
+                }));
+            })
+            .await;
+
+        let result = test_client(&server)
+            .list_vmss_vms("test-rg", "test-vmss")
+            .await
+            .expect("all VM pages should be returned");
+
+        first_page.assert_async().await;
+        second_page.assert_async().await;
+        assert!(result.next_link.is_none());
+        assert_eq!(
+            result
+                .value
+                .iter()
+                .filter_map(|vm| vm.instance_id.as_deref())
+                .collect::<Vec<_>>(),
+            vec!["3", "7"]
+        );
+    }
+
+    #[tokio::test]
+    async fn updates_vmss_vm_user_data_with_minimal_encoded_request() {
+        let server = MockServer::start_async().await;
+        let update = server
+            .mock_async(|when, then| {
+                when.method(PUT)
+                    .path(vm_path())
+                    .query_param("api-version", "2024-07-01")
+                    .json_body(json!({
+                        "location": "eastus",
+                        "properties": {
+                            "userData": USER_DATA_BASE64,
+                        },
+                    }));
+                then.status(200).json_body(json!({
+                    "location": "eastus",
+                    "properties": {
+                        "userData": USER_DATA_BASE64,
+                    },
+                }));
+            })
+            .await;
+
+        let result = test_client(&server)
+            .update_vmss_vm_user_data("test-rg", "test-vmss", "3", "eastus", USER_DATA_BASE64)
+            .await
+            .expect("userData update should succeed");
+
+        update.assert_async().await;
+        let OperationResult::Completed(vm) = result else {
+            panic!("expected synchronous VM update");
+        };
+        assert_eq!(
+            vm.properties.and_then(|properties| properties.user_data),
+            Some(USER_DATA_BASE64.to_string())
+        );
+    }
+
+    #[tokio::test]
+    async fn returns_vmss_vm_user_data_long_running_operation() {
+        let server = MockServer::start_async().await;
+        let operation_url = format!("{}/operations/user-data-update", server.base_url());
+        let update = server
+            .mock_async(|when, then| {
+                when.method(PUT)
+                    .path(vm_path())
+                    .query_param("api-version", "2024-07-01");
+                then.status(202)
+                    .header("Azure-AsyncOperation", &operation_url)
+                    .header("Retry-After", "7");
+            })
+            .await;
+
+        let result = test_client(&server)
+            .update_vmss_vm_user_data("test-rg", "test-vmss", "3", "eastus", USER_DATA_BASE64)
+            .await
+            .expect("accepted userData update should return an LRO");
+
+        update.assert_async().await;
+        let OperationResult::LongRunning(operation) = result else {
+            panic!("expected asynchronous VM update");
+        };
+        assert_eq!(operation.url, operation_url);
+        assert_eq!(operation.retry_after, Some(Duration::from_secs(7)));
+    }
 }

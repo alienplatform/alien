@@ -865,13 +865,13 @@ fn log_entry_from_hit(hit: Value) -> LogEntry {
     let service = hit
         .get("service_name")
         .and_then(Value::as_str)
-        .filter(|service| *service != "alien-runtime")
+        .filter(|service| *service != "alien-worker-runtime")
         .map(str::to_string)
         .or_else(|| {
             resource_attrs?
                 .get("service.name")
                 .and_then(Value::as_str)
-                .filter(|service| *service != "alien-runtime")
+                .filter(|service| *service != "alien-worker-runtime")
                 .map(str::to_string)
         });
     let deployment_id = resource_attrs

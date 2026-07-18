@@ -396,6 +396,20 @@ pub trait Vault: Binding {
 
     /// Deletes a secret by name.
     async fn delete_secret(&self, secret_name: &str) -> Result<()>;
+
+    /// Lists the names of all secrets stored in this vault.
+    ///
+    /// Returned names are in the vault's own namespace (any provider-specific
+    /// prefix is stripped), so each name can be passed straight back to
+    /// [`Vault::get_secret`].
+    ///
+    /// Implementations backed by a flat namespace (a single string prefix
+    /// with no reserved separator, e.g. `"{vault_prefix}-{secret_name}"`)
+    /// cannot implement this safely with a prefix/`BeginsWith` scan: a vault
+    /// named `"app"` would also match a sibling vault named `"app-prod"`,
+    /// aliasing across vaults. Such providers should return
+    /// `OperationNotSupported` rather than list under this hazard.
+    async fn list_secrets(&self) -> Result<Vec<String>>;
 }
 
 /// TLS mode used when building a Postgres connection string.
@@ -607,6 +621,19 @@ pub struct QueueMessage {
     pub payload: MessagePayload,
     /// Opaque receipt handle for acknowledgment (backend-specific, short-lived)
     pub receipt_handle: String,
+    /// Delivery attempt for this message, 1-based (1 = first delivery).
+    ///
+    /// Providers that do not report redelivery counts always set 1; the local
+    /// provider reports the real per-message count so handlers can enforce
+    /// retry limits.
+    #[serde(default = "first_attempt")]
+    pub attempt: u32,
+}
+
+/// Serde default for [`QueueMessage::attempt`]: treat missing counts as the
+/// first delivery.
+fn first_attempt() -> u32 {
+    1
 }
 
 /// Maximum message size in bytes (64 KiB = 65,536 bytes)
@@ -656,6 +683,14 @@ pub trait Queue: Binding {
 
     /// Acknowledge a message using its receipt handle (idempotent)
     async fn ack(&self, queue: &str, receipt_handle: &str) -> Result<()>;
+
+    /// Negative-acknowledge a message: release its lease so it becomes
+    /// immediately available for redelivery, without waiting out the
+    /// visibility timeout. Receipt-handle rules mirror [`Queue::ack`].
+    async fn nack(&self, queue: &str, receipt_handle: &str) -> Result<()>;
+
+    /// Delete every message in the queue, whether visible or in flight.
+    async fn purge(&self, queue: &str) -> Result<()>;
 }
 
 /// Request for invoking a function directly

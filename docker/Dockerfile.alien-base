@@ -2,15 +2,15 @@
 # Stage 1: Copy and select the correct binary
 FROM docker.io/chainguard/wolfi-base:latest as binary-selector
 
-# Copy alien-runtime for both architectures
-COPY target/aarch64-unknown-linux-musl/release/alien-runtime /tmp/alien-runtime-aarch64
-COPY target/x86_64-unknown-linux-musl/release/alien-runtime /tmp/alien-runtime-x86_64
+# Copy alien-worker-runtime for both architectures
+COPY target/aarch64-unknown-linux-musl/release/alien-worker-runtime /tmp/alien-worker-runtime-aarch64
+COPY target/x86_64-unknown-linux-musl/release/alien-worker-runtime /tmp/alien-worker-runtime-x86_64
 
 # Select the appropriate binary based on target architecture
 ARG TARGETARCH
 RUN case "$TARGETARCH" in \
-       amd64)  cp /tmp/alien-runtime-x86_64 /tmp/alien-runtime ;; \
-       arm64)  cp /tmp/alien-runtime-aarch64 /tmp/alien-runtime ;; \
+       amd64)  cp /tmp/alien-worker-runtime-x86_64 /tmp/alien-worker-runtime ;; \
+       arm64)  cp /tmp/alien-worker-runtime-aarch64 /tmp/alien-worker-runtime ;; \
     esac
 
 # Stage 2: Final runtime image
@@ -19,8 +19,8 @@ FROM docker.io/chainguard/wolfi-base:latest
 WORKDIR /app
 
 # Copy the correct binary from the selector stage
-COPY --from=binary-selector /tmp/alien-runtime /app/alien-runtime
-RUN chmod +x /app/alien-runtime
+COPY --from=binary-selector /tmp/alien-worker-runtime /app/alien-worker-runtime
+RUN chmod +x /app/alien-worker-runtime
 
 # Change ownership of app directory to nonroot user
 RUN chown -R nonroot:nonroot /app
@@ -28,4 +28,4 @@ RUN chown -R nonroot:nonroot /app
 # Switch to nonroot user
 USER nonroot
 
-ENTRYPOINT ["/app/alien-runtime"]
+ENTRYPOINT ["/app/alien-worker-runtime"]

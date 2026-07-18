@@ -11,13 +11,13 @@ import { ResourceRefSchema } from "./resource-ref-schema.js";
  */
 export const WorkerTriggerSchema = z.union([z.object({
     get "queue"(){
-                return ResourceRefSchema.describe("New ResourceRef that works with any resource type.\nThis can eventually replace the enum-based ResourceRef for full extensibility.")
+                return ResourceRefSchema.describe("Reference to a resource by its stable id and resource type.")
               },
 "type": z.enum(["queue"])
     }), z.object({
     "events": z.array(z.string()).describe("Events to trigger on (e.g., [\"created\", \"deleted\"])"),
 get "storage"(){
-                return ResourceRefSchema.describe("New ResourceRef that works with any resource type.\nThis can eventually replace the enum-based ResourceRef for full extensibility.")
+                return ResourceRefSchema.describe("Reference to a resource by its stable id and resource type.")
               },
 "type": z.enum(["storage"])
     }), z.object({

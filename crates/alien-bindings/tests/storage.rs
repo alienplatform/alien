@@ -5,8 +5,6 @@ use alien_bindings::{
     BindingsProvider,
 };
 
-#[cfg(feature = "grpc")]
-use alien_bindings::{grpc::run_grpc_server, providers::grpc_provider::GrpcBindingsProvider};
 use alien_core::bindings::{self, StorageBinding};
 
 // Now using unified BindingsProvider instead of platform-specific providers
@@ -23,11 +21,7 @@ use std::path::PathBuf as StdPathBuf;
 use std::{collections::HashMap, env, sync::Arc};
 use tempfile::TempDir;
 use test_context::AsyncTestContext;
-use tokio::net::TcpListener;
-use tokio::task::JoinHandle;
 use workspace_root::get_workspace_root;
-
-const GRPC_BINDING_NAME: &str = "test-grpc-storage-binding";
 
 fn load_test_env() {
     // Load .env.test from the workspace root
@@ -94,108 +88,6 @@ impl StorageTestContext for LocalProviderTestContext {
 }
 
 // --- gRPC Provider Context ---
-#[cfg(feature = "grpc")]
-struct GrpcProviderTestContext {
-    storage: Arc<dyn Storage>,
-    _server_handle:
-        JoinHandle<Result<(), alien_error::AlienError<alien_bindings::error::ErrorData>>>,
-    _temp_data_dir: TempDir, // Manages ALIEN_DATA_DIR for the gRPC server's LocalBindingsProvider
-}
-
-#[cfg(feature = "grpc")]
-impl AsyncTestContext for GrpcProviderTestContext {
-    async fn setup() -> Self {
-        load_test_env();
-        let temp_data_dir = tempfile::tempdir()
-            .expect("Failed to create temp dir for ALIEN_DATA_DIR (gRPC server)");
-        let temp_data_dir_path = temp_data_dir.path().to_str().unwrap().to_string();
-
-        // Env map for the BindingsProvider used by the gRPC server
-        let server_binding = StorageBinding::local(temp_data_dir_path.clone());
-
-        let mut server_provider_env_map: HashMap<String, String> = env::vars().collect();
-        let server_binding_json =
-            serde_json::to_string(&server_binding).expect("Failed to serialize server binding");
-        server_provider_env_map.insert(
-            bindings::binding_env_var_name(GRPC_BINDING_NAME),
-            server_binding_json,
-        );
-        server_provider_env_map.insert("ALIEN_DEPLOYMENT_TYPE".to_string(), "local".to_string());
-
-        let local_provider_for_server = Arc::new(
-            BindingsProvider::from_env(server_provider_env_map)
-                .await
-                .expect("Failed to load bindings provider"),
-        );
-
-        let listener = TcpListener::bind("127.0.0.1:0")
-            .await
-            .expect("Failed to bind to random port");
-        let addr = listener.local_addr().expect("Failed to get local address");
-        drop(listener); // Release the port so the server can bind to it
-
-        let server_addr_str = addr.to_string();
-        let server_addr_for_spawn = server_addr_str.clone();
-
-        let server_handle = tokio::spawn(async move {
-            let handles = run_grpc_server(local_provider_for_server, &server_addr_for_spawn)
-                .await
-                .unwrap();
-
-            // Wait for server to be ready
-            handles
-                .readiness_receiver
-                .await
-                .expect("Server should become ready");
-            handles.server_task.await.unwrap()
-        });
-
-        tokio::time::sleep(std::time::Duration::from_millis(500)).await; // Allow server to start, increased sleep
-
-        // Env map for the GrpcBindingsProvider (client-side)
-        let mut service_provider_env_map: HashMap<String, String> = env::vars().collect();
-        service_provider_env_map.insert(
-            "ALIEN_BINDINGS_GRPC_ADDRESS".to_string(),
-            server_addr_str.clone(),
-        );
-        service_provider_env_map.insert("ALIEN_DEPLOYMENT_TYPE".to_string(), "grpc".to_string());
-
-        let grpc_provider = GrpcBindingsProvider::new_with_env(service_provider_env_map)
-            .expect("Failed to load bindings provider");
-
-        let storage_client = grpc_provider
-            .load_storage(GRPC_BINDING_NAME)
-            .await
-            .unwrap_or_else(|e| {
-                panic!(
-                    "Failed to load Grpc storage for binding '{}' using ALIEN_BINDINGS_GRPC_ADDRESS='{}': {:?}",
-                    GRPC_BINDING_NAME, server_addr_str, e
-                )
-            });
-
-        Self {
-            storage: storage_client,
-            _server_handle: server_handle,
-            _temp_data_dir: temp_data_dir,
-        }
-    }
-
-    async fn teardown(self) {
-        self._server_handle.abort();
-    }
-}
-
-#[cfg(feature = "grpc")]
-#[async_trait]
-impl StorageTestContext for GrpcProviderTestContext {
-    async fn get_storage(&self) -> Arc<dyn Storage> {
-        self.storage.clone()
-    }
-    fn provider_name(&self) -> &'static str {
-        "grpc"
-    }
-}
-
 // --- AWS Provider Context ---
 #[cfg(feature = "aws")]
 struct AwsProviderTestContext {
@@ -452,7 +344,6 @@ impl StorageTestContext for KubernetesProviderTestContext {
 
 #[rstest]
 #[case::local(LocalProviderTestContext::setup().await)]
-#[cfg_attr(feature = "grpc", case::grpc(GrpcProviderTestContext::setup().await))]
 #[cfg_attr(feature = "aws", case::aws(AwsProviderTestContext::setup().await))]
 #[cfg_attr(feature = "azure", case::azure(AzureProviderTestContext::setup().await))]
 #[cfg_attr(feature = "gcp", case::gcp(GcpProviderTestContext::setup().await))]
@@ -489,7 +380,6 @@ async fn test_put_and_get(#[case] ctx: impl StorageTestContext) {
 
 #[rstest]
 #[case::local(LocalProviderTestContext::setup().await)]
-#[cfg_attr(feature = "grpc", case::grpc(GrpcProviderTestContext::setup().await))]
 #[cfg_attr(feature = "aws", case::aws(AwsProviderTestContext::setup().await))]
 #[cfg_attr(feature = "azure", case::azure(AzureProviderTestContext::setup().await))]
 #[cfg_attr(feature = "gcp", case::gcp(GcpProviderTestContext::setup().await))]
@@ -542,7 +432,6 @@ async fn test_head_operation(#[case] ctx: impl StorageTestContext) {
 
 #[rstest]
 #[case::local(LocalProviderTestContext::setup().await)]
-#[cfg_attr(feature = "grpc", case::grpc(GrpcProviderTestContext::setup().await))]
 #[cfg_attr(feature = "aws", case::aws(AwsProviderTestContext::setup().await))]
 #[cfg_attr(feature = "azure", case::azure(AzureProviderTestContext::setup().await))]
 #[cfg_attr(feature = "gcp", case::gcp(GcpProviderTestContext::setup().await))]
@@ -611,7 +500,6 @@ async fn test_delete_operation(#[case] ctx: impl StorageTestContext) {
 
 #[rstest]
 #[case::local(LocalProviderTestContext::setup().await)]
-#[cfg_attr(feature = "grpc", case::grpc(GrpcProviderTestContext::setup().await))]
 #[cfg_attr(feature = "aws", case::aws(AwsProviderTestContext::setup().await))]
 #[cfg_attr(feature = "gcp", case::gcp(GcpProviderTestContext::setup().await))]
 #[cfg_attr(feature = "azure", case::azure(AzureProviderTestContext::setup().await))]
@@ -863,7 +751,6 @@ async fn test_list_operations(#[case] ctx: impl StorageTestContext) {
 
 #[rstest]
 #[case::local(LocalProviderTestContext::setup().await)]
-#[cfg_attr(feature = "grpc", case::grpc(GrpcProviderTestContext::setup().await))]
 #[cfg_attr(feature = "aws", case::aws(AwsProviderTestContext::setup().await))]
 #[cfg_attr(feature = "azure", case::azure(AzureProviderTestContext::setup().await))]
 #[cfg_attr(feature = "gcp", case::gcp(GcpProviderTestContext::setup().await))]
@@ -958,7 +845,6 @@ async fn test_copy_operation(#[case] ctx: impl StorageTestContext) {
 
 #[rstest]
 #[case::local(LocalProviderTestContext::setup().await)]
-#[cfg_attr(feature = "grpc", case::grpc(GrpcProviderTestContext::setup().await))]
 // TODO (DOC): Unsupported on AWS right now.
 // #[cfg_attr(feature = "aws", case::aws(AwsProviderTestContext::setup().await))]
 #[cfg_attr(feature = "gcp", case::gcp(GcpProviderTestContext::setup().await))]
@@ -1078,7 +964,6 @@ async fn test_copy_if_not_exists_operation(#[case] ctx: impl StorageTestContext)
 
 #[rstest]
 #[case::local(LocalProviderTestContext::setup().await)]
-#[cfg_attr(feature = "grpc", case::grpc(GrpcProviderTestContext::setup().await))]
 #[cfg_attr(feature = "aws", case::aws(AwsProviderTestContext::setup().await))]
 #[cfg_attr(feature = "gcp", case::gcp(GcpProviderTestContext::setup().await))]
 #[cfg_attr(feature = "azure", case::azure(AzureProviderTestContext::setup().await))]
@@ -1147,7 +1032,6 @@ async fn test_rename_operation(#[case] ctx: impl StorageTestContext) {
 
 #[rstest]
 #[case::local(LocalProviderTestContext::setup().await)]
-#[cfg_attr(feature = "grpc", case::grpc(GrpcProviderTestContext::setup().await))]
 // TODO (DOC): Unsupported on AWS right now.
 // #[cfg_attr(feature = "aws", case::aws(AwsProviderTestContext::setup().await))]
 #[cfg_attr(feature = "gcp", case::gcp(GcpProviderTestContext::setup().await))]
@@ -1301,7 +1185,6 @@ async fn test_rename_if_not_exists_operation(#[case] ctx: impl StorageTestContex
 
 #[rstest]
 #[case::local(LocalProviderTestContext::setup().await)]
-#[cfg_attr(feature = "grpc", case::grpc(GrpcProviderTestContext::setup().await))]
 #[cfg_attr(feature = "aws", case::aws(AwsProviderTestContext::setup().await))]
 #[cfg_attr(feature = "gcp", case::gcp(GcpProviderTestContext::setup().await))]
 #[cfg_attr(feature = "azure", case::azure(AzureProviderTestContext::setup().await))]
@@ -1480,7 +1363,6 @@ async fn test_put_multipart(#[case] ctx: impl StorageTestContext) {
 
 #[rstest]
 #[case::local(LocalProviderTestContext::setup().await)]
-#[cfg_attr(feature = "grpc", case::grpc(GrpcProviderTestContext::setup().await))]
 #[cfg_attr(feature = "aws", case::aws(AwsProviderTestContext::setup().await))]
 #[cfg_attr(feature = "gcp", case::gcp(GcpProviderTestContext::setup().await))]
 // Azure does not support suffix range requests
@@ -1652,7 +1534,6 @@ async fn test_get_with_options(#[case] ctx: impl StorageTestContext) {
 
 #[rstest]
 #[case::local(LocalProviderTestContext::setup().await)]
-#[cfg_attr(feature = "grpc", case::grpc(GrpcProviderTestContext::setup().await))]
 #[cfg_attr(feature = "aws", case::aws(AwsProviderTestContext::setup().await))]
 #[cfg_attr(feature = "gcp", case::gcp(GcpProviderTestContext::setup().await))]
 #[cfg_attr(feature = "azure", case::azure(AzureProviderTestContext::setup().await))]
@@ -1757,7 +1638,6 @@ async fn test_put_with_options(#[case] ctx: impl StorageTestContext) {
 
 #[rstest]
 #[case::local(LocalProviderTestContext::setup().await)]
-#[cfg_attr(feature = "grpc", case::grpc(GrpcProviderTestContext::setup().await))]
 #[cfg_attr(feature = "aws", case::aws(AwsProviderTestContext::setup().await))]
 #[cfg_attr(feature = "gcp", case::gcp(GcpProviderTestContext::setup().await))]
 #[cfg_attr(feature = "azure", case::azure(AzureProviderTestContext::setup().await))]
@@ -1925,7 +1805,6 @@ async fn test_delete_stream(#[case] ctx: impl StorageTestContext) {
 
 #[rstest]
 #[case::local(LocalProviderTestContext::setup().await)]
-#[cfg_attr(feature = "grpc", case::grpc(GrpcProviderTestContext::setup().await))]
 #[cfg_attr(feature = "aws", case::aws(AwsProviderTestContext::setup().await))]
 #[cfg_attr(feature = "gcp", case::gcp(GcpProviderTestContext::setup().await))]
 #[cfg_attr(feature = "azure", case::azure(AzureProviderTestContext::setup().await))]
@@ -2062,7 +1941,6 @@ async fn test_get_ranges(#[case] ctx: impl StorageTestContext) {
 
 #[rstest]
 #[case::local(LocalProviderTestContext::setup().await)]
-#[cfg_attr(feature = "grpc", case::grpc(GrpcProviderTestContext::setup().await))]
 #[cfg_attr(feature = "aws", case::aws(AwsProviderTestContext::setup().await))]
 #[cfg_attr(feature = "gcp", case::gcp(GcpProviderTestContext::setup().await))]
 #[cfg_attr(feature = "azure", case::azure(AzureProviderTestContext::setup().await))]

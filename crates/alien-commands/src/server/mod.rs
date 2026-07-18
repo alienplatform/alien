@@ -9,14 +9,13 @@ use std::time::Duration;
 
 use alien_bindings::presigned::PresignedRequest;
 use alien_bindings::traits::{Kv, PutOptions, Storage};
-use alien_core::DeploymentModel;
 use alien_error::{AlienError, Context, ContextError, IntoAlienError};
 use chrono::{DateTime, Utc};
 use hex;
 use hmac::{Hmac, Mac};
 use serde::{Deserialize, Serialize};
 use sha2::Sha256;
-use tracing::{debug, info};
+use tracing::{debug, info, warn};
 use uuid::Uuid;
 
 use base64::{engine::general_purpose, Engine as _};
@@ -31,18 +30,26 @@ use crate::INLINE_MAX_BYTES;
 /// boundary (Azure Table Storage) to account for JSON wrapping overhead.
 const KV_VALUE_THRESHOLD: usize = 20_000;
 
+fn is_definite_dispatch_rejection(error: &crate::error::Error) -> bool {
+    matches!(
+        error.error.as_ref(),
+        Some(ErrorData::TransportDispatchRejected { .. })
+    )
+}
+
 pub mod axum_handlers;
 pub mod command_registry;
-pub mod dispatchers;
 pub mod storage;
 
+pub use crate::dispatchers::{CommandDispatcher, NullCommandDispatcher};
 pub use axum_handlers::{
     create_axum_router, CommandPayloadResponse, HasCommandServer, StorePayloadRequest,
 };
 pub use command_registry::{
+    delivery_mode_for, select_command_target, validate_command_name, validate_command_target_id,
     CommandEnvelopeData, CommandMetadata, CommandRegistry, CommandStatus, InMemoryCommandRegistry,
+    ResolvedCommandTarget,
 };
-pub use dispatchers::{CommandDispatcher, NullCommandDispatcher};
 
 // =============================================================================
 // KV Data Structures (Operational Data Only)
@@ -137,16 +144,18 @@ impl CommandServer {
     }
 
     /// Maximum allowed response token lifetime (2 hours).
-    /// Tokens are issued with 1-hour expiry; this cap provides headroom for clock skew
-    /// while rejecting tokens with absurdly far-future expiration.
     const MAX_RESPONSE_TOKEN_LIFETIME_SECS: i64 = 7200;
+    /// Worker execution can run for 1 hour and the operator lease adds 60
+    /// seconds of response-submission headroom. Response credentials therefore
+    /// need to outlive both; 2 hours stays within the verifier cap.
+    const RESPONSE_CREDENTIAL_LIFETIME_SECS: u64 = 7200;
 
     /// Sign a response URL for a specific command.
     ///
     /// Returns `(hmac_hex, expires_epoch)`. The HMAC is computed over
     /// `"arc.v1:{command_id}:{expires}"` using the server's signing key.
     fn sign_response_url(&self, command_id: &str) -> (String, i64) {
-        let expires = Utc::now().timestamp() + 3600; // 1 hour
+        let expires = Utc::now().timestamp() + Self::RESPONSE_CREDENTIAL_LIFETIME_SECS as i64;
         let message = format!("commands.v1:{}:{}", command_id, expires);
 
         type HmacSha256 = Hmac<Sha256>;
@@ -208,9 +217,34 @@ impl CommandServer {
         // Validate the request
         self.validate_create_command(&request).await?;
 
-        // Check idempotency if key provided
-        if let Some(ref idem_key) = request.idempotency_key {
-            if let Some(existing_id) = self.check_idempotency(idem_key).await? {
+        // Resolve which command-capable resource this command targets
+        // (explicit targetResourceId, or single-target shorthand).
+        let resolved_target = self
+            .command_registry
+            .resolve_target(
+                &request.deployment_id,
+                request.target_resource_id.as_deref(),
+            )
+            .await?;
+
+        // Compose the target-scoped idempotency key once, from the resolved
+        // target, and reuse it for both the pre-create check and the
+        // post-create mapping. Both must derive from the same target, so a
+        // single composition is the source of truth (idempotency is scoped per
+        // target: the same key addressed to two different targets is two
+        // commands).
+        let composed_idempotency_key = request.idempotency_key.as_ref().map(|idem_key| {
+            Self::compose_idempotency_key(
+                &request.deployment_id,
+                &resolved_target.target.resource_id,
+                &request.command,
+                idem_key,
+            )
+        });
+
+        // Check idempotency if key provided.
+        if let Some(ref composed_key) = composed_idempotency_key {
+            if let Some(existing_id) = self.check_idempotency(composed_key).await? {
                 // Return existing command status
                 let status = self
                     .command_registry
@@ -249,6 +283,7 @@ impl CommandServer {
             .create_command(
                 &request.deployment_id,
                 &request.command,
+                &resolved_target,
                 initial_state,
                 request.deadline,
                 request_size_bytes,
@@ -256,11 +291,42 @@ impl CommandServer {
             .await?;
 
         let command_id = metadata.command_id;
-        let command_delivery_model = metadata.deployment_model;
+        let delivery_mode = metadata.delivery_mode;
 
-        // 2. Store idempotency mapping in KV
-        if let Some(ref idem_key) = request.idempotency_key {
-            self.store_idempotency(idem_key, &command_id).await?;
+        // 2. Store idempotency mapping in KV, reusing the key composed above
+        // from the same resolved target. Losing the conditional put means a
+        // concurrent create with the same key raced past the pre-create check
+        // together with this one; dedupe by failing the command created above
+        // and answering with the winner's, so the caller never observes two
+        // live commands for one idempotency key.
+        if let Some(ref composed_key) = composed_idempotency_key {
+            if let Some(winner_id) = self.store_idempotency(composed_key, &command_id).await? {
+                let _ = self
+                    .command_registry
+                    .complete_command(
+                        &command_id,
+                        CommandState::Failed,
+                        Utc::now(),
+                        None,
+                        Some(serde_json::json!({
+                            "code": "IDEMPOTENT_DUPLICATE",
+                            "message": format!(
+                                "Superseded by concurrent create '{}' with the same idempotency key",
+                                winner_id
+                            ),
+                        })),
+                    )
+                    .await?;
+                let status = self.command_registry.get_command_status(&winner_id).await?;
+                let state = status.map(|s| s.state).unwrap_or(CommandState::Pending);
+                return Ok(CreateCommandResponse {
+                    command_id: winner_id,
+                    state,
+                    storage_upload: None,
+                    inline_allowed_up_to: self.inline_max_bytes as u64,
+                    next: "poll".to_string(),
+                });
+            }
         }
 
         // 3. Store params in KV
@@ -273,23 +339,26 @@ impl CommandServer {
             None
         };
 
-        // 5. Handle dispatch based on state and command delivery mode.
+        // 5. Handle dispatch based on state and the target's delivery mode
         let (final_state, next_action) = if initial_state == CommandState::Pending {
-            match command_delivery_model {
-                DeploymentModel::Push => {
-                    // Push delivery: dispatch immediately through the platform transport.
-                    self.dispatch_command_push(&command_id, &request.deployment_id)
+            match delivery_mode {
+                CommandDeliveryMode::Push => {
+                    // Push delivery: dispatch immediately
+                    let state = self
+                        .dispatch_command_push(&command_id, &request.deployment_id)
                         .await?;
-                    (CommandState::Dispatched, "poll")
+                    (state, "poll")
                 }
-                DeploymentModel::Pull => {
-                    // Pull delivery: create pending index, target will lease over HTTPS.
-                    self.create_pending_index(&request.deployment_id, &command_id)
-                        .await?;
-                    debug!(
-                        "Command {} ready for pull (deployment will poll)",
-                        command_id
-                    );
+                CommandDeliveryMode::Pull => {
+                    // Pull delivery: create a pending index for a receiver or
+                    // environment-local operator relay.
+                    self.create_pending_index(
+                        &request.deployment_id,
+                        &metadata.target.resource_id,
+                        &command_id,
+                    )
+                    .await?;
+                    debug!("Command {} ready for target-scoped lease", command_id);
                     (CommandState::Pending, "poll")
                 }
             }
@@ -347,11 +416,24 @@ impl CommandServer {
         self.store_params(command_id, &params).await?;
 
         // 4. Update registry to Pending state
-        self.command_registry
+        let transitioned = self
+            .command_registry
             .update_command_state(command_id, CommandState::Pending, None, None, None, None)
             .await?;
+        if !transitioned {
+            let current_state = self
+                .command_registry
+                .get_command_status(command_id)
+                .await?
+                .map(|current| current.state)
+                .unwrap_or(status.state);
+            return Err(AlienError::new(ErrorData::InvalidStateTransition {
+                from: current_state.as_ref().to_string(),
+                to: CommandState::Pending.as_ref().to_string(),
+            }));
+        }
 
-        // 5. Get deployment model from registry and handle dispatch
+        // 5. Get delivery mode from registry and handle dispatch
         let metadata = self
             .command_registry
             .get_command_metadata(command_id)
@@ -362,17 +444,20 @@ impl CommandServer {
                 })
             })?;
 
-        let final_state = match metadata.deployment_model {
-            DeploymentModel::Push => {
+        let final_state = match metadata.delivery_mode {
+            CommandDeliveryMode::Push => {
                 self.dispatch_command_push(command_id, &status.deployment_id)
-                    .await?;
-                CommandState::Dispatched
+                    .await?
             }
-            DeploymentModel::Pull => {
-                self.create_pending_index(&status.deployment_id, command_id)
-                    .await?;
+            CommandDeliveryMode::Pull => {
+                self.create_pending_index(
+                    &status.deployment_id,
+                    &metadata.target.resource_id,
+                    command_id,
+                )
+                .await?;
                 debug!(
-                    "Command {} ready for pull after upload (deployment will poll)",
+                    "Command {} ready for pull after upload (target will poll)",
                     command_id
                 );
                 CommandState::Pending
@@ -403,28 +488,54 @@ impl CommandServer {
         // 2. Check deadline expiry inline
         if let Some(deadline) = status.deadline {
             if Utc::now() > deadline && !status.state.is_terminal() {
-                // Expire the command
-                self.command_registry
-                    .update_command_state(
+                // Expire the command — CONDITIONALLY: a submit can land
+                // between the status read above and this write, and an
+                // unconditional write would stomp its terminal state (the
+                // torn-record class the conditional transition exists for).
+                let won = self
+                    .command_registry
+                    .complete_command(command_id, CommandState::Expired, Utc::now(), None, None)
+                    .await?;
+                if won {
+                    // Clean up pending index
+                    self.delete_pending_index(
+                        &status.deployment_id,
+                        &status.target.resource_id,
                         command_id,
-                        CommandState::Expired,
-                        None,
-                        Some(Utc::now()),
-                        None,
-                        None,
                     )
                     .await?;
 
-                // Clean up pending index
-                self.delete_pending_index(&status.deployment_id, command_id)
-                    .await?;
-
-                // Return expired status directly (avoid recursion)
+                    // Return expired status directly (avoid recursion)
+                    return Ok(CommandStatusResponse {
+                        command_id: command_id.to_string(),
+                        state: CommandState::Expired,
+                        attempt: status.attempt,
+                        target: status.target,
+                        response: None,
+                    });
+                }
+                // Lost to a concurrent submit: fall through and serve the
+                // freshly-terminal state below.
+                let status = self
+                    .command_registry
+                    .get_command_status(command_id)
+                    .await?
+                    .ok_or_else(|| {
+                        AlienError::new(ErrorData::CommandNotFound {
+                            command_id: command_id.to_string(),
+                        })
+                    })?;
+                let response = if status.state.is_terminal() {
+                    self.get_response(command_id).await?
+                } else {
+                    None
+                };
                 return Ok(CommandStatusResponse {
                     command_id: command_id.to_string(),
-                    state: CommandState::Expired,
+                    state: status.state,
                     attempt: status.attempt,
-                    response: None,
+                    target: status.target,
+                    response,
                 });
             }
         }
@@ -440,6 +551,7 @@ impl CommandServer {
             command_id: command_id.to_string(),
             state: status.state,
             attempt: status.attempt,
+            target: status.target,
             response,
         })
     }
@@ -507,14 +619,14 @@ impl CommandServer {
         // 5. Store response blob in KV
         self.store_response(command_id, &response).await?;
 
-        // 6. Clean up lease from KV
-        self.delete_lease(command_id).await?;
-
-        // 7. Clean up pending index from KV (terminal state)
-        self.delete_pending_index(&status.deployment_id, command_id)
-            .await?;
-
-        // 8. Update registry state (SOURCE OF TRUTH)
+        // 6. Update registry state (SOURCE OF TRUTH) BEFORE cleaning up the lease
+        // and pending index. Committing the terminal state first guarantees the
+        // command can never be stranded as Dispatched-with-no-lease-no-index: if
+        // the process dies (or a cleanup step errors) after this point, get/poll
+        // sees the terminal state and returns the already-stored response, and any
+        // orphaned lease/pending-index entry is reaped by `acquire_lease`'s
+        // terminal-state check. The old order (cleanup first, state last) left a
+        // crash window in which the response was stored but permanently invisible.
         let (new_state, error) = if response.is_success() {
             (CommandState::Succeeded, None)
         } else if let CommandResponse::Error { code, message, .. } = &response {
@@ -536,16 +648,56 @@ impl CommandServer {
             _ => None,
         };
 
-        self.command_registry
-            .update_command_state(
-                command_id,
-                new_state,
-                None, // dispatched_at already set
-                Some(Utc::now()),
-                response_size,
-                error,
-            )
+        // Conditional terminal transition: exactly one of two racing
+        // submitters (a redelivered execution racing the original whose lease
+        // expired) wins; a terminal record is never overwritten. The blob was
+        // pre-stored above for crash-safety (state never flips terminal with
+        // no blob on disk); the winner re-stores its own response below so
+        // the recorded state and the served blob agree. Residual: a loser
+        // whose pre-store lands after the winner's re-store can still leave
+        // its blob — that requires the loser's KV write to outlast the
+        // winner's entire transition+re-store, a pathological schedule.
+        let won = self
+            .command_registry
+            .complete_command(command_id, new_state, Utc::now(), response_size, error)
             .await?;
+        if !won {
+            debug!(
+                "Ignoring duplicate response for command {} (lost the terminal transition race)",
+                command_id
+            );
+            return Ok(());
+        }
+        self.store_response(command_id, &response).await?;
+
+        // 7. Clean up lease from KV (best-effort; the terminal state is already
+        // committed above, so a failure here cannot strand the command). Log a
+        // warning and continue instead of failing the call — a leftover entry
+        // is reaped by `acquire_lease`'s terminal-state check on its next scan.
+        if let Err(e) = self.delete_lease(command_id).await {
+            warn!(
+                command_id,
+                error = %e,
+                "Failed to clean up lease after terminal response; will be reaped on next lease scan"
+            );
+        }
+
+        // 8. Clean up pending index from KV (best-effort; terminal state).
+        // Same reasoning as the lease cleanup above.
+        if let Err(e) = self
+            .delete_pending_index(
+                &status.deployment_id,
+                &status.target.resource_id,
+                command_id,
+            )
+            .await
+        {
+            warn!(
+                command_id,
+                error = %e,
+                "Failed to clean up pending index after terminal response; will be reaped on next lease scan"
+            );
+        }
 
         info!(
             "Command {} completed with state {:?}",
@@ -564,8 +716,12 @@ impl CommandServer {
     ) -> Result<LeaseResponse> {
         let mut leases = Vec::new();
 
-        // 1. Scan KV pending index
-        let target_prefix = format!("target:{}:pending:", deployment_id);
+        // 1. Scan KV pending index — ONLY the requesting target's prefix.
+        // Commands for other targets in the same deployment are invisible here.
+        let target_prefix = format!(
+            "target:{}:{}:pending:",
+            deployment_id, lease_request.target.resource_id
+        );
         let scan_result = self
             .kv
             .scan_prefix(&target_prefix, Some(lease_request.max_leases * 2), None)
@@ -625,8 +781,29 @@ impl CommandServer {
                 continue;
             }
 
+            // Reverse index for O(1) release-by-lease-id lookups. Shares the
+            // lease's TTL so it self-cleans on expiry; a stale entry is
+            // harmless because every reader re-verifies the lease_id against
+            // the live `cmd:{id}:lease` record.
+            let reverse_key = format!("lease:{}", lease_id);
+            self.kv
+                .put(
+                    &reverse_key,
+                    command_id.as_bytes().to_vec(),
+                    Some(PutOptions {
+                        ttl: Some(lease_duration),
+                        if_not_exists: false,
+                    }),
+                )
+                .await
+                .context(ErrorData::KvOperationFailed {
+                    operation: "put".to_string(),
+                    key: reverse_key,
+                    message: "Failed to create lease reverse index".to_string(),
+                })?;
+
             // 3. Get metadata from registry
-            let metadata = match self
+            let mut metadata = match self
                 .command_registry
                 .get_command_metadata(&command_id)
                 .await?
@@ -640,6 +817,36 @@ impl CommandServer {
                 }
             };
 
+            // 3.1 Expiry-driven redelivery: this command was already
+            // dispatched, yet the lease slot was free (the conditional put
+            // above succeeded) — the previous lease TTL-expired with no
+            // response and no explicit release. Increment the attempt so the
+            // redelivered envelope carries `attempt > 1`, the at-least-once
+            // redelivery signal both receiver twins document. The explicit
+            // release path (`release_lease`) increments the same counter.
+            if metadata.state == CommandState::Dispatched {
+                self.command_registry.increment_attempt(&command_id).await?;
+                metadata.attempt += 1;
+            }
+
+            // 3.5 Defense-in-depth: the pending index key said this command
+            // belongs to the requesting target — verify the registry agrees.
+            // A mismatch means the index is corrupt; fail loudly rather than
+            // delivering a command to the wrong resource. The corrupt index
+            // key is deliberately retained (only the lease is cleaned up):
+            // genuine corruption should never occur, and the key is the
+            // evidence an operator needs — do not "fix" this by deleting it.
+            if metadata.target != lease_request.target {
+                self.delete_lease(&command_id).await?;
+                return Err(AlienError::new(ErrorData::Other {
+                    message: format!(
+                        "Pending index corruption: command '{}' is indexed under target '{}' \
+                         but the registry says it belongs to target '{}' — refusing to deliver",
+                        command_id, lease_request.target.resource_id, metadata.target.resource_id,
+                    ),
+                }));
+            }
+
             // 4. Check if command is in terminal state (stale index)
             if metadata.state.is_terminal() {
                 // Clean up stale data
@@ -648,16 +855,16 @@ impl CommandServer {
                 continue;
             }
 
-            // 5. Check deadline expiry
+            // 5. Check deadline expiry — conditionally: a racing submit's
+            // terminal state must never be stomped back to Expired.
             if let Some(deadline) = metadata.deadline {
                 if Utc::now() > deadline {
-                    // Expire the command
-                    self.command_registry
-                        .update_command_state(
+                    let _ = self
+                        .command_registry
+                        .complete_command(
                             &command_id,
                             CommandState::Expired,
-                            None,
-                            Some(Utc::now()),
+                            Utc::now(),
                             None,
                             None,
                         )
@@ -678,20 +885,34 @@ impl CommandServer {
                 }
             };
 
-            // 7. Update registry state to Dispatched
-            self.command_registry
-                .update_command_state(
-                    &command_id,
-                    CommandState::Dispatched,
-                    Some(Utc::now()),
-                    None,
-                    None,
-                    None,
-                )
+            // 7. Mark Dispatched — conditionally. Between the terminal
+            // check in step 3.1 and here, the ORIGINAL holder of a
+            // TTL-expired lease can still submit; handing out this lease
+            // would re-execute a completed command and stomp its state.
+            let dispatched = self
+                .command_registry
+                .mark_dispatched_if_not_terminal(&command_id, Utc::now())
                 .await?;
+            if !dispatched {
+                debug!(
+                    command_id = %command_id,
+                    "Command turned terminal while leasing; releasing the lease"
+                );
+                self.delete_lease(&command_id).await?;
+                let _ = self.kv.delete(&index_key).await;
+                continue;
+            }
 
-            // 8. Build envelope
-            let envelope = self.build_envelope(&command_id, &metadata, params).await?;
+            // 8. Build envelope. Lease-served envelopes carry manager URLs
+            // as path-relative references from the lease endpoint: a pull
+            // consumer resolves them against the exact endpoint it reached,
+            // preserving both a network-corrected origin and any reverse-
+            // proxy path prefix the manager cannot know. Push envelopes keep
+            // absolute URLs: push transports have no configured base, and
+            // reaching the manager's public address is inherent to push
+            // delivery.
+            let mut envelope = self.build_envelope(&command_id, &metadata, params).await?;
+            Self::relativize_manager_urls(&mut envelope, &self.base_url);
 
             leases.push(LeaseInfo {
                 lease_id,
@@ -703,6 +924,58 @@ impl CommandServer {
         }
 
         Ok(LeaseResponse { leases })
+    }
+
+    /// Rewrite manager-origin URLs in a lease-served envelope to references
+    /// relative to that lease endpoint (see [`Self::acquire_lease`]). Only
+    /// same-origin URLs can be made relative, so cloud-presigned storage URLs
+    /// pass through byte-for-byte.
+    fn relativize_manager_urls(envelope: &mut Envelope, base_url: &str) {
+        let Ok(mut lease_endpoint) = reqwest::Url::parse(base_url) else {
+            // An unparseable base cannot produce relative references; leave
+            // the envelope absolute (the pre-relative behavior).
+            return;
+        };
+        let Ok(mut segments) = lease_endpoint.path_segments_mut() else {
+            return;
+        };
+        segments.pop_if_empty().push("commands").push("leases");
+        drop(segments);
+        lease_endpoint.set_query(None);
+        lease_endpoint.set_fragment(None);
+
+        let relativize = |target: &mut String| {
+            let Ok(mut target_url) = reqwest::Url::parse(target.as_str()) else {
+                return;
+            };
+            let suffix = target
+                .find(['?', '#'])
+                .map(|index| target[index..].to_string())
+                .unwrap_or_default();
+            target_url.set_query(None);
+            target_url.set_fragment(None);
+            if let Some(relative) = lease_endpoint.make_relative(&target_url) {
+                *target = format!("{relative}{suffix}");
+            }
+        };
+
+        relativize(&mut envelope.response_handling.submit_response_url);
+        if let alien_core::presigned::PresignedRequestBackend::Http { url, .. } =
+            &mut envelope.response_handling.storage_upload_request.backend
+        {
+            relativize(url);
+        }
+        if let BodySpec::Storage {
+            storage_get_request: Some(request),
+            ..
+        } = &mut envelope.params
+        {
+            if let alien_core::presigned::PresignedRequestBackend::Http { url, .. } =
+                &mut request.backend
+            {
+                relativize(url);
+            }
+        }
     }
 
     /// Release a lease manually.
@@ -726,19 +999,27 @@ impl CommandServer {
                 }));
             }
 
-            // 2. Delete lease from KV
+            // 2. Delete lease from KV (and its reverse index)
             self.delete_lease(command_id).await?;
+            let _ = self.kv.delete(&format!("lease:{}", lease_id)).await;
 
-            // 3. Increment attempt in registry
-            self.command_registry.increment_attempt(command_id).await?;
-
-            // 4. Update registry state back to Pending
-            self.command_registry
+            // 3. Return the command to Pending only while it is still
+            // non-terminal. A racing response/deadline completion wins.
+            let released = self
+                .command_registry
                 .update_command_state(command_id, CommandState::Pending, None, None, None, None)
                 .await?;
+            if released {
+                // 4. Increment the attempt only for a command that was
+                // actually released for redelivery.
+                self.command_registry.increment_attempt(command_id).await?;
+            }
 
             // Note: Pending index is NOT removed on lease, so command is still there
-            debug!("Lease {} released for command {}", lease_id, command_id);
+            debug!(
+                released,
+                "Lease {} released for command {}", lease_id, command_id
+            );
         }
 
         Ok(())
@@ -753,43 +1034,67 @@ impl CommandServer {
         Ok(status.map(|s| s.deployment_id))
     }
 
-    /// Release a lease by lease_id only (for the API).
-    pub async fn release_lease_by_id(&self, lease_id: &str) -> Result<()> {
-        // Scan for leases to find the one with this lease_id
-        let lease_prefix = "cmd:";
-        let scan_result = self
-            .kv
-            .scan_prefix(lease_prefix, None, None)
-            .await
+    /// Resolve a lease_id to `(command_id, owner_deployment_id)` via the
+    /// `lease:{lease_id}` reverse index, re-verifying against the live lease
+    /// record (the reverse entry can outlive a released lease briefly, and a
+    /// command can have been re-leased under a new lease_id since).
+    ///
+    /// Used by the manager's auth layer to check that the caller may act on
+    /// the deployment that holds the lease.
+    pub async fn get_lease_owner(&self, lease_id: &str) -> Result<Option<(String, String)>> {
+        let reverse_key = format!("lease:{}", lease_id);
+        let Some(command_id_bytes) =
+            self.kv
+                .get(&reverse_key)
+                .await
+                .context(ErrorData::KvOperationFailed {
+                    operation: "get".to_string(),
+                    key: reverse_key.clone(),
+                    message: "Failed to look up lease reverse index".to_string(),
+                })?
+        else {
+            return Ok(None);
+        };
+        let command_id = String::from_utf8(command_id_bytes).map_err(|_| {
+            AlienError::new(ErrorData::Other {
+                message: format!("Lease reverse index '{}' is not valid UTF-8", reverse_key),
+            })
+        })?;
+
+        let lease_key = format!("cmd:{}:lease", command_id);
+        let Some(lease_data) =
+            self.kv
+                .get(&lease_key)
+                .await
+                .context(ErrorData::KvOperationFailed {
+                    operation: "get".to_string(),
+                    key: lease_key,
+                    message: "Failed to look up lease".to_string(),
+                })?
+        else {
+            return Ok(None);
+        };
+        let lease: LeaseData = serde_json::from_slice(&lease_data)
             .into_alien_error()
-            .context(ErrorData::KvOperationFailed {
-                operation: "scan_prefix".to_string(),
-                key: lease_prefix.to_string(),
-                message: "Failed to scan for lease keys".to_string(),
+            .context(ErrorData::SerializationFailed {
+                message: "Failed to deserialize lease data".to_string(),
+                data_type: Some("LeaseData".to_string()),
             })?;
-
-        for (key, value) in scan_result.items {
-            if key.ends_with(":lease") {
-                if let Ok(lease) = serde_json::from_slice::<LeaseData>(&value) {
-                    if lease.lease_id == lease_id {
-                        let command_id = key
-                            .strip_prefix("cmd:")
-                            .and_then(|s| s.strip_suffix(":lease"))
-                            .ok_or_else(|| {
-                                AlienError::new(ErrorData::Other {
-                                    message: format!("Invalid lease key format: {}", key),
-                                })
-                            })?;
-
-                        return self.release_lease(command_id, lease_id).await;
-                    }
-                }
-            }
+        if lease.lease_id != lease_id {
+            return Ok(None);
         }
 
-        Err(AlienError::new(ErrorData::LeaseNotFound {
-            lease_id: lease_id.to_string(),
-        }))
+        Ok(Some((command_id, lease.owner)))
+    }
+
+    /// Release a lease by lease_id only (for the API).
+    pub async fn release_lease_by_id(&self, lease_id: &str) -> Result<()> {
+        match self.get_lease_owner(lease_id).await? {
+            Some((command_id, _owner)) => self.release_lease(&command_id, lease_id).await,
+            None => Err(AlienError::new(ErrorData::LeaseNotFound {
+                lease_id: lease_id.to_string(),
+            })),
+        }
     }
 
     // =========================================================================
@@ -802,6 +1107,15 @@ impl CommandServer {
                 message: "Command name cannot be empty".to_string(),
             }));
         }
+
+        // The command name occupies one segment of the `:`-delimited
+        // idempotency key (`{dep}:{rid}:{command}:{key}`). A ':' in the name
+        // would let it bleed into the client-key segment — which routinely
+        // contains ':' — so (command="a:b", key="c") and (command="a",
+        // key="b:c") would forge the same key and be treated as the same
+        // command. Reject ':' here, mirroring the target-id colon guard, so the
+        // command segment is always unambiguous.
+        validate_command_name(&request.command)?;
 
         if request.deployment_id.is_empty() {
             return Err(AlienError::new(ErrorData::InvalidCommand {
@@ -821,6 +1135,36 @@ impl CommandServer {
     }
 
     // --- Idempotency ---
+
+    /// Compose the target-scoped idempotency key:
+    /// `{deploymentId}:{targetResourceId}:{commandName}:{key}`.
+    ///
+    /// Scoping by target means the same client key addressed to two different
+    /// targets creates two distinct commands.
+    fn compose_idempotency_key(
+        deployment_id: &str,
+        target_resource_id: &str,
+        command_name: &str,
+        idem_key: &str,
+    ) -> String {
+        // Invariant: at every real call site the target id and command name are
+        // both `:`-free (the former enforced at resolution via
+        // `validate_command_target_id`, the latter via `validate_command_name`
+        // in `validate_create_command`), so each occupies exactly one segment of
+        // `{dep}:{rid}:{command}:{key}` and only the trailing client key may
+        // carry ':'. Those guards live upstream; this is a pure formatter, so it
+        // is not asserted on `command_name` here (the collision tests below
+        // deliberately format a ':'-bearing command to demonstrate what the
+        // upstream guard prevents).
+        debug_assert!(
+            !target_resource_id.contains(':'),
+            "target_resource_id must be ':'-free before key composition: {target_resource_id}"
+        );
+        format!(
+            "{}:{}:{}:{}",
+            deployment_id, target_resource_id, command_name, idem_key
+        )
+    }
 
     async fn check_idempotency(&self, idem_key: &str) -> Result<Option<String>> {
         let key = format!("idem:{}", idem_key);
@@ -845,10 +1189,18 @@ impl CommandServer {
         Ok(None)
     }
 
-    async fn store_idempotency(&self, idem_key: &str, command_id: &str) -> Result<()> {
+    /// Claim the idempotency key for `command_id`.
+    ///
+    /// Returns `None` when this command won the key. Returns
+    /// `Some(winner_id)` when a concurrent create with the same key won the
+    /// conditional put first — both requests passed the pre-create
+    /// `check_idempotency` before either stored, so the loser must be
+    /// detected here, after its command was already created.
+    async fn store_idempotency(&self, idem_key: &str, command_id: &str) -> Result<Option<String>> {
         let key = format!("idem:{}", idem_key);
         let ttl = Duration::from_secs(24 * 60 * 60); // 24 hours
-        self.kv
+        let won = self
+            .kv
             .put(
                 &key,
                 command_id.as_bytes().to_vec(),
@@ -863,7 +1215,21 @@ impl CommandServer {
                 key: key.clone(),
                 message: "Failed to store idempotency".to_string(),
             })?;
-        Ok(())
+        if won {
+            return Ok(None);
+        }
+        // Lost the conditional put: read back who won. The winner entry can
+        // only be absent if it TTL-expired in the microseconds since — treat
+        // that as an inconsistency rather than silently duplicating.
+        match self.check_idempotency(idem_key).await? {
+            Some(winner_id) => Ok(Some(winner_id)),
+            None => Err(AlienError::new(ErrorData::Other {
+                message: format!(
+                    "Idempotency key '{}' was concurrently claimed but has no winner entry",
+                    key
+                ),
+            })),
+        }
     }
 
     // --- Params ---
@@ -1109,11 +1475,23 @@ impl CommandServer {
 
     // --- Pending Index ---
 
-    async fn create_pending_index(&self, deployment_id: &str, command_id: &str) -> Result<()> {
+    async fn create_pending_index(
+        &self,
+        deployment_id: &str,
+        target_resource_id: &str,
+        command_id: &str,
+    ) -> Result<()> {
+        // Invariant: the target id is `:`-free (enforced at resolution via
+        // `validate_command_target_id`), so its prefix `target:{dep}:{rid}:`
+        // cannot overlap another target's pending keys.
+        debug_assert!(
+            !target_resource_id.contains(':'),
+            "target_resource_id must be ':'-free in the pending index: {target_resource_id}"
+        );
         let timestamp = Utc::now().timestamp_nanos_opt().unwrap_or(0);
         let key = format!(
-            "target:{}:pending:{}:{}",
-            deployment_id, timestamp, command_id
+            "target:{}:{}:pending:{}:{}",
+            deployment_id, target_resource_id, timestamp, command_id
         );
 
         // Store empty value - just for ordering
@@ -1128,9 +1506,14 @@ impl CommandServer {
         Ok(())
     }
 
-    async fn delete_pending_index(&self, deployment_id: &str, command_id: &str) -> Result<()> {
+    async fn delete_pending_index(
+        &self,
+        deployment_id: &str,
+        target_resource_id: &str,
+        command_id: &str,
+    ) -> Result<()> {
         // We need to scan to find the exact key since we don't know the timestamp
-        let prefix = format!("target:{}:pending:", deployment_id);
+        let prefix = format!("target:{}:{}:pending:", deployment_id, target_resource_id);
         let scan_result = self
             .kv
             .scan_prefix(&prefix, Some(100), None)
@@ -1159,6 +1542,98 @@ impl CommandServer {
         Ok(())
     }
 
+    /// Expire every overdue non-terminal command recorded in the deadline
+    /// index. Intended to run periodically from the hosting process.
+    ///
+    /// Deadlines are otherwise only enforced lazily (status polls and lease
+    /// scans), which never reaches a command nobody polls — most notably a
+    /// `PendingUpload` whose params upload never completed, which has no
+    /// pending-index entry and would otherwise live forever.
+    ///
+    /// Uses the conditional terminal transition, so racing a concurrent
+    /// submit is safe: whoever wins, the record stays consistent. Returns
+    /// the number of commands expired.
+    pub async fn reap_expired_commands(&self) -> Result<u32> {
+        let now = Utc::now();
+        let mut expired = 0u32;
+        let mut cursor: Option<String> = None;
+        // Paginate the whole index (bounded page count as a runaway guard):
+        // keys are not numerically ordered — the timestamp segment isn't
+        // zero-padded — so due entries can sit behind any number of
+        // future-dated ones and a single capped scan would starve them.
+        for _ in 0..64 {
+            let scan = self
+                .kv
+                .scan_prefix("deadline:", Some(256), cursor.clone())
+                .await
+                .into_alien_error()
+                .context(ErrorData::KvOperationFailed {
+                    operation: "scan_prefix".to_string(),
+                    key: "deadline:".to_string(),
+                    message: "Failed to scan the deadline index".to_string(),
+                })?;
+            let next_cursor = scan.next_cursor.clone();
+            for (key, value) in scan.items {
+                let Ok(data) = serde_json::from_slice::<DeadlineIndexData>(&value) else {
+                    warn!(key = %key, "Unparseable deadline index entry; deleting");
+                    let _ = self.kv.delete(&key).await;
+                    continue;
+                };
+                if data.deadline > now {
+                    // Not due yet. (Keys are not sortable numerically — the
+                    // timestamp segment isn't zero-padded — so keep scanning.)
+                    continue;
+                }
+
+                let status = self
+                    .command_registry
+                    .get_command_status(&data.command_id)
+                    .await?;
+                match status {
+                    None => {
+                        let _ = self.kv.delete(&key).await;
+                    }
+                    Some(status) if status.state.is_terminal() => {
+                        let _ = self.kv.delete(&key).await;
+                    }
+                    Some(status) => {
+                        let won = self
+                        .command_registry
+                        .complete_command(
+                            &data.command_id,
+                            CommandState::Expired,
+                            now,
+                            None,
+                            Some(serde_json::json!({
+                                "code": "COMMAND_EXPIRED",
+                                "message": format!("Deadline {} elapsed", data.deadline.to_rfc3339()),
+                            })),
+                        )
+                        .await?;
+                        if won {
+                            expired += 1;
+                            info!(command_id = %data.command_id, "Expired overdue command");
+                            let _ = self.delete_lease(&data.command_id).await;
+                            let _ = self
+                                .delete_pending_index(
+                                    &status.deployment_id,
+                                    &status.target.resource_id,
+                                    &data.command_id,
+                                )
+                                .await;
+                        }
+                        let _ = self.kv.delete(&key).await;
+                    }
+                }
+            }
+            match next_cursor {
+                Some(next) => cursor = Some(next),
+                None => break,
+            }
+        }
+        Ok(expired)
+    }
+
     // --- Deadline Index ---
 
     async fn create_deadline_index(&self, command_id: &str, deadline: DateTime<Utc>) -> Result<()> {
@@ -1179,15 +1654,19 @@ impl CommandServer {
             },
         )?;
 
-        let ttl = deadline.signed_duration_since(Utc::now());
-        let ttl_duration = if ttl.num_seconds() > 0 {
-            Some(Duration::from_secs(ttl.num_seconds() as u64))
-        } else {
-            None
-        };
-
-        let options = ttl_duration.map(|ttl| PutOptions {
-            ttl: Some(ttl),
+        // The entry must remain VISIBLE well past the deadline: scan_prefix
+        // treats logically-expired keys as absent on every provider, so a
+        // TTL equal to the deadline would hide the entry at exactly the
+        // moment the reaper needs it (the bug that made the reaper inert).
+        // The reaper deletes entries as it processes them; the 7-day grace
+        // is only self-cleaning for processes that never run a reaper.
+        const DEADLINE_INDEX_GRACE: chrono::Duration = chrono::Duration::days(7);
+        let ttl = deadline
+            .signed_duration_since(Utc::now())
+            .checked_add(&DEADLINE_INDEX_GRACE)
+            .unwrap_or(DEADLINE_INDEX_GRACE);
+        let options = (ttl.num_seconds() > 0).then(|| PutOptions {
+            ttl: Some(Duration::from_secs(ttl.num_seconds() as u64)),
             if_not_exists: false,
         });
 
@@ -1204,7 +1683,11 @@ impl CommandServer {
 
     // --- Dispatch ---
 
-    async fn dispatch_command_push(&self, command_id: &str, deployment_id: &str) -> Result<()> {
+    async fn dispatch_command_push(
+        &self,
+        command_id: &str,
+        deployment_id: &str,
+    ) -> Result<CommandState> {
         // Get metadata from registry
         let metadata = self
             .command_registry
@@ -1226,32 +1709,64 @@ impl CommandServer {
         // Build envelope
         let envelope = self.build_envelope(command_id, &metadata, params).await?;
 
-        // Dispatch via transport
-        self.command_dispatcher
-            .dispatch(&envelope)
-            .await
-            .map_err(|e| {
-                e.context(ErrorData::TransportDispatchFailed {
-                    message: "Failed to dispatch command".to_string(),
-                    transport_type: None,
-                    target: Some(deployment_id.to_string()),
-                })
-            })?;
+        // Mark Dispatched BEFORE invoking the transport: a fast worker can
+        // execute and submit before this function resumes, and submit
+        // validates state == Dispatched — the old dispatch-then-mark order
+        // could reject that submit (losing the response) or stomp its
+        // terminal state back to Dispatched.
+        if !self
+            .command_registry
+            .mark_dispatched_if_not_terminal(command_id, Utc::now())
+            .await?
+        {
+            return Ok(self
+                .command_registry
+                .get_command_status(command_id)
+                .await?
+                .map(|status| status.state)
+                .unwrap_or(CommandState::Dispatched));
+        }
 
-        // Update registry state
-        self.command_registry
-            .update_command_state(
+        // A definite pre-delivery rejection (connection refusal, request
+        // builder failure, or any HTTP status other than the runtime's exact
+        // 202 acceptance) is safe to record as terminal DELIVERY_FAILED.
+        // Other transport errors are ambiguous: the target may have accepted
+        // the envelope before the response was lost. Keep those Dispatched so
+        // a late response remains valid and return the durable ID for polling;
+        // reverting/retrying could execute the command twice.
+        if let Err(error) = self.command_dispatcher.dispatch(&envelope).await {
+            if is_definite_dispatch_rejection(&error) {
+                let delivery_failure = CommandResponse::error(
+                    "DELIVERY_FAILED",
+                    "Worker runtime did not accept command delivery",
+                );
+                self.submit_command_response(command_id, delivery_failure)
+                    .await?;
+                warn!(
+                    command_id,
+                    deployment_id,
+                    error = %error,
+                    "Push dispatch was definitely rejected; command marked Failed"
+                );
+                return Ok(CommandState::Failed);
+            }
+
+            let error = error.context(ErrorData::TransportDispatchFailed {
+                message: "Failed to dispatch command".to_string(),
+                transport_type: None,
+                target: Some(deployment_id.to_string()),
+            });
+            warn!(
                 command_id,
-                CommandState::Dispatched,
-                Some(Utc::now()),
-                None,
-                None,
-                None,
-            )
-            .await?;
+                deployment_id,
+                error = %error,
+                "Push dispatch acknowledgement failed; command remains Dispatched for a possible late response"
+            );
+            return Ok(CommandState::Dispatched);
+        }
 
-        info!("Command {} dispatched via push", command_id);
-        Ok(())
+        info!("Command {} dispatched via push", envelope.command_id);
+        Ok(CommandState::Dispatched)
     }
 
     async fn build_envelope(
@@ -1295,25 +1810,26 @@ impl CommandServer {
         }
 
         // If params are still Storage (either too large or re-inline failed),
-        // ensure they have a presigned GET request
+        // always mint a fresh GET request. A command may remain Pending longer
+        // than the URL minted at upload completion, and leasing must never hand
+        // a Worker an already-expired storage credential.
         if let BodySpec::Storage {
             size,
-            storage_get_request,
+            storage_get_request: _,
             storage_put_used,
         } = &params
         {
-            if storage_get_request.is_none() {
-                let get_request = self.generate_storage_get_request(command_id).await?;
-                params = BodySpec::Storage {
-                    size: *size,
-                    storage_get_request: Some(get_request),
-                    storage_put_used: *storage_put_used,
-                };
-            }
+            let get_request = self.generate_storage_get_request(command_id).await?;
+            params = BodySpec::Storage {
+                size: *size,
+                storage_get_request: Some(get_request),
+                storage_put_used: *storage_put_used,
+            };
         }
 
         Ok(Envelope::new(
             metadata.deployment_id.clone(),
+            metadata.target.clone(),
             command_id.to_string(),
             metadata.attempt,
             metadata.deadline,
@@ -1325,7 +1841,7 @@ impl CommandServer {
 
     async fn create_response_handling(&self, command_id: &str) -> Result<ResponseHandling> {
         let upload_path = StoragePath::from(format!("arc/commands/{}/response", command_id));
-        let expires_in = Duration::from_secs(3600);
+        let expires_in = Duration::from_secs(Self::RESPONSE_CREDENTIAL_LIFETIME_SECS);
         let presigned = self
             .storage
             .presigned_put(&upload_path, expires_in)
@@ -1408,5 +1924,159 @@ impl CommandServer {
                 })
             })
             .map(|s| s.to_string())
+    }
+}
+
+#[cfg(test)]
+mod relative_url_tests {
+    use super::*;
+    use alien_core::presigned::PresignedOperation;
+    use std::collections::HashMap;
+
+    fn http_request(url: &str, operation: PresignedOperation) -> PresignedRequest {
+        PresignedRequest::new_http(
+            url.to_string(),
+            match operation {
+                PresignedOperation::Get => "GET",
+                PresignedOperation::Put => "PUT",
+                PresignedOperation::Delete => "DELETE",
+            }
+            .to_string(),
+            HashMap::new(),
+            operation,
+            "commands/test".to_string(),
+            Utc::now() + chrono::Duration::minutes(5),
+        )
+    }
+
+    #[test]
+    fn leased_manager_urls_are_relative_to_lease_endpoint() {
+        let mut envelope = Envelope::new(
+            "deployment",
+            CommandTarget::new("daemon", CommandTargetType::Daemon),
+            "command",
+            1,
+            None,
+            "run",
+            BodySpec::Storage {
+                size: Some(2048),
+                storage_get_request: Some(http_request(
+                    "http://manager.internal/storage/params?signature=params",
+                    PresignedOperation::Get,
+                )),
+                storage_put_used: Some(true),
+            },
+            ResponseHandling {
+                max_inline_bytes: 1024,
+                submit_response_url:
+                    "http://manager.internal/v1/commands/command/response?response_token=DoNotCanonicalize%2FValue&expires=1"
+                        .to_string(),
+                storage_upload_request: http_request(
+                    "http://manager.internal/v1/storage/response?signature=DoNotCanonicalize%2FUpload",
+                    PresignedOperation::Put,
+                ),
+            },
+        );
+
+        CommandServer::relativize_manager_urls(&mut envelope, "http://manager.internal/v1");
+
+        assert_eq!(
+            envelope.response_handling.submit_response_url,
+            "command/response?response_token=DoNotCanonicalize%2FValue&expires=1"
+        );
+        assert_eq!(
+            envelope.response_handling.storage_upload_request.url(),
+            "../storage/response?signature=DoNotCanonicalize%2FUpload"
+        );
+        let BodySpec::Storage {
+            storage_get_request: Some(params),
+            ..
+        } = &envelope.params
+        else {
+            panic!("storage params request");
+        };
+        assert_eq!(params.url(), "../../storage/params?signature=params");
+
+        envelope.response_handling.storage_upload_request = http_request(
+            "https://storage.example.com/result?signature=cloud",
+            PresignedOperation::Put,
+        );
+        CommandServer::relativize_manager_urls(&mut envelope, "http://manager.internal/v1");
+        assert_eq!(
+            envelope.response_handling.storage_upload_request.url(),
+            "https://storage.example.com/result?signature=cloud",
+            "cloud-presigned URLs must remain byte-for-byte absolute"
+        );
+    }
+}
+
+#[cfg(test)]
+mod idempotency_key_tests {
+    use super::*;
+    use crate::server::{validate_command_name, validate_command_target_id};
+
+    #[test]
+    fn definite_dispatch_rejection_is_classified_by_typed_error_data() {
+        let rejected = AlienError::new(ErrorData::TransportDispatchRejected {
+            message: "not accepted".to_string(),
+            transport_type: Some("http".to_string()),
+            target: Some("command-id".to_string()),
+        });
+        assert!(is_definite_dispatch_rejection(&rejected));
+
+        let ambiguous = AlienError::new(ErrorData::TransportDispatchFailed {
+            message: "acknowledgement lost".to_string(),
+            transport_type: Some("http".to_string()),
+            target: Some("command-id".to_string()),
+        });
+        assert!(!is_definite_dispatch_rejection(&ambiguous));
+    }
+
+    /// Idempotency keys are `{dep}:{rid}:{command}:{key}`. If a target id could
+    /// contain ':', the `rid` segment would be ambiguous: the two triples
+    ///   (rid="svc",   command="a:b", key="k")
+    ///   (rid="svc:a", command="b",   key="k")
+    /// both compose to `dep:svc:a:b:k`. The shared guard forbids ':' in a target
+    /// id, so the second can never be a resolved target — closing the collision
+    /// at the rid boundary. Only the colon-free composition is exercised here;
+    /// the colliding one is proven unreachable via the guard.
+    #[test]
+    fn target_id_colon_guard_prevents_idempotency_key_collision() {
+        let colliding = CommandServer::compose_idempotency_key("dep", "svc", "a:b", "k");
+        assert_eq!(colliding, "dep:svc:a:b:k");
+
+        // The alternate triple that would collide needs target id "svc:a".
+        assert!(
+            validate_command_target_id("svc:a").is_err(),
+            "a ':'-bearing target id must be rejected so it cannot forge the rid segment"
+        );
+        assert!(validate_command_target_id("svc").is_ok());
+    }
+
+    /// The command name is the other forgeable segment. Client keys routinely
+    /// contain ':', so without a command-name guard these two distinct inputs
+    ///   (command="a:b", key="c")
+    ///   (command="a",   key="b:c")
+    /// both compose to `dep:svc:a:b:c` — a cross-command idempotency collision.
+    /// The guard rejects the ':'-bearing command name, so only the second input
+    /// is ever composed; the first can never reach key composition.
+    #[test]
+    fn command_name_colon_guard_prevents_idempotency_key_collision() {
+        // Without the guard, both inputs compose to the identical string.
+        let forged = CommandServer::compose_idempotency_key("dep", "svc", "a:b", "c");
+        let legitimate = CommandServer::compose_idempotency_key("dep", "svc", "a", "b:c");
+        assert_eq!(
+            forged, legitimate,
+            "these inputs are exactly the colliding pair the guard must separate"
+        );
+        assert_eq!(legitimate, "dep:svc:a:b:c");
+
+        // The guard makes the colliding input unreachable: a ':'-bearing command
+        // name is rejected, while the legitimate command name is accepted. With
+        // the forger blocked, `a:b`+`c` can never compose the shared key — only
+        // the distinct `a`+`b:c` command can.
+        let err = validate_command_name("a:b").expect_err("':'-bearing command must be rejected");
+        assert_eq!(err.code, "INVALID_COMMAND");
+        assert!(validate_command_name("a").is_ok());
     }
 }

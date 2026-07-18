@@ -6,8 +6,9 @@
 //! - Background tasks with `wait_until`
 //! - Bindings usage (storage, kv, queue, vault, etc.)
 
+use alien_bindings::{BindingsProvider, BindingsProviderApi};
 use alien_error::{Context, IntoAlienError};
-use alien_sdk::{AlienContext, ErrorData as BindingsErrorData};
+use alien_sdk::{worker::AlienContext, ErrorData as BindingsErrorData};
 use alien_test_server::{handlers, models::AppState};
 use axum::{
     routing::{get, post},
@@ -16,6 +17,7 @@ use axum::{
 use clap::Parser;
 use sha2::{Digest, Sha256};
 use std::{
+    collections::HashMap,
     net::{IpAddr, Ipv4Addr, SocketAddr},
     sync::Arc,
 };
@@ -40,14 +42,24 @@ async fn main() -> anyhow::Result<()> {
 
     let args = Args::parse();
 
-    // Always use port 0 (dynamic) — the alien-runtime entrypoint binds to PORT=8080,
+    // Always use port 0 (dynamic) — the alien-worker-runtime entrypoint binds to PORT=8080,
     // so the user app must pick a free port and register it via register_http_server().
     let port: u16 = 0;
 
     info!(port = port, "Starting Alien Test Server (dynamic port)");
 
-    // Initialize Alien context
-    let ctx = AlienContext::from_env()
+    let env_vars: HashMap<String, String> = std::env::vars().collect();
+
+    // Managed resource bindings are intentionally outside alien-sdk's app API.
+    // This comprehensive infrastructure test keeps a direct provider for those
+    // test-only endpoints.
+    let internal_bindings: Arc<dyn BindingsProviderApi> = Arc::new(
+        BindingsProvider::from_env(env_vars.clone())
+            .await
+            .expect("Failed to create internal bindings provider"),
+    );
+
+    let ctx = AlienContext::from_env_with_vars(&env_vars)
         .await
         .expect("Failed to create Alien context");
 
@@ -56,7 +68,10 @@ async fn main() -> anyhow::Result<()> {
         "Initialized Alien context"
     );
 
-    let app_state = AppState { ctx: Arc::new(ctx) };
+    let app_state = AppState {
+        ctx: Arc::new(ctx),
+        internal_bindings,
+    };
 
     // Register event handlers (using new SDK pattern)
     // Note: These handlers are called via gRPC from the runtime when events occur
@@ -132,7 +147,7 @@ fn register_event_handlers(app_state: &AppState) {
 
                 // Store in KV for test verification
                 // Sanitize key: replace / with _ to comply with KV key validation rules
-                let kv = ctx.get_bindings().load_kv("alien-kv").await?;
+                let kv = ctx.bindings().kv("alien-kv").await?;
                 let record = serde_json::json!({
                     "key": event.key,
                     "bucket": event.bucket,
@@ -141,7 +156,7 @@ fn register_event_handlers(app_state: &AppState) {
                     "contentType": event.content_type,
                     "processedAt": chrono::Utc::now().to_rfc3339(),
                 });
-                let sanitized_key = event.key.replace('/', "_");
+                let sanitized_key = alien_test_server::sanitize_kv_key_part(&event.key);
                 let kv_key = format!("storage_event:{}", sanitized_key);
                 let value = serde_json::to_vec(&record).into_alien_error().context(
                     BindingsErrorData::SerializationFailed {
@@ -169,14 +184,15 @@ fn register_event_handlers(app_state: &AppState) {
                 );
 
                 // Store in KV for test verification
-                // Sanitize schedule name: replace / with _ to comply with KV key validation rules
-                let kv = ctx.get_bindings().load_kv("alien-kv").await?;
+                // Sanitize schedule name to comply with KV key validation rules
+                let kv = ctx.bindings().kv("alien-kv").await?;
                 let record = serde_json::json!({
                     "scheduleName": event.schedule_name,
                     "scheduledTime": event.scheduled_time,
                     "processedAt": chrono::Utc::now().to_rfc3339(),
                 });
-                let sanitized_schedule = event.schedule_name.replace('/', "_");
+                let sanitized_schedule =
+                    alien_test_server::sanitize_kv_key_part(&event.schedule_name);
                 let kv_key = format!("cron_event:{}", sanitized_schedule);
                 let value = serde_json::to_vec(&record).into_alien_error().context(
                     BindingsErrorData::SerializationFailed {
@@ -205,8 +221,8 @@ fn register_event_handlers(app_state: &AppState) {
                 );
 
                 // Store in KV for test verification
-                // Sanitize message ID: replace / with _ to comply with KV key validation rules
-                let kv = ctx.get_bindings().load_kv("alien-kv").await?;
+                // Sanitize message ID to comply with KV key validation rules
+                let kv = ctx.bindings().kv("alien-kv").await?;
                 let record = serde_json::json!({
                     "messageId": message.id,
                     "source": message.source,
@@ -215,7 +231,7 @@ fn register_event_handlers(app_state: &AppState) {
                     "attemptCount": message.attempt_count,
                     "processedAt": chrono::Utc::now().to_rfc3339(),
                 });
-                let sanitized_id = message.id.replace('/', "_");
+                let sanitized_id = alien_test_server::sanitize_kv_key_part(&message.id);
                 let kv_key = format!("queue_message:{}", sanitized_id);
                 let value = serde_json::to_vec(&record).into_alien_error().context(
                     BindingsErrorData::SerializationFailed {
@@ -378,6 +394,10 @@ fn build_router(app_state: AppState) -> Router {
             post(handlers::storage::test_storage),
         )
         .route(
+            "/storage-write/{binding_name}",
+            post(handlers::storage::write_storage_object),
+        )
+        .route(
             "/build-test/{binding_name}",
             post(handlers::build::test_build),
         )
@@ -389,6 +409,10 @@ fn build_router(app_state: AppState) -> Router {
         .route(
             "/queue-test/{binding_name}",
             post(handlers::queue::test_queue),
+        )
+        .route(
+            "/queue-send/{binding_name}",
+            post(handlers::queue::send_queue_message),
         )
         .route(
             "/vault-test/{binding_name}",

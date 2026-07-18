@@ -18,8 +18,7 @@ pub async fn test_service_account(
     info!(%binding_name, "Received service account test request");
 
     let sa = app_state
-        .ctx
-        .get_bindings()
+        .internal_bindings
         .load_service_account(&binding_name)
         .await
         .context(ErrorData::BindingNotFound {

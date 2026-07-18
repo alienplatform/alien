@@ -110,10 +110,25 @@ pub fn map_gcp_error(
     let resource_type = resource_type.to_string();
     let resource_name = resource_name.to_string();
 
-    // Try to parse GCP error message if available
-    let gcp_error_message = serde_json::from_str::<GcpErrorResponse>(response_text)
-        .map(|gcp_error| gcp_error.error.message)
-        .ok();
+    // Try to parse GCP error message and status if available
+    let parsed_error = serde_json::from_str::<GcpErrorResponse>(response_text).ok();
+    let gcp_error_status = parsed_error
+        .as_ref()
+        .and_then(|gcp_error| gcp_error.error.status.clone());
+    let gcp_error_message = parsed_error.map(|gcp_error| gcp_error.error.message);
+
+    // A failed document/resource precondition (e.g. Firestore's
+    // currentDocument.updateTime mismatch) is an optimistic-concurrency
+    // CONFLICT, not invalid input — callers racing on a resource must be
+    // able to detect a lost race without string-sniffing messages.
+    if gcp_error_status.as_deref() == Some("FAILED_PRECONDITION") {
+        return ErrorData::RemoteResourceConflict {
+            message: gcp_error_message
+                .unwrap_or_else(|| format!("Precondition failed for {}", resource_name)),
+            resource_type,
+            resource_name,
+        };
+    }
 
     match http_status {
         404 => ErrorData::RemoteResourceNotFound {

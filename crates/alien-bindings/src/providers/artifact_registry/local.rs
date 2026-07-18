@@ -1,5 +1,5 @@
 use crate::{
-    error::{ErrorData, Result},
+    error::{binding_env_var, ErrorData, Result},
     traits::{
         ArtifactRegistry, ArtifactRegistryCredentials, ArtifactRegistryPermissions, Binding,
         CrossAccountAccess, CrossAccountPermissions, RegistryAuthMethod, RepositoryResponse,
@@ -46,6 +46,7 @@ impl LocalArtifactRegistry {
             ArtifactRegistryBinding::Local(config) => config,
             _ => {
                 return Err(AlienError::new(ErrorData::BindingConfigInvalid {
+                    env_var: binding_env_var(&binding_name),
                     binding_name,
                     reason: "Expected Local artifact registry binding variant".to_string(),
                 }));
@@ -56,6 +57,7 @@ impl LocalArtifactRegistry {
             .registry_url
             .into_value(&binding_name, "registry_url")
             .context(ErrorData::BindingConfigInvalid {
+                env_var: binding_env_var(&binding_name),
                 binding_name: binding_name.clone(),
                 reason: "Failed to extract registry_url from binding".to_string(),
             })?;
@@ -63,6 +65,7 @@ impl LocalArtifactRegistry {
         // Validate the registry endpoint format
         if registry_endpoint.is_empty() {
             return Err(AlienError::new(ErrorData::BindingConfigInvalid {
+                env_var: binding_env_var(&binding_name),
                 binding_name: binding_name.clone(),
                 reason: "Registry endpoint cannot be empty".to_string(),
             }));

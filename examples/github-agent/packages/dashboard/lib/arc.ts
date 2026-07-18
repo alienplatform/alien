@@ -1,4 +1,4 @@
-import { CommandsClient } from "@alienplatform/sdk/commands"
+import { CommandsClient } from "@alienplatform/commands"
 import { alien, config } from "./config"
 
 /**

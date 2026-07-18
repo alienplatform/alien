@@ -14,7 +14,6 @@ use crate::{
 };
 use alien_core::{BuildConfig, BuildStatus, ComputeType};
 use alien_error::{AlienError, Context, ContextError};
-use alien_sdk::{error::ErrorData as BindingsErrorData, BindingsProvider};
 
 /// Test build operations
 #[utoipa::path(
@@ -42,8 +41,7 @@ pub async fn test_build(
     info!(%binding_name, "Received build test request");
 
     let build_instance = app_state
-        .ctx
-        .get_bindings()
+        .internal_bindings
         .load_build(&binding_name)
         .await
         .context(ErrorData::BindingNotFound {

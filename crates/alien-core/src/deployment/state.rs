@@ -19,6 +19,12 @@ pub struct RuntimeMetadata {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub last_synced_env_vars_hash: Option<String>,
 
+    /// Exact vault keys owned by the deployment secret synchronizer. This
+    /// inventory lets a later snapshot delete removed keys without listing or
+    /// touching unrelated values in the same vault.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub last_synced_secret_names: Vec<String>,
+
     /// The prepared (mutated) stack from the last successful deployment phase
     /// This is the stack AFTER mutations have been applied (with service accounts, vault, etc.)
     /// Used for compatibility checks during updates to compare mutated stacks
@@ -199,5 +205,19 @@ mod tests {
         let mut imported = state();
         imported.stack_state = Some(StackState::new(Platform::Kubernetes));
         assert!(imported.has_desired());
+    }
+
+    #[test]
+    fn runtime_metadata_from_before_secret_inventory_defaults_to_empty() {
+        let metadata: RuntimeMetadata = serde_json::from_value(serde_json::json!({
+            "lastSyncedEnvVarsHash": "old-hash"
+        }))
+        .expect("old runtime metadata remains readable");
+
+        assert_eq!(
+            metadata.last_synced_env_vars_hash.as_deref(),
+            Some("old-hash")
+        );
+        assert!(metadata.last_synced_secret_names.is_empty());
     }
 }

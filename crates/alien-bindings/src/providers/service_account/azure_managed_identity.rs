@@ -1,4 +1,4 @@
-use crate::error::{ErrorData, Result};
+use crate::error::{binding_env_var, ErrorData, Result};
 use crate::traits::{
     AzureServiceAccountInfo, Binding, ImpersonationRequest, ServiceAccount, ServiceAccountInfo,
 };
@@ -33,6 +33,7 @@ impl AzureManagedIdentityServiceAccount {
             .clone()
             .into_value("service-account", "client_id")
             .context(ErrorData::BindingConfigInvalid {
+                env_var: binding_env_var("service-account"),
                 binding_name: "service-account".to_string(),
                 reason: "Failed to resolve client_id from binding".to_string(),
             })
@@ -45,6 +46,7 @@ impl AzureManagedIdentityServiceAccount {
             .clone()
             .into_value("service-account", "resource_id")
             .context(ErrorData::BindingConfigInvalid {
+                env_var: binding_env_var("service-account"),
                 binding_name: "service-account".to_string(),
                 reason: "Failed to resolve resource_id from binding".to_string(),
             })
@@ -57,6 +59,7 @@ impl AzureManagedIdentityServiceAccount {
             .clone()
             .into_value("service-account", "principal_id")
             .context(ErrorData::BindingConfigInvalid {
+                env_var: binding_env_var("service-account"),
                 binding_name: "service-account".to_string(),
                 reason: "Failed to resolve principal_id from binding".to_string(),
             })

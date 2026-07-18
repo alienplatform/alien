@@ -7,46 +7,81 @@ use std::sync::Arc;
 
 use alien_commands::error::ErrorData as CommandErrorData;
 use alien_commands::server::{
-    CommandEnvelopeData, CommandMetadata, CommandRegistry, CommandStatus,
+    delivery_mode_for, select_command_target, CommandEnvelopeData, CommandMetadata,
+    CommandRegistry, CommandStatus, ResolvedCommandTarget,
 };
-use alien_core::{CommandState, DeploymentModel};
+use alien_core::{
+    CommandDeliveryMode, CommandState, CommandTarget, CommandTargetType, DeploymentModel, Platform,
+};
 use alien_error::IntoAlienError;
 
 use super::database::{RowParser, SqliteDatabase};
 use super::migrations::Commands;
 
-fn command_delivery_model_for_deployment(
-    deployment: &crate::traits::DeploymentRecord,
-) -> DeploymentModel {
-    match deployment.platform {
-        // Local and Kubernetes deployments can still be manager-reconciled in
-        // push mode, but command delivery for their workers is pull-based:
-        // the worker runtime leases commands over outbound HTTPS.
-        alien_core::Platform::Kubernetes | alien_core::Platform::Local => DeploymentModel::Pull,
-        _ => {
-            deployment
-                .stack_settings
-                .as_ref()
-                .expect("stored deployment carries stack_settings")
-                .deployment_model
-        }
-    }
-}
-
 pub struct SqliteCommandRegistry {
     db: Arc<SqliteDatabase>,
     deployment_store: Arc<dyn crate::traits::DeploymentStore>,
+    release_store: Arc<dyn crate::traits::ReleaseStore>,
 }
 
 impl SqliteCommandRegistry {
     pub fn new(
         db: Arc<SqliteDatabase>,
         deployment_store: Arc<dyn crate::traits::DeploymentStore>,
+        release_store: Arc<dyn crate::traits::ReleaseStore>,
     ) -> Self {
         Self {
             db,
             deployment_store,
+            release_store,
         }
+    }
+
+    /// Derive the Worker delivery context for this deployment. Kubernetes uses
+    /// an environment-local operator relay. Local and cloud honor deployment
+    /// model: embedded Local is Push; remote Local is Pull through its operator.
+    ///
+    /// This platform-dependent derivation stays manager-side; the pinned
+    /// per-type rule (Container/Daemon always Pull) lives in the shared
+    /// [`delivery_mode_for`] that both registries call.
+    fn worker_delivery_mode(
+        platform: Platform,
+        stack_deployment_model: DeploymentModel,
+    ) -> CommandDeliveryMode {
+        match platform {
+            Platform::Kubernetes => CommandDeliveryMode::Pull,
+            _ if stack_deployment_model == DeploymentModel::Push => CommandDeliveryMode::Push,
+            _ => CommandDeliveryMode::Pull,
+        }
+    }
+
+    /// Derive the delivery mode for a resolved target, failing fast when the
+    /// deployment carries no stack settings.
+    ///
+    /// A missing `stack_settings` is an invariant violation: defaulting it
+    /// (`DeploymentModel::default()` is Push) would silently resolve Worker
+    /// targets to Push delivery — the riskiest direction. Per the repo's "fail
+    /// fast, don't fall back silently" rule we return a typed error naming the
+    /// deployment instead. The per-type dispatch (Container/Daemon always Pull)
+    /// then goes through the shared [`delivery_mode_for`].
+    fn resolve_delivery_mode(
+        resource_type: CommandTargetType,
+        platform: Platform,
+        stack_settings: Option<&alien_core::StackSettings>,
+        deployment_id: &str,
+    ) -> alien_commands::error::Result<CommandDeliveryMode> {
+        let stack_deployment_model =
+            stack_settings.map(|s| s.deployment_model).ok_or_else(|| {
+                alien_error::AlienError::new(CommandErrorData::Other {
+                    message: format!(
+                        "Deployment '{}' is missing stack_settings.deployment_model; \
+                     cannot derive command delivery mode",
+                        deployment_id
+                    ),
+                })
+            })?;
+        let worker_mode = Self::worker_delivery_mode(platform, stack_deployment_model);
+        Ok(delivery_mode_for(resource_type, worker_mode))
     }
 
     fn parse_command_status(row: &turso::Row) -> alien_commands::error::Result<CommandStatus> {
@@ -75,60 +110,175 @@ impl SqliteCommandRegistry {
             request_size_bytes: request_size.map(|n| n as u64),
             response_size_bytes: response_size.map(|n| n as u64),
             error: p.optional_json(12, "error").map_err(to_cmd_err)?,
+            // Status is a read-only path, so it tolerates legacy
+            // rows written before target columns existed (NULL target). Such
+            // rows can never be leased or dispatched (they are absent from the
+            // per-target pending index), so a synthesized deployment-scoped
+            // marker here is display-only and cannot cause misdelivery.
+            target: parse_target_columns(&p, 13, 14)
+                .map_err(to_cmd_err)?
+                .unwrap_or_else(|| {
+                    let deployment_id = p.string(1, "deployment_id").unwrap_or_default();
+                    CommandTarget::new(deployment_id, CommandTargetType::Worker)
+                }),
         })
     }
 
     fn parse_envelope_data(row: &turso::Row) -> alien_commands::error::Result<CommandEnvelopeData> {
         let p = RowParser::new(row);
         let state_str: String = p.string(3, "state").map_err(to_cmd_err)?;
-        let deployment_model_str: String = p.string(4, "deployment_model").map_err(to_cmd_err)?;
+        let delivery_mode_str: String = p.string(4, "delivery_mode").map_err(to_cmd_err)?;
+        let command_id = p.string(0, "id").map_err(to_cmd_err)?;
+
+        // Envelope data feeds the lease/dispatch path, which must
+        // never deliver to the wrong resource. A legacy row without a target
+        // (NULL columns) cannot be safely dispatched, so we fail loudly rather
+        // than synthesize a target. In practice such rows are unreachable here
+        // — they predate the per-target pending index and so are never leased
+        // — but a defensive loud error beats silent misdelivery.
+        let target = parse_target_columns(&p, 7, 8)
+            .map_err(to_cmd_err)?
+            .ok_or_else(|| {
+                alien_error::AlienError::new(CommandErrorData::Other {
+                    message: format!(
+                        "Command '{}' predates command-target columns and cannot be \
+                         leased or dispatched (no resolved target)",
+                        command_id
+                    ),
+                })
+            })?;
 
         Ok(CommandEnvelopeData {
-            command_id: p.string(0, "id").map_err(to_cmd_err)?,
+            command_id,
             deployment_id: p.string(1, "deployment_id").map_err(to_cmd_err)?,
             command: p.string(2, "name").map_err(to_cmd_err)?,
             state: deserialize_command_state(&state_str),
-            deployment_model: deserialize_deployment_model(&deployment_model_str),
+            delivery_mode: deserialize_delivery_mode(&delivery_mode_str),
             attempt: p.i64(5, "attempt").map_err(to_cmd_err)? as u32,
             deadline: p.optional_datetime(6, "deadline").map_err(to_cmd_err)?,
+            target,
         })
     }
 
     /// All columns for full command queries.
-    const COMMAND_COLUMNS: [Commands; 13] = [
-        Commands::Id,                // 0
-        Commands::DeploymentId,      // 1
-        Commands::Name,              // 2
-        Commands::State,             // 3
-        Commands::DeploymentModel,   // 4
-        Commands::Attempt,           // 5
-        Commands::Deadline,          // 6
-        Commands::CreatedAt,         // 7
-        Commands::DispatchedAt,      // 8
-        Commands::CompletedAt,       // 9
-        Commands::RequestSizeBytes,  // 10
-        Commands::ResponseSizeBytes, // 11
-        Commands::Error,             // 12
+    const COMMAND_COLUMNS: [Commands; 15] = [
+        Commands::Id,                 // 0
+        Commands::DeploymentId,       // 1
+        Commands::Name,               // 2
+        Commands::State,              // 3
+        Commands::DeliveryMode,       // 4
+        Commands::Attempt,            // 5
+        Commands::Deadline,           // 6
+        Commands::CreatedAt,          // 7
+        Commands::DispatchedAt,       // 8
+        Commands::CompletedAt,        // 9
+        Commands::RequestSizeBytes,   // 10
+        Commands::ResponseSizeBytes,  // 11
+        Commands::Error,              // 12
+        Commands::TargetResourceId,   // 13
+        Commands::TargetResourceType, // 14
     ];
 
     /// Columns needed for envelope data (subset).
-    const ENVELOPE_COLUMNS: [Commands; 7] = [
-        Commands::Id,              // 0
-        Commands::DeploymentId,    // 1
-        Commands::Name,            // 2
-        Commands::State,           // 3
-        Commands::DeploymentModel, // 4
-        Commands::Attempt,         // 5
-        Commands::Deadline,        // 6
+    const ENVELOPE_COLUMNS: [Commands; 9] = [
+        Commands::Id,                 // 0
+        Commands::DeploymentId,       // 1
+        Commands::Name,               // 2
+        Commands::State,              // 3
+        Commands::DeliveryMode,       // 4
+        Commands::Attempt,            // 5
+        Commands::Deadline,           // 6
+        Commands::TargetResourceId,   // 7
+        Commands::TargetResourceType, // 8
     ];
 }
 
 #[async_trait]
 impl CommandRegistry for SqliteCommandRegistry {
+    async fn resolve_target(
+        &self,
+        deployment_id: &str,
+        requested: Option<&str>,
+    ) -> alien_commands::error::Result<ResolvedCommandTarget> {
+        // Single-tenant SQLite registry — resolution reads deployment + release
+        // state directly, so `Subject::system()` is the correct synthetic caller
+        // (the route layer already authorized the human caller against the
+        // deployment; see the auth note in routes/commands.rs).
+        let caller = crate::auth::Subject::system();
+
+        let deployment = self
+            .deployment_store
+            .get_deployment(&caller, deployment_id)
+            .await
+            .map_err(|e| {
+                alien_error::AlienError::new(CommandErrorData::Other {
+                    message: format!("Failed to load deployment '{}': {}", deployment_id, e),
+                })
+            })?
+            .ok_or_else(|| {
+                alien_error::AlienError::new(CommandErrorData::InvalidCommand {
+                    message: format!("Deployment '{}' not found", deployment_id),
+                })
+            })?;
+
+        // Load the deployment's current release stack (if any) and derive its
+        // command-capable targets in declaration order. A deployment with no
+        // current release, or no stack for its platform, simply has no targets
+        // — the resolution rules below then surface NO_COMMAND_TARGETS (or
+        // COMMAND_TARGET_NOT_FOUND for an explicit request).
+        let targets: Vec<CommandTarget> = match deployment.current_release_id.as_deref() {
+            Some(release_id) => {
+                let release = self
+                    .release_store
+                    .get_release(&caller, release_id)
+                    .await
+                    .map_err(|e| {
+                        alien_error::AlienError::new(CommandErrorData::Other {
+                            message: format!("Failed to load release '{}': {}", release_id, e),
+                        })
+                    })?
+                    .ok_or_else(|| {
+                        alien_error::AlienError::new(CommandErrorData::Other {
+                            message: format!(
+                                "Release '{}' for deployment '{}' not found",
+                                release_id, deployment_id
+                            ),
+                        })
+                    })?;
+                match release.stacks.get(&deployment.platform) {
+                    Some(stack) => stack.command_targets(),
+                    None => Vec::new(),
+                }
+            }
+            None => Vec::new(),
+        };
+
+        // Selection rules (empty-id guard, explicit lookup, shorthand codes,
+        // and the `:`-charset guard) come from the single shared implementation
+        // in alien-commands — the same one the in-memory registry calls.
+        let target = select_command_target(deployment_id, &targets, requested)?;
+
+        // Fail fast if the stored deployment carries no stack settings rather
+        // than silently defaulting Worker delivery to Push (the riskiest
+        // direction).
+        let delivery_mode = Self::resolve_delivery_mode(
+            target.resource_type,
+            deployment.platform,
+            deployment.stack_settings.as_ref(),
+            deployment_id,
+        )?;
+
+        Ok(ResolvedCommandTarget {
+            target,
+            delivery_mode,
+        })
+    }
+
     async fn create_command(
         &self,
         deployment_id: &str,
         command_name: &str,
+        target: &ResolvedCommandTarget,
         initial_state: CommandState,
         deadline: Option<DateTime<Utc>>,
         request_size_bytes: Option<u64>,
@@ -164,8 +314,13 @@ impl CommandRegistry for SqliteCommandRegistry {
             }));
         }
 
-        let deployment_model = command_delivery_model_for_deployment(&deployment);
-        let deployment_model_str = serialize_enum(&deployment_model);
+        // The delivery mode is decided at resolution time and passed in with
+        // the resolved target; it is stored in the delivery-mode column (whose
+        // physical name is still `deployment_model` — same "push"/"pull"
+        // strings). The resolved target's id and type are stored in the
+        // dedicated command-target columns.
+        let delivery_mode_str = serialize_enum(&target.delivery_mode);
+        let target_type_str = serialize_enum(&target.target.resource_type);
 
         let sql = Query::insert()
             .into_table(Commands::Table)
@@ -174,22 +329,26 @@ impl CommandRegistry for SqliteCommandRegistry {
                 Commands::DeploymentId,
                 Commands::Name,
                 Commands::State,
-                Commands::DeploymentModel,
+                Commands::DeliveryMode,
                 Commands::Attempt,
                 Commands::Deadline,
                 Commands::CreatedAt,
                 Commands::RequestSizeBytes,
+                Commands::TargetResourceId,
+                Commands::TargetResourceType,
             ])
             .values_panic([
                 command_id.clone().into(),
                 deployment_id.into(),
                 command_name.into(),
                 state_str.into(),
-                deployment_model_str.into(),
+                delivery_mode_str.into(),
                 1i64.into(),
                 deadline.map(|d| d.to_rfc3339()).into(),
                 now.to_rfc3339().into(),
                 request_size_bytes.map(|n| n as i64).into(),
+                target.target.resource_id.clone().into(),
+                target_type_str.into(),
             ])
             .to_string(SqliteQueryBuilder);
 
@@ -197,7 +356,8 @@ impl CommandRegistry for SqliteCommandRegistry {
 
         Ok(CommandMetadata {
             command_id,
-            deployment_model,
+            target: target.target.clone(),
+            delivery_mode: target.delivery_mode,
             project_id: "local".to_string(),
         })
     }
@@ -256,13 +416,18 @@ impl CommandRegistry for SqliteCommandRegistry {
         completed_at: Option<DateTime<Utc>>,
         response_size_bytes: Option<u64>,
         error: Option<serde_json::Value>,
-    ) -> alien_commands::error::Result<()> {
+    ) -> alien_commands::error::Result<bool> {
         let sql = {
             let mut query = Query::update();
             query
                 .table(Commands::Table)
                 .value(Commands::State, state.as_ref())
-                .and_where(Expr::col(Commands::Id).eq(command_id));
+                .and_where(Expr::col(Commands::Id).eq(command_id))
+                .and_where(Expr::col(Commands::State).is_not_in([
+                    CommandState::Succeeded.as_ref(),
+                    CommandState::Failed.as_ref(),
+                    CommandState::Expired.as_ref(),
+                ]));
             if let Some(d) = dispatched_at {
                 query.value(Commands::DispatchedAt, d.to_rfc3339());
             }
@@ -281,8 +446,79 @@ impl CommandRegistry for SqliteCommandRegistry {
             query.to_string(SqliteQueryBuilder)
         };
 
-        self.db.execute(&sql).await.map_err(to_cmd_err)?;
-        Ok(())
+        let rows_affected = self
+            .db
+            .execute_returning_rows_affected(&sql)
+            .await
+            .map_err(to_cmd_err)?;
+        Ok(rows_affected > 0)
+    }
+
+    async fn complete_command(
+        &self,
+        command_id: &str,
+        state: CommandState,
+        completed_at: DateTime<Utc>,
+        response_size_bytes: Option<u64>,
+        error: Option<serde_json::Value>,
+    ) -> alien_commands::error::Result<bool> {
+        // Single conditional UPDATE: the WHERE clause excludes terminal
+        // states, so exactly one of two racing submitters wins and a
+        // terminal record is never overwritten.
+        let sql = {
+            let mut query = Query::update();
+            query
+                .table(Commands::Table)
+                .value(Commands::State, state.as_ref())
+                .value(Commands::CompletedAt, completed_at.to_rfc3339())
+                .and_where(Expr::col(Commands::Id).eq(command_id))
+                .and_where(Expr::col(Commands::State).is_not_in([
+                    CommandState::Succeeded.as_ref(),
+                    CommandState::Failed.as_ref(),
+                    CommandState::Expired.as_ref(),
+                ]));
+            if let Some(r) = response_size_bytes {
+                query.value(Commands::ResponseSizeBytes, r as i64);
+            }
+            if let Some(e) = &error {
+                query.value(
+                    Commands::Error,
+                    serde_json::to_string(e).unwrap_or_default(),
+                );
+            }
+            query.to_string(SqliteQueryBuilder)
+        };
+
+        let rows_affected = self
+            .db
+            .execute_returning_rows_affected(&sql)
+            .await
+            .map_err(to_cmd_err)?;
+        Ok(rows_affected > 0)
+    }
+
+    async fn mark_dispatched_if_not_terminal(
+        &self,
+        command_id: &str,
+        dispatched_at: DateTime<Utc>,
+    ) -> alien_commands::error::Result<bool> {
+        let sql = Query::update()
+            .table(Commands::Table)
+            .value(Commands::State, CommandState::Dispatched.as_ref())
+            .value(Commands::DispatchedAt, dispatched_at.to_rfc3339())
+            .and_where(Expr::col(Commands::Id).eq(command_id))
+            .and_where(Expr::col(Commands::State).is_not_in([
+                CommandState::Succeeded.as_ref(),
+                CommandState::Failed.as_ref(),
+                CommandState::Expired.as_ref(),
+            ]))
+            .to_string(SqliteQueryBuilder);
+        let rows_affected = self
+            .db
+            .execute_returning_rows_affected(&sql)
+            .await
+            .map_err(to_cmd_err)?;
+        Ok(rows_affected > 0)
     }
 
     async fn increment_attempt(&self, command_id: &str) -> alien_commands::error::Result<u32> {
@@ -331,6 +567,37 @@ fn serialize_enum<T: serde::Serialize>(value: &T) -> String {
         .unwrap_or_default()
 }
 
+/// Parse the target columns into a [`CommandTarget`], or `None` for a legacy
+/// row that predates command-target columns (NULL/empty `target_resource_id`).
+fn parse_target_columns(
+    p: &RowParser,
+    id_idx: usize,
+    type_idx: usize,
+) -> Result<Option<CommandTarget>, alien_error::AlienError> {
+    let resource_id = p.optional_string(id_idx, "target_resource_id")?;
+    let Some(resource_id) = resource_id.filter(|s| !s.is_empty()) else {
+        return Ok(None);
+    };
+    let resource_type = p
+        .optional_string(type_idx, "target_resource_type")?
+        .as_deref()
+        .map(deserialize_target_type)
+        .unwrap_or(CommandTargetType::Worker);
+    Ok(Some(CommandTarget::new(resource_id, resource_type)))
+}
+
+/// Deserialize CommandTargetType from its serde string representation.
+fn deserialize_target_type(s: &str) -> CommandTargetType {
+    serde_json::from_value(serde_json::Value::String(s.to_string())).unwrap_or_else(|e| {
+        tracing::warn!(
+            "Failed to deserialize CommandTargetType '{}': {}, using Worker",
+            s,
+            e
+        );
+        CommandTargetType::Worker
+    })
+}
+
 /// Deserialize CommandState from its serde string representation.
 fn deserialize_command_state(s: &str) -> CommandState {
     serde_json::from_value(serde_json::Value::String(s.to_string())).unwrap_or_else(|e| {
@@ -343,15 +610,19 @@ fn deserialize_command_state(s: &str) -> CommandState {
     })
 }
 
-/// Deserialize DeploymentModel from its serde string representation.
-fn deserialize_deployment_model(s: &str) -> DeploymentModel {
+/// Deserialize CommandDeliveryMode from its serde string representation.
+///
+/// The deployment_model column historically stored `DeploymentModel` values;
+/// both enums serialize to the same "push"/"pull" strings, so old rows parse
+/// unchanged.
+fn deserialize_delivery_mode(s: &str) -> CommandDeliveryMode {
     serde_json::from_value(serde_json::Value::String(s.to_string())).unwrap_or_else(|e| {
         tracing::warn!(
-            "Failed to deserialize DeploymentModel '{}': {}, using Pull",
+            "Failed to deserialize CommandDeliveryMode '{}': {}, using Pull",
             s,
             e
         );
-        DeploymentModel::Pull
+        CommandDeliveryMode::Pull
     })
 }
 
@@ -364,101 +635,148 @@ fn to_cmd_err<E: std::fmt::Display>(err: E) -> alien_commands::error::Error {
 
 #[cfg(test)]
 mod tests {
-    use chrono::Utc;
+    use super::*;
+    use crate::stores::sqlite::{SqliteDeploymentStore, SqliteReleaseStore};
 
-    use alien_core::{DeploymentModel, Platform, StackSettings};
+    async fn registry() -> (Arc<SqliteDatabase>, SqliteCommandRegistry) {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("test.db");
+        std::mem::forget(dir);
+        let db = Arc::new(SqliteDatabase::new(path.to_str().unwrap()).await.unwrap());
+        let dep_store = Arc::new(SqliteDeploymentStore::new(db.clone()));
+        let rel_store = Arc::new(SqliteReleaseStore::new(db.clone()));
+        let reg = SqliteCommandRegistry::new(db.clone(), dep_store, rel_store);
+        (db, reg)
+    }
 
-    use super::command_delivery_model_for_deployment;
+    /// A deployment with no stack settings is an invariant violation. The
+    /// delivery-mode derivation must fail loudly (naming the deployment) rather
+    /// than silently default to Push — the store's `stack_settings` column is
+    /// NOT NULL so this state is unreachable through the store, but the guard
+    /// still protects the resolver if that invariant is ever broken upstream.
+    #[test]
+    fn resolve_delivery_mode_fails_fast_without_stack_settings() {
+        let err = SqliteCommandRegistry::resolve_delivery_mode(
+            CommandTargetType::Worker,
+            Platform::Aws,
+            None,
+            "dep-x",
+        )
+        .unwrap_err();
+        assert!(
+            err.message.contains("deployment_model"),
+            "expected a fail-fast deployment-model error, got: {}",
+            err.message
+        );
+    }
 
-    fn deployment_record(
-        platform: Platform,
-        deployment_model: DeploymentModel,
-    ) -> crate::traits::DeploymentRecord {
-        crate::traits::DeploymentRecord {
-            id: "dep_test".to_string(),
-            workspace_id: "default".to_string(),
-            project_id: "default".to_string(),
-            name: "test".to_string(),
-            deployment_group_id: "dg_test".to_string(),
-            platform,
-            deployment_protocol_version: alien_core::CURRENT_DEPLOYMENT_PROTOCOL_VERSION,
-            base_platform: None,
-            status: "running".to_string(),
-            stack_settings: Some(StackSettings {
-                deployment_model,
-                ..StackSettings::default()
-            }),
-            stack_state: None,
-            environment_info: None,
-            runtime_metadata: None,
-            current_release_id: None,
-            desired_release_id: None,
-            import_source: None,
-            setup_method: None,
-            setup_metadata: None,
-            setup_target: None,
-            setup_fingerprint: None,
-            setup_fingerprint_version: None,
-            user_environment_variables: None,
-            management_config: None,
-            deployment_config: None,
-            deployment_token: None,
-            retry_requested: false,
-            locked_by: None,
-            locked_at: None,
-            created_at: Utc::now(),
-            updated_at: None,
-            error: None,
+    /// With stack settings present, the derivation returns a real mode (Push for
+    /// a Worker on a push-capable platform with the Push model) — never the
+    /// silent default masking a missing invariant.
+    #[test]
+    fn resolve_delivery_mode_worker_push_when_present() {
+        let settings = alien_core::StackSettings {
+            deployment_model: DeploymentModel::Push,
+            ..alien_core::StackSettings::default()
+        };
+        let mode = SqliteCommandRegistry::resolve_delivery_mode(
+            CommandTargetType::Worker,
+            Platform::Aws,
+            Some(&settings),
+            "dep-x",
+        )
+        .unwrap();
+        assert_eq!(mode, CommandDeliveryMode::Push);
+    }
+
+    #[test]
+    fn worker_delivery_mode_routes_environment_local_platforms() {
+        for model in [DeploymentModel::Push, DeploymentModel::Pull] {
+            assert_eq!(
+                SqliteCommandRegistry::worker_delivery_mode(Platform::Kubernetes, model),
+                CommandDeliveryMode::Pull,
+                "Kubernetes manager delivery is leased by the in-cluster operator"
+            );
+        }
+
+        for platform in [
+            Platform::Local,
+            Platform::Aws,
+            Platform::Gcp,
+            Platform::Azure,
+        ] {
+            assert_eq!(
+                SqliteCommandRegistry::worker_delivery_mode(platform, DeploymentModel::Push),
+                CommandDeliveryMode::Push,
+                "{platform:?} Push deployments dispatch directly"
+            );
+            assert_eq!(
+                SqliteCommandRegistry::worker_delivery_mode(platform, DeploymentModel::Pull),
+                CommandDeliveryMode::Pull,
+                "{platform:?} Pull deployments dispatch through their operator"
+            );
         }
     }
 
-    #[test]
-    fn local_commands_poll_even_for_push_dev_deployments() {
-        let deployment = deployment_record(Platform::Local, DeploymentModel::Push);
+    /// A legacy command row has NULL target columns. Status reads must
+    /// tolerate it (read-only path), while envelope/lease reads must fail
+    /// loudly rather than synthesize a target that could misdeliver.
+    #[tokio::test]
+    async fn legacy_null_target_row_status_tolerant_envelope_loud() {
+        let (db, reg) = registry().await;
 
-        assert_eq!(
-            command_delivery_model_for_deployment(&deployment),
-            DeploymentModel::Pull
+        // Insert a legacy row directly: target columns left NULL.
+        db.execute(
+            "INSERT INTO commands (id, deployment_id, name, state, deployment_model, attempt, created_at) \
+             VALUES ('legacy-cmd', 'dep-legacy', 'sync', 'PENDING', 'pull', 1, '2020-01-01T00:00:00Z')",
+        )
+        .await
+        .unwrap();
+
+        // Status read tolerates the NULL target with a synthesized marker.
+        let status = reg.get_command_status("legacy-cmd").await.unwrap().unwrap();
+        assert_eq!(status.target.resource_id, "dep-legacy");
+        assert_eq!(status.target.resource_type, CommandTargetType::Worker);
+
+        // Envelope/lease read fails loudly — never synthesizes a target.
+        let err = reg.get_command_metadata("legacy-cmd").await.unwrap_err();
+        assert!(
+            err.message.contains("predates command-target columns"),
+            "expected a loud legacy error, got: {}",
+            err.message
         );
     }
 
-    #[test]
-    fn kubernetes_commands_poll_even_if_record_is_malformed_as_push() {
-        let deployment = deployment_record(Platform::Kubernetes, DeploymentModel::Push);
+    #[tokio::test]
+    async fn non_terminal_update_cannot_resurrect_completed_command() {
+        let (db, reg) = registry().await;
+        db.execute(
+            "INSERT INTO commands \
+             (id, deployment_id, name, state, deployment_model, attempt, created_at, target_resource_id, target_resource_type) \
+             VALUES ('completed-cmd', 'dep-1', 'run', 'SUCCEEDED', 'pull', 1, \
+             '2020-01-01T00:00:00Z', 'daemon-1', 'daemon')",
+        )
+        .await
+        .unwrap();
 
+        assert!(!reg
+            .update_command_state(
+                "completed-cmd",
+                CommandState::Pending,
+                None,
+                None,
+                None,
+                None,
+            )
+            .await
+            .unwrap());
         assert_eq!(
-            command_delivery_model_for_deployment(&deployment),
-            DeploymentModel::Pull
-        );
-    }
-
-    #[test]
-    fn cloud_commands_use_recorded_delivery_model() {
-        let aws = deployment_record(Platform::Aws, DeploymentModel::Push);
-        let gcp = deployment_record(Platform::Gcp, DeploymentModel::Push);
-        let azure = deployment_record(Platform::Azure, DeploymentModel::Push);
-
-        assert_eq!(
-            command_delivery_model_for_deployment(&aws),
-            DeploymentModel::Push
-        );
-        assert_eq!(
-            command_delivery_model_for_deployment(&gcp),
-            DeploymentModel::Push
-        );
-        assert_eq!(
-            command_delivery_model_for_deployment(&azure),
-            DeploymentModel::Push
-        );
-    }
-
-    #[test]
-    fn machines_commands_use_recorded_delivery_model() {
-        let deployment = deployment_record(Platform::Machines, DeploymentModel::Push);
-
-        assert_eq!(
-            command_delivery_model_for_deployment(&deployment),
-            DeploymentModel::Push
+            reg.get_command_status("completed-cmd")
+                .await
+                .unwrap()
+                .unwrap()
+                .state,
+            CommandState::Succeeded
         );
     }
 }

@@ -235,6 +235,29 @@ describe("Stack builder validation", () => {
     })
   })
 
+  it("defaults container commandsEnabled to false and allows enabling it", () => {
+    const defaultContainer = new alien.Container("api")
+      .code({ type: "image", image: "api:latest" })
+      .cpu(0.5)
+      .memory("512Mi")
+      .port(8080)
+      .permissions("execution")
+      .build()
+
+    expect(defaultContainer.config.commandsEnabled).toBe(false)
+
+    const commandsContainer = new alien.Container("cmd-api")
+      .code({ type: "image", image: "api:latest" })
+      .cpu(0.5)
+      .memory("512Mi")
+      .port(8080)
+      .permissions("execution")
+      .commandsEnabled(true)
+      .build()
+
+    expect(commandsContainer.config.commandsEnabled).toBe(true)
+  })
+
   it("builds and validates a complex stack with permissions", () => {
     // Storage bucket
     const storage = new alien.Storage("my-test-bucket").publicRead(true).build()
@@ -281,6 +304,16 @@ describe("Stack builder validation", () => {
 
     // Snapshot the full stack for regression testing
     expect(stack).toMatchSnapshot()
+  })
+
+  it.each([0, 3601])("rejects unsupported Worker timeout %s", timeoutSeconds => {
+    expect(() =>
+      new alien.Worker("slow-worker")
+        .code({ type: "image", image: SHARED_IMAGE })
+        .permissions("execution")
+        .timeoutSeconds(timeoutSeconds)
+        .build(),
+    ).toThrow()
   })
 
   it("builds and validates a stack with Build and ArtifactRegistry resources", () => {

@@ -373,6 +373,7 @@ impl IntoResponse for ErrorResponse {
             "STORAGE_OPERATION_FAILED"
             | "KV_OPERATION_FAILED"
             | "TRANSPORT_DISPATCH_FAILED"
+            | "TRANSPORT_DISPATCH_REJECTED"
             | "AGENT_ERROR"
             | "COMMANDS_ERROR"
             | "SERIALIZATION_FAILED"

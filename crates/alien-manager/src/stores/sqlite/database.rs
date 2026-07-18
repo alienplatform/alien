@@ -24,6 +24,11 @@ impl SqliteDatabase {
                 })?;
         }
 
+        // Plain single-process open. Unlike the local binding stores in
+        // alien-bindings, the manager is the only process touching this file,
+        // so turso's experimental `experimental_multiprocess_wal` mode is
+        // deliberately NOT enabled here — no cross-process coordination is
+        // needed and we avoid depending on an experimental on-disk format.
         let db: Database = turso::Builder::new_local(path)
             .build()
             .await

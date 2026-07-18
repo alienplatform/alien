@@ -101,6 +101,20 @@ fn gcp_compute_cluster_execute_keeps_distinct_generated_role_permissions() {
     let project_bindings = grant_plan.bindings_for_target(GcpBindingTargetScope::Project);
     let project_roles = grant_plan.custom_roles_for_bindings(&project_bindings);
 
+    let secret_binding = project_bindings
+        .iter()
+        .find(|binding| binding.role == "roles/secretmanager.secretAccessor")
+        .expect("compute-cluster machine secret accessor binding");
+    let secret_condition = secret_binding
+        .condition
+        .as_ref()
+        .expect("stack-scoped Secret Manager condition");
+    assert_eq!(secret_condition.title, "ComputeClusterStackSecretsRead");
+    assert_eq!(
+        secret_condition.expression,
+        "(resource.type == \"secretmanager.googleapis.com/Secret\" || resource.type == \"secretmanager.googleapis.com/SecretVersion\") && resource.name.startsWith(\"projects/123456789012/secrets/my-stack-\")"
+    );
+
     assert!(
         project_roles.iter().any(|role| {
             role.included_permissions.iter().any(|permission| {

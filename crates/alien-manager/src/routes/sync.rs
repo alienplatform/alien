@@ -144,8 +144,8 @@ pub struct AgentSyncResponse {
     pub current_state: Option<serde_json::Value>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub target: Option<serde_json::Value>,
-    /// Public URL for the commands API. Cloud-deployed workers use this
-    /// to poll for pending commands instead of the agent's local sync URL.
+    /// Public URL for the commands API. Operators and app-owned receivers use
+    /// it to lease pending commands instead of the agent's local sync URL.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub commands_url: Option<String>,
 }
@@ -428,6 +428,18 @@ async fn reconcile(
         Ok(r) => r,
         Err(e) => return e.into_response(),
     };
+
+    if let Err(error) = crate::registry_access::cleanup_deleted_registry_access(
+        state.deployment_store.as_ref(),
+        &state.bindings_provider,
+        &state.target_bindings_providers,
+        &req.deployment_id,
+        &final_state,
+    )
+    .await
+    {
+        return error.into_response();
+    }
 
     // Derive native image host for Lambda/Cloud Run so push clients
     // can set it on their local DeploymentConfig.
@@ -1089,6 +1101,18 @@ async fn agent_sync(
                             error = %e,
                             "Failed to reconcile agent-reported state"
                         );
+                    } else {
+                        if let Err(error) = crate::registry_access::cleanup_deleted_registry_access(
+                            state.deployment_store.as_ref(),
+                            &state.bindings_provider,
+                            &state.target_bindings_providers,
+                            &req.deployment_id,
+                            &agent_state,
+                        )
+                        .await
+                        {
+                            return error.into_response();
+                        }
                     }
                 }
             }

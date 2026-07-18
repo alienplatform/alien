@@ -36,8 +36,8 @@ pub async fn get_received_queue_messages(
     // Get KV binding
     let kv = app_state
         .ctx
-        .get_bindings()
-        .load_kv(&kv_binding_name)
+        .bindings()
+        .kv(&kv_binding_name)
         .await
         .context(ErrorData::BindingNotFound {
             binding_name: kv_binding_name.clone(),

@@ -17,4 +17,3 @@ const value: models.Actor1 = {
 ```typescript
 const value: any = "<value>";
 ```
-

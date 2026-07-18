@@ -6,12 +6,18 @@
 import { ResolveCredentialsResponse } from "@alienplatform/manager-api/models";
 
 let value: ResolveCredentialsResponse = {
-  clientConfig: "<value>",
+  clientConfig: {
+    cloud: {},
+    kubernetes: {
+      mode: "inCluster",
+    },
+    platform: "kubernetesCloud",
+  },
 };
 ```
 
 ## Fields
 
-| Field              | Type               | Required           | Description        |
-| ------------------ | ------------------ | ------------------ | ------------------ |
-| `clientConfig`     | *any*              | :heavy_check_mark: | N/A                |
+| Field                                              | Type                                               | Required                                           | Description                                        |
+| -------------------------------------------------- | -------------------------------------------------- | -------------------------------------------------- | -------------------------------------------------- |
+| `clientConfig`                                     | *models.ClientConfigUnion*                         | :heavy_check_mark:                                 | Configuration for different cloud platform clients |

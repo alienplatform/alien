@@ -35,6 +35,10 @@ export type CreateCommandRequest = {
    */
   params?: any | null | undefined;
   /**
+   * Resource id the command is addressed to. Required when the deployment has more than one command-capable resource.
+   */
+  target?: string | undefined;
+  /**
    * Initial state (PENDING_UPLOAD if params require upload, PENDING if inline)
    */
   initialState?: InitialState | undefined;
@@ -57,6 +61,7 @@ export type CreateCommandRequest$Outbound = {
   deploymentId: string;
   name: string;
   params?: any | null | undefined;
+  target?: string | undefined;
   initialState?: string | undefined;
   deadline?: string | null | undefined;
   requestSizeBytes?: number | undefined;
@@ -70,6 +75,7 @@ export const CreateCommandRequest$outboundSchema: z.ZodType<
   deploymentId: z.string(),
   name: z.string(),
   params: z.nullable(z.any()).optional(),
+  target: z.string().optional(),
   initialState: InitialState$outboundSchema.optional(),
   deadline: z.nullable(z.date().transform(v => v.toISOString())).optional(),
   requestSizeBytes: z.number().optional(),

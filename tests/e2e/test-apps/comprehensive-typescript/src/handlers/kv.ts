@@ -1,24 +1,24 @@
 import { kv } from "@alienplatform/sdk"
 import { Hono } from "hono"
-import { toExternalOperationError } from "../helpers.js"
+import { scanAll, toExternalOperationError } from "../helpers.js"
 
 const app = new Hono()
 
 app.post("/kv-test/:bindingName", async c => {
   const bindingName = c.req.param("bindingName")
   try {
-    const k = await kv(bindingName)
+    const k = kv(bindingName)
     const prefix = `test-key-${Date.now()}`
     const key1 = `${prefix}-1`
     const key2 = `${prefix}-2`
     const testValue = { message: "kv-test", ts: Date.now() }
 
     // 1. Put
-    await k.set(key1, testValue)
+    await k.setJson(key1, testValue)
 
     // 2. Put with ifNotExists — second set should return false
-    const firstSet = await k.set(key2, testValue, { ifNotExists: true })
-    const secondSet = await k.set(key2, { message: "duplicate" }, { ifNotExists: true })
+    const firstSet = await k.setJson(key2, testValue, { ifNotExists: true })
+    const secondSet = await k.setJson(key2, { message: "duplicate" }, { ifNotExists: true })
     if (secondSet !== false) {
       return c.json(
         { success: false, error: "ifNotExists: duplicate set should return false" },
@@ -44,7 +44,7 @@ app.post("/kv-test/:bindingName", async c => {
 
     // 5. Scan prefix
     let scanCount = 0
-    for await (const _ of k.scan(prefix)) {
+    for await (const _ of scanAll(k, prefix)) {
       scanCount++
     }
     if (scanCount < 2) {
@@ -58,7 +58,7 @@ app.post("/kv-test/:bindingName", async c => {
       return c.json({ success: false, error: "Exists returned true after delete" }, 500)
     }
     const getAfterDelete = await k.get(key1)
-    if (getAfterDelete !== undefined) {
+    if (getAfterDelete !== null) {
       return c.json({ success: false, error: "Get returned value after delete" }, 500)
     }
 

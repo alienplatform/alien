@@ -2,18 +2,69 @@ use crate::core::{state_utils::StackResourceStateExt, ResourceControllerContext}
 use crate::error::{ErrorData, Result};
 use alien_core::{
     bindings::serialize_binding_as_env_var, container_runtime_environment_contract,
-    kubernetes_base_platform_runtime_environment_plan,
-    passthrough_transport_runtime_environment_plan, public_url_host,
-    render_runtime_environment_entries, render_runtime_environment_plan,
+    daemon_runtime_environment_contract, kubernetes_base_platform_runtime_environment_plan,
+    public_url_host, render_runtime_environment_entries, render_runtime_environment_plan,
     standard_runtime_environment_plan, validate_prepared_runtime_environment_map,
-    worker_runtime_environment_contract, Container, Daemon, ResourceRef, ResourceStatus,
-    RuntimeEnvironmentBindingEntry, RuntimeEnvironmentRenderer, RuntimeEnvironmentValue, Worker,
+    worker_runtime_environment_contract, Container, Daemon, EnvironmentVariable,
+    EnvironmentVariableType, ResourceRef, ResourceStatus, RuntimeEnvironmentBindingEntry,
+    RuntimeEnvironmentRenderer, RuntimeEnvironmentValue, Worker,
     ENV_ALIEN_CURRENT_CONTAINER_BINDING_NAME, ENV_ALIEN_CURRENT_WORKER_BINDING_NAME,
-    ENV_ALIEN_PUBLIC_ENDPOINTS_JSON,
+    ENV_ALIEN_PUBLIC_ENDPOINTS_JSON, ENV_ALIEN_WORKER_TIMEOUT_SECONDS,
 };
 use alien_error::{AlienError, Context, IntoAlienError};
 use serde::Serialize;
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
+
+pub const OTEL_EXPORTER_OTLP_HEADERS: &str = "OTEL_EXPORTER_OTLP_HEADERS";
+pub const OTEL_EXPORTER_OTLP_METRICS_HEADERS: &str = "OTEL_EXPORTER_OTLP_METRICS_HEADERS";
+
+fn matches_environment_target(resource_id: &str, target_resources: &Option<Vec<String>>) -> bool {
+    match target_resources {
+        None => true,
+        Some(patterns) if patterns.is_empty() => false,
+        Some(patterns) => patterns.iter().any(|pattern| {
+            if let Some(prefix) = pattern.strip_suffix('*') {
+                resource_id.starts_with(prefix)
+            } else {
+                resource_id == pattern
+            }
+        }),
+    }
+}
+
+pub(crate) fn applicable_secret_environment_variables<'a>(
+    resource_id: &str,
+    variables: &'a [EnvironmentVariable],
+) -> Vec<&'a EnvironmentVariable> {
+    variables
+        .iter()
+        .filter(|var| var.var_type == EnvironmentVariableType::Secret)
+        .filter(|var| matches_environment_target(resource_id, &var.target_resources))
+        .collect()
+}
+
+pub fn direct_monitoring_auth_headers(
+    ctx: &ResourceControllerContext<'_>,
+) -> BTreeMap<String, String> {
+    let Some(monitoring) = &ctx.deployment_config.monitoring else {
+        return BTreeMap::new();
+    };
+
+    let mut headers = BTreeMap::from([(
+        OTEL_EXPORTER_OTLP_HEADERS.to_string(),
+        monitoring.logs_auth_header.clone(),
+    )]);
+    if monitoring.metrics_endpoint.is_some() {
+        headers.insert(
+            OTEL_EXPORTER_OTLP_METRICS_HEADERS.to_string(),
+            monitoring
+                .metrics_auth_header
+                .clone()
+                .unwrap_or_else(|| monitoring.logs_auth_header.clone()),
+        );
+    }
+    headers
+}
 
 /// Common environment variable preparation for worker controllers.
 /// This handles the shared logic of processing linked resources and setting up
@@ -269,6 +320,7 @@ impl EnvironmentVariableBuilder {
         mut self,
         ctx: &ResourceControllerContext<'_>,
         worker_id: &str,
+        timeout_seconds: u32,
     ) -> Result<Self> {
         let renderer = ControllerRuntimeEnvironmentRenderer {
             ctx,
@@ -284,6 +336,10 @@ impl EnvironmentVariableBuilder {
         })? {
             self.env_vars.insert(name, value);
         }
+        self.env_vars.insert(
+            ENV_ALIEN_WORKER_TIMEOUT_SECONDS.to_string(),
+            timeout_seconds.to_string(),
+        );
         self.add_kubernetes_base_platform_env_vars(ctx, &renderer)?;
 
         Ok(self)
@@ -312,6 +368,49 @@ impl EnvironmentVariableBuilder {
         self.add_kubernetes_base_platform_env_vars(ctx, &renderer)?;
 
         Ok(self)
+    }
+
+    /// Add the complete scalar runtime environment for a Daemon.
+    ///
+    /// Daemons run runtime-less under direct supervision: the
+    /// contract is the standard platform-identity set only — no transport var,
+    /// no self-binding var. Command-enabled Daemons receive their pull-receiver
+    /// config (`ALIEN_COMMANDS_*`) per-resource through `config.environment`,
+    /// not from this plan.
+    pub fn add_daemon_runtime_env_vars(
+        mut self,
+        ctx: &ResourceControllerContext<'_>,
+    ) -> Result<Self> {
+        let renderer = ControllerRuntimeEnvironmentRenderer {
+            ctx,
+            current_container_id: None,
+            current_worker_id: None,
+        };
+        let plan = daemon_runtime_environment_contract(ctx.platform, &[]);
+        for (name, value) in render_runtime_environment_plan(&plan, &renderer).map_err(|error| {
+            AlienError::new(ErrorData::ResourceConfigInvalid {
+                message: error.to_string(),
+                resource_id: None,
+            })
+        })? {
+            self.env_vars.insert(name, value);
+        }
+        self.add_kubernetes_base_platform_env_vars(ctx, &renderer)?;
+
+        Ok(self)
+    }
+
+    /// Adds monitoring credentials for a runtime-less workload at the final
+    /// provisioning boundary. The values come from `DeploymentConfig`, not the
+    /// resource config: Local passes them directly to the process, and
+    /// Kubernetes replaces them with Secret refs before serializing a Pod.
+    pub fn add_direct_monitoring_auth_headers(
+        mut self,
+        ctx: &ResourceControllerContext<'_>,
+    ) -> Self {
+        self.env_vars.extend(direct_monitoring_auth_headers(ctx));
+
+        self
     }
 
     fn add_kubernetes_base_platform_env_vars(
@@ -451,23 +550,10 @@ impl EnvironmentVariableBuilder {
         self
     }
 
-    /// Add passthrough transport for non-Worker runtime workloads.
-    pub fn add_passthrough_transport_env_vars(mut self) -> Self {
-        for entry in passthrough_transport_runtime_environment_plan() {
-            if let RuntimeEnvironmentValue::Literal(value) = entry.value {
-                self.env_vars
-                    .insert(entry.name.to_string(), value.to_string());
-            }
-        }
-        self
-    }
-
     /// Add the function's own binding to its environment variables for self-introspection.
     /// This adds both:
     /// 1. ALIEN_CURRENT_WORKER_BINDING_NAME - the function's ID for identifying itself
     /// 2. ALIEN_{FUNCTION_ID}_BINDING - the function's full binding parameters (if available)
-    ///
-    /// This allows the function to introspect itself via alien_context.get_current_worker().
     ///
     /// The binding params should be provided when available. During initial creation, binding
     /// params may be incomplete (e.g., URL not yet known). During updates or after creation
@@ -560,7 +646,7 @@ mod tests {
             .bindings
             .push(("cache".to_string(), binding_json.clone()));
 
-        let (env_vars, bindings) = builder.build_with_bindings();
+        let (_env_vars, bindings) = builder.build_with_bindings();
 
         // Verify bindings are tracked
         assert_eq!(bindings.len(), 1);
@@ -578,6 +664,51 @@ mod tests {
         assert_eq!(env_vars.len(), 1);
         assert_eq!(env_vars.get("FOO"), Some(&"bar".to_string()));
         assert_eq!(bindings.len(), 0);
+    }
+
+    /// Ensures neither the Container
+    /// nor the Daemon compute env plan may inject any retired worker/binding env
+    /// var on any platform. Fails loudly if a forbidden name reappears in either
+    /// static plan (the controller manifest tests guard the rendered manifests).
+    #[test]
+    fn forbidden_env_absent_from_container_and_daemon_plans() {
+        use alien_core::{
+            container_runtime_environment_plan, daemon_runtime_environment_plan, Platform,
+        };
+
+        // Retired worker-runtime / lazy-binding signals. Command-capable
+        // Container/Daemon receivers use the `ALIEN_COMMANDS_*` contract instead;
+        // none of these may leak into a compute env plan.
+        const FORBIDDEN: &[&str] = &[
+            "ALIEN_TRANSPORT",
+            "ALIEN_WORKER_GRPC_ADDRESS",
+            "ALIEN_BINDINGS_MODE",
+            "ALIEN_BINDINGS_GRPC_ADDRESS",
+            "ALIEN_BINDINGS_ADDRESS",
+            "ALIEN_SECRETS",
+            "ALIEN_RUNTIME_SECRETS",
+        ];
+
+        for platform in [
+            Platform::Local,
+            Platform::Kubernetes,
+            Platform::Aws,
+            Platform::Gcp,
+            Platform::Azure,
+            Platform::Test,
+        ] {
+            for (label, entries) in [
+                ("container", container_runtime_environment_plan(platform)),
+                ("daemon", daemon_runtime_environment_plan(platform)),
+            ] {
+                for forbidden in FORBIDDEN {
+                    assert!(
+                        !entries.iter().any(|entry| entry.name == *forbidden),
+                        "{label} plan for {platform:?} must not inject forbidden env var {forbidden}"
+                    );
+                }
+            }
+        }
     }
 
     #[test]

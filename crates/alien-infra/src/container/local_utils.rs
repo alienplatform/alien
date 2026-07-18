@@ -9,14 +9,14 @@
 use crate::error::{ErrorData, Result};
 use alien_core::bindings::{
     binding_env_var_name, ArtifactRegistryBinding, BindingValue, ContainerBinding, KvBinding,
-    PostgresBinding, StorageBinding, VaultBinding, WorkerBinding,
+    PostgresBinding, QueueBinding, StorageBinding, VaultBinding, WorkerBinding,
 };
 use alien_error::{AlienError, Context, IntoAlienError};
 use tracing::debug;
 
 /// Rewrites a binding's filesystem path from host path to container path.
 ///
-/// For containers, linked resources (Storage, KV, Vault) are mounted at different
+/// For containers, linked resources (Storage, KV, Queue, Vault) are mounted at different
 /// paths inside the container. This worker updates the binding env var to use
 /// the container-internal path.
 ///
@@ -78,6 +78,31 @@ pub(super) fn rewrite_binding_path_for_container(
                 return Err(AlienError::new(ErrorData::ResourceControllerConfigError {
                     resource_id: resource_id.to_string(),
                     message: "Local platform containers cannot use cloud KV bindings".to_string(),
+                }));
+            }
+        }
+    }
+
+    // Queue binding: only Local variant allowed on Local platform
+    if let Ok(mut binding) = serde_json::from_str::<QueueBinding>(binding_json) {
+        match binding {
+            QueueBinding::Local(ref mut local) => {
+                local.queue_path = BindingValue::value(container_path.to_string());
+                let new_json = serde_json::to_string(&binding).into_alien_error().context(
+                    ErrorData::ResourceControllerConfigError {
+                        resource_id: resource_id.to_string(),
+                        message: "Failed to serialize Queue binding".to_string(),
+                    },
+                )?;
+
+                *binding_json = new_json;
+                return Ok(());
+            }
+            _ => {
+                return Err(AlienError::new(ErrorData::ResourceControllerConfigError {
+                    resource_id: resource_id.to_string(),
+                    message: "Local platform containers cannot use cloud queue bindings"
+                        .to_string(),
                 }));
             }
         }
@@ -321,7 +346,29 @@ pub(super) fn rewrite_localhost_urls_for_container(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use alien_core::bindings::{serialize_binding_as_env_var, PostgresBinding};
+    use alien_core::bindings::{serialize_binding_as_env_var, PostgresBinding, QueueBinding};
+
+    #[test]
+    fn local_queue_binding_rewritten_to_container_mount() {
+        let binding =
+            QueueBinding::local(BindingValue::value("/host/alien/queues/jobs".to_string()));
+        let mut env =
+            serialize_binding_as_env_var("jobs", &binding).expect("serialize local Queue binding");
+        let key = binding_env_var_name("jobs");
+
+        rewrite_binding_path_for_container(&mut env, "jobs", "/mnt/queue/jobs")
+            .expect("rewrite should succeed");
+
+        let rewritten: QueueBinding =
+            serde_json::from_str(env.get(&key).unwrap()).expect("rewritten binding deserializes");
+        let QueueBinding::Local(local) = rewritten else {
+            panic!("expected a Local Queue binding after rewrite");
+        };
+        let BindingValue::Value(queue_path) = local.queue_path else {
+            panic!("queue_path is a concrete value")
+        };
+        assert_eq!(queue_path, "/mnt/queue/jobs");
+    }
 
     // A container linked to a Local Postgres must receive the full binding (password inline) with the
     // host rewritten to a container-reachable address. This runs the exact serialize→rewrite

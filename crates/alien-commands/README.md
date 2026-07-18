@@ -19,7 +19,7 @@ Three feature-gated modules:
 
 - **Core types** (always available) — `Envelope`, `CommandResponse`, `BodySpec`, protocol constants
 - **`server` feature** — `CommandServer`, `CommandRegistry`, Axum handlers, dispatchers. Used by alien-manager.
-- **`runtime` feature** — Envelope decoding, response submission. Used by alien-runtime.
+- **`runtime` feature** — Envelope decoding, response submission. Used by alien-worker-runtime.
 
 ## Key Types
 

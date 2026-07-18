@@ -1,6 +1,6 @@
 {
   "id": "compute-cluster/execute",
-  "description": "Runtime permissions for managed container VMs: cross-account image pull, per-container service account impersonation, EBS/disk attach, and LB target registration.",
+  "description": "Runtime permissions for managed container VMs: cross-account image pull, per-container service account impersonation, stack-scoped secret resolution, disk attach, and LB target registration.",
   "platforms": {
     "aws": [
       // Cross-account ECR image pull from managing account's registry
@@ -41,6 +41,26 @@
           },
           "resource": {
             "resources": ["arn:aws:iam::${awsAccountId}:role/${stackPrefix}-*-sa"]
+          }
+        }
+      },
+      // The machine hosting layer resolves typed workload SecretRefs with the VM's ambient
+      // identity before starting the container. Keep reads inside this
+      // deployment's setup-owned app-secret vault.
+      {
+        "grant": {
+          "actions": ["ssm:GetParameter"]
+        },
+        "binding": {
+          "stack": {
+            "resources": [
+              "arn:aws:ssm:${awsRegion}:${awsAccountId}:parameter/${stackPrefix}-secrets-*"
+            ]
+          },
+          "resource": {
+            "resources": [
+              "arn:aws:ssm:${awsRegion}:${awsAccountId}:parameter/${stackPrefix}-secrets-*"
+            ]
           }
         }
       },
@@ -154,6 +174,29 @@
           }
         }
       },
+      // Machine-wide workload secret resolution. The condition restricts the
+      // predefined accessor role to Secret Manager values owned by this stack.
+      {
+        "grant": {
+          "predefinedRoles": ["roles/secretmanager.secretAccessor"]
+        },
+        "binding": {
+          "stack": {
+            "scope": "projects/${projectName}",
+            "condition": {
+              "title": "ComputeClusterStackSecretsRead",
+              "expression": "(resource.type == \"secretmanager.googleapis.com/Secret\" || resource.type == \"secretmanager.googleapis.com/SecretVersion\") && resource.name.startsWith(\"projects/${projectNumber}/secrets/${stackPrefix}-\")"
+            }
+          },
+          "resource": {
+            "scope": "projects/${projectName}",
+            "condition": {
+              "title": "ComputeClusterStackSecretsRead",
+              "expression": "(resource.type == \"secretmanager.googleapis.com/Secret\" || resource.type == \"secretmanager.googleapis.com/SecretVersion\") && resource.name.startsWith(\"projects/${projectNumber}/secrets/${stackPrefix}-\")"
+            }
+          }
+        }
+      },
       // Disk attach/detach for persistent storage containers (container runtime)
       {
         "grant": {
@@ -208,6 +251,10 @@
           }
         }
       },
+      // The setup-owned Key Vault has a generated uniqueness suffix, so its
+      // exact scope cannot be expressed by this stack-prefix permission set.
+      // The provider ComputeCluster controller grants Key Vault Secrets User
+      // after resolving the concrete vault binding.
       // Disk attach/detach for persistent storage containers (container runtime)
       {
         "grant": {

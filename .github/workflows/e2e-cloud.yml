@@ -64,6 +64,9 @@ on:
           - comprehensive-rust
           - comprehensive-ts
           - full-stack-microservices
+          - command-routing-ts
+          - container-rust
+          - runtime-less-mixed
       network_mode:
         description: "Cloud network mode"
         type: choice
@@ -104,12 +107,10 @@ on:
         description: "Run local agent in foreground (no service install, no sudo)"
         type: boolean
         default: true
-      aws_target:
-        description: "AWS target account"
-        type: choice
-        default: aws-target-1
-        options:
-          - aws-target-1
+      recover_stale_terraform_lock:
+        description: "Force-unlock the shared HCP Terraform workspace before setup (manual recovery only)"
+        type: boolean
+        default: false
       gcp_target:
         description: "GCP target project"
         type: choice
@@ -127,6 +128,13 @@ on:
   merge_group:
   pull_request:
     types: [opened, reopened, synchronize, labeled]
+
+# Every run currently shares ALIEN_E2E_SLOT 03. Serialize the complete workflow
+# so a newer run cannot reuse resources while an older run is still testing or
+# cleaning them up.
+concurrency:
+  group: e2e-tests-slot-03
+  cancel-in-progress: false
 
 permissions:
   contents: read
@@ -154,6 +162,8 @@ jobs:
       has_cloudformation: ${{ steps.set.outputs.has_cloudformation }}
       needs_x86_64: ${{ steps.set.outputs.needs_x86_64 }}
       needs_aarch64: ${{ steps.set.outputs.needs_aarch64 }}
+      needs_bindings_x86_64: ${{ steps.set.outputs.needs_bindings_x86_64 }}
+      needs_bindings_aarch64: ${{ steps.set.outputs.needs_bindings_aarch64 }}
       build_images: ${{ steps.set.outputs.build_images }}
       build_base_image: ${{ steps.set.outputs.build_base_image }}
       build_operator_image: ${{ steps.set.outputs.build_operator_image }}
@@ -189,6 +199,8 @@ jobs:
             echo "has_cloudformation=false" >> $GITHUB_OUTPUT
             echo "needs_x86_64=false" >> $GITHUB_OUTPUT
             echo "needs_aarch64=false" >> $GITHUB_OUTPUT
+            echo "needs_bindings_x86_64=false" >> $GITHUB_OUTPUT
+            echo "needs_bindings_aarch64=false" >> $GITHUB_OUTPUT
             echo "build_images=true" >> $GITHUB_OUTPUT
             echo "build_base_image=true" >> $GITHUB_OUTPUT
             echo "build_operator_image=true" >> $GITHUB_OUTPUT
@@ -258,26 +270,26 @@ jobs:
           PUSH_ENTRIES='[]'
           if [ "$PUSH_AWS_CLI" = "true" ]; then
             if [ "$APP" = "All" ] || [ "$APP" = "comprehensive-rust" ]; then
-              PUSH_ENTRIES=$(echo "$PUSH_ENTRIES" | jq -c '. + [{"name":"push-aws-comprehensive-rust","test_filter":"push_aws_comprehensive_rust","needs_oidc":false,"resource_suffix":"awscr"}]')
+              PUSH_ENTRIES=$(echo "$PUSH_ENTRIES" | jq -c '. + [{"name":"push-aws-comprehensive-rust","test_filter":"push_aws_comprehensive_rust","needs_oidc":false,"resource_suffix":"awscr","timeout_minutes":60}]')
             fi
             if [ "$APP" = "All" ] || [ "$APP" = "comprehensive-ts" ]; then
-              PUSH_ENTRIES=$(echo "$PUSH_ENTRIES" | jq -c '. + [{"name":"push-aws-comprehensive-ts","test_filter":"push_aws_comprehensive_ts","needs_oidc":false,"resource_suffix":"awsct"}]')
+              PUSH_ENTRIES=$(echo "$PUSH_ENTRIES" | jq -c '. + [{"name":"push-aws-comprehensive-ts","test_filter":"push_aws_comprehensive_ts","needs_oidc":false,"resource_suffix":"awsct","bindings_arch":"aarch64","timeout_minutes":60}]')
             fi
           fi
           if [ "$PUSH_GCP_CLI" = "true" ]; then
             if [ "$APP" = "All" ] || [ "$APP" = "comprehensive-rust" ]; then
-              PUSH_ENTRIES=$(echo "$PUSH_ENTRIES" | jq -c '. + [{"name":"push-gcp-comprehensive-rust","test_filter":"push_gcp_comprehensive_rust","needs_oidc":false,"resource_suffix":"gcpcr"}]')
+              PUSH_ENTRIES=$(echo "$PUSH_ENTRIES" | jq -c '. + [{"name":"push-gcp-comprehensive-rust","test_filter":"push_gcp_comprehensive_rust","needs_oidc":false,"resource_suffix":"gcpcr","timeout_minutes":60}]')
             fi
             if [ "$APP" = "All" ] || [ "$APP" = "comprehensive-ts" ]; then
-              PUSH_ENTRIES=$(echo "$PUSH_ENTRIES" | jq -c '. + [{"name":"push-gcp-comprehensive-ts","test_filter":"push_gcp_comprehensive_ts","needs_oidc":false,"resource_suffix":"gcpct"}]')
+              PUSH_ENTRIES=$(echo "$PUSH_ENTRIES" | jq -c '. + [{"name":"push-gcp-comprehensive-ts","test_filter":"push_gcp_comprehensive_ts","needs_oidc":false,"resource_suffix":"gcpct","bindings_arch":"x86_64","timeout_minutes":60}]')
             fi
           fi
           if [ "$PUSH_AZURE_CLI" = "true" ]; then
             if [ "$APP" = "All" ] || [ "$APP" = "comprehensive-rust" ]; then
-              PUSH_ENTRIES=$(echo "$PUSH_ENTRIES" | jq -c '. + [{"name":"push-azure-comprehensive-rust","test_filter":"push_azure_comprehensive_rust","needs_oidc":true,"resource_suffix":"azcr"}]')
+              PUSH_ENTRIES=$(echo "$PUSH_ENTRIES" | jq -c '. + [{"name":"push-azure-comprehensive-rust","test_filter":"push_azure_comprehensive_rust","needs_oidc":true,"resource_suffix":"azcr","timeout_minutes":75}]')
             fi
             if [ "$APP" = "All" ] || [ "$APP" = "comprehensive-ts" ]; then
-              PUSH_ENTRIES=$(echo "$PUSH_ENTRIES" | jq -c '. + [{"name":"push-azure-comprehensive-ts","test_filter":"push_azure_comprehensive_ts","needs_oidc":true,"resource_suffix":"azct"}]')
+              PUSH_ENTRIES=$(echo "$PUSH_ENTRIES" | jq -c '. + [{"name":"push-azure-comprehensive-ts","test_filter":"push_azure_comprehensive_ts","needs_oidc":true,"resource_suffix":"azct","bindings_arch":"x86_64","timeout_minutes":75}]')
             fi
           fi
 
@@ -291,6 +303,15 @@ jobs:
             fi
             if [ "$APP" = "All" ] || [ "$APP" = "comprehensive-ts" ]; then
               LOCAL_ENTRIES=$(echo "$LOCAL_ENTRIES" | jq -c '. + [{"name":"local-linux-comprehensive-ts","os":"depot-ubuntu-24.04-arm-8","test_filter":"pull_local_comprehensive_ts"}]')
+            fi
+            if [ "$APP" = "All" ] || [ "$APP" = "command-routing-ts" ]; then
+              LOCAL_ENTRIES=$(echo "$LOCAL_ENTRIES" | jq -c '. + [{"name":"local-linux-command-routing-ts","os":"depot-ubuntu-24.04-arm-8","test_filter":"pull_local_command_routing_ts"}]')
+            fi
+            if [ "$APP" = "All" ] || [ "$APP" = "container-rust" ]; then
+              LOCAL_ENTRIES=$(echo "$LOCAL_ENTRIES" | jq -c '. + [{"name":"local-linux-container-rust","os":"depot-ubuntu-24.04-arm-8","test_filter":"pull_local_container_rust"}]')
+            fi
+            if [ "$APP" = "All" ] || [ "$APP" = "runtime-less-mixed" ]; then
+              LOCAL_ENTRIES=$(echo "$LOCAL_ENTRIES" | jq -c '. + [{"name":"local-linux-runtime-less-mixed","os":"depot-ubuntu-24.04-arm-8","test_filter":"pull_local_runtime_less_mixed"}]')
             fi
           fi
           if [ "$LOCAL_MACOS_AGENT" = "true" ]; then
@@ -337,13 +358,37 @@ jobs:
           fi
           if [ "$APP" = "All" ] || [ "$APP" = "full-stack-microservices" ]; then
             if [ "$KUBERNETES_AWS_TERRAFORM_HELM" = "true" ]; then
-              TERRAFORM_ENTRIES=$(echo "$TERRAFORM_ENTRIES" | jq -c '. + [{"name":"terraform-eks-helm-pull-full-stack-microservices","test_filter":"terraform_eks_helm_pull_full_stack_microservices","needs_oidc":false,"resource_suffix":"tfeksfs"}]')
+              TERRAFORM_ENTRIES=$(echo "$TERRAFORM_ENTRIES" | jq -c '. + [{"name":"terraform-eks-helm-pull-full-stack-microservices","test_filter":"terraform_eks_helm_pull_full_stack_microservices","needs_oidc":false,"resource_suffix":"tfeksfs","bindings_arch":"aarch64"}]')
             fi
             if [ "$KUBERNETES_GCP_TERRAFORM_HELM" = "true" ]; then
-              TERRAFORM_ENTRIES=$(echo "$TERRAFORM_ENTRIES" | jq -c '. + [{"name":"terraform-gke-helm-pull-full-stack-microservices","test_filter":"terraform_gke_helm_pull_full_stack_microservices","needs_oidc":false,"resource_suffix":"tfgkefs"}]')
+              TERRAFORM_ENTRIES=$(echo "$TERRAFORM_ENTRIES" | jq -c '. + [{"name":"terraform-gke-helm-pull-full-stack-microservices","test_filter":"terraform_gke_helm_pull_full_stack_microservices","needs_oidc":false,"resource_suffix":"tfgkefs","bindings_arch":"x86_64"}]')
             fi
             if [ "$KUBERNETES_AZURE_TERRAFORM_HELM" = "true" ]; then
-              TERRAFORM_ENTRIES=$(echo "$TERRAFORM_ENTRIES" | jq -c '. + [{"name":"terraform-aks-helm-pull-full-stack-microservices","test_filter":"terraform_aks_helm_pull_full_stack_microservices","needs_oidc":true,"resource_suffix":"tfaksfs"}]')
+              TERRAFORM_ENTRIES=$(echo "$TERRAFORM_ENTRIES" | jq -c '. + [{"name":"terraform-aks-helm-pull-full-stack-microservices","test_filter":"terraform_aks_helm_pull_full_stack_microservices","needs_oidc":true,"resource_suffix":"tfaksfs","bindings_arch":"x86_64"}]')
+            fi
+          fi
+          # One managed Kubernetes target is enough to prove the runtime-less
+          # Daemon and target-scoped routing contract. The app is portable to
+          # GKE/AKS too, but duplicating this behavior test across all three
+          # providers would only multiply cloud cost and runtime.
+          if [ "$APP" = "All" ] || [ "$APP" = "command-routing-ts" ]; then
+            if [ "$KUBERNETES_AWS_TERRAFORM_HELM" = "true" ]; then
+              TERRAFORM_ENTRIES=$(echo "$TERRAFORM_ENTRIES" | jq -c '. + [{"name":"terraform-eks-helm-pull-command-routing-ts","test_filter":"terraform_eks_helm_pull_command_routing_ts","needs_oidc":false,"resource_suffix":"tfeksrt","bindings_arch":"aarch64"}]')
+            fi
+          fi
+          # The mixed app proves both missing runtime-less SDK paths on each
+          # managed Kubernetes provider: TypeScript Container + Rust Daemon,
+          # direct KV, pull receivers, and a target-scoped command-name
+          # collision.
+          if [ "$APP" = "All" ] || [ "$APP" = "runtime-less-mixed" ]; then
+            if [ "$KUBERNETES_AWS_TERRAFORM_HELM" = "true" ]; then
+              TERRAFORM_ENTRIES=$(echo "$TERRAFORM_ENTRIES" | jq -c '. + [{"name":"terraform-eks-helm-pull-runtime-less-mixed","test_filter":"terraform_eks_helm_pull_runtime_less_mixed","needs_oidc":false,"resource_suffix":"tfeksrm","bindings_arch":"aarch64"}]')
+            fi
+            if [ "$KUBERNETES_GCP_TERRAFORM_HELM" = "true" ]; then
+              TERRAFORM_ENTRIES=$(echo "$TERRAFORM_ENTRIES" | jq -c '. + [{"name":"terraform-gke-helm-pull-runtime-less-mixed","test_filter":"terraform_gke_helm_pull_runtime_less_mixed","needs_oidc":false,"resource_suffix":"tfgkerm","bindings_arch":"x86_64"}]')
+            fi
+            if [ "$KUBERNETES_AZURE_TERRAFORM_HELM" = "true" ]; then
+              TERRAFORM_ENTRIES=$(echo "$TERRAFORM_ENTRIES" | jq -c '. + [{"name":"terraform-aks-helm-pull-runtime-less-mixed","test_filter":"terraform_aks_helm_pull_runtime_less_mixed","needs_oidc":true,"resource_suffix":"tfaksrm","bindings_arch":"x86_64"}]')
             fi
           fi
 
@@ -358,6 +403,20 @@ jobs:
 
           HAS_TERRAFORM=$([ "$(echo "$TERRAFORM_ENTRIES" | jq 'length')" -gt 0 ] && echo true || echo false)
           HAS_CLOUDFORMATION=$([ "$(echo "$CLOUDFORMATION_ENTRIES" | jq 'length')" -gt 0 ] && echo true || echo false)
+
+          # TypeScript resources compile the in-process bindings addon into the
+          # target executable. Build each Linux addon natively: the ARM E2E
+          # runner cannot cross-build the x86_64 napi cdylib (or vice versa).
+          NEEDS_BINDINGS_X86_64=false
+          NEEDS_BINDINGS_AARCH64=false
+          if jq -n -e --argjson push "$PUSH_ENTRIES" --argjson terraform "$TERRAFORM_ENTRIES" \
+            'any(($push + $terraform)[]; .bindings_arch? == "aarch64")' >/dev/null; then
+            NEEDS_BINDINGS_AARCH64=true
+          fi
+          if jq -n -e --argjson push "$PUSH_ENTRIES" --argjson terraform "$TERRAFORM_ENTRIES" \
+            'any(($push + $terraform)[]; .bindings_arch? == "x86_64")' >/dev/null; then
+            NEEDS_BINDINGS_X86_64=true
+          fi
 
           # Architecture needs: AWS→aarch64, GCP/Azure→x86_64
           ANY_TESTS=false
@@ -384,6 +443,8 @@ jobs:
           echo "has_cloudformation=$HAS_CLOUDFORMATION" >> $GITHUB_OUTPUT
           echo "needs_x86_64=$NEEDS_X86_64" >> $GITHUB_OUTPUT
           echo "needs_aarch64=$NEEDS_AARCH64" >> $GITHUB_OUTPUT
+          echo "needs_bindings_x86_64=$NEEDS_BINDINGS_X86_64" >> $GITHUB_OUTPUT
+          echo "needs_bindings_aarch64=$NEEDS_BINDINGS_AARCH64" >> $GITHUB_OUTPUT
           echo "build_images=$BUILD_IMAGES" >> $GITHUB_OUTPUT
           echo "build_base_image=$BUILD_BASE_IMAGE" >> $GITHUB_OUTPUT
           echo "build_operator_image=$BUILD_AGENT_IMAGE" >> $GITHUB_OUTPUT
@@ -391,14 +452,15 @@ jobs:
           echo "test_filter=$TEST_FILTER" >> $GITHUB_OUTPUT
           echo "network_mode=$NETWORK_MODE" >> $GITHUB_OUTPUT
 
-  # ── Build alien-runtime + alien-operator for needed architectures ─────
+  # ── Build alien-worker-runtime + alien-operator for needed architectures ─────
   # Combined into one cargo invocation per arch to share compilation of
   # common dependencies (tokio, reqwest, serde, platform clients, etc.).
 
   build-x86_64:
     needs: [compute-matrix]
     if: >-
-      needs.compute-matrix.outputs.build_images == 'true' &&
+      (needs.compute-matrix.outputs.build_images == 'true' ||
+       needs.compute-matrix.outputs.needs_bindings_x86_64 == 'true') &&
       needs.compute-matrix.outputs.needs_x86_64 == 'true'
     runs-on: depot-ubuntu-24.04-16
     timeout-minutes: 45
@@ -415,22 +477,66 @@ jobs:
           targets: x86_64-unknown-linux-musl
           install-protoc: "true"
 
-      - name: Build alien-runtime + alien-operator (x86_64)
+      - uses: pnpm/action-setup@v4
+        if: needs.compute-matrix.outputs.needs_bindings_x86_64 == 'true'
+        with:
+          version: 10.11.0
+
+      - uses: actions/setup-node@v4
+        if: needs.compute-matrix.outputs.needs_bindings_x86_64 == 'true'
+        with:
+          node-version: 22
+          cache: pnpm
+
+      - uses: oven-sh/setup-bun@v2
+        if: needs.compute-matrix.outputs.needs_bindings_x86_64 == 'true'
+        with:
+          bun-version: "1.3.14"
+
+      - name: Install JS dependencies
+        if: needs.compute-matrix.outputs.needs_bindings_x86_64 == 'true'
+        run: pnpm install --frozen-lockfile
+
+      - name: Build alien-worker-runtime + alien-operator (x86_64)
+        if: needs.compute-matrix.outputs.build_images == 'true'
         run: |
           PACKAGES=()
           if [ "${{ needs.compute-matrix.outputs.build_base_image }}" = "true" ]; then
-            PACKAGES+=("-p" "alien-runtime")
+            PACKAGES+=("-p" "alien-worker-runtime")
           fi
           if [ "${{ needs.compute-matrix.outputs.build_operator_image }}" = "true" ]; then
             PACKAGES+=("-p" "alien-operator")
           fi
           depot cargo build --release "${PACKAGES[@]}" --target x86_64-unknown-linux-musl
 
+      - name: Build TypeScript bindings addon (x86_64)
+        if: needs.compute-matrix.outputs.needs_bindings_x86_64 == 'true'
+        run: |
+          pnpm --filter @alienplatform/bindings exec napi build \
+            --platform --release --target x86_64-unknown-linux-gnu \
+            --cwd "$GITHUB_WORKSPACE/crates/alien-bindings-node"
+
+      - name: Verify TypeScript bindings addon (x86_64)
+        if: needs.compute-matrix.outputs.needs_bindings_x86_64 == 'true'
+        env:
+          ADDON_PATH: crates/alien-bindings-node/alien-bindings-node.linux-x64-gnu.node
+        run: |
+          file "$ADDON_PATH" | grep -q 'x86-64'
+          node -e 'const a=require(require("node:path").resolve(process.env.ADDON_PATH)); if (!a.version()) throw new Error("native version() returned empty")'
+          bun -e 'const a=require(require("node:path").resolve(process.env.ADDON_PATH)); if (!a.version()) throw new Error("native version() returned empty")'
+
+      - uses: actions/upload-artifact@v4
+        if: needs.compute-matrix.outputs.needs_bindings_x86_64 == 'true'
+        with:
+          name: alien-bindings-node-linux-x64-gnu
+          path: crates/alien-bindings-node/alien-bindings-node.linux-x64-gnu.node
+          retention-days: 1
+
       - uses: actions/upload-artifact@v4
         if: needs.compute-matrix.outputs.build_base_image == 'true'
         with:
-          name: alien-runtime-x86_64
-          path: target/x86_64-unknown-linux-musl/release/alien-runtime
+          name: alien-worker-runtime-x86_64
+          path: target/x86_64-unknown-linux-musl/release/alien-worker-runtime
           retention-days: 1
 
       - uses: actions/upload-artifact@v4
@@ -443,7 +549,8 @@ jobs:
   build-aarch64:
     needs: [compute-matrix]
     if: >-
-      needs.compute-matrix.outputs.build_images == 'true' &&
+      (needs.compute-matrix.outputs.build_images == 'true' ||
+       needs.compute-matrix.outputs.needs_bindings_aarch64 == 'true') &&
       needs.compute-matrix.outputs.needs_aarch64 == 'true'
     runs-on: depot-ubuntu-24.04-arm-16
     timeout-minutes: 45
@@ -460,22 +567,66 @@ jobs:
           targets: aarch64-unknown-linux-musl
           install-protoc: "true"
 
-      - name: Build alien-runtime + alien-operator (aarch64)
+      - uses: pnpm/action-setup@v4
+        if: needs.compute-matrix.outputs.needs_bindings_aarch64 == 'true'
+        with:
+          version: 10.11.0
+
+      - uses: actions/setup-node@v4
+        if: needs.compute-matrix.outputs.needs_bindings_aarch64 == 'true'
+        with:
+          node-version: 22
+          cache: pnpm
+
+      - uses: oven-sh/setup-bun@v2
+        if: needs.compute-matrix.outputs.needs_bindings_aarch64 == 'true'
+        with:
+          bun-version: "1.3.14"
+
+      - name: Install JS dependencies
+        if: needs.compute-matrix.outputs.needs_bindings_aarch64 == 'true'
+        run: pnpm install --frozen-lockfile
+
+      - name: Build alien-worker-runtime + alien-operator (aarch64)
+        if: needs.compute-matrix.outputs.build_images == 'true'
         run: |
           PACKAGES=()
           if [ "${{ needs.compute-matrix.outputs.build_base_image }}" = "true" ]; then
-            PACKAGES+=("-p" "alien-runtime")
+            PACKAGES+=("-p" "alien-worker-runtime")
           fi
           if [ "${{ needs.compute-matrix.outputs.build_operator_image }}" = "true" ]; then
             PACKAGES+=("-p" "alien-operator")
           fi
           depot cargo build --release "${PACKAGES[@]}" --target aarch64-unknown-linux-musl
 
+      - name: Build TypeScript bindings addon (aarch64)
+        if: needs.compute-matrix.outputs.needs_bindings_aarch64 == 'true'
+        run: |
+          pnpm --filter @alienplatform/bindings exec napi build \
+            --platform --release --target aarch64-unknown-linux-gnu \
+            --cwd "$GITHUB_WORKSPACE/crates/alien-bindings-node"
+
+      - name: Verify TypeScript bindings addon (aarch64)
+        if: needs.compute-matrix.outputs.needs_bindings_aarch64 == 'true'
+        env:
+          ADDON_PATH: crates/alien-bindings-node/alien-bindings-node.linux-arm64-gnu.node
+        run: |
+          file "$ADDON_PATH" | grep -q 'aarch64'
+          node -e 'const a=require(require("node:path").resolve(process.env.ADDON_PATH)); if (!a.version()) throw new Error("native version() returned empty")'
+          bun -e 'const a=require(require("node:path").resolve(process.env.ADDON_PATH)); if (!a.version()) throw new Error("native version() returned empty")'
+
+      - uses: actions/upload-artifact@v4
+        if: needs.compute-matrix.outputs.needs_bindings_aarch64 == 'true'
+        with:
+          name: alien-bindings-node-linux-arm64-gnu
+          path: crates/alien-bindings-node/alien-bindings-node.linux-arm64-gnu.node
+          retention-days: 1
+
       - uses: actions/upload-artifact@v4
         if: needs.compute-matrix.outputs.build_base_image == 'true'
         with:
-          name: alien-runtime-aarch64
-          path: target/aarch64-unknown-linux-musl/release/alien-runtime
+          name: alien-worker-runtime-aarch64
+          path: target/aarch64-unknown-linux-musl/release/alien-worker-runtime
           retention-days: 1
 
       - uses: actions/upload-artifact@v4
@@ -503,13 +654,13 @@ jobs:
       - uses: actions/download-artifact@v4
         if: needs.build-x86_64.result == 'success'
         with:
-          name: alien-runtime-x86_64
+          name: alien-worker-runtime-x86_64
           path: target/x86_64-unknown-linux-musl/release/
 
       - uses: actions/download-artifact@v4
         if: needs.build-aarch64.result == 'success'
         with:
-          name: alien-runtime-aarch64
+          name: alien-worker-runtime-aarch64
           path: target/aarch64-unknown-linux-musl/release/
 
       - name: Ensure binary dirs exist and make executable
@@ -517,9 +668,9 @@ jobs:
           # Create placeholder dirs for skipped architectures so Dockerfile COPY doesn't fail
           mkdir -p target/x86_64-unknown-linux-musl/release target/aarch64-unknown-linux-musl/release
           # Create empty placeholder binaries for skipped architectures
-          [ ! -f target/x86_64-unknown-linux-musl/release/alien-runtime ] && touch target/x86_64-unknown-linux-musl/release/alien-runtime
-          [ ! -f target/aarch64-unknown-linux-musl/release/alien-runtime ] && touch target/aarch64-unknown-linux-musl/release/alien-runtime
-          chmod +x target/*/release/alien-runtime
+          [ ! -f target/x86_64-unknown-linux-musl/release/alien-worker-runtime ] && touch target/x86_64-unknown-linux-musl/release/alien-worker-runtime
+          [ ! -f target/aarch64-unknown-linux-musl/release/alien-worker-runtime ] && touch target/aarch64-unknown-linux-musl/release/alien-worker-runtime
+          chmod +x target/*/release/alien-worker-runtime
 
       - name: Compute Docker platforms
         id: platforms
@@ -552,6 +703,40 @@ jobs:
           push: true
           tags: ghcr.io/alienplatform/alien-base:${{ github.sha }}
           provenance: false
+
+      - name: Verify alien-base runtime entrypoint
+        env:
+          BASE_IMAGE: ghcr.io/alienplatform/alien-base:${{ github.sha }}
+          NEEDS_X86_64: ${{ needs.compute-matrix.outputs.needs_x86_64 }}
+          NEEDS_AARCH64: ${{ needs.compute-matrix.outputs.needs_aarch64 }}
+        run: |
+          expected='["/app/alien-worker-runtime"]'
+          images="$(docker buildx imagetools inspect --format '{{json .Image}}' "$BASE_IMAGE")"
+          verify_entrypoint() {
+            local platform="$1"
+            local image
+            local actual_platform
+            local actual_entrypoint
+
+            image="$(jq -c --arg platform "$platform" 'if has($platform) then .[$platform] else . end' <<<"$images")"
+            actual_platform="$(jq -r '"\(.os)/\(.architecture)"' <<<"$image")"
+            [ "$actual_platform" = "$platform" ] || {
+              echo "$platform alien-base platform: expected $platform, got $actual_platform" >&2
+              exit 1
+            }
+            actual_entrypoint="$(jq -c '.config.Entrypoint' <<<"$image")"
+            [ "$actual_entrypoint" = "$expected" ] || {
+              echo "$platform alien-base entrypoint: expected $expected, got $actual_entrypoint" >&2
+              exit 1
+            }
+          }
+
+          if [ "$NEEDS_X86_64" = "true" ]; then
+            verify_entrypoint linux/amd64
+          fi
+          if [ "$NEEDS_AARCH64" = "true" ]; then
+            verify_entrypoint linux/arm64
+          fi
 
   build-operator-image:
     needs: [compute-matrix, build-x86_64, build-aarch64]
@@ -638,6 +823,7 @@ jobs:
       - uses: hashicorp/setup-terraform@v3
         with:
           terraform_wrapper: false
+          terraform_version: 1.14.5
 
       - name: Mask non-secret infrastructure identifiers
         run: |
@@ -651,6 +837,16 @@ jobs:
       - name: Terraform init
         working-directory: infra/test
         run: terraform init
+        env:
+          TF_TOKEN_app_terraform_io: ${{ secrets.TF_API_TOKEN }}
+
+      - name: Recover confirmed stale Terraform lock
+        if: inputs.recover_stale_terraform_lock == true
+        working-directory: infra/test
+        # The workflow-level E2E concurrency group must be idle before this
+        # manual switch is used. HCP identifies this workspace lock by its
+        # organization/name pair in Terraform's lock error.
+        run: terraform force-unlock -force alienplatform/alien-test-infra
         env:
           TF_TOKEN_app_terraform_io: ${{ secrets.TF_API_TOKEN }}
 
@@ -695,11 +891,11 @@ jobs:
             echo "EKS OIDC provider $provider_arn does not exist; Terraform will create it."
           fi
 
-          suffix="$(terraform state show module.aws.random_id.suffix | awk -F'"' '/hex =/ { print $2; exit }')"
-          if [ -z "$suffix" ]; then
-            echo "Could not resolve shared EKS suffix; Terraform will create missing bootstrap resources if needed."
+          if [[ ! "$cluster_name" =~ ^alien-e2e-([0-9a-f]+)$ ]]; then
+            echo "Could not derive the shared EKS suffix from cluster name '$cluster_name'; Terraform will create missing bootstrap resources if needed."
             exit 0
           fi
+          suffix="${BASH_REMATCH[1]}"
 
           ebs_role_name="alien-e2e-eks-ebs-csi-${suffix}"
           if ! terraform state show module.aws.aws_iam_role.e2e_eks_ebs_csi >/dev/null 2>&1; then
@@ -831,7 +1027,7 @@ jobs:
             --azure azure-target-1
           ./scripts/select-e2e-targets.sh \
             --env-file .env.test \
-            --aws "${{ inputs.aws_target || 'aws-target-1' }}" \
+            --aws aws-target-1 \
             --gcp "${{ inputs.gcp_target || 'gcp-target-3' }}" \
             --azure "${{ inputs.azure_target || 'azure-target-1' }}"
           printf "\nALIEN_E2E_SLOT='%s'\n" "$ALIEN_E2E_SLOT" >> .env.test
@@ -868,7 +1064,7 @@ jobs:
           export AWS_SECRET_ACCESS_KEY="$AWS_TARGET_SECRET_ACCESS_KEY"
           export AWS_SESSION_TOKEN="${AWS_TARGET_SESSION_TOKEN:-}"
           export AWS_DEFAULT_REGION="$AWS_TARGET_REGION"
-          for suffix in "" "-awscr" "-awsct" "-cfawscr" "-tfawscr" "-tfekscr" "-tfeksfs" "-awsr" "-awst" "-cfaws" "-tfaws" "-tfeks"; do
+          for suffix in "" "-awscr" "-awsct" "-cfawscr" "-tfawscr" "-tfekscr" "-tfeksfs" "-tfeksrt" "-tfeksrm" "-awsr" "-awst" "-cfaws" "-tfaws" "-tfeks"; do
             export ALIEN_E2E_RESOURCE_PREFIX="e2e-${ALIEN_E2E_SLOT}${suffix}"
             ./scripts/cleanup-aws-e2e-resources.sh
           done
@@ -885,7 +1081,7 @@ jobs:
           retention-days: 1
 
       - name: Install 1Password CLI
-        uses: 1password/install-cli-action@v1
+        uses: 1password/install-cli-action@v4
 
       - name: Upload .env.test to 1Password (for local dev)
         run: |
@@ -901,7 +1097,7 @@ jobs:
   # ── E2E push test matrix ───────────────────────────────────────────
 
   push-test:
-    needs: [compute-matrix, setup, build-base-image]
+    needs: [compute-matrix, setup, build-x86_64, build-aarch64, build-base-image]
     if: |
       !cancelled() && !failure() &&
       needs.compute-matrix.outputs.has_push == 'true'
@@ -914,12 +1110,26 @@ jobs:
       fail-fast: false
       matrix: ${{ fromJSON(needs.compute-matrix.outputs.push_matrix) }}
     runs-on: depot-ubuntu-24.04-arm-8
-    timeout-minutes: 60
+    timeout-minutes: ${{ matrix.timeout_minutes }}
     env:
       CARGO_INCREMENTAL: "0"
       CARGO_NET_GIT_FETCH_WITH_CLI: "true"
     steps:
       - uses: actions/checkout@v4
+
+      - name: Download TypeScript bindings addon (x86_64)
+        if: matrix.bindings_arch == 'x86_64'
+        uses: actions/download-artifact@v4
+        with:
+          name: alien-bindings-node-linux-x64-gnu
+          path: crates/alien-bindings-node
+
+      - name: Download TypeScript bindings addon (aarch64)
+        if: matrix.bindings_arch == 'aarch64'
+        uses: actions/download-artifact@v4
+        with:
+          name: alien-bindings-node-linux-arm64-gnu
+          path: crates/alien-bindings-node
 
       - name: Configure git credentials
         run: git config --global url."https://x-access-token:${{ secrets.REPO_ACCESS_TOKEN }}@github.com/".insteadOf "https://github.com/"
@@ -961,6 +1171,9 @@ jobs:
           platforms: arm64
 
       - uses: mozilla-actions/sccache-action@v0.0.9
+        continue-on-error: true
+        with:
+          version: v0.16.0
 
       - uses: taiki-e/install-action@cargo-nextest
 
@@ -972,6 +1185,8 @@ jobs:
           version: 0.16.0
 
       - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: "1.3.14"
 
       - uses: pnpm/action-setup@v4
         with:
@@ -988,7 +1203,7 @@ jobs:
           pnpm build
           pnpm -C examples install --frozen-lockfile
         env:
-          NODE_OPTIONS: "--max-old-space-size=4096"
+          NODE_OPTIONS: "--max-old-space-size=8192"
 
       - name: Mask sensitive values from .env.test
         run: |
@@ -1006,6 +1221,8 @@ jobs:
       - name: Run E2E push test
         env:
           NGROK_AUTHTOKEN: ${{ secrets.NGROK_AUTHTOKEN }}
+          DOCKER_USERNAME: ${{ (needs.compute-matrix.outputs.build_base_image == 'true' || startsWith(inputs.base_image_override, 'ghcr.io/alienplatform/alien-base:')) && github.actor || '' }}
+          DOCKER_PASSWORD: ${{ (needs.compute-matrix.outputs.build_base_image == 'true' || startsWith(inputs.base_image_override, 'ghcr.io/alienplatform/alien-base:')) && secrets.GITHUB_TOKEN || '' }}
           ALIEN_OVERRIDE_BASE_IMAGE: ${{ inputs.base_image_override || (needs.compute-matrix.outputs.build_base_image == 'true' && needs.build-base-image.outputs.base_image || '') }}
           ALIEN_E2E_NETWORK_MODE: ${{ needs.compute-matrix.outputs.network_mode }}
         run: |
@@ -1049,6 +1266,9 @@ jobs:
           platforms: arm64
 
       - uses: mozilla-actions/sccache-action@v0.0.9
+        continue-on-error: true
+        with:
+          version: v0.16.0
 
       - uses: taiki-e/install-action@cargo-nextest
 
@@ -1060,6 +1280,8 @@ jobs:
           version: 0.16.0
 
       - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: "1.3.14"
 
       - uses: pnpm/action-setup@v4
         with:
@@ -1083,7 +1305,7 @@ jobs:
           pnpm build
           pnpm -C examples install --frozen-lockfile
         env:
-          NODE_OPTIONS: "--max-old-space-size=4096"
+          NODE_OPTIONS: "--max-old-space-size=8192"
 
       - name: Mask sensitive values from .env.test
         run: |
@@ -1098,6 +1320,8 @@ jobs:
       - name: Run E2E CloudFormation distribution test
         env:
           NGROK_AUTHTOKEN: ${{ secrets.NGROK_AUTHTOKEN }}
+          DOCKER_USERNAME: ${{ (needs.compute-matrix.outputs.build_base_image == 'true' || startsWith(inputs.base_image_override, 'ghcr.io/alienplatform/alien-base:')) && github.actor || '' }}
+          DOCKER_PASSWORD: ${{ (needs.compute-matrix.outputs.build_base_image == 'true' || startsWith(inputs.base_image_override, 'ghcr.io/alienplatform/alien-base:')) && secrets.GITHUB_TOKEN || '' }}
           ALIEN_OVERRIDE_BASE_IMAGE: ${{ inputs.base_image_override || (needs.compute-matrix.outputs.build_base_image == 'true' && needs.build-base-image.outputs.base_image || '') }}
           ALIEN_E2E_NETWORK_MODE: ${{ needs.compute-matrix.outputs.network_mode }}
         run: |
@@ -1109,13 +1333,14 @@ jobs:
   # ── E2E Terraform distribution matrix ──────────────────────────────
 
   terraform-test:
-    needs: [compute-matrix, setup, build-base-image, build-operator-image]
+    needs: [compute-matrix, setup, build-x86_64, build-aarch64, build-base-image, build-operator-image]
     if: |
       !cancelled() && !failure() &&
       needs.compute-matrix.outputs.has_terraform == 'true'
     environment: e2e-tests
     strategy:
       fail-fast: false
+      max-parallel: ${{ (inputs.run_kubernetes_aws_terraform_helm || inputs.run_kubernetes_gcp_terraform_helm || inputs.run_kubernetes_azure_terraform_helm) && 1 || 4 }}
       matrix: ${{ fromJSON(needs.compute-matrix.outputs.terraform_matrix) }}
     runs-on: depot-ubuntu-24.04-16
     timeout-minutes: 90
@@ -1124,6 +1349,20 @@ jobs:
       CARGO_NET_GIT_FETCH_WITH_CLI: "true"
     steps:
       - uses: actions/checkout@v4
+
+      - name: Download TypeScript bindings addon (x86_64)
+        if: matrix.bindings_arch == 'x86_64'
+        uses: actions/download-artifact@v4
+        with:
+          name: alien-bindings-node-linux-x64-gnu
+          path: crates/alien-bindings-node
+
+      - name: Download TypeScript bindings addon (aarch64)
+        if: matrix.bindings_arch == 'aarch64'
+        uses: actions/download-artifact@v4
+        with:
+          name: alien-bindings-node-linux-arm64-gnu
+          path: crates/alien-bindings-node
 
       - name: Configure git credentials
         run: git config --global url."https://x-access-token:${{ secrets.REPO_ACCESS_TOKEN }}@github.com/".insteadOf "https://github.com/"
@@ -1172,6 +1411,9 @@ jobs:
           platforms: arm64
 
       - uses: mozilla-actions/sccache-action@v0.0.9
+        continue-on-error: true
+        with:
+          version: v0.16.0
 
       - uses: taiki-e/install-action@cargo-nextest
 
@@ -1183,6 +1425,8 @@ jobs:
           version: 0.16.0
 
       - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: "1.3.14"
 
       - uses: pnpm/action-setup@v4
         with:
@@ -1218,6 +1462,19 @@ jobs:
           chmod +x kind
           sudo mv kind /usr/local/bin/kind
 
+      - name: Install Azure kubelogin
+        if: contains(matrix.test_filter, 'aks')
+        run: |
+          case "$(uname -m)" in
+            x86_64|amd64) KUBELOGIN_ARCH=amd64 ;;
+            aarch64|arm64) KUBELOGIN_ARCH=arm64 ;;
+            *) echo "Unsupported kubelogin architecture: $(uname -m)" >&2; exit 1 ;;
+          esac
+          curl -fsSL -o /tmp/kubelogin.zip "https://github.com/Azure/kubelogin/releases/download/v0.2.17/kubelogin-linux-${KUBELOGIN_ARCH}.zip"
+          unzip -q /tmp/kubelogin.zip -d /tmp/kubelogin
+          sudo install -m 0755 "/tmp/kubelogin/bin/linux_${KUBELOGIN_ARCH}/kubelogin" /usr/local/bin/kubelogin
+          kubelogin --version
+
       - name: Install kubeconform
         run: |
           curl -L https://github.com/yannh/kubeconform/releases/latest/download/kubeconform-linux-amd64.tar.gz \
@@ -1230,7 +1487,7 @@ jobs:
           pnpm build
           pnpm -C examples install --frozen-lockfile
         env:
-          NODE_OPTIONS: "--max-old-space-size=4096"
+          NODE_OPTIONS: "--max-old-space-size=8192"
 
       - name: Mask sensitive values from .env.test
         run: |
@@ -1261,6 +1518,8 @@ jobs:
       - name: Run E2E Terraform distribution test
         env:
           NGROK_AUTHTOKEN: ${{ secrets.NGROK_AUTHTOKEN }}
+          DOCKER_USERNAME: ${{ (needs.compute-matrix.outputs.build_base_image == 'true' || startsWith(inputs.base_image_override, 'ghcr.io/alienplatform/alien-base:')) && github.actor || '' }}
+          DOCKER_PASSWORD: ${{ (needs.compute-matrix.outputs.build_base_image == 'true' || startsWith(inputs.base_image_override, 'ghcr.io/alienplatform/alien-base:')) && secrets.GITHUB_TOKEN || '' }}
           ALIEN_OVERRIDE_BASE_IMAGE: ${{ inputs.base_image_override || (needs.compute-matrix.outputs.build_base_image == 'true' && needs.build-base-image.outputs.base_image || '') }}
           ALIEN_TEST_OVERRIDE_OPERATOR_IMAGE: ${{ inputs.operator_image_override || (needs.compute-matrix.outputs.build_operator_image == 'true' && needs.build-operator-image.outputs.operator_image || '') }}
           ALIEN_E2E_NETWORK_MODE: ${{ needs.compute-matrix.outputs.network_mode }}
@@ -1315,6 +1574,9 @@ jobs:
           platforms: arm64
 
       - uses: mozilla-actions/sccache-action@v0.0.9
+        continue-on-error: true
+        with:
+          version: v0.16.0
 
       - uses: taiki-e/install-action@cargo-nextest
 
@@ -1338,6 +1600,8 @@ jobs:
           version: 0.16.0
 
       - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: "1.3.14"
 
       - uses: pnpm/action-setup@v4
         with:
@@ -1354,7 +1618,7 @@ jobs:
           pnpm build
           pnpm -C examples install --frozen-lockfile
         env:
-          NODE_OPTIONS: "--max-old-space-size=4096"
+          NODE_OPTIONS: "--max-old-space-size=8192"
 
       - name: Build alien-operator and alien-deploy (Unix)
         if: runner.os != 'Windows'
@@ -1433,7 +1697,7 @@ jobs:
       needs.compute-matrix.outputs.skip_cleanup != 'true' &&
       needs.setup.result == 'success'
     runs-on: depot-ubuntu-24.04-arm
-    timeout-minutes: 30
+    timeout-minutes: 45
     steps:
       - uses: actions/checkout@v4
 
@@ -1451,7 +1715,7 @@ jobs:
           export AWS_SECRET_ACCESS_KEY="$AWS_TARGET_SECRET_ACCESS_KEY"
           export AWS_SESSION_TOKEN="${AWS_TARGET_SESSION_TOKEN:-}"
           export AWS_DEFAULT_REGION="$AWS_TARGET_REGION"
-          for suffix in "" "-awscr" "-awsct" "-cfawscr" "-tfawscr" "-tfekscr" "-tfeksfs" "-awsr" "-awst" "-cfaws" "-tfaws" "-tfeks"; do
+          for suffix in "" "-awscr" "-awsct" "-cfawscr" "-tfawscr" "-tfekscr" "-tfeksfs" "-tfeksrt" "-tfeksrm" "-awsr" "-awst" "-cfaws" "-tfaws" "-tfeks"; do
             export ALIEN_E2E_RESOURCE_PREFIX="e2e-${ALIEN_E2E_SLOT}${suffix}"
             ./scripts/cleanup-aws-e2e-resources.sh
           done
@@ -1489,7 +1753,7 @@ jobs:
 
           e2e_resource_prefixes=()
           e2e_role_prefixes=()
-          for suffix in "" "-gcpcr" "-gcpct" "-tfgcpcr" "-tfgkecr" "-tfgkefs"; do
+          for suffix in "" "-gcpcr" "-gcpct" "-tfgcpcr" "-tfgkecr" "-tfgkefs" "-tfgkerm"; do
             resource_prefix="e2e-${ALIEN_E2E_SLOT}${suffix}"
             e2e_resource_prefixes+=("$resource_prefix")
             role_prefix="role_${resource_prefix//-/_}_"
@@ -1665,6 +1929,10 @@ jobs:
         run: |
           set -u
           set -a && source .env.test && set +a
+          if [[ ! "${ALIEN_E2E_SLOT:-}" =~ ^[0-9]{2}$ ]]; then
+            echo "ALIEN_E2E_SLOT must be a two-digit slot before Azure cleanup" >&2
+            exit 1
+          fi
           az login --service-principal \
             -u "$AZURE_TARGET_CLIENT_ID" -p "$AZURE_TARGET_CLIENT_SECRET" --tenant "$AZURE_TARGET_TENANT_ID" \
             --output none || true
@@ -1681,7 +1949,7 @@ jobs:
             esac
             if [[ ! "$rg" =~ ^[a-z][0-9a-f]{7}-default-resource-group$ ]] \
               && [[ ! "$rg" =~ ^alien-e2e-[0-9a-f]{8}$ ]] \
-              && [[ ! "$rg" =~ ^e2e-[0-9]{2}(-[a-z0-9]+)?- ]]; then
+              && [[ ! "$rg" =~ ^e2e-${ALIEN_E2E_SLOT}- ]]; then
               continue
             fi
             MATCHED_GROUPS+=("$rg")
@@ -1714,7 +1982,7 @@ jobs:
             [ -n "$vault_name" ] || continue
             if [[ ! "$vault_name" =~ ^[a-z][0-9a-f]{7}- ]] \
               && [[ ! "$vault_name" =~ ^alien-e2e-[0-9a-f]{8} ]] \
-              && [[ ! "$vault_name" =~ ^e2e-[0-9]{2}(-[a-z0-9]+)?- ]]; then
+              && [[ ! "$vault_name" =~ ^e2e-${ALIEN_E2E_SLOT}- ]]; then
               continue
             fi
             echo "Purging soft-deleted Key Vault: $vault_name"
@@ -1729,7 +1997,7 @@ jobs:
           while IFS=$'\t' read -r assignment_id assignment_description; do
             [ -n "$assignment_id" ] || continue
             [ -n "${assignment_description:-}" ] || continue
-            if [[ "$assignment_description" =~ ^management\ uami\ .*\((e2e-[0-9]{2}(-[a-z0-9]+)?|alien-e2e-[0-9a-f]{8}|[a-z][0-9a-f]{7})\)$ ]]; then
+            if [[ "$assignment_description" =~ ^management\ uami\ .*\((e2e-${ALIEN_E2E_SLOT}(-[a-z0-9]+)?|alien-e2e-[0-9a-f]{8}|[a-z][0-9a-f]{7})\)$ ]]; then
               echo "Deleting role assignment: $assignment_id ($assignment_description)"
               az role assignment delete --ids "$assignment_id" || true
             fi

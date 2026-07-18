@@ -1,5 +1,6 @@
 ---
 source: crates/alien-cloudformation/tests/generator/aws_full_stack_tests.rs
+assertion_line: 122
 expression: yaml
 ---
 AWSTemplateFormatVersion: 2010-09-09
@@ -677,23 +678,19 @@ Resources:
         - Action:
           - lambda:AddPermission
           - lambda:CreateAlias
-          - lambda:CreateEventSourceMapping
           - lambda:CreateFunctionUrlConfig
           - lambda:DeleteAlias
-          - lambda:DeleteEventSourceMapping
           - lambda:DeleteFunction
           - lambda:DeleteFunctionConcurrency
           - lambda:DeleteFunctionEventInvokeConfig
           - lambda:DeleteFunctionUrlConfig
           - lambda:GetCodeSigningConfig
-          - lambda:GetEventSourceMapping
           - lambda:GetFunction
           - lambda:GetFunctionConfiguration
           - lambda:GetFunctionEventInvokeConfig
           - lambda:GetFunctionUrlConfig
           - lambda:GetPolicy
           - lambda:ListAliases
-          - lambda:ListEventSourceMappings
           - lambda:ListTags
           - lambda:ListVersionsByFunction
           - lambda:PublishVersion
@@ -703,7 +700,6 @@ Resources:
           - lambda:TagResource
           - lambda:UpdateAlias
           - lambda:UpdateCodeSigningConfig
-          - lambda:UpdateEventSourceMapping
           - lambda:UpdateFunctionCode
           - lambda:UpdateFunctionConfiguration
           Condition:
@@ -715,6 +711,25 @@ Resources:
           Resource:
           - Fn::Sub: arn:${AWS::Partition}:lambda:${AWS::Region}:${AWS::AccountId}:function:${AWS::StackName}-*
           Sid: ManageLambdaFunctions
+        - Action:
+          - lambda:CreateEventSourceMapping
+          - lambda:DeleteEventSourceMapping
+          - lambda:GetEventSourceMapping
+          - lambda:UpdateEventSourceMapping
+          Condition:
+            StringLike:
+              lambda:FunctionArn:
+                Fn::Sub: arn:${AWS::Partition}:lambda:${AWS::Region}:${AWS::AccountId}:function:${AWS::StackName}-*
+          Effect: Allow
+          Resource:
+          - '*'
+          Sid: ProvisionEventSourceMappings
+        - Action:
+          - lambda:ListEventSourceMappings
+          Effect: Allow
+          Resource:
+          - '*'
+          Sid: ListEventSourceMappings
         - Action:
           - ec2:DescribeNetworkInterfaces
           - ec2:DescribeSecurityGroups

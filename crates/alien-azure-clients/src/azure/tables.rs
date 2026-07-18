@@ -1131,6 +1131,15 @@ impl TableStorageApi for AzureTableStorageClient {
             )
             .await?;
 
+        // The ETag lives in the response HEADER: at the minimalmetadata
+        // accept level the body carries no `odata.etag` property, and
+        // callers doing optimistic-concurrency updates need it.
+        let etag_header = resp
+            .headers()
+            .get("ETag")
+            .and_then(|value| value.to_str().ok())
+            .map(ToString::to_string);
+
         let response_body =
             resp.text()
                 .await
@@ -1139,7 +1148,7 @@ impl TableStorageApi for AzureTableStorageClient {
                     message: "Azure GetEntity: failed to read response body".to_string(),
                 })?;
 
-        let entity: TableEntity = serde_json::from_str(&response_body)
+        let mut entity: TableEntity = serde_json::from_str(&response_body)
             .into_alien_error()
             .context(ErrorData::HttpResponseError {
                 message: format!("Azure GetEntity: JSON parse error. Body: {}", response_body),
@@ -1148,6 +1157,15 @@ impl TableStorageApi for AzureTableStorageClient {
                 http_request_text: None,
                 http_response_text: Some(response_body),
             })?;
+
+        // Expose it under the odata property name (present natively only at
+        // fullmetadata) so consumers have ONE place to look.
+        if let Some(etag) = etag_header {
+            entity
+                .properties
+                .entry("odata.etag".to_string())
+                .or_insert(serde_json::Value::String(etag));
+        }
 
         Ok(entity)
     }

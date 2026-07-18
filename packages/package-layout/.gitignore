@@ -1,0 +1,8 @@
+# Packed tarballs produced by `run.ts` (pnpm pack) — regenerated every run.
+.tarballs/
+
+# The consumer app is installed by npm at run time; nothing under it is committed
+# except the source that run.ts does not rewrite.
+fixture/node_modules/
+fixture/package-lock.json
+fixture/.compiled/

@@ -43,8 +43,8 @@ pub async fn test_vault(
 
     let vault_instance = app_state
         .ctx
-        .get_bindings()
-        .load_vault(&binding_name)
+        .bindings()
+        .vault(&binding_name)
         .await
         .context(ErrorData::BindingNotFound {
             binding_name: binding_name.clone(),
@@ -118,14 +118,15 @@ pub async fn get_managed_secret(
 ) -> Result<Json<serde_json::Value>> {
     info!("Attempting to read MANAGED_TEST_SECRET from secrets vault");
 
-    let vault_instance = app_state
-        .ctx
-        .get_bindings()
-        .load_vault("secrets")
-        .await
-        .context(ErrorData::BindingNotFound {
-            binding_name: "secrets".to_string(),
-        })?;
+    let vault_instance =
+        app_state
+            .ctx
+            .bindings()
+            .vault("secrets")
+            .await
+            .context(ErrorData::BindingNotFound {
+                binding_name: "secrets".to_string(),
+            })?;
 
     match vault_instance.get_secret("MANAGED_TEST_SECRET").await {
         Ok(value) => {

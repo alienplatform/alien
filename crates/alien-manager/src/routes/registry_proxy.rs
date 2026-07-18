@@ -1598,10 +1598,10 @@ mod tests {
     }
 
     fn route_test_error(binding_name: &str) -> alien_bindings::error::Error {
-        alien_error::AlienError::new(alien_bindings::error::ErrorData::BindingConfigInvalid {
-            binding_name: binding_name.to_string(),
-            reason: "test provider has no bindings".to_string(),
-        })
+        alien_error::AlienError::new(alien_bindings::error::ErrorData::config_invalid(
+            binding_name,
+            "test provider has no bindings",
+        ))
     }
 
     #[async_trait::async_trait]

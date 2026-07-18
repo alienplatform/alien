@@ -1297,33 +1297,12 @@ async fn test_insert_and_delete_notification(ctx: &mut GcsTestContext) {
     // GCS notifications require the service agent to have roles/pubsub.publisher.
     {
         use alien_gcp_clients::iam::{Binding, IamPolicy};
-        // Look up the project number from the Resource Manager API.
-        // The GCS service agent is service-{PROJECT_NUMBER}@gs-project-accounts.iam.gserviceaccount.com
-        let project_number = {
-            use alien_gcp_clients::resource_manager::{ResourceManagerApi, ResourceManagerClient};
-            let gcp_creds_json = std::env::var("GOOGLE_MANAGEMENT_SERVICE_ACCOUNT_KEY").unwrap();
-            let rm_cfg = GcpClientConfig {
-                project_id: project_id.clone(),
-                region: "us-central1".to_string(),
-                credentials: GcpCredentials::ServiceAccountKey {
-                    json: gcp_creds_json,
-                },
-                service_overrides: None,
-                project_number: None,
-            };
-            let rm_client = ResourceManagerClient::new(reqwest::Client::new(), rm_cfg);
-            let project = rm_client
-                .get_project_metadata(project_id.clone())
-                .await
-                .expect("Failed to get project metadata for project number");
-            project
-                .project_number
-                .expect("Project metadata missing project_number")
-        };
-        let gcs_service_agent = format!(
-            "serviceAccount:service-{}@gs-project-accounts.iam.gserviceaccount.com",
-            project_number
-        );
+        let project_service_account = ctx
+            .client
+            .get_project_service_account()
+            .await
+            .expect("Failed to get the Cloud Storage service account");
+        let gcs_service_agent = format!("serviceAccount:{}", project_service_account.email_address);
         let policy = IamPolicy {
             bindings: vec![Binding {
                 role: "roles/pubsub.publisher".to_string(),
@@ -1415,33 +1394,12 @@ async fn test_insert_notification_with_event_types(ctx: &mut GcsTestContext) {
     // Grant the GCS service agent permission to publish to the topic
     {
         use alien_gcp_clients::iam::{Binding, IamPolicy};
-        // Look up the project number from the Resource Manager API.
-        // The GCS service agent is service-{PROJECT_NUMBER}@gs-project-accounts.iam.gserviceaccount.com
-        let project_number = {
-            use alien_gcp_clients::resource_manager::{ResourceManagerApi, ResourceManagerClient};
-            let gcp_creds_json = std::env::var("GOOGLE_MANAGEMENT_SERVICE_ACCOUNT_KEY").unwrap();
-            let rm_cfg = GcpClientConfig {
-                project_id: project_id.clone(),
-                region: "us-central1".to_string(),
-                credentials: GcpCredentials::ServiceAccountKey {
-                    json: gcp_creds_json,
-                },
-                service_overrides: None,
-                project_number: None,
-            };
-            let rm_client = ResourceManagerClient::new(reqwest::Client::new(), rm_cfg);
-            let project = rm_client
-                .get_project_metadata(project_id.clone())
-                .await
-                .expect("Failed to get project metadata for project number");
-            project
-                .project_number
-                .expect("Project metadata missing project_number")
-        };
-        let gcs_service_agent = format!(
-            "serviceAccount:service-{}@gs-project-accounts.iam.gserviceaccount.com",
-            project_number
-        );
+        let project_service_account = ctx
+            .client
+            .get_project_service_account()
+            .await
+            .expect("Failed to get the Cloud Storage service account");
+        let gcs_service_agent = format!("serviceAccount:{}", project_service_account.email_address);
         let policy = IamPolicy {
             bindings: vec![Binding {
                 role: "roles/pubsub.publisher".to_string(),

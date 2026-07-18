@@ -1,98 +1,128 @@
+//! Local disk-persisted queue backed by turso (`localqueue.v1`), multi-process safe.
+//!
+//! # Connection strategy
+//!
+//! turso is async-native and its `Connection` is `Send + Sync`, so there is no
+//! `spawn_blocking` boundary and no `Mutex<Connection>` anywhere. `LocalQueue`
+//! holds one `turso::Database` handle on `<dataDir>/localqueue.sqlite`; each
+//! operation opens its **own** short-lived connection from it and drops it
+//! when the operation completes, so no statement state leaks between
+//! operations.
+//!
+//! Correctness under concurrent access (multiple handles on one file, i.e.
+//! multiple processes) comes from turso's multi-process WAL mode — enabled
+//! explicitly, experimental upstream, and gated by the multi-handle tests
+//! below — plus a `busy_timeout` (writers wait for the write lock instead of
+//! failing with `Busy`).
+//!
+//! # Receive design: one `BEGIN IMMEDIATE` transaction per batch
+//!
+//! The pinned `localqueue.v1` receive is one atomic
+//! `UPDATE ... SET receipt_handle = ?uuid ... RETURNING ...`. A single bound
+//! parameter cannot mint a **distinct** UUID per claimed row, so this
+//! implementation uses the sanctioned equivalent: one `BEGIN IMMEDIATE`
+//! transaction per batch that selects the due ids, then runs that exact
+//! per-row `UPDATE ... RETURNING` with a fresh UUID for each, and commits.
+//! `IMMEDIATE` takes the write lock at `BEGIN`, so concurrent receivers (in
+//! any process) serialize on the whole claim: a message is delivered to
+//! exactly one receiver per visibility window.
+//!
+//! See `crates/alien-bindings/FORMAT.md` for the on-disk `localqueue.v1`
+//! contract, including the `"{id}:{uuid}"` caller-facing receipt-handle format.
 use crate::error::{ErrorData, Result};
+use crate::providers::local_store::{as_i64, as_text, query_all, LocalStore, StoreSpec};
 use crate::traits::{
-    Binding, MessagePayload, Queue, QueueMessage, MAX_BATCH_SIZE, MAX_MESSAGE_BYTES,
+    Binding, MessagePayload, Queue, QueueMessage, LEASE_SECONDS, MAX_BATCH_SIZE, MAX_MESSAGE_BYTES,
 };
 use alien_core::bindings::LocalQueueBinding;
-use alien_error::{AlienError, Context, IntoAlienError};
+use alien_error::{AlienError, Context as _, IntoAlienError as _};
 use async_trait::async_trait;
-use chrono::{DateTime, Utc};
-use serde::{Deserialize, Serialize};
+use chrono::Utc;
 use std::path::PathBuf;
-use std::sync::Arc;
-use tokio::sync::Mutex;
+use std::time::Duration;
+use turso::transaction::TransactionBehavior;
+use turso::Connection;
 
-const LEASE_DURATION_SECS: i64 = 30;
+static QUEUE_SPEC: StoreSpec = StoreSpec {
+    db_filename: "localqueue.sqlite",
+    format_version: "localqueue.v1",
+    binding_type: "local queue",
+    schema_ddl: "CREATE TABLE IF NOT EXISTS messages (\
+                     id             INTEGER PRIMARY KEY AUTOINCREMENT,\
+                     payload_type   TEXT    NOT NULL,\
+                     payload_data   TEXT    NOT NULL,\
+                     enqueued_at    INTEGER NOT NULL,\
+                     visible_at     INTEGER NOT NULL,\
+                     attempt        INTEGER NOT NULL DEFAULT 0,\
+                     receipt_handle TEXT\
+                 );\
+                 CREATE INDEX IF NOT EXISTS idx_messages_visible ON messages (visible_at, enqueued_at, id);",
+};
 
-/// Local disk-persisted queue implementation using sled embedded database.
+/// Local disk-persisted queue on turso (`localqueue.v1`).
 ///
-/// This provides a persistent, thread-safe, disk-based message queue that implements
-/// all Queue trait features including send, receive with visibility timeout, and ack.
-/// Messages survive process restarts.
+/// Implements the `Queue` trait (send/receive/ack/nack/purge). Messages
+/// survive process restarts, and multiple `LocalQueue`
+/// handles — including handles in different OS processes — can safely share
+/// one data directory.
 #[derive(Debug)]
 pub struct LocalQueue {
-    db: Arc<Mutex<sled::Db>>,
+    store: LocalStore,
 }
 
-/// Stored message format that avoids serde issues with `MessagePayload`'s internal tagging.
-/// We store the payload as a raw JSON value and a discriminator tag.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-struct StoredMessage {
-    /// "json" or "text"
-    payload_type: String,
-    /// The raw payload content (JSON value for json type, string for text type)
-    payload_data: serde_json::Value,
-    enqueued_at: DateTime<Utc>,
-}
-
-impl StoredMessage {
-    fn from_payload(payload: MessagePayload) -> Self {
-        let (payload_type, payload_data) = match payload {
-            MessagePayload::Json(v) => ("json".to_string(), v),
-            MessagePayload::Text(s) => ("text".to_string(), serde_json::Value::String(s)),
-        };
-        Self {
-            payload_type,
-            payload_data,
-            enqueued_at: Utc::now(),
-        }
-    }
-
-    fn into_payload(self) -> MessagePayload {
-        match self.payload_type.as_str() {
-            "json" => MessagePayload::Json(self.payload_data),
-            _ => match self.payload_data {
-                serde_json::Value::String(s) => MessagePayload::Text(s),
-                other => MessagePayload::Text(other.to_string()),
-            },
-        }
+/// Build the standard queue operation error context.
+fn queue_error(operation: &str, reason: String) -> ErrorData {
+    ErrorData::QueueOperationFailed {
+        operation: operation.to_string(),
+        reason,
     }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
-struct InFlightMessage {
-    /// The sequence key in the messages tree (big-endian u64 bytes)
-    seq_bytes: Vec<u8>,
-    message: StoredMessage,
-    leased_until: DateTime<Utc>,
+/// Split a `MessagePayload` into its stored `(payload_type, payload_data)`
+/// columns: `("json", <serialized JSON>)` or `("text", <raw string>)`.
+fn encode_payload(payload: MessagePayload) -> Result<(&'static str, String)> {
+    match payload {
+        MessagePayload::Json(v) => {
+            let data = serde_json::to_string(&v)
+                .into_alien_error()
+                .context(queue_error(
+                    "send",
+                    "failed to serialize JSON payload".to_string(),
+                ))?;
+            Ok(("json", data))
+        }
+        MessagePayload::Text(s) => Ok(("text", s)),
+    }
+}
+
+/// Rebuild a `MessagePayload` from its stored columns.
+fn decode_payload(payload_type: &str, payload_data: String) -> Result<MessagePayload> {
+    match payload_type {
+        "json" => {
+            let value = serde_json::from_str(&payload_data)
+                .into_alien_error()
+                .context(queue_error(
+                    "receive",
+                    "failed to deserialize stored JSON payload".to_string(),
+                ))?;
+            Ok(MessagePayload::Json(value))
+        }
+        "text" => Ok(MessagePayload::Text(payload_data)),
+        other => Err(AlienError::new(queue_error(
+            "receive",
+            format!("unknown payload_type '{other}' in localqueue.v1 store"),
+        ))),
+    }
 }
 
 impl LocalQueue {
-    /// Create a new local queue store with the given data directory.
+    /// Create a new local queue store rooted at the given data directory.
+    ///
+    /// The directory is created if missing; the store lives at
+    /// `<data_dir>/localqueue.sqlite`.
     pub async fn new(data_dir: PathBuf) -> Result<Self> {
-        tracing::debug!(data_dir = %data_dir.display(), "Opening LocalQueue database");
-
-        if let Some(parent) = data_dir.parent() {
-            tokio::fs::create_dir_all(parent)
-                .await
-                .into_alien_error()
-                .context(ErrorData::LocalFilesystemError {
-                    path: parent.to_string_lossy().to_string(),
-                    operation: "create_dir_all".to_string(),
-                })?;
-        }
-
-        let db =
-            sled::open(&data_dir)
-                .into_alien_error()
-                .context(ErrorData::BindingSetupFailed {
-                    binding_type: "local queue".to_string(),
-                    reason: format!("Failed to open sled database at: {:?}", data_dir),
-                })?;
-
-        tracing::debug!(data_dir = %data_dir.display(), "LocalQueue database opened successfully");
-
         Ok(Self {
-            db: Arc::new(Mutex::new(db)),
+            store: LocalStore::open(data_dir, &QUEUE_SPEC).await?,
         })
     }
 
@@ -101,93 +131,166 @@ impl LocalQueue {
         let queue_path = binding
             .queue_path
             .into_value("queue", "queue_path")
-            .context(ErrorData::BindingConfigInvalid {
-                binding_name: "queue".to_string(),
-                reason: "Failed to resolve queue_path from binding".to_string(),
-            })?;
+            .context(ErrorData::config_invalid(
+                "queue",
+                "Failed to resolve queue_path from binding",
+            ))?;
 
         Self::new(PathBuf::from(queue_path)).await
     }
 
-    /// Reclaim expired in-flight messages back to the messages tree.
-    fn reclaim_expired_leases(db: &sled::Db) -> Result<()> {
-        let in_flight_tree = db.open_tree("in_flight").into_alien_error().context(
-            ErrorData::QueueOperationFailed {
-                operation: "open in_flight tree".to_string(),
-                reason: "Failed to open in_flight tree".to_string(),
-            },
-        )?;
+    /// Get the data directory path (the directory that holds `localqueue.sqlite`).
+    pub fn data_dir(&self) -> &PathBuf {
+        self.store.data_dir()
+    }
 
-        let messages_tree = db.open_tree("messages").into_alien_error().context(
-            ErrorData::QueueOperationFailed {
-                operation: "open messages tree".to_string(),
-                reason: "Failed to open messages tree".to_string(),
-            },
-        )?;
+    /// Split a caller-facing `"{id}:{uuid}"` receipt handle into its parts.
+    ///
+    /// Returns `None` for a handle this store could never have issued; ack and
+    /// nack treat that exactly like an already-deleted message (idempotent Ok).
+    fn parse_receipt_handle(receipt_handle: &str) -> Option<(i64, String)> {
+        let (id, receipt) = receipt_handle.split_once(':')?;
+        let id: i64 = id.parse().ok()?;
+        if receipt.is_empty() {
+            return None;
+        }
+        Some((id, receipt.to_string()))
+    }
 
-        let now = Utc::now();
-        let mut expired_handles = Vec::new();
+    /// Claim up to `max_messages` due messages with the given visibility
+    /// timeout. This is `receive` minus the batch-size validation and with the
+    /// timeout injectable, so tests can force fast redelivery.
+    async fn receive_inner(
+        &self,
+        max_messages: usize,
+        visibility: Duration,
+    ) -> Result<Vec<QueueMessage>> {
+        self.store
+            .with_conn(|conn| async move {
+                let mut conn = conn;
+                let now = Utc::now().timestamp_millis();
+                let visible_until =
+                    now.saturating_add(i64::try_from(visibility.as_millis()).unwrap_or(i64::MAX));
+                let limit = i64::try_from(max_messages).unwrap_or(i64::MAX);
 
-        for result in in_flight_tree.iter() {
-            let (handle_bytes, value_bytes) =
-                result
+                // IMMEDIATE takes the write lock at BEGIN: the select-then-claim
+                // below is one critical section across all handles and processes.
+                let tx = conn
+                    .transaction_with_behavior(TransactionBehavior::Immediate)
+                    .await
                     .into_alien_error()
-                    .context(ErrorData::QueueOperationFailed {
-                        operation: "scan in_flight".to_string(),
-                        reason: "Failed to iterate in-flight messages".to_string(),
-                    })?;
+                    .context(queue_error(
+                        "receive",
+                        "failed to begin immediate transaction".to_string(),
+                    ))?;
 
-            if let Ok(in_flight) = serde_json::from_slice::<InFlightMessage>(&value_bytes) {
-                if now >= in_flight.leased_until {
-                    // Re-enqueue the message with its original sequence key
-                    let stored_bytes = serde_json::to_vec(&in_flight.message)
-                        .into_alien_error()
-                        .context(ErrorData::QueueOperationFailed {
-                            operation: "serialize reclaimed message".to_string(),
-                            reason: "Failed to serialize message".to_string(),
-                        })?;
-
-                    messages_tree
-                        .insert(&in_flight.seq_bytes, stored_bytes)
-                        .into_alien_error()
-                        .context(ErrorData::QueueOperationFailed {
-                            operation: "re-enqueue expired message".to_string(),
-                            reason: "Failed to re-enqueue expired message".to_string(),
-                        })?;
-
-                    expired_handles.push(handle_bytes);
-                }
-            }
-        }
-
-        for handle in expired_handles {
-            let _ = in_flight_tree.remove(&handle);
-        }
-
-        Ok(())
-    }
-
-    fn serialize_message(message: &StoredMessage) -> Result<Vec<u8>> {
-        serde_json::to_vec(message)
-            .into_alien_error()
-            .context(ErrorData::QueueOperationFailed {
-                operation: "serialize message".to_string(),
-                reason: "Failed to serialize message to JSON".to_string(),
-            })
-    }
-
-    fn message_size(payload: &MessagePayload) -> Result<usize> {
-        match payload {
-            MessagePayload::Json(v) => serde_json::to_string(v)
-                .map(|s| s.len())
+                let id_rows = query_all(
+                    &tx,
+                    "SELECT id FROM messages WHERE visible_at <= ?1 \
+                     ORDER BY enqueued_at, id LIMIT ?2",
+                    (now, limit),
+                )
+                .await
                 .into_alien_error()
-                .context(ErrorData::QueueOperationFailed {
-                    operation: "measure message size".to_string(),
-                    reason: "Failed to serialize JSON payload".to_string(),
-                }),
-            MessagePayload::Text(s) => Ok(s.len()),
-        }
+                .context(queue_error(
+                    "receive",
+                    "failed to scan due messages".to_string(),
+                ))?;
+                let mut ids = Vec::with_capacity(id_rows.len());
+                for row in &id_rows {
+                    ids.push(row.first().and_then(as_i64).ok_or_else(|| {
+                        AlienError::new(queue_error(
+                            "receive",
+                            "failed to read due-message row".to_string(),
+                        ))
+                    })?);
+                }
+
+                let mut messages = Vec::with_capacity(ids.len());
+                for id in ids {
+                    // The pinned claim statement, with a fresh UUID per row.
+                    let receipt = uuid::Uuid::new_v4().to_string();
+                    let claimed = query_all(
+                        &tx,
+                        "UPDATE messages \
+                         SET visible_at = ?1, attempt = attempt + 1, receipt_handle = ?2 \
+                         WHERE id = ?3 \
+                         RETURNING payload_type, payload_data, attempt",
+                        (visible_until, receipt.as_str(), id),
+                    )
+                    .await
+                    .into_alien_error()
+                    .context(queue_error(
+                        "receive",
+                        format!("failed to claim message {id}"),
+                    ))?;
+                    let row = claimed.first().ok_or_else(|| {
+                        AlienError::new(queue_error(
+                            "receive",
+                            format!("claim of message {id} returned no row"),
+                        ))
+                    })?;
+                    let payload_type = row.first().and_then(as_text).ok_or_else(|| {
+                        AlienError::new(queue_error(
+                            "receive",
+                            format!("claimed message {id} has a non-text payload_type"),
+                        ))
+                    })?;
+                    let payload_data = row.get(1).and_then(as_text).ok_or_else(|| {
+                        AlienError::new(queue_error(
+                            "receive",
+                            format!("claimed message {id} has a non-text payload_data"),
+                        ))
+                    })?;
+                    let attempt = row
+                        .get(2)
+                        .and_then(as_i64)
+                        .and_then(|n| u32::try_from(n).ok())
+                        .ok_or_else(|| {
+                            AlienError::new(queue_error(
+                                "receive",
+                                format!("claimed message {id} has an invalid attempt count"),
+                            ))
+                        })?;
+                    messages.push(QueueMessage {
+                        payload: decode_payload(&payload_type, payload_data)?,
+                        receipt_handle: format!("{id}:{receipt}"),
+                        attempt,
+                    });
+                }
+
+                tx.commit().await.into_alien_error().context(queue_error(
+                    "receive",
+                    "failed to commit receive transaction".to_string(),
+                ))?;
+                Ok(messages)
+            })
+            .await
     }
+}
+
+/// Does a message row with this id still exist (under the current transaction)?
+///
+/// Inside `ack`/`nack` this runs on the open `BEGIN IMMEDIATE` transaction
+/// (turso's `Transaction` derefs to `Connection`).
+async fn message_exists(conn: &Connection, id: i64, operation: &str) -> Result<bool> {
+    let rows = query_all(conn, "SELECT 1 FROM messages WHERE id = ?1", (id,))
+        .await
+        .into_alien_error()
+        .context(queue_error(
+            operation,
+            format!("failed to check message {id} existence"),
+        ))?;
+    Ok(!rows.is_empty())
+}
+
+fn stale_receipt_error(id: i64, operation: &str) -> AlienError<ErrorData> {
+    AlienError::new(queue_error(
+        operation,
+        format!(
+            "stale receipt handle for message {id}: the message was redelivered and a newer receipt supersedes this one"
+        ),
+    ))
 }
 
 impl Binding for LocalQueue {}
@@ -195,56 +298,33 @@ impl Binding for LocalQueue {}
 #[async_trait]
 impl Queue for LocalQueue {
     async fn send(&self, _queue: &str, message: MessagePayload) -> Result<()> {
-        let size = Self::message_size(&message)?;
-        if size > MAX_MESSAGE_BYTES {
+        // Encode once, then measure the encoded bytes we will actually store.
+        let (payload_type, payload_data) = encode_payload(message)?;
+        if payload_data.len() > MAX_MESSAGE_BYTES {
             return Err(AlienError::new(ErrorData::BindingSetupFailed {
                 binding_type: "queue.local".to_string(),
                 reason: format!(
                     "Message size {} bytes exceeds limit of {} bytes",
-                    size, MAX_MESSAGE_BYTES
+                    payload_data.len(),
+                    MAX_MESSAGE_BYTES
                 ),
             }));
         }
 
-        let stored = StoredMessage::from_payload(message);
-        let serialized = Self::serialize_message(&stored)?;
-
-        let db = self.db.lock().await;
-        let messages_tree = db.open_tree("messages").into_alien_error().context(
-            ErrorData::QueueOperationFailed {
-                operation: "open messages tree".to_string(),
-                reason: "Failed to open messages tree".to_string(),
-            },
-        )?;
-
-        // Use generate_id for monotonically increasing sequence numbers
-        let seq = db
-            .generate_id()
-            .into_alien_error()
-            .context(ErrorData::QueueOperationFailed {
-                operation: "generate sequence".to_string(),
-                reason: "Failed to generate message sequence number".to_string(),
-            })?;
-        let seq_key = seq.to_be_bytes();
-
-        messages_tree
-            .insert(seq_key, serialized)
-            .into_alien_error()
-            .context(ErrorData::QueueOperationFailed {
-                operation: "send".to_string(),
-                reason: "Failed to insert message".to_string(),
-            })?;
-
-        messages_tree
-            .flush_async()
+        self.store
+            .with_conn(|conn| async move {
+                let now = Utc::now().timestamp_millis();
+                conn.execute(
+                    "INSERT INTO messages (payload_type, payload_data, enqueued_at, visible_at, attempt) \
+                     VALUES (?1, ?2, ?3, ?3, 0)",
+                    (payload_type, payload_data.as_str(), now),
+                )
+                .await
+                .into_alien_error()
+                .context(queue_error("send", "failed to insert message".to_string()))?;
+                Ok(())
+            })
             .await
-            .into_alien_error()
-            .context(ErrorData::QueueOperationFailed {
-                operation: "flush".to_string(),
-                reason: "Failed to flush message to disk".to_string(),
-            })?;
-
-        Ok(())
     }
 
     async fn receive(&self, _queue: &str, max_messages: usize) -> Result<Vec<QueueMessage>> {
@@ -258,147 +338,140 @@ impl Queue for LocalQueue {
             }));
         }
 
-        let db = self.db.lock().await;
-
-        // Reclaim expired leases first
-        Self::reclaim_expired_leases(&db)?;
-
-        let messages_tree = db.open_tree("messages").into_alien_error().context(
-            ErrorData::QueueOperationFailed {
-                operation: "open messages tree".to_string(),
-                reason: "Failed to open messages tree".to_string(),
-            },
-        )?;
-
-        let in_flight_tree = db.open_tree("in_flight").into_alien_error().context(
-            ErrorData::QueueOperationFailed {
-                operation: "open in_flight tree".to_string(),
-                reason: "Failed to open in_flight tree".to_string(),
-            },
-        )?;
-
-        let now = Utc::now();
-        let leased_until = now + chrono::Duration::seconds(LEASE_DURATION_SECS);
-        let mut result = Vec::new();
-
-        // Pop messages from the front (lowest sequence number)
-        for item in messages_tree.iter() {
-            if result.len() >= max_messages {
-                break;
-            }
-
-            let (seq_key, value_bytes) =
-                item.into_alien_error()
-                    .context(ErrorData::QueueOperationFailed {
-                        operation: "receive".to_string(),
-                        reason: "Failed to iterate messages".to_string(),
-                    })?;
-
-            let stored: StoredMessage = match serde_json::from_slice(&value_bytes) {
-                Ok(m) => m,
-                Err(_) => continue, // Skip corrupted messages
-            };
-
-            // Generate a receipt handle
-            let receipt_handle = uuid::Uuid::new_v4().to_string();
-
-            // Move to in-flight
-            let in_flight = InFlightMessage {
-                seq_bytes: seq_key.to_vec(),
-                message: stored.clone(),
-                leased_until,
-            };
-            let in_flight_bytes = serde_json::to_vec(&in_flight).into_alien_error().context(
-                ErrorData::QueueOperationFailed {
-                    operation: "serialize in_flight".to_string(),
-                    reason: "Failed to serialize in-flight message".to_string(),
-                },
-            )?;
-
-            in_flight_tree
-                .insert(receipt_handle.as_bytes(), in_flight_bytes)
-                .into_alien_error()
-                .context(ErrorData::QueueOperationFailed {
-                    operation: "move to in_flight".to_string(),
-                    reason: "Failed to move message to in-flight".to_string(),
-                })?;
-
-            // Remove from messages
-            messages_tree.remove(&seq_key).into_alien_error().context(
-                ErrorData::QueueOperationFailed {
-                    operation: "remove from messages".to_string(),
-                    reason: "Failed to remove message from queue".to_string(),
-                },
-            )?;
-
-            result.push(QueueMessage {
-                payload: stored.into_payload(),
-                receipt_handle,
-            });
-        }
-
-        // Flush both trees
-        messages_tree
-            .flush_async()
+        self.receive_inner(max_messages, Duration::from_secs(LEASE_SECONDS))
             .await
-            .into_alien_error()
-            .context(ErrorData::QueueOperationFailed {
-                operation: "flush".to_string(),
-                reason: "Failed to flush messages tree".to_string(),
-            })?;
-        in_flight_tree
-            .flush_async()
-            .await
-            .into_alien_error()
-            .context(ErrorData::QueueOperationFailed {
-                operation: "flush".to_string(),
-                reason: "Failed to flush in_flight tree".to_string(),
-            })?;
-
-        Ok(result)
     }
 
     async fn ack(&self, _queue: &str, receipt_handle: &str) -> Result<()> {
-        let db = self.db.lock().await;
-        let in_flight_tree = db.open_tree("in_flight").into_alien_error().context(
-            ErrorData::QueueOperationFailed {
-                operation: "open in_flight tree".to_string(),
-                reason: "Failed to open in_flight tree".to_string(),
-            },
-        )?;
+        // A handle this store never issued behaves like an already-deleted
+        // message: idempotent Ok (preserves the historical ack contract).
+        let Some((id, receipt)) = Self::parse_receipt_handle(receipt_handle) else {
+            return Ok(());
+        };
 
-        // Remove the message (idempotent - missing key is OK)
-        in_flight_tree
-            .remove(receipt_handle.as_bytes())
-            .into_alien_error()
-            .context(ErrorData::QueueOperationFailed {
-                operation: "ack".to_string(),
-                reason: "Failed to acknowledge message".to_string(),
-            })?;
-
-        in_flight_tree
-            .flush_async()
+        self.store
+            .with_conn(|conn| async move {
+                let mut conn = conn;
+                let tx = conn
+                    .transaction_with_behavior(TransactionBehavior::Immediate)
+                    .await
+                    .into_alien_error()
+                    .context(queue_error(
+                        "ack",
+                        "failed to begin immediate transaction".to_string(),
+                    ))?;
+                let deleted = tx
+                    .execute(
+                        "DELETE FROM messages WHERE id = ?1 AND receipt_handle = ?2",
+                        (id, receipt.as_str()),
+                    )
+                    .await
+                    .into_alien_error()
+                    .context(queue_error("ack", format!("failed to ack message {id}")))?;
+                if deleted == 0 && message_exists(&tx, id, "ack").await? {
+                    // The row is still there but under a different (newer) receipt:
+                    // this caller lost its lease. Rejecting prevents a slow consumer
+                    // from deleting work that has been handed to someone else.
+                    return Err(stale_receipt_error(id, "ack"));
+                }
+                tx.commit().await.into_alien_error().context(queue_error(
+                    "ack",
+                    "failed to commit ack transaction".to_string(),
+                ))?;
+                Ok(())
+            })
             .await
-            .into_alien_error()
-            .context(ErrorData::QueueOperationFailed {
-                operation: "flush".to_string(),
-                reason: "Failed to flush acknowledgment".to_string(),
-            })?;
+    }
 
-        Ok(())
+    /// Negative-acknowledge a message: make it immediately visible again.
+    ///
+    /// Same receipt rules as `ack`: a stale receipt (the message was
+    /// redelivered and a newer receipt supersedes this one) is rejected; a
+    /// receipt for an already-deleted message is an idempotent no-op.
+    async fn nack(&self, _queue: &str, receipt_handle: &str) -> Result<()> {
+        let Some((id, receipt)) = Self::parse_receipt_handle(receipt_handle) else {
+            return Ok(());
+        };
+
+        self.store
+            .with_conn(|conn| async move {
+                let mut conn = conn;
+                let now = Utc::now().timestamp_millis();
+                let tx = conn
+                    .transaction_with_behavior(TransactionBehavior::Immediate)
+                    .await
+                    .into_alien_error()
+                    .context(queue_error(
+                        "nack",
+                        "failed to begin immediate transaction".to_string(),
+                    ))?;
+                let updated = tx
+                    .execute(
+                        "UPDATE messages SET visible_at = ?1 WHERE id = ?2 AND receipt_handle = ?3",
+                        (now, id, receipt.as_str()),
+                    )
+                    .await
+                    .into_alien_error()
+                    .context(queue_error("nack", format!("failed to nack message {id}")))?;
+                if updated == 0 && message_exists(&tx, id, "nack").await? {
+                    return Err(stale_receipt_error(id, "nack"));
+                }
+                tx.commit().await.into_alien_error().context(queue_error(
+                    "nack",
+                    "failed to commit nack transaction".to_string(),
+                ))?;
+                Ok(())
+            })
+            .await
+    }
+
+    /// Delete every message in the queue, visible or in flight.
+    async fn purge(&self, _queue: &str) -> Result<()> {
+        self.store
+            .with_conn(|conn| async move {
+                conn.execute("DELETE FROM messages", ())
+                    .await
+                    .into_alien_error()
+                    .context(queue_error("purge", "failed to purge queue".to_string()))?;
+                Ok(())
+            })
+            .await
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::providers::local_store::open_database;
+    use std::collections::BTreeSet;
+    use std::sync::Arc;
+    use std::time::Duration;
     use tempfile::TempDir;
+    use tokio::time;
 
     fn payload_text(msg: &QueueMessage) -> String {
         match &msg.payload {
             MessagePayload::Text(s) => s.clone(),
             MessagePayload::Json(v) => v.to_string(),
         }
+    }
+
+    /// Parse the message id out of a `"{id}:{uuid}"` receipt handle.
+    fn handle_id(receipt_handle: &str) -> i64 {
+        receipt_handle
+            .split_once(':')
+            .expect("receipt handle must be '{id}:{uuid}'")
+            .0
+            .parse()
+            .expect("receipt handle id must be an integer")
+    }
+
+    /// Open a raw connection to the store for white-box column inspection.
+    async fn raw_conn(queue: &LocalQueue) -> Connection {
+        let db = open_database(&queue.data_dir().join("localqueue.sqlite"), "test")
+            .await
+            .expect("raw open");
+        db.connect().expect("raw connect")
     }
 
     async fn create_test_queue() -> (LocalQueue, TempDir) {
@@ -460,8 +533,19 @@ mod tests {
     async fn test_ack_idempotent() {
         let (queue, _temp_dir) = create_test_queue().await;
 
-        // Acking a non-existent receipt handle should succeed
+        // Acking a receipt handle that never existed should succeed.
         queue.ack("q", "non-existent-handle").await.unwrap();
+
+        // Acking an already-deleted message (double ack with the same, current
+        // receipt) must also succeed: the row is gone, so the ack is a no-op.
+        queue
+            .send("q", MessagePayload::Text("msg".to_string()))
+            .await
+            .unwrap();
+        let msgs = queue.receive("q", 1).await.unwrap();
+        assert_eq!(msgs.len(), 1);
+        queue.ack("q", &msgs[0].receipt_handle).await.unwrap();
+        queue.ack("q", &msgs[0].receipt_handle).await.unwrap();
     }
 
     #[tokio::test]
@@ -554,5 +638,272 @@ mod tests {
         for (i, msg) in msgs.iter().enumerate() {
             assert_eq!(payload_text(msg), format!("{}", i));
         }
+    }
+
+    #[tokio::test]
+    async fn test_unknown_format_rejected_on_open() {
+        let temp_dir = tempfile::tempdir().expect("Failed to create temp dir");
+        let dir = temp_dir.path().join("queue");
+
+        // Create a valid store, then rewrite its format marker to a future version.
+        {
+            let queue = LocalQueue::new(dir.clone()).await.expect("initial open");
+            queue
+                .send("q", MessagePayload::Text("m".to_string()))
+                .await
+                .unwrap();
+        }
+        {
+            let db = open_database(&dir.join("localqueue.sqlite"), "test")
+                .await
+                .expect("raw open");
+            let conn = db.connect().expect("raw connect");
+            conn.execute(
+                "UPDATE meta SET value = 'localqueue.v2' WHERE key = 'format'",
+                (),
+            )
+            .await
+            .expect("format overwrite");
+        }
+
+        // Reopening must fail fast, naming both the found and expected formats.
+        let err = LocalQueue::new(dir)
+            .await
+            .expect_err("unknown format must be rejected");
+        let msg = err.to_string();
+        assert!(
+            msg.contains("localqueue.v2"),
+            "error must name the found format, got: {msg}"
+        );
+        assert!(
+            msg.contains("localqueue.v1"),
+            "error must name the expected format, got: {msg}"
+        );
+    }
+
+    // ---- localqueue.v1 semantics proofs ----
+
+    #[tokio::test]
+    async fn test_visibility_timeout_redelivery_increments_attempt() {
+        let (queue, _temp_dir) = create_test_queue().await;
+
+        queue
+            .send("q", MessagePayload::Text("retry-me".to_string()))
+            .await
+            .unwrap();
+
+        // Receive with a short visibility timeout and do NOT ack.
+        let first = queue
+            .receive_inner(1, Duration::from_millis(100))
+            .await
+            .unwrap();
+        assert_eq!(first.len(), 1);
+        let id = handle_id(&first[0].receipt_handle);
+
+        // While the message is in flight, it must not be redelivered.
+        let hidden = queue.receive("q", 10).await.unwrap();
+        assert!(hidden.is_empty(), "in-flight message must be hidden");
+
+        // After the visibility timeout expires the message is redelivered ...
+        time::sleep(Duration::from_millis(250)).await;
+        let second = queue.receive("q", 10).await.unwrap();
+        assert_eq!(second.len(), 1, "expired message must be redelivered");
+        assert_eq!(payload_text(&second[0]), "retry-me");
+        assert_eq!(
+            handle_id(&second[0].receipt_handle),
+            id,
+            "redelivery must be the same message row"
+        );
+        assert_ne!(
+            second[0].receipt_handle, first[0].receipt_handle,
+            "each delivery must mint a fresh receipt handle"
+        );
+
+        // ... with the real attempt count surfaced to the caller ...
+        assert_eq!(first[0].attempt, 1, "first delivery must report attempt 1");
+        assert_eq!(
+            second[0].attempt, 2,
+            "redelivery must report attempt 2 to the caller"
+        );
+
+        // ... with attempt incremented once per delivery (1 then 2).
+        let conn = raw_conn(&queue).await;
+        let rows = query_all(&conn, "SELECT attempt FROM messages WHERE id = ?1", (id,))
+            .await
+            .expect("attempt read");
+        let attempt = rows
+            .first()
+            .and_then(|row| row.first())
+            .and_then(as_i64)
+            .expect("attempt value");
+        assert_eq!(attempt, 2, "two deliveries must mean attempt == 2");
+    }
+
+    #[tokio::test]
+    async fn test_stale_receipt_rejected() {
+        let (queue, _temp_dir) = create_test_queue().await;
+
+        queue
+            .send("q", MessagePayload::Text("contested".to_string()))
+            .await
+            .unwrap();
+
+        // Handle A receives with a short visibility timeout and stalls.
+        let a = queue
+            .receive_inner(1, Duration::from_millis(100))
+            .await
+            .unwrap();
+        assert_eq!(a.len(), 1);
+
+        // The message expires and is redelivered to handle B.
+        time::sleep(Duration::from_millis(250)).await;
+        let b = queue.receive("q", 1).await.unwrap();
+        assert_eq!(b.len(), 1);
+        assert_ne!(a[0].receipt_handle, b[0].receipt_handle);
+
+        // A's receipt is stale (B holds the current one): ack must be rejected.
+        let err = queue
+            .ack("q", &a[0].receipt_handle)
+            .await
+            .expect_err("stale receipt ack must be rejected");
+        assert!(
+            err.to_string().to_lowercase().contains("stale"),
+            "error should identify the stale receipt, got: {err}"
+        );
+
+        // The message must still be there for B, whose current receipt works.
+        queue.ack("q", &b[0].receipt_handle).await.unwrap();
+        let remaining = queue.receive("q", 10).await.unwrap();
+        assert!(remaining.is_empty(), "acked message must be gone");
+    }
+
+    #[tokio::test]
+    async fn test_nack_makes_message_immediately_visible() {
+        let (queue, _temp_dir) = create_test_queue().await;
+
+        queue
+            .send("q", MessagePayload::Text("try-again".to_string()))
+            .await
+            .unwrap();
+
+        let msgs = queue.receive("q", 1).await.unwrap();
+        assert_eq!(msgs.len(), 1);
+
+        // In flight under the default 30s lease: hidden without a nack.
+        assert!(queue.receive("q", 10).await.unwrap().is_empty());
+
+        queue.nack("q", &msgs[0].receipt_handle).await.unwrap();
+
+        // Immediately visible again — no waiting on the visibility timeout.
+        let redelivered = queue.receive("q", 10).await.unwrap();
+        assert_eq!(redelivered.len(), 1, "nacked message must be redelivered");
+        assert_eq!(payload_text(&redelivered[0]), "try-again");
+        assert_ne!(
+            redelivered[0].receipt_handle, msgs[0].receipt_handle,
+            "redelivery must mint a fresh receipt handle"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_purge_empties_queue() {
+        let (queue, _temp_dir) = create_test_queue().await;
+
+        for i in 0..3 {
+            queue
+                .send("q", MessagePayload::Text(format!("m{i}")))
+                .await
+                .unwrap();
+        }
+        // Put one message in flight so purge covers both visible and leased rows.
+        let in_flight = queue.receive("q", 1).await.unwrap();
+        assert_eq!(in_flight.len(), 1);
+
+        queue.purge("q").await.unwrap();
+
+        assert!(queue.receive("q", 10).await.unwrap().is_empty());
+        let conn = raw_conn(&queue).await;
+        let rows = query_all(&conn, "SELECT COUNT(*) FROM messages", ())
+            .await
+            .expect("count read");
+        let count = rows
+            .first()
+            .and_then(|row| row.first())
+            .and_then(as_i64)
+            .expect("count value");
+        assert_eq!(count, 0, "purge must delete every row, leased or not");
+    }
+
+    // ---- Multi-process-safety proof ----
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn test_two_handle_concurrent_receive_no_double_delivery() {
+        let temp_dir = tempfile::tempdir().expect("Failed to create temp dir");
+        let dir = temp_dir.path().join("queue");
+        // Two independent handles on the SAME data_dir == two processes sharing the file.
+        let queue_a = Arc::new(LocalQueue::new(dir.clone()).await.expect("open handle a"));
+        let queue_b = Arc::new(LocalQueue::new(dir.clone()).await.expect("open handle b"));
+
+        let n = 30;
+        for i in 0..n {
+            queue_a
+                .send("q", MessagePayload::Text(format!("msg-{i}")))
+                .await
+                .unwrap();
+        }
+
+        // Six concurrent receivers split across the two handles, each draining
+        // in batches. All deliveries happen well inside the default 30s
+        // visibility window, so ANY duplicate is a double delivery.
+        let mut tasks = Vec::new();
+        for t in 0..6 {
+            let queue = if t % 2 == 0 {
+                queue_a.clone()
+            } else {
+                queue_b.clone()
+            };
+            tasks.push(tokio::spawn(async move {
+                let mut got: Vec<(i64, String)> = Vec::new();
+                let mut consecutive_empty = 0;
+                while consecutive_empty < 3 {
+                    let batch = queue.receive("q", 5).await.expect("receive ok");
+                    assert!(batch.len() <= 5, "batch must respect max_messages");
+                    if batch.is_empty() {
+                        consecutive_empty += 1;
+                        time::sleep(Duration::from_millis(10)).await;
+                        continue;
+                    }
+                    consecutive_empty = 0;
+                    for msg in batch {
+                        got.push((handle_id(&msg.receipt_handle), payload_text(&msg)));
+                    }
+                }
+                got
+            }));
+        }
+
+        let mut all: Vec<(i64, String)> = Vec::new();
+        for task in tasks {
+            all.extend(task.await.expect("task join"));
+        }
+
+        // Exactly N deliveries in total — this catches double delivery even
+        // before any dedup: 31 deliveries of 30 messages must fail here.
+        assert_eq!(
+            all.len(),
+            n,
+            "total deliveries must equal messages sent (no double delivery)"
+        );
+
+        // No duplicate message ids ...
+        let ids: BTreeSet<i64> = all.iter().map(|(id, _)| *id).collect();
+        assert_eq!(ids.len(), n, "every delivered message id must be unique");
+
+        // ... and no duplicate payloads; the union covers every message.
+        let payloads: BTreeSet<String> = all.iter().map(|(_, p)| p.clone()).collect();
+        let expected: BTreeSet<String> = (0..n).map(|i| format!("msg-{i}")).collect();
+        assert_eq!(
+            payloads, expected,
+            "union of deliveries must cover all messages exactly once"
+        );
     }
 }

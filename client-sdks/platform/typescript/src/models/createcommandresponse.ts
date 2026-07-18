@@ -22,6 +22,49 @@ export type CreateCommandResponseDeploymentModel = ClosedEnum<
   typeof CreateCommandResponseDeploymentModel
 >;
 
+/**
+ * The kind of command-capable resource a command targets.
+ */
+export const CreateCommandResponseResourceType = {
+  Worker: "worker",
+  Container: "container",
+  Daemon: "daemon",
+} as const;
+/**
+ * The kind of command-capable resource a command targets.
+ */
+export type CreateCommandResponseResourceType = ClosedEnum<
+  typeof CreateCommandResponseResourceType
+>;
+
+/**
+ * Resource the command is addressed to
+ */
+export type CreateCommandResponseTarget = {
+  /**
+   * The resource ID within the deployment's stack (e.g. a Worker/Container/Daemon id).
+   */
+  resourceId: string;
+  /**
+   * The kind of command-capable resource a command targets.
+   */
+  resourceType: CreateCommandResponseResourceType;
+};
+
+/**
+ * How the command is delivered to its target
+ */
+export const CreateCommandResponseDeliveryMode = {
+  Push: "push",
+  Pull: "pull",
+} as const;
+/**
+ * How the command is delivered to its target
+ */
+export type CreateCommandResponseDeliveryMode = ClosedEnum<
+  typeof CreateCommandResponseDeliveryMode
+>;
+
 export type CreateCommandResponse = {
   /**
    * Unique identifier for the command.
@@ -35,12 +78,49 @@ export type CreateCommandResponse = {
    * How to dispatch the command
    */
   deploymentModel: CreateCommandResponseDeploymentModel;
+  /**
+   * Resource the command is addressed to
+   */
+  target: CreateCommandResponseTarget;
+  /**
+   * How the command is delivered to its target
+   */
+  deliveryMode: CreateCommandResponseDeliveryMode;
 };
 
 /** @internal */
 export const CreateCommandResponseDeploymentModel$inboundSchema: z.ZodEnum<
   typeof CreateCommandResponseDeploymentModel
 > = z.enum(CreateCommandResponseDeploymentModel);
+
+/** @internal */
+export const CreateCommandResponseResourceType$inboundSchema: z.ZodEnum<
+  typeof CreateCommandResponseResourceType
+> = z.enum(CreateCommandResponseResourceType);
+
+/** @internal */
+export const CreateCommandResponseTarget$inboundSchema: z.ZodType<
+  CreateCommandResponseTarget,
+  unknown
+> = z.object({
+  resourceId: z.string(),
+  resourceType: CreateCommandResponseResourceType$inboundSchema,
+});
+
+export function createCommandResponseTargetFromJSON(
+  jsonString: string,
+): SafeParseResult<CreateCommandResponseTarget, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => CreateCommandResponseTarget$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'CreateCommandResponseTarget' from JSON`,
+  );
+}
+
+/** @internal */
+export const CreateCommandResponseDeliveryMode$inboundSchema: z.ZodEnum<
+  typeof CreateCommandResponseDeliveryMode
+> = z.enum(CreateCommandResponseDeliveryMode);
 
 /** @internal */
 export const CreateCommandResponse$inboundSchema: z.ZodType<
@@ -50,6 +130,8 @@ export const CreateCommandResponse$inboundSchema: z.ZodType<
   id: z.string(),
   projectId: z.string(),
   deploymentModel: CreateCommandResponseDeploymentModel$inboundSchema,
+  target: z.lazy(() => CreateCommandResponseTarget$inboundSchema),
+  deliveryMode: CreateCommandResponseDeliveryMode$inboundSchema,
 });
 
 export function createCommandResponseFromJSON(

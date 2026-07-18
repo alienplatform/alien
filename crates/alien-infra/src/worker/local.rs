@@ -2,13 +2,17 @@ use std::path::PathBuf;
 use std::time::Duration;
 use tracing::{debug, error, info};
 
-use crate::core::{environment_variables::EnvironmentVariableBuilder, ResourceControllerContext};
+use crate::core::{
+    environment_variables::{applicable_secret_environment_variables, EnvironmentVariableBuilder},
+    ResourceControllerContext,
+};
 use crate::error::{ErrorData, Result};
 use alien_core::{
     HeartbeatBackend, LocalRuntimeUnitKind, LocalRuntimeUnitStatus, LocalWorkerHeartbeatData,
     ObservedHealth, Platform, Postgres, ProviderLifecycleState, ResourceHeartbeat,
     ResourceHeartbeatData, ResourceOutputs as CoreResourceOutputs, ResourceStatus, Worker,
     WorkerCode, WorkerHeartbeatData, WorkerOutputs, WorkloadHeartbeatStatus,
+    ENV_ALIEN_COMMANDS_TOKEN,
 };
 use alien_error::{AlienError, Context, IntoAlienError};
 use alien_macros::controller;
@@ -27,6 +31,9 @@ pub struct LocalWorkerController {
     pub(crate) extracted_image_path: Option<PathBuf>,
     /// URL where the worker is accessible
     pub(crate) worker_url: Option<String>,
+    /// Whether the running Worker accepts command pushes.
+    #[serde(default)]
+    pub(crate) commands_enabled: bool,
 }
 
 #[controller]
@@ -133,11 +140,22 @@ impl LocalWorkerController {
         //
         // Runtime-owned names are added from the same core contract used by
         // cloud controllers and IaC renderers.
-        let env_vars = EnvironmentVariableBuilder::try_new(&config.environment)?
-            .add_worker_runtime_env_vars(ctx, &config.id)?
+        let mut env_vars = EnvironmentVariableBuilder::try_new(&config.environment)?
+            .add_worker_runtime_env_vars(ctx, &config.id, config.timeout_seconds)?
             .add_linked_resources(&config.links, ctx, &config.id)
             .await?
             .build();
+
+        // The push token is control-plane material rather than an application secret. Resolve it
+        // from the current desired snapshot only at the final process-launch boundary. Ordinary
+        // application secrets continue through the existing ALIEN_SECRETS vault-load path.
+        let runtime_control_env = worker_runtime_control_environment(
+            &config,
+            &ctx.deployment_config.environment_variables.variables,
+        )?;
+        let mut runtime_only_env_names = runtime_control_env.keys().cloned().collect::<Vec<_>>();
+        runtime_only_env_names.sort();
+        env_vars.extend(runtime_control_env);
 
         // Linked Postgres resources carry a runtime-only secret (the password). Name them so the
         // worker manager delivers the binding to the process but never persists it to metadata.
@@ -150,7 +168,12 @@ impl LocalWorkerController {
 
         // Start the worker with complete environment
         let worker_url = func_mgr
-            .start_worker(&config.id, env_vars, runtime_only_binding_names)
+            .start_worker(
+                &config.id,
+                env_vars,
+                runtime_only_binding_names,
+                runtime_only_env_names,
+            )
             .await
             .context(ErrorData::CloudPlatformError {
                 message: "Failed to start worker runtime".to_string(),
@@ -158,6 +181,7 @@ impl LocalWorkerController {
             })?;
 
         self.worker_url = Some(worker_url);
+        self.commands_enabled = config.commands_enabled;
 
         info!(
             worker_id = %config.id,
@@ -234,6 +258,33 @@ impl LocalWorkerController {
                 })
             })?;
 
+        if let Some(state) = self.runtime_refresh_state(&config) {
+            info!(
+                worker_id = %config.id,
+                running_commands_enabled = self.commands_enabled,
+                desired_commands_enabled = config.commands_enabled,
+                "Worker command capability changed; restarting with current desired environment"
+            );
+            return Ok(HandlerAction::Continue {
+                state,
+                suggested_delay: None,
+            });
+        }
+
+        // Runtime-only control secrets are deliberately absent from recovery metadata. If the
+        // manager was restarted or reaped a command-capable Worker, rebuild the launch from the
+        // current desired snapshot instead of attempting metadata-only recovery.
+        if !func_mgr.is_running(&config.id).await {
+            info!(
+                worker_id = %config.id,
+                "Worker is not running; restarting with current desired environment"
+            );
+            return Ok(HandlerAction::Continue {
+                state: LocalWorkerState::StartingProcess,
+                suggested_delay: None,
+            });
+        }
+
         func_mgr
             .check_health(&config.id)
             .await
@@ -264,7 +315,12 @@ impl LocalWorkerController {
             self.worker_url = Some(current_url);
         }
 
-        emit_local_worker_heartbeat(ctx, &config, self.extracted_image_path.as_ref());
+        emit_local_worker_heartbeat(
+            ctx,
+            &config,
+            self.extracted_image_path.as_ref(),
+            self.commands_enabled,
+        );
 
         debug!(worker_id=%config.id, "Worker health check passed");
 
@@ -389,7 +445,13 @@ impl LocalWorkerController {
                         load_balancer_endpoint: None,
                     },
                 )]),
-                commands_push_target: None, // Local uses polling
+                commands_push_target: self.commands_enabled.then(|| {
+                    format!(
+                        "{}{}",
+                        url.trim_end_matches('/'),
+                        alien_core::WORKER_COMMAND_PUSH_PATH
+                    )
+                }),
             })
         })
     }
@@ -413,10 +475,68 @@ impl LocalWorkerController {
     }
 }
 
+impl LocalWorkerController {
+    fn runtime_refresh_state(&self, config: &Worker) -> Option<LocalWorkerState> {
+        (self.commands_enabled != config.commands_enabled)
+            .then_some(LocalWorkerState::StoppingForUpdate)
+    }
+}
+
+fn worker_runtime_control_environment(
+    config: &Worker,
+    variables: &[alien_core::EnvironmentVariable],
+) -> Result<std::collections::HashMap<String, String>> {
+    if !config.commands_enabled {
+        return Ok(std::collections::HashMap::new());
+    }
+
+    let command_tokens = applicable_secret_environment_variables(&config.id, variables)
+        .into_iter()
+        .filter(|var| var.name == ENV_ALIEN_COMMANDS_TOKEN)
+        .collect::<Vec<_>>();
+
+    let token = match command_tokens.as_slice() {
+        [] => {
+            return Err(AlienError::new(ErrorData::ResourceConfigInvalid {
+                message: format!(
+                    "commands-enabled Worker '{}' is missing its runtime command token",
+                    config.id
+                ),
+                resource_id: Some(config.id.clone()),
+            }));
+        }
+        [token] if token.value.is_empty() => {
+            return Err(AlienError::new(ErrorData::ResourceConfigInvalid {
+                message: format!(
+                    "commands-enabled Worker '{}' has an empty runtime command token",
+                    config.id
+                ),
+                resource_id: Some(config.id.clone()),
+            }));
+        }
+        [token] => token.value.clone(),
+        [_, _, ..] => {
+            return Err(AlienError::new(ErrorData::ResourceConfigInvalid {
+                message: format!(
+                    "commands-enabled Worker '{}' has multiple applicable runtime command tokens",
+                    config.id
+                ),
+                resource_id: Some(config.id.clone()),
+            }));
+        }
+    };
+
+    Ok(std::collections::HashMap::from([(
+        ENV_ALIEN_COMMANDS_TOKEN.to_string(),
+        token,
+    )]))
+}
+
 fn emit_local_worker_heartbeat(
     ctx: &ResourceControllerContext<'_>,
     config: &Worker,
     extracted_image_path: Option<&PathBuf>,
+    commands_enabled: bool,
 ) {
     ctx.emit_heartbeat(ResourceHeartbeat {
         deployment_id: None,
@@ -435,7 +555,7 @@ fn emit_local_worker_heartbeat(
                 collection_issues: vec![],
             },
             pid: None,
-            command_supported: true,
+            command_supported: commands_enabled,
             image_path_present: extracted_image_path
                 .map(|path| path.exists())
                 .unwrap_or(false),
@@ -458,4 +578,145 @@ fn emit_local_worker_heartbeat(
         })),
         raw: vec![],
     });
+}
+
+#[cfg(test)]
+mod output_tests {
+    use alien_core::{
+        EnvironmentVariable, EnvironmentVariableType, Worker, WorkerCode, WorkerOutputs,
+        ENV_ALIEN_COMMANDS_TOKEN,
+    };
+
+    use super::{worker_runtime_control_environment, LocalWorkerController, LocalWorkerState};
+
+    fn controller(commands_enabled: bool) -> LocalWorkerController {
+        LocalWorkerController {
+            state: LocalWorkerState::Ready,
+            extracted_image_path: None,
+            worker_url: Some("http://127.0.0.1:8080/".to_string()),
+            commands_enabled,
+            _internal_stay_count: None,
+        }
+    }
+
+    #[test]
+    fn command_push_output_exists_only_when_commands_are_enabled() {
+        let enabled = controller(true).build_outputs().expect("outputs");
+        let enabled = enabled
+            .downcast_ref::<WorkerOutputs>()
+            .expect("Worker outputs");
+        assert_eq!(
+            enabled.commands_push_target.as_deref(),
+            Some("http://127.0.0.1:8080/_alien/commands")
+        );
+
+        let disabled = controller(false).build_outputs().expect("outputs");
+        let disabled = disabled
+            .downcast_ref::<WorkerOutputs>()
+            .expect("Worker outputs");
+        assert!(disabled.commands_push_target.is_none());
+    }
+
+    #[test]
+    fn legacy_ready_state_requires_restart_before_enabling_commands() {
+        let controller: LocalWorkerController = serde_json::from_value(serde_json::json!({
+            "extractedImagePath": null,
+            "workerUrl": "http://127.0.0.1:8080",
+            "state": "ready",
+            "_internalStayCount": null
+        }))
+        .expect("legacy Local Worker controller state");
+        assert!(!controller.commands_enabled);
+        assert!(controller
+            .build_outputs()
+            .expect("legacy outputs")
+            .downcast_ref::<WorkerOutputs>()
+            .expect("Worker outputs")
+            .commands_push_target
+            .is_none());
+
+        let config = Worker::new("worker".to_string())
+            .code(WorkerCode::Image {
+                image: "worker:latest".to_string(),
+            })
+            .permissions("execution".to_string())
+            .commands_enabled(true)
+            .build();
+        assert_eq!(
+            controller.runtime_refresh_state(&config),
+            Some(LocalWorkerState::StoppingForUpdate)
+        );
+        assert!(!controller.commands_enabled);
+    }
+
+    #[test]
+    fn ready_state_requires_restart_before_disabling_commands() {
+        let controller = controller(true);
+        let config = Worker::new("worker".to_string())
+            .code(WorkerCode::Image {
+                image: "worker:latest".to_string(),
+            })
+            .permissions("execution".to_string())
+            .commands_enabled(false)
+            .build();
+
+        assert_eq!(
+            controller.runtime_refresh_state(&config),
+            Some(LocalWorkerState::StoppingForUpdate)
+        );
+        assert!(controller.commands_enabled);
+    }
+
+    #[test]
+    fn runtime_control_channel_receives_token_but_not_app_secrets() {
+        let config = Worker::new("worker".to_string())
+            .code(WorkerCode::Image {
+                image: "worker:latest".to_string(),
+            })
+            .permissions("execution".to_string())
+            .commands_enabled(true)
+            .build();
+        let variables = vec![
+            EnvironmentVariable {
+                name: ENV_ALIEN_COMMANDS_TOKEN.to_string(),
+                value: "runtime-token".to_string(),
+                var_type: EnvironmentVariableType::Secret,
+                target_resources: Some(vec!["worker".to_string()]),
+            },
+            EnvironmentVariable {
+                name: "APP_SECRET".to_string(),
+                value: "app-value".to_string(),
+                var_type: EnvironmentVariableType::Secret,
+                target_resources: Some(vec!["worker".to_string()]),
+            },
+        ];
+
+        let env = worker_runtime_control_environment(&config, &variables).expect("runtime env");
+        assert_eq!(
+            env.get(ENV_ALIEN_COMMANDS_TOKEN),
+            Some(&"runtime-token".to_string())
+        );
+        assert!(!env.contains_key("APP_SECRET"));
+    }
+
+    #[test]
+    fn commands_disabled_does_not_receive_a_runtime_control_token() {
+        let config = Worker::new("worker".to_string())
+            .code(WorkerCode::Image {
+                image: "worker:latest".to_string(),
+            })
+            .permissions("execution".to_string())
+            .commands_enabled(false)
+            .build();
+        let variables = vec![EnvironmentVariable {
+            name: ENV_ALIEN_COMMANDS_TOKEN.to_string(),
+            value: "runtime-token".to_string(),
+            var_type: EnvironmentVariableType::Secret,
+            target_resources: Some(vec!["worker".to_string()]),
+        }];
+
+        let env =
+            worker_runtime_control_environment(&config, &variables).expect("disabled commands");
+        assert!(!env.contains_key(ENV_ALIEN_COMMANDS_TOKEN));
+    }
 }

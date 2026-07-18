@@ -1391,10 +1391,7 @@ export type SyncReconcileRequestCurrentReleaseConfig = {
 };
 
 /**
- * New ResourceRef that works with any resource type.
- *
- * @remarks
- * This can eventually replace the enum-based ResourceRef for full extensibility.
+ * Reference to a resource by its stable id and resource type.
  */
 export type SyncReconcileRequestCurrentReleaseDependency = {
   id: string;
@@ -3138,10 +3135,7 @@ export type SyncReconcileRequestPreparedStackConfig = {
 };
 
 /**
- * New ResourceRef that works with any resource type.
- *
- * @remarks
- * This can eventually replace the enum-based ResourceRef for full extensibility.
+ * Reference to a resource by its stable id and resource type.
  */
 export type SyncReconcileRequestPreparedStackDependency = {
   id: string;
@@ -3258,6 +3252,14 @@ export type SyncReconcileRequestRuntimeMetadata = {
    * Used to avoid redundant sync operations during incremental deployment
    */
   lastSyncedEnvVarsHash?: string | null | undefined;
+  /**
+   * Exact vault keys owned by the deployment secret synchronizer. This
+   *
+   * @remarks
+   * inventory lets a later snapshot delete removed keys without listing or
+   * touching unrelated values in the same vault.
+   */
+  lastSyncedSecretNames?: Array<string> | undefined;
   preparedStack?: SyncReconcileRequestPreparedStack | any | null | undefined;
   /**
    * Whether cross-account registry access has been successfully granted.
@@ -3330,10 +3332,7 @@ export type ControllerPlatformStateEnum = ClosedEnum<
 export type StateControllerPlatformUnion = ControllerPlatformStateEnum | any;
 
 /**
- * New ResourceRef that works with any resource type.
- *
- * @remarks
- * This can eventually replace the enum-based ResourceRef for full extensibility.
+ * Reference to a resource by its stable id and resource type.
  */
 export type SyncReconcileRequestStackStateDependency = {
   id: string;
@@ -5004,10 +5003,7 @@ export type SyncReconcileRequestTargetReleaseConfig = {
 };
 
 /**
- * New ResourceRef that works with any resource type.
- *
- * @remarks
- * This can eventually replace the enum-based ResourceRef for full extensibility.
+ * Reference to a resource by its stable id and resource type.
  */
 export type SyncReconcileRequestTargetReleaseDependency = {
   id: string;
@@ -7477,9 +7473,6 @@ export type ResourceHeartbeatStatus36 = {
   stale: boolean;
 };
 
-/**
- * Local embedded Postgres backend.
- */
 export type DataLocal8 = {
   name: string;
   port?: number | null | undefined;
@@ -7543,9 +7536,6 @@ export type ResourceHeartbeatStatus35 = {
   stale: boolean;
 };
 
-/**
- * Azure Flexible Server backend.
- */
 export type DataFlexibleServer = {
   serverName: string;
   state?: string | null | undefined;
@@ -7608,9 +7598,6 @@ export type ResourceHeartbeatStatus34 = {
   stale: boolean;
 };
 
-/**
- * GCP Cloud SQL backend.
- */
 export type DataCloudSQL = {
   databaseVersion?: string | null | undefined;
   instanceName: string;
@@ -7673,9 +7660,6 @@ export type ResourceHeartbeatStatus33 = {
   stale: boolean;
 };
 
-/**
- * AWS Aurora Serverless v2 backend.
- */
 export type DataAurora = {
   clusterIdentifier: string;
   endpoint?: string | null | undefined;
@@ -10078,7 +10062,6 @@ export type DataMachines1 = {
   horizonStatusMessage?: string | null | undefined;
   horizonStatusReason?: string | null | undefined;
   latestUpdateTimestamp: string;
-  observedImage?: string | null | undefined;
   status: ResourceHeartbeatStatus16;
   unavailableInstances: number;
   backend: "machines";
@@ -10242,7 +10225,6 @@ export type DataAzure1 = {
   horizonStatusMessage?: string | null | undefined;
   horizonStatusReason?: string | null | undefined;
   latestUpdateTimestamp: string;
-  observedImage?: string | null | undefined;
   status: ResourceHeartbeatStatus15;
   unavailableInstances: number;
   backend: "azure";
@@ -10406,7 +10388,6 @@ export type DataGcp1 = {
   horizonStatusMessage?: string | null | undefined;
   horizonStatusReason?: string | null | undefined;
   latestUpdateTimestamp: string;
-  observedImage?: string | null | undefined;
   status: ResourceHeartbeatStatus14;
   unavailableInstances: number;
   backend: "gcp";
@@ -10570,7 +10551,6 @@ export type DataAws1 = {
   horizonStatusMessage?: string | null | undefined;
   horizonStatusReason?: string | null | undefined;
   latestUpdateTimestamp: string;
-  observedImage?: string | null | undefined;
   status: ResourceHeartbeatStatus13;
   unavailableInstances: number;
   backend: "aws";
@@ -11212,9 +11192,7 @@ export type DataHorizonPlatform = {
   cpu?: Cpu3 | any | null | undefined;
   events: Array<SyncReconcileRequestEvent3>;
   image?: string | null | undefined;
-  latestUpdateTimestamp?: string | null | undefined;
   memory?: Memory3 | any | null | undefined;
-  observedImage?: string | null | undefined;
   replicaUnits: Array<ReplicaUnit>;
   replicas: Replicas2;
   schedulingMode: SchedulingMode;
@@ -18421,6 +18399,7 @@ export function syncReconcileRequestPreparedStackUnionToJSON(
 /** @internal */
 export type SyncReconcileRequestRuntimeMetadata$Outbound = {
   lastSyncedEnvVarsHash?: string | null | undefined;
+  lastSyncedSecretNames?: Array<string> | undefined;
   preparedStack?:
     | SyncReconcileRequestPreparedStack$Outbound
     | any
@@ -18435,6 +18414,7 @@ export const SyncReconcileRequestRuntimeMetadata$outboundSchema: z.ZodType<
   SyncReconcileRequestRuntimeMetadata
 > = z.object({
   lastSyncedEnvVarsHash: z.nullable(z.string()).optional(),
+  lastSyncedSecretNames: z.array(z.string()).optional(),
   preparedStack: z.nullable(
     z.union([
       z.lazy(() => SyncReconcileRequestPreparedStack$outboundSchema),
@@ -31955,7 +31935,6 @@ export type DataMachines1$Outbound = {
   horizonStatusMessage?: string | null | undefined;
   horizonStatusReason?: string | null | undefined;
   latestUpdateTimestamp: string;
-  observedImage?: string | null | undefined;
   status: ResourceHeartbeatStatus16$Outbound;
   unavailableInstances: number;
   backend: "machines";
@@ -31979,7 +31958,6 @@ export const DataMachines1$outboundSchema: z.ZodType<
   horizonStatusMessage: z.nullable(z.string()).optional(),
   horizonStatusReason: z.nullable(z.string()).optional(),
   latestUpdateTimestamp: z.string(),
-  observedImage: z.nullable(z.string()).optional(),
   status: z.lazy(() => ResourceHeartbeatStatus16$outboundSchema),
   unavailableInstances: z.int(),
   backend: z.literal("machines"),
@@ -32370,7 +32348,6 @@ export type DataAzure1$Outbound = {
   horizonStatusMessage?: string | null | undefined;
   horizonStatusReason?: string | null | undefined;
   latestUpdateTimestamp: string;
-  observedImage?: string | null | undefined;
   status: ResourceHeartbeatStatus15$Outbound;
   unavailableInstances: number;
   backend: "azure";
@@ -32394,7 +32371,6 @@ export const DataAzure1$outboundSchema: z.ZodType<
   horizonStatusMessage: z.nullable(z.string()).optional(),
   horizonStatusReason: z.nullable(z.string()).optional(),
   latestUpdateTimestamp: z.string(),
-  observedImage: z.nullable(z.string()).optional(),
   status: z.lazy(() => ResourceHeartbeatStatus15$outboundSchema),
   unavailableInstances: z.int(),
   backend: z.literal("azure"),
@@ -32785,7 +32761,6 @@ export type DataGcp1$Outbound = {
   horizonStatusMessage?: string | null | undefined;
   horizonStatusReason?: string | null | undefined;
   latestUpdateTimestamp: string;
-  observedImage?: string | null | undefined;
   status: ResourceHeartbeatStatus14$Outbound;
   unavailableInstances: number;
   backend: "gcp";
@@ -32807,7 +32782,6 @@ export const DataGcp1$outboundSchema: z.ZodType<DataGcp1$Outbound, DataGcp1> = z
     horizonStatusMessage: z.nullable(z.string()).optional(),
     horizonStatusReason: z.nullable(z.string()).optional(),
     latestUpdateTimestamp: z.string(),
-    observedImage: z.nullable(z.string()).optional(),
     status: z.lazy(() => ResourceHeartbeatStatus14$outboundSchema),
     unavailableInstances: z.int(),
     backend: z.literal("gcp"),
@@ -33198,7 +33172,6 @@ export type DataAws1$Outbound = {
   horizonStatusMessage?: string | null | undefined;
   horizonStatusReason?: string | null | undefined;
   latestUpdateTimestamp: string;
-  observedImage?: string | null | undefined;
   status: ResourceHeartbeatStatus13$Outbound;
   unavailableInstances: number;
   backend: "aws";
@@ -33220,7 +33193,6 @@ export const DataAws1$outboundSchema: z.ZodType<DataAws1$Outbound, DataAws1> = z
     horizonStatusMessage: z.nullable(z.string()).optional(),
     horizonStatusReason: z.nullable(z.string()).optional(),
     latestUpdateTimestamp: z.string(),
-    observedImage: z.nullable(z.string()).optional(),
     status: z.lazy(() => ResourceHeartbeatStatus13$outboundSchema),
     unavailableInstances: z.int(),
     backend: z.literal("aws"),
@@ -34762,9 +34734,7 @@ export type DataHorizonPlatform$Outbound = {
   cpu?: Cpu3$Outbound | any | null | undefined;
   events: Array<SyncReconcileRequestEvent3$Outbound>;
   image?: string | null | undefined;
-  latestUpdateTimestamp?: string | null | undefined;
   memory?: Memory3$Outbound | any | null | undefined;
-  observedImage?: string | null | undefined;
   replicaUnits: Array<ReplicaUnit$Outbound>;
   replicas: Replicas2$Outbound;
   schedulingMode: string;
@@ -34783,10 +34753,8 @@ export const DataHorizonPlatform$outboundSchema: z.ZodType<
     .optional(),
   events: z.array(z.lazy(() => SyncReconcileRequestEvent3$outboundSchema)),
   image: z.nullable(z.string()).optional(),
-  latestUpdateTimestamp: z.nullable(z.string()).optional(),
   memory: z.nullable(z.union([z.lazy(() => Memory3$outboundSchema), z.any()]))
     .optional(),
-  observedImage: z.nullable(z.string()).optional(),
   replicaUnits: z.array(z.lazy(() => ReplicaUnit$outboundSchema)),
   replicas: z.lazy(() => Replicas2$outboundSchema),
   schedulingMode: SchedulingMode$outboundSchema,

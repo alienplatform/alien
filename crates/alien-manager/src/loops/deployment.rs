@@ -19,9 +19,8 @@ use tracing::{debug, error, info, warn};
 
 use alien_core::{
     DeploymentConfig, DeploymentModel, DeploymentState, DeploymentStatus, EnvironmentVariable,
-    EnvironmentVariableType, EnvironmentVariablesSnapshot, ReleaseInfo,
-    ENV_ALIEN_COMMANDS_POLLING_ENABLED, ENV_ALIEN_COMMANDS_POLLING_URL, ENV_ALIEN_COMMANDS_TOKEN,
-    ENV_ALIEN_DEPLOYMENT_ID, ENV_ALIEN_DEPLOYMENT_NAME,
+    EnvironmentVariableType, EnvironmentVariablesSnapshot, ReleaseInfo, ENV_ALIEN_DEPLOYMENT_ID,
+    ENV_ALIEN_DEPLOYMENT_NAME,
 };
 use alien_deployment::loop_contract::LoopOperation;
 use alien_deployment::runner::{failed_status_for_deployment_error, RunnerPolicy, RunnerResult};
@@ -31,6 +30,7 @@ use alien_local::LocalBindingsProvider;
 
 use crate::auth::Subject;
 use crate::config::ManagerConfig;
+use crate::error::REMOTE_CREDENTIAL_HANDOFF_FAILED_CODE;
 use crate::traits::deployment_store::{DeploymentFilter, DeploymentRecord, ReconcileData};
 use crate::traits::{CredentialResolver, DeploymentStore, ReleaseStore, ServerBindings};
 use crate::transports::ManagerTransport;
@@ -44,6 +44,11 @@ pub(crate) const MAX_CONCURRENT_DEPLOYMENTS: usize = 4;
 const MAX_ACQUIRE_BATCHES_PER_TICK: usize = 16;
 /// Suggested delay threshold (ms) — if step suggests waiting longer, yield.
 const SUGGESTED_DELAY_THRESHOLD_MS: u64 = 500;
+/// Google documents IAM policy changes as typically propagating within two
+/// minutes, but potentially taking seven minutes or longer. Keep the first
+/// target-side token exchange retryable for a bounded window after setup hands
+/// the deployment to Provisioning.
+const GCP_CREDENTIAL_HANDOFF_GRACE_PERIOD: Duration = Duration::from_secs(10 * 60);
 
 /// Build a `HorizonMachineImage` from `ALIEN_BYO_HORIZON_AMI_AMD64`/`_ARM64`
 /// + `AWS_REGION` env vars. Returns `None` when no AMI env vars are set so
@@ -413,11 +418,20 @@ impl DeploymentLoop {
         {
             Ok(resolved) => resolved,
             Err(e) => {
-                if should_wait_for_credential_handoff(status, &deployment) {
+                let handoff_retry_remaining = gcp_credential_handoff_retry_remaining(
+                    status,
+                    &deployment,
+                    &e,
+                    chrono::Utc::now(),
+                );
+                if should_wait_for_credential_handoff(status, &deployment)
+                    || handoff_retry_remaining.is_some()
+                {
                     warn!(
                         deployment_id = %deployment_id,
                         status = ?status,
                         platform = ?deployment.platform,
+                        retry_window_remaining_secs = ?handoff_retry_remaining.map(|duration| duration.as_secs()),
                         error = %e,
                         "Credentials unavailable for deployment phase; waiting for another driver or credential handoff"
                     );
@@ -511,7 +525,7 @@ impl DeploymentLoop {
 
         // 4. Build environment variables.
         let environment_variables = self
-            .build_environment_variables(&deployment_id, &deployment)
+            .build_environment_variables(&deployment_id, &deployment, &deployment_stack)
             .await?;
         let provided_config = deployment.deployment_config.as_ref();
         let monitoring = provided_config
@@ -549,7 +563,8 @@ impl DeploymentLoop {
         )
         .await;
 
-        let mut config = if let Some(mut config) = deployment.deployment_config.clone() {
+        let mut config = if let Some(config) = deployment.deployment_config.clone() {
+            let mut config = with_environment_snapshot(config, environment_variables);
             if config.deployment_name.is_none() {
                 config.deployment_name = Some(deployment.name.clone());
             }
@@ -763,11 +778,12 @@ impl DeploymentLoop {
     /// Includes:
     /// - `ALIEN_DEPLOYMENT_ID`
     /// - `ALIEN_DEPLOYMENT_NAME`
-    /// - Commands polling configuration
+    /// - Command delivery configuration
     async fn build_environment_variables(
         &self,
         deployment_id: &str,
         deployment: &DeploymentRecord,
+        deployment_stack: &alien_core::Stack,
     ) -> Result<EnvironmentVariablesSnapshot, AlienError> {
         let mut vars: Vec<EnvironmentVariable> = Vec::new();
 
@@ -785,40 +801,42 @@ impl DeploymentLoop {
             target_resources: None,
         });
 
-        // 3. Commands configuration — only inject polling for K8s/Local.
-        // Cloud workers (Lambda, Cloud Run, Container Apps) receive commands via
-        // platform-native push (InvokeFunction, Pub/Sub, Service Bus) — no polling needed,
-        // regardless of deployment model. K8s/Local run as containers that must poll.
-        let needs_polling = matches!(
+        // 3a. Local/Kubernetes Worker push authentication. Cloud-native Worker
+        // transports authenticate through their platform instead.
+        let needs_http_push_auth = matches!(
             deployment.platform,
             alien_core::Platform::Kubernetes | alien_core::Platform::Local
         );
 
-        if needs_polling {
-            let commands_base = self.config.commands_base_url();
-            vars.push(EnvironmentVariable {
-                name: ENV_ALIEN_COMMANDS_POLLING_ENABLED.to_string(),
-                value: "true".to_string(),
-                var_type: EnvironmentVariableType::Plain,
-                target_resources: None,
-            });
-            vars.push(EnvironmentVariable {
-                name: ENV_ALIEN_COMMANDS_POLLING_URL.to_string(),
-                value: commands_base,
-                var_type: EnvironmentVariableType::Plain,
-                target_resources: None,
-            });
-            // Commands token — from the deployment record field.
-            // The manager is the sole injector of ALIEN_COMMANDS_TOKEN.
-            if let Some(ref token) = deployment.deployment_token {
-                vars.push(EnvironmentVariable {
-                    name: ENV_ALIEN_COMMANDS_TOKEN.to_string(),
-                    value: token.clone(),
-                    var_type: EnvironmentVariableType::Secret,
-                    target_resources: None,
-                });
-            }
+        if needs_http_push_auth {
+            vars.extend(
+                worker_commands_push_env_vars(
+                    deployment.deployment_token.as_deref(),
+                    deployment_stack,
+                )
+                .map_err(|e| e.into_generic())?,
+            );
         }
+
+        // 3b. Container/Daemon command receiver env — injected on EVERY platform.
+        // Unlike workers, Containers and Daemons always deliver commands via
+        // Pull, regardless of platform, so the receiver contract must reach
+        // them everywhere, not just K8s/Local.
+        // The Worker-only gate above is deliberately NOT applied here: its
+        // justification (cloud *workers* use platform-native push) does not hold
+        // for Container/Daemon receivers. The snapshot reaches Container/Daemon env
+        // on any platform through the platform-independent per-resource dispatch in
+        // `alien-deployment::inject_into_environment` (Container/Daemon downcast).
+        // Empty when the stack declares no command-enabled Container/Daemon targets.
+        let commands_base = self.config.commands_base_url();
+        vars.extend(
+            commands_receiver_env_vars(
+                commands_base,
+                deployment.deployment_token.as_deref(),
+                deployment_stack,
+            )
+            .map_err(|e| e.into_generic())?,
+        );
 
         // 4. User-provided environment variables from the deployment record.
         if let Some(ref user_vars) = deployment.user_environment_variables {
@@ -862,6 +880,40 @@ impl DeploymentLoop {
     }
 }
 
+/// Builds the scoped token that authenticates Local/Kubernetes command pushes
+/// into each command-enabled Worker runtime. Container/Daemon receiver env is
+/// wired separately below.
+fn worker_commands_push_env_vars(
+    deployment_token: Option<&str>,
+    deployment_stack: &alien_core::Stack,
+) -> Result<Vec<EnvironmentVariable>, alien_error::AlienError<alien_core::ErrorData>> {
+    deployment_stack.worker_command_push_env_vars(deployment_token)
+}
+
+/// Builds the command *receiver* environment variables (`ALIEN_COMMANDS_URL`,
+/// `ALIEN_COMMANDS_TOKEN`, `ALIEN_COMMANDS_TARGET_RESOURCE_ID`,
+/// `ALIEN_COMMANDS_TARGET_RESOURCE_TYPE`), each scoped via `target_resources` to a
+/// single command-enabled Container or Daemon. Unlike Worker push auth, this is
+/// injected on every platform because Container/Daemon always deliver via Pull.
+/// `ALIEN_DEPLOYMENT_ID` is not re-emitted here — it is already
+/// injected deployment-wide above. The commands token comes from the deployment
+/// record — the manager is the sole injector of `ALIEN_COMMANDS_TOKEN`.
+fn commands_receiver_env_vars(
+    commands_base_url: String,
+    deployment_token: Option<&str>,
+    deployment_stack: &alien_core::Stack,
+) -> Result<Vec<EnvironmentVariable>, alien_error::AlienError<alien_core::ErrorData>> {
+    deployment_stack.receiver_command_env_vars(&commands_base_url, deployment_token)
+}
+
+fn with_environment_snapshot(
+    mut config: DeploymentConfig,
+    environment_variables: EnvironmentVariablesSnapshot,
+) -> DeploymentConfig {
+    config.environment_variables = environment_variables;
+    config
+}
+
 fn should_wait_for_credential_handoff(
     status: DeploymentStatus,
     deployment: &DeploymentRecord,
@@ -882,6 +934,37 @@ fn has_remote_stack_management_outputs(stack_state: &alien_core::StackState) -> 
         resource_state.resource_type == "remote-stack-management"
             && resource_state.outputs.as_ref().is_some()
     })
+}
+
+fn gcp_credential_handoff_retry_remaining(
+    status: DeploymentStatus,
+    deployment: &DeploymentRecord,
+    error: &AlienError,
+    now: chrono::DateTime<chrono::Utc>,
+) -> Option<Duration> {
+    if status != DeploymentStatus::Provisioning
+        || deployment.platform != alien_core::Platform::Gcp
+        || error.code != REMOTE_CREDENTIAL_HANDOFF_FAILED_CODE
+        || !deployment
+            .stack_state
+            .as_ref()
+            .is_some_and(has_remote_stack_management_outputs)
+    {
+        return None;
+    }
+
+    // Provisioning is persisted by the setup-to-runtime transition, so
+    // updated_at is the durable start of this handoff window. created_at keeps
+    // older/imported records bounded if they lack an update timestamp.
+    let handoff_started_at = deployment.updated_at.unwrap_or(deployment.created_at);
+    let elapsed = now
+        .signed_duration_since(handoff_started_at)
+        .to_std()
+        .unwrap_or(Duration::ZERO);
+
+    GCP_CREDENTIAL_HANDOFF_GRACE_PERIOD
+        .checked_sub(elapsed)
+        .filter(|remaining| !remaining.is_zero())
 }
 
 fn failed_state_for_credential_error(
@@ -927,21 +1010,30 @@ fn failed_state_for_credential_error(
 #[cfg(test)]
 mod tests {
     use super::{
-        active_work_statuses, get_or_create_local_bindings_provider,
-        has_remote_stack_management_outputs, manager_candidate_statuses,
-        needs_provision_capability, parse_status, retryable_failed_statuses,
-        should_wait_for_credential_handoff,
+        active_work_statuses, commands_receiver_env_vars, gcp_credential_handoff_retry_remaining,
+        get_or_create_local_bindings_provider, has_remote_stack_management_outputs,
+        manager_candidate_statuses, needs_provision_capability, parse_status,
+        retryable_failed_statuses, should_wait_for_credential_handoff, with_environment_snapshot,
+        worker_commands_push_env_vars, GCP_CREDENTIAL_HANDOFF_GRACE_PERIOD,
     };
     use alien_core::{
-        DeploymentStatus, Platform, RemoteStackManagement, RemoteStackManagementOutputs, Resource,
-        ResourceOutputs, ResourceStatus, StackResourceState, StackSettings, StackState,
+        Container, ContainerCode, Daemon, DaemonCode, DeploymentConfig, DeploymentStatus,
+        EnvironmentVariable, EnvironmentVariableType, EnvironmentVariablesSnapshot, Platform,
+        RemoteStackManagement, RemoteStackManagementOutputs, Resource, ResourceLifecycle,
+        ResourceOutputs, ResourceSpec, ResourceStatus, Stack, StackResourceState, StackSettings,
+        StackState, Worker, WorkerCode, ENV_ALIEN_COMMANDS_TARGET_RESOURCE_ID,
+        ENV_ALIEN_COMMANDS_TARGET_RESOURCE_TYPE, ENV_ALIEN_COMMANDS_TOKEN, ENV_ALIEN_COMMANDS_URL,
+        ENV_ALIEN_DEPLOYMENT_ID, ENV_ALIEN_DEPLOYMENT_NAME,
     };
     use alien_deployment::loop_contract::{classify_status, LoopOperation};
+    use alien_error::AlienError;
     use chrono::Utc;
     use std::collections::HashMap;
     use std::sync::Mutex;
+    use std::time::Duration;
     use tempfile::TempDir;
 
+    use crate::error::ErrorData;
     use crate::traits::deployment_store::DeploymentRecord;
 
     fn deployment_record(
@@ -1146,6 +1238,102 @@ mod tests {
     }
 
     #[test]
+    fn gcp_provisioning_retries_target_credential_handoff_during_grace_period() {
+        let now = Utc::now();
+        let mut deployment = deployment_record(
+            DeploymentStatus::Provisioning,
+            Some(stack_state_with_remote_management_outputs(true)),
+        );
+        deployment.platform = Platform::Gcp;
+        deployment.updated_at = Some(now - chrono::Duration::minutes(2));
+        let error = AlienError::new(ErrorData::RemoteCredentialHandoffFailed {
+            deployment_id: deployment.id.clone(),
+            platform: Platform::Gcp,
+        })
+        .into_generic();
+
+        let remaining = gcp_credential_handoff_retry_remaining(
+            DeploymentStatus::Provisioning,
+            &deployment,
+            &error,
+            now,
+        )
+        .expect("fresh GCP handoff failure should remain retryable");
+
+        assert_eq!(
+            remaining,
+            GCP_CREDENTIAL_HANDOFF_GRACE_PERIOD - Duration::from_secs(2 * 60)
+        );
+    }
+
+    #[test]
+    fn gcp_provisioning_handoff_becomes_hard_failure_after_grace_period() {
+        let now = Utc::now();
+        let mut deployment = deployment_record(
+            DeploymentStatus::Provisioning,
+            Some(stack_state_with_remote_management_outputs(true)),
+        );
+        deployment.platform = Platform::Gcp;
+        deployment.updated_at = Some(
+            now - chrono::Duration::from_std(GCP_CREDENTIAL_HANDOFF_GRACE_PERIOD)
+                .expect("grace period should fit chrono duration"),
+        );
+        let error = AlienError::new(ErrorData::RemoteCredentialHandoffFailed {
+            deployment_id: deployment.id.clone(),
+            platform: Platform::Gcp,
+        })
+        .into_generic();
+
+        assert_eq!(
+            gcp_credential_handoff_retry_remaining(
+                DeploymentStatus::Provisioning,
+                &deployment,
+                &error,
+                now,
+            ),
+            None,
+            "handoff retry must be bounded"
+        );
+
+        let failed = super::failed_state_for_credential_error(
+            &deployment,
+            DeploymentStatus::Provisioning,
+            None,
+            "release",
+            error,
+        );
+        assert_eq!(failed.status, DeploymentStatus::ProvisioningFailed);
+        assert_eq!(
+            failed.error.expect("hard failure should retain error").code,
+            "REMOTE_CREDENTIAL_HANDOFF_FAILED"
+        );
+    }
+
+    #[test]
+    fn provisioning_does_not_retry_unrelated_credential_failures() {
+        let now = Utc::now();
+        let mut deployment = deployment_record(
+            DeploymentStatus::Provisioning,
+            Some(stack_state_with_remote_management_outputs(true)),
+        );
+        deployment.platform = Platform::Gcp;
+        deployment.updated_at = Some(now);
+        let error = AlienError::new(alien_error::GenericError {
+            message: "management binding is missing".to_string(),
+        });
+
+        assert_eq!(
+            gcp_credential_handoff_retry_remaining(
+                DeploymentStatus::Provisioning,
+                &deployment,
+                &error,
+                now,
+            ),
+            None
+        );
+    }
+
+    #[test]
     fn remote_stack_management_output_detection_is_explicit() {
         assert!(!has_remote_stack_management_outputs(
             &stack_state_with_remote_management_outputs(false)
@@ -1279,6 +1467,270 @@ mod tests {
 
         provider_a.shutdown().await;
         provider_b.shutdown().await;
+    }
+
+    #[test]
+    fn worker_commands_push_env_vars_scopes_token_per_command_enabled_worker() {
+        let worker_a = Worker::new("worker-a".to_string())
+            .code(WorkerCode::Image {
+                image: "worker:latest".to_string(),
+            })
+            .permissions("execution".to_string())
+            .commands_enabled(true)
+            .build();
+        let worker_b = Worker::new("worker-b".to_string())
+            .code(WorkerCode::Image {
+                image: "worker:latest".to_string(),
+            })
+            .permissions("execution".to_string())
+            .commands_enabled(true)
+            .build();
+        // Commands-disabled Worker must not expose a command push endpoint.
+        let worker_off = Worker::new("worker-off".to_string())
+            .code(WorkerCode::Image {
+                image: "worker:latest".to_string(),
+            })
+            .permissions("execution".to_string())
+            .build();
+        let stack = Stack::new("manager-command-target-stack".to_string())
+            .add(worker_a, ResourceLifecycle::Live)
+            .add(worker_b, ResourceLifecycle::Live)
+            .add(worker_off, ResourceLifecycle::Live)
+            .build();
+
+        let vars =
+            worker_commands_push_env_vars(Some("ax_dep_test"), &stack).expect("token present");
+
+        // Nothing deployment-wide; nothing scoped to the disabled worker.
+        assert!(vars.iter().all(|v| {
+            v.target_resources == Some(vec!["worker-a".to_string()])
+                || v.target_resources == Some(vec!["worker-b".to_string()])
+        }));
+
+        // One secret token per command-enabled worker.
+        for worker_id in ["worker-a", "worker-b"] {
+            let scoped: Vec<_> = vars
+                .iter()
+                .filter(|v| v.target_resources == Some(vec![worker_id.to_string()]))
+                .collect();
+            assert_eq!(scoped.len(), 1, "expected one token for {worker_id}");
+            assert!(scoped.iter().any(
+                |v| v.name == alien_core::ENV_ALIEN_COMMANDS_TOKEN && v.value == "ax_dep_test"
+            ));
+        }
+    }
+
+    fn command_container(id: &str, commands_enabled: bool) -> Container {
+        let builder = Container::new(id.to_string())
+            .code(ContainerCode::Image {
+                image: "container:latest".to_string(),
+            })
+            .cpu(ResourceSpec {
+                min: "0.5".to_string(),
+                desired: "1".to_string(),
+            })
+            .memory(ResourceSpec {
+                min: "512Mi".to_string(),
+                desired: "1Gi".to_string(),
+            })
+            .port(8080)
+            .permissions("container-execution".to_string());
+        if commands_enabled {
+            builder.commands_enabled(true).build()
+        } else {
+            builder.build()
+        }
+    }
+
+    #[test]
+    fn platform_config_replaces_empty_environment_snapshot_for_command_daemon() {
+        let daemon = Daemon::new("debug-daemon".to_string())
+            .code(DaemonCode::Image {
+                image: "daemon:latest".to_string(),
+            })
+            .permissions("daemon-execution".to_string())
+            .commands_enabled(true)
+            .build();
+        let stack = Stack::new("manager-platform-config-stack".to_string())
+            .add(daemon, ResourceLifecycle::Live)
+            .build();
+        let empty_snapshot = EnvironmentVariablesSnapshot {
+            variables: Vec::new(),
+            hash: "stale-empty-snapshot".to_string(),
+            created_at: "2026-01-01T00:00:00Z".to_string(),
+        };
+        let provided_config = DeploymentConfig::builder()
+            .stack_settings(StackSettings::default())
+            .environment_variables(empty_snapshot)
+            .allow_frozen_changes(false)
+            .external_bindings(Default::default())
+            .build();
+        let mut deployment = deployment_record(DeploymentStatus::Provisioning, None);
+        deployment.deployment_token = Some("ax_dep_test".to_string());
+        deployment.deployment_config = Some(provided_config);
+
+        let mut fresh_variables = vec![
+            EnvironmentVariable {
+                name: ENV_ALIEN_DEPLOYMENT_ID.to_string(),
+                value: deployment.id.clone(),
+                var_type: EnvironmentVariableType::Plain,
+                target_resources: None,
+            },
+            EnvironmentVariable {
+                name: ENV_ALIEN_DEPLOYMENT_NAME.to_string(),
+                value: deployment.name.clone(),
+                var_type: EnvironmentVariableType::Plain,
+                target_resources: None,
+            },
+        ];
+        fresh_variables.extend(
+            commands_receiver_env_vars(
+                "https://manager.example.test/v1".to_string(),
+                deployment.deployment_token.as_deref(),
+                &stack,
+            )
+            .expect("command-enabled daemon should produce receiver variables"),
+        );
+        let fresh_snapshot = EnvironmentVariablesSnapshot {
+            variables: fresh_variables,
+            hash: "fresh-snapshot".to_string(),
+            created_at: "2026-01-02T00:00:00Z".to_string(),
+        };
+
+        let effective_config = with_environment_snapshot(
+            deployment
+                .deployment_config
+                .expect("platform deployment should supply a config snapshot"),
+            fresh_snapshot.clone(),
+        );
+
+        assert_eq!(effective_config.environment_variables, fresh_snapshot);
+        let variables = &effective_config.environment_variables.variables;
+        assert_eq!(variables.len(), 6);
+        for (name, value, var_type, target_resources) in [
+            (
+                ENV_ALIEN_DEPLOYMENT_ID,
+                "dep_test",
+                EnvironmentVariableType::Plain,
+                None,
+            ),
+            (
+                ENV_ALIEN_DEPLOYMENT_NAME,
+                "test",
+                EnvironmentVariableType::Plain,
+                None,
+            ),
+            (
+                ENV_ALIEN_COMMANDS_URL,
+                "https://manager.example.test/v1",
+                EnvironmentVariableType::Plain,
+                Some(vec!["debug-daemon".to_string()]),
+            ),
+            (
+                ENV_ALIEN_COMMANDS_TOKEN,
+                "ax_dep_test",
+                EnvironmentVariableType::Secret,
+                Some(vec!["debug-daemon".to_string()]),
+            ),
+            (
+                ENV_ALIEN_COMMANDS_TARGET_RESOURCE_ID,
+                "debug-daemon",
+                EnvironmentVariableType::Plain,
+                Some(vec!["debug-daemon".to_string()]),
+            ),
+            (
+                ENV_ALIEN_COMMANDS_TARGET_RESOURCE_TYPE,
+                "daemon",
+                EnvironmentVariableType::Plain,
+                Some(vec!["debug-daemon".to_string()]),
+            ),
+        ] {
+            assert!(
+                variables.iter().any(|variable| {
+                    variable.name == name
+                        && variable.value == value
+                        && variable.var_type == var_type
+                        && variable.target_resources == target_resources
+                }),
+                "missing or incorrect environment variable {name}"
+            );
+        }
+    }
+
+    #[test]
+    fn commands_receiver_env_vars_scopes_contract_per_command_enabled_container_and_daemon() {
+        let container = command_container("container-a", true);
+        let daemon = Daemon::new("daemon-b".to_string())
+            .code(DaemonCode::Image {
+                image: "daemon:latest".to_string(),
+            })
+            .permissions("daemon-execution".to_string())
+            .commands_enabled(true)
+            .build();
+        // Commands-disabled container: must get NOTHING.
+        let container_off = command_container("container-off", false);
+        // Commands-enabled Worker uses runtime push, never the receiver
+        // contract, and must not be a receiver scope target.
+        let worker = Worker::new("worker-c".to_string())
+            .code(WorkerCode::Image {
+                image: "worker:latest".to_string(),
+            })
+            .permissions("execution".to_string())
+            .commands_enabled(true)
+            .build();
+        let stack = Stack::new("manager-receiver-stack".to_string())
+            .add(container, ResourceLifecycle::Live)
+            .add(daemon, ResourceLifecycle::Live)
+            .add(container_off, ResourceLifecycle::Live)
+            .add(worker, ResourceLifecycle::Live)
+            .build();
+
+        let vars = commands_receiver_env_vars(
+            "https://manager.example.test/v1".to_string(),
+            Some("ax_dep_test"),
+            &stack,
+        )
+        .expect("token present");
+
+        // Every var scoped to exactly one command-enabled Container/Daemon; the
+        // disabled container and the worker are never scope targets.
+        assert!(vars.iter().all(|v| {
+            v.target_resources == Some(vec!["container-a".to_string()])
+                || v.target_resources == Some(vec!["daemon-b".to_string()])
+        }));
+        // No deployment-wide DEPLOYMENT_ID is re-emitted here.
+        assert!(!vars
+            .iter()
+            .any(|v| v.name == alien_core::ENV_ALIEN_DEPLOYMENT_ID));
+
+        for (resource_id, expected_type) in [("container-a", "container"), ("daemon-b", "daemon")] {
+            let scoped: Vec<_> = vars
+                .iter()
+                .filter(|v| v.target_resources == Some(vec![resource_id.to_string()]))
+                .collect();
+            assert_eq!(
+                scoped.len(),
+                4,
+                "expected 4 receiver vars for {resource_id}"
+            );
+            assert!(scoped.iter().any(|v| {
+                v.name == alien_core::ENV_ALIEN_COMMANDS_URL
+                    && v.value == "https://manager.example.test/v1"
+            }));
+            assert!(scoped
+                .iter()
+                .any(|v| v.name == alien_core::ENV_ALIEN_COMMANDS_TOKEN
+                    && v.value == "ax_dep_test"
+                    && v.var_type == alien_core::EnvironmentVariableType::Secret));
+            assert!(scoped.iter().any(|v| {
+                v.name == alien_core::ENV_ALIEN_COMMANDS_TARGET_RESOURCE_ID
+                    && v.value == resource_id
+            }));
+            assert!(scoped.iter().any(|v| {
+                v.name == alien_core::ENV_ALIEN_COMMANDS_TARGET_RESOURCE_TYPE
+                    && v.value == expected_type
+            }));
+        }
     }
 }
 

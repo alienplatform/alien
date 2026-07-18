@@ -111,6 +111,9 @@ impl Queue for AwsSqsQueue {
                 QueueMessage {
                     payload,
                     receipt_handle: m.receipt_handle,
+                    // SQS redelivery counts (ApproximateReceiveCount) are not
+                    // requested on this receive path yet.
+                    attempt: 1,
                 }
             })
             .collect();
@@ -127,6 +130,28 @@ impl Queue for AwsSqsQueue {
             .context(ErrorData::BindingSetupFailed {
                 binding_type: "queue.sqs".to_string(),
                 reason: "Failed to delete message".to_string(),
+            })
+    }
+
+    async fn nack(&self, _queue: &str, _receipt_handle: &str) -> Result<()> {
+        // SQS nack is ChangeMessageVisibility(VisibilityTimeout=0). The
+        // alien-aws-clients SqsApi wrapper does not expose that call, so we
+        // fail explicitly rather than silently waiting out the lease.
+        Err(alien_error::AlienError::new(
+            ErrorData::OperationNotSupported {
+                operation: "queue.nack".to_string(),
+                reason: "AWS SQS nack requires ChangeMessageVisibility, which the SQS client does not expose".to_string(),
+            },
+        ))
+    }
+
+    async fn purge(&self, _queue: &str) -> Result<()> {
+        self.client
+            .purge_queue(&self.queue_url)
+            .await
+            .context(ErrorData::BindingSetupFailed {
+                binding_type: "queue.sqs".to_string(),
+                reason: "Failed to purge queue".to_string(),
             })
     }
 }

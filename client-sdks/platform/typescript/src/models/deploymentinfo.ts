@@ -200,19 +200,19 @@ export type DeploymentInfoBuildInfo = {
    */
   alienSha: string;
   /**
-   * Horizon source commit used by platform private extensions, if applicable.
+   * Compute backend source revision used by optional package extensions, if applicable.
    */
   horizonSha: string;
   /**
-   * Horizon release channel manifest embedded into the generated CLI.
+   * Machine runtime release manifest embedded into the generated CLI.
    */
   machineBundleManifestUrl?: string | null | undefined;
   /**
-   * Platform source commit used to build packages-builder and private extensions.
+   * Source revision used to build the package service and optional extensions.
    */
   platformSha: string;
   /**
-   * SHA256 checksum of the source companion agent binary shipped with the CLI package, when present.
+   * SHA256 checksum of the source runtime helper binary shipped with the CLI package, when present.
    */
   sourceAgentBinarySha256?: string | null | undefined;
   /**

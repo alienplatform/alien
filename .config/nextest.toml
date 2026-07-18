@@ -22,7 +22,7 @@ test-group = 'otlp-tests'
 [[profile.default.overrides]]
 # Lambda tests must run serially - they spawn cargo lambda watch processes that conflict
 # The test() predicate matches test names, not module paths, so we match any test starting with test_lambda
-filter = 'package(alien-runtime) and test(test_lambda)'
+filter = 'package(alien-worker-runtime) and test(test_lambda)'
 test-group = 'lambda-tests'
 
 [[profile.default.overrides]]

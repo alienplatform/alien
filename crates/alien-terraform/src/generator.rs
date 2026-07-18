@@ -923,6 +923,12 @@ fn variables_body(
         Some(Expression::String(advanced_settings_default)),
         true,
     )));
+    blocks.push(nested(variable_block(
+        "advanced_settings_overlay_json",
+        "JSON-encoded deployment settings merged over the package defaults. Use this for partial advanced-setting overrides that must preserve generated defaults such as compute selections.",
+        Some(Expression::String("{}".to_string())),
+        true,
+    )));
     blocks.push(nested(string_enum_variable_block(
         "updates_mode",
         "How application updates are delivered after setup.",
@@ -1975,6 +1981,12 @@ fn locals_body(
             expr::raw("null")
         },
     ));
+    body.push(attr(
+        "advanced_settings",
+        expr::raw(
+            "merge(jsondecode(var.advanced_settings_json), jsondecode(var.advanced_settings_overlay_json))",
+        ),
+    ));
     if target.is_kubernetes() {
         let generated_kubernetes_exposure = extra
             .get("kubernetes_exposure")
@@ -2006,8 +2018,8 @@ fn locals_body(
         body.push(attr(
             "deployment_kubernetes_settings",
             expr::raw(
-                r#"merge(try(jsondecode(var.advanced_settings_json).kubernetes, {}), {
-  exposure = jsondecode(try(jsondecode(var.advanced_settings_json).kubernetes.exposure, null) == null ? jsonencode(local.kubernetes_exposure) : jsonencode(jsondecode(var.advanced_settings_json).kubernetes.exposure))
+                r#"merge(try(local.advanced_settings.kubernetes, {}), {
+  exposure = jsondecode(try(local.advanced_settings.kubernetes.exposure, null) == null ? jsonencode(local.kubernetes_exposure) : jsonencode(local.advanced_settings.kubernetes.exposure))
 })"#,
             ),
         ));
@@ -2095,7 +2107,7 @@ fn stack_settings_expression(
                 ""
             };
             return expr::raw(format!(
-                r#"merge(jsondecode(var.advanced_settings_json), {{
+                r#"merge(local.advanced_settings, {{
   deploymentModel = var.deployment_model
   updates    = var.updates_mode
   telemetry  = var.telemetry_mode
@@ -2128,7 +2140,7 @@ fn stack_settings_expression(
                 ""
             };
             return expr::raw(format!(
-                r#"merge(jsondecode(var.advanced_settings_json), {{
+                r#"merge(local.advanced_settings, {{
   deploymentModel = var.deployment_model
   updates    = var.updates_mode
   telemetry  = var.telemetry_mode
@@ -2153,7 +2165,7 @@ fn stack_settings_expression(
         }
         _ if target.is_kubernetes() => {
             return expr::raw(
-                r#"merge(jsondecode(var.advanced_settings_json), {
+                r#"merge(local.advanced_settings, {
   deploymentModel = var.deployment_model
   updates    = var.updates_mode
   telemetry  = var.telemetry_mode
@@ -2164,7 +2176,7 @@ fn stack_settings_expression(
         }
         _ => {
             return expr::raw(
-                r#"merge(jsondecode(var.advanced_settings_json), {
+                r#"merge(local.advanced_settings, {
   deploymentModel = var.deployment_model
   updates    = var.updates_mode
   telemetry  = var.telemetry_mode
@@ -2637,7 +2649,7 @@ Use your organization's normal backend and approval workflow. A typical local re
 {registration_note}\n\
 ## Outputs\n\n\
 - `deployment_management_config`: management endpoint and credential-boundary metadata.\n\
-- `deployment_stack_settings`: deployment settings JSON assembled from typed variables and `advanced_settings_json`.\n\
+- `deployment_stack_settings`: deployment settings JSON assembled from typed variables, package defaults, and advanced-setting overlays.\n\
 - `deployment_resources`: setup-owned resource metadata handed to the deployment runtime.\n\
 - `deployment_id` and `deployment_token`: emitted only when Terraform performs registration.\
 {kubernetes_operations}",
@@ -2660,7 +2672,7 @@ fn readme_required_inputs(has_registration: bool) -> String {
 }
 
 fn readme_common_inputs() -> String {
-    "Common optional settings:\n\n- `resource_prefix`: stable physical-name prefix. Leave empty to generate one.\n- `management_url`: optional management endpoint used by pull-style runtimes.\n- `deployment_model`: `push` or `pull`.\n- `updates_mode`: `auto` or `approval-required`.\n- `telemetry_mode`: `off`, `auto`, or `approval-required`.\n- `heartbeats_mode`: `off` or `on`.\n- `advanced_settings_json`: advanced deployment settings JSON. Most installs should use typed variables instead.".to_string()
+    "Common optional settings:\n\n- `resource_prefix`: stable physical-name prefix. Leave empty to generate one.\n- `management_url`: optional management endpoint used by pull-style runtimes.\n- `deployment_model`: `push` or `pull`.\n- `updates_mode`: `auto` or `approval-required`.\n- `telemetry_mode`: `off`, `auto`, or `approval-required`.\n- `heartbeats_mode`: `off` or `on`.\n- `advanced_settings_json`: complete advanced deployment settings JSON. Most installs should keep the generated default.\n- `advanced_settings_overlay_json`: partial advanced settings merged over package defaults, preserving generated values such as compute selections.".to_string()
 }
 
 fn readme_stack_inputs(inputs: &[StackInputDefinition]) -> String {

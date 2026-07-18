@@ -8,8 +8,6 @@ use alien_bindings::{
     BindingsProvider,
 };
 
-#[cfg(feature = "grpc")]
-use alien_bindings::{grpc::run_grpc_server, providers::grpc_provider::GrpcBindingsProvider};
 use alien_core::bindings::BindingValue;
 
 // Platform-specific providers are now internal implementation details
@@ -24,7 +22,6 @@ use std::sync::Mutex;
 use std::{collections::HashMap, env, sync::Arc, time::Duration};
 use tempfile::TempDir;
 use test_context::AsyncTestContext;
-use tokio::net::TcpListener;
 use tokio::task::JoinHandle;
 use uuid::Uuid;
 use workspace_root::get_workspace_root;
@@ -40,8 +37,6 @@ use alien_azure_clients::{
     containerregistry::{AzureContainerRegistryClient, ContainerRegistryApi},
     AzureClientConfig,
 };
-
-const GRPC_BINDING_NAME: &str = "test-grpc-artifact-registry-binding";
 
 fn load_test_env() {
     // Load .env.test from the workspace root
@@ -152,145 +147,6 @@ impl ArtifactRegistryTestContext for LocalProviderArtifactRegistryTestContext {
 }
 
 // --- gRPC Provider Context ---
-#[cfg(feature = "grpc")]
-struct GrpcProviderArtifactRegistryTestContext {
-    artifact_registry: Arc<dyn ArtifactRegistry>,
-    _server_handle:
-        JoinHandle<Result<(), alien_error::AlienError<alien_bindings::error::ErrorData>>>,
-    _temp_data_dir: TempDir,
-    _registry_handle: JoinHandle<()>,
-}
-
-#[cfg(feature = "grpc")]
-impl AsyncTestContext for GrpcProviderArtifactRegistryTestContext {
-    async fn setup() -> Self {
-        load_test_env();
-        let temp_data_dir =
-            tempfile::tempdir().expect("Failed to create temp dir for gRPC server test");
-
-        #[cfg(all(feature = "local", unix))]
-        {
-            // Start a container registry for the gRPC server (no auth, matching production behavior)
-            use container_registry::ContainerRegistry;
-
-            let mut registry = ContainerRegistry::builder().build_for_testing();
-
-            // Bind to a random port on localhost
-            registry.bind(([127, 0, 0, 1], 0).into());
-            let running_registry = registry.run_in_background();
-            let bound_addr = running_registry.bound_addr();
-            let registry_endpoint = format!("localhost:{}", bound_addr.port());
-
-            // Keep the registry running in the background
-            let registry_handle = tokio::spawn(async move {
-                let _guard = running_registry;
-                // Wait for the test to complete
-                tokio::time::sleep(Duration::from_secs(300)).await;
-            });
-
-            // Set up environment for the gRPC server with registry URL
-            let server_binding = alien_core::bindings::ArtifactRegistryBinding::local(
-                registry_endpoint.clone(),
-                None,
-            );
-
-            let mut server_provider_env_map: HashMap<String, String> = env::vars().collect();
-            let server_binding_json =
-                serde_json::to_string(&server_binding).expect("Failed to serialize server binding");
-            server_provider_env_map.insert(
-                alien_core::bindings::binding_env_var_name(GRPC_BINDING_NAME),
-                server_binding_json,
-            );
-            server_provider_env_map
-                .insert("ALIEN_DEPLOYMENT_TYPE".to_string(), "local".to_string());
-
-            let local_provider_for_server = Arc::new(
-                BindingsProvider::from_env(server_provider_env_map)
-                    .await
-                    .expect("Failed to load bindings provider"),
-            );
-
-            let listener = TcpListener::bind("127.0.0.1:0")
-                .await
-                .expect("Failed to bind to random port");
-            let addr = listener.local_addr().expect("Failed to get local address");
-            drop(listener);
-
-            let server_addr_str = addr.to_string();
-            let server_addr_for_spawn = server_addr_str.clone();
-
-            let server_handle = tokio::spawn(async move {
-                let handles = run_grpc_server(local_provider_for_server, &server_addr_for_spawn)
-                    .await
-                    .unwrap();
-
-                // Wait for server to be ready
-                handles
-                    .readiness_receiver
-                    .await
-                    .expect("Server should become ready");
-                handles.server_task.await.unwrap()
-            });
-
-            tokio::time::sleep(std::time::Duration::from_millis(500)).await;
-
-            let mut service_provider_env_map: HashMap<String, String> = env::vars().collect();
-            service_provider_env_map.insert(
-                "ALIEN_BINDINGS_GRPC_ADDRESS".to_string(),
-                server_addr_str.clone(),
-            );
-            service_provider_env_map
-                .insert("ALIEN_DEPLOYMENT_TYPE".to_string(), "grpc".to_string());
-
-            let grpc_provider = GrpcBindingsProvider::new_with_env(service_provider_env_map)
-                .expect("Failed to load bindings provider");
-
-            let artifact_registry_client = grpc_provider
-                .load_artifact_registry(GRPC_BINDING_NAME)
-                .await
-                .unwrap_or_else(|e| {
-                    panic!(
-                        "Failed to load Grpc artifact registry for binding '{}' using ALIEN_BINDINGS_GRPC_ADDRESS='{}': {:?}",
-                        GRPC_BINDING_NAME, server_addr_str, e
-                    )
-                });
-
-            Self {
-                artifact_registry: artifact_registry_client,
-                _server_handle: server_handle,
-                _temp_data_dir: temp_data_dir,
-                _registry_handle: registry_handle,
-            }
-        }
-        #[cfg(all(feature = "local", not(unix)))]
-        {
-            panic!("Local artifact registry tests require Unix because container-registry uses symlinks");
-        }
-        #[cfg(not(feature = "local"))]
-        {
-            // For gRPC provider, we can use a mock or skip the test
-            // For now, we'll skip the test when local feature is not available
-            panic!("Local feature is required for GrpcProviderArtifactRegistryTestContext");
-        }
-    }
-
-    async fn teardown(self) {
-        self._server_handle.abort();
-        self._registry_handle.abort();
-    }
-}
-
-#[cfg(feature = "grpc")]
-#[async_trait]
-impl ArtifactRegistryTestContext for GrpcProviderArtifactRegistryTestContext {
-    async fn get_artifact_registry(&self) -> Arc<dyn ArtifactRegistry> {
-        self.artifact_registry.clone()
-    }
-    fn provider_name(&self) -> &'static str {
-        "grpc"
-    }
-}
-
 // --- AWS Provider Context ---
 #[cfg(feature = "aws")]
 struct AwsProviderArtifactRegistryTestContext {
@@ -629,18 +485,11 @@ async fn wait_for_repository_ready(
 
 #[rstest]
 #[cfg_attr(feature = "local", case::local(LocalProviderArtifactRegistryTestContext::setup().await))]
-#[cfg_attr(feature = "grpc", case::grpc(GrpcProviderArtifactRegistryTestContext::setup().await))]
 #[cfg_attr(feature = "aws", case::aws(AwsProviderArtifactRegistryTestContext::setup().await))]
 #[cfg_attr(feature = "azure", case::azure(AzureProviderArtifactRegistryTestContext::setup().await))]
 #[cfg_attr(feature = "gcp", case::gcp(GcpProviderArtifactRegistryTestContext::setup().await))]
 // #[cfg_attr(feature = "kubernetes", case::kubernetes(KubernetesProviderArtifactRegistryTestContext::setup().await))]
-#[cfg(any(
-    feature = "local",
-    feature = "grpc",
-    feature = "aws",
-    feature = "azure",
-    feature = "gcp"
-))]
+#[cfg(any(feature = "local", feature = "aws", feature = "azure", feature = "gcp"))]
 #[tokio::test]
 async fn test_create_repository_and_get_status(#[case] ctx: impl ArtifactRegistryTestContext) {
     let artifact_registry = ctx.get_artifact_registry().await;
@@ -705,18 +554,11 @@ async fn test_create_repository_and_get_status(#[case] ctx: impl ArtifactRegistr
 
 #[rstest]
 #[cfg_attr(feature = "local", case::local(LocalProviderArtifactRegistryTestContext::setup().await))]
-#[cfg_attr(feature = "grpc", case::grpc(GrpcProviderArtifactRegistryTestContext::setup().await))]
 #[cfg_attr(feature = "aws", case::aws(AwsProviderArtifactRegistryTestContext::setup().await))]
 #[cfg_attr(feature = "azure", case::azure(AzureProviderArtifactRegistryTestContext::setup().await))]
 #[cfg_attr(feature = "gcp", case::gcp(GcpProviderArtifactRegistryTestContext::setup().await))]
 // #[cfg_attr(feature = "kubernetes", case::kubernetes(KubernetesProviderArtifactRegistryTestContext::setup().await))]
-#[cfg(any(
-    feature = "local",
-    feature = "grpc",
-    feature = "aws",
-    feature = "azure",
-    feature = "gcp"
-))]
+#[cfg(any(feature = "local", feature = "aws", feature = "azure", feature = "gcp"))]
 #[tokio::test]
 async fn test_add_remove_cross_account_access(#[case] ctx: impl ArtifactRegistryTestContext) {
     let artifact_registry = ctx.get_artifact_registry().await;
@@ -1275,13 +1117,12 @@ async fn test_add_remove_cross_account_access(#[case] ctx: impl ArtifactRegistry
 
 #[rstest]
 #[cfg_attr(feature = "local", case::local(LocalProviderArtifactRegistryTestContext::setup().await))]
-#[cfg_attr(feature = "grpc", case::grpc(GrpcProviderArtifactRegistryTestContext::setup().await))]
 // TODO (CRITICAL): Enable AWS test (need to create pull/push roles)
 // #[cfg_attr(feature = "aws", case::aws(AwsProviderArtifactRegistryTestContext::setup().await))]
 #[cfg_attr(feature = "azure", case::azure(AzureProviderArtifactRegistryTestContext::setup().await))]
 // #[cfg_attr(feature = "gcp", case::gcp(GcpProviderArtifactRegistryTestContext::setup().await))]
 // #[cfg_attr(feature = "kubernetes", case::kubernetes(KubernetesProviderArtifactRegistryTestContext::setup().await))]
-#[cfg(any(feature = "local", feature = "grpc", feature = "azure"))]
+#[cfg(any(feature = "local", feature = "azure"))]
 #[tokio::test]
 async fn test_generate_credentials(#[case] ctx: impl ArtifactRegistryTestContext) {
     let artifact_registry = ctx.get_artifact_registry().await;
@@ -1334,18 +1175,11 @@ async fn test_generate_credentials(#[case] ctx: impl ArtifactRegistryTestContext
 
 #[rstest]
 #[cfg_attr(feature = "local", case::local(LocalProviderArtifactRegistryTestContext::setup().await))]
-#[cfg_attr(feature = "grpc", case::grpc(GrpcProviderArtifactRegistryTestContext::setup().await))]
 #[cfg_attr(feature = "aws", case::aws(AwsProviderArtifactRegistryTestContext::setup().await))]
 #[cfg_attr(feature = "azure", case::azure(AzureProviderArtifactRegistryTestContext::setup().await))]
 #[cfg_attr(feature = "gcp", case::gcp(GcpProviderArtifactRegistryTestContext::setup().await))]
 // #[cfg_attr(feature = "kubernetes", case::kubernetes(KubernetesProviderArtifactRegistryTestContext::setup().await))]
-#[cfg(any(
-    feature = "local",
-    feature = "grpc",
-    feature = "aws",
-    feature = "azure",
-    feature = "gcp"
-))]
+#[cfg(any(feature = "local", feature = "aws", feature = "azure", feature = "gcp"))]
 #[tokio::test]
 async fn test_delete_repository(#[case] ctx: impl ArtifactRegistryTestContext) {
     let artifact_registry = ctx.get_artifact_registry().await;
@@ -1396,18 +1230,11 @@ async fn test_delete_repository(#[case] ctx: impl ArtifactRegistryTestContext) {
 
 #[rstest]
 #[cfg_attr(feature = "local", case::local(LocalProviderArtifactRegistryTestContext::setup().await))]
-#[cfg_attr(feature = "grpc", case::grpc(GrpcProviderArtifactRegistryTestContext::setup().await))]
 #[cfg_attr(feature = "aws", case::aws(AwsProviderArtifactRegistryTestContext::setup().await))]
 #[cfg_attr(feature = "azure", case::azure(AzureProviderArtifactRegistryTestContext::setup().await))]
 #[cfg_attr(feature = "gcp", case::gcp(GcpProviderArtifactRegistryTestContext::setup().await))]
 // #[cfg_attr(feature = "kubernetes", case::kubernetes(KubernetesProviderArtifactRegistryTestContext::setup().await))]
-#[cfg(any(
-    feature = "local",
-    feature = "grpc",
-    feature = "aws",
-    feature = "azure",
-    feature = "gcp"
-))]
+#[cfg(any(feature = "local", feature = "aws", feature = "azure", feature = "gcp"))]
 #[tokio::test]
 async fn test_full_repository_lifecycle(#[case] ctx: impl ArtifactRegistryTestContext) {
     let artifact_registry = ctx.get_artifact_registry().await;
@@ -1587,18 +1414,11 @@ async fn test_full_repository_lifecycle(#[case] ctx: impl ArtifactRegistryTestCo
 
 #[rstest]
 #[cfg_attr(feature = "local", case::local(LocalProviderArtifactRegistryTestContext::setup().await))]
-#[cfg_attr(feature = "grpc", case::grpc(GrpcProviderArtifactRegistryTestContext::setup().await))]
 #[cfg_attr(feature = "aws", case::aws(AwsProviderArtifactRegistryTestContext::setup().await))]
 #[cfg_attr(feature = "azure", case::azure(AzureProviderArtifactRegistryTestContext::setup().await))]
 #[cfg_attr(feature = "gcp", case::gcp(GcpProviderArtifactRegistryTestContext::setup().await))]
 // #[cfg_attr(feature = "kubernetes", case::kubernetes(KubernetesProviderArtifactRegistryTestContext::setup().await))]
-#[cfg(any(
-    feature = "local",
-    feature = "grpc",
-    feature = "aws",
-    feature = "azure",
-    feature = "gcp"
-))]
+#[cfg(any(feature = "local", feature = "aws", feature = "azure", feature = "gcp"))]
 #[tokio::test]
 async fn test_get_nonexistent_repository_returns_404(
     #[case] ctx: impl ArtifactRegistryTestContext,
@@ -1622,6 +1442,30 @@ async fn test_get_nonexistent_repository_returns_404(
 
     // Try to get a repository that doesn't exist
     let result = artifact_registry.get_repository(&nonexistent_repo).await;
+
+    // ACR and GAR repositories are implicit (image paths under a fixed parent
+    // registry) — there is no discrete repository resource to 404 on, and
+    // get_repository documents that it returns the routable name without a
+    // cloud call. Assert that contract instead of a not-found error.
+    if provider_name == "azure" || provider_name == "gcp" {
+        let response = result.unwrap_or_else(|e| {
+            panic!(
+                "[{}] get_repository is implicit for this provider and must succeed: {:?}",
+                provider_name, e
+            )
+        });
+        assert!(
+            response.name.contains(nonexistent_repo.as_str()),
+            "[{}] Routable name '{}' should carry the requested repo id",
+            provider_name,
+            response.name
+        );
+        println!(
+            "[{}] ✓ Implicit repository resolved to routable name '{}'",
+            provider_name, response.name
+        );
+        return;
+    }
 
     // Should get an error
     assert!(

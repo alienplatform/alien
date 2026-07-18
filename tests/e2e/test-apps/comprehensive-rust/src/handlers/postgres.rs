@@ -38,8 +38,7 @@ pub async fn test_postgres(
     info!(%binding_name, "Received postgres test request");
 
     let postgres = app_state
-        .ctx
-        .get_bindings()
+        .internal_bindings
         .load_postgres(&binding_name)
         .await
         .context(ErrorData::BindingNotFound {

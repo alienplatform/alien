@@ -110,8 +110,6 @@ pub mod aws_dynamodb;
 pub mod azure_table_storage;
 #[cfg(feature = "gcp")]
 pub mod gcp_firestore;
-#[cfg(feature = "grpc")]
-pub mod grpc;
 #[cfg(feature = "local")]
 pub mod local;
 
@@ -121,7 +119,5 @@ pub use aws_dynamodb::AwsDynamodbKv;
 pub use azure_table_storage::AzureTableStorageKv;
 #[cfg(feature = "gcp")]
 pub use gcp_firestore::GcpFirestoreKv;
-#[cfg(feature = "grpc")]
-pub use grpc::GrpcKv;
 #[cfg(feature = "local")]
 pub use local::LocalKv;

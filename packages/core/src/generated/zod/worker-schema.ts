@@ -17,14 +17,14 @@ export const WorkerSchema = z.object({
     get "code"(){
                 return WorkerCodeSchema.describe("Specifies the source of the worker's executable code.\nThis can be a pre-built container image or source code that the system will build.")
               },
-"commandsEnabled": z.optional(z.boolean().default(false).describe("Whether the worker can receive remote commands via the Commands protocol.\nWhen enabled, the runtime polls the manager for pending commands and executes registered handlers.")),
+"commandsEnabled": z.optional(z.boolean().default(false).describe("Whether the worker can receive remote commands via the Commands protocol.\nWhen enabled, the platform pushes commands into the Worker runtime,\nwhich executes registered handlers.")),
 "concurrencyLimit": z.int().min(0).describe("Maximum number of concurrent executions allowed for the worker.\nNone means platform default applies.").nullish(),
 "environment": z.optional(z.object({
     
     }).catchall(z.string()).describe("Key-value pairs to set as environment variables for the worker.")),
 "id": z.string().describe("Identifier for the worker. Must contain only alphanumeric characters, hyphens, and underscores ([A-Za-z0-9-_]).\nMaximum 64 characters."),
 get "links"(){
-                return z.array(ResourceRefSchema.describe("New ResourceRef that works with any resource type.\nThis can eventually replace the enum-based ResourceRef for full extensibility.")).describe("List of resource references this worker depends on.")
+                return z.array(ResourceRefSchema.describe("Reference to a resource by its stable id and resource type.")).describe("List of resource references this worker depends on.")
               },
 "memoryMb": z.optional(z.int().min(0).default(256).describe("Memory allocated to the worker in megabytes (MB).\nDefault: 256\n\nPlatform-specific constraints:\n- **AWS Lambda**: 128–10240 MB in 1 MB increments\n- **GCP Cloud Run**: 128–32768 MB\n- **Azure Container Apps**: fixed CPU/memory pairs — 512, 1024, 1536, 2048, 2560,\n  3072, 3584, 4096 MB. Values below 512 are automatically rounded up at deploy time.")),
 "permissions": z.string().describe("Permission profile name that defines the permissions granted to this worker.\nThis references a profile defined in the stack's permission definitions."),
@@ -34,7 +34,7 @@ get "publicEndpoints"(){
 get "readinessProbe"(){
                 return z.union([ReadinessProbeSchema, z.null()]).optional()
               },
-"timeoutSeconds": z.optional(z.int().min(0).default(180).describe("Maximum execution time for the worker in seconds.\nConstraints: 1‑3600 seconds (platform-specific limits may apply)\nDefault: 30")),
+"timeoutSeconds": z.optional(z.int().min(1).max(3600).default(180).describe("Maximum execution time for the worker in seconds.\nConstraints: 1‑3600 seconds (platform-specific limits may apply)\nDefault: 180")),
 get "triggers"(){
                 return z.array(WorkerTriggerSchema.describe("Defines what triggers a worker execution.")).describe("List of triggers that define what events automatically invoke this worker.\nIf empty, the worker is only invokable directly via HTTP calls or platform-specific invocation APIs.\nWhen configured, the worker will be automatically invoked when any of the specified trigger conditions are met.")
               }

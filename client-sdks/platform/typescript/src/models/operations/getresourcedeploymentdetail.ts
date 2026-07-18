@@ -2394,9 +2394,6 @@ export type DataStatus36 = {
   stale: boolean;
 };
 
-/**
- * Local embedded Postgres backend.
- */
 export type DataLocal8 = {
   name: string;
   port?: number | null | undefined;
@@ -2462,9 +2459,6 @@ export type DataStatus35 = {
   stale: boolean;
 };
 
-/**
- * Azure Flexible Server backend.
- */
 export type DataFlexibleServer = {
   serverName: string;
   state?: string | null | undefined;
@@ -2529,9 +2523,6 @@ export type DataStatus34 = {
   stale: boolean;
 };
 
-/**
- * GCP Cloud SQL backend.
- */
 export type DataCloudSQL = {
   databaseVersion?: string | null | undefined;
   instanceName: string;
@@ -2596,9 +2587,6 @@ export type DataStatus33 = {
   stale: boolean;
 };
 
-/**
- * AWS Aurora Serverless v2 backend.
- */
 export type DataAurora = {
   clusterIdentifier: string;
   endpoint?: string | null | undefined;
@@ -5033,7 +5021,6 @@ export type DataMachines1 = {
   horizonStatusMessage?: string | null | undefined;
   horizonStatusReason?: string | null | undefined;
   latestUpdateTimestamp: string;
-  observedImage?: string | null | undefined;
   status: DataStatus16;
   unavailableInstances: number;
   backend: "machines";
@@ -5199,7 +5186,6 @@ export type DataAzure1 = {
   horizonStatusMessage?: string | null | undefined;
   horizonStatusReason?: string | null | undefined;
   latestUpdateTimestamp: string;
-  observedImage?: string | null | undefined;
   status: DataStatus15;
   unavailableInstances: number;
   backend: "azure";
@@ -5365,7 +5351,6 @@ export type DataGcp1 = {
   horizonStatusMessage?: string | null | undefined;
   horizonStatusReason?: string | null | undefined;
   latestUpdateTimestamp: string;
-  observedImage?: string | null | undefined;
   status: DataStatus14;
   unavailableInstances: number;
   backend: "gcp";
@@ -5531,7 +5516,6 @@ export type DataAws1 = {
   horizonStatusMessage?: string | null | undefined;
   horizonStatusReason?: string | null | undefined;
   latestUpdateTimestamp: string;
-  observedImage?: string | null | undefined;
   status: DataStatus13;
   unavailableInstances: number;
   backend: "aws";
@@ -6177,9 +6161,7 @@ export type DataHorizonPlatform = {
   cpu?: Cpu3 | any | null | undefined;
   events: Array<Event3>;
   image?: string | null | undefined;
-  latestUpdateTimestamp?: string | null | undefined;
   memory?: Memory3 | any | null | undefined;
-  observedImage?: string | null | undefined;
   replicaUnits: Array<ReplicaUnit>;
   replicas: Replicas2;
   schedulingMode: SchedulingMode;
@@ -15417,7 +15399,6 @@ export const DataMachines1$inboundSchema: z.ZodType<DataMachines1, unknown> = z
     horizonStatusMessage: z.nullable(z.string()).optional(),
     horizonStatusReason: z.nullable(z.string()).optional(),
     latestUpdateTimestamp: z.string(),
-    observedImage: z.nullable(z.string()).optional(),
     status: z.lazy(() => DataStatus16$inboundSchema),
     unavailableInstances: z.int(),
     backend: z.literal("machines"),
@@ -15745,7 +15726,6 @@ export const DataAzure1$inboundSchema: z.ZodType<DataAzure1, unknown> = z
     horizonStatusMessage: z.nullable(z.string()).optional(),
     horizonStatusReason: z.nullable(z.string()).optional(),
     latestUpdateTimestamp: z.string(),
-    observedImage: z.nullable(z.string()).optional(),
     status: z.lazy(() => DataStatus15$inboundSchema),
     unavailableInstances: z.int(),
     backend: z.literal("azure"),
@@ -16072,7 +16052,6 @@ export const DataGcp1$inboundSchema: z.ZodType<DataGcp1, unknown> = z.object({
   horizonStatusMessage: z.nullable(z.string()).optional(),
   horizonStatusReason: z.nullable(z.string()).optional(),
   latestUpdateTimestamp: z.string(),
-  observedImage: z.nullable(z.string()).optional(),
   status: z.lazy(() => DataStatus14$inboundSchema),
   unavailableInstances: z.int(),
   backend: z.literal("gcp"),
@@ -16399,7 +16378,6 @@ export const DataAws1$inboundSchema: z.ZodType<DataAws1, unknown> = z.object({
   horizonStatusMessage: z.nullable(z.string()).optional(),
   horizonStatusReason: z.nullable(z.string()).optional(),
   latestUpdateTimestamp: z.string(),
-  observedImage: z.nullable(z.string()).optional(),
   status: z.lazy(() => DataStatus13$inboundSchema),
   unavailableInstances: z.int(),
   backend: z.literal("aws"),
@@ -17699,10 +17677,8 @@ export const DataHorizonPlatform$inboundSchema: z.ZodType<
     .optional(),
   events: z.array(z.lazy(() => Event3$inboundSchema)),
   image: z.nullable(z.string()).optional(),
-  latestUpdateTimestamp: z.nullable(z.string()).optional(),
   memory: z.nullable(z.union([z.lazy(() => Memory3$inboundSchema), z.any()]))
     .optional(),
-  observedImage: z.nullable(z.string()).optional(),
   replicaUnits: z.array(z.lazy(() => ReplicaUnit$inboundSchema)),
   replicas: z.lazy(() => Replicas2$inboundSchema),
   schedulingMode: SchedulingMode$inboundSchema,

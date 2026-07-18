@@ -10,7 +10,8 @@ use utoipa::OpenApi;
     info(
         title = "Alien Manager API",
         version = "1.0.0",
-        description = "Control plane for Alien applications. Manages deployments, releases, commands, and telemetry."
+        description = "Control plane for Alien applications. Manages deployments, releases, commands, and telemetry.",
+        license(name = "FSL-1.1-Apache-2.0")
     ),
     paths(
         // Health
@@ -45,6 +46,7 @@ use utoipa::OpenApi;
         crate::routes::sync::initialize,
         // Credentials
         crate::routes::credentials::resolve_credentials,
+        crate::routes::credentials::mint_credentials,
     ),
     components(schemas(
         // Deployment types
@@ -86,6 +88,8 @@ use utoipa::OpenApi;
         // Credentials types
         crate::routes::credentials::ResolveCredentialsRequest,
         crate::routes::credentials::ResolveCredentialsResponse,
+        crate::routes::credentials::MintCredentialsRequest,
+        crate::routes::credentials::MintCredentialsResponse,
         // Identity types
         crate::routes::whoami::WhoamiResponse,
         // Health types

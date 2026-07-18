@@ -172,8 +172,12 @@ run();
 * [create](docs/sdks/commands/README.md#create) - Create command metadata. Called by manager when processing commands. Returns project info for routing decisions.
 * [listNames](docs/sdks/commands/README.md#listnames) - List distinct command names. Use for filter dropdowns in the dashboard.
 * [listDeployments](docs/sdks/commands/README.md#listdeployments) - List distinct deployments that have commands, including deployment group info. Use for filter dropdowns in the dashboard.
+* [resolveTarget](docs/sdks/commands/README.md#resolvetarget) - Resolve which resource a command for this deployment would be addressed to, and how it would be delivered. Fails when the deployment has no command-capable resources, or more than one and no explicit target was named.
 * [update](docs/sdks/commands/README.md#update) - Update command state. Called by manager when command is dispatched or completes.
 * [get](docs/sdks/commands/README.md#get) - Retrieve a command by ID.
+* [dispatch](docs/sdks/commands/README.md#dispatch) - Atomically mark a command DISPATCHED unless it is already terminal. Returns whether the transition was applied.
+* [complete](docs/sdks/commands/README.md#complete) - Atomically transition a command to a terminal state (SUCCEEDED, FAILED, or EXPIRED) unless it is already terminal. Returns whether the transition was applied.
+* [incrementAttempt](docs/sdks/commands/README.md#incrementattempt) - Atomically increment the command's attempt counter and return the new value.
 
 ### [DebugSessions](docs/sdks/debugsessions/README.md)
 
@@ -371,11 +375,15 @@ To read more about standalone functions, check [FUNCTIONS.md](./FUNCTIONS.md).
 - [`billingGetEntitlements`](docs/sdks/billing/README.md#getentitlements) - Get the workspace billing entitlements used for product feature gates. Autumn is the source of truth; the response is served through the workspace billing read model with stale-cache fallback.
 - [`billingListAuditLog`](docs/sdks/billing/README.md#listauditlog) - List billing activity entries for the current workspace.
 - [`cloudRegionsGet`](docs/sdks/cloudregions/README.md#get) - Get cloud regions supported by this Alien environment.
+- [`commandsComplete`](docs/sdks/commands/README.md#complete) - Atomically transition a command to a terminal state (SUCCEEDED, FAILED, or EXPIRED) unless it is already terminal. Returns whether the transition was applied.
 - [`commandsCreate`](docs/sdks/commands/README.md#create) - Create command metadata. Called by manager when processing commands. Returns project info for routing decisions.
+- [`commandsDispatch`](docs/sdks/commands/README.md#dispatch) - Atomically mark a command DISPATCHED unless it is already terminal. Returns whether the transition was applied.
 - [`commandsGet`](docs/sdks/commands/README.md#get) - Retrieve a command by ID.
+- [`commandsIncrementAttempt`](docs/sdks/commands/README.md#incrementattempt) - Atomically increment the command's attempt counter and return the new value.
 - [`commandsList`](docs/sdks/commands/README.md#list) - Retrieve commands. Use for dashboard analytics and command history.
 - [`commandsListDeployments`](docs/sdks/commands/README.md#listdeployments) - List distinct deployments that have commands, including deployment group info. Use for filter dropdowns in the dashboard.
 - [`commandsListNames`](docs/sdks/commands/README.md#listnames) - List distinct command names. Use for filter dropdowns in the dashboard.
+- [`commandsResolveTarget`](docs/sdks/commands/README.md#resolvetarget) - Resolve which resource a command for this deployment would be addressed to, and how it would be delivered. Fails when the deployment has no command-capable resources, or more than one and no explicit target was named.
 - [`commandsUpdate`](docs/sdks/commands/README.md#update) - Update command state. Called by manager when command is dispatched or completes.
 - [`debugSessionsCreate`](docs/sdks/debugsessions/README.md#create) - Create a debug-session audit row. Called by the manager when a pull or push debug tunnel is opened. Workspace + project derived from deployment.
 - [`debugSessionsGet`](docs/sdks/debugsessions/README.md#get) - Retrieve a debug session by ID.

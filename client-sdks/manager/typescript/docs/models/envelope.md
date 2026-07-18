@@ -31,6 +31,10 @@ let value: Envelope = {
     },
     submitResponseUrl: "https://unused-outlaw.net/",
   },
+  target: {
+    resourceId: "<id>",
+    resourceType: "daemon",
+  },
 };
 ```
 
@@ -46,3 +50,5 @@ let value: Envelope = {
 | `params`                                                                                      | *models.BodySpec*                                                                             | :heavy_check_mark:                                                                            | Body specification supporting inline and storage modes                                        |
 | `protocol`                                                                                    | *string*                                                                                      | :heavy_check_mark:                                                                            | Protocol version identifier                                                                   |
 | `responseHandling`                                                                            | [models.ResponseHandling](../models/responsehandling.md)                                      | :heavy_check_mark:                                                                            | Response handling configuration for deployments                                               |
+| `target`                                                                                      | [models.CommandTarget](../models/commandtarget.md)                                            | :heavy_check_mark:                                                                            | Identifies the specific resource a command is addressed to.                                   |
+| `traceContext`                                                                                | [models.TraceContext](../models/tracecontext.md)                                              | :heavy_minus_sign:                                                                            | N/A                                                                                           |

@@ -63,6 +63,7 @@ fn gcp_function_basic_cloud_run() {
                 })
                 .permissions("execution".to_string())
                 .timeout_seconds(30)
+                .expect("literal Worker timeout is within supported range")
                 .memory_mb(256)
                 .build(),
             ResourceLifecycle::Frozen,
@@ -88,6 +89,7 @@ fn gcp_function_public_ingress_emits_invoker_binding() {
                     wildcard_subdomains: false,
                 })
                 .timeout_seconds(60)
+                .expect("literal Worker timeout is within supported range")
                 .memory_mb(512)
                 .build(),
             ResourceLifecycle::Live,
@@ -115,6 +117,7 @@ fn gcp_function_with_queue_and_schedule_triggers() {
                 .trigger(WorkerTrigger::schedule("*/5 * * * *"))
                 .trigger(WorkerTrigger::storage(&assets, vec!["created".to_string()]))
                 .timeout_seconds(60)
+                .expect("literal Worker timeout is within supported range")
                 .memory_mb(512)
                 .build(),
             ResourceLifecycle::Live,

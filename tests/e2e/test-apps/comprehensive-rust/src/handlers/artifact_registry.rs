@@ -11,8 +11,8 @@ use crate::{
     models::{AppState, ArtifactRegistryTestRequest, ArtifactRegistryTestResponse},
     ErrorData, Result,
 };
+use alien_bindings::{ArtifactRegistryPermissions, ErrorData as BindingsErrorData};
 use alien_error::{AlienError, Context, ContextError, IntoAlienError};
-use alien_sdk::{ArtifactRegistryPermissions, BindingsProvider};
 
 /// Test artifact registry operations
 #[utoipa::path(
@@ -40,8 +40,7 @@ pub async fn test_artifact_registry(
     info!(%binding_name, "Received artifact registry test request");
 
     let artifact_registry_instance = app_state
-        .ctx
-        .get_bindings()
+        .internal_bindings
         .load_artifact_registry(&binding_name)
         .await
         .context(ErrorData::BindingNotFound {
@@ -83,7 +82,7 @@ pub async fn test_artifact_registry(
                 status_checks += 1;
 
                 // Check if it's a ResourceNotFound error (repository still creating)
-                if let Some(alien_sdk::error::ErrorData::ResourceNotFound { .. }) = &e.error {
+                if let Some(BindingsErrorData::ResourceNotFound { .. }) = &e.error {
                     // Repository not found yet, it might still be creating
                     if status_checks >= MAX_STATUS_CHECKS {
                         return Err(AlienError::new(

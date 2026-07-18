@@ -43,12 +43,12 @@ pub async fn test_storage(
         Utc::now().timestamp_millis()
     );
     let test_object_path = object_store::path::Path::from(test_object_path_str.clone());
-    let test_data = Bytes::from_static(b"Hello from alien-runtime storage test endpoint!");
+    let test_data = Bytes::from_static(b"Hello from alien-worker-runtime storage test endpoint!");
 
     let storage_instance = app_state
         .ctx
-        .get_bindings()
-        .load_storage(&binding_name)
+        .bindings()
+        .storage(&binding_name)
         .await
         .context(ErrorData::BindingNotFound {
             binding_name: binding_name.clone(),
@@ -316,6 +316,79 @@ pub async fn test_storage(
 
     Ok(Json(StorageTestResponse {
         binding_name,
+        success: true,
+    }))
+}
+
+#[derive(serde::Serialize, serde::Deserialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
+#[serde(rename_all = "camelCase")]
+pub struct StorageWriteRequest {
+    /// Object key to write. The test picks a unique key and then reads back
+    /// the storage event the trigger handler recorded for exactly this key.
+    pub key: String,
+    /// Object content.
+    pub content: String,
+}
+
+#[derive(serde::Serialize, serde::Deserialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
+#[serde(rename_all = "camelCase")]
+pub struct StorageWriteResponse {
+    pub binding_name: String,
+    pub key: String,
+    pub success: bool,
+}
+
+/// Write-only storage operation. Unlike `/storage-test`, the object is not
+/// deleted afterwards, so the platform storage trigger observes exactly one
+/// `created` event for the key and the test can verify the handler recorded it.
+#[cfg_attr(feature = "openapi", utoipa::path(
+    post,
+    path = "/storage-write/{binding_name}",
+    tag = "storage",
+    params(("binding_name" = String, Path, description = "Storage binding name")),
+    responses(
+        (status = 200, description = "Object written", body = StorageWriteResponse),
+        (status = 400, description = "Binding not found", body = AlienError),
+        (status = 500, description = "Storage operation failed", body = AlienError),
+    ),
+    operation_id = "write_storage_object",
+    summary = "Write a single object without deleting it",
+    description = "Used by storage-trigger delivery tests"
+))]
+#[cfg_attr(not(feature = "openapi"), allow(unused))]
+pub async fn write_storage_object(
+    State(app_state): State<AppState>,
+    Path(binding_name): Path<String>,
+    Json(request): Json<StorageWriteRequest>,
+) -> Result<Json<StorageWriteResponse>> {
+    info!(%binding_name, key = %request.key, "Received storage write-only request");
+
+    let storage_instance = app_state
+        .ctx
+        .bindings()
+        .storage(&binding_name)
+        .await
+        .context(ErrorData::BindingNotFound {
+            binding_name: binding_name.clone(),
+        })?;
+
+    let object_path = object_store::path::Path::from(request.key.clone());
+    storage_instance
+        .put(
+            &object_path,
+            Bytes::from(request.content.into_bytes()).into(),
+        )
+        .await
+        .into_alien_error()
+        .context(ErrorData::StorageOperationFailed {
+            operation: "put".to_string(),
+        })?;
+
+    Ok(Json(StorageWriteResponse {
+        binding_name,
+        key: request.key,
         success: true,
     }))
 }

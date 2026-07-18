@@ -45,14 +45,15 @@ pub async fn test_kv(
     let test_value1 = b"test-value-1-from-alien-test-server".to_vec();
     let test_value2 = b"test-value-2-from-alien-test-server".to_vec();
 
-    let kv_instance = app_state
-        .ctx
-        .get_bindings()
-        .load_kv(&binding_name)
-        .await
-        .context(ErrorData::BindingNotFound {
-            binding_name: binding_name.clone(),
-        })?;
+    let kv_instance =
+        app_state
+            .ctx
+            .bindings()
+            .kv(&binding_name)
+            .await
+            .context(ErrorData::BindingNotFound {
+                binding_name: binding_name.clone(),
+            })?;
 
     // 1. Put the first key-value pair
     info!(%test_key1, "Putting first key-value pair");

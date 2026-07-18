@@ -268,13 +268,20 @@ resource "azurerm_role_definition" "shared_env_join" {
 }
 
 # ── Management: RBAC for Terraform execution identity ─────────────────────────
-# The Terraform SP (current authenticated principal) needs blob + ACR push
-# access for building and pushing images during test setup.
+# The Terraform SP (current authenticated principal) needs blob/table + ACR
+# access for exercising the storage clients and pushing images during setup.
 
 resource "azurerm_role_assignment" "manager_storage_blob" {
   provider             = azurerm.management
   scope                = azurerm_storage_account.test.id
   role_definition_name = "Storage Blob Data Contributor"
+  principal_id         = data.azurerm_client_config.management.object_id
+}
+
+resource "azurerm_role_assignment" "manager_storage_table" {
+  provider             = azurerm.management
+  scope                = azurerm_storage_account.test.id
+  role_definition_name = "Storage Table Data Contributor"
   principal_id         = data.azurerm_client_config.management.object_id
 }
 

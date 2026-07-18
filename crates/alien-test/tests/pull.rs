@@ -69,3 +69,77 @@ async fn pull_local_comprehensive_ts(ctx: &mut LocalPullTypeScript) {
         .await
         .expect("command checks failed");
 }
+
+// ---------------------------------------------------------------------------
+// Local: target-scoped command routing (Worker + Daemon, overlapping names)
+// ---------------------------------------------------------------------------
+//
+// One deployment, TWO command-capable resources that both register `status`:
+// Worker `api` (push) and Daemon `indexer-daemon` (pull receiver, runtime-less
+// under direct supervision). Also covers the Local Daemon direct entrypoint:
+// the daemon process must come up, lease its own commands (and only its own),
+// and use in-process bindings.
+
+e2e_test_context!(
+    LocalPullCommandRouting,
+    Platform::Local,
+    DeploymentModel::Pull,
+    TestApp::CommandRoutingTs
+);
+
+#[test_context(LocalPullCommandRouting)]
+#[tokio::test]
+async fn pull_local_command_routing_ts(ctx: &mut LocalPullCommandRouting) {
+    common::routing::check_command_routing(&ctx.ctx.deployment)
+        .await
+        .expect("command routing checks failed");
+}
+
+// ---------------------------------------------------------------------------
+// Local: Rust SOURCE Container (runtime-less, pull receiver, direct bindings)
+// ---------------------------------------------------------------------------
+//
+// The Rust twin of the TS Daemon coverage above: a source-built Rust
+// Container whose compiled binary is the image entrypoint (no runtime
+// wrapper), using `alien_bindings::Bindings::from_env` for a direct KV
+// binding and `alien_commands::Receiver` for target-scoped pull commands.
+// This is the only test that executes the Rust receiver against a real
+// command server from inside a container.
+
+e2e_test_context!(
+    LocalPullContainerRust,
+    Platform::Local,
+    DeploymentModel::Pull,
+    TestApp::ContainerRust
+);
+
+#[test_context(LocalPullContainerRust)]
+#[tokio::test]
+async fn pull_local_container_rust(ctx: &mut LocalPullContainerRust) {
+    common::container::check_container_status(&ctx.ctx.deployment)
+        .await
+        .expect("container status check failed");
+}
+
+// ---------------------------------------------------------------------------
+// Local: TypeScript Container + Rust Daemon, direct bindings and commands
+// ---------------------------------------------------------------------------
+//
+// Both source-built processes start directly, use a KV through their native
+// in-process binding libraries, and own their command receiver loops. They
+// deliberately register the same command name so target identity is required.
+
+e2e_test_context!(
+    LocalPullRuntimeLessMixed,
+    Platform::Local,
+    DeploymentModel::Pull,
+    TestApp::RuntimeLessMixed
+);
+
+#[test_context(LocalPullRuntimeLessMixed)]
+#[tokio::test]
+async fn pull_local_runtime_less_mixed(ctx: &mut LocalPullRuntimeLessMixed) {
+    common::runtime_less::check_mixed_runtime_less(&ctx.ctx.deployment)
+        .await
+        .expect("mixed runtime-less checks failed");
+}

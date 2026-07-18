@@ -484,6 +484,23 @@ fn wildcard_action_allowed(
             && has_condition_key(binding, "iam:AWSServiceName"))
         || (action_requires_tag_condition(action)
             && has_condition_key(binding, "aws:RequestTag/${stackTag}"))
+        || (action_scoped_by_function_arn_condition(action)
+            && has_condition_key(binding, "lambda:FunctionArn"))
+}
+
+fn action_scoped_by_function_arn_condition(action: &str) -> bool {
+    // Event source mapping writes cannot be scoped through the Resource
+    // element: CreateEventSourceMapping authorizes against `*`, and
+    // Get/Update/Delete authorize against the mapping's own UUID ARN (which
+    // is unknowable in a static policy). AWS documents scoping them with the
+    // `lambda:FunctionArn` condition key instead, which pins the mapping to
+    // this stack's functions.
+    matches!(
+        action,
+        "lambda:CreateEventSourceMapping"
+            | "lambda:DeleteEventSourceMapping"
+            | "lambda:UpdateEventSourceMapping"
+    )
 }
 
 fn action_is_forced_wildcard_read(action: &str) -> bool {

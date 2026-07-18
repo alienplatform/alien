@@ -1,4 +1,4 @@
-use crate::error::{ErrorData, Result};
+use crate::error::{binding_env_var, ErrorData, Result};
 use crate::traits::{
     AwsServiceAccountInfo, Binding, ImpersonationRequest, ServiceAccount, ServiceAccountInfo,
 };
@@ -41,6 +41,7 @@ impl AwsIamServiceAccount {
             .clone()
             .into_value("service-account", "role_arn")
             .context(ErrorData::BindingConfigInvalid {
+                env_var: binding_env_var("service-account"),
                 binding_name: "service-account".to_string(),
                 reason: "Failed to resolve role_arn from binding".to_string(),
             })
@@ -53,6 +54,7 @@ impl AwsIamServiceAccount {
             .clone()
             .into_value("service-account", "role_name")
             .context(ErrorData::BindingConfigInvalid {
+                env_var: binding_env_var("service-account"),
                 binding_name: "service-account".to_string(),
                 reason: "Failed to resolve role_name from binding".to_string(),
             })
@@ -100,10 +102,11 @@ impl ServiceAccount for AwsIamServiceAccount {
         let impersonated_config = CoreAwsClientConfig {
             account_id: self.config.account_id.clone(),
             region: self.config.region.clone(),
-            credentials: AwsCredentials::AccessKeys {
+            credentials: AwsCredentials::SessionCredentials {
                 access_key_id: credentials.access_key_id,
                 secret_access_key: credentials.secret_access_key,
-                session_token: Some(credentials.session_token),
+                session_token: credentials.session_token,
+                expires_at: credentials.expiration,
             },
             service_overrides: self.config.service_overrides.clone(),
         };

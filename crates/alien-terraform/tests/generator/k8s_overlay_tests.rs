@@ -279,7 +279,7 @@ fn managed_kubernetes_cluster_emitters_export_runtime_metadata() {
         let main = module.get("locals.tf").expect("locals should render");
         assert!(main.contains("kubernetes_exposure"));
         assert!(main.contains(
-            "exposure = jsondecode(try(jsondecode(var.advanced_settings_json).kubernetes.exposure, null) == null ? jsonencode(local.kubernetes_exposure) : jsonencode(jsondecode(var.advanced_settings_json).kubernetes.exposure))"
+            "exposure = jsondecode(try(local.advanced_settings.kubernetes.exposure, null) == null ? jsonencode(local.kubernetes_exposure) : jsonencode(local.advanced_settings.kubernetes.exposure))"
         ));
         match target {
             TerraformTarget::Eks => {
@@ -584,7 +584,7 @@ fn managed_kubernetes_cluster_preserves_stack_settings_exposure() {
     assert!(locals.contains("custom_domain_name"));
     assert!(locals.contains("certificateArn = var.custom_domain_certificate_arn"));
     assert!(locals.contains(
-        "exposure = jsondecode(try(jsondecode(var.advanced_settings_json).kubernetes.exposure, null) == null ? jsonencode(local.kubernetes_exposure) : jsonencode(jsondecode(var.advanced_settings_json).kubernetes.exposure))"
+        "exposure = jsondecode(try(local.advanced_settings.kubernetes.exposure, null) == null ? jsonencode(local.kubernetes_exposure) : jsonencode(local.advanced_settings.kubernetes.exposure))"
     ));
     assert_terraform_valid(&module, "eks_custom_exposure");
 }

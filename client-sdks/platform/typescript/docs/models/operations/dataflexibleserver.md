@@ -1,7 +1,5 @@
 # DataFlexibleServer
 
-Azure Flexible Server backend.
-
 ## Example Usage
 
 ```typescript

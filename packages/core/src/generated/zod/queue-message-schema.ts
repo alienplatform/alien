@@ -7,7 +7,7 @@ import * as z from "zod";
 import { MessagePayloadSchema } from "./message-payload-schema.js";
 
 /**
- * @description Standardized queue message structure used by alien-runtime\n\nThis structure contains commonly available metadata across all platforms\nand a JSON-first payload that handles both structured data and plain text.
+ * @description Standardized queue message structure delivered to applications\n\nThis structure contains commonly available metadata across all platforms\nand a JSON-first payload that handles both structured data and plain text.
  */
 export const QueueMessageSchema = z.object({
     "attemptCount": z.int().min(0).describe("Delivery attempt count (from ApproximateReceiveCount/deliveryCount, if available)").nullish(),
@@ -21,6 +21,6 @@ get "payload"(){
 "receiptHandle": z.string().describe("Platform-specific receipt handle for acknowledgment"),
 "source": z.string().describe("Source queue/topic name (derived from ARN/source/topic)"),
 "timestamp": z.iso.datetime().describe("Message timestamp (from SentTimestamp/ce-time/enqueuedTimeUtc)")
-    }).describe("Standardized queue message structure used by alien-runtime\n\nThis structure contains commonly available metadata across all platforms\nand a JSON-first payload that handles both structured data and plain text.")
+    }).describe("Standardized queue message structure delivered to applications\n\nThis structure contains commonly available metadata across all platforms\nand a JSON-first payload that handles both structured data and plain text.")
 
 export type QueueMessage = z.infer<typeof QueueMessageSchema>

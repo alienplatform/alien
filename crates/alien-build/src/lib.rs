@@ -334,8 +334,7 @@ pub async fn build_stack(mut stack: Stack, settings: &BuildSettings) -> Result<S
                                 &stack_id,
                                 &settings,
                                 &output_dir,
-                                false, // is_container = false for Worker resources
-                                "worker",
+                                toolchain::WorkloadKind::Worker,
                                 &[],
                             ) => result,
                             _ = cancel_token.cancelled() => {
@@ -450,8 +449,9 @@ pub async fn build_stack(mut stack: Stack, settings: &BuildSettings) -> Result<S
     }
 
     // Build all daemons in parallel with fail-fast behavior.
-    // Daemons are long-lived native subprocesses (TransportType::Passthrough);
-    // their build path mirrors workers: produce an OCI tarball per target,
+    // Daemons are long-lived native subprocesses that run runtime-less under
+    // direct supervision, with no runtime wrapper or transport environment.
+    // Their build path mirrors workers: produce an OCI tarball per target,
     // then rewrite the resource's `code` to `DaemonCode::Image` so the local
     // platform's LocalDaemonController can hand the path to extract_daemon_image.
     if !daemons_to_build.is_empty() {
@@ -501,8 +501,7 @@ pub async fn build_stack(mut stack: Stack, settings: &BuildSettings) -> Result<S
                                 &stack_id,
                                 &settings,
                                 &output_dir,
-                                false, // is_container = false for Daemon resources
-                                "daemon",
+                                toolchain::WorkloadKind::Daemon,
                                 &[],
                             ) => result,
                             _ = cancel_token.cancelled() => {
@@ -710,8 +709,7 @@ pub async fn build_stack(mut stack: Stack, settings: &BuildSettings) -> Result<S
                                 &stack_id,
                                 &settings,
                                 &output_dir,
-                                true, // is_container = true for Container resources
-                                "container",
+                                toolchain::WorkloadKind::Container,
                                 &related_resources,
                             ) => result,
                             _ = cancel_token.cancelled() => {
@@ -1332,6 +1330,7 @@ pub async fn push_stack(
                         }));
                     }
 
+                    let artifact_push_started = Instant::now();
                     let result = tokio::select! {
                         result = push_resource_images(
                             &display_resource_name,
@@ -1350,7 +1349,15 @@ pub async fn push_stack(
                     };
 
                     match &result {
-                        Ok(image_uri) => info!("Successfully pushed {} '{}' to: {}", target.resource_type, resource_name, image_uri),
+                        Ok(image_uri) => info!(
+                            resource = resource_name.as_str(),
+                            push_secs = format!("{:.2}", artifact_push_started.elapsed().as_secs_f64()).as_str(),
+                            "Successfully pushed {} '{}' in {:.2}s to: {}",
+                            target.resource_type,
+                            resource_name,
+                            artifact_push_started.elapsed().as_secs_f64(),
+                            image_uri
+                        ),
                         Err(e) => info!("Failed to push {} '{}': {}", target.resource_type, resource_name, e),
                     }
 
@@ -1771,7 +1778,7 @@ async fn finalize_artifact_dir(
 /// `build_output_dir/resource_name/{target}.oci.tar`
 #[alien_event(AlienEvent::BuildingResource {
     resource_name: resource_name.to_string(),
-    resource_type: resource_type.to_string(),
+    resource_type: workload.as_str().to_string(),
     related_resources: related_resources.to_vec(),
 })]
 async fn build_resource(
@@ -1781,8 +1788,7 @@ async fn build_resource(
     stack_id: &str,
     settings: &BuildSettings,
     build_output_dir: &Path,
-    is_container: bool,
-    resource_type: &str,
+    workload: toolchain::WorkloadKind,
     related_resources: &[String],
 ) -> Result<String> {
     let resource_started = Instant::now();
@@ -1796,26 +1802,64 @@ async fn build_resource(
         targets
     );
 
-    let artifact_cache_key =
-        compute_source_artifact_cache_key(src, toolchain_config, settings, &targets, is_container)
-            .await?;
+    // Validate the source directory before the artifact-cache hash walks it,
+    // so a missing or invalid project fails with a clear config error instead
+    // of an I/O error from the hasher.
+    if !Path::new(src).is_dir() {
+        return Err(AlienError::new(ErrorData::InvalidResourceConfig {
+            resource_id: resource_name.to_string(),
+            reason: format!("Source directory '{}' not found", src),
+        }));
+    }
+    toolchain::create_toolchain(toolchain_config).validate_source(Path::new(src), resource_name)?;
 
-    if let Some(cached_dir) = find_cached_artifact_dir(
+    let cache_key_started = Instant::now();
+    let artifact_cache_key =
+        compute_source_artifact_cache_key(src, toolchain_config, settings, &targets, workload)
+            .await?;
+    let cache_key_secs = cache_key_started.elapsed().as_secs_f64();
+
+    let platform_name = settings.platform.runtime_platform().as_str();
+    let lookup_started = Instant::now();
+    let cached_dir = find_cached_artifact_dir(
         build_output_dir,
         resource_name,
         &targets,
         &artifact_cache_key,
     )
-    .await?
-    {
+    .await?;
+    let lookup_secs = lookup_started.elapsed().as_secs_f64();
+
+    if let Some(cached_dir) = cached_dir {
         info!(
-            "Reusing cached build artifacts for resource '{}' at {} after {:.2}s",
+            resource = resource_name,
+            platform = platform_name,
+            artifact_cache = "HIT",
+            cache_key = &artifact_cache_key[..12],
+            key_secs = format!("{cache_key_secs:.2}").as_str(),
+            lookup_secs = format!("{lookup_secs:.2}").as_str(),
+            "Artifact cache HIT for resource '{}' on platform '{}': reusing {} (skipping {} target build(s))",
             resource_name,
+            platform_name,
             cached_dir.display(),
-            resource_started.elapsed().as_secs_f64()
+            targets.len()
         );
         return Ok(cached_dir.to_string_lossy().into_owned());
     }
+
+    info!(
+        resource = resource_name,
+        platform = platform_name,
+        artifact_cache = "MISS",
+        cache_key = &artifact_cache_key[..12],
+        key_secs = format!("{cache_key_secs:.2}").as_str(),
+        lookup_secs = format!("{lookup_secs:.2}").as_str(),
+        "Artifact cache MISS for resource '{}' on platform '{}': building {} target(s): {:?}",
+        resource_name,
+        platform_name,
+        targets.len(),
+        targets
+    );
 
     // Build into a unique staging directory so concurrent builds do not race on
     // the same path before the hashed output is finalized.
@@ -1844,6 +1888,7 @@ async fn build_resource(
 
             tokio::spawn(async move {
                 info!("Building for target: {:?}", target);
+                let target_started = Instant::now();
 
                 // Create target-specific output path
                 // Always use target ID in filename for consistency
@@ -1859,14 +1904,19 @@ async fn build_resource(
                     &settings,
                     &target,
                     &target_output_path,
-                    is_container,
+                    workload,
                 )
                 .await?;
 
                 info!(
-                    "Successfully built target {} for resource '{}' at: {}",
+                    resource = resource_name.as_str(),
+                    platform = settings.platform.runtime_platform().as_str(),
+                    target = target.runtime_platform_id(),
+                    target_secs = format!("{:.2}", target_started.elapsed().as_secs_f64()).as_str(),
+                    "Successfully built target {} for resource '{}' in {:.2}s at: {}",
                     target.runtime_platform_id(),
                     resource_name,
+                    target_started.elapsed().as_secs_f64(),
                     target_output_path.display()
                 );
 
@@ -1916,10 +1966,10 @@ async fn compute_source_artifact_cache_key(
     toolchain_config: &alien_core::ToolchainConfig,
     settings: &BuildSettings,
     targets: &[BinaryTarget],
-    is_container: bool,
+    workload: toolchain::WorkloadKind,
 ) -> Result<String> {
     let mut hasher = Sha256::new();
-    hasher.update(b"alien-build-artifact-cache-v1");
+    hasher.update(b"alien-build-artifact-cache-v3");
     hasher.update(src.as_bytes());
     hasher.update(
         serde_json::to_vec(toolchain_config)
@@ -1929,22 +1979,27 @@ async fn compute_source_artifact_cache_key(
             })?,
     );
     // Source artifact bytes are platform-independent for equivalent target sets.
-    // The actual differences are target triples, debug/release mode, container
-    // packaging, base image, and whether the runtime is packaged into the image.
-    // This lets e.g. GCP and Azure reuse the same linux-x64 artifacts.
-    let needs_runtime_in_image =
-        is_container || settings.platform.runtime_platform() != Platform::Local;
-    hasher.update(needs_runtime_in_image.to_string().as_bytes());
+    // The actual differences are target triples, debug/release mode, workload
+    // kind (which decides the image shape: runtime for Workers, direct
+    // entrypoint for Containers/Daemons), base image, and whether the built
+    // binary runs as a host process. This lets e.g. GCP and Azure reuse the
+    // same linux-x64 artifacts.
+    let host_process = workload != toolchain::WorkloadKind::Container
+        && settings.platform.runtime_platform() == Platform::Local;
+    hasher.update(host_process.to_string().as_bytes());
     hasher.update(settings.debug_mode.to_string().as_bytes());
-    hasher.update(is_container.to_string().as_bytes());
-    if let Some(override_base_image) = &settings.override_base_image {
-        hasher.update(override_base_image.as_bytes());
+    hasher.update(workload.as_str().as_bytes());
+    for base_image in
+        effective_source_base_images(toolchain_config, settings, workload, host_process)
+    {
+        hasher.update(b"\0base-image\0");
+        hasher.update(base_image.as_bytes());
     }
     for target in targets {
         hasher.update(target.runtime_platform_id().as_bytes());
     }
 
-    hash_build_input_source(src, toolchain_config, &mut hasher).await?;
+    hash_build_input_source(src, toolchain_config, targets, &mut hasher).await?;
 
     Ok(format!("{:x}", hasher.finalize()))
 }
@@ -1952,12 +2007,81 @@ async fn compute_source_artifact_cache_key(
 async fn hash_build_input_source(
     src: &str,
     toolchain_config: &alien_core::ToolchainConfig,
+    targets: &[BinaryTarget],
     hasher: &mut Sha256,
 ) -> Result<()> {
     match toolchain_config {
         ToolchainConfig::Rust { .. } => hash_rust_build_input_graph(Path::new(src), hasher).await,
+        ToolchainConfig::TypeScript { .. } => {
+            hash_source_directory(Path::new(src), hasher).await?;
+            hash_typescript_dependency_inputs(Path::new(src), targets, hasher).await
+        }
         _ => hash_source_directory(Path::new(src), hasher).await,
     }
+}
+
+/// Hash the build inputs a TypeScript app pulls in from OUTSIDE its source
+/// directory, which `hash_source_directory` cannot see (`node_modules` is
+/// excluded from the source walk):
+///
+/// - the `dist/` content of every `@alienplatform/*` package the app has
+///   installed, resolved through its symlink to the real location — a
+///   `workspace:`/`file:` dependency changes content without changing any
+///   version number, and the compiled binary bundles that content;
+/// - the workspace dev addon files for the requested targets — the compiled
+///   binary embeds the addon, so a rebuilt addon must invalidate the cached
+///   artifact.
+///
+/// Registry-installed dependencies are content-addressed by the lockfile,
+/// which lives in the source directory and is already hashed.
+async fn hash_typescript_dependency_inputs(
+    src_dir: &Path,
+    targets: &[BinaryTarget],
+    hasher: &mut Sha256,
+) -> Result<()> {
+    let scope_dir = src_dir.join("node_modules").join("@alienplatform");
+    let Ok(entries) = std::fs::read_dir(&scope_dir) else {
+        // No workspace packages installed — nothing extra to hash.
+        return Ok(());
+    };
+
+    let mut packages: Vec<PathBuf> = entries.flatten().map(|entry| entry.path()).collect();
+    packages.sort();
+
+    let mut bindings_realpath: Option<PathBuf> = None;
+    for package_dir in packages {
+        let Ok(realpath) = package_dir.canonicalize() else {
+            continue;
+        };
+        if package_dir.file_name().is_some_and(|n| n == "bindings") {
+            bindings_realpath = Some(realpath.clone());
+        }
+        hasher.update(b"alienplatform-package");
+        hasher.update(package_dir.to_string_lossy().as_bytes());
+        let dist = realpath.join("dist");
+        if dist.is_dir() {
+            hash_source_directory(&dist, hasher).await?;
+        }
+    }
+
+    // Workspace dev addons for the requested targets, anchored on the real
+    // bindings package location (mirrors the staging lookup's anchor).
+    if let Some(bindings) = bindings_realpath {
+        for addon in toolchain::native_addon::workspace_addon_inputs(&bindings, targets) {
+            hasher.update(b"native-addon");
+            hasher.update(addon.to_string_lossy().as_bytes());
+            let bytes = fs::read(&addon).await.into_alien_error().context(
+                ErrorData::FileOperationFailed {
+                    operation: "read file".to_string(),
+                    file_path: addon.display().to_string(),
+                    reason: "Failed to read native addon for build cache key".to_string(),
+                },
+            )?;
+            hasher.update(&bytes);
+        }
+    }
+
+    Ok(())
 }
 
 async fn hash_rust_build_input_graph(src_dir: &Path, hasher: &mut Sha256) -> Result<()> {
@@ -1975,6 +2099,33 @@ async fn hash_rust_build_input_graph(src_dir: &Path, hasher: &mut Sha256) -> Res
             },
         )?;
         hasher.update(lockfile_bytes);
+    }
+
+    // Workspace-level toolchain configuration changes the produced binary even
+    // when no package source changes: rust-toolchain pins the compiler,
+    // .cargo/config.toml can change rustflags, linker, or profile settings.
+    // These live at the workspace root, outside the per-package directories
+    // hashed below, so hash them explicitly. Absent files contribute nothing,
+    // which keeps existing cache keys stable for projects without them.
+    for toolchain_file in [
+        "rust-toolchain.toml",
+        "rust-toolchain",
+        ".cargo/config.toml",
+        ".cargo/config",
+    ] {
+        let path = metadata.workspace_root.join(toolchain_file);
+        if path.is_file() {
+            let contents = fs::read(&path).await.into_alien_error().context(
+                ErrorData::FileOperationFailed {
+                    operation: "read file".to_string(),
+                    file_path: path.display().to_string(),
+                    reason: "Failed to read toolchain config file for build cache key".to_string(),
+                },
+            )?;
+            hasher.update(b"toolchain-config-file");
+            hasher.update(toolchain_file.as_bytes());
+            hasher.update(contents);
+        }
     }
 
     let local_package_ids = local_cargo_package_ids(&metadata);
@@ -2171,7 +2322,7 @@ fn collect_source_files(base_dir: &Path, dir: &Path, files: &mut Vec<PathBuf>) -
 fn is_ignored_source_cache_path(file_name: &str) -> bool {
     matches!(
         file_name,
-        ".git" | ".alien" | ".alien-build" | "target" | "node_modules"
+        ".git" | ".alien" | ".alien-build" | "target" | "node_modules" | "alien-bindings.node" // staged addon: derived artifact, hashed via its source
     ) || file_name.ends_with(".bun-build")
 }
 
@@ -2350,7 +2501,7 @@ async fn build_target_to_file(
     settings: &BuildSettings,
     target: &BinaryTarget,
     output_path: &Path,
-    is_container: bool,
+    workload: toolchain::WorkloadKind,
 ) -> Result<String> {
     info!(
         "Starting toolchain build for resource: {} (target: {})",
@@ -2397,7 +2548,7 @@ async fn build_target_to_file(
         build_target: *target,
         runtime_platform_name: settings.platform.runtime_platform().as_str().to_string(),
         debug_mode: settings.debug_mode,
-        is_container,
+        workload,
     };
 
     // Create and run toolchain
@@ -2437,12 +2588,15 @@ async fn build_target_to_file(
             files_to_package,
         } => {
             // Cloud platform flow - build from base image
-            let base_images_to_try: Vec<String> =
-                if let Some(override_image) = &settings.override_base_image {
-                    vec![override_image.clone()]
-                } else {
-                    base_images.clone()
-                };
+            // The override is specifically the Worker runtime base. Direct
+            // Container/Daemon images must remain on their plain bases even
+            // when a mixed stack builds Workers from a feature-versioned
+            // alien-base image.
+            let base_images_to_try = base_images_for_workload(
+                base_images,
+                settings.override_base_image.as_deref(),
+                workload,
+            );
 
             if base_images_to_try.is_empty() {
                 return Err(AlienError::new(ErrorData::BuildConfigInvalid {
@@ -2497,12 +2651,24 @@ async fn build_target_to_file(
 
                     let app_layer = app_layer_builder.build().await.map_dockdash_err()?;
 
-                    let image_builder = DockDashImage::builder()
+                    let mut image_builder = DockDashImage::builder()
                         .from(base_image)
                         .platform(target.oci_os(), &target.to_dockdash_arch())
                         .pull_policy(PullPolicy::Always)
-                        .layer(app_layer)
-                        .cmd(toolchain_output.runtime_command.clone()); // Set CMD from toolchain
+                        .layer(app_layer);
+
+                    // Built-in Worker and direct bases are public. Do not let
+                    // unrelated DOCKER_USERNAME/PASSWORD values get sent to
+                    // GHCR, cgr.dev, or Docker Hub. A feature-versioned Worker
+                    // override may be private, so it keeps dockdash's explicit
+                    // environment-auth path.
+                    if workload != toolchain::WorkloadKind::Worker
+                        || settings.override_base_image.is_none()
+                    {
+                        image_builder = image_builder.auth(dockdash::RegistryAuth::Anonymous);
+                    }
+
+                    image_builder = apply_image_command(image_builder, &toolchain_output);
 
                     build_result = image_builder
                         .output_to(output_path.to_path_buf())
@@ -2616,8 +2782,8 @@ async fn build_target_to_file(
             // Build from scratch (no base image - don't call .from() at all)
             let mut image_builder = DockDashImage::builder()
                 .platform(target.oci_os(), &target.to_dockdash_arch())
-                .working_dir("/app") // Set working directory so ./app resolves correctly
-                .cmd(toolchain_output.runtime_command.clone()); // Set CMD from toolchain
+                .working_dir("/app"); // Set working directory so ./app resolves correctly
+            image_builder = apply_image_command(image_builder, &toolchain_output);
 
             for layer in all_layers {
                 image_builder = image_builder.layer(layer);
@@ -2642,6 +2808,89 @@ async fn build_target_to_file(
     );
 
     Ok(output_path.to_string_lossy().into_owned())
+}
+
+/// Return the ordered base-image inputs that affect a source artifact.
+/// Host-process and Dockerfile builds do not use the source toolchain bases.
+fn effective_source_base_images(
+    toolchain_config: &alien_core::ToolchainConfig,
+    settings: &BuildSettings,
+    workload: toolchain::WorkloadKind,
+    host_process: bool,
+) -> Vec<String> {
+    if host_process || matches!(toolchain_config, alien_core::ToolchainConfig::Docker { .. }) {
+        return vec![];
+    }
+
+    let defaults = match workload {
+        toolchain::WorkloadKind::Worker => toolchain::WORKER_BASE_IMAGES,
+        toolchain::WorkloadKind::Container | toolchain::WorkloadKind::Daemon => {
+            toolchain::DIRECT_BASE_IMAGES
+        }
+    }
+    .iter()
+    .map(|image| (*image).to_string())
+    .collect::<Vec<_>>();
+
+    base_images_for_workload(&defaults, settings.override_base_image.as_deref(), workload)
+}
+
+/// Apply a feature-versioned runtime base only to Worker source images.
+fn base_images_for_workload(
+    base_images: &[String],
+    override_base_image: Option<&str>,
+    workload: toolchain::WorkloadKind,
+) -> Vec<String> {
+    if workload == toolchain::WorkloadKind::Worker {
+        if let Some(override_image) = override_base_image {
+            return vec![override_image.to_string()];
+        }
+    }
+
+    base_images.to_vec()
+}
+
+/// Decide the ENTRYPOINT/CMD pair an image gets from a [`ToolchainOutput`].
+///
+/// - `entrypoint: Some` — direct-entrypoint images (source-built
+///   Containers/Daemons): the compiled binary overrides the plain base
+///   image's entrypoint and clears inherited CMD. CMD is set only when
+///   `runtime_command` is nonempty — direct images carry no runtime wrapper
+///   and no `--` separator.
+/// - `entrypoint: None` — keep the base image's entrypoint (e.g. alien-base's
+///   `alien-worker-runtime`) and always set CMD from `runtime_command`.
+///
+/// The resulting image shapes are pinned by `tests/image_shape_tests.rs`.
+fn image_entrypoint_and_cmd(
+    output: &toolchain::ToolchainOutput,
+) -> (Option<Vec<String>>, Option<Vec<String>>) {
+    match &output.entrypoint {
+        Some(entrypoint) => {
+            let cmd = if output.runtime_command.is_empty() {
+                None
+            } else {
+                Some(output.runtime_command.clone())
+            };
+            (Some(entrypoint.clone()), cmd)
+        }
+        None => (None, Some(output.runtime_command.clone())),
+    }
+}
+
+/// Apply the [`image_entrypoint_and_cmd`] contract to a dockdash image
+/// builder. Used by both the base-image and from-scratch build paths.
+fn apply_image_command(
+    mut builder: dockdash::ImageBuilder,
+    output: &toolchain::ToolchainOutput,
+) -> dockdash::ImageBuilder {
+    let (entrypoint, cmd) = image_entrypoint_and_cmd(output);
+    if let Some(entrypoint) = entrypoint {
+        builder = builder.entrypoint(entrypoint);
+    }
+    if let Some(cmd) = cmd {
+        builder = builder.cmd(cmd);
+    }
+    builder
 }
 
 fn base_image_build_retry_delay(attempt: usize) -> Duration {
@@ -2946,6 +3195,87 @@ mod tests {
     use std::path::PathBuf;
     use std::process::Command;
     use tempfile::tempdir;
+
+    fn toolchain_output(
+        entrypoint: Option<Vec<String>>,
+        runtime_command: Vec<String>,
+    ) -> toolchain::ToolchainOutput {
+        toolchain::ToolchainOutput {
+            build_strategy: toolchain::ImageBuildStrategy::FromScratch { layers: vec![] },
+            entrypoint,
+            runtime_command,
+        }
+    }
+
+    /// Pins the ENTRYPOINT/CMD contract shared by the base-image and
+    /// from-scratch build paths (see also tests/image_shape_tests.rs).
+    #[test]
+    fn image_entrypoint_and_cmd_contract() {
+        // Worker: base entrypoint kept, CMD is the separator + binary.
+        let worker = toolchain_output(None, vec!["--".to_string(), "./bin".to_string()]);
+        assert_eq!(
+            image_entrypoint_and_cmd(&worker),
+            (None, Some(vec!["--".to_string(), "./bin".to_string()]))
+        );
+
+        // Direct entrypoint (Container/Daemon): binary is the entrypoint, no CMD.
+        let direct = toolchain_output(Some(vec!["/app/bin".to_string()]), vec![]);
+        assert_eq!(
+            image_entrypoint_and_cmd(&direct),
+            (Some(vec!["/app/bin".to_string()]), None)
+        );
+
+        // Local from-scratch (host process): no entrypoint, CMD is the binary.
+        let local = toolchain_output(None, vec!["./bin".to_string()]);
+        assert_eq!(
+            image_entrypoint_and_cmd(&local),
+            (None, Some(vec!["./bin".to_string()]))
+        );
+
+        // Explicit entrypoint with a nonempty command keeps both.
+        let both = toolchain_output(
+            Some(vec!["/app/bin".to_string()]),
+            vec!["serve".to_string()],
+        );
+        assert_eq!(
+            image_entrypoint_and_cmd(&both),
+            (
+                Some(vec!["/app/bin".to_string()]),
+                Some(vec!["serve".to_string()])
+            )
+        );
+    }
+
+    #[test]
+    fn runtime_base_override_only_applies_to_workers() {
+        let direct_bases = vec!["cgr.dev/chainguard/wolfi-base:latest".to_string()];
+        let runtime_base = "registry.example.com/alien-base:feature";
+
+        assert_eq!(
+            base_images_for_workload(&direct_bases, None, toolchain::WorkloadKind::Worker),
+            direct_bases,
+            "without an override the declared default bases must be preserved"
+        );
+        assert_eq!(
+            base_images_for_workload(
+                &direct_bases,
+                Some(runtime_base),
+                toolchain::WorkloadKind::Worker,
+            ),
+            vec![runtime_base.to_string()]
+        );
+        for workload in [
+            toolchain::WorkloadKind::Container,
+            toolchain::WorkloadKind::Daemon,
+        ] {
+            assert_eq!(
+                base_images_for_workload(&direct_bases, Some(runtime_base), workload),
+                direct_bases,
+                "{} must not inherit the Worker runtime base",
+                workload.as_str()
+            );
+        }
+    }
 
     #[test]
     fn requested_host_binary_only_gates_container_skip() {
@@ -3540,6 +3870,7 @@ mod tests {
         };
         let azure = BuildSettings {
             platform: PlatformBuildSettings::Azure {},
+            override_base_image: Some("registry.example.com/base:other-tag".to_string()),
             ..gcp.clone()
         };
 
@@ -3548,7 +3879,7 @@ mod tests {
             &toolchain,
             &gcp,
             &targets,
-            true,
+            crate::toolchain::WorkloadKind::Container,
         )
         .await
         .unwrap();
@@ -3557,12 +3888,119 @@ mod tests {
             &toolchain,
             &azure,
             &targets,
-            true,
+            crate::toolchain::WorkloadKind::Container,
         )
         .await
         .unwrap();
 
-        assert_eq!(gcp_key, azure_key);
+        assert_eq!(
+            gcp_key, azure_key,
+            "direct workloads must ignore the Worker runtime-base override"
+        );
+        let gcp_daemon_key = compute_source_artifact_cache_key(
+            src_dir.path().to_str().unwrap(),
+            &toolchain,
+            &gcp,
+            &targets,
+            crate::toolchain::WorkloadKind::Daemon,
+        )
+        .await
+        .unwrap();
+        let azure_daemon_key = compute_source_artifact_cache_key(
+            src_dir.path().to_str().unwrap(),
+            &toolchain,
+            &azure,
+            &targets,
+            crate::toolchain::WorkloadKind::Daemon,
+        )
+        .await
+        .unwrap();
+        assert_eq!(
+            gcp_daemon_key, azure_daemon_key,
+            "Daemon artifacts must ignore the Worker runtime-base override"
+        );
+
+        let gcp_worker_key = compute_source_artifact_cache_key(
+            src_dir.path().to_str().unwrap(),
+            &toolchain,
+            &gcp,
+            &targets,
+            crate::toolchain::WorkloadKind::Worker,
+        )
+        .await
+        .unwrap();
+        let azure_worker_key = compute_source_artifact_cache_key(
+            src_dir.path().to_str().unwrap(),
+            &toolchain,
+            &azure,
+            &targets,
+            crate::toolchain::WorkloadKind::Worker,
+        )
+        .await
+        .unwrap();
+        assert_ne!(
+            gcp_worker_key, azure_worker_key,
+            "Worker artifacts must include their runtime base in the cache key"
+        );
+
+        let docker_toolchain = ToolchainConfig::Docker {
+            dockerfile: None,
+            build_args: None,
+            target: None,
+        };
+        let gcp_docker_key = compute_source_artifact_cache_key(
+            src_dir.path().to_str().unwrap(),
+            &docker_toolchain,
+            &gcp,
+            &targets,
+            crate::toolchain::WorkloadKind::Worker,
+        )
+        .await
+        .unwrap();
+        let azure_docker_key = compute_source_artifact_cache_key(
+            src_dir.path().to_str().unwrap(),
+            &docker_toolchain,
+            &azure,
+            &targets,
+            crate::toolchain::WorkloadKind::Worker,
+        )
+        .await
+        .unwrap();
+        assert_eq!(
+            gcp_docker_key, azure_docker_key,
+            "Dockerfile builds own their base and must ignore the source Worker override"
+        );
+
+        let local_a = BuildSettings {
+            platform: PlatformBuildSettings::Local {},
+            ..gcp
+        };
+        let local_b = BuildSettings {
+            platform: PlatformBuildSettings::Local {},
+            ..azure
+        };
+        let local_a_key = compute_source_artifact_cache_key(
+            src_dir.path().to_str().unwrap(),
+            &toolchain,
+            &local_a,
+            &targets,
+            crate::toolchain::WorkloadKind::Worker,
+        )
+        .await
+        .unwrap();
+        let local_b_key = compute_source_artifact_cache_key(
+            src_dir.path().to_str().unwrap(),
+            &toolchain,
+            &local_b,
+            &targets,
+            crate::toolchain::WorkloadKind::Worker,
+        )
+        .await
+        .unwrap();
+        assert_eq!(
+            local_a_key, local_b_key,
+            "Local Workers run from scratch and must ignore the cloud runtime base"
+        );
     }
 
     #[tokio::test]
@@ -3612,7 +4050,7 @@ mod tests {
             &toolchain,
             &settings,
             &targets,
-            true,
+            crate::toolchain::WorkloadKind::Container,
         )
         .await
         .unwrap();
@@ -3624,12 +4062,261 @@ mod tests {
             &toolchain,
             &settings,
             &targets,
-            true,
+            crate::toolchain::WorkloadKind::Container,
         )
         .await
         .unwrap();
 
         assert_ne!(first_key, second_key);
+    }
+
+    #[tokio::test]
+    async fn rust_source_artifact_cache_key_includes_workspace_toolchain_files() {
+        // Toolchain files live at the workspace root, not inside the member's
+        // package directory, so this must use a real `[workspace]` layout —
+        // otherwise package_dir == workspace_root and hash_source_directory
+        // picks the files up as ordinary source, masking a broken/deleted
+        // workspace-root hashing loop.
+        let workspace_dir = tempdir().unwrap();
+        let app_dir = workspace_dir.path().join("app");
+        std::fs::create_dir_all(app_dir.join("src")).unwrap();
+        std::fs::write(
+            workspace_dir.path().join("Cargo.toml"),
+            "[workspace]\nmembers = [\"app\"]\nresolver = \"2\"\n",
+        )
+        .unwrap();
+        std::fs::write(
+            app_dir.join("Cargo.toml"),
+            "[package]\nname = \"app\"\nversion = \"0.1.0\"\nedition = \"2021\"\n",
+        )
+        .unwrap();
+        std::fs::write(app_dir.join("src/main.rs"), "fn main() {}\n").unwrap();
+
+        let toolchain = ToolchainConfig::Rust {
+            binary_name: "app".to_string(),
+        };
+        let targets = vec![BinaryTarget::LinuxX64];
+        let settings = BuildSettings {
+            output_directory: workspace_dir
+                .path()
+                .join("out")
+                .to_string_lossy()
+                .into_owned(),
+            platform: PlatformBuildSettings::Gcp {},
+            targets: Some(targets.clone()),
+            cache_url: None,
+            override_base_image: None,
+            debug_mode: false,
+        };
+
+        let key = |dir: &Path| {
+            let dir = dir.to_str().unwrap().to_string();
+            let toolchain = toolchain.clone();
+            let settings = settings.clone();
+            let targets = targets.clone();
+            async move {
+                compute_source_artifact_cache_key(
+                    &dir,
+                    &toolchain,
+                    &settings,
+                    &targets,
+                    crate::toolchain::WorkloadKind::Container,
+                )
+                .await
+                .unwrap()
+            }
+        };
+
+        let without_toolchain_file = key(&app_dir).await;
+
+        std::fs::write(
+            workspace_dir.path().join("rust-toolchain.toml"),
+            "[toolchain]\nchannel = \"1.84.0\"\n",
+        )
+        .unwrap();
+        let with_pinned_toolchain = key(&app_dir).await;
+        assert_ne!(
+            without_toolchain_file, with_pinned_toolchain,
+            "pinning the compiler via a workspace-root rust-toolchain.toml must invalidate the artifact cache key"
+        );
+
+        std::fs::write(
+            workspace_dir.path().join("rust-toolchain.toml"),
+            "[toolchain]\nchannel = \"1.85.0\"\n",
+        )
+        .unwrap();
+        let with_changed_toolchain = key(&app_dir).await;
+        assert_ne!(
+            with_pinned_toolchain, with_changed_toolchain,
+            "changing the content of the workspace-root rust-toolchain.toml must invalidate the artifact cache key"
+        );
+
+        std::fs::create_dir_all(workspace_dir.path().join(".cargo")).unwrap();
+        std::fs::write(
+            workspace_dir.path().join(".cargo/config.toml"),
+            "[build]\nrustflags = [\"-C\", \"target-cpu=native\"]\n",
+        )
+        .unwrap();
+        let with_cargo_config = key(&app_dir).await;
+        assert_ne!(
+            with_changed_toolchain, with_cargo_config,
+            "changing rustflags via workspace-root .cargo/config.toml must invalidate the artifact cache key"
+        );
+    }
+
+    #[tokio::test]
+    async fn source_artifact_cache_key_differs_across_target_triples() {
+        let src_dir = tempdir().unwrap();
+        std::fs::create_dir_all(src_dir.path().join("src")).unwrap();
+        std::fs::write(
+            src_dir.path().join("Cargo.toml"),
+            "[package]\nname = \"app\"\nversion = \"0.1.0\"\nedition = \"2021\"\n",
+        )
+        .unwrap();
+        std::fs::write(src_dir.path().join("src/main.rs"), "fn main() {}\n").unwrap();
+
+        let toolchain = ToolchainConfig::Rust {
+            binary_name: "app".to_string(),
+        };
+        let key_for = |targets: Vec<BinaryTarget>| {
+            let dir = src_dir.path().to_str().unwrap().to_string();
+            let out = src_dir.path().join("out").to_string_lossy().into_owned();
+            let toolchain = toolchain.clone();
+            async move {
+                let settings = BuildSettings {
+                    output_directory: out,
+                    platform: PlatformBuildSettings::Gcp {},
+                    targets: Some(targets.clone()),
+                    cache_url: None,
+                    override_base_image: None,
+                    debug_mode: false,
+                };
+                compute_source_artifact_cache_key(
+                    &dir,
+                    &toolchain,
+                    &settings,
+                    &targets,
+                    crate::toolchain::WorkloadKind::Container,
+                )
+                .await
+                .unwrap()
+            }
+        };
+
+        let x64_key = key_for(vec![BinaryTarget::LinuxX64]).await;
+        let arm64_key = key_for(vec![BinaryTarget::LinuxArm64]).await;
+        assert_ne!(
+            x64_key, arm64_key,
+            "different target triples must not share build artifacts"
+        );
+    }
+
+    /// Reuse invariant, end to end at the cache layer: after one platform's build
+    /// produces artifacts, an equivalent-target build for another platform finds
+    /// them (one build total), while a build for a different triple misses even
+    /// though the tarball file exists (two builds total).
+    #[tokio::test]
+    async fn equivalent_platform_build_reuses_artifact_but_differing_triple_rebuilds() {
+        let src_dir = tempdir().unwrap();
+        std::fs::create_dir_all(src_dir.path().join("src")).unwrap();
+        std::fs::write(
+            src_dir.path().join("Cargo.toml"),
+            "[package]\nname = \"app\"\nversion = \"0.1.0\"\nedition = \"2021\"\n",
+        )
+        .unwrap();
+        std::fs::write(src_dir.path().join("src/main.rs"), "fn main() {}\n").unwrap();
+
+        let toolchain = ToolchainConfig::Rust {
+            binary_name: "app".to_string(),
+        };
+        let out_root = tempdir().unwrap();
+        let settings_for =
+            |platform: PlatformBuildSettings, targets: &[BinaryTarget]| BuildSettings {
+                output_directory: out_root.path().to_string_lossy().into_owned(),
+                platform,
+                targets: Some(targets.to_vec()),
+                cache_url: None,
+                override_base_image: None,
+                debug_mode: false,
+            };
+        let x64 = vec![BinaryTarget::LinuxX64];
+        let arm64 = vec![BinaryTarget::LinuxArm64];
+
+        // "First build" (gcp, linux-x64): produce the hashed artifact directory
+        // exactly as build_resource finalizes it.
+        let gcp_key = compute_source_artifact_cache_key(
+            src_dir.path().to_str().unwrap(),
+            &toolchain,
+            &settings_for(PlatformBuildSettings::Gcp {}, &x64),
+            &x64,
+            crate::toolchain::WorkloadKind::Container,
+        )
+        .await
+        .unwrap();
+        let gcp_dir = out_root.path().join("build").join("gcp");
+        let artifact_dir = gcp_dir.join("app-12345678");
+        fs::create_dir_all(&artifact_dir).await.unwrap();
+        fs::write(artifact_dir.join("linux-x64.oci.tar"), b"oci")
+            .await
+            .unwrap();
+        // Also stage an arm64 tarball so the differing-triple case below is
+        // decided by the cache key, not by a missing target file.
+        fs::write(artifact_dir.join("linux-arm64.oci.tar"), b"oci")
+            .await
+            .unwrap();
+        write_artifact_cache_metadata(&artifact_dir, &gcp_key)
+            .await
+            .unwrap();
+
+        // "Second build" (azure, same source, same linux-x64 target): the key
+        // matches and the sibling-platform lookup finds the gcp artifacts, so
+        // no second compile happens.
+        let azure_key = compute_source_artifact_cache_key(
+            src_dir.path().to_str().unwrap(),
+            &toolchain,
+            &settings_for(PlatformBuildSettings::Azure {}, &x64),
+            &x64,
+            crate::toolchain::WorkloadKind::Container,
+        )
+        .await
+        .unwrap();
+        assert_eq!(gcp_key, azure_key, "equivalent platforms must share keys");
+
+        let azure_dir = out_root.path().join("build").join("azure");
+        fs::create_dir_all(&azure_dir).await.unwrap();
+        let reused = find_cached_artifact_dir(&azure_dir, "app", &x64, &azure_key)
+            .await
+            .unwrap();
+        assert_eq!(
+            reused,
+            Some(artifact_dir.clone()),
+            "same inputs + equivalent targets must reuse the one built artifact"
+        );
+
+        // "Third build" (aws, linux-arm64): the tarball file exists, but the
+        // key differs, so the lookup misses and a real build would run.
+        let aws_key = compute_source_artifact_cache_key(
+            src_dir.path().to_str().unwrap(),
+            &toolchain,
+            &settings_for(
+                PlatformBuildSettings::Aws {
+                    managing_account_id: None,
+                },
+                &arm64,
+            ),
+            &arm64,
+            crate::toolchain::WorkloadKind::Container,
+        )
+        .await
+        .unwrap();
+        assert_ne!(gcp_key, aws_key);
+
+        let aws_dir = out_root.path().join("build").join("aws");
+        fs::create_dir_all(&aws_dir).await.unwrap();
+        let miss = find_cached_artifact_dir(&aws_dir, "app", &arm64, &aws_key)
+            .await
+            .unwrap();
+        assert_eq!(miss, None, "a differing triple must trigger its own build");
     }
 
     #[tokio::test]
@@ -3753,7 +4440,7 @@ mod tests {
                 build_target: target,
                 runtime_platform_name: "aws".to_string(),
                 debug_mode: false,
-                is_container: true,
+                workload: crate::toolchain::WorkloadKind::Container,
             };
             toolchain
                 .build(&context)
@@ -3889,7 +4576,7 @@ mod tests {
             build_target: BinaryTarget::LinuxArm64,
             runtime_platform_name: "aws".to_string(),
             debug_mode: false,
-            is_container: true,
+            workload: crate::toolchain::WorkloadKind::Container,
         };
         toolchain
             .build(&context)
@@ -4023,7 +4710,7 @@ mod tests {
                 build_target: target,
                 runtime_platform_name: "aws".to_string(),
                 debug_mode: false,
-                is_container: true,
+                workload: crate::toolchain::WorkloadKind::Container,
             };
             toolchain
                 .build(&context)

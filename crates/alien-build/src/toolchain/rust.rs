@@ -169,17 +169,19 @@ impl RustToolchain {
 
 #[async_trait]
 impl Toolchain for RustToolchain {
-    async fn build(&self, context: &ToolchainContext) -> Result<ToolchainOutput> {
-        let build_started = Instant::now();
-        info!("Building Rust project with binary: {}", self.binary_name);
-
-        // Validate that this is a Rust project
-        if !Self::is_rust_project(&context.src_dir) {
+    fn validate_source(&self, src_dir: &Path, resource_name: &str) -> Result<()> {
+        if !Self::is_rust_project(src_dir) {
             return Err(AlienError::new(ErrorData::InvalidResourceConfig {
-                resource_id: self.binary_name.clone(),
+                resource_id: resource_name.to_string(),
                 reason: "Source directory does not contain Cargo.toml".to_string(),
             }));
         }
+        Ok(())
+    }
+
+    async fn build(&self, context: &ToolchainContext) -> Result<ToolchainOutput> {
+        let build_started = Instant::now();
+        info!("Building Rust project with binary: {}", self.binary_name);
 
         // Generate cache key and setup cache paths
         let cache_key = self.generate_cache_key(context).await?;
@@ -486,101 +488,34 @@ impl Toolchain for RustToolchain {
         // Save updated cache only after validating the build output.
         cache_utils::save_cache(context.cache_store.as_deref(), &cache_key, &cache_paths).await?;
 
-        // Determine if we need alien-runtime in the image
-        // Local native resources use embedded runtime in the agent (no runtime in image)
-        // Everything else (containers on any platform, functions on cloud) needs alien-runtime
-        let needs_runtime_in_image =
-            context.is_container || context.runtime_platform_name != "local";
-
-        if !needs_runtime_in_image {
-            // Local native resource - runtime is embedded in the agent
-            // Package the application binary, and any extra assets the project
-            // wants shipped alongside it. Convention: anything in a top-level
-            // `vendor/` directory next to Cargo.toml gets copied into the
-            // image under `/app/vendor/`. This is how a daemon can ship
-            // helper binaries or data files it needs at runtime without
-            // baking them into the Rust binary itself.
-            let runtime_command = vec![format!("./{}", binary_filename)];
-
-            let mut layers = vec![super::LayerSpec {
-                files: vec![super::FileSpec {
-                    host_path: binary_path.clone(),
-                    container_path: format!("./{}", binary_filename),
-                    mode: Some(0o755), // Executable
-                }],
-                description: "Application binary".to_string(),
-            }];
-
-            let vendor_dir = context.src_dir.join("vendor");
-            if vendor_dir.is_dir() {
-                info!(
-                    "Including vendor directory in image: {}",
-                    vendor_dir.display()
-                );
-                layers.push(super::LayerSpec {
-                    files: vec![super::FileSpec {
-                        host_path: vendor_dir,
-                        container_path: "./vendor".to_string(),
-                        mode: None,
-                    }],
-                    description: "Vendor assets".to_string(),
-                });
-            }
-
-            info!(
-                "Rust toolchain prepared image inputs for binary '{}' target '{}' in {:.2}s",
-                self.binary_name,
-                context.build_target.rust_target_triple(),
-                build_started.elapsed().as_secs_f64()
-            );
-
-            return Ok(ToolchainOutput {
-                build_strategy: super::ImageBuildStrategy::FromScratch { layers },
-                runtime_command,
-            });
-        }
-
-        // Need alien-runtime in the image (containers or cloud functions)
-        // Use the universal alien-base image that includes alien-runtime with ENTRYPOINT
-        let base_images = vec!["ghcr.io/alienplatform/alien-base:latest".to_string()];
-
-        // Runtime command: -- separator required by alien-runtime CLI, then application binary
-        // Base image ENTRYPOINT is ["/app/alien-runtime"] so CMD must start with "--"
-        let runtime_command = vec!["--".to_string(), format!("./{}", binary_filename)];
-
-        let mut files_to_package = vec![super::FileSpec {
-            host_path: binary_path,
-            container_path: format!("./{}", binary_filename),
-            mode: Some(0o755),
-        }];
-
-        // Convention (mirrors the local-platform/from-scratch path): include
-        // a top-level `vendor/` directory next to Cargo.toml under `/app/vendor/`
-        // in the image. This is how a daemon ships helper binaries or data
-        // files it needs at runtime, for example a host loader bundling the
-        // binary it later installs onto the host. Without this,
-        // source-built cloud daemons can't ship vendored assets at all
-        // (the local path bundles them; this path silently dropped them).
+        // Package the application binary, and any extra assets the project
+        // wants shipped alongside it. Convention: anything in a top-level
+        // `vendor/` directory next to Cargo.toml gets copied into the image
+        // under `/app/vendor/`. This is how a daemon can ship helper binaries
+        // or data files it needs at runtime without baking them into the Rust
+        // binary itself.
+        let mut extra_layers = Vec::new();
         let vendor_dir = context.src_dir.join("vendor");
         if vendor_dir.is_dir() {
             info!(
                 "Including vendor directory in image: {}",
                 vendor_dir.display()
             );
-            files_to_package.push(super::FileSpec {
-                host_path: vendor_dir,
-                container_path: "./vendor".to_string(),
-                mode: None,
+            extra_layers.push(super::LayerSpec {
+                files: vec![super::FileSpec {
+                    host_path: vendor_dir,
+                    container_path: "./vendor".to_string(),
+                    mode: None,
+                }],
+                description: "Vendor assets".to_string(),
             });
         }
 
-        let output = ToolchainOutput {
-            build_strategy: super::ImageBuildStrategy::FromBaseImage {
-                base_images,
-                files_to_package,
-            },
-            runtime_command,
-        };
+        // Image shape (runtime for Workers, direct entrypoint for
+        // Containers/Daemons) is decided per workload kind in
+        // `image_output_for_binary`.
+        let output =
+            super::image_output_for_binary(context, binary_path, &binary_filename, extra_layers);
 
         info!(
             "Rust toolchain prepared image inputs for binary '{}' target '{}' in {:.2}s",
@@ -724,7 +659,7 @@ version = "0.1.0"
             build_target: alien_core::BinaryTarget::LinuxX64,
             runtime_platform_name: "aws".to_string(),
             debug_mode: false,
-            is_container: false,
+            workload: crate::toolchain::WorkloadKind::Worker,
         };
 
         let cache_key = toolchain.generate_cache_key(&context).await.unwrap();

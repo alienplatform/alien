@@ -578,6 +578,389 @@ mod tests {
     }
 
     // ===============================================
+    // TARGET ROUTING
+    // ===============================================
+
+    /// Status responses and lease envelopes carry the resolved target
+    /// (single-target shorthand: no targetResourceId in the request).
+    #[tokio::test]
+    async fn test_status_and_envelope_carry_resolved_target() {
+        let server = TestCommandServer::builder().with_pull_mode().build().await;
+
+        let request = test_inline_create_command("target-agent", "targeted-command");
+        let response = server.create_command(request).await.unwrap();
+
+        let status = server
+            .get_command_status(&response.command_id)
+            .await
+            .unwrap();
+        assert_eq!(status.target, server.default_target);
+
+        let lease = server
+            .acquire_single_lease("target-agent")
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(lease.envelope.target, server.default_target);
+    }
+
+    /// An explicitly requested target that doesn't exist is rejected with the
+    /// stable COMMAND_TARGET_NOT_FOUND code.
+    #[tokio::test]
+    async fn test_create_with_unknown_target_rejected() {
+        let server = TestCommandServer::builder().with_pull_mode().build().await;
+
+        let mut request = test_inline_create_command("target-agent", "targeted-command");
+        request.target_resource_id = Some("no-such-resource".to_string());
+
+        let err = server.create_command(request).await.unwrap_err();
+        assert_eq!(err.code, "COMMAND_TARGET_NOT_FOUND");
+    }
+
+    /// With two registered targets, shorthand creation (no targetResourceId)
+    /// is rejected with the stable COMMAND_TARGET_AMBIGUOUS code.
+    #[tokio::test]
+    async fn test_create_shorthand_with_two_targets_ambiguous() {
+        let server = TestCommandServer::builder().with_pull_mode().build().await;
+        server
+            .registry
+            .register_target("second-daemon", CommandTargetType::Daemon)
+            .await
+            .unwrap();
+
+        let request = test_inline_create_command("target-agent", "targeted-command");
+        let err = server.create_command(request).await.unwrap_err();
+        assert_eq!(err.code, "COMMAND_TARGET_AMBIGUOUS");
+    }
+
+    /// Each target leases only its own commands: two targets, two commands,
+    /// each lease scan returns only the requester's command.
+    #[tokio::test]
+    async fn test_lease_scans_only_requesting_targets_prefix() {
+        let server = TestCommandServer::builder().with_pull_mode().build().await;
+        server
+            .registry
+            .register_target("second-daemon", CommandTargetType::Daemon)
+            .await
+            .unwrap();
+        let second_target = CommandTarget::new("second-daemon", CommandTargetType::Daemon);
+
+        // Command for the default target.
+        let mut request_a = test_inline_create_command("target-agent", "for-default");
+        request_a.target_resource_id = Some(server.default_target.resource_id.clone());
+        let cmd_a = server.create_command(request_a).await.unwrap();
+
+        // Command for the second target.
+        let mut request_b = test_inline_create_command("target-agent", "for-second");
+        request_b.target_resource_id = Some("second-daemon".to_string());
+        let cmd_b = server.create_command(request_b).await.unwrap();
+
+        // Default target leases only its own command, even asking for many.
+        let default_leases = server
+            .acquire_lease(
+                "target-agent",
+                LeaseRequest {
+                    deployment_id: "target-agent".to_string(),
+                    target: server.default_target.clone(),
+                    max_leases: 10,
+                    lease_seconds: 60,
+                },
+            )
+            .await
+            .unwrap();
+        assert_eq!(default_leases.leases.len(), 1);
+        assert_eq!(default_leases.leases[0].command_id, cmd_a.command_id);
+        assert_eq!(
+            default_leases.leases[0].envelope.target,
+            server.default_target
+        );
+
+        // Second target leases only its own command.
+        let second_leases = server
+            .acquire_lease(
+                "target-agent",
+                LeaseRequest {
+                    deployment_id: "target-agent".to_string(),
+                    target: second_target.clone(),
+                    max_leases: 10,
+                    lease_seconds: 60,
+                },
+            )
+            .await
+            .unwrap();
+        assert_eq!(second_leases.leases.len(), 1);
+        assert_eq!(second_leases.leases[0].command_id, cmd_b.command_id);
+        assert_eq!(second_leases.leases[0].envelope.target, second_target);
+    }
+
+    /// Expiry-driven redelivery: a leased command whose lease TTL runs out
+    /// WITHOUT a response (crashed receiver, network partition — no explicit
+    /// release) must become leasable again, and the redelivered envelope must
+    /// carry an incremented attempt so handlers can detect redelivery
+    /// (`ctx.attempt > 1` is the documented at-least-once signal on both
+    /// receiver twins).
+    #[tokio::test]
+    async fn test_expired_lease_redelivers_with_incremented_attempt() {
+        let server = TestCommandServer::builder().with_pull_mode().build().await;
+
+        let mut request = test_inline_create_command("expiry-agent", "expiry-redelivery");
+        request.target_resource_id = Some(server.default_target.resource_id.clone());
+        let created = server.create_command(request).await.unwrap();
+
+        let lease_request = LeaseRequest {
+            deployment_id: "expiry-agent".to_string(),
+            target: server.default_target.clone(),
+            max_leases: 1,
+            lease_seconds: 1,
+        };
+
+        // First lease: attempt 1. No response is ever submitted.
+        let first = server
+            .acquire_lease("expiry-agent", lease_request.clone())
+            .await
+            .unwrap();
+        assert_eq!(first.leases.len(), 1);
+        assert_eq!(first.leases[0].command_id, created.command_id);
+        assert_eq!(first.leases[0].attempt, 1);
+
+        // While the lease is live, the command must NOT be re-leasable.
+        let while_held = server
+            .acquire_lease("expiry-agent", lease_request.clone())
+            .await
+            .unwrap();
+        assert!(
+            while_held.leases.is_empty(),
+            "a live lease must not be double-leased"
+        );
+
+        // Let the 1s lease TTL expire without any response.
+        tokio::time::sleep(std::time::Duration::from_millis(2500)).await;
+
+        // Redelivery: same command, incremented attempt.
+        let second = server
+            .acquire_lease("expiry-agent", lease_request)
+            .await
+            .unwrap();
+        assert_eq!(
+            second.leases.len(),
+            1,
+            "an expired lease must make the command leasable again"
+        );
+        assert_eq!(second.leases[0].command_id, created.command_id);
+        assert_eq!(
+            second.leases[0].attempt, 2,
+            "expiry-driven redelivery must increment the attempt"
+        );
+        assert_eq!(
+            second.leases[0].envelope.attempt, 2,
+            "the redelivered envelope must carry the incremented attempt"
+        );
+    }
+
+    /// Lease-served envelopes carry manager URLs relative to the exact lease
+    /// endpoint. The pull consumer resolves them against the endpoint it
+    /// reached, preserving both a network-corrected origin and any reverse-
+    /// proxy prefix. Signed query parameters must survive untouched.
+    #[tokio::test]
+    async fn test_leased_envelope_manager_urls_are_path_relative() {
+        let server = TestCommandServer::builder().with_pull_mode().build().await;
+
+        let mut request = test_inline_create_command("relative-agent", "relative-urls");
+        request.target_resource_id = Some(server.default_target.resource_id.clone());
+        let created = server.create_command(request).await.unwrap();
+
+        let leases = server
+            .acquire_lease(
+                "relative-agent",
+                LeaseRequest {
+                    deployment_id: "relative-agent".to_string(),
+                    target: server.default_target.clone(),
+                    max_leases: 1,
+                    lease_seconds: 60,
+                },
+            )
+            .await
+            .unwrap();
+        assert_eq!(leases.leases.len(), 1);
+        let envelope = &leases.leases[0].envelope;
+
+        let submit = &envelope.response_handling.submit_response_url;
+        assert!(
+            submit.starts_with(&format!("{}/response?", created.command_id)),
+            "submit URL must be relative to the lease endpoint, got '{submit}'"
+        );
+        assert!(
+            submit.contains("response_token="),
+            "relativization must preserve the signed query, got '{submit}'"
+        );
+    }
+
+    /// Defense-in-depth: a pending-index entry under target A's prefix whose
+    /// stored command metadata says target B is corruption — the lease call
+    /// must fail loudly instead of misdelivering the command.
+    #[tokio::test]
+    async fn test_lease_target_mismatch_in_pending_index_is_loud_error() {
+        let server = TestCommandServer::builder().with_pull_mode().build().await;
+        server
+            .registry
+            .register_target("second-daemon", CommandTargetType::Daemon)
+            .await
+            .unwrap();
+
+        // Create a command registered to second-daemon.
+        let mut request = test_inline_create_command("target-agent", "for-second");
+        request.target_resource_id = Some("second-daemon".to_string());
+        let cmd = server.create_command(request).await.unwrap();
+
+        // Corrupt the index: plant the command under the DEFAULT target's prefix.
+        let corrupt_key = format!(
+            "target:target-agent:{}:pending:{}:{}",
+            server.default_target.resource_id,
+            chrono::Utc::now().timestamp_nanos_opt().unwrap_or(0),
+            cmd.command_id
+        );
+        alien_bindings::traits::Kv::put(server.kv.as_ref(), &corrupt_key, vec![], None)
+            .await
+            .unwrap();
+
+        // Leasing as the default target must fail loudly, not deliver the command.
+        let result = server
+            .acquire_lease(
+                "target-agent",
+                LeaseRequest {
+                    deployment_id: "target-agent".to_string(),
+                    target: server.default_target.clone(),
+                    max_leases: 1,
+                    lease_seconds: 60,
+                },
+            )
+            .await;
+        let err = result.unwrap_err();
+        assert!(
+            err.message.contains(&cmd.command_id) || err.message.contains("target"),
+            "expected loud target-mismatch error, got: {}",
+            err.message
+        );
+    }
+
+    /// Idempotency keys are scoped per target: same key on two different
+    /// targets creates two distinct commands; same key + same target replays
+    /// the same command.
+    #[tokio::test]
+    async fn test_idempotency_scoped_per_target() {
+        let server = TestCommandServer::builder().with_pull_mode().build().await;
+        server
+            .registry
+            .register_target("second-daemon", CommandTargetType::Daemon)
+            .await
+            .unwrap();
+
+        let make_request = |target: &str| {
+            let mut request = test_inline_create_command("target-agent", "idem-command");
+            request.target_resource_id = Some(target.to_string());
+            request.idempotency_key = Some("same-key".to_string());
+            request
+        };
+
+        let default_id = server.default_target.resource_id.clone();
+        let first = server
+            .create_command(make_request(&default_id))
+            .await
+            .unwrap();
+        let second = server
+            .create_command(make_request("second-daemon"))
+            .await
+            .unwrap();
+        // Same key, different target: distinct commands.
+        assert_ne!(first.command_id, second.command_id);
+
+        // Same key, same target: replays the same command.
+        let replay = server
+            .create_command(make_request(&default_id))
+            .await
+            .unwrap();
+        assert_eq!(replay.command_id, first.command_id);
+    }
+
+    /// One deployment, two command-capable targets of different types
+    /// (Worker + Daemon) sharing the exact same command name: the Worker's
+    /// command routes Push (mock dispatcher receives it), the Daemon's lands
+    /// only in the Daemon's own pending index (leasable there, absent from
+    /// the Worker's). The two never cross.
+    #[tokio::test]
+    async fn test_worker_and_daemon_share_command_name_route_independently() {
+        // Push-capable dispatcher: the default auto-registered target is a
+        // Worker in Push mode (see TestCommandServerBuilder::build).
+        let server = TestCommandServer::new().await;
+        server
+            .registry
+            .register_target("shared-daemon", CommandTargetType::Daemon)
+            .await
+            .unwrap();
+        let daemon_target = CommandTarget::new("shared-daemon", CommandTargetType::Daemon);
+
+        // Command addressed to the Worker.
+        let mut worker_request = test_inline_create_command("target-agent", "shared-command");
+        worker_request.target_resource_id = Some(server.default_target.resource_id.clone());
+        let worker_response = server.create_command(worker_request).await.unwrap();
+        assert_eq!(worker_response.state, CommandState::Dispatched);
+
+        // Command addressed to the Daemon, same command name.
+        let mut daemon_request = test_inline_create_command("target-agent", "shared-command");
+        daemon_request.target_resource_id = Some("shared-daemon".to_string());
+        let daemon_response = server.create_command(daemon_request).await.unwrap();
+        assert_eq!(daemon_response.state, CommandState::Pending);
+
+        // The Worker's command reached the mock dispatcher (push); the
+        // Daemon's did not — exactly one dispatch, and it's the Worker's.
+        let mock_dispatcher = server
+            .mock_dispatcher()
+            .expect("Should have mock dispatcher");
+        mock_dispatcher.assert_dispatch_count(1).await;
+        let dispatched = mock_dispatcher.get_latest().await.unwrap();
+        assert_eq!(dispatched.envelope.command_id, worker_response.command_id);
+        assert_eq!(dispatched.envelope.target, server.default_target);
+
+        // The Daemon's command sits only in ITS OWN pending index: leasing as
+        // the Daemon target returns exactly the Daemon's command.
+        let daemon_leases = server
+            .acquire_lease(
+                "target-agent",
+                LeaseRequest {
+                    deployment_id: "target-agent".to_string(),
+                    target: daemon_target.clone(),
+                    max_leases: 10,
+                    lease_seconds: 60,
+                },
+            )
+            .await
+            .unwrap();
+        assert_eq!(daemon_leases.leases.len(), 1);
+        assert_eq!(
+            daemon_leases.leases[0].command_id,
+            daemon_response.command_id
+        );
+        assert_eq!(daemon_leases.leases[0].envelope.target, daemon_target);
+
+        // Leasing as the Worker target never surfaces the Daemon's command
+        // (the Worker's pending index is untouched — its command was pushed,
+        // not enqueued, and the Daemon's command was never indexed there).
+        let worker_leases = server
+            .acquire_lease(
+                "target-agent",
+                LeaseRequest {
+                    deployment_id: "target-agent".to_string(),
+                    target: server.default_target.clone(),
+                    max_leases: 10,
+                    lease_seconds: 60,
+                },
+            )
+            .await
+            .unwrap();
+        assert_eq!(worker_leases.leases.len(), 0);
+    }
+
+    // ===============================================
     // ESSENTIAL COMPONENT TESTS
     // ===============================================
 
@@ -617,6 +1000,88 @@ mod tests {
         assert_eq!(complete_response.state, CommandState::Dispatched);
     }
 
+    /// A transport error is an ambiguous acknowledgement: the target may have
+    /// accepted the envelope before the response was lost. The command must
+    /// stay Dispatched so a late response remains valid. Creation still returns
+    /// the durable command ID, avoiding an unknown orphan and an immediate
+    /// duplicate when default clients retry without an idempotency key.
+    #[tokio::test]
+    async fn ambiguous_push_failure_keeps_dispatched_and_accepts_late_response() {
+        let server = TestCommandServer::new().await;
+        let dispatcher = server
+            .mock_dispatcher()
+            .expect("push test server uses the mock dispatcher");
+        dispatcher.set_should_fail(true).await;
+
+        let created = server
+            .create_command(test_inline_create_command(
+                "push-agent",
+                "ambiguous-dispatch",
+            ))
+            .await
+            .expect("ambiguous acknowledgement must still return the durable command ID");
+        assert_eq!(created.state, CommandState::Dispatched);
+        dispatcher.assert_dispatch_count(0).await;
+
+        let status = server
+            .get_command_status(&created.command_id)
+            .await
+            .expect("command status");
+        assert_eq!(status.command_id, created.command_id);
+        assert_eq!(status.state, CommandState::Dispatched);
+        assert_eq!(status.attempt, 1);
+
+        server
+            .submit_command_response(
+                &created.command_id,
+                test_success_response(b"completed after ambiguous acknowledgement"),
+            )
+            .await
+            .expect("late response remains valid");
+        server.assert_command_succeeded(&created.command_id).await;
+    }
+
+    #[tokio::test]
+    async fn definite_push_rejection_becomes_terminal_delivery_failure() {
+        let server = TestCommandServer::new().await;
+        let dispatcher = server
+            .mock_dispatcher()
+            .expect("push test server uses the mock dispatcher");
+        dispatcher.set_should_reject(true).await;
+
+        let created = server
+            .create_command(test_inline_create_command(
+                "push-agent",
+                "definite-rejection",
+            ))
+            .await
+            .expect("definite rejection must return the durable terminal command ID");
+        assert_eq!(created.state, CommandState::Failed);
+
+        let status = server
+            .get_command_status(&created.command_id)
+            .await
+            .expect("command status");
+        assert_eq!(status.state, CommandState::Failed);
+        let Some(CommandResponse::Error { code, message, .. }) = status.response else {
+            panic!("definite delivery rejection must persist an error response");
+        };
+        assert_eq!(code, "DELIVERY_FAILED");
+        assert_eq!(message, "Worker runtime did not accept command delivery");
+
+        let late = server
+            .submit_command_response(
+                &created.command_id,
+                test_success_response(b"must not replace delivery failure"),
+            )
+            .await;
+        assert!(
+            late.is_ok(),
+            "terminal duplicate submissions are idempotent"
+        );
+        server.assert_command_failed(&created.command_id).await;
+    }
+
     /// Test lease operations
     #[tokio::test]
     async fn test_lease_operations() {
@@ -643,8 +1108,14 @@ mod tests {
         assert_envelope_command(&lease.envelope, "lease-command");
 
         // Test no available leases
+        let empty_lease_request = LeaseRequest {
+            deployment_id: "nonexistent-agent".to_string(),
+            target: server.default_target.clone(),
+            max_leases: 1,
+            lease_seconds: 60,
+        };
         let empty_response = server
-            .acquire_lease("nonexistent-agent", LeaseRequest::default())
+            .acquire_lease("nonexistent-agent", empty_lease_request)
             .await
             .unwrap();
         assert_eq!(empty_response.leases.len(), 0);
@@ -657,6 +1128,109 @@ mod tests {
         server
             .assert_command_state(&response.command_id, CommandState::Pending)
             .await;
+    }
+
+    #[tokio::test]
+    async fn max_timeout_lease_receives_response_credentials_beyond_lease_headroom() {
+        let server = TestCommandServer::builder().with_pull_mode().build().await;
+        let created = server
+            .create_command(test_inline_create_command("max-timeout", "run"))
+            .await
+            .unwrap();
+        let lease = server
+            .acquire_lease(
+                "max-timeout",
+                LeaseRequest {
+                    deployment_id: "max-timeout".to_string(),
+                    target: server.default_target.clone(),
+                    max_leases: 1,
+                    lease_seconds: 3660,
+                },
+            )
+            .await
+            .unwrap()
+            .leases
+            .into_iter()
+            .next()
+            .expect("max-timeout lease");
+        assert_eq!(lease.command_id, created.command_id);
+
+        let submit = url::Url::parse("http://manager.invalid")
+            .unwrap()
+            .join(&lease.envelope.response_handling.submit_response_url)
+            .unwrap();
+        let expires = submit
+            .query_pairs()
+            .find_map(|(key, value)| (key == "expires").then(|| value.parse::<i64>().unwrap()))
+            .expect("response token expiry");
+        let required = Utc::now() + chrono::Duration::seconds(3660);
+        assert!(
+            expires > required.timestamp(),
+            "response token must outlive max execution plus lease headroom"
+        );
+        assert!(
+            lease
+                .envelope
+                .response_handling
+                .storage_upload_request
+                .expiration
+                > required,
+            "response upload credential must outlive max execution plus lease headroom"
+        );
+    }
+
+    #[tokio::test]
+    async fn delayed_storage_command_lease_refreshes_expired_params_get() {
+        let server = TestCommandServer::builder().with_pull_mode().build().await;
+        let created = server
+            .create_command(test_storage_create_command(
+                "delayed-storage",
+                "run",
+                200_000,
+            ))
+            .await
+            .unwrap();
+        server
+            .upload_complete(&created.command_id, test_upload_complete_request(200_000))
+            .await
+            .unwrap();
+
+        let mut stored = server
+            .command_server
+            .get_params(&created.command_id)
+            .await
+            .unwrap()
+            .expect("stored params");
+        let BodySpec::Storage {
+            storage_get_request: Some(request),
+            ..
+        } = &mut stored
+        else {
+            panic!("storage params with GET request");
+        };
+        request.expiration = Utc::now() - chrono::Duration::hours(1);
+        server
+            .command_server
+            .store_params(&created.command_id, &stored)
+            .await
+            .unwrap();
+
+        let lease = server
+            .acquire_single_lease("delayed-storage")
+            .await
+            .unwrap()
+            .expect("delayed command lease");
+        let BodySpec::Storage {
+            storage_get_request: Some(fresh),
+            ..
+        } = lease.envelope.params
+        else {
+            panic!("leased storage params with fresh GET request");
+        };
+        assert!(
+            fresh.expiration > Utc::now() + chrono::Duration::minutes(50),
+            "leasing must replace the stale upload-time params URL"
+        );
     }
 
     /// Test response submission and idempotency
@@ -715,6 +1289,84 @@ mod tests {
             let decoded = body.decode_inline().unwrap();
             let json: serde_json::Value = serde_json::from_slice(&decoded).unwrap();
             assert_eq!(json["result"], "success"); // Not changed
+        }
+    }
+
+    /// Regression: a failure partway through response cleanup must not strand the
+    /// command as non-terminal with an invisible response, and must not fail the
+    /// `submit_command_response` call either.
+    ///
+    /// `submit_command_response` stores the response blob, commits the terminal
+    /// registry state (the source of truth), then cleans up the lease and pending
+    /// index. Here the KV is armed to fail the pending-index scan performed by
+    /// that cleanup. Cleanup is best-effort — a leftover pending-index/lease entry
+    /// is reaped by `acquire_lease`'s terminal-state check on its next scan — so
+    /// the submit call must still return `Ok`, only logging a warning, and the
+    /// command must still be observable as `Succeeded` with its stored response.
+    /// Under the old ordering (cleanup first, state last) the same fault left the
+    /// command stuck as `Dispatched` with a stored-but-invisible response; under a
+    /// prior version of the new ordering, the cleanup error was still propagated
+    /// with `?`, failing the call despite the terminal state already being safe.
+    #[tokio::test]
+    #[tracing_test::traced_test]
+    async fn test_response_cleanup_failure_keeps_command_terminal() {
+        let server = TestCommandServer::builder()
+            .with_pull_mode()
+            .with_fault_injection()
+            .build()
+            .await;
+        let fault_kv = server
+            .fault_kv
+            .clone()
+            .expect("fault injection was requested");
+
+        // Create + lease the command. Lease acquisition scans the same pending
+        // prefix, so it must run before the fault is armed.
+        let request = test_inline_create_command("cleanup-agent", "cleanup-command");
+        let response = server.create_command(request).await.unwrap();
+        let lease = server
+            .acquire_single_lease("cleanup-agent")
+            .await
+            .unwrap()
+            .unwrap();
+
+        // Arm the fault so the pending-index cleanup scan fails during submit.
+        fault_kv.arm_pending_scan_failure();
+
+        let agent_response = test_json_success_response(&serde_json::json!({ "result": "ok" }));
+        let submit_result = server
+            .submit_command_response(&lease.command_id, agent_response)
+            .await;
+        assert!(
+            submit_result.is_ok(),
+            "cleanup failures are best-effort and must not fail submit_command_response \
+             once the terminal state is committed"
+        );
+        assert!(
+            logs_contain("Failed to clean up pending index"),
+            "a cleanup failure must still be logged as a warning"
+        );
+
+        // Despite the cleanup failure, the terminal state was committed first, so
+        // the command is visible as Succeeded with its stored response rather than
+        // stranded as Dispatched with an invisible one.
+        let status = server
+            .get_command_status(&response.command_id)
+            .await
+            .unwrap();
+        assert_eq!(
+            status.state,
+            CommandState::Succeeded,
+            "command must be terminal even though response cleanup failed"
+        );
+        let final_response = status
+            .response
+            .expect("stored response must be visible on the terminal command");
+        assert!(final_response.is_success());
+        if let CommandResponse::Success { response: body } = final_response {
+            let decoded = body.decode_inline().unwrap();
+            let json: serde_json::Value = serde_json::from_slice(&decoded).unwrap();
+            assert_eq!(json["result"], "ok");
         }
     }
 
@@ -778,6 +1430,7 @@ mod tests {
             params: BodySpec::inline(b"{}"),
             deadline: None,
             idempotency_key: None,
+            target_resource_id: None,
         };
         let result = server.create_command(invalid_request).await;
         assert!(result.is_err());
@@ -789,6 +1442,7 @@ mod tests {
             params: BodySpec::inline(b"{}"),
             deadline: None,
             idempotency_key: None,
+            target_resource_id: None,
         };
         let result = server.create_command(invalid_request).await;
         assert!(result.is_err());
@@ -854,4 +1508,97 @@ mod tests {
             assert_eq!(message, "Something went wrong");
         }
     }
+}
+
+/// Two racing submitters with OPPOSITE outcomes (a redelivered execution
+/// racing the original whose lease expired): exactly one wins the terminal
+/// transition, the loser is swallowed as a duplicate, and the recorded state
+/// matches the served response — a terminal record is never overwritten.
+#[cfg(feature = "test-utils")]
+#[tokio::test]
+async fn concurrent_opposite_submits_keep_state_and_response_consistent() {
+    use alien_commands::test_utils::*;
+    use alien_commands::types::{CommandResponse, CommandState};
+
+    let server = TestCommandServer::builder().with_pull_mode().build().await;
+
+    let request = test_inline_create_command("pull-agent", "flaky-op");
+    let created = server.create_command(request).await.unwrap();
+    let lease = server
+        .acquire_single_lease("pull-agent")
+        .await
+        .unwrap()
+        .unwrap();
+
+    let success = test_json_success_response(&serde_json::json!({ "ok": true }));
+    let failure = CommandResponse::Error {
+        code: "HANDLER_ERROR".to_string(),
+        message: "boom".to_string(),
+        details: None,
+    };
+
+    // Race the two submissions.
+    let (a, b) = tokio::join!(
+        server.submit_command_response(&lease.command_id, success),
+        server.submit_command_response(&lease.command_id, failure),
+    );
+    // Both calls succeed: the loser is silently treated as a duplicate.
+    a.unwrap();
+    b.unwrap();
+
+    let status = server
+        .get_command_status(&created.command_id)
+        .await
+        .unwrap();
+    assert!(status.state.is_terminal());
+    let response = status.response.expect("terminal command serves a response");
+    match (&status.state, &response) {
+        (CommandState::Succeeded, CommandResponse::Success { .. }) => {}
+        (CommandState::Failed, CommandResponse::Error { .. }) => {}
+        (state, response) => {
+            panic!("torn terminal record: state {state:?} does not match response {response:?}")
+        }
+    }
+}
+
+/// The deadline reaper terminates commands nothing else would ever touch:
+/// a Pending pull command past its deadline (with its pending-index entry
+/// cleaned) — the same path also covers PendingUpload commands whose params
+/// upload never completed, since the reaper transitions ANY non-terminal
+/// state.
+#[cfg(feature = "test-utils")]
+#[tokio::test]
+async fn deadline_reaper_expires_overdue_commands() {
+    use alien_commands::test_utils::*;
+    use alien_commands::types::CommandState;
+
+    let server = TestCommandServer::builder().with_pull_mode().build().await;
+
+    // A multi-second deadline matters here: the index entry gets a KV TTL,
+    // and the regression this guards is the TTL expiring AT the deadline —
+    // hiding the entry from the reaper's scan exactly when it became due.
+    let mut request = test_inline_create_command("pull-agent", "slow-op");
+    request.deadline = Some(chrono::Utc::now() + chrono::Duration::seconds(2));
+    let created = server.create_command(request).await.unwrap();
+    assert_eq!(created.state, CommandState::Pending);
+
+    tokio::time::sleep(std::time::Duration::from_millis(2600)).await;
+    let expired = server.command_server.reap_expired_commands().await.unwrap();
+    assert_eq!(expired, 1, "the overdue command must be reaped");
+
+    let status = server
+        .get_command_status(&created.command_id)
+        .await
+        .unwrap();
+    assert_eq!(status.state, CommandState::Expired);
+
+    // The pending index entry is gone: a poller can no longer lease it.
+    let lease = server.acquire_single_lease("pull-agent").await.unwrap();
+    assert!(lease.is_none(), "expired command must not be leasable");
+
+    // A second reap pass is a no-op (index entry deleted).
+    assert_eq!(
+        server.command_server.reap_expired_commands().await.unwrap(),
+        0
+    );
 }

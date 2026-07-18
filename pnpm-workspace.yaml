@@ -3,4 +3,5 @@ packages:
   - client-sdks/platform/typescript
   - client-sdks/manager/typescript
   - crates/alien-test-app
+  - crates/alien-bindings-node
   - tests/e2e/test-apps/*

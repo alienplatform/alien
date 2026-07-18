@@ -11,14 +11,19 @@ let value: CommandStatusResponse = {
   attempt: 289238,
   commandId: "<id>",
   state: "DISPATCHED",
+  target: {
+    resourceId: "<id>",
+    resourceType: "daemon",
+  },
 };
 ```
 
 ## Fields
 
-| Field                                             | Type                                              | Required                                          | Description                                       |
-| ------------------------------------------------- | ------------------------------------------------- | ------------------------------------------------- | ------------------------------------------------- |
-| `attempt`                                         | *number*                                          | :heavy_check_mark:                                | Current attempt number                            |
-| `commandId`                                       | *string*                                          | :heavy_check_mark:                                | Command identifier                                |
-| `response`                                        | *models.CommandResponse*                          | :heavy_minus_sign:                                | N/A                                               |
-| `state`                                           | [models.CommandState](../models/commandstate.md)  | :heavy_check_mark:                                | Command states in the Commands protocol lifecycle |
+| Field                                                       | Type                                                        | Required                                                    | Description                                                 |
+| ----------------------------------------------------------- | ----------------------------------------------------------- | ----------------------------------------------------------- | ----------------------------------------------------------- |
+| `attempt`                                                   | *number*                                                    | :heavy_check_mark:                                          | Current attempt number                                      |
+| `commandId`                                                 | *string*                                                    | :heavy_check_mark:                                          | Command identifier                                          |
+| `response`                                                  | *models.CommandResponse*                                    | :heavy_minus_sign:                                          | N/A                                                         |
+| `state`                                                     | [models.CommandState](../models/commandstate.md)            | :heavy_check_mark:                                          | Command states in the Commands protocol lifecycle           |
+| `target`                                                    | [models.CommandTarget](../models/commandtarget.md)          | :heavy_check_mark:                                          | Identifies the specific resource a command is addressed to. |

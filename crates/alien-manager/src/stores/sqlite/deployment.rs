@@ -7,8 +7,8 @@ use std::sync::Arc;
 use tracing::warn;
 
 use alien_core::{
-    import::ImportSourceKind, DeploymentModel, EnvironmentInfo, EnvironmentVariable, Platform,
-    RuntimeMetadata, StackState,
+    import::ImportSourceKind, DeploymentModel, DeploymentStatus, EnvironmentInfo,
+    EnvironmentVariable, Platform, RuntimeMetadata, StackState,
 };
 use alien_error::{AlienError, Context, GenericError, IntoAlienError};
 
@@ -48,6 +48,8 @@ impl SqliteDeploymentStore {
         "delete-failed",
     ];
     const SETUP_TEARDOWN_STATUSES: [&'static str; 2] = ["teardown-required", "teardown-failed"];
+    const RUNTIME_DELETE_STATUSES: [&'static str; 3] =
+        ["delete-pending", "deleting", "delete-failed"];
     const RUNNING_STATUS: &'static str = "running";
 
     pub fn new(db: Arc<SqliteDatabase>) -> Self {
@@ -62,6 +64,18 @@ impl SqliteDeploymentStore {
             && !reported_state.retry_requested
             && Self::FAILED_STATUSES.contains(&deployment.status.as_str())
             && reported_state.status.is_failed()
+    }
+
+    fn is_delete_progress(status: DeploymentStatus) -> bool {
+        matches!(
+            status,
+            DeploymentStatus::DeletePending
+                | DeploymentStatus::Deleting
+                | DeploymentStatus::DeleteFailed
+                | DeploymentStatus::TeardownRequired
+                | DeploymentStatus::TeardownFailed
+                | DeploymentStatus::Deleted
+        )
     }
 
     fn acquire_status_condition(statuses: Option<&Vec<String>>) -> sea_query::Condition {
@@ -1138,9 +1152,18 @@ impl DeploymentStore for SqliteDeploymentStore {
         let status_str = serde_json::to_value(&state.status)
             .and_then(|v| Ok(v.as_str().unwrap_or("pending").to_string()))
             .unwrap_or_else(|_| "pending".to_string());
-
         // Check if deployment completed (current matches desired)
         let deployment = self.get_deployment(caller, &data.deployment_id).await?;
+        let status_update: sea_query::SimpleExpr = if Self::is_delete_progress(state.status) {
+            status_str.clone().into()
+        } else {
+            Expr::case(
+                Expr::col(Deployments::Status).is_in(Self::RUNTIME_DELETE_STATUSES),
+                Expr::col(Deployments::Status),
+            )
+            .finally(status_str.clone())
+            .into()
+        };
         let deployment_completed = deployment
             .as_ref()
             .and_then(|d| d.desired_release_id.as_ref())
@@ -1170,7 +1193,10 @@ impl DeploymentStore for SqliteDeploymentStore {
             let mut query = Query::update();
             query
                 .table(Deployments::Table)
-                .value(Deployments::Status, &status_str as &str)
+                // A delete request can arrive while the current manager step owns
+                // the lock. Persist that step's latest resource state without
+                // allowing its stale status to erase the deletion request.
+                .value(Deployments::Status, status_update)
                 .value(
                     Deployments::DeploymentProtocolVersion,
                     state.protocol_version as i64,

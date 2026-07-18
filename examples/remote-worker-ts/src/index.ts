@@ -7,16 +7,16 @@ const tools: Record<string, { description: string; execute: (params: any) => Pro
   "read-file": {
     description: "Read a file from the customer's private workspace",
     execute: async ({ path }: { path: string }) => {
-      const store = await storage("files")
-      const { data } = await store.get(path)
+      const store = storage("files")
+      const data = await store.get(path)
       return { content: new TextDecoder().decode(data) }
     },
   },
   "write-file": {
     description: "Write a file to the customer's private workspace",
     execute: async ({ path, content }: { path: string; content: string }) => {
-      const store = await storage("files")
-      await store.put(path, content)
+      const store = storage("files")
+      await store.put(path, new TextEncoder().encode(content))
       return { written: true, path }
     },
   },

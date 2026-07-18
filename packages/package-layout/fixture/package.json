@@ -1,0 +1,13 @@
+{
+  "name": "package-layout-consumer",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Real npm consumer of packed @alienplatform tarballs; run.ts fills and restores dependencies for each validation run.",
+  "devDependencies": {
+    "@types/node": "24.10.4",
+    "typescript": "5.8.3"
+  },
+  "dependencies": {},
+  "overrides": {}
+}

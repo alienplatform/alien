@@ -32,10 +32,19 @@ impl StackMutation for AzureServiceBusNamespaceMutation {
             return false;
         }
 
-        // Check if we have queue resources that need Service Bus Namespace
+        // Queue resources and Worker storage triggers use Service Bus as the
+        // durable delivery hop for Azure events.
         let has_queue_resources = stack.resources.iter().any(|(_, entry)| {
             let resource_type = entry.config.resource_type();
             matches!(resource_type.as_ref(), "queue")
+                || entry
+                    .config
+                    .downcast_ref::<alien_core::Worker>()
+                    .is_some_and(|worker| {
+                        worker.triggers.iter().any(|trigger| {
+                            matches!(trigger, alien_core::WorkerTrigger::Storage { .. })
+                        })
+                    })
         });
 
         if !has_queue_resources {
@@ -87,5 +96,61 @@ impl StackMutation for AzureServiceBusNamespaceMutation {
         debug!("Added AzureServiceBusNamespace resource '{}'", namespace_id);
 
         Ok(stack)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use alien_core::{
+        EnvironmentVariablesSnapshot, ExternalBindings, StackSettings, Storage, Worker, WorkerCode,
+        WorkerTrigger,
+    };
+
+    fn deployment_config() -> DeploymentConfig {
+        DeploymentConfig::builder()
+            .stack_settings(StackSettings::default())
+            .environment_variables(EnvironmentVariablesSnapshot {
+                variables: Vec::new(),
+                hash: String::new(),
+                created_at: "2024-01-01T00:00:00Z".to_string(),
+            })
+            .allow_frozen_changes(false)
+            .external_bindings(ExternalBindings::default())
+            .build()
+    }
+
+    #[tokio::test]
+    async fn storage_trigger_adds_service_bus_namespace_without_queue_resource() {
+        let storage = Storage::new("uploads".to_string()).build();
+        let worker = Worker::new("processor".to_string())
+            .code(WorkerCode::Image {
+                image: "test:latest".to_string(),
+            })
+            .permissions("worker".to_string())
+            .trigger(WorkerTrigger::storage(
+                &storage,
+                vec!["created".to_string()],
+            ))
+            .build();
+        let stack = Stack::new("test".to_string())
+            .add(storage, ResourceLifecycle::Frozen)
+            .add(worker, ResourceLifecycle::Live)
+            .build();
+        let state = StackState::new(Platform::Azure);
+        let config = deployment_config();
+        let mutation = AzureServiceBusNamespaceMutation;
+
+        assert!(mutation.should_run(&stack, &state, &config));
+        let mutated = mutation.mutate(stack, &state, &config).await.unwrap();
+        let namespace = mutated
+            .resources
+            .get("default-service-bus-namespace")
+            .expect("storage trigger Service Bus namespace");
+
+        assert!(namespace.dependencies.contains(&ResourceRef::new(
+            alien_core::ServiceActivation::RESOURCE_TYPE,
+            "enable-servicebus",
+        )));
     }
 }

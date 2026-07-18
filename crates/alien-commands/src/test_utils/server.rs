@@ -1,4 +1,5 @@
 use std::net::SocketAddr;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 
 use async_trait::async_trait;
@@ -9,7 +10,8 @@ use tempfile::TempDir;
 
 use alien_bindings::{
     providers::{kv::LocalKv, storage::LocalStorage},
-    traits::{Kv, Storage},
+    traits::{Binding, Kv, PutOptions, ScanResult, Storage},
+    ErrorData,
 };
 
 use crate::{
@@ -18,7 +20,80 @@ use crate::{
     types::*,
     Result,
 };
-use alien_core::DeploymentModel;
+
+/// A [`Kv`] decorator that can be armed to fail the pending-index scan performed
+/// during response cleanup, simulating a backend error or process failure that
+/// strikes *after* the response blob has been stored.
+///
+/// It exists to prove that `submit_command_response` commits the terminal
+/// registry state (the source of truth) *before* it touches the lease and
+/// pending index: with the fault armed, the cleanup scan fails, yet the command
+/// must still be observable as terminal with its stored response. Under the old
+/// ordering (cleanup first, state last) the same fault left the command stranded
+/// as `Dispatched` with an invisible response.
+#[derive(Debug)]
+pub struct FaultInjectingKv {
+    inner: Arc<LocalKv>,
+    fail_pending_scan: AtomicBool,
+}
+
+impl FaultInjectingKv {
+    fn new(inner: Arc<LocalKv>) -> Self {
+        Self {
+            inner,
+            fail_pending_scan: AtomicBool::new(false),
+        }
+    }
+
+    /// Arm the fault: subsequent `scan_prefix` calls over a `target:…` (pending
+    /// index) prefix fail. Acquire leases *before* arming — lease acquisition
+    /// scans the same prefix.
+    pub fn arm_pending_scan_failure(&self) {
+        self.fail_pending_scan.store(true, Ordering::SeqCst);
+    }
+}
+
+impl Binding for FaultInjectingKv {}
+
+#[async_trait]
+impl Kv for FaultInjectingKv {
+    async fn get(&self, key: &str) -> alien_bindings::Result<Option<Vec<u8>>> {
+        self.inner.get(key).await
+    }
+
+    async fn put(
+        &self,
+        key: &str,
+        value: Vec<u8>,
+        options: Option<PutOptions>,
+    ) -> alien_bindings::Result<bool> {
+        self.inner.put(key, value, options).await
+    }
+
+    async fn delete(&self, key: &str) -> alien_bindings::Result<()> {
+        self.inner.delete(key).await
+    }
+
+    async fn exists(&self, key: &str) -> alien_bindings::Result<bool> {
+        self.inner.exists(key).await
+    }
+
+    async fn scan_prefix(
+        &self,
+        prefix: &str,
+        limit: Option<usize>,
+        cursor: Option<String>,
+    ) -> alien_bindings::Result<ScanResult> {
+        if self.fail_pending_scan.load(Ordering::SeqCst) && prefix.starts_with("target:") {
+            return Err(alien_error::AlienError::new(ErrorData::KvOperationFailed {
+                operation: "scan_prefix".to_string(),
+                key: prefix.to_string(),
+                reason: "injected fault: pending-index scan failure".to_string(),
+            }));
+        }
+        self.inner.scan_prefix(prefix, limit, cursor).await
+    }
+}
 
 /// Test server for command protocol integration testing
 ///
@@ -67,6 +142,15 @@ pub struct TestCommandServer {
     pub storage: Arc<LocalStorage>,
     /// Command dispatcher (for testing push scenarios)
     pub dispatcher: Arc<dyn CommandDispatcher>,
+    /// In-memory command registry (register extra targets for multi-target tests)
+    pub registry: Arc<InMemoryCommandRegistry>,
+    /// The auto-registered default command target
+    /// ("test-worker" in push mode, "test-daemon" in pull mode)
+    pub default_target: CommandTarget,
+    /// The fault-injecting KV decorator wrapping `kv`, present only when the
+    /// server was built with [`TestCommandServerBuilder::with_fault_injection`].
+    /// Arm it to exercise mid-cleanup failures in `submit_command_response`.
+    pub fault_kv: Option<Arc<FaultInjectingKv>>,
     /// Temporary directory (kept alive for the test duration)
     _temp_dir: TempDir,
 }
@@ -142,10 +226,15 @@ impl TestCommandServer {
             .await
     }
 
-    /// Acquire a single lease for a polling deployment
+    /// Acquire a single lease for a polling deployment, as the server's
+    /// auto-registered default target.
     pub async fn acquire_single_lease(&self, deployment_id: &str) -> Result<Option<LeaseInfo>> {
-        let mut lease_request = LeaseRequest::default();
-        lease_request.deployment_id = deployment_id.to_string();
+        let lease_request = LeaseRequest {
+            deployment_id: deployment_id.to_string(),
+            target: self.default_target.clone(),
+            max_leases: 1,
+            lease_seconds: 60,
+        };
         let response = self.acquire_lease(deployment_id, lease_request).await?;
         Ok(response.leases.into_iter().next())
     }
@@ -259,6 +348,7 @@ pub struct TestCommandServerBuilder {
     kv: Option<Arc<LocalKv>>,
     storage: Option<Arc<LocalStorage>>,
     dispatcher: Option<Arc<dyn CommandDispatcher>>,
+    fault_injection: bool,
 }
 
 impl TestCommandServerBuilder {
@@ -267,7 +357,15 @@ impl TestCommandServerBuilder {
             kv: None,
             storage: None,
             dispatcher: None,
+            fault_injection: false,
         }
+    }
+
+    /// Wrap the KV store in a [`FaultInjectingKv`] so tests can simulate a
+    /// backend/process failure partway through response cleanup.
+    pub fn with_fault_injection(mut self) -> Self {
+        self.fault_injection = true;
+        self
     }
 
     /// Use a specific KV instance (useful for sharing state between tests)
@@ -320,16 +418,39 @@ impl TestCommandServerBuilder {
             .dispatcher
             .unwrap_or_else(|| Arc::new(MockDispatcher::new()) as Arc<dyn CommandDispatcher>);
 
-        // Determine deployment model based on dispatcher
-        // If using MockDispatcher, use its mode; otherwise default to Pull
-        let deployment_model = dispatcher
+        // Determine worker delivery mode based on dispatcher: if using a
+        // MockDispatcher, its mode stands in for the production derivation
+        // (platform push path + stack deployment model); otherwise Pull.
+        let worker_delivery_mode = dispatcher
             .as_any()
             .downcast_ref::<MockDispatcher>()
             .map(|d| match d.mode() {
-                MockDispatcherMode::Push => DeploymentModel::Push,
-                MockDispatcherMode::Pull => DeploymentModel::Pull,
+                MockDispatcherMode::Push => CommandDeliveryMode::Push,
+                MockDispatcherMode::Pull => CommandDeliveryMode::Pull,
             })
-            .unwrap_or(DeploymentModel::Pull);
+            .unwrap_or(CommandDeliveryMode::Pull);
+
+        // Auto-register a default command target so single-target shorthand
+        // resolution works out of the box: a Push-mode server gets a Worker
+        // (the only push-capable target type), a Pull-mode server a Daemon.
+        let registry = Arc::new(InMemoryCommandRegistry::with_worker_delivery_mode(
+            worker_delivery_mode,
+        ));
+        let default_target = match worker_delivery_mode {
+            CommandDeliveryMode::Push => {
+                CommandTarget::new("test-worker", CommandTargetType::Worker)
+            }
+            CommandDeliveryMode::Pull => {
+                CommandTarget::new("test-daemon", CommandTargetType::Daemon)
+            }
+        };
+        registry
+            .register_target(
+                default_target.resource_id.clone(),
+                default_target.resource_type,
+            )
+            .await
+            .expect("default target id is well-formed");
 
         // Find a free port
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
@@ -344,13 +465,22 @@ impl TestCommandServerBuilder {
             base.join("v1/").expect("Valid URL join").to_string()
         };
 
+        // When fault injection is requested, the CommandServer talks to the KV
+        // through the decorator while the harness keeps the inner LocalKv handle
+        // (for inspection) and exposes the decorator (for arming faults).
+        let (kv_for_server, fault_kv): (Arc<dyn Kv>, Option<Arc<FaultInjectingKv>>) =
+            if self.fault_injection {
+                let wrapper = Arc::new(FaultInjectingKv::new(kv.clone()));
+                (wrapper.clone() as Arc<dyn Kv>, Some(wrapper))
+            } else {
+                (kv.clone() as Arc<dyn Kv>, None)
+            };
+
         let command_server = Arc::new(CommandServer::new(
-            kv.clone() as Arc<dyn Kv>,
+            kv_for_server,
             storage.clone() as Arc<dyn Storage>,
             dispatcher.clone(),
-            Arc::new(InMemoryCommandRegistry::with_deployment_model(
-                deployment_model,
-            )),
+            registry.clone(),
             command_base_url,
             b"test-signing-key-for-commands".to_vec(),
         ));
@@ -382,6 +512,9 @@ impl TestCommandServerBuilder {
             kv,
             storage,
             dispatcher,
+            registry,
+            default_target,
+            fault_kv,
             _temp_dir: temp_dir,
         }
     }

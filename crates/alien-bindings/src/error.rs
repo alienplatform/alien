@@ -1,14 +1,38 @@
 use alien_error::{AlienError, AlienErrorData, ContextError};
 use serde::{Deserialize, Serialize};
 
+/// Derives the exact `ALIEN_<NAME>_BINDING` environment variable name that would have
+/// configured a binding with the given name — the same derivation `alien-core` uses to
+/// generate binding env vars, so this is guaranteed to match `parse_bindings_from_env`'s
+/// reverse parsing (see `provider.rs`).
+pub fn binding_env_var(binding_name: &str) -> String {
+    alien_core::bindings::binding_env_var_name(binding_name)
+}
+
 /// Errors related to alien-bindings operations.
 #[derive(Debug, Clone, AlienErrorData, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub enum ErrorData {
+    /// No binding configuration was found for the requested binding name (the
+    /// `ALIEN_<NAME>_BINDING` environment variable was not set).
+    #[error(
+        code = "BINDING_NOT_CONFIGURED",
+        message = "No binding configured for '{binding_name}': environment variable '{env_var}' is not set",
+        retryable = "false",
+        internal = "false",
+        http_status_code = 400
+    )]
+    BindingNotConfigured {
+        /// Name of the binding that was requested
+        binding_name: String,
+        /// The exact environment variable name that would configure this binding
+        env_var: String,
+    },
+
     /// Binding provider configuration is invalid or missing.
     #[error(
         code = "BINDING_CONFIG_INVALID",
-        message = "Binding configuration invalid for binding '{binding_name}': {reason}",
+        message = "Binding configuration invalid for binding '{binding_name}' (env var '{env_var}'): {reason}",
         retryable = "false",
         internal = "false",
         http_status_code = 400
@@ -16,8 +40,27 @@ pub enum ErrorData {
     BindingConfigInvalid {
         /// Name of the binding
         binding_name: String,
+        /// The exact environment variable name that configures this binding
+        env_var: String,
         /// Specific reason why the configuration is invalid
         reason: String,
+    },
+
+    /// Binding configuration named a provider that this build does not support.
+    #[error(
+        code = "UNSUPPORTED_BINDING_PROVIDER",
+        message = "Binding '{binding_name}' (env var '{env_var}') uses unsupported provider '{provider}'",
+        retryable = "false",
+        internal = "false",
+        http_status_code = 501
+    )]
+    UnsupportedBindingProvider {
+        /// Name of the binding
+        binding_name: String,
+        /// The exact environment variable name that configures this binding
+        env_var: String,
+        /// The provider string that is not supported
+        provider: String,
     },
 
     /// Storage operation failed due to provider issues.
@@ -262,21 +305,6 @@ pub enum ErrorData {
     SerializationFailed {
         /// Human-readable error message
         message: String,
-    },
-
-    /// Operation is not implemented yet.
-    #[error(
-        code = "NOT_IMPLEMENTED",
-        message = "Operation '{operation}' is not implemented: {reason}",
-        retryable = "false",
-        internal = "false",
-        http_status_code = 501
-    )]
-    NotImplemented {
-        /// Name of the operation that is not implemented
-        operation: String,
-        /// Reason why the operation is not implemented
-        reason: String,
     },
 
     /// Response format from provider API is unexpected or missing required fields.
@@ -616,6 +644,28 @@ pub enum ErrorData {
         /// Description of the configuration issue
         message: String,
     },
+}
+
+impl ErrorData {
+    /// Construct a [`ErrorData::BindingConfigInvalid`] for `binding_name`,
+    /// deriving the exact `ALIEN_<NAME>_BINDING` env var name internally so call
+    /// sites cannot forget it (the omission that repeatedly broke bindings).
+    pub fn config_invalid(binding_name: &str, reason: impl Into<String>) -> Self {
+        ErrorData::BindingConfigInvalid {
+            env_var: binding_env_var(binding_name),
+            binding_name: binding_name.to_string(),
+            reason: reason.into(),
+        }
+    }
+
+    /// Construct a [`ErrorData::BindingNotConfigured`] for `binding_name`,
+    /// deriving the exact `ALIEN_<NAME>_BINDING` env var name internally.
+    pub fn not_configured(binding_name: &str) -> Self {
+        ErrorData::BindingNotConfigured {
+            binding_name: binding_name.to_string(),
+            env_var: binding_env_var(binding_name),
+        }
+    }
 }
 
 /// Convenient alias with default error type `ErrorData`.

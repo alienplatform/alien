@@ -90,7 +90,17 @@ pub(crate) enum Commands {
     DeploymentId,
     Name,
     State,
-    DeploymentModel,
+    /// How the command is delivered to its target (Push/Pull).
+    ///
+    /// This is the delivery-mode column. The physical
+    /// column keeps its historical name `deployment_model` (via the `iden`
+    /// override) so no data migration is needed — `DeploymentModel` and
+    /// `CommandDeliveryMode` both serialize to the same `"push"`/`"pull"`
+    /// strings, so existing rows read unchanged. Renaming the column outright
+    /// would require a non-idempotent `RENAME COLUMN` for zero real benefit,
+    /// so we rename in code only (least-magic option).
+    #[iden = "deployment_model"]
+    DeliveryMode,
     Attempt,
     Deadline,
     CreatedAt,
@@ -99,6 +109,12 @@ pub(crate) enum Commands {
     RequestSizeBytes,
     ResponseSizeBytes,
     Error,
+    /// The command's resolved target resource id. NULL on rows
+    /// written before this migration (legacy deployment-scoped commands).
+    TargetResourceId,
+    /// The command's resolved target resource type (worker/container/daemon).
+    /// NULL on legacy rows.
+    TargetResourceType,
 }
 
 /// Run all table creation migrations.
@@ -260,7 +276,7 @@ pub async fn run_migrations(db: &SqliteDatabase) -> Result<(), AlienError> {
             .col(ColumnDef::new(Commands::DeploymentId).text().not_null())
             .col(ColumnDef::new(Commands::Name).text().not_null())
             .col(ColumnDef::new(Commands::State).text().not_null())
-            .col(ColumnDef::new(Commands::DeploymentModel).text().not_null())
+            .col(ColumnDef::new(Commands::DeliveryMode).text().not_null())
             .col(
                 ColumnDef::new(Commands::Attempt)
                     .integer()
@@ -279,6 +295,8 @@ pub async fn run_migrations(db: &SqliteDatabase) -> Result<(), AlienError> {
             .col(ColumnDef::new(Commands::RequestSizeBytes).integer())
             .col(ColumnDef::new(Commands::ResponseSizeBytes).integer())
             .col(ColumnDef::new(Commands::Error).text())
+            .col(ColumnDef::new(Commands::TargetResourceId).text())
+            .col(ColumnDef::new(Commands::TargetResourceType).text())
             .build(SqliteQueryBuilder),
     ];
 
@@ -321,6 +339,11 @@ pub async fn run_migrations(db: &SqliteDatabase) -> Result<(), AlienError> {
         "ALTER TABLE releases ADD COLUMN project_id TEXT NOT NULL DEFAULT 'default'",
         "ALTER TABLE deployment_groups ADD COLUMN workspace_id TEXT NOT NULL DEFAULT 'default'",
         "ALTER TABLE deployment_groups ADD COLUMN project_id TEXT NOT NULL DEFAULT 'default'",
+        // Command target columns. Nullable — legacy rows written
+        // before this migration carry NULL and are treated as pre-target
+        // commands (readable in status, never leasable/dispatchable).
+        "ALTER TABLE commands ADD COLUMN target_resource_id TEXT",
+        "ALTER TABLE commands ADD COLUMN target_resource_type TEXT",
     ];
     for sql in alter_statements {
         if let Err(e) = conn.execute(sql, ()).await {

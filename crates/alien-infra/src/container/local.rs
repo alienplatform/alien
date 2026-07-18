@@ -13,14 +13,29 @@ use alien_core::{
     Container, ContainerCode, ContainerHeartbeatData, ContainerOutputs, ContainerStatus,
     EnvironmentVariable, EnvironmentVariableType, HeartbeatBackend, Kv,
     LocalContainerHeartbeatData, LocalRuntimeUnitKind, LocalRuntimeUnitStatus, ObservedHealth,
-    Platform, Postgres, ProviderLifecycleState, ResourceHeartbeat, ResourceHeartbeatData,
+    Platform, Postgres, ProviderLifecycleState, Queue, ResourceHeartbeat, ResourceHeartbeatData,
     ResourceOutputs as CoreResourceOutputs, ResourceStatus, Storage, Vault,
     WorkloadHeartbeatStatus,
 };
 use alien_error::{AlienError, Context, IntoAlienError as _};
-use alien_local::{ContainerConfig, ContainerInfo};
+use alien_local::{BindMount, ContainerConfig, ContainerInfo, LocalQueueManager};
 use alien_macros::controller;
 use chrono::Utc;
+
+/// Remove the vault-load secret pointers (`ALIEN_SECRETS` /
+/// `ALIEN_RUNTIME_SECRETS`) from a projected environment.
+///
+/// Containers never receive `ALIEN_SECRETS` anymore
+/// (`SecretDelivery::resolve(Local, Container)` is `NativeProjection` on every
+/// platform), so this is defense in depth: it keeps a pointer minted by an
+/// OLDER manager's env snapshot — or by any future regression — out of the
+/// runtime-less container, whose secrets arrive as concrete env vars. The
+/// local daemon path strips the same two vars before spawning its process;
+/// this keeps the container path symmetric.
+fn strip_vault_secret_pointers(env_vars: &mut std::collections::HashMap<String, String>) {
+    env_vars.remove(alien_core::ENV_ALIEN_SECRETS);
+    env_vars.remove(alien_core::ENV_ALIEN_RUNTIME_SECRETS);
+}
 
 fn matches_environment_target(resource_id: &str, target_resources: &Option<Vec<String>>) -> bool {
     match target_resources {
@@ -45,6 +60,30 @@ fn applicable_secret_environment_variables<'a>(
         .filter(|var| var.var_type == EnvironmentVariableType::Secret)
         .filter(|var| matches_environment_target(resource_id, &var.target_resources))
         .collect()
+}
+
+fn local_queue_bind_mount(
+    queue_manager: Option<&LocalQueueManager>,
+    resource_id: &str,
+) -> Result<BindMount> {
+    let queue_manager = queue_manager.ok_or_else(|| {
+        AlienError::new(ErrorData::LocalServicesNotAvailable {
+            service_name: "LocalQueueManager".to_string(),
+        })
+    })?;
+    let host_path = queue_manager.get_queue_path(resource_id).context(
+        ErrorData::ResourceControllerConfigError {
+            resource_id: resource_id.to_string(),
+            message: "Failed to resolve local Queue path for container mount".to_string(),
+        },
+    )?;
+
+    Ok(BindMount {
+        host_path,
+        container_path: format!("/mnt/queue/{resource_id}"),
+        resource_id: resource_id.to_string(),
+        shared_with_host_workloads: true,
+    })
 }
 
 /// Local Container controller.
@@ -86,12 +125,17 @@ impl LocalContainerController {
                 })
             })?;
 
-        // Determine the image
+        // Determine the image. Source-built containers are supported: `alien
+        // build` compiles the source and rewrites `code` to an image whose
+        // compiled binary is the direct entrypoint. Reaching the controller
+        // with unbuilt source means the build step was skipped.
         let image = match &config.code {
             ContainerCode::Image { image } => image.clone(),
             ContainerCode::Source { .. } => {
                 return Err(AlienError::new(ErrorData::ResourceConfigInvalid {
-                    message: "Local platform does not support building from source. Use pre-built images.".to_string(),
+                    message:
+                        "Container still has unbuilt source code. Run 'alien build' first; it compiles the source into an image the controller can run."
+                            .to_string(),
                     resource_id: Some(config.id.clone()),
                 }));
             }
@@ -100,7 +144,7 @@ impl LocalContainerController {
         // Determine if this container should be exposed publicly.
         let expose_public = !config.public_endpoints.is_empty();
 
-        // First, collect bind mounts for linked filesystem resources (Storage, KV, Vault)
+        // First, collect bind mounts for linked filesystem resources (Storage, KV, Queue, Vault)
         // We need to know the container paths before building env vars so we can rewrite bindings
         let mut bind_mounts = Vec::new();
 
@@ -124,6 +168,7 @@ impl LocalContainerController {
                 host_path: tmp_host_path,
                 container_path: "/tmp".to_string(),
                 resource_id: "tmp".to_string(),
+                shared_with_host_workloads: false,
             });
         }
 
@@ -141,6 +186,7 @@ impl LocalContainerController {
                                 host_path,
                                 container_path: format!("/mnt/storage/{}", linked_resource_id),
                                 resource_id: linked_resource_id.to_string(),
+                                shared_with_host_workloads: true,
                             });
                         }
                     }
@@ -153,9 +199,18 @@ impl LocalContainerController {
                                 host_path,
                                 container_path: format!("/mnt/kv/{}", linked_resource_id),
                                 resource_id: linked_resource_id.to_string(),
+                                shared_with_host_workloads: true,
                             });
                         }
                     }
+                }
+                // Check if it's a Queue resource
+                else if resource_config.downcast_ref::<Queue>().is_some() {
+                    let queue_manager = ctx.service_provider.get_local_queue_manager();
+                    bind_mounts.push(local_queue_bind_mount(
+                        queue_manager.as_deref(),
+                        linked_resource_id,
+                    )?);
                 }
                 // Check if it's a Vault resource
                 else if resource_config.downcast_ref::<Vault>().is_some() {
@@ -165,6 +220,7 @@ impl LocalContainerController {
                                 host_path,
                                 container_path: format!("/mnt/vault/{}", linked_resource_id),
                                 resource_id: linked_resource_id.to_string(),
+                                shared_with_host_workloads: true,
                             });
                         }
                     }
@@ -172,10 +228,16 @@ impl LocalContainerController {
             }
         }
 
-        // Build environment variables using EnvironmentVariableBuilder
-        // This populates binding env vars with HOST paths
+        // Build environment variables using EnvironmentVariableBuilder.
+        // Local containers run runtime-less (the app binary is the direct entrypoint), so they get
+        // the same env surface as any linked workload — standard Alien vars, the public-endpoint
+        // metadata, and linked-resource bindings (with HOST paths, rewritten to container paths
+        // below). The container's own self-binding and binding-name var are injected by the
+        // container manager at spawn, so there is no container "runtime" env plan here.
         let mut env_vars = EnvironmentVariableBuilder::try_new(&config.environment)?
-            .add_container_runtime_env_vars(ctx, &config.id)?
+            .add_standard_alien_env_vars(ctx)?
+            .add_direct_monitoring_auth_headers(ctx)
+            .add_current_resource_public_endpoint(ctx, &config.id)?
             .add_linked_resources(&config.links, ctx, &config.id)
             .await?
             .build();
@@ -186,6 +248,9 @@ impl LocalContainerController {
         ) {
             env_vars.insert(var.name.clone(), var.value.clone());
         }
+        // Monitoring credentials are controller-owned and must win over a
+        // same-name value from the deployment environment snapshot.
+        env_vars.extend(crate::core::direct_monitoring_auth_headers(ctx));
 
         // Local Postgres inlines its password in the binding (no secret store) and `get_binding_params`
         // strips it from the synced copy, so re-resolve the full binding from the manager's 0600
@@ -232,6 +297,12 @@ impl LocalContainerController {
         // Containers cannot use "localhost" to reach services on the host machine
         local_utils::rewrite_localhost_urls_for_container(&mut env_vars)?;
 
+        // Strip the vault-load pointer: a runtime-less local container has its
+        // secrets delivered as concrete env vars, so `ALIEN_SECRETS` is dead
+        // weight that would otherwise leak into the container env. Mirrors the
+        // local daemon spawn path.
+        strip_vault_secret_pointers(&mut env_vars);
+
         // Build the container config
         let ports: Vec<u16> = config.ports.iter().map(|p| p.port).collect();
 
@@ -249,6 +320,9 @@ impl LocalContainerController {
                 .map(|ps| ps.mount_path.clone()),
             volume_size: config.persistent_storage.as_ref().map(|ps| ps.size.clone()),
             bind_mounts,
+            // For pulls from the manager's registry proxy (source-built
+            // container images in pull deployments).
+            proxy_token: ctx.deployment_config.deployment_token.clone(),
         };
 
         // Start the container
@@ -566,4 +640,69 @@ fn emit_local_container_heartbeat(
         )),
         raw: vec![],
     });
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::collections::HashMap;
+
+    #[test]
+    fn local_queue_mount_requires_queue_manager() {
+        let error = local_queue_bind_mount(None, "jobs")
+            .expect_err("a linked Queue must not silently skip its container mount");
+
+        assert_eq!(error.code, "LOCAL_SERVICES_NOT_AVAILABLE");
+        assert!(error.message.contains("LocalQueueManager"));
+    }
+
+    #[test]
+    fn local_queue_mount_reports_missing_queue_path() {
+        let state_dir = tempfile::tempdir().expect("tempdir");
+        let queue_manager = LocalQueueManager::new(state_dir.path().to_path_buf());
+
+        let error = local_queue_bind_mount(Some(&queue_manager), "jobs")
+            .expect_err("a linked Queue without local state must fail before container startup");
+
+        assert_eq!(error.code, "RESOURCE_CONTROLLER_CONFIG_ERROR");
+        assert!(error.message.contains("jobs"));
+        assert!(error.message.contains("Failed to resolve local Queue path"));
+    }
+
+    #[test]
+    fn strips_vault_secret_pointers_but_keeps_delivered_secrets_and_plain_vars() {
+        // A runtime-less local container env: the vault-load pointers plus the
+        // concretely-delivered secrets and ordinary vars they exist alongside.
+        let mut env_vars = HashMap::from([
+            (
+                alien_core::ENV_ALIEN_SECRETS.to_string(),
+                "{\"keys\":[\"DB_PASSWORD\"],\"hash\":\"abc\"}".to_string(),
+            ),
+            (
+                alien_core::ENV_ALIEN_RUNTIME_SECRETS.to_string(),
+                "runtime-pointer".to_string(),
+            ),
+            ("DB_PASSWORD".to_string(), "s3cret".to_string()),
+            ("APP_ENV".to_string(), "prod".to_string()),
+        ]);
+
+        strip_vault_secret_pointers(&mut env_vars);
+
+        // The vault-load pointers must be gone — they are what leaks otherwise.
+        assert!(
+            !env_vars.contains_key(alien_core::ENV_ALIEN_SECRETS),
+            "ALIEN_SECRETS must not reach the runtime-less container env"
+        );
+        assert!(
+            !env_vars.contains_key(alien_core::ENV_ALIEN_RUNTIME_SECRETS),
+            "ALIEN_RUNTIME_SECRETS must not reach the runtime-less container env"
+        );
+        // Concretely-delivered secrets and plain vars must survive untouched.
+        assert_eq!(
+            env_vars.get("DB_PASSWORD").map(String::as_str),
+            Some("s3cret")
+        );
+        assert_eq!(env_vars.get("APP_ENV").map(String::as_str), Some("prod"));
+        assert_eq!(env_vars.len(), 2);
+    }
 }

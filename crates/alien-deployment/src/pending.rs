@@ -62,7 +62,11 @@ pub async fn handle_pending(
 
     // Inject environment variables into the prepared stack for validation
     let mut mutated_stack_with_env = mutated_stack;
-    crate::helpers::inject_environment_variables(&mut mutated_stack_with_env, &config)?;
+    crate::helpers::inject_environment_variables(
+        &mut mutated_stack_with_env,
+        &config,
+        current.platform,
+    )?;
     if let Some(monitoring) = &config.monitoring {
         crate::helpers::inject_monitoring_environment_variables(
             &mut mutated_stack_with_env,

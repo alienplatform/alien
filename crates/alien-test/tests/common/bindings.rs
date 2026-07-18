@@ -10,7 +10,7 @@ use serde_json;
 use tracing::info;
 
 /// The binding name used in test app stack configurations.
-const STORAGE_BINDING: &str = "alien-storage";
+pub(super) const STORAGE_BINDING: &str = "alien-storage";
 const KV_BINDING: &str = "alien-kv";
 const VAULT_BINDING: &str = "alien-vault";
 const POSTGRES_BINDING: &str = "alien-postgres";
@@ -25,7 +25,7 @@ struct BindingTestResponse {
 }
 
 /// Helper to get the deployment URL, failing if not yet assigned.
-fn deployment_url(deployment: &TestDeployment) -> anyhow::Result<&str> {
+pub(super) fn deployment_url(deployment: &TestDeployment) -> anyhow::Result<&str> {
     deployment
         .url
         .as_deref()
@@ -415,43 +415,6 @@ pub async fn check_managed_secret(deployment: &TestDeployment) -> anyhow::Result
     }
 
     info!("Managed secret check passed");
-    Ok(())
-}
-
-// ---------------------------------------------------------------------------
-// Events
-// ---------------------------------------------------------------------------
-
-/// Check event handler registration: GET /events/list
-pub async fn check_events(deployment: &TestDeployment) -> anyhow::Result<()> {
-    let url = deployment_url(deployment)?;
-    info!("Checking events");
-
-    let resp = reqwest::Client::new()
-        .get(format!("{}/events/list", url))
-        .send()
-        .await
-        .context("Events list request failed")?;
-
-    let status = resp.status();
-    if !status.is_success() {
-        let body = resp.text().await.unwrap_or_default();
-        bail!("Events list returned {}: {}", status, body);
-    }
-
-    let data: serde_json::Value = resp
-        .json()
-        .await
-        .context("Failed to parse events response")?;
-    // Verify the response has event arrays (even if empty, the handler is registered)
-    if data.get("storageEvents").is_none() && data.get("queueMessages").is_none() {
-        bail!(
-            "Events response missing storageEvents/queueMessages: {:?}",
-            data
-        );
-    }
-
-    info!("Events check passed");
     Ok(())
 }
 

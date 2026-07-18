@@ -5,8 +5,8 @@
 //! 2. Correctly loads bindings from managers
 //! 3. Graceful shutdown works correctly
 //!
-//! Note: KV is tested separately in kv_integration.rs because sled creates
-//! the database directory on open, not during create_kv().
+//! Note: KV is tested separately in kv_integration.rs because the `LocalKv`
+//! binding creates its database file on open, not during create_kv().
 
 use alien_bindings::providers::kv::local::LocalKv;
 use alien_bindings::traits::{BindingsProviderApi, PutOptions};
@@ -33,8 +33,8 @@ async fn test_full_local_workflow() {
         .await
         .unwrap();
 
-    // For KV, we need to open it first to create the database directory
-    // (sled creates the directory, not the manager)
+    // For KV, we need to open it first to create the database file
+    // (the LocalKv binding creates the file, not the manager)
     let kv_path = provider.kv_manager().create_kv("test-kv").await.unwrap();
     {
         let _kv = LocalKv::new(kv_path).await.unwrap();

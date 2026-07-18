@@ -2,11 +2,11 @@
 name = "alien-sdk"
 version.workspace = true
 edition = "2021"
-description = "Alien SDK for Rust — cloud-agnostic bindings for storage, KV, queues, vault, and more"
+description = "Alien SDK for Rust — app bindings for storage, KV, queues, and vaults"
 license-file.workspace = true
 
 [features]
-default = ["grpc", "all-platforms"]
+default = ["all-platforms"]
 all-platforms = ["alien-bindings/all-platforms"]
 aws = ["alien-bindings/aws"]
 gcp = ["alien-bindings/gcp"]
@@ -14,9 +14,31 @@ azure = ["alien-bindings/azure"]
 kubernetes = ["alien-bindings/kubernetes"]
 local = ["alien-bindings/local"]
 test = ["alien-bindings/test"]
-grpc = ["alien-bindings/grpc"]
-openapi = ["alien-bindings/openapi"]
+# The Worker app protocol (Control + WaitUntil gRPC) lives in
+# alien-worker-protocol; `worker` pulls only the app-side clients used by
+# worker::AlienContext / worker::WaitUntilContext and their tonic runtime.
+worker = ["dep:alien-worker-protocol", "dep:tonic", "dep:prost-types", "dep:tokio-stream"]
+openapi = ["alien-bindings/openapi", "dep:utoipa"]
 platform-sdk = ["alien-bindings/platform-sdk"]
 
 [dependencies]
 alien-bindings = { workspace = true }
+alien-core = { workspace = true }
+alien-error = { workspace = true }
+async-trait = { workspace = true }
+chrono = { workspace = true, features = ["serde"] }
+futures = { workspace = true }
+serde = { workspace = true, features = ["derive"] }
+serde_json = { workspace = true }
+tokio = { workspace = true, features = ["sync", "macros", "rt", "time"] }
+tracing = { workspace = true }
+uuid = { workspace = true, features = ["v4", "serde"] }
+
+# Worker protocol clients only; server implementation is excluded.
+alien-worker-protocol = { workspace = true, optional = true }
+tonic = { workspace = true, optional = true }
+prost-types = { workspace = true, optional = true }
+tokio-stream = { workspace = true, optional = true }
+
+# OpenAPI schema derives on the wait_until types
+utoipa = { workspace = true, optional = true }
