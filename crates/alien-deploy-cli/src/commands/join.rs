@@ -23,6 +23,10 @@ const IP_FORWARDING_CONFIG: &str = "net.ipv4.ip_forward = 1\n";
 const IP_FORWARDING_SYSCTL: &str = "net.ipv4.ip_forward=1";
 const DEFAULT_REGISTRATION_TIMEOUT_SECONDS: u64 = 120;
 const REGISTRATION_POLL_INTERVAL_MS: u64 = 1_000;
+#[cfg(not(test))]
+const DRAIN_POLL_INTERVAL_MS: u64 = 1_000;
+#[cfg(test)]
+const DRAIN_POLL_INTERVAL_MS: u64 = 10;
 const WRAPPED_JOIN_TOKEN_PREFIX: &str = "aj1_";
 
 #[derive(Args, Debug)]
@@ -1375,14 +1379,15 @@ async fn uninstall_joined_machine(install_root: &Path, purge: bool) -> Result<()
     let manager = native_service_manager()?;
     let label = parse_service_label(&state.service_label)?;
 
-    match request_machine_drain(&state).await {
-        Ok(true) => output::info("Drain requested for machine"),
-        Ok(false) => output::info(
-            "Drain skipped; installed machine state is missing control-plane credentials",
-        ),
-        Err(error) => output::warn(&format!(
-            "Could not request control-plane drain before uninstall: {error}"
-        )),
+    match request_machine_drain(&state).await? {
+        true => output::info("Machine drain completed"),
+        false => {
+            return Err(AlienError::new(ErrorData::ValidationError {
+                field: "machine installation state".to_string(),
+                message: "cannot leave safely because control-plane credentials are missing"
+                    .to_string(),
+            }));
+        }
     }
 
     let _ = manager.stop(ServiceStopCtx {
@@ -1435,6 +1440,13 @@ struct MachineDrainRequest<'a> {
     machine_id: &'a str,
 }
 
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct MachineDrainResponse {
+    #[serde(default)]
+    drained: Option<bool>,
+}
+
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 struct MachineLeaveRequest<'a> {
@@ -1454,31 +1466,56 @@ async fn request_machine_drain(state: &MachineInstallState) -> Result<bool> {
 
     let machine_token = read_secret_string(machine_token_path, "machine token")?;
     let drain_url = control_plane_endpoint(control_plane_url, "drain")?;
-    let response = reqwest::Client::new()
-        .post(drain_url.clone())
-        .header("Authorization", format!("Machine {machine_token}"))
-        .json(&MachineDrainRequest {
-            cluster_id,
-            machine_id,
-        })
-        .send()
-        .await
-        .into_alien_error()
-        .context(ErrorData::HttpError {
-            operation: "POST".to_string(),
-            url: drain_url.to_string(),
-            reason: "Failed to request machine drain".to_string(),
-        })?;
+    let client = reqwest::Client::new();
+    let mut waiting_reported = false;
+    loop {
+        let response = client
+            .post(drain_url.clone())
+            .header("Authorization", format!("Machine {machine_token}"))
+            .json(&MachineDrainRequest {
+                cluster_id,
+                machine_id,
+            })
+            .send()
+            .await
+            .into_alien_error()
+            .context(ErrorData::HttpError {
+                operation: "POST".to_string(),
+                url: drain_url.to_string(),
+                reason: "Failed to request machine drain".to_string(),
+            })?;
 
-    if !response.status().is_success() {
-        return Err(AlienError::new(ErrorData::HttpError {
-            operation: "POST".to_string(),
-            url: drain_url.to_string(),
-            reason: format!("server returned {}", response.status()),
-        }));
+        let status = response.status();
+        if !status.is_success() {
+            return Err(AlienError::new(ErrorData::HttpError {
+                operation: "POST".to_string(),
+                url: drain_url.to_string(),
+                reason: format!("server returned {status}"),
+            }));
+        }
+
+        let response = response
+            .json::<MachineDrainResponse>()
+            .await
+            .into_alien_error()
+            .context(ErrorData::HttpError {
+                operation: "decode".to_string(),
+                url: drain_url.to_string(),
+                reason: "Invalid machine drain response".to_string(),
+            })?;
+
+        // Older Horizon servers returned only `{ success: true }`. Current
+        // servers report completion so the service cannot be stopped while
+        // its accepted workloads are still running.
+        if response.drained.unwrap_or(true) {
+            return Ok(true);
+        }
+        if !waiting_reported {
+            output::info("Waiting for machine workloads to drain");
+            waiting_reported = true;
+        }
+        tokio::time::sleep(Duration::from_millis(DRAIN_POLL_INTERVAL_MS)).await;
     }
-
-    Ok(true)
 }
 
 async fn request_machine_leave(state: &MachineInstallState) -> Result<bool> {
@@ -1706,6 +1743,8 @@ mod tests {
     use super::*;
     use flate2::{write::GzEncoder, Compression};
     use std::io::Write;
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    use tokio::net::TcpListener;
 
     fn linux_host(systemd_runtime_dir: &Path) -> HostFacts<'_> {
         HostFacts {
@@ -1741,6 +1780,61 @@ mod tests {
             "{WRAPPED_JOIN_TOKEN_PREFIX}{}",
             URL_SAFE_NO_PAD.encode(payload.to_string())
         )
+    }
+
+    #[tokio::test]
+    async fn machine_drain_waits_for_reported_completion() {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let server = tokio::spawn(async move {
+            let mut paths = Vec::new();
+            for drained in [false, true] {
+                let (mut stream, _) = listener.accept().await.unwrap();
+                let mut request = vec![0; 4096];
+                let read = stream.read(&mut request).await.unwrap();
+                let request = String::from_utf8_lossy(&request[..read]);
+                paths.push(
+                    request
+                        .lines()
+                        .next()
+                        .unwrap()
+                        .split_whitespace()
+                        .nth(1)
+                        .unwrap()
+                        .to_string(),
+                );
+                let body = format!(r#"{{"success":true,"drained":{drained}}}"#);
+                let response = format!(
+                    "HTTP/1.1 200 OK\r\ncontent-type: application/json\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{body}",
+                    body.len()
+                );
+                stream.write_all(response.as_bytes()).await.unwrap();
+            }
+            paths
+        });
+
+        let temp = tempfile::tempdir().unwrap();
+        let token_path = temp.path().join("machine-token");
+        std::fs::write(&token_path, "machine-secret\n").unwrap();
+        let state = MachineInstallState {
+            bundle_version: "test".to_string(),
+            bundle_url: None,
+            service_label: "dev.alien.machine".to_string(),
+            executable_path: temp.path().join("machine"),
+            config_path: temp.path().join("config"),
+            join_token_path: temp.path().join("join-token"),
+            machine_id_path: None,
+            machine_token_path: Some(token_path),
+            control_plane_url: Some(format!("http://{address}/control")),
+            cluster_id: Some("cluster-test".to_string()),
+            machine_id: Some("machine-test".to_string()),
+        };
+
+        assert!(request_machine_drain(&state).await.unwrap());
+        assert_eq!(
+            server.await.unwrap(),
+            vec!["/control/drain", "/control/drain"]
+        );
     }
 
     fn test_manifest() -> MachineBundleManifest {

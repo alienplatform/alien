@@ -109,6 +109,7 @@ export * from "./machinescapacitymetric.js";
 export * from "./machinesdrainblocker.js";
 export * from "./machinesinventoryitem.js";
 export * from "./machinesjointokensummary.js";
+export * from "./machineslocaloverrideobservation.js";
 export * from "./manager.js";
 export * from "./managerdeployment.js";
 export * from "./managerdomainbindingresponse.js";

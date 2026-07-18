@@ -14,6 +14,10 @@ import {
   MachinesDrainBlocker,
   MachinesDrainBlocker$inboundSchema,
 } from "./machinesdrainblocker.js";
+import {
+  MachinesLocalOverrideObservation,
+  MachinesLocalOverrideObservation$inboundSchema,
+} from "./machineslocaloverrideobservation.js";
 
 export type Storage = {
   allocated: number;
@@ -38,6 +42,8 @@ export type MachinesInventoryItem = {
   overlayIp?: string | null | undefined;
   lastHeartbeat: string;
   horizondVersion?: string | null | undefined;
+  localOverrides: Array<MachinesLocalOverrideObservation>;
+  localOverridesObservedAt?: string | null | undefined;
   replicaCount: number;
 };
 
@@ -79,6 +85,8 @@ export const MachinesInventoryItem$inboundSchema: z.ZodType<
   overlayIp: z.nullable(z.string()).optional(),
   lastHeartbeat: z.string(),
   horizondVersion: z.nullable(z.string()).optional(),
+  localOverrides: z.array(MachinesLocalOverrideObservation$inboundSchema),
+  localOverridesObservedAt: z.nullable(z.string()).optional(),
   replicaCount: z.int(),
 });
 
