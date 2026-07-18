@@ -337,6 +337,7 @@ impl PreflightRegistry {
         registry.add_compile_time_check(Box::new(compile_time::NetworkSettingsPlatformCheck));
         registry.add_compile_time_check(Box::new(compile_time::PublicSubnetsRequiredCheck));
         registry.add_compile_time_check(Box::new(compile_time::PermissionProfilesExistCheck));
+        registry.add_compile_time_check(Box::new(compile_time::PermissionGatesValidCheck));
         registry.add_compile_time_check(Box::new(compile_time::SingleExposedPortCheck));
         registry.add_compile_time_check(Box::new(compile_time::ResourceNameLengthCheck));
         registry.add_compile_time_check(Box::new(compile_time::ResourceIdPatternCheck));
@@ -418,6 +419,9 @@ impl PreflightRegistry {
         registry.add_mutation(Box::new(mutations::RemoteStackManagementMutation));
         registry.add_mutation(Box::new(mutations::SecretsVaultMutation));
         registry.add_mutation(Box::new(mutations::ResourceLinkPermissionsMutation));
+        // Runs after link grants are authored and before service accounts are
+        // built, so accounts compile from the pruned profiles.
+        registry.add_mutation(Box::new(mutations::PermissionGateMutation));
         registry.add_mutation(Box::new(mutations::ServiceAccountMutation));
 
         // Phase 3: Service activations and platform infrastructure

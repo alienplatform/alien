@@ -9,6 +9,7 @@ pub mod frozen_resource_lifecycle;
 pub mod live_provision_permissions;
 pub mod machines_resources;
 pub mod network_required;
+pub mod permission_gates_valid;
 pub mod permission_profiles_exist;
 pub mod public_worker_lifecycle;
 pub mod resource_id_pattern;
@@ -33,6 +34,7 @@ pub use machines_resources::MachinesResourcesCheck;
 pub use network_required::{
     stack_requires_network, NetworkSettingsPlatformCheck, PublicSubnetsRequiredCheck,
 };
+pub use permission_gates_valid::PermissionGatesValidCheck;
 pub use permission_profiles_exist::PermissionProfilesExistCheck;
 pub use public_worker_lifecycle::PublicWorkerLifecycleCheck;
 pub use resource_id_pattern::ResourceIdPatternCheck;
