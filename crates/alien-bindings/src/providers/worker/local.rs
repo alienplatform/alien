@@ -1,4 +1,4 @@
-use crate::error::{ErrorData, Result};
+use crate::error::{binding_env_var, ErrorData, Result};
 use crate::traits::{Binding, Worker, WorkerInvokeRequest, WorkerInvokeResponse};
 use alien_core::bindings::LocalWorkerBinding;
 use alien_error::{Context, IntoAlienError};
@@ -27,6 +27,7 @@ impl LocalWorker {
             .clone()
             .into_value("worker", "worker_url")
             .context(ErrorData::BindingConfigInvalid {
+                env_var: binding_env_var("worker"),
                 binding_name: "worker".to_string(),
                 reason: "Failed to resolve worker_url from binding".to_string(),
             })
@@ -70,6 +71,7 @@ impl Worker for LocalWorker {
             reqwest::Method::from_bytes(request.method.as_bytes())
                 .into_alien_error()
                 .context(ErrorData::BindingConfigInvalid {
+                    env_var: binding_env_var("worker"),
                     binding_name: "worker".to_string(),
                     reason: format!("Invalid HTTP method: {}", request.method),
                 })?,

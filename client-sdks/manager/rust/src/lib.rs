@@ -32,6 +32,29 @@ pub trait SdkResultExt<T> {
     fn into_sdk_error(self) -> Result<T, AlienError<GenericError>>;
 }
 
+/// Async counterpart for operations whose OpenAPI schema does not describe
+/// every error status. Progenitor leaves those response bodies unread, so an
+/// async adapter is required to preserve the structured Alien error payload.
+pub trait SdkResultExtReadingBody<T> {
+    fn into_sdk_error_reading_body(
+        self,
+    ) -> impl std::future::Future<Output = Result<T, AlienError<GenericError>>> + Send;
+}
+
+impl<T: Send> SdkResultExtReadingBody<ResponseValue<T>> for Result<ResponseValue<T>, Error<()>> {
+    fn into_sdk_error_reading_body(
+        self,
+    ) -> impl std::future::Future<Output = Result<ResponseValue<T>, AlienError<GenericError>>> + Send
+    {
+        async move {
+            match self {
+                Ok(response) => Ok(response),
+                Err(error) => Err(convert_sdk_error_reading_body(error).await),
+            }
+        }
+    }
+}
+
 impl<T> SdkResultExt<ResponseValue<T>> for Result<ResponseValue<T>, Error<()>> {
     fn into_sdk_error(self) -> Result<ResponseValue<T>, AlienError<GenericError>> {
         self.map_err(convert_sdk_error)
@@ -55,12 +78,24 @@ pub async fn convert_sdk_error_reading_body(err: Error<()>) -> AlienError<Generi
                 .unwrap_or("Unknown")
                 .to_string();
             let url = response.url().to_string();
+            let header_request_id = response
+                .headers()
+                .get("x-request-id")
+                .and_then(|value| value.to_str().ok())
+                .map(str::to_string);
             let body = response.text().await.unwrap_or_default();
 
             if let Ok(mut api_error) = serde_json::from_str::<AlienError<GenericError>>(&body) {
                 if api_error.http_status_code.is_none() {
                     api_error.http_status_code = Some(status);
                 }
+                let body_request_id = serde_json::from_str::<serde_json::Value>(&body)
+                    .ok()
+                    .and_then(|value| value.get("requestId")?.as_str().map(str::to_string));
+                api_error.context = context_with_request_id(
+                    api_error.context,
+                    header_request_id.as_deref().or(body_request_id.as_deref()),
+                );
                 return api_error;
             }
 
@@ -83,6 +118,29 @@ pub async fn convert_sdk_error_reading_body(err: Error<()>) -> AlienError<Generi
             }
         }
         other => convert_sdk_error(other),
+    }
+}
+
+fn context_with_request_id(
+    context: Option<serde_json::Value>,
+    request_id: Option<&str>,
+) -> Option<serde_json::Value> {
+    let Some(request_id) = request_id else {
+        return context;
+    };
+
+    match context {
+        Some(serde_json::Value::Object(mut object)) => {
+            object
+                .entry("requestId")
+                .or_insert_with(|| serde_json::Value::String(request_id.to_string()));
+            Some(serde_json::Value::Object(object))
+        }
+        Some(value) => Some(serde_json::json!({
+            "requestId": request_id,
+            "details": value,
+        })),
+        None => Some(serde_json::json!({ "requestId": request_id })),
     }
 }
 
@@ -300,9 +358,11 @@ mod tests {
         let body = serde_json::json!({
             "code": "PUBLIC_SUBDOMAIN_REQUIRES_CUSTOM_DOMAIN",
             "message": "Choosing a public subdomain requires a custom project domain",
+            "hint": "Configure a custom domain first",
             "retryable": false,
             "internal": false,
             "httpStatusCode": 400,
+            "requestId": "req_body_123",
         })
         .to_string();
 
@@ -314,6 +374,11 @@ mod tests {
             "Choosing a public subdomain requires a custom project domain"
         );
         assert_eq!(error.http_status_code, Some(400));
+        assert_eq!(
+            error.hint.as_deref(),
+            Some("Configure a custom domain first")
+        );
+        assert_eq!(error.context.as_ref().unwrap()["requestId"], "req_body_123");
         assert!(!error.retryable);
         assert!(!error.internal);
     }

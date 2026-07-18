@@ -28,10 +28,7 @@
             "lambda:GetCodeSigningConfig",
             "lambda:GetFunctionEventInvokeConfig",
             "lambda:AddPermission",
-            "lambda:RemovePermission",
-            "lambda:GetEventSourceMapping",
-            "lambda:ListEventSourceMappings",
-            "lambda:UpdateEventSourceMapping"
+            "lambda:RemovePermission"
           ]
         },
         "binding": {
@@ -53,6 +50,52 @@
                 "aws:ResourceTag/${managedByTag}": "runtime"
               }
             }
+          }
+        }
+      },
+      {
+        // Event source mapping actions do not authorize against function ARNs:
+        // Get/Update evaluate against the mapping's own UUID ARN and are
+        // scoped via the lambda:FunctionArn condition instead.
+        "label": "manage-event-source-mappings",
+        "description": "Read and update SQS event source mappings for this application's functions.",
+        "grant": {
+          "actions": ["lambda:GetEventSourceMapping", "lambda:UpdateEventSourceMapping"]
+        },
+        "binding": {
+          "stack": {
+            "resources": ["*"],
+            "condition": {
+              "StringLike": {
+                "lambda:FunctionArn": "arn:aws:lambda:${awsRegion}:${awsAccountId}:function:${stackPrefix}-*"
+              }
+            }
+          },
+          "resource": {
+            "resources": ["*"],
+            "condition": {
+              "StringLike": {
+                "lambda:FunctionArn": "arn:aws:lambda:${awsRegion}:${awsAccountId}:function:${resourceName}"
+              }
+            }
+          }
+        }
+      },
+      {
+        // ListEventSourceMappings supports neither resource-level scoping nor
+        // lambda condition keys — AWS evaluates it against `*` only. The list
+        // result exposes mapping metadata, not payloads.
+        "label": "list-event-source-mappings",
+        "description": "List event source mappings (AWS supports this action only on all resources).",
+        "grant": {
+          "actions": ["lambda:ListEventSourceMappings"]
+        },
+        "binding": {
+          "stack": {
+            "resources": ["*"]
+          },
+          "resource": {
+            "resources": ["*"]
           }
         }
       },

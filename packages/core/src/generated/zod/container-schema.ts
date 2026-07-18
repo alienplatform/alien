@@ -26,6 +26,7 @@ get "code"(){
                 return ContainerCodeSchema.describe("Specifies the source of the container's executable code.")
               },
 "command": z.array(z.string()).describe("Command to override image default").nullish(),
+"commandsEnabled": z.optional(z.boolean().default(false).describe("Whether the container can receive remote commands via the Commands protocol.\nWhen enabled, an app-owned command receiver can lease pending commands\nfor this Container and execute registered handlers.")),
 get "cpu"(){
                 return ResourceSpecSchema.describe("Resource specification with min/desired values.")
               },
@@ -41,7 +42,7 @@ get "healthCheck"(){
               },
 "id": z.string().describe("Unique identifier for the container.\nMust be DNS-compatible: lowercase alphanumeric with hyphens."),
 get "links"(){
-                return z.array(ResourceRefSchema.describe("New ResourceRef that works with any resource type.\nThis can eventually replace the enum-based ResourceRef for full extensibility.")).describe("Resource links (dependencies)")
+                return z.array(ResourceRefSchema.describe("Reference to a resource by its stable id and resource type.")).describe("Resource links (dependencies)")
               },
 get "memory"(){
                 return ResourceSpecSchema.describe("Resource specification with min/desired values.")

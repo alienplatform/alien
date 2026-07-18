@@ -67,6 +67,7 @@ fn test_stack(stack_id: &str, function_id: &str, image_uri: &str) -> Stack {
         })
         .memory_mb(256)
         .timeout_seconds(30)
+        .expect("literal Worker timeout is within supported range")
         .commands_enabled(false)
         .readiness_probe(ReadinessProbe::default())
         .build();

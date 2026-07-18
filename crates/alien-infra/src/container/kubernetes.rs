@@ -2,10 +2,13 @@ use std::collections::{BTreeMap, HashMap};
 use std::time::Duration;
 use tracing::{debug, info};
 
+use crate::core::kubernetes_errors::is_remote_resource_conflict;
 use crate::core::{
-    kubernetes_branded_resource_labels, kubernetes_runtime_pod_labels,
-    reconcile_environment_secret, EnvironmentVariableBuilder, KubernetesEnvSecretPlan,
-    ResourceController, ResourceControllerContext,
+    delete_environment_secret, direct_monitoring_auth_headers, kubernetes_branded_resource_labels,
+    kubernetes_runtime_pod_labels, projected_env_vars,
+    reconcile_environment_secret_with_additional_secrets, EnvSecretRotationTracker,
+    EnvironmentVariableBuilder, KubernetesEnvSecretPlan, ResourceController,
+    ResourceControllerContext,
 };
 use crate::error::{ErrorData, Result};
 use crate::kubernetes_public_endpoint::{
@@ -21,14 +24,14 @@ use alien_core::{
     branded_tag_key, kubernetes_resource_name, kubernetes_service_account_name, public_url_host,
     Container, ContainerCode, ContainerOutputs, ContainerStatus, PublicEndpointOutput,
     ResourceOutputs, ResourceStatus, ALIEN_MANAGED_BY_TAG_KEY, ALIEN_MANAGED_BY_TAG_VALUE,
-    DEFAULT_ALIEN_LABEL_DOMAIN, ENV_ALIEN_SECRETS,
+    DEFAULT_ALIEN_LABEL_DOMAIN, ENV_ALIEN_RUNTIME_SECRETS,
 };
 use alien_error::{AlienError, Context, ContextError, IntoAlienError};
 use alien_macros::controller;
 
 use k8s_openapi::api::apps::v1::{Deployment, DeploymentSpec, StatefulSet, StatefulSetSpec};
 use k8s_openapi::api::core::v1::{
-    Container as K8sContainer, ContainerPort, EnvVar, LocalObjectReference, PersistentVolumeClaim,
+    Container as K8sContainer, ContainerPort, LocalObjectReference, PersistentVolumeClaim,
     PersistentVolumeClaimSpec, PodSpec, PodTemplateSpec, ResourceRequirements, Service,
     ServicePort, ServiceSpec, Volume, VolumeMount,
 };
@@ -74,11 +77,6 @@ fn kubernetes_port_name(port: &alien_core::ContainerPort) -> String {
     }
 }
 
-fn is_already_exists(error: &alien_client_core::Error) -> bool {
-    let text = error.to_string();
-    text.contains("AlreadyExists") || text.contains("409")
-}
-
 #[controller]
 pub struct KubernetesContainerController {
     /// The name of the created Kubernetes Deployment or StatefulSet.
@@ -95,6 +93,11 @@ pub struct KubernetesContainerController {
     pub(crate) container_id: Option<String>,
     /// Public endpoint route/certificate state.
     pub(crate) public_endpoint: KubernetesPublicEndpointState,
+    /// Tracks the env-Secret checksum so `needs_update` can detect secret
+    /// rotations that config diffing cannot see (secrets are projected via
+    /// secretKeyRef, never into the resource config).
+    #[serde(default)]
+    pub(crate) env_secret: EnvSecretRotationTracker,
 }
 
 #[controller]
@@ -144,6 +147,7 @@ impl KubernetesContainerController {
         let env_secret_plan = self
             .reconcile_environment_secret(config, &container_name, &namespace, ctx)
             .await?;
+        self.env_secret.record(env_secret_plan.as_ref());
         self.reconcile_internal_service(config, &container_name, &namespace, ctx)
             .await?;
 
@@ -175,7 +179,7 @@ impl KubernetesContainerController {
                 Ok(_) => {
                     info!(statefulset_name=%container_name, namespace=%namespace, "StatefulSet creation initiated");
                 }
-                Err(err) if is_already_exists(&err) => {
+                Err(err) if is_remote_resource_conflict(&err) => {
                     let existing = deployment_client
                         .get_statefulset(&namespace, &container_name)
                         .await
@@ -233,7 +237,7 @@ impl KubernetesContainerController {
                 Ok(_) => {
                     info!(deployment_name=%container_name, namespace=%namespace, "Deployment creation initiated");
                 }
-                Err(err) if is_already_exists(&err) => {
+                Err(err) if is_remote_resource_conflict(&err) => {
                     let existing = deployment_client
                         .get_deployment(&namespace, &container_name)
                         .await
@@ -624,6 +628,7 @@ impl KubernetesContainerController {
         let env_secret_plan = self
             .reconcile_environment_secret(config, workload_name, namespace, ctx)
             .await?;
+        self.env_secret.record(env_secret_plan.as_ref());
         self.service_port = first_declared_container_port(config);
         self.reconcile_internal_service(config, workload_name, namespace, ctx)
             .await?;
@@ -921,6 +926,15 @@ impl KubernetesContainerController {
                 {
                     info!(workload_name=%workload_name, "Workload already deleted");
 
+                    delete_environment_secret(
+                        "container",
+                        &config.id,
+                        workload_name,
+                        namespace,
+                        ctx,
+                    )
+                    .await?;
+
                     self.workload_name = None;
                     self.namespace = None;
 
@@ -993,6 +1007,15 @@ impl KubernetesContainerController {
                     ) =>
                 {
                     info!(workload_name=%workload_name, "Workload successfully deleted");
+
+                    delete_environment_secret(
+                        "container",
+                        &config.id,
+                        workload_name,
+                        namespace,
+                        ctx,
+                    )
+                    .await?;
 
                     self.workload_name = None;
                     self.namespace = None;
@@ -1067,6 +1090,25 @@ impl KubernetesContainerController {
         }
     }
 
+    /// Secret-typed env vars never enter the resource config on Kubernetes
+    /// (they're projected via secretKeyRef), so config diffing alone cannot
+    /// see secret rotations. Schedule an update when the snapshot-derived
+    /// env-secret checksum drifts from the one applied last; the update
+    /// re-reconciles the Secret and rolls pods via the checksum annotation.
+    fn needs_update(&self, ctx: &ResourceControllerContext<'_>) -> Result<bool> {
+        let Some(workload_name) = self.workload_name.as_ref() else {
+            return Ok(false);
+        };
+        let config = ctx.desired_resource_config::<Container>()?;
+        let monitoring_headers = direct_monitoring_auth_headers(ctx);
+        Ok(self.env_secret.drifted_with_additional_secrets(
+            &config.id,
+            workload_name,
+            &ctx.deployment_config.environment_variables.variables,
+            &monitoring_headers,
+        ))
+    }
+
     fn get_binding_params(&self) -> Result<Option<serde_json::Value>> {
         use alien_core::{BindingValue, KubernetesContainerBinding};
 
@@ -1105,7 +1147,8 @@ mod output_tests {
     use alien_core::ContainerOutputs;
 
     use super::{
-        KubernetesContainerController, KubernetesContainerState, KubernetesPublicEndpointState,
+        EnvSecretRotationTracker, KubernetesContainerController, KubernetesContainerState,
+        KubernetesPublicEndpointState,
     };
 
     #[test]
@@ -1123,6 +1166,7 @@ mod output_tests {
             service_port: Some(3000),
             container_id: Some("container".to_string()),
             public_endpoint,
+            env_secret: EnvSecretRotationTracker::default(),
             _internal_stay_count: None,
         };
 
@@ -1158,6 +1202,7 @@ mod output_tests {
             service_port: Some(3000),
             container_id: Some("container".to_string()),
             public_endpoint,
+            env_secret: EnvSecretRotationTracker::default(),
             _internal_stay_count: None,
         };
 
@@ -1189,6 +1234,7 @@ impl KubernetesContainerController {
             service_port: Some(80),
             container_id: Some("test-container".to_string()),
             public_endpoint: KubernetesPublicEndpointState::default(),
+            env_secret: EnvSecretRotationTracker::default(),
             _internal_stay_count: None,
         }
     }
@@ -1200,7 +1246,16 @@ impl KubernetesContainerController {
         namespace: &str,
         ctx: &ResourceControllerContext<'_>,
     ) -> Result<Option<KubernetesEnvSecretPlan>> {
-        reconcile_environment_secret("container", &config.id, workload_name, namespace, ctx).await
+        let monitoring_headers = direct_monitoring_auth_headers(ctx);
+        reconcile_environment_secret_with_additional_secrets(
+            "container",
+            &config.id,
+            workload_name,
+            namespace,
+            &monitoring_headers,
+            ctx,
+        )
+        .await
     }
 
     async fn reconcile_internal_service(
@@ -1224,7 +1279,7 @@ impl KubernetesContainerController {
 
         match service_client.create_service(namespace, &service).await {
             Ok(_) => Ok(()),
-            Err(e) if is_already_exists(&e) => {
+            Err(e) if is_remote_resource_conflict(&e) => {
                 let existing = service_client
                     .get_service(namespace, service_name)
                     .await
@@ -1476,14 +1531,19 @@ impl KubernetesContainerController {
         env_secret_plan: Option<&KubernetesEnvSecretPlan>,
         ctx: &ResourceControllerContext<'_>,
     ) -> Result<PodSpec> {
-        // Determine the container image
+        // Determine the container image. Source-built containers are
+        // supported: `alien build` compiles the source, `alien release`
+        // pushes it, and the controller receives a registry image whose
+        // compiled binary is the direct entrypoint. Reaching here with
+        // unbuilt source means the build step was skipped.
         let image = match &config.code {
             ContainerCode::Image { image } => image.clone(),
             ContainerCode::Source { .. } => {
                 return Err(AlienError::new(ErrorData::ResourceControllerConfigError {
                     resource_id: config.id.clone(),
-                    message: "Source-based containers not yet supported in Kubernetes platform"
-                        .to_string(),
+                    message:
+                        "Container still has unbuilt source code. Run 'alien build' first; it compiles the source into an image the controller can deploy."
+                            .to_string(),
                 }));
             }
         };
@@ -1492,80 +1552,21 @@ impl KubernetesContainerController {
         // IMPORTANT: Start with config.environment which includes injected vars from DeploymentConfig
         let env_builder = EnvironmentVariableBuilder::try_new(&config.environment)?
             .add_container_runtime_env_vars(ctx, &config.id)?
+            .add_direct_monitoring_auth_headers(ctx)
+            // Cross-target parity with the local controller: apps read
+            // ALIEN_PUBLIC_ENDPOINTS_JSON to build their own absolute URLs.
+            .add_current_resource_public_endpoint(ctx, &config.id)?
             .add_linked_resources(&config.links, ctx, &config.id)
             .await?
             .add_self_container_binding(&config.id, self.get_binding_params()?.as_ref())?;
 
-        let (env_map, bindings) = env_builder.build_with_bindings();
+        let (mut env_map, bindings) = env_builder.build_with_bindings();
+        env_map.remove(ENV_ALIEN_RUNTIME_SECRETS);
 
-        let mut env_vars = Vec::new();
-
-        if let Some(plan) = env_secret_plan {
-            for key in &plan.keys {
-                env_vars.push(EnvVar {
-                    name: key.clone(),
-                    value: None,
-                    value_from: Some(k8s_openapi::api::core::v1::EnvVarSource {
-                        secret_key_ref: Some(k8s_openapi::api::core::v1::SecretKeySelector {
-                            name: plan.secret_name.clone(),
-                            key: key.clone(),
-                            optional: Some(false),
-                        }),
-                        ..Default::default()
-                    }),
-                });
-            }
-        }
-
-        // Process bindings for Kubernetes SecretRefs
-        for (binding_name, binding_json) in bindings {
-            if let Ok(extraction) = crate::core::k8s_secret_bindings::extract_binding_secrets(
-                &binding_name,
-                &binding_json,
-            ) {
-                // Add individual secret env vars with valueFrom.secretKeyRef
-                for (env_name, secret_name, secret_key) in extraction.secret_env_vars {
-                    env_vars.push(EnvVar {
-                        name: env_name,
-                        value: None,
-                        value_from: Some(k8s_openapi::api::core::v1::EnvVarSource {
-                            secret_key_ref: Some(k8s_openapi::api::core::v1::SecretKeySelector {
-                                name: secret_name,
-                                key: secret_key,
-                                optional: Some(false),
-                            }),
-                            ..Default::default()
-                        }),
-                    });
-                }
-
-                // Add the binding JSON with $(VAR) placeholders
-                let env_key = format!(
-                    "ALIEN_{}_BINDING",
-                    binding_name.to_uppercase().replace('-', "_")
-                );
-                env_vars.push(EnvVar {
-                    name: env_key,
-                    value: Some(extraction.resolved_binding_json),
-                    value_from: None,
-                });
-            }
-        }
-
-        // Add all remaining env vars from the builder (includes user vars + injected vars)
-        for (key, value) in env_map {
-            if key == ENV_ALIEN_SECRETS && env_secret_plan.is_some() {
-                continue;
-            }
-            // Skip if already added as a secret ref
-            if !env_vars.iter().any(|ev| ev.name == key) {
-                env_vars.push(EnvVar {
-                    name: key,
-                    value: Some(value),
-                    value_from: None,
-                });
-            }
-        }
+        // Containers project Secret-kind env vars as secretKeyRefs and never
+        // load secrets at runtime, so the ALIEN_SECRETS vault-load pointer is
+        // stripped from the manifest.
+        let env_vars = projected_env_vars(env_secret_plan, bindings, env_map)?;
 
         // Build volume mounts
         let mut volume_mounts = Vec::new();
@@ -1830,6 +1831,54 @@ mod tests {
     }
 
     #[test]
+    fn command_receiver_token_flows_through_secret_plan_scoped_per_resource() {
+        // The receiver's `ALIEN_COMMANDS_TOKEN` is a Secret-kind env
+        // var scoped per Container/Daemon. `applicable_secret_environment_variables`
+        // is what drives `KubernetesEnvSecretPlan.keys` → each key rendered as a
+        // `secretKeyRef` in the container/daemon manifests. This asserts the token
+        // reaches exactly its own resource and never a sibling — the same
+        // machinery for both container and daemon controllers.
+        let vars = vec![
+            alien_core::EnvironmentVariable {
+                name: alien_core::ENV_ALIEN_COMMANDS_TOKEN.to_string(),
+                value: "tok-container".to_string(),
+                var_type: alien_core::EnvironmentVariableType::Secret,
+                target_resources: Some(vec!["api-container".to_string()]),
+            },
+            alien_core::EnvironmentVariable {
+                name: alien_core::ENV_ALIEN_COMMANDS_TOKEN.to_string(),
+                value: "tok-daemon".to_string(),
+                var_type: alien_core::EnvironmentVariableType::Secret,
+                target_resources: Some(vec!["log-daemon".to_string()]),
+            },
+            // Plain receiver vars must NOT be selected as secrets.
+            alien_core::EnvironmentVariable {
+                name: alien_core::ENV_ALIEN_COMMANDS_URL.to_string(),
+                value: "https://cmd.example.test/v1".to_string(),
+                var_type: alien_core::EnvironmentVariableType::Plain,
+                target_resources: Some(vec!["api-container".to_string()]),
+            },
+        ];
+
+        let container_secrets = applicable_secret_environment_variables("api-container", &vars);
+        assert_eq!(container_secrets.len(), 1);
+        assert_eq!(
+            container_secrets[0].name,
+            alien_core::ENV_ALIEN_COMMANDS_TOKEN
+        );
+        assert_eq!(container_secrets[0].value, "tok-container");
+
+        let daemon_secrets = applicable_secret_environment_variables("log-daemon", &vars);
+        assert_eq!(daemon_secrets.len(), 1);
+        assert_eq!(daemon_secrets[0].value, "tok-daemon");
+
+        // A resource with no scoped receiver token gets no secret keys — the
+        // commands_enabled=false / non-receiver case yields an empty plan.
+        let other = applicable_secret_environment_variables("worker-main", &vars);
+        assert!(other.is_empty());
+    }
+
+    #[test]
     fn internal_service_uses_declared_container_ports() {
         let config = Container::new("api".to_string())
             .code(ContainerCode::Image {
@@ -1855,6 +1904,7 @@ mod tests {
             service_port: Some(3000),
             container_id: Some("api".to_string()),
             public_endpoint: KubernetesPublicEndpointState::default(),
+            env_secret: EnvSecretRotationTracker::default(),
             _internal_stay_count: None,
         };
 
@@ -1869,5 +1919,265 @@ mod tests {
         assert_eq!(ports.len(), 1);
         assert_eq!(ports[0].port, 3000);
         assert_eq!(ports[0].target_port, Some(IntOrString::Int(3000)));
+    }
+
+    // ── Typed manifest tests ─────────────────────────────────────────
+    //
+    // These build the actual k8s-openapi objects the controller submits and
+    // assert on the typed fields — no string snapshots.
+
+    use crate::core::kubernetes_manifest_test_support::{
+        assert_secret_key_ref, deployment_env, pod_template_checksum_annotation, secret_env_var,
+        KubernetesManifestTestHarness,
+    };
+    use crate::core::{
+        direct_monitoring_auth_headers, environment_secret_plan,
+        environment_secret_plan_with_additional_secrets, OTEL_EXPORTER_OTLP_HEADERS,
+        OTEL_EXPORTER_OTLP_METRICS_HEADERS,
+    };
+    use alien_core::{
+        OtlpConfig, Resource, ENV_ALIEN_COMMANDS_TOKEN, ENV_ALIEN_LAMBDA_MODE,
+        ENV_ALIEN_RUNTIME_SECRETS, ENV_ALIEN_RUNTIME_SEND_OTLP, ENV_ALIEN_SECRETS,
+        ENV_ALIEN_TRANSPORT, ENV_ALIEN_WORKER_GRPC_ADDRESS,
+    };
+    fn manifest_test_container(environment: &[(&str, &str)], stateful: bool) -> Container {
+        let mut config = Container::new("web".to_string())
+            .code(ContainerCode::Image {
+                image: "registry.example.com/web:1".to_string(),
+            })
+            .cpu(alien_core::ResourceSpec {
+                min: "100m".to_string(),
+                desired: "500m".to_string(),
+            })
+            .memory(alien_core::ResourceSpec {
+                min: "128Mi".to_string(),
+                desired: "512Mi".to_string(),
+            })
+            .stateful(stateful)
+            .permissions("default".to_string())
+            .build();
+        for (name, value) in environment {
+            config
+                .environment
+                .insert(name.to_string(), value.to_string());
+        }
+        config
+    }
+
+    fn manifest_test_controller() -> KubernetesContainerController {
+        KubernetesContainerController {
+            workload_name: Some("web".to_string()),
+            namespace: Some("test-ns".to_string()),
+            service_name: Some("web".to_string()),
+            container_id: Some("web".to_string()),
+            ..Default::default()
+        }
+    }
+
+    #[tokio::test]
+    async fn deployment_manifest_projects_secrets_and_never_carries_alien_secrets() {
+        let variables = vec![
+            secret_env_var("APP_SECRET", "s3cret", None),
+            secret_env_var(
+                ENV_ALIEN_COMMANDS_TOKEN,
+                "receiver-token",
+                Some(vec!["web"]),
+            ),
+        ];
+        // Simulate a config injected by an older manager that still collapsed
+        // secrets: the pointer must be stripped from the manifest regardless.
+        let config = manifest_test_container(
+            &[
+                ("APP_ENV", "prod"),
+                (
+                    ENV_ALIEN_SECRETS,
+                    "{\"keys\":[\"APP_SECRET\"],\"hash\":\"legacy\"}",
+                ),
+                (ENV_ALIEN_RUNTIME_SECRETS, "vault://legacy-runtime"),
+            ],
+            false,
+        );
+        let harness =
+            KubernetesManifestTestHarness::new(Resource::new(config.clone()), variables.clone())
+                .with_monitoring(OtlpConfig {
+                    logs_endpoint: "https://manager.test/v1/logs".to_string(),
+                    logs_auth_header: "authorization=Bearer logs-token".to_string(),
+                    metrics_endpoint: Some("https://manager.test/v1/metrics".to_string()),
+                    metrics_auth_header: Some("authorization=Bearer metrics-token".to_string()),
+                    resource_attributes: HashMap::new(),
+                });
+        let monitoring_headers = direct_monitoring_auth_headers(&harness.ctx());
+        let plan = environment_secret_plan_with_additional_secrets(
+            "web",
+            "web",
+            &variables,
+            &monitoring_headers,
+        )
+        .expect("plan");
+        let controller = manifest_test_controller();
+
+        let deployment = controller
+            .build_deployment(
+                &config,
+                "web",
+                "test-ns",
+                "web-sa",
+                None,
+                Some(&plan),
+                &harness.ctx(),
+            )
+            .await
+            .expect("deployment manifest");
+
+        let env = deployment_env(&deployment);
+
+        // App secret and the command receiver token are native projections.
+        assert_secret_key_ref(&env, "APP_SECRET", "web-env");
+        assert_secret_key_ref(&env, ENV_ALIEN_COMMANDS_TOKEN, "web-env");
+        assert_secret_key_ref(&env, OTEL_EXPORTER_OTLP_HEADERS, "web-env");
+        assert_secret_key_ref(&env, OTEL_EXPORTER_OTLP_METRICS_HEADERS, "web-env");
+
+        // The runtime vault-load pointer never reaches the manifest.
+        assert!(
+            !env.iter().any(|var| matches!(
+                var.name.as_str(),
+                ENV_ALIEN_SECRETS | ENV_ALIEN_RUNTIME_SECRETS
+            )),
+            "vault pointers must not appear in a Kubernetes Container manifest"
+        );
+
+        // Plain vars still flow through.
+        let app_env = env
+            .iter()
+            .find(|var| var.name == "APP_ENV")
+            .expect("plain APP_ENV");
+        assert_eq!(app_env.value.as_deref(), Some("prod"));
+
+        // No worker-era runtime env leaks into Container manifests.
+        for name in [
+            ENV_ALIEN_TRANSPORT,
+            ENV_ALIEN_WORKER_GRPC_ADDRESS,
+            ENV_ALIEN_RUNTIME_SEND_OTLP,
+            ENV_ALIEN_LAMBDA_MODE,
+        ] {
+            assert!(
+                !env.iter().any(|var| var.name == name),
+                "worker-era env var '{name}' must not appear in a Container manifest"
+            );
+        }
+
+        // The pod template carries the checksum that rolls pods on rotation.
+        assert_eq!(
+            pod_template_checksum_annotation(&deployment.spec.expect("spec").template),
+            Some(plan.checksum.clone())
+        );
+    }
+
+    #[tokio::test]
+    async fn statefulset_manifest_projects_secrets_and_stamps_checksum() {
+        let variables = vec![secret_env_var("APP_SECRET", "s3cret", None)];
+        let config = manifest_test_container(&[], true);
+        let plan = environment_secret_plan("web", "web", &variables).expect("plan");
+        let harness = KubernetesManifestTestHarness::new(Resource::new(config.clone()), variables);
+        let controller = manifest_test_controller();
+
+        let statefulset = controller
+            .build_statefulset(
+                &config,
+                "web",
+                "test-ns",
+                "web-sa",
+                None,
+                Some(&plan),
+                &harness.ctx(),
+            )
+            .await
+            .expect("statefulset manifest");
+
+        let spec = statefulset.spec.expect("statefulset spec");
+        let env = spec.template.spec.as_ref().expect("pod spec").containers[0]
+            .env
+            .clone()
+            .expect("container env");
+        assert_secret_key_ref(&env, "APP_SECRET", "web-env");
+        assert!(!env.iter().any(|var| var.name == ENV_ALIEN_SECRETS));
+        assert_eq!(
+            pod_template_checksum_annotation(&spec.template),
+            Some(plan.checksum.clone())
+        );
+    }
+
+    #[tokio::test]
+    async fn secret_rotation_changes_the_rendered_pod_template() {
+        let config = manifest_test_container(&[], false);
+        let controller = manifest_test_controller();
+
+        let mut templates = Vec::new();
+        for value in ["v1", "v1", "v2"] {
+            let variables = vec![secret_env_var("APP_SECRET", value, None)];
+            let plan = environment_secret_plan("web", "web", &variables).expect("plan");
+            let harness =
+                KubernetesManifestTestHarness::new(Resource::new(config.clone()), variables);
+            let deployment = controller
+                .build_deployment(
+                    &config,
+                    "web",
+                    "test-ns",
+                    "web-sa",
+                    None,
+                    Some(&plan),
+                    &harness.ctx(),
+                )
+                .await
+                .expect("deployment manifest");
+            templates.push(deployment.spec.expect("spec").template);
+        }
+
+        assert_eq!(
+            templates[0], templates[1],
+            "identical secret values must render an identical pod template"
+        );
+        assert_ne!(
+            pod_template_checksum_annotation(&templates[0]),
+            pod_template_checksum_annotation(&templates[2]),
+            "rotating a secret value must change the pod template (rollout)"
+        );
+    }
+
+    #[test]
+    fn needs_update_detects_env_secret_rotation() {
+        let config = manifest_test_container(&[], false);
+        let original = vec![secret_env_var("APP_SECRET", "v1", None)];
+        let original_plan = environment_secret_plan("web", "web", &original).expect("plan");
+
+        let mut controller = manifest_test_controller();
+        controller.env_secret.record(Some(&original_plan));
+
+        // Same snapshot: no drift.
+        let harness =
+            KubernetesManifestTestHarness::new(Resource::new(config.clone()), original.clone());
+        assert!(!controller
+            .needs_update(&harness.ctx())
+            .expect("needs_update"));
+
+        // Rotated value: drift → update.
+        let rotated = vec![secret_env_var("APP_SECRET", "v2", None)];
+        let harness = KubernetesManifestTestHarness::new(Resource::new(config.clone()), rotated);
+        assert!(controller
+            .needs_update(&harness.ctx())
+            .expect("needs_update"));
+
+        // All secrets removed: drift → update (Secret refs must go away).
+        let harness = KubernetesManifestTestHarness::new(Resource::new(config.clone()), vec![]);
+        assert!(controller
+            .needs_update(&harness.ctx())
+            .expect("needs_update"));
+
+        // Never had secrets, still none: no drift.
+        controller.env_secret.record(None);
+        let harness = KubernetesManifestTestHarness::new(Resource::new(config), vec![]);
+        assert!(!controller
+            .needs_update(&harness.ctx())
+            .expect("needs_update"));
     }
 }

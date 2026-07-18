@@ -53,12 +53,14 @@
 
 mod artifact_registry_manager;
 mod container_manager;
+mod daemon_supervisor;
 mod error;
 mod kv_manager;
 mod local_bindings_provider;
 mod postgres_manager;
 mod queue_manager;
 mod storage_manager;
+mod store_probe;
 pub mod trigger_service;
 mod vault_manager;
 mod worker_manager;
@@ -69,6 +71,7 @@ pub use container_manager::{
     BindMount, ContainerConfig, ContainerInfo, ContainerMetadata, LocalContainerManager,
     LocalRuntimeStatus,
 };
+pub use daemon_supervisor::DaemonLaunchOptions;
 pub use error::{ErrorData, Result};
 pub use kv_manager::LocalKvManager;
 pub use local_bindings_provider::LocalBindingsProvider;

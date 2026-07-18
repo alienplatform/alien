@@ -4,7 +4,7 @@
 //! Used when `[impersonation]` is configured in alien-manager.toml.
 //! The management SA is loaded from the per-platform target bindings provider.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
 use alien_bindings::traits::ImpersonationRequest;
@@ -13,6 +13,7 @@ use alien_core::{ClientConfig, DeploymentStatus, EnvironmentInfo, ManagementConf
 use alien_error::{AlienError, Context, GenericError, IntoAlienError};
 use async_trait::async_trait;
 
+use crate::error::ErrorData;
 use crate::traits::{CredentialResolver, DeploymentRecord, ResolvedCredentials};
 
 /// Resolves cloud credentials for push-model deployments via service account impersonation.
@@ -23,16 +24,22 @@ use crate::traits::{CredentialResolver, DeploymentRecord, ResolvedCredentials};
 pub struct ImpersonationCredentialResolver {
     bindings_provider: Arc<dyn BindingsProviderApi>,
     target_providers: HashMap<Platform, Arc<dyn BindingsProviderApi>>,
+    management_binding_platforms: HashSet<Platform>,
+    environment_resolver: super::environment_credentials::EnvironmentCredentialResolver,
 }
 
 impl ImpersonationCredentialResolver {
     pub fn new(
         bindings_provider: Arc<dyn BindingsProviderApi>,
         target_providers: HashMap<Platform, Arc<dyn BindingsProviderApi>>,
+        management_binding_platforms: HashSet<Platform>,
     ) -> Self {
         Self {
             bindings_provider,
             target_providers,
+            management_binding_platforms,
+            environment_resolver:
+                super::environment_credentials::EnvironmentCredentialResolver::new(),
         }
     }
 
@@ -41,11 +48,12 @@ impl ImpersonationCredentialResolver {
             .get(&platform)
             .unwrap_or(&self.bindings_provider)
     }
-}
 
-#[async_trait]
-impl CredentialResolver for ImpersonationCredentialResolver {
-    async fn resolve(&self, deployment: &DeploymentRecord) -> Result<ClientConfig, AlienError> {
+    async fn resolve_from_env(
+        &self,
+        deployment: &DeploymentRecord,
+        env: HashMap<String, String>,
+    ) -> Result<ClientConfig, AlienError> {
         let platform = deployment.platform;
 
         if platform == Platform::Test {
@@ -66,13 +74,18 @@ impl CredentialResolver for ImpersonationCredentialResolver {
             return Ok(ClientConfig::Test);
         }
 
-        let status = parse_status(&deployment.status);
+        if !self.management_binding_platforms.contains(&platform) {
+            return self
+                .environment_resolver
+                .resolve_from_env(deployment, env)
+                .await;
+        }
 
-        // InitialSetup is still setup-owned. Even after the remote stack
-        // management identity exists in state, setup credentials must finish
-        // attaching its management policies and creating the remaining Frozen
-        // resources. Runtime impersonation starts after handoff.
-        if uses_direct_management_credentials(status) {
+        // InitialSetup remains setup-owned until the remote stack management
+        // identity is imported. Poll-only setup methods hand the deployment to
+        // the runtime manager at that point, so continuing with the managing
+        // identity would send target resource operations to the wrong account.
+        if uses_direct_impersonation_credentials(&deployment) {
             let provider = self.provider_for_target(platform);
             let base_config = impersonate_management_sa(&**provider, platform).await?;
             return apply_target_environment(base_config, deployment.environment_info.as_ref());
@@ -84,7 +97,7 @@ impl CredentialResolver for ImpersonationCredentialResolver {
             let provider = self.provider_for_target(platform);
             let base_config = impersonate_management_sa(&**provider, platform).await?;
 
-            let resolver = alien_infra::RemoteAccessResolver::new(std::env::vars().collect());
+            let resolver = alien_infra::RemoteAccessResolver::new(env);
             let resolved = resolver
                 .resolve(
                     base_config,
@@ -92,9 +105,11 @@ impl CredentialResolver for ImpersonationCredentialResolver {
                     deployment.environment_info.as_ref(),
                 )
                 .await
-                .context(GenericError {
-                    message: "Failed to resolve remote access from stack state".to_string(),
-                })?;
+                .context(ErrorData::RemoteCredentialHandoffFailed {
+                    deployment_id: deployment.id.clone(),
+                    platform,
+                })
+                .map_err(AlienError::into_generic)?;
 
             return Ok(resolved);
         }
@@ -106,11 +121,29 @@ impl CredentialResolver for ImpersonationCredentialResolver {
             ),
         }))
     }
+}
+
+#[async_trait]
+impl CredentialResolver for ImpersonationCredentialResolver {
+    async fn resolve(&self, deployment: &DeploymentRecord) -> Result<ClientConfig, AlienError> {
+        self.resolve_from_env(deployment, std::env::vars().collect())
+            .await
+    }
 
     async fn resolve_with_capability(
         &self,
         deployment: &DeploymentRecord,
     ) -> Result<ResolvedCredentials, AlienError> {
+        if !self
+            .management_binding_platforms
+            .contains(&deployment.platform)
+        {
+            return self
+                .environment_resolver
+                .resolve_with_capability(deployment)
+                .await;
+        }
+
         let client_config = self.resolve(deployment).await?;
         let status = parse_status(&deployment.status);
         let has_provision_capability = matches!(
@@ -133,6 +166,13 @@ impl CredentialResolver for ImpersonationCredentialResolver {
     ) -> Result<Option<ManagementConfig>, AlienError> {
         if uses_control_plane_credentials(platform) {
             return Ok(None);
+        }
+
+        if !self.management_binding_platforms.contains(&platform) {
+            return self
+                .environment_resolver
+                .resolve_management_config(platform)
+                .await;
         }
 
         let provider = self.provider_for_target(platform);
@@ -266,7 +306,7 @@ fn management_config_from_info(
     }
 }
 
-fn apply_target_environment(
+pub(crate) fn apply_target_environment(
     client_config: ClientConfig,
     environment_info: Option<&EnvironmentInfo>,
 ) -> Result<ClientConfig, AlienError> {
@@ -306,18 +346,36 @@ fn apply_target_environment(
     }
 }
 
-fn parse_status(status: &str) -> DeploymentStatus {
+pub(crate) fn parse_status(status: &str) -> DeploymentStatus {
     serde_json::from_value(serde_json::Value::String(status.to_string()))
         .unwrap_or(DeploymentStatus::Pending)
 }
 
-fn uses_direct_management_credentials(status: DeploymentStatus) -> bool {
+pub(crate) fn uses_direct_management_credentials(status: DeploymentStatus) -> bool {
     matches!(
         status,
         DeploymentStatus::Pending
             | DeploymentStatus::PreflightsFailed
             | DeploymentStatus::InitialSetup
+            | DeploymentStatus::InitialSetupFailed
     )
+}
+
+fn uses_direct_impersonation_credentials(deployment: &DeploymentRecord) -> bool {
+    let status = parse_status(&deployment.status);
+
+    match status {
+        DeploymentStatus::Pending | DeploymentStatus::PreflightsFailed => true,
+        DeploymentStatus::InitialSetup | DeploymentStatus::InitialSetupFailed => {
+            deployment.stack_state.as_ref().is_none_or(|stack_state| {
+                !stack_state.resources.values().any(|resource_state| {
+                    resource_state.resource_type == "remote-stack-management"
+                        && resource_state.outputs.is_some()
+                })
+            })
+        }
+        _ => false,
+    }
 }
 
 fn uses_control_plane_credentials(platform: Platform) -> bool {
@@ -327,10 +385,15 @@ fn uses_control_plane_credentials(platform: Platform) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use alien_bindings::BindingsProvider;
     use alien_core::{
-        AwsClientConfig, AwsCredentials, AwsEnvironmentInfo, AzureClientConfig, AzureCredentials,
-        AzureEnvironmentInfo, GcpClientConfig, GcpCredentials, GcpEnvironmentInfo,
+        bindings::ServiceAccountBinding, AwsClientConfig, AwsCredentials, AwsEnvironmentInfo,
+        AzureClientConfig, AzureCredentials, AzureEnvironmentInfo, GcpClientConfig, GcpCredentials,
+        GcpEnvironmentInfo, GcpServiceOverrides, RemoteStackManagement,
+        RemoteStackManagementOutputs, Resource, ResourceLifecycle, ResourceOutputs, ResourceStatus,
+        StackResourceState, StackState,
     };
+    use chrono::Utc;
 
     #[test]
     fn azure_target_environment_overrides_subscription_and_region_but_keeps_managing_tenant() {
@@ -407,22 +470,166 @@ mod tests {
         assert_eq!(gcp.project_number.as_deref(), Some("123456789"));
     }
 
+    fn gcp_handoff_deployment() -> DeploymentRecord {
+        let remote_management = RemoteStackManagement::new("management".to_string()).build();
+        let mut stack_state =
+            StackState::with_resource_prefix(Platform::Gcp, "test-prefix".to_string());
+        stack_state.resources.insert(
+            remote_management.id.clone(),
+            StackResourceState::builder()
+                .resource_type(RemoteStackManagement::RESOURCE_TYPE.to_string())
+                .status(ResourceStatus::Running)
+                .config(Resource::new(remote_management))
+                .outputs(ResourceOutputs::new(RemoteStackManagementOutputs {
+                    management_resource_id: "deployment@target-project.iam.gserviceaccount.com"
+                        .to_string(),
+                    access_configuration: "deployment@target-project.iam.gserviceaccount.com"
+                        .to_string(),
+                }))
+                .lifecycle(ResourceLifecycle::Frozen)
+                .dependencies(vec![])
+                .build(),
+        );
+
+        DeploymentRecord {
+            id: "deployment".to_string(),
+            workspace_id: "default".to_string(),
+            project_id: "default".to_string(),
+            name: "deployment".to_string(),
+            deployment_group_id: "group".to_string(),
+            platform: Platform::Gcp,
+            deployment_protocol_version: alien_core::CURRENT_DEPLOYMENT_PROTOCOL_VERSION,
+            base_platform: None,
+            status: "provisioning".to_string(),
+            stack_settings: None,
+            stack_state: Some(stack_state),
+            environment_info: Some(EnvironmentInfo::Gcp(GcpEnvironmentInfo {
+                project_id: "target-project".to_string(),
+                project_number: "987654321".to_string(),
+                region: "us-east1".to_string(),
+            })),
+            runtime_metadata: None,
+            current_release_id: None,
+            desired_release_id: None,
+            import_source: None,
+            setup_method: None,
+            setup_metadata: None,
+            setup_target: None,
+            setup_fingerprint: None,
+            setup_fingerprint_version: None,
+            user_environment_variables: None,
+            management_config: None,
+            deployment_config: None,
+            deployment_token: None,
+            retry_requested: false,
+            locked_by: None,
+            locked_at: None,
+            created_at: Utc::now(),
+            updated_at: None,
+            error: None,
+        }
+    }
+
+    #[tokio::test]
+    async fn gcp_materialization_failure_is_classified_for_bounded_handoff_retry() {
+        let base_config = ClientConfig::Gcp(Box::new(GcpClientConfig {
+            project_id: "managing-project".to_string(),
+            region: "us-central1".to_string(),
+            credentials: GcpCredentials::AccessToken {
+                token: "source-token".to_string(),
+            },
+            service_overrides: Some(GcpServiceOverrides {
+                endpoints: HashMap::from([(
+                    "iamcredentials".to_string(),
+                    "http://127.0.0.1:9".to_string(),
+                )]),
+            }),
+            project_number: Some("123456789".to_string()),
+        }));
+        let bindings = HashMap::from([(
+            "management".to_string(),
+            serde_json::to_value(ServiceAccountBinding::gcp_service_account(
+                "management@managing-project.iam.gserviceaccount.com",
+                "management-unique-id",
+            ))
+            .expect("management binding should serialize"),
+        )]);
+        let provider: Arc<dyn BindingsProviderApi> = Arc::new(
+            BindingsProvider::new(base_config, bindings)
+                .expect("GCP management bindings provider should be valid"),
+        );
+        let resolver = ImpersonationCredentialResolver::new(
+            provider.clone(),
+            HashMap::from([(Platform::Gcp, provider)]),
+            HashSet::from([Platform::Gcp]),
+        );
+
+        let error = resolver
+            .resolve_from_env(&gcp_handoff_deployment(), HashMap::new())
+            .await
+            .expect_err("failed target token materialization must fail credential handoff");
+
+        assert_eq!(
+            error.code, "REMOTE_CREDENTIAL_HANDOFF_FAILED",
+            "the real resolver path must expose the code consumed by the bounded provisioning retry"
+        );
+    }
+
     #[test]
-    fn initial_setup_uses_direct_management_credentials_until_handoff() {
-        assert!(uses_direct_management_credentials(
-            DeploymentStatus::Pending
-        ));
-        assert!(uses_direct_management_credentials(
-            DeploymentStatus::PreflightsFailed
-        ));
-        assert!(uses_direct_management_credentials(
-            DeploymentStatus::InitialSetup
-        ));
-        assert!(!uses_direct_management_credentials(
-            DeploymentStatus::Provisioning
-        ));
-        assert!(!uses_direct_management_credentials(
-            DeploymentStatus::Running
+    fn initial_setup_switches_impersonated_credentials_when_remote_management_is_ready() {
+        let mut deployment = gcp_handoff_deployment();
+
+        for status in ["pending", "preflights-failed"] {
+            deployment.status = status.to_string();
+            assert!(uses_direct_impersonation_credentials(&deployment));
+        }
+
+        deployment.stack_state = None;
+        for status in ["initial-setup", "initial-setup-failed"] {
+            deployment.status = status.to_string();
+            assert!(uses_direct_impersonation_credentials(&deployment));
+        }
+
+        deployment.stack_state = gcp_handoff_deployment().stack_state;
+        for status in [
+            "initial-setup",
+            "initial-setup-failed",
+            "provisioning",
+            "running",
+        ] {
+            deployment.status = status.to_string();
+            assert!(!uses_direct_impersonation_credentials(&deployment));
+        }
+    }
+
+    #[tokio::test]
+    async fn unconfigured_azure_delegates_to_environment_credentials() {
+        let provider: Arc<dyn BindingsProviderApi> = Arc::new(
+            BindingsProvider::new(ClientConfig::Test, HashMap::new())
+                .expect("empty test provider should be valid"),
+        );
+        let resolver = ImpersonationCredentialResolver::new(
+            provider.clone(),
+            HashMap::from([(Platform::Aws, provider)]),
+            HashSet::from([Platform::Aws]),
+        );
+
+        let resolved = resolver
+            .resolve_from_env(
+                &super::super::environment_credentials::tests::azure_deployment("initial-setup"),
+                super::super::environment_credentials::tests::azure_env(),
+            )
+            .await
+            .expect("unconfigured Azure should use its environment credentials");
+        let azure = resolved
+            .azure_config()
+            .expect("Azure config should resolve");
+
+        assert_eq!(azure.subscription_id, "target-subscription");
+        assert!(matches!(
+            &azure.credentials,
+            AzureCredentials::WorkloadIdentity { client_id, .. }
+                if client_id == "management-client"
         ));
     }
 

@@ -196,7 +196,11 @@ fn critical_e2e_provider_operations_are_declared() {
             aws_actions: &["s3:GetBucketNotification", "s3:PutBucketNotification"],
             gcp_permissions: &["storage.buckets.get", "storage.buckets.update"],
             gcp_predefined_roles: &[],
-            azure_actions: &[],
+            azure_actions: &[
+                "Microsoft.EventGrid/eventSubscriptions/read",
+                "Microsoft.EventGrid/eventSubscriptions/write",
+                "Microsoft.EventGrid/eventSubscriptions/delete",
+            ],
             azure_data_actions: &[],
             azure_predefined_roles: &[],
         },

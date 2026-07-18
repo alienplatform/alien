@@ -4,9 +4,11 @@ members = [
   "crates/alien-commands-client",
   "crates/alien-sdk",
   "crates/alien-bindings",
+  "crates/alien-worker-protocol",
+  "crates/alien-bindings-node",
   "crates/alien-cli",
   "crates/alien-cli-common",
-  "crates/alien-runtime",
+  "crates/alien-worker-runtime",
   "crates/alien-infra",
   "crates/alien-core",
   "crates/alien-build",
@@ -38,6 +40,8 @@ members = [
   "examples/byoc-database",
   "crates/alien-test",
   "tests/e2e/test-apps/comprehensive-rust",
+  "tests/e2e/test-apps/container-rust",
+  "tests/e2e/test-apps/runtime-less-mixed/daemon",
 ]
 resolver = "2"
 
@@ -60,8 +64,9 @@ license-file = "LICENSE.md"
 alien-commands = { path = "crates/alien-commands", version = "1.14.1", default-features = false }
 alien-commands-client = { path = "crates/alien-commands-client" }
 alien-bindings = { path = "crates/alien-bindings", version = "1.14.1", default-features = false }
+alien-worker-protocol = { path = "crates/alien-worker-protocol", version = "1.14.1" }
 alien-sdk = { path = "crates/alien-sdk", version = "1.14.1", default-features = false }
-alien-runtime = { path = "crates/alien-runtime", version = "1.14.1" }
+alien-worker-runtime = { path = "crates/alien-worker-runtime", version = "1.14.1" }
 dockdash = "0.2.0"
 alien-core = { path = "crates/alien-core", version = "1.14.1" }
 alien-infra = { path = "crates/alien-infra", version = "1.14.1" }
@@ -158,7 +163,6 @@ sec = "1"
 serde = "1.0.219"
 serde_json = "1.0.140"
 serde_yaml = "0.9"
-sled = "0.34"
 snapbox = "0.6"
 tar = "0.4"
 toml = "0.8"
@@ -177,7 +181,14 @@ tracing = "0.1.41"
 tracing-appender = "0.2"
 tracing-web = "0.1"
 tracing-subscriber = "0.3.19"
-turso = "0.5"
+# Pinned to this exact pre-release across the whole workspace: the local
+# binding providers need `Builder::experimental_multiprocess_wal`, which first
+# shipped in the 0.7 pre-releases, and mixing turso versions is not viable —
+# every turso_core version exports the same unmangled `#[no_mangle]` C symbols
+# (e.g. `uuid4_str`), so two versions in one binary fail to link on Linux.
+# `default-features = false` drops turso's `mimalloc` feature so it does not
+# register a `#[global_allocator]`.
+turso = { version = "=0.7.0-pre.21", default-features = false }
 aegis = { version = "0.9", features = ["pure-rust"] }
 url = "2.5.4"
 form_urlencoded = "1.2.1"

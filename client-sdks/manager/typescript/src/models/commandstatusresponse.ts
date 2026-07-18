@@ -10,6 +10,7 @@ import {
   CommandResponse$inboundSchema,
 } from "./commandresponse.js";
 import { CommandState, CommandState$inboundSchema } from "./commandstate.js";
+import { CommandTarget, CommandTarget$inboundSchema } from "./commandtarget.js";
 import { SDKValidationError } from "./errors/sdkvalidationerror.js";
 
 /**
@@ -29,6 +30,10 @@ export type CommandStatusResponse = {
    * Command states in the Commands protocol lifecycle
    */
   state: CommandState;
+  /**
+   * Identifies the specific resource a command is addressed to.
+   */
+  target: CommandTarget;
 };
 
 /** @internal */
@@ -40,6 +45,7 @@ export const CommandStatusResponse$inboundSchema: z.ZodType<
   commandId: z.string(),
   response: z.nullable(CommandResponse$inboundSchema).optional(),
   state: CommandState$inboundSchema,
+  target: CommandTarget$inboundSchema,
 });
 
 export function commandStatusResponseFromJSON(

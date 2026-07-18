@@ -16,6 +16,10 @@ use crate::{
     manager::TestManager,
 };
 
+mod diagnostics;
+
+use diagnostics::collect_helm_failure_diagnostics;
+
 /// Default Docker label applied to test alien-operator containers so they can be
 /// cleaned up afterwards.
 pub const TEST_AGENT_LABEL: &str = "alien-test-operator=true";
@@ -407,8 +411,20 @@ impl TestAlienOperator {
         let output = cmd.output().await?;
 
         if !output.status.success() {
+            let stdout = String::from_utf8_lossy(&output.stdout);
             let stderr = String::from_utf8_lossy(&output.stderr);
-            return Err(format!("Helm install failed: {}", stderr).into());
+            let diagnostics = collect_helm_failure_diagnostics(
+                release_name,
+                namespace,
+                kubeconfig,
+                kube_context,
+                command_env,
+            )
+            .await;
+            return Err(format!(
+                "Helm install failed\nstdout:\n{stdout}\nstderr:\n{stderr}\n{diagnostics}"
+            )
+            .into());
         }
 
         info!(%release_name, "alien-operator helm release installed");

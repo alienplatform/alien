@@ -7,16 +7,20 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
 
-use alien_core::{Platform, Stack};
+use alien_core::{ClientConfig, Platform, Stack};
 use anyhow::Context;
 use tracing::info;
 
 use crate::build_push::build_and_push_stack;
 use crate::config::TestConfig;
 use crate::deployment::TestDeployment;
-use crate::helm_values::{runtime_image_pull_secrets, to_helm_values_yaml};
 use crate::managed_secret::provision_managed_test_secret;
 use crate::manager::TestManager;
+
+const LOCAL_DELETION_TIMEOUT: Duration = Duration::from_secs(120);
+const DISTRIBUTION_DELETION_HANDOFF_TIMEOUT: Duration = Duration::from_secs(600);
+const DEFAULT_DEPLOYMENT_RUNNING_TIMEOUT: Duration = Duration::from_secs(600);
+const AZURE_DEPLOYMENT_RUNNING_TIMEOUT: Duration = Duration::from_secs(1_800);
 
 // ---------------------------------------------------------------------------
 // Enums
@@ -135,6 +139,15 @@ pub enum TestApp {
     ComprehensiveRust,
     ComprehensiveTs,
     FullStackMicroservices,
+    /// Worker + Daemon registering overlapping command names, routed by target
+    /// (`examples/command-routing-ts`).
+    CommandRoutingTs,
+    /// Rust SOURCE Container running the app-owned pull receiver with a
+    /// direct in-process KV binding (`tests/e2e/test-apps/container-rust`).
+    ContainerRust,
+    /// TypeScript SOURCE Container + Rust SOURCE Daemon sharing a direct KV
+    /// binding and registering the same target-scoped command.
+    RuntimeLessMixed,
 }
 
 impl std::fmt::Display for TestApp {
@@ -143,6 +156,9 @@ impl std::fmt::Display for TestApp {
             TestApp::ComprehensiveRust => write!(f, "comprehensive-rust"),
             TestApp::ComprehensiveTs => write!(f, "comprehensive-ts"),
             TestApp::FullStackMicroservices => write!(f, "full-stack-microservices"),
+            TestApp::CommandRoutingTs => write!(f, "command-routing-ts"),
+            TestApp::ContainerRust => write!(f, "container-rust"),
+            TestApp::RuntimeLessMixed => write!(f, "runtime-less-mixed"),
         }
     }
 }
@@ -178,8 +194,12 @@ pub enum Binding {
     Inspect,
     /// Managed secret retrieval from the internal `secrets` vault (cloud only)
     ManagedSecret,
-    /// Event handler verification
-    Events,
+    /// Queue trigger delivery: a send-only message must reach `on_queue_message`
+    QueueEvent,
+    /// Storage trigger delivery: an object write must reach `on_storage_event`
+    StorageEvent,
+    /// Cron trigger delivery: the schedule must fire `on_cron_event`
+    CronEvent,
     /// Build execution (CodeBuild, Cloud Build, ACA Jobs)
     Build,
     /// Artifact registry (ECR, GAR, ACR)
@@ -205,7 +225,9 @@ impl std::fmt::Display for Binding {
             Binding::Environment => write!(f, "environment"),
             Binding::Inspect => write!(f, "inspect"),
             Binding::ManagedSecret => write!(f, "managed-secret"),
-            Binding::Events => write!(f, "events"),
+            Binding::QueueEvent => write!(f, "queue-event"),
+            Binding::StorageEvent => write!(f, "storage-event"),
+            Binding::CronEvent => write!(f, "cron-event"),
             Binding::Build => write!(f, "build"),
             Binding::ArtifactRegistry => write!(f, "artifact-registry"),
             Binding::ServiceAccount => write!(f, "service-account"),
@@ -238,7 +260,9 @@ pub fn supported_bindings(platform: Platform, model: DeploymentModel) -> Vec<Bin
         Platform::Aws | Platform::Gcp | Platform::Azure => {
             bindings.push(Binding::Kv);
             bindings.push(Binding::Queue);
-            bindings.push(Binding::Events);
+            bindings.push(Binding::QueueEvent);
+            bindings.push(Binding::StorageEvent);
+            bindings.push(Binding::CronEvent);
             bindings.push(Binding::Build);
             bindings.push(Binding::ArtifactRegistry);
             bindings.push(Binding::ServiceAccount);
@@ -256,7 +280,9 @@ pub fn supported_bindings(platform: Platform, model: DeploymentModel) -> Vec<Bin
         Platform::Local => {
             bindings.push(Binding::Kv);
             bindings.push(Binding::Queue);
-            bindings.push(Binding::Events);
+            bindings.push(Binding::QueueEvent);
+            bindings.push(Binding::StorageEvent);
+            bindings.push(Binding::CronEvent);
             bindings.push(Binding::ArtifactRegistry);
             bindings.push(Binding::ServiceAccount);
             // Only the embedded Local controller ships in this repo, so Postgres is
@@ -293,13 +319,26 @@ pub fn exclusion_reason(
     match binding {
         Binding::Worker => Some("Worker binding test app endpoint not yet implemented"),
         Binding::Container => Some("Container binding requires managed container infrastructure"),
+        // The TypeScript comprehensive app's surface is storage/kv/queue/vault.
+        // The manager/controller-internal artifact-registry and
+        // service-account flows were split out of the TS SDK and are not
+        // reachable through any handler the TS app can serve. The Rust
+        // comprehensive app still exercises these two bindings. Build is not
+        // listed here because it is excluded for every app by the arm below.
+        Binding::ArtifactRegistry | Binding::ServiceAccount
+            if app == TestApp::ComprehensiveTs =>
+        {
+            Some(
+                "TS comprehensive app has no artifact-registry/service-account handlers after the SDK facade split",
+            )
+        }
         Binding::Build => Some("Build binding not yet stable across all platforms"),
         Binding::ServiceAccount if platform == Platform::Local => {
             Some("Local service account binding not yet wired up")
         }
         // Bun-compiled TypeScript binaries on Windows have a runtime issue where
         // setTimeout/async tasks in detached promises (waitUntil) don't execute.
-        // All other gRPC bindings work; only background tasks are affected.
+        // All direct binding checks work; only background tasks are affected.
         Binding::WaitUntil
             if platform == Platform::Local
                 && app == TestApp::ComprehensiveTs
@@ -321,6 +360,9 @@ pub(crate) fn test_app_path(app: TestApp) -> &'static str {
         TestApp::ComprehensiveRust => "test-apps/comprehensive-rust",
         TestApp::ComprehensiveTs => "test-apps/comprehensive-typescript",
         TestApp::FullStackMicroservices => "../../examples/full-stack-microservices",
+        TestApp::CommandRoutingTs => "../../examples/command-routing-ts",
+        TestApp::ContainerRust => "test-apps/container-rust",
+        TestApp::RuntimeLessMixed => "test-apps/runtime-less-mixed",
     }
 }
 
@@ -333,7 +375,11 @@ fn deployment_environment_variables(
     app: TestApp,
 ) -> Option<Vec<alien_manager_api::types::EnvironmentVariable>> {
     match app {
-        TestApp::ComprehensiveRust | TestApp::ComprehensiveTs => None,
+        TestApp::ComprehensiveRust
+        | TestApp::ComprehensiveTs
+        | TestApp::CommandRoutingTs
+        | TestApp::ContainerRust
+        | TestApp::RuntimeLessMixed => None,
         TestApp::FullStackMicroservices => {
             Some(vec![alien_manager_api::types::EnvironmentVariable {
                 name: "APP_SECRET".to_string(),
@@ -392,26 +438,29 @@ pub struct TestContext {
 }
 
 impl TestContext {
-    /// Best-effort cleanup: destroy the deployment and stop any agent.
+    /// Destroy the deployment, stop its operator, and remove external artifacts.
     ///
     /// Designed to be called from `AsyncTestContext::teardown()` so that
-    /// resources are released even when a test panics. Errors are logged
-    /// but never propagated.
-    pub async fn cleanup(mut self) {
-        // 1. Dump agent logs for debugging, then stop the agent.
-        if let Some(agent) = self.agent.take() {
-            if let Some(ref cid) = agent.container_id {
-                let logs = crate::operator::docker_container_logs(cid).await;
-                tracing::info!(container_id = %cid, "Agent container logs:\n{}", logs);
+    /// resources are released even when a test panics. Unsafe handoffs and
+    /// artifact teardown failures are returned so the E2E cannot pass while
+    /// leaking resources or discarding recovery state.
+    pub async fn cleanup(mut self) -> anyhow::Result<()> {
+        let has_distribution_cleanups = !self.distribution_cleanups.is_empty();
+        self.distribution_cleanups
+            .sort_by_key(|cleanup| cleanup.cleanup_order());
+
+        // Keep a pull operator alive until runtime deletion reaches a terminal
+        // handoff. Distribution artifacts must not be removed while that
+        // operator may still need their setup-created access path.
+        let defer_operator_cleanup = self.platform == Platform::Local || has_distribution_cleanups;
+        let mut agent = self.agent.take();
+        if !defer_operator_cleanup {
+            if let Some(agent) = agent.take() {
+                cleanup_operator(agent).await;
             }
-            if agent.installed_as_service {
-                let logs = crate::operator::collect_service_logs().await;
-                tracing::info!("Agent service logs:\n{}", logs);
-            }
-            agent.cleanup().await;
         }
 
-        // 2. Mark the deployment as delete-pending via the manager API.
+        // Mark the deployment as delete-pending via the manager API.
         // The manager chooses the resource cleanup set from deployment ownership.
         let destroy_enqueued = match self.deployment.destroy().await {
             Ok(()) => true,
@@ -425,25 +474,41 @@ impl TestContext {
             }
         };
 
-        if !destroy_enqueued {
-            // Still run setup artifact cleanup below. It is the owner of
-            // setup-created resources and should not depend on manager cleanup.
-            self.deployment.kill_foreground_agent().await;
-
-            for cleanup in self.distribution_cleanups {
-                cleanup.cleanup().await;
+        // Drive the deletion state machine with target credentials so cloud
+        // resources are actually torn down before the test exits.
+        let mut distribution_cleanup_ready = true;
+        if has_distribution_cleanups {
+            // If enqueueing deletion failed, make one immediate status check.
+            // A 404 or terminal teardown status proves external cleanup is
+            // safe; an active/unknown deployment means setup artifacts must be
+            // retained so live resources do not lose their credentials or
+            // scaffolding.
+            let handoff_timeout = if destroy_enqueued {
+                DISTRIBUTION_DELETION_HANDOFF_TIMEOUT
+            } else {
+                Duration::ZERO
+            };
+            match self.deployment.wait_until_deleted(handoff_timeout).await {
+                Ok(outcome) => info!(
+                    deployment = %self.deployment.id,
+                    ?outcome,
+                    "cleanup: runtime deletion handed off to setup artifact owner"
+                ),
+                Err(error) => {
+                    distribution_cleanup_ready = false;
+                    tracing::warn!(
+                        deployment = %self.deployment.id,
+                        %error,
+                        "cleanup: retaining distribution artifacts because runtime deletion did not reach a safe handoff"
+                    );
+                }
             }
-
-            info!(deployment = %self.deployment.id, "cleanup: complete");
-            return;
-        }
-
-        // 3. Drive the deletion state machine with target credentials so
-        //    cloud resources are actually torn down before the test exits.
-        if matches!(
-            self.platform,
-            Platform::Aws | Platform::Gcp | Platform::Azure
-        ) {
+        } else if destroy_enqueued
+            && matches!(
+                self.platform,
+                Platform::Aws | Platform::Gcp | Platform::Azure
+            )
+        {
             let config = crate::config::TestConfig::from_env();
             if config.has_platform(self.platform) {
                 if let Err(e) = crate::setup::teardown_target(
@@ -460,19 +525,129 @@ impl TestContext {
                         "cleanup: teardown_target failed (resources may be orphaned)"
                     );
                 }
+            } else {
+                tracing::warn!(
+                    deployment = %self.deployment.id,
+                    platform = %self.platform,
+                    "cleanup: target credentials unavailable for deployment teardown"
+                );
+            }
+        } else if destroy_enqueued && self.platform == Platform::Local {
+            if let Err(error) = complete_local_deletion(&self.deployment, &self.manager).await {
+                tracing::warn!(
+                    deployment = %self.deployment.id,
+                    %error,
+                    "cleanup: local operator did not complete deployment deletion"
+                );
             }
         }
 
         // Kill the foreground agent process and wait for it to exit.
         // This prevents orphaned agent processes from spamming logs after the test.
         self.deployment.kill_foreground_agent().await;
+        if let Some(mut agent) = agent.take() {
+            let helm_cleanup_is_tracked = agent
+                .helm_release
+                .as_ref()
+                .zip(agent.helm_namespace.as_ref())
+                .is_some_and(|(release, namespace)| {
+                    self.distribution_cleanups.iter().any(|cleanup| {
+                        matches!(
+                            cleanup,
+                            crate::distribution::DistributionArtifactCleanup::Helm {
+                                release: tracked_release,
+                                namespace: tracked_namespace,
+                                ..
+                            } if tracked_release == release && tracked_namespace == namespace
+                        )
+                    })
+                });
+            if helm_cleanup_is_tracked {
+                // The tracked artifact owns uninstall and namespace deletion so
+                // failures are propagated and the release is handled exactly once.
+                agent.helm_release = None;
+                agent.helm_namespace = None;
+            }
+            cleanup_operator(agent).await;
+        }
 
-        for cleanup in self.distribution_cleanups {
-            cleanup.cleanup().await;
+        if !distribution_cleanup_ready {
+            let recovery = self
+                .distribution_cleanups
+                .into_iter()
+                .map(|cleanup| cleanup.preserve_for_recovery())
+                .collect::<Vec<_>>()
+                .join("\n");
+            anyhow::bail!(
+                "Distribution cleanup stopped before setup teardown because live-resource deletion did not reach a safe handoff. Recovery artifacts:\n{recovery}"
+            );
+        }
+
+        let mut cleanups = self.distribution_cleanups.into_iter();
+        while let Some(cleanup) = cleanups.next() {
+            if let Err(error) = cleanup.cleanup().await {
+                let retained = cleanups
+                    .map(|cleanup| cleanup.preserve_for_recovery())
+                    .collect::<Vec<_>>()
+                    .join("\n");
+                if retained.is_empty() {
+                    return Err(error);
+                }
+                return Err(error.context(format!(
+                    "Subsequent distribution artifacts were retained to preserve cleanup order:\n{retained}"
+                )));
+            }
         }
 
         info!(deployment = %self.deployment.id, "cleanup: complete");
+        Ok(())
     }
+}
+
+async fn cleanup_operator(agent: crate::operator::TestAlienOperator) {
+    if let Some(ref cid) = agent.container_id {
+        let logs = crate::operator::docker_container_logs(cid).await;
+        tracing::info!(container_id = %cid, "Agent container logs:\n{}", logs);
+    }
+    if agent.installed_as_service {
+        let logs = crate::operator::collect_service_logs().await;
+        tracing::info!("Agent service logs:\n{}", logs);
+    }
+    agent.cleanup().await;
+}
+
+async fn complete_local_deletion(
+    deployment: &TestDeployment,
+    manager: &Arc<TestManager>,
+) -> anyhow::Result<()> {
+    let outcome = deployment
+        .wait_until_deleted(LOCAL_DELETION_TIMEOUT)
+        .await
+        .map_err(|error| anyhow::anyhow!(error.to_string()))?;
+
+    if outcome == crate::deployment::DeletionOutcome::Deleted {
+        return Ok(());
+    }
+
+    let state_directory = deployment
+        .local_state_directory()
+        .context("Local deployment state directory is unavailable for setup teardown")?;
+    info!(
+        deployment = %deployment.id,
+        state_directory = %state_directory.display(),
+        "runtime deletion handed off to client-side setup teardown"
+    );
+
+    alien_deploy_cli::commands::push_deletion(
+        manager.client(),
+        &deployment.id,
+        Platform::Local,
+        ClientConfig::Local {
+            state_directory: state_directory.to_string_lossy().into_owned(),
+        },
+    )
+    .await
+    .map_err(|error| anyhow::anyhow!("Local setup teardown failed: {error}"))
 }
 
 // ---------------------------------------------------------------------------
@@ -541,103 +716,6 @@ console.log(JSON.stringify(stack));
     });
 
     Ok(stack_by_platform)
-}
-
-async fn start_generated_helm_agent(
-    manager: &Arc<TestManager>,
-    deployment: &TestDeployment,
-    stack: &Stack,
-    operator_image: &str,
-) -> anyhow::Result<crate::operator::TestAlienOperator> {
-    let chart_dir = tempfile::tempdir().context("failed to create generated Helm chart dir")?;
-    let registry = alien_helm::HelmRegistry::built_in();
-    let mut stack_settings = alien_core::StackSettings::default();
-    stack_settings.deployment_model = alien_core::DeploymentModel::Pull;
-    let chart = alien_helm::generate_helm_chart(
-        stack,
-        alien_helm::HelmOptions {
-            registry: &registry,
-            stack_settings,
-            chart_name: format!("e2e-agent-{}", &uuid::Uuid::new_v4().to_string()[..8]),
-        },
-    )
-    .map_err(|error| anyhow::anyhow!("failed to generate Helm agent chart: {error}"))?;
-
-    for (path, contents) in chart.files {
-        let path = chart_dir.path().join(path);
-        if let Some(parent) = path.parent() {
-            tokio::fs::create_dir_all(parent).await?;
-        }
-        tokio::fs::write(path, contents).await?;
-    }
-
-    let (repository, tag) = split_image_tag(operator_image)?;
-    let mut runtime = serde_json::json!({
-        "image": {
-            "repository": repository,
-            "tag": tag,
-            "pullPolicy": "IfNotPresent",
-        },
-        "encryption": {
-            "key": crate::operator::generate_encryption_key(),
-        }
-    });
-    if let Some(image_pull_secrets) = runtime_image_pull_secrets(&repository) {
-        runtime["imagePullSecrets"] = image_pull_secrets;
-    }
-
-    let values = serde_json::json!({
-        "management": {
-            "token": deployment.token.clone(),
-            "name": deployment.name.clone(),
-            "url": manager.public_url.clone(),
-            "deploymentId": deployment.id.clone(),
-            "updates": "auto",
-            "telemetry": "auto",
-            "healthChecks": "on",
-        },
-        "runtime": runtime,
-        "stackSettings": {
-            "deploymentModel": "pull",
-            "updates": "auto",
-            "telemetry": "auto",
-            "heartbeats": "on",
-        },
-        "infrastructure": null,
-    });
-    let values_path = chart_dir.path().join("values.e2e.yaml");
-    tokio::fs::write(&values_path, to_helm_values_yaml(&values)?).await?;
-
-    crate::operator::TestAlienOperator::helm_install_with_values(
-        chart_dir.path(),
-        &values_path,
-        &format!("e2e-agent-{}", &uuid::Uuid::new_v4().to_string()[..8]),
-        "alien-test",
-        None,
-        None,
-        &[],
-    )
-    .await
-    .map_err(|error| {
-        anyhow::anyhow!("Failed to start alien-operator via generated Helm chart: {error}")
-    })
-}
-
-fn split_image_tag(image: &str) -> anyhow::Result<(String, String)> {
-    if image.contains('@') {
-        anyhow::bail!(
-            "ALIEN_TEST_OVERRIDE_AGENT_IMAGE must use a tag for Helm E2E installs; digest references are not supported yet"
-        );
-    }
-    let last_slash = image.rfind('/');
-    let last_colon = image.rfind(':');
-    if let Some(colon) =
-        last_colon.filter(|colon| last_slash.map(|slash| *colon > slash).unwrap_or(true))
-    {
-        Ok((image[..colon].to_string(), image[colon + 1..].to_string()))
-    } else {
-        Ok((image.to_string(), "latest".to_string()))
-    }
 }
 
 // ---------------------------------------------------------------------------
@@ -1136,6 +1214,11 @@ pub async fn run_alien_deploy_up(
         .ok()
         .filter(|v| v == "0" || v == "false")
         .is_none();
+    let foreground_data_dir = if foreground {
+        Some(tempfile::tempdir().context("Failed to create foreground operator data directory")?)
+    } else {
+        None
+    };
 
     // Service mode requires root on Linux/macOS (systemd/launchd).
     let use_sudo =
@@ -1164,6 +1247,11 @@ pub async fn run_alien_deploy_up(
         // so agent logs are visible in test output and pipes don't fill up.
         cmd.stdout(std::process::Stdio::inherit())
             .stderr(std::process::Stdio::inherit());
+        // Isolate the complete foreground customer flow. alien-deploy starts
+        // alien-operator, so Unix teardown must signal the group rather than
+        // killing only the wrapper and orphaning its child.
+        #[cfg(unix)]
+        cmd.process_group(0);
     } else {
         // In service mode the process exits quickly. Capture output for error reporting.
         cmd.stdout(std::process::Stdio::piped())
@@ -1174,11 +1262,12 @@ pub async fn run_alien_deploy_up(
         cmd.arg("--foreground");
         // Use a temp directory for agent state so tests don't interfere with
         // each other or with a user's real agent data at ~/.alien/agent-data.
-        let agent_data_dir = tempfile::tempdir().expect("failed to create temp dir for agent data");
-        cmd.arg("--data-dir").arg(agent_data_dir.path());
-        // Keep the tempdir alive — it'll be cleaned up when the test ends.
-        // Leak it intentionally; OS cleans up /tmp on reboot anyway.
-        std::mem::forget(agent_data_dir);
+        cmd.arg("--data-dir").arg(
+            foreground_data_dir
+                .as_ref()
+                .context("Foreground operator data directory was not initialized")?
+                .path(),
+        );
     }
 
     // Ensure the locally-built alien-operator binary is used instead of
@@ -1235,7 +1324,10 @@ pub async fn run_alien_deploy_up(
             }
 
             if start.elapsed() > max_wait {
-                child.kill().await.ok();
+                if let Err(error) = crate::deployment::terminate_foreground_agent(&mut child).await
+                {
+                    tracing::warn!(%error, "Failed to stop timed-out foreground agent");
+                }
                 anyhow::bail!("Timed out waiting for foreground agent to create deployment");
             }
         }
@@ -1307,7 +1399,14 @@ pub async fn run_alien_deploy_up(
     );
 
     if let Some(child) = _foreground_child {
-        deployment.set_foreground_agent(child);
+        deployment.set_foreground_agent(
+            child,
+            foreground_data_dir.context("Foreground operator data directory ownership was lost")?,
+        );
+    } else if platform == Platform::Local {
+        deployment.set_local_service_state_directory(std::path::PathBuf::from(
+            alien_deploy_cli::commands::operator::default_service_data_dir(),
+        ));
     }
 
     Ok(deployment)
@@ -1334,27 +1433,42 @@ pub fn is_platform_available(
                     || config.has_platform(Platform::Gcp)
                     || config.has_platform(Platform::Azure))
         }
-        Platform::Kubernetes => {
-            // Kubernetes only supports pull (container) model
-            model == DeploymentModel::Pull
-        }
         Platform::Aws | Platform::Gcp | Platform::Azure => {
-            // Cloud platforms support both push and pull models.
-            //
-            // Push: manager deploys using cross-account impersonation (RSM).
-            // Pull: alien-operator runs in the target environment and deploys
-            //       directly using target credentials — no cross-account IAM.
-            //
-            // Both require management + target credentials to be configured.
-            config.has_platform(platform)
+            // `setup` currently owns the cloud push path. Kubernetes pull is
+            // exercised through `setup_distribution`, where Terraform creates
+            // the setup resources and Helm installs the operator.
+            model == DeploymentModel::Push && config.has_platform(platform)
         }
         _ => false,
+    }
+}
+
+fn deployment_running_timeout(platform: Platform) -> Duration {
+    match platform {
+        Platform::Azure => AZURE_DEPLOYMENT_RUNNING_TIMEOUT,
+        _ => DEFAULT_DEPLOYMENT_RUNNING_TIMEOUT,
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn azure_readiness_budget_accounts_for_slow_control_plane_propagation() {
+        assert_eq!(
+            deployment_running_timeout(Platform::Azure),
+            Duration::from_secs(1_800)
+        );
+        assert_eq!(
+            deployment_running_timeout(Platform::Aws),
+            Duration::from_secs(600)
+        );
+        assert_eq!(
+            deployment_running_timeout(Platform::Gcp),
+            Duration::from_secs(600)
+        );
+    }
 
     #[test]
     fn managed_kubernetes_flows_use_kubernetes_runtime_with_cloud_base() {
@@ -1379,6 +1493,118 @@ mod tests {
             DistributionFlow::TerraformOnpremHelmPull.kubernetes_base_platform(),
             None
         );
+    }
+
+    #[test]
+    fn event_delivery_bindings_cover_every_trigger_capable_platform() {
+        // Trigger delivery must be proven wherever the platform wires
+        // queue/storage/schedule triggers: the three clouds and Local.
+        for platform in [
+            Platform::Aws,
+            Platform::Gcp,
+            Platform::Azure,
+            Platform::Local,
+        ] {
+            for model in [DeploymentModel::Push, DeploymentModel::Pull] {
+                let supported = supported_bindings(platform, model);
+                for binding in [
+                    Binding::QueueEvent,
+                    Binding::StorageEvent,
+                    Binding::CronEvent,
+                ] {
+                    assert!(
+                        supported.contains(&binding),
+                        "expected {:?} in supported bindings for {:?}/{:?}",
+                        binding,
+                        platform,
+                        model
+                    );
+                    assert!(
+                        exclusion_reason(platform, model, binding, TestApp::ComprehensiveRust)
+                            .is_none(),
+                        "{:?} must not be excluded for the Rust app on {:?}/{:?}",
+                        binding,
+                        platform,
+                        model
+                    );
+                    assert!(
+                        exclusion_reason(platform, model, binding, TestApp::ComprehensiveTs)
+                            .is_none(),
+                        "{:?} must not be excluded for the TS app on {:?}/{:?}",
+                        binding,
+                        platform,
+                        model
+                    );
+                }
+            }
+        }
+        // Kubernetes worker deployments don't wire triggers in this repo.
+        let k8s = supported_bindings(Platform::Kubernetes, DeploymentModel::Pull);
+        for binding in [
+            Binding::QueueEvent,
+            Binding::StorageEvent,
+            Binding::CronEvent,
+        ] {
+            assert!(!k8s.contains(&binding));
+        }
+    }
+
+    #[test]
+    fn ts_app_excludes_manager_internal_bindings_on_every_platform() {
+        // Build is intentionally omitted: it is excluded for every app, not the
+        // TS app specifically, so asserting its exclusion here would be
+        // tautological. artifact-registry and service-account are the genuinely
+        // TS-specific exclusions (the Rust app still serves them — see
+        // `rust_app_keeps_service_account_and_artifact_registry_coverage`).
+        for platform in [
+            Platform::Aws,
+            Platform::Gcp,
+            Platform::Azure,
+            Platform::Kubernetes,
+            Platform::Local,
+        ] {
+            for model in [DeploymentModel::Push, DeploymentModel::Pull] {
+                for binding in [Binding::ArtifactRegistry, Binding::ServiceAccount] {
+                    assert!(
+                        exclusion_reason(platform, model, binding, TestApp::ComprehensiveTs)
+                            .is_some(),
+                        "expected {:?}/{:?} to be excluded for the TS app on {:?}/{:?}",
+                        binding,
+                        TestApp::ComprehensiveTs,
+                        platform,
+                        model
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn rust_app_keeps_service_account_and_artifact_registry_coverage() {
+        // The Rust comprehensive app still serves these handlers, so only the
+        // pre-existing, platform-specific exclusions should apply to it.
+        assert!(exclusion_reason(
+            Platform::Aws,
+            DeploymentModel::Push,
+            Binding::ArtifactRegistry,
+            TestApp::ComprehensiveRust
+        )
+        .is_none());
+        assert!(exclusion_reason(
+            Platform::Aws,
+            DeploymentModel::Push,
+            Binding::ServiceAccount,
+            TestApp::ComprehensiveRust
+        )
+        .is_none());
+        // Local service account remains excluded regardless of app.
+        assert!(exclusion_reason(
+            Platform::Local,
+            DeploymentModel::Pull,
+            Binding::ServiceAccount,
+            TestApp::ComprehensiveRust
+        )
+        .is_some());
     }
 }
 
@@ -1447,11 +1673,11 @@ pub async fn setup(
 
     // ── Route to the correct flow based on platform + model ─────────
     //
-    // Push (AWS/GCP/Azure) and Local pull: use the real `alien-deploy deploy` flow.
+    // Push (AWS/GCP/Azure) and Local pull use separate real product flows.
     //   Developer role: build, push, release, create DG + token.
     //   Customer role: `alien-deploy deploy --token <dg_token> --platform <platform>`.
-    //
-    // K8s pull uses the direct Terraform+Helm flow.
+    // Kubernetes pull belongs to `setup_distribution`; it needs the setup
+    // artifact outputs to select a cloud registry and configure Helm.
 
     // Only local pull uses `alien-deploy deploy` for now.
     // Push model has an auth issue: alien-deploy deploy uses the DG token for
@@ -1492,15 +1718,13 @@ pub async fn setup(
 
         (deployment, agent)
     } else {
-        // ── Direct flow (push + K8s pull) ───────────────────────────
+        // ── Direct cloud push flow ──────────────────────────────────
         //
         // Push model: test harness calls push_initial_setup() directly
         // with the admin token (alien-deploy deploy auth not yet supported).
-        //
-        // K8s pull: helm install alien-operator chart.
-        if model == DeploymentModel::Pull && platform != Platform::Kubernetes {
+        if model == DeploymentModel::Pull {
             anyhow::bail!(
-                "direct cloud pull is not supported by the e2e harness; use local pull or Terraform+Helm Kubernetes pull"
+                "direct pull is not supported by this E2E path; use local pull or a Terraform+Helm Kubernetes distribution test"
             );
         }
 
@@ -1533,21 +1757,7 @@ pub async fn setup(
             }
         }
 
-        // Pull model: start the agent for supported pull flows.
-        let agent = if model == DeploymentModel::Pull && platform == Platform::Kubernetes {
-            let operator_image = std::env::var("ALIEN_TEST_OVERRIDE_AGENT_IMAGE")
-                .ok()
-                .filter(|image| !image.is_empty())
-                .unwrap_or_else(|| "ghcr.io/alienplatform/alien-operator:latest".to_string());
-
-            let agent =
-                start_generated_helm_agent(&manager, &deployment, &stack, &operator_image).await?;
-            Some(agent)
-        } else {
-            None
-        };
-
-        (deployment, agent)
+        (deployment, None)
     };
 
     // Capture agent container ID for debug logging (avoids holding non-Send
@@ -1558,7 +1768,7 @@ pub async fn setup(
     // For push: the manager's deployment loop drives this after alien-deploy deploy completes.
     // For pull: the alien-operator drives this via sync + deployment loop.
     let wait_result = deployment
-        .wait_until_running(Duration::from_secs(600))
+        .wait_until_running(deployment_running_timeout(platform))
         .await
         .map_err(|e| e.to_string());
 
@@ -1638,27 +1848,29 @@ async fn cleanup_failed_setup(
 ) {
     tracing::warn!(deployment_id = %deployment.id, "Running cleanup after setup failure");
 
-    // Stop the agent first
-    if let Some(agent) = agent {
-        if let Some(ref cid) = agent.container_id {
-            let logs = crate::operator::docker_container_logs(cid).await;
-            tracing::info!(container_id = %cid, "Agent container logs:\n{}", logs);
+    let defer_operator_cleanup = platform == Platform::Local;
+    let mut agent = agent;
+    if !defer_operator_cleanup {
+        if let Some(agent) = agent.take() {
+            cleanup_operator(agent).await;
         }
-        agent.cleanup().await;
     }
 
     // Mark deployment as delete-pending
-    if let Err(e) = deployment.destroy().await {
-        tracing::warn!(
-            deployment = %deployment.id,
-            error = %e,
-            "cleanup: failed to trigger destroy"
-        );
-        return;
-    }
+    let destroy_enqueued = match deployment.destroy().await {
+        Ok(()) => true,
+        Err(error) => {
+            tracing::warn!(
+                deployment = %deployment.id,
+                %error,
+                "cleanup: failed to trigger destroy"
+            );
+            false
+        }
+    };
 
     // Drive cloud resource deletion with target credentials
-    if matches!(platform, Platform::Aws | Platform::Gcp | Platform::Azure) {
+    if destroy_enqueued && matches!(platform, Platform::Aws | Platform::Gcp | Platform::Azure) {
         let config = TestConfig::from_env();
         if config.has_platform(platform) {
             if let Err(e) =
@@ -1671,6 +1883,19 @@ async fn cleanup_failed_setup(
                 );
             }
         }
+    } else if destroy_enqueued && platform == Platform::Local {
+        if let Err(error) = complete_local_deletion(deployment, manager).await {
+            tracing::warn!(
+                deployment = %deployment.id,
+                %error,
+                "cleanup: local operator did not complete deployment deletion after setup failure"
+            );
+        }
+    }
+
+    deployment.kill_foreground_agent().await;
+    if let Some(agent) = agent.take() {
+        cleanup_operator(agent).await;
     }
 
     tracing::info!(deployment = %deployment.id, "cleanup after setup failure: complete");

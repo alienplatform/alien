@@ -69,13 +69,25 @@ impl ManagerConfig {
     }
 
     pub fn commands_base_url(&self) -> String {
-        format!("{}/v1", self.base_url())
+        format!("{}/v1", self.base_url().trim_end_matches('/'))
     }
 
     pub fn releases_url(&self) -> String {
         self.releases_url
             .clone()
             .unwrap_or_else(|| "https://releases.alien.dev".to_string())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::ManagerConfig;
+
+    #[test]
+    fn commands_base_url_normalizes_trailing_slash() {
+        let mut config = ManagerConfig::default();
+        config.base_url = Some("https://manager.example.com/".to_string());
+        assert_eq!(config.commands_base_url(), "https://manager.example.com/v1");
     }
 }
 

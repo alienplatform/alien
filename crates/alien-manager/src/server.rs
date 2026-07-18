@@ -23,6 +23,7 @@ pub struct AlienManager {
     pub(crate) server_bindings: Arc<ServerBindings>,
     pub(crate) dev_status_tx: Option<tokio::sync::watch::Sender<()>>,
     pub(crate) log_buffer: Arc<LogBuffer>,
+    pub(crate) command_server: Arc<alien_commands::server::CommandServer>,
 }
 
 impl AlienManager {
@@ -91,6 +92,25 @@ impl AlienManager {
             });
         } else {
             info!("Heartbeat loop disabled");
+        }
+
+        // Spawn the command deadline reaper: expires overdue non-terminal
+        // commands (including PendingUpload ones no lease scan or status
+        // poll would ever touch). Lazy enforcement still exists on the
+        // status/lease paths; this loop is the backstop that guarantees
+        // termination without a poller.
+        {
+            let command_server = self.command_server.clone();
+            tokio::spawn(async move {
+                let mut interval = tokio::time::interval(std::time::Duration::from_secs(30));
+                interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+                loop {
+                    interval.tick().await;
+                    if let Err(e) = command_server.reap_expired_commands().await {
+                        tracing::warn!(error = %e, "Command deadline reap failed");
+                    }
+                }
+            });
         }
 
         // Start the HTTP server

@@ -1010,6 +1010,25 @@ impl StackExecutor {
     pub async fn step(&self, state: StackState) -> Result<StepResult> {
         validate_stack_controller_state_versions(&state)?;
 
+        let mut state = state;
+        for (resource_id, resource_state) in &mut state.resources {
+            if resource_state.status != ResourceStatus::UpdateFailed {
+                continue;
+            }
+            let Some(desired) = self.resources.get(resource_id) else {
+                continue;
+            };
+            if resource_state.config != desired.resource {
+                continue;
+            }
+            if resource_state.retry_failed()? {
+                debug!(
+                    "Resumed unchanged failed update for '{}' before planning",
+                    resource_id
+                );
+            }
+        }
+
         let mut next_state = state.clone(); // Clone the input state to modify
 
         // --- Planning Phase ---
@@ -1254,8 +1273,10 @@ impl StackExecutor {
                     resource_id, current_state.status
                 );
 
+                let update_state = current_state.clone();
+
                 // Try to get the controller and transition to update
-                match current_state.get_internal_controller() {
+                match update_state.get_internal_controller() {
                     Ok(Some(mut controller)) => {
                         match controller.transition_to_update() {
                             Ok(()) => {
@@ -1279,7 +1300,7 @@ impl StackExecutor {
                                     }
                                 };
 
-                                let updated_state = current_state.with_updates(|state| {
+                                let updated_state = update_state.with_updates(|state| {
                                     state.config = new_config.clone(); // Set to new desired config
                                     state.previous_config = Some(current_state.config.clone()); // Store old config
                                     state.dependencies = desired_config.dependencies.clone(); // Update dependencies to match new config
@@ -1287,7 +1308,8 @@ impl StackExecutor {
                                     state.outputs = controller.get_outputs();
                                     state.retry_attempt = 0;
                                     state.error = None; // Clear error when starting update
-                                                        // Update internal state with the mutated controller
+                                    state.last_failed_state = None;
+                                    // Update internal state with the mutated controller
                                     if let Err(e) = state.set_internal_controller(Some(controller))
                                     {
                                         error!("Failed to serialize controller state: {}", e);
@@ -1301,7 +1323,7 @@ impl StackExecutor {
                                     resource_id, e
                                 );
                                 // Create a failed update state and preserve current controller state for retry
-                                let failed_update_state = current_state.with_updates(|state| {
+                                let failed_update_state = update_state.with_updates(|state| {
                                     state.status = ResourceStatus::UpdateFailed;
                                     state.error = Some(e.into_generic());
                                     state.retry_attempt = 0;

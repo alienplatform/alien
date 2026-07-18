@@ -286,7 +286,7 @@ mod tests {
                 kubernetes: Some(KubernetesSettings {
                     cluster: Some(KubernetesClusterSettings {
                         ownership: KubernetesClusterOwnership::Existing,
-                        namespace: Some("alien-runtime".to_string()),
+                        namespace: Some("alien-worker-runtime".to_string()),
                         cloud: None,
                     }),
                     exposure: None,
@@ -306,6 +306,6 @@ mod tests {
 
         assert_eq!(cluster.provider, KubernetesClusterProvider::Eks);
         assert_eq!(cluster.ownership, KubernetesClusterOwnership::Existing);
-        assert_eq!(cluster.namespace, "alien-runtime");
+        assert_eq!(cluster.namespace, "alien-worker-runtime");
     }
 }

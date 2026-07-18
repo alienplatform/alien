@@ -2,7 +2,7 @@
 //!
 //! These tests verify that:
 //! 1. Manager creates KV databases usable by LocalKv binding
-//! 2. Health checks actually open sled databases
+//! 2. Health checks read the localkv.v1 format marker
 //! 3. Data persists across sessions
 
 use alien_bindings::providers::kv::local::LocalKv;
@@ -18,10 +18,10 @@ async fn test_manager_creates_usable_kv() {
     let temp_dir = TempDir::new().unwrap();
     let manager = LocalKvManager::new(temp_dir.path().to_path_buf());
 
-    // Manager creates KV path (returns the path, but sled creates the actual DB)
+    // Manager creates the KV directory (LocalKv creates the store file on open)
     let kv_path = manager.create_kv("my-kv").await.unwrap();
 
-    // LocalKv opens sled at that path (sled creates the directory)
+    // LocalKv opens the SQLite store at that path (creating localkv.sqlite)
     let kv = LocalKv::new(kv_path).await.unwrap();
 
     // Actually use it
@@ -32,7 +32,7 @@ async fn test_manager_creates_usable_kv() {
     assert_eq!(value, Some(b"value1".to_vec()));
 }
 
-/// Health check actually opens sled database
+/// Health check reads the localkv.v1 format marker
 #[tokio::test]
 async fn test_health_check_opens_database() {
     let temp_dir = TempDir::new().unwrap();
@@ -41,14 +41,17 @@ async fn test_health_check_opens_database() {
     // Missing KV fails
     assert!(manager.check_health("nonexistent").await.is_err());
 
-    // Create KV path and open database (sled creates the dir on open)
+    // Directory created but store not yet opened → healthy (not-yet-materialized
+    // is a valid state; the store file only appears on first LocalKv::new).
     let kv_path = manager.create_kv("healthy-kv").await.unwrap();
+    manager.check_health("healthy-kv").await.unwrap();
+
+    // Open the store so localkv.sqlite exists with the localkv.v1 marker.
     {
         let _kv = LocalKv::new(kv_path).await.unwrap();
-        // KV is dropped here, releasing the sled lock
     }
 
-    // Now health check should pass (database exists and unlocked)
+    // Health check reads the format marker and passes
     manager.check_health("healthy-kv").await.unwrap();
 
     // Delete and verify health fails
@@ -78,7 +81,7 @@ async fn test_kv_data_persists_across_sessions() {
     // Read with fresh instance
     {
         let manager = LocalKvManager::new(temp_dir.path().to_path_buf());
-        // KV should still exist (sled created the directory)
+        // KV should still exist (the directory persists on disk)
         assert!(manager.kv_exists("persist-kv"));
 
         let kv_path = manager.get_kv_path("persist-kv").unwrap();
@@ -94,7 +97,7 @@ async fn test_get_binding_returns_local_variant() {
     let temp_dir = TempDir::new().unwrap();
     let manager = LocalKvManager::new(temp_dir.path().to_path_buf());
 
-    // Create path and open with sled (so directory exists)
+    // Create path and open the store (so the directory exists)
     let kv_path = manager.create_kv("binding-test").await.unwrap();
     let _kv = LocalKv::new(kv_path).await.unwrap();
 

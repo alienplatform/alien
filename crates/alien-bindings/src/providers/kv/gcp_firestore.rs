@@ -118,6 +118,84 @@ impl GcpFirestoreKv {
     }
 
     /// Converts a Firestore Document to KV document
+    /// Attempt to take over a logically-expired document after a
+    /// conditional create conflict. Returns `Ok(true)` only when THIS
+    /// caller replaced the expired document (an `updateTime` precondition
+    /// makes the replace atomic — a racing taker bumps the update time and
+    /// this patch loses); a live document, a lost race, or a deletion in
+    /// between all resolve to `Ok(false)`.
+    async fn try_take_over_expired(&self, key: &str, document: &Document) -> Result<bool> {
+        use alien_client_core::ErrorData as CloudErrorData;
+        use alien_gcp_clients::gcp::firestore::{Precondition, PreconditionType};
+
+        let document_path = format!("{}/{}", self.collection_name, key);
+        let existing = match self
+            .client
+            .get_document(
+                self.database_id.clone(),
+                document_path.clone(),
+                None,
+                None,
+                None,
+            )
+            .await
+        {
+            Ok(existing) => existing,
+            Err(e)
+                if matches!(
+                    e.error.as_ref(),
+                    Some(CloudErrorData::RemoteResourceNotFound { .. })
+                ) =>
+            {
+                return Ok(false);
+            }
+            Err(e) => {
+                return Err(crate::error::map_cloud_client_error(
+                    e,
+                    format!("Failed to read existing document for key '{}'", key),
+                    Some(key.to_string()),
+                ));
+            }
+        };
+
+        let kv_doc = self.firestore_to_kv_document(&existing)?;
+        if !self.is_expired(kv_doc.expires_at) {
+            return Ok(false);
+        }
+        let Some(update_time) = existing.update_time.clone() else {
+            return Ok(false);
+        };
+
+        match self
+            .client
+            .patch_document(
+                self.database_id.clone(),
+                document_path,
+                document.clone(),
+                None,
+                None,
+                Some(Precondition {
+                    condition: PreconditionType::UpdateTime(update_time),
+                }),
+            )
+            .await
+        {
+            Ok(_) => Ok(true),
+            Err(e) => match e.error.as_ref() {
+                // A lost race: the precondition mismatch maps to Conflict
+                // (FAILED_PRECONDITION → RemoteResourceConflict in
+                // map_gcp_error), and a deletion in between maps to NotFound.
+                Some(CloudErrorData::RemoteResourceConflict { .. })
+                | Some(CloudErrorData::RemoteResourceNotFound { .. }) => Ok(false),
+                _ => Err(crate::error::map_cloud_client_error(
+                    e,
+                    format!("Failed to take over expired document for key '{}'", key),
+                    Some(key.to_string()),
+                )),
+            },
+        }
+    }
+
     fn firestore_to_kv_document(&self, doc: &Document) -> Result<KvDocument> {
         let fields = doc.fields.as_ref().ok_or_else(|| {
             AlienError::new(ErrorData::UnexpectedResponseFormat {
@@ -258,7 +336,7 @@ impl Kv for GcpFirestoreKv {
                     self.database_id.clone(),
                     self.collection_name.clone(),
                     Some(document_id),
-                    document,
+                    document.clone(),
                     None,
                 )
                 .await
@@ -268,7 +346,13 @@ impl Kv for GcpFirestoreKv {
                     // Check if this is a conflict (document already exists)
                     match &e.error {
                         Some(alien_client_core::ErrorData::RemoteResourceConflict { .. }) => {
-                            Ok(false)
+                            // Expired documents count as ABSENT, matching the
+                            // local provider's atomic takeover: Firestore's
+                            // TTL deletion can lag the logical expiry by
+                            // hours, and without a takeover a conditional
+                            // put (e.g. a command lease after the previous
+                            // holder died) stays blocked until then.
+                            self.try_take_over_expired(key, &document).await
                         }
                         _ => Err(crate::error::map_cloud_client_error(
                             e,

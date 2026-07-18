@@ -1,7 +1,9 @@
 //! Tests for the plan() method that calculates diffs.
 
 use super::helpers::*;
+use crate::core::state_utils::StackResourceStateExt;
 use crate::error::Result;
+use crate::worker::{TestWorkerController, TestWorkerState};
 use alien_core::{ResourceLifecycle, ResourceStatus, Stack};
 
 /// Tests that plan identifies resources to create.
@@ -219,6 +221,89 @@ async fn test_plan_update_failed_with_config_change() -> Result<()> {
         plan.updates.contains_key("func1"),
         "UpdateFailed resource with config change should be marked for update"
     );
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn test_step_restarts_update_from_terminal_failure_with_config_change() -> Result<()> {
+    let func_v1 = test_function_with_image("func1", "image-v1");
+    let stack_v1 = Stack::new("update-failed-repair-test".to_owned())
+        .add(func_v1, ResourceLifecycle::Live)
+        .build();
+    let mut state = run_to_synced(&new_executor(&stack_v1)?, new_test_state()).await?;
+
+    let resource_state = state.resources.get_mut("func1").unwrap();
+    let mut failed_controller = resource_state
+        .get_internal_controller_typed::<TestWorkerController>()
+        .unwrap();
+    let mut failed_poll = failed_controller.clone();
+    failed_poll.state = TestWorkerState::UpdateConfigPolling;
+    failed_poll.update_config_poll_count = 7;
+    failed_controller.state = TestWorkerState::UpdateFailed;
+    resource_state.status = ResourceStatus::UpdateFailed;
+    resource_state.set_internal_controller(Some(Box::new(failed_controller)))?;
+    resource_state.set_last_failed_controller(Some(Box::new(failed_poll)))?;
+
+    let func_v2 = test_function_with_image("func1", "image-v2");
+    let stack_v2 = Stack::new("update-failed-repair-test".to_owned())
+        .add(func_v2.clone(), ResourceLifecycle::Live)
+        .build();
+    let result = new_executor(&stack_v2)?.step(state).await?;
+    let repaired = result.next_state.resources.get("func1").unwrap();
+
+    assert_eq!(repaired.status, ResourceStatus::Updating);
+    assert_eq!(repaired.config, alien_core::Resource::new(func_v2));
+    assert!(repaired.error.is_none());
+    let repaired_controller = repaired
+        .get_internal_controller_typed::<TestWorkerController>()
+        .unwrap();
+    assert_eq!(
+        repaired_controller.state,
+        TestWorkerState::UpdateCodePolling
+    );
+    assert_eq!(repaired_controller.update_code_poll_count, 0);
+    assert_eq!(repaired_controller.update_config_poll_count, 0);
+    assert!(repaired.last_failed_state.is_none());
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn test_same_config_retry_resumes_exact_failed_update_handler() -> Result<()> {
+    let func = test_function_with_image("func1", "image-v1");
+    let stack = Stack::new("same-config-update-retry-test".to_owned())
+        .add(func, ResourceLifecycle::Live)
+        .build();
+    let mut state = run_to_synced(&new_executor(&stack)?, new_test_state()).await?;
+
+    let resource_state = state.resources.get_mut("func1").unwrap();
+    let mut failed_terminal = resource_state
+        .get_internal_controller_typed::<TestWorkerController>()
+        .unwrap();
+    let mut failed_poll = failed_terminal.clone();
+    failed_poll.state = TestWorkerState::UpdateConfigPolling;
+    failed_poll.update_config_poll_count = 1;
+    failed_terminal.state = TestWorkerState::UpdateFailed;
+    resource_state.status = ResourceStatus::UpdateFailed;
+    resource_state.set_internal_controller(Some(Box::new(failed_terminal)))?;
+    resource_state.set_last_failed_controller(Some(Box::new(failed_poll)))?;
+
+    let result = new_executor(&stack)?.step(state).await?;
+    let retried = result.next_state.resources.get("func1").unwrap();
+    let retried_controller = retried
+        .get_internal_controller_typed::<TestWorkerController>()
+        .unwrap();
+    assert_eq!(retried.status, ResourceStatus::Updating);
+    assert_eq!(
+        retried_controller.state,
+        TestWorkerState::UpdateConfigPolling
+    );
+    assert_eq!(
+        retried_controller.update_config_poll_count, 2,
+        "the saved polling handler should resume and execute one step"
+    );
+    assert!(retried.last_failed_state.is_none());
 
     Ok(())
 }

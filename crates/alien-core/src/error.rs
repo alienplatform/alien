@@ -41,6 +41,19 @@ pub enum ErrorData {
     )]
     InvalidResourceUpdate { resource_id: String, reason: String },
 
+    /// Worker execution timeout is outside the supported range.
+    #[error(
+        code = "WORKER_TIMEOUT_INVALID",
+        message = "Worker timeoutSeconds must be between 1 and {max_timeout_seconds} seconds, got {timeout_seconds}",
+        retryable = "false",
+        internal = "false",
+        http_status_code = 400
+    )]
+    WorkerTimeoutInvalid {
+        timeout_seconds: u32,
+        max_timeout_seconds: u32,
+    },
+
     /// The resource exists but has not produced any outputs yet.
     #[error(
         code = "RESOURCE_HAS_NO_OUTPUTS",
@@ -185,6 +198,16 @@ pub enum ErrorData {
         message: String,
         field: Option<String>,
     },
+
+    /// A command-enabled resource exists but the deployment has no token to
+    /// authenticate its command transport.
+    #[error(
+        code = "COMMAND_TOKEN_MISSING",
+        message = "Deployment has command-enabled resource '{resource_id}' but no deployment token to authenticate it: {reason}",
+        retryable = "false",
+        internal = "false"
+    )]
+    CommandTokenMissing { resource_id: String, reason: String },
 
     /// Public URL configuration is invalid.
     #[error(

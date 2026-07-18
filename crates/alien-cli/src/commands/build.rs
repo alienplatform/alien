@@ -93,7 +93,7 @@ pub struct BuildArgs {
     #[arg(long)]
     pub cache_url: Option<String>,
 
-    /// Override the runtime base image used for source-built cloud containers.
+    /// Override the Worker runtime base image used for source-built cloud Workers.
     #[arg(long, env = "ALIEN_OVERRIDE_BASE_IMAGE", hide = true)]
     pub override_base_image: Option<String>,
 

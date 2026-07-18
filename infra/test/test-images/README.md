@@ -2,7 +2,7 @@
 
 Minimal container images used by **cloud unit tests** (`alien-aws-clients`, `alien-gcp-clients`, etc.) to verify that infra controllers can deploy, invoke, and tear down cloud resources.
 
-These are **NOT** the runtime image. The actual runtime image containing `alien-runtime` is built from `docker/Dockerfile.alien-base`.
+These are **NOT** the runtime image. The actual runtime image containing `alien-worker-runtime` is built from `docker/Dockerfile.alien-base`.
 
 | Image | Purpose | Target |
 |-------|---------|--------|

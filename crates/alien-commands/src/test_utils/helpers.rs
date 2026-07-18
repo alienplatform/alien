@@ -61,6 +61,8 @@ pub fn test_envelope_for_agent(
 ) -> Envelope {
     Envelope::new(
         deployment_id,
+        // Matches the default target auto-registered by `TestCommandServer`.
+        CommandTarget::new("test-worker", CommandTargetType::Worker),
         command_id,
         1,
         None,
@@ -130,6 +132,7 @@ pub fn test_inline_create_command_with_params(
         params: BodySpec::inline(&params_bytes),
         deadline: None,
         idempotency_key: None,
+        target_resource_id: None,
     };
 
     (request, params_bytes)
@@ -147,6 +150,7 @@ pub fn test_storage_create_command(
         params: BodySpec::storage(size as u64),
         deadline: None,
         idempotency_key: None,
+        target_resource_id: None,
     }
 }
 
@@ -162,6 +166,7 @@ pub fn test_create_command(
         params,
         deadline: None,
         idempotency_key: None,
+        target_resource_id: None,
     }
 }
 
@@ -178,6 +183,7 @@ pub fn test_create_command_with_deadline(
         params,
         deadline: Some(deadline),
         idempotency_key: None,
+        target_resource_id: None,
     }
 }
 

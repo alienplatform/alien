@@ -135,16 +135,79 @@ impl crate::traits::Vault for LocalVault {
     async fn delete_secret(&self, secret_name: &str) -> Result<()> {
         let mut secrets = self.load_secrets().await?;
 
-        secrets.remove(secret_name).ok_or_else(|| {
-            AlienError::new(ErrorData::CloudPlatformError {
-                message: format!(
-                    "Secret '{}' not found in vault '{}'",
-                    secret_name, self.vault_name
-                ),
-                resource_id: None,
-            })
-        })?;
+        secrets.remove(secret_name);
 
         self.save_secrets(&secrets).await
+    }
+
+    /// List the names of all secrets stored in this vault (the keys of the
+    /// backing `secrets.json`). An absent file yields an empty list.
+    async fn list_secrets(&self) -> Result<Vec<String>> {
+        let secrets = self.load_secrets().await?;
+        Ok(secrets.into_keys().collect())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::traits::Vault as _;
+    use std::collections::BTreeSet;
+    use tempfile::TempDir;
+
+    fn test_vault() -> (LocalVault, TempDir) {
+        let temp_dir = TempDir::new().expect("tempdir");
+        let vault = LocalVault::new("secrets".to_string(), temp_dir.path().to_path_buf());
+        (vault, temp_dir)
+    }
+
+    #[tokio::test]
+    async fn list_secrets_empty_when_no_file() {
+        let (vault, _temp_dir) = test_vault();
+        let names = vault.list_secrets().await.expect("list should succeed");
+        assert!(names.is_empty(), "fresh vault must list no secrets");
+    }
+
+    #[tokio::test]
+    async fn list_secrets_returns_all_stored_names() {
+        let (vault, _temp_dir) = test_vault();
+
+        vault.set_secret("api-key", "a").await.expect("set api-key");
+        vault.set_secret("db-url", "b").await.expect("set db-url");
+
+        let names: BTreeSet<String> = vault
+            .list_secrets()
+            .await
+            .expect("list should succeed")
+            .into_iter()
+            .collect();
+        assert_eq!(
+            names,
+            BTreeSet::from(["api-key".to_string(), "db-url".to_string()]),
+            "list must return exactly the stored secret names"
+        );
+
+        // A listed name round-trips back through get_secret.
+        assert_eq!(vault.get_secret("api-key").await.expect("get"), "a");
+    }
+
+    #[tokio::test]
+    async fn list_secrets_reflects_deletion() {
+        let (vault, _temp_dir) = test_vault();
+
+        vault.set_secret("keep", "1").await.expect("set keep");
+        vault.set_secret("drop", "2").await.expect("set drop");
+        vault.delete_secret("drop").await.expect("delete drop");
+        vault
+            .delete_secret("drop")
+            .await
+            .expect("repeated delete is idempotent");
+
+        let names = vault.list_secrets().await.expect("list should succeed");
+        assert_eq!(
+            names,
+            vec!["keep".to_string()],
+            "deleted secret must be gone"
+        );
     }
 }

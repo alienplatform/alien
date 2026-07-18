@@ -329,6 +329,12 @@ impl GcpRemoteStackManagementController {
             }))?;
         let management_service_account_email = &gcp_management.service_account_email;
 
+        // Initial setup runs with the target's setup credentials, not the
+        // external management identity receiving this grant. A live token
+        // probe here would therefore test the wrong caller. The management
+        // credential resolver exercises this trust relationship after setup
+        // hands provisioning back to the control plane.
+
         info!(
             target_service_account = %service_account_email,
             management_service_account = %management_service_account_email,
@@ -406,7 +412,6 @@ impl GcpRemoteStackManagementController {
             management_service_account = %management_service_account_email,
             "Impersonation permissions granted successfully"
         );
-
         self.impersonation_granted = true;
 
         Ok(HandlerAction::Continue {

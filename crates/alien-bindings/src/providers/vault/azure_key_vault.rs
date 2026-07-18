@@ -1,7 +1,7 @@
 use crate::error::{ErrorData, Result};
 use alien_azure_clients::keyvault::{AzureKeyVaultSecretsClient, KeyVaultSecretsApi};
 use alien_azure_clients::models::secrets::SecretSetParameters;
-use alien_error::Context;
+use alien_error::{Context, ContextError};
 use async_trait::async_trait;
 use std::sync::Arc;
 
@@ -83,17 +83,40 @@ impl crate::traits::Vault for AzureKeyVault {
     /// Delete a secret
     async fn delete_secret(&self, secret_name: &str) -> Result<()> {
         let sanitized = Self::sanitize_secret_name(secret_name);
-        self.client
+        match self
+            .client
             .delete_secret(self.vault_base_url.clone(), sanitized)
             .await
-            .context(ErrorData::CloudPlatformError {
+        {
+            Ok(_) => Ok(()),
+            Err(error)
+                if matches!(
+                    error.error,
+                    Some(alien_client_core::ErrorData::RemoteResourceNotFound { .. })
+                ) =>
+            {
+                Ok(())
+            }
+            Err(error) => Err(error.context(ErrorData::CloudPlatformError {
                 message: format!(
                     "Failed to delete secret '{}' from vault '{}'",
                     secret_name, self.vault_base_url
                 ),
                 resource_id: None,
-            })?;
+            })),
+        }
+    }
 
-        Ok(())
+    async fn list_secrets(&self) -> Result<Vec<String>> {
+        // Azure Key Vault list is GET /secrets. The alien-azure-clients
+        // KeyVaultSecretsApi wrapper does not expose it, so this fails
+        // explicitly rather than guessing.
+        Err(alien_error::AlienError::new(
+            ErrorData::OperationNotSupported {
+                operation: "vault.list_secrets".to_string(),
+                reason: "Azure Key Vault list is not exposed by the Key Vault secrets client"
+                    .to_string(),
+            },
+        ))
     }
 }

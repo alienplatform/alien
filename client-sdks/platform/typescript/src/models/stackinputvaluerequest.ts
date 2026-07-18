@@ -3,9 +3,17 @@
  */
 
 import * as z from "zod/v4";
+import { safeParse } from "../lib/schemas.js";
+import { Result as SafeParseResult } from "../types/fp.js";
+import { SDKValidationError } from "./errors/sdkvalidationerror.js";
 
 export type StackInputValueRequest = string | number | boolean | Array<string>;
 
+/** @internal */
+export const StackInputValueRequest$inboundSchema: z.ZodType<
+  StackInputValueRequest,
+  unknown
+> = z.union([z.string(), z.number(), z.boolean(), z.array(z.string())]);
 /** @internal */
 export type StackInputValueRequest$Outbound =
   | string
@@ -24,5 +32,14 @@ export function stackInputValueRequestToJSON(
 ): string {
   return JSON.stringify(
     StackInputValueRequest$outboundSchema.parse(stackInputValueRequest),
+  );
+}
+export function stackInputValueRequestFromJSON(
+  jsonString: string,
+): SafeParseResult<StackInputValueRequest, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => StackInputValueRequest$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'StackInputValueRequest' from JSON`,
   );
 }

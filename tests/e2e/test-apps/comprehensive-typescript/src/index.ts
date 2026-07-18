@@ -9,8 +9,8 @@ import { createHash } from "node:crypto"
 import { command, kv, onCronEvent, onQueueMessage, onStorageEvent } from "@alienplatform/sdk"
 import { Hono } from "hono"
 
-import artifactRegistryRoutes from "./handlers/artifact-registry.js"
-import buildRoutes from "./handlers/build.js"
+import { sanitizeKvKeyPart } from "./helpers.js"
+
 import environmentRoutes from "./handlers/environment.js"
 import eventsRoutes from "./handlers/events.js"
 import healthRoutes from "./handlers/health.js"
@@ -18,7 +18,6 @@ import inspectRoutes from "./handlers/inspect.js"
 import kvRoutes from "./handlers/kv.js"
 import postgresRoutes from "./handlers/postgres.js"
 import queueRoutes from "./handlers/queue.js"
-import serviceAccountRoutes from "./handlers/service-account.js"
 import sseRoutes from "./handlers/sse.js"
 import storageRoutes from "./handlers/storage.js"
 import vaultRoutes from "./handlers/vault.js"
@@ -36,18 +35,15 @@ app.route("/", kvRoutes)
 app.route("/", vaultRoutes)
 app.route("/", postgresRoutes)
 app.route("/", queueRoutes)
-app.route("/", buildRoutes)
-app.route("/", artifactRegistryRoutes)
-app.route("/", serviceAccountRoutes)
 app.route("/", eventsRoutes)
 app.route("/", waitUntilRoutes)
 
 // --- Event handlers ---
 
 onStorageEvent("*", async event => {
-  const k = await kv("alien-kv")
-  const sanitizedKey = event.objectKey.replace(/\//g, "_")
-  await k.set(`storage_event:${sanitizedKey}`, {
+  const k = kv("alien-kv")
+  const sanitizedKey = sanitizeKvKeyPart(event.objectKey)
+  await k.setJson(`storage_event:${sanitizedKey}`, {
     key: event.objectKey,
     bucket: event.bucketName,
     eventType: event.eventType,
@@ -57,9 +53,9 @@ onStorageEvent("*", async event => {
 })
 
 onCronEvent("*", async event => {
-  const k = await kv("alien-kv")
-  const sanitizedSchedule = event.scheduleName.replace(/\//g, "_")
-  await k.set(`cron_event:${sanitizedSchedule}`, {
+  const k = kv("alien-kv")
+  const sanitizedSchedule = sanitizeKvKeyPart(event.scheduleName)
+  await k.setJson(`cron_event:${sanitizedSchedule}`, {
     scheduleName: event.scheduleName,
     scheduledTime: event.timestamp,
     processedAt: new Date().toISOString(),
@@ -67,15 +63,16 @@ onCronEvent("*", async event => {
 })
 
 onQueueMessage("*", async message => {
-  const k = await kv("alien-kv")
-  const sanitizedId = message.id.replace(/\//g, "_")
-  await k.set(`queue_message:${sanitizedId}`, {
+  const k = kv("alien-kv")
+  const sanitizedId = sanitizeKvKeyPart(message.id)
+  // The SDK delivers the payload already decoded: a parsed JSON value when
+  // the message body is JSON, otherwise the UTF-8 text. Re-serialize objects
+  // so the recorded payload stays a string the checks can match against.
+  await k.setJson(`queue_message:${sanitizedId}`, {
     messageId: message.id,
     source: message.source,
     payload:
-      typeof message.payload === "string"
-        ? message.payload
-        : new TextDecoder().decode(message.payload as Uint8Array),
+      typeof message.payload === "string" ? message.payload : JSON.stringify(message.payload),
     processedAt: new Date().toISOString(),
   })
 })

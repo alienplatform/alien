@@ -11,7 +11,7 @@ import { KubernetesTlsSecretRefSchema } from "./kubernetes-tls-secret-ref-schema
  */
 export const KubernetesCertificateModeSchema = z.union([z.lazy(() => KubernetesTlsSecretRefSchema).and(z.object({
     "mode": z.enum(["tlsSecretRef"])
-    })).describe("Namespace-scoped Kubernetes TLS Secret reference."), z.object({
+    })), z.object({
     "mode": z.enum(["managedAcmImport"]),
 "region": z.string().describe("ACM region. Defaults to the deployment region when omitted.").nullish(),
 "tags": z.optional(z.object({

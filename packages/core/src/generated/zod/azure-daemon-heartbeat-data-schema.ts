@@ -26,6 +26,7 @@ get "events"(){
 "horizonStatusMessage": z.string().nullish(),
 "horizonStatusReason": z.string().nullish(),
 "latestUpdateTimestamp": z.string(),
+"observedImage": z.string().nullish(),
 get "status"(){
                 return WorkloadHeartbeatStatusSchema
               },

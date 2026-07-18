@@ -1,10 +1,11 @@
 //! Controller for managing Azure Storage Containers.
 
 use crate::{
-    core::ResourceControllerContext,
+    core::{AzurePermissionsHelper, ResourceControllerContext, ResourcePermissionsHelper},
     error::{ErrorData, Result},
     infra_requirements::azure_utils,
 };
+use alien_azure_clients::authorization::Scope;
 use alien_azure_clients::azure::models::blob::{
     BlobContainer, BlobServiceProperties, ContainerProperties, ContainerPropertiesPublicAccess,
 };
@@ -27,12 +28,38 @@ fn get_azure_container_name(prefix: &str, name: &str) -> String {
         .replace('_', "-")
 }
 
+fn azure_permission_scope_and_context(
+    ctx: &ResourceControllerContext<'_>,
+    container_name: &str,
+) -> Result<(Scope, alien_permissions::PermissionContext)> {
+    let storage_account_name = azure_utils::get_storage_account_name(ctx.state)?;
+    let resource_scope = Scope::Resource {
+        resource_group_name: azure_utils::get_resource_group_name(ctx.state)?,
+        resource_provider: "Microsoft.Storage".to_string(),
+        parent_resource_path: Some(format!(
+            "storageAccounts/{storage_account_name}/blobServices/default"
+        )),
+        resource_type: "containers".to_string(),
+        resource_name: container_name.to_string(),
+    };
+    let permission_context =
+        ResourcePermissionsHelper::build_azure_permission_context(ctx, container_name)?;
+    Ok((resource_scope, permission_context))
+}
+
 #[controller]
 pub struct AzureStorageController {
     /// The name of the created Azure Storage Container
     pub(crate) container_name: Option<String>,
     /// The name of the Azure Storage Account (from infrastructure dependencies)
     pub(crate) storage_account_name: Option<String>,
+    /// Full deterministic Azure resource IDs of runtime-owned role assignments.
+    /// IDs are recorded before creation so partial failures remain cleanable.
+    #[serde(default)]
+    pub(crate) role_assignment_ids: Vec<String>,
+    /// Whether the role assignment IDs were durably planned in an earlier controller step.
+    #[serde(default)]
+    pub(crate) role_assignments_planned: bool,
 }
 
 #[controller]
@@ -120,6 +147,43 @@ impl AzureStorageController {
         self.container_name = Some(container_name.clone());
 
         Ok(HandlerAction::Continue {
+            state: PlanningPermissions,
+            suggested_delay: None,
+        })
+    }
+
+    #[handler(
+        state = PlanningPermissions,
+        on_failure = CreateFailed,
+        status = ResourceStatus::Provisioning,
+    )]
+    async fn planning_permissions(
+        &mut self,
+        ctx: &ResourceControllerContext<'_>,
+    ) -> Result<HandlerAction> {
+        let config = ctx.desired_resource_config::<Storage>()?;
+        self.role_assignment_ids = if let Some(container_name) = &self.container_name {
+            let (resource_scope, permission_context) =
+                azure_permission_scope_and_context(ctx, container_name)?;
+            AzurePermissionsHelper::plan_resource_scoped_role_assignment_ids(
+                ctx,
+                &config.id,
+                "storage",
+                resource_scope,
+                &permission_context,
+            )
+            .await?
+        } else {
+            Vec::new()
+        };
+        self.role_assignments_planned = true;
+
+        info!(
+            resource_id = %config.id(),
+            role_assignments = self.role_assignment_ids.len(),
+            "Planned Azure Storage role assignments"
+        );
+        Ok(HandlerAction::Continue {
             state: ApplyingPermissions,
             suggested_delay: None,
         })
@@ -136,35 +200,26 @@ impl AzureStorageController {
     ) -> Result<HandlerAction> {
         let config = ctx.desired_resource_config::<Storage>()?;
 
+        if !self.role_assignments_planned {
+            return Ok(HandlerAction::Continue {
+                state: PlanningPermissions,
+                suggested_delay: None,
+            });
+        }
+
         info!(resource_id = %config.id(), "Applying resource-scoped permissions");
 
         // Apply resource-scoped permissions from the stack
         if let Some(container_name) = &self.container_name {
-            use crate::core::ResourcePermissionsHelper;
-            use alien_azure_clients::authorization::Scope;
-
-            let config = ctx.desired_resource_config::<Storage>()?;
-
-            // Build Azure resource scope for the storage container
-            let storage_account_name = azure_utils::get_storage_account_name(ctx.state)?;
-            let resource_scope = Scope::Resource {
-                resource_group_name: azure_utils::get_resource_group_name(ctx.state)?,
-                resource_provider: "Microsoft.Storage".to_string(),
-                parent_resource_path: Some(format!(
-                    "storageAccounts/{}/blobServices/default",
-                    storage_account_name
-                )),
-                resource_type: "containers".to_string(),
-                resource_name: container_name.to_string(),
-            };
-
-            ResourcePermissionsHelper::apply_azure_resource_scoped_permissions(
+            let (resource_scope, permission_context) =
+                azure_permission_scope_and_context(ctx, container_name)?;
+            AzurePermissionsHelper::apply_resource_scoped_permissions_from_checkpoint(
                 ctx,
                 &config.id,
-                container_name,
-                resource_scope,
-                "Storage",
                 "storage",
+                resource_scope,
+                &permission_context,
+                &self.role_assignment_ids,
             )
             .await?;
         }
@@ -331,6 +386,67 @@ impl AzureStorageController {
         status = ResourceStatus::Deleting,
     )]
     async fn delete_start(&mut self, ctx: &ResourceControllerContext<'_>) -> Result<HandlerAction> {
+        let config = ctx.desired_resource_config::<Storage>()?;
+
+        if !self.role_assignment_ids.is_empty() {
+            let azure_config = ctx.get_azure_config()?;
+            let authorization_client = ctx
+                .service_provider
+                .get_azure_authorization_client(azure_config)?;
+
+            for assignment_id in &self.role_assignment_ids {
+                match authorization_client
+                    .delete_role_assignment_by_id(assignment_id.clone())
+                    .await
+                {
+                    Ok(_) => {
+                        info!(
+                            resource_id = %config.id(),
+                            assignment_id,
+                            "Deleted Azure Storage role assignment"
+                        );
+                    }
+                    Err(error)
+                        if matches!(
+                            &error.error,
+                            Some(CloudClientErrorData::RemoteResourceNotFound { .. })
+                        ) =>
+                    {
+                        info!(
+                            resource_id = %config.id(),
+                            assignment_id,
+                            "Azure Storage role assignment was already deleted"
+                        );
+                    }
+                    Err(error) => {
+                        return Err(error.context(ErrorData::CloudPlatformError {
+                            message: format!(
+                                "Failed to delete Azure role assignment '{}' for Storage",
+                                assignment_id
+                            ),
+                            resource_id: Some(config.id().to_string()),
+                        }));
+                    }
+                }
+            }
+            self.role_assignment_ids.clear();
+        }
+
+        Ok(HandlerAction::Continue {
+            state: DeletingContainer,
+            suggested_delay: None,
+        })
+    }
+
+    #[handler(
+        state = DeletingContainer,
+        on_failure = DeleteFailed,
+        status = ResourceStatus::Deleting,
+    )]
+    async fn deleting_container(
+        &mut self,
+        ctx: &ResourceControllerContext<'_>,
+    ) -> Result<HandlerAction> {
         let config = ctx.desired_resource_config::<Storage>()?;
 
         if let Some(container_name) = &self.container_name {
@@ -575,6 +691,8 @@ impl AzureStorageController {
             state: AzureStorageState::Ready,
             container_name: Some(get_azure_container_name("test-stack", storage_name)),
             storage_account_name: Some("test-storage-account".to_string()),
+            role_assignment_ids: Vec::new(),
+            role_assignments_planned: true,
             _internal_stay_count: None,
         }
     }
@@ -588,13 +706,17 @@ mod tests {
 
     use std::sync::Arc;
 
-    use alien_azure_clients::blob_containers::{BlobContainerApi, MockBlobContainerApi};
     use alien_azure_clients::models::blob::{
         BlobContainer, ContainerProperties, ContainerPropertiesPublicAccess,
+    };
+    use alien_azure_clients::{
+        authorization::{AuthorizationApi, MockAuthorizationApi},
+        blob_containers::{BlobContainerApi, MockBlobContainerApi},
     };
     use alien_client_core::{ErrorData as CloudClientErrorData, Result as CloudClientResult};
     use alien_core::{LifecycleRule, Platform, ResourceStatus, Storage, StorageOutputs};
     use alien_error::AlienError;
+    use mockall::{predicate::eq, Sequence};
     use rstest::{fixture, rstest};
 
     use crate::core::{
@@ -676,19 +798,26 @@ mod tests {
     fn setup_mock_service_provider(
         mock_blob: Arc<MockBlobContainerApi>,
     ) -> Arc<MockPlatformServiceProvider> {
+        setup_mock_service_provider_with_authorization(
+            mock_blob,
+            Arc::new(MockAuthorizationApi::new()),
+        )
+    }
+
+    fn setup_mock_service_provider_with_authorization(
+        mock_blob: Arc<MockBlobContainerApi>,
+        authorization: Arc<MockAuthorizationApi>,
+    ) -> Arc<MockPlatformServiceProvider> {
         let mut mock_provider = MockPlatformServiceProvider::new();
 
         mock_provider
             .expect_get_azure_blob_container_client()
             .returning(move |_| Ok(mock_blob.clone()));
 
-        // Mock Azure authorization client for resource-scoped permissions
+        let authorization: Arc<dyn AuthorizationApi> = authorization;
         mock_provider
             .expect_get_azure_authorization_client()
-            .returning(|_| {
-                use alien_azure_clients::authorization::MockAuthorizationApi;
-                Ok(Arc::new(MockAuthorizationApi::new()))
-            });
+            .returning(move |_| Ok(authorization.clone()));
 
         Arc::new(mock_provider)
     }
@@ -738,6 +867,67 @@ mod tests {
 
         // Verify outputs are no longer available
         assert!(executor.outputs().is_none());
+    }
+
+    #[tokio::test]
+    async fn test_role_assignment_plan_is_serialized_before_apply_step() {
+        let storage = basic_storage();
+        let container_name = format!("test-{}", storage.id);
+        let mut blob = MockBlobContainerApi::new();
+        blob.expect_create_blob_container()
+            .times(1)
+            .returning(move |_, _, _, _| Ok(create_successful_container_response(&container_name)));
+        let mut authorization = MockAuthorizationApi::new();
+        authorization
+            .expect_create_or_update_role_assignment_by_id()
+            .times(0);
+        authorization
+            .expect_create_or_update_role_definition()
+            .times(0);
+        let mock_provider =
+            setup_mock_service_provider_with_authorization(Arc::new(blob), Arc::new(authorization));
+        let resource_id = storage.id.clone();
+        let mut executor = SingleControllerExecutor::builder()
+            .resource(storage)
+            .controller(AzureStorageController::default())
+            .platform(Platform::Azure)
+            .service_provider(mock_provider)
+            .with_test_dependencies()
+            .build()
+            .await
+            .expect("Azure Storage executor should build");
+
+        executor
+            .step()
+            .await
+            .expect("container creation should reach permission planning");
+        executor
+            .step()
+            .await
+            .expect("permission planning should complete without Azure mutations");
+
+        let controller = executor
+            .internal_state::<AzureStorageController>()
+            .expect("Azure Storage controller state");
+        assert!(matches!(
+            controller.state,
+            crate::storage::azure::AzureStorageState::ApplyingPermissions
+        ));
+        assert!(controller.role_assignments_planned);
+
+        let persisted = executor
+            .stack_state()
+            .resources
+            .get(&resource_id)
+            .and_then(|resource| resource.internal_state.as_ref())
+            .expect("planned controller state should be serialized");
+        assert_eq!(
+            persisted
+                .get("roleAssignmentsPlanned")
+                .and_then(serde_json::Value::as_bool),
+            Some(true)
+        );
+        assert!(persisted.get("roleAssignmentIds").is_some());
     }
 
     // ─────────────── UPDATE FLOW TESTS ────────────────────────────────
@@ -831,6 +1021,93 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn test_role_assignments_are_deleted_before_container() {
+        let storage = basic_storage();
+        let assignment_id = "/subscriptions/sub-123/resourceGroups/rg-123/providers/Microsoft.Authorization/roleAssignments/assignment-123";
+        let mut sequence = Sequence::new();
+
+        let mut authorization = MockAuthorizationApi::new();
+        authorization
+            .expect_delete_role_assignment_by_id()
+            .with(eq(assignment_id.to_string()))
+            .times(1)
+            .in_sequence(&mut sequence)
+            .returning(|_| Ok(None));
+
+        let mut blob = MockBlobContainerApi::new();
+        blob.expect_delete_blob_container()
+            .times(1)
+            .in_sequence(&mut sequence)
+            .returning(|_, _, _| Ok(()));
+
+        let mock_provider =
+            setup_mock_service_provider_with_authorization(Arc::new(blob), Arc::new(authorization));
+        let mut controller = AzureStorageController::mock_ready(&storage.id);
+        controller.role_assignment_ids = vec![assignment_id.to_string()];
+        let mut executor = SingleControllerExecutor::builder()
+            .resource(storage)
+            .controller(controller)
+            .platform(Platform::Azure)
+            .service_provider(mock_provider)
+            .with_test_dependencies()
+            .build()
+            .await
+            .unwrap();
+
+        executor.delete().unwrap();
+        executor.run_until_terminal().await.unwrap();
+
+        assert_eq!(executor.status(), ResourceStatus::Deleted);
+    }
+
+    #[tokio::test]
+    async fn test_missing_role_assignment_does_not_block_container_deletion() {
+        let storage = basic_storage();
+        let assignment_id = "/subscriptions/sub-123/resourceGroups/rg-123/providers/Microsoft.Authorization/roleAssignments/missing-assignment";
+        let mut sequence = Sequence::new();
+
+        let mut authorization = MockAuthorizationApi::new();
+        authorization
+            .expect_delete_role_assignment_by_id()
+            .with(eq(assignment_id.to_string()))
+            .times(1)
+            .in_sequence(&mut sequence)
+            .returning(|_| {
+                Err(AlienError::new(
+                    CloudClientErrorData::RemoteResourceNotFound {
+                        resource_type: "Azure role assignment".to_string(),
+                        resource_name: "missing-assignment".to_string(),
+                    },
+                ))
+            });
+
+        let mut blob = MockBlobContainerApi::new();
+        blob.expect_delete_blob_container()
+            .times(1)
+            .in_sequence(&mut sequence)
+            .returning(|_, _, _| Ok(()));
+
+        let mock_provider =
+            setup_mock_service_provider_with_authorization(Arc::new(blob), Arc::new(authorization));
+        let mut controller = AzureStorageController::mock_ready(&storage.id);
+        controller.role_assignment_ids = vec![assignment_id.to_string()];
+        let mut executor = SingleControllerExecutor::builder()
+            .resource(storage)
+            .controller(controller)
+            .platform(Platform::Azure)
+            .service_provider(mock_provider)
+            .with_test_dependencies()
+            .build()
+            .await
+            .unwrap();
+
+        executor.delete().unwrap();
+        executor.run_until_terminal().await.unwrap();
+
+        assert_eq!(executor.status(), ResourceStatus::Deleted);
+    }
+
+    #[tokio::test]
     async fn test_best_effort_deletion_when_no_container_name() {
         let storage = basic_storage();
 
@@ -839,6 +1116,8 @@ mod tests {
             state: crate::storage::azure::AzureStorageState::Ready,
             container_name: None, // No container name set
             storage_account_name: None,
+            role_assignment_ids: Vec::new(),
+            role_assignments_planned: true,
             _internal_stay_count: None,
         };
 

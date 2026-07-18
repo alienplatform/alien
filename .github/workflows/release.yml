@@ -57,7 +57,6 @@ jobs:
           echo "version=$VERSION" >> "$GITHUB_OUTPUT"
 
       - name: Set workspace Cargo version
-        if: ${{ !inputs.dry_run }}
         run: |
           VERSION="${{ steps.bump.outputs.version }}"
           python3 - <<EOF
@@ -74,10 +73,17 @@ jobs:
           VERSION: ${{ steps.bump.outputs.version }}
 
       - name: Set npm package versions
-        if: ${{ !inputs.dry_run }}
         run: |
           VERSION="${{ steps.bump.outputs.version }}"
-          for pkg in packages/core packages/sdk packages/testing client-sdks/platform/typescript client-sdks/manager/typescript; do
+          # The bindings addon ships as a wrapper + per-platform prebuild packages
+          # (crate manifest, wrapper, and each npm/<triple> skeleton) that must all
+          # carry the release version BEFORE the native build on the runners, so the
+          # loader embeds it and publish injects matching optionalDependencies.
+          for pkg in packages/core packages/commands packages/sdk packages/testing \
+            client-sdks/platform/typescript client-sdks/manager/typescript \
+            packages/bindings crates/alien-bindings-node \
+            packages/bindings/npm/darwin-arm64 packages/bindings/npm/darwin-x64 \
+            packages/bindings/npm/linux-x64-gnu packages/bindings/npm/linux-arm64-gnu; do
             node -e "
               const fs = require('fs');
               const path = '${pkg}/package.json';
@@ -86,14 +92,43 @@ jobs:
             "
           done
 
+      # Dry-run build jobs start from the untagged commit, so carry the exact
+      # versioned manifests that a real release would commit into those fresh
+      # checkouts. This keeps the addon binary, wrapper, and platform packages
+      # on one computed version without mutating git or publishing anything.
+      - name: Upload versioned manifests for dry run
+        if: ${{ inputs.dry_run }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-version-manifests
+          retention-days: 1
+          path: |
+            Cargo.toml
+            packages/core/package.json
+            packages/commands/package.json
+            packages/sdk/package.json
+            packages/testing/package.json
+            client-sdks/platform/typescript/package.json
+            client-sdks/manager/typescript/package.json
+            packages/bindings/package.json
+            crates/alien-bindings-node/package.json
+            packages/bindings/npm/darwin-arm64/package.json
+            packages/bindings/npm/darwin-x64/package.json
+            packages/bindings/npm/linux-x64-gnu/package.json
+            packages/bindings/npm/linux-arm64-gnu/package.json
+
       - name: Commit and tag
         if: ${{ !inputs.dry_run }}
         run: |
           VERSION="${{ steps.bump.outputs.version }}"
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
-          git add Cargo.toml packages/core/package.json packages/sdk/package.json packages/testing/package.json \
-            client-sdks/platform/typescript/package.json client-sdks/manager/typescript/package.json
+          git add Cargo.toml packages/core/package.json packages/commands/package.json \
+            packages/sdk/package.json packages/testing/package.json \
+            client-sdks/platform/typescript/package.json client-sdks/manager/typescript/package.json \
+            packages/bindings/package.json crates/alien-bindings-node/package.json \
+            packages/bindings/npm/darwin-arm64/package.json packages/bindings/npm/darwin-x64/package.json \
+            packages/bindings/npm/linux-x64-gnu/package.json packages/bindings/npm/linux-arm64-gnu/package.json
           git commit -m "chore: release v${VERSION}"
           git tag "v${VERSION}"
           git push
@@ -150,6 +185,9 @@ jobs:
       - uses: depot/setup-action@v1
 
       - uses: mozilla-actions/sccache-action@v0.0.9
+        continue-on-error: true
+        with:
+          version: v0.16.0
 
       - name: Install protoc
         run: sudo apt-get update && sudo apt-get install -y protobuf-compiler
@@ -173,6 +211,7 @@ jobs:
             alien-client-config \
             alien-permissions \
             alien-bindings \
+            alien-worker-protocol \
             alien-sdk \
             alien-commands \
             alien-commands-client; do
@@ -202,6 +241,8 @@ jobs:
           registry-url: https://registry.npmjs.org
 
       - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: "1.3.14"
 
       - name: Validate npm auth
         env:
@@ -221,6 +262,9 @@ jobs:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
         run: |
           pnpm --filter @alienplatform/core publish --access public --no-git-checks
+          # commands must land before testing: @alienplatform/testing depends on it,
+          # and publish rewrites the workspace:* range to this release's version.
+          pnpm --filter @alienplatform/commands publish --access public --no-git-checks
           pnpm --filter @alienplatform/sdk publish --access public --no-git-checks
           pnpm --filter @alienplatform/testing publish --access public --no-git-checks
 
@@ -263,6 +307,312 @@ jobs:
           npm run build
           npm publish --access public
 
+  # ─── Native addon prebuilds (@alienplatform/bindings) ──────────────
+  #
+  # The bindings addon publishes as a thin wrapper plus per-platform prebuild
+  # packages (`@alienplatform/bindings-<triple>`) that carry a compiled `.node`,
+  # so `npm install @alienplatform/bindings` needs no Rust toolchain. Each triple
+  # builds on its native runner (darwin-x64 cross-builds on the arm mac — same
+  # toolchain via `--target`). Unlike the other build/publish jobs, build-addon
+  # and publish-bindings also run on dry_run (checking out the untagged HEAD and
+  # publishing with `--dry-run`) so a maintainer can validate the whole
+  # build → smoke → publish path — including the linux halves that can't run
+  # pre-merge — without cutting a real release.
+
+  build-addon:
+    needs: prepare
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: depot-macos-15
+            os: macos
+            target: aarch64-apple-darwin
+            triple: darwin-arm64
+            expect_arch: arm64
+          - runner: depot-macos-15
+            os: macos
+            target: x86_64-apple-darwin
+            triple: darwin-x64
+            expect_arch: x86_64
+          - runner: depot-ubuntu-24.04-16
+            os: linux
+            target: x86_64-unknown-linux-gnu
+            triple: linux-x64-gnu
+            expect_arch: x86-64
+          - runner: depot-ubuntu-24.04-arm-16
+            os: linux
+            target: aarch64-unknown-linux-gnu
+            triple: linux-arm64-gnu
+            expect_arch: aarch64
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 60
+    env:
+      CARGO_INCREMENTAL: "0"
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.dry_run && github.sha || format('v{0}', needs.prepare.outputs.version) }}
+
+      - name: Apply computed version for dry run
+        if: ${{ inputs.dry_run }}
+        uses: actions/download-artifact@v4
+        with:
+          name: release-version-manifests
+          path: .
+
+      - name: Validate bindings release version lockstep
+        env:
+          VERSION: ${{ needs.prepare.outputs.version }}
+        run: node packages/bindings/scripts/validate-release-version.mjs "$VERSION"
+
+      # Rust toolchain: Linux via the shared composite; macOS uses dtolnay +
+      # brew protoc directly (plain `napi build`, not `depot cargo`, so no
+      # Depot/sccache setup here). The addon depends on alien-bindings, whose
+      # build.rs needs protoc.
+      - name: Setup Rust (linux)
+        if: matrix.os == 'linux'
+        uses: ./.github/actions/setup-rust
+        with:
+          depot-project-id: ${{ vars.DEPOT_PROJECT_ID }}
+          repo-access-token: ${{ secrets.REPO_ACCESS_TOKEN }}
+          install-protoc: "true"
+
+      - uses: dtolnay/rust-toolchain@nightly
+        if: matrix.os == 'macos'
+
+      - name: Configure git credentials for cargo (macos)
+        if: matrix.os == 'macos'
+        run: git config --global url."https://x-access-token:${{ secrets.REPO_ACCESS_TOKEN }}@github.com/".insteadOf "https://github.com/"
+
+      - name: Install protoc (macos)
+        if: matrix.os == 'macos'
+        run: brew install protobuf
+
+      - name: Add cross target (darwin-x64)
+        if: matrix.target == 'x86_64-apple-darwin'
+        run: rustup target add x86_64-apple-darwin
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10.11.0
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Build addon (${{ matrix.triple }})
+        env:
+          CARGO_NET_GIT_FETCH_WITH_CLI: "true"
+        run: |
+          pnpm --filter @alienplatform/bindings exec napi build \
+            --platform --release --target ${{ matrix.target }} \
+            --cwd "$GITHUB_WORKSPACE/crates/alien-bindings-node"
+
+      - name: Stage addon into platform package
+        run: |
+          cp "crates/alien-bindings-node/alien-bindings-node.${{ matrix.triple }}.node" \
+            "packages/bindings/npm/${{ matrix.triple }}/alien-bindings-node.${{ matrix.triple }}.node"
+
+      # Closes the wrong-arch hole on the two legs the smoke step doesn't cover.
+      - name: Assert staged binary architecture
+        run: file "packages/bindings/npm/${{ matrix.triple }}/alien-bindings-node.${{ matrix.triple }}.node" | grep -q "${{ matrix.expect_arch }}"
+
+      - name: Upload addon artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: addon-${{ matrix.triple }}
+          retention-days: 1
+          path: packages/bindings/npm/${{ matrix.triple }}/alien-bindings-node.${{ matrix.triple }}.node
+
+  # This job deliberately has no Rust compiler or protoc setup. It
+  # starts from the already-built artifacts and proves that a consumer whose
+  # only direct dependency is @alienplatform/bindings gets the right optional
+  # platform package. Native runners additionally exercise npm + Node and Bun
+  # installs with a real local-provider KV operation.
+  smoke-addon:
+    needs: [prepare, build-addon]
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: depot-macos-15
+            triple: darwin-arm64
+            execute: true
+          - runner: depot-macos-15
+            triple: darwin-x64
+            execute: false
+          - runner: depot-ubuntu-24.04-16
+            triple: linux-x64-gnu
+            execute: true
+          - runner: depot-ubuntu-24.04-arm-16
+            triple: linux-arm64-gnu
+            execute: true
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.dry_run && github.sha || format('v{0}', needs.prepare.outputs.version) }}
+
+      - name: Apply computed version for dry run
+        if: ${{ inputs.dry_run }}
+        uses: actions/download-artifact@v4
+        with:
+          name: release-version-manifests
+          path: .
+
+      - name: Validate bindings release version lockstep
+        env:
+          VERSION: ${{ needs.prepare.outputs.version }}
+        run: node packages/bindings/scripts/validate-release-version.mjs "$VERSION"
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10.11.0
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+
+      - uses: oven-sh/setup-bun@v2
+        if: matrix.execute
+        with:
+          bun-version: "1.3.14"
+
+      - name: Install JavaScript dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Download staged addon (${{ matrix.triple }})
+        uses: actions/download-artifact@v4
+        with:
+          name: addon-${{ matrix.triple }}
+          path: packages/bindings/npm/${{ matrix.triple }}
+
+      - name: Verify wrapper-only prebuild install (${{ matrix.triple }})
+        env:
+          EXECUTE_NATIVE: ${{ matrix.execute }}
+        run: |
+          args=("${{ matrix.triple }}")
+          if [ "$EXECUTE_NATIVE" = "true" ]; then args+=(--execute); fi
+          bash scripts/smoke-addon-prebuild.sh "${args[@]}"
+
+  publish-bindings:
+    needs: [prepare, smoke-addon, publish-npm]
+    # publish-npm skips on dry_run, so a bare `needs` would cascade-skip the
+    # dry-run path this job deliberately supports. On a real release, wait for
+    # publish-npm to succeed: the wrapper's package.json pins
+    # `@alienplatform/core: ^<release>`, so publishing it while core's publish
+    # failed leaves every `npm install @alienplatform/bindings` ETARGET-broken.
+    if: always() && needs.smoke-addon.result == 'success' && (inputs.dry_run || needs.publish-npm.result == 'success')
+    runs-on: depot-ubuntu-24.04-arm-4
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.dry_run && github.sha || format('v{0}', needs.prepare.outputs.version) }}
+
+      - name: Apply computed version for dry run
+        if: ${{ inputs.dry_run }}
+        uses: actions/download-artifact@v4
+        with:
+          name: release-version-manifests
+          path: .
+
+      - name: Validate bindings release version lockstep
+        env:
+          VERSION: ${{ needs.prepare.outputs.version }}
+        run: node packages/bindings/scripts/validate-release-version.mjs "$VERSION"
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10.11.0
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+          registry-url: https://registry.npmjs.org
+
+      - name: Validate npm auth
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+        run: npm whoami
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Download addon artifacts
+        uses: actions/download-artifact@v4
+        with:
+          pattern: addon-*
+          path: ./addons
+          merge-multiple: false
+
+      - name: Stage addons into platform packages
+        run: |
+          for triple in darwin-arm64 darwin-x64 linux-x64-gnu linux-arm64-gnu; do
+            cp "./addons/addon-${triple}/alien-bindings-node.${triple}.node" \
+              "packages/bindings/npm/${triple}/alien-bindings-node.${triple}.node"
+          done
+
+      - name: Build wrapper
+        run: pnpm --filter @alienplatform/bindings build
+
+      # Platform packages publish FIRST so an install of the wrapper can never
+      # race ahead of the optionalDependencies it pins.
+      - name: Publish platform prebuild packages (first)
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+          VERSION: ${{ needs.prepare.outputs.version }}
+        run: |
+          for triple in darwin-arm64 darwin-x64 linux-x64-gnu linux-arm64-gnu; do
+            package="@alienplatform/bindings-${triple}"
+            if [ "${{ inputs.dry_run }}" = "true" ]; then
+              echo "Dry-running ${package}@${VERSION}..."
+              ( cd "packages/bindings/npm/${triple}" && npm publish --access public --dry-run )
+              continue
+            fi
+
+            # npm has no multi-package transaction. Publishing every platform
+            # before the wrapper keeps incomplete releases unreachable, while
+            # this existence check makes a retry resume after a partial publish.
+            published="$(npm view "${package}@${VERSION}" version 2>/dev/null || true)"
+            if [ "$published" = "$VERSION" ]; then
+              echo "${package}@${VERSION} is already published; continuing"
+            else
+              echo "Publishing ${package}@${VERSION}..."
+              ( cd "packages/bindings/npm/${triple}" && npm publish --access public )
+            fi
+          done
+
+      # Inject exact-version optionalDependencies explicitly (see the script) —
+      # more deterministic and reviewable than `napi prepublish`.
+      - name: Inject optionalDependencies into the wrapper
+        run: node packages/bindings/scripts/inject-optional-deps.mjs
+
+      - name: Publish wrapper (last)
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+          VERSION: ${{ needs.prepare.outputs.version }}
+        run: |
+          if [ "${{ inputs.dry_run }}" = "true" ]; then
+            pnpm --filter @alienplatform/bindings publish --access public --no-git-checks --dry-run
+            exit 0
+          fi
+
+          published="$(npm view "@alienplatform/bindings@${VERSION}" version 2>/dev/null || true)"
+          if [ "$published" = "$VERSION" ]; then
+            echo "@alienplatform/bindings@${VERSION} is already published; continuing"
+          else
+            pnpm --filter @alienplatform/bindings publish --access public --no-git-checks
+          fi
+
   # ─── Binary builds (4 targets, all parallel) ───────────────────────
 
   build-binaries-linux-x86_64:
@@ -285,7 +635,7 @@ jobs:
             target/x86_64-unknown-linux-musl/release/alien
             target/x86_64-unknown-linux-musl/release/alien-deploy
             target/x86_64-unknown-linux-musl/release/alien-operator
-            target/x86_64-unknown-linux-musl/release/alien-runtime
+            target/x86_64-unknown-linux-musl/release/alien-worker-runtime
             target/x86_64-unknown-linux-musl/release/alien-manager
           key: release-linux-x86_64-v${{ needs.prepare.outputs.version }}
 
@@ -303,13 +653,13 @@ jobs:
           CARGO_NET_GIT_FETCH_WITH_CLI: "true"
         run: |
           depot cargo build --release \
-            -p alien-cli -p alien-deploy-cli -p alien-operator -p alien-runtime -p alien-manager \
+            -p alien-cli -p alien-deploy-cli -p alien-operator -p alien-worker-runtime -p alien-manager \
             --target x86_64-unknown-linux-musl
 
       - name: Stage binaries for upload
         run: |
           mkdir -p staged/x86_64-unknown-linux-musl
-          for binary in alien alien-deploy alien-operator alien-runtime alien-manager; do
+          for binary in alien alien-deploy alien-operator alien-worker-runtime alien-manager; do
             cp "target/x86_64-unknown-linux-musl/release/${binary}" "staged/x86_64-unknown-linux-musl/${binary}"
           done
 
@@ -340,7 +690,7 @@ jobs:
             target/aarch64-unknown-linux-musl/release/alien
             target/aarch64-unknown-linux-musl/release/alien-deploy
             target/aarch64-unknown-linux-musl/release/alien-operator
-            target/aarch64-unknown-linux-musl/release/alien-runtime
+            target/aarch64-unknown-linux-musl/release/alien-worker-runtime
             target/aarch64-unknown-linux-musl/release/alien-manager
           key: release-linux-aarch64-v${{ needs.prepare.outputs.version }}
 
@@ -358,13 +708,13 @@ jobs:
           CARGO_NET_GIT_FETCH_WITH_CLI: "true"
         run: |
           depot cargo build --release \
-            -p alien-cli -p alien-deploy-cli -p alien-operator -p alien-runtime -p alien-manager \
+            -p alien-cli -p alien-deploy-cli -p alien-operator -p alien-worker-runtime -p alien-manager \
             --target aarch64-unknown-linux-musl
 
       - name: Stage binaries for upload
         run: |
           mkdir -p staged/aarch64-unknown-linux-musl
-          for binary in alien alien-deploy alien-operator alien-runtime alien-manager; do
+          for binary in alien alien-deploy alien-operator alien-worker-runtime alien-manager; do
             cp "target/aarch64-unknown-linux-musl/release/${binary}" "staged/aarch64-unknown-linux-musl/${binary}"
           done
 
@@ -413,7 +763,10 @@ jobs:
 
       - name: Install sccache
         if: steps.binary-cache.outputs.cache-hit != 'true'
+        continue-on-error: true
         uses: mozilla-actions/sccache-action@v0.0.9
+        with:
+          version: v0.16.0
 
       - name: Install protoc
         if: steps.binary-cache.outputs.cache-hit != 'true'
@@ -478,7 +831,10 @@ jobs:
       # depot cargo is Linux/macOS only — use sccache directly on Windows
       - name: Install sccache
         if: steps.binary-cache.outputs.cache-hit != 'true'
+        continue-on-error: true
         uses: mozilla-actions/sccache-action@v0.0.9
+        with:
+          version: v0.16.0
 
       - name: Install build tools (protoc, nasm, cmake)
         if: steps.binary-cache.outputs.cache-hit != 'true'
@@ -545,7 +901,7 @@ jobs:
             aws s3 cp "$src" "s3://alien-releases-prod/${binary}/latest/${os}-${arch}/${binary}"
           }
 
-          for binary in alien alien-deploy alien-operator alien-runtime alien-manager; do
+          for binary in alien alien-deploy alien-operator alien-worker-runtime alien-manager; do
             upload "$binary" x86_64-unknown-linux-musl linux x86_64
             upload "$binary" aarch64-unknown-linux-musl linux aarch64
           done
@@ -600,12 +956,12 @@ jobs:
           # Linux x86_64 tarball
           tar -czf "dist/alien-v${VERSION}-x86_64-unknown-linux-musl.tar.gz" \
             -C artifacts/binaries-x86_64-unknown-linux-musl \
-            alien alien-deploy alien-operator alien-runtime alien-manager
+            alien alien-deploy alien-operator alien-worker-runtime alien-manager
 
           # Linux aarch64 tarball
           tar -czf "dist/alien-v${VERSION}-aarch64-unknown-linux-musl.tar.gz" \
             -C artifacts/binaries-aarch64-unknown-linux-musl \
-            alien alien-deploy alien-operator alien-runtime alien-manager
+            alien alien-deploy alien-operator alien-worker-runtime alien-manager
 
           # macOS aarch64 tarball
           tar -czf "dist/alien-v${VERSION}-aarch64-apple-darwin.tar.gz" \
@@ -659,7 +1015,7 @@ jobs:
         run: |
           for target in x86_64-unknown-linux-musl aarch64-unknown-linux-musl; do
             mkdir -p "target/${target}/release"
-            for binary in alien-operator alien-runtime alien-manager; do
+            for binary in alien-operator alien-worker-runtime alien-manager; do
               cp "./linux-bins/binaries-${target}/${binary}" "target/${target}/release/${binary}"
               chmod +x "target/${target}/release/${binary}"
             done

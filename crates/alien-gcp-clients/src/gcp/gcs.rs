@@ -23,6 +23,10 @@ const GCS_UPLOAD_BASE: &str = "https://storage.googleapis.com/upload/storage/v1"
 #[cfg_attr(target_arch = "wasm32", async_trait::async_trait(?Send))]
 #[cfg_attr(not(target_arch = "wasm32"), async_trait::async_trait)]
 pub trait GcsApi: Send + Sync + Debug {
+    /// Retrieve the Cloud Storage service agent for the configured project.
+    /// Calling this endpoint also ensures that the managed service account exists.
+    async fn get_project_service_account(&self) -> Result<ProjectServiceAccount>;
+
     /// Create a new bucket inside the configured project.
     async fn create_bucket(&self, bucket_name: String, bucket: Bucket) -> Result<Bucket>;
 
@@ -141,6 +145,23 @@ impl GcsClient {
 #[cfg_attr(target_arch = "wasm32", async_trait::async_trait(?Send))]
 #[cfg_attr(not(target_arch = "wasm32"), async_trait::async_trait)]
 impl GcsApi for GcsClient {
+    async fn get_project_service_account(&self) -> Result<ProjectServiceAccount> {
+        let url = format!(
+            "{}/projects/{}/serviceAccount",
+            self.get_api_base_url(),
+            self.cfg.project_id
+        );
+        let builder = self.http.get(url);
+        auth_send_json(
+            builder,
+            &self.auth().await?,
+            "GetProjectServiceAccount",
+            &self.cfg.project_id,
+            "GCS",
+        )
+        .await
+    }
+
     // ------------------------------------------------------------
     // Bucket operations
     // ------------------------------------------------------------
@@ -492,6 +513,17 @@ impl GcsApi for GcsClient {
 
 // --- Data Structures ---
 
+/// The Google-managed Cloud Storage service account for a project.
+/// https://cloud.google.com/storage/docs/json_api/v1/projects/serviceAccount
+#[derive(Debug, Serialize, Deserialize, Clone)]
+#[serde(rename_all = "camelCase")]
+pub struct ProjectServiceAccount {
+    #[serde(rename = "email_address")]
+    pub email_address: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub kind: Option<String>,
+}
+
 /// Represents a Bucket resource in Google Cloud Storage.
 /// Fields are based on the JSON API documentation for Buckets.
 /// https://cloud.google.com/storage/docs/json_api/v1/buckets#resource
@@ -759,4 +791,29 @@ pub struct GcsNotification {
     /// Custom attributes to attach to each notification message
     #[serde(default, skip_serializing_if = "HashMap::is_empty")]
     pub custom_attributes: HashMap<String, String>,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::ProjectServiceAccount;
+
+    #[test]
+    fn project_service_account_deserializes_gcs_response() {
+        let response = r#"{
+            "email_address": "service-123456789@gs-project-accounts.iam.gserviceaccount.com",
+            "kind": "storage#serviceAccount"
+        }"#;
+
+        let service_account: ProjectServiceAccount = serde_json::from_str(response)
+            .expect("GCS service account response should deserialize");
+
+        assert_eq!(
+            service_account.email_address,
+            "service-123456789@gs-project-accounts.iam.gserviceaccount.com"
+        );
+        assert_eq!(
+            service_account.kind.as_deref(),
+            Some("storage#serviceAccount")
+        );
+    }
 }

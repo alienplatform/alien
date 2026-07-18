@@ -13,9 +13,7 @@
             "lambda:ListTags",
             "lambda:GetFunctionUrlConfig",
             "lambda:GetCodeSigningConfig",
-            "lambda:GetFunctionEventInvokeConfig",
-            "lambda:GetEventSourceMapping",
-            "lambda:ListEventSourceMappings"
+            "lambda:GetFunctionEventInvokeConfig"
           ]
         },
         "binding": {
@@ -24,6 +22,49 @@
           },
           "resource": {
             "resources": ["arn:aws:lambda:${awsRegion}:${awsAccountId}:function:${resourceName}"]
+          }
+        }
+      },
+      {
+        // Event source mapping reads do not authorize against function ARNs:
+        // Get evaluates against the mapping's UUID ARN (scoped via the
+        // lambda:FunctionArn condition); List supports `*` only.
+        "label": "read-event-source-mappings",
+        "description": "Read SQS event source mapping state for this application's functions.",
+        "grant": {
+          "actions": ["lambda:GetEventSourceMapping"]
+        },
+        "binding": {
+          "stack": {
+            "resources": ["*"],
+            "condition": {
+              "StringLike": {
+                "lambda:FunctionArn": "arn:aws:lambda:${awsRegion}:${awsAccountId}:function:${stackPrefix}-*"
+              }
+            }
+          },
+          "resource": {
+            "resources": ["*"],
+            "condition": {
+              "StringLike": {
+                "lambda:FunctionArn": "arn:aws:lambda:${awsRegion}:${awsAccountId}:function:${resourceName}"
+              }
+            }
+          }
+        }
+      },
+      {
+        "label": "list-event-source-mappings",
+        "description": "List event source mappings (AWS supports this action only on all resources).",
+        "grant": {
+          "actions": ["lambda:ListEventSourceMappings"]
+        },
+        "binding": {
+          "stack": {
+            "resources": ["*"]
+          },
+          "resource": {
+            "resources": ["*"]
           }
         }
       }

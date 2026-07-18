@@ -321,6 +321,8 @@ impl Toolchain for DockerToolchain {
             build_strategy: super::ImageBuildStrategy::CompleteOCITarball {
                 tarball_path: output_tarball,
             },
+            // The Dockerfile fully controls the image; keep its own entrypoint/cmd.
+            entrypoint: None,
             runtime_command,
         })
     }
@@ -681,7 +683,7 @@ CMD ["cat", "hello.txt"]
             build_target: BinaryTarget::linux_container_target(),
             runtime_platform_name: "aws".to_string(),
             debug_mode: false,
-            is_container: true,
+            workload: crate::toolchain::WorkloadKind::Container,
         };
 
         // Test assumes Docker is running (per user requirement)
@@ -878,7 +880,7 @@ RUN echo "Version: $VERSION" > version.txt
             build_target: BinaryTarget::linux_container_target(),
             runtime_platform_name: "aws".to_string(),
             debug_mode: false,
-            is_container: true,
+            workload: crate::toolchain::WorkloadKind::Container,
         };
 
         // Test assumes Docker is running
@@ -917,7 +919,7 @@ RUN echo "Version: $VERSION" > version.txt
             build_target: BinaryTarget::linux_container_target(),
             runtime_platform_name: "aws".to_string(),
             debug_mode: false,
-            is_container: true,
+            workload: crate::toolchain::WorkloadKind::Container,
         };
 
         let result = toolchain.build(&context).await;
@@ -966,7 +968,7 @@ WORKDIR /app
             build_target: BinaryTarget::linux_container_target(),
             runtime_platform_name: "aws".to_string(),
             debug_mode: false,
-            is_container: true,
+            workload: crate::toolchain::WorkloadKind::Container,
         };
 
         // Should succeed with custom dockerfile

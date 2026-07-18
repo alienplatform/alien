@@ -42,6 +42,8 @@ alien-local = { workspace = true }
 
 # Client config extensions (always available — needed for cross-account credential resolution)
 alien-client-config = { workspace = true }
+alien-azure-clients = { workspace = true }
+alien-gcp-clients = { workspace = true }
 
 # Web framework
 axum = { workspace = true, features = ["tokio", "http2", "json", "query", "macros"] }

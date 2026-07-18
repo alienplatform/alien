@@ -28,6 +28,7 @@ describe("data-connector-ts", () => {
     await deployment?.destroy()
   })
 
+  // This command hits the vault binding unconditionally via getConnectionConfig().
   it("should test connection using vault credentials", async () => {
     const result = await deployment.invokeCommand("test-connection", {})
     expect(result.connected).toBe(true)
@@ -37,6 +38,7 @@ describe("data-connector-ts", () => {
     expect(result).not.toHaveProperty("password")
   })
 
+  // This command hits the vault binding unconditionally via getConnectionConfig().
   it("should query data", async () => {
     const result = await deployment.invokeCommand("query", {
       sql: "SELECT * FROM users",
@@ -46,6 +48,7 @@ describe("data-connector-ts", () => {
     expect(result.cached).toBe(false)
   })
 
+  // This command hits the kv binding when useCache is set.
   it("should cache query results", async () => {
     // First query populates cache
     await deployment.invokeCommand("query", {

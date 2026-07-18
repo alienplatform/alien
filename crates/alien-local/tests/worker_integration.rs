@@ -3,14 +3,14 @@
 //! These tests verify the complete worker lifecycle:
 //! 1. Build TypeScript app using alien-build (the real build system)
 //! 2. Extract the OCI image using worker manager
-//! 3. Start the worker (which registers with runtime via gRPC)
+//! 3. Start the Worker (which registers through the Worker app protocol)
 //! 4. Make HTTP requests to verify it works
 //! 5. Stop the worker gracefully
 //!
 //! The test uses examples/basic-worker-ts — a real Alien app that:
 //! - Exports a Hono app with a /health endpoint
-//! - Registers a command handler (inactive without commands polling)
-//! - Serves HTTP requests via the Alien runtime
+//! - Registers a command handler (invoked only when a command is pushed)
+//! - Serves HTTP requests through the Alien Worker Runtime
 
 use alien_build::settings::{BuildSettings, PlatformBuildSettings};
 use alien_core::permissions::{PermissionProfile, PermissionsConfig};
@@ -46,6 +46,7 @@ async fn build_test_app_with_alien_build(output_dir: &std::path::Path) -> PathBu
         })
         .memory_mb(512)
         .timeout_seconds(60)
+        .expect("literal Worker timeout is within supported range")
         .environment(HashMap::new())
         .permissions("execution".to_string())
         .build();
@@ -169,7 +170,7 @@ async fn test_function_full_lifecycle() {
 
     // 4. Start worker
     let url = manager
-        .start_worker("test-func", HashMap::new(), Vec::new())
+        .start_worker("test-func", HashMap::new(), Vec::new(), Vec::new())
         .await
         .expect("Failed to start worker");
 
@@ -232,11 +233,11 @@ async fn test_start_worker_idempotent() {
 
     // Start twice - should return same URL
     let url1 = manager
-        .start_worker("idempotent-func", HashMap::new(), Vec::new())
+        .start_worker("idempotent-func", HashMap::new(), Vec::new(), Vec::new())
         .await
         .unwrap();
     let url2 = manager
-        .start_worker("idempotent-func", HashMap::new(), Vec::new())
+        .start_worker("idempotent-func", HashMap::new(), Vec::new(), Vec::new())
         .await
         .unwrap();
 
@@ -278,7 +279,7 @@ async fn test_start_without_extract_fails() {
     let manager = provider.worker_manager();
 
     let result = manager
-        .start_worker("no-image", HashMap::new(), Vec::new())
+        .start_worker("no-image", HashMap::new(), Vec::new(), Vec::new())
         .await;
     assert!(result.is_err());
 }
@@ -309,7 +310,7 @@ async fn test_delete_worker_cleanup() {
         .await
         .unwrap();
     manager
-        .start_worker("delete-test", HashMap::new(), Vec::new())
+        .start_worker("delete-test", HashMap::new(), Vec::new(), Vec::new())
         .await
         .unwrap();
 
@@ -352,7 +353,7 @@ async fn test_get_binding_returns_local_variant() {
         .await
         .unwrap();
     manager
-        .start_worker("binding-test", HashMap::new(), Vec::new())
+        .start_worker("binding-test", HashMap::new(), Vec::new(), Vec::new())
         .await
         .unwrap();
 
@@ -402,7 +403,7 @@ async fn test_health_check() {
         .await
         .unwrap();
     manager
-        .start_worker("health-test", HashMap::new(), Vec::new())
+        .start_worker("health-test", HashMap::new(), Vec::new(), Vec::new())
         .await
         .unwrap();
 
@@ -447,7 +448,7 @@ async fn test_multiple_functions_concurrent() {
             .await
             .unwrap();
         let url = manager
-            .start_worker(&func_id, HashMap::new(), Vec::new())
+            .start_worker(&func_id, HashMap::new(), Vec::new(), Vec::new())
             .await
             .unwrap();
         urls.push((func_id, url));
@@ -519,7 +520,7 @@ async fn test_port_allocation_fallback() {
         .unwrap();
 
     let url_before = manager
-        .start_worker("fallback-test", HashMap::new(), Vec::new())
+        .start_worker("fallback-test", HashMap::new(), Vec::new(), Vec::new())
         .await
         .unwrap();
 
@@ -540,7 +541,7 @@ async fn test_port_allocation_fallback() {
 
     // 3. Start worker again (port should be reused if properly released)
     let url_after = manager
-        .start_worker("fallback-test", HashMap::new(), Vec::new())
+        .start_worker("fallback-test", HashMap::new(), Vec::new(), Vec::new())
         .await
         .expect("Failed to start worker after stop");
 
@@ -606,7 +607,7 @@ async fn test_delete_prevents_port_reuse() {
 
     // Start worker and get URL
     let url_before = manager
-        .start_worker("delete-test", HashMap::new(), Vec::new())
+        .start_worker("delete-test", HashMap::new(), Vec::new(), Vec::new())
         .await
         .unwrap();
     let port_before: u16 = url_before.split(':').last().unwrap().parse().unwrap();
@@ -622,7 +623,7 @@ async fn test_delete_prevents_port_reuse() {
 
     // Start again - should get a DIFFERENT port (no saved metadata)
     let url_after = manager
-        .start_worker("delete-test", HashMap::new(), Vec::new())
+        .start_worker("delete-test", HashMap::new(), Vec::new(), Vec::new())
         .await
         .unwrap();
     let port_after: u16 = url_after.split(':').last().unwrap().parse().unwrap();

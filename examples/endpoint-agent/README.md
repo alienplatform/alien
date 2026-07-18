@@ -16,6 +16,7 @@ This example demonstrates an endpoint security monitoring agent that:
 
 - **Encrypted Storage**: Uses Turso with AEGIS-256 encryption for data at rest
 - **Command-Only Interface**: No HTTP endpoints - all interaction via Alien commands
+- **App-Owned Receiver**: The Daemon runs `alien_commands::Receiver` itself; no Worker runtime or Operator dispatches its handlers
 - **PII Detection**: Basic pattern matching for emails, SSNs, credit cards, phone numbers
 - **File Monitoring**: Cross-platform filesystem watching via `notify` crate
 - **Hash-Only Clipboard**: Never stores actual clipboard content, only hashes
@@ -80,7 +81,7 @@ alien deploy --platform local
 ### Using Commands Client (TypeScript)
 
 ```typescript
-import { CommandsClient } from "@alienplatform/sdk/commands"
+import { CommandsClient } from "@alienplatform/commands"
 
 const client = new CommandsClient({
   managerUrl: "https://am.example.com",
@@ -88,17 +89,16 @@ const client = new CommandsClient({
   token: "your_token",
 })
 
+const agent = client.target("agent")
+
 // Query recent events
-const events = await client.invoke("get-events", {
-  since: "5m",
-  limit: 10,
-})
+const events = await agent.invoke("get-events", { since: "5m", limit: 10 })
 
 // Get configuration
-const config = await client.invoke("get-config", {})
+const config = await agent.invoke("get-config", {})
 
 // Scan directory
-const scanResult = await client.invoke("scan-path", {
+const scanResult = await agent.invoke("scan-path", {
   path: "/tmp",
 })
 ```
@@ -107,14 +107,18 @@ const scanResult = await client.invoke("scan-path", {
 
 ```bash
 # Query events
-alien commands invoke get-events --deployment <deployment-id> --params '{"since": "5m", "limit": 10}'
+alien commands invoke --deployment <deployment-id> --command get-events --params '{"since": "5m", "limit": 10}'
 
 # Get config
-alien commands invoke get-config --deployment <deployment-id>
+alien commands invoke --deployment <deployment-id> --command get-config
 
 # Scan path
-alien commands invoke scan-path --deployment <deployment-id> --params '{"path": "/tmp"}'
+alien commands invoke --deployment <deployment-id> --command scan-path --params '{"path": "/tmp"}'
 ```
+
+The CLI uses single-target inference. This example has exactly one
+command-enabled resource (`agent`); code should use `.target("agent")`
+explicitly as shown above.
 
 ## Environment Variables
 

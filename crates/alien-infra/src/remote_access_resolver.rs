@@ -13,10 +13,12 @@ use alien_core::{
 };
 use alien_error::{AlienError, Context, IntoAlienError};
 #[cfg(feature = "gcp")]
-use alien_gcp_clients::GcpImpersonationConfig;
+use alien_gcp_clients::{GcpClientConfigExt, GcpImpersonationConfig};
 use std::collections::HashMap;
 use tracing::info;
 use uuid::Uuid;
+
+const GCP_CLOUD_PLATFORM_SCOPE: &str = "https://www.googleapis.com/auth/cloud-platform";
 
 /// Service for resolving stack state into authenticated client configurations
 #[derive(Debug)]
@@ -186,15 +188,40 @@ impl RemoteAccessResolver {
             target_region,
         });
 
-        base_config.impersonate(impersonation_config).await.context(
-            ErrorData::AuthenticationFailed {
+        let resolved = base_config
+            .impersonate(impersonation_config)
+            .await
+            .context(ErrorData::AuthenticationFailed {
                 message: format!(
                     "Failed to impersonate GCP service account: {}",
                     service_account_email
                 ),
                 method: Some("service_account_impersonation".to_string()),
-            },
-        )
+            })?;
+
+        let ClientConfig::Gcp(gcp_config) = resolved else {
+            return Err(AlienError::new(ErrorData::RemoteAccessInvalid {
+                message: "GCP impersonation returned a non-GCP client configuration".to_string(),
+                field_name: Some("platform".to_string()),
+            }));
+        };
+
+        // GCP impersonation configs are refreshable and lazy: constructing one
+        // does not call IAMCredentials. Materialize the token at the credential
+        // handoff boundary so propagation failures are reported to the caller
+        // before any deployment operation starts.
+        gcp_config
+            .get_bearer_token(GCP_CLOUD_PLATFORM_SCOPE)
+            .await
+            .context(ErrorData::AuthenticationFailed {
+                message: format!(
+                    "Failed to materialize GCP service account credentials: {}",
+                    service_account_email
+                ),
+                method: Some("service_account_impersonation".to_string()),
+            })?;
+
+        Ok(ClientConfig::Gcp(gcp_config))
     }
 
     /// Resolve Azure impersonation using target-side UAMI Workload Identity.
@@ -309,6 +336,54 @@ impl Default for RemoteAccessResolver {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use alien_core::{
+        GcpClientConfig, GcpCredentials, GcpEnvironmentInfo, GcpServiceOverrides, Resource,
+        ResourceLifecycle, ResourceOutputs, ResourceStatus, StackResourceState,
+    };
+    use httpmock::{Method::POST, MockServer};
+    use serde_json::json;
+
+    fn gcp_stack_state(service_account_email: &str) -> StackState {
+        let config = RemoteStackManagement::new("management".to_string()).build();
+        let mut state = StackState::new(Platform::Gcp);
+        state.resources.insert(
+            config.id.clone(),
+            StackResourceState::builder()
+                .resource_type(RemoteStackManagement::RESOURCE_TYPE.to_string())
+                .status(ResourceStatus::Running)
+                .config(Resource::new(config))
+                .outputs(ResourceOutputs::new(RemoteStackManagementOutputs {
+                    management_resource_id: service_account_email.to_string(),
+                    access_configuration: service_account_email.to_string(),
+                }))
+                .lifecycle(ResourceLifecycle::Frozen)
+                .dependencies(vec![])
+                .build(),
+        );
+        state
+    }
+
+    fn gcp_base_config(iam_credentials_url: String) -> ClientConfig {
+        ClientConfig::Gcp(Box::new(GcpClientConfig {
+            project_id: "managing-project".to_string(),
+            region: "us-central1".to_string(),
+            credentials: GcpCredentials::AccessToken {
+                token: "source-token".to_string(),
+            },
+            service_overrides: Some(GcpServiceOverrides {
+                endpoints: HashMap::from([("iamcredentials".to_string(), iam_credentials_url)]),
+            }),
+            project_number: Some("123456789".to_string()),
+        }))
+    }
+
+    fn gcp_target_environment() -> EnvironmentInfo {
+        EnvironmentInfo::Gcp(GcpEnvironmentInfo {
+            project_id: "target-project".to_string(),
+            project_number: "987654321".to_string(),
+            region: "us-east1".to_string(),
+        })
+    }
 
     #[test]
     fn test_remote_access_resolver_creation() {
@@ -328,5 +403,89 @@ mod tests {
     fn test_default_resolver() {
         let resolver = RemoteAccessResolver::default();
         assert!(resolver.env.is_empty());
+    }
+
+    #[tokio::test]
+    async fn gcp_remote_access_materializes_credentials_at_handoff() {
+        let server = MockServer::start_async().await;
+        let token_exchange = server
+            .mock_async(|when, then| {
+                when.method(POST);
+                then.status(200).json_body(json!({
+                    "accessToken": "target-token",
+                    "expireTime": "2026-07-16T12:00:00Z"
+                }));
+            })
+            .await;
+        let service_account_email = "deployment@target-project.iam.gserviceaccount.com";
+
+        let resolved = RemoteAccessResolver::default()
+            .resolve(
+                gcp_base_config(server.url("/v1")),
+                &gcp_stack_state(service_account_email),
+                Some(&gcp_target_environment()),
+            )
+            .await
+            .expect("GCP remote access should materialize a usable target token");
+
+        token_exchange.assert_async().await;
+        let gcp = resolved
+            .gcp_config()
+            .expect("resolved remote access should remain GCP");
+        assert_eq!(gcp.project_id, "target-project");
+        assert_eq!(gcp.region, "us-east1");
+        match &gcp.credentials {
+            GcpCredentials::ImpersonatedServiceAccount { source, config } => {
+                assert_eq!(config.service_account_email, service_account_email);
+                assert_eq!(
+                    source.credentials,
+                    GcpCredentials::AccessToken {
+                        token: "source-token".to_string()
+                    }
+                );
+            }
+            credentials => panic!(
+                "resolved credentials should remain refreshable after validation, got {credentials:?}"
+            ),
+        }
+    }
+
+    #[tokio::test]
+    async fn gcp_remote_access_reports_token_exchange_failure_during_handoff() {
+        let server = MockServer::start_async().await;
+        let denied_exchange = server
+            .mock_async(|when, then| {
+                when.method(POST);
+                then.status(403).json_body(json!({
+                    "error": {
+                        "code": 403,
+                        "message": "Permission 'iam.serviceAccounts.getAccessToken' denied",
+                        "status": "PERMISSION_DENIED"
+                    }
+                }));
+            })
+            .await;
+        let service_account_email = "deployment@target-project.iam.gserviceaccount.com";
+
+        let error = RemoteAccessResolver::default()
+            .resolve(
+                gcp_base_config(server.url("/v1")),
+                &gcp_stack_state(service_account_email),
+                Some(&gcp_target_environment()),
+            )
+            .await
+            .expect_err("GCP token exchange failure must fail credential handoff");
+
+        assert!(
+            denied_exchange.hits_async().await > 0,
+            "credential materialization must attempt the IAM token exchange during handoff"
+        );
+        assert_eq!(error.code, "AUTHENTICATION_FAILED");
+        assert!(
+            error
+                .to_string()
+                .contains("Failed to materialize GCP service account credentials"),
+            "handoff error should identify the failed token materialization: {error}"
+        );
     }
 }

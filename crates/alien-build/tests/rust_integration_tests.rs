@@ -22,6 +22,7 @@ fn create_test_function(name: &str, code: WorkerCode) -> Worker {
         .code(code)
         .memory_mb(512)
         .timeout_seconds(60)
+        .expect("literal Worker timeout is within supported range")
         .environment(HashMap::new())
         .permissions("execution".to_string())
         .build()
@@ -139,7 +140,7 @@ async fn test_rust_workspace_build(
     );
 
     let stack = stack_with_permissions(stack_name)
-        .add(func_with_workspace, ResourceLifecycle::Frozen)
+        .add(func_with_workspace, ResourceLifecycle::Live)
         .build();
 
     let settings = BuildSettings {
@@ -222,7 +223,7 @@ async fn test_rust_toolchain_invalid_project() {
     );
 
     let stack = stack_with_permissions("test-stack")
-        .add(func_with_invalid_rust, ResourceLifecycle::Frozen)
+        .add(func_with_invalid_rust, ResourceLifecycle::Live)
         .build();
 
     let temp_output_dir = tempdir().expect("Failed to create temp output dir");
@@ -248,7 +249,9 @@ async fn test_rust_toolchain_invalid_project() {
             resource_id,
             reason,
         }) => {
-            assert_eq!(resource_id, "test-app");
+            // The error names the resource, not the configured binary name —
+            // that is what a user can act on in their stack config.
+            assert_eq!(resource_id, "invalid-rust-func");
             assert!(reason.contains("Cargo.toml"));
         }
         other => panic!("Expected InvalidResourceConfig error, got: {:?}", other),
@@ -299,7 +302,7 @@ async fn test_real_cargo_init_project() {
     );
 
     let stack = stack_with_permissions("test-stack")
-        .add(func_with_cargo_project, ResourceLifecycle::Frozen)
+        .add(func_with_cargo_project, ResourceLifecycle::Live)
         .build();
 
     let settings = BuildSettings {

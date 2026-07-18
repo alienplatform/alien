@@ -24,7 +24,7 @@ get "controllerPlatform"(){
                 return z.union([PlatformSchema, z.null()]).optional()
               },
 get "dependencies"(){
-                return z.array(ResourceRefSchema.describe("New ResourceRef that works with any resource type.\nThis can eventually replace the enum-based ResourceRef for full extensibility.")).describe("Complete list of dependencies for this resource, including infrastructure dependencies.\nThis preserves the full dependency information from the stack definition.").optional()
+                return z.array(ResourceRefSchema.describe("Reference to a resource by its stable id and resource type.")).describe("Complete list of dependencies for this resource, including infrastructure dependencies.\nThis preserves the full dependency information from the stack definition.").optional()
               },
 get "error"(){
                 return z.union([AlienErrorSchema, z.null()]).optional()

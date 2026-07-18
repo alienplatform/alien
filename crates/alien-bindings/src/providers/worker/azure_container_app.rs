@@ -1,4 +1,4 @@
-use crate::error::{ErrorData, Result};
+use crate::error::{binding_env_var, ErrorData, Result};
 use crate::traits::{Binding, Worker, WorkerInvokeRequest, WorkerInvokeResponse};
 use alien_azure_clients::container_apps::{AzureContainerAppsClient, ContainerAppsApi};
 use alien_azure_clients::{AzureClientConfig, AzureTokenCache};
@@ -38,6 +38,7 @@ impl ContainerAppWorker {
             .clone()
             .into_value("worker", "private_url")
             .context(ErrorData::BindingConfigInvalid {
+                env_var: binding_env_var("worker"),
                 binding_name: "worker".to_string(),
                 reason: "Failed to resolve private_url from binding".to_string(),
             })
@@ -51,6 +52,7 @@ impl ContainerAppWorker {
                 .clone()
                 .into_value("worker", "public_url")
                 .context(ErrorData::BindingConfigInvalid {
+                    env_var: binding_env_var("worker"),
                     binding_name: "worker".to_string(),
                     reason: "Failed to resolve public_url from binding".to_string(),
                 })?;
@@ -64,6 +66,7 @@ impl ContainerAppWorker {
             .clone()
             .into_value("worker", "resource_group_name")
             .context(ErrorData::BindingConfigInvalid {
+                env_var: binding_env_var("worker"),
                 binding_name: "worker".to_string(),
                 reason: "Failed to resolve resource_group_name from binding".to_string(),
             })?;
@@ -74,6 +77,7 @@ impl ContainerAppWorker {
             .clone()
             .into_value("worker", "container_app_name")
             .context(ErrorData::BindingConfigInvalid {
+                env_var: binding_env_var("worker"),
                 binding_name: "worker".to_string(),
                 reason: "Failed to resolve container_app_name from binding".to_string(),
             })?;
@@ -217,6 +221,7 @@ impl Worker for ContainerAppWorker {
                 .clone()
                 .into_value("worker", "public_url")
                 .context(ErrorData::BindingConfigInvalid {
+                    env_var: binding_env_var("worker"),
                     binding_name: "worker".to_string(),
                     reason: "Failed to resolve public_url from binding".to_string(),
                 })?;
@@ -230,6 +235,7 @@ impl Worker for ContainerAppWorker {
             .clone()
             .into_value("worker", "resource_group_name")
             .context(ErrorData::BindingConfigInvalid {
+                env_var: binding_env_var("worker"),
                 binding_name: "worker".to_string(),
                 reason: "Failed to resolve resource_group_name from binding".to_string(),
             })?;
@@ -240,6 +246,7 @@ impl Worker for ContainerAppWorker {
             .clone()
             .into_value("worker", "container_app_name")
             .context(ErrorData::BindingConfigInvalid {
+                env_var: binding_env_var("worker"),
                 binding_name: "worker".to_string(),
                 reason: "Failed to resolve container_app_name from binding".to_string(),
             })?;

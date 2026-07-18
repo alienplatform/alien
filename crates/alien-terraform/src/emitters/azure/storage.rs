@@ -226,10 +226,10 @@ fn emit_storage_permissions(
                     fragment,
                     ctx.resource_id,
                     storage_label,
-                    parent_label,
                     &profile_name,
                     binding_index,
                     &binding.role_name,
+                    expr::template(binding.scope.clone()),
                     role_definition_id,
                     principal_id_expr.clone(),
                 );
@@ -290,10 +290,10 @@ fn emit_storage_permissions(
                 fragment,
                 ctx.resource_id,
                 storage_label,
-                parent_label,
                 "management",
                 binding_index,
                 &binding.role_name,
+                expr::template(binding.scope.clone()),
                 role_definition_id,
                 principal_id_expr.clone(),
             );
@@ -342,10 +342,10 @@ fn emit_role_assignment(
     fragment: &mut TfFragment,
     storage_id: &str,
     storage_label: &str,
-    parent_label: &str,
     principal_label: &str,
     binding_index: usize,
     role_name: &str,
+    scope: Expression,
     role_definition_id: Expression,
     principal_id_expr: Expression,
 ) {
@@ -360,7 +360,7 @@ fn emit_role_assignment(
                     "uuidv5(\"oid\", \"deployment:azure:storage-role-assign:${{local.resource_prefix}}:{storage_id}:{role_label}:{principal_label}:{binding_index}\")"
                 )),
             ),
-            attr("scope", storage_container_scope_expr(parent_label, storage_label)),
+            attr("scope", scope),
             attr("role_definition_id", role_definition_id),
             attr("principal_id", principal_id_expr),
         ],
@@ -427,12 +427,6 @@ fn remote_stack_management_label<'a>(ctx: &'a EmitContext<'_>) -> Option<&'a str
     })
 }
 
-fn storage_container_scope_expr(parent_label: &str, storage_label: &str) -> Expression {
-    expr::raw(format!(
-        "\"${{azurerm_storage_account.{parent_label}.id}}/blobServices/default/containers/${{azurerm_storage_container.{storage_label}.name}}\""
-    ))
-}
-
 fn storage_account_name_expr_string(parent_label: &str) -> String {
     format!("${{azurerm_storage_account.{parent_label}.name}}")
 }
@@ -491,4 +485,108 @@ fn rule_block(storage_label: &str, index: usize, rule: &LifecycleRule) -> hcl::s
             )),
         ],
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::{generate_terraform_module, TerraformOptions, TerraformTarget, TfRegistry};
+    use alien_core::{
+        AzureResourceGroup, ManagementPermissions, ResourceLifecycle, ServiceAccount, Stack,
+        StackSettings,
+    };
+
+    const STORAGE_BLOB_DATA_CONTRIBUTOR_ROLE_ID: &str = "ba92f5b4-2d11-453d-a403-e96b0029c9fe";
+    const RESOURCE_GROUP_SCOPE: &str =
+        "\"/subscriptions/${var.azure_subscription_id}/resourceGroups/${var.azure_resource_group_name}\"";
+    const STORAGE_CONTAINER_SCOPE: &str =
+        "\"/subscriptions/${var.azure_subscription_id}/resourceGroups/${var.azure_resource_group_name}/providers/Microsoft.Storage/storageAccounts/${azurerm_storage_account.default_storage_account.name}/blobServices/default/containers/${replace(lower(\"${local.resource_prefix}-files\"), \"_\", \"-\")}\"";
+
+    #[test]
+    fn generated_storage_assignments_preserve_each_permission_binding_scope() {
+        let permissions = PermissionProfile::new().resource(
+            "files",
+            ["storage/data-write", "storage/trigger-management"],
+        );
+        let stack = Stack::new("azure-storage-scopes".to_string())
+            .permission("app", permissions.clone())
+            .management(ManagementPermissions::override_(permissions))
+            .add(
+                AzureResourceGroup::new("default-resource-group".to_string()).build(),
+                ResourceLifecycle::Frozen,
+            )
+            .add(
+                AzureStorageAccount::new("default-storage-account".to_string()).build(),
+                ResourceLifecycle::Frozen,
+            )
+            .add(
+                Storage::new("files".to_string()).build(),
+                ResourceLifecycle::Frozen,
+            )
+            .add(
+                ServiceAccount::new("app-sa".to_string()).build(),
+                ResourceLifecycle::Frozen,
+            )
+            .add(
+                RemoteStackManagement::new("management".to_string()).build(),
+                ResourceLifecycle::Frozen,
+            )
+            .build();
+        let registry = TfRegistry::built_in();
+        let module = generate_terraform_module(
+            &stack,
+            TerraformTarget::Azure,
+            TerraformOptions {
+                display_name: None,
+                registry: &registry,
+                stack_settings: StackSettings::default(),
+                registration: None,
+                helm_install: None,
+                supported_aws_regions: Vec::new(),
+            },
+        )
+        .expect("Azure Terraform module should render");
+        let storage_module = module.get("files.tf").expect("storage resource module");
+
+        assert_principal_assignment_scopes(
+            storage_module,
+            "azurerm_user_assigned_identity.app_sa.principal_id",
+        );
+        assert_principal_assignment_scopes(
+            storage_module,
+            "azurerm_user_assigned_identity.management.principal_id",
+        );
+    }
+
+    fn assert_principal_assignment_scopes(rendered: &str, principal_id: &str) {
+        let assignments = rendered
+            .split("resource \"azurerm_role_assignment\"")
+            .skip(1)
+            .filter_map(|chunk| chunk.split_once("\n}\n").map(|(block, _)| block))
+            .filter(|block| block.contains(principal_id))
+            .collect::<Vec<_>>();
+        assert_eq!(assignments.len(), 2, "expected both storage grants");
+
+        let data_write = assignments
+            .iter()
+            .find(|block| block.contains(STORAGE_BLOB_DATA_CONTRIBUTOR_ROLE_ID))
+            .expect("storage/data-write assignment");
+        assert!(
+            data_write.contains(STORAGE_CONTAINER_SCOPE),
+            "storage/data-write must retain its generated container scope:\n{data_write}"
+        );
+
+        let trigger_management = assignments
+            .iter()
+            .find(|block| !block.contains(STORAGE_BLOB_DATA_CONTRIBUTOR_ROLE_ID))
+            .expect("storage/trigger-management assignment");
+        assert!(
+            trigger_management.contains(RESOURCE_GROUP_SCOPE),
+            "storage/trigger-management must retain its generated resource-group scope:\n{trigger_management}"
+        );
+        assert!(
+            !trigger_management.contains("blobServices/default/containers"),
+            "storage/trigger-management must not be narrowed to the blob container"
+        );
+    }
 }

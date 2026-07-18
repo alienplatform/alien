@@ -1,0 +1,19 @@
+[package]
+name = "container-rust-indexer"
+version = "0.1.0"
+edition = "2021"
+publish = false
+
+[[bin]]
+name = "container-rust-indexer"
+path = "src/main.rs"
+
+[dependencies]
+# `local` because the local pull E2E runs the container against the local
+# platform's disk-backed providers.
+alien-bindings = { workspace = true, features = ["local"] }
+alien-commands = { workspace = true, default-features = false, features = ["receiver"] }
+serde_json = { workspace = true }
+tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true, features = ["env-filter"] }

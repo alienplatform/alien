@@ -24,6 +24,9 @@ pub enum Error {
     #[error("Configuration error: {0}")]
     Configuration(String),
 
+    #[error("Command receiver failed: {0}")]
+    CommandReceiver(String),
+
     #[error("{0}")]
     Generic(String),
 }
@@ -36,6 +39,7 @@ impl IntoResponse for Error {
             Error::InvalidVector(msg) => (StatusCode::BAD_REQUEST, msg.as_str()),
             Error::Serialization(msg) => (StatusCode::INTERNAL_SERVER_ERROR, msg.as_str()),
             Error::Configuration(msg) => (StatusCode::INTERNAL_SERVER_ERROR, msg.as_str()),
+            Error::CommandReceiver(msg) => (StatusCode::INTERNAL_SERVER_ERROR, msg.as_str()),
             Error::Generic(msg) => (StatusCode::INTERNAL_SERVER_ERROR, msg.as_str()),
         };
 

@@ -35,18 +35,47 @@ export type CommandListItemResponseState = ClosedEnum<
 >;
 
 /**
- * Deployment model captured from deployment at creation time
+ * Delivery mode for this command (push/pull), derived from the target at creation time
  */
 export const CommandListItemResponseDeploymentModel = {
   Push: "push",
   Pull: "pull",
 } as const;
 /**
- * Deployment model captured from deployment at creation time
+ * Delivery mode for this command (push/pull), derived from the target at creation time
  */
 export type CommandListItemResponseDeploymentModel = ClosedEnum<
   typeof CommandListItemResponseDeploymentModel
 >;
+
+/**
+ * The kind of command-capable resource a command targets.
+ */
+export const CommandListItemResponseResourceType = {
+  Worker: "worker",
+  Container: "container",
+  Daemon: "daemon",
+} as const;
+/**
+ * The kind of command-capable resource a command targets.
+ */
+export type CommandListItemResponseResourceType = ClosedEnum<
+  typeof CommandListItemResponseResourceType
+>;
+
+/**
+ * Resource the command is addressed to; null on commands created before target routing
+ */
+export type CommandListItemResponseTarget = {
+  /**
+   * The resource ID within the deployment's stack (e.g. a Worker/Container/Daemon id).
+   */
+  resourceId: string;
+  /**
+   * The kind of command-capable resource a command targets.
+   */
+  resourceType: CommandListItemResponseResourceType;
+};
 
 export type CommandListItemResponse = {
   /**
@@ -74,9 +103,13 @@ export type CommandListItemResponse = {
    */
   state: CommandListItemResponseState;
   /**
-   * Deployment model captured from deployment at creation time
+   * Delivery mode for this command (push/pull), derived from the target at creation time
    */
   deploymentModel: CommandListItemResponseDeploymentModel;
+  /**
+   * Resource the command is addressed to; null on commands created before target routing
+   */
+  target: CommandListItemResponseTarget | null;
   /**
    * Current attempt number
    */
@@ -128,6 +161,30 @@ export const CommandListItemResponseDeploymentModel$inboundSchema: z.ZodEnum<
 > = z.enum(CommandListItemResponseDeploymentModel);
 
 /** @internal */
+export const CommandListItemResponseResourceType$inboundSchema: z.ZodEnum<
+  typeof CommandListItemResponseResourceType
+> = z.enum(CommandListItemResponseResourceType);
+
+/** @internal */
+export const CommandListItemResponseTarget$inboundSchema: z.ZodType<
+  CommandListItemResponseTarget,
+  unknown
+> = z.object({
+  resourceId: z.string(),
+  resourceType: CommandListItemResponseResourceType$inboundSchema,
+});
+
+export function commandListItemResponseTargetFromJSON(
+  jsonString: string,
+): SafeParseResult<CommandListItemResponseTarget, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => CommandListItemResponseTarget$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'CommandListItemResponseTarget' from JSON`,
+  );
+}
+
+/** @internal */
 export const CommandListItemResponse$inboundSchema: z.ZodType<
   CommandListItemResponse,
   unknown
@@ -139,6 +196,7 @@ export const CommandListItemResponse$inboundSchema: z.ZodType<
   name: z.string(),
   state: CommandListItemResponseState$inboundSchema,
   deploymentModel: CommandListItemResponseDeploymentModel$inboundSchema,
+  target: z.nullable(z.lazy(() => CommandListItemResponseTarget$inboundSchema)),
   attempt: z.nullable(z.number()),
   deadline: z.nullable(
     z.iso.datetime({ offset: true }).transform(v => new Date(v)),

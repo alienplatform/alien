@@ -28,6 +28,7 @@ use alien_azure_clients::{
     container_apps::{AzureContainerAppsClient, ContainerAppsApi},
     containerregistry::{AzureContainerRegistryClient, ContainerRegistryApi},
     disks::{AzureManagedDisksClient, ManagedDisksApi},
+    event_grid::{AzureEventGridClient, EventGridApi},
     flexible_server::{AzureFlexibleServerClient, FlexibleServerApi},
     keyvault::{
         AzureKeyVaultCertificatesClient, AzureKeyVaultManagementClient, AzureKeyVaultSecretsClient,
@@ -243,6 +244,10 @@ pub trait PlatformServiceProvider: Send + Sync {
         &self,
         config: &AzureClientConfig,
     ) -> Result<Arc<dyn ServiceBusDataPlaneApi>>;
+    fn get_azure_event_grid_client(
+        &self,
+        config: &AzureClientConfig,
+    ) -> Result<Arc<dyn EventGridApi>>;
     fn get_azure_network_client(
         &self,
         config: &AzureClientConfig,
@@ -983,6 +988,16 @@ impl PlatformServiceProvider for DefaultPlatformServiceProvider {
         config: &AzureClientConfig,
     ) -> Result<Arc<dyn ServiceBusDataPlaneApi>> {
         Ok(Arc::new(AzureServiceBusDataPlaneClient::new(
+            reqwest::Client::new(),
+            AzureTokenCache::new(config.clone()),
+        )))
+    }
+
+    fn get_azure_event_grid_client(
+        &self,
+        config: &AzureClientConfig,
+    ) -> Result<Arc<dyn EventGridApi>> {
+        Ok(Arc::new(AzureEventGridClient::new(
             reqwest::Client::new(),
             AzureTokenCache::new(config.clone()),
         )))

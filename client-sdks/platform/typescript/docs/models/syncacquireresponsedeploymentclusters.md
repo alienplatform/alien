@@ -1,0 +1,24 @@
+# SyncAcquireResponseDeploymentClusters
+
+Configuration for a single container worker cluster.
+
+Contains the cluster ID and management token needed to interact with
+the managed container control plane API for container operations.
+
+## Example Usage
+
+```typescript
+import { SyncAcquireResponseDeploymentClusters } from "@alienplatform/platform-api/models";
+
+let value: SyncAcquireResponseDeploymentClusters = {
+  clusterId: "<id>",
+  managementToken: "<value>",
+};
+```
+
+## Fields
+
+| Field                                                                                                     | Type                                                                                                      | Required                                                                                                  | Description                                                                                               |
+| --------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------- |
+| `clusterId`                                                                                               | *string*                                                                                                  | :heavy_check_mark:                                                                                        | Cluster ID (deterministic: workspace/project/deployment/resourceid)                                       |
+| `managementToken`                                                                                         | *string*                                                                                                  | :heavy_check_mark:                                                                                        | Management token for API access (hm_...)<br/>Used by alien-deployment controllers to create/update containers |

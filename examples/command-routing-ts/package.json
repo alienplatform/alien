@@ -1,0 +1,15 @@
+{
+  "name": "command-routing-ts",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "alien dev",
+    "build": "alien build --platform local",
+    "test:ts": "pnpm --filter './services/*' test:ts"
+  },
+  "devDependencies": {
+    "@alienplatform/core": "^1.7.0",
+    "typescript": "^5.7.3"
+  }
+}

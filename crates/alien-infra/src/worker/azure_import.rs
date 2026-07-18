@@ -37,6 +37,7 @@ impl ResourceImporter for AzureWorkerImporter {
             pending_operation_url: None,
             pending_operation_retry_after: None,
             dapr_components: Vec::new(),
+            storage_trigger_infrastructure: Vec::new(),
             fqdn: data.fqdn,
             certificate_id: None,
             keyvault_cert_id: None,

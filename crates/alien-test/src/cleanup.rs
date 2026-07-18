@@ -120,8 +120,7 @@ pub async fn cleanup_agent_containers(label: &str) -> Result<(), Box<dyn std::er
     Ok(())
 }
 
-/// Helm uninstall a test release. Best-effort: errors are logged but do not
-/// fail the cleanup.
+/// Helm uninstall a test release.
 pub async fn cleanup_helm_release(
     release_name: &str,
     namespace: &str,
@@ -132,7 +131,13 @@ pub async fn cleanup_helm_release(
     info!(%release_name, %namespace, "cleaning up helm release");
 
     let mut cmd = tokio::process::Command::new("helm");
-    cmd.args(["uninstall", release_name, "--namespace", namespace]);
+    cmd.args([
+        "uninstall",
+        release_name,
+        "--namespace",
+        namespace,
+        "--ignore-not-found",
+    ]);
 
     if let Some(kc) = kubeconfig {
         cmd.env("KUBECONFIG", kc);
@@ -148,10 +153,16 @@ pub async fn cleanup_helm_release(
         }
         Ok(out) => {
             let stderr = String::from_utf8_lossy(&out.stderr);
-            warn!(%release_name, %stderr, "failed to uninstall helm release (continuing)");
+            return Err(format!(
+                "Failed to uninstall Helm release '{release_name}' from namespace '{namespace}': {stderr}"
+            )
+            .into());
         }
         Err(e) => {
-            warn!(%release_name, error = %e, "failed to uninstall helm release (continuing)");
+            return Err(format!(
+                "Failed to launch Helm while uninstalling release '{release_name}' from namespace '{namespace}': {e}"
+            )
+            .into());
         }
     }
 
@@ -186,10 +197,15 @@ pub async fn cleanup_kubernetes_namespace(
         }
         Ok(out) => {
             let stderr = String::from_utf8_lossy(&out.stderr);
-            warn!(%namespace, %stderr, "failed to delete kubernetes namespace (continuing)");
+            return Err(
+                format!("Failed to delete Kubernetes namespace '{namespace}': {stderr}").into(),
+            );
         }
         Err(e) => {
-            warn!(%namespace, error = %e, "failed to delete kubernetes namespace (continuing)");
+            return Err(format!(
+                "Failed to launch kubectl while deleting namespace '{namespace}': {e}"
+            )
+            .into());
         }
     }
 

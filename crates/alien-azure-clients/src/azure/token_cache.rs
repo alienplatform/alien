@@ -29,10 +29,12 @@ impl AzureTokenCache {
     }
 
     pub async fn get_bearer_token_with_scope(&self, scope: &str) -> Result<String> {
-        // Skip caching for AccessToken credential type (static/opaque)
+        // Skip caching for already-materialized token credential types. Their
+        // lifecycle is owned by the minting resolver, not this local cache.
         if matches!(
             &self.config.credentials,
             alien_core::AzureCredentials::AccessToken { .. }
+                | alien_core::AzureCredentials::ScopedAccessTokens { .. }
         ) {
             return self.config.get_bearer_token_with_scope(scope).await;
         }
@@ -63,6 +65,14 @@ impl AzureTokenCache {
         }
 
         Ok(token)
+    }
+
+    /// Invalidates a cached token after Azure rejects it as unauthorized.
+    ///
+    /// The next request for this scope will acquire a fresh token from the
+    /// configured credential source instead of reusing the rejected token.
+    pub async fn invalidate_bearer_token_with_scope(&self, scope: &str) {
+        self.cache.lock().await.remove(scope);
     }
 
     pub fn config(&self) -> &AzureClientConfig {

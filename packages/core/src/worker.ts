@@ -189,7 +189,7 @@ export class Worker {
 
   /**
    * Enables or disables the Commands protocol for the worker.
-   * When enabled, the runtime polls the manager for pending commands and executes registered handlers.
+   * When enabled, the platform pushes commands into the Worker runtime, which executes registered handlers.
    * Default: false.
    * @param enabled Whether to enable commands for this worker.
    * @returns The Worker builder instance.

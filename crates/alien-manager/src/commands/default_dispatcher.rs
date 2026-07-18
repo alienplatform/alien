@@ -3,25 +3,44 @@ use std::fmt::Debug;
 use std::sync::Arc;
 
 use alien_commands::{
+    dispatchers::{
+        CommandDispatcher, HttpCommandDispatcher, LambdaCommandDispatcher, PubSubCommandDispatcher,
+        ServiceBusCommandDispatcher,
+    },
     error::{ErrorData as CmdErrorData, Result as CmdResult},
-    server::CommandDispatcher,
     Envelope,
 };
-use alien_core::{Platform, Worker, WorkerOutputs};
-use alien_error::{AlienError, Context};
+use alien_core::{CommandTargetType, Platform, ResourceStatus, WorkerOutputs};
+use alien_error::{AlienError, Context, IntoAlienError};
 use async_trait::async_trait;
 use tracing::{debug, info};
 
-use crate::traits::{CredentialResolver, DeploymentStore, ReleaseStore};
+use crate::traits::{CredentialResolver, DeploymentStore};
+
+const COMMAND_DISPATCH_CONNECT_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(5);
+const COMMAND_DISPATCH_REQUEST_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(30);
+
+fn definitely_not_delivered(envelope: &Envelope, message: impl Into<String>) -> CmdErrorData {
+    CmdErrorData::TransportDispatchRejected {
+        message: message.into(),
+        transport_type: None,
+        target: Some(envelope.command_id.clone()),
+    }
+}
 
 /// Default command dispatcher for standalone alien-manager.
 ///
-/// Looks up the deployment's stack state, finds the worker with `commands_enabled=true`,
-/// reads its `commands_push_target` from outputs, resolves credentials for the target
-/// environment, and dispatches via the platform-specific mechanism.
+/// The command envelope already names the specific Worker the command is
+/// addressed to (`envelope.target`, resolved server-side by the registry).
+/// This dispatcher reads that worker's `commands_push_target` from the
+/// deployment's stack state, resolves credentials for the target environment,
+/// and dispatches via the platform-specific mechanism.
+///
+/// Only Worker targets ever reach this push dispatcher — Container/Daemon
+/// targets are always Pull and are served by
+/// the pending-index poll path, never dispatched here.
 pub struct DefaultCommandDispatcher {
     deployment_store: Arc<dyn DeploymentStore>,
-    release_store: Arc<dyn ReleaseStore>,
     credential_resolver: Arc<dyn CredentialResolver>,
     http_client: reqwest::Client,
 }
@@ -36,42 +55,22 @@ impl Debug for DefaultCommandDispatcher {
 impl DefaultCommandDispatcher {
     pub fn new(
         deployment_store: Arc<dyn DeploymentStore>,
-        release_store: Arc<dyn ReleaseStore>,
         credential_resolver: Arc<dyn CredentialResolver>,
-    ) -> Self {
-        Self {
+    ) -> CmdResult<Self> {
+        let http_client = reqwest::Client::builder()
+            .connect_timeout(COMMAND_DISPATCH_CONNECT_TIMEOUT)
+            .timeout(COMMAND_DISPATCH_REQUEST_TIMEOUT)
+            .build()
+            .map_err(reqwest::Error::without_url)
+            .into_alien_error()
+            .context(CmdErrorData::Other {
+                message: "Failed to build bounded command dispatch HTTP client".to_string(),
+            })?;
+        Ok(Self {
             deployment_store,
-            release_store,
             credential_resolver,
-            http_client: reqwest::Client::new(),
-        }
-    }
-
-    /// Find the worker with `commands_enabled=true` in the release stack for the given platform.
-    fn find_commands_worker(
-        &self,
-        release: &crate::traits::ReleaseRecord,
-        platform: &Platform,
-    ) -> CmdResult<String> {
-        let stack = release.stacks.get(platform).ok_or_else(|| {
-            AlienError::new(CmdErrorData::Other {
-                message: format!(
-                    "Release {} does not contain a stack for platform {}",
-                    release.id, platform
-                ),
-            })
-        })?;
-
-        for (resource_id, entry) in stack.resources() {
-            if let Some(worker) = entry.config.downcast_ref::<Worker>() {
-                if worker.commands_enabled {
-                    return Ok(resource_id.clone());
-                }
-            }
-        }
-        Err(AlienError::new(CmdErrorData::Other {
-            message: "No worker with commands_enabled=true found in release stack".to_string(),
-        }))
+            http_client,
+        })
     }
 }
 
@@ -96,87 +95,105 @@ impl CommandDispatcher for DefaultCommandDispatcher {
             .deployment_store
             .get_deployment(&system, deployment_id)
             .await
-            .context(CmdErrorData::Other {
-                message: format!("Failed to get deployment {}", deployment_id),
-            })?
+            .context(definitely_not_delivered(
+                envelope,
+                format!("Failed to get deployment {deployment_id} before dispatch"),
+            ))?
             .ok_or_else(|| {
-                AlienError::new(CmdErrorData::Other {
-                    message: format!("Deployment {} not found", deployment_id),
-                })
+                AlienError::new(definitely_not_delivered(
+                    envelope,
+                    format!("Deployment {deployment_id} not found before dispatch"),
+                ))
             })?;
 
-        // 2. Reject platforms that use polling (K8s/Local), not push dispatch.
-        // Note: we don't check deployment_model here — the CommandServer already
-        // routes Pull deployments to create_pending_index, so this dispatcher
-        // only gets called for Push deployments.
-        if matches!(deployment.platform, Platform::Kubernetes | Platform::Local) {
-            return Err(AlienError::new(CmdErrorData::OperationNotSupported {
-                message: format!(
-                    "Deployment {} is on {:?} which uses polling, not push dispatch",
-                    deployment_id, deployment.platform
+        // 2. The envelope names the specific target resource. Push dispatch
+        // only handles Worker targets — a Container/Daemon target here means a
+        // Pull command was misrouted to the push path, which must never happen
+        // (they are served by the pending-index poll path). Fail loudly.
+        let target = &envelope.target;
+        if target.resource_type != CommandTargetType::Worker {
+            return Err(AlienError::new(definitely_not_delivered(
+                envelope,
+                format!(
+                    "Target '{}' is {:?} and cannot use push delivery",
+                    target.resource_id, target.resource_type
                 ),
-                operation: Some("dispatch".to_string()),
-            }));
+            )));
+        }
+        let worker_id = &target.resource_id;
+
+        if deployment.platform == Platform::Kubernetes {
+            return Err(AlienError::new(definitely_not_delivered(
+                envelope,
+                "Kubernetes Worker commands must use the environment-local operator relay",
+            )));
         }
 
-        // 3. Get release to find the commands-enabled worker
-        let release_id = deployment.current_release_id.as_ref().ok_or_else(|| {
-            AlienError::new(CmdErrorData::Other {
-                message: format!("Deployment {} has no current_release_id", deployment_id),
-            })
-        })?;
-
-        let release = self
-            .release_store
-            .get_release(&system, release_id)
-            .await
-            .context(CmdErrorData::Other {
-                message: format!("Failed to get release {}", release_id),
-            })?
-            .ok_or_else(|| {
-                AlienError::new(CmdErrorData::Other {
-                    message: format!("Release {} not found", release_id),
-                })
-            })?;
-
-        // 4. Find worker with commands_enabled and get its push target from stack state
-        let worker_id = self.find_commands_worker(&release, &deployment.platform)?;
-
+        // 3. Read the targeted worker's push target from stack state.
         let stack_state = deployment.stack_state.as_ref().ok_or_else(|| {
-            AlienError::new(CmdErrorData::Other {
-                message: format!("Deployment {} has no stack_state", deployment_id),
-            })
+            AlienError::new(definitely_not_delivered(
+                envelope,
+                format!("Deployment {deployment_id} has no stack state"),
+            ))
         })?;
+
+        let worker_state = stack_state.resources.get(worker_id).ok_or_else(|| {
+            AlienError::new(definitely_not_delivered(
+                envelope,
+                format!("Worker '{worker_id}' is absent from stack state"),
+            ))
+        })?;
+        if worker_state.status != ResourceStatus::Running {
+            return Err(AlienError::new(definitely_not_delivered(
+                envelope,
+                format!(
+                    "Worker '{worker_id}' is not Running (status: {:?})",
+                    worker_state.status
+                ),
+            )));
+        }
 
         let worker_outputs: &WorkerOutputs =
             stack_state
-                .get_resource_outputs(&worker_id)
-                .context(CmdErrorData::Other {
-                    message: format!("Failed to get worker outputs for '{}'", worker_id),
-                })?;
+                .get_resource_outputs(worker_id)
+                .context(definitely_not_delivered(
+                    envelope,
+                    format!("Failed to get Worker outputs for '{worker_id}'"),
+                ))?;
 
         let push_target = worker_outputs
             .commands_push_target
             .as_ref()
             .ok_or_else(|| {
-                AlienError::new(CmdErrorData::Other {
-                    message: format!(
-                        "Worker '{}' has no commands_push_target in outputs",
-                        worker_id
-                    ),
-                })
+                AlienError::new(definitely_not_delivered(
+                    envelope,
+                    format!("Worker '{worker_id}' has no command push target"),
+                ))
             })?;
 
-        // 5. Resolve credentials for the target environment
+        if deployment.platform == Platform::Local {
+            let token = deployment.deployment_token.clone().ok_or_else(|| {
+                AlienError::new(definitely_not_delivered(
+                    envelope,
+                    format!("Deployment {deployment_id} has no command push token"),
+                ))
+            })?;
+            let dispatcher =
+                HttpCommandDispatcher::new(self.http_client.clone(), push_target.clone(), token);
+            return dispatcher.dispatch(envelope).await;
+        }
+
+        // 4. Resolve credentials for the target environment.
         let client_config = self
             .credential_resolver
             .resolve(&deployment)
             .await
-            .context(CmdErrorData::Other {
-                message: "Failed to resolve credentials".to_string(),
-            })?;
+            .context(definitely_not_delivered(
+                envelope,
+                "Failed to resolve credentials before dispatch",
+            ))?;
 
-        // 6. Create platform-specific dispatcher and dispatch
+        // 5. Create platform-specific dispatcher and dispatch.
         info!(
             command_id = %envelope.command_id,
             deployment_id = %deployment_id,
@@ -187,20 +204,19 @@ impl CommandDispatcher for DefaultCommandDispatcher {
 
         match client_config {
             alien_core::ClientConfig::Aws(aws_config) => {
-                use alien_commands::server::dispatchers::LambdaCommandDispatcher;
                 let dispatcher = LambdaCommandDispatcher::new(
                     self.http_client.clone(),
                     *aws_config,
                     push_target.clone(),
                 )
                 .await
-                .context(CmdErrorData::Other {
-                    message: "Failed to create Lambda dispatcher".to_string(),
-                })?;
+                .context(definitely_not_delivered(
+                    envelope,
+                    "Failed to create Lambda dispatcher before dispatch",
+                ))?;
                 dispatcher.dispatch(envelope).await
             }
             alien_core::ClientConfig::Gcp(gcp_config) => {
-                use alien_commands::server::dispatchers::PubSubCommandDispatcher;
                 let dispatcher = PubSubCommandDispatcher::new(
                     self.http_client.clone(),
                     *gcp_config,
@@ -209,14 +225,11 @@ impl CommandDispatcher for DefaultCommandDispatcher {
                 dispatcher.dispatch(envelope).await
             }
             alien_core::ClientConfig::Azure(azure_config) => {
-                use alien_commands::server::dispatchers::ServiceBusCommandDispatcher;
                 let (namespace, queue) = push_target.split_once('/').ok_or_else(|| {
-                    AlienError::new(CmdErrorData::Other {
-                        message: format!(
-                            "Invalid Azure push target '{}': expected 'namespace/queue'",
-                            push_target
-                        ),
-                    })
+                    AlienError::new(definitely_not_delivered(
+                        envelope,
+                        "Invalid Azure push target: expected 'namespace/queue'",
+                    ))
                 })?;
                 let dispatcher = ServiceBusCommandDispatcher::new(
                     self.http_client.clone(),
@@ -226,13 +239,13 @@ impl CommandDispatcher for DefaultCommandDispatcher {
                 );
                 dispatcher.dispatch(envelope).await
             }
-            _ => Err(AlienError::new(CmdErrorData::OperationNotSupported {
-                message: format!(
+            _ => Err(AlienError::new(definitely_not_delivered(
+                envelope,
+                format!(
                     "Platform {:?} does not support push dispatch",
                     deployment.platform
                 ),
-                operation: Some("dispatch".to_string()),
-            })),
+            ))),
         }
     }
 

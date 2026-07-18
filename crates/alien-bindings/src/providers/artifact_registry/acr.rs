@@ -1,5 +1,5 @@
 use crate::{
-    error::{map_cloud_client_error, ErrorData, Result},
+    error::{binding_env_var, map_cloud_client_error, ErrorData, Result},
     traits::{
         ArtifactRegistry, ArtifactRegistryCredentials, ArtifactRegistryPermissions, Binding,
         CrossAccountAccess, CrossAccountPermissions, RegistryAuthMethod, RepositoryResponse,
@@ -43,6 +43,7 @@ impl AcrArtifactRegistry {
             ArtifactRegistryBinding::Acr(config) => config,
             _ => {
                 return Err(AlienError::new(ErrorData::BindingConfigInvalid {
+                    env_var: binding_env_var(&binding_name),
                     binding_name: binding_name.clone(),
                     reason: "Expected ACR binding, got different service type".to_string(),
                 }));
@@ -53,6 +54,7 @@ impl AcrArtifactRegistry {
             .registry_name
             .into_value(&binding_name, "registry_name")
             .context(ErrorData::BindingConfigInvalid {
+                env_var: binding_env_var(&binding_name),
                 binding_name: binding_name.clone(),
                 reason: "Failed to extract registry_name from binding".to_string(),
             })?;
@@ -61,6 +63,7 @@ impl AcrArtifactRegistry {
             .resource_group_name
             .into_value(&binding_name, "resource_group_name")
             .context(ErrorData::BindingConfigInvalid {
+                env_var: binding_env_var(&binding_name),
                 binding_name: binding_name.clone(),
                 reason: "Failed to extract resource_group_name from binding".to_string(),
             })?;
@@ -72,10 +75,10 @@ impl AcrArtifactRegistry {
 
         let repository_prefix = match config.repository_prefix {
             Some(bv) => bv.into_value(&binding_name, "repository_prefix").context(
-                ErrorData::BindingConfigInvalid {
-                    binding_name: binding_name.clone(),
-                    reason: "Failed to extract repository_prefix from binding".to_string(),
-                },
+                ErrorData::config_invalid(
+                    &binding_name,
+                    "Failed to extract repository_prefix from binding",
+                ),
             )?,
             None => String::new(),
         };

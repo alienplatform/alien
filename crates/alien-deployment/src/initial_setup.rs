@@ -50,13 +50,12 @@ pub async fn handle_initial_setup(
 
     // Inject all environment variables — plain AND secrets.
     //
-    // The secrets vault is a dependency of every compute resource (added by
-    // SecretsVaultMutation as a link, and links ARE dependencies). The executor
-    // won't start a function until its vault dependency is Running, so
-    // ALIEN_SECRETS is always safe to inject. Secret values are synced to the
-    // vault below, between the step where the vault becomes Running and the
-    // step where compute resources start.
-    crate::helpers::inject_environment_variables(&mut target_stack, &config)?;
+    // Worker wrappers that consume vault pointers receive the secrets vault as
+    // a dependency from SecretsVaultMutation. Native-projected workloads do
+    // not need workload vault access. Secret values are synced below, between
+    // the step where the vault becomes Running and the step where Workers can
+    // consume it.
+    crate::helpers::inject_environment_variables(&mut target_stack, &config, current.platform)?;
 
     // Inject OTLP monitoring env vars if monitoring is configured
     if let Some(monitoring) = &config.monitoring {

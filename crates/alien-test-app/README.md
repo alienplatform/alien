@@ -5,7 +5,7 @@ Minimal test application for testing the Alien runtime, local development, and b
 ## Purpose
 
 This is a lightweight Rust application used for testing core Alien functionality in:
-- `alien-runtime` - Testing transport event routing (HTTP forwarding, event handling, command protocol)
+- `alien-worker-runtime` - Testing transport event routing (HTTP forwarding, event handling, command protocol)
 - `alien-local` - Testing function lifecycle (extract, start, stop, health checks)
 - `dockdash` - Testing OCI image building and registry operations
 
@@ -65,7 +65,7 @@ PORT=8080 cargo run --release
 
 The test app is used in:
 
-1. **Runtime tests** (`alien-runtime/tests/`) - Testing transport-level functionality
+1. **Runtime tests** (`alien-worker-runtime/tests/`) - Testing transport-level functionality
 2. **Local tests** (`alien-local/tests/`) - Testing local function lifecycle
 3. **Dockdash tests** (`dockdash/tests/`) - Testing OCI image building
 

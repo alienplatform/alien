@@ -25,16 +25,43 @@ export const CommandState = {
 export type CommandState = ClosedEnum<typeof CommandState>;
 
 /**
- * Deployment model captured from deployment at creation time
+ * Delivery mode for this command (push/pull), derived from the target at creation time
  */
 export const CommandDeploymentModel = {
   Push: "push",
   Pull: "pull",
 } as const;
 /**
- * Deployment model captured from deployment at creation time
+ * Delivery mode for this command (push/pull), derived from the target at creation time
  */
 export type CommandDeploymentModel = ClosedEnum<typeof CommandDeploymentModel>;
+
+/**
+ * The kind of command-capable resource a command targets.
+ */
+export const CommandResourceType = {
+  Worker: "worker",
+  Container: "container",
+  Daemon: "daemon",
+} as const;
+/**
+ * The kind of command-capable resource a command targets.
+ */
+export type CommandResourceType = ClosedEnum<typeof CommandResourceType>;
+
+/**
+ * Resource the command is addressed to; null on commands created before target routing
+ */
+export type CommandTarget = {
+  /**
+   * The resource ID within the deployment's stack (e.g. a Worker/Container/Daemon id).
+   */
+  resourceId: string;
+  /**
+   * The kind of command-capable resource a command targets.
+   */
+  resourceType: CommandResourceType;
+};
 
 export type Command = {
   /**
@@ -62,9 +89,13 @@ export type Command = {
    */
   state: CommandState;
   /**
-   * Deployment model captured from deployment at creation time
+   * Delivery mode for this command (push/pull), derived from the target at creation time
    */
   deploymentModel: CommandDeploymentModel;
+  /**
+   * Resource the command is addressed to; null on commands created before target routing
+   */
+  target: CommandTarget | null;
   /**
    * Current attempt number
    */
@@ -113,6 +144,28 @@ export const CommandDeploymentModel$inboundSchema: z.ZodEnum<
 > = z.enum(CommandDeploymentModel);
 
 /** @internal */
+export const CommandResourceType$inboundSchema: z.ZodEnum<
+  typeof CommandResourceType
+> = z.enum(CommandResourceType);
+
+/** @internal */
+export const CommandTarget$inboundSchema: z.ZodType<CommandTarget, unknown> = z
+  .object({
+    resourceId: z.string(),
+    resourceType: CommandResourceType$inboundSchema,
+  });
+
+export function commandTargetFromJSON(
+  jsonString: string,
+): SafeParseResult<CommandTarget, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => CommandTarget$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'CommandTarget' from JSON`,
+  );
+}
+
+/** @internal */
 export const Command$inboundSchema: z.ZodType<Command, unknown> = z.object({
   id: z.string(),
   deploymentId: z.string(),
@@ -121,6 +174,7 @@ export const Command$inboundSchema: z.ZodType<Command, unknown> = z.object({
   name: z.string(),
   state: CommandState$inboundSchema,
   deploymentModel: CommandDeploymentModel$inboundSchema,
+  target: z.nullable(z.lazy(() => CommandTarget$inboundSchema)),
   attempt: z.nullable(z.number()),
   deadline: z.nullable(
     z.iso.datetime({ offset: true }).transform(v => new Date(v)),

@@ -83,3 +83,6 @@ async-trait = { workspace = true }
 chrono = { workspace = true }
 test-context = { workspace = true }
 temp-env = { workspace = true }
+
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"

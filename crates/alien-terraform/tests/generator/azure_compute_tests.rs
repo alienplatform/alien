@@ -6,8 +6,9 @@
 
 use super::helpers::{assert_terraform_valid, render, snapshot_module};
 use alien_core::{
-    ArtifactRegistry, AzureContainerAppsEnvironment, AzureResourceGroup, Build, ResourceLifecycle,
-    Stack, StackSettings, Worker, WorkerCode,
+    ArtifactRegistry, AzureContainerAppsEnvironment, AzureResourceGroup, Build,
+    ComputePoolSelection, ComputeSettings, ResourceLifecycle, Stack, StackSettings, Worker,
+    WorkerCode,
 };
 use alien_core::{ContainerAppsEnvironmentBinding, ExternalBinding, ExternalBindings};
 use alien_terraform::TerraformTarget;
@@ -47,7 +48,7 @@ fn azure_build_renders_acr_task() {
                 .permissions("execution".to_string())
                 .environment([("PROFILE".to_string(), "release".to_string())].into())
                 .build(),
-            ResourceLifecycle::Live,
+            ResourceLifecycle::Frozen,
         )
         .build();
     let module = render(&stack, TerraformTarget::Azure, StackSettings::default());
@@ -67,6 +68,7 @@ fn azure_function_basic_container_app() {
                 })
                 .permissions("execution".to_string())
                 .timeout_seconds(30)
+                .expect("literal Worker timeout is within supported range")
                 .memory_mb(256)
                 .build(),
             ResourceLifecycle::Live,
@@ -75,6 +77,42 @@ fn azure_function_basic_container_app() {
     let module = render(&stack, TerraformTarget::Azure, StackSettings::default());
     snapshot_module("azure_function_basic", &module);
     assert_terraform_valid(&module, "azure_function_basic");
+}
+
+#[test]
+fn advanced_settings_overlay_preserves_generated_compute_defaults() {
+    let stack = Stack::new("acme-overlay".to_string())
+        .add(resource_group(), ResourceLifecycle::Frozen)
+        .build();
+    let module = render(
+        &stack,
+        TerraformTarget::Azure,
+        StackSettings {
+            compute: Some(ComputeSettings {
+                pools: [(
+                    "general".to_string(),
+                    ComputePoolSelection::Fixed {
+                        machines: 1,
+                        machine: Some("Standard_D2as_v5".to_string()),
+                    },
+                )]
+                .into_iter()
+                .collect(),
+            }),
+            ..StackSettings::default()
+        },
+    );
+
+    let variables = module.get("variables.tf").expect("variables should render");
+    assert!(variables.contains(r#"variable "advanced_settings_overlay_json""#));
+    assert!(variables.contains(r#"\"machine\":\"Standard_D2as_v5\""#));
+    let locals = module.get("locals.tf").expect("locals should render");
+    assert!(locals.contains("advanced_settings"));
+    assert!(locals.contains("jsondecode(var.advanced_settings_json)"));
+    assert!(locals.contains("jsondecode(var.advanced_settings_overlay_json)"));
+    assert!(locals.contains("deployment_settings"));
+    assert!(locals.contains("merge(local.advanced_settings"));
+    assert_terraform_valid(&module, "azure_advanced_settings_overlay");
 }
 
 #[test]
@@ -94,6 +132,7 @@ fn azure_function_public_ingress_enables_external_ingress() {
                     wildcard_subdomains: false,
                 })
                 .timeout_seconds(60)
+                .expect("literal Worker timeout is within supported range")
                 .memory_mb(512)
                 .build(),
             ResourceLifecycle::Live,

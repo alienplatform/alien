@@ -15,6 +15,7 @@ use tracing::{debug, info};
 ///
 /// Different Azure resource types require different Azure service providers to be enabled:
 /// - worker, build: Microsoft.App
+/// - worker with a storage trigger: Microsoft.EventGrid + Microsoft.ServiceBus
 /// - storage, kv: Microsoft.Storage  
 /// - vault: Microsoft.KeyVault
 /// - artifact-registry: Microsoft.ContainerRegistry
@@ -123,6 +124,24 @@ impl AzureServiceActivationMutation {
             match resource_type.as_ref() {
                 "worker" | "build" if include_azure_workload_scaffolding => {
                     services.insert("enable-app".to_string(), "Microsoft.App".to_string());
+                    if entry
+                        .config
+                        .downcast_ref::<alien_core::Worker>()
+                        .is_some_and(|worker| {
+                            worker.triggers.iter().any(|trigger| {
+                                matches!(trigger, alien_core::WorkerTrigger::Storage { .. })
+                            })
+                        })
+                    {
+                        services.insert(
+                            "enable-eventgrid".to_string(),
+                            "Microsoft.EventGrid".to_string(),
+                        );
+                        services.insert(
+                            "enable-servicebus".to_string(),
+                            "Microsoft.ServiceBus".to_string(),
+                        );
+                    }
                 }
                 "storage" | "kv" => {
                     services.insert(
@@ -182,5 +201,42 @@ impl AzureServiceActivationMutation {
         }
 
         services
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use alien_core::{ResourceLifecycle, Storage, Worker, WorkerCode, WorkerTrigger};
+
+    #[test]
+    fn azure_storage_trigger_requires_event_grid_and_service_bus() {
+        let storage = Storage::new("uploads".to_string()).build();
+        let worker = Worker::new("processor".to_string())
+            .code(WorkerCode::Image {
+                image: "test:latest".to_string(),
+            })
+            .permissions("worker".to_string())
+            .trigger(WorkerTrigger::storage(
+                &storage,
+                vec!["created".to_string()],
+            ))
+            .build();
+        let stack = Stack::new("test".to_string())
+            .add(storage, ResourceLifecycle::Frozen)
+            .add(worker, ResourceLifecycle::Live)
+            .build();
+
+        let services =
+            AzureServiceActivationMutation.get_required_services(&stack, Platform::Azure);
+
+        assert_eq!(
+            services.get("enable-eventgrid").map(String::as_str),
+            Some("Microsoft.EventGrid")
+        );
+        assert_eq!(
+            services.get("enable-servicebus").map(String::as_str),
+            Some("Microsoft.ServiceBus")
+        );
     }
 }

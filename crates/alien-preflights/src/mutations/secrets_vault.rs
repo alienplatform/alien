@@ -1,24 +1,27 @@
-//! Adds secrets vault and links it to all compute resources.
+//! Adds the deployment secrets vault and grants runtime access only to Worker
+//! wrappers that need vault-backed app or runtime secrets.
 
 use crate::error::Result;
 use crate::StackMutation;
 use alien_core::permissions::{PermissionProfile, PermissionSetReference};
 use alien_core::{
-    Container, Daemon, DeploymentConfig, Platform, RemoteStackManagement, ResourceEntry,
-    ResourceLifecycle, ResourceRef, Stack, StackState, Vault, Worker,
+    ComputeCluster, ComputeKind, DeploymentConfig, Platform, RemoteStackManagement, ResourceEntry,
+    ResourceLifecycle, ResourceRef, SecretDelivery, Stack, StackState, Vault, Worker,
 };
 use async_trait::async_trait;
 use tracing::{debug, info};
 
 /// Adds secrets vault for environment variable storage.
 ///
-/// Creates the "secrets" vault (if missing) and links it to all Workers, Daemons, and Containers.
-/// Secrets are synced during deployment and loaded by alien-runtime at startup.
+/// Creates the "secrets" vault (if missing). Worker wrappers receive the vault
+/// link/read permission only when needed for app or runtime-owned secrets.
+/// Runtime-less Containers and Daemons receive secrets from their hosting
+/// layer and must not get vault data-plane access.
 ///
 /// Steps:
 /// 1. Add "secrets" vault resource (if not present)
-/// 2. Link vault to all Workers, Daemons, and Containers
-/// 3. Add vault/data-read to compute resource profiles
+/// 2. Link the vault to Worker runtimes that consume vault-backed secrets
+/// 3. Add vault/data-read to those Worker profiles
 /// 4. Add vault/data-read and vault/data-write to management profile for the secrets vault
 pub struct SecretsVaultMutation;
 
@@ -39,7 +42,7 @@ impl StackMutation for SecretsVaultMutation {
                 || config.external_bindings.has("secrets");
         }
 
-        // Always run to ensure vault permissions are added to all profiles
+        // Always run to ensure required vault permissions are present
         // even if the vault resource already exists (idempotent)
         true
     }
@@ -47,10 +50,10 @@ impl StackMutation for SecretsVaultMutation {
     async fn mutate(
         &self,
         mut stack: Stack,
-        _stack_state: &StackState,
-        _config: &DeploymentConfig,
+        stack_state: &StackState,
+        config: &DeploymentConfig,
     ) -> Result<Stack> {
-        info!("Adding secrets vault and linking to all compute resources");
+        info!("Adding deployment secrets vault and scoped runtime access");
 
         let secrets_vault_id = "secrets";
 
@@ -75,13 +78,22 @@ impl StackMutation for SecretsVaultMutation {
             debug!("Secrets vault already exists");
         }
 
-        // Step 2: Link the vault to all compute resources (Workers, Daemons, and Containers)
-        // This gives them the vault binding so alien-runtime can load secrets
-        link_vault_to_compute_resources(&mut stack, secrets_vault_id)?;
-
-        // Step 3: Add vault/data-read permission to all compute resource profiles
-        // This allows Workers, Daemons, and Containers to read secrets from the vault
-        add_vault_read_permissions_to_compute_profiles(&mut stack, secrets_vault_id)?;
+        // Native-projected Workers need the vault only when their wrapper has
+        // runtime-owned monitoring credentials. Other Worker hosts consume the
+        // vault-backed app-secret pointer regardless of monitoring.
+        let worker_vault_access_required =
+            !SecretDelivery::resolve(stack_state.platform, ComputeKind::Worker)
+                .is_native_projection()
+                || config.monitoring.is_some();
+        if worker_vault_access_required {
+            link_vault_to_worker_runtimes(&mut stack, secrets_vault_id)?;
+            add_vault_read_permissions_to_worker_profiles(&mut stack, secrets_vault_id)?;
+        }
+        add_vault_dependency_to_compute_clusters(
+            &mut stack,
+            secrets_vault_id,
+            stack_state.platform,
+        );
 
         // Step 4: Add vault data permissions to management profile for the secrets vault.
         // This allows the control plane to sync secret environment variables without
@@ -92,96 +104,95 @@ impl StackMutation for SecretsVaultMutation {
     }
 }
 
-/// Link the secrets vault to all compute resources (Workers, Daemons, and Containers)
+/// Compute-cluster machine identities receive narrowly scoped read access to the
+/// deployment secrets vault. Make the Frozen vault an explicit dependency so
+/// provider-specific ComputeCluster controllers never assign that access
+/// against a vault whose outputs or cloud resource do not exist yet.
 ///
-/// This ensures all source-based compute resources get the vault binding,
-/// allowing alien-runtime to load secrets at startup via ALIEN_SECRETS.
-fn link_vault_to_compute_resources(stack: &mut Stack, vault_id: &str) -> Result<()> {
+/// AWS Parameter Store vaults are namespaces rather than provisioned resources.
+/// Their setup emitters only produce IAM policy attachments, so treating those
+/// attachments as the vault dependency target creates a cycle between the
+/// compute role, vault policies, and execution role. The compute role already
+/// carries its scoped Parameter Store access and has no vault resource to await.
+fn add_vault_dependency_to_compute_clusters(stack: &mut Stack, vault_id: &str, platform: Platform) {
+    if platform == Platform::Aws {
+        return;
+    }
+
+    let vault_ref = ResourceRef::new(Vault::RESOURCE_TYPE, vault_id);
+
+    for (resource_id, entry) in &mut stack.resources {
+        if entry.config.resource_type() != ComputeCluster::RESOURCE_TYPE {
+            continue;
+        }
+        if entry
+            .dependencies
+            .iter()
+            .any(|dependency| dependency == &vault_ref)
+        {
+            continue;
+        }
+
+        entry.dependencies.push(vault_ref.clone());
+        debug!(
+            compute_cluster = %resource_id,
+            vault = %vault_id,
+            "Made the compute cluster depend on its deployment secrets vault"
+        );
+    }
+}
+
+/// Link the secrets vault only to Worker wrappers selected by the caller.
+fn link_vault_to_worker_runtimes(stack: &mut Stack, vault_id: &str) -> Result<()> {
     let vault_ref = ResourceRef::new(Vault::RESOURCE_TYPE, vault_id);
     let mut linked_count = 0;
 
     for (resource_id, entry) in &mut stack.resources {
         let resource_type = entry.config.resource_type();
 
-        // Check if this is a compute resource (Worker, Daemon, or Container)
-        let is_compute = resource_type == Worker::RESOURCE_TYPE
-            || resource_type == Daemon::RESOURCE_TYPE
-            || resource_type == Container::RESOURCE_TYPE;
-
-        if !is_compute {
+        if resource_type != Worker::RESOURCE_TYPE {
             continue;
         }
 
-        // Get the links array (Worker, Daemon, and Container have .links field)
-        let links = if resource_type == Worker::RESOURCE_TYPE {
-            if let Some(worker) = entry.config.downcast_mut::<Worker>() {
-                &mut worker.links
-            } else {
-                continue;
-            }
-        } else if resource_type == Daemon::RESOURCE_TYPE {
-            if let Some(daemon) = entry.config.downcast_mut::<Daemon>() {
-                &mut daemon.links
-            } else {
-                continue;
-            }
-        } else {
-            if let Some(container) = entry.config.downcast_mut::<Container>() {
-                &mut container.links
-            } else {
-                continue;
-            }
+        let Some(worker) = entry.config.downcast_mut::<Worker>() else {
+            continue;
         };
 
         // Add vault link if not already present
-        if !links.iter().any(|link| link.id() == vault_id) {
-            links.push(vault_ref.clone());
+        if !worker.links.iter().any(|link| link.id() == vault_id) {
+            worker.links.push(vault_ref.clone());
             linked_count += 1;
             debug!("Linked secrets vault to compute resource '{}'", resource_id);
         }
     }
 
     if linked_count > 0 {
-        info!("Linked secrets vault to {} compute resources", linked_count);
+        info!("Linked secrets vault to {linked_count} Worker runtimes");
     }
 
     Ok(())
 }
 
-/// Add vault/data-read permission to all compute resource permission profiles
-///
-/// Workers, Daemons, and Containers need to read secrets from the vault.
-/// This permission is added to their profiles, allowing alien-runtime to fetch secrets.
-fn add_vault_read_permissions_to_compute_profiles(
+/// Add vault/data-read only to Worker profiles selected by the caller.
+fn add_vault_read_permissions_to_worker_profiles(
     stack: &mut Stack,
     vault_name: &str,
 ) -> Result<()> {
-    // Get all compute resource permission profile names
+    // Get Worker permission profile names.
     let profile_names: Vec<String> = stack
         .resources
         .iter()
         .filter_map(|(_, entry)| {
             let resource_type = entry.config.resource_type();
 
-            // Check if this is a compute resource
-            if resource_type == Worker::RESOURCE_TYPE {
-                entry
-                    .config
-                    .downcast_ref::<Worker>()
-                    .map(|worker| worker.permissions.clone())
-            } else if resource_type == Daemon::RESOURCE_TYPE {
-                entry
-                    .config
-                    .downcast_ref::<Daemon>()
-                    .map(|daemon| daemon.permissions.clone())
-            } else if resource_type == Container::RESOURCE_TYPE {
-                entry
-                    .config
-                    .downcast_ref::<Container>()
-                    .map(|c| c.permissions.clone())
-            } else {
-                None
+            if resource_type != Worker::RESOURCE_TYPE {
+                return None;
             }
+
+            entry
+                .config
+                .downcast_ref::<Worker>()
+                .map(|worker| worker.permissions.clone())
         })
         .collect();
 
@@ -315,6 +326,61 @@ mod tests {
         }
     }
 
+    fn compute_cluster_stack() -> Stack {
+        Stack {
+            id: "test-stack".to_string(),
+            resources: IndexMap::from([(
+                "compute".to_string(),
+                ResourceEntry {
+                    config: alien_core::Resource::new(
+                        ComputeCluster::new("compute".to_string()).build(),
+                    ),
+                    lifecycle: ResourceLifecycle::Frozen,
+                    dependencies: Vec::new(),
+                    remote_access: false,
+                },
+            )]),
+            permissions: PermissionsConfig {
+                profiles: IndexMap::new(),
+                management: ManagementPermissions::Auto,
+            },
+            supported_platforms: None,
+            inputs: vec![],
+        }
+    }
+
+    #[test]
+    fn aws_compute_cluster_skips_namespace_only_vault_dependency() {
+        let mut stack = compute_cluster_stack();
+
+        add_vault_dependency_to_compute_clusters(&mut stack, "secrets", Platform::Aws);
+
+        assert!(stack
+            .resources
+            .get("compute")
+            .expect("compute cluster")
+            .dependencies
+            .is_empty());
+    }
+
+    #[test]
+    fn compute_cluster_depends_on_provisioned_vault_exactly_once() {
+        let mut stack = compute_cluster_stack();
+
+        add_vault_dependency_to_compute_clusters(&mut stack, "secrets", Platform::Azure);
+        add_vault_dependency_to_compute_clusters(&mut stack, "secrets", Platform::Azure);
+
+        let dependencies = &stack
+            .resources
+            .get("compute")
+            .expect("compute cluster")
+            .dependencies;
+        assert_eq!(
+            dependencies,
+            &[ResourceRef::new(Vault::RESOURCE_TYPE, "secrets")]
+        );
+    }
+
     #[tokio::test]
     async fn test_adds_secrets_vault_and_links_to_function() {
         let worker = Worker::new("test-worker".to_string())
@@ -358,7 +424,10 @@ mod tests {
             .external_bindings(ExternalBindings::default())
             .build();
         let mutation = SecretsVaultMutation;
-        let result_stack = mutation.mutate(stack, &stack_state, &config).await.unwrap();
+        let result_stack = mutation
+            .mutate(stack.clone(), &stack_state, &config)
+            .await
+            .unwrap();
 
         // Check that secrets vault was added
         assert!(result_stack.resources.contains_key("secrets"));
@@ -383,6 +452,70 @@ mod tests {
         assert!(vault_permissions
             .iter()
             .any(|p| p.id() == "vault/data-read"));
+
+        // Kubernetes projects app secrets natively. Without runtime monitoring,
+        // its Worker wrapper has no reason to access the vault.
+        let kubernetes_stack = mutation
+            .mutate(
+                stack.clone(),
+                &StackState::new(Platform::Kubernetes),
+                &config,
+            )
+            .await
+            .unwrap();
+        let worker = kubernetes_stack
+            .resources
+            .get("test-worker")
+            .unwrap()
+            .config
+            .downcast_ref::<Worker>()
+            .unwrap();
+        assert!(worker.links.iter().all(|link| link.id() != "secrets"));
+        assert!(kubernetes_stack
+            .permissions
+            .profiles
+            .get("test-profile")
+            .unwrap()
+            .0
+            .get("secrets")
+            .is_none());
+
+        // Runtime monitoring adds a vault-backed ALIEN_RUNTIME_SECRETS pointer
+        // for the Worker wrapper, so the link and read permission are required.
+        let mut monitoring_config = config;
+        monitoring_config.monitoring = Some(alien_core::OtlpConfig {
+            logs_endpoint: "https://example.com/v1/logs".to_string(),
+            logs_auth_header: "authorization=Bearer test".to_string(),
+            metrics_endpoint: None,
+            metrics_auth_header: None,
+            resource_attributes: Default::default(),
+        });
+        let kubernetes_stack = mutation
+            .mutate(
+                stack,
+                &StackState::new(Platform::Kubernetes),
+                &monitoring_config,
+            )
+            .await
+            .unwrap();
+        let worker = kubernetes_stack
+            .resources
+            .get("test-worker")
+            .unwrap()
+            .config
+            .downcast_ref::<Worker>()
+            .unwrap();
+        assert!(worker.links.iter().any(|link| link.id() == "secrets"));
+        assert!(kubernetes_stack
+            .permissions
+            .profiles
+            .get("test-profile")
+            .unwrap()
+            .0
+            .get("secrets")
+            .unwrap()
+            .iter()
+            .any(|permission| permission.id() == "vault/data-read"));
     }
 
     #[tokio::test]
@@ -441,7 +574,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_links_vault_to_containers() {
+    async fn runtime_less_container_gets_no_vault_link_or_read_permission() {
         let container = Container::new("test-container".to_string())
             .code(ContainerCode::Image {
                 image: "test:latest".to_string(),
@@ -493,24 +626,23 @@ mod tests {
         let mutation = SecretsVaultMutation;
         let result_stack = mutation.mutate(stack, &stack_state, &config).await.unwrap();
 
-        // Check that vault was linked to the container
+        // The hosting layer projects Container secrets before process start.
         let container_entry = result_stack.resources.get("test-container").unwrap();
         let container = container_entry.config.downcast_ref::<Container>().unwrap();
         assert!(
-            container.links.iter().any(|link| link.id() == "secrets"),
-            "Container should be linked to secrets vault"
+            container.links.iter().all(|link| link.id() != "secrets"),
+            "runtime-less Container must not receive the secrets vault binding"
         );
 
-        // Check that vault/data-read was added to container profile
         let container_profile = result_stack
             .permissions
             .profiles
             .get("test-profile")
             .unwrap();
-        let vault_permissions = container_profile.0.get("secrets").unwrap();
-        assert!(vault_permissions
-            .iter()
-            .any(|p| p.id() == "vault/data-read"));
+        assert!(
+            !container_profile.0.contains_key("secrets"),
+            "runtime-less Container profile must not get vault data-plane access"
+        );
     }
 
     #[tokio::test]
@@ -629,7 +761,7 @@ mod tests {
         let mutation = SecretsVaultMutation;
         let result_stack = mutation.mutate(stack, &stack_state, &config).await.unwrap();
 
-        // Both resources should be linked to secrets vault
+        // Only the Worker wrapper consumes vault pointers.
         let worker = result_stack
             .resources
             .get("api")
@@ -646,20 +778,25 @@ mod tests {
             .config
             .downcast_ref::<Container>()
             .unwrap();
-        assert!(container.links.iter().any(|link| link.id() == "secrets"));
+        assert!(container.links.iter().all(|link| link.id() != "secrets"));
 
-        // Both profiles should have vault/data-read
-        for profile_name in ["api-profile", "worker-profile"] {
-            let profile = result_stack.permissions.profiles.get(profile_name).unwrap();
-            let vault_permissions = profile.0.get("secrets").unwrap();
-            assert!(
-                vault_permissions
-                    .iter()
-                    .any(|p| p.id() == "vault/data-read"),
-                "Profile {} should have vault/data-read",
-                profile_name
-            );
-        }
+        let api_profile = result_stack
+            .permissions
+            .profiles
+            .get("api-profile")
+            .unwrap();
+        assert!(api_profile
+            .0
+            .get("secrets")
+            .expect("Worker vault grant")
+            .iter()
+            .any(|permission| permission.id() == "vault/data-read"));
+        let container_profile = result_stack
+            .permissions
+            .profiles
+            .get("worker-profile")
+            .unwrap();
+        assert!(!container_profile.0.contains_key("secrets"));
     }
 
     #[tokio::test]

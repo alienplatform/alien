@@ -16,7 +16,7 @@ path = "src/main.rs"
 
 [features]
 default = ["otlp", "platform"]
-otlp = ["dep:alien-runtime", "alien-runtime/otlp"]
+otlp = ["dep:alien-worker-runtime", "alien-worker-runtime/otlp"]
 platform = ["dep:oauth2", "dep:open", "dep:keyring"]
 
 [dependencies]
@@ -24,7 +24,7 @@ alien-core = { workspace = true }
 alien-cloudformation = { workspace = true }
 alien-helm = { workspace = true }
 alien-terraform = { workspace = true }
-alien-runtime = { workspace = true, optional = true }
+alien-worker-runtime = { workspace = true, optional = true }
 alien-infra = { workspace = true, features = ["aws", "gcp", "azure", "test", "local"] }
 alien-build = { workspace = true }
 alien-error = { workspace = true }
@@ -91,6 +91,7 @@ toml = "0.8"
 crossterm = { workspace = true }
 
 [dev-dependencies]
+http = { workspace = true }
 snapbox = "0.6.0"
 predicates = "3.0.4"
 insta = { workspace = true }

@@ -13,8 +13,7 @@ use crate::{
 };
 use alien_build::settings::{BuildSettings, PlatformBuildSettings};
 use alien_core::{
-    AgentStatus, BinaryTarget, DeploymentStatus, DevResourceInfo, DevStatus, DevStatusState, Stack,
-    StackState,
+    AgentStatus, DeploymentStatus, DevResourceInfo, DevStatus, DevStatusState, Stack, StackState,
 };
 use alien_error::{AlienError, Context, IntoAlienError};
 use alien_manager::{
@@ -380,7 +379,12 @@ pub async fn build_and_post_release_simple(
         let settings = BuildSettings {
             output_directory: output_dir.to_str().unwrap().to_string(),
             platform: PlatformBuildSettings::Local {},
-            targets: Some(vec![BinaryTarget::current_os()]),
+            // `None` resolves to the host target for Workers/Daemons (Local
+            // platform default) while still letting source Containers build
+            // their Linux image. An explicit host-only list means "host-binary
+            // CI job" to the build and skips containers entirely — see
+            // `requested_host_binary_only` in alien-build.
+            targets: None,
             cache_url: None,
             override_base_image: None,
             debug_mode: true,

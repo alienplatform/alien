@@ -75,8 +75,13 @@ pub async fn commands_task(args: CommandsArgs, ctx: ExecutionMode) -> Result<()>
             // Resolve the manager the same way `deployments` does. In platform
             // mode this discovers the manager URL and builds a workspace-aware
             // client; server_sdk_client() isn't available there.
+            // Invoking a command never pushes container images, so resolve
+            // metadata-only and skip artifact-repo provisioning (~10–15s on
+            // platform/dev clusters — see resolve_manager_metadata_only).
             let (_, project_link) = ctx.resolve_project(None, true).await?;
-            let manager = ctx.resolve_manager(&project_link.project_id, "aws").await?;
+            let manager = ctx
+                .resolve_manager_metadata_only(&project_link.project_id, "aws")
+                .await?;
 
             invoke_command(
                 &manager.client,

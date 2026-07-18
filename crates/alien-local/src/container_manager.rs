@@ -11,7 +11,7 @@
 //! - Streams container logs to dev command
 
 use crate::error::{ErrorData, Result};
-use alien_core::ENV_ALIEN_COMMANDS_POLLING_URL;
+use alien_core::ENV_ALIEN_COMMANDS_URL;
 use alien_error::{AlienError, Context, IntoAlienError};
 use bollard::container::{
     Config, CreateContainerOptions, ListContainersOptions, LogOutput, LogsOptions,
@@ -31,6 +31,40 @@ use tracing::{debug, info, warn};
 
 /// Default Docker network name for Alien containers.
 const NETWORK_NAME: &str = "deployment-network";
+
+/// Alien-injected dev-server URLs whose `localhost` must be rewritten to
+/// `host.docker.internal` so a container running inside Docker can reach the
+/// host. User-provided env vars are left untouched (they may intentionally use
+/// localhost). Includes the command receiver base URL (`ALIEN_COMMANDS_URL`)
+/// because it points at the local manager.
+const DEV_SERVER_URL_VARS: &[&str] = &["OTEL_EXPORTER_OTLP_LOGS_ENDPOINT", ENV_ALIEN_COMMANDS_URL];
+
+/// Rewrite `://localhost:` to `://host.docker.internal:` for the known
+/// Alien-injected dev-server URL env vars only.
+fn rewrite_dev_server_localhost_urls(env_vars: &mut HashMap<String, String>) {
+    for key in DEV_SERVER_URL_VARS {
+        if let Some(value) = env_vars.get_mut(*key) {
+            if value.contains("http://localhost:") || value.contains("https://localhost:") {
+                *value = value.replace("://localhost:", "://host.docker.internal:");
+            }
+        }
+    }
+}
+
+#[derive(Debug, PartialEq, Eq)]
+struct OciProcessOverride {
+    entrypoint: Option<Vec<String>>,
+    cmd: Option<Vec<String>>,
+}
+
+fn oci_process_override(command: Option<&[String]>) -> OciProcessOverride {
+    OciProcessOverride {
+        entrypoint: command
+            .filter(|command| !command.is_empty())
+            .map(|command| command.to_vec()),
+        cmd: None,
+    }
+}
 
 /// Allocates a host port, preferring a saved port if available.
 ///
@@ -143,6 +177,12 @@ pub struct ContainerConfig {
     /// Bind mounts for linked resources (Storage, KV, Vault directories)
     /// The controller is responsible for rewriting binding env vars to use container paths.
     pub bind_mounts: Vec<BindMount>,
+    /// Deployment token for authenticated pulls from the manager's registry
+    /// proxy. Public-registry images (e.g. `postgres:16-alpine`) pull
+    /// anonymously; when the anonymous pull is rejected and this token is
+    /// present, the pull is retried as `deployment:<token>` basic auth —
+    /// the same credential the local worker manager uses for proxy pulls.
+    pub proxy_token: Option<String>,
 }
 
 /// A bind mount for a linked resource directory.
@@ -157,6 +197,10 @@ pub struct BindMount {
     pub container_path: String,
     /// Resource ID (for logging only)
     pub resource_id: String,
+    /// Whether a host-side Alien workload also opens files in this directory.
+    /// When true, local containers must create files as the host operator user
+    /// so native workloads can reopen them.
+    pub shared_with_host_workloads: bool,
 }
 
 /// Result of starting a container.
@@ -330,7 +374,12 @@ impl LocalContainerManager {
     /// If the image is a local file path that exists on disk, this method loads the
     /// OCI tarball into Docker and returns the loaded image tag.
     /// Otherwise, it returns the image reference as-is (for registry images).
-    async fn resolve_image(&self, image: &str, container_id: &str) -> Result<String> {
+    async fn resolve_image(
+        &self,
+        image: &str,
+        container_id: &str,
+        proxy_token: Option<&str>,
+    ) -> Result<String> {
         let path = Path::new(image);
 
         // Find the OCI tarball
@@ -341,13 +390,32 @@ impl LocalContainerManager {
             // Directory - look for *.oci.tar files
             Self::find_oci_tarball(path)?
         } else if !path.exists() {
-            // Not a local path, treat as registry image
-            debug!(image = %image, "Image is not a local path, treating as registry image");
-            return Ok(image.to_string());
+            // Not a local path: a registry image. Pull it explicitly so the
+            // later `create` never depends on an implicit anonymous pull —
+            // source-built container images live behind the manager's
+            // registry proxy, which requires deployment-token auth for GETs.
+            // Public images (e.g. `postgres:16-alpine`) pull anonymously
+            // first; only a rejected anonymous pull retries with the token.
+            debug!(image = %image, "Image is not a local path, pulling registry image");
+            return self
+                .pull_registry_image(image, container_id, proxy_token)
+                .await;
         } else {
             return Ok(image.to_string());
         };
 
+        self.load_oci_tarball_into_docker(&tarball_path, container_id)
+            .await
+    }
+
+    /// `docker load` an OCI tarball and return a reference the daemon can
+    /// `create` from, re-tagging by image ID when the containerd image store
+    /// registered only the tar's literal annotation name.
+    async fn load_oci_tarball_into_docker(
+        &self,
+        tarball_path: &Path,
+        container_id: &str,
+    ) -> Result<String> {
         info!(
             tarball = %tarball_path.display(),
             container_id = %container_id,
@@ -413,7 +481,186 @@ impl LocalContainerManager {
             "Successfully loaded OCI image with docker load"
         );
 
+        // With Docker's containerd image store, `docker load` registers the
+        // image under the tar's literal `io.containerd.image.name` annotation
+        // (e.g. `worker:tag`), while every docker CLI/API lookup normalizes
+        // the reference to `docker.io/library/worker:tag` — a name the load
+        // did NOT register, so `create` fails with "No such image" even
+        // though the content is present. Re-tagging by image ID registers
+        // the normalized reference. Uses the same bollard client `create`
+        // will use (a CLI `docker tag` could target a different daemon via
+        // the active docker context). On the classic image store the initial
+        // inspect succeeds and nothing else runs.
+        if self.docker.inspect_image(&loaded_image).await.is_err() {
+            let images = self
+                .docker
+                .list_images(None::<bollard::image::ListImagesOptions<String>>)
+                .await
+                .into_alien_error()
+                .context(ErrorData::DockerContainerError {
+                    container: container_id.to_string(),
+                    operation: "list_images".to_string(),
+                    reason: "Failed to list images to locate the loaded OCI image".to_string(),
+                })?;
+            // Compare with the `docker.io/library/` default-registry prefix
+            // stripped from both sides: depending on the image store, the
+            // daemon may report the tag in literal or normalized form.
+            let normalize = |t: &str| {
+                t.strip_prefix("docker.io/library/")
+                    .unwrap_or(t)
+                    .to_string()
+            };
+            let wanted = normalize(&loaded_image);
+            let image_id = images
+                .iter()
+                .find(|img| img.repo_tags.iter().any(|t| normalize(t) == wanted))
+                .map(|img| img.id.clone())
+                .ok_or_else(|| {
+                    AlienError::new(ErrorData::DockerContainerError {
+                        container: container_id.to_string(),
+                        operation: "resolve_loaded_image".to_string(),
+                        reason: format!(
+                            "docker load reported image '{}' but the daemon can neither \
+                             inspect it nor list it — the load did not register usable content",
+                            loaded_image
+                        ),
+                    })
+                })?;
+            let (repo, tag) = loaded_image.rsplit_once(':').ok_or_else(|| {
+                AlienError::new(ErrorData::DockerContainerError {
+                    container: container_id.to_string(),
+                    operation: "resolve_loaded_image".to_string(),
+                    reason: format!("Loaded image reference '{}' has no tag", loaded_image),
+                })
+            })?;
+            self.docker
+                .tag_image(
+                    &image_id,
+                    Some(bollard::image::TagImageOptions { repo, tag }),
+                )
+                .await
+                .into_alien_error()
+                .context(ErrorData::DockerContainerError {
+                    container: container_id.to_string(),
+                    operation: "tag_image".to_string(),
+                    reason: format!(
+                        "Failed to tag loaded image {} as {}",
+                        image_id, loaded_image
+                    ),
+                })?;
+        }
+
         Ok(loaded_image)
+    }
+
+    /// Make a registry image available to the daemon and return a reference
+    /// `create` can use. Three attempts, cheapest first:
+    ///
+    /// 1. Daemon-side anonymous pull — public images (`postgres:16-alpine`).
+    /// 2. Daemon-side pull with `deployment:<token>` basic auth (the manager
+    ///    registry proxy's pull credential) — proxies the daemon can reach
+    ///    over HTTPS, e.g. the E2E harness's public manager URL.
+    /// 3. Host-side pull via dockdash with the same credential, then
+    ///    `docker load` — the dev server's proxy lives on the HOST's
+    ///    localhost, which the daemon cannot reach (and would refuse as a
+    ///    plain-HTTP registry anyway). The operator process CAN reach it,
+    ///    exactly like the local worker manager's image pulls.
+    async fn pull_registry_image(
+        &self,
+        image: &str,
+        container_id: &str,
+        proxy_token: Option<&str>,
+    ) -> Result<String> {
+        use futures_util::TryStreamExt;
+
+        let options = Some(bollard::image::CreateImageOptions {
+            from_image: image.to_string(),
+            ..Default::default()
+        });
+
+        // 1. Daemon-side, anonymous.
+        if self
+            .docker
+            .create_image(options.clone(), None, None)
+            .try_collect::<Vec<_>>()
+            .await
+            .is_ok()
+        {
+            return Ok(image.to_string());
+        }
+
+        let Some(token) = proxy_token else {
+            return Err(AlienError::new(ErrorData::DockerContainerError {
+                container: container_id.to_string(),
+                operation: "pull_image".to_string(),
+                reason: format!(
+                    "Anonymous pull of '{}' failed and no deployment token is available",
+                    image
+                ),
+            }));
+        };
+
+        // 2. Daemon-side, deployment-token auth.
+        info!(
+            image = %image,
+            container_id = %container_id,
+            "Anonymous pull rejected; retrying with deployment-token auth"
+        );
+        let credentials = bollard::auth::DockerCredentials {
+            username: Some("deployment".to_string()),
+            password: Some(token.to_string()),
+            ..Default::default()
+        };
+        if self
+            .docker
+            .create_image(options, None, Some(credentials))
+            .try_collect::<Vec<_>>()
+            .await
+            .is_ok()
+        {
+            return Ok(image.to_string());
+        }
+
+        // 3. Host-side pull + docker load.
+        info!(
+            image = %image,
+            container_id = %container_id,
+            "Daemon-side pulls failed; pulling on the host and loading into Docker"
+        );
+        let protocol = if image.starts_with("127.0.0.1") || image.starts_with("localhost") {
+            dockdash::ClientProtocol::Http
+        } else {
+            dockdash::ClientProtocol::Https
+        };
+        let container_target = alien_core::BinaryTarget::linux_container_target();
+        let arch = match container_target.oci_arch() {
+            "arm64" => dockdash::Arch::ARM64,
+            _ => dockdash::Arch::Amd64,
+        };
+        let (pulled, _diagnostics) = dockdash::Image::builder()
+            .from(image)
+            .pull_policy(dockdash::PullPolicy::Always)
+            .protocol(protocol)
+            .platform(container_target.oci_os(), &arch)
+            .auth(dockdash::RegistryAuth::Basic(
+                "deployment".to_string(),
+                token.to_string(),
+            ))
+            .build()
+            .await
+            .into_alien_error()
+            .context(ErrorData::DockerContainerError {
+                container: container_id.to_string(),
+                operation: "pull_image".to_string(),
+                reason: format!(
+                    "Pull of '{}' failed anonymously, with deployment-token auth via the \
+                     daemon, and via the host-side registry client",
+                    image
+                ),
+            })?;
+
+        self.load_oci_tarball_into_docker(pulled.path(), container_id)
+            .await
     }
 
     /// Finds an OCI tarball in a directory (searches *.oci.tar recursively up to 1 level deep).
@@ -497,7 +744,9 @@ impl LocalContainerManager {
         };
 
         // Resolve image (load from OCI tarball if local path)
-        let image = self.resolve_image(&config.image, container_id).await?;
+        let image = self
+            .resolve_image(&config.image, container_id, config.proxy_token.as_deref())
+            .await?;
 
         // Build DNS aliases
         let mut network_aliases = vec![container_id.to_string(), format!("{}.svc", container_id)];
@@ -522,21 +771,7 @@ impl LocalContainerManager {
         // We also need to rewrite localhost URLs to host.docker.internal for built-in
         // dev server URLs since containers run inside Docker and can't reach host via localhost.
         let mut env_vars = config.env_vars.clone();
-
-        // Rewrite localhost URLs to host.docker.internal ONLY for known dev-server URLs
-        // Don't rewrite user-provided env vars (they might intentionally use localhost)
-        const DEV_SERVER_VARS: &[&str] = &[
-            "OTEL_EXPORTER_OTLP_LOGS_ENDPOINT",
-            ENV_ALIEN_COMMANDS_POLLING_URL,
-        ];
-
-        for key in DEV_SERVER_VARS {
-            if let Some(value) = env_vars.get_mut(*key) {
-                if value.contains("http://localhost:") || value.contains("https://localhost:") {
-                    *value = value.replace("://localhost:", "://host.docker.internal:");
-                }
-            }
-        }
+        rewrite_dev_server_localhost_urls(&mut env_vars);
 
         // Inject the current container binding so the container can discover its own URLs.
         {
@@ -579,10 +814,6 @@ impl LocalContainerManager {
                 })?;
             env_vars.extend(binding_env_vars);
         }
-
-        // Command polling is configured via environment variables (ALIEN_COMMANDS_POLLING_*)
-        // The runtime CLI will read ALIEN_AGENT_ID, ALIEN_COMMANDS_POLLING_ENABLED, etc. from env
-        // No need to inject here - it should come from the deployment configuration
 
         let env: Vec<String> = env_vars
             .iter()
@@ -671,10 +902,29 @@ impl LocalContainerManager {
             },
         );
 
+        // Local file-backed bindings are shared with host-side workloads
+        // (notably runtime-less Daemons) and with the operator's health
+        // probes. Run a container that receives those bind mounts as the
+        // operator's Unix uid/gid so every process creates SQLite/WAL and
+        // storage files with the same ownership. Leaving the image's user in
+        // place lets the first container process create files the host-side
+        // daemon cannot reopen (EACCES), even though both were given the same
+        // binding path.
+        //
+        // Containers without linked-resource bind mounts keep the image's
+        // declared user unchanged.
+        let user = shared_bind_mount_user(&config.bind_mounts);
+
+        // `ContainerConfig::command` has Kubernetes `command` semantics: it
+        // replaces the image ENTRYPOINT rather than becoming its CMD.
+        let process_override = oci_process_override(config.command.as_deref());
+
         // Build container config
         let container_config = Config {
             image: Some(image.clone()),
-            cmd: config.command.clone(),
+            entrypoint: process_override.entrypoint,
+            cmd: process_override.cmd,
+            user,
             hostname: Some(container_id.to_string()),
             env: Some(env),
             exposed_ports,
@@ -686,6 +936,18 @@ impl LocalContainerManager {
                 // On Linux: maps to host gateway IP
                 // On Mac/Windows: Docker Desktop provides this automatically, but explicit is fine
                 extra_hosts: Some(vec!["host.docker.internal:host-gateway".to_string()]),
+                // Restart exited containers like every managed platform does.
+                // Without this a container that races its peers at startup —
+                // e.g. nginx resolving an upstream before that service joined
+                // the network — stays Exited forever, while in production it
+                // would self-heal. ALWAYS (not ON_FAILURE) matches the
+                // Kubernetes Deployment default and also covers entrypoints
+                // that exit 0 on failure; Docker applies exponential backoff
+                // between restarts, and a manual stop/rm still sticks.
+                restart_policy: Some(bollard::models::RestartPolicy {
+                    name: Some(bollard::models::RestartPolicyNameEnum::ALWAYS),
+                    maximum_retry_count: None,
+                }),
                 ..Default::default()
             }),
             networking_config: Some(bollard::container::NetworkingConfig { endpoints_config }),
@@ -1083,5 +1345,107 @@ impl LocalContainerManager {
         }
 
         Ok(metadata_list)
+    }
+}
+
+/// Return the host identity a bind-mounted local workload must share with the
+/// operator and native Daemons. Docker accepts numeric `uid:gid` values even
+/// when the image has no matching passwd entry.
+#[cfg(target_os = "linux")]
+fn shared_bind_mount_user(bind_mounts: &[BindMount]) -> Option<String> {
+    if !bind_mounts
+        .iter()
+        .any(|mount| mount.shared_with_host_workloads)
+    {
+        return None;
+    }
+
+    // SAFETY: geteuid/getegid are side-effect-free process identity queries.
+    let (uid, gid) = unsafe { (libc::geteuid(), libc::getegid()) };
+    if uid == 0 {
+        return None;
+    }
+    Some(format!("{uid}:{gid}"))
+}
+
+#[cfg(not(target_os = "linux"))]
+fn shared_bind_mount_user(_bind_mounts: &[BindMount]) -> Option<String> {
+    // Docker Desktop mediates bind mounts through its VM/file-sharing layer;
+    // host uid/gid values do not identify the container user there.
+    None
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn test_bind_mount(shared_with_host_workloads: bool) -> BindMount {
+        BindMount {
+            host_path: PathBuf::from("/tmp/alien-test-binding"),
+            container_path: "/mnt/test".to_string(),
+            resource_id: "test".to_string(),
+            shared_with_host_workloads,
+        }
+    }
+
+    #[test]
+    fn tmp_only_bind_mount_preserves_the_image_user() {
+        assert_eq!(shared_bind_mount_user(&[test_bind_mount(false)]), None);
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn shared_bind_mount_uses_the_non_root_host_identity() {
+        // SAFETY: geteuid/getegid are side-effect-free process identity queries.
+        let (uid, gid) = unsafe { (libc::geteuid(), libc::getegid()) };
+        let expected = (uid != 0).then(|| format!("{uid}:{gid}"));
+
+        assert_eq!(shared_bind_mount_user(&[test_bind_mount(true)]), expected);
+    }
+
+    #[test]
+    fn rewrites_localhost_for_command_receiver_url() {
+        let mut env = HashMap::new();
+        env.insert(
+            ENV_ALIEN_COMMANDS_URL.to_string(),
+            "http://localhost:8080/v1".to_string(),
+        );
+        // A user var pointing at localhost must be left alone.
+        env.insert(
+            "USER_API_URL".to_string(),
+            "http://localhost:9000".to_string(),
+        );
+        // A non-localhost receiver URL must be left as-is.
+        env.insert(
+            "OTEL_EXPORTER_OTLP_LOGS_ENDPOINT".to_string(),
+            "https://otel.example.test/v1/logs".to_string(),
+        );
+
+        rewrite_dev_server_localhost_urls(&mut env);
+
+        assert_eq!(
+            env[ENV_ALIEN_COMMANDS_URL],
+            "http://host.docker.internal:8080/v1"
+        );
+        assert_eq!(env["USER_API_URL"], "http://localhost:9000");
+        assert_eq!(
+            env["OTEL_EXPORTER_OTLP_LOGS_ENDPOINT"],
+            "https://otel.example.test/v1/logs"
+        );
+    }
+
+    #[test]
+    fn configured_command_replaces_the_image_entrypoint() {
+        let command = vec!["/agent".to_string(), "--poll".to_string()];
+
+        let process_override = oci_process_override(Some(&command));
+
+        assert_eq!(
+            process_override,
+            OciProcessOverride {
+                entrypoint: Some(command),
+                cmd: None,
+            }
+        );
     }
 }

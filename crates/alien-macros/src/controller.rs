@@ -480,7 +480,8 @@ fn generate_controller_impl(
     let transition_to_delete_body = generate_transition_to_delete(state_enum_name, flow_entries);
     let transition_to_teardown_body =
         generate_transition_to_teardown(state_enum_name, flow_entries);
-    let transition_to_update_body = generate_transition_to_update(state_enum_name, flow_entries);
+    let transition_to_update_body =
+        generate_transition_to_update(state_enum_name, handlers, flow_entries);
 
     let get_binding_params_impl = if let Some(method) = get_binding_params_method {
         // Include the user's implementation directly in the trait
@@ -703,10 +704,17 @@ fn generate_transition_to_delete(
 
 fn generate_transition_to_update(
     state_enum_name: &Ident,
+    handlers: &HashMap<String, (&ImplItemFn, HandlerAttr)>,
     flow_entries: &HashMap<String, (Ident, FlowEntryAttr)>,
 ) -> TokenStream2 {
     if let Some((update_start_state, update_flow)) = flow_entries.get("Update") {
-        let allowed_states = &update_flow.from_states;
+        let mut allowed_states = update_flow.from_states.clone();
+        if let Some((_, update_start_handler)) = handlers.get(&update_start_state.to_string()) {
+            let update_failure_state = &update_start_handler.on_failure;
+            if !allowed_states.contains(update_failure_state) {
+                allowed_states.push(update_failure_state.clone());
+            }
+        }
         let allowed_states_str = allowed_states
             .iter()
             .map(|s| quote!(#s).to_string())

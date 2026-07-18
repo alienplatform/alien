@@ -15,7 +15,7 @@
     "db:seed": "tsx scripts/seed.ts"
   },
   "dependencies": {
-    "@alienplatform/sdk": "^1.0.0",
+    "@alienplatform/commands": "^1.0.0",
     "@alienplatform/platform-api": "^1.0.52",
     "github-agent-remote-agent": "file:../remote-agent",
     "@hookform/resolvers": "^3.10.0",

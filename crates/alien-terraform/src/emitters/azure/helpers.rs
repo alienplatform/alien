@@ -83,6 +83,16 @@ pub fn resource_prefix_template(suffix: &str) -> Expression {
     expr::template(format!("${{local.resource_prefix}}-{suffix}"))
 }
 
+/// Azure Container Registry task names are capped at 50 characters. Preserve
+/// the readable deployment-prefixed name when it fits; otherwise retain a
+/// deterministic prefix and append an 8-character hash of the full name.
+pub fn container_registry_task_name_template(suffix: &str) -> Expression {
+    let full_name = format!("${{local.resource_prefix}}-{suffix}");
+    expr::raw(format!(
+        "length(\"{full_name}\") <= 50 ? \"{full_name}\" : format(\"%s-%s\", trim(substr(\"{full_name}\", 0, 41), \"-\"), substr(sha1(\"{full_name}\"), 0, 8))"
+    ))
+}
+
 /// Standard tags map for Azure. Same key set as GCP labels — the `tags` block
 /// accepts arbitrary string values, no kebab-case constraint.
 pub fn tags(ctx: &EmitContext<'_>, alien_resource_type: &'static str) -> Expression {

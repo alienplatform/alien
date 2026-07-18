@@ -3353,7 +3353,7 @@ spec:
   type: {{ if eq $service.type "loadBalancer" }}LoadBalancer{{ else }}ClusterIP{{ end }}
   selector:
     app: {{ include "deployment.resourceName" (dict "root" $ "name" $id) }}
-    managed-by: deployment
+    managed-by: runtime
     component: {{ $service.component | quote }}
   ports:
     - name: http

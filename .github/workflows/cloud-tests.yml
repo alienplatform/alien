@@ -73,6 +73,7 @@ jobs:
       - uses: hashicorp/setup-terraform@v3
         with:
           terraform_wrapper: false
+          terraform_version: 1.14.5
 
       - name: Mask non-secret infrastructure identifiers
         run: |
@@ -216,7 +217,7 @@ jobs:
           include-hidden-files: true
 
       - name: Install 1Password CLI
-        uses: 1password/install-cli-action@v1
+        uses: 1password/install-cli-action@v4
 
       - name: Upload .env.test to 1Password (for local dev)
         run: |
@@ -286,6 +287,9 @@ jobs:
       - uses: depot/setup-action@v1
 
       - uses: mozilla-actions/sccache-action@v0.0.9
+        continue-on-error: true
+        with:
+          version: v0.16.0
 
       - uses: taiki-e/install-action@cargo-nextest
 

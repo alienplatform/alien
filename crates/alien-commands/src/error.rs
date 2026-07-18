@@ -31,6 +31,125 @@ pub enum ErrorData {
         command_id: String,
     },
 
+    /// Explicitly requested command target does not exist in the deployment
+    /// (or is not command-capable). Also returned for an empty resource id.
+    ///
+    /// 404 mirrors the crate's other lookup failures (COMMAND_NOT_FOUND,
+    /// LEASE_NOT_FOUND): the named resource does not exist.
+    #[error(
+        code = "COMMAND_TARGET_NOT_FOUND",
+        message = "Command target '{resource_id}' not found in deployment '{deployment_id}'",
+        retryable = "false",
+        internal = "false",
+        http_status_code = 404
+    )]
+    CommandTargetNotFound {
+        /// Resource ID that was requested but not found
+        resource_id: String,
+        /// Deployment the target was looked up in
+        deployment_id: String,
+    },
+
+    /// Single-target shorthand was used but the deployment has multiple
+    /// command-capable targets.
+    ///
+    /// 409 mirrors CONFLICT: the request conflicts with the deployment's
+    /// current state and the client resolves it by naming a target.
+    #[error(
+        code = "COMMAND_TARGET_AMBIGUOUS",
+        message = "Deployment '{deployment_id}' has multiple command-capable targets; specify targetResourceId",
+        retryable = "false",
+        internal = "false",
+        http_status_code = 409
+    )]
+    CommandTargetAmbiguous {
+        /// Deployment with more than one command-capable target
+        deployment_id: String,
+    },
+
+    /// The deployment has no command-capable targets at all.
+    ///
+    /// 422: the request is well-formed but unsatisfiable for this deployment
+    /// (no resource has commands enabled) — unlike 400 (malformed) or 404
+    /// (a specific named thing missing).
+    #[error(
+        code = "NO_COMMAND_TARGETS",
+        message = "Deployment '{deployment_id}' has no command-capable targets",
+        retryable = "false",
+        internal = "false",
+        http_status_code = 422
+    )]
+    NoCommandTargets {
+        /// Deployment without any command-capable targets
+        deployment_id: String,
+    },
+
+    /// A command target resource id contains `:`, which would break the
+    /// pending-index and idempotency-key delimiter grammar.
+    ///
+    /// 400: the request (or a stored target) is malformed. The commands layer
+    /// permits every resource-id character except `:`, which delimits key
+    /// segments.
+    #[error(
+        code = "COMMAND_TARGET_ID_INVALID",
+        message = "Command target id '{resource_id}' is invalid: ids cannot contain ':'",
+        retryable = "false",
+        internal = "false",
+        http_status_code = 400
+    )]
+    CommandTargetIdInvalid {
+        /// The offending resource id
+        resource_id: String,
+    },
+
+    /// Pull command receiver configuration from the environment is missing
+    /// or invalid (e.g. a required `ALIEN_COMMANDS_*` variable is absent).
+    #[error(
+        code = "COMMAND_RECEIVER_CONFIG_INVALID",
+        message = "Command receiver configuration invalid: {message}",
+        retryable = "false",
+        internal = "false",
+        http_status_code = 400
+    )]
+    CommandReceiverConfigInvalid {
+        /// Human-readable description of what is missing or invalid
+        message: String,
+        /// Environment variable that is missing or invalid
+        env_var: String,
+    },
+
+    /// The command receiver bearer token was rejected by the commands API.
+    #[error(
+        code = "COMMAND_RECEIVER_UNAUTHORIZED",
+        message = "Command receiver authorization failed during {operation}",
+        retryable = "false",
+        internal = "false",
+        http_status_code = 401
+    )]
+    CommandReceiverUnauthorized {
+        /// Command API operation that was rejected
+        operation: String,
+        /// Commands API URL that rejected the token
+        url: String,
+    },
+
+    /// The command receiver request was permanently rejected by the commands API.
+    #[error(
+        code = "COMMAND_RECEIVER_REQUEST_REJECTED",
+        message = "Command receiver request was rejected with HTTP {status} during {operation}",
+        retryable = "false",
+        internal = "false",
+        http_status_code = 502
+    )]
+    CommandReceiverRequestRejected {
+        /// Command API operation that was rejected
+        operation: String,
+        /// HTTP status returned by the commands API
+        status: u16,
+        /// Commands API URL that rejected the request
+        url: String,
+    },
+
     /// Invalid state transition attempted on command.
     #[error(
         code = "INVALID_STATE_TRANSITION",
@@ -104,6 +223,25 @@ pub enum ErrorData {
         /// Transport type that failed
         transport_type: Option<String>,
         /// Target endpoint or agent identifier
+        target: Option<String>,
+    },
+
+    /// Transport rejected a command before accepting it for execution.
+    ///
+    /// Unlike an acknowledgement timeout, this is a definite non-delivery:
+    /// the command server may safely record a terminal delivery failure.
+    #[error(
+        code = "TRANSPORT_DISPATCH_REJECTED",
+        message = "Transport rejected dispatch: {message}",
+        retryable = "false",
+        internal = "false"
+    )]
+    TransportDispatchRejected {
+        /// Safe description that contains no endpoint credentials or body.
+        message: String,
+        /// Transport type that rejected the command.
+        transport_type: Option<String>,
+        /// Command identifier (never a credential-bearing URL).
         target: Option<String>,
     },
 

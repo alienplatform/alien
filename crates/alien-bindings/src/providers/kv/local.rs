@@ -1,174 +1,151 @@
+//! Local disk-persisted KV backed by turso (`localkv.v1`), multi-process safe.
+//!
+//! # Connection strategy
+//!
+//! turso is async-native and its `Connection` is `Send + Sync`, so there is no
+//! `spawn_blocking` boundary and no `Mutex<Connection>` anywhere. `LocalKv`
+//! holds one `turso::Database` handle on `<dataDir>/localkv.sqlite`; each
+//! operation opens its **own** short-lived connection from it and drops it
+//! when the operation completes, so no statement state leaks between
+//! operations.
+//!
+//! Correctness under concurrent access (multiple handles on one file, i.e.
+//! multiple processes) comes from turso's multi-process WAL mode — enabled
+//! explicitly, experimental upstream, and gated by the multi-handle tests
+//! below — plus a `busy_timeout` (writers wait for the write lock instead of
+//! failing with `Busy`). The schema is created once in [`LocalKv::new`]. Reads
+//! of live rows never take the write lock; a read that encounters an expired
+//! row escalates to a short delete (see `get` and `exists`). Conditional puts
+//! are a single atomic `INSERT ... ON CONFLICT DO UPDATE ... WHERE` so the
+//! race is resolved by the database, not by application-level locking.
+//!
+//! See `crates/alien-bindings/FORMAT.md` for the on-disk `localkv.v1` contract.
 use crate::error::{ErrorData, Result};
-use crate::traits::{Binding, Kv, PutOptions, ScanResult};
-use alien_error::{
-    AlienError, Context as _, ContextError as _, IntoAlienError as _, IntoAlienErrorDirect,
+use crate::providers::local_store::{
+    as_blob, as_i64, as_opt_i64, as_text, opt_i64_value, query_all, LocalStore, StoreSpec,
 };
+use crate::traits::{Binding, Kv, PutOptions, ScanResult};
+use alien_error::{AlienError, Context as _, IntoAlienError as _};
 use async_trait::async_trait;
-use chrono::{DateTime, Utc};
-use serde::{Deserialize, Serialize};
+use chrono::Utc;
 use std::path::PathBuf;
-use std::sync::Arc;
-use std::time::Duration;
-use tokio::sync::Mutex;
+use turso::Connection;
 
-/// Local disk-persisted KV implementation using sled embedded database
-///
-/// This provides a persistent, thread-safe, disk-based key-value store that implements
-/// all KV trait features including TTL, conditional puts, and prefix scanning.
-/// Perfect for local development and testing that needs data persistence across restarts.
+static KV_SPEC: StoreSpec = StoreSpec {
+    db_filename: "localkv.sqlite",
+    format_version: "localkv.v1",
+    binding_type: "local KV",
+    schema_ddl: "CREATE TABLE IF NOT EXISTS kv (key TEXT PRIMARY KEY, value BLOB NOT NULL, expires_at INTEGER);",
+};
+
 #[derive(Debug)]
 pub struct LocalKv {
-    db: Arc<Mutex<sled::Db>>,
-    data_dir: PathBuf,
+    store: LocalStore,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
-struct StoredValue {
-    value: Vec<u8>,
-    expires_at: Option<DateTime<Utc>>,
+/// Build the standard KV operation error context.
+fn kv_error(operation: &str, key: &str, reason: &str) -> ErrorData {
+    ErrorData::KvOperationFailed {
+        operation: operation.to_string(),
+        key: key.to_string(),
+        reason: reason.to_string(),
+    }
 }
 
-impl StoredValue {
-    fn new(value: Vec<u8>, ttl: Option<Duration>) -> Self {
-        let expires_at = ttl
-            .map(|duration| Utc::now() + chrono::Duration::from_std(duration).unwrap_or_default());
-
-        Self { value, expires_at }
-    }
-
-    fn is_expired(&self) -> bool {
-        if let Some(expires_at) = self.expires_at {
-            Utc::now() >= expires_at
-        } else {
-            false
-        }
-    }
+/// Delete a row that is already expired (`expires_at <= now`), used by the
+/// lazy-expiry paths of `get` and `exists`.
+async fn delete_expired(conn: &Connection, operation: &str, key: &str, now: i64) -> Result<()> {
+    conn.execute(
+        "DELETE FROM kv WHERE key = ?1 AND expires_at IS NOT NULL AND expires_at <= ?2",
+        (key, now),
+    )
+    .await
+    .into_alien_error()
+    .context(kv_error(operation, key, "failed to delete expired row"))?;
+    Ok(())
 }
 
 impl LocalKv {
-    /// Create a new local KV store with the given data directory
     pub async fn new(data_dir: PathBuf) -> Result<Self> {
-        tracing::debug!(data_dir = %data_dir.display(), "Opening LocalKv database");
-
-        // Ensure the data directory exists
-        if let Some(parent) = data_dir.parent() {
-            tokio::fs::create_dir_all(parent)
-                .await
-                .into_alien_error()
-                .context(ErrorData::LocalFilesystemError {
-                    path: parent.to_string_lossy().to_string(),
-                    operation: "create_dir_all".to_string(),
-                })?;
-        }
-
-        let db =
-            sled::open(&data_dir)
-                .into_alien_error()
-                .context(ErrorData::BindingSetupFailed {
-                    binding_type: "local KV".to_string(),
-                    reason: format!("Failed to open sled database at: {:?}", data_dir),
-                })?;
-
-        tracing::debug!(data_dir = %data_dir.display(), "LocalKv database opened successfully");
-
         Ok(Self {
-            db: Arc::new(Mutex::new(db)),
-            data_dir,
+            store: LocalStore::open(data_dir, &KV_SPEC).await?,
         })
     }
 
-    /// Get the data directory path
+    /// Get the data directory path (the directory that holds `localkv.sqlite`).
     pub fn data_dir(&self) -> &PathBuf {
-        &self.data_dir
+        self.store.data_dir()
     }
 
-    /// Get the number of items currently stored (including expired items)
-    /// Useful for testing
+    /// Get the number of items currently stored (including expired items).
+    /// Useful for testing.
     pub async fn len(&self) -> Result<usize> {
-        let db = self.db.lock().await;
-        Ok(db.len())
+        self.store
+            .with_conn(|conn| async move {
+                let rows = query_all(&conn, "SELECT COUNT(*) FROM kv", ())
+                    .await
+                    .into_alien_error()
+                    .context(kv_error("len", "*", "failed to count rows"))?;
+                let count = rows
+                    .first()
+                    .and_then(|row| row.first())
+                    .and_then(as_i64)
+                    .ok_or_else(|| {
+                        AlienError::new(kv_error("len", "*", "count query returned no value"))
+                    })?;
+                Ok(count as usize)
+            })
+            .await
     }
 
-    /// Check if the store is empty (including expired items)
-    /// Useful for testing
+    /// Check if the store is empty (including expired items).
+    /// Useful for testing.
     pub async fn is_empty(&self) -> Result<bool> {
-        let db = self.db.lock().await;
-        Ok(db.is_empty())
+        Ok(self.len().await? == 0)
     }
 
-    /// Clear all data from the store
-    /// Useful for testing
+    /// Clear all data from the store.
+    /// Useful for testing.
     pub async fn clear(&self) -> Result<()> {
-        let db = self.db.lock().await;
-        db.clear()
-            .into_alien_error()
-            .context(ErrorData::KvOperationFailed {
-                operation: "clear".to_string(),
-                key: "*".to_string(),
-                reason: "Failed to clear local KV store".to_string(),
-            })?;
-        Ok(())
+        self.store
+            .with_conn(|conn| async move {
+                conn.execute("DELETE FROM kv", ())
+                    .await
+                    .into_alien_error()
+                    .context(kv_error("clear", "*", "failed to clear local KV store"))?;
+                Ok(())
+            })
+            .await
     }
 
-    /// Get all keys currently in the store (including expired ones)
-    /// Useful for testing and debugging
+    /// Get all keys currently in the store (including expired ones).
+    /// Useful for testing and debugging.
     pub async fn keys(&self) -> Result<Vec<String>> {
-        let db = self.db.lock().await;
-        let mut keys = Vec::new();
-
-        for result in db.iter() {
-            let (key, _) = result
-                .into_alien_error()
-                .context(ErrorData::KvOperationFailed {
-                    operation: "scan keys".to_string(),
-                    key: "<unknown>".to_string(),
-                    reason: "Failed to iterate over keys".to_string(),
-                })?;
-
-            let key_str = String::from_utf8(key.to_vec()).into_alien_error().context(
-                ErrorData::KvOperationFailed {
-                    operation: "decode key".to_string(),
-                    key: "<invalid UTF-8>".to_string(),
-                    reason: "Invalid UTF-8 in stored key".to_string(),
-                },
-            )?;
-
-            keys.push(key_str);
-        }
-
-        Ok(keys)
+        self.store
+            .with_conn(|conn| async move {
+                let rows = query_all(&conn, "SELECT key FROM kv", ())
+                    .await
+                    .into_alien_error()
+                    .context(kv_error("keys", "*", "failed to scan keys"))?;
+                let mut keys = Vec::with_capacity(rows.len());
+                for row in &rows {
+                    keys.push(row.first().and_then(as_text).ok_or_else(|| {
+                        AlienError::new(kv_error("keys", "*", "failed to read key row"))
+                    })?);
+                }
+                Ok(keys)
+            })
+            .await
     }
 
-    /// Validate key constraints using global KV validation
+    /// Validate key constraints using global KV validation.
     fn validate_key(key: &str) -> Result<()> {
         crate::providers::kv::validate_key(key)
     }
 
-    /// Validate value constraints using global KV validation
+    /// Validate value constraints using global KV validation.
     fn validate_value(value: &[u8]) -> Result<()> {
         crate::providers::kv::validate_value(value)
-    }
-
-    /// Serialize a stored value to bytes
-    fn serialize_value(stored_value: &StoredValue) -> Result<Vec<u8>> {
-        serde_json::to_vec(stored_value)
-            .into_alien_error()
-            .context(ErrorData::KvOperationFailed {
-                operation: "serialize value".to_string(),
-                key: "<unknown>".to_string(),
-                reason: "Failed to serialize value to JSON".to_string(),
-            })
-    }
-
-    /// Deserialize bytes to a stored value
-    fn deserialize_value(bytes: &[u8]) -> Result<StoredValue> {
-        serde_json::from_slice(bytes)
-            .into_alien_error()
-            .context(ErrorData::KvOperationFailed {
-                operation: "deserialize value".to_string(),
-                key: "<unknown>".to_string(),
-                reason: "Failed to deserialize value from JSON".to_string(),
-            })
     }
 }
 
@@ -179,133 +156,127 @@ impl Kv for LocalKv {
     async fn get(&self, key: &str) -> Result<Option<Vec<u8>>> {
         Self::validate_key(key)?;
 
-        let db = self.db.lock().await;
+        self.store
+            .with_conn(|conn| async move {
+                let now = Utc::now().timestamp_millis();
+                let rows = query_all(
+                    &conn,
+                    "SELECT value, expires_at FROM kv WHERE key = ?1",
+                    (key,),
+                )
+                .await
+                .into_alien_error()
+                .context(kv_error("get", key, "failed to read value"))?;
 
-        let value_bytes = match db.get(key.as_bytes()) {
-            Ok(Some(bytes)) => bytes,
-            Ok(None) => return Ok(None),
-            Err(e) => {
-                return Err(e.into_alien_error().context(ErrorData::KvOperationFailed {
-                    operation: "get".to_string(),
-                    key: key.to_string(),
-                    reason: "Failed to retrieve value from sled database".to_string(),
-                }));
-            }
-        };
+                let Some(row) = rows.first() else {
+                    return Ok(None);
+                };
+                let value = row.first().and_then(as_blob).ok_or_else(|| {
+                    AlienError::new(kv_error("get", key, "stored value is not a blob"))
+                })?;
+                let expires_at = row.get(1).and_then(as_opt_i64).ok_or_else(|| {
+                    AlienError::new(kv_error("get", key, "stored expires_at is not an integer"))
+                })?;
 
-        let stored_value = Self::deserialize_value(&value_bytes)?;
-
-        if stored_value.is_expired() {
-            // Lazily remove expired items
-            let _ = db.remove(key.as_bytes());
-            Ok(None)
-        } else {
-            Ok(Some(stored_value.value))
-        }
+                if matches!(expires_at, Some(exp) if exp <= now) {
+                    // Lazily remove the expired row.
+                    delete_expired(&conn, "get", key, now).await?;
+                    Ok(None)
+                } else {
+                    Ok(Some(value))
+                }
+            })
+            .await
     }
 
     async fn put(&self, key: &str, value: Vec<u8>, options: Option<PutOptions>) -> Result<bool> {
         Self::validate_key(key)?;
         Self::validate_value(&value)?;
-
-        let db = self.db.lock().await;
         let options = options.unwrap_or_default();
 
-        // Handle conditional put (if_not_exists)
-        if options.if_not_exists {
-            if let Some(existing_bytes) =
-                db.get(key.as_bytes())
+        self.store
+            .with_conn(|conn| async move {
+                let now = Utc::now().timestamp_millis();
+                let expires_at: Option<i64> = options
+                    .ttl
+                    .map(|d| now.saturating_add(i64::try_from(d.as_millis()).unwrap_or(i64::MAX)));
+
+                if options.if_not_exists {
+                    // One atomic statement: insert if absent, otherwise overwrite
+                    // ONLY when the existing row is already expired. The changed
+                    // row count (returned by `execute`) is 1 for the winner, 0
+                    // for a loser.
+                    let changed = conn
+                        .execute(
+                            "INSERT INTO kv (key, value, expires_at) VALUES (?1, ?2, ?3) \
+                             ON CONFLICT(key) DO UPDATE SET value = ?2, expires_at = ?3 \
+                             WHERE kv.expires_at IS NOT NULL AND kv.expires_at <= ?4",
+                            (key, value, opt_i64_value(expires_at), now),
+                        )
+                        .await
+                        .into_alien_error()
+                        .context(kv_error("put", key, "failed conditional put"))?;
+                    Ok(changed == 1)
+                } else {
+                    conn.execute(
+                        "INSERT INTO kv (key, value, expires_at) VALUES (?1, ?2, ?3) \
+                         ON CONFLICT(key) DO UPDATE SET value = ?2, expires_at = ?3",
+                        (key, value, opt_i64_value(expires_at)),
+                    )
+                    .await
                     .into_alien_error()
-                    .context(ErrorData::KvOperationFailed {
-                        operation: "conditional put check".to_string(),
-                        key: key.to_string(),
-                        reason: "Failed to check existing key".to_string(),
-                    })?
-            {
-                // Check if existing value is expired
-                if let Ok(existing_stored) = Self::deserialize_value(&existing_bytes) {
-                    if !existing_stored.is_expired() {
-                        return Ok(false); // Key exists and is not expired
-                    }
+                    .context(kv_error("put", key, "failed to upsert value"))?;
+                    Ok(true)
                 }
-                // If we can't deserialize or it's expired, we can overwrite
-            }
-        }
-
-        let stored_value = StoredValue::new(value, options.ttl);
-        let serialized = Self::serialize_value(&stored_value)?;
-
-        db.insert(key.as_bytes(), serialized)
-            .into_alien_error()
-            .context(ErrorData::KvOperationFailed {
-                operation: "put".to_string(),
-                key: key.to_string(),
-                reason: "Failed to insert value into sled database".to_string(),
-            })?;
-
-        // Ensure data is persisted to disk without blocking the Tokio thread
-        db.flush_async()
+            })
             .await
-            .into_alien_error()
-            .context(ErrorData::KvOperationFailed {
-                operation: "flush".to_string(),
-                key: key.to_string(),
-                reason: "Failed to flush data to disk".to_string(),
-            })?;
-
-        tracing::info!(key = %key, data_dir = %self.data_dir.display(), "LocalKv::put completed successfully and flushed");
-
-        Ok(true)
     }
 
     async fn delete(&self, key: &str) -> Result<()> {
         Self::validate_key(key)?;
 
-        let db = self.db.lock().await;
-        db.remove(key.as_bytes())
-            .into_alien_error()
-            .context(ErrorData::KvOperationFailed {
-                operation: "delete".to_string(),
-                key: key.to_string(),
-                reason: "Failed to remove key from sled database".to_string(),
-            })?;
-
-        // Ensure deletion is persisted to disk without blocking the Tokio thread
-        db.flush_async()
+        self.store
+            .with_conn(|conn| async move {
+                conn.execute("DELETE FROM kv WHERE key = ?1", (key,))
+                    .await
+                    .into_alien_error()
+                    .context(kv_error("delete", key, "failed to delete key"))?;
+                Ok(())
+            })
             .await
-            .into_alien_error()
-            .context(ErrorData::KvOperationFailed {
-                operation: "flush".to_string(),
-                key: key.to_string(),
-                reason: "Failed to flush deletion to disk".to_string(),
-            })?;
-
-        Ok(())
     }
 
     async fn exists(&self, key: &str) -> Result<bool> {
         Self::validate_key(key)?;
 
-        let db = self.db.lock().await;
+        self.store
+            .with_conn(|conn| async move {
+                let now = Utc::now().timestamp_millis();
+                let rows = query_all(&conn, "SELECT expires_at FROM kv WHERE key = ?1", (key,))
+                    .await
+                    .into_alien_error()
+                    .context(kv_error("exists", key, "failed to check existence"))?;
 
-        match db.get(key.as_bytes()) {
-            Ok(Some(bytes)) => {
-                let stored_value = Self::deserialize_value(&bytes)?;
-                if stored_value.is_expired() {
-                    // Lazily remove expired items
-                    let _ = db.remove(key.as_bytes());
+                let Some(row) = rows.first() else {
+                    return Ok(false);
+                };
+                let expires_at = row.first().and_then(as_opt_i64).ok_or_else(|| {
+                    AlienError::new(kv_error(
+                        "exists",
+                        key,
+                        "stored expires_at is not an integer",
+                    ))
+                })?;
+
+                if matches!(expires_at, Some(exp) if exp <= now) {
+                    // Lazily remove the expired row.
+                    delete_expired(&conn, "exists", key, now).await?;
                     Ok(false)
                 } else {
                     Ok(true)
                 }
-            }
-            Ok(None) => Ok(false),
-            Err(e) => Err(e.into_alien_error().context(ErrorData::KvOperationFailed {
-                operation: "exists".to_string(),
-                key: key.to_string(),
-                reason: "Failed to check key existence in sled database".to_string(),
-            })),
-        }
+            })
+            .await
     }
 
     async fn scan_prefix(
@@ -316,9 +287,7 @@ impl Kv for LocalKv {
     ) -> Result<ScanResult> {
         Self::validate_key(prefix)?;
 
-        let db = self.db.lock().await;
-
-        // Parse cursor if provided (simple offset-based pagination for local)
+        // Parse cursor (simple offset-based pagination for local).
         let start_offset = if let Some(cursor_str) = cursor {
             cursor_str.parse::<usize>().map_err(|_| {
                 AlienError::new(ErrorData::InvalidInput {
@@ -331,48 +300,71 @@ impl Kv for LocalKv {
             0
         };
 
-        // Collect matching, non-expired keys
-        let mut matching_items: Vec<(String, Vec<u8>)> = Vec::new();
-
-        for result in db.scan_prefix(prefix.as_bytes()) {
-            let (key_bytes, value_bytes) =
-                result
-                    .into_alien_error()
-                    .context(ErrorData::KvOperationFailed {
-                        operation: "scan_prefix".to_string(),
-                        key: prefix.to_string(),
-                        reason: "Failed to scan prefix in sled database".to_string(),
-                    })?;
-
-            let key = String::from_utf8(key_bytes.to_vec())
+        // Collect matching, non-expired items in sorted key order.
+        let matching: Vec<(String, Vec<u8>)> = self
+            .store
+            .with_conn(|conn| async move {
+                let now = Utc::now().timestamp_millis();
+                let rows = query_all(
+                    &conn,
+                    "SELECT key, value, expires_at FROM kv WHERE key >= ?1 ORDER BY key",
+                    (prefix,),
+                )
+                .await
                 .into_alien_error()
-                .context(ErrorData::KvOperationFailed {
-                    operation: "decode key".to_string(),
-                    key: prefix.to_string(),
-                    reason: "Invalid UTF-8 in stored key during scan".to_string(),
-                })?;
+                .context(kv_error(
+                    "scan_prefix",
+                    prefix,
+                    "failed to scan prefix",
+                ))?;
 
-            if let Ok(stored_value) = Self::deserialize_value(&value_bytes) {
-                if !stored_value.is_expired() {
-                    matching_items.push((key, stored_value.value));
+                let mut matching = Vec::new();
+                for row in &rows {
+                    let k = row.first().and_then(as_text).ok_or_else(|| {
+                        AlienError::new(kv_error(
+                            "scan_prefix",
+                            prefix,
+                            "failed to read scan row key",
+                        ))
+                    })?;
+                    // Keys are ordered ascending starting at `prefix`; once a key
+                    // stops matching the prefix, no later key can match either.
+                    if !k.starts_with(prefix) {
+                        break;
+                    }
+                    let v = row.get(1).and_then(as_blob).ok_or_else(|| {
+                        AlienError::new(kv_error(
+                            "scan_prefix",
+                            prefix,
+                            "stored value is not a blob",
+                        ))
+                    })?;
+                    let exp = row.get(2).and_then(as_opt_i64).ok_or_else(|| {
+                        AlienError::new(kv_error(
+                            "scan_prefix",
+                            prefix,
+                            "stored expires_at is not an integer",
+                        ))
+                    })?;
+                    if matches!(exp, Some(e) if e <= now) {
+                        continue; // expired: treat as absent
+                    }
+                    matching.push((k, v));
                 }
-            }
-        }
+                Ok(matching)
+            })
+            .await?;
 
-        // Sort for deterministic behavior
-        matching_items.sort_by(|a, b| a.0.cmp(&b.0));
-
-        // Apply pagination
-        let total_items = matching_items.len();
+        // Apply offset-based pagination (results are already sorted by key).
+        let total_items = matching.len();
         let end_offset = start_offset + limit.unwrap_or(total_items);
 
-        let items = matching_items
+        let items = matching
             .into_iter()
             .skip(start_offset)
             .take(limit.unwrap_or(usize::MAX))
             .collect::<Vec<_>>();
 
-        // Generate next cursor if there are more items
         let next_cursor = if end_offset < total_items {
             Some(end_offset.to_string())
         } else {
@@ -386,6 +378,8 @@ impl Kv for LocalKv {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::providers::local_store::open_database;
+    use std::sync::Arc;
     use std::time::Duration;
     use tempfile::TempDir;
     use tokio::time;
@@ -402,7 +396,6 @@ mod tests {
     async fn test_basic_operations() {
         let (kv, _temp_dir) = create_test_kv().await;
 
-        // Test put and get
         assert!(kv
             .put("test_key", b"test_value".to_vec(), None)
             .await
@@ -410,11 +403,9 @@ mod tests {
         let value = kv.get("test_key").await.unwrap();
         assert_eq!(value, Some(b"test_value".to_vec()));
 
-        // Test exists
         assert!(kv.exists("test_key").await.unwrap());
         assert!(!kv.exists("nonexistent").await.unwrap());
 
-        // Test delete
         kv.delete("test_key").await.unwrap();
         assert!(!kv.exists("test_key").await.unwrap());
         assert_eq!(kv.get("test_key").await.unwrap(), None);
@@ -424,7 +415,6 @@ mod tests {
     async fn test_conditional_put() {
         let (kv, _temp_dir) = create_test_kv().await;
 
-        // First put should succeed
         let options = Some(PutOptions {
             ttl: None,
             if_not_exists: true,
@@ -434,13 +424,10 @@ mod tests {
             .await
             .unwrap());
 
-        // Second put should fail due to if_not_exists
         assert!(!kv.put("key", b"value2".to_vec(), options).await.unwrap());
 
-        // Value should still be the original
         assert_eq!(kv.get("key").await.unwrap(), Some(b"value1".to_vec()));
 
-        // Regular put should succeed
         assert!(kv.put("key", b"value3".to_vec(), None).await.unwrap());
         assert_eq!(kv.get("key").await.unwrap(), Some(b"value3".to_vec()));
     }
@@ -458,17 +445,14 @@ mod tests {
             .await
             .unwrap();
 
-        // Should exist immediately after put completes
         assert!(kv.exists("expiring_key").await.unwrap());
         assert_eq!(
             kv.get("expiring_key").await.unwrap(),
             Some(b"value".to_vec())
         );
 
-        // Wait for expiration
         time::sleep(Duration::from_millis(750)).await;
 
-        // Should be expired now
         assert!(!kv.exists("expiring_key").await.unwrap());
         assert_eq!(kv.get("expiring_key").await.unwrap(), None);
     }
@@ -477,7 +461,6 @@ mod tests {
     async fn test_prefix_scanning() {
         let (kv, _temp_dir) = create_test_kv().await;
 
-        // Insert test data
         kv.put("prefix:key1", b"value1".to_vec(), None)
             .await
             .unwrap();
@@ -489,22 +472,18 @@ mod tests {
             .unwrap();
         kv.put("other:key", b"other".to_vec(), None).await.unwrap();
 
-        // Scan with prefix
         let result = kv.scan_prefix("prefix:", None, None).await.unwrap();
         assert_eq!(result.items.len(), 3);
         assert!(result.next_cursor.is_none());
 
-        // Check items are sorted
         assert_eq!(result.items[0].0, "prefix:key1");
         assert_eq!(result.items[1].0, "prefix:key2");
         assert_eq!(result.items[2].0, "prefix:key3");
 
-        // Test with limit
         let result = kv.scan_prefix("prefix:", Some(2), None).await.unwrap();
         assert_eq!(result.items.len(), 2);
         assert!(result.next_cursor.is_some());
 
-        // Test pagination
         let cursor = result.next_cursor.unwrap();
         let result = kv
             .scan_prefix("prefix:", Some(2), Some(cursor))
@@ -520,7 +499,6 @@ mod tests {
         let temp_dir = tempfile::tempdir().expect("Failed to create temp dir");
         let db_path = temp_dir.path().join("kv.db");
 
-        // Create KV, add data, and drop it
         {
             let kv = LocalKv::new(db_path.clone())
                 .await
@@ -530,7 +508,6 @@ mod tests {
                 .unwrap();
         }
 
-        // Reopen and verify data persists
         {
             let kv = LocalKv::new(db_path)
                 .await
@@ -544,15 +521,12 @@ mod tests {
     async fn test_key_validation() {
         let (kv, _temp_dir) = create_test_kv().await;
 
-        // Empty key should fail
         assert!(kv.put("", b"value".to_vec(), None).await.is_err());
         assert!(kv.get("").await.is_err());
 
-        // Key too long should fail
         let long_key = "a".repeat(513);
         assert!(kv.put(&long_key, b"value".to_vec(), None).await.is_err());
 
-        // Invalid characters should fail
         assert!(kv
             .put("key with spaces", b"value".to_vec(), None)
             .await
@@ -566,7 +540,6 @@ mod tests {
             .await
             .is_err());
 
-        // Valid keys should succeed
         assert!(kv
             .put("valid_key-123", b"value".to_vec(), None)
             .await
@@ -581,12 +554,10 @@ mod tests {
     async fn test_value_validation() {
         let (kv, _temp_dir) = create_test_kv().await;
 
-        // Value too large should fail
-        let large_value = vec![0u8; 24_577]; // Just over 24 KiB
+        let large_value = vec![0u8; 24_577];
         assert!(kv.put("key", large_value, None).await.is_err());
 
-        // Maximum size value should succeed
-        let max_value = vec![0u8; 24_576]; // Exactly 24 KiB
+        let max_value = vec![0u8; 24_576];
         assert!(kv.put("key", max_value, None).await.is_ok());
     }
 
@@ -594,12 +565,10 @@ mod tests {
     async fn test_utility_methods() {
         let (kv, _temp_dir) = create_test_kv().await;
 
-        // Initially empty
         assert!(kv.is_empty().await.unwrap());
         assert_eq!(kv.len().await.unwrap(), 0);
         assert_eq!(kv.keys().await.unwrap(), Vec::<String>::new());
 
-        // Add some data
         kv.put("key1", b"value1".to_vec(), None).await.unwrap();
         kv.put("key2", b"value2".to_vec(), None).await.unwrap();
 
@@ -610,9 +579,209 @@ mod tests {
         keys.sort();
         assert_eq!(keys, vec!["key1", "key2"]);
 
-        // Clear
         kv.clear().await.unwrap();
         assert!(kv.is_empty().await.unwrap());
         assert_eq!(kv.len().await.unwrap(), 0);
+    }
+
+    #[tokio::test]
+    async fn test_unknown_format_rejected_on_open() {
+        let temp_dir = tempfile::tempdir().expect("Failed to create temp dir");
+        let dir = temp_dir.path().join("kv");
+
+        // Create a valid store, then rewrite its format marker to a future version.
+        {
+            let kv = LocalKv::new(dir.clone()).await.expect("initial open");
+            kv.put("k", b"v".to_vec(), None).await.unwrap();
+        }
+        {
+            let db = open_database(&dir.join("localkv.sqlite"), "test")
+                .await
+                .expect("raw open");
+            let conn = db.connect().expect("raw connect");
+            conn.execute(
+                "UPDATE meta SET value = 'localkv.v2' WHERE key = 'format'",
+                (),
+            )
+            .await
+            .expect("format overwrite");
+        }
+
+        // Reopening must fail fast, naming both the found and expected formats.
+        let err = LocalKv::new(dir)
+            .await
+            .expect_err("unknown format must be rejected");
+        let msg = err.to_string();
+        assert!(
+            msg.contains("localkv.v2"),
+            "error must name the found format, got: {msg}"
+        );
+        assert!(
+            msg.contains("localkv.v1"),
+            "error must name the expected format, got: {msg}"
+        );
+    }
+
+    // ---- Multi-process-safety proofs ----
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn test_conditional_put_atomicity_across_handles() {
+        let temp_dir = tempfile::tempdir().expect("Failed to create temp dir");
+        let dir = temp_dir.path().join("kv");
+        // Two independent handles on the SAME data_dir == two processes sharing the file.
+        let kv_a = Arc::new(LocalKv::new(dir.clone()).await.expect("open handle a"));
+        let kv_b = Arc::new(LocalKv::new(dir.clone()).await.expect("open handle b"));
+
+        let n = 16;
+        let mut handles = Vec::new();
+        for i in 0..n {
+            let kv = if i % 2 == 0 {
+                kv_a.clone()
+            } else {
+                kv_b.clone()
+            };
+            handles.push(tokio::spawn(async move {
+                let val = format!("val-{i}").into_bytes();
+                let opts = Some(PutOptions {
+                    ttl: None,
+                    if_not_exists: true,
+                });
+                let won = kv.put("race", val.clone(), opts).await.expect("put ok");
+                (won, val)
+            }));
+        }
+
+        let mut winners = Vec::new();
+        for h in handles {
+            let (won, val) = h.await.expect("task join");
+            if won {
+                winners.push(val);
+            }
+        }
+
+        assert_eq!(
+            winners.len(),
+            1,
+            "exactly one conditional put must win across both handles"
+        );
+        let stored = kv_a.get("race").await.unwrap().expect("key present");
+        assert_eq!(stored, winners[0], "stored value must equal the winner");
+        assert_eq!(
+            kv_b.get("race").await.unwrap().expect("key present via b"),
+            winners[0]
+        );
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn test_ttl_expiry_takeover_conditional_put() {
+        let temp_dir = tempfile::tempdir().expect("Failed to create temp dir");
+        let dir = temp_dir.path().join("kv");
+        let kv_a = Arc::new(LocalKv::new(dir.clone()).await.expect("open handle a"));
+        let kv_b = Arc::new(LocalKv::new(dir.clone()).await.expect("open handle b"));
+
+        // Seed a short-lived key with a conditional put.
+        assert!(kv_a
+            .put(
+                "k",
+                b"initial".to_vec(),
+                Some(PutOptions {
+                    ttl: Some(Duration::from_millis(300)),
+                    if_not_exists: true,
+                }),
+            )
+            .await
+            .unwrap());
+
+        // While it is still live, a conditional put must lose.
+        assert!(!kv_b
+            .put(
+                "k",
+                b"early".to_vec(),
+                Some(PutOptions {
+                    ttl: None,
+                    if_not_exists: true,
+                }),
+            )
+            .await
+            .unwrap());
+
+        // Wait for the seeded key to expire.
+        time::sleep(Duration::from_millis(450)).await;
+
+        // Race the takeover: many conditional puts against the now-expired key.
+        let n = 12;
+        let mut handles = Vec::new();
+        for i in 0..n {
+            let kv = if i % 2 == 0 {
+                kv_a.clone()
+            } else {
+                kv_b.clone()
+            };
+            handles.push(tokio::spawn(async move {
+                let val = format!("takeover-{i}").into_bytes();
+                let won = kv
+                    .put(
+                        "k",
+                        val.clone(),
+                        Some(PutOptions {
+                            ttl: None,
+                            if_not_exists: true,
+                        }),
+                    )
+                    .await
+                    .expect("put ok");
+                (won, val)
+            }));
+        }
+
+        let mut winners = Vec::new();
+        for h in handles {
+            let (won, val) = h.await.expect("task join");
+            if won {
+                winners.push(val);
+            }
+        }
+
+        assert_eq!(
+            winners.len(),
+            1,
+            "exactly one takeover conditional put must win after expiry"
+        );
+        let stored = kv_b.get("k").await.unwrap().expect("key present");
+        assert_eq!(
+            stored, winners[0],
+            "stored value must equal the takeover winner"
+        );
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn test_multi_handle_concurrent_smoke() {
+        let temp_dir = tempfile::tempdir().expect("Failed to create temp dir");
+        let dir = temp_dir.path().join("kv");
+        let kv_a = Arc::new(LocalKv::new(dir.clone()).await.expect("open handle a"));
+        let kv_b = Arc::new(LocalKv::new(dir.clone()).await.expect("open handle b"));
+
+        let mut handles = Vec::new();
+        for i in 0..50 {
+            let kv = if i % 2 == 0 {
+                kv_a.clone()
+            } else {
+                kv_b.clone()
+            };
+            handles.push(tokio::spawn(async move {
+                let key = format!("key_{i}");
+                let val = format!("v{i}").into_bytes();
+                // No busy errors expected under multi-process WAL + busy_timeout.
+                kv.put(&key, val.clone(), None).await.expect("put ok");
+                let got = kv.get(&key).await.expect("get ok");
+                assert_eq!(got, Some(val));
+            }));
+        }
+        for h in handles {
+            h.await.expect("task join");
+        }
+
+        assert_eq!(kv_a.len().await.unwrap(), 50, "handle a sees all keys");
+        assert_eq!(kv_b.len().await.unwrap(), 50, "handle b sees all keys");
     }
 }

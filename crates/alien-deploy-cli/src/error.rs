@@ -23,6 +23,14 @@ pub enum ErrorData {
     ValidationError { field: String, message: String },
 
     #[error(
+        code = "MANAGEMENT_UNAVAILABLE",
+        message = "Management is unavailable.\nRuntime state was not checked. This does not mean the deployment stopped.",
+        retryable = "true",
+        internal = "false"
+    )]
+    ManagementUnavailable,
+
+    #[error(
         code = "FILE_OPERATION_FAILED",
         message = "Failed to {operation} '{file_path}': {reason}",
         retryable = "true",

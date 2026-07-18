@@ -25,6 +25,9 @@ pub enum ReleasesCmd {
         /// Project to list releases for (optional, uses linked project by default)
         #[arg(long)]
         project: Option<String>,
+        /// Emit the manager API response as machine-readable JSON
+        #[arg(long)]
+        json: bool,
     },
     /// Show a release and how far it has rolled out across deployments
     Get {
@@ -43,16 +46,16 @@ pub async fn releases_task(args: ReleasesArgs, ctx: ExecutionMode) -> Result<()>
     ctx.ensure_ready().await?;
 
     match args.cmd {
-        ReleasesCmd::Ls { project } => {
+        ReleasesCmd::Ls { project, json } => {
             // Releases are a core feature, so they go through the manager, not
             // the platform API directly.
             let manager = crate::commands::deployments::resolve_manager_client(
                 &ctx,
                 project.as_deref(),
-                true,
+                !json,
             )
             .await?;
-            list_releases_task(&manager).await
+            list_releases_task(&manager, json).await
         }
         ReleasesCmd::Get { id, project, json } => {
             let manager = crate::commands::deployments::resolve_manager_client(
@@ -66,7 +69,7 @@ pub async fn releases_task(args: ReleasesArgs, ctx: ExecutionMode) -> Result<()>
     }
 }
 
-async fn list_releases_task(client: &alien_manager_api::Client) -> Result<()> {
+async fn list_releases_task(client: &alien_manager_api::Client, json: bool) -> Result<()> {
     let response = client
         .list_releases()
         .send()
@@ -78,17 +81,22 @@ async fn list_releases_task(client: &alien_manager_api::Client) -> Result<()> {
         })?
         .into_inner();
 
+    if json {
+        return print_json(&response.items);
+    }
+
     if response.items.is_empty() {
         println!("(no releases)");
         return Ok(());
     }
 
-    let mut table = make_table(&["ID", "Created", "Commit", "Platforms"]);
+    let mut table = make_table(&["ID", "Created", "Commit", "Ref", "Platforms"]);
     for release in &response.items {
         table.add_row(vec![
             release.id.clone().into(),
             release.created_at.clone().into(),
             commit_cell(release),
+            commit_ref_cell(release),
             platforms_cell(&release.stack),
         ]);
     }
@@ -266,8 +274,11 @@ fn render_release(release: &ReleaseResponse) {
     println!("{} {}", dim_label("Release"), release.id);
     println!("{} {}", dim_label("Created"), release.created_at);
     if let Some(git) = &release.git_metadata {
-        if let Some(commit) = git.commit_ref.as_ref().or(git.commit_sha.as_ref()) {
-            println!("{} {}", dim_label("Commit"), commit);
+        if let Some(commit_sha) = &git.commit_sha {
+            println!("{} {}", dim_label("Commit"), commit_sha);
+        }
+        if let Some(commit_ref) = &git.commit_ref {
+            println!("{} {}", dim_label("Ref"), commit_ref);
         }
         if let Some(message) = &git.commit_message {
             println!("{} {}", dim_label("Message"), message);
@@ -310,14 +321,27 @@ fn rolled_out_cell(target: &RolloutTarget) -> String {
     }
 }
 
-/// A branch/tag ref reads better than a bare SHA, so prefer it.
 fn commit_cell(release: &ReleaseResponse) -> comfy_table::Cell {
     let label = release
         .git_metadata
         .as_ref()
-        .and_then(|g| g.commit_ref.clone().or_else(|| g.commit_sha.clone()))
+        .and_then(|g| g.commit_sha.as_deref())
+        .map(short_commit_sha)
         .unwrap_or_else(|| "—".to_string());
     comfy_table::Cell::new(label)
+}
+
+fn commit_ref_cell(release: &ReleaseResponse) -> comfy_table::Cell {
+    let label = release
+        .git_metadata
+        .as_ref()
+        .and_then(|g| g.commit_ref.clone())
+        .unwrap_or_else(|| "—".to_string());
+    comfy_table::Cell::new(label)
+}
+
+fn short_commit_sha(sha: &str) -> String {
+    sha.chars().take(12).collect()
 }
 
 fn platform_names(stack: &StackByPlatform) -> Vec<String> {
@@ -326,6 +350,7 @@ fn platform_names(stack: &StackByPlatform) -> Vec<String> {
         ("gcp", stack.gcp.is_some()),
         ("azure", stack.azure.is_some()),
         ("kubernetes", stack.kubernetes.is_some()),
+        ("machines", stack.machines.is_some()),
         ("local", stack.local.is_some()),
         ("test", stack.test.is_some()),
     ]
@@ -347,7 +372,7 @@ fn platforms_cell(stack: &StackByPlatform) -> comfy_table::Cell {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use alien_manager_api::types::Platform;
+    use alien_manager_api::types::{GitMetadataResponse, Platform};
 
     /// Build a minimal `DeploymentResponse` for rollout tests. Only the fields
     /// `compute_rollout` reads are meaningful; the rest are filler.
@@ -376,6 +401,36 @@ mod tests {
     }
 
     const REL: &str = "rel_target";
+
+    #[test]
+    fn release_identity_keeps_sha_and_ref_separate() {
+        let release = ReleaseResponse {
+            created_at: "2026-07-16T00:00:00Z".to_string(),
+            git_metadata: Some(GitMetadataResponse {
+                commit_message: None,
+                commit_ref: Some("main".to_string()),
+                commit_sha: Some("0123456789abcdef0123456789abcdef01234567".to_string()),
+            }),
+            id: REL.to_string(),
+            project_id: "prj_1".to_string(),
+            setup_fingerprints: serde_json::Map::new(),
+            stack: StackByPlatform::default(),
+            workspace_id: "ws_1".to_string(),
+        };
+
+        assert_eq!(commit_cell(&release).content(), "0123456789ab");
+        assert_eq!(commit_ref_cell(&release).content(), "main");
+    }
+
+    #[test]
+    fn platform_names_include_machines_from_generated_model() {
+        let stack = StackByPlatform {
+            machines: Some(serde_json::json!({})),
+            ..Default::default()
+        };
+
+        assert_eq!(platform_names(&stack), vec!["machines"]);
+    }
 
     #[test]
     fn keeps_only_deployments_targeting_the_release() {

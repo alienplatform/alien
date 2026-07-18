@@ -23,14 +23,14 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Duration;
 
-use alien_bindings::grpc::control::{
-    self, CronEvent as ProtoCronEvent, QueueMessage as ProtoQueueMessage,
-    StorageEvent as ProtoStorageEvent, Task,
-};
-use alien_bindings::grpc::control_service::ControlGrpcServer;
 use alien_bindings::traits::{BindingsProviderApi, MessagePayload, Queue};
 use alien_core::WorkerTrigger;
 use alien_error::{AlienError, Context, IntoAlienError};
+use alien_worker_protocol::control::{
+    self, CronEvent as ProtoCronEvent, QueueMessage as ProtoQueueMessage,
+    StorageEvent as ProtoStorageEvent, Task,
+};
+use alien_worker_protocol::ControlGrpcServer;
 use chrono::Utc;
 use prost_types::Timestamp;
 use tokio::sync::broadcast;
@@ -174,7 +174,7 @@ async fn wait_for_control_server() -> Result<Arc<ControlGrpcServer>> {
     let cs = {
         let mut cs_opt = None;
         for _ in 0..60 {
-            if let Some(cs) = alien_runtime::get_control_server() {
+            if let Some(cs) = alien_worker_runtime::get_control_server() {
                 cs_opt = Some(cs);
                 break;
             }
@@ -236,8 +236,9 @@ fn to_cron_crate_format(user_cron: &str) -> String {
 /// Acks only on successful handler completion (at-least-once delivery).
 ///
 /// Uses the shared `LocalBindingsProvider` to access the queue — the same
-/// provider the worker runtime uses. This avoids sled lock contention
-/// (sled only allows one open handle per database directory).
+/// provider the worker runtime uses. `LocalQueue` (multi-process WAL mode +
+/// busy_timeout) allows concurrent opens across handles and processes, so this
+/// sharing is a convenience rather than a lock-contention workaround.
 async fn poll_queue(
     binding_name: &str,
     provider: &LocalBindingsProvider,
@@ -308,7 +309,7 @@ async fn poll_queue_once(
                 source: binding_name.to_string(),
                 payload: payload_bytes,
                 receipt_handle: msg.receipt_handle.clone(),
-                attempt_count: 1,
+                attempt_count: msg.attempt,
                 timestamp: Some(now_timestamp()),
                 attributes: std::collections::HashMap::new(),
             })),
@@ -381,6 +382,20 @@ async fn watch_storage(
             reason: "Failed to create storage directory for watching".to_string(),
         })?;
 
+    // notify reports canonicalized paths (on macOS `/var` is a symlink to
+    // `/private/var`, so events arrive under `/private/var/...` while the
+    // configured root says `/var/...`). Strip keys against the canonicalized
+    // root, or event keys silently degrade to absolute filesystem paths.
+    let canonical_storage_path =
+        storage_path
+            .canonicalize()
+            .into_alien_error()
+            .context(ErrorData::LocalDirectoryError {
+                path: storage_path.display().to_string(),
+                operation: "canonicalize".to_string(),
+                reason: "Failed to canonicalize storage directory for watching".to_string(),
+            })?;
+
     watcher
         .watch(storage_path, RecursiveMode::Recursive)
         .into_alien_error()
@@ -405,6 +420,11 @@ async fn watch_storage(
             Some(event) = fs_rx.recv() => {
                 let event_type = match event.kind {
                     EventKind::Create(_) => "created",
+                    // object_store's local backend stages an upload as
+                    // `key#N` and renames it into place on completion, so
+                    // the finished object surfaces as a rename, not a
+                    // create.
+                    EventKind::Modify(notify::event::ModifyKind::Name(_)) => "created",
                     EventKind::Remove(_) => "deleted",
                     _ => continue,
                 };
@@ -418,11 +438,38 @@ async fn watch_storage(
                         continue;
                     }
 
-                    let relative = path
-                        .strip_prefix(storage_path)
-                        .unwrap_or(path)
-                        .to_string_lossy()
-                        .to_string();
+                    // Never emit events for object_store's `key#N` staging
+                    // files — only the final renamed object is an object.
+                    if let Some(name) = path.file_name().and_then(|n| n.to_str()) {
+                        if name
+                            .rsplit_once('#')
+                            .is_some_and(|(_, n)| !n.is_empty() && n.bytes().all(|b| b.is_ascii_digit()))
+                        {
+                            continue;
+                        }
+                    }
+
+                    // A created object must exist: this drops the vanished
+                    // half of rename pairs (the old name) and any file that
+                    // was removed again before we got here.
+                    if event_type == "created" && !path.is_file() {
+                        continue;
+                    }
+
+                    let relative = match path
+                        .strip_prefix(&canonical_storage_path)
+                        .or_else(|_| path.strip_prefix(storage_path))
+                    {
+                        Ok(rel) => rel.to_string_lossy().to_string(),
+                        Err(_) => {
+                            warn!(
+                                storage = %binding_name,
+                                path = %path.display(),
+                                "Storage event path outside the watched root; skipping"
+                            );
+                            continue;
+                        }
+                    };
 
                     let size = if event_type == "created" {
                         std::fs::metadata(path).map(|m| m.len()).unwrap_or(0)

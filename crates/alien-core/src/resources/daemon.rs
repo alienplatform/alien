@@ -111,6 +111,8 @@ pub struct Daemon {
     #[builder(default)]
     #[serde(default)]
     pub environment: HashMap<String, String>,
+    /// Whether an app-owned command receiver can lease pending commands for
+    /// this Daemon and execute registered handlers.
     #[builder(default = default_commands_enabled())]
     #[serde(default = "default_commands_enabled")]
     #[cfg_attr(feature = "openapi", schema(default = default_commands_enabled))]

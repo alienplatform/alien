@@ -21,7 +21,7 @@ const startupTimeoutMs = Number(process.env.STARTUP_TIMEOUT_SECONDS ?? "180") * 
 
 const db = new pg.Pool({ connectionString: databaseUrl })
 const redis = new Redis(redisUrl, { maxRetriesPerRequest: 3 })
-const files = await storage(filesBucket)
+const files = storage(filesBucket)
 
 const sleep = (ms: number) => new Promise(resolve => setTimeout(resolve, ms))
 
@@ -67,14 +67,6 @@ async function initializeSchema() {
     )
   `)
 }
-
-await waitForStartupDependency("postgres", async () => {
-  await db.query("select 1")
-})
-await initializeSchema()
-await waitForStartupDependency("redis", async () => {
-  await redis.ping()
-})
 
 const app = new Hono()
 
@@ -127,7 +119,7 @@ app.post("/issues/:id/files", async c => {
 
   const fileId = randomUUID()
   const objectKey = `issues/${id}/${fileId}-${payload.filename}`
-  await files.put(objectKey, payload.content, { contentType: "text/plain; charset=utf-8" })
+  await files.put(objectKey, new TextEncoder().encode(payload.content))
   const result = await db.query(
     "insert into issue_files (id, issue_id, object_key, filename) values ($1, $2, $3, $4) returning *",
     [fileId, id, objectKey, payload.filename],
@@ -144,7 +136,7 @@ app.get("/files/:fileId", async c => {
     return c.json({ error: "file not found" }, 404)
   }
 
-  const object = await files.getText(result.rows[0].object_key)
+  const object = new TextDecoder().decode(await files.get(result.rows[0].object_key))
   return c.json({ filename: result.rows[0].filename, content: object })
 })
 
@@ -180,7 +172,17 @@ app.post("/internal/maintenance", async c => {
   return c.json({ created: true, issueId: id })
 })
 
-if (import.meta.main) {
+// Async entry instead of top-level await: a source-built container that uses
+// a binding compiles under --format=cjs, which forbids top-level await.
+async function start() {
+  await waitForStartupDependency("postgres", async () => {
+    await db.query("select 1")
+  })
+  await initializeSchema()
+  await waitForStartupDependency("redis", async () => {
+    await redis.ping()
+  })
+
   Bun.serve({
     port,
     fetch: app.fetch,
@@ -189,4 +191,11 @@ if (import.meta.main) {
   console.log(`api listening on ${port}`)
 }
 
-export default app
+void start().catch(error => {
+  console.error("api failed to start", error)
+  process.exit(1)
+})
+
+// No `export default app`: Bun auto-serves a default export with a `fetch`
+// method as soon as the module evaluates, which would open a second server
+// before the dependency gating in `start()` has passed.

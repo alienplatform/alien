@@ -38,17 +38,67 @@ pub trait DebugSessionLoop: Send + Sync + 'static {
 }
 
 /// Default no-op implementation used when no real loop is wired in
-/// (OSS builds, tests, airgapped binaries). Logs once at startup and
-/// returns; the agent's other loops are unaffected.
+/// (OSS builds, tests, airgapped binaries). Logs once at startup and waits for
+/// shutdown so the operator supervisor does not treat the unsupported loop as
+/// an unexpected exit.
 pub struct UnimplementedDebugSessionLoop;
 
 #[async_trait]
 impl DebugSessionLoop for UnimplementedDebugSessionLoop {
-    async fn run(self: Arc<Self>, _state: Arc<OperatorState>) {
+    async fn run(self: Arc<Self>, state: Arc<OperatorState>) {
         debug!(
             "Debug-session loop not configured — `alien debug` tunnels are \
              not supported. Provide a `DebugSessionLoop` via \
              `run_operator_with_cancel_and_debug_loop` to enable."
         );
+        state.cancel.cancelled().await;
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::{sync::Arc, time::Duration};
+
+    use alien_core::Platform;
+    use tokio::time::timeout;
+    use tokio_util::sync::CancellationToken;
+
+    use super::{DebugSessionLoop, UnimplementedDebugSessionLoop};
+    use crate::{db::OperatorDb, OperatorConfig, OperatorState};
+
+    #[tokio::test]
+    async fn unsupported_loop_stays_alive_until_operator_shutdown() {
+        let data_dir = tempfile::tempdir().expect("create operator data directory");
+        let data_dir_path = data_dir.path().to_string_lossy().into_owned();
+        let encryption_key = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
+        let db = Arc::new(
+            OperatorDb::new(&data_dir_path, encryption_key)
+                .await
+                .expect("create operator database"),
+        );
+        let cancel = CancellationToken::new();
+        let config = OperatorConfig::builder()
+            .platform(Platform::Kubernetes)
+            .data_dir(data_dir_path)
+            .encryption_key(encryption_key)
+            .build();
+        let state = Arc::new(OperatorState {
+            config,
+            db,
+            service_provider: None,
+            cancel: cancel.clone(),
+        });
+
+        let mut task = tokio::spawn(Arc::new(UnimplementedDebugSessionLoop).run(state));
+        assert!(
+            timeout(Duration::from_millis(50), &mut task).await.is_err(),
+            "unsupported debug loop must not terminate the operator"
+        );
+
+        cancel.cancel();
+        timeout(Duration::from_secs(1), task)
+            .await
+            .expect("debug loop should stop after operator cancellation")
+            .expect("debug loop task should not panic");
     }
 }

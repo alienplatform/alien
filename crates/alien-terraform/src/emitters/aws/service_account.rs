@@ -86,7 +86,7 @@ fn trust_principals(ctx: &EmitContext<'_>, service_account: &ServiceAccount) -> 
     let mut services: BTreeSet<&'static str> = BTreeSet::new();
     let mut compute_role_arns = Vec::new();
 
-    for (id, entry) in ctx.stack.resources() {
+    for (_id, entry) in ctx.stack.resources() {
         if let Some(function) = entry.config.downcast_ref::<Worker>() {
             if Some(function.permissions.as_str()) == profile_name {
                 services.insert("lambda.amazonaws.com");
@@ -97,11 +97,16 @@ fn trust_principals(ctx: &EmitContext<'_>, service_account: &ServiceAccount) -> 
                 services.insert("codebuild.amazonaws.com");
             }
         }
-        if entry.config.downcast_ref::<ComputeCluster>().is_some() {
-            if let Some(label) = ctx.name_for(id) {
-                let role_label = format!("{label}_instance");
-                compute_role_arns.push(expr::traversal(["aws_iam_role", &role_label, "arn"]));
-            }
+        if let Some(cluster) = entry.config.downcast_ref::<ComputeCluster>() {
+            // Build the ARN from the deterministic role name instead of
+            // traversing the compute-cluster IAM resource. The compute role's
+            // execute policy may reference this service-account role; a direct
+            // traversal here would therefore create a Terraform dependency
+            // cycle between the two roles.
+            compute_role_arns.push(expr::template(format!(
+                "arn:aws:iam::${{data.aws_caller_identity.current.account_id}}:role/${{local.resource_prefix}}-{}-instances",
+                cluster.id
+            )));
         }
     }
 
@@ -144,9 +149,21 @@ fn trust_assume_role_policy(services: &[&str], compute_role_arns: Vec<Expression
         ("Effect", Expression::String("Allow".to_string())),
         (
             "Principal",
-            expr::object([("AWS", Expression::Array(compute_role_arns))]),
+            expr::object([(
+                "AWS",
+                expr::template(
+                    "arn:aws:iam::${data.aws_caller_identity.current.account_id}:root".to_string(),
+                ),
+            )]),
         ),
         ("Action", Expression::String("sts:AssumeRole".to_string())),
+        (
+            "Condition",
+            expr::object([(
+                "StringEquals",
+                expr::object([("aws:PrincipalArn", Expression::Array(compute_role_arns))]),
+            )]),
+        ),
     ]));
 
     jsonencode(expr::object([

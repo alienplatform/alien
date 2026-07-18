@@ -36,6 +36,7 @@ impl ResourceImporter for GcpWorkerImporter {
             service_name: Some(data.service_name),
             url: data.url,
             operation_name: None,
+            image_pull_permission_retries: 0,
             compute_operation_name: None,
             compute_operation_region: None,
             push_subscriptions: data.pubsub_subscription_names,

@@ -146,9 +146,7 @@ pub async fn status_command(
         .send()
         .await
         .into_alien_error()
-        .context(ErrorData::ConfigurationError {
-            message: "Failed to get deployment from manager".to_string(),
-        })?
+        .context(ErrorData::ManagementUnavailable)?
         .into_inner();
 
     let deployment_info =
@@ -301,11 +299,12 @@ async fn fetch_remote_deployment_info(
         manager_url.trim_end_matches('/'),
         urlencoding::encode(deployment_id),
     );
-    let response = client.get(&url).send().await.into_alien_error().context(
-        ErrorData::ConfigurationError {
-            message: "Failed to fetch deployment info from manager".to_string(),
-        },
-    )?;
+    let response = client
+        .get(&url)
+        .send()
+        .await
+        .into_alien_error()
+        .context(ErrorData::ManagementUnavailable)?;
 
     if !response.status().is_success() {
         let status = response.status();
@@ -335,11 +334,12 @@ async fn resolve_remote_deployment_id(
         manager_url.trim_end_matches('/'),
         urlencoding::encode(name),
     );
-    let response = client.get(&url).send().await.into_alien_error().context(
-        ErrorData::ConfigurationError {
-            message: "Failed to list deployments from manager".to_string(),
-        },
-    )?;
+    let response = client
+        .get(&url)
+        .send()
+        .await
+        .into_alien_error()
+        .context(ErrorData::ManagementUnavailable)?;
 
     if !response.status().is_success() {
         let status = response.status();
@@ -425,6 +425,27 @@ fn format_json_fallback(value: &JsonValue) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    const MANAGEMENT_UNAVAILABLE_MESSAGE: &str = "Management is unavailable.\nRuntime state was not checked. This does not mean the deployment stopped.";
+
+    #[tokio::test]
+    async fn reports_management_unavailable_when_manager_cannot_be_reached() {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let address = listener.local_addr().unwrap();
+        drop(listener);
+
+        let error =
+            resolve_remote_deployment_id("test-token", &format!("http://{address}"), "production")
+                .await
+                .unwrap_err();
+
+        assert_eq!(error.code, "MANAGEMENT_UNAVAILABLE");
+        assert_eq!(error.message, MANAGEMENT_UNAVAILABLE_MESSAGE);
+        assert!(error.retryable);
+        assert!(!error.internal);
+        assert!(error.source.is_some(), "the network cause must be retained");
+        assert!(error.to_string().contains(MANAGEMENT_UNAVAILABLE_MESSAGE));
+    }
 
     #[test]
     fn formats_error_code_and_message() {

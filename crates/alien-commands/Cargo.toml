@@ -9,6 +9,7 @@ license-file.workspace = true
 default = ["server", "runtime"]
 server = [
     "alien-bindings",
+    "alien-error/axum",
     "reqwest",
     "axum",
     "uuid",
@@ -18,6 +19,7 @@ server = [
     "alien-aws-clients",
     "alien-gcp-clients",
     "alien-azure-clients",
+    "alien-client-core",
     "tokio",
     "hmac",
     "sha2",
@@ -28,11 +30,24 @@ runtime = [
     "reqwest",
     "bytes",
     "futures",
+    "tokio",
+]
+# App-owned pull command receiver for Containers and Daemons.
+# Deliberately light: protocol types + HTTP only. Must NOT pull the heavy
+# `server` deps (axum, object_store, cloud clients) — verify with:
+#   cargo tree -p alien-commands --no-default-features --features receiver
+receiver = [
+    "reqwest",
+    "reqwest/rustls-tls",
+    "bytes",
+    "tokio",
+    "tokio-util",
 ]
 dispatchers = [
     "alien-aws-clients",
     "alien-gcp-clients",
     "alien-azure-clients",
+    "alien-client-core",
     "reqwest",
 ]
 openapi = ["utoipa", "alien-error/openapi", "alien-bindings/openapi", "alien-core/openapi"]
@@ -44,6 +59,14 @@ test-utils = [
     "alien-bindings/local",
 ]
 
+# Standalone test command server for the TypeScript integration suite. Only
+# built when `test-utils` is enabled (it reuses `TestCommandServer`); never part
+# of a normal build.
+[[bin]]
+name = "test-command-server"
+path = "src/bin/test-command-server.rs"
+required-features = ["test-utils"]
+
 [dependencies]
 # Core dependencies (always available)
 serde = { workspace = true, features = ["derive"] }
@@ -51,7 +74,10 @@ serde_json = "1.0"
 base64 = "0.22"
 chrono = { version = "0.4", features = ["serde"] }
 async-trait = "0.1"
-alien-error = { workspace = true, features = ["axum"] }
+# The axum integration (IntoResponse for AlienError) is only needed by the
+# `server` feature, which enables `alien-error/axum`; keeping it off the base
+# dependency keeps the `receiver` feature free of axum.
+alien-error = { workspace = true }
 tracing = "0.1"
 url = "2.5"
 
@@ -80,10 +106,16 @@ alien-core = { workspace = true }
 # OpenAPI feature dependencies
 utoipa = { workspace = true, features = ["axum_extras", "chrono"], optional = true }
 
+# Receiver feature dependencies
+tokio-util = { workspace = true, optional = true }
+
 # Test utilities feature dependencies
 tempfile = { workspace = true, optional = true }
 tokio = { workspace = true, features = ["full"], optional = true }
 
 [dev-dependencies]
-tokio = { workspace = true, features = ["full"] }
+tokio = { workspace = true, features = ["full", "test-util"] }
 tokio-test = "0.4"
+temp-env = { workspace = true }
+tracing-subscriber = { workspace = true }
+tracing-test = { workspace = true, features = ["no-env-filter"] }

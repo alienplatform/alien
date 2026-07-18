@@ -16,7 +16,8 @@ export const CreateCommandRequestSchema = z.object({
 "idempotencyKey": z.string().describe("Optional idempotency key").nullish(),
 get "params"(){
                 return BodySpecSchema.describe("Body specification supporting inline and storage modes")
-              }
+              },
+"targetResourceId": z.string().describe("Optional explicit target resource ID within the deployment's stack.\nWhen omitted, the target is resolved server-side (single-target shorthand):\nexactly one command-capable resource must exist, or resolution fails.").nullish()
     }).describe("Request to create a new command")
 
 export type CreateCommandRequest = z.infer<typeof CreateCommandRequestSchema>

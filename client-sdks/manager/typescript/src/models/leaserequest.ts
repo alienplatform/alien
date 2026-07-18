@@ -3,6 +3,11 @@
  */
 
 import * as z from "zod/v4";
+import {
+  CommandTarget,
+  CommandTarget$Outbound,
+  CommandTarget$outboundSchema,
+} from "./commandtarget.js";
 
 /**
  * Request for acquiring leases
@@ -20,6 +25,10 @@ export type LeaseRequest = {
    * Maximum number of leases to acquire
    */
   maxLeases?: number | undefined;
+  /**
+   * Identifies the specific resource a command is addressed to.
+   */
+  target: CommandTarget;
 };
 
 /** @internal */
@@ -27,6 +36,7 @@ export type LeaseRequest$Outbound = {
   deploymentId: string;
   leaseSeconds?: number | undefined;
   maxLeases?: number | undefined;
+  target: CommandTarget$Outbound;
 };
 
 /** @internal */
@@ -37,6 +47,7 @@ export const LeaseRequest$outboundSchema: z.ZodType<
   deploymentId: z.string(),
   leaseSeconds: z.int().optional(),
   maxLeases: z.int().optional(),
+  target: CommandTarget$outboundSchema,
 });
 
 export function leaseRequestToJSON(leaseRequest: LeaseRequest): string {

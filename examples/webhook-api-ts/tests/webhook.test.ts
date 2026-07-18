@@ -16,7 +16,7 @@ describe("webhook-api-ts", () => {
     const response = await fetch(`${deployment.url}/health`)
     expect(response.ok).toBe(true)
 
-    const data = await response.json()
+    const data = (await response.json()) as { status: string }
     expect(data.status).toBe("ok")
   })
 

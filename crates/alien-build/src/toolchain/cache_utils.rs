@@ -84,10 +84,16 @@ pub async fn restore_cache(
     };
 
     let cache_path = object_store::path::Path::from(format!("cache/{}.tar.gz", cache_key));
+    let restore_started = std::time::Instant::now();
 
     match store.get(&cache_path).await {
         Ok(result) => {
-            info!("Cache hit for key: {}", cache_key);
+            info!(
+                toolchain_cache = "HIT",
+                cache_key = cache_key,
+                "Toolchain cache HIT for key: {}",
+                cache_key
+            );
 
             let bytes =
                 result
@@ -174,11 +180,21 @@ pub async fn restore_cache(
                     reason: "Failed to extract cache archive".to_string(),
                 })?;
 
-            info!("Successfully restored cache for key: {}", cache_key);
+            info!(
+                restore_secs = format!("{:.2}", restore_started.elapsed().as_secs_f64()).as_str(),
+                "Successfully restored toolchain cache for key '{}' in {:.2}s",
+                cache_key,
+                restore_started.elapsed().as_secs_f64()
+            );
             Ok(true)
         }
         Err(object_store::Error::NotFound { .. }) => {
-            info!("Cache miss for key: {}", cache_key);
+            info!(
+                toolchain_cache = "MISS",
+                cache_key = cache_key,
+                "Toolchain cache MISS for key: {}",
+                cache_key
+            );
             Ok(false)
         }
         Err(e) => {
@@ -203,7 +219,8 @@ pub async fn save_cache(
         }
     };
 
-    info!("Saving cache for key: {}", cache_key);
+    info!("Saving toolchain cache for key: {}", cache_key);
+    let save_started = std::time::Instant::now();
 
     // Create tar.gz archive
     let mut archive_data = Vec::new();
@@ -255,7 +272,12 @@ pub async fn save_cache(
 
     match store.put(&cache_path, archive_data.into()).await {
         Ok(_) => {
-            info!("Successfully saved cache for key: {}", cache_key);
+            info!(
+                save_secs = format!("{:.2}", save_started.elapsed().as_secs_f64()).as_str(),
+                "Successfully saved toolchain cache for key '{}' in {:.2}s",
+                cache_key,
+                save_started.elapsed().as_secs_f64()
+            );
         }
         Err(e) => {
             warn!("Failed to save cache for key {}: {}", cache_key, e);

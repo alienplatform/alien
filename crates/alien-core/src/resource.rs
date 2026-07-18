@@ -397,8 +397,7 @@ impl ToSchema for Resource {
     }
 }
 
-/// New ResourceRef that works with any resource type.
-/// This can eventually replace the enum-based ResourceRef for full extensibility.
+/// Reference to a resource by its stable id and resource type.
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 #[serde(rename_all = "camelCase")]

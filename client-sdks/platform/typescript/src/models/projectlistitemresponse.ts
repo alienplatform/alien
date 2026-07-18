@@ -90,9 +90,44 @@ export type ProjectListItemResponseDeploymentPortalAppearance = {
 };
 
 /**
+ * Target OS and architecture for compiled binaries.
+ *
+ * @remarks
+ *
+ * Used as keys in package output maps (CLI binaries, Terraform providers, etc.)
+ * and for cross-compilation target selection during builds.
+ */
+export const ProjectListItemResponseBinaryTarget = {
+  WindowsX64: "windows-x64",
+  LinuxX64: "linux-x64",
+  LinuxArm64: "linux-arm64",
+  DarwinArm64: "darwin-arm64",
+} as const;
+/**
+ * Target OS and architecture for compiled binaries.
+ *
+ * @remarks
+ *
+ * Used as keys in package output maps (CLI binaries, Terraform providers, etc.)
+ * and for cross-compilation target selection during builds.
+ */
+export type ProjectListItemResponseBinaryTarget = ClosedEnum<
+  typeof ProjectListItemResponseBinaryTarget
+>;
+
+/**
  * CLI package configuration. If null, CLI packages will not be generated.
  */
 export type ProjectListItemResponseCli = {
+  /**
+   * Binary targets required by this package's setup consumer.
+   *
+   * @remarks
+   *
+   * Older package rows omit this field and retain the historical all-target
+   * behavior. Callers creating new packages should state their target set.
+   */
+  binaryTargets?: Array<ProjectListItemResponseBinaryTarget> | undefined;
   /**
    * Human-friendly display name for help banners and about text
    */
@@ -340,10 +375,17 @@ export function projectListItemResponseDeploymentPortalAppearanceFromJSON(
 }
 
 /** @internal */
+export const ProjectListItemResponseBinaryTarget$inboundSchema: z.ZodEnum<
+  typeof ProjectListItemResponseBinaryTarget
+> = z.enum(ProjectListItemResponseBinaryTarget);
+
+/** @internal */
 export const ProjectListItemResponseCli$inboundSchema: z.ZodType<
   ProjectListItemResponseCli,
   unknown
 > = z.object({
+  binaryTargets: z.array(ProjectListItemResponseBinaryTarget$inboundSchema)
+    .optional(),
   displayName: z.string(),
   name: z.string(),
   enabled: z.boolean(),

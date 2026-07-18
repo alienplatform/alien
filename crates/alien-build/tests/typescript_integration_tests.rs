@@ -44,25 +44,24 @@ async fn install_bindings_package(project_dir: &Path) {
         .await
         .expect("Failed to write bindings package.json");
 
-    // Copy dist folder
-    let dist_src = bindings_src.join("dist");
-    let dist_dest = bindings_dest.join("dist");
-    fs::create_dir_all(&dist_dest)
-        .await
-        .expect("Failed to create dist directory");
+    // Copy dist folder (recursively — dist contains the worker-runtime subdir)
+    copy_dir_recursive(&bindings_src.join("dist"), &bindings_dest.join("dist"));
+}
 
-    // Copy all files in dist
-    let entries = std::fs::read_dir(&dist_src).expect("Failed to read bindings dist directory");
-    for entry in entries {
-        let entry = entry.expect("Failed to read dist entry");
-        let file_name = entry.file_name();
+// Recursively copy a directory tree (the sdk dist has subdirectories such as
+// dist/worker-runtime/).
+fn copy_dir_recursive(src: &Path, dest: &Path) {
+    std::fs::create_dir_all(dest).unwrap_or_else(|e| panic!("create {}: {e}", dest.display()));
+    for entry in std::fs::read_dir(src).unwrap_or_else(|e| panic!("read {}: {e}", src.display())) {
+        let entry = entry.expect("dir entry");
         let src_path = entry.path();
-        let dest_path = dist_dest.join(&file_name);
-
-        let content = std::fs::read(&src_path).expect(&format!("Failed to read {:?}", src_path));
-        fs::write(&dest_path, content)
-            .await
-            .expect(&format!("Failed to write {:?}", dest_path));
+        let dest_path = dest.join(entry.file_name());
+        if entry.file_type().expect("file type").is_dir() {
+            copy_dir_recursive(&src_path, &dest_path);
+        } else {
+            std::fs::copy(&src_path, &dest_path)
+                .unwrap_or_else(|e| panic!("copy {}: {e}", src_path.display()));
+        }
     }
 }
 
@@ -72,6 +71,7 @@ fn create_test_function(name: &str, code: WorkerCode) -> Worker {
         .code(code)
         .memory_mb(512)
         .timeout_seconds(60)
+        .expect("literal Worker timeout is within supported range")
         .environment(HashMap::new())
         .permissions("execution".to_string())
         .build()
@@ -278,7 +278,7 @@ async fn test_typescript_workspace_build(
     );
 
     let stack = stack_with_permissions(stack_name)
-        .add(func_with_workspace, ResourceLifecycle::Frozen)
+        .add(func_with_workspace, ResourceLifecycle::Live)
         .build();
 
     let settings = BuildSettings {
@@ -380,7 +380,7 @@ async fn test_build_stack_with_source_code() {
 
     let stack = stack_with_permissions("test-stack")
         .add(storage_target.clone(), ResourceLifecycle::Frozen)
-        .add(func_to_build_resource, ResourceLifecycle::Frozen)
+        .add(func_to_build_resource, ResourceLifecycle::Live)
         .add(func_already_image_resource, ResourceLifecycle::Live)
         .build();
 
@@ -517,7 +517,7 @@ async fn test_typescript_toolchain_invalid_project() {
     );
 
     let stack = stack_with_permissions("test-stack")
-        .add(func_with_invalid_ts, ResourceLifecycle::Frozen)
+        .add(func_with_invalid_ts, ResourceLifecycle::Live)
         .build();
 
     let temp_output_dir = tempdir().expect("Failed to create temp output dir");
@@ -543,7 +543,9 @@ async fn test_typescript_toolchain_invalid_project() {
             resource_id,
             reason,
         }) => {
-            assert_eq!(resource_id, "typescript-project");
+            // The error names the resource, not a toolchain placeholder —
+            // that is what a user can act on in their stack config.
+            assert_eq!(resource_id, "invalid-ts-func");
             assert!(reason.contains("package.json"));
         }
         other => panic!("Expected InvalidResourceConfig error, got: {:?}", other),
@@ -622,7 +624,7 @@ async fn test_real_npm_init_project() {
     );
 
     let stack = stack_with_permissions("test-stack")
-        .add(func_with_npm_project, ResourceLifecycle::Frozen)
+        .add(func_with_npm_project, ResourceLifecycle::Live)
         .build();
 
     let settings = BuildSettings {
@@ -764,7 +766,7 @@ async fn test_real_pnpm_init_project() {
     );
 
     let stack = stack_with_permissions("test-stack")
-        .add(func_with_pnpm_project, ResourceLifecycle::Frozen)
+        .add(func_with_pnpm_project, ResourceLifecycle::Live)
         .build();
 
     let settings = BuildSettings {
@@ -919,7 +921,7 @@ async fn test_real_bun_init_project() {
     );
 
     let stack = stack_with_permissions("test-stack")
-        .add(func_with_bun_project, ResourceLifecycle::Frozen)
+        .add(func_with_bun_project, ResourceLifecycle::Live)
         .build();
 
     let settings = BuildSettings {

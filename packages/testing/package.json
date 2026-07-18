@@ -31,7 +31,7 @@
     "test:ts": "tsc --noEmit"
   },
   "dependencies": {
-    "@alienplatform/sdk": "workspace:*",
+    "@alienplatform/commands": "workspace:*",
     "@alienplatform/core": "workspace:*",
     "get-port": "^7.1.0",
     "zod": "4.3.2"

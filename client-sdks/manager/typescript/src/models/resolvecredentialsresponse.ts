@@ -5,10 +5,17 @@
 import * as z from "zod/v4";
 import { safeParse } from "../lib/schemas.js";
 import { Result as SafeParseResult } from "../types/fp.js";
+import {
+  ClientConfigUnion,
+  ClientConfigUnion$inboundSchema,
+} from "./clientconfigunion.js";
 import { SDKValidationError } from "./errors/sdkvalidationerror.js";
 
 export type ResolveCredentialsResponse = {
-  clientConfig: any;
+  /**
+   * Configuration for different cloud platform clients
+   */
+  clientConfig: ClientConfigUnion;
 };
 
 /** @internal */
@@ -16,7 +23,7 @@ export const ResolveCredentialsResponse$inboundSchema: z.ZodType<
   ResolveCredentialsResponse,
   unknown
 > = z.object({
-  clientConfig: z.any(),
+  clientConfig: ClientConfigUnion$inboundSchema,
 });
 
 export function resolveCredentialsResponseFromJSON(

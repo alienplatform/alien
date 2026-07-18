@@ -135,7 +135,7 @@ pub async fn handle_updating(
     })?;
 
     // Inject environment variables into the prepared stack
-    crate::helpers::inject_environment_variables(&mut target_stack, &config)?;
+    crate::helpers::inject_environment_variables(&mut target_stack, &config, current.platform)?;
 
     // Inject OTLP monitoring env vars if monitoring is configured
     if let Some(monitoring) = &config.monitoring {
@@ -294,13 +294,12 @@ pub async fn handle_updating(
     Ok(result)
 }
 
-/// Handle UpdateFailed status - retry failed resources and re-run preflights
+/// Handle UpdateFailed status - accept a retry request and re-run preflights
 ///
 /// This step:
 /// 1. Checks if retry_requested flag is set
-/// 2. Calls retry_failed() on stack state to recover failed resources
-/// 3. Transitions back to UpdatePending to re-run preflights
-/// 4. Sets clear_retry_requested flag to clear the retry marker
+/// 2. Transitions back to UpdatePending to re-run preflights
+/// 3. Clears the retry marker
 ///
 /// Note: We transition to UpdatePending (not Updating) because update failures
 /// might indicate compatibility issues that preflights should re-validate.
@@ -328,23 +327,18 @@ pub async fn handle_update_failed(
         });
     }
 
-    info!("Retrying failed resources and re-running preflights");
+    info!("Re-running preflights before retrying the update");
 
-    let mut stack_state = current.stack_state.ok_or_else(|| {
+    let stack_state = current.stack_state.ok_or_else(|| {
         AlienError::new(ErrorData::MissingConfiguration {
             message: "Stack state required for retry".to_string(),
         })
     })?;
 
-    // Retry failed resources using alien-infra
-    use alien_infra::state_utils::StackStateExt;
-    let retried = stack_state
-        .retry_failed()
-        .context(ErrorData::StackExecutionFailed {
-            message: "Failed to retry failed resources".to_string(),
-        })?;
-
-    info!("Retried {} failed resources: {:?}", retried.len(), retried);
+    // Failed resources are resumed by the executor after preflights and stack
+    // preparation. At that point it can compare the exact prepared configs:
+    // unchanged failures resume their saved handler, while changed failures
+    // start a fresh update.
 
     // Transition back to UpdatePending to re-run preflights
     next.status = DeploymentStatus::UpdatePending;

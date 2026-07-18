@@ -78,6 +78,33 @@ pub struct PresignedResponse {
     pub body: Option<Bytes>,
 }
 
+/// Remove credentials from a URL before storing it in an error or log record.
+///
+/// Presigned storage URLs and command response URLs carry bearer-equivalent
+/// query values. User info, query parameters, and fragments are therefore
+/// never safe diagnostic context; the origin and path are enough to identify
+/// the failed endpoint.
+pub fn redact_url_for_error(raw: &str) -> String {
+    if let Ok(mut parsed) = url::Url::parse(raw) {
+        let _ = parsed.set_username("");
+        let _ = parsed.set_password(None);
+        parsed.set_query(None);
+        parsed.set_fragment(None);
+        return parsed.to_string();
+    }
+
+    if raw.starts_with('/') && !raw.starts_with("//") {
+        return raw
+            .split(['?', '#'])
+            .next()
+            .filter(|value| !value.is_empty())
+            .unwrap_or("<invalid-url>")
+            .to_string();
+    }
+
+    "<invalid-url>".to_string()
+}
+
 impl PresignedRequest {
     /// Create a new HTTP-based presigned request
     pub fn new_http(
@@ -128,12 +155,25 @@ impl PresignedRequest {
     /// For PUT operations, body should contain the data to upload.
     /// For GET/DELETE operations, body is typically None.
     pub async fn execute(&self, body: Option<Bytes>) -> Result<PresignedResponse> {
+        let client = reqwest::Client::new();
+        self.execute_with_client(&client, body).await
+    }
+
+    /// Execute this presigned request with a caller-owned HTTP client.
+    ///
+    /// Multi-step protocols should use this form so retries and adjacent HTTP
+    /// operations share one connection pool. Local requests ignore the client.
+    pub async fn execute_with_client(
+        &self,
+        client: &reqwest::Client,
+        body: Option<Bytes>,
+    ) -> Result<PresignedResponse> {
         match &self.backend {
             PresignedRequestBackend::Http {
                 url,
                 method,
                 headers,
-            } => self.execute_http(url, method, headers, body).await,
+            } => self.execute_http(client, url, method, headers, body).await,
             PresignedRequestBackend::Local {
                 file_path,
                 operation,
@@ -192,6 +232,7 @@ impl PresignedRequest {
 
     async fn execute_http(
         &self,
+        client: &reqwest::Client,
         url: &str,
         method: &str,
         headers: &HashMap<String, String>,
@@ -204,7 +245,6 @@ impl PresignedRequest {
             }));
         }
 
-        let client = reqwest::Client::new();
         let mut request = match method {
             "PUT" => client.put(url),
             "GET" => client.get(url),
@@ -227,15 +267,16 @@ impl PresignedRequest {
             request = request.body(data);
         }
 
-        let response =
-            request
-                .send()
-                .await
-                .into_alien_error()
-                .context(ErrorData::HttpRequestFailed {
-                    url: url.to_string(),
-                    method: method.to_string(),
-                })?;
+        let safe_url = redact_url_for_error(url);
+        let response = request
+            .send()
+            .await
+            .map_err(reqwest::Error::without_url)
+            .into_alien_error()
+            .context(ErrorData::HttpRequestFailed {
+                url: safe_url.clone(),
+                method: method.to_string(),
+            })?;
 
         let status_code = response.status().as_u16();
         let response_headers = response
@@ -245,12 +286,17 @@ impl PresignedRequest {
             .collect();
 
         let response_body = if matches!(self.operation, PresignedOperation::Get) {
-            Some(response.bytes().await.into_alien_error().context(
-                ErrorData::HttpRequestFailed {
-                    url: url.to_string(),
-                    method: method.to_string(),
-                },
-            )?)
+            Some(
+                response
+                    .bytes()
+                    .await
+                    .map_err(reqwest::Error::without_url)
+                    .into_alien_error()
+                    .context(ErrorData::HttpRequestFailed {
+                        url: safe_url,
+                        method: method.to_string(),
+                    })?,
+            )
         } else {
             None
         };
@@ -344,5 +390,38 @@ impl PresignedRequest {
                 })
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::redact_url_for_error;
+
+    #[test]
+    fn redacts_query_fragment_and_user_info_from_diagnostic_urls() {
+        let secret = "do-not-log-this-token";
+        let sanitized = redact_url_for_error(&format!(
+            "https://user:{secret}@storage.example.com/object?X-Amz-Signature={secret}#fragment"
+        ));
+
+        assert_eq!(sanitized, "https://storage.example.com/object");
+        assert!(!sanitized.contains(secret));
+    }
+
+    #[test]
+    fn redacts_query_from_relative_urls() {
+        assert_eq!(
+            redact_url_for_error("/v1/commands/cmd/response?response_token=secret"),
+            "/v1/commands/cmd/response"
+        );
+    }
+
+    #[test]
+    fn does_not_echo_unparseable_urls() {
+        let secret = "do-not-log-this-token";
+        assert_eq!(
+            redact_url_for_error(&format!("not a URL containing {secret}")),
+            "<invalid-url>"
+        );
     }
 }

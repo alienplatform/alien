@@ -3,15 +3,14 @@ pub mod artifact_registry;
 pub mod build;
 pub mod container;
 pub mod kv;
+#[cfg(feature = "local")]
+pub(crate) mod local_store;
 pub mod postgres;
 pub mod queue;
 pub mod service_account;
+
 pub mod storage;
 pub mod vault;
 pub mod worker;
-
-// gRPC provider (cross-service)
-#[cfg(feature = "grpc")]
-pub mod grpc_provider;
 
 pub mod utils;

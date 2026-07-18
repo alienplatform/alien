@@ -11,6 +11,7 @@ use alien_core::{is_valid_resource_prefix, RESOURCE_PREFIX_ERROR_MESSAGE};
 use alien_error::{AlienError, Context, IntoAlienError};
 use alien_manager_api::types::DeploymentResponse;
 use alien_manager_api::SdkResultExt as ManagerSdkResultExt;
+use alien_manager_api::SdkResultExtReadingBody as _;
 use alien_platform_api::types::{
     CreateDeploymentTokenId, CreateDeploymentTokenRequest, CreateDeploymentTokenWorkspace,
     CreateDeploymentWorkspace, GetDeploymentId, GetDeploymentWorkspace, NewDeploymentRequest,
@@ -19,6 +20,15 @@ use alien_platform_api::types::{
 };
 use alien_platform_api::SdkResultExt as _;
 use clap::{Parser, Subcommand, ValueEnum};
+use serde::Serialize;
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct DeploymentMutationOutput<'a> {
+    deployment_id: &'a str,
+    action: &'static str,
+    accepted: bool,
+}
 
 /// Telemetry (monitoring) mode for a deployment.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
@@ -135,11 +145,17 @@ pub enum DeploymentsCmd {
     Retry {
         /// Deployment name or ID
         id: String,
+        /// Print the updated deployment as machine-readable JSON
+        #[arg(long)]
+        json: bool,
     },
     /// Redeploy a deployment with the same release
     Redeploy {
         /// Deployment name or ID
         id: String,
+        /// Print the updated deployment as machine-readable JSON
+        #[arg(long)]
+        json: bool,
     },
     /// Pin a deployment to a specific release
     Pin {
@@ -147,6 +163,9 @@ pub enum DeploymentsCmd {
         id: String,
         /// Release ID to pin to (omit to unpin and use active release)
         release_id: Option<String>,
+        /// Print the pin response as machine-readable JSON
+        #[arg(long)]
+        json: bool,
     },
     /// Create a deployment token (deployment-scoped API key)
     Token {
@@ -178,19 +197,19 @@ pub async fn deployments_task(args: DeploymentsArgs, ctx: ExecutionMode) -> Resu
         }
         DeploymentsCmd::Get { id, json } => {
             let manager = resolve_manager_client(&ctx, None, !json).await?;
-            get_deployment_task(&manager, &id, json).await
+            get_deployment_task(&ctx, &manager, &id, json).await
         }
         DeploymentsCmd::Delete { id, yes } => {
             let manager = resolve_manager_client(&ctx, None, true).await?;
             delete_deployment_task(&manager, &id, yes).await
         }
-        DeploymentsCmd::Retry { id } => {
-            let manager = resolve_manager_client(&ctx, None, true).await?;
-            retry_deployment_task(&manager, &id).await
+        DeploymentsCmd::Retry { id, json } => {
+            let manager = resolve_manager_client(&ctx, None, !json).await?;
+            retry_deployment_task(&manager, &id, json).await
         }
-        DeploymentsCmd::Redeploy { id } => {
-            let manager = resolve_manager_client(&ctx, None, true).await?;
-            redeploy_deployment_task(&manager, &id).await
+        DeploymentsCmd::Redeploy { id, json } => {
+            let manager = resolve_manager_client(&ctx, None, !json).await?;
+            redeploy_deployment_task(&manager, &id, json).await
         }
 
         // --- Platform API operations (create, pin, token) ---
@@ -220,7 +239,7 @@ pub async fn deployments_task(args: DeploymentsArgs, ctx: ExecutionMode) -> Resu
             }
 
             let client = ctx.sdk_client().await?;
-            let workspace_name = ctx.resolve_workspace().await?;
+            let workspace_name = ctx.resolve_platform_workspace_context(true).await?.name;
 
             create_deployment_task(
                 &ctx,
@@ -243,7 +262,11 @@ pub async fn deployments_task(args: DeploymentsArgs, ctx: ExecutionMode) -> Resu
             )
             .await
         }
-        DeploymentsCmd::Pin { id, release_id } => {
+        DeploymentsCmd::Pin {
+            id,
+            release_id,
+            json,
+        } => {
             if ctx.is_dev() {
                 return Err(AlienError::new(ErrorData::ValidationError {
                     field: "command".to_string(),
@@ -252,8 +275,8 @@ pub async fn deployments_task(args: DeploymentsArgs, ctx: ExecutionMode) -> Resu
                 }));
             }
             let client = ctx.sdk_client().await?;
-            let workspace_name = ctx.resolve_workspace().await?;
-            pin_deployment_task(&client, &workspace_name, &id, release_id).await
+            let workspace_name = ctx.resolve_platform_workspace_context(true).await?.name;
+            pin_deployment_task(&client, &workspace_name, &id, release_id, json).await
         }
         DeploymentsCmd::Token { id } => {
             if ctx.is_dev() {
@@ -264,7 +287,7 @@ pub async fn deployments_task(args: DeploymentsArgs, ctx: ExecutionMode) -> Resu
                 }));
             }
             let client = ctx.sdk_client().await?;
-            let workspace_name = ctx.resolve_workspace().await?;
+            let workspace_name = ctx.resolve_platform_workspace_context(true).await?.name;
             token_deployment_task(&client, &workspace_name, &id).await
         }
     }
@@ -278,6 +301,11 @@ pub async fn deployments_task(args: DeploymentsArgs, ctx: ExecutionMode) -> Resu
 ///
 /// Uses the linked project (or `--project` override) to discover the manager URL
 /// in platform mode. In dev/standalone modes, the manager URL is known directly.
+///
+/// All `deployments` subcommands are Manager API operations that never push
+/// container images, so we resolve metadata-only and skip the artifact-repo
+/// provisioning step. On platform/dev clusters that provisioning is a cloud
+/// API round trip that adds ~10–15s per invocation for a repo we never use.
 pub(crate) async fn resolve_manager_client(
     ctx: &ExecutionMode,
     project_override: Option<&str>,
@@ -288,7 +316,9 @@ pub(crate) async fn resolve_manager_client(
         .await?;
     // The platform parameter is only used in platform mode for build-config
     // discovery; the manager URL is the same regardless of platform.
-    let manager_ctx = ctx.resolve_manager(&project_link.project_id, "aws").await?;
+    let manager_ctx = ctx
+        .resolve_manager_metadata_only(&project_link.project_id, "aws")
+        .await?;
     Ok(manager_ctx.client)
 }
 
@@ -329,7 +359,15 @@ async fn list_deployments_task(client: &alien_manager_api::Client, json: bool) -
         return Ok(());
     }
 
-    let mut table = make_table(&["Name", "ID", "Status", "Platform", "Release", "Updated"]);
+    let mut table = make_table(&[
+        "Name",
+        "ID",
+        "Status",
+        "Platform",
+        "Current release",
+        "Desired release",
+        "Updated",
+    ]);
     for deployment in &response.items {
         table.add_row(vec![
             deployment.name.clone().into(),
@@ -341,6 +379,7 @@ async fn list_deployments_task(client: &alien_manager_api::Client, json: bool) -
                 .clone()
                 .unwrap_or_else(|| "—".to_string())
                 .into(),
+            desired_release_cell(deployment).into(),
             deployment
                 .updated_at
                 .clone()
@@ -353,15 +392,31 @@ async fn list_deployments_task(client: &alien_manager_api::Client, json: bool) -
     Ok(())
 }
 
+fn desired_release_cell(deployment: &DeploymentResponse) -> String {
+    let Some(desired) = deployment.desired_release_id.as_deref() else {
+        return "—".to_string();
+    };
+    if deployment.current_release_id.as_deref() == Some(desired) {
+        "—".to_string()
+    } else {
+        desired.to_string()
+    }
+}
+
 async fn get_deployment_task(
+    ctx: &ExecutionMode,
     client: &alien_manager_api::Client,
     reference: &str,
     json: bool,
 ) -> Result<()> {
     let deployment = resolve_deployment_reference(client, reference).await?;
+    let observed_resources = observed_rollout_resources(ctx, &deployment, !json).await?;
 
     if json {
-        return print_json(&deployment);
+        return print_json(&DeploymentDetailOutput {
+            deployment: &deployment,
+            observed_resources,
+        });
     }
 
     println!(
@@ -406,6 +461,8 @@ async fn get_deployment_task(
         print_stack_resources(&stack_state);
     }
 
+    print_observed_rollout_resources(&observed_resources);
+
     if let Some(env_info) = &deployment.environment_info {
         let env_str = serde_json::to_string_pretty(env_info)
             .into_alien_error()
@@ -417,6 +474,192 @@ async fn get_deployment_task(
     }
 
     Ok(())
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct DeploymentDetailOutput<'a> {
+    #[serde(flatten)]
+    deployment: &'a DeploymentResponse,
+    observed_resources: Vec<ObservedRolloutResource>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct ObservedRolloutResource {
+    resource_id: String,
+    resource_type: String,
+    desired_image: Option<String>,
+    observed_image: Option<String>,
+    provider_updated_at: Option<String>,
+    observed_at: Option<String>,
+    stale: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    error: Option<String>,
+}
+
+async fn observed_rollout_resources(
+    ctx: &ExecutionMode,
+    deployment: &DeploymentResponse,
+    allow_bootstrap: bool,
+) -> Result<Vec<ObservedRolloutResource>> {
+    if ctx.is_dev() || ctx.is_standalone() {
+        return Ok(Vec::new());
+    }
+
+    #[cfg(not(feature = "platform"))]
+    return Ok(Vec::new());
+
+    #[cfg(feature = "platform")]
+    {
+        let Some(stack_state) = deployment.stack_state.as_ref() else {
+            return Ok(Vec::new());
+        };
+        let stack_state: alien_core::StackState = serde_json::from_value(stack_state.clone())
+            .into_alien_error()
+            .context(ErrorData::JsonError {
+                operation: "deserialization".to_string(),
+                reason: "Failed to inspect deployment resources".to_string(),
+            })?;
+        let (_, project_link) = ctx.resolve_project(None, allow_bootstrap).await?;
+        let workspace = ctx
+            .resolve_workspace_query_with_bootstrap(allow_bootstrap)
+            .await?;
+        let client = ctx.sdk_client().await?;
+        let mut observations = Vec::new();
+
+        for (resource_id, resource) in stack_state.resources {
+            if resource.resource_type != "container" && resource.resource_type != "daemon" {
+                continue;
+            }
+
+            let mut request = client
+                .get_resource_deployment_detail()
+                .area(resource.resource_type.as_str())
+                .deployment_id(deployment.id.as_str())
+                .resource_id(resource_id.as_str())
+                .project(project_link.project_id.as_str());
+            if let Some(workspace) = workspace.as_deref() {
+                request = request.workspace(workspace);
+            }
+
+            match request.send().await.into_sdk_error() {
+                Ok(response) => {
+                    let detail = response.into_inner();
+                    let value = serde_json::to_value(&detail).into_alien_error().context(
+                        ErrorData::JsonError {
+                            operation: "serialization".to_string(),
+                            reason: "Failed to inspect provider observation".to_string(),
+                        },
+                    )?;
+                    observations.push(ObservedRolloutResource {
+                        resource_id,
+                        resource_type: resource.resource_type,
+                        desired_image: detail.deployment.desired_image,
+                        observed_image: json_string(
+                            &value,
+                            &["heartbeat", "heartbeat", "data", "data", "observedImage"],
+                        )
+                        .or_else(|| {
+                            json_string(
+                                &value,
+                                &["heartbeat", "heartbeat", "data", "data", "image"],
+                            )
+                        }),
+                        provider_updated_at: json_string(
+                            &value,
+                            &[
+                                "heartbeat",
+                                "heartbeat",
+                                "data",
+                                "data",
+                                "latestUpdateTimestamp",
+                            ],
+                        ),
+                        observed_at: json_string(&value, &["heartbeat", "observedAt"]),
+                        stale: detail.deployment.platform_stale || detail.deployment.provider_stale,
+                        error: None,
+                    });
+                }
+                Err(error) => {
+                    let desired_image = desired_image_from_resource(&resource);
+                    observations.push(ObservedRolloutResource {
+                        resource_id,
+                        resource_type: resource.resource_type,
+                        desired_image,
+                        observed_image: None,
+                        provider_updated_at: None,
+                        observed_at: None,
+                        stale: false,
+                        error: Some(error.to_string()),
+                    });
+                }
+            }
+        }
+
+        Ok(observations)
+    }
+}
+
+fn json_string(value: &serde_json::Value, path: &[&str]) -> Option<String> {
+    path.iter()
+        .try_fold(value, |current, segment| current.get(segment))
+        .and_then(serde_json::Value::as_str)
+        .map(str::to_string)
+}
+
+fn desired_image_from_resource(resource: &alien_core::StackResourceState) -> Option<String> {
+    serde_json::to_value(resource)
+        .ok()
+        .and_then(|value| json_string(&value, &["config", "code", "image"]))
+}
+
+fn print_observed_rollout_resources(resources: &[ObservedRolloutResource]) {
+    if resources.is_empty() {
+        return;
+    }
+    println!("{}", heading("Observed rollout state"));
+    let mut table = make_table(&[
+        "Resource",
+        "Type",
+        "Desired image",
+        "Observed image",
+        "Provider updated",
+        "State",
+    ]);
+    for resource in resources {
+        let state = observed_rollout_state(resource);
+        table.add_row(vec![
+            comfy_table::Cell::new(&resource.resource_id),
+            comfy_table::Cell::new(&resource.resource_type),
+            comfy_table::Cell::new(resource.desired_image.as_deref().unwrap_or("—")),
+            comfy_table::Cell::new(resource.observed_image.as_deref().unwrap_or("—")),
+            comfy_table::Cell::new(
+                resource
+                    .provider_updated_at
+                    .as_deref()
+                    .or(resource.observed_at.as_deref())
+                    .unwrap_or("—"),
+            ),
+            comfy_table::Cell::new(state),
+        ]);
+    }
+    print_table(table);
+}
+
+fn observed_rollout_state(resource: &ObservedRolloutResource) -> &'static str {
+    if resource.error.is_some() {
+        "unavailable"
+    } else if resource.stale {
+        "stale"
+    } else if resource.desired_image.is_some()
+        && resource.observed_image.is_some()
+        && resource.desired_image != resource.observed_image
+    {
+        "rollout pending"
+    } else {
+        "converged"
+    }
 }
 
 async fn delete_deployment_task(
@@ -465,26 +708,41 @@ async fn delete_deployment_task(
     Ok(())
 }
 
-async fn retry_deployment_task(client: &alien_manager_api::Client, reference: &str) -> Result<()> {
+async fn retry_deployment_task(
+    client: &alien_manager_api::Client,
+    reference: &str,
+    json: bool,
+) -> Result<()> {
     let deployment = resolve_deployment_reference(client, reference).await?;
 
-    println!(
-        "{}",
-        contextual_heading("Retrying deployment", &deployment.name, &[])
-    );
-    println!("{} {}", dim_label("ID"), deployment.id);
-    println!("{} {}", dim_label("Status"), deployment.status);
+    if !json {
+        println!(
+            "{}",
+            contextual_heading("Retrying deployment", &deployment.name, &[])
+        );
+        println!("{} {}", dim_label("ID"), deployment.id);
+        println!("{} {}", dim_label("Status"), deployment.status);
+    }
 
     client
         .retry_deployment()
         .id(&deployment.id)
         .send()
         .await
-        .into_sdk_error()
+        .into_sdk_error_reading_body()
+        .await
         .context(ErrorData::ApiRequestFailed {
             message: "retrying deployment".to_string(),
             url: None,
         })?;
+
+    if json {
+        return print_json(&DeploymentMutationOutput {
+            deployment_id: &deployment.id,
+            action: "retry",
+            accepted: true,
+        });
+    }
 
     println!("{}", success_line("Retry requested."));
     println!(
@@ -499,17 +757,20 @@ async fn retry_deployment_task(client: &alien_manager_api::Client, reference: &s
 async fn redeploy_deployment_task(
     client: &alien_manager_api::Client,
     reference: &str,
+    json: bool,
 ) -> Result<()> {
     let deployment = resolve_deployment_reference(client, reference).await?;
 
-    println!(
-        "{}",
-        contextual_heading("Redeploying deployment", &deployment.name, &[])
-    );
-    println!("{} {}", dim_label("ID"), deployment.id);
-    println!("{} {}", dim_label("Status"), deployment.status);
-    if let Some(current_release_id) = &deployment.current_release_id {
-        println!("{} {}", dim_label("Current release"), current_release_id);
+    if !json {
+        println!(
+            "{}",
+            contextual_heading("Redeploying deployment", &deployment.name, &[])
+        );
+        println!("{} {}", dim_label("ID"), deployment.id);
+        println!("{} {}", dim_label("Status"), deployment.status);
+        if let Some(current_release_id) = &deployment.current_release_id {
+            println!("{} {}", dim_label("Current release"), current_release_id);
+        }
     }
 
     client
@@ -517,11 +778,20 @@ async fn redeploy_deployment_task(
         .id(&deployment.id)
         .send()
         .await
-        .into_sdk_error()
+        .into_sdk_error_reading_body()
+        .await
         .context(ErrorData::ApiRequestFailed {
             message: "redeploying deployment".to_string(),
             url: None,
         })?;
+
+    if json {
+        return print_json(&DeploymentMutationOutput {
+            deployment_id: &deployment.id,
+            action: "redeploy",
+            accepted: true,
+        });
+    }
 
     println!("{}", success_line("Redeploy requested."));
     println!(
@@ -927,6 +1197,7 @@ async fn pin_deployment_task(
     workspace: &str,
     deployment_id: &str,
     release_id: Option<String>,
+    json: bool,
 ) -> Result<()> {
     let workspace_param = GetDeploymentWorkspace::try_from(workspace)
         .into_alien_error()
@@ -953,17 +1224,19 @@ async fn pin_deployment_task(
         })?;
     let deployment = response.into_inner();
 
-    println!(
-        "{}",
-        contextual_heading("Pinning deployment", deployment.name.as_ref(), &[])
-    );
-    println!("{} {}", dim_label("ID"), *deployment.id);
-    println!("{} {:?}", dim_label("Status"), deployment.status);
+    if !json {
+        println!(
+            "{}",
+            contextual_heading("Pinning deployment", deployment.name.as_ref(), &[])
+        );
+        println!("{} {}", dim_label("ID"), *deployment.id);
+        println!("{} {:?}", dim_label("Status"), deployment.status);
 
-    if let Some(ref release_id_str) = release_id {
-        println!("Pinning to release: {}", release_id_str);
-    } else {
-        println!("Unpinning deployment (will use active release)");
+        if let Some(ref release_id_str) = release_id {
+            println!("Pinning to release: {}", release_id_str);
+        } else {
+            println!("Unpinning deployment (will use active release)");
+        }
     }
 
     let pin_workspace_param = PinDeploymentReleaseWorkspace::try_from(workspace)
@@ -1007,6 +1280,10 @@ async fn pin_deployment_task(
             url: None,
         })?;
     let pin_response = response.into_inner();
+
+    if json {
+        return print_json(&pin_response);
+    }
 
     println!("{}", success_line("Deployment pin updated."));
     println!("{} {}", dim_label("Message"), pin_response.message);
@@ -1118,6 +1395,72 @@ fn parse_targeted_env_var(input: &str) -> Option<(String, String, Vec<String>)> 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use alien_manager_api::types::Platform;
+
+    fn deployment_with_releases(
+        current: Option<&str>,
+        desired: Option<&str>,
+    ) -> DeploymentResponse {
+        DeploymentResponse::builder()
+            .id("dep_1")
+            .name("example")
+            .status("running")
+            .platform(Platform::Aws)
+            .deployment_group_id("dg_1")
+            .deployment_protocol_version(1u32)
+            .project_id("prj_1")
+            .workspace_id("ws_1")
+            .retry_requested(false)
+            .created_at("2026-07-16T00:00:00Z")
+            .current_release_id(current.map(str::to_string))
+            .desired_release_id(desired.map(str::to_string))
+            .try_into()
+            .expect("valid deployment response")
+    }
+
+    #[test]
+    fn desired_release_column_only_shows_an_unreached_target() {
+        assert_eq!(
+            desired_release_cell(&deployment_with_releases(Some("rel_a"), Some("rel_b"))),
+            "rel_b"
+        );
+        assert_eq!(
+            desired_release_cell(&deployment_with_releases(Some("rel_a"), Some("rel_a"))),
+            "—"
+        );
+        assert_eq!(
+            desired_release_cell(&deployment_with_releases(Some("rel_a"), None)),
+            "—"
+        );
+        assert_eq!(
+            desired_release_cell(&deployment_with_releases(None, Some("rel_first"))),
+            "rel_first"
+        );
+    }
+
+    #[test]
+    fn observed_rollout_state_distinguishes_mismatch_stale_and_unavailable() {
+        let mut resource = ObservedRolloutResource {
+            resource_id: "api".to_string(),
+            resource_type: "container".to_string(),
+            desired_image: Some("registry.example/api:desired".to_string()),
+            observed_image: Some("registry.example/api:previous".to_string()),
+            provider_updated_at: Some("2026-07-16T00:00:00Z".to_string()),
+            observed_at: Some("2026-07-16T00:00:01Z".to_string()),
+            stale: false,
+            error: None,
+        };
+        assert_eq!(observed_rollout_state(&resource), "rollout pending");
+
+        resource.observed_image = resource.desired_image.clone();
+        assert_eq!(observed_rollout_state(&resource), "converged");
+
+        resource.stale = true;
+        assert_eq!(observed_rollout_state(&resource), "stale");
+
+        resource.error = Some("heartbeat unavailable".to_string());
+        assert_eq!(observed_rollout_state(&resource), "unavailable");
+    }
 
     #[test]
     fn test_parse_targeted_env_var_with_url() {

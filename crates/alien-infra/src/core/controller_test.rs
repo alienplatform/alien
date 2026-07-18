@@ -253,12 +253,12 @@ use alien_core::ClientConfig;
 use alien_core::{
     AwsManagementConfig, AzureContainerAppsEnvironment, AzureResourceGroup,
     AzureServiceBusNamespace, AzureStorageAccount, ComputeBackend, DeploymentConfig,
-    DomainMetadata, EnvironmentVariablesSnapshot, ManagementConfig, Platform, Resource,
-    ResourceDefinition, ResourceEntry, ResourceHeartbeat, ResourceLifecycle, ResourceOutputs,
-    ResourceRef, ResourceStatus, Stack, StackResourceState, StackSettings, StackState, Storage,
-    Worker, WorkerCode,
+    DomainMetadata, EnvironmentVariablesSnapshot, ExternalBinding, ExternalBindings,
+    ManagementConfig, Platform, Resource, ResourceDefinition, ResourceEntry, ResourceHeartbeat,
+    ResourceLifecycle, ResourceOutputs, ResourceRef, ResourceStatus, Stack, StackResourceState,
+    StackSettings, StackState, Storage, Worker, WorkerCode,
 };
-use alien_error::{AlienError, Context};
+use alien_error::{AlienError, Context, IntoAlienError};
 use alien_gcp_clients::{GcpClientConfig, GcpClientConfigExt as _};
 use alien_preflights::runner::PreflightRunner;
 use indexmap::IndexMap;
@@ -317,6 +317,8 @@ pub struct SingleControllerExecutor {
     compute_backend: Option<ComputeBackend>,
     // Environment variables snapshot for deployment config
     environment_variables: EnvironmentVariablesSnapshot,
+    // External resource bindings exposed to the controller under test
+    external_bindings: ExternalBindings,
     // Deployment monitoring configuration
     monitoring: Option<alien_core::OtlpConfig>,
     // Domain metadata for public resources (certificates, DNS)
@@ -381,7 +383,7 @@ impl SingleControllerExecutor {
                 .maybe_compute_backend(self.compute_backend.clone())
                 .environment_variables(self.environment_variables.clone())
                 .maybe_monitoring(self.monitoring.clone())
-                .external_bindings(alien_core::ExternalBindings::default())
+                .external_bindings(self.external_bindings.clone())
                 .allow_frozen_changes(false)
                 .maybe_domain_metadata(self.domain_metadata.clone())
                 .maybe_public_endpoints(self.public_endpoints.clone())
@@ -624,6 +626,7 @@ pub struct SingleControllerExecutorBuilder {
     management_config: Option<ManagementConfig>,
     compute_backend: Option<ComputeBackend>,
     environment_variables: EnvironmentVariablesSnapshot,
+    external_bindings: ExternalBindings,
     monitoring: Option<alien_core::OtlpConfig>,
     domain_metadata: Option<DomainMetadata>,
     public_endpoints: Option<alien_core::PublicEndpointUrls>,
@@ -645,6 +648,7 @@ impl SingleControllerExecutorBuilder {
                 hash: String::new(),
                 created_at: String::new(),
             },
+            external_bindings: ExternalBindings::default(),
             monitoring: None,
             domain_metadata: None,
             public_endpoints: None,
@@ -674,6 +678,12 @@ impl SingleControllerExecutorBuilder {
     /// Sets the environment variables snapshot.
     pub fn environment_variables(mut self, variables: EnvironmentVariablesSnapshot) -> Self {
         self.environment_variables = variables;
+        self
+    }
+
+    /// Sets external bindings exposed to the controller under test.
+    pub fn external_bindings(mut self, bindings: ExternalBindings) -> Self {
+        self.external_bindings = bindings;
         self
     }
 
@@ -1012,7 +1022,7 @@ impl SingleControllerExecutorBuilder {
             .maybe_management_config(management_config.clone())
             .maybe_compute_backend(self.compute_backend.clone())
             .environment_variables(self.environment_variables.clone())
-            .external_bindings(alien_core::ExternalBindings::default())
+            .external_bindings(self.external_bindings.clone())
             .allow_frozen_changes(false)
             .build();
         config.domain_metadata = self.domain_metadata.clone();
@@ -1063,7 +1073,22 @@ impl SingleControllerExecutorBuilder {
                 };
 
                 let mock_status = mock_controller.get_status();
-                let mock_outputs = mock_controller.get_outputs();
+                let external_binding = self.external_bindings.get(new_resource_id);
+                let mock_outputs = external_binding
+                    .and_then(ExternalBinding::to_resource_outputs)
+                    .or_else(|| mock_controller.get_outputs());
+                let remote_binding_params = if new_resource_entry.remote_access {
+                    external_binding
+                        .map(serde_json::to_value)
+                        .transpose()
+                        .into_alien_error()
+                        .context(ErrorData::ResourceStateSerializationFailed {
+                            resource_id: new_resource_id.clone(),
+                            message: "Failed to serialize external binding parameters".to_string(),
+                        })?
+                } else {
+                    None
+                };
 
                 // Serialize controller state
                 let internal_state = if mock_status == ResourceStatus::Pending {
@@ -1082,6 +1107,7 @@ impl SingleControllerExecutorBuilder {
                     .config(new_resource_entry.config.clone())
                     .maybe_internal_state(internal_state)
                     .maybe_outputs(mock_outputs)
+                    .maybe_remote_binding_params(remote_binding_params)
                     .lifecycle(new_resource_entry.lifecycle)
                     .dependencies(new_resource_entry.dependencies.clone())
                     .build();
@@ -1101,6 +1127,7 @@ impl SingleControllerExecutorBuilder {
             management_config,
             compute_backend: self.compute_backend,
             environment_variables: self.environment_variables,
+            external_bindings: self.external_bindings,
             monitoring: self.monitoring,
             domain_metadata: self.domain_metadata,
             public_endpoints: self.public_endpoints,

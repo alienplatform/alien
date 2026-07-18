@@ -95,6 +95,8 @@ pub async fn step(
     client_config: alien_core::ClientConfig,
     service_provider: Option<std::sync::Arc<dyn alien_infra::PlatformServiceProvider>>,
 ) -> Result<DeploymentStepResult> {
+    let mut current = current;
+
     if current.protocol_version < alien_core::MIN_SUPPORTED_DEPLOYMENT_PROTOCOL_VERSION
         || current.protocol_version > alien_core::CURRENT_DEPLOYMENT_PROTOCOL_VERSION
     {
@@ -108,6 +110,19 @@ pub async fn step(
                         .to_string(),
             },
         ));
+    }
+
+    if current.status == DeploymentStatus::Running
+        && current.target_release.as_ref().is_some_and(|target| {
+            current
+                .current_release
+                .as_ref()
+                .and_then(|release| release.release_id.as_ref())
+                != target.release_id.as_ref()
+        })
+    {
+        info!("A newer target release is available; starting update reconciliation");
+        current.status = DeploymentStatus::UpdatePending;
     }
 
     info!(

@@ -1,3 +1,4 @@
+use crate::daemon_supervisor::{log_exporter_from_env, DaemonRuntime};
 use crate::error::{ErrorData, Result};
 use alien_error::{AlienError, Context, ContextError as _, IntoAlienError};
 use serde::{Deserialize, Serialize};
@@ -18,6 +19,8 @@ use tracing::{debug, info, warn};
 /// This manager maintains persistent state and provides auto-recovery:
 /// - Worker metadata is saved to disk for crash recovery
 /// - Background task monitors health and auto-recovers crashed workers
+/// - Workers with runtime-only environment values are restarted by their controller so those
+///   values are resolved from the current desired configuration rather than persisted here
 /// - Graceful shutdown via shared signal
 ///
 /// # State Scoping
@@ -30,13 +33,13 @@ use tracing::{debug, info, warn};
 #[derive(Debug)]
 pub struct LocalWorkerManager {
     /// Base directory for all local platform state
-    state_dir: PathBuf,
+    pub(crate) state_dir: PathBuf,
     /// Map of worker ID to runtime state (ephemeral)
     workers: Arc<Mutex<HashMap<String, WorkerRuntime>>>,
     /// Map of daemon ID to runtime state (ephemeral)
-    daemons: Arc<Mutex<HashMap<String, DaemonRuntime>>>,
+    pub(crate) daemons: Arc<Mutex<HashMap<String, DaemonRuntime>>>,
     /// Bindings provider for worker runtimes
-    bindings_provider: Arc<dyn alien_bindings::BindingsProviderApi>,
+    pub(crate) bindings_provider: Arc<dyn alien_bindings::BindingsProviderApi>,
 }
 
 #[derive(Debug)]
@@ -55,40 +58,36 @@ struct WorkerRuntime {
     metadata: WorkerMetadata,
 }
 
-#[derive(Debug)]
-struct DaemonRuntime {
-    /// Tokio task handle for the daemon (returns our local Result type)
-    task_handle: JoinHandle<crate::error::Result<()>>,
-    /// Shutdown channel sender
-    shutdown_tx: tokio::sync::broadcast::Sender<()>,
-    /// When the daemon was started (used for monitoring)
-    #[allow(dead_code)]
-    started_at: chrono::DateTime<chrono::Utc>,
-    /// Persistent metadata for this daemon (used for crash recovery)
-    #[allow(dead_code)]
-    metadata: WorkerMetadata,
-}
-
 /// Persistent metadata for a worker (saved to disk)
 #[derive(Debug, Clone, Serialize, Deserialize)]
-struct WorkerMetadata {
+pub(crate) struct WorkerMetadata {
     /// Worker identifier
-    worker_id: String,
+    pub(crate) worker_id: String,
     /// Path to the extracted OCI image
-    extracted_path: PathBuf,
+    pub(crate) extracted_path: PathBuf,
     /// Environment variables for the worker
-    env_vars: HashMap<String, String>,
+    pub(crate) env_vars: HashMap<String, String>,
     /// Runtime command from OCI image config (ENTRYPOINT + CMD)
-    runtime_command: Vec<String>,
+    pub(crate) runtime_command: Vec<String>,
     /// Working directory from OCI image config
-    working_dir: Option<String>,
+    pub(crate) working_dir: Option<String>,
     /// Transport port for the runtime (persisted to enable transparent recovery)
     #[serde(default)]
-    transport_port: Option<u16>,
+    pub(crate) transport_port: Option<u16>,
     /// Names of linked resources whose binding is a runtime-only secret (a local Postgres password),
     /// persisted so recovery/restart can re-resolve it live; the secret itself is never written here.
     #[serde(default)]
-    runtime_only_binding_names: Vec<String>,
+    pub(crate) runtime_only_binding_names: Vec<String>,
+    /// Env var NAMES whose resolved values are deployment secrets; the values
+    /// are stripped from this persisted file (see `plan_worker_launch`) and
+    /// live only in the process env and the in-memory runtime.
+    #[serde(default)]
+    pub(crate) runtime_only_env_names: Vec<String>,
+    /// Daemon stop grace period (seconds): SIGTERM, then SIGKILL after this
+    /// window. `None` uses the supervisor default. Persisted so monitor
+    /// restarts keep the configured window; absent in pre-existing metadata.
+    #[serde(default)]
+    pub(crate) stop_grace_period_seconds: Option<u32>,
 }
 
 impl LocalWorkerManager {
@@ -149,11 +148,13 @@ impl LocalWorkerManager {
         {
             warn!("Failed to recover workers from metadata: {:?}", e);
         }
-        if let Err(e) =
-            Self::recover_all_daemons(&state_dir, &daemons, bindings_provider.clone()).await
-        {
-            warn!("Failed to recover daemons from metadata: {:?}", e);
-        }
+        // Daemons are intentionally NOT cold-recovered from metadata: after a
+        // manager restart, only the controller can rebuild the full launch
+        // env (deployment secrets are never persisted, and extraction resets
+        // metadata mid-update). Its Ready handler self-heals a not-running
+        // daemon back through StartingProcess with a freshly built env, so a
+        // disk-driven restart here could only resurrect stale state — an old
+        // binary mid-update, or an empty environment.
 
         // Then monitor health and auto-restart crashed workers
         let mut interval = tokio::time::interval(tokio::time::Duration::from_secs(5));
@@ -168,8 +169,8 @@ impl LocalWorkerManager {
                     if let Err(e) = Self::monitor_and_restart(&state_dir, &workers, bindings_provider.clone()).await {
                         warn!("Worker health check failed: {:?}", e);
                     }
-                    if let Err(e) = Self::monitor_and_restart_daemons(&state_dir, &daemons, bindings_provider.clone()).await {
-                        warn!("Daemon health check failed: {:?}", e);
+                    if let Err(e) = Self::reap_finished_daemons(&daemons).await {
+                        warn!("Daemon reap failed: {:?}", e);
                     }
                 }
             }
@@ -249,6 +250,14 @@ impl LocalWorkerManager {
             }
         }
 
+        if Self::requires_fresh_controller_environment(&metadata) {
+            info!(
+                worker_id = %metadata.worker_id,
+                "Skipping metadata-only recovery; controller must rebuild runtime-only environment"
+            );
+            return Ok(());
+        }
+
         info!(worker_id = %metadata.worker_id, "Recovering worker from previous run");
 
         // Restart the worker using metadata
@@ -256,94 +265,9 @@ impl LocalWorkerManager {
             &metadata.worker_id,
             metadata.env_vars,
             metadata.runtime_only_binding_names,
+            metadata.runtime_only_env_names,
             state_dir,
             workers,
-            bindings_provider,
-        )
-        .await?;
-
-        Ok(())
-    }
-
-    /// Recovers all daemons from metadata files.
-    async fn recover_all_daemons(
-        state_dir: &PathBuf,
-        daemons: &Arc<Mutex<HashMap<String, DaemonRuntime>>>,
-        bindings_provider: Arc<dyn alien_bindings::BindingsProviderApi>,
-    ) -> Result<()> {
-        let daemons_dir = state_dir.join("daemons");
-        if !daemons_dir.exists() {
-            return Ok(());
-        }
-
-        let entries = fs::read_dir(&daemons_dir)
-            .into_alien_error()
-            .context(ErrorData::Other {
-                message: "Failed to read daemons directory".to_string(),
-            })?;
-
-        for entry in entries {
-            let entry = entry.into_alien_error().context(ErrorData::Other {
-                message: "Failed to read daemon entry".to_string(),
-            })?;
-
-            if entry.path().is_dir() {
-                let metadata_file = entry.path().join("metadata.json");
-                if metadata_file.exists() {
-                    if let Err(e) = Self::recover_single_daemon(
-                        &metadata_file,
-                        state_dir,
-                        daemons,
-                        bindings_provider.clone(),
-                    )
-                    .await
-                    {
-                        warn!("Failed to recover daemon from {:?}: {:?}", metadata_file, e);
-                    }
-                }
-            }
-        }
-
-        Ok(())
-    }
-
-    /// Recovers a single daemon from metadata file.
-    async fn recover_single_daemon(
-        metadata_path: &PathBuf,
-        state_dir: &PathBuf,
-        daemons: &Arc<Mutex<HashMap<String, DaemonRuntime>>>,
-        bindings_provider: Arc<dyn alien_bindings::BindingsProviderApi>,
-    ) -> Result<()> {
-        let contents = tokio::fs::read_to_string(metadata_path)
-            .await
-            .into_alien_error()
-            .context(ErrorData::Other {
-                message: format!("Failed to read {}", metadata_path.display()),
-            })?;
-
-        let metadata: WorkerMetadata =
-            serde_json::from_str(&contents)
-                .into_alien_error()
-                .context(ErrorData::Other {
-                    message: "Failed to parse daemon metadata".to_string(),
-                })?;
-
-        {
-            let daemons_guard = daemons.lock().await;
-            if daemons_guard.contains_key(&metadata.worker_id) {
-                debug!(daemon_id = %metadata.worker_id, "Daemon already running, skipping recovery");
-                return Ok(());
-            }
-        }
-
-        info!(daemon_id = %metadata.worker_id, "Recovering daemon from previous run");
-
-        Self::start_daemon_internal(
-            &metadata.worker_id,
-            metadata.env_vars,
-            metadata.runtime_only_binding_names,
-            state_dir,
-            daemons,
             bindings_provider,
         )
         .await?;
@@ -395,6 +319,14 @@ impl LocalWorkerManager {
                     }
                 }
 
+                if Self::requires_fresh_controller_environment(&metadata) {
+                    info!(
+                        worker_id = %worker_id,
+                        "Leaving crashed Worker stopped so its controller can rebuild runtime-only environment"
+                    );
+                    continue;
+                }
+
                 warn!(worker_id = %worker_id, "Auto-restarting worker...");
 
                 // Restart using metadata
@@ -402,6 +334,7 @@ impl LocalWorkerManager {
                     &metadata.worker_id,
                     metadata.env_vars,
                     metadata.runtime_only_binding_names,
+                    metadata.runtime_only_env_names,
                     state_dir,
                     workers,
                     bindings_provider.clone(),
@@ -418,11 +351,18 @@ impl LocalWorkerManager {
         Ok(())
     }
 
-    /// Monitors running daemons and restarts crashed ones.
-    async fn monitor_and_restart_daemons(
-        state_dir: &PathBuf,
+    /// Reaps finished daemon runtimes from the map.
+    ///
+    /// Deliberately does NOT restart: the local daemon controller is the
+    /// single restarter — its Ready handler notices a not-running daemon
+    /// (this reap is what flips `is_daemon_running` to false) and re-enters
+    /// StartingProcess, rebuilding the full env with freshly resolved
+    /// secrets under the executor's retry/backoff. A monitor-side restart
+    /// here could only relaunch with the stale in-memory env, and its
+    /// remove→spawn window raced the controller's stop→extract→start update
+    /// sequence (resurrecting an old binary mid-update).
+    async fn reap_finished_daemons(
         daemons: &Arc<Mutex<HashMap<String, DaemonRuntime>>>,
-        bindings_provider: Arc<dyn alien_bindings::BindingsProviderApi>,
     ) -> Result<()> {
         let daemon_ids: Vec<String> = {
             let daemons_guard = daemons.lock().await;
@@ -430,51 +370,24 @@ impl LocalWorkerManager {
         };
 
         for daemon_id in daemon_ids {
-            let (metadata, task_result) = {
-                let mut daemons_mut = daemons.lock().await;
-                if let Some(runtime) = daemons_mut.get(&daemon_id) {
-                    if runtime.task_handle.is_finished() {
-                        let mut runtime = daemons_mut.remove(&daemon_id).unwrap();
-                        let task_result = (&mut runtime.task_handle).await;
-                        (Some(runtime.metadata.clone()), Some(task_result))
-                    } else {
-                        (None, None)
-                    }
-                } else {
-                    (None, None)
+            let mut daemons_mut = daemons.lock().await;
+            let finished = daemons_mut
+                .get(&daemon_id)
+                .is_some_and(|runtime| runtime.task_handle.is_finished());
+            if !finished {
+                continue;
+            }
+            let mut runtime = daemons_mut.remove(&daemon_id).unwrap();
+            drop(daemons_mut);
+            match (&mut runtime.task_handle).await {
+                Ok(Ok(())) => {
+                    warn!(daemon_id = %daemon_id, "Daemon exited cleanly but unexpectedly; the controller will relaunch it");
                 }
-            };
-
-            if let Some(metadata) = metadata {
-                if let Some(task_result) = task_result {
-                    match task_result {
-                        Ok(Ok(())) => {
-                            warn!(daemon_id = %daemon_id, "Daemon exited cleanly but unexpectedly");
-                        }
-                        Ok(Err(e)) => {
-                            warn!(daemon_id = %daemon_id, error = ?e, "Daemon crashed with error");
-                        }
-                        Err(e) => {
-                            warn!(daemon_id = %daemon_id, error = ?e, "Daemon task panicked");
-                        }
-                    }
+                Ok(Err(e)) => {
+                    warn!(daemon_id = %daemon_id, error = ?e, "Daemon crashed; the controller will relaunch it");
                 }
-
-                warn!(daemon_id = %daemon_id, "Auto-restarting daemon...");
-
-                if let Err(e) = Self::start_daemon_internal(
-                    &metadata.worker_id,
-                    metadata.env_vars,
-                    metadata.runtime_only_binding_names,
-                    state_dir,
-                    daemons,
-                    bindings_provider.clone(),
-                )
-                .await
-                {
-                    warn!(daemon_id = %daemon_id, error = ?e, "Failed to restart daemon");
-                } else {
-                    info!(daemon_id = %daemon_id, "Successfully restarted daemon after crash");
+                Err(e) => {
+                    warn!(daemon_id = %daemon_id, error = ?e, "Daemon task panicked; the controller will relaunch it");
                 }
             }
         }
@@ -482,13 +395,15 @@ impl LocalWorkerManager {
         Ok(())
     }
 
-    /// Saves worker metadata to disk (static for use by background task)
     fn save_metadata_static(state_dir: &PathBuf, metadata: &WorkerMetadata) -> Result<()> {
         Self::save_metadata_in_namespace(state_dir, "workers", metadata)
     }
 
     /// Saves daemon metadata to disk.
-    fn save_daemon_metadata_static(state_dir: &PathBuf, metadata: &WorkerMetadata) -> Result<()> {
+    pub(crate) fn save_daemon_metadata_static(
+        state_dir: &PathBuf,
+        metadata: &WorkerMetadata,
+    ) -> Result<()> {
         Self::save_metadata_in_namespace(state_dir, "daemons", metadata)
     }
 
@@ -572,36 +487,15 @@ impl LocalWorkerManager {
         id: &str,
         env_vars: HashMap<String, String>,
         runtime_only_binding_names: Vec<String>,
+        runtime_only_env_names: Vec<String>,
     ) -> Result<String> {
         Self::start_worker_internal(
             id,
             env_vars,
             runtime_only_binding_names,
+            runtime_only_env_names,
             &self.state_dir,
             &self.workers,
-            self.bindings_provider.clone(),
-        )
-        .await
-    }
-
-    /// Starts a daemon runtime.
-    ///
-    /// Daemons use passthrough transport: there is no HTTP invocation proxy and no
-    /// worker URL. The process is still wrapped by alien-runtime so bindings,
-    /// commands polling, tracing, graceful shutdown, and log export behave the
-    /// same as other local compute resources.
-    pub async fn start_daemon(
-        &self,
-        id: &str,
-        env_vars: HashMap<String, String>,
-        runtime_only_binding_names: Vec<String>,
-    ) -> Result<()> {
-        Self::start_daemon_internal(
-            id,
-            env_vars,
-            runtime_only_binding_names,
-            &self.state_dir,
-            &self.daemons,
             self.bindings_provider.clone(),
         )
         .await
@@ -611,20 +505,36 @@ impl LocalWorkerManager {
     /// each named runtime-only binding's key removed — keyed on the names, not on what re-resolved,
     /// so a secret never persists even if live re-resolution returns nothing (e.g. the resource
     /// vanished between env-build and start) — while the live env keeps the re-resolved secret. Pure
-    /// (no IO) so the "password never persisted" invariant is unit-testable on the artifact we write.
-    fn plan_worker_launch(
+    /// (no IO) so the "password never persisted" invariant is unit-testable on the artifact we
+    /// write. The command token is always classified runtime-only here as a final defense even if a
+    /// caller omits its name.
+    pub(crate) fn plan_worker_launch(
         id: &str,
         extracted_dir: &PathBuf,
         existing: &WorkerMetadata,
         transport_port: Option<u16>,
         passed_env: HashMap<String, String>,
         runtime_only_binding_names: Vec<String>,
+        runtime_only_env_names: &[String],
         resolved: &[(String, HashMap<String, String>)],
     ) -> (WorkerMetadata, HashMap<String, String>) {
         let mut persisted_env = passed_env.clone();
         let mut live_env = passed_env;
+        let mut runtime_only_env_names = runtime_only_env_names.to_vec();
+        if live_env.contains_key(alien_core::ENV_ALIEN_COMMANDS_TOKEN)
+            && !runtime_only_env_names
+                .iter()
+                .any(|name| name == alien_core::ENV_ALIEN_COMMANDS_TOKEN)
+        {
+            runtime_only_env_names.push(alien_core::ENV_ALIEN_COMMANDS_TOKEN.to_string());
+        }
         for name in &runtime_only_binding_names {
             persisted_env.remove(&alien_core::bindings::binding_env_var_name(name));
+        }
+        // Resolved deployment secrets (including ALIEN_COMMANDS_TOKEN) never
+        // persist either — same invariant as the binding secrets above.
+        for name in &runtime_only_env_names {
+            persisted_env.remove(name);
         }
         for (_name, entry) in resolved {
             live_env.extend(entry.clone());
@@ -637,6 +547,8 @@ impl LocalWorkerManager {
             working_dir: existing.working_dir.clone(),
             transport_port,
             runtime_only_binding_names,
+            runtime_only_env_names,
+            stop_grace_period_seconds: existing.stop_grace_period_seconds,
         };
         (metadata, live_env)
     }
@@ -646,16 +558,22 @@ impl LocalWorkerManager {
         id: &str,
         env_vars: HashMap<String, String>,
         runtime_only_binding_names: Vec<String>,
+        runtime_only_env_names: Vec<String>,
         state_dir: &PathBuf,
         workers: &Arc<Mutex<HashMap<String, WorkerRuntime>>>,
         bindings_provider: Arc<dyn alien_bindings::BindingsProviderApi>,
     ) -> Result<String> {
-        // Check if already running
+        // Keep healthy starts idempotent, but do not let a finished task masquerade as a live
+        // Worker while its controller is trying to relaunch with freshly resolved secrets.
         {
-            let workers_guard = workers.lock().await;
+            let mut workers_guard = workers.lock().await;
             if let Some(runtime) = workers_guard.get(id) {
-                debug!(worker_id = %id, "Worker already running");
-                return Ok(runtime.worker_url.clone());
+                if !runtime.task_handle.is_finished() {
+                    debug!(worker_id = %id, "Worker already running");
+                    return Ok(runtime.worker_url.clone());
+                }
+                workers_guard.remove(id);
+                debug!(worker_id = %id, "Removed finished Worker before fresh launch");
             }
         }
 
@@ -727,6 +645,7 @@ impl LocalWorkerManager {
             Some(port),
             env_vars,
             runtime_only_binding_names,
+            &runtime_only_env_names,
             &resolved_bindings,
         );
 
@@ -736,45 +655,28 @@ impl LocalWorkerManager {
                 message: "Failed to find free port for gRPC server".to_string(),
             })
         })?;
-        let bindings_address = format!("127.0.0.1:{}", grpc_port);
+        let worker_grpc_address = format!("127.0.0.1:{}", grpc_port);
 
-        // Build log exporter configuration
-        // For local workers, we extract OTLP config from env_vars and pass directly
-        // This allows alien-runtime (running embedded) to send logs via OTLP
-        let log_exporter =
-            if let Some(endpoint) = runtime_env_vars.get("OTEL_EXPORTER_OTLP_LOGS_ENDPOINT") {
-                let mut headers = HashMap::new();
-                if let Some(headers_str) = runtime_env_vars.get("OTEL_EXPORTER_OTLP_HEADERS") {
-                    for header in headers_str.split(',') {
-                        if let Some((key, value)) = header.split_once('=') {
-                            headers.insert(key.trim().to_lowercase(), value.trim().to_string());
-                        }
-                    }
-                }
+        // Build log exporter configuration. For local workers, we extract OTLP config from
+        // env_vars and pass it to the embedded alien-worker-runtime so it can send logs via OTLP.
+        // Same parsing as the daemon path, so it shares that helper.
+        let log_exporter = log_exporter_from_env(&runtime_env_vars, id);
+        let command_timeout =
+            alien_worker_runtime::RuntimeConfig::command_timeout_from_env_vars(&runtime_env_vars)
+                .into_alien_error()
+                .context(ErrorData::Other {
+                    message: "Invalid Worker command timeout configuration".to_string(),
+                })?;
 
-                let service_name = runtime_env_vars
-                    .get("OTEL_SERVICE_NAME")
-                    .cloned()
-                    .unwrap_or_else(|| id.to_string());
-
-                alien_runtime::LogExporter::Otlp {
-                    endpoint: endpoint.clone(),
-                    headers,
-                    service_name,
-                }
-            } else {
-                // No OTLP config - shouldn't happen for workers, but fallback to None
-                alien_runtime::LogExporter::None
-            };
-
-        let runtime_config = alien_runtime::RuntimeConfig::builder()
-            .transport(alien_runtime::TransportType::Local)
+        let runtime_config = alien_worker_runtime::RuntimeConfig::builder()
+            .transport(alien_worker_runtime::TransportType::Local)
             .transport_port(port)
-            .bindings_address(bindings_address)
+            .worker_grpc_address(worker_grpc_address)
             .command(existing_metadata.runtime_command.clone())
             .working_dir(PathBuf::from(&working_dir))
             .env_vars(runtime_env_vars)
             .log_exporter(log_exporter)
+            .command_timeout(command_timeout)
             .build();
 
         Self::save_metadata_static(state_dir, &updated_metadata)?;
@@ -782,13 +684,13 @@ impl LocalWorkerManager {
         // Create shutdown channel
         let (shutdown_tx, shutdown_rx) = tokio::sync::broadcast::channel(1);
 
-        // Spawn alien_runtime::run in tokio task with custom bindings provider
+        // Spawn alien_worker_runtime::run in tokio task with custom bindings provider
         let id_clone = id.to_string();
         let runtime_task: JoinHandle<crate::error::Result<()>> = tokio::spawn(async move {
-            alien_runtime::run(
+            alien_worker_runtime::run(
                 runtime_config,
                 shutdown_rx,
-                alien_runtime::BindingsSource::Provider(bindings_provider),
+                alien_worker_runtime::RuntimeDependencies::Provider(bindings_provider),
             )
             .await
             .context(ErrorData::Other {
@@ -798,7 +700,7 @@ impl LocalWorkerManager {
             Ok(())
         });
 
-        // Wait for the HTTP transport to actually be ready. alien-runtime may
+        // Wait for the HTTP transport to actually be ready. alien-worker-runtime may
         // first wait for app HTTP registration and task subscription before it
         // opens the proxy listener.
         let max_wait = std::time::Duration::from_secs(60);
@@ -819,6 +721,12 @@ impl LocalWorkerManager {
 
             // Check if we've exceeded the timeout
             if start.elapsed() > max_wait {
+                // The runtime has not been published in `workers` yet, so this
+                // local handle is its only owner. Abort and join it before
+                // returning; otherwise Tokio detaches the task and a delayed
+                // startup can leave an untracked listener behind.
+                runtime_task.abort();
+                let _ = runtime_task.await;
                 return Err(AlienError::new(ErrorData::Other {
                     message: format!(
                         "Worker '{}' transport did not become ready within {:?}",
@@ -878,174 +786,8 @@ impl LocalWorkerManager {
         Ok(worker_url)
     }
 
-    /// Internal static implementation of start_daemon for use by background task.
-    async fn start_daemon_internal(
-        id: &str,
-        env_vars: HashMap<String, String>,
-        runtime_only_binding_names: Vec<String>,
-        state_dir: &PathBuf,
-        daemons: &Arc<Mutex<HashMap<String, DaemonRuntime>>>,
-        bindings_provider: Arc<dyn alien_bindings::BindingsProviderApi>,
-    ) -> Result<()> {
-        {
-            let daemons_guard = daemons.lock().await;
-            if daemons_guard.contains_key(id) {
-                debug!(daemon_id = %id, "Daemon already running");
-                return Ok(());
-            }
-        }
-
-        let extracted_dir = state_dir.join("daemons").join(id);
-        let metadata_file = extracted_dir.join("metadata.json");
-        if !metadata_file.exists() {
-            return Err(AlienError::new(ErrorData::Other {
-                message: format!(
-                    "Daemon metadata not found at {}. Run extract_daemon_image first.",
-                    metadata_file.display()
-                ),
-            }));
-        }
-
-        let metadata_contents = std::fs::read_to_string(&metadata_file)
-            .into_alien_error()
-            .context(ErrorData::Other {
-                message: format!("Failed to read metadata file: {}", metadata_file.display()),
-            })?;
-
-        let existing_metadata: WorkerMetadata = serde_json::from_str(&metadata_contents)
-            .into_alien_error()
-            .context(ErrorData::Other {
-                message: "Failed to parse daemon metadata".to_string(),
-            })?;
-
-        let working_dir = if let Some(ref oci_working_dir) = existing_metadata.working_dir {
-            let relative_path = oci_working_dir.trim_start_matches('/');
-            extracted_dir
-                .join(relative_path)
-                .to_string_lossy()
-                .to_string()
-        } else {
-            extracted_dir.to_string_lossy().to_string()
-        };
-
-        // Re-resolve each secret live (kept out of persisted metadata; see plan_worker_launch).
-        let mut resolved_bindings = Vec::new();
-        for name in &runtime_only_binding_names {
-            if let Some(entry) = bindings_provider
-                .resolve_runtime_only_binding_env(name)
-                .await
-                .context(ErrorData::Other {
-                    message: format!("Failed to resolve runtime-only binding '{}'", name),
-                })?
-            {
-                resolved_bindings.push((name.clone(), entry));
-            }
-        }
-        let (updated_metadata, runtime_env_vars) = Self::plan_worker_launch(
-            id,
-            &extracted_dir,
-            &existing_metadata,
-            None,
-            env_vars,
-            runtime_only_binding_names,
-            &resolved_bindings,
-        );
-        let grpc_port = port_check::free_local_ipv4_port().ok_or_else(|| {
-            AlienError::new(ErrorData::Other {
-                message: "Failed to find free port for gRPC server".to_string(),
-            })
-        })?;
-        let bindings_address = format!("127.0.0.1:{}", grpc_port);
-
-        let log_exporter =
-            if let Some(endpoint) = runtime_env_vars.get("OTEL_EXPORTER_OTLP_LOGS_ENDPOINT") {
-                let mut headers = HashMap::new();
-                if let Some(headers_str) = runtime_env_vars.get("OTEL_EXPORTER_OTLP_HEADERS") {
-                    for header in headers_str.split(',') {
-                        if let Some((key, value)) = header.split_once('=') {
-                            headers.insert(key.trim().to_lowercase(), value.trim().to_string());
-                        }
-                    }
-                }
-
-                let service_name = runtime_env_vars
-                    .get("OTEL_SERVICE_NAME")
-                    .cloned()
-                    .unwrap_or_else(|| id.to_string());
-
-                alien_runtime::LogExporter::Otlp {
-                    endpoint: endpoint.clone(),
-                    headers,
-                    service_name,
-                }
-            } else {
-                alien_runtime::LogExporter::None
-            };
-
-        let runtime_config = alien_runtime::RuntimeConfig::builder()
-            .transport(alien_runtime::TransportType::Passthrough)
-            .transport_port(0)
-            .bindings_address(bindings_address)
-            .command(existing_metadata.runtime_command.clone())
-            .working_dir(PathBuf::from(&working_dir))
-            .env_vars(runtime_env_vars)
-            .log_exporter(log_exporter)
-            .build();
-
-        Self::save_daemon_metadata_static(state_dir, &updated_metadata)?;
-
-        let (shutdown_tx, shutdown_rx) = tokio::sync::broadcast::channel(1);
-
-        let id_clone = id.to_string();
-        let runtime_task: JoinHandle<crate::error::Result<()>> = tokio::spawn(async move {
-            alien_runtime::run(
-                runtime_config,
-                shutdown_rx,
-                alien_runtime::BindingsSource::Provider(bindings_provider),
-            )
-            .await
-            .context(ErrorData::Other {
-                message: format!("Runtime failed for daemon '{}'", id_clone),
-            })?;
-
-            Ok(())
-        });
-
-        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
-        if runtime_task.is_finished() {
-            match runtime_task.await {
-                Ok(Ok(())) => {
-                    return Err(AlienError::new(ErrorData::Other {
-                        message: format!("Runtime for daemon '{}' exited during startup", id),
-                    }));
-                }
-                Ok(Err(e)) => {
-                    return Err(e.context(ErrorData::Other {
-                        message: format!("Runtime for daemon '{}' failed during startup", id),
-                    }));
-                }
-                Err(e) => {
-                    return Err(AlienError::new(ErrorData::Other {
-                        message: format!("Runtime task for daemon '{}' panicked: {}", id, e),
-                    }));
-                }
-            }
-        }
-
-        let mut daemons_mut = daemons.lock().await;
-        daemons_mut.insert(
-            id.to_string(),
-            DaemonRuntime {
-                task_handle: runtime_task,
-                shutdown_tx,
-                started_at: chrono::Utc::now(),
-                metadata: updated_metadata,
-            },
-        );
-
-        info!(daemon_id = %id, "Daemon runtime started");
-
-        Ok(())
+    fn requires_fresh_controller_environment(metadata: &WorkerMetadata) -> bool {
+        !metadata.runtime_only_env_names.is_empty()
     }
 
     /// Stops a worker runtime (keeps extracted image directory and metadata for recovery).
@@ -1053,9 +795,15 @@ impl LocalWorkerManager {
     /// # Arguments
     /// * `id` - Worker identifier
     pub async fn stop_worker(&self, id: &str) -> Result<()> {
-        let mut workers = self.workers.lock().await;
+        // Remove under the lock, then drain outside it. A command may run for
+        // the full Worker timeout, and unrelated Worker lifecycle operations
+        // must remain available while this runtime terminalizes accepted work.
+        let runtime = {
+            let mut workers = self.workers.lock().await;
+            workers.remove(id)
+        };
 
-        if let Some(runtime) = workers.remove(id) {
+        if let Some(runtime) = runtime {
             // Send shutdown signal (triggers wait_until drain, OTLP flush)
             if let Err(e) = runtime.shutdown_tx.send(()) {
                 warn!(
@@ -1099,9 +847,17 @@ impl LocalWorkerManager {
 
     /// Stops a daemon runtime (keeps extracted image directory and metadata for recovery).
     pub async fn stop_daemon(&self, id: &str) -> Result<()> {
-        let mut daemons = self.daemons.lock().await;
+        // Remove under the lock, then drain OUTSIDE it: the graceful stop can
+        // take up to the daemon's stop grace period (30s default), and other
+        // daemons' health checks, the crash monitor, and concurrent starts
+        // all contend on this lock. The removed entry already makes the stop
+        // exclusive — nothing else can reach this runtime.
+        let runtime = {
+            let mut daemons = self.daemons.lock().await;
+            daemons.remove(id)
+        };
 
-        if let Some(runtime) = daemons.remove(id) {
+        if let Some(runtime) = runtime {
             if let Err(e) = runtime.shutdown_tx.send(()) {
                 warn!(
                     daemon_id = %id,
@@ -1237,13 +993,24 @@ impl LocalWorkerManager {
     /// Checks if a worker is currently running.
     pub async fn is_running(&self, id: &str) -> bool {
         let workers = self.workers.lock().await;
-        workers.contains_key(id)
+        workers
+            .get(id)
+            .is_some_and(|runtime| !runtime.task_handle.is_finished())
     }
 
     /// Checks if a daemon is currently running.
     pub async fn is_daemon_running(&self, id: &str) -> bool {
         let daemons = self.daemons.lock().await;
         daemons.contains_key(id)
+    }
+
+    /// Returns the OS process id of a running daemon's app process, if known.
+    ///
+    /// The pid identifies the app binary the supervisor spawned directly (its own child), so a
+    /// caller can confirm the app runs as a direct child of the supervisor with no wrapper between.
+    pub async fn daemon_pid(&self, id: &str) -> Option<u32> {
+        let daemons = self.daemons.lock().await;
+        daemons.get(id).and_then(|runtime| runtime.pid)
     }
 
     /// Gets the URL of a running worker.
@@ -1519,6 +1286,8 @@ impl LocalWorkerManager {
                 working_dir: metadata.working_dir,
                 transport_port: None, // Will be allocated during start_worker
                 runtime_only_binding_names: Vec::new(), // Will be set during start_worker
+                runtime_only_env_names: Vec::new(), // Will be set during start_daemon
+                stop_grace_period_seconds: None, // Will be set during start_daemon
             };
             if namespace == "daemons" {
                 Self::save_daemon_metadata_static(&self.state_dir, &worker_metadata)?;
@@ -1594,6 +1363,8 @@ impl LocalWorkerManager {
                 working_dir: metadata.working_dir,
                 transport_port: None, // Will be allocated during start_worker
                 runtime_only_binding_names: Vec::new(), // Will be set during start_worker
+                runtime_only_env_names: Vec::new(), // Will be set during start_daemon
+                stop_grace_period_seconds: None, // Will be set during start_daemon
             };
             if namespace == "daemons" {
                 Self::save_daemon_metadata_static(&self.state_dir, &worker_metadata)?;
@@ -1736,6 +1507,8 @@ mod tests {
             working_dir: None,
             transport_port: None,
             runtime_only_binding_names: Vec::new(),
+            runtime_only_env_names: Vec::new(),
+            stop_grace_period_seconds: None,
         };
         // The env builder already inlined the binding (with password) into the passed env.
         let mut base = HashMap::new();
@@ -1758,6 +1531,7 @@ mod tests {
             Some(3000),
             base,
             vec!["pgdb".to_string()],
+            &[],
             &resolved,
         );
 
@@ -1779,6 +1553,86 @@ mod tests {
         assert_eq!(live.get("FOO"), Some(&"bar".to_string()));
     }
 
+    #[test]
+    fn plan_worker_launch_keeps_command_token_live_but_out_of_metadata() {
+        let existing = WorkerMetadata {
+            worker_id: "command-worker".to_string(),
+            extracted_path: PathBuf::from("/w"),
+            env_vars: HashMap::new(),
+            runtime_command: vec!["bun".to_string()],
+            working_dir: None,
+            transport_port: None,
+            runtime_only_binding_names: Vec::new(),
+            runtime_only_env_names: Vec::new(),
+            stop_grace_period_seconds: None,
+        };
+        let base = HashMap::from([
+            ("APP_ENV".to_string(), "production".to_string()),
+            (
+                alien_core::ENV_ALIEN_COMMANDS_TOKEN.to_string(),
+                "current-runtime-token".to_string(),
+            ),
+        ]);
+        let (metadata, live) = LocalWorkerManager::plan_worker_launch(
+            "command-worker",
+            &PathBuf::from("/w"),
+            &existing,
+            Some(3000),
+            base,
+            Vec::new(),
+            &[],
+            &[],
+        );
+
+        assert_eq!(
+            live.get(alien_core::ENV_ALIEN_COMMANDS_TOKEN),
+            Some(&"current-runtime-token".to_string())
+        );
+        assert_eq!(
+            metadata.env_vars.get("APP_ENV"),
+            Some(&"production".to_string())
+        );
+        assert!(!metadata
+            .env_vars
+            .contains_key(alien_core::ENV_ALIEN_COMMANDS_TOKEN));
+        assert_eq!(
+            metadata.runtime_only_env_names,
+            vec![alien_core::ENV_ALIEN_COMMANDS_TOKEN.to_string()]
+        );
+
+        let json = serde_json::to_string(&metadata).expect("metadata serializes");
+        assert!(!json.contains("current-runtime-token"));
+        assert!(LocalWorkerManager::requires_fresh_controller_environment(
+            &metadata
+        ));
+    }
+
+    #[test]
+    fn only_runtime_only_environment_requires_controller_owned_recovery() {
+        let ordinary = WorkerMetadata {
+            worker_id: "ordinary".to_string(),
+            extracted_path: PathBuf::from("/w"),
+            env_vars: HashMap::new(),
+            runtime_command: Vec::new(),
+            working_dir: None,
+            transport_port: None,
+            runtime_only_binding_names: vec!["database".to_string()],
+            runtime_only_env_names: Vec::new(),
+            stop_grace_period_seconds: None,
+        };
+        assert!(!LocalWorkerManager::requires_fresh_controller_environment(
+            &ordinary
+        ));
+
+        let command_worker = WorkerMetadata {
+            runtime_only_env_names: vec![alien_core::ENV_ALIEN_COMMANDS_TOKEN.to_string()],
+            ..ordinary
+        };
+        assert!(LocalWorkerManager::requires_fresh_controller_environment(
+            &command_worker
+        ));
+    }
+
     /// Nothing resolved (non-Postgres links, external Postgres, or absent on recover) → env untouched
     /// on both channels, so non-Postgres bindings and the recover path keep working.
     #[test]
@@ -1791,6 +1645,8 @@ mod tests {
             working_dir: None,
             transport_port: None,
             runtime_only_binding_names: Vec::new(),
+            runtime_only_env_names: Vec::new(),
+            stop_grace_period_seconds: None,
         };
         let mut base = HashMap::new();
         base.insert("FOO".to_string(), "bar".to_string());
@@ -1801,6 +1657,7 @@ mod tests {
             None,
             base.clone(),
             Vec::new(),
+            &[],
             &[],
         );
         assert_eq!(metadata.env_vars, base);
@@ -1820,6 +1677,8 @@ mod tests {
             working_dir: None,
             transport_port: None,
             runtime_only_binding_names: Vec::new(),
+            runtime_only_env_names: Vec::new(),
+            stop_grace_period_seconds: None,
         };
         // The env builder already inlined the binding (with password), but re-resolution finds nothing.
         let mut base = HashMap::new();
@@ -1835,6 +1694,7 @@ mod tests {
             Some(3000),
             base,
             vec!["pgdb".to_string()],
+            &[],
             &[],
         );
         let json = serde_json::to_string(&metadata).expect("metadata serializes");

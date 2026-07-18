@@ -4,7 +4,10 @@ use std::path::PathBuf;
 use std::time::Duration;
 use tracing::{debug, info};
 
-use crate::core::{environment_variables::EnvironmentVariableBuilder, ResourceControllerContext};
+use crate::core::{
+    applicable_secret_environment_variables, direct_monitoring_auth_headers,
+    environment_variables::EnvironmentVariableBuilder, ResourceControllerContext,
+};
 use crate::error::{ErrorData, Result};
 use alien_core::{
     Daemon, DaemonCode, DaemonHeartbeatData, DaemonOutputs, HeartbeatBackend,
@@ -51,11 +54,17 @@ impl LocalDaemonController {
                 })
             })?;
 
+        // Source-built daemons are supported: `alien build` compiles the
+        // source and rewrites `code` to an image whose binary this controller
+        // extracts and runs. Reaching here with unbuilt source means the
+        // build step was skipped.
         let image_ref = match &config.code {
             DaemonCode::Image { image } => image.clone(),
             DaemonCode::Source { .. } => {
                 return Err(AlienError::new(ErrorData::ResourceConfigInvalid {
-                    message: "Local platform does not support building daemon source code directly. Build the image first and use DaemonCode::Image.".to_string(),
+                    message:
+                        "Daemon still has unbuilt source code. Run 'alien build' first; it compiles the source into an image the controller can extract and run."
+                            .to_string(),
                     resource_id: Some(config.id.clone()),
                 }));
             }
@@ -111,20 +120,44 @@ impl LocalDaemonController {
         info!(daemon_id = %config.id, "Starting daemon runtime");
 
         let mut env_builder = EnvironmentVariableBuilder::try_new(&config.environment)?
-            .add_standard_alien_env_vars(ctx)?
+            .add_daemon_runtime_env_vars(ctx)?
+            .add_direct_monitoring_auth_headers(ctx)
             .add_current_resource_public_endpoint(ctx, &config.id)?
             .add_linked_resources(&config.links, ctx, &config.id)
             .await?;
 
-        if config.commands_enabled {
-            env_builder = env_builder.add_passthrough_transport_env_vars();
-        }
+        // Command-enabled Daemons no longer get `ALIEN_TRANSPORT=passthrough`.
+        // Their receiver config (`ALIEN_COMMANDS_*`) is injected per-resource into
+        // `config.environment` by the manager/operator snapshot and
+        // flows in through `EnvironmentVariableBuilder::try_new(&config.environment)`.
 
         if let Some(endpoint) = config.public_endpoints.first() {
             env_builder = env_builder.add_env_var("PORT".to_string(), endpoint.port.to_string());
         }
 
-        let env_vars = env_builder.build();
+        let mut env_vars = env_builder.build();
+
+        // Resolve secret environment variables into plain values before the process starts. On the
+        // local platform there is no `ALIEN_SECRETS` vault-load marker — the supervisor spawns the
+        // app with these values already in its environment, so the app reads them like any env var.
+        // Their NAMES are handed to the supervisor as runtime-only so the values never persist to
+        // the daemon's on-disk metadata.
+        let mut runtime_only_env_names = Vec::new();
+        for var in applicable_secret_environment_variables(
+            &config.id,
+            &ctx.deployment_config.environment_variables.variables,
+        ) {
+            env_vars.insert(var.name.clone(), var.value.clone());
+            runtime_only_env_names.push(var.name.clone());
+        }
+        // Monitoring credentials are controller-owned. Apply them after user
+        // secrets so a same-name snapshot value cannot replace the credential
+        // selected by DeploymentConfig.monitoring.
+        let monitoring_headers = direct_monitoring_auth_headers(ctx);
+        env_vars.extend(monitoring_headers.clone());
+        runtime_only_env_names.extend(monitoring_headers.into_keys());
+        runtime_only_env_names.sort();
+        runtime_only_env_names.dedup();
 
         // Linked Postgres resources carry a runtime-only secret (the password). Name them so the
         // worker manager delivers the binding to the process but never persists it to metadata.
@@ -136,7 +169,16 @@ impl LocalDaemonController {
             .collect();
 
         manager
-            .start_daemon(&config.id, env_vars, runtime_only_binding_names)
+            .start_daemon(
+                &config.id,
+                env_vars,
+                alien_local::DaemonLaunchOptions {
+                    runtime_only_binding_names,
+                    runtime_only_env_names,
+                    command_override: config.command.clone(),
+                    stop_grace_period_seconds: config.stop_grace_period_seconds,
+                },
+            )
             .await
             .context(ErrorData::CloudPlatformError {
                 message: "Failed to start daemon runtime".to_string(),
@@ -166,6 +208,21 @@ impl LocalDaemonController {
                     service_name: "LocalWorkerManager".to_string(),
                 })
             })?;
+
+        // Self-heal instead of erroring when the daemon simply isn't running:
+        // after a manager restart, cold recovery intentionally skips daemons
+        // whose env carried runtime-only secrets (their values are never
+        // persisted), so the controller — resuming at Ready — is the ONLY
+        // thing that can bring them back. Re-entering StartingProcess rebuilds
+        // the full env (secrets freshly resolved) and starts the process;
+        // erroring here would just cycle Ready→RefreshFailed→Ready forever.
+        if !manager.is_daemon_running(&config.id).await {
+            debug!(daemon_id=%config.id, "Daemon not running; re-entering start flow");
+            return Ok(HandlerAction::Continue {
+                state: StartingProcess,
+                suggested_delay: None,
+            });
+        }
 
         manager
             .check_daemon_health(&config.id)

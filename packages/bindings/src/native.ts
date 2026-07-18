@@ -1,0 +1,65 @@
+/**
+ * `@alienplatform/bindings/native` — static-embed entry for `bun build --compile`.
+ *
+ * This module imports the native addon through the literal specifier
+ * `./alien-bindings.node` so bun's compiler can detect the reference and embed
+ * the addon into the single-file executable. Unlike the default entry, it does
+ * NOT probe the filesystem or resolve a prebuild package — the addon must
+ * already be staged next to the built `native.js`.
+ *
+ * Staging contract (produced by `alien build`'s TypeScript toolchain; see
+ * PACKAGE_LAYOUT.md): before this module is bundled and compiled, the correct
+ * per-platform addon is copied next to `dist/native.js` as
+ * `alien-bindings.node`. The build owns that copy step; this module only
+ * consumes the staged file.
+ *
+ * The specifier is kept external at build time (see tsdown.config.ts) so the
+ * literal survives into `dist/native.js` for bun to resolve and embed.
+ *
+ * `bun build --compile` on this entry needs `--format=cjs` or the produced
+ * binary crashes on load (`__require is not defined`) — see
+ * `packages/package-layout/steps/compile.ts` for the verified repro and required flag.
+ */
+
+import addon from "./alien-bindings.node"
+import { createFactories } from "./factories.js"
+import { registerEmbeddedAddon } from "./loader.js"
+
+/**
+ * Register the bun-embedded addon with the default loader, so plain
+ * `@alienplatform/bindings` imports (which go through `loader.ts`) resolve to
+ * it inside a compiled binary. `alien build` emits an explicit call to this
+ * from the compiled entry — an explicit call rather than a bare side-effect
+ * import so it survives this package's `sideEffects: false` tree-shaking.
+ */
+export function installEmbeddedAddon(): void {
+  registerEmbeddedAddon(addon)
+}
+
+const factories = createFactories(() => addon)
+
+/** Resolve the storage binding named `name`. */
+export const storage = factories.storage
+/** Resolve the key-value binding named `name`. */
+export const kv = factories.kv
+/** Resolve the queue binding named `name`. */
+export const queue = factories.queue
+/** Resolve the vault binding named `name`. */
+export const vault = factories.vault
+
+export { AlienError, BindingNotConfiguredError, defineError } from "./errors.js"
+
+export type {
+  Kv,
+  KvScanItem,
+  KvScanResult,
+  KvSetOptions,
+  ObjectMeta,
+  PresignedRequest,
+  Queue,
+  QueueMessage,
+  SignedUrlMethod,
+  SignedUrlOptions,
+  Storage,
+  Vault,
+} from "./types.js"

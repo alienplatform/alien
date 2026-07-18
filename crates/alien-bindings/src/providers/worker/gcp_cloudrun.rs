@@ -1,4 +1,4 @@
-use crate::error::{ErrorData, Result};
+use crate::error::{binding_env_var, ErrorData, Result};
 use crate::traits::{Binding, Worker, WorkerInvokeRequest, WorkerInvokeResponse};
 use alien_core::bindings::CloudRunWorkerBinding;
 use alien_error::{AlienError, Context, IntoAlienError};
@@ -33,6 +33,7 @@ impl CloudRunWorker {
             .clone()
             .into_value("worker", "private_url")
             .context(ErrorData::BindingConfigInvalid {
+                env_var: binding_env_var("worker"),
                 binding_name: "worker".to_string(),
                 reason: "Failed to resolve private_url from binding".to_string(),
             })
@@ -149,6 +150,7 @@ impl Worker for CloudRunWorker {
                 .clone()
                 .into_value("worker", "public_url")
                 .context(ErrorData::BindingConfigInvalid {
+                    env_var: binding_env_var("worker"),
                     binding_name: "worker".to_string(),
                     reason: "Failed to resolve public_url from binding".to_string(),
                 })?;
@@ -162,6 +164,7 @@ impl Worker for CloudRunWorker {
             .clone()
             .into_value("worker", "service_name")
             .context(ErrorData::BindingConfigInvalid {
+                env_var: binding_env_var("worker"),
                 binding_name: "worker".to_string(),
                 reason: "Failed to resolve service_name from binding".to_string(),
             })?;
@@ -172,6 +175,7 @@ impl Worker for CloudRunWorker {
             .clone()
             .into_value("worker", "location")
             .context(ErrorData::BindingConfigInvalid {
+                env_var: binding_env_var("worker"),
                 binding_name: "worker".to_string(),
                 reason: "Failed to resolve location from binding".to_string(),
             })?;

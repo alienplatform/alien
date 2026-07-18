@@ -77,7 +77,7 @@ pub async fn handle_provisioning(
     })?;
 
     // Inject environment variables into the prepared stack
-    crate::helpers::inject_environment_variables(&mut target_stack, &config)?;
+    crate::helpers::inject_environment_variables(&mut target_stack, &config, current.platform)?;
 
     // Inject OTLP monitoring env vars if monitoring is configured
     if let Some(monitoring) = &config.monitoring {

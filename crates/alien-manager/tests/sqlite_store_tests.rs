@@ -9,7 +9,16 @@ use std::sync::Arc;
 use alien_core::{DeploymentModel, DeploymentState, DeploymentStatus, Platform, StackSettings};
 use alien_manager::auth::{Role, Scope, Subject, SubjectKind};
 use alien_manager::stores::sqlite::{
-    SqliteDatabase, SqliteDeploymentStore, SqliteReleaseStore, SqliteTokenStore,
+    migrations, SqliteCommandRegistry, SqliteDatabase, SqliteDeploymentStore, SqliteReleaseStore,
+    SqliteTokenStore,
+};
+
+// Command-target resolution test imports.
+use alien_commands::server::CommandRegistry;
+use alien_core::{CommandDeliveryMode, CommandState, CommandTarget, CommandTargetType};
+use alien_core::{
+    Container, ContainerCode, Daemon, DaemonCode, ResourceLifecycle, ResourceSpec, RuntimeMetadata,
+    Stack, StackState, Worker, WorkerCode,
 };
 use alien_manager::traits::deployment_store::*;
 use alien_manager::traits::release_store::*;
@@ -92,6 +101,43 @@ async fn create_test_deployment_with_settings(
         )
         .await
         .unwrap()
+}
+
+fn test_deployment_state(
+    status: DeploymentStatus,
+    stack_state: Option<StackState>,
+) -> DeploymentState {
+    DeploymentState {
+        status,
+        platform: Platform::Aws,
+        current_release: None,
+        target_release: None,
+        stack_state,
+        error: None,
+        environment_info: None,
+        runtime_metadata: None,
+        retry_requested: false,
+        protocol_version: alien_core::DEPLOYMENT_PROTOCOL_VERSION,
+    }
+}
+
+fn test_reconcile_data(
+    deployment_id: &str,
+    session: &str,
+    status: DeploymentStatus,
+    stack_state: Option<StackState>,
+) -> ReconcileData {
+    ReconcileData {
+        deployment_id: deployment_id.to_string(),
+        session: session.to_string(),
+        state: test_deployment_state(status, stack_state),
+        update_heartbeat: false,
+        suggested_delay_ms: None,
+        heartbeats: vec![],
+        observed_inventory_batches: vec![],
+        capabilities: vec![],
+        operator_version: None,
+    }
 }
 
 // =============================================================================
@@ -782,6 +828,130 @@ async fn reconcile_succeeds_under_other_session_lock() {
 }
 
 #[tokio::test]
+async fn stale_reconcile_preserves_runtime_delete_status_and_latest_stack_state() {
+    let db = fresh_db().await;
+    let store = SqliteDeploymentStore::new(db);
+    let group_id = create_test_group(&store).await;
+
+    for (index, (delete_status, expected_status)) in [
+        (DeploymentStatus::DeletePending, "delete-pending"),
+        (DeploymentStatus::Deleting, "deleting"),
+        (DeploymentStatus::DeleteFailed, "delete-failed"),
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        let deployment = create_test_deployment(
+            &store,
+            &group_id,
+            &format!("delete-race-{index}"),
+            Platform::Aws,
+        )
+        .await;
+        let session = format!("session-{index}");
+        let acquired = store
+            .acquire(
+                &test_subject(),
+                &session,
+                &DeploymentFilter {
+                    deployment_ids: Some(vec![deployment.id.clone()]),
+                    ..Default::default()
+                },
+                1,
+            )
+            .await
+            .unwrap();
+        assert_eq!(acquired.len(), 1);
+
+        store
+            .set_delete_pending(&test_subject(), &deployment.id)
+            .await
+            .unwrap();
+        if delete_status != DeploymentStatus::DeletePending {
+            store
+                .reconcile(
+                    &test_subject(),
+                    test_reconcile_data(&deployment.id, &session, delete_status, None),
+                )
+                .await
+                .unwrap();
+        }
+
+        let latest_stack_state = StackState::new(Platform::Aws);
+        let expected_resource_prefix = latest_stack_state.resource_prefix.clone();
+        store
+            .reconcile(
+                &test_subject(),
+                test_reconcile_data(
+                    &deployment.id,
+                    &session,
+                    DeploymentStatus::Running,
+                    Some(latest_stack_state),
+                ),
+            )
+            .await
+            .unwrap();
+
+        let fetched = store
+            .get_deployment(&test_subject(), &deployment.id)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(fetched.status, expected_status);
+        assert_eq!(
+            fetched
+                .stack_state
+                .expect("stale reconcile should persist its latest stack state")
+                .resource_prefix,
+            expected_resource_prefix
+        );
+        assert_eq!(fetched.locked_by.as_deref(), Some(session.as_str()));
+
+        store
+            .release(&test_subject(), &deployment.id, &session)
+            .await
+            .unwrap();
+    }
+}
+
+#[tokio::test]
+async fn reconcile_allows_runtime_delete_progress() {
+    let db = fresh_db().await;
+    let store = SqliteDeploymentStore::new(db);
+    let group_id = create_test_group(&store).await;
+    let deployment =
+        create_test_deployment(&store, &group_id, "delete-progress", Platform::Aws).await;
+
+    store
+        .set_delete_pending(&test_subject(), &deployment.id)
+        .await
+        .unwrap();
+
+    for (status, expected_status) in [
+        (DeploymentStatus::Deleting, "deleting"),
+        (DeploymentStatus::DeleteFailed, "delete-failed"),
+        (DeploymentStatus::Deleting, "deleting"),
+        (DeploymentStatus::TeardownRequired, "teardown-required"),
+        (DeploymentStatus::Deleted, "deleted"),
+    ] {
+        store
+            .reconcile(
+                &test_subject(),
+                test_reconcile_data(&deployment.id, "delete-session", status, None),
+            )
+            .await
+            .unwrap();
+
+        let fetched = store
+            .get_deployment(&test_subject(), &deployment.id)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(fetched.status, expected_status);
+    }
+}
+
+#[tokio::test]
 async fn reconcile_refreshes_owned_lock_lease() {
     let db = fresh_db().await;
     let store = SqliteDeploymentStore::new(db.clone());
@@ -1297,4 +1467,335 @@ async fn release_not_found() {
         .await
         .unwrap();
     assert!(result.is_none());
+}
+
+// =============================================================================
+// SqliteCommandRegistry target resolution + migration
+// =============================================================================
+
+fn worker(id: &str, commands_enabled: bool) -> Worker {
+    let b = Worker::new(id.to_string())
+        .code(WorkerCode::Image {
+            image: "worker:latest".to_string(),
+        })
+        .permissions("execution".to_string());
+    if commands_enabled {
+        b.commands_enabled(true).build()
+    } else {
+        b.build()
+    }
+}
+
+fn container(id: &str, commands_enabled: bool) -> Container {
+    let b = Container::new(id.to_string())
+        .code(ContainerCode::Image {
+            image: "container:latest".to_string(),
+        })
+        .cpu(ResourceSpec {
+            min: "0.5".to_string(),
+            desired: "1".to_string(),
+        })
+        .memory(ResourceSpec {
+            min: "512Mi".to_string(),
+            desired: "1Gi".to_string(),
+        })
+        .port(8080)
+        .permissions("container-execution".to_string());
+    if commands_enabled {
+        b.commands_enabled(true).build()
+    } else {
+        b.build()
+    }
+}
+
+fn daemon(id: &str, commands_enabled: bool) -> Daemon {
+    let b = Daemon::new(id.to_string())
+        .code(DaemonCode::Image {
+            image: "daemon:latest".to_string(),
+        })
+        .permissions("daemon-execution".to_string());
+    if commands_enabled {
+        b.commands_enabled(true).build()
+    } else {
+        b.build()
+    }
+}
+
+/// Build a running deployment whose current release contains `stack`, and
+/// return a registry wired to the same stores plus the deployment id.
+async fn registry_with_release(
+    stack: Stack,
+    platform: Platform,
+    stack_settings: StackSettings,
+) -> (SqliteCommandRegistry, String) {
+    let db = fresh_db().await;
+    let dep_store = Arc::new(SqliteDeploymentStore::new(db.clone()));
+    let rel_store = Arc::new(SqliteReleaseStore::new(db.clone()));
+    let group_id = create_test_group(&dep_store).await;
+
+    let release = rel_store
+        .create_release(
+            &test_subject(),
+            CreateReleaseParams {
+                project_id: "default".to_string(),
+                stacks: HashMap::from([(platform, stack)]),
+                git_commit_sha: None,
+                git_commit_ref: None,
+                git_commit_message: None,
+            },
+        )
+        .await
+        .unwrap();
+
+    let dep = dep_store
+        .create_with_state(
+            &test_subject(),
+            CreateImportedDeploymentParams {
+                deployment_protocol_version: alien_core::CURRENT_DEPLOYMENT_PROTOCOL_VERSION,
+                name: "cmd-target-dep".to_string(),
+                deployment_group_id: group_id,
+                platform,
+                base_platform: None,
+                stack_settings,
+                stack_state: StackState::new(platform),
+                environment_info: None,
+                runtime_metadata: RuntimeMetadata::default(),
+                status: "running".to_string(),
+                current_release_id: Some(release.id.clone()),
+                desired_release_id: None,
+                import_source: None,
+                setup_metadata: None,
+                setup_target: "test".to_string(),
+                setup_fingerprint: "test".to_string(),
+                setup_fingerprint_version: 1,
+                deployment_token: None,
+                management_config: None,
+                input_values: Default::default(),
+            },
+        )
+        .await
+        .unwrap();
+
+    let registry = SqliteCommandRegistry::new(db, dep_store, rel_store);
+    (registry, dep.id)
+}
+
+#[tokio::test]
+async fn resolve_target_shorthand_single_worker_push() {
+    // One command-enabled worker on AWS with the default (Push) deployment
+    // model resolves via shorthand and derives Push delivery.
+    let stack = Stack::new("s".to_string())
+        .add(worker("w1", true), ResourceLifecycle::Live)
+        .add(worker("w-off", false), ResourceLifecycle::Live)
+        .build();
+    let (registry, dep_id) =
+        registry_with_release(stack, Platform::Aws, StackSettings::default()).await;
+
+    let resolved = registry.resolve_target(&dep_id, None).await.unwrap();
+    assert_eq!(
+        resolved.target,
+        CommandTarget::new("w1", CommandTargetType::Worker)
+    );
+    assert_eq!(resolved.delivery_mode, CommandDeliveryMode::Push);
+}
+
+#[tokio::test]
+async fn resolve_target_explicit_daemon_is_pull() {
+    let stack = Stack::new("s".to_string())
+        .add(worker("w1", true), ResourceLifecycle::Live)
+        .add(daemon("d1", true), ResourceLifecycle::Live)
+        .build();
+    let (registry, dep_id) =
+        registry_with_release(stack, Platform::Aws, StackSettings::default()).await;
+
+    let resolved = registry.resolve_target(&dep_id, Some("d1")).await.unwrap();
+    assert_eq!(
+        resolved.target,
+        CommandTarget::new("d1", CommandTargetType::Daemon)
+    );
+    // Daemons are always Pull, even on a push-capable platform/model.
+    assert_eq!(resolved.delivery_mode, CommandDeliveryMode::Pull);
+}
+
+#[tokio::test]
+async fn resolve_target_ambiguous_is_409() {
+    let stack = Stack::new("s".to_string())
+        .add(worker("w1", true), ResourceLifecycle::Live)
+        .add(worker("w2", true), ResourceLifecycle::Live)
+        .build();
+    let (registry, dep_id) =
+        registry_with_release(stack, Platform::Aws, StackSettings::default()).await;
+
+    let err = registry.resolve_target(&dep_id, None).await.unwrap_err();
+    assert_eq!(err.code, "COMMAND_TARGET_AMBIGUOUS");
+    assert_eq!(err.http_status_code, Some(409));
+}
+
+#[tokio::test]
+async fn resolve_target_none_is_422() {
+    let stack = Stack::new("s".to_string())
+        .add(worker("w-off", false), ResourceLifecycle::Live)
+        .build();
+    let (registry, dep_id) =
+        registry_with_release(stack, Platform::Aws, StackSettings::default()).await;
+
+    let err = registry.resolve_target(&dep_id, None).await.unwrap_err();
+    assert_eq!(err.code, "NO_COMMAND_TARGETS");
+    assert_eq!(err.http_status_code, Some(422));
+}
+
+#[tokio::test]
+async fn resolve_target_unknown_is_404() {
+    let stack = Stack::new("s".to_string())
+        .add(worker("w1", true), ResourceLifecycle::Live)
+        .build();
+    let (registry, dep_id) =
+        registry_with_release(stack, Platform::Aws, StackSettings::default()).await;
+
+    let err = registry
+        .resolve_target(&dep_id, Some("nope"))
+        .await
+        .unwrap_err();
+    assert_eq!(err.code, "COMMAND_TARGET_NOT_FOUND");
+    assert_eq!(err.http_status_code, Some(404));
+
+    // An explicit empty id never falls back to shorthand.
+    let err = registry
+        .resolve_target(&dep_id, Some(""))
+        .await
+        .unwrap_err();
+    assert_eq!(err.code, "COMMAND_TARGET_NOT_FOUND");
+}
+
+#[tokio::test]
+async fn resolve_target_worker_on_kubernetes_is_pull() {
+    // K8s manager delivery is Pull to the in-cluster operator, which then
+    // pushes the command into the Worker runtime.
+    let stack = Stack::new("s".to_string())
+        .add(worker("w1", true), ResourceLifecycle::Live)
+        .build();
+    let (registry, dep_id) =
+        registry_with_release(stack, Platform::Kubernetes, StackSettings::default()).await;
+
+    let resolved = registry.resolve_target(&dep_id, None).await.unwrap();
+    assert_eq!(resolved.delivery_mode, CommandDeliveryMode::Pull);
+}
+
+#[tokio::test]
+async fn resolve_target_worker_on_local_is_push() {
+    let stack = Stack::new("s".to_string())
+        .add(worker("w1", true), ResourceLifecycle::Live)
+        .build();
+    let (registry, dep_id) =
+        registry_with_release(stack, Platform::Local, StackSettings::default()).await;
+
+    let resolved = registry.resolve_target(&dep_id, None).await.unwrap();
+    assert_eq!(resolved.delivery_mode, CommandDeliveryMode::Push);
+}
+
+#[tokio::test]
+async fn resolve_target_worker_pull_model_is_pull() {
+    // Push-capable platform, but the stack uses the Pull deployment model.
+    let stack = Stack::new("s".to_string())
+        .add(worker("w1", true), ResourceLifecycle::Live)
+        .build();
+    let settings = StackSettings {
+        deployment_model: DeploymentModel::Pull,
+        ..StackSettings::default()
+    };
+    let (registry, dep_id) = registry_with_release(stack, Platform::Aws, settings).await;
+
+    let resolved = registry.resolve_target(&dep_id, None).await.unwrap();
+    assert_eq!(resolved.delivery_mode, CommandDeliveryMode::Pull);
+}
+
+#[tokio::test]
+async fn resolve_target_container_always_pull() {
+    let stack = Stack::new("s".to_string())
+        .add(container("c1", true), ResourceLifecycle::Live)
+        .build();
+    let (registry, dep_id) =
+        registry_with_release(stack, Platform::Aws, StackSettings::default()).await;
+
+    let resolved = registry.resolve_target(&dep_id, None).await.unwrap();
+    assert_eq!(
+        resolved.target,
+        CommandTarget::new("c1", CommandTargetType::Container)
+    );
+    assert_eq!(resolved.delivery_mode, CommandDeliveryMode::Pull);
+}
+
+#[tokio::test]
+async fn resolve_target_colon_id_is_invalid() {
+    // A requested target id containing ':' would break the pending-index /
+    // idempotency key grammar; the shared guard rejects it with a typed error
+    // through the SQLite resolve path, identically to the in-memory registry.
+    let stack = Stack::new("s".to_string())
+        .add(worker("w1", true), ResourceLifecycle::Live)
+        .build();
+    let (registry, dep_id) =
+        registry_with_release(stack, Platform::Aws, StackSettings::default()).await;
+
+    let err = registry
+        .resolve_target(&dep_id, Some("w1:pending:1"))
+        .await
+        .unwrap_err();
+    assert_eq!(err.code, "COMMAND_TARGET_ID_INVALID");
+    assert_eq!(err.http_status_code, Some(400));
+}
+
+// NB: the fail-fast guard for a deployment missing stack_settings is exercised
+// by an in-crate unit test (`resolve_delivery_mode_fails_fast_without_stack_settings`
+// in stores::sqlite::command_registry) — the `stack_settings` column is NOT NULL,
+// so that invariant-violation state cannot be reached through this store's
+// public API, only through the private derivation helper.
+
+#[tokio::test]
+async fn create_command_round_trips_target_columns() {
+    let stack = Stack::new("s".to_string())
+        .add(daemon("d1", true), ResourceLifecycle::Live)
+        .build();
+    let (registry, dep_id) =
+        registry_with_release(stack, Platform::Aws, StackSettings::default()).await;
+
+    let resolved = registry.resolve_target(&dep_id, None).await.unwrap();
+    let expected = CommandTarget::new("d1", CommandTargetType::Daemon);
+    let metadata = registry
+        .create_command(
+            &dep_id,
+            "sync-data",
+            &resolved,
+            CommandState::Pending,
+            None,
+            None,
+        )
+        .await
+        .unwrap();
+    assert_eq!(metadata.target, expected);
+    assert_eq!(metadata.delivery_mode, CommandDeliveryMode::Pull);
+
+    let status = registry
+        .get_command_status(&metadata.command_id)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(status.target, expected);
+
+    let envelope = registry
+        .get_command_metadata(&metadata.command_id)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(envelope.target, expected);
+    assert_eq!(envelope.delivery_mode, CommandDeliveryMode::Pull);
+}
+
+#[tokio::test]
+async fn commands_migration_is_idempotent() {
+    let db = fresh_db().await;
+    // `SqliteDatabase::new` already ran migrations once; running them again
+    // (target-column ALTERs included) must succeed via duplicate-column
+    // tolerance.
+    migrations::run_migrations(&db).await.unwrap();
+    migrations::run_migrations(&db).await.unwrap();
 }

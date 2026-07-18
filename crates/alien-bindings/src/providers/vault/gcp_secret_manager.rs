@@ -250,4 +250,17 @@ impl crate::traits::Vault for GcpSecretManagerVault {
             })),
         }
     }
+
+    async fn list_secrets(&self) -> Result<Vec<String>> {
+        // GCP Secret Manager list is projects.secrets.list. The
+        // alien-gcp-clients SecretManagerApi wrapper does not expose it, so
+        // this fails explicitly rather than guessing.
+        Err(alien_error::AlienError::new(
+            ErrorData::OperationNotSupported {
+                operation: "vault.list_secrets".to_string(),
+                reason: "GCP Secret Manager list is not exposed by the Secret Manager client"
+                    .to_string(),
+            },
+        ))
+    }
 }
