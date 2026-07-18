@@ -797,6 +797,7 @@ mod tests {
         let transport = FailFirstCheckpointTransport::default();
         let mut state = test_state();
         state.status = DeploymentStatus::Running;
+        state.current_release = state.target_release.take();
         state.stack_state = Some(StackState::new(Platform::Test));
         let mut config = test_config();
         let policy = RunnerPolicy {
