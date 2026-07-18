@@ -118,6 +118,7 @@ fn container_endpoint_supported(platform: Platform, protocol: ExposeProtocol) ->
             | Platform::Test,
             ExposeProtocol::Http,
         ) => true,
+        (Platform::Aws | Platform::Gcp | Platform::Azure, ExposeProtocol::Tcp) => true,
         (_, ExposeProtocol::Tcp) => false,
     }
 }
@@ -278,7 +279,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn container_tcp_is_closed_on_every_deployable_platform() {
+    async fn container_tcp_is_supported_only_on_cloud_container_platforms() {
         for &platform in Platform::DEPLOYABLE {
             let stack = Stack::new("test-stack".to_string())
                 .add(
@@ -291,8 +292,11 @@ mod tests {
                 .check(&stack, platform)
                 .await
                 .expect("preflight should run");
-            assert!(!result.success, "TCP should be closed on {platform}");
-            assert!(result.errors.iter().any(|error| error.contains("TCP")));
+            let expected = matches!(platform, Platform::Aws | Platform::Gcp | Platform::Azure);
+            assert_eq!(
+                result.success, expected,
+                "unexpected TCP support on {platform}"
+            );
         }
     }
 

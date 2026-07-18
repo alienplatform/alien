@@ -289,6 +289,11 @@ pub trait ComputeApi: Send + Sync + Debug {
     async fn delete_target_https_proxy(&self, target_https_proxy_name: String)
         -> Result<Operation>;
 
+    // --- Target TCP Proxy Operations ---
+
+    async fn insert_target_tcp_proxy(&self, target_tcp_proxy: TargetTcpProxy) -> Result<Operation>;
+    async fn delete_target_tcp_proxy(&self, target_tcp_proxy_name: String) -> Result<Operation>;
+
     // --- SSL Certificate Operations ---
 
     /// Gets an SSL certificate.
@@ -1222,6 +1227,33 @@ impl ComputeApi for ComputeClient {
                 None,
                 Option::<()>::None,
                 &target_https_proxy_name,
+            )
+            .await
+    }
+
+    async fn insert_target_tcp_proxy(&self, target_tcp_proxy: TargetTcpProxy) -> Result<Operation> {
+        let path = format!("projects/{}/global/targetTcpProxies", self.project_id);
+        let name = target_tcp_proxy
+            .name
+            .clone()
+            .unwrap_or_else(|| "targetTcpProxy".to_string());
+        self.base
+            .execute_request(Method::POST, &path, None, Some(target_tcp_proxy), &name)
+            .await
+    }
+
+    async fn delete_target_tcp_proxy(&self, target_tcp_proxy_name: String) -> Result<Operation> {
+        let path = format!(
+            "projects/{}/global/targetTcpProxies/{}",
+            self.project_id, target_tcp_proxy_name
+        );
+        self.base
+            .execute_request(
+                Method::DELETE,
+                &path,
+                None,
+                Option::<()>::None,
+                &target_tcp_proxy_name,
             )
             .await
     }
@@ -3824,6 +3856,19 @@ pub struct TargetHttpProxy {
 /// See: https://cloud.google.com/compute/docs/reference/rest/v1/targetHttpsProxies
 #[derive(Debug, Serialize, Deserialize, Clone, Default, Builder)]
 #[serde(rename_all = "camelCase")]
+pub struct TargetTcpProxy {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub name: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub description: Option<String>,
+    pub service: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub proxy_header: Option<String>,
+}
+
+/// Global target HTTPS proxy.
+#[derive(Debug, Serialize, Deserialize, Clone, Default, Builder)]
+#[serde(rename_all = "camelCase")]
 pub struct TargetHttpsProxy {
     /// Unique identifier; defined by the server.
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -5678,5 +5723,111 @@ mod tests {
         assert_eq!(rule.target.as_deref(), Some(SERVICE_ATTACHMENT));
         assert_eq!(rule.subnetwork.as_deref(), Some(STACK_SUBNET));
         assert!(rule.load_balancing_scheme.is_none());
+    }
+
+    #[tokio::test]
+    async fn target_tcp_proxy_insert_and_delete_use_compute_rest_contract() {
+        use alien_core::{GcpCredentials, GcpServiceOverrides};
+        use std::{
+            collections::HashMap,
+            io::{Read, Write},
+            net::TcpListener,
+            sync::{Arc, Mutex},
+        };
+
+        let listener = TcpListener::bind("127.0.0.1:0").expect("bind test server");
+        let endpoint = format!("http://{}", listener.local_addr().expect("local address"));
+        let observed = Arc::new(Mutex::new(Vec::new()));
+        let captured = observed.clone();
+        let server = std::thread::spawn(move || {
+            for _ in 0..2 {
+                let (mut stream, _) = listener.accept().expect("accept request");
+                let mut bytes = Vec::new();
+                let mut buffer = [0_u8; 4096];
+                let (header_end, content_length) = loop {
+                    let count = stream.read(&mut buffer).expect("read request");
+                    assert!(count > 0, "request ended before headers");
+                    bytes.extend_from_slice(&buffer[..count]);
+                    if let Some(end) = bytes.windows(4).position(|window| window == b"\r\n\r\n") {
+                        let header_end = end + 4;
+                        let headers = String::from_utf8_lossy(&bytes[..header_end]);
+                        let length: usize = headers
+                            .lines()
+                            .find_map(|line| {
+                                line.to_ascii_lowercase()
+                                    .strip_prefix("content-length: ")
+                                    .and_then(|value| value.parse().ok())
+                            })
+                            .unwrap_or(0);
+                        break (header_end, length);
+                    }
+                };
+                while bytes.len() < header_end + content_length {
+                    let count = stream.read(&mut buffer).expect("read body");
+                    assert!(count > 0, "request ended before body");
+                    bytes.extend_from_slice(&buffer[..count]);
+                }
+                captured.lock().expect("capture lock").push(
+                    String::from_utf8(bytes[..header_end + content_length].to_vec())
+                        .expect("request utf8"),
+                );
+                let body = r#"{"name":"operation-1","status":"DONE"}"#;
+                write!(stream, "HTTP/1.1 200 OK\r\ncontent-type: application/json\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{}", body.len(), body).expect("write response");
+            }
+        });
+        let client = ComputeClient::new(
+            Client::new(),
+            GcpClientConfig {
+                project_id: "example-project".to_string(),
+                region: "us-central1".to_string(),
+                credentials: GcpCredentials::AccessToken {
+                    token: "test-token".to_string(),
+                },
+                service_overrides: Some(GcpServiceOverrides {
+                    endpoints: HashMap::from([("compute".to_string(), endpoint)]),
+                }),
+                project_number: None,
+            },
+        );
+        client
+            .insert_target_tcp_proxy(
+                TargetTcpProxy::builder()
+                    .name("example-proxy".to_string())
+                    .description("TCP proxy".to_string())
+                    .service(
+                        "projects/example-project/global/backendServices/example-backend"
+                            .to_string(),
+                    )
+                    .proxy_header("NONE".to_string())
+                    .build(),
+            )
+            .await
+            .expect("insert should succeed");
+        client
+            .delete_target_tcp_proxy("example-proxy".to_string())
+            .await
+            .expect("delete should succeed");
+        server.join().expect("server should finish");
+        let requests = observed.lock().expect("capture lock");
+        let (insert_headers, insert_body) =
+            requests[0].split_once("\r\n\r\n").expect("insert request");
+        assert!(insert_headers
+            .starts_with("POST /projects/example-project/global/targetTcpProxies HTTP/1.1"));
+        assert!(insert_headers
+            .lines()
+            .any(|line| line.eq_ignore_ascii_case("authorization: Bearer test-token")));
+        assert_eq!(
+            serde_json::from_str::<serde_json::Value>(insert_body).expect("insert JSON"),
+            serde_json::json!({"name":"example-proxy","description":"TCP proxy","service":"projects/example-project/global/backendServices/example-backend","proxyHeader":"NONE"})
+        );
+        let (delete_headers, delete_body) =
+            requests[1].split_once("\r\n\r\n").expect("delete request");
+        assert!(delete_headers.starts_with(
+            "DELETE /projects/example-project/global/targetTcpProxies/example-proxy HTTP/1.1"
+        ));
+        assert!(delete_headers
+            .lines()
+            .any(|line| line.eq_ignore_ascii_case("authorization: Bearer test-token")));
+        assert!(delete_body.is_empty());
     }
 }
