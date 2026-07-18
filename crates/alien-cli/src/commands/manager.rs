@@ -1376,7 +1376,7 @@ fn format_event_data(data: &alien_platform_api::types::EventData) -> String {
         EventData::RunningPreflights { platform, stack } => {
             format!("Running preflights: {} ({})", stack, platform)
         }
-        EventData::DownloadingAlienWorkerRuntime { target_triple, .. } => {
+        EventData::DownloadingAlienRuntime { target_triple, .. } => {
             format!("Downloading alien-worker-runtime ({})", target_triple)
         }
         EventData::BuildingResource {
