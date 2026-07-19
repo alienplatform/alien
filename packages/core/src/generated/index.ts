@@ -27,6 +27,7 @@ export type { AwsLambdaWorkerHeartbeatData } from "./zod/aws-lambda-worker-heart
 export type { AwsManagementConfig } from "./zod/aws-management-config-schema.js";
 export type { AwsNetworkImportData } from "./zod/aws-network-import-data-schema.js";
 export type { AwsOpenSearchCollectionType } from "./zod/aws-open-search-collection-type-schema.js";
+export type { AwsOpenSearchImportData } from "./zod/aws-open-search-import-data-schema.js";
 export type { AwsOpenSearchOutputs } from "./zod/aws-open-search-outputs-schema.js";
 export type { AwsOpenSearch } from "./zod/aws-open-search-schema.js";
 export type { AwsParameterStoreVaultHeartbeatData } from "./zod/aws-parameter-store-vault-heartbeat-data-schema.js";
@@ -396,6 +397,7 @@ export { AwsLambdaWorkerHeartbeatDataSchema } from "./zod/aws-lambda-worker-hear
 export { AwsManagementConfigSchema } from "./zod/aws-management-config-schema.js";
 export { AwsNetworkImportDataSchema } from "./zod/aws-network-import-data-schema.js";
 export { AwsOpenSearchCollectionTypeSchema } from "./zod/aws-open-search-collection-type-schema.js";
+export { AwsOpenSearchImportDataSchema } from "./zod/aws-open-search-import-data-schema.js";
 export { AwsOpenSearchOutputsSchema } from "./zod/aws-open-search-outputs-schema.js";
 export { AwsOpenSearchSchema } from "./zod/aws-open-search-schema.js";
 export { AwsParameterStoreVaultHeartbeatDataSchema } from "./zod/aws-parameter-store-vault-heartbeat-data-schema.js";

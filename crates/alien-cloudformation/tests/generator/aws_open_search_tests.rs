@@ -3,9 +3,10 @@
 use super::helpers::render_built_ins;
 use alien_cloudformation::{CfRegistry, RegistrationMode};
 use alien_core::{
-    AwsOpenSearch, AwsOpenSearchCollectionType, PermissionProfile, Platform, ResourceLifecycle,
-    ServiceAccount, Stack, StackSettings,
+    import::EmitContext, AwsOpenSearch, AwsOpenSearchCollectionType, AwsOpenSearchImportData,
+    PermissionProfile, Platform, ResourceLifecycle, ServiceAccount, Stack, StackSettings,
 };
+use indexmap::IndexMap;
 
 #[test]
 fn aws_open_search_renders_next_gen_collection_with_data_access() {
@@ -137,5 +138,79 @@ fn aws_open_search_has_no_emitter_on_other_platforms() {
             .err()
             .unwrap_or_else(|| panic!("{platform:?} must have no AwsOpenSearch emitter"));
         assert_eq!(err.code, "IMPORT_REGISTRATION_MISSING");
+    }
+}
+
+/// `emit_import_ref` and `AwsOpenSearchImportData` are two halves of one
+/// contract: the manager-side importer deserializes exactly what the deployed
+/// setup stack resolves this expression to. Resolving every intrinsic to a
+/// placeholder string and parsing the result catches key or shape drift
+/// between the emitter and the import struct at test time.
+#[test]
+fn aws_open_search_import_ref_matches_import_data_contract() {
+    let stack = Stack::new("search-stack".to_string())
+        .add(
+            AwsOpenSearch::new("articles".to_string()).build(),
+            ResourceLifecycle::Frozen,
+        )
+        .build();
+    let (_, entry) = stack
+        .resources()
+        .find(|(id, _)| id.as_str() == "articles")
+        .expect("articles resource");
+    let names: IndexMap<String, String> =
+        IndexMap::from([("articles".to_string(), "Articles".to_string())]);
+    let ctx = EmitContext {
+        stack: &stack,
+        resource: entry,
+        resource_id: "articles",
+        platform: Platform::Aws,
+        stack_settings: &StackSettings::default(),
+        names: &names,
+    };
+
+    let registry = CfRegistry::built_in();
+    let emitter = registry
+        .require(&AwsOpenSearch::RESOURCE_TYPE, Platform::Aws)
+        .expect("aws-opensearch emitter should be registered");
+    let import_ref = emitter
+        .emit_import_ref(&ctx)
+        .expect("import ref should render");
+    let import_json = serde_json::to_value(&import_ref).expect("import ref should serialize");
+
+    let resolved = resolve_cfn_intrinsics(import_json);
+    let data: AwsOpenSearchImportData = serde_json::from_value(resolved)
+        .expect("resolved import ref must deserialize into AwsOpenSearchImportData");
+    assert!(!data.collection_name.is_empty());
+    assert!(!data.collection_id.is_empty());
+    assert!(!data.collection_arn.is_empty());
+    assert!(!data.endpoint.is_empty());
+}
+
+/// Replace every CloudFormation intrinsic (`Ref` / `Fn::*`) with a
+/// placeholder string — the shape the payload has after the deployed stack
+/// resolves it.
+fn resolve_cfn_intrinsics(value: serde_json::Value) -> serde_json::Value {
+    match value {
+        serde_json::Value::Object(map) => {
+            let is_intrinsic = map.len() == 1
+                && map
+                    .keys()
+                    .next()
+                    .is_some_and(|key| key == "Ref" || key.starts_with("Fn::"));
+            if is_intrinsic {
+                serde_json::Value::String("resolved".to_string())
+            } else {
+                serde_json::Value::Object(
+                    map.into_iter()
+                        .map(|(key, value)| (key, resolve_cfn_intrinsics(value)))
+                        .collect(),
+                )
+            }
+        }
+        serde_json::Value::Array(items) => {
+            serde_json::Value::Array(items.into_iter().map(resolve_cfn_intrinsics).collect())
+        }
+        other => other,
     }
 }

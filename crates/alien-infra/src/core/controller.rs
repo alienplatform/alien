@@ -1122,6 +1122,9 @@ fn deserialize_controller_by_tag(
         #[cfg(feature = "aws")]
         "AwsEmailController" => deser!(crate::email::AwsEmailController),
 
+        // AWS OpenSearch controllers
+        #[cfg(feature = "aws")]
+        "AwsOpenSearchController" => deser!(crate::open_search::AwsOpenSearchController),
 
         // Azure infra requirement controllers
         #[cfg(feature = "azure")]

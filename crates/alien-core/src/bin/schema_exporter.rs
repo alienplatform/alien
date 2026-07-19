@@ -165,6 +165,7 @@ use utoipa::OpenApi;
     AwsEmailImportData,
     AwsEmailDomainImportData,
     AwsEmailDkimTokenImportData,
+    AwsOpenSearchImportData,
     AwsQueueImportData,
     AwsKvImportData,
     AwsVaultImportData,

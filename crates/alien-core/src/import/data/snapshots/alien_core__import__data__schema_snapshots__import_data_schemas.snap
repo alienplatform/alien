@@ -369,6 +369,36 @@ expression: schemas
     "title": "AwsNetworkImportData",
     "type": "object"
   },
+  "aws_open_search": {
+    "$schema": "http://json-schema.org/draft-07/schema#",
+    "description": "AWS OpenSearch (`experimental/aws-opensearch`) ImportData.\n\nMirrors the `emit_import_ref` payload of the AWS OpenSearch Serverless emitter. Next-generation collections expose no Dashboards endpoint, so only the data-plane endpoint and identifiers are carried.",
+    "properties": {
+      "collectionArn": {
+        "description": "ARN of the collection.",
+        "type": "string"
+      },
+      "collectionId": {
+        "description": "Server-assigned collection id.",
+        "type": "string"
+      },
+      "collectionName": {
+        "description": "Physical collection name (`{id}-{stack-suffix}`).",
+        "type": "string"
+      },
+      "endpoint": {
+        "description": "Collection endpoint (`https://<collectionId>.aoss.<region>.on.aws`). Requests must be SigV4-signed with service name `aoss`.",
+        "type": "string"
+      }
+    },
+    "required": [
+      "collectionArn",
+      "collectionId",
+      "collectionName",
+      "endpoint"
+    ],
+    "title": "AwsOpenSearchImportData",
+    "type": "object"
+  },
   "aws_postgres": {
     "$schema": "http://json-schema.org/draft-07/schema#",
     "description": "AWS Postgres (Aurora Serverless v2) registration data: the handles by which a setup-created Aurora cluster is registered as a Frozen Postgres resource. Setup owns the cluster, Alien refreshes and heartbeats it. Carries the master password's Secrets Manager ARN, never the password.",
