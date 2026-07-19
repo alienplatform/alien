@@ -397,13 +397,10 @@ impl LocalContainerController {
                     resource_id: Some(config.id.clone()),
                 })?;
 
-        // Extract host_port from the binding's public URL if present
+        // Extract host_port from the binding's public URL if present.
         let current_host_port = current_binding.get_public_url().and_then(|binding_value| {
-            // Extract the actual URL string from BindingValue
             if let alien_core::bindings::BindingValue::Value(url) = binding_value {
-                // Parse "http://localhost:12345" -> 12345
-                url.strip_prefix("http://localhost:")
-                    .and_then(|port_str| port_str.parse::<u16>().ok())
+                local_public_url_port(url)
             } else {
                 None
             }
@@ -563,6 +560,10 @@ fn local_endpoint_scheme(protocol: ExposeProtocol) -> &'static str {
         ExposeProtocol::Http => "http",
         ExposeProtocol::Tcp => "tcp",
     }
+}
+
+fn local_public_url_port(url: &str) -> Option<u16> {
+    url.rsplit_once(':')?.1.parse().ok()
 }
 
 fn local_container_binding(info: &ContainerInfo) -> ContainerBinding {
@@ -735,6 +736,13 @@ mod tests {
             assert_eq!(endpoint.host, "localhost");
             assert_eq!(endpoint.url, "tcp://localhost:49152");
         }
+    }
+
+    #[test]
+    fn public_url_port_supports_http_and_tcp_bindings() {
+        assert_eq!(local_public_url_port("http://localhost:49152"), Some(49152));
+        assert_eq!(local_public_url_port("tcp://localhost:49153"), Some(49153));
+        assert_eq!(local_public_url_port("tcp://localhost"), None);
     }
 
     #[test]
