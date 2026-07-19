@@ -483,12 +483,13 @@ impl LocalContainerController {
         info!(container_id = %config.id, "Deleting container");
 
         // Delete the container
-        container_mgr.delete_container(&config.id).await.context(
-            ErrorData::CloudPlatformError {
+        container_mgr
+            .delete_container_and_storage(&config.id)
+            .await
+            .context(ErrorData::CloudPlatformError {
                 message: "Failed to delete container".to_string(),
                 resource_id: Some(config.id.clone()),
-            },
-        )?;
+            })?;
 
         info!(container_id = %config.id, "Container deleted successfully");
 

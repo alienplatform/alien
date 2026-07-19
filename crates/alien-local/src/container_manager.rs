@@ -19,7 +19,7 @@ use bollard::container::{
 };
 use bollard::models::{EndpointSettings, HostConfig, PortBinding};
 use bollard::network::{CreateNetworkOptions, InspectNetworkOptions};
-use bollard::volume::CreateVolumeOptions;
+use bollard::volume::{CreateVolumeOptions, RemoveVolumeOptions};
 use bollard::Docker;
 use futures_util::StreamExt;
 use serde::{Deserialize, Serialize};
@@ -244,6 +244,73 @@ pub struct LocalContainerManager {
 }
 
 impl LocalContainerManager {
+    fn persistent_storage_dir(&self, container_id: &str) -> PathBuf {
+        self.state_dir.join("container-volumes").join(container_id)
+    }
+
+    async fn persistent_storage_bind(
+        &self,
+        container_id: &str,
+        mount_path: &str,
+        run_as_host_user: bool,
+    ) -> Result<String> {
+        let volume_name = format!("alien-{container_id}-data");
+
+        // Preserve data created by releases that always used Docker named
+        // volumes. New Linux containers that run as the host operator use a
+        // host-owned directory instead: Docker initializes an empty named
+        // volume as root, so the explicitly non-root workload cannot write to
+        // it. A directory created by this process has the exact uid/gid the
+        // container is configured to use and requires no privileged init
+        // container or helper image.
+        match self.docker.inspect_volume(&volume_name).await {
+            Ok(_) => return Ok(format!("{volume_name}:{mount_path}")),
+            Err(bollard::errors::Error::DockerResponseServerError {
+                status_code: 404, ..
+            }) => {}
+            Err(error) => {
+                return Err(error)
+                    .into_alien_error()
+                    .context(ErrorData::DockerVolumeError {
+                        volume: volume_name,
+                        operation: "inspect".to_string(),
+                        reason: "Failed to inspect Docker volume".to_string(),
+                    });
+            }
+        }
+
+        #[cfg(target_os = "linux")]
+        if run_as_host_user {
+            let storage_dir = self.persistent_storage_dir(container_id);
+            tokio::fs::create_dir_all(&storage_dir)
+                .await
+                .into_alien_error()
+                .context(ErrorData::LocalDirectoryError {
+                    path: storage_dir.display().to_string(),
+                    operation: "create".to_string(),
+                    reason: "Failed to create container persistent storage directory".to_string(),
+                })?;
+            return Ok(format!("{}:{mount_path}", storage_dir.display()));
+        }
+
+        self.docker
+            .create_volume(CreateVolumeOptions::<String> {
+                name: volume_name.clone(),
+                driver: "local".to_string(),
+                driver_opts: HashMap::new(),
+                labels: HashMap::new(),
+            })
+            .await
+            .into_alien_error()
+            .context(ErrorData::DockerVolumeError {
+                volume: volume_name.clone(),
+                operation: "create".to_string(),
+                reason: "Failed to create Docker volume".to_string(),
+            })?;
+
+        Ok(format!("{volume_name}:{mount_path}"))
+    }
+
     /// Creates a new container manager.
     ///
     /// Attempts to connect to the local Docker daemon.
@@ -850,26 +917,11 @@ impl LocalContainerManager {
 
         // Add persistent storage volume if configured
         if let Some(mount_path) = &config.volume_mount {
-            let volume_name = format!("alien-{}-data", container_id);
-
-            // Create Docker volume
-            self.docker
-                .create_volume(CreateVolumeOptions::<String> {
-                    name: volume_name.clone(),
-                    driver: "local".to_string(),
-                    driver_opts: HashMap::new(),
-                    labels: HashMap::new(),
-                })
-                .await
-                .into_alien_error()
-                .context(ErrorData::DockerVolumeError {
-                    volume: volume_name.clone(),
-                    operation: "create".to_string(),
-                    reason: "Failed to create Docker volume".to_string(),
-                })?;
-
-            let bind = format!("{}:{}", volume_name, mount_path);
-            binds.push(bind);
+            let run_as_host_user = shared_bind_mount_user(&config.bind_mounts).is_some();
+            binds.push(
+                self.persistent_storage_bind(container_id, mount_path, run_as_host_user)
+                    .await?,
+            );
         }
 
         // Add bind mounts for linked resources (Storage, KV, Vault directories)
@@ -1103,6 +1155,62 @@ impl LocalContainerManager {
                 tmp_dir = %tmp_dir.display(),
                 "Removed container tmp directory"
             );
+        }
+
+        Ok(())
+    }
+
+    /// Deletes a container and the persistent storage owned by the resource.
+    ///
+    /// Container replacement uses [`Self::delete_container`] so data survives
+    /// updates. Resource deletion uses this method so neither the current
+    /// host-backed directory nor a named volume created by an older release is
+    /// leaked.
+    pub async fn delete_container_and_storage(&self, container_id: &str) -> Result<()> {
+        self.delete_container(container_id).await?;
+
+        let volume_name = format!("alien-{container_id}-data");
+        match self
+            .docker
+            .remove_volume(&volume_name, Some(RemoveVolumeOptions { force: true }))
+            .await
+        {
+            Ok(_) => {
+                info!(volume = %volume_name, "Container persistent volume deleted");
+            }
+            Err(bollard::errors::Error::DockerResponseServerError {
+                status_code: 404, ..
+            }) => {}
+            Err(error) => {
+                return Err(error)
+                    .into_alien_error()
+                    .context(ErrorData::DockerVolumeError {
+                        volume: volume_name,
+                        operation: "delete".to_string(),
+                        reason: "Failed to delete container persistent volume".to_string(),
+                    });
+            }
+        }
+
+        let storage_dir = self.persistent_storage_dir(container_id);
+        match tokio::fs::remove_dir_all(&storage_dir).await {
+            Ok(_) => {
+                info!(
+                    path = %storage_dir.display(),
+                    "Container persistent storage directory deleted"
+                );
+            }
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+            Err(error) => {
+                return Err(error)
+                    .into_alien_error()
+                    .context(ErrorData::LocalDirectoryError {
+                        path: storage_dir.display().to_string(),
+                        operation: "delete".to_string(),
+                        reason: "Failed to delete container persistent storage directory"
+                            .to_string(),
+                    });
+            }
         }
 
         Ok(())
