@@ -432,7 +432,7 @@ fn test_container_management_can_mutate_compacted_load_balancer_names() {
     ));
     assert!(condition_equals(
         mutation_statement,
-        "aws:ResourceTag/resource-id",
+        "aws:ResourceTag/resource",
         "tcp-service"
     ));
     assert!(condition_equals(
