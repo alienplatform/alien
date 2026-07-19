@@ -1,7 +1,6 @@
 use std::collections::{HashSet, VecDeque};
 use std::convert::TryFrom;
 use std::io::{self, Write};
-use std::num::NonZeroU64;
 use std::sync::Arc;
 use std::time::Duration as StdDuration;
 
@@ -363,106 +362,34 @@ async fn resolve_deployment_target(
     project_override: Option<&str>,
     allow_prompt: bool,
 ) -> Result<ResolvedLogsTarget> {
-    if deployment.starts_with("dep_") {
-        let response = client
-            .get_deployment()
-            .id(deployment)
-            .workspace(workspace)
-            .send()
-            .await
-            .into_sdk_error()
-            .context(ErrorData::ApiRequestFailed {
-                message: format!("Failed to get deployment {deployment}"),
-                url: None,
-            })?
-            .into_inner();
+    #[cfg(feature = "platform")]
+    {
+        let response = crate::platform_deployment_resolver::resolve(
+            ctx,
+            client,
+            workspace,
+            deployment,
+            project_override,
+            allow_prompt,
+        )
+        .await?;
         return target_from_deployment_detail(response, None).await;
     }
 
-    let Some((group_name, deployment_name)) = deployment.split_once('/') else {
-        return Err(AlienError::new(ErrorData::ValidationError {
-            field: "deployment".to_string(),
-            message:
-                "Use a deployment ID like dep_... or <deployment-group-name>/<deployment-name>."
-                    .to_string(),
-        }));
-    };
-
-    let (project_id, project_link) = ctx.resolve_project(project_override, allow_prompt).await?;
-    let groups = client
-        .list_deployment_groups()
-        .workspace(workspace)
-        .project(project_id.as_str())
-        .search(group_name)
-        .limit(NonZeroU64::new(50).expect("constant is non-zero"))
-        .send()
-        .await
-        .into_sdk_error()
-        .context(ErrorData::ApiRequestFailed {
-            message: format!("Failed to resolve deployment group {group_name}"),
-            url: None,
-        })?
-        .into_inner()
-        .items;
-
-    let group = groups
-        .into_iter()
-        .find(|group| {
-            let name: String = group.name.clone().into();
-            name == group_name
-        })
-        .ok_or_else(|| {
-            AlienError::new(ErrorData::ValidationError {
-                field: "deployment".to_string(),
-                message: format!(
-                    "Deployment group '{group_name}' was not found in project {}.",
-                    project_link.project_name
-                ),
-            })
-        })?;
-    let group_id: String = group.id.clone().into();
-
-    let deployments = client
-        .list_deployments()
-        .workspace(workspace)
-        .project(project_id.as_str())
-        .deployment_group(group_id.as_str())
-        .search(deployment_name)
-        .limit(NonZeroU64::new(50).expect("constant is non-zero"))
-        .send()
-        .await
-        .into_sdk_error()
-        .context(ErrorData::ApiRequestFailed {
-            message: format!("Failed to resolve deployment {deployment}"),
-            url: None,
-        })?
-        .into_inner()
-        .items;
-
-    let deployment = deployments
-        .into_iter()
-        .find(|item| item.name == deployment_name)
-        .ok_or_else(|| {
-            AlienError::new(ErrorData::ValidationError {
-                field: "deployment".to_string(),
-                message: format!(
-                    "Deployment '{deployment_name}' was not found in group '{group_name}'."
-                ),
-            })
-        })?;
-
-    let deployment_id: String = deployment.id.clone().into();
-    let deployment_project_id: String = deployment.project_id.clone().into();
-    let manager_id = String::from(deployment.manager_id.clone());
-
-    Ok(ResolvedLogsTarget {
-        manager_id,
-        project_id: Some(deployment_project_id),
-        project_name: Some(project_link.project_name),
-        deployment_id: Some(deployment_id),
-        deployment_name: Some(deployment.name),
-        deployment_group_name: Some(group_name.to_string()),
-    })
+    #[cfg(not(feature = "platform"))]
+    {
+        let _ = (
+            ctx,
+            client,
+            workspace,
+            deployment,
+            project_override,
+            allow_prompt,
+        );
+        Err(AlienError::new(ErrorData::ConfigurationError {
+            message: "Deployment log discovery requires platform support.".to_string(),
+        }))
+    }
 }
 
 async fn target_from_deployment_detail(

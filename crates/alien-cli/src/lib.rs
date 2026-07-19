@@ -10,6 +10,8 @@ pub mod execution_context;
 pub mod git_utils;
 pub mod interaction;
 pub mod output;
+#[cfg(feature = "platform")]
+pub mod platform_deployment_resolver;
 pub mod project_link;
 pub mod ui;
 
