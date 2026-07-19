@@ -252,7 +252,7 @@ pub fn generate_cloudformation_template(
         stack,
         &stack_settings,
         supports_custom_domain,
-    );
+    )?;
     add_stack_input_parameters(&mut template, &stack_inputs);
     add_supported_region_rule(&mut template, &options.registration);
     if supports_custom_domain {
@@ -755,7 +755,7 @@ fn add_standard_parameters(
     stack: &Stack,
     settings: &StackSettings,
     supports_custom_domain: bool,
-) {
+) -> Result<()> {
     template.parameters.insert(
         PARAM_TOKEN.to_string(),
         string_parameter(
@@ -785,7 +785,7 @@ fn add_standard_parameters(
     );
 
     add_network_parameters(template, settings.network.as_ref());
-    add_compute_parameters(template, stack, settings.compute.as_ref());
+    add_compute_parameters(template, stack, settings.compute.as_ref())?;
 
     if supports_custom_domain {
         let domain_defaults = DomainParameterDefaults::from_settings(settings.domains.as_ref());
@@ -849,6 +849,7 @@ fn add_standard_parameters(
             false,
         ),
     );
+    Ok(())
 }
 
 fn add_network_parameters(template: &mut CfTemplate, network: Option<&NetworkSettings>) {
@@ -932,13 +933,24 @@ fn add_compute_parameters(
     template: &mut CfTemplate,
     stack: &Stack,
     compute: Option<&alien_core::ComputeSettings>,
-) {
+) -> Result<()> {
+    let plan = alien_core::compute_planner::plan_compute(stack, Platform::Aws, compute)?;
     for group in compute_capacity_groups(stack) {
         let Some(selection) = compute.and_then(|settings| settings.pools.get(&group.group_id))
         else {
             continue;
         };
         let machine_parameter = compute_machine_parameter_name(&group.group_id);
+        let allowed_values = plan
+            .pools
+            .iter()
+            .find(|pool| pool.pool_id == group.group_id)
+            .map(|pool| {
+                pool.machines
+                    .iter()
+                    .map(|machine| CfExpression::from(machine.machine.as_str()))
+                    .collect()
+            });
         template.parameters.insert(
             machine_parameter,
             string_parameter(
@@ -947,7 +959,7 @@ fn add_compute_parameters(
                     group.group_id
                 ),
                 selection.machine().map(ToString::to_string),
-                None,
+                allowed_values,
                 false,
             ),
         );
@@ -1015,6 +1027,7 @@ fn add_compute_parameters(
             _ => {}
         }
     }
+    Ok(())
 }
 
 fn add_supported_region_rule(template: &mut CfTemplate, registration: &RegistrationMode) {
