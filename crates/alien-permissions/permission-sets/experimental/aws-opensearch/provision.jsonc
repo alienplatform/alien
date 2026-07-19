@@ -1,0 +1,54 @@
+{
+  // AWS-only experimental resource: OpenSearch Serverless (next generation).
+  "id": "experimental/aws-opensearch/provision",
+  "description": "Allows creating, updating, and deleting OpenSearch Serverless collection groups, collections, and their security/access policies",
+  "platforms": {
+    "aws": [
+      {
+        // Derived from the AWS::OpenSearchServerless::{CollectionGroup,Collection,
+        // SecurityPolicy,AccessPolicy} CloudFormation handler permissions.
+        // AOSS control-plane actions are not resource-scopable (security and
+        // access policies have no ARNs, and collection ARNs use server-assigned
+        // ids that don't exist until after creation), so the grant is
+        // account-wide for the aoss service.
+        "grant": {
+          "actions": [
+            "aoss:CreateCollectionGroup",
+            "aoss:UpdateCollectionGroup",
+            "aoss:DeleteCollectionGroup",
+            "aoss:BatchGetCollectionGroup",
+            "aoss:ListCollectionGroups",
+            "aoss:CreateCollection",
+            "aoss:UpdateCollection",
+            "aoss:DeleteCollection",
+            "aoss:BatchGetCollection",
+            "aoss:ListCollections",
+            "aoss:AddCollectionToCollectionGroup",
+            "aoss:CreateSecurityPolicy",
+            "aoss:GetSecurityPolicy",
+            "aoss:UpdateSecurityPolicy",
+            "aoss:DeleteSecurityPolicy",
+            "aoss:ListSecurityPolicies",
+            "aoss:CreateAccessPolicy",
+            "aoss:GetAccessPolicy",
+            "aoss:UpdateAccessPolicy",
+            "aoss:DeleteAccessPolicy",
+            "aoss:ListAccessPolicies",
+            "aoss:TagResource",
+            "aoss:UntagResource",
+            "aoss:ListTagsForResource",
+            "iam:CreateServiceLinkedRole"
+          ]
+        },
+        "binding": {
+          "stack": {
+            "resources": ["*"]
+          },
+          "resource": {
+            "resources": ["*"]
+          }
+        }
+      }
+    ]
+  }
+}

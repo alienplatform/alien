@@ -10,8 +10,8 @@ use crate::{
     emitters::aws::{
         helpers::{
             cf_from_json, required_logical_id, resource_config, service_account_role_id,
-            storage_notification_configuration, storage_notification_dependencies, tags,
-            uniquify_iam_statement_sids,
+            stack_id_short_suffix, storage_notification_configuration,
+            storage_notification_dependencies, tags, uniquify_iam_statement_sids,
         },
         service_account::permission_context,
     },
@@ -160,34 +160,6 @@ fn bucket_name(storage_id: &str) -> CfExpression {
                 CfExpression::from(storage_id),
                 stack_id_short_suffix(),
             ]),
-        ]),
-    )])
-}
-
-fn stack_id_short_suffix() -> CfExpression {
-    CfExpression::object([(
-        "Fn::Select",
-        CfExpression::list([
-            CfExpression::Integer(0),
-            CfExpression::object([(
-                "Fn::Split",
-                CfExpression::list([
-                    CfExpression::from("-"),
-                    CfExpression::object([(
-                        "Fn::Select",
-                        CfExpression::list([
-                            CfExpression::Integer(2),
-                            CfExpression::object([(
-                                "Fn::Split",
-                                CfExpression::list([
-                                    CfExpression::from("/"),
-                                    CfExpression::ref_("AWS::StackId"),
-                                ]),
-                            )]),
-                        ]),
-                    )]),
-                ]),
-            )]),
         ]),
     )])
 }

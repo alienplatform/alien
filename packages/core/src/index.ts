@@ -17,6 +17,7 @@ export * from "./input.js"
 export * from "./get-resource-outputs.js"
 export * from "./error.js"
 export * from "./common-errors.js"
+export * as experimental from "./experimental/index.js"
 
 export {
   EventChangeSchema,

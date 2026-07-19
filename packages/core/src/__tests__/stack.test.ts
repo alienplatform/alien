@@ -602,3 +602,34 @@ describe("Email resource configuration", () => {
     expect(email.config.events).toBeUndefined()
   })
 })
+
+describe("Experimental AwsOpenSearch resource configuration", () => {
+  it("serializes with the experimental resource type and camelCase fields", () => {
+    const search = new alien.experimental.AwsOpenSearch("articles").build()
+    expect(search.config.type).toBe("experimental/aws-opensearch")
+    expect(search.ref()).toEqual({ type: "experimental/aws-opensearch", id: "articles" })
+    expect(search.config.id).toBe("articles")
+    // Default matches the Rust serde default so both sides deserialize the
+    // same stack definition identically.
+    expect(search.config.collectionType).toBe("search")
+
+    const vectors = new alien.experimental.AwsOpenSearch("embeddings")
+      .collectionType("vectorSearch")
+      .build()
+    expect(vectors.config.collectionType).toBe("vectorSearch")
+
+    const stack = new alien.Stack("search-stack").add(search, "frozen").build()
+    expect(stack.resources).toHaveProperty("articles")
+    expect(stack.resources["articles"]?.config.type).toBe("experimental/aws-opensearch")
+    expect(stack.resources["articles"]?.lifecycle).toBe("frozen")
+  })
+
+  it("rejects unknown collection types", () => {
+    expect(() =>
+      new alien.experimental.AwsOpenSearch("articles")
+        // @ts-expect-error -- runtime validation for untyped callers
+        .collectionType("timeseries")
+        .build(),
+    ).toThrow()
+  })
+})

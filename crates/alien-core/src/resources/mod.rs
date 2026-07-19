@@ -1,3 +1,11 @@
+//! Built-in resource definitions.
+//!
+//! Resource type identifiers are stable strings (`"storage"`, `"queue"`, …).
+//! Provider-specific resources that don't abstract over clouds live under the
+//! `experimental/` namespace (e.g. `experimental/aws-opensearch`); they are
+//! only registered for the platforms they support and may change in breaking
+//! ways before being promoted to a portable resource.
+
 mod worker;
 pub use worker::*;
 
@@ -21,6 +29,9 @@ pub use build::*;
 
 mod artifact_registry;
 pub use artifact_registry::*;
+
+mod aws_open_search;
+pub use aws_open_search::*;
 
 mod service_activation;
 pub use service_activation::*;
