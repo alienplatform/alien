@@ -465,9 +465,17 @@ fn aws_open_search_round_trip() {
         "arn:aws:aoss:us-east-1:123456789012:collection/abc123def456"
     );
 
-    // Not an SDK remote-access resource: workers reach the collection over
-    // SigV4 HTTP with setup-granted IAM, so no binding params are imported.
-    assert!(state.remote_binding_params.is_none());
+    // Manager-provisioned workers receive the collection binding from the
+    // imported controller state, mirroring the CloudFormation emitter's
+    // binding ref (SigV4 HTTP with service name `aoss`).
+    assert_eq!(
+        state.remote_binding_params,
+        Some(json!({
+            "service": "aoss",
+            "endpoint": "https://abc123def456.aoss.us-east-1.on.aws",
+            "collectionName": "search-a2591da2",
+        }))
+    );
 }
 
 /// A payload missing the required `endpoint` field must surface as a typed

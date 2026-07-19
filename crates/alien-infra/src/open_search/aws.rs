@@ -104,4 +104,18 @@ impl AwsOpenSearchController {
             None
         }
     }
+
+    fn get_binding_params(&self) -> Result<Option<serde_json::Value>> {
+        // Mirrors the CloudFormation emitter's binding ref: service "aoss",
+        // the SigV4-signed collection endpoint, and the physical name.
+        let (Some(endpoint), Some(collection_name)) = (&self.endpoint, &self.collection_name)
+        else {
+            return Ok(None);
+        };
+        Ok(Some(serde_json::json!({
+            "service": "aoss",
+            "endpoint": endpoint,
+            "collectionName": collection_name,
+        })))
+    }
 }
