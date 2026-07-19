@@ -13,14 +13,23 @@ export { EmailSchema as EmailConfigSchema } from "./generated/index.js"
 
 /**
  * Email infrastructure for sending and receiving mail on customer-owned
- * domains (AWS SES). Provisions one email identity per domain (Easy DKIM) and
- * a shared configuration set, plus optional inbound and event wiring.
+ * domains (AWS SES). Provisions a shared configuration set, optional inbound
+ * and event wiring, and one email identity (Easy DKIM) per seed domain.
+ *
+ * The resource owns the email infrastructure, not the domain lifecycle. Seed
+ * domains are optional: products that create and verify domains dynamically
+ * should manage identities at runtime through the `email/manage-identities`
+ * grant instead of listing them here. Runtime-created identities are
+ * application data — they are not tracked by the deployment and survive stack
+ * deletion.
  *
  * After deployment, create the per-domain DKIM CNAME records from the
  * resource outputs — SES verifies each domain once the records exist in DNS.
  *
- * When inbound mail is configured, the provisioned SES receipt rule set must
- * be activated manually after deployment (only one receipt rule set can be
+ * When inbound mail is configured, the receipt rule is a catch-all (no
+ * recipient filter), so mail for runtime-verified identities lands in the
+ * bucket without redeployment. The provisioned SES receipt rule set must be
+ * activated manually after deployment (only one receipt rule set can be
  * active per AWS account, and CloudFormation cannot activate one):
  * `aws ses set-active-receipt-rule-set --rule-set-name <ruleSetName>`.
  */
@@ -47,8 +56,8 @@ export class Email {
   }
 
   /**
-   * Sets the mail domains this resource sends (and optionally receives) on.
-   * At least one domain is required.
+   * Sets the seed mail domains provisioned at deploy time (one SES identity
+   * each). Optional — omit for products that manage domains at runtime.
    * @param domains The mail domains (e.g. `["mail.example.com"]`).
    * @returns The Email builder instance.
    */
@@ -58,7 +67,7 @@ export class Email {
   }
 
   /**
-   * Adds a single mail domain.
+   * Adds a single seed mail domain.
    * @param domain The mail domain (e.g. `"mail.example.com"`).
    * @returns The Email builder instance.
    */
@@ -97,10 +106,6 @@ export class Email {
    */
   public build(): Resource {
     const config = EmailSchema.parse(this._config)
-    if (config.domains.length === 0) {
-      throw new Error(`Email resource '${config.id}' must configure at least one domain`)
-    }
-
     return new Resource({
       type: "email",
       ...config,

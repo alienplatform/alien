@@ -1,0 +1,58 @@
+{
+  // The runtime domain-management capability. The Email resource owns the
+  // email infrastructure (configuration set, event/inbound topology); the
+  // domain lifecycle belongs to the application. With this grant a workload
+  // creates an SES identity when a customer adds a domain, hands the DKIM
+  // records to the customer, polls verification, and deletes the identity
+  // when the domain is removed — all without any infrastructure mutation.
+  // Identities created this way are application data: they are not tracked
+  // by the deployment and survive stack deletion.
+  "id": "email/manage-identities",
+  "description": "Allows creating, configuring, and deleting email identities at runtime (the runtime domain-management capability)",
+  "platforms": {
+    "aws": [
+      {
+        // SES identities are named after customer mail domains, which are
+        // unknowable at deploy time, so identity ARNs cannot be scoped with
+        // the stack prefix (same exception as email/send and email/provision).
+        "grant": {
+          "actions": [
+            "ses:CreateEmailIdentity",
+            "ses:GetEmailIdentity",
+            "ses:DeleteEmailIdentity",
+            "ses:PutEmailIdentityMailFromAttributes",
+            "ses:PutEmailIdentityDkimAttributes",
+            "ses:PutEmailIdentityFeedbackAttributes",
+            "ses:PutEmailIdentityConfigurationSetAttributes"
+          ]
+        },
+        "binding": {
+          "stack": {
+            "resources": ["arn:aws:ses:${awsRegion}:${awsAccountId}:identity/*"]
+          },
+          "resource": {
+            "resources": ["arn:aws:ses:${awsRegion}:${awsAccountId}:identity/*"]
+          }
+        }
+      },
+      {
+        // Per the SES entry in the Service Authorization Reference,
+        // ses:ListEmailIdentities does not support resource-level
+        // permissions — Resource must be "*". It is the discovery path for
+        // runtime-created identities (the binding intentionally carries no
+        // domain list).
+        "grant": {
+          "actions": ["ses:ListEmailIdentities"]
+        },
+        "binding": {
+          "stack": {
+            "resources": ["*"]
+          },
+          "resource": {
+            "resources": ["*"]
+          }
+        }
+      }
+    ]
+  }
+}

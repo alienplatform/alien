@@ -594,7 +594,11 @@ describe("Email resource configuration", () => {
     expect(stack).toMatchSnapshot()
   })
 
-  it("rejects an email resource without domains", () => {
-    expect(() => new alien.Email("mailer").build()).toThrow(/at least one domain/)
+  it("creates an email resource without seed domains", () => {
+    const email = new alien.Email("mailer").build()
+    expect(email.config.id).toBe("mailer")
+    expect(email.config.domains).toEqual([])
+    expect(email.config.inbound).toBeUndefined()
+    expect(email.config.events).toBeUndefined()
   })
 })

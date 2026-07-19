@@ -105,10 +105,14 @@ fn aws_email_renders_ses_infrastructure() {
         "AWS::SES::ReceiptRuleSet"
     );
     let rule = &resources["MailerInboundRule"];
-    assert_eq!(
-        rule["Properties"]["Rule"]["Recipients"],
-        serde_json::json!(["mail.example.com", "mail.example.org"])
-    );
+    // No Recipients filter: the rule is a catch-all so that mail for
+    // identities verified at runtime lands in the bucket without any
+    // infrastructure change.
+    assert!(rule["Properties"]["Rule"]
+        .as_object()
+        .expect("rule properties")
+        .get("Recipients")
+        .is_none());
     assert_eq!(
         rule["Properties"]["Rule"]["Actions"][0]["S3Action"]["BucketName"]["Ref"],
         "Mailbox"
@@ -164,6 +168,39 @@ fn aws_email_without_links_omits_event_and_inbound_wiring() {
     insta::assert_snapshot!("aws_email_minimal", yaml);
 }
 
+/// Seed domains are optional: a resource with no domains and no links still
+/// provisions the configuration set. Identities are then created entirely at
+/// runtime through the email/manage-identities grant.
+#[test]
+fn aws_email_without_seed_domains_renders_config_set_only() {
+    let stack = Stack::new("email-config-only".to_string())
+        .add(
+            Email::new("mailer".to_string()).build(),
+            ResourceLifecycle::Frozen,
+        )
+        .build();
+
+    let yaml = render_built_ins(
+        &stack,
+        StackSettings::default(),
+        RegistrationMode::OutputsFallback,
+        "aws email config set only",
+    );
+
+    let template: serde_json::Value =
+        serde_yaml::from_str(&yaml).expect("template YAML should parse");
+    let resources = template["Resources"].as_object().expect("resources map");
+    assert_eq!(
+        resources["MailerConfigSet"]["Type"],
+        "AWS::SES::ConfigurationSet"
+    );
+    assert!(!resources.contains_key("MailerIdentity0"));
+    assert!(!resources.contains_key("MailerEventsTopic"));
+    assert!(!resources.contains_key("MailerRuleSet"));
+
+    insta::assert_snapshot!("aws_email_config_set_only", yaml);
+}
+
 #[test]
 fn aws_email_import_ref_carries_dkim_tokens_and_rule_set() {
     let stack = email_stack();
@@ -215,11 +252,20 @@ fn aws_email_import_ref_carries_dkim_tokens_and_rule_set() {
         .expect("email emitter should provide a binding");
     let binding_json = serde_json::to_value(&binding_ref).expect("binding ref should serialize");
     assert_eq!(binding_json["service"], "ses");
+    assert_eq!(binding_json["region"]["Ref"], "AWS::Region");
     assert_eq!(binding_json["configurationSet"]["Ref"], "MailerConfigSet");
     assert_eq!(
-        binding_json["domains"],
-        serde_json::json!(["mail.example.com", "mail.example.org"])
+        binding_json["eventTopicArn"]["Ref"], "MailerEventsTopic",
+        "binding should expose the events topic ARN when events are configured"
     );
+    // Deliberately no domain list: identities are created and removed at
+    // runtime, so applications discover them via ses:ListEmailIdentities
+    // instead of a deploy-frozen list.
+    assert!(binding_json
+        .as_object()
+        .expect("binding object")
+        .get("domains")
+        .is_none());
 }
 
 #[test]

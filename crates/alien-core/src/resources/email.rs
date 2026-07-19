@@ -9,18 +9,29 @@ use std::collections::BTreeMap;
 use std::fmt::Debug;
 
 /// Email infrastructure for sending and receiving mail on customer-owned
-/// domains. On AWS this is backed by SES: one email identity per domain
-/// (Easy DKIM), a shared configuration set, and optional inbound/event wiring.
+/// domains. On AWS this is backed by SES: a shared configuration set, optional
+/// inbound/event wiring, and one email identity (Easy DKIM) per seed domain.
 ///
-/// The operator owns DNS: after deployment, the per-domain DKIM CNAME records
-/// surfaced in [`EmailOutputs`] must be created before SES verifies the domain
-/// and allows sending from it.
+/// # Infrastructure vs runtime data
+///
+/// This resource owns the email *infrastructure* and the capability to use it,
+/// not the domain lifecycle. Deployment manages the configuration set, the
+/// event topology, the inbound receipt topology, and any seed identities
+/// listed in `domains`. Email identities created at runtime through the
+/// `email/manage-identities` grant are application data: they are not tracked
+/// by the deployment, are not removed when the stack is deleted, and their
+/// lifecycle — including deletion — belongs to the application.
+///
+/// The operator (or the application, for runtime-created identities) owns DNS:
+/// the per-domain DKIM CNAME records surfaced in [`EmailOutputs`] must be
+/// created before SES verifies a domain and allows sending from it.
 ///
 /// # Inbound mail (AWS)
 ///
-/// When `inbound` is set, a SES receipt rule set is provisioned that writes raw
-/// incoming mail for the configured domains into the linked Storage bucket.
-/// Two caveats apply:
+/// When `inbound` is set, a SES receipt rule set is provisioned that writes
+/// raw incoming mail into the linked Storage bucket. The receipt rule is a
+/// catch-all (no recipient filter), so mail for identities verified at runtime
+/// lands in the bucket without any infrastructure change. Two caveats apply:
 ///
 /// * SES allows only **one active receipt rule set per AWS account**, and
 ///   CloudFormation has no resource that activates a rule set. Activating the
@@ -34,9 +45,9 @@ use std::fmt::Debug;
 ///
 /// `domains` is append-friendly: adding a domain provisions a new identity,
 /// removing a domain deletes its identity (and its DKIM verification state).
-/// The list must never become empty. `inbound` and `events` may be added,
-/// removed, or repointed; removing them tears down the corresponding receipt
-/// rule set / event destination wiring.
+/// The list may be empty. `inbound` and `events` may be added, removed, or
+/// repointed; removing them tears down the corresponding receipt rule set /
+/// event destination wiring.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Builder)]
 #[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -47,12 +58,18 @@ pub struct Email {
     #[builder(start_fn)]
     pub id: String,
 
-    /// Mail domains this resource sends (and optionally receives) on.
-    /// At least one domain is required.
+    /// Seed mail domains provisioned at deploy time (one SES identity each).
+    /// Useful for day-0 bootstrap and products with a static domain set.
+    /// May be empty (the default): products that create and verify domains
+    /// dynamically should manage identities at runtime through the
+    /// `email/manage-identities` grant instead of listing them here.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    #[builder(default)]
     pub domains: Vec<String>,
 
-    /// Optional inbound-mail configuration: raw incoming mail for `domains`
-    /// is written to the linked Storage bucket.
+    /// Optional inbound-mail configuration: raw incoming mail (for any
+    /// identity the account receives mail for — the receipt rule is a
+    /// catch-all) is written to the linked Storage bucket.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub inbound: Option<EmailInbound>,
 
@@ -191,15 +208,10 @@ impl ResourceDefinition for Email {
             }));
         }
 
-        // Domains are append-friendly: adding provisions a new identity and
-        // removing deletes one (including its DKIM verification state). The
-        // only invalid transition is ending up with no domains at all.
-        if new_email.domains.is_empty() {
-            return Err(AlienError::new(ErrorData::InvalidResourceUpdate {
-                resource_id: self.id.clone(),
-                reason: "at least one domain is required".to_string(),
-            }));
-        }
+        // Seed domains are append-friendly: adding provisions a new identity
+        // and removing deletes one (including its DKIM verification state).
+        // An empty list is valid — runtime-created identities are managed
+        // outside the deployment.
 
         Ok(())
     }
@@ -326,16 +338,34 @@ mod tests {
     }
 
     #[test]
-    fn validate_update_rejects_empty_domains() {
+    fn validate_update_allows_removing_all_seed_domains() {
         let original = Email::new("mailer".to_string())
             .domains(vec!["mail.example.com".to_string()])
             .build();
-        let emptied = Email::new("mailer".to_string()).domains(vec![]).build();
+        let emptied = Email::new("mailer".to_string()).build();
 
-        let error = original
+        original
             .validate_update(&emptied)
-            .expect_err("removing all domains must be rejected");
-        assert!(error.to_string().contains("at least one domain"));
+            .expect("removing all seed domains must be allowed");
+    }
+
+    #[test]
+    fn builder_defaults_to_no_seed_domains() {
+        let email = Email::new("mailer".to_string()).build();
+        assert!(email.domains.is_empty());
+        assert!(email.inbound.is_none());
+        assert!(email.events.is_none());
+        assert!(email.get_dependencies().is_empty());
+    }
+
+    #[test]
+    fn empty_domains_are_omitted_from_serialization_and_roundtrip() {
+        let email = Email::new("mailer".to_string()).build();
+        let json = serde_json::to_value(&email).expect("email should serialize");
+        assert_eq!(json, serde_json::json!({ "id": "mailer" }));
+
+        let roundtrip: Email = serde_json::from_value(json).expect("email should deserialize");
+        assert_eq!(email, roundtrip);
     }
 
     #[test]

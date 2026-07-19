@@ -1323,8 +1323,6 @@ Resources:
           Fn::Sub: ${AWS::StackName}-mailer-inbound
         Enabled: true
         ScanEnabled: true
-        Recipients:
-        - mail.example.com
         Actions:
         - S3Action:
             BucketName:

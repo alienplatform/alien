@@ -1,16 +1,20 @@
-//! AWS Email — SES email identities, configuration set, and optional
-//! inbound/event wiring.
+//! AWS Email — SES configuration set, optional inbound/event wiring, and
+//! seed email identities.
 //!
-//! Per domain: an `AWS::SES::EmailIdentity` with Easy DKIM enabled, associated
-//! with one shared `AWS::SES::ConfigurationSet`. When `events` is configured:
-//! an `AWS::SES::ConfigurationSetEventDestination` publishing send / delivery /
-//! bounce / complaint / delivery-delay / reject events to an `AWS::SNS::Topic`,
-//! which is subscribed to the linked SQS queue (plus the queue policy that
-//! allows the topic to send). When `inbound` is configured: an
-//! `AWS::SES::ReceiptRuleSet` and an `AWS::SES::ReceiptRule` whose `S3Action`
-//! writes raw incoming mail into the linked storage bucket (the bucket policy
-//! statement that allows `ses.amazonaws.com` writes is emitted by the storage
-//! emitter — S3 supports only one bucket policy resource per bucket).
+//! CloudFormation owns the email *infrastructure*: one shared
+//! `AWS::SES::ConfigurationSet`, plus an `AWS::SES::EmailIdentity` with Easy
+//! DKIM enabled for each seed domain. Identities created at runtime (through
+//! the `email/manage-identities` grant) are application data — they are not
+//! tracked by the stack and survive stack deletion. When `events` is
+//! configured: an `AWS::SES::ConfigurationSetEventDestination` publishing
+//! send / delivery / bounce / complaint / delivery-delay / reject events to an
+//! `AWS::SNS::Topic`, which is subscribed to the linked SQS queue (plus the
+//! queue policy that allows the topic to send). When `inbound` is configured:
+//! an `AWS::SES::ReceiptRuleSet` and a catch-all `AWS::SES::ReceiptRule` whose
+//! `S3Action` writes raw incoming mail into the linked storage bucket (the
+//! bucket policy statement that allows `ses.amazonaws.com` writes is emitted
+//! by the storage emitter — S3 supports only one bucket policy resource per
+//! bucket).
 //!
 //! Post-deploy caveat: SES allows only one **active** receipt rule set per
 //! account and CloudFormation has no resource that activates one, so the
@@ -155,26 +159,28 @@ impl CfEmitter for AwsEmailEmitter {
         Ok(CfExpression::object(fields))
     }
 
+    /// The binding intentionally carries no domain list: identities are
+    /// created and removed at runtime, so a list frozen at deploy time would
+    /// be stale by design. Applications discover the current identities via
+    /// `ses:ListEmailIdentities` (granted by `email/manage-identities`).
     fn emit_binding_ref(&self, ctx: &EmitContext<'_>) -> Result<Option<CfExpression>> {
         let email = resource_config::<Email>(ctx, Email::RESOURCE_TYPE)?;
         let logical_id = required_logical_id(ctx)?;
-        Ok(Some(CfExpression::object([
+        let mut fields = vec![
             ("service", CfExpression::from("ses")),
+            ("region", CfExpression::ref_("AWS::Region")),
             (
                 "configurationSet",
                 CfExpression::ref_(format!("{logical_id}ConfigSet")),
             ),
-            (
-                "domains",
-                CfExpression::list(
-                    email
-                        .domains
-                        .iter()
-                        .map(|domain| CfExpression::from(domain.clone())),
-                ),
-            ),
-            ("region", CfExpression::ref_("AWS::Region")),
-        ])))
+        ];
+        if email.events.is_some() {
+            fields.push((
+                "eventTopicArn",
+                CfExpression::ref_(format!("{logical_id}EventsTopic")),
+            ));
+        }
+        Ok(Some(CfExpression::object(fields)))
     }
 }
 
@@ -182,16 +188,10 @@ fn identity_logical_id(logical_id: &str, index: usize) -> String {
     format!("{logical_id}Identity{index}")
 }
 
+/// Seed domains may be empty — a config-set-only resource is valid, and
+/// runtime-created identities are managed outside the deployment — but the
+/// same domain must not be listed twice.
 fn validate_domains(email: &Email) -> Result<()> {
-    if email.domains.is_empty() {
-        return Err(AlienError::new(ErrorData::GenericError {
-            message: format!(
-                "email resource '{}' must configure at least one domain",
-                email.id()
-            ),
-        }));
-    }
-
     let mut seen = BTreeSet::new();
     for domain in &email.domains {
         if !seen.insert(domain.as_str()) {
@@ -390,15 +390,11 @@ fn inbound_resources(email: &Email, logical_id: &str, bucket_id: &str) -> Vec<Cf
             ("Name", stack_name(&format!("{}-inbound", email.id()))),
             ("Enabled", CfExpression::from(true)),
             ("ScanEnabled", CfExpression::from(true)),
-            (
-                "Recipients",
-                CfExpression::list(
-                    email
-                        .domains
-                        .iter()
-                        .map(|domain| CfExpression::from(domain.clone())),
-                ),
-            ),
+            // No `Recipients` filter: SES treats a rule without recipients as
+            // a catch-all matching every recipient the account receives mail
+            // for. That way mail addressed to identities verified at runtime
+            // (outside this deployment) lands in the bucket without any
+            // infrastructure change.
             (
                 "Actions",
                 CfExpression::list([CfExpression::object([(

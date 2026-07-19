@@ -288,9 +288,6 @@ Resources:
           Fn::Sub: ${AWS::StackName}-mailer-inbound
         Enabled: true
         ScanEnabled: true
-        Recipients:
-        - mail.example.com
-        - mail.example.org
         Actions:
         - S3Action:
             BucketName:
