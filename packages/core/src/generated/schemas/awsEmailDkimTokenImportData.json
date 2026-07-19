@@ -1,0 +1,1 @@
+{"type":"object","description":"A single Easy-DKIM CNAME record.","required":["name","value"],"properties":{"name":{"type":"string","description":"CNAME record host name."},"value":{"type":"string","description":"CNAME record value."}},"x-readme-ref-name":"AwsEmailDkimTokenImportData"}

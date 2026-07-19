@@ -18,6 +18,9 @@ export type { AwsDynamoDbKeySchemaElement } from "./zod/aws-dynamo-db-key-schema
 export type { AwsDynamoDbKvHeartbeatData } from "./zod/aws-dynamo-db-kv-heartbeat-data-schema.js";
 export type { AwsEcrArtifactRegistryHeartbeatData } from "./zod/aws-ecr-artifact-registry-heartbeat-data-schema.js";
 export type { AwsEcrRepositoryHeartbeatData } from "./zod/aws-ecr-repository-heartbeat-data-schema.js";
+export type { AwsEmailDkimTokenImportData } from "./zod/aws-email-dkim-token-import-data-schema.js";
+export type { AwsEmailDomainImportData } from "./zod/aws-email-domain-import-data-schema.js";
+export type { AwsEmailImportData } from "./zod/aws-email-import-data-schema.js";
 export type { AwsIamRoleServiceAccountHeartbeatData } from "./zod/aws-iam-role-service-account-heartbeat-data-schema.js";
 export type { AwsKvImportData } from "./zod/aws-kv-import-data-schema.js";
 export type { AwsLambdaWorkerHeartbeatData } from "./zod/aws-lambda-worker-heartbeat-data-schema.js";
@@ -381,6 +384,9 @@ export { AwsDynamoDbKeySchemaElementSchema } from "./zod/aws-dynamo-db-key-schem
 export { AwsDynamoDbKvHeartbeatDataSchema } from "./zod/aws-dynamo-db-kv-heartbeat-data-schema.js";
 export { AwsEcrArtifactRegistryHeartbeatDataSchema } from "./zod/aws-ecr-artifact-registry-heartbeat-data-schema.js";
 export { AwsEcrRepositoryHeartbeatDataSchema } from "./zod/aws-ecr-repository-heartbeat-data-schema.js";
+export { AwsEmailDkimTokenImportDataSchema } from "./zod/aws-email-dkim-token-import-data-schema.js";
+export { AwsEmailDomainImportDataSchema } from "./zod/aws-email-domain-import-data-schema.js";
+export { AwsEmailImportDataSchema } from "./zod/aws-email-import-data-schema.js";
 export { AwsIamRoleServiceAccountHeartbeatDataSchema } from "./zod/aws-iam-role-service-account-heartbeat-data-schema.js";
 export { AwsKvImportDataSchema } from "./zod/aws-kv-import-data-schema.js";
 export { AwsLambdaWorkerHeartbeatDataSchema } from "./zod/aws-lambda-worker-heartbeat-data-schema.js";

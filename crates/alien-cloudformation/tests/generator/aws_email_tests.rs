@@ -4,8 +4,8 @@
 use super::helpers::render_built_ins;
 use alien_cloudformation::{CfRegistry, RegistrationMode};
 use alien_core::{
-    import::EmitContext, Email, EmailEvents, EmailInbound, Platform, Queue, ResourceLifecycle,
-    ResourceRef, Stack, StackSettings, Storage,
+    import::EmitContext, AwsEmailImportData, Email, EmailEvents, EmailInbound, Platform, Queue,
+    ResourceLifecycle, ResourceRef, Stack, StackSettings, Storage,
 };
 use indexmap::IndexMap;
 
@@ -305,4 +305,84 @@ fn aws_email_rejects_live_linked_queue() {
         .emit_resources_with_registry(&ctx, &registry)
         .expect_err("linking a live queue must be rejected");
     assert!(error.to_string().contains("not emitted in setup"));
+}
+
+/// `emit_import_ref` and `AwsEmailImportData` are two halves of one contract:
+/// the manager-side importer deserializes exactly what the deployed setup
+/// stack resolves this expression to. Resolving every intrinsic to a
+/// placeholder string and parsing the result catches key or shape drift
+/// between the emitter and the import struct at test time.
+#[test]
+fn aws_email_import_ref_matches_import_data_contract() {
+    let stack = email_stack();
+    let (_, entry) = stack
+        .resources()
+        .find(|(id, _)| id.as_str() == "mailer")
+        .expect("mailer resource");
+    let names: IndexMap<String, String> = IndexMap::from([
+        ("mailer".to_string(), "Mailer".to_string()),
+        ("mailbox".to_string(), "Mailbox".to_string()),
+        ("mail-events".to_string(), "MailEvents".to_string()),
+    ]);
+    let ctx = EmitContext {
+        stack: &stack,
+        resource: entry,
+        resource_id: "mailer",
+        platform: Platform::Aws,
+        stack_settings: &StackSettings::default(),
+        names: &names,
+    };
+
+    let registry = CfRegistry::built_in();
+    let emitter = registry
+        .require(&Email::RESOURCE_TYPE, Platform::Aws)
+        .expect("email emitter should be registered");
+    let import_ref = emitter
+        .emit_import_ref(&ctx)
+        .expect("import ref should render");
+    let import_json = serde_json::to_value(&import_ref).expect("import ref should serialize");
+
+    let resolved = resolve_cfn_intrinsics(import_json);
+    let data: AwsEmailImportData = serde_json::from_value(resolved)
+        .expect("resolved import ref must deserialize into AwsEmailImportData");
+    assert_eq!(data.domains.len(), 2, "one entry per seed domain");
+    for domain in ["mail.example.com", "mail.example.org"] {
+        let entry = data
+            .domains
+            .get(domain)
+            .unwrap_or_else(|| panic!("domain '{domain}' must be present"));
+        assert_eq!(entry.dkim_tokens.len(), 3, "Easy DKIM emits three tokens");
+    }
+    assert!(
+        data.rule_set_name.is_some(),
+        "inbound is configured, so the rule set name must be exported"
+    );
+}
+
+/// Replace every CloudFormation intrinsic (`Ref` / `Fn::*`) with a
+/// placeholder string — the shape the payload has after the deployed stack
+/// resolves it.
+fn resolve_cfn_intrinsics(value: serde_json::Value) -> serde_json::Value {
+    match value {
+        serde_json::Value::Object(map) => {
+            let is_intrinsic = map.len() == 1
+                && map
+                    .keys()
+                    .next()
+                    .is_some_and(|key| key == "Ref" || key.starts_with("Fn::"));
+            if is_intrinsic {
+                serde_json::Value::String("resolved".to_string())
+            } else {
+                serde_json::Value::Object(
+                    map.into_iter()
+                        .map(|(key, value)| (key, resolve_cfn_intrinsics(value)))
+                        .collect(),
+                )
+            }
+        }
+        serde_json::Value::Array(items) => {
+            serde_json::Value::Array(items.into_iter().map(resolve_cfn_intrinsics).collect())
+        }
+        other => other,
+    }
 }

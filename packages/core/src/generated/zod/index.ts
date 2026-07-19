@@ -18,6 +18,9 @@ export type { AwsDynamoDbKeySchemaElement } from "./aws-dynamo-db-key-schema-ele
 export type { AwsDynamoDbKvHeartbeatData } from "./aws-dynamo-db-kv-heartbeat-data-schema.js";
 export type { AwsEcrArtifactRegistryHeartbeatData } from "./aws-ecr-artifact-registry-heartbeat-data-schema.js";
 export type { AwsEcrRepositoryHeartbeatData } from "./aws-ecr-repository-heartbeat-data-schema.js";
+export type { AwsEmailDkimTokenImportData } from "./aws-email-dkim-token-import-data-schema.js";
+export type { AwsEmailDomainImportData } from "./aws-email-domain-import-data-schema.js";
+export type { AwsEmailImportData } from "./aws-email-import-data-schema.js";
 export type { AwsIamRoleServiceAccountHeartbeatData } from "./aws-iam-role-service-account-heartbeat-data-schema.js";
 export type { AwsKvImportData } from "./aws-kv-import-data-schema.js";
 export type { AwsLambdaWorkerHeartbeatData } from "./aws-lambda-worker-heartbeat-data-schema.js";
@@ -381,6 +384,9 @@ export { AwsDynamoDbKeySchemaElementSchema } from "./aws-dynamo-db-key-schema-el
 export { AwsDynamoDbKvHeartbeatDataSchema } from "./aws-dynamo-db-kv-heartbeat-data-schema.js";
 export { AwsEcrArtifactRegistryHeartbeatDataSchema } from "./aws-ecr-artifact-registry-heartbeat-data-schema.js";
 export { AwsEcrRepositoryHeartbeatDataSchema } from "./aws-ecr-repository-heartbeat-data-schema.js";
+export { AwsEmailDkimTokenImportDataSchema } from "./aws-email-dkim-token-import-data-schema.js";
+export { AwsEmailDomainImportDataSchema } from "./aws-email-domain-import-data-schema.js";
+export { AwsEmailImportDataSchema } from "./aws-email-import-data-schema.js";
 export { AwsIamRoleServiceAccountHeartbeatDataSchema } from "./aws-iam-role-service-account-heartbeat-data-schema.js";
 export { AwsKvImportDataSchema } from "./aws-kv-import-data-schema.js";
 export { AwsLambdaWorkerHeartbeatDataSchema } from "./aws-lambda-worker-heartbeat-data-schema.js";

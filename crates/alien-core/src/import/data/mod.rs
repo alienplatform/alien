@@ -9,7 +9,8 @@ pub mod kubernetes_cluster;
 
 pub use aws::{
     AwsArtifactRegistryImportData, AwsBuildImportData, AwsComputeClusterImportData,
-    AwsKvImportData, AwsNetworkImportData, AwsPostgresImportData, AwsQueueImportData,
+    AwsEmailDkimTokenImportData, AwsEmailDomainImportData, AwsEmailImportData, AwsKvImportData,
+    AwsNetworkImportData, AwsPostgresImportData, AwsQueueImportData,
     AwsRemoteStackManagementImportData, AwsServiceAccountImportData, AwsStorageImportData,
     AwsVaultImportData, AwsWorkerImportData,
 };
@@ -70,6 +71,7 @@ mod schema_snapshots {
                 "aws_compute_cluster",
                 schema::<AwsComputeClusterImportData>(),
             ),
+            ("aws_email", schema::<AwsEmailImportData>()),
             ("aws_function", schema::<AwsWorkerImportData>()),
             ("aws_kv", schema::<AwsKvImportData>()),
             ("aws_network", schema::<AwsNetworkImportData>()),
