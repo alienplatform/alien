@@ -604,6 +604,8 @@ fn action_requires_tag_condition(action: &str) -> bool {
             | "elasticloadbalancing:DeleteListener"
             | "elasticloadbalancing:DeleteLoadBalancer"
             | "elasticloadbalancing:DeleteTargetGroup"
+            | "elasticloadbalancing:ModifyListener"
+            | "elasticloadbalancing:ModifyLoadBalancerAttributes"
             | "elasticloadbalancing:ModifyTargetGroupAttributes"
             | "events:PutRule"
             | "lambda:CreateFunction"

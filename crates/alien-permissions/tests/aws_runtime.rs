@@ -378,6 +378,71 @@ fn test_container_provision_can_manage_setup_compute_security_group_ingress() {
 }
 
 #[test]
+fn test_container_management_can_mutate_compacted_load_balancer_names() {
+    let generator = AwsRuntimePermissionsGenerator::new();
+    let permission_set =
+        get_permission_set("container/management").expect("permission set exists");
+    let context = create_test_context()
+        .with_stack_prefix("e2e-03-aws-terraform-tcp-f938d0b8fa")
+        .with_resource_id("tcp-service");
+
+    let result = generator
+        .generate_policy(permission_set, BindingTarget::Resource, &context)
+        .expect("container management policy should generate");
+
+    let mutation_statement = result
+        .statement
+        .iter()
+        .find(|statement| {
+            statement
+                .action
+                .contains(&"elasticloadbalancing:ModifyTargetGroupAttributes".to_string())
+        })
+        .expect("container management should allow target group attribute updates");
+
+    for action in [
+        "elasticloadbalancing:ModifyListener",
+        "elasticloadbalancing:ModifyLoadBalancerAttributes",
+        "elasticloadbalancing:ModifyTargetGroupAttributes",
+    ] {
+        assert!(
+            mutation_statement.action.contains(&action.to_string()),
+            "container management should allow {action}"
+        );
+    }
+    for resource in [
+        "loadbalancer/app/*/*",
+        "loadbalancer/net/*/*",
+        "targetgroup/*/*",
+        "listener/app/*/*/*",
+        "listener/net/*/*/*",
+    ] {
+        assert!(
+            mutation_statement
+                .resource
+                .iter()
+                .any(|candidate| candidate.ends_with(resource)),
+            "compacted AWS names should remain authorized through {resource}"
+        );
+    }
+    assert!(condition_equals(
+        mutation_statement,
+        "aws:ResourceTag/deployment",
+        "e2e-03-aws-terraform-tcp-f938d0b8fa"
+    ));
+    assert!(condition_equals(
+        mutation_statement,
+        "aws:ResourceTag/resource-id",
+        "tcp-service"
+    ));
+    assert!(condition_equals(
+        mutation_statement,
+        "aws:ResourceTag/managed-by",
+        "runtime"
+    ));
+}
+
+#[test]
 fn test_compute_cluster_management_can_pass_stack_prefixed_instance_roles() {
     let generator = AwsRuntimePermissionsGenerator::new();
     let permission_set =

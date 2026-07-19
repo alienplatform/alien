@@ -25,13 +25,20 @@
       },
       {
         "grant": {
-          "actions": ["elasticloadbalancing:ModifyListener"]
+          "actions": [
+            "elasticloadbalancing:ModifyListener",
+            "elasticloadbalancing:ModifyLoadBalancerAttributes",
+            "elasticloadbalancing:ModifyTargetGroupAttributes"
+          ]
         },
         "binding": {
           "stack": {
             "resources": [
-              "arn:aws:elasticloadbalancing:${awsRegion}:${awsAccountId}:listener/app/${stackPrefix}-*/*/*",
-              "arn:aws:elasticloadbalancing:${awsRegion}:${awsAccountId}:listener/net/${stackPrefix}-*/*/*"
+              "arn:aws:elasticloadbalancing:${awsRegion}:${awsAccountId}:loadbalancer/app/*/*",
+              "arn:aws:elasticloadbalancing:${awsRegion}:${awsAccountId}:loadbalancer/net/*/*",
+              "arn:aws:elasticloadbalancing:${awsRegion}:${awsAccountId}:targetgroup/*/*",
+              "arn:aws:elasticloadbalancing:${awsRegion}:${awsAccountId}:listener/app/*/*/*",
+              "arn:aws:elasticloadbalancing:${awsRegion}:${awsAccountId}:listener/net/*/*/*"
             ],
             "condition": {
               "StringEquals": {
@@ -42,8 +49,11 @@
           },
           "resource": {
             "resources": [
-              "arn:aws:elasticloadbalancing:${awsRegion}:${awsAccountId}:listener/app/${stackPrefix}-*/*/*",
-              "arn:aws:elasticloadbalancing:${awsRegion}:${awsAccountId}:listener/net/${stackPrefix}-*/*/*"
+              "arn:aws:elasticloadbalancing:${awsRegion}:${awsAccountId}:loadbalancer/app/*/*",
+              "arn:aws:elasticloadbalancing:${awsRegion}:${awsAccountId}:loadbalancer/net/*/*",
+              "arn:aws:elasticloadbalancing:${awsRegion}:${awsAccountId}:targetgroup/*/*",
+              "arn:aws:elasticloadbalancing:${awsRegion}:${awsAccountId}:listener/app/*/*/*",
+              "arn:aws:elasticloadbalancing:${awsRegion}:${awsAccountId}:listener/net/*/*/*"
             ],
             "condition": {
               "StringEquals": {
