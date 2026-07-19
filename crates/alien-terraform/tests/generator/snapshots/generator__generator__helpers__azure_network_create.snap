@@ -226,6 +226,18 @@ resource "azurerm_subnet" "default_network_private" {
   address_prefixes = [
     cidrsubnet(tolist(azurerm_virtual_network.default_network.address_space)[0], 8, 1)
   ]
+  depends_on = [
+    azurerm_resource_group.default_resource_group
+  ]
+}
+
+resource "azurerm_subnet" "default_network_container_apps" {
+  name                 = "${local.resource_prefix}-default_network-container-apps"
+  resource_group_name  = var.azure_resource_group_name
+  virtual_network_name = azurerm_virtual_network.default_network.name
+  address_prefixes = [
+    cidrsubnet(tolist(azurerm_virtual_network.default_network.address_space)[0], 8, 5)
+  ]
 
   delegation {
     name = "container-apps-environment"
@@ -400,6 +412,7 @@ resource "terraform_data" "deployment_registration" {
     azurerm_virtual_network.default_network,
     azurerm_subnet.default_network_public,
     azurerm_subnet.default_network_private,
+    azurerm_subnet.default_network_container_apps,
     azurerm_subnet.default_network_appgw,
     azurerm_subnet.default_network_alb,
     azurerm_subnet.default_network_pe,
