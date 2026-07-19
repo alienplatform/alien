@@ -620,8 +620,8 @@ describe("Experimental AwsOpenSearch resource configuration", () => {
 
     const stack = new alien.Stack("search-stack").add(search, "frozen").build()
     expect(stack.resources).toHaveProperty("articles")
-    expect(stack.resources["articles"]?.config.type).toBe("experimental/aws-opensearch")
-    expect(stack.resources["articles"]?.lifecycle).toBe("frozen")
+    expect(stack.resources.articles?.config.type).toBe("experimental/aws-opensearch")
+    expect(stack.resources.articles?.lifecycle).toBe("frozen")
   })
 
   it("rejects unknown collection types", () => {
