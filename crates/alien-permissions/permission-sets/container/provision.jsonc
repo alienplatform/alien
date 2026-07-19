@@ -69,6 +69,9 @@
       {
         "grant": {
           "actions": [
+            "elasticloadbalancing:ModifyListener",
+            "elasticloadbalancing:ModifyLoadBalancerAttributes",
+            "elasticloadbalancing:ModifyTargetGroupAttributes",
             "elasticloadbalancing:DeleteLoadBalancer",
             "elasticloadbalancing:DeleteTargetGroup",
             "elasticloadbalancing:DeleteListener"

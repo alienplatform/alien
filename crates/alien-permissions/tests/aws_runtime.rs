@@ -378,17 +378,17 @@ fn test_container_provision_can_manage_setup_compute_security_group_ingress() {
 }
 
 #[test]
-fn test_container_management_can_mutate_compacted_load_balancer_names() {
+fn test_container_provision_can_mutate_compacted_load_balancer_names() {
     let generator = AwsRuntimePermissionsGenerator::new();
     let permission_set =
-        get_permission_set("container/management").expect("permission set exists");
+        get_permission_set("container/provision").expect("permission set exists");
     let context = create_test_context()
         .with_stack_prefix("e2e-03-aws-terraform-tcp-f938d0b8fa")
         .with_resource_id("tcp-service");
 
     let result = generator
         .generate_policy(permission_set, BindingTarget::Resource, &context)
-        .expect("container management policy should generate");
+        .expect("container provision policy should generate");
 
     let mutation_statement = result
         .statement
@@ -398,7 +398,7 @@ fn test_container_management_can_mutate_compacted_load_balancer_names() {
                 .action
                 .contains(&"elasticloadbalancing:ModifyTargetGroupAttributes".to_string())
         })
-        .expect("container management should allow target group attribute updates");
+        .expect("container provision should allow target group attribute updates");
 
     for action in [
         "elasticloadbalancing:ModifyListener",
@@ -407,7 +407,7 @@ fn test_container_management_can_mutate_compacted_load_balancer_names() {
     ] {
         assert!(
             mutation_statement.action.contains(&action.to_string()),
-            "container management should allow {action}"
+            "container provision should allow {action}"
         );
     }
     for resource in [
