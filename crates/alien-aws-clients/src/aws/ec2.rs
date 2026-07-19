@@ -3236,6 +3236,7 @@ pub struct Volume {
     pub volume_id: Option<String>,
     pub size: Option<i32>,
     pub availability_zone: Option<String>,
+    #[serde(rename = "status")]
     pub state: Option<String>,
     pub volume_type: Option<String>,
     pub iops: Option<i32>,
@@ -3575,6 +3576,35 @@ impl GetConsoleOutputResponse {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn describe_volumes_deserializes_aws_status_as_volume_state() {
+        let response: DescribeVolumesResponse = quick_xml::de::from_str(
+            r#"<DescribeVolumesResponse xmlns="http://ec2.amazonaws.com/doc/2016-11-15/">
+                <volumeSet>
+                    <item>
+                        <volumeId>vol-0123456789abcdef0</volumeId>
+                        <size>10</size>
+                        <availabilityZone>us-west-2a</availabilityZone>
+                        <status>available</status>
+                        <volumeType>gp3</volumeType>
+                    </item>
+                </volumeSet>
+            </DescribeVolumesResponse>"#,
+        )
+        .expect("AWS DescribeVolumes response should deserialize");
+
+        let volumes = response
+            .volume_set
+            .expect("volumeSet should be present")
+            .items;
+        assert_eq!(volumes.len(), 1);
+        assert_eq!(
+            volumes[0].volume_id.as_deref(),
+            Some("vol-0123456789abcdef0")
+        );
+        assert_eq!(volumes[0].state.as_deref(), Some("available"));
+    }
 
     /// Setting `nested_virtualization=Some("enabled")` emits the AWS
     /// form-encoded key `LaunchTemplateData.CpuOptions.NestedVirtualization`
