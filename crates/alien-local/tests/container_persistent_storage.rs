@@ -36,7 +36,7 @@ fn config(shared_dir: &Path) -> ContainerConfig {
         image: IMAGE.to_string(),
         command: Some(vec!["sleep".to_string(), "300".to_string()]),
         ports: vec![],
-        expose_public: false,
+        public_endpoint: None,
         env_vars: HashMap::new(),
         stateful: true,
         ordinal: Some(0),

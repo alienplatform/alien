@@ -100,7 +100,7 @@ async fn local_container_reaches_local_postgres_but_not_the_outside() {
                 image: CLIENT_IMAGE.to_string(),
                 command: Some(vec!["sleep".to_string(), "300".to_string()]),
                 ports: vec![],
-                expose_public: false,
+                public_endpoint: None,
                 env_vars: HashMap::new(),
                 stateful: false,
                 ordinal: None,

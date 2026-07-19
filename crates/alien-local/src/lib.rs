@@ -69,7 +69,7 @@ pub use artifact_registry_manager::LocalArtifactRegistryManager;
 
 pub use container_manager::{
     BindMount, ContainerConfig, ContainerInfo, ContainerMetadata, LocalContainerManager,
-    LocalRuntimeStatus,
+    LocalPublicEndpoint, LocalRuntimeStatus,
 };
 pub use daemon_supervisor::DaemonLaunchOptions;
 pub use error::{ErrorData, Result};
