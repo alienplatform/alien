@@ -55,7 +55,10 @@ jobs:
       - uses: taiki-e/install-action@nextest
 
       - name: Install protoc
-        run: sudo apt-get update && sudo apt-get install -y protobuf-compiler
+        uses: arduino/setup-protoc@v3
+        with:
+          version: "27.x"
+          repo-token: ${{ github.token }}
 
       - uses: hashicorp/setup-terraform@v3
         with:

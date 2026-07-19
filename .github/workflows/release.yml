@@ -190,7 +190,10 @@ jobs:
           version: v0.16.0
 
       - name: Install protoc
-        run: sudo apt-get update && sudo apt-get install -y protobuf-compiler
+        uses: arduino/setup-protoc@v3
+        with:
+          version: "27.x"
+          repo-token: ${{ github.token }}
 
       - name: Publish crates
         env:

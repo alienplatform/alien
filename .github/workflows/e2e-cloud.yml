@@ -857,8 +857,8 @@ jobs:
           set -euo pipefail
 
           if ! command -v aws >/dev/null 2>&1; then
-            sudo apt-get update
-            sudo apt-get install -y awscli
+            sudo apt-get -o Acquire::Retries=5 update
+            sudo apt-get -o Acquire::Retries=5 install -y awscli
           fi
 
           cluster_name="$(terraform output -raw e2e_eks_cluster_name 2>/dev/null || true)"
@@ -984,8 +984,8 @@ jobs:
       - name: Install Kubernetes auth helpers
         run: |
           if ! command -v aws >/dev/null 2>&1; then
-            sudo apt-get update
-            sudo apt-get install -y awscli unzip
+            sudo apt-get -o Acquire::Retries=5 update
+            sudo apt-get -o Acquire::Retries=5 install -y awscli unzip
           fi
           case "$(uname -m)" in
             aarch64|arm64) KUBELOGIN_ARCH=arm64 ;;
@@ -1178,7 +1178,10 @@ jobs:
       - uses: taiki-e/install-action@cargo-nextest
 
       - name: Install protoc
-        run: sudo apt-get update && sudo apt-get install -y protobuf-compiler
+        uses: arduino/setup-protoc@v3
+        with:
+          version: "27.x"
+          repo-token: ${{ github.token }}
 
       - uses: mlugg/setup-zig@v2
         with:
@@ -1273,7 +1276,10 @@ jobs:
       - uses: taiki-e/install-action@cargo-nextest
 
       - name: Install protoc
-        run: sudo apt-get update && sudo apt-get install -y protobuf-compiler
+        uses: arduino/setup-protoc@v3
+        with:
+          version: "27.x"
+          repo-token: ${{ github.token }}
 
       - uses: mlugg/setup-zig@v2
         with:
@@ -1418,7 +1424,10 @@ jobs:
       - uses: taiki-e/install-action@cargo-nextest
 
       - name: Install protoc
-        run: sudo apt-get update && sudo apt-get install -y protobuf-compiler
+        uses: arduino/setup-protoc@v3
+        with:
+          version: "27.x"
+          repo-token: ${{ github.token }}
 
       - uses: mlugg/setup-zig@v2
         with:
@@ -1582,7 +1591,10 @@ jobs:
 
       - name: Install protoc (Ubuntu)
         if: runner.os == 'Linux'
-        run: sudo apt-get update && sudo apt-get install -y protobuf-compiler
+        uses: arduino/setup-protoc@v3
+        with:
+          version: "27.x"
+          repo-token: ${{ github.token }}
 
       - name: Install protoc (macOS)
         if: runner.os == 'macOS'

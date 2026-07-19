@@ -1,4 +1,6 @@
 #![cfg(all(test, feature = "gcp"))]
+mod common;
+
 use alien_client_core::{ErrorData, Result};
 use alien_gcp_clients::iam::{
     Binding, CreateRoleRequest, CreateServiceAccountRequest, Expr, IamApi, IamClient, IamPolicy,
@@ -185,10 +187,12 @@ impl IamTestContext {
         account_id: &str,
         service_account: CreateServiceAccountRequest,
     ) -> Result<ServiceAccount> {
-        let result = self
-            .client
-            .create_service_account(account_id.to_string(), service_account)
-            .await;
+        let result = common::create_service_account_with_quota_retry(
+            &self.client,
+            account_id,
+            &service_account,
+        )
+        .await;
         if result.is_ok() {
             // For service accounts, the name format is projects/{project}/serviceAccounts/{email}
             // We need to track the full name for deletion
@@ -818,10 +822,14 @@ async fn test_error_service_account_already_exists(ctx: &mut IamTestContext) {
         .service_account(service_account)
         .build();
 
-    let result = ctx
-        .client
-        .create_service_account(account_id.clone(), duplicate_request)
-        .await;
+    // Retry only exhausted-quota 429s so this test observes the expected 409
+    // conflict instead of unrelated project-wide throttling.
+    let result = common::create_service_account_with_quota_retry(
+        &ctx.client,
+        &account_id,
+        &duplicate_request,
+    )
+    .await;
     assert!(
         result.is_err(),
         "Expected error when creating duplicate service account"

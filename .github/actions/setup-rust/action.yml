@@ -40,14 +40,20 @@ runs:
       run: |
         git config --global url."https://x-access-token:${{ inputs.repo-access-token }}@github.com/".insteadOf "https://github.com/"
 
-    - name: Install musl-tools and protoc
+    - name: Install protoc
+      if: inputs.install-protoc == 'true'
+      uses: arduino/setup-protoc@v3
+      with:
+        version: "27.x"
+        repo-token: ${{ github.token }}
+
+    - name: Install musl-tools
       shell: bash
+      # Retry transient Ubuntu mirror failures; a dead mirror has killed CI
+      # jobs before (apt exit code 100 after minutes of connection errors).
       run: |
-        PACKAGES="musl-tools"
-        if [ "${{ inputs.install-protoc }}" = "true" ]; then
-          PACKAGES="$PACKAGES protobuf-compiler"
-        fi
-        sudo apt-get update && sudo apt-get install -y $PACKAGES
+        sudo apt-get -o Acquire::Retries=5 update
+        sudo apt-get -o Acquire::Retries=5 install -y musl-tools
 
     - name: Add Rust targets
       if: inputs.targets != ''

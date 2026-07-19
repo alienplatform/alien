@@ -48,7 +48,10 @@ jobs:
         run: git config --global url."https://x-access-token:${{ secrets.REPO_ACCESS_TOKEN }}@github.com/".insteadOf "https://github.com/"
 
       - name: Install protoc
-        run: sudo apt-get update && sudo apt-get install -y protobuf-compiler
+        uses: arduino/setup-protoc@v3
+        with:
+          version: "27.x"
+          repo-token: ${{ github.token }}
 
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
