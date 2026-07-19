@@ -309,10 +309,12 @@ fn instance_satisfies(
     spec: &instance_catalog::InstanceTypeSpec,
     requirements: &WorkloadRequirements,
 ) -> bool {
-    if let Some(architecture) = requirements.architecture {
-        if spec.architecture != architecture {
-            return false;
-        }
+    if spec.architecture
+        != requirements
+            .architecture
+            .unwrap_or(instance_catalog::Architecture::X86_64)
+    {
+        return false;
     }
     if requirements.nested_virt && !spec.is_nested_virt_capable() {
         return false;
@@ -710,7 +712,7 @@ mod tests {
                 "general".to_string(),
                 ComputePoolSelection::Fixed {
                     machines: 1,
-                    machine: Some("m7g.xlarge".to_string()),
+                    machine: Some("m7i.xlarge".to_string()),
                 },
             )]
             .into_iter()
@@ -720,7 +722,7 @@ mod tests {
         let plan = plan_compute(&stack, Platform::Aws, Some(&settings)).expect("plan should build");
 
         let pool = plan.pools.first().expect("general pool should exist");
-        assert_eq!(pool.selected.machine(), Some("m7g.xlarge"));
+        assert_eq!(pool.selected.machine(), Some("m7i.xlarge"));
         assert!(pool.errors.is_empty());
     }
 
