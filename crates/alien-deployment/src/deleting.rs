@@ -28,7 +28,8 @@ pub async fn handle_delete_pending(
         })
     })?;
 
-    if let Some(runtime_metadata) = next.runtime_metadata.as_mut() {
+    if stack_state.resources.contains_key("secrets") {
+        let runtime_metadata = next.runtime_metadata.get_or_insert_default();
         crate::helpers::delete_deployment_vault_secrets(
             &stack_state,
             &client_config,
