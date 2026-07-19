@@ -196,18 +196,92 @@ pub async fn deployments_task(args: DeploymentsArgs, ctx: ExecutionMode) -> Resu
             list_deployments_task(&manager, json).await
         }
         DeploymentsCmd::Get { id, json } => {
+            #[cfg(feature = "platform")]
+            if ctx.is_platform() {
+                let workspace = ctx.resolve_workspace_with_bootstrap(!json).await?;
+                let client = ctx.sdk_client().await?;
+                let deployment = crate::platform_deployment_resolver::resolve(
+                    &ctx, &client, &workspace, &id, None, !json,
+                )
+                .await?;
+                if json {
+                    return print_json(&deployment);
+                }
+                println!(
+                    "{}",
+                    contextual_heading(
+                        "Showing deployment",
+                        &String::from(deployment.name.clone()),
+                        &[]
+                    )
+                );
+                println!("{} {}", dim_label("ID"), String::from(deployment.id));
+                println!("{} {}", dim_label("Status"), deployment.status);
+                println!("{} {}", dim_label("Platform"), deployment.platform);
+                println!(
+                    "{} {}",
+                    dim_label("Group"),
+                    String::from(deployment.deployment_group_id)
+                );
+                println!(
+                    "{} {}",
+                    dim_label("Manager"),
+                    String::from(deployment.manager_id)
+                );
+                println!("{} {}", dim_label("Created"), deployment.created_at);
+                return Ok(());
+            }
             let manager = resolve_manager_client(&ctx, None, !json).await?;
             get_deployment_task(&ctx, &manager, &id, json).await
         }
         DeploymentsCmd::Delete { id, yes } => {
+            #[cfg(feature = "platform")]
+            if ctx.is_platform() {
+                let resolved = crate::platform_deployment_resolver::resolve_with_manager(
+                    &ctx, &id, None, true,
+                )
+                .await?;
+                return delete_deployment_task(
+                    &resolved.manager.client,
+                    &String::from(resolved.detail.id),
+                    yes,
+                )
+                .await;
+            }
             let manager = resolve_manager_client(&ctx, None, true).await?;
             delete_deployment_task(&manager, &id, yes).await
         }
         DeploymentsCmd::Retry { id, json } => {
+            #[cfg(feature = "platform")]
+            if ctx.is_platform() {
+                let resolved = crate::platform_deployment_resolver::resolve_with_manager(
+                    &ctx, &id, None, !json,
+                )
+                .await?;
+                return retry_deployment_task(
+                    &resolved.manager.client,
+                    &String::from(resolved.detail.id),
+                    json,
+                )
+                .await;
+            }
             let manager = resolve_manager_client(&ctx, None, !json).await?;
             retry_deployment_task(&manager, &id, json).await
         }
         DeploymentsCmd::Redeploy { id, json } => {
+            #[cfg(feature = "platform")]
+            if ctx.is_platform() {
+                let resolved = crate::platform_deployment_resolver::resolve_with_manager(
+                    &ctx, &id, None, !json,
+                )
+                .await?;
+                return redeploy_deployment_task(
+                    &resolved.manager.client,
+                    &String::from(resolved.detail.id),
+                    json,
+                )
+                .await;
+            }
             let manager = resolve_manager_client(&ctx, None, !json).await?;
             redeploy_deployment_task(&manager, &id, json).await
         }

@@ -180,15 +180,7 @@ pub async fn debug_task(args: DebugArgs, ctx: ExecutionMode) -> Result<()> {
         })
     })?;
 
-    let (_, project_link) = ctx.resolve_project(None, true).await?;
-    // `debug` never pushes images, so skip the artifact-registry repo
-    // provisioning step — saves ~10s per invocation against cloud managers.
-    let manager = ctx
-        .resolve_manager_metadata_only(&project_link.project_id, "aws")
-        .await?;
-
-    let is_dev = ctx.is_dev();
-    let deployment_id = resolve_deployment_id(&manager, deployment, is_dev).await?;
+    let (manager, deployment_id) = resolve_debug_target(&ctx, deployment, true).await?;
 
     // No CLI-side caching: every invocation asks the manager to create-or-
     // reuse a session. The manager controls session lifetime, token rotation,
@@ -227,11 +219,7 @@ async fn runtime_shell_task(args: DebugShellArgs, ctx: ExecutionMode) -> Result<
         }));
     }
 
-    let (_, project_link) = ctx.resolve_project(None, true).await?;
-    let manager = ctx
-        .resolve_manager_metadata_only(&project_link.project_id, "aws")
-        .await?;
-    let deployment_id = resolve_deployment_id(&manager, &args.deployment, ctx.is_dev()).await?;
+    let (manager, deployment_id) = resolve_debug_target(&ctx, &args.deployment, true).await?;
     let session = request_debug_session(
         &manager,
         CreateDebugSessionRequest {
@@ -261,11 +249,7 @@ async fn runtime_shell_task(args: DebugShellArgs, ctx: ExecutionMode) -> Result<
 }
 
 async fn runtime_exec_task(args: DebugExecArgs, ctx: ExecutionMode) -> Result<()> {
-    let (_, project_link) = ctx.resolve_project(None, true).await?;
-    let manager = ctx
-        .resolve_manager_metadata_only(&project_link.project_id, "aws")
-        .await?;
-    let deployment_id = resolve_deployment_id(&manager, &args.deployment, ctx.is_dev()).await?;
+    let (manager, deployment_id) = resolve_debug_target(&ctx, &args.deployment, true).await?;
     let session = request_debug_session(
         &manager,
         CreateDebugSessionRequest {
@@ -965,9 +949,32 @@ pub async fn debug_task_dev(args: DebugArgs, port: u16) -> Result<()> {
 
 /// Parse the user-supplied deployment spec and resolve it to a `dep_...` ID.
 ///
-/// Delegates to the shared `deployment_resolver` so the spec form, server-side
-/// `search` filtering, and "not found / ambiguous" messages stay in sync
-/// across `debug`, `commands`, and `deployments {get,delete,retry,redeploy}`.
+/// Resolve both the canonical deployment ID and the manager that owns it.
+async fn resolve_debug_target(
+    ctx: &ExecutionMode,
+    deployment: &str,
+    allow_prompt: bool,
+) -> Result<(crate::execution_context::ManagerContext, String)> {
+    #[cfg(feature = "platform")]
+    if ctx.is_platform() {
+        let resolved = crate::platform_deployment_resolver::resolve_with_manager(
+            ctx,
+            deployment,
+            None,
+            allow_prompt,
+        )
+        .await?;
+        return Ok((resolved.manager, String::from(resolved.detail.id)));
+    }
+
+    let (_, project_link) = ctx.resolve_project(None, allow_prompt).await?;
+    let manager = ctx
+        .resolve_manager_metadata_only(&project_link.project_id, "aws")
+        .await?;
+    let deployment_id = resolve_deployment_id(&manager, deployment, ctx.is_dev()).await?;
+    Ok((manager, deployment_id))
+}
+
 async fn resolve_deployment_id(
     manager: &ManagerContext,
     spec: &str,
