@@ -610,6 +610,10 @@ expression: schemas
         "description": "AKS cluster identity principal id (system-assigned identity).",
         "type": "string"
       },
+      "identityId": {
+        "description": "Resource ID of the user-assigned identity attached to cluster VMs.",
+        "type": "string"
+      },
       "kubeletIdentityClientId": {
         "description": "kubelet UAMI client id used by node pools.",
         "type": "string"
@@ -618,6 +622,7 @@ expression: schemas
     "required": [
       "clusterId",
       "clusterIdentityPrincipalId",
+      "identityId",
       "kubeletIdentityClientId"
     ],
     "title": "AzureComputeClusterImportData",
