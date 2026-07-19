@@ -380,8 +380,7 @@ fn test_container_provision_can_manage_setup_compute_security_group_ingress() {
 #[test]
 fn test_container_provision_can_mutate_compacted_load_balancer_names() {
     let generator = AwsRuntimePermissionsGenerator::new();
-    let permission_set =
-        get_permission_set("container/provision").expect("permission set exists");
+    let permission_set = get_permission_set("container/provision").expect("permission set exists");
     let context = create_test_context()
         .with_stack_prefix("e2e-03-aws-terraform-tcp-f938d0b8fa")
         .with_resource_id("tcp-service");
