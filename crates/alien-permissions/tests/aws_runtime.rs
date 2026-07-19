@@ -109,6 +109,43 @@ fn test_compute_cluster_management_can_tag_otlp_secrets() {
 }
 
 #[test]
+fn test_compute_cluster_management_can_terminate_only_tagged_stack_instances() {
+    let generator = AwsRuntimePermissionsGenerator::new();
+    let permission_set =
+        get_permission_set("compute-cluster/management").expect("permission set exists");
+    let context = create_test_context();
+
+    let result = generator
+        .generate_policy(permission_set, BindingTarget::Stack, &context)
+        .expect("Should generate AWS policy successfully");
+
+    let statement = result
+        .statement
+        .iter()
+        .find(|statement| {
+            statement
+                .action
+                .contains(&"autoscaling:TerminateInstanceInAutoScalingGroup".to_string())
+        })
+        .expect("compute-cluster management should allow drained instance termination");
+
+    assert_eq!(
+        statement.resource,
+        ["arn:aws:autoscaling:us-east-1:123456789012:autoScalingGroup:*:autoScalingGroupName/my-stack-*".to_string()]
+    );
+    assert!(condition_equals(
+        statement,
+        "aws:ResourceTag/deployment",
+        "my-stack"
+    ));
+    assert!(condition_equals(
+        statement,
+        "aws:ResourceTag/managed-by",
+        "runtime"
+    ));
+}
+
+#[test]
 fn test_compute_cluster_management_can_use_tagged_launch_templates() {
     let generator = AwsRuntimePermissionsGenerator::new();
     let permission_set =

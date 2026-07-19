@@ -237,7 +237,8 @@
             "autoscaling:DeleteAutoScalingGroup",
             "autoscaling:UpdateAutoScalingGroup",
             "autoscaling:SetDesiredCapacity",
-            "autoscaling:StartInstanceRefresh"
+            "autoscaling:StartInstanceRefresh",
+            "autoscaling:TerminateInstanceInAutoScalingGroup"
           ]
         },
         "binding": {

@@ -563,6 +563,7 @@ fn action_requires_tag_condition(action: &str) -> bool {
             | "autoscaling:DeleteAutoScalingGroup"
             | "autoscaling:SetDesiredCapacity"
             | "autoscaling:StartInstanceRefresh"
+            | "autoscaling:TerminateInstanceInAutoScalingGroup"
             | "autoscaling:UpdateAutoScalingGroup"
             | "ec2:AllocateAddress"
             | "ec2:AssociateRouteTable"
