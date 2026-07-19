@@ -7,12 +7,15 @@ use alien_error::{AlienError, Context, IntoAlienError};
 use async_trait::async_trait;
 use serde_json::{json, Value};
 use std::collections::HashMap;
+use std::env::VarError;
 use std::fs::File;
 use std::io::Read;
 use std::path::Path;
 use std::process::Stdio;
 use tokio::process::Command;
 use tracing::info;
+
+const ENTERPRISE_CA_CERT_PATH_ENV: &str = "ALIEN_ENTERPRISE_CA_CERT_PATH";
 
 /// Docker toolchain implementation using Docker buildx for multi-architecture builds.
 ///
@@ -74,6 +77,55 @@ impl DockerToolchain {
             reason: reason.into(),
             build_output: None,
         }
+    }
+
+    fn enterprise_ca_secret() -> Result<Option<String>> {
+        let path = match std::env::var(ENTERPRISE_CA_CERT_PATH_ENV) {
+            Ok(path) => path,
+            Err(VarError::NotPresent) => return Ok(None),
+            Err(VarError::NotUnicode(_)) => {
+                return Err(AlienError::new(Self::docker_build_error(format!(
+                    "{ENTERPRISE_CA_CERT_PATH_ENV} must contain a valid UTF-8 file path"
+                ))));
+            }
+        };
+        if path.is_empty() {
+            return Err(AlienError::new(Self::docker_build_error(format!(
+                "{ENTERPRISE_CA_CERT_PATH_ENV} must not be empty"
+            ))));
+        }
+
+        let file = File::open(&path)
+            .into_alien_error()
+            .context(Self::docker_build_error(format!(
+                "{ENTERPRISE_CA_CERT_PATH_ENV} must name a readable file"
+            )))?;
+        let metadata = file
+            .metadata()
+            .into_alien_error()
+            .context(Self::docker_build_error(format!(
+                "Could not inspect the file named by {ENTERPRISE_CA_CERT_PATH_ENV}"
+            )))?;
+        if !metadata.is_file() || metadata.len() == 0 {
+            return Err(AlienError::new(Self::docker_build_error(format!(
+                "{ENTERPRISE_CA_CERT_PATH_ENV} must name a non-empty regular file"
+            ))));
+        }
+
+        Ok(Some(format!("id=enterprise_ca,src={path}")))
+    }
+
+    fn redacted_build_args(args: &[String]) -> Vec<&str> {
+        args.iter()
+            .enumerate()
+            .map(|(index, arg)| {
+                if index > 0 && args[index - 1] == "--secret" {
+                    "<redacted>"
+                } else {
+                    arg.as_str()
+                }
+            })
+            .collect()
     }
 
     /// std reports x86_64/aarch64; docker wants amd64/arm64 — map the host CPU.
@@ -170,14 +222,14 @@ impl Toolchain for DockerToolchain {
 
         Self::ensure_builder_supports_arch(arch_str).await?;
 
-        let mut args: Vec<&str> = vec![
-            "buildx",
-            "build",
-            "--platform",
-            platform_str.as_str(),
-            "--load", // export into the docker daemon so we can `docker save` it
-            "-f",
-            dockerfile_name,
+        let mut args = vec![
+            "buildx".to_string(),
+            "build".to_string(),
+            "--platform".to_string(),
+            platform_str,
+            "--load".to_string(), // export into the docker daemon so we can `docker save` it
+            "-f".to_string(),
+            dockerfile_name.to_string(),
         ];
 
         // Add build args if provided
@@ -188,24 +240,30 @@ impl Toolchain for DockerToolchain {
             .unwrap_or_default();
 
         for build_arg in &build_arg_strings {
-            args.push("--build-arg");
-            args.push(build_arg);
+            args.push("--build-arg".to_string());
+            args.push(build_arg.clone());
+        }
+
+        if let Some(secret) = Self::enterprise_ca_secret()? {
+            args.push("--secret".to_string());
+            args.push(secret);
         }
 
         // Add target if specified
-        let target_str;
         if let Some(target) = &self.target {
-            target_str = target.clone();
-            args.push("--target");
-            args.push(&target_str);
+            args.push("--target".to_string());
+            args.push(target.clone());
         }
 
         // Add tag and context
-        args.push("-t");
-        args.push(&temp_tag);
-        args.push("."); // Build context is the src_dir
+        args.push("-t".to_string());
+        args.push(temp_tag.clone());
+        args.push(".".to_string()); // Build context is the src_dir
 
-        info!("Running docker buildx build with args: {:?}", args);
+        info!(
+            "Running docker buildx build with args: {:?}",
+            Self::redacted_build_args(&args)
+        );
 
         // Run docker buildx build with progress reporting
         AlienEvent::CompilingCode {
@@ -648,6 +706,25 @@ mod tests {
         assert_ne!(tag1, tag2); // Should be unique
     }
 
+    #[test]
+    fn build_logs_redact_enterprise_ca_secret() {
+        let sentinel = "/private/sentinel-enterprise-ca.pem";
+        let args = vec![
+            "buildx".to_string(),
+            "build".to_string(),
+            "--secret".to_string(),
+            format!("id=enterprise_ca,src={sentinel}"),
+            ".".to_string(),
+        ];
+
+        let rendered = format!("{:?}", DockerToolchain::redacted_build_args(&args));
+        assert!(
+            !rendered.contains(sentinel),
+            "secret path leaked: {rendered}"
+        );
+        assert!(rendered.contains("<redacted>"), "secret was not redacted");
+    }
+
     #[tokio::test]
     async fn test_docker_toolchain_build() {
         if !docker_available() {
@@ -721,6 +798,66 @@ CMD ["cat", "hello.txt"]
         assert!(
             metadata.cmd.is_some(),
             "Image should have CMD from Dockerfile"
+        );
+    }
+
+    #[tokio::test]
+    #[ignore = "needs Docker, BuildKit, and ALIEN_ENTERPRISE_CA_CERT_PATH"]
+    async fn enterprise_ca_is_forwarded_as_ephemeral_buildkit_secret() {
+        assert!(docker_available(), "Docker must be available");
+        let cert_path = std::env::var(ENTERPRISE_CA_CERT_PATH_ENV)
+            .expect("ALIEN_ENTERPRISE_CA_CERT_PATH must be configured");
+        let cert = fs::read(&cert_path)
+            .await
+            .expect("configured enterprise CA must be readable");
+        assert!(
+            !cert.is_empty(),
+            "configured enterprise CA must not be empty"
+        );
+
+        let source = tempdir().expect("source temp dir");
+        let build = tempdir().expect("build temp dir");
+        fs::write(
+            source.path().join("Dockerfile"),
+            r#"# syntax=docker/dockerfile:1
+FROM alpine:3.20
+RUN --mount=type=secret,id=enterprise_ca,required=true test -s /run/secrets/enterprise_ca
+CMD ["true"]
+"#,
+        )
+        .await
+        .expect("write Dockerfile");
+
+        let toolchain = DockerToolchain {
+            dockerfile: None,
+            build_args: None,
+            target: None,
+        };
+        let context = ToolchainContext {
+            src_dir: source.path().to_path_buf(),
+            build_dir: build.path().to_path_buf(),
+            cache_store: None,
+            cache_prefix: "enterprise-ca-test".to_string(),
+            build_target: BinaryTarget::linux_container_target(),
+            runtime_platform_name: "local".to_string(),
+            debug_mode: false,
+            workload: crate::toolchain::WorkloadKind::Container,
+        };
+
+        toolchain
+            .build(&context)
+            .await
+            .expect("Docker toolchain should forward the configured BuildKit secret");
+
+        let archive = fs::read(build.path().join(format!(
+            "{}.oci.tar",
+            context.build_target.runtime_platform_id()
+        )))
+        .await
+        .expect("read built OCI archive");
+        assert!(
+            !archive.windows(cert.len()).any(|window| window == cert),
+            "enterprise CA contents must not be persisted in the image archive"
         );
     }
 
