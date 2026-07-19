@@ -10,6 +10,39 @@ local fast_steps = new Mapping<String, Step> {
     }
     ["check-added-large-files"] = Builtins.check_added_large_files
     ["check-merge-conflict"] = Builtins.check_merge_conflict
+    ["max-lines"] {
+        glob = List("*.rs", "*.ts", "*.tsx", "*.js", "*.jsx")
+        exclude = List(
+            "client-sdks/**", // generated (Speakeasy SDK codegen)
+            "packages/sdk/src/worker-runtime/generated/**", // generated
+            // The #[controller] macro requires the annotated struct and its single
+            // annotated impl block to live in one module, so these cannot be split further.
+            "crates/alien-infra/src/worker/gcp/mod.rs",
+            "crates/alien-infra/src/worker/aws/mod.rs",
+            "crates/alien-infra/src/worker/azure/mod.rs",
+            "crates/alien-test/src/distribution.rs", // legacy, pending split
+            "crates/alien-helm/src/generator.rs", // legacy, pending split
+            "crates/alien-deploy-cli/src/commands/up.rs", // legacy, pending split
+            "crates/alien-aws-clients/src/aws/ec2.rs", // legacy, pending split
+            "crates/alien-gcp-clients/tests/gcp_compute_client_tests.rs", // legacy, pending split
+            "crates/alien-terraform/src/generator.rs", // legacy, pending split
+            "crates/alien-core/src/heartbeat.rs", // legacy, pending split
+            "crates/alien-deploy-cli/src/commands/join.rs", // legacy, pending split
+            "crates/alien-infra/src/kubernetes_public_endpoint.rs", // legacy, pending split
+            "crates/alien-infra/src/network/aws.rs", // legacy, pending split
+            "crates/alien-aws-clients/tests/aws_s3_client_tests.rs", // legacy, pending split
+            "crates/alien-cloudformation/src/generator.rs", // legacy, pending split
+            "crates/alien-bindings/src/provider.rs", // legacy, pending split
+            "crates/alien-bindings/tests/storage.rs", // legacy, pending split
+            "crates/alien-infra/src/container/kubernetes.rs", // legacy, pending split
+            "crates/alien-infra/src/network/azure.rs", // legacy, pending split
+            "crates/alien-infra/src/core/executor.rs", // legacy, pending split
+            "crates/alien-commands/src/server/mod.rs", // legacy, pending split
+            "crates/alien-cli/src/commands/release.rs", // legacy, pending split
+            "crates/alien-preflights/src/mutations/compute_cluster.rs" // legacy, pending split
+        )
+        check = #"wc -l {{files}} | awk '$2 != "total" && $1 > 2000 { printf "%s has %s lines (max 2000) - split this file or add an hk.pkl exclude\n", $2, $1; found = 1 } END { exit found }'"#
+    }
     ["newlines"] = Builtins.newlines
     ["rustfmt"] = (Builtins.rustfmt) {
         check = "rustfmt --check --edition 2021 {{files}}"
