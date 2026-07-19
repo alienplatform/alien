@@ -144,8 +144,8 @@ fn azure_full_stack_renders_audit_ready_module() {
     let has = |needle: &str| rendered.iter().any(|line| line == needle);
 
     assert!(
-        has("infrastructure_subnet_id = azurerm_subnet.default_network_private.id"),
-        "container apps environment must point its infrastructure subnet at the network private subnet"
+        has("infrastructure_subnet_id = azurerm_subnet.default_network_container_apps.id"),
+        "container apps environment must use its dedicated infrastructure subnet"
     );
     assert!(
         has("internal_load_balancer_enabled = false"),
@@ -153,7 +153,7 @@ fn azure_full_stack_renders_audit_ready_module() {
     );
     assert!(
         has("name = \"Microsoft.App/environments\""),
-        "the private subnet must be delegated to Microsoft.App/environments for the env infra subnet"
+        "the container apps subnet must be delegated to Microsoft.App/environments"
     );
 
     assert_terraform_valid(&module, "azure_full_stack");

@@ -12,8 +12,9 @@
 //!   resource id and subnet names; we surface the resolved ids in
 //!   ImportData so the controller can plug them into AKS / Container
 //!   Apps without an extra cloud round-trip.
-//! * `Create` — full topology: VNet, public + private subnet, NAT
-//!   gateway with its public IP, NSG.
+//! * `Create` — full topology: VNet, public + private workload subnets,
+//!   a dedicated Container Apps infrastructure subnet, NAT gateway with
+//!   its public IP, and an NSG.
 //!
 //! Subnets land at deterministic addresses derived from the VNet CIDR.
 //! Default CIDR `10.46.0.0/16` mirrors the AWS (`10.42`) / GCP
@@ -154,6 +155,7 @@ fn create_topology(ctx: &EmitContext<'_>, label: &str, cidr: Option<String>) -> 
     let cidr = cidr.unwrap_or_else(|| "10.46.0.0/16".to_string());
     let public_label = format!("{label}_public");
     let private_label = format!("{label}_private");
+    let container_apps_label = format!("{label}_container_apps");
     let appgw_label = format!("{label}_appgw");
     let alb_label = format!("{label}_alb");
     let pe_label = format!("{label}_pe");
@@ -209,12 +211,10 @@ fn create_topology(ctx: &EmitContext<'_>, label: &str, cidr: Option<String>) -> 
         ],
     ));
 
-    // The private subnet doubles as the Container Apps environment infrastructure subnet (the
-    // env emitter points `infrastructure_subnet_id` here, mirroring the runtime controller). Azure
-    // requires that subnet to be delegated to `Microsoft.App/environments`; unlike the `az` CLI,
-    // the azurerm provider does not auto-delegate, so the delegation is declared here. A /24 is
-    // sufficient for the consumption environment the env emitter creates (proven against real
-    // Azure: a consumption env on a /24 delegated subnet provisions and schedules apps).
+    // The private subnet is reserved for VM and other workload NICs. Container Apps environments
+    // are external resources from Azure Networking's perspective, so a VMSS cannot attach NICs to
+    // the same subnet as an environment. Keep this subnet undelegated and give Container Apps its
+    // own subnet below.
     fragment.resource_blocks.push(resource_block(
         "azurerm_subnet",
         &private_label,
@@ -235,6 +235,33 @@ fn create_topology(ctx: &EmitContext<'_>, label: &str, cidr: Option<String>) -> 
                 "address_prefixes",
                 Expression::Array(vec![expr::raw(format!(
                     "cidrsubnet(tolist(azurerm_virtual_network.{label}.address_space)[0], 8, 1)"
+                ))]),
+            ),
+        ],
+    ));
+
+    // Azure requires a delegated infrastructure subnet for a VNet-integrated Container Apps
+    // environment. A /24 is sufficient for the consumption environment emitted by Alien.
+    fragment.resource_blocks.push(resource_block(
+        "azurerm_subnet",
+        &container_apps_label,
+        [
+            attr(
+                "name",
+                expr::template(format!("${{local.resource_prefix}}-{label}-container-apps")),
+            ),
+            attr(
+                "resource_group_name",
+                expr::raw("var.azure_resource_group_name"),
+            ),
+            attr(
+                "virtual_network_name",
+                expr::traversal(["azurerm_virtual_network", label, "name"]),
+            ),
+            attr(
+                "address_prefixes",
+                Expression::Array(vec![expr::raw(format!(
+                    "cidrsubnet(tolist(azurerm_virtual_network.{label}.address_space)[0], 8, 5)"
                 ))]),
             ),
             nested(crate::block::block(
@@ -340,8 +367,8 @@ fn create_topology(ctx: &EmitContext<'_>, label: &str, cidr: Option<String>) -> 
     ));
 
     // Dedicated Private Endpoint subnet for Postgres Flexible Server (and any future PE-reached
-    // service). It must NOT share the delegated Container Apps "private" subnet: a subnet delegated
-    // to `Microsoft.App/environments` cannot host a Private Endpoint. Left undelegated, with
+    // service). It must not share either the workload subnet or the delegated Container Apps
+    // subnet. Left undelegated, with
     // Private Endpoint network policies disabled as Azure requires for PE NICs.
     fragment.resource_blocks.push(resource_block(
         "azurerm_subnet",
