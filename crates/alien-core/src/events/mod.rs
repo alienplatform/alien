@@ -31,7 +31,7 @@
 //!   event bus instances, making it easy to add to large Rust workspaces with many crates.
 //! - **Hierarchical Events**: Events can have parent-child relationships for organizing complex operations.
 //! - **State Management**: Events can track their lifecycle (None, Started, Success, Failed).
-//! - **Durable Execution Support**: Designed to work with frameworks like Temporal, Inngest, and Restate
+//! - **Durable Execution Support**: Designed to work with durable execution frameworks
 //!   where processes can restart and state needs to be preserved externally.
 //! - **Change-based Architecture**: Instead of storing events in memory, the system emits changes
 //!   (Created, Updated, StateChanged) that handlers can persist or react to.
