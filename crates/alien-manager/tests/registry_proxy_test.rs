@@ -434,6 +434,27 @@ async fn test_proxy_auth() {
         .await
         .unwrap();
     assert_eq!(resp.status(), 401, "No auth should be 401");
+    assert_eq!(
+        resp.headers()
+            .get("www-authenticate")
+            .and_then(|value| value.to_str().ok()),
+        Some("Basic realm=\"alien-manager\"")
+    );
+
+    // Reverse proxies commonly normalize the trailing slash away. The OCI
+    // client must receive the same challenge from the normalized path.
+    let resp = client
+        .get(format!("{}/v2", s.manager_url))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 401, "Normalized version path should be 401");
+    assert_eq!(
+        resp.headers()
+            .get("www-authenticate")
+            .and_then(|value| value.to_str().ok()),
+        Some("Basic realm=\"alien-manager\"")
+    );
 
     // Invalid Bearer
     let resp = client

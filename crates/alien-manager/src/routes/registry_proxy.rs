@@ -198,6 +198,11 @@ fn project_id_after_prefix<'a>(repo_name: &'a str, prefix: &str) -> Option<&'a s
 
 pub fn router() -> Router<AppState> {
     Router::new()
+        // Some reverse proxies normalize the OCI client's `/v2/` probe to
+        // `/v2`. Both forms must return the registry auth challenge or the
+        // client will treat the registry as anonymous and omit credentials
+        // from subsequent push requests.
+        .route("/v2", get(version_check))
         .route("/v2/", get(version_check))
         .route(
             "/v2/{*path}",
