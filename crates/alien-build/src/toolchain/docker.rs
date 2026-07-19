@@ -1,5 +1,5 @@
 use super::{Toolchain, ToolchainContext, ToolchainOutput};
-use crate::command_output::{image_build_error_with_output, wait_with_captured_output};
+use crate::command_output::wait_with_captured_output;
 use crate::error::{ErrorData, Result};
 use crate::settings::BinaryTargetExt;
 use alien_core::AlienEvent;
@@ -41,7 +41,7 @@ impl DockerToolchain {
         src_dir.join(dockerfile_name).exists()
     }
 
-    /// Generate a temporary tag for the build
+    #[cfg(test)]
     fn generate_temp_tag(resource_name: &str) -> String {
         use rand::distr::Alphanumeric;
         use rand::Rng;
@@ -212,7 +212,11 @@ impl Toolchain for DockerToolchain {
 
         // Build arguments for docker buildx build
         // Note: Target architecture is automatically handled by build_target
-        let temp_tag = Self::generate_temp_tag("docker-build");
+        let output_tarball = context.build_dir.join(format!(
+            "{}.oci.tar",
+            context.build_target.runtime_platform_id()
+        ));
+        let output = format!("type=oci,dest={}", output_tarball.display());
         let arch_str = match context.build_target.to_dockdash_arch() {
             dockdash::Arch::Amd64 => "amd64",
             dockdash::Arch::ARM64 => "arm64",
@@ -227,7 +231,8 @@ impl Toolchain for DockerToolchain {
             "build".to_string(),
             "--platform".to_string(),
             platform_str,
-            "--load".to_string(), // export into the docker daemon so we can `docker save` it
+            "--output".to_string(),
+            output,
             "-f".to_string(),
             dockerfile_name.to_string(),
         ];
@@ -255,9 +260,7 @@ impl Toolchain for DockerToolchain {
             args.push(target.clone());
         }
 
-        // Add tag and context
-        args.push("-t".to_string());
-        args.push(temp_tag.clone());
+        // Add build context
         args.push(".".to_string()); // Build context is the src_dir
 
         info!(
@@ -321,52 +324,9 @@ impl Toolchain for DockerToolchain {
         })
         .await?;
 
-        // Export the built image to OCI tarball
-        let output_tarball = context.build_dir.join(format!(
-            "{}.oci.tar",
-            context.build_target.runtime_platform_id()
-        ));
-
-        info!(
-            "Exporting Docker image {} to OCI tarball: {}",
-            temp_tag,
-            output_tarball.display()
-        );
-
-        let output_tarball_str = output_tarball.to_string_lossy().to_string();
-        let save_args = vec!["save", "-o", &output_tarball_str, &temp_tag];
-
-        let save_output = Command::new("docker")
-            .args(&save_args)
-            .stdout(Stdio::piped())
-            .stderr(Stdio::piped())
-            .output()
-            .await
-            .into_alien_error()
-            .context(ErrorData::ImageBuildFailed {
-                resource_name: "docker-build".to_string(),
-                reason: "Failed to execute docker save".to_string(),
-                build_output: None,
-            })?;
-
-        if !save_output.status.success() {
-            return Err(image_build_error_with_output(
-                "docker-build",
-                "docker save failed",
-                &save_output,
-            ));
-        }
-
-        info!("Successfully exported Docker image to OCI tarball");
-
-        // Flatten the saved archive to a single image manifest before the OCI reader sees it.
+        // Buildx may wrap the image manifest in an index alongside provenance attestations.
+        // Flatten the archive before the runtime OCI reader sees it.
         Self::normalize_oci_archive(&output_tarball, arch_str)?;
-
-        // Clean up the temporary image
-        let _ = Command::new("docker")
-            .args(&["rmi", &temp_tag])
-            .output()
-            .await;
 
         // Extract CMD from the built image for the runtime_command field
         let runtime_command = Self::extract_cmd_from_tarball(&output_tarball)?;
