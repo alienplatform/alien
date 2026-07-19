@@ -34,6 +34,11 @@ pub struct AwsEmailController {
     pub(crate) domains: BTreeMap<String, EmailDomainOutputs>,
     /// SES receipt rule set name, when inbound mail is configured.
     pub(crate) rule_set_name: Option<String>,
+    /// Deployment region recorded at import time. Absent on states imported
+    /// before this field existed; the binding then omits `region` and
+    /// consumers fall back to their runtime's own region.
+    #[serde(default)]
+    pub(crate) region: Option<String>,
 }
 
 #[controller]
@@ -99,5 +104,21 @@ impl AwsEmailController {
                 rule_set_name: self.rule_set_name.clone(),
             })
         })
+    }
+
+    fn get_binding_params(&self) -> Result<Option<serde_json::Value>> {
+        // Mirrors the CloudFormation emitter's binding ref: service "ses" plus
+        // the configuration set; `region` is included when known.
+        let Some(configuration_set) = &self.configuration_set else {
+            return Ok(None);
+        };
+        let mut binding = serde_json::json!({
+            "service": "ses",
+            "configurationSet": configuration_set,
+        });
+        if let Some(region) = &self.region {
+            binding["region"] = serde_json::Value::String(region.clone());
+        }
+        Ok(Some(binding))
     }
 }

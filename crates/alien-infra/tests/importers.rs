@@ -347,10 +347,16 @@ fn aws_email_round_trip() {
     assert_eq!(domain.dkim_tokens[0].name, "t1._domainkey.mail.example.com");
     assert_eq!(domain.dkim_tokens[0].value, "t1.dkim.amazonses.com");
 
-    // Email is not an SDK remote-access resource: bindings are baked into
-    // setup-emitted workloads at generation time, so the imported state must
-    // not carry binding params.
-    assert!(state.remote_binding_params.is_none());
+    // Manager-provisioned workers receive the mail binding from the imported
+    // controller state, mirroring the CloudFormation emitter's binding ref.
+    assert_eq!(
+        state.remote_binding_params,
+        Some(json!({
+            "service": "ses",
+            "configurationSet": "alien-stack-mailer",
+            "region": "us-east-1",
+        }))
+    );
 }
 
 /// A config-set-only email resource (no seed domains, no inbound) is valid —

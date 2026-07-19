@@ -48,6 +48,7 @@ impl ResourceImporter for AwsEmailImporter {
             configuration_set: Some(data.configuration_set),
             domains,
             rule_set_name: data.rule_set_name,
+            region: Some(ctx.region.to_string()),
             _internal_stay_count: None,
         };
         make_imported_state(controller, ctx)
