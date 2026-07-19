@@ -202,6 +202,10 @@ impl<'de> Deserialize<'de> for Resource {
                 serde_json::from_value::<crate::resources::Queue>(value)
                     .map_err(serde::de::Error::custom)?,
             ),
+            "email" => Box::new(
+                serde_json::from_value::<crate::resources::Email>(value)
+                    .map_err(serde::de::Error::custom)?,
+            ),
             "kv" => Box::new(
                 serde_json::from_value::<crate::resources::Kv>(value)
                     .map_err(serde::de::Error::custom)?,
@@ -262,6 +266,7 @@ impl<'de> Deserialize<'de> for Resource {
                         "kubernetes-cluster",
                         "storage",
                         "queue",
+                        "email",
                         "kv",
                         "postgres",
                         "network",
@@ -538,6 +543,10 @@ impl<'de> Deserialize<'de> for ResourceOutputs {
                 serde_json::from_value::<crate::resources::QueueOutputs>(value)
                     .map_err(serde::de::Error::custom)?,
             ),
+            "email" => Box::new(
+                serde_json::from_value::<crate::resources::EmailOutputs>(value)
+                    .map_err(serde::de::Error::custom)?,
+            ),
             "kv" => Box::new(
                 serde_json::from_value::<crate::resources::KvOutputs>(value)
                     .map_err(serde::de::Error::custom)?,
@@ -603,6 +612,7 @@ impl<'de> Deserialize<'de> for ResourceOutputs {
                         "compute-cluster",
                         "storage",
                         "queue",
+                        "email",
                         "kv",
                         "postgres",
                         "network",

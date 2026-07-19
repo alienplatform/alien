@@ -568,3 +568,33 @@ describe("ArtifactRegistry resource configuration", () => {
     expect(stack).toMatchSnapshot()
   })
 })
+
+describe("Email resource configuration", () => {
+  it("creates email infrastructure with inbound storage and events queue", () => {
+    const mailbox = new alien.Storage("mailbox").build()
+    const mailEvents = new alien.Queue("mail-events").build()
+    const email = new alien.Email("mailer")
+      .domains(["mail.example.com"])
+      .domain("mail.example.org")
+      .inbound(mailbox)
+      .events(mailEvents)
+      .build()
+
+    expect(email.config.id).toBe("mailer")
+    expect(email.config.domains).toEqual(["mail.example.com", "mail.example.org"])
+    expect(email.config.inbound).toEqual({ storage: { type: "storage", id: "mailbox" } })
+    expect(email.config.events).toEqual({ queue: { type: "queue", id: "mail-events" } })
+
+    const stack = new alien.Stack("email-stack")
+      .add(mailbox, "frozen")
+      .add(mailEvents, "frozen")
+      .add(email, "frozen")
+      .build()
+
+    expect(stack).toMatchSnapshot()
+  })
+
+  it("rejects an email resource without domains", () => {
+    expect(() => new alien.Email("mailer").build()).toThrow(/at least one domain/)
+  })
+})

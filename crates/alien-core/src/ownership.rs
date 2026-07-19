@@ -89,7 +89,10 @@ pub fn ownership_policy_for_resource_type(resource_type: &str) -> ResourceOwners
         | "azure_container_apps_environment"
         | "azure-container-apps-environment"
         | "azure_service_bus_namespace"
-        | "azure-service-bus-namespace" => frozen_only(),
+        | "azure-service-bus-namespace"
+        // Email holds durable routing state (domain identities, DKIM
+        // verification, receipt rules) that setup owns end to end.
+        | "email" => frozen_only(),
         "storage" | "queue" | "kv" | "vault" | "postgres" => user_choice(),
         _ => user_choice(),
     }
@@ -191,6 +194,7 @@ mod tests {
             "azure_storage_account",
             "azure_container_apps_environment",
             "azure_service_bus_namespace",
+            "email",
         ] {
             let policy = ownership_policy_for_resource_type(resource_type);
             assert!(policy.allows_lifecycle(ResourceLifecycle::Frozen));

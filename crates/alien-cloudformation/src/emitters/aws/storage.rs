@@ -18,8 +18,8 @@ use crate::{
     template::{CfExpression, CfResource},
 };
 use alien_core::{
-    import::EmitContext, ErrorData, PermissionProfile, PermissionSetReference,
-    RemoteStackManagement, Result, ServiceAccount, Storage,
+    import::EmitContext, ownership_policy_for_resource_type, Email, ErrorData, PermissionProfile,
+    PermissionSetReference, RemoteStackManagement, Result, ServiceAccount, Storage,
 };
 use alien_error::{AlienError, Context, IntoAlienError};
 use alien_permissions::{generators::AwsCloudFormationPermissionsGenerator, BindingTarget};
@@ -119,7 +119,11 @@ impl CfEmitter for AwsStorageEmitter {
             .insert("Bucket".to_string(), CfExpression::ref_(bucket_id));
         policy.properties.insert(
             "PolicyDocument".to_string(),
-            bucket_policy_document(bucket_id, storage.public_read),
+            bucket_policy_document(
+                bucket_id,
+                storage.public_read,
+                email_inbound_targets_bucket(ctx),
+            ),
         );
 
         let mut resources = vec![bucket, policy];
@@ -200,7 +204,31 @@ fn public_access_block(block_public_access: bool) -> CfExpression {
     ])
 }
 
-fn bucket_policy_document(bucket_id: &str, public_read: bool) -> CfExpression {
+/// True when a setup-emitted Email resource delivers inbound mail into this
+/// bucket. The SES write grant must live in this bucket policy — S3 supports
+/// only one bucket policy resource per bucket, so the email emitter cannot
+/// attach its own.
+fn email_inbound_targets_bucket(ctx: &EmitContext<'_>) -> bool {
+    ctx.stack.resources().any(|(_id, entry)| {
+        let ownership = ownership_policy_for_resource_type(entry.config.resource_type().as_ref());
+        if !ownership.should_emit_in_setup(entry.lifecycle) {
+            return false;
+        }
+        let Some(email) = entry.config.downcast_ref::<Email>() else {
+            return false;
+        };
+        email
+            .inbound
+            .as_ref()
+            .is_some_and(|inbound| inbound.storage.id == ctx.resource_id)
+    })
+}
+
+fn bucket_policy_document(
+    bucket_id: &str,
+    public_read: bool,
+    allow_ses_inbound: bool,
+) -> CfExpression {
     let bucket_arn = CfExpression::get_att(bucket_id, "Arn");
     let bucket_objects_arn =
         CfExpression::sub(format!("arn:${{AWS::Partition}}:s3:::${{{bucket_id}}}/*"));
@@ -229,7 +257,32 @@ fn bucket_policy_document(bucket_id: &str, public_read: bool) -> CfExpression {
             ("Effect", CfExpression::from("Allow")),
             ("Principal", CfExpression::from("*")),
             ("Action", CfExpression::from("s3:GetObject")),
+            ("Resource", bucket_objects_arn.clone()),
+        ]));
+    }
+
+    if allow_ses_inbound {
+        // SES delivers received mail via its service principal; scope the
+        // grant to this account per the SES receiving documentation.
+        statements.push(CfExpression::object([
+            ("Sid", CfExpression::from("AllowSesInboundDelivery")),
+            ("Effect", CfExpression::from("Allow")),
+            (
+                "Principal",
+                CfExpression::object([("Service", CfExpression::from("ses.amazonaws.com"))]),
+            ),
+            ("Action", CfExpression::from("s3:PutObject")),
             ("Resource", bucket_objects_arn),
+            (
+                "Condition",
+                CfExpression::object([(
+                    "StringEquals",
+                    CfExpression::object([(
+                        "aws:SourceAccount",
+                        CfExpression::ref_("AWS::AccountId"),
+                    )]),
+                )]),
+            ),
         ]));
     }
 

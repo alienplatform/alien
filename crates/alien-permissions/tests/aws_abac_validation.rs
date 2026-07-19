@@ -272,6 +272,7 @@ fn aws_resource_arns_are_stack_or_resource_scoped_unless_documented_external() {
                         || documented_same_account_ecr_metadata_scope(actions, resource)
                         || documented_run_instances_companion_resource(actions, resource)
                         || documented_create_security_group_vpc_resource(actions, resource)
+                        || documented_ses_domain_identity_scope(resource)
                     {
                         continue;
                     }
@@ -295,6 +296,14 @@ fn documented_external_resource_scope(resource: &str) -> bool {
     // Runtime compute pulls images from the manager-owned artifact registry. Target-account
     // isolation is enforced by the repository resource policy that grants this role access.
     resource == "arn:aws:ecr:*:${managingAccountId}:repository/*"
+}
+
+fn documented_ses_domain_identity_scope(resource: &str) -> bool {
+    // SES identities are named after customer mail domains (e.g.
+    // `identity/mail.example.com`), so their ARNs cannot carry the stack
+    // prefix. Sends remain gated by the stack-scoped configuration-set ARN
+    // granted alongside the identity ARN.
+    resource == "arn:aws:ses:${awsRegion}:${awsAccountId}:identity/*"
 }
 
 fn documented_same_account_ecr_metadata_scope(actions: &[String], resource: &str) -> bool {
@@ -480,6 +489,7 @@ fn wildcard_action_allowed(
     action_is_forced_wildcard_read(action)
         || action_is_documented_cross_account_exception(action)
         || action_is_documented_lambda_vpc_eni_exception(permission_set_id, action)
+        || action_is_documented_ses_receipt_rule_exception(permission_set_id, action)
         || (action_requires_service_name_condition(action)
             && has_condition_key(binding, "iam:AWSServiceName"))
         || (action_requires_tag_condition(action)
@@ -543,6 +553,26 @@ fn action_is_documented_lambda_vpc_eni_exception(permission_set_id: &str, action
             | "ec2:DeleteNetworkInterface"
             | "ec2:AssignPrivateIpAddresses"
             | "ec2:UnassignPrivateIpAddresses"
+    )
+}
+
+fn action_is_documented_ses_receipt_rule_exception(permission_set_id: &str, action: &str) -> bool {
+    if permission_set_id != "email/provision" {
+        return false;
+    }
+
+    // Per the SES entry in the Service Authorization Reference, the v1
+    // receipt-rule actions do not support resource-level permissions —
+    // Resource must be "*". Receipt rule sets are account-wide singletons
+    // (only one can be active), so there is no narrower scope to grant.
+    matches!(
+        action,
+        "ses:CreateReceiptRuleSet"
+            | "ses:DeleteReceiptRuleSet"
+            | "ses:CreateReceiptRule"
+            | "ses:UpdateReceiptRule"
+            | "ses:DeleteReceiptRule"
+            | "ses:SetActiveReceiptRuleSet"
     )
 }
 
