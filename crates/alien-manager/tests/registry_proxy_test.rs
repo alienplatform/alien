@@ -732,6 +732,22 @@ async fn test_proxy_push_auth() {
         403,
         "Deployment tokens should not push manifests"
     );
+
+    // Both upload-init forms must reach the upstream registry. Reverse
+    // proxies commonly normalize the trailing slash away.
+    for suffix in ["blobs/uploads/", "blobs/uploads"] {
+        let resp = client
+            .post(format!("{}/v2/artifacts/test-repo/{suffix}", s.manager_url))
+            .header("Authorization", format!("Bearer {}", s.admin_token))
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(
+            resp.status(),
+            202,
+            "Authenticated upload init for {suffix} should reach the upstream registry"
+        );
+    }
 }
 
 /// End-to-end: push an image through the proxy, then pull it back and verify content.

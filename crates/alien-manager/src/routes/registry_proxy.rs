@@ -433,7 +433,7 @@ async fn proxy_push(
     Query(query): Query<HashMap<String, String>>,
     body: Body,
 ) -> Response {
-    let oci_path_str = path.trim_start_matches('/');
+    let oci_path_str = canonicalize_oci_push_path(path.trim_start_matches('/'));
     // The signing flow in `rewrite_location_with_upload_session_auth` signs
     // the URL's full path (`/v2/...`). axum's `Path` extractor on the
     // `/v2/{*path}` route strips the leading `/v2/`, so rebuild it before
@@ -483,6 +483,17 @@ async fn proxy_push(
         Some(&repo_name),
     )
     .await
+}
+
+/// Restore the significant trailing slash on the OCI upload-init endpoint.
+/// Reverse proxies commonly normalize it away, while upstream registries such
+/// as ECR require `POST .../blobs/uploads/` and reject the slashless form.
+fn canonicalize_oci_push_path(path: &str) -> std::borrow::Cow<'_, str> {
+    if path.ends_with("/blobs/uploads") {
+        std::borrow::Cow::Owned(format!("{path}/"))
+    } else {
+        std::borrow::Cow::Borrowed(path)
+    }
 }
 
 /// True if the path matches an OCI blob-upload-session URL —
