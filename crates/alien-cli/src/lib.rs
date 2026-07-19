@@ -72,7 +72,7 @@ pub struct Cli {
     pub base_url: Option<String>,
 
     /// Platform API key
-    #[arg(long, env = "ALIEN_API_KEY", global = true)]
+    #[arg(long, env = "ALIEN_API_KEY", hide_env_values = true, global = true)]
     pub api_key: Option<String>,
 
     /// Don't open browser for authentication
