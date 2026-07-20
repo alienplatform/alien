@@ -54,6 +54,11 @@ permissions:
   contents: read
   id-token: write
 
+env:
+  # Fall back to local compilation when the shared sccache backend returns a
+  # transient error (e.g. webdav 403) instead of failing the whole build.
+  SCCACHE_IGNORE_SERVER_IO_ERROR: "1"
+
 jobs:
   setup:
     # Skip on fork PRs (no access to secrets)
@@ -68,9 +73,9 @@ jobs:
     runs-on: depot-ubuntu-24.04-arm
     timeout-minutes: 45
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
-      - uses: hashicorp/setup-terraform@v3
+      - uses: hashicorp/setup-terraform@v4
         with:
           terraform_wrapper: false
           terraform_version: 1.14.5
@@ -209,7 +214,7 @@ jobs:
           done < .env.test
 
       - name: Upload .env.test artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v6
         with:
           name: env-test
           path: .env.test
@@ -254,13 +259,13 @@ jobs:
       CARGO_INCREMENTAL: "0"
       CARGO_NET_GIT_FETCH_WITH_CLI: "true"
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       - name: Configure git credentials
         run: git config --global url."https://x-access-token:${{ secrets.REPO_ACCESS_TOKEN }}@github.com/".insteadOf "https://github.com/"
 
       - name: Download .env.test
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v7
         with:
           name: env-test
 
@@ -286,7 +291,7 @@ jobs:
 
       - uses: depot/setup-action@v1
 
-      - uses: mozilla-actions/sccache-action@v0.0.9
+      - uses: mozilla-actions/sccache-action@v0.0.10
         continue-on-error: true
         with:
           version: v0.16.0

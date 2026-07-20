@@ -28,7 +28,7 @@ runs:
 
     - name: Install sccache
       continue-on-error: true
-      uses: mozilla-actions/sccache-action@v0.0.9
+      uses: mozilla-actions/sccache-action@v0.0.10
       with:
         # Avoid the action's latest-release API lookup, which can fail during
         # transient GitHub API outages. Cache setup is an optimization, so a

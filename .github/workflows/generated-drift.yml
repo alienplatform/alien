@@ -17,6 +17,11 @@ permissions:
   contents: read
   id-token: write
 
+env:
+  # Fall back to local compilation when the shared sccache backend returns a
+  # transient error (e.g. webdav 403) instead of failing the whole build.
+  SCCACHE_IGNORE_SERVER_IO_ERROR: "1"
+
 jobs:
   drift:
     if: false # temporarily disabled — speakeasy CLI not available in CI
@@ -27,13 +32,13 @@ jobs:
       CARGO_NET_GIT_FETCH_WITH_CLI: "true"
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
-      - uses: pnpm/action-setup@v4
+      - uses: pnpm/action-setup@v6
         with:
           version: 10.11.0
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v5
         with:
           node-version: 22
           cache: pnpm
@@ -42,7 +47,7 @@ jobs:
 
       - uses: depot/setup-action@v1
 
-      - uses: mozilla-actions/sccache-action@v0.0.9
+      - uses: mozilla-actions/sccache-action@v0.0.10
 
       - name: Configure git credentials
         run: git config --global url."https://x-access-token:${{ secrets.REPO_ACCESS_TOKEN }}@github.com/".insteadOf "https://github.com/"

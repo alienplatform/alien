@@ -13,6 +13,11 @@ permissions:
   packages: write
   id-token: write
 
+env:
+  # Fall back to local compilation when the shared sccache backend returns a
+  # transient error (e.g. webdav 403) instead of failing the whole build.
+  SCCACHE_IGNORE_SERVER_IO_ERROR: "1"
+
 jobs:
   prepare:
     runs-on: depot-ubuntu-24.04-arm
@@ -20,7 +25,7 @@ jobs:
     outputs:
       version: ${{ steps.bump.outputs.version }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
         with:
           token: ${{ secrets.REPO_ACCESS_TOKEN }}
           fetch-depth: 0
@@ -98,7 +103,7 @@ jobs:
       # on one computed version without mutating git or publishing anything.
       - name: Upload versioned manifests for dry run
         if: ${{ inputs.dry_run }}
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v6
         with:
           name: release-version-manifests
           retention-days: 1
@@ -142,7 +147,7 @@ jobs:
     runs-on: depot-ubuntu-24.04-arm
     timeout-minutes: 5
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
         with:
           ref: v${{ needs.prepare.outputs.version }}
           fetch-depth: 0
@@ -157,7 +162,7 @@ jobs:
           OUTPUT: CHANGELOG-release.md
 
       - name: Upload changelog
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v6
         with:
           name: changelog
           retention-days: 1
@@ -173,7 +178,7 @@ jobs:
     env:
       CARGO_REGISTRY_TOKEN: ${{ secrets.CRATES_IO_TOKEN }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
         with:
           ref: v${{ needs.prepare.outputs.version }}
 
@@ -184,7 +189,7 @@ jobs:
 
       - uses: depot/setup-action@v1
 
-      - uses: mozilla-actions/sccache-action@v0.0.9
+      - uses: mozilla-actions/sccache-action@v0.0.10
         continue-on-error: true
         with:
           version: v0.16.0
@@ -229,15 +234,15 @@ jobs:
     runs-on: depot-ubuntu-24.04-arm-4
     timeout-minutes: 30
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
         with:
           ref: v${{ needs.prepare.outputs.version }}
 
-      - uses: pnpm/action-setup@v4
+      - uses: pnpm/action-setup@v6
         with:
           version: 10.11.0
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v5
         with:
           node-version: 22
           cache: pnpm
@@ -277,11 +282,11 @@ jobs:
     runs-on: depot-ubuntu-24.04-arm-4
     timeout-minutes: 30
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
         with:
           ref: v${{ needs.prepare.outputs.version }}
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v5
         with:
           node-version: 22
           registry-url: https://registry.npmjs.org
@@ -353,13 +358,13 @@ jobs:
     env:
       CARGO_INCREMENTAL: "0"
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
         with:
           ref: ${{ inputs.dry_run && github.sha || format('v{0}', needs.prepare.outputs.version) }}
 
       - name: Apply computed version for dry run
         if: ${{ inputs.dry_run }}
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v7
         with:
           name: release-version-manifests
           path: .
@@ -396,11 +401,11 @@ jobs:
         if: matrix.target == 'x86_64-apple-darwin'
         run: rustup target add x86_64-apple-darwin
 
-      - uses: pnpm/action-setup@v4
+      - uses: pnpm/action-setup@v6
         with:
           version: 10.11.0
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v5
         with:
           node-version: 22
           cache: pnpm
@@ -426,7 +431,7 @@ jobs:
         run: file "packages/bindings/npm/${{ matrix.triple }}/alien-bindings-node.${{ matrix.triple }}.node" | grep -q "${{ matrix.expect_arch }}"
 
       - name: Upload addon artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v6
         with:
           name: addon-${{ matrix.triple }}
           retention-days: 1
@@ -458,13 +463,13 @@ jobs:
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 20
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
         with:
           ref: ${{ inputs.dry_run && github.sha || format('v{0}', needs.prepare.outputs.version) }}
 
       - name: Apply computed version for dry run
         if: ${{ inputs.dry_run }}
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v7
         with:
           name: release-version-manifests
           path: .
@@ -474,11 +479,11 @@ jobs:
           VERSION: ${{ needs.prepare.outputs.version }}
         run: node packages/bindings/scripts/validate-release-version.mjs "$VERSION"
 
-      - uses: pnpm/action-setup@v4
+      - uses: pnpm/action-setup@v6
         with:
           version: 10.11.0
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v5
         with:
           node-version: 22
           cache: pnpm
@@ -492,7 +497,7 @@ jobs:
         run: pnpm install --frozen-lockfile
 
       - name: Download staged addon (${{ matrix.triple }})
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v7
         with:
           name: addon-${{ matrix.triple }}
           path: packages/bindings/npm/${{ matrix.triple }}
@@ -516,13 +521,13 @@ jobs:
     runs-on: depot-ubuntu-24.04-arm-4
     timeout-minutes: 30
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
         with:
           ref: ${{ inputs.dry_run && github.sha || format('v{0}', needs.prepare.outputs.version) }}
 
       - name: Apply computed version for dry run
         if: ${{ inputs.dry_run }}
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v7
         with:
           name: release-version-manifests
           path: .
@@ -532,11 +537,11 @@ jobs:
           VERSION: ${{ needs.prepare.outputs.version }}
         run: node packages/bindings/scripts/validate-release-version.mjs "$VERSION"
 
-      - uses: pnpm/action-setup@v4
+      - uses: pnpm/action-setup@v6
         with:
           version: 10.11.0
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v5
         with:
           node-version: 22
           cache: pnpm
@@ -551,7 +556,7 @@ jobs:
         run: pnpm install --frozen-lockfile
 
       - name: Download addon artifacts
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v7
         with:
           pattern: addon-*
           path: ./addons
@@ -626,13 +631,13 @@ jobs:
     env:
       CARGO_INCREMENTAL: "0"
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
         with:
           ref: v${{ needs.prepare.outputs.version }}
 
       - name: Restore binaries from cache
         id: binary-cache
-        uses: actions/cache@v4
+        uses: actions/cache@v5
         with:
           path: |
             target/x86_64-unknown-linux-musl/release/alien
@@ -667,7 +672,7 @@ jobs:
           done
 
       - name: Upload x86_64 linux binaries
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v6
         with:
           name: binaries-x86_64-unknown-linux-musl
           retention-days: 1
@@ -681,13 +686,13 @@ jobs:
     env:
       CARGO_INCREMENTAL: "0"
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
         with:
           ref: v${{ needs.prepare.outputs.version }}
 
       - name: Restore binaries from cache
         id: binary-cache
-        uses: actions/cache@v4
+        uses: actions/cache@v5
         with:
           path: |
             target/aarch64-unknown-linux-musl/release/alien
@@ -722,7 +727,7 @@ jobs:
           done
 
       - name: Upload aarch64 linux binaries
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v6
         with:
           name: binaries-aarch64-unknown-linux-musl
           retention-days: 1
@@ -738,13 +743,13 @@ jobs:
     env:
       CARGO_INCREMENTAL: "0"
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
         with:
           ref: v${{ needs.prepare.outputs.version }}
 
       - name: Restore binaries from cache
         id: binary-cache
-        uses: actions/cache@v4
+        uses: actions/cache@v5
         with:
           path: |
             target/aarch64-apple-darwin/release/alien
@@ -767,7 +772,7 @@ jobs:
       - name: Install sccache
         if: steps.binary-cache.outputs.cache-hit != 'true'
         continue-on-error: true
-        uses: mozilla-actions/sccache-action@v0.0.9
+        uses: mozilla-actions/sccache-action@v0.0.10
         with:
           version: v0.16.0
 
@@ -792,7 +797,7 @@ jobs:
           done
 
       - name: Upload aarch64 darwin binaries
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v6
         with:
           name: binaries-aarch64-apple-darwin
           retention-days: 1
@@ -808,13 +813,13 @@ jobs:
     env:
       CARGO_INCREMENTAL: "0"
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
         with:
           ref: v${{ needs.prepare.outputs.version }}
 
       - name: Restore binaries from cache
         id: binary-cache
-        uses: actions/cache@v4
+        uses: actions/cache@v5
         with:
           path: |
             target/x86_64-pc-windows-msvc/release/alien.exe
@@ -835,7 +840,7 @@ jobs:
       - name: Install sccache
         if: steps.binary-cache.outputs.cache-hit != 'true'
         continue-on-error: true
-        uses: mozilla-actions/sccache-action@v0.0.9
+        uses: mozilla-actions/sccache-action@v0.0.10
         with:
           version: v0.16.0
 
@@ -865,7 +870,7 @@ jobs:
           cp target/x86_64-pc-windows-msvc/release/alien-operator.exe staged/x86_64-pc-windows-msvc/
 
       - name: Upload windows binaries
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v6
         with:
           name: binaries-x86_64-pc-windows-msvc
           retention-days: 1
@@ -880,7 +885,7 @@ jobs:
     timeout-minutes: 10
     steps:
       - name: Download all artifacts
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v7
         with:
           pattern: binaries-*
           path: ./artifacts
@@ -939,14 +944,14 @@ jobs:
     timeout-minutes: 10
     steps:
       - name: Download all binary artifacts
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v7
         with:
           pattern: binaries-*
           path: ./artifacts
           merge-multiple: false
 
       - name: Download changelog
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v7
         with:
           name: changelog
           path: .
@@ -1003,12 +1008,12 @@ jobs:
     runs-on: depot-ubuntu-24.04-arm-16
     timeout-minutes: 30
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
         with:
           ref: v${{ needs.prepare.outputs.version }}
 
       - name: Download linux binaries
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v7
         with:
           pattern: binaries-*-unknown-linux-musl
           path: ./linux-bins
@@ -1215,11 +1220,11 @@ jobs:
     runs-on: depot-ubuntu-24.04-arm
     timeout-minutes: 20
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
         with:
           ref: v${{ needs.prepare.outputs.version }}
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v5
         with:
           node-version: 22
           registry-url: https://registry.npmjs.org
@@ -1230,7 +1235,7 @@ jobs:
         run: npm whoami
 
       - name: Download all binary artifacts
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v7
         with:
           pattern: binaries-*
           path: ./artifacts
