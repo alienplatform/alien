@@ -278,15 +278,11 @@ pub fn validate_compute_pool_selection(
         errors.push(format!("Pool '{pool_id}' {message}"));
     }
     if matches!(platform, Platform::Aws | Platform::Gcp | Platform::Azure) {
-        let resolved_architecture = instance_catalog::select_instance_type(platform, requirements)
-            .ok()
-            .and_then(|selection| selection.profile.architecture);
         match selection.machine() {
             Some(machine) => match instance_catalog::find_instance_type(platform, machine) {
                 Some(spec) => {
-                    if resolved_architecture.is_none_or(|architecture| {
-                        !instance_satisfies(spec, requirements, architecture)
-                    }) {
+                    let architecture = requirements.architecture.unwrap_or(spec.architecture);
+                    if !instance_satisfies(spec, requirements, architecture) {
                         errors.push(format!(
                             "{} machine '{}' does not satisfy pool '{}' requirements",
                             platform, machine, pool_id
@@ -329,11 +325,20 @@ fn machine_options(
                 message: format!("Failed to select {platform} machine: {message}"),
             })
         })?;
-    let resolved_architecture = recommended.profile.architecture.ok_or_else(|| {
-        AlienError::new(ErrorData::GenericError {
-            message: format!("Selected {platform} machine has no CPU architecture"),
+    let resolved_architecture = requirements
+        .architecture
+        .or_else(|| {
+            selected_machine.and_then(|machine| {
+                instance_catalog::find_instance_type(platform, machine)
+                    .map(|spec| spec.architecture)
+            })
         })
-    })?;
+        .or(recommended.profile.architecture)
+        .ok_or_else(|| {
+            AlienError::new(ErrorData::GenericError {
+                message: format!("Selected {platform} machine has no CPU architecture"),
+            })
+        })?;
     let recommended = recommended.instance_type.to_string();
 
     let mut options: Vec<ComputeMachineOption> = instance_catalog::catalog_for_platform(platform)
@@ -789,6 +794,32 @@ mod tests {
         let pool = plan.pools.first().expect("general pool should exist");
         assert_eq!(pool.selected.machine(), Some("m7g.xlarge"));
         assert!(pool.errors.is_empty());
+    }
+
+    #[test]
+    fn selected_machine_defines_architecture_when_workloads_do_not() {
+        let stack = stack_with_container();
+        let settings = ComputeSettings {
+            pools: [(
+                "general".to_string(),
+                ComputePoolSelection::Fixed {
+                    machines: 1,
+                    machine: Some("m7i.xlarge".to_string()),
+                    failure_domains: None,
+                },
+            )]
+            .into_iter()
+            .collect(),
+        };
+
+        let plan = plan_compute(&stack, Platform::Aws, Some(&settings)).expect("plan should build");
+
+        let pool = plan.pools.first().expect("general pool should exist");
+        assert!(pool.errors.is_empty());
+        assert!(pool.machines.iter().all(|machine| {
+            instance_catalog::find_instance_type(Platform::Aws, &machine.machine)
+                .is_some_and(|spec| spec.architecture == Architecture::X86_64)
+        }));
     }
 
     #[test]
