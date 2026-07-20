@@ -60,6 +60,15 @@ fn entry<T: ResourceDefinition>(resource: T) -> ResourceEntry {
     }
 }
 
+fn remote_entry<T: ResourceDefinition>(resource: T) -> ResourceEntry {
+    ResourceEntry {
+        config: Resource::new(resource),
+        lifecycle: ResourceLifecycle::Live,
+        dependencies: vec![],
+        remote_access: true,
+    }
+}
+
 fn frozen_entry<T: ResourceDefinition>(resource: T) -> ResourceEntry {
     ResourceEntry {
         config: Resource::new(resource),
@@ -311,11 +320,45 @@ fn gcp_storage_round_trip() {
         internal_state(&state)["bucketName"],
         "alien-stack-my-bucket"
     );
+    assert_eq!(
+        state.remote_binding_params, None,
+        "an imported resource without remote access must not publish its binding params"
+    );
 }
 
 #[test]
-fn gcp_kv_round_trip() {
-    let entry = entry(Kv::new("settings".to_string()).build());
+fn gcp_storage_remote_access_round_trip() {
+    let entry = remote_entry(Storage::new("my-bucket".to_string()).build());
+    let data = GcpStorageImportData {
+        project_id: "my-project".to_string(),
+        bucket_name: "alien-stack-my-bucket".to_string(),
+        bucket_self_link: "https://www.googleapis.com/storage/v1/b/alien-stack-my-bucket"
+            .to_string(),
+        location: "us-central1".to_string(),
+    };
+    let state = run_through_registry(
+        &Storage::RESOURCE_TYPE,
+        Platform::Gcp,
+        serde_json::to_value(&data).unwrap(),
+        &entry,
+        "us-central1",
+        &gcp_management_config(),
+    );
+
+    assert_running_with_internal_state(&state);
+    assert_eq!(
+        state.remote_binding_params,
+        Some(json!({
+            "service": "gcs",
+            "bucketName": "alien-stack-my-bucket",
+        })),
+        "an imported resource with remote access must publish its binding params"
+    );
+}
+
+#[test]
+fn gcp_kv_remote_access_round_trip() {
+    let entry = remote_entry(Kv::new("settings".to_string()).build());
     let data = GcpKvImportData {
         project_id: "my-project".to_string(),
         database_id: "alien-stack-settings".to_string(),
@@ -343,8 +386,8 @@ fn gcp_kv_round_trip() {
 }
 
 #[test]
-fn gcp_build_round_trip() {
-    let entry = entry(
+fn gcp_build_remote_access_round_trip() {
+    let entry = remote_entry(
         Build::new("builder".to_string())
             .permissions("build-execution".to_string())
             .environment(HashMap::from([(
