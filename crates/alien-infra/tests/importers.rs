@@ -34,7 +34,8 @@ use alien_core::import::{
     ImportContext,
 };
 use alien_core::{
-    ArtifactRegistry, AwsManagementConfig, AzureContainerAppsEnvironment, AzureContainerAppsEnvironmentOutputs, AzureManagementConfig,
+    ArtifactRegistry, AwsManagementConfig, AwsOpenSearch, AwsOpenSearchOutputs,
+    AzureContainerAppsEnvironment, AzureContainerAppsEnvironmentOutputs, AzureManagementConfig,
     AzureResourceGroup, AzureResourceGroupOutputs, AzureServiceBusNamespace, AzureStorageAccount,
     AzureStorageAccountOutputs, Build, Email, EmailInbound, EmailOutputs, GcpManagementConfig,
     KubernetesCluster, KubernetesClusterOutputs, KubernetesClusterOwnership,
@@ -420,6 +421,98 @@ fn aws_email_missing_configuration_set_is_a_typed_error() {
     );
 }
 
+/// An OpenSearch Serverless collection imports as Running with typed
+/// [`AwsOpenSearchOutputs`] carrying the data-plane endpoint and ARN the
+/// setup stack handed over.
+#[test]
+fn aws_open_search_round_trip() {
+    let entry = frozen_entry(AwsOpenSearch::new("search".to_string()).build());
+    // Wire-shaped payload: the same key structure the AWS OpenSearch
+    // emitter's `emit_import_ref` produces after CloudFormation resolves it.
+    let payload = json!({
+        "collectionName": "search-a2591da2",
+        "collectionId": "abc123def456",
+        "collectionArn": "arn:aws:aoss:us-east-1:123456789012:collection/abc123def456",
+        "endpoint": "https://abc123def456.aoss.us-east-1.on.aws"
+    });
+    let state = run_through_registry(
+        &AwsOpenSearch::RESOURCE_TYPE,
+        Platform::Aws,
+        payload,
+        &entry,
+        "us-east-1",
+        &aws_management_config(),
+    );
+
+    assert_running_with_internal_state(&state);
+    let internal = internal_state(&state);
+    assert_eq!(internal["type"], "AwsOpenSearchController");
+    assert_eq!(internal["state"], "ready");
+    assert_eq!(internal["collectionName"], "search-a2591da2");
+    assert_eq!(internal["collectionId"], "abc123def456");
+
+    let outputs = state
+        .outputs
+        .as_ref()
+        .and_then(|outputs| outputs.downcast_ref::<AwsOpenSearchOutputs>())
+        .expect("aws-opensearch import must expose typed AwsOpenSearchOutputs");
+    assert_eq!(
+        outputs.endpoint,
+        "https://abc123def456.aoss.us-east-1.on.aws"
+    );
+    assert_eq!(
+        outputs.collection_arn,
+        "arn:aws:aoss:us-east-1:123456789012:collection/abc123def456"
+    );
+
+    // Manager-provisioned workers receive the collection binding from the
+    // imported controller state, mirroring the CloudFormation emitter's
+    // binding ref (SigV4 HTTP with service name `aoss`).
+    assert_eq!(
+        state.remote_binding_params,
+        Some(json!({
+            "service": "aoss",
+            "endpoint": "https://abc123def456.aoss.us-east-1.on.aws",
+            "collectionName": "search-a2591da2",
+        }))
+    );
+}
+
+/// A payload missing the required `endpoint` field must surface as a typed
+/// deserialization error naming the resource — not a silent default.
+#[test]
+fn aws_open_search_missing_endpoint_is_a_typed_error() {
+    let entry = frozen_entry(AwsOpenSearch::new("search".to_string()).build());
+    let registry = ImporterRegistry::built_in();
+    let settings = settings();
+    let mgmt = aws_management_config();
+    let ctx = ImportContext {
+        resource_id: "search",
+        platform: Platform::Aws,
+        region: "us-east-1",
+        stack_settings: &settings,
+        management_config: Some(&mgmt),
+        resource: &entry,
+    };
+    let err = registry
+        .run(
+            &AwsOpenSearch::RESOURCE_TYPE,
+            Platform::Aws,
+            json!({
+                "collectionName": "search-a2591da2",
+                "collectionId": "abc123def456",
+                "collectionArn": "arn:aws:aoss:us-east-1:123456789012:collection/abc123def456"
+            }),
+            &ctx,
+        )
+        .expect_err("payload without endpoint must fail");
+    let msg = err.to_string();
+    assert!(
+        msg.contains("endpoint") && msg.contains("search"),
+        "error must name the missing field and the resource, got: {msg}"
+    );
+}
+
 #[test]
 fn gcp_storage_round_trip() {
     let entry = entry(Storage::new("my-bucket".to_string()).build());
@@ -787,6 +880,7 @@ fn registry_built_in_covers_all_oss_pairs() {
         ArtifactRegistry::RESOURCE_TYPE,
         Worker::RESOURCE_TYPE,
         Email::RESOURCE_TYPE,
+        AwsOpenSearch::RESOURCE_TYPE,
     ];
     for rt in aws_pairs {
         assert!(

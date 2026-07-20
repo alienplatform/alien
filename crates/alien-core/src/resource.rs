@@ -254,6 +254,10 @@ impl<'de> Deserialize<'de> for Resource {
                 serde_json::from_value::<crate::resources::AzureServiceBusNamespace>(value)
                     .map_err(serde::de::Error::custom)?,
             ),
+            "experimental/aws-opensearch" => Box::new(
+                serde_json::from_value::<crate::resources::AwsOpenSearch>(value)
+                    .map_err(serde::de::Error::custom)?,
+            ),
             other => {
                 return Err(serde::de::Error::unknown_variant(
                     other,
@@ -279,6 +283,7 @@ impl<'de> Deserialize<'de> for Resource {
                         "azure_storage_account",
                         "azure_container_apps_environment",
                         "azure_service_bus_namespace",
+                        "experimental/aws-opensearch",
                     ],
                 ))
             }
@@ -601,6 +606,10 @@ impl<'de> Deserialize<'de> for ResourceOutputs {
                 serde_json::from_value::<crate::resources::AzureServiceBusNamespaceOutputs>(value)
                     .map_err(serde::de::Error::custom)?,
             ),
+            "experimental/aws-opensearch" => Box::new(
+                serde_json::from_value::<crate::resources::AwsOpenSearchOutputs>(value)
+                    .map_err(serde::de::Error::custom)?,
+            ),
             other => {
                 return Err(serde::de::Error::unknown_variant(
                     other,
@@ -626,6 +635,7 @@ impl<'de> Deserialize<'de> for ResourceOutputs {
                         "azure_storage_account",
                         "azure_container_apps_environment",
                         "azure_service_bus_namespace",
+                        "experimental/aws-opensearch",
                     ],
                 ))
             }

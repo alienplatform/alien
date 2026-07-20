@@ -6,13 +6,14 @@
 use crate::{
     emitters::aws::{
         AwsArtifactRegistryEmitter, AwsBuildEmitter, AwsEmailEmitter, AwsKubernetesClusterEmitter,
-        AwsKvEmitter, AwsNetworkEmitter, AwsQueueEmitter, AwsRemoteStackManagementEmitter,
+        AwsKvEmitter, AwsNetworkEmitter, AwsOpenSearchEmitter, AwsQueueEmitter,
+        AwsRemoteStackManagementEmitter,
         AwsServiceAccountEmitter, AwsStorageEmitter, AwsVaultEmitter, AwsWorkerEmitter,
     },
     registry::CfRegistry,
 };
 use alien_core::{
-    ArtifactRegistry, Build, Email, KubernetesCluster, Kv, Network, Platform, Queue,
+    ArtifactRegistry, AwsOpenSearch, Build, Email, KubernetesCluster, Kv, Network, Platform, Queue,
     RemoteStackManagement, ResourceType, ServiceAccount, Storage, Vault, Worker,
 };
 
@@ -25,6 +26,10 @@ pub(crate) fn register_aws(registry: &mut CfRegistry) {
     }
 
     aws(registry, Storage::RESOURCE_TYPE, AwsStorageEmitter);
+    // Experimental resources are provider-specific: AwsOpenSearch only
+    // registers an AWS emitter, so other platforms fail with a typed
+    // ImportRegistrationMissing error at generation time.
+    aws(registry, AwsOpenSearch::RESOURCE_TYPE, AwsOpenSearchEmitter);
     aws(registry, Kv::RESOURCE_TYPE, AwsKvEmitter);
     aws(registry, Queue::RESOURCE_TYPE, AwsQueueEmitter);
     aws(registry, Email::RESOURCE_TYPE, AwsEmailEmitter);

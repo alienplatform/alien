@@ -15,9 +15,9 @@ use alien_core::Daemon;
 #[cfg(feature = "local")]
 use alien_core::Postgres;
 use alien_core::{
-    ArtifactRegistry, AzureContainerAppsEnvironment, AzureResourceGroup, AzureServiceBusNamespace,
-    AzureStorageAccount, Build, Email, Kv, Network, RemoteStackManagement, ServiceAccount,
-    ServiceActivation, Storage, Vault, Worker,
+    ArtifactRegistry, AwsOpenSearch, AzureContainerAppsEnvironment, AzureResourceGroup,
+    AzureServiceBusNamespace, AzureStorageAccount, Build, Email, Kv, Network,
+    RemoteStackManagement, ServiceAccount, ServiceActivation, Storage, Vault, Worker,
 };
 use alien_core::{Platform, ResourceDefinition, ResourceType};
 use alien_error::AlienError;
@@ -237,6 +237,18 @@ impl ResourceRegistry {
             Email::RESOURCE_TYPE,
             Platform::Aws,
             Box::new(DefaultControllerFactory::<crate::email::AwsEmailController>::new()),
+        );
+
+        // Register built-in AWS OpenSearch controller (AWS only; the
+        // experimental resource is Frozen-only and enters deployments
+        // through stack import).
+        #[cfg(feature = "aws")]
+        registry.register_controller_factory(
+            AwsOpenSearch::RESOURCE_TYPE,
+            Platform::Aws,
+            Box::new(DefaultControllerFactory::<
+                crate::open_search::AwsOpenSearchController,
+            >::new()),
         );
 
         // Register built-in Storage controllers

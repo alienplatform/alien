@@ -17,6 +17,18 @@ export * from "./input.js"
 export * from "./get-resource-outputs.js"
 export * from "./error.js"
 export * from "./common-errors.js"
+// A plain value object (not `export * as`) so the bundled .d.ts stays parseable by
+// downstream dts tooling; usage is identical: `new alien.experimental.AwsOpenSearch(...)`.
+import { AwsOpenSearch as ExperimentalAwsOpenSearch } from "./experimental/index.js"
+
+export const experimental = {
+  AwsOpenSearch: ExperimentalAwsOpenSearch,
+} as const
+export type {
+  AwsOpenSearchCollectionType,
+  AwsOpenSearchConfig,
+  AwsOpenSearchOutputs,
+} from "./experimental/index.js"
 
 export {
   EventChangeSchema,

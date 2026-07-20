@@ -93,6 +93,9 @@ pub fn ownership_policy_for_resource_type(resource_type: &str) -> ResourceOwners
         // Email holds durable routing state (domain identities, DKIM
         // verification, receipt rules) that setup owns end to end.
         | "email" => frozen_only(),
+        // Durable search state, setup-owned only: there is no runtime
+        // controller that could provision or replace the collection.
+        "experimental/aws-opensearch" => frozen_only(),
         "storage" | "queue" | "kv" | "vault" | "postgres" => user_choice(),
         _ => user_choice(),
     }
@@ -180,6 +183,16 @@ mod tests {
             assert!(policy.should_emit_in_setup(ResourceLifecycle::Frozen));
             assert!(!policy.should_emit_in_setup(ResourceLifecycle::Live));
         }
+    }
+
+    #[test]
+    fn experimental_aws_opensearch_is_frozen_only() {
+        let policy = ownership_policy_for_resource_type("experimental/aws-opensearch");
+        assert_eq!(policy.default_lifecycle(), ResourceLifecycle::Frozen);
+        assert!(policy.allows_lifecycle(ResourceLifecycle::Frozen));
+        assert!(!policy.allows_lifecycle(ResourceLifecycle::Live));
+        assert!(policy.should_emit_in_setup(ResourceLifecycle::Frozen));
+        assert!(!policy.requires_management_permissions());
     }
 
     #[test]

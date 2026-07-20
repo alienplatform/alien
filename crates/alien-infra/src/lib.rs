@@ -13,6 +13,8 @@ pub use daemon::*;
 
 mod email;
 pub use email::*;
+mod open_search;
+pub use open_search::*;
 
 mod storage;
 pub use storage::*;
