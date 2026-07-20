@@ -37,7 +37,11 @@ export function physicalSourceNames(source: string): string[] {
   const raw = process.env[`ALIEN_${source.replaceAll("-", "_").toUpperCase()}_BINDING`]
   if (!raw) return []
   try {
-    const binding = JSON.parse(raw) as { bucketName?: string; queueName?: string; queueUrl?: string }
+    const binding = JSON.parse(raw) as {
+      bucketName?: string
+      queueName?: string
+      queueUrl?: string
+    }
     return [binding.bucketName, binding.queueName, binding.queueUrl?.split("/").pop()].filter(
       (name): name is string => typeof name === "string" && name.length > 0,
     )
