@@ -42,14 +42,14 @@ pub async fn handle_pending(
     // Step 3: Run deployment-time preflights (compile-time + mutations + runtime checks)
     // Store the mutated stack for use in subsequent phases (InitialSetup, Provisioning)
     let runner = alien_preflights::runner::PreflightRunner::new();
-    let (mutated_stack, _deployment_summary) = runner
+    let (mutated_stack, _deployment_summary, _) = runner
         .run_deployment_time_preflights(
             target_stack.clone(),
             &stack_state,
             &config,
             &client_config,
-            None,  // No old stack for initial deployment
-            false, // Never skip frozen check on initial deployment
+            None, // No old stack for initial deployment
+            None,
         )
         .await
         .context(ErrorData::PreflightChecksFailed)?;

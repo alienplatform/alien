@@ -59,24 +59,36 @@ pub async fn handle_update_pending(
 
     // Run deployment-time preflights: compatibility checks + mutations + runtime checks
     // Store the mutated stack to use for the actual update and for future compatibility checks
-    // Pass allow_frozen_changes flag to skip frozen resource checks if requested
-    let (mutated_stack, _deployment_summary) = runner
+    let target_release_id = current
+        .target_release
+        .as_ref()
+        .and_then(|release| release.release_id.as_deref());
+    let setup_update_authorization = current
+        .runtime_metadata
+        .as_ref()
+        .and_then(|metadata| metadata.setup_update_authorization.as_ref())
+        .filter(|authorization| Some(authorization.release_id.as_str()) == target_release_id);
+    let (mutated_stack, _deployment_summary, setup_update_authorized) = runner
         .run_deployment_time_preflights(
             target_stack.clone(),
             &stack_state,
             &config,
             &client_config,
             old_stack_for_comparison, // Pass old mutated stack for compatibility checks
-            config.allow_frozen_changes, // Skip frozen check if flag is set
+            setup_update_authorization,
         )
         .await
         .context(ErrorData::PreflightChecksFailed)?;
+    debug!(
+        setup_update_authorized,
+        "evaluated setup update authorization"
+    );
 
     info!("Deployment-time preflight checks completed successfully");
 
     // Store the mutated stack in runtime_metadata for future compatibility checks
     let mut runtime_metadata = current.runtime_metadata.unwrap_or_default();
-    runtime_metadata.prepared_stack = Some(mutated_stack);
+    runtime_metadata.pending_prepared_stack = Some(mutated_stack);
 
     // Transition to Updating
     next.status = DeploymentStatus::Updating;
@@ -128,11 +140,25 @@ pub async fn handle_updating(
     })?;
 
     // Use the prepared stack from UpdatePending phase (already mutated)
-    let mut target_stack = runtime_metadata.prepared_stack.clone().ok_or_else(|| {
-        AlienError::new(ErrorData::MissingConfiguration {
-            message: "Prepared stack not found in runtime metadata".to_string(),
-        })
-    })?;
+    let mut target_stack = runtime_metadata
+        .pending_prepared_stack
+        .clone()
+        .ok_or_else(|| {
+            AlienError::new(ErrorData::MissingConfiguration {
+                message: "Pending prepared stack not found in runtime metadata".to_string(),
+            })
+        })?;
+    let setup_update_authorized = runtime_metadata
+        .setup_update_authorization
+        .as_ref()
+        .is_some_and(|authorization| {
+            authorization.target_frozen_digest == target_stack.frozen_resources_digest()
+                && current
+                    .target_release
+                    .as_ref()
+                    .and_then(|release| release.release_id.as_deref())
+                    == Some(authorization.release_id.as_str())
+        });
 
     // Inject environment variables into the prepared stack
     crate::helpers::inject_environment_variables(&mut target_stack, &config, current.platform)?;
@@ -168,8 +194,8 @@ pub async fn handle_updating(
     // By default, only deploy live resources (frozen resources don't change)
     // If allow_frozen_changes is true, also deploy frozen resources
     let mut lifecycle_filter_vec = vec![ResourceLifecycle::Live];
-    if config.allow_frozen_changes {
-        info!("Including frozen resources in update (allow_frozen_changes=true)");
+    if config.allow_frozen_changes || setup_update_authorized {
+        info!("Including frozen resources in authorized update");
         lifecycle_filter_vec.push(ResourceLifecycle::Frozen);
     }
 
@@ -225,6 +251,8 @@ pub async fn handle_updating(
         next.status = DeploymentStatus::Running;
         next.stack_state = Some(step_result.next_state);
         next.error = None;
+        runtime_metadata.prepared_stack = runtime_metadata.pending_prepared_stack.take();
+        runtime_metadata.setup_update_authorization = None;
         next.runtime_metadata = Some(runtime_metadata);
         // Promote target to current: update successful
         next.current_release = next.target_release.clone();

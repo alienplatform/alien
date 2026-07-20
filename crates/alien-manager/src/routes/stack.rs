@@ -41,7 +41,8 @@ use alien_core::{
     is_valid_resource_prefix, AwsEnvironmentInfo, AzureEnvironmentInfo, DeploymentConfig,
     DeploymentStatus, EnvironmentInfo, EnvironmentVariablesSnapshot, ExternalBindings,
     GcpEnvironmentInfo, KubernetesCluster, Platform, ResourceLifecycle, ResourceStatus,
-    RuntimeMetadata, Stack, StackResourceState, StackState, RESOURCE_PREFIX_ERROR_MESSAGE,
+    RuntimeMetadata, SetupUpdateAuthorization, Stack, StackResourceState, StackState,
+    RESOURCE_PREFIX_ERROR_MESSAGE,
 };
 use alien_error::AlienError;
 
@@ -178,8 +179,6 @@ pub async fn stack_import(
         Err(e) => return e.into_response(),
     };
     let environment_info = infer_import_environment_info(&req);
-    let runtime_metadata = import_runtime_metadata(&prepared_stack);
-
     match state
         .deployment_store
         .get_deployment_by_name(&subject, &deployment_group_id, &deployment_name)
@@ -215,6 +214,20 @@ pub async fn stack_import(
                 })
                 .into_response();
             }
+            if !can_reconcile_after_import(&existing) {
+                return AlienError::new(ErrorData::ImportedDeploymentConflict {
+                    reason: format!(
+                        "Imported deployment '{}' is currently reconciling; retry setup after it reaches a stable state",
+                        existing.id
+                    ),
+                })
+                .into_response();
+            }
+            let runtime_metadata =
+                match reimport_runtime_metadata(&existing, &prepared_stack, &release.id, &req) {
+                    Ok(metadata) => metadata,
+                    Err(error) => return error.into_response(),
+                };
             let should_reconcile = import_changes_deployment(
                 &existing,
                 &stack_state,
@@ -289,6 +302,8 @@ pub async fn stack_import(
         Ok(None) => {}
         Err(e) => return e.into_response(),
     }
+
+    let runtime_metadata = import_runtime_metadata(&prepared_stack);
 
     let create_ctx = crate::auth::DeploymentCreateCtx {
         workspace_id: &dg.workspace_id,
@@ -448,13 +463,6 @@ fn can_accept_reimport(
         && existing.setup_fingerprint.as_deref() == Some(req.setup_fingerprint.as_str())
         && imported_resources_are_unchanged(existing, imported_stack_state);
 
-    if matches!(
-        existing.status.as_str(),
-        "initial-setup" | "provisioning" | "update-pending" | "updating"
-    ) {
-        return true;
-    }
-
     matches!(
         existing.status.as_str(),
         "running" | "update-failed" | "refresh-failed"
@@ -559,6 +567,37 @@ fn import_runtime_metadata(stack: &Stack) -> RuntimeMetadata {
         prepared_stack: Some(stack.clone()),
         ..RuntimeMetadata::default()
     }
+}
+
+fn reimport_runtime_metadata(
+    existing: &DeploymentRecord,
+    prepared_stack: &Stack,
+    release_id: &str,
+    req: &StackImportRequest,
+) -> crate::error::Result<RuntimeMetadata> {
+    let mut metadata = existing.runtime_metadata.clone().unwrap_or_default();
+    let baseline_stack = metadata.prepared_stack.as_ref().ok_or_else(|| {
+        AlienError::new(ErrorData::ImportedDeploymentConflict {
+            reason: format!(
+                "Imported deployment '{}' has no successful prepared stack; complete or repair its current deployment before rerunning setup",
+                existing.id
+            ),
+        })
+    })?;
+    let baseline_frozen_digest = baseline_stack.frozen_resources_digest();
+    let target_frozen_digest = prepared_stack.frozen_resources_digest();
+
+    metadata.setup_update_authorization =
+        (baseline_frozen_digest != target_frozen_digest).then(|| SetupUpdateAuthorization {
+            nonce: uuid::Uuid::new_v4().to_string(),
+            baseline_frozen_digest,
+            target_frozen_digest,
+            release_id: release_id.to_string(),
+            setup_target: req.setup_target.clone(),
+            setup_fingerprint: req.setup_fingerprint.clone(),
+            setup_fingerprint_version: req.setup_fingerprint_version,
+        });
+    Ok(metadata)
 }
 
 async fn prepare_import_stack(

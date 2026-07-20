@@ -7,6 +7,27 @@ use serde::{Deserialize, Serialize};
 
 use super::{DeploymentStatus, EnvironmentInfo, ReleaseInfo};
 
+/// One-shot authority for a setup re-import to replace setup-owned resources.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
+#[serde(rename_all = "camelCase")]
+pub struct SetupUpdateAuthorization {
+    /// Unique revision used by persistence layers for compare-and-swap updates.
+    pub nonce: String,
+    /// Frozen resource projection from the last successful deployment.
+    pub baseline_frozen_digest: String,
+    /// Frozen resource projection prepared by the setup re-import.
+    pub target_frozen_digest: String,
+    /// Release whose stack was prepared by setup.
+    pub release_id: String,
+    /// Stable setup target recorded on the imported deployment.
+    pub setup_target: String,
+    /// Exact setup artifact revision that authored this authority.
+    pub setup_fingerprint: String,
+    /// Setup fingerprint contract version.
+    pub setup_fingerprint_version: u32,
+}
+
 /// Runtime metadata for deployment
 ///
 /// Stores deployment state that needs to persist across step calls.
@@ -30,6 +51,16 @@ pub struct RuntimeMetadata {
     /// Used for compatibility checks during updates to compare mutated stacks
     #[serde(skip_serializing_if = "Option::is_none")]
     pub prepared_stack: Option<crate::Stack>,
+
+    /// Prepared target for an update that has not reached Running yet. Keeping
+    /// it separate preserves the last successful baseline across retries.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pending_prepared_stack: Option<crate::Stack>,
+
+    /// One-shot setup update authority. It contains only non-secret identity
+    /// and canonical resource digests, never the imported payload or tokens.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub setup_update_authorization: Option<SetupUpdateAuthorization>,
 
     /// Whether cross-account registry access has been successfully granted.
     /// Set to true after the manager successfully sets the ECR/GAR repo policy
@@ -219,5 +250,7 @@ mod tests {
             Some("old-hash")
         );
         assert!(metadata.last_synced_secret_names.is_empty());
+        assert!(metadata.pending_prepared_stack.is_none());
+        assert!(metadata.setup_update_authorization.is_none());
     }
 }
