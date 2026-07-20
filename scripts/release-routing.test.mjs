@@ -52,6 +52,15 @@ test("stable remains the default release mode", () => {
   assert.match(workflow, /mode:\n\s+description: Publication channel\n\s+type: choice\n\s+default: stable\n\s+options: \[stable, dev\]/)
 })
 
+test("dev publication requires an explicit full source commit", () => {
+  assert.match(workflow, /source_ref:\n\s+description: Exact 40-character source commit/)
+  const reusable = readFileSync(
+    resolve(process.cwd(), ".github/workflows/publish-npm-dev.yml"),
+    "utf8",
+  )
+  assert.match(reusable, /\^\[0-9a-f\]\{40\}\$/)
+})
+
 test("dev mode can reach only the reusable npm dev workflow", () => {
   const jobs = parseJobs(workflow)
   assert.deepEqual([...jobs.keys()].sort(), ["publish-npm-dev", ...stableJobs].sort())

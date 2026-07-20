@@ -38,13 +38,12 @@ function baseVersion(version, name) {
 
 export function computeVersions(root, sha) {
   if (!/^[0-9a-f]{40}$/.test(sha)) throw new Error(`Expected a full lowercase git SHA, got ${sha}`)
-  const shortSha = sha.slice(0, 12)
   const manifests = packages.map(entry => ({ ...entry, manifest: readJson(resolve(root, entry.path)) }))
   const versions = new Map()
 
   for (const { manifest, versionFrom } of manifests) {
     if (versionFrom) continue
-    versions.set(manifest.name, `${baseVersion(manifest.version, manifest.name)}-dev.${shortSha}`)
+    versions.set(manifest.name, `${baseVersion(manifest.version, manifest.name)}-dev.${sha}`)
   }
   for (const { manifest, versionFrom } of manifests) {
     if (!versionFrom) continue
@@ -80,7 +79,7 @@ export function validateManifests(root, sha) {
     if (manifest.version !== expected.get(manifest.name)) {
       throw new Error(`${manifest.name} version is ${manifest.version}; expected ${expected.get(manifest.name)}`)
     }
-    if (!/-dev\.[0-9a-f]{12}$/.test(manifest.version)) {
+    if (!/-dev\.[0-9a-f]{40}$/.test(manifest.version)) {
       throw new Error(`${manifest.name} version is not an immutable dev prerelease: ${manifest.version}`)
     }
     for (const field of dependencyFields) {

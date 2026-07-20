@@ -9,7 +9,7 @@ on:
         default: stable
         options: [stable, dev]
       source_ref:
-        description: Exact source ref for dev npm packages
+        description: Exact 40-character source commit for dev npm packages
         type: string
         default: main
       dry_run:

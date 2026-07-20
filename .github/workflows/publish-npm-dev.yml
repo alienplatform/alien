@@ -4,7 +4,7 @@ on:
   workflow_call:
     inputs:
       source_ref:
-        description: Exact branch, tag, or commit to package
+        description: Exact 40-character lowercase commit SHA to package
         required: true
         type: string
       dry_run:
@@ -42,7 +42,13 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
+          source_ref="${{ inputs.source_ref }}"
+          [[ "$source_ref" =~ ^[0-9a-f]{40}$ ]] || {
+            echo "source_ref must be an exact 40-character lowercase commit SHA" >&2
+            exit 1
+          }
           git_sha="$(git rev-parse HEAD)"
+          test "$git_sha" = "$source_ref"
           echo "git_sha=$git_sha" >> "$GITHUB_OUTPUT"
           echo "short_sha=${git_sha:0:12}" >> "$GITHUB_OUTPUT"
 
@@ -93,7 +99,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
-          ref: ${{ inputs.source_ref }}
+          ref: ${{ needs.prepare.outputs.git_sha }}
 
       - name: Setup Rust (linux)
         if: matrix.os == 'linux'
@@ -155,7 +161,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
-          ref: ${{ inputs.source_ref }}
+          ref: ${{ needs.prepare.outputs.git_sha }}
 
       - uses: actions/checkout@v4
         with:
@@ -273,7 +279,7 @@ jobs:
             name="$(jq -er '.name' <<< "$manifest")"
             version="$(jq -er '.version' <<< "$manifest")"
             local_integrity="sha512-$(openssl dgst -sha512 -binary "$tarball" | openssl base64 -A)"
-            [[ "$version" =~ -dev\.[0-9a-f]{12}$ ]] || { echo "Refusing stable version $name@$version" >&2; exit 1; }
+            [[ "$version" =~ -dev\.[0-9a-f]{40}$ ]] || { echo "Refusing stable version $name@$version" >&2; exit 1; }
             remote_integrity="$(npm view "$name@$version" dist.integrity 2>/dev/null || true)"
             if [ -n "$remote_integrity" ]; then
               test "$remote_integrity" = "$local_integrity" || {

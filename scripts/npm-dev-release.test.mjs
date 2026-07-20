@@ -34,8 +34,8 @@ test("rewrites every published package and internal edge to commit-addressed ver
   const versions = rewriteManifests(root, sha)
   validateManifests(root, sha)
 
-  assert.equal(versions.get("@alienplatform/core"), `${coreBase}-dev.0123456789ab`)
-  assert.equal(versions.get("@alienplatform/platform-api"), `${platformBase}-dev.0123456789ab`)
+  assert.equal(versions.get("@alienplatform/core"), `${coreBase}-dev.${sha}`)
+  assert.equal(versions.get("@alienplatform/platform-api"), `${platformBase}-dev.${sha}`)
 
   const commands = JSON.parse(readFileSync(resolve(root, "packages/commands/package.json"), "utf8"))
   assert.equal(commands.dependencies["@alienplatform/core"], versions.get("@alienplatform/core"))
@@ -53,5 +53,9 @@ test("rejects a stable or mismatched package graph after rewrite", () => {
   manifest.dependencies["@alienplatform/core"] = "^1.14.1"
   writeFileSync(path, `${JSON.stringify(manifest)}\n`)
 
-  assert.throws(() => validateManifests(root, sha), /expected 1\.14\.1-dev\.0123456789ab/)
+  assert.throws(() => validateManifests(root, sha), new RegExp(`expected 1\\.14\\.1-dev\\.${sha}`))
+})
+
+test("rejects abbreviated commit identities", () => {
+  assert.throws(() => rewriteManifests(fixture(), sha.slice(0, 12)), /full lowercase git SHA/)
 })
