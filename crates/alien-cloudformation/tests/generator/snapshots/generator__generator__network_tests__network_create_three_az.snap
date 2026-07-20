@@ -220,10 +220,7 @@ Resources:
         Fn::Select:
         - 0
         - Fn::Cidr:
-          - Fn::If:
-            - HasVpcCidr
-            - Ref: VpcCidr
-            - 10.42.0.0/16
+          - Ref: VpcCidr
           - 6
           - 8
       MapPublicIpOnLaunch: true
@@ -252,10 +249,7 @@ Resources:
         Fn::Select:
         - 3
         - Fn::Cidr:
-          - Fn::If:
-            - HasVpcCidr
-            - Ref: VpcCidr
-            - 10.42.0.0/16
+          - Ref: VpcCidr
           - 6
           - 8
       Tags:
@@ -283,10 +277,7 @@ Resources:
         Fn::Select:
         - 1
         - Fn::Cidr:
-          - Fn::If:
-            - HasVpcCidr
-            - Ref: VpcCidr
-            - 10.42.0.0/16
+          - Ref: VpcCidr
           - 6
           - 8
       MapPublicIpOnLaunch: true
@@ -315,10 +306,7 @@ Resources:
         Fn::Select:
         - 4
         - Fn::Cidr:
-          - Fn::If:
-            - HasVpcCidr
-            - Ref: VpcCidr
-            - 10.42.0.0/16
+          - Ref: VpcCidr
           - 6
           - 8
       Tags:
@@ -346,10 +334,7 @@ Resources:
         Fn::Select:
         - 2
         - Fn::Cidr:
-          - Fn::If:
-            - HasVpcCidr
-            - Ref: VpcCidr
-            - 10.42.0.0/16
+          - Ref: VpcCidr
           - 6
           - 8
       MapPublicIpOnLaunch: true
@@ -378,10 +363,7 @@ Resources:
         Fn::Select:
         - 5
         - Fn::Cidr:
-          - Fn::If:
-            - HasVpcCidr
-            - Ref: VpcCidr
-            - 10.42.0.0/16
+          - Ref: VpcCidr
           - 6
           - 8
       Tags:

@@ -505,11 +505,7 @@ fn cidr_block(index: usize) -> CfExpression {
             CfExpression::object([(
                 "Fn::Cidr",
                 CfExpression::list([
-                    CfExpression::if_(
-                        CONDITION_HAS_VPC_CIDR,
-                        CfExpression::ref_(PARAM_VPC_CIDR),
-                        CfExpression::from("10.251.0.0/16"),
-                    ),
+                    CfExpression::ref_(PARAM_VPC_CIDR),
                     CfExpression::from(16u8),
                     CfExpression::from(8u8),
                 ]),

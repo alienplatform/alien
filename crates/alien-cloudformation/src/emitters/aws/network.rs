@@ -366,11 +366,7 @@ fn cidr_blocks() -> CfExpression {
     CfExpression::object([(
         "Fn::Cidr",
         CfExpression::list([
-            CfExpression::if_(
-                CONDITION_HAS_VPC_CIDR,
-                CfExpression::ref_(PARAM_VPC_CIDR),
-                CfExpression::from("10.42.0.0/16"),
-            ),
+            CfExpression::ref_(PARAM_VPC_CIDR),
             CfExpression::Integer(6),
             CfExpression::Integer(8),
         ]),
