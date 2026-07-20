@@ -249,7 +249,25 @@ jobs:
           set -euo pipefail
           consumer="$(mktemp -d)"
           npm init --yes --prefix "$consumer" >/dev/null
-          npm install --prefix "$consumer" "$GITHUB_WORKSPACE"/npm-dev-tarballs/*.tgz
+          case "$(uname -s)-$(uname -m)" in
+            Linux-x86_64) native_package_prefix=alienplatform-bindings-linux-x64-gnu ;;
+            Linux-aarch64) native_package_prefix=alienplatform-bindings-linux-arm64-gnu ;;
+            Darwin-x86_64) native_package_prefix=alienplatform-bindings-darwin-x64 ;;
+            Darwin-arm64) native_package_prefix=alienplatform-bindings-darwin-arm64 ;;
+            *) echo "Unsupported smoke-test platform: $(uname -s)-$(uname -m)" >&2; exit 1 ;;
+          esac
+          tarballs=("$GITHUB_WORKSPACE"/npm-dev-tarballs/*.tgz)
+          install_tarballs=()
+          for tarball in "${tarballs[@]}"; do
+            filename="$(basename "$tarball")"
+            case "$filename" in
+              alienplatform-bindings-darwin-arm64-*.tgz|alienplatform-bindings-darwin-x64-*.tgz|alienplatform-bindings-linux-x64-gnu-*.tgz|alienplatform-bindings-linux-arm64-gnu-*.tgz)
+                [[ "$filename" == "$native_package_prefix"-*.tgz ]] && install_tarballs+=("$tarball")
+                ;;
+              *) install_tarballs+=("$tarball") ;;
+            esac
+          done
+          npm install --prefix "$consumer" "${install_tarballs[@]}"
           cd "$consumer"
           node --input-type=module <<'EOF'
           import { Container } from "@alienplatform/core"
