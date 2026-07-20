@@ -7,9 +7,10 @@ use alien_error::{AlienError, Context, IntoAlienError};
 use async_trait::async_trait;
 use serde_json::{json, Value};
 use std::collections::HashMap;
+use std::ffi::OsString;
 use std::fs::File;
 use std::io::Read;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::process::Stdio;
 use tokio::process::Command;
 use tracing::info;
@@ -32,6 +33,13 @@ pub struct DockerToolchain {
 }
 
 impl DockerToolchain {
+    const ENTERPRISE_CA_ENV_VARS: [&'static str; 4] = [
+        "ALIEN_ENTERPRISE_CA_CERT_PATH",
+        "SSL_CERT_FILE",
+        "REQUESTS_CA_BUNDLE",
+        "NODE_EXTRA_CA_CERTS",
+    ];
+
     /// Check if the source directory contains a Dockerfile
     pub fn has_dockerfile(src_dir: &Path, dockerfile: Option<&String>) -> bool {
         let dockerfile_name = dockerfile.map(|s| s.as_str()).unwrap_or("Dockerfile");
@@ -65,6 +73,41 @@ impl DockerToolchain {
             "docker buildx build failed"
         }
         .to_string()
+    }
+
+    /// Find the host's TLS trust bundle, if one is configured.
+    ///
+    /// Dockerfiles can opt in with
+    /// `RUN --mount=type=secret,id=enterprise_ca,required=false ...`. BuildKit
+    /// keeps the certificate out of the image layers and build context.
+    /// Alien's explicit override takes precedence, followed by language-neutral
+    /// variables and finally the Node-specific additional certificate variable.
+    fn enterprise_ca_path() -> Result<Option<PathBuf>> {
+        Self::enterprise_ca_path_from(|name| std::env::var_os(name))
+    }
+
+    fn enterprise_ca_path_from(
+        mut env_value: impl FnMut(&str) -> Option<OsString>,
+    ) -> Result<Option<PathBuf>> {
+        for name in Self::ENTERPRISE_CA_ENV_VARS {
+            let Some(value) = env_value(name) else {
+                continue;
+            };
+            let path = PathBuf::from(value);
+            let valid = File::open(&path)
+                .and_then(|mut file| {
+                    let mut first_byte = [0_u8; 1];
+                    file.read_exact(&mut first_byte)
+                })
+                .is_ok();
+            if !valid {
+                return Err(AlienError::new(Self::docker_build_error(format!(
+                    "{name} must point to a readable, non-empty certificate file"
+                ))));
+            }
+            return Ok(Some(path));
+        }
+        Ok(None)
     }
 
     /// `ImageBuildFailed` for a docker setup step (no captured build output).
@@ -170,14 +213,14 @@ impl Toolchain for DockerToolchain {
 
         Self::ensure_builder_supports_arch(arch_str).await?;
 
-        let mut args: Vec<&str> = vec![
-            "buildx",
-            "build",
-            "--platform",
-            platform_str.as_str(),
-            "--load", // export into the docker daemon so we can `docker save` it
-            "-f",
-            dockerfile_name,
+        let mut args = vec![
+            "buildx".to_string(),
+            "build".to_string(),
+            "--platform".to_string(),
+            platform_str,
+            "--load".to_string(), // export into the docker daemon so we can `docker save` it
+            "-f".to_string(),
+            dockerfile_name.to_string(),
         ];
 
         // Add build args if provided
@@ -188,24 +231,33 @@ impl Toolchain for DockerToolchain {
             .unwrap_or_default();
 
         for build_arg in &build_arg_strings {
-            args.push("--build-arg");
-            args.push(build_arg);
+            args.push("--build-arg".to_string());
+            args.push(build_arg.clone());
+        }
+
+        let enterprise_ca = Self::enterprise_ca_path()?;
+        if let Some(path) = &enterprise_ca {
+            args.push("--secret".to_string());
+            args.push(format!("id=enterprise_ca,src={}", path.display()));
         }
 
         // Add target if specified
-        let target_str;
         if let Some(target) = &self.target {
-            target_str = target.clone();
-            args.push("--target");
-            args.push(&target_str);
+            args.push("--target".to_string());
+            args.push(target.clone());
         }
 
         // Add tag and context
-        args.push("-t");
-        args.push(&temp_tag);
-        args.push("."); // Build context is the src_dir
+        args.push("-t".to_string());
+        args.push(temp_tag.clone());
+        args.push(".".to_string()); // Build context is the src_dir
 
-        info!("Running docker buildx build with args: {:?}", args);
+        info!(
+            platform = %args[3],
+            dockerfile = dockerfile_name,
+            has_enterprise_ca = enterprise_ca.is_some(),
+            "Running docker buildx build"
+        );
 
         // Run docker buildx build with progress reporting
         AlienEvent::CompilingCode {
@@ -648,6 +700,64 @@ mod tests {
         assert_ne!(tag1, tag2); // Should be unique
     }
 
+    #[test]
+    fn enterprise_ca_uses_standard_precedence() {
+        let temp_dir = tempdir().unwrap();
+        let ssl = temp_dir.path().join("ssl.pem");
+        let requests = temp_dir.path().join("requests.pem");
+        let node = temp_dir.path().join("node.pem");
+        for path in [&ssl, &requests, &node] {
+            std::fs::write(path, "certificate").unwrap();
+        }
+        let values = HashMap::from([
+            ("SSL_CERT_FILE", ssl.as_os_str().to_owned()),
+            ("REQUESTS_CA_BUNDLE", requests.as_os_str().to_owned()),
+            ("NODE_EXTRA_CA_CERTS", node.as_os_str().to_owned()),
+        ]);
+
+        let selected = DockerToolchain::enterprise_ca_path_from(|name| values.get(name).cloned())
+            .expect("certificate discovery should succeed");
+
+        assert_eq!(selected.as_deref(), Some(ssl.as_path()));
+    }
+
+    #[test]
+    fn enterprise_ca_explicit_override_has_highest_precedence() {
+        let temp_dir = tempdir().unwrap();
+        let explicit = temp_dir.path().join("explicit.pem");
+        let ssl = temp_dir.path().join("ssl.pem");
+        std::fs::write(&explicit, "explicit certificate").unwrap();
+        std::fs::write(&ssl, "standard certificate").unwrap();
+        let values = HashMap::from([
+            (
+                "ALIEN_ENTERPRISE_CA_CERT_PATH",
+                explicit.as_os_str().to_owned(),
+            ),
+            ("SSL_CERT_FILE", ssl.as_os_str().to_owned()),
+        ]);
+
+        let selected = DockerToolchain::enterprise_ca_path_from(|name| values.get(name).cloned())
+            .expect("certificate discovery should succeed");
+
+        assert_eq!(selected.as_deref(), Some(explicit.as_path()));
+    }
+
+    #[test]
+    fn enterprise_ca_is_optional_but_invalid_configuration_fails() {
+        let absent = DockerToolchain::enterprise_ca_path_from(|_| None)
+            .expect("absent certificate variables should be accepted");
+        assert_eq!(absent, None);
+
+        let error = DockerToolchain::enterprise_ca_path_from(|name| {
+            (name == "ALIEN_ENTERPRISE_CA_CERT_PATH")
+                .then(|| OsString::from("/missing/certificate.pem"))
+        })
+        .expect_err("an advertised missing certificate must fail fast");
+        let message = error.to_string();
+        assert!(message.contains("ALIEN_ENTERPRISE_CA_CERT_PATH"));
+        assert!(!message.contains("/missing/certificate.pem"));
+    }
+
     #[tokio::test]
     async fn test_docker_toolchain_build() {
         if !docker_available() {
@@ -658,13 +768,24 @@ mod tests {
         let temp_dir = tempdir().unwrap();
         let build_dir = tempdir().unwrap();
 
-        // Create a simple Dockerfile
-        let dockerfile_content = r#"
+        // Require the automatically forwarded trust bundle when the host advertises one.
+        // This is a real BuildKit mount: the build fails if Alien omits the secret.
+        let ca_mount_check = DockerToolchain::enterprise_ca_path()
+            .expect("configured certificate path should be valid")
+            .is_some()
+            .then_some(
+                "RUN --mount=type=secret,id=enterprise_ca,required=true test -s /run/secrets/enterprise_ca",
+            )
+            .unwrap_or_default();
+        let dockerfile_content = format!(
+            r#"
 FROM alpine:latest
 WORKDIR /app
+{ca_mount_check}
 RUN echo "Hello from Docker" > hello.txt
 CMD ["cat", "hello.txt"]
-"#;
+"#
+        );
         fs::write(temp_dir.path().join("Dockerfile"), dockerfile_content)
             .await
             .unwrap();
