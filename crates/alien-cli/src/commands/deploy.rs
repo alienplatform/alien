@@ -629,7 +629,11 @@ fn deployment_stack_settings_json(
     args: &DeployArgs,
 ) -> Result<serde_json::Value> {
     let mut settings = serde_json::json!({
-        "deploymentModel": if resolved_args.platform == "aws" { "push" } else { "pull" },
+        "deploymentModel": if uses_push_deployment_model(resolved_args.platform_enum) {
+            "push"
+        } else {
+            "pull"
+        },
         "heartbeats": if args.no_heartbeat { "off" } else { "on" },
         "telemetry": match args.monitoring {
             MonitoringMode::Off => "off",
@@ -647,6 +651,13 @@ fn deployment_stack_settings_json(
     }
 
     Ok(settings)
+}
+
+fn uses_push_deployment_model(platform: Platform) -> bool {
+    matches!(
+        platform,
+        Platform::Aws | Platform::Gcp | Platform::Azure | Platform::Machines | Platform::Test
+    )
 }
 
 async fn create_machines_join_command(
@@ -991,8 +1002,9 @@ pub async fn deploy_task(args: DeployArgs, ctx: ExecutionMode) -> Result<()> {
                             })
                             .transpose()?;
 
-                        // AWS managed deployments require push model; pull is for K8s/manager-side.
-                        let deployment_model = if resolved_args.platform == "aws" {
+                        let deployment_model = if uses_push_deployment_model(
+                            resolved_args.platform_enum,
+                        ) {
                             alien_platform_api::types::NewDeploymentRequestStackSettingsDeploymentModel::Push
                         } else {
                             alien_platform_api::types::NewDeploymentRequestStackSettingsDeploymentModel::Pull
@@ -1631,4 +1643,25 @@ fn is_local_private_url(url: &str) -> bool {
         || url.starts_with("https://localhost:")
         || url.starts_with("http://127.0.0.1:")
         || url.starts_with("https://127.0.0.1:")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn deployment_models_match_platform_delivery() {
+        for platform in [
+            Platform::Aws,
+            Platform::Gcp,
+            Platform::Azure,
+            Platform::Machines,
+            Platform::Test,
+        ] {
+            assert!(uses_push_deployment_model(platform));
+        }
+
+        assert!(!uses_push_deployment_model(Platform::Kubernetes));
+        assert!(!uses_push_deployment_model(Platform::Local));
+    }
 }
