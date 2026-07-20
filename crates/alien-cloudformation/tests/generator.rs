@@ -15,6 +15,7 @@ mod generator {
     pub mod aws_email_tests;
     pub mod aws_full_stack_tests;
     pub mod aws_open_search_tests;
+    pub mod enabled_queue_tests;
     pub mod enabled_storage_tests;
     pub mod enabled_tests;
     pub mod kubernetes_cluster_tests;

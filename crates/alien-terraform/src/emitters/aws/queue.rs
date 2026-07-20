@@ -4,6 +4,7 @@ use crate::{
     block::{attr, resource_block},
     emitter::{TfEmitter, TfFragment},
     emitters::aws::helpers::{downcast, required_label, resource_prefix_template, tags},
+    emitters::enabled,
     expr,
 };
 use alien_core::{import::EmitContext, Queue, Result, Worker, WorkerTrigger};
@@ -16,8 +17,9 @@ impl TfEmitter for AwsQueueEmitter {
     fn emit(&self, ctx: &EmitContext<'_>) -> Result<TfFragment> {
         let queue = downcast::<Queue>(ctx, Queue::RESOURCE_TYPE)?;
         let label = required_label(ctx)?;
+        let enabled_when = ctx.resource.enabled_when.as_deref();
 
-        let q = resource_block(
+        let mut q = resource_block(
             "aws_sqs_queue",
             label,
             [
@@ -34,27 +36,43 @@ impl TfEmitter for AwsQueueEmitter {
                 attr("tags", tags(ctx, "queue")),
             ],
         );
+        enabled::gate(&mut q, enabled_when)?;
 
         Ok(TfFragment::default().with_resource(q))
     }
 
     fn emit_import_ref(&self, ctx: &EmitContext<'_>) -> Result<Expression> {
         let label = required_label(ctx)?;
+        let enabled_when = ctx.resource.enabled_when.as_deref();
         Ok(expr::object([
             (
                 "queueName",
-                expr::traversal(["aws_sqs_queue", label, "name"]),
+                enabled::attribute(enabled_when, "aws_sqs_queue", label, "name"),
             ),
-            ("queueUrl", expr::traversal(["aws_sqs_queue", label, "url"])),
-            ("queueArn", expr::traversal(["aws_sqs_queue", label, "arn"])),
+            (
+                "queueUrl",
+                enabled::attribute(enabled_when, "aws_sqs_queue", label, "url"),
+            ),
+            (
+                "queueArn",
+                enabled::attribute(enabled_when, "aws_sqs_queue", label, "arn"),
+            ),
         ]))
+    }
+
+    fn supports_enabled_when(&self) -> bool {
+        true
     }
 
     fn emit_binding_ref(&self, ctx: &EmitContext<'_>) -> Result<Option<Expression>> {
         let label = required_label(ctx)?;
+        let enabled_when = ctx.resource.enabled_when.as_deref();
         Ok(Some(expr::object([
             ("service", Expression::String("sqs".to_string())),
-            ("queueUrl", expr::traversal(["aws_sqs_queue", label, "url"])),
+            (
+                "queueUrl",
+                enabled::attribute(enabled_when, "aws_sqs_queue", label, "url"),
+            ),
         ])))
     }
 }
