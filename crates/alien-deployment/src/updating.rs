@@ -357,16 +357,27 @@ pub async fn handle_update_failed(
 
     info!("Re-running preflights before retrying the update");
 
-    let stack_state = current.stack_state.ok_or_else(|| {
+    let mut stack_state = current.stack_state.ok_or_else(|| {
         AlienError::new(ErrorData::MissingConfiguration {
             message: "Stack state required for retry".to_string(),
         })
     })?;
 
-    // Failed resources are resumed by the executor after preflights and stack
-    // preparation. At that point it can compare the exact prepared configs:
-    // unchanged failures resume their saved handler, while changed failures
-    // start a fresh update.
+    // Restore each failed controller to the handler that failed and reset its
+    // retry/backoff budget before re-running preflights. Stack preparation will
+    // still replace this state when the desired resource config changed; when
+    // it did not, execution resumes without losing durable provider IDs.
+    use alien_infra::state_utils::StackStateExt;
+    let retried = stack_state
+        .retry_failed()
+        .context(ErrorData::StackExecutionFailed {
+            message: "Failed to retry resources during update".to_string(),
+        })?;
+
+    info!(
+        resource_ids = ?retried,
+        "Reset failed resource state before retrying update"
+    );
 
     // Transition back to UpdatePending to re-run preflights
     next.status = DeploymentStatus::UpdatePending;

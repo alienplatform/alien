@@ -833,6 +833,31 @@ async fn test_update_failed_retry_gate_returns_to_update_pending() {
     // Run until UpdateFailed
     state = run_until_status(state, config.clone(), &[DeploymentStatus::UpdateFailed]).await;
 
+    // Persist and restore the failed deployment, matching a manager restart.
+    state = serde_json::from_str(
+        &serde_json::to_string(&state).expect("failed deployment should serialize"),
+    )
+    .expect("failed deployment should deserialize");
+
+    let failed_resource = state
+        .stack_state
+        .as_ref()
+        .unwrap()
+        .resources
+        .values()
+        .find(|resource| {
+            matches!(
+                resource.status,
+                alien_core::ResourceStatus::ProvisionFailed
+                    | alien_core::ResourceStatus::UpdateFailed
+                    | alien_core::ResourceStatus::DeleteFailed
+                    | alien_core::ResourceStatus::RefreshFailed
+            )
+        })
+        .expect("update should contain a failed resource");
+    assert!(failed_resource.retry_attempt > 0);
+    assert!(failed_resource.last_failed_state.is_some());
+
     // Without retry_requested, should stay in failed state
     let result = alien_deployment::step(state.clone(), config.clone(), ClientConfig::Test, None)
         .await
@@ -852,6 +877,28 @@ async fn test_update_failed_retry_gate_returns_to_update_pending() {
     assert!(
         !result.state.retry_requested,
         "retry flag should be cleared"
+    );
+
+    let retried_resource = result
+        .state
+        .stack_state
+        .as_ref()
+        .unwrap()
+        .resources
+        .values()
+        .find(|resource| resource.config.id() == "test-function-v2")
+        .expect("retried resource should remain in stack state");
+    assert_eq!(
+        retried_resource.retry_attempt, 0,
+        "manual retry should grant the resource a fresh retry budget"
+    );
+    assert!(
+        retried_resource.error.is_none(),
+        "manual retry should clear the exhausted attempt error"
+    );
+    assert!(
+        retried_resource.last_failed_state.is_none(),
+        "manual retry should consume the saved failed handler"
     );
 }
 
