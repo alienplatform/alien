@@ -859,3 +859,139 @@ fn import_platform_for_resource(
 
     Platform::Kubernetes
 }
+
+#[cfg(test)]
+mod setup_update_authorization_tests {
+    use super::*;
+    use alien_core::{Storage, Worker, WorkerCode};
+    use chrono::Utc;
+
+    fn request() -> StackImportRequest {
+        StackImportRequest {
+            setup_import_format_version: CURRENT_SETUP_IMPORT_FORMAT_VERSION,
+            deployment_group_token: String::new(),
+            deployment_name: "deployment".to_string(),
+            resource_prefix: "deployment".to_string(),
+            source_kind: None,
+            setup_metadata: None,
+            release_id: Some("release".to_string()),
+            platform: Platform::Aws,
+            base_platform: None,
+            region: "region".to_string(),
+            setup_target: "target".to_string(),
+            setup_fingerprint: "fingerprint".to_string(),
+            setup_fingerprint_version: 1,
+            stack_settings: Default::default(),
+            management_config: None,
+            input_values: HashMap::new(),
+            resources: vec![],
+        }
+    }
+
+    fn record(prepared_stack: Stack) -> DeploymentRecord {
+        DeploymentRecord {
+            id: "deployment".to_string(),
+            workspace_id: "workspace".to_string(),
+            project_id: "project".to_string(),
+            name: "deployment".to_string(),
+            deployment_group_id: "group".to_string(),
+            platform: Platform::Aws,
+            deployment_protocol_version: alien_core::CURRENT_DEPLOYMENT_PROTOCOL_VERSION,
+            base_platform: None,
+            status: "running".to_string(),
+            stack_settings: Some(Default::default()),
+            stack_state: Some(StackState::new(Platform::Aws)),
+            environment_info: None,
+            runtime_metadata: Some(RuntimeMetadata {
+                prepared_stack: Some(prepared_stack),
+                last_synced_env_vars_hash: Some("env-hash".to_string()),
+                registry_access_granted: true,
+                ..RuntimeMetadata::default()
+            }),
+            current_release_id: Some("release".to_string()),
+            desired_release_id: Some("release".to_string()),
+            import_source: None,
+            setup_method: None,
+            setup_metadata: None,
+            setup_target: Some("target".to_string()),
+            setup_fingerprint: Some("fingerprint".to_string()),
+            setup_fingerprint_version: Some(1),
+            user_environment_variables: None,
+            management_config: None,
+            deployment_config: None,
+            deployment_token: None,
+            retry_requested: false,
+            locked_by: None,
+            locked_at: None,
+            created_at: Utc::now(),
+            updated_at: None,
+            error: None,
+        }
+    }
+
+    fn stack(live_id: &str, frozen_id: &str) -> Stack {
+        Stack::new("stack".to_string())
+            .add(
+                Storage::new(frozen_id.to_string()).build(),
+                ResourceLifecycle::Frozen,
+            )
+            .add(
+                Worker::new(live_id.to_string())
+                    .code(WorkerCode::Image {
+                        image: "image".to_string(),
+                    })
+                    .permissions("default".to_string())
+                    .build(),
+                ResourceLifecycle::Live,
+            )
+            .build()
+    }
+
+    #[test]
+    fn no_op_and_live_only_reimports_do_not_mint_setup_authority() {
+        let baseline = stack("live-a", "frozen");
+        for target in [baseline.clone(), stack("live-b", "frozen")] {
+            let metadata = reimport_runtime_metadata(
+                &record(baseline.clone()),
+                &target,
+                "release",
+                &request(),
+            )
+            .expect("stable setup import should succeed");
+
+            assert!(metadata.setup_update_authorization.is_none());
+            assert_eq!(
+                metadata.last_synced_env_vars_hash.as_deref(),
+                Some("env-hash")
+            );
+            assert!(metadata.registry_access_granted);
+        }
+    }
+
+    #[test]
+    fn frozen_reimport_mints_exact_authority_without_losing_runtime_metadata() {
+        let baseline = stack("live", "frozen-a");
+        let target = stack("live", "frozen-b");
+        let metadata =
+            reimport_runtime_metadata(&record(baseline.clone()), &target, "release", &request())
+                .expect("setup-owned update should succeed");
+        let authorization = metadata
+            .setup_update_authorization
+            .expect("frozen change should mint setup authority");
+
+        assert_eq!(
+            authorization.baseline_frozen_digest,
+            baseline.frozen_resources_digest()
+        );
+        assert_eq!(
+            authorization.target_frozen_digest,
+            target.frozen_resources_digest()
+        );
+        assert_eq!(authorization.release_id, "release");
+        assert_eq!(
+            metadata.last_synced_env_vars_hash.as_deref(),
+            Some("env-hash")
+        );
+        assert!(metadata.registry_access_granted);
+    }
+}
