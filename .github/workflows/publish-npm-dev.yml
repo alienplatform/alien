@@ -141,7 +141,7 @@ jobs:
         run: |
           set -euo pipefail
           npm_version="$(node -p "require('./packages/bindings/package.json').version")-dev.${{ needs.prepare.outputs.git_sha }}"
-          node --input-type=module "$npm_version" <<'EOF'
+          node --input-type=module - "$npm_version" <<'EOF'
           import { readFileSync, writeFileSync } from "node:fs"
           const [version] = process.argv.slice(2)
           const path = "Cargo.toml"
