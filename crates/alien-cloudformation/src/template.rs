@@ -200,6 +200,19 @@ impl CfExpression {
         Self::object([("Fn::Sub", Self::String(template.into()))])
     }
 
+    /// `Fn::Sub` two-argument form: substitutes named variables whose values
+    /// are arbitrary expressions (e.g. `Fn::Join` results).
+    pub fn sub_with<I, K>(template: impl Into<String>, variables: I) -> Self
+    where
+        I: IntoIterator<Item = (K, CfExpression)>,
+        K: Into<String>,
+    {
+        Self::object([(
+            "Fn::Sub",
+            Self::List(vec![Self::String(template.into()), Self::object(variables)]),
+        )])
+    }
+
     pub fn equals(left: CfExpression, right: CfExpression) -> Self {
         Self::object([("Fn::Equals", Self::List(vec![left, right]))])
     }

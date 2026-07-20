@@ -7,15 +7,13 @@ use alien_error::{AlienError, Context, IntoAlienError};
 use async_trait::async_trait;
 use serde_json::{json, Value};
 use std::collections::HashMap;
-use std::env::VarError;
+use std::ffi::OsString;
 use std::fs::File;
 use std::io::Read;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::process::Stdio;
 use tokio::process::Command;
 use tracing::{info, warn};
-
-const ENTERPRISE_CA_CERT_PATH_ENV: &str = "ALIEN_ENTERPRISE_CA_CERT_PATH";
 
 /// Docker toolchain implementation using Docker buildx for multi-architecture builds.
 ///
@@ -40,6 +38,13 @@ struct BuildxBuilder {
 }
 
 impl DockerToolchain {
+    const ENTERPRISE_CA_ENV_VARS: [&'static str; 4] = [
+        "ALIEN_ENTERPRISE_CA_CERT_PATH",
+        "SSL_CERT_FILE",
+        "REQUESTS_CA_BUNDLE",
+        "NODE_EXTRA_CA_CERTS",
+    ];
+
     /// Check if the source directory contains a Dockerfile
     pub fn has_dockerfile(src_dir: &Path, dockerfile: Option<&String>) -> bool {
         let dockerfile_name = dockerfile.map(|s| s.as_str()).unwrap_or("Dockerfile");
@@ -97,40 +102,32 @@ impl DockerToolchain {
         }
     }
 
-    fn enterprise_ca_secret() -> Result<Option<String>> {
-        let path = match std::env::var(ENTERPRISE_CA_CERT_PATH_ENV) {
-            Ok(path) => path,
-            Err(VarError::NotPresent) => return Ok(None),
-            Err(VarError::NotUnicode(_)) => {
+    fn enterprise_ca_path() -> Result<Option<PathBuf>> {
+        Self::enterprise_ca_path_from(|name| std::env::var_os(name))
+    }
+
+    fn enterprise_ca_path_from(
+        mut env_value: impl FnMut(&str) -> Option<OsString>,
+    ) -> Result<Option<PathBuf>> {
+        for name in Self::ENTERPRISE_CA_ENV_VARS {
+            let Some(value) = env_value(name) else {
+                continue;
+            };
+            let path = PathBuf::from(value);
+            let valid = File::open(&path)
+                .and_then(|mut file| {
+                    let mut first_byte = [0_u8; 1];
+                    file.read_exact(&mut first_byte)
+                })
+                .is_ok();
+            if !valid {
                 return Err(AlienError::new(Self::docker_build_error(format!(
-                    "{ENTERPRISE_CA_CERT_PATH_ENV} must contain a valid UTF-8 file path"
+                    "{name} must point to a readable, non-empty certificate file"
                 ))));
             }
-        };
-        if path.is_empty() {
-            return Err(AlienError::new(Self::docker_build_error(format!(
-                "{ENTERPRISE_CA_CERT_PATH_ENV} must not be empty"
-            ))));
+            return Ok(Some(path));
         }
-
-        let file = File::open(&path)
-            .into_alien_error()
-            .context(Self::docker_build_error(format!(
-                "{ENTERPRISE_CA_CERT_PATH_ENV} must name a readable file"
-            )))?;
-        let metadata = file
-            .metadata()
-            .into_alien_error()
-            .context(Self::docker_build_error(format!(
-                "Could not inspect the file named by {ENTERPRISE_CA_CERT_PATH_ENV}"
-            )))?;
-        if !metadata.is_file() || metadata.len() == 0 {
-            return Err(AlienError::new(Self::docker_build_error(format!(
-                "{ENTERPRISE_CA_CERT_PATH_ENV} must name a non-empty regular file"
-            ))));
-        }
-
-        Ok(Some(format!("id=enterprise_ca,src={path}")))
+        Ok(None)
     }
 
     fn redacted_build_args(args: &[String]) -> Vec<&str> {
@@ -397,9 +394,10 @@ impl Toolchain for DockerToolchain {
             args.push(build_arg.clone());
         }
 
-        if let Some(secret) = Self::enterprise_ca_secret()? {
+        let enterprise_ca = Self::enterprise_ca_path()?;
+        if let Some(path) = &enterprise_ca {
             args.push("--secret".to_string());
-            args.push(secret);
+            args.push(format!("id=enterprise_ca,src={}", path.display()));
         }
 
         // Add target if specified
@@ -946,6 +944,64 @@ mod tests {
             "secret path leaked: {rendered}"
         );
         assert!(rendered.contains("<redacted>"), "secret was not redacted");
+    }
+
+    #[test]
+    fn enterprise_ca_uses_standard_precedence() {
+        let temp_dir = tempdir().unwrap();
+        let ssl = temp_dir.path().join("ssl.pem");
+        let requests = temp_dir.path().join("requests.pem");
+        let node = temp_dir.path().join("node.pem");
+        for path in [&ssl, &requests, &node] {
+            std::fs::write(path, "certificate").unwrap();
+        }
+        let values = HashMap::from([
+            ("SSL_CERT_FILE", ssl.as_os_str().to_owned()),
+            ("REQUESTS_CA_BUNDLE", requests.as_os_str().to_owned()),
+            ("NODE_EXTRA_CA_CERTS", node.as_os_str().to_owned()),
+        ]);
+
+        let selected = DockerToolchain::enterprise_ca_path_from(|name| values.get(name).cloned())
+            .expect("certificate discovery should succeed");
+
+        assert_eq!(selected.as_deref(), Some(ssl.as_path()));
+    }
+
+    #[test]
+    fn enterprise_ca_explicit_override_has_highest_precedence() {
+        let temp_dir = tempdir().unwrap();
+        let explicit = temp_dir.path().join("explicit.pem");
+        let ssl = temp_dir.path().join("ssl.pem");
+        std::fs::write(&explicit, "explicit certificate").unwrap();
+        std::fs::write(&ssl, "standard certificate").unwrap();
+        let values = HashMap::from([
+            (
+                "ALIEN_ENTERPRISE_CA_CERT_PATH",
+                explicit.as_os_str().to_owned(),
+            ),
+            ("SSL_CERT_FILE", ssl.as_os_str().to_owned()),
+        ]);
+
+        let selected = DockerToolchain::enterprise_ca_path_from(|name| values.get(name).cloned())
+            .expect("certificate discovery should succeed");
+
+        assert_eq!(selected.as_deref(), Some(explicit.as_path()));
+    }
+
+    #[test]
+    fn enterprise_ca_is_optional_but_invalid_configuration_fails() {
+        let absent = DockerToolchain::enterprise_ca_path_from(|_| None)
+            .expect("absent certificate variables should be accepted");
+        assert_eq!(absent, None);
+
+        let error = DockerToolchain::enterprise_ca_path_from(|name| {
+            (name == "ALIEN_ENTERPRISE_CA_CERT_PATH")
+                .then(|| OsString::from("/missing/certificate.pem"))
+        })
+        .expect_err("an advertised missing certificate must fail fast");
+        let message = error.to_string();
+        assert!(message.contains("ALIEN_ENTERPRISE_CA_CERT_PATH"));
+        assert!(!message.contains("/missing/certificate.pem"));
     }
 
     #[tokio::test]

@@ -1,0 +1,52 @@
+{
+  // Allows reading email infrastructure configuration: identity/DKIM
+  // verification status, configuration set settings, and receipt rules.
+  "id": "email/management",
+  "description": "Allows reading email identity verification status and configuration",
+  "platforms": {
+    "aws": [
+      {
+        "grant": {
+          "actions": [
+            "ses:GetEmailIdentity",
+            "ses:GetConfigurationSet",
+            "ses:GetConfigurationSetEventDestinations"
+          ]
+        },
+        "binding": {
+          "stack": {
+            "resources": [
+              "arn:aws:ses:${awsRegion}:${awsAccountId}:identity/*",
+              "arn:aws:ses:${awsRegion}:${awsAccountId}:configuration-set/${stackPrefix}-*"
+            ]
+          },
+          "resource": {
+            "resources": [
+              "arn:aws:ses:${awsRegion}:${awsAccountId}:identity/*",
+              "arn:aws:ses:${awsRegion}:${awsAccountId}:configuration-set/${resourceName}"
+            ]
+          }
+        }
+      },
+      {
+        // Receipt rule inspection uses the SES v1 API, which does not support
+        // resource-level scoping.
+        "grant": {
+          "actions": [
+            "ses:DescribeReceiptRuleSet",
+            "ses:DescribeReceiptRule",
+            "ses:DescribeActiveReceiptRuleSet"
+          ]
+        },
+        "binding": {
+          "stack": {
+            "resources": ["*"]
+          },
+          "resource": {
+            "resources": ["*"]
+          }
+        }
+      }
+    ]
+  }
+}

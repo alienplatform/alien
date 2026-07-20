@@ -1,0 +1,32 @@
+{
+  // Allows sending mail through the provisioned SES identities and
+  // configuration set. Workloads use the AWS SDK directly with this grant.
+  "id": "email/send",
+  "description": "Allows sending email through the provisioned identities and configuration set",
+  "platforms": {
+    "aws": [
+      {
+        // SES authorizes sends against both the identity ARN and the
+        // configuration set ARN. Identities are named after customer mail
+        // domains, so they cannot be scoped with the stack prefix.
+        "grant": {
+          "actions": ["ses:SendEmail", "ses:SendRawEmail"]
+        },
+        "binding": {
+          "stack": {
+            "resources": [
+              "arn:aws:ses:${awsRegion}:${awsAccountId}:identity/*",
+              "arn:aws:ses:${awsRegion}:${awsAccountId}:configuration-set/${stackPrefix}-*"
+            ]
+          },
+          "resource": {
+            "resources": [
+              "arn:aws:ses:${awsRegion}:${awsAccountId}:identity/*",
+              "arn:aws:ses:${awsRegion}:${awsAccountId}:configuration-set/${resourceName}"
+            ]
+          }
+        }
+      }
+    ]
+  }
+}

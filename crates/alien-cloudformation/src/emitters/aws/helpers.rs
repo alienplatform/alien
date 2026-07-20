@@ -81,6 +81,37 @@ pub fn stack_name(suffix: &str) -> CfExpression {
     CfExpression::sub(format!("${{AWS::StackName}}-{suffix}"))
 }
 
+/// First segment of the stack id GUID (8 hex chars). Appended to physical
+/// resource names that must be globally or account unique (S3 buckets,
+/// OpenSearch Serverless collections).
+pub fn stack_id_short_suffix() -> CfExpression {
+    CfExpression::object([(
+        "Fn::Select",
+        CfExpression::list([
+            CfExpression::Integer(0),
+            CfExpression::object([(
+                "Fn::Split",
+                CfExpression::list([
+                    CfExpression::from("-"),
+                    CfExpression::object([(
+                        "Fn::Select",
+                        CfExpression::list([
+                            CfExpression::Integer(2),
+                            CfExpression::object([(
+                                "Fn::Split",
+                                CfExpression::list([
+                                    CfExpression::from("/"),
+                                    CfExpression::ref_("AWS::StackId"),
+                                ]),
+                            )]),
+                        ]),
+                    )]),
+                ]),
+            )]),
+        ]),
+    )])
+}
+
 /// Standard resource tags.
 pub fn tags(ctx: &EmitContext<'_>) -> CfExpression {
     CfExpression::list([
