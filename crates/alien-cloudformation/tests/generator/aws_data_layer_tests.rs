@@ -129,6 +129,79 @@ fn frozen_storage_with_live_worker_trigger_omits_setup_notification_wiring() {
 }
 
 #[test]
+fn aws_queue_resource_permissions_attach_to_service_account_role() {
+    let stack = Stack::new("queue-permissions".to_string())
+        .permission(
+            "execution",
+            PermissionProfile::new().resource("jobs", ["queue/data-read", "queue/data-write"]),
+        )
+        .add(
+            ServiceAccount::new("execution-sa".to_string()).build(),
+            ResourceLifecycle::Frozen,
+        )
+        .add(
+            Queue::new("jobs".to_string()).build(),
+            ResourceLifecycle::Frozen,
+        )
+        .build();
+
+    let yaml = render_built_ins(
+        &stack,
+        StackSettings::default(),
+        RegistrationMode::OutputsFallback,
+        "aws queue service account permissions",
+    );
+    let template: serde_json::Value =
+        serde_yaml::from_str(&yaml).expect("template YAML should parse");
+
+    let read_policy = &template["Resources"]["JobsExecutionSaRoleQueuePermission00"];
+    let write_policy = &template["Resources"]["JobsExecutionSaRoleQueuePermission01"];
+    assert_eq!(read_policy["Type"], "AWS::IAM::Policy");
+    assert_eq!(write_policy["Type"], "AWS::IAM::Policy");
+
+    let read_actions = read_policy["Properties"]["PolicyDocument"]["Statement"][0]["Action"]
+        .as_array()
+        .expect("read statement should list actions");
+    assert!(read_actions.contains(&serde_json::json!("sqs:ReceiveMessage")));
+    let write_actions = write_policy["Properties"]["PolicyDocument"]["Statement"][0]["Action"]
+        .as_array()
+        .expect("write statement should list actions");
+    assert!(write_actions.contains(&serde_json::json!("sqs:DeleteMessage")));
+
+    // Statements must be pinned to the queue ARN: the physical queue name is
+    // CloudFormation-generated, so a name-pattern binding would never match.
+    for policy in [read_policy, write_policy] {
+        assert_eq!(
+            policy["Properties"]["PolicyDocument"]["Statement"][0]["Resource"]["Fn::GetAtt"],
+            serde_json::json!(["Jobs", "Arn"])
+        );
+        assert_eq!(
+            policy["Properties"]["Roles"][0]["Ref"],
+            serde_json::json!("ExecutionSaRole")
+        );
+    }
+}
+
+#[test]
+fn aws_queue_without_grants_emits_no_iam_policies() {
+    let stack = Stack::new("queue-plain".to_string())
+        .add(
+            Queue::new("jobs".to_string()).build(),
+            ResourceLifecycle::Frozen,
+        )
+        .build();
+
+    let yaml = render_built_ins(
+        &stack,
+        StackSettings::default(),
+        RegistrationMode::OutputsFallback,
+        "aws queue without grants",
+    );
+
+    assert!(!yaml.contains("QueuePermission"));
+}
+
+#[test]
 fn aws_vault_resource_permissions_attach_to_service_account_role() {
     let stack = Stack::new("vault-permissions".to_string())
         .permission(

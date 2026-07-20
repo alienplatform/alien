@@ -53,7 +53,7 @@ pub async fn setup_target(
         .context("Failed to build initial setup target config")?;
     let has_remote_management = management_config.is_some();
 
-    alien_deploy_cli::commands::push_initial_setup(
+    if let Err(error) = alien_deploy_cli::commands::push_initial_setup(
         manager.client(),
         &deployment.id,
         platform,
@@ -66,7 +66,21 @@ pub async fn setup_target(
         None,
     )
     .await
-    .map_err(|e| anyhow::anyhow!("push_initial_setup failed: {}", e))?;
+    {
+        let manager_error = manager
+            .client()
+            .get_deployment()
+            .id(&deployment.id)
+            .send()
+            .await
+            .ok()
+            .and_then(|state| state.error.clone())
+            .map(|state_error| state_error.to_string())
+            .unwrap_or_else(|| "manager returned no deployment error details".to_string());
+        anyhow::bail!(
+            "push_initial_setup failed: {error}; manager deployment error: {manager_error}"
+        );
+    }
 
     // For Azure with shared (external) Container Apps Environment: when remote
     // stack management is configured, the management UAMI now exists but lacks

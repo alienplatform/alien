@@ -110,6 +110,35 @@ fn compute_cluster_execute_does_not_read_workload_secrets() {
 }
 
 #[test]
+fn compute_cluster_controllers_can_describe_launch_templates_for_retry_adoption() {
+    let generator = AwsRuntimePermissionsGenerator::new();
+    let context = create_test_context();
+
+    for permission_set_id in ["compute-cluster/management", "compute-cluster/provision"] {
+        let permission_set = get_permission_set(permission_set_id).expect("permission set exists");
+        let result = generator
+            .generate_policy(permission_set, BindingTarget::Stack, &context)
+            .expect("compute cluster policy should generate");
+
+        let statement = result
+            .statement
+            .iter()
+            .find(|statement| {
+                statement
+                    .action
+                    .contains(&"ec2:DescribeLaunchTemplates".to_string())
+            })
+            .expect("compute cluster controller should be able to inspect an existing template");
+
+        assert_eq!(statement.resource, ["*".to_string()]);
+        assert!(
+            statement.condition.is_none(),
+            "EC2 Describe actions do not support IAM conditions"
+        );
+    }
+}
+
+#[test]
 fn test_compute_cluster_management_can_tag_otlp_secrets() {
     let generator = AwsRuntimePermissionsGenerator::new();
     let permission_set =
@@ -137,6 +166,43 @@ fn test_compute_cluster_management_can_tag_otlp_secrets() {
     assert!(secret_statement
         .action
         .contains(&"secretsmanager:TagResource".to_string()));
+}
+
+#[test]
+fn test_compute_cluster_management_can_terminate_only_tagged_stack_instances() {
+    let generator = AwsRuntimePermissionsGenerator::new();
+    let permission_set =
+        get_permission_set("compute-cluster/management").expect("permission set exists");
+    let context = create_test_context();
+
+    let result = generator
+        .generate_policy(permission_set, BindingTarget::Stack, &context)
+        .expect("Should generate AWS policy successfully");
+
+    let statement = result
+        .statement
+        .iter()
+        .find(|statement| {
+            statement
+                .action
+                .contains(&"autoscaling:TerminateInstanceInAutoScalingGroup".to_string())
+        })
+        .expect("compute-cluster management should allow drained instance termination");
+
+    assert_eq!(
+        statement.resource,
+        ["arn:aws:autoscaling:us-east-1:123456789012:autoScalingGroup:*:autoScalingGroupName/my-stack-*".to_string()]
+    );
+    assert!(condition_equals(
+        statement,
+        "aws:ResourceTag/deployment",
+        "my-stack"
+    ));
+    assert!(condition_equals(
+        statement,
+        "aws:ResourceTag/managed-by",
+        "runtime"
+    ));
 }
 
 #[test]
@@ -405,6 +471,70 @@ fn test_container_provision_can_manage_setup_compute_security_group_ingress() {
         setup_compute_ingress_statement,
         "aws:ResourceTag/deployment",
         "my-stack"
+    ));
+}
+
+#[test]
+fn test_container_provision_can_mutate_compacted_load_balancer_names() {
+    let generator = AwsRuntimePermissionsGenerator::new();
+    let permission_set = get_permission_set("container/provision").expect("permission set exists");
+    let context = create_test_context()
+        .with_stack_prefix("e2e-03-aws-terraform-tcp-f938d0b8fa")
+        .with_resource_id("tcp-service");
+
+    let result = generator
+        .generate_policy(permission_set, BindingTarget::Resource, &context)
+        .expect("container provision policy should generate");
+
+    let mutation_statement = result
+        .statement
+        .iter()
+        .find(|statement| {
+            statement
+                .action
+                .contains(&"elasticloadbalancing:ModifyTargetGroupAttributes".to_string())
+        })
+        .expect("container provision should allow target group attribute updates");
+
+    for action in [
+        "elasticloadbalancing:ModifyListener",
+        "elasticloadbalancing:ModifyLoadBalancerAttributes",
+        "elasticloadbalancing:ModifyTargetGroupAttributes",
+    ] {
+        assert!(
+            mutation_statement.action.contains(&action.to_string()),
+            "container provision should allow {action}"
+        );
+    }
+    for resource in [
+        "loadbalancer/app/*/*",
+        "loadbalancer/net/*/*",
+        "targetgroup/*/*",
+        "listener/app/*/*/*",
+        "listener/net/*/*/*",
+    ] {
+        assert!(
+            mutation_statement
+                .resource
+                .iter()
+                .any(|candidate| candidate.ends_with(resource)),
+            "compacted AWS names should remain authorized through {resource}"
+        );
+    }
+    assert!(condition_equals(
+        mutation_statement,
+        "aws:ResourceTag/deployment",
+        "e2e-03-aws-terraform-tcp-f938d0b8fa"
+    ));
+    assert!(condition_equals(
+        mutation_statement,
+        "aws:ResourceTag/resource",
+        "tcp-service"
+    ));
+    assert!(condition_equals(
+        mutation_statement,
+        "aws:ResourceTag/managed-by",
+        "runtime"
     ));
 }
 

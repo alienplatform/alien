@@ -30,10 +30,11 @@ use alien_core::permissions::PermissionProfile;
 use alien_core::{
     AwsEnvironmentInfo, AwsManagementConfig, AwsRemoteStackManagementImportData,
     AwsStorageImportData, AzureEnvironmentInfo, AzureManagementConfig,
-    AzureRemoteStackManagementImportData, EnvironmentInfo, GcpEnvironmentInfo, GcpManagementConfig,
-    GcpRemoteStackManagementImportData, KubernetesCluster, KubernetesClusterOwnership,
-    KubernetesClusterProvider, ManagementConfig, Platform, RemoteStackManagement,
-    ResourceLifecycle, ResourceStatus, Stack, StackSettings, Storage, Worker, WorkerCode,
+    AzureRemoteStackManagementImportData, DeploymentState, DeploymentStatus, EnvironmentInfo,
+    GcpEnvironmentInfo, GcpManagementConfig, GcpRemoteStackManagementImportData, KubernetesCluster,
+    KubernetesClusterOwnership, KubernetesClusterProvider, ManagementConfig, Platform, ReleaseInfo,
+    RemoteStackManagement, ResourceLifecycle, ResourceStatus, Stack, StackSettings, Storage,
+    Worker, WorkerCode,
 };
 use alien_manager::auth::Authz;
 use alien_manager::config::ManagerConfig;
@@ -47,8 +48,8 @@ use alien_manager::stores::sqlite::{
 };
 use alien_manager::traits::{
     AuthValidator, CreateDeploymentGroupParams, CreateDeploymentParams, CreateReleaseParams,
-    CreateTokenParams, CredentialResolver, DeploymentStore, ReleaseStore, TelemetryBackend,
-    TokenStore, TokenType,
+    CreateTokenParams, CredentialResolver, DeploymentStore, ReconcileData, ReleaseStore,
+    TelemetryBackend, TokenStore, TokenType,
 };
 
 // ---------------------------------------------------------------------------
@@ -769,6 +770,50 @@ async fn re_import_replaces_stack_state() {
     let (s1, j1) = post_import(&fixture, Some(&fixture.dg_token), &body).await;
     assert_eq!(s1, StatusCode::CREATED);
     let first: StackImportResponse = serde_json::from_value(j1).unwrap();
+
+    let imported = fixture
+        .deployment_store
+        .get_deployment(
+            &alien_manager::auth::Subject::system(),
+            &first.deployment_id,
+        )
+        .await
+        .unwrap()
+        .expect("deployment must persist");
+    fixture
+        .deployment_store
+        .reconcile(
+            &alien_manager::auth::Subject::system(),
+            ReconcileData {
+                deployment_id: imported.id,
+                session: "test-reconcile".to_string(),
+                state: DeploymentState {
+                    status: DeploymentStatus::Running,
+                    platform: imported.platform,
+                    current_release: Some(ReleaseInfo {
+                        release_id: fixture.release_id.clone(),
+                        version: None,
+                        description: None,
+                        stack: stack_with_storage("assets"),
+                    }),
+                    target_release: None,
+                    stack_state: imported.stack_state,
+                    error: None,
+                    environment_info: imported.environment_info,
+                    runtime_metadata: imported.runtime_metadata,
+                    retry_requested: false,
+                    protocol_version: imported.deployment_protocol_version,
+                },
+                update_heartbeat: false,
+                suggested_delay_ms: None,
+                heartbeats: vec![],
+                observed_inventory_batches: vec![],
+                capabilities: vec![],
+                operator_version: None,
+            },
+        )
+        .await
+        .expect("deployment should reach a stable state before re-import");
 
     let mut body = body;
     body.resources[0].import_data = serde_json::to_value(AwsStorageImportData {

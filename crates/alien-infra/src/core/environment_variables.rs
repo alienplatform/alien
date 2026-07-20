@@ -283,9 +283,14 @@ impl EnvironmentVariableBuilder {
         let wildcard_endpoints = current_resource_wildcard_endpoints(ctx);
         let mut env_endpoints = HashMap::new();
         for (endpoint_name, public_url) in &endpoint_urls {
-            let Some(host) = public_url_host(public_url) else {
-                continue;
-            };
+            let host = public_url_host(public_url).ok_or_else(|| {
+                AlienError::new(ErrorData::ResourceConfigInvalid {
+                    message: format!(
+                        "public endpoint '{endpoint_name}' URL does not contain a valid host"
+                    ),
+                    resource_id: Some(resource_id.to_string()),
+                })
+            })?;
             let wildcard_host = wildcard_endpoints
                 .get(endpoint_name)
                 .copied()
@@ -726,5 +731,20 @@ mod tests {
             Some("[::1]".to_string())
         );
         assert_eq!(public_url_host(""), None);
+    }
+
+    #[test]
+    fn public_endpoint_environment_projection_remains_url_host_and_wildcard_host() {
+        let json = serde_json::to_string(&PublicEndpointEnv {
+            url: "https://gateway.example.test".to_string(),
+            host: "gateway.example.test".to_string(),
+            wildcard_host: Some("*.gateway.example.test".to_string()),
+        })
+        .expect("environment endpoint should serialize");
+
+        assert_eq!(
+            json,
+            r#"{"url":"https://gateway.example.test","host":"gateway.example.test","wildcardHost":"*.gateway.example.test"}"#
+        );
     }
 }

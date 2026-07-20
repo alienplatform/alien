@@ -32,6 +32,9 @@ impl ResourceImporter for AwsNetworkImporter {
             ctx.stack_settings.network.as_ref(),
             Some(NetworkSettings::UseDefault)
         ) && data.vpc_id.is_none();
+        let needs_subnet_domain_discovery = !needs_default_vpc_discovery
+            && data.subnets_by_failure_domain.is_empty()
+            && (!data.public_subnet_ids.is_empty() || !data.private_subnet_ids.is_empty());
         let is_setup_owned_vpc = data.is_byo_vpc
             || matches!(
                 ctx.stack_settings.network.as_ref(),
@@ -41,6 +44,8 @@ impl ResourceImporter for AwsNetworkImporter {
         let controller = AwsNetworkController {
             state: if needs_default_vpc_discovery {
                 AwsNetworkState::CreateStart
+            } else if needs_subnet_domain_discovery {
+                AwsNetworkState::DiscoveringSubnetFailureDomains
             } else {
                 AwsNetworkState::Ready
             },
@@ -59,10 +64,11 @@ impl ResourceImporter for AwsNetworkImporter {
             route_table_association_ids: Vec::new(),
             security_group_id: data.security_group_id,
             availability_zones: data.availability_zones,
+            subnets_by_failure_domain: data.subnets_by_failure_domain,
             is_byo_vpc: is_setup_owned_vpc,
             _internal_stay_count: None,
         };
-        if needs_default_vpc_discovery {
+        if needs_default_vpc_discovery || needs_subnet_domain_discovery {
             make_imported_state_with_status(controller, ctx, ResourceStatus::Provisioning)
         } else {
             make_imported_state(controller, ctx)
@@ -126,6 +132,7 @@ mod tests {
             private_route_table_id: None,
             security_group_id: None,
             availability_zones: Vec::new(),
+            subnets_by_failure_domain: Default::default(),
             is_byo_vpc: true,
         }
     }
@@ -154,7 +161,7 @@ mod tests {
     }
 
     #[test]
-    fn imported_network_with_vpc_id_is_ready() {
+    fn imported_network_without_domain_map_discovers_before_becoming_ready() {
         let settings = StackSettings {
             network: Some(NetworkSettings::ByoVpcAws {
                 vpc_id: "vpc-123".to_string(),
@@ -174,13 +181,50 @@ mod tests {
             .import(data, &import_context(&settings, &entry))
             .expect("network import should succeed");
 
+        assert_eq!(imported.status, ResourceStatus::Provisioning);
+        let internal = imported
+            .internal_state
+            .expect("imported network should have controller state");
+        assert_eq!(internal["state"], "discoveringSubnetFailureDomains");
+        assert_eq!(internal["isByoVpc"], true);
+    }
+
+    #[test]
+    fn imported_network_with_exact_domain_map_is_ready() {
+        let settings = StackSettings {
+            network: Some(NetworkSettings::ByoVpcAws {
+                vpc_id: "vpc-123".to_string(),
+                public_subnet_ids: vec!["subnet-public".to_string()],
+                private_subnet_ids: vec!["subnet-private".to_string()],
+                security_group_ids: vec!["sg-123".to_string()],
+            }),
+            ..StackSettings::default()
+        };
+        let mut data = empty_default_import_data();
+        data.vpc_id = Some("vpc-123".to_string());
+        data.public_subnet_ids = vec!["subnet-public".to_string()];
+        data.private_subnet_ids = vec!["subnet-private".to_string()];
+        data.subnets_by_failure_domain.insert(
+            "us-west-2b".to_string(),
+            alien_core::aws::AwsFailureDomainSubnets {
+                public_subnet_ids: vec!["subnet-public".to_string()],
+                private_subnet_ids: vec!["subnet-private".to_string()],
+            },
+        );
+        let entry = network_entry();
+        let imported = AwsNetworkImporter
+            .import(data, &import_context(&settings, &entry))
+            .expect("network import should succeed");
+
         assert_eq!(imported.status, ResourceStatus::Running);
         let internal = imported
             .internal_state
             .expect("imported network should have controller state");
         assert_eq!(internal["state"], "ready");
-        assert_eq!(internal["isByoVpc"], true);
-        assert!(imported.outputs.is_some());
+        assert_eq!(
+            internal["subnetsByFailureDomain"]["us-west-2b"]["privateSubnetIds"][0],
+            "subnet-private"
+        );
     }
 
     #[test]

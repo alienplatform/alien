@@ -434,6 +434,27 @@ async fn test_proxy_auth() {
         .await
         .unwrap();
     assert_eq!(resp.status(), 401, "No auth should be 401");
+    assert_eq!(
+        resp.headers()
+            .get("www-authenticate")
+            .and_then(|value| value.to_str().ok()),
+        Some("Basic realm=\"alien-manager\"")
+    );
+
+    // Reverse proxies commonly normalize the trailing slash away. The OCI
+    // client must receive the same challenge from the normalized path.
+    let resp = client
+        .get(format!("{}/v2", s.manager_url))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 401, "Normalized version path should be 401");
+    assert_eq!(
+        resp.headers()
+            .get("www-authenticate")
+            .and_then(|value| value.to_str().ok()),
+        Some("Basic realm=\"alien-manager\"")
+    );
 
     // Invalid Bearer
     let resp = client
@@ -711,6 +732,22 @@ async fn test_proxy_push_auth() {
         403,
         "Deployment tokens should not push manifests"
     );
+
+    // Both upload-init forms must reach the upstream registry. Reverse
+    // proxies commonly normalize the trailing slash away.
+    for suffix in ["blobs/uploads/", "blobs/uploads"] {
+        let resp = client
+            .post(format!("{}/v2/artifacts/test-repo/{suffix}", s.manager_url))
+            .header("Authorization", format!("Bearer {}", s.admin_token))
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(
+            resp.status(),
+            202,
+            "Authenticated upload init for {suffix} should reach the upstream registry"
+        );
+    }
 }
 
 /// End-to-end: push an image through the proxy, then pull it back and verify content.

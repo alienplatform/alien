@@ -4,6 +4,7 @@
 */
 
 import * as z from "zod";
+import { ExposeProtocolSchema } from "./expose-protocol-schema.js";
 import { LoadBalancerEndpointSchema } from "./load-balancer-endpoint-schema.js";
 
 /**
@@ -13,6 +14,10 @@ export const PublicEndpointOutputSchema = z.object({
     "host": z.string().describe("Hostname for this endpoint."),
 get "loadBalancerEndpoint"(){
                 return z.union([LoadBalancerEndpointSchema, z.null()]).optional()
+              },
+"port": z.int().min(1).max(65535).describe("Public connection port."),
+get "protocol"(){
+                return ExposeProtocolSchema.describe("Protocol for public workload endpoints.")
               },
 "url": z.string().describe("Base URL for this endpoint."),
 "wildcardHost": z.string().describe("Wildcard hostname routed to this endpoint, when configured.").nullish()

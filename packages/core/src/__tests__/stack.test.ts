@@ -568,3 +568,68 @@ describe("ArtifactRegistry resource configuration", () => {
     expect(stack).toMatchSnapshot()
   })
 })
+
+describe("Email resource configuration", () => {
+  it("creates email infrastructure with inbound storage and events queue", () => {
+    const mailbox = new alien.Storage("mailbox").build()
+    const mailEvents = new alien.Queue("mail-events").build()
+    const email = new alien.Email("mailer")
+      .domains(["mail.example.com"])
+      .domain("mail.example.org")
+      .inbound(mailbox)
+      .events(mailEvents)
+      .build()
+
+    expect(email.config.id).toBe("mailer")
+    expect(email.config.domains).toEqual(["mail.example.com", "mail.example.org"])
+    expect(email.config.inbound).toEqual({ storage: { type: "storage", id: "mailbox" } })
+    expect(email.config.events).toEqual({ queue: { type: "queue", id: "mail-events" } })
+
+    const stack = new alien.Stack("email-stack")
+      .add(mailbox, "frozen")
+      .add(mailEvents, "frozen")
+      .add(email, "frozen")
+      .build()
+
+    expect(stack).toMatchSnapshot()
+  })
+
+  it("creates an email resource without seed domains", () => {
+    const email = new alien.Email("mailer").build()
+    expect(email.config.id).toBe("mailer")
+    expect(email.config.domains).toEqual([])
+    expect(email.config.inbound).toBeUndefined()
+    expect(email.config.events).toBeUndefined()
+  })
+})
+
+describe("Experimental AwsOpenSearch resource configuration", () => {
+  it("serializes with the experimental resource type and camelCase fields", () => {
+    const search = new alien.experimental.AwsOpenSearch("articles").build()
+    expect(search.config.type).toBe("experimental/aws-opensearch")
+    expect(search.ref()).toEqual({ type: "experimental/aws-opensearch", id: "articles" })
+    expect(search.config.id).toBe("articles")
+    // Default matches the Rust serde default so both sides deserialize the
+    // same stack definition identically.
+    expect(search.config.collectionType).toBe("search")
+
+    const vectors = new alien.experimental.AwsOpenSearch("embeddings")
+      .collectionType("vectorSearch")
+      .build()
+    expect(vectors.config.collectionType).toBe("vectorSearch")
+
+    const stack = new alien.Stack("search-stack").add(search, "frozen").build()
+    expect(stack.resources).toHaveProperty("articles")
+    expect(stack.resources.articles?.config.type).toBe("experimental/aws-opensearch")
+    expect(stack.resources.articles?.lifecycle).toBe("frozen")
+  })
+
+  it("rejects unknown collection types", () => {
+    expect(() =>
+      new alien.experimental.AwsOpenSearch("articles")
+        // @ts-expect-error -- runtime validation for untyped callers
+        .collectionType("timeseries")
+        .build(),
+    ).toThrow()
+  })
+})

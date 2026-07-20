@@ -6,7 +6,7 @@ use crate::output;
 use alien_core::embedded_config::DeployCliConfig;
 use alien_error::{AlienError, Context, IntoAlienError};
 use clap::Parser;
-use serde::{Deserialize, Serialize};
+use serde::Deserialize;
 use serde_json::Value as JsonValue;
 use std::{collections::BTreeMap, path::PathBuf};
 
@@ -79,13 +79,7 @@ struct RemoteResourceInfo {
     public_endpoints: BTreeMap<String, PublicEndpointConnectionInfo>,
 }
 
-#[derive(Debug, Deserialize, Serialize)]
-#[serde(rename_all = "camelCase")]
-struct PublicEndpointConnectionInfo {
-    url: String,
-    host: Option<String>,
-    wildcard_host: Option<String>,
-}
+type PublicEndpointConnectionInfo = alien_core::PublicEndpointOutput;
 
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -213,13 +207,23 @@ pub async fn status_command(
         }
     }
     output::status("Created:", &deployment.created_at);
-    for (resource_id, resource) in deployment_info
-        .resources
-        .iter()
-        .filter(|(_, resource)| resource.public_url.is_some())
-    {
-        if let Some(public_url) = resource.public_url.as_ref() {
-            output::status(&format!("{resource_id} URL:"), public_url);
+    for (resource_id, resource) in &deployment_info.resources {
+        let Some(endpoint) = representative_public_endpoint(&resource.public_endpoints) else {
+            if let Some(public_url) = &resource.public_url {
+                output::status(&format!("{resource_id} URL:"), public_url);
+            }
+            continue;
+        };
+        match endpoint.protocol {
+            alien_core::ExposeProtocol::Http => {
+                output::status(&format!("{resource_id} URL:"), &endpoint.url);
+            }
+            alien_core::ExposeProtocol::Tcp => {
+                output::status(
+                    &format!("{resource_id} Address:"),
+                    &format_endpoint_address(&endpoint.host, endpoint.port),
+                );
+            }
         }
     }
 
@@ -277,15 +281,21 @@ async fn fetch_platform_deployment_info(
 fn representative_public_url(
     endpoints: &BTreeMap<String, PublicEndpointConnectionInfo>,
 ) -> Option<String> {
-    endpoints
-        .get("api")
-        .map(|endpoint| endpoint.url.clone())
-        .or_else(|| {
-            endpoints
-                .values()
-                .next()
-                .map(|endpoint| endpoint.url.clone())
-        })
+    representative_public_endpoint(endpoints).map(|endpoint| endpoint.url.clone())
+}
+
+fn representative_public_endpoint(
+    endpoints: &BTreeMap<String, PublicEndpointConnectionInfo>,
+) -> Option<&PublicEndpointConnectionInfo> {
+    endpoints.get("api").or_else(|| endpoints.values().next())
+}
+
+fn format_endpoint_address(host: &str, port: u16) -> String {
+    if host.contains(':') {
+        format!("[{host}]:{port}")
+    } else {
+        format!("{host}:{port}")
+    }
 }
 
 async fn fetch_remote_deployment_info(
@@ -487,6 +497,57 @@ mod tests {
         assert_eq!(
             format_error_chain(&error),
             vec![format_json_fallback(&error)]
+        );
+    }
+
+    #[test]
+    fn parses_old_http_deployment_info_with_current_metadata() {
+        let info: RemoteDeploymentInfo = serde_json::from_value(serde_json::json!({
+            "resources": {
+                "gateway": {
+                    "resourceType": "container",
+                    "publicUrl": "https://gateway.example.test",
+                    "publicEndpoints": {
+                        "api": {
+                            "url": "https://gateway.example.test",
+                            "host": "gateway.example.test"
+                        }
+                    }
+                }
+            }
+        }))
+        .expect("old deployment info should parse");
+
+        let endpoint = &info.resources["gateway"].public_endpoints["api"];
+        assert_eq!(endpoint.protocol, alien_core::ExposeProtocol::Http);
+        assert_eq!(endpoint.port, 443);
+    }
+
+    #[test]
+    fn parses_legacy_manager_info_without_endpoint_map() {
+        let info: RemoteDeploymentInfo = serde_json::from_value(serde_json::json!({
+            "resources": {
+                "gateway": {
+                    "resourceType": "container",
+                    "publicUrl": "https://gateway.example.test"
+                }
+            }
+        }))
+        .expect("legacy manager info should parse");
+
+        let resource = &info.resources["gateway"];
+        assert_eq!(
+            resource.public_url.as_deref(),
+            Some("https://gateway.example.test")
+        );
+        assert!(resource.public_endpoints.is_empty());
+    }
+
+    #[test]
+    fn formats_ipv6_tcp_address() {
+        assert_eq!(
+            format_endpoint_address("2001:db8::1", 6432),
+            "[2001:db8::1]:6432"
         );
     }
 }

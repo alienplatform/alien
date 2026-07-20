@@ -34,15 +34,15 @@ use alien_core::import::{
     ImportContext,
 };
 use alien_core::{
-    ArtifactRegistry, AwsManagementConfig, AzureContainerAppsEnvironment,
-    AzureContainerAppsEnvironmentOutputs, AzureManagementConfig, AzureResourceGroup,
-    AzureResourceGroupOutputs, AzureServiceBusNamespace, AzureStorageAccount,
-    AzureStorageAccountOutputs, Build, GcpManagementConfig, KubernetesCluster,
-    KubernetesClusterOutputs, KubernetesClusterOwnership, KubernetesClusterProvider,
-    KubernetesHeartbeatMode, Kv, ManagementConfig, Network, NetworkSettings, Platform, Queue,
-    RemoteStackManagement, RemoteStackManagementOutputs, Resource, ResourceDefinition,
-    ResourceEntry, ResourceLifecycle, ResourceStatus, ResourceType, ServiceAccount,
-    ServiceActivation, StackSettings, Storage, Vault, Worker,
+    ArtifactRegistry, AwsManagementConfig, AwsOpenSearch, AwsOpenSearchOutputs,
+    AzureContainerAppsEnvironment, AzureContainerAppsEnvironmentOutputs, AzureManagementConfig,
+    AzureResourceGroup, AzureResourceGroupOutputs, AzureServiceBusNamespace, AzureStorageAccount,
+    AzureStorageAccountOutputs, Build, Email, EmailInbound, EmailOutputs, GcpManagementConfig,
+    KubernetesCluster, KubernetesClusterOutputs, KubernetesClusterOwnership,
+    KubernetesClusterProvider, KubernetesHeartbeatMode, Kv, ManagementConfig, Network,
+    NetworkSettings, Platform, Queue, RemoteStackManagement, RemoteStackManagementOutputs,
+    Resource, ResourceDefinition, ResourceEntry, ResourceLifecycle, ResourceRef, ResourceStatus,
+    ResourceType, ServiceAccount, ServiceActivation, StackSettings, Storage, Vault, Worker,
 };
 use alien_infra::ImporterRegistry;
 use serde_json::json;
@@ -295,6 +295,231 @@ fn aws_remote_stack_management_round_trip() {
         &aws_management_config(),
     );
     assert_running_with_internal_state(&state);
+}
+
+/// A fully wired email resource (seed domain + inbound) imports as Running
+/// with typed [`EmailOutputs`] carrying exactly what the setup stack handed
+/// over: DKIM CNAME records per domain, the configuration set, and the
+/// receipt rule set name.
+#[test]
+fn aws_email_round_trip() {
+    let storage = Storage::new("mailbox".to_string()).build();
+    let email = Email::new("mailer".to_string())
+        .domains(vec!["mail.example.com".to_string()])
+        .inbound(EmailInbound {
+            storage: ResourceRef::from(&storage),
+        })
+        .build();
+    let entry = frozen_entry(email);
+    // Wire-shaped payload: the same key structure the AWS email emitter's
+    // `emit_import_ref` produces after CloudFormation resolves it.
+    let payload = json!({
+        "configurationSet": "alien-stack-mailer",
+        "domains": {
+            "mail.example.com": {
+                "dkimTokens": [
+                    {"name": "t1._domainkey.mail.example.com", "value": "t1.dkim.amazonses.com"},
+                    {"name": "t2._domainkey.mail.example.com", "value": "t2.dkim.amazonses.com"},
+                    {"name": "t3._domainkey.mail.example.com", "value": "t3.dkim.amazonses.com"}
+                ]
+            }
+        },
+        "ruleSetName": "alien-stack-mailer"
+    });
+    let state = run_through_registry(
+        &Email::RESOURCE_TYPE,
+        Platform::Aws,
+        payload,
+        &entry,
+        "us-east-1",
+        &aws_management_config(),
+    );
+
+    assert_running_with_internal_state(&state);
+    let internal = internal_state(&state);
+    assert_eq!(internal["type"], "AwsEmailController");
+    assert_eq!(internal["state"], "ready");
+    assert_eq!(internal["configurationSet"], "alien-stack-mailer");
+    assert_eq!(internal["ruleSetName"], "alien-stack-mailer");
+
+    let outputs = state
+        .outputs
+        .as_ref()
+        .and_then(|outputs| outputs.downcast_ref::<EmailOutputs>())
+        .expect("email import must expose typed EmailOutputs");
+    assert_eq!(outputs.configuration_set, "alien-stack-mailer");
+    assert_eq!(outputs.rule_set_name.as_deref(), Some("alien-stack-mailer"));
+    let domain = outputs
+        .domains
+        .get("mail.example.com")
+        .expect("seed domain must be present in outputs");
+    assert_eq!(domain.dkim_tokens.len(), 3);
+    assert_eq!(domain.dkim_tokens[0].name, "t1._domainkey.mail.example.com");
+    assert_eq!(domain.dkim_tokens[0].value, "t1.dkim.amazonses.com");
+
+    // Manager-provisioned workers receive the mail binding from the imported
+    // controller state, mirroring the CloudFormation emitter's binding ref.
+    assert_eq!(
+        state.remote_binding_params,
+        Some(json!({
+            "service": "ses",
+            "configurationSet": "alien-stack-mailer",
+            "region": "us-east-1",
+        }))
+    );
+}
+
+/// A config-set-only email resource (no seed domains, no inbound) is valid —
+/// runtime-created identities are managed outside the deployment — and must
+/// import with empty domains and no rule set name.
+#[test]
+fn aws_email_config_set_only_round_trip() {
+    let entry = frozen_entry(Email::new("mailer".to_string()).build());
+    let payload = json!({
+        "configurationSet": "alien-stack-mailer",
+        "domains": {}
+    });
+    let state = run_through_registry(
+        &Email::RESOURCE_TYPE,
+        Platform::Aws,
+        payload,
+        &entry,
+        "us-east-1",
+        &aws_management_config(),
+    );
+
+    assert_running_with_internal_state(&state);
+    let outputs = state
+        .outputs
+        .as_ref()
+        .and_then(|outputs| outputs.downcast_ref::<EmailOutputs>())
+        .expect("email import must expose typed EmailOutputs");
+    assert_eq!(outputs.configuration_set, "alien-stack-mailer");
+    assert!(outputs.domains.is_empty());
+    assert!(outputs.rule_set_name.is_none());
+}
+
+/// A payload missing the required `configurationSet` field must surface as a
+/// typed deserialization error naming the resource — not a silent default.
+#[test]
+fn aws_email_missing_configuration_set_is_a_typed_error() {
+    let entry = frozen_entry(Email::new("mailer".to_string()).build());
+    let registry = ImporterRegistry::built_in();
+    let settings = settings();
+    let mgmt = aws_management_config();
+    let ctx = ImportContext {
+        resource_id: "mailer",
+        platform: Platform::Aws,
+        region: "us-east-1",
+        stack_settings: &settings,
+        management_config: Some(&mgmt),
+        resource: &entry,
+    };
+    let err = registry
+        .run(
+            &Email::RESOURCE_TYPE,
+            Platform::Aws,
+            json!({ "domains": {} }),
+            &ctx,
+        )
+        .expect_err("payload without configurationSet must fail");
+    let msg = err.to_string();
+    assert!(
+        msg.contains("configurationSet") && msg.contains("mailer"),
+        "error must name the missing field and the resource, got: {msg}"
+    );
+}
+
+/// An OpenSearch Serverless collection imports as Running with typed
+/// [`AwsOpenSearchOutputs`] carrying the data-plane endpoint and ARN the
+/// setup stack handed over.
+#[test]
+fn aws_open_search_round_trip() {
+    let entry = frozen_entry(AwsOpenSearch::new("search".to_string()).build());
+    // Wire-shaped payload: the same key structure the AWS OpenSearch
+    // emitter's `emit_import_ref` produces after CloudFormation resolves it.
+    let payload = json!({
+        "collectionName": "search-a2591da2",
+        "collectionId": "abc123def456",
+        "collectionArn": "arn:aws:aoss:us-east-1:123456789012:collection/abc123def456",
+        "endpoint": "https://abc123def456.aoss.us-east-1.on.aws"
+    });
+    let state = run_through_registry(
+        &AwsOpenSearch::RESOURCE_TYPE,
+        Platform::Aws,
+        payload,
+        &entry,
+        "us-east-1",
+        &aws_management_config(),
+    );
+
+    assert_running_with_internal_state(&state);
+    let internal = internal_state(&state);
+    assert_eq!(internal["type"], "AwsOpenSearchController");
+    assert_eq!(internal["state"], "ready");
+    assert_eq!(internal["collectionName"], "search-a2591da2");
+    assert_eq!(internal["collectionId"], "abc123def456");
+
+    let outputs = state
+        .outputs
+        .as_ref()
+        .and_then(|outputs| outputs.downcast_ref::<AwsOpenSearchOutputs>())
+        .expect("aws-opensearch import must expose typed AwsOpenSearchOutputs");
+    assert_eq!(
+        outputs.endpoint,
+        "https://abc123def456.aoss.us-east-1.on.aws"
+    );
+    assert_eq!(
+        outputs.collection_arn,
+        "arn:aws:aoss:us-east-1:123456789012:collection/abc123def456"
+    );
+
+    // Manager-provisioned workers receive the collection binding from the
+    // imported controller state, mirroring the CloudFormation emitter's
+    // binding ref (SigV4 HTTP with service name `aoss`).
+    assert_eq!(
+        state.remote_binding_params,
+        Some(json!({
+            "service": "aoss",
+            "endpoint": "https://abc123def456.aoss.us-east-1.on.aws",
+            "collectionName": "search-a2591da2",
+        }))
+    );
+}
+
+/// A payload missing the required `endpoint` field must surface as a typed
+/// deserialization error naming the resource — not a silent default.
+#[test]
+fn aws_open_search_missing_endpoint_is_a_typed_error() {
+    let entry = frozen_entry(AwsOpenSearch::new("search".to_string()).build());
+    let registry = ImporterRegistry::built_in();
+    let settings = settings();
+    let mgmt = aws_management_config();
+    let ctx = ImportContext {
+        resource_id: "search",
+        platform: Platform::Aws,
+        region: "us-east-1",
+        stack_settings: &settings,
+        management_config: Some(&mgmt),
+        resource: &entry,
+    };
+    let err = registry
+        .run(
+            &AwsOpenSearch::RESOURCE_TYPE,
+            Platform::Aws,
+            json!({
+                "collectionName": "search-a2591da2",
+                "collectionId": "abc123def456",
+                "collectionArn": "arn:aws:aoss:us-east-1:123456789012:collection/abc123def456"
+            }),
+            &ctx,
+        )
+        .expect_err("payload without endpoint must fail");
+    let msg = err.to_string();
+    assert!(
+        msg.contains("endpoint") && msg.contains("search"),
+        "error must name the missing field and the resource, got: {msg}"
+    );
 }
 
 #[test]
@@ -697,6 +922,8 @@ fn registry_built_in_covers_all_oss_pairs() {
         Build::RESOURCE_TYPE,
         ArtifactRegistry::RESOURCE_TYPE,
         Worker::RESOURCE_TYPE,
+        Email::RESOURCE_TYPE,
+        AwsOpenSearch::RESOURCE_TYPE,
     ];
     for rt in aws_pairs {
         assert!(

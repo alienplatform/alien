@@ -101,6 +101,72 @@ expression: schemas
     "title": "AwsComputeClusterImportData",
     "type": "object"
   },
+  "aws_email": {
+    "$schema": "http://json-schema.org/draft-07/schema#",
+    "definitions": {
+      "AwsEmailDkimTokenImportData": {
+        "description": "A single Easy-DKIM CNAME record.",
+        "properties": {
+          "name": {
+            "description": "CNAME record host name.",
+            "type": "string"
+          },
+          "value": {
+            "description": "CNAME record value.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "name",
+          "value"
+        ],
+        "type": "object"
+      },
+      "AwsEmailDomainImportData": {
+        "description": "Per-domain import payload for an AWS Email resource.",
+        "properties": {
+          "dkimTokens": {
+            "description": "Easy-DKIM CNAME tokens (three per domain). The domain is verified by SES once these records exist in its DNS configuration.",
+            "items": {
+              "$ref": "#/definitions/AwsEmailDkimTokenImportData"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "dkimTokens"
+        ],
+        "type": "object"
+      }
+    },
+    "description": "AWS Email ImportData.\n\nMirrors the `emit_import_ref` payload of the AWS SES email emitter: the shared configuration set name, one entry per seed domain carrying its Easy-DKIM CNAME records, and — when inbound mail is configured — the receipt rule set name. Identities created at runtime through the `email/manage-identities` grant are application data and never appear here.",
+    "properties": {
+      "configurationSet": {
+        "description": "SES configuration set name (used when sending).",
+        "type": "string"
+      },
+      "domains": {
+        "additionalProperties": {
+          "$ref": "#/definitions/AwsEmailDomainImportData"
+        },
+        "description": "Per-seed-domain DNS data, keyed by mail domain.",
+        "type": "object"
+      },
+      "ruleSetName": {
+        "description": "SES receipt rule set name, present only when inbound mail is configured. Activating the rule set is a manual post-deploy step.",
+        "type": [
+          "string",
+          "null"
+        ]
+      }
+    },
+    "required": [
+      "configurationSet",
+      "domains"
+    ],
+    "title": "AwsEmailImportData",
+    "type": "object"
+  },
   "aws_function": {
     "$schema": "http://json-schema.org/draft-07/schema#",
     "description": "AWS Worker ImportData.",
@@ -210,6 +276,30 @@ expression: schemas
   },
   "aws_network": {
     "$schema": "http://json-schema.org/draft-07/schema#",
+    "definitions": {
+      "AwsFailureDomainSubnets": {
+        "description": "AWS subnets grouped by their real availability zone.",
+        "properties": {
+          "privateSubnetIds": {
+            "default": [],
+            "description": "Private subnet IDs in this availability zone.",
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "publicSubnetIds": {
+            "default": [],
+            "description": "Public subnet IDs in this availability zone.",
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          }
+        },
+        "type": "object"
+      }
+    },
     "description": "AWS Network ImportData.",
     "properties": {
       "availabilityZones": {
@@ -286,6 +376,13 @@ expression: schemas
           "null"
         ]
       },
+      "subnetsByFailureDomain": {
+        "additionalProperties": {
+          "$ref": "#/definitions/AwsFailureDomainSubnets"
+        },
+        "description": "Exact subnet membership keyed by real availability zone.",
+        "type": "object"
+      },
       "vpcId": {
         "description": "VPC ID. Absent when default-VPC mode defers lookup to AWS at runtime.",
         "type": [
@@ -301,6 +398,36 @@ expression: schemas
       "publicSubnetIds"
     ],
     "title": "AwsNetworkImportData",
+    "type": "object"
+  },
+  "aws_open_search": {
+    "$schema": "http://json-schema.org/draft-07/schema#",
+    "description": "AWS OpenSearch (`experimental/aws-opensearch`) ImportData.\n\nMirrors the `emit_import_ref` payload of the AWS OpenSearch Serverless emitter. Next-generation collections expose no Dashboards endpoint, so only the data-plane endpoint and identifiers are carried.",
+    "properties": {
+      "collectionArn": {
+        "description": "ARN of the collection.",
+        "type": "string"
+      },
+      "collectionId": {
+        "description": "Server-assigned collection id.",
+        "type": "string"
+      },
+      "collectionName": {
+        "description": "Physical collection name (`{id}-{stack-suffix}`).",
+        "type": "string"
+      },
+      "endpoint": {
+        "description": "Collection endpoint (`https://<collectionId>.aoss.<region>.on.aws`). Requests must be SigV4-signed with service name `aoss`.",
+        "type": "string"
+      }
+    },
+    "required": [
+      "collectionArn",
+      "collectionId",
+      "collectionName",
+      "endpoint"
+    ],
+    "title": "AwsOpenSearchImportData",
     "type": "object"
   },
   "aws_postgres": {

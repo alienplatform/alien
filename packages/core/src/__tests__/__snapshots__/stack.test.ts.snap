@@ -93,6 +93,58 @@ Resource {
 }
 `;
 
+exports[`Email resource configuration > creates email infrastructure with inbound storage and events queue 1`] = `
+{
+  "id": "email-stack",
+  "permissions": undefined,
+  "resources": {
+    "mail-events": {
+      "config": {
+        "id": "mail-events",
+        "type": "queue",
+      },
+      "dependencies": [],
+      "lifecycle": "frozen",
+    },
+    "mailbox": {
+      "config": {
+        "id": "mailbox",
+        "lifecycleRules": [],
+        "publicRead": false,
+        "type": "storage",
+        "versioning": false,
+      },
+      "dependencies": [],
+      "lifecycle": "frozen",
+    },
+    "mailer": {
+      "config": {
+        "domains": [
+          "mail.example.com",
+          "mail.example.org",
+        ],
+        "events": {
+          "queue": {
+            "id": "mail-events",
+            "type": "queue",
+          },
+        },
+        "id": "mailer",
+        "inbound": {
+          "storage": {
+            "id": "mailbox",
+            "type": "storage",
+          },
+        },
+        "type": "email",
+      },
+      "dependencies": [],
+      "lifecycle": "frozen",
+    },
+  },
+}
+`;
+
 exports[`Permissions system > creates a stack with custom permission sets 1`] = `
 {
   "id": "permissions-stack",

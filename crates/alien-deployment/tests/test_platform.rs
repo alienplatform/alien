@@ -5,8 +5,8 @@
 use alien_core::{
     ClientConfig, DeploymentConfig, DeploymentState, DeploymentStatus, EnvironmentVariable,
     EnvironmentVariableType, EnvironmentVariablesSnapshot, Platform, ReleaseInfo, ResourceEntry,
-    ResourceLifecycle, RuntimeMetadata, Stack, StackSettings, StackState, Storage, Worker,
-    WorkerCode,
+    ResourceLifecycle, RuntimeMetadata, SetupUpdateAuthorization, Stack, StackSettings, StackState,
+    Storage, Worker, WorkerCode,
 };
 use chrono::Utc;
 use indexmap::IndexMap;
@@ -719,7 +719,7 @@ async fn test_update_flow_happy_path_promotes_release() {
 }
 
 #[tokio::test]
-async fn running_pull_actor_starts_update_when_target_release_changes() {
+async fn setup_authorized_update_clears_authority_only_on_success() {
     let config = create_test_config("hash_v1", false);
     let mut state = run_to_completion(
         create_initial_state(create_test_stack("test-stack", "test-function")),
@@ -734,14 +734,43 @@ async fn running_pull_actor_starts_update_when_target_release_changes() {
         stack: create_test_stack("test-stack", "test-function"),
     };
     state.target_release = Some(release_v2.clone());
+    state.status = DeploymentStatus::UpdatePending;
+    let frozen_digest = state
+        .runtime_metadata
+        .as_ref()
+        .and_then(|metadata| metadata.prepared_stack.as_ref())
+        .unwrap()
+        .frozen_resources_digest();
+    state
+        .runtime_metadata
+        .as_mut()
+        .unwrap()
+        .setup_update_authorization = Some(SetupUpdateAuthorization {
+        nonce: "successful-setup-revision".to_string(),
+        baseline_frozen_digest: frozen_digest.clone(),
+        target_frozen_digest: frozen_digest,
+        release_id: "rel_v2".to_string(),
+        setup_target: "target".to_string(),
+        setup_fingerprint: "fingerprint".to_string(),
+        setup_fingerprint_version: 1,
+    });
 
     let first_update_step = alien_deployment::step(state, config.clone(), ClientConfig::Test, None)
         .await
-        .expect("running actor should accept the new desired release");
+        .expect("setup-authorized update should accept the desired release");
     assert_eq!(first_update_step.state.status, DeploymentStatus::Updating);
 
     let completed = run_to_completion(first_update_step.state, config).await;
     assert_eq!(completed.status, DeploymentStatus::Running);
+    assert!(
+        completed
+            .runtime_metadata
+            .as_ref()
+            .unwrap()
+            .setup_update_authorization
+            .is_none(),
+        "setup authorization must clear in the successful Running transition"
+    );
     assert_eq!(
         completed.current_release.as_ref().unwrap().release_id,
         release_v2.release_id
@@ -829,9 +858,74 @@ async fn test_update_failed_retry_gate_returns_to_update_pending() {
         stack: stack_v2,
     };
     start_update(&mut state, release_v2);
+    // Setup registration transitions the deployment directly to UpdatePending;
+    // it is not an ordinary newer-release reconciliation.
+    state.status = DeploymentStatus::UpdatePending;
+    let frozen_digest = state
+        .runtime_metadata
+        .as_ref()
+        .and_then(|metadata| metadata.prepared_stack.as_ref())
+        .expect("running deployment should retain its prepared stack")
+        .frozen_resources_digest();
+    state
+        .runtime_metadata
+        .as_mut()
+        .unwrap()
+        .setup_update_authorization = Some(SetupUpdateAuthorization {
+        nonce: "setup-revision".to_string(),
+        baseline_frozen_digest: frozen_digest.clone(),
+        target_frozen_digest: frozen_digest,
+        release_id: "rel_v2".to_string(),
+        setup_target: "target".to_string(),
+        setup_fingerprint: "fingerprint".to_string(),
+        setup_fingerprint_version: 1,
+    });
 
     // Run until UpdateFailed
     state = run_until_status(state, config.clone(), &[DeploymentStatus::UpdateFailed]).await;
+    assert!(
+        state
+            .runtime_metadata
+            .as_ref()
+            .unwrap()
+            .setup_update_authorization
+            .is_some(),
+        "failed update must retain setup authorization before persistence"
+    );
+
+    // Persist and restore the failed deployment, matching a manager restart.
+    state = serde_json::from_str(
+        &serde_json::to_string(&state).expect("failed deployment should serialize"),
+    )
+    .expect("failed deployment should deserialize");
+
+    let failed_resource = state
+        .stack_state
+        .as_ref()
+        .unwrap()
+        .resources
+        .values()
+        .find(|resource| {
+            matches!(
+                resource.status,
+                alien_core::ResourceStatus::ProvisionFailed
+                    | alien_core::ResourceStatus::UpdateFailed
+                    | alien_core::ResourceStatus::DeleteFailed
+                    | alien_core::ResourceStatus::RefreshFailed
+            )
+        })
+        .expect("update should contain a failed resource");
+    assert!(failed_resource.retry_attempt > 0);
+    assert!(failed_resource.last_failed_state.is_some());
+    assert!(
+        state
+            .runtime_metadata
+            .as_ref()
+            .unwrap()
+            .setup_update_authorization
+            .is_some(),
+        "a failed, serialized update must retain setup authorization for retry"
+    );
 
     // Without retry_requested, should stay in failed state
     let result = alien_deployment::step(state.clone(), config.clone(), ClientConfig::Test, None)
@@ -841,7 +935,7 @@ async fn test_update_failed_retry_gate_returns_to_update_pending() {
 
     // With retry_requested, should transition to UpdatePending (not Updating)
     request_retry(&mut state);
-    let result = alien_deployment::step(state, config, ClientConfig::Test, None)
+    let result = alien_deployment::step(state, config.clone(), ClientConfig::Test, None)
         .await
         .expect("Step should succeed");
     assert_eq!(
@@ -852,6 +946,38 @@ async fn test_update_failed_retry_gate_returns_to_update_pending() {
     assert!(
         !result.state.retry_requested,
         "retry flag should be cleared"
+    );
+
+    let retried_resource = result
+        .state
+        .stack_state
+        .as_ref()
+        .unwrap()
+        .resources
+        .values()
+        .find(|resource| resource.config.id() == "test-function-v2")
+        .expect("retried resource should remain in stack state");
+    assert_eq!(
+        retried_resource.retry_attempt, 0,
+        "manual retry should grant the resource a fresh retry budget"
+    );
+    assert!(
+        retried_resource.error.is_none(),
+        "manual retry should clear the exhausted attempt error"
+    );
+    assert!(
+        retried_resource.last_failed_state.is_none(),
+        "manual retry should consume the saved failed handler"
+    );
+    assert!(
+        result
+            .state
+            .runtime_metadata
+            .as_ref()
+            .unwrap()
+            .setup_update_authorization
+            .is_some(),
+        "retry preparation must not consume setup authorization"
     );
 }
 

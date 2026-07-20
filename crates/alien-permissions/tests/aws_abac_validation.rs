@@ -270,8 +270,10 @@ fn aws_resource_arns_are_stack_or_resource_scoped_unless_documented_external() {
                         || binding.condition.is_some()
                         || documented_external_resource_scope(resource)
                         || documented_same_account_ecr_metadata_scope(actions, resource)
+                        || documented_aoss_id_scoped_collection_resource(actions, resource)
                         || documented_run_instances_companion_resource(actions, resource)
                         || documented_create_security_group_vpc_resource(actions, resource)
+                        || documented_ses_domain_identity_scope(resource)
                     {
                         continue;
                     }
@@ -295,6 +297,24 @@ fn documented_external_resource_scope(resource: &str) -> bool {
     // Runtime compute pulls images from the manager-owned artifact registry. Target-account
     // isolation is enforced by the repository resource policy that grants this role access.
     resource == "arn:aws:ecr:*:${managingAccountId}:repository/*"
+}
+
+fn documented_ses_domain_identity_scope(resource: &str) -> bool {
+    // SES identities are named after customer mail domains (e.g.
+    // `identity/mail.example.com`), so their ARNs cannot carry the stack
+    // prefix. Sends remain gated by the stack-scoped configuration-set ARN
+    // granted alongside the identity ARN.
+    resource == "arn:aws:ses:${awsRegion}:${awsAccountId}:identity/*"
+}
+
+fn documented_aoss_id_scoped_collection_resource(actions: &[String], resource: &str) -> bool {
+    // OpenSearch Serverless collection ARNs use server-assigned ids, so a
+    // static data-plane grant cannot embed the stack prefix or resource name.
+    // The CloudFormation emitter narrows the emitted IAM policy to the exact
+    // collection ARN via Fn::GetAtt, and calls additionally require the role
+    // to be a principal of the collection's data-access policy.
+    actions.iter().all(|action| action == "aoss:APIAccessAll")
+        && resource == "arn:aws:aoss:${awsRegion}:${awsAccountId}:collection/*"
 }
 
 fn documented_same_account_ecr_metadata_scope(actions: &[String], resource: &str) -> bool {
@@ -479,7 +499,9 @@ fn wildcard_action_allowed(
 ) -> bool {
     action_is_forced_wildcard_read(action)
         || action_is_documented_cross_account_exception(action)
+        || action_is_documented_aoss_control_plane_exception(permission_set_id, action)
         || action_is_documented_lambda_vpc_eni_exception(permission_set_id, action)
+        || action_is_documented_ses_receipt_rule_exception(permission_set_id, action)
         || (action_requires_service_name_condition(action)
             && has_condition_key(binding, "iam:AWSServiceName"))
         || (action_requires_tag_condition(action)
@@ -530,6 +552,19 @@ fn action_is_documented_cross_account_exception(action: &str) -> bool {
     matches!(action, "ecr:GetAuthorizationToken")
 }
 
+fn action_is_documented_aoss_control_plane_exception(
+    permission_set_id: &str,
+    action: &str,
+) -> bool {
+    // OpenSearch Serverless control-plane actions cannot be resource-scoped:
+    // security and access policies have no ARNs, and collection/group ARNs use
+    // server-assigned ids that don't exist until after creation. AWS documents
+    // identity-based policies for these operations with Resource "*". The
+    // provision set is only granted to setup/management roles, never to
+    // workload roles.
+    permission_set_id == "experimental/aws-opensearch/provision" && action.starts_with("aoss:")
+}
+
 fn action_is_documented_lambda_vpc_eni_exception(permission_set_id: &str, action: &str) -> bool {
     if permission_set_id != "worker/execute" {
         return false;
@@ -543,6 +578,26 @@ fn action_is_documented_lambda_vpc_eni_exception(permission_set_id: &str, action
             | "ec2:DeleteNetworkInterface"
             | "ec2:AssignPrivateIpAddresses"
             | "ec2:UnassignPrivateIpAddresses"
+    )
+}
+
+fn action_is_documented_ses_receipt_rule_exception(permission_set_id: &str, action: &str) -> bool {
+    if permission_set_id != "email/provision" {
+        return false;
+    }
+
+    // Per the SES entry in the Service Authorization Reference, the v1
+    // receipt-rule actions do not support resource-level permissions —
+    // Resource must be "*". Receipt rule sets are account-wide singletons
+    // (only one can be active), so there is no narrower scope to grant.
+    matches!(
+        action,
+        "ses:CreateReceiptRuleSet"
+            | "ses:DeleteReceiptRuleSet"
+            | "ses:CreateReceiptRule"
+            | "ses:UpdateReceiptRule"
+            | "ses:DeleteReceiptRule"
+            | "ses:SetActiveReceiptRuleSet"
     )
 }
 
@@ -563,6 +618,7 @@ fn action_requires_tag_condition(action: &str) -> bool {
             | "autoscaling:DeleteAutoScalingGroup"
             | "autoscaling:SetDesiredCapacity"
             | "autoscaling:StartInstanceRefresh"
+            | "autoscaling:TerminateInstanceInAutoScalingGroup"
             | "autoscaling:UpdateAutoScalingGroup"
             | "ec2:AllocateAddress"
             | "ec2:AssociateRouteTable"
@@ -604,6 +660,8 @@ fn action_requires_tag_condition(action: &str) -> bool {
             | "elasticloadbalancing:DeleteListener"
             | "elasticloadbalancing:DeleteLoadBalancer"
             | "elasticloadbalancing:DeleteTargetGroup"
+            | "elasticloadbalancing:ModifyListener"
+            | "elasticloadbalancing:ModifyLoadBalancerAttributes"
             | "elasticloadbalancing:ModifyTargetGroupAttributes"
             | "events:PutRule"
             | "lambda:CreateFunction"

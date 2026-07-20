@@ -126,6 +126,15 @@ pub enum Architecture {
     X86_64,
 }
 
+/// Default machine architecture for images built for a managed cloud.
+pub fn default_architecture(platform: Platform) -> Option<Architecture> {
+    match platform {
+        Platform::Aws => Some(Architecture::Arm64),
+        Platform::Gcp | Platform::Azure => Some(Architecture::X86_64),
+        Platform::Kubernetes | Platform::Machines | Platform::Local | Platform::Test => None,
+    }
+}
+
 /// Static GPU specification for catalog entries (no heap allocation).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct CatalogGpu {
@@ -250,6 +259,16 @@ static CATALOG: &[InstanceTypeSpec] = &[
         gpu: None,
     },
     InstanceTypeSpec {
+        name: "t3.xlarge",
+        platform: Platform::Aws,
+        family: InstanceFamily::Burstable,
+        architecture: Architecture::X86_64,
+        vcpu: 4,
+        memory_bytes: 16 * GI,
+        ephemeral_storage_bytes: 20 * GI,
+        gpu: None,
+    },
+    InstanceTypeSpec {
         name: "t4g.xlarge",
         platform: Platform::Aws,
         family: InstanceFamily::Burstable,
@@ -267,6 +286,16 @@ static CATALOG: &[InstanceTypeSpec] = &[
         architecture: Architecture::Arm64,
         vcpu: 1,
         memory_bytes: 4 * GI,
+        ephemeral_storage_bytes: 20 * GI,
+        gpu: None,
+    },
+    InstanceTypeSpec {
+        name: "m7i.large",
+        platform: Platform::Aws,
+        family: InstanceFamily::GeneralPurpose,
+        architecture: Architecture::X86_64,
+        vcpu: 2,
+        memory_bytes: 8 * GI,
         ephemeral_storage_bytes: 20 * GI,
         gpu: None,
     },
@@ -298,6 +327,16 @@ static CATALOG: &[InstanceTypeSpec] = &[
         gpu: None,
     },
     InstanceTypeSpec {
+        name: "m7i.xlarge",
+        platform: Platform::Aws,
+        family: InstanceFamily::GeneralPurpose,
+        architecture: Architecture::X86_64,
+        vcpu: 4,
+        memory_bytes: 16 * GI,
+        ephemeral_storage_bytes: 20 * GI,
+        gpu: None,
+    },
+    InstanceTypeSpec {
         name: "m7g.xlarge",
         platform: Platform::Aws,
         family: InstanceFamily::GeneralPurpose,
@@ -318,6 +357,16 @@ static CATALOG: &[InstanceTypeSpec] = &[
         gpu: None,
     },
     InstanceTypeSpec {
+        name: "m7i.2xlarge",
+        platform: Platform::Aws,
+        family: InstanceFamily::GeneralPurpose,
+        architecture: Architecture::X86_64,
+        vcpu: 8,
+        memory_bytes: 32 * GI,
+        ephemeral_storage_bytes: 20 * GI,
+        gpu: None,
+    },
+    InstanceTypeSpec {
         name: "m7g.2xlarge",
         platform: Platform::Aws,
         family: InstanceFamily::GeneralPurpose,
@@ -334,6 +383,16 @@ static CATALOG: &[InstanceTypeSpec] = &[
         architecture: Architecture::X86_64,
         vcpu: 8,
         memory_bytes: 32 * GI,
+        ephemeral_storage_bytes: 20 * GI,
+        gpu: None,
+    },
+    InstanceTypeSpec {
+        name: "m7i.4xlarge",
+        platform: Platform::Aws,
+        family: InstanceFamily::GeneralPurpose,
+        architecture: Architecture::X86_64,
+        vcpu: 16,
+        memory_bytes: 64 * GI,
         ephemeral_storage_bytes: 20 * GI,
         gpu: None,
     },
@@ -1195,20 +1254,9 @@ pub fn select_instance_type(
         raw_family
     };
 
-    // Filter catalog to matching platform + family. Nested-virt-capable
-    // entries (m8i/c8i/r8i on AWS) are NESTED-VIRT-ONLY: they're added
-    // exclusively to satisfy `CpuOptions.NestedVirtualization=enabled`
-    // workloads and cost more than the Graviton default. We include them
-    // ONLY when `requirements.nested_virt` is true, and exclude them
-    // otherwise so the cost-efficient default (e.g. m7g) keeps winning
-    // for ordinary workloads.
     let candidates: Vec<&InstanceTypeSpec> = CATALOG
         .iter()
         .filter(|spec| spec.platform == platform && spec.family == family)
-        .filter(|spec| match requirements.architecture {
-            Some(architecture) => spec.architecture == architecture,
-            None => true,
-        })
         .filter(|spec| {
             if requirements.nested_virt {
                 spec.is_nested_virt_capable()
@@ -1266,6 +1314,20 @@ pub fn select_instance_type(
     } else {
         candidates
     };
+
+    let architecture = requirements
+        .architecture
+        .or_else(|| default_architecture(platform))
+        .ok_or_else(|| format!("platform {platform} has no default compute architecture"))?;
+    let candidates: Vec<&InstanceTypeSpec> = candidates
+        .into_iter()
+        .filter(|spec| spec.architecture == architecture)
+        .collect();
+    if candidates.is_empty() {
+        return Err(format!(
+            "architecture {architecture:?} is unavailable for this workload on platform {platform}"
+        ));
+    }
 
     // Cap at MAX_STANDARD_VCPU for non-GPU/non-storage workloads
     let vcpu_cap =
@@ -1427,6 +1489,7 @@ fn system_reserve_memory_bytes(memory_bytes: u64) -> u64 {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::BinaryTarget;
 
     // -- Parsing tests --
 
@@ -1628,7 +1691,7 @@ mod tests {
             max_memory_per_container: 8 * GI,
             max_ephemeral_storage_bytes: 500 * GI,
             gpu: None,
-            architecture: None,
+            architecture: Some(Architecture::X86_64),
             nested_virt: false,
         };
         let sel = select_instance_type(Platform::Aws, &req).unwrap();
@@ -1650,7 +1713,7 @@ mod tests {
                 gpu_type: "nvidia-a100".to_string(),
                 count: 1,
             }),
-            architecture: None,
+            architecture: Some(Architecture::X86_64),
             nested_virt: false,
         };
         let sel = select_instance_type(Platform::Aws, &req).unwrap();
@@ -1660,7 +1723,7 @@ mod tests {
     }
 
     #[test]
-    fn test_select_works_for_all_cloud_platforms() {
+    fn test_select_uses_each_cloud_image_target_architecture() {
         let req = WorkloadRequirements {
             total_cpu_at_desired: 4.0,
             total_memory_bytes_at_desired: 16 * GI,
@@ -1674,8 +1737,15 @@ mod tests {
             nested_virt: false,
         };
         for platform in [Platform::Aws, Platform::Gcp, Platform::Azure] {
-            let sel = select_instance_type(platform, &req);
-            assert!(sel.is_ok(), "selection failed for {platform}");
+            let sel = select_instance_type(platform, &req)
+                .unwrap_or_else(|error| panic!("selection failed for {platform}: {error}"));
+            let spec = find_instance_type(platform, sel.instance_type)
+                .expect("selected machine should exist in the catalog");
+            assert_eq!(
+                Some(spec.architecture),
+                default_architecture(platform),
+                "machine architecture must match the image target for {platform}"
+            );
         }
     }
 
@@ -1768,7 +1838,7 @@ mod tests {
             max_memory_per_container: 8 * GI,
             max_ephemeral_storage_bytes: 10 * GI,
             gpu: None,
-            architecture: None,
+            architecture: Some(Architecture::X86_64),
             nested_virt: true,
         };
         let sel = select_instance_type(Platform::Aws, &req).unwrap();
@@ -1783,11 +1853,8 @@ mod tests {
         assert!(spec.is_nested_virt_capable());
     }
 
-    /// Negative case: with `nested_virt = false`, the selector should
-    /// continue picking the cost-efficient Graviton default, unchanged
-    /// from prior behavior.
     #[test]
-    fn test_select_aws_falls_back_to_graviton_without_nested_virt() {
+    fn test_select_aws_defaults_to_image_target_architecture() {
         let req = WorkloadRequirements {
             total_cpu_at_desired: 4.0,
             total_memory_bytes_at_desired: 8 * GI,
@@ -1801,11 +1868,68 @@ mod tests {
             nested_virt: false,
         };
         let sel = select_instance_type(Platform::Aws, &req).unwrap();
-        assert!(
-            sel.instance_type.starts_with("m7g.") || sel.instance_type.starts_with("t4g."),
-            "expected Graviton default, got {}",
-            sel.instance_type
-        );
+        let spec = find_instance_type(Platform::Aws, sel.instance_type).unwrap();
+        assert_eq!(spec.architecture, Architecture::Arm64);
+    }
+
+    #[test]
+    fn test_cloud_defaults_match_image_target_architectures() {
+        for platform in [Platform::Aws, Platform::Gcp, Platform::Azure] {
+            let target = BinaryTarget::defaults_for_platform(platform)
+                .into_iter()
+                .next()
+                .expect("managed cloud should have a default image target");
+            let image_architecture = match target.oci_arch() {
+                "arm64" => Architecture::Arm64,
+                "amd64" => Architecture::X86_64,
+                architecture => {
+                    panic!("unsupported managed-cloud image architecture {architecture}")
+                }
+            };
+
+            assert_eq!(default_architecture(platform), Some(image_architecture));
+        }
+    }
+
+    /// ARM remains available when the workload or capacity profile declares it.
+    #[test]
+    fn test_select_aws_uses_graviton_for_explicit_arm64() {
+        let req = WorkloadRequirements {
+            total_cpu_at_desired: 4.0,
+            total_memory_bytes_at_desired: 8 * GI,
+            total_cpu_at_max: 4.0,
+            total_memory_bytes_at_max: 8 * GI,
+            max_cpu_per_container: 4.0,
+            max_memory_per_container: 8 * GI,
+            max_ephemeral_storage_bytes: 10 * GI,
+            gpu: None,
+            architecture: Some(Architecture::Arm64),
+            nested_virt: false,
+        };
+        let sel = select_instance_type(Platform::Aws, &req).unwrap();
+        let spec = find_instance_type(Platform::Aws, sel.instance_type).unwrap();
+        assert_eq!(spec.architecture, Architecture::Arm64);
+    }
+
+    #[test]
+    fn test_select_rejects_explicit_architecture_missing_from_cloud_catalog() {
+        let req = WorkloadRequirements {
+            total_cpu_at_desired: 1.0,
+            total_memory_bytes_at_desired: 2 * GI,
+            total_cpu_at_max: 1.0,
+            total_memory_bytes_at_max: 2 * GI,
+            max_cpu_per_container: 1.0,
+            max_memory_per_container: 2 * GI,
+            max_ephemeral_storage_bytes: 10 * GI,
+            gpu: None,
+            architecture: Some(Architecture::Arm64),
+            nested_virt: false,
+        };
+
+        let error = select_instance_type(Platform::Gcp, &req)
+            .expect_err("GCP catalog has no ARM64 machine");
+
+        assert!(error.contains("architecture Arm64 is unavailable"));
     }
 
     #[test]

@@ -5,8 +5,12 @@
 //! (no emulation) and uses the fewest runners.
 
 use alien_core::{
-    BinaryTarget, Daemon, DaemonCode, Platform, Stack, ToolchainConfig, Worker, WorkerCode,
+    compute_planner::capacity_group_requirements,
+    instance_catalog::{self, Architecture},
+    BinaryTarget, ComputeCluster, Daemon, DaemonCode, Platform, Stack, ToolchainConfig, Worker,
+    WorkerCode,
 };
+use alien_error::AlienError;
 use serde::Serialize;
 
 /// One platform/target pair to build within a runner group.
@@ -143,11 +147,182 @@ pub fn plan_runner_groups(
         .collect()
 }
 
+/// Plans native runners while keeping cloud image and compute architectures aligned.
+pub fn plan_runner_groups_for_stack(
+    supported: &[Platform],
+    stack: &Stack,
+) -> crate::error::Result<Vec<RunnerGroup>> {
+    let local_includes_host_binaries = stack_targets_native_host_binaries(stack);
+    let mut groups = plan_runner_groups(supported, local_includes_host_binaries);
+    let machines_architecture = exact_compute_architecture(stack)?;
+
+    for platform in supported.iter().copied().filter(|platform| {
+        matches!(platform, Platform::Aws | Platform::Gcp | Platform::Azure)
+            || (*platform == Platform::Machines && machines_architecture.is_some())
+    }) {
+        let required_target = resolve_targets_for_stack_platform(stack, platform, None)?[0];
+        let target = target_name(required_target);
+        for group in &mut groups {
+            group
+                .builds
+                .retain(|build| build.platform != platform.as_str());
+            group.platforms.retain(|name| name != platform.as_str());
+        }
+        let group = if let Some(group) = groups.iter_mut().find(|group| group.name == target) {
+            group
+        } else {
+            groups.push(RunnerGroup {
+                name: target.to_string(),
+                runner: runner_for(required_target).to_string(),
+                platforms: Vec::new(),
+                builds: Vec::new(),
+            });
+            let index = groups.len() - 1;
+            &mut groups[index]
+        };
+        group.builds.push(BuildJob {
+            platform: platform.as_str().to_string(),
+            target: target.to_string(),
+        });
+        group.platforms.push(platform.as_str().to_string());
+    }
+    groups.retain(|group| !group.builds.is_empty());
+    groups.sort_by_key(|group| match group.name.as_str() {
+        "linux-arm64" => 0,
+        "linux-x64" => 1,
+        "darwin-arm64" => 2,
+        "windows-x64" => 3,
+        _ => 4,
+    });
+    Ok(groups)
+}
+
+/// Resolves cloud image targets from the stack's compute architecture.
+pub fn resolve_targets_for_stack_platform(
+    stack: &Stack,
+    platform: Platform,
+    requested: Option<&[BinaryTarget]>,
+) -> crate::error::Result<Vec<BinaryTarget>> {
+    if platform == Platform::Machines && exact_compute_architecture(stack)?.is_none() {
+        return Ok(requested
+            .map(<[BinaryTarget]>::to_vec)
+            .unwrap_or_else(|| BinaryTarget::defaults_for_platform(platform)));
+    }
+    if !matches!(
+        platform,
+        Platform::Aws | Platform::Gcp | Platform::Azure | Platform::Machines
+    ) {
+        return Ok(requested
+            .map(<[BinaryTarget]>::to_vec)
+            .unwrap_or_else(|| BinaryTarget::defaults_for_platform(platform)));
+    }
+
+    let architecture = if platform == Platform::Machines {
+        exact_compute_architecture(stack)?.ok_or_else(|| {
+            AlienError::new(crate::error::ErrorData::BuildConfigInvalid {
+                message: "machines architecture could not be resolved".to_string(),
+            })
+        })?
+    } else {
+        resolved_compute_architecture(stack, platform)?
+    };
+    let required = match architecture {
+        Architecture::Arm64 => BinaryTarget::LinuxArm64,
+        Architecture::X86_64 => BinaryTarget::LinuxX64,
+    };
+    let resolved = requested
+        .map(<[BinaryTarget]>::to_vec)
+        .unwrap_or_else(|| vec![required]);
+    if resolved.as_slice() != [required] {
+        return Err(AlienError::new(crate::error::ErrorData::BuildConfigInvalid {
+            message: format!(
+                "build targets {resolved:?} do not match {platform} compute architecture {architecture:?}; expected {required:?}"
+            ),
+        }));
+    }
+    Ok(resolved)
+}
+
+fn exact_compute_architecture(stack: &Stack) -> crate::error::Result<Option<Architecture>> {
+    let mut architectures = stack
+        .resources()
+        .filter_map(|(_, entry)| entry.config.downcast_ref::<ComputeCluster>())
+        .flat_map(|cluster| cluster.capacity_groups.iter())
+        .filter_map(|group| group.profile.as_ref()?.architecture)
+        .collect::<Vec<_>>();
+    architectures.sort_by_key(|architecture| match architecture {
+        Architecture::Arm64 => 0,
+        Architecture::X86_64 => 1,
+    });
+    architectures.dedup();
+    match architectures.as_slice() {
+        [] => Ok(None),
+        [architecture] => Ok(Some(*architecture)),
+        _ => Err(AlienError::new(crate::error::ErrorData::BuildConfigInvalid {
+            message: "compute pools require mixed CPU architectures; one platform image cannot satisfy both".to_string(),
+        })),
+    }
+}
+
+fn resolved_compute_architecture(
+    stack: &Stack,
+    platform: Platform,
+) -> crate::error::Result<Architecture> {
+    let architectures = stack
+        .resources()
+        .filter_map(|(_, entry)| entry.config.downcast_ref::<ComputeCluster>())
+        .flat_map(|cluster| cluster.capacity_groups.iter())
+        .map(|group| {
+            instance_catalog::select_instance_type(platform, &capacity_group_requirements(group))
+                .map_err(|message| {
+                    AlienError::new(crate::error::ErrorData::BuildConfigInvalid {
+                        message: format!(
+                            "cannot resolve compute pool '{}' for {platform}: {message}",
+                            group.group_id
+                        ),
+                    })
+                })?
+                .profile
+                .architecture
+                .ok_or_else(|| {
+                    AlienError::new(crate::error::ErrorData::BuildConfigInvalid {
+                        message: format!(
+                            "selected compute pool '{}' machine has no CPU architecture",
+                            group.group_id
+                        ),
+                    })
+                })
+        })
+        .collect::<crate::error::Result<Vec<_>>>()?;
+    if architectures.is_empty() {
+        return instance_catalog::default_architecture(platform).ok_or_else(|| {
+            AlienError::new(crate::error::ErrorData::BuildConfigInvalid {
+                message: format!("managed cloud {platform} has no default compute architecture"),
+            })
+        });
+    }
+    let mut architectures = architectures.into_iter().collect::<Vec<_>>();
+    architectures.sort_by_key(|architecture| match architecture {
+        Architecture::Arm64 => 0,
+        Architecture::X86_64 => 1,
+    });
+    architectures.dedup();
+    match architectures.as_slice() {
+        [architecture] => Ok(*architecture),
+        _ => Err(AlienError::new(crate::error::ErrorData::BuildConfigInvalid {
+            message: "compute pools require mixed CPU architectures; one platform image cannot satisfy both".to_string(),
+        })),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use alien_core::Platform::*;
-    use alien_core::{Container, ContainerCode, ResourceLifecycle, ResourceSpec};
+    use alien_core::{
+        CapacityGroup, ComputeCluster, Container, ContainerCode, MachineProfile, ResourceLifecycle,
+        ResourceSpec,
+    };
 
     fn platforms(group: &RunnerGroup) -> Vec<&str> {
         assert_eq!(
@@ -247,6 +422,121 @@ mod tests {
         Stack::new("plan-test".to_string())
             .add(resource, ResourceLifecycle::Live)
             .build()
+    }
+
+    fn stack_with_architectures(architectures: &[Architecture]) -> Stack {
+        let mut cluster = ComputeCluster::new("runtime".to_string());
+        for (index, architecture) in architectures.iter().enumerate() {
+            cluster = cluster.capacity_group(CapacityGroup {
+                group_id: format!("pool-{index}"),
+                instance_type: None,
+                profile: Some(MachineProfile {
+                    cpu: "1".to_string(),
+                    memory_bytes: 2 * 1024 * 1024 * 1024,
+                    ephemeral_storage_bytes: 20 * 1024 * 1024 * 1024,
+                    architecture: Some(*architecture),
+                    gpu: None,
+                }),
+                min_size: 1,
+                max_size: 1,
+                scale_policy: None,
+                nested_virtualization: None,
+            });
+        }
+        stack_with(cluster.build())
+    }
+
+    #[test]
+    fn aws_explicit_x86_uses_x64_runner() {
+        let stack = stack_with_architectures(&[Architecture::X86_64]);
+        let groups = plan_runner_groups_for_stack(&[Aws], &stack).expect("plan should build");
+
+        assert_eq!(groups[0].name, "linux-x64");
+    }
+
+    #[test]
+    fn aws_without_compute_constraint_keeps_arm_default() {
+        let stack = Stack::new("unconstrained".to_string()).build();
+
+        assert_eq!(
+            resolve_targets_for_stack_platform(&stack, Aws, None).expect("target should resolve"),
+            vec![BinaryTarget::LinuxArm64]
+        );
+    }
+
+    #[test]
+    fn gcp_and_azure_without_compute_constraint_keep_x64_default() {
+        let stack = Stack::new("unconstrained".to_string()).build();
+
+        for platform in [Gcp, Azure] {
+            assert_eq!(
+                resolve_targets_for_stack_platform(&stack, platform, None)
+                    .expect("target should resolve"),
+                vec![BinaryTarget::LinuxX64]
+            );
+        }
+    }
+
+    #[test]
+    fn machines_exact_x86_narrows_images_and_ci_runner() {
+        let stack = stack_with_architectures(&[Architecture::X86_64]);
+
+        assert_eq!(
+            resolve_targets_for_stack_platform(&stack, Machines, None)
+                .expect("target should resolve"),
+            vec![BinaryTarget::LinuxX64]
+        );
+        let groups = plan_runner_groups_for_stack(&[Machines], &stack).expect("plan should build");
+        assert_eq!(
+            groups
+                .iter()
+                .map(|group| group.name.as_str())
+                .collect::<Vec<_>>(),
+            vec!["linux-x64"]
+        );
+    }
+
+    #[test]
+    fn machines_without_constraint_preserves_multi_arch_images() {
+        let stack = Stack::new("unconstrained".to_string()).build();
+
+        assert_eq!(
+            resolve_targets_for_stack_platform(&stack, Machines, None)
+                .expect("targets should resolve"),
+            BinaryTarget::LINUX
+        );
+    }
+
+    #[test]
+    fn aws_explicit_arm_uses_arm_runner() {
+        let stack = stack_with_architectures(&[Architecture::Arm64]);
+        let groups = plan_runner_groups_for_stack(&[Aws], &stack).expect("plan should build");
+
+        assert_eq!(groups[0].name, "linux-arm64");
+    }
+
+    #[test]
+    fn gcp_rejects_explicit_arm_before_build() {
+        let stack = stack_with_architectures(&[Architecture::Arm64]);
+
+        assert!(plan_runner_groups_for_stack(&[Gcp], &stack).is_err());
+    }
+
+    #[test]
+    fn mixed_compute_architectures_are_rejected_before_build() {
+        let stack = stack_with_architectures(&[Architecture::Arm64, Architecture::X86_64]);
+
+        assert!(plan_runner_groups_for_stack(&[Aws], &stack).is_err());
+    }
+
+    #[test]
+    fn requested_target_must_match_compute_architecture() {
+        let stack = stack_with_architectures(&[Architecture::X86_64]);
+
+        assert!(
+            resolve_targets_for_stack_platform(&stack, Aws, Some(&[BinaryTarget::LinuxArm64]),)
+                .is_err()
+        );
     }
 
     fn container() -> Container {
