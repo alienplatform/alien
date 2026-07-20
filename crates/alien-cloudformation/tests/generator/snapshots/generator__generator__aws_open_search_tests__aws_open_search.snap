@@ -150,7 +150,7 @@ Resources:
       Type: network
       Policy:
         Fn::Sub:
-        - '[{"AllowFromPublic":true,"Rules":[{"Resource":["collection/${Name}"],"ResourceType":"collection"},{"Resource":["collection/${Name}"],"ResourceType":"dashboard"}]}]'
+        - '[{"Rules":[{"ResourceType":"collection","Resource":["collection/${Name}"]},{"ResourceType":"dashboard","Resource":["collection/${Name}"]}],"AllowFromPublic":true}]'
         - Name:
             Fn::Join:
             - '-'
@@ -229,7 +229,7 @@ Resources:
       Type: data
       Policy:
         Fn::Sub:
-        - '[{"Description":"Alien-managed data access for ''articles''","Principal":["${Principal0}"],"Rules":[{"Permission":["aoss:CreateCollectionItems","aoss:DeleteCollectionItems","aoss:UpdateCollectionItems","aoss:DescribeCollectionItems"],"Resource":["collection/${Name}"],"ResourceType":"collection"},{"Permission":["aoss:CreateIndex","aoss:DeleteIndex","aoss:UpdateIndex","aoss:DescribeIndex","aoss:ReadDocument","aoss:WriteDocument"],"Resource":["index/${Name}/*"],"ResourceType":"index"}]}]'
+        - '[{"Description":"Alien-managed data access for ''articles''","Rules":[{"ResourceType":"collection","Resource":["collection/${Name}"],"Permission":["aoss:CreateCollectionItems","aoss:DeleteCollectionItems","aoss:UpdateCollectionItems","aoss:DescribeCollectionItems"]},{"ResourceType":"index","Resource":["index/${Name}/*"],"Permission":["aoss:CreateIndex","aoss:DeleteIndex","aoss:UpdateIndex","aoss:DescribeIndex","aoss:ReadDocument","aoss:WriteDocument"]}],"Principal":["${Principal0}"]}]'
         - Name:
             Fn::Join:
             - '-'
