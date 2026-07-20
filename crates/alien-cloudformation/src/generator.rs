@@ -876,8 +876,8 @@ fn add_network_parameters(template: &mut CfTemplate, network: Option<&NetworkSet
             template.parameters.insert(
                 PARAM_VPC_CIDR.to_string(),
                 string_parameter(
-                    "Only used with create-new. CIDR for the new VPC; leave unset for the generated default.",
-                    Some(defaults.cidr.unwrap_or_default()),
+                    "Only used with create-new. CIDR for the new VPC.",
+                    Some(defaults.cidr.unwrap_or_else(|| "10.42.0.0/16".to_string())),
                     None,
                     false,
                 ),

@@ -93,7 +93,7 @@ Parameters:
     - use-default
   VpcCidr:
     Type: String
-    Description: Only used with create-new. CIDR for the new VPC; leave unset for the generated default.
+    Description: Only used with create-new. CIDR for the new VPC.
     Default: 10.44.0.0/16
   AvailabilityZones:
     Type: Number
