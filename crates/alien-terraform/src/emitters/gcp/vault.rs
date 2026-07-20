@@ -9,8 +9,8 @@ use crate::{
     block::{attr, data_block},
     emitter::{TfEmitter, TfFragment},
     emitters::gcp::helpers::{
-        downcast, emit_custom_role_and_bindings_for_target, permission_context, required_label,
-        service_account_member_for_label,
+        downcast, emit_custom_role_and_bindings_for_target, gate_bindings, permission_context,
+        required_label, service_account_member_for_label,
     },
     expr,
 };
@@ -29,6 +29,7 @@ impl TfEmitter for GcpVaultEmitter {
         let vault = downcast::<Vault>(ctx, Vault::RESOURCE_TYPE)?;
         let vault_label = required_label(ctx)?;
         let mut fragment = TfFragment::default();
+        let enabled_when = ctx.resource.enabled_when.as_deref();
         let vault_permission_owners = vault_permission_owners(ctx);
 
         if !vault_permission_owners.is_empty() && remote_stack_management_label(ctx).is_none() {
@@ -54,6 +55,7 @@ impl TfEmitter for GcpVaultEmitter {
                     }
                     let binding_owner_label =
                         binding_owner_label(&role_owner_label, &permission_set.id);
+                    let appended_from = fragment.resource_blocks.len();
                     emit_custom_role_and_bindings_for_target(
                         &mut fragment,
                         &binding_owner_label,
@@ -62,6 +64,7 @@ impl TfEmitter for GcpVaultEmitter {
                         &context,
                         BindingTarget::Resource,
                     )?;
+                    gate_bindings(&mut fragment, appended_from, enabled_when)?;
                 }
             }
         }
@@ -84,6 +87,7 @@ impl TfEmitter for GcpVaultEmitter {
                 }
                 let binding_owner_label =
                     binding_owner_label(&role_owner_label, &permission_set.id);
+                let appended_from = fragment.resource_blocks.len();
                 emit_custom_role_and_bindings_for_target(
                     &mut fragment,
                     &binding_owner_label,
@@ -92,6 +96,7 @@ impl TfEmitter for GcpVaultEmitter {
                     &context,
                     BindingTarget::Resource,
                 )?;
+                gate_bindings(&mut fragment, appended_from, enabled_when)?;
             }
         }
 
@@ -108,6 +113,20 @@ impl TfEmitter for GcpVaultEmitter {
                 expr::template(format!("${{local.resource_prefix}}-{}", vault.id())),
             ),
         ]))
+    }
+
+    /// The vault has no Terraform block of its own — it is a Secret Manager
+    /// name prefix — and its import data is built entirely from `local` and
+    /// `var` values. So nothing here needs an index: the role bindings are
+    /// project-scoped with a name-prefix condition, never a resource address.
+    ///
+    /// They still take the gate. `roles/secretmanager.secretAccessor` reads
+    /// secret payloads, and the condition matches on a prefix: resource ids may
+    /// contain hyphens, so a declined vault `app` leaves a grant over secrets
+    /// starting `<prefix>-app-`, which covers a live sibling vault named
+    /// `app-config`. Only the bindings are gated — see `gate_bindings`.
+    fn supports_enabled_when(&self) -> bool {
+        true
     }
 
     fn emit_binding_ref(&self, ctx: &EmitContext<'_>) -> Result<Option<Expression>> {
