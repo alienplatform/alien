@@ -24,8 +24,10 @@ jobs:
       # reports "runner lost communication" with no logs). Full-width
       # parallelism (16 rustc jobs, then 16 concurrent test binaries — many
       # of which spawn servers and embedded databases) is what spikes it.
-      CARGO_BUILD_JOBS: "12"
-      NEXTEST_TEST_THREADS: "10"
+      # 12/10 stopped being enough as the test set grew: both attempts of
+      # the same main push died mid-tests on 2026-07-19 (run 29707403037).
+      CARGO_BUILD_JOBS: "10"
+      NEXTEST_TEST_THREADS: "8"
 
     steps:
       - name: Validate PR title
