@@ -626,3 +626,29 @@ fn an_ungated_azure_vault_is_untouched() {
     );
     assert_ungated_registration_list_is_a_plain_array(main);
 }
+
+/// The complete gated module as rendered text, so reviewers read the same
+/// artifact a customer's security team does — the CloudFormation suite commits
+/// the equivalent YAML snapshot.
+#[test]
+fn the_gated_module_snapshot_stays_reviewable() {
+    let builder = permissioned(
+        Stack::new("gated-stack".to_string()).inputs(gate_inputs()),
+        "jobs",
+        &["queue/data-write"],
+    )
+    .permission(
+        "reader",
+        PermissionProfile::new().resource("app-tokens", ["vault/data-read"]),
+    )
+    .add(
+        ServiceAccount::new("reader-sa".to_string()).build(),
+        ResourceLifecycle::Frozen,
+    );
+    let module = render(
+        &add_vault(add_queue(builder, true), true).build(),
+        TerraformTarget::Aws,
+        StackSettings::default(),
+    );
+    super::helpers::snapshot_module("enabled_gated_queue_and_vault_aws", &module);
+}
