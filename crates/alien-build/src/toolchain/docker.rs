@@ -13,7 +13,7 @@ use std::io::Read;
 use std::path::Path;
 use std::process::Stdio;
 use tokio::process::Command;
-use tracing::info;
+use tracing::{info, warn};
 
 const ENTERPRISE_CA_CERT_PATH_ENV: &str = "ALIEN_ENTERPRISE_CA_CERT_PATH";
 
@@ -32,6 +32,11 @@ pub struct DockerToolchain {
     pub build_args: Option<HashMap<String, String>>,
     /// Multi-stage build target
     pub target: Option<String>,
+}
+
+struct BuildxBuilder {
+    name: String,
+    owned: bool,
 }
 
 impl DockerToolchain {
@@ -54,6 +59,19 @@ impl DockerToolchain {
             .to_lowercase();
 
         format!("alien-build-{}:{}", resource_name, random_suffix)
+    }
+
+    fn generate_builder_name() -> String {
+        use rand::distr::Alphanumeric;
+        use rand::Rng;
+
+        let suffix: String = rand::rng()
+            .sample_iter(&Alphanumeric)
+            .take(8)
+            .map(char::from)
+            .collect::<String>()
+            .to_lowercase();
+        format!("alien-build-{}-{suffix}", std::process::id())
     }
 
     fn humanize_buildx_failure(stderr_output: &str) -> String {
@@ -147,16 +165,29 @@ impl DockerToolchain {
             .any(|line| line.contains(&needle))
     }
 
-    /// Whether the active builder already supports `target_arch` (the default `docker` builder
-    /// reflects the kernel's binfmt handlers). A failed inspect counts as "no".
-    async fn host_can_emulate(target_arch: &str) -> Result<bool> {
+    fn inspect_field<'a>(inspect_stdout: &'a str, field: &str) -> Option<&'a str> {
+        inspect_stdout.lines().find_map(|line| {
+            line.strip_prefix(field)
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+        })
+    }
+
+    fn driver_supports_oci_export(driver: &str) -> bool {
+        matches!(
+            driver,
+            "docker-container" | "kubernetes" | "remote" | "cloud"
+        )
+    }
+
+    async fn builder_supports_arch(builder_name: &str, target_arch: &str) -> Result<bool> {
         let output = Command::new("docker")
-            .args(["buildx", "inspect", "default"])
+            .args(["buildx", "inspect", builder_name])
             .output()
             .await
             .into_alien_error()
             .context(Self::docker_build_error(
-                "Could not inspect the default buildx builder",
+                "Could not inspect the scoped buildx builder",
             ))?;
         if !output.status.success() {
             return Ok(false);
@@ -171,19 +202,121 @@ impl DockerToolchain {
         host_arch != Some(target_arch) && !builder_supports
     }
 
-    /// Fail fast when the active builder can't build `target_arch`. We don't set up emulation
-    /// here — that's the CI runner's job; a native target, or one the builder already supports,
-    /// passes through.
-    async fn ensure_builder_supports_arch(target_arch: &str) -> Result<()> {
+    async fn ensure_builder_supports_arch(builder_name: &str, target_arch: &str) -> Result<()> {
         let host_arch = Self::host_docker_arch();
         if host_arch == Some(target_arch) {
             return Ok(());
         }
-        let builder_supports = Self::host_can_emulate(target_arch).await?;
+        let builder_supports = Self::builder_supports_arch(builder_name, target_arch).await?;
         if Self::build_blocked(host_arch, target_arch, builder_supports) {
             return Err(AlienError::new(Self::docker_build_error(format!(
                 "Cannot build linux/{t} on this host: the active buildx builder doesn't support that architecture. Build on a native {t} runner, or configure a buildx builder with emulation for it.",
                 t = target_arch
+            ))));
+        }
+        Ok(())
+    }
+
+    async fn create_builder(builder_name: &str) -> Result<()> {
+        let output = Command::new("docker")
+            .args([
+                "buildx",
+                "create",
+                "--name",
+                builder_name,
+                "--driver",
+                "docker-container",
+            ])
+            .output()
+            .await
+            .into_alien_error()
+            .context(Self::docker_build_error(
+                "Could not create a scoped docker-container buildx builder",
+            ))?;
+        if !output.status.success() {
+            return Err(AlienError::new(Self::docker_build_error(format!(
+                "Could not create a scoped docker-container buildx builder: {}",
+                String::from_utf8_lossy(&output.stderr).trim()
+            ))));
+        }
+
+        let output = Command::new("docker")
+            .args(["buildx", "inspect", "--bootstrap", builder_name])
+            .output()
+            .await
+            .into_alien_error()
+            .context(Self::docker_build_error(
+                "Could not bootstrap the scoped buildx builder",
+            ))?;
+        if !output.status.success() {
+            return Err(AlienError::new(Self::docker_build_error(format!(
+                "Could not bootstrap the scoped buildx builder: {}",
+                String::from_utf8_lossy(&output.stderr).trim()
+            ))));
+        }
+        Ok(())
+    }
+
+    async fn select_builder() -> Result<BuildxBuilder> {
+        let output = Command::new("docker")
+            .args(["buildx", "inspect"])
+            .output()
+            .await
+            .into_alien_error()
+            .context(Self::docker_build_error(
+                "Could not inspect the current buildx builder",
+            ))?;
+        if !output.status.success() {
+            return Err(AlienError::new(Self::docker_build_error(format!(
+                "Could not inspect the current buildx builder: {}",
+                String::from_utf8_lossy(&output.stderr).trim()
+            ))));
+        }
+        let inspect = String::from_utf8_lossy(&output.stdout);
+        let name = Self::inspect_field(&inspect, "Name:").ok_or_else(|| {
+            AlienError::new(Self::docker_build_error(
+                "Current buildx builder inspection did not report a name",
+            ))
+        })?;
+        let driver = Self::inspect_field(&inspect, "Driver:").ok_or_else(|| {
+            AlienError::new(Self::docker_build_error(
+                "Current buildx builder inspection did not report a driver",
+            ))
+        })?;
+
+        if Self::driver_supports_oci_export(driver) {
+            return Ok(BuildxBuilder {
+                name: name.to_string(),
+                owned: false,
+            });
+        }
+        if driver != "docker" {
+            return Err(AlienError::new(Self::docker_build_error(format!(
+                "The current buildx driver '{driver}' does not support OCI archive export"
+            ))));
+        }
+
+        let name = Self::generate_builder_name();
+        if let Err(error) = Self::create_builder(&name).await {
+            let _ = Self::remove_builder(&name).await;
+            return Err(error);
+        }
+        Ok(BuildxBuilder { name, owned: true })
+    }
+
+    async fn remove_builder(builder_name: &str) -> Result<()> {
+        let output = Command::new("docker")
+            .args(["buildx", "rm", "--force", builder_name])
+            .output()
+            .await
+            .into_alien_error()
+            .context(Self::docker_build_error(
+                "Could not remove the scoped buildx builder",
+            ))?;
+        if !output.status.success() {
+            return Err(AlienError::new(Self::docker_build_error(format!(
+                "Could not remove the scoped buildx builder: {}",
+                String::from_utf8_lossy(&output.stderr).trim()
             ))));
         }
         Ok(())
@@ -224,11 +357,21 @@ impl Toolchain for DockerToolchain {
         };
         let platform_str = format!("linux/{}", arch_str);
 
-        Self::ensure_builder_supports_arch(arch_str).await?;
+        let builder = Self::select_builder().await?;
+        if let Err(error) = Self::ensure_builder_supports_arch(&builder.name, arch_str).await {
+            if builder.owned {
+                if let Err(cleanup_error) = Self::remove_builder(&builder.name).await {
+                    warn!(%cleanup_error, builder_name = %builder.name, "failed to clean up buildx builder");
+                }
+            }
+            return Err(error);
+        }
 
         let mut args = vec![
             "buildx".to_string(),
             "build".to_string(),
+            "--builder".to_string(),
+            builder.name.clone(),
             "--platform".to_string(),
             platform_str,
             "--output".to_string(),
@@ -269,7 +412,7 @@ impl Toolchain for DockerToolchain {
         );
 
         // Run docker buildx build with progress reporting
-        AlienEvent::CompilingCode {
+        let build_result = AlienEvent::CompilingCode {
             language: "docker".to_string(),
             progress: None,
         }
@@ -322,7 +465,20 @@ impl Toolchain for DockerToolchain {
             info!("docker buildx build completed successfully");
             Ok(())
         })
-        .await?;
+        .await;
+
+        let cleanup_result = if builder.owned {
+            Self::remove_builder(&builder.name).await
+        } else {
+            Ok(())
+        };
+        if let Err(build_error) = build_result {
+            if let Err(cleanup_error) = cleanup_result {
+                warn!(%cleanup_error, builder_name = %builder.name, "failed to clean up buildx builder after a failed build");
+            }
+            return Err(build_error);
+        }
+        cleanup_result?;
 
         // Buildx may wrap the image manifest in an index alongside provenance attestations.
         // Flatten the archive before the runtime OCI reader sees it.
@@ -852,6 +1008,24 @@ CMD ["true"]
             "Name: linux/arm64-builder\nPlatforms: linux/amd64\n",
             "arm64"
         ));
+    }
+
+    #[test]
+    fn selects_oci_capable_buildx_drivers_without_replacing_them() {
+        let inspect = "Name:          team-builder\nDriver:        docker-container\n";
+        assert_eq!(
+            DockerToolchain::inspect_field(inspect, "Name:"),
+            Some("team-builder")
+        );
+        assert_eq!(
+            DockerToolchain::inspect_field(inspect, "Driver:"),
+            Some("docker-container")
+        );
+        assert!(DockerToolchain::driver_supports_oci_export(
+            "docker-container"
+        ));
+        assert!(DockerToolchain::driver_supports_oci_export("remote"));
+        assert!(!DockerToolchain::driver_supports_oci_export("docker"));
     }
 
     /// The capability decision is pure: a native target, or a non-native one the builder
