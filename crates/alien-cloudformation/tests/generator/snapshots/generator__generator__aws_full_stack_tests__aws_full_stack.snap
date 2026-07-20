@@ -1,6 +1,5 @@
 ---
 source: crates/alien-cloudformation/tests/generator/aws_full_stack_tests.rs
-assertion_line: 122
 expression: yaml
 ---
 AWSTemplateFormatVersion: 2010-09-09
@@ -264,9 +263,10 @@ Resources:
         Fn::Select:
         - 0
         - Fn::Cidr:
-          - Fn::GetAtt:
-            - DefaultNetworkVpc
-            - CidrBlock
+          - Fn::If:
+            - HasVpcCidr
+            - Ref: VpcCidr
+            - 10.42.0.0/16
           - 6
           - 8
       MapPublicIpOnLaunch: true
@@ -295,9 +295,10 @@ Resources:
         Fn::Select:
         - 3
         - Fn::Cidr:
-          - Fn::GetAtt:
-            - DefaultNetworkVpc
-            - CidrBlock
+          - Fn::If:
+            - HasVpcCidr
+            - Ref: VpcCidr
+            - 10.42.0.0/16
           - 6
           - 8
       Tags:
@@ -325,9 +326,10 @@ Resources:
         Fn::Select:
         - 1
         - Fn::Cidr:
-          - Fn::GetAtt:
-            - DefaultNetworkVpc
-            - CidrBlock
+          - Fn::If:
+            - HasVpcCidr
+            - Ref: VpcCidr
+            - 10.42.0.0/16
           - 6
           - 8
       MapPublicIpOnLaunch: true
@@ -356,9 +358,10 @@ Resources:
         Fn::Select:
         - 4
         - Fn::Cidr:
-          - Fn::GetAtt:
-            - DefaultNetworkVpc
-            - CidrBlock
+          - Fn::If:
+            - HasVpcCidr
+            - Ref: VpcCidr
+            - 10.42.0.0/16
           - 6
           - 8
       Tags:
@@ -386,9 +389,10 @@ Resources:
         Fn::Select:
         - 2
         - Fn::Cidr:
-          - Fn::GetAtt:
-            - DefaultNetworkVpc
-            - CidrBlock
+          - Fn::If:
+            - HasVpcCidr
+            - Ref: VpcCidr
+            - 10.42.0.0/16
           - 6
           - 8
       MapPublicIpOnLaunch: true
@@ -417,9 +421,10 @@ Resources:
         Fn::Select:
         - 5
         - Fn::Cidr:
-          - Fn::GetAtt:
-            - DefaultNetworkVpc
-            - CidrBlock
+          - Fn::If:
+            - HasVpcCidr
+            - Ref: VpcCidr
+            - 10.42.0.0/16
           - 6
           - 8
       Tags:

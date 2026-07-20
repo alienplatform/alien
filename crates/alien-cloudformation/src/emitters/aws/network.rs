@@ -199,7 +199,7 @@ fn created_network_resources(ctx: &EmitContext<'_>) -> Result<Vec<CfResource>> {
             .insert("AvailabilityZone".to_string(), select(index, get_azs()));
         public_subnet
             .properties
-            .insert("CidrBlock".to_string(), select(index, cidr_blocks(&vpc_id)));
+            .insert("CidrBlock".to_string(), select(index, cidr_blocks()));
         public_subnet
             .properties
             .insert("MapPublicIpOnLaunch".to_string(), CfExpression::from(true));
@@ -219,10 +219,9 @@ fn created_network_resources(ctx: &EmitContext<'_>) -> Result<Vec<CfResource>> {
         private_subnet
             .properties
             .insert("AvailabilityZone".to_string(), select(index, get_azs()));
-        private_subnet.properties.insert(
-            "CidrBlock".to_string(),
-            select(index + 3, cidr_blocks(&vpc_id)),
-        );
+        private_subnet
+            .properties
+            .insert("CidrBlock".to_string(), select(index + 3, cidr_blocks()));
         private_subnet
             .properties
             .insert("Tags".to_string(), tags(ctx));
@@ -363,11 +362,15 @@ fn network_id(prefix: &str, suffix: &str) -> String {
     format!("{prefix}{suffix}")
 }
 
-fn cidr_blocks(vpc_id: &str) -> CfExpression {
+fn cidr_blocks() -> CfExpression {
     CfExpression::object([(
         "Fn::Cidr",
         CfExpression::list([
-            CfExpression::get_att(vpc_id, "CidrBlock"),
+            CfExpression::if_(
+                CONDITION_HAS_VPC_CIDR,
+                CfExpression::ref_(PARAM_VPC_CIDR),
+                CfExpression::from("10.42.0.0/16"),
+            ),
             CfExpression::Integer(6),
             CfExpression::Integer(8),
         ]),
