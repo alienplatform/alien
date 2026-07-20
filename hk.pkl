@@ -21,7 +21,6 @@ local fast_steps = new Mapping<String, Step> {
             "crates/alien-infra/src/worker/aws/mod.rs",
             "crates/alien-infra/src/worker/azure/mod.rs",
             "crates/alien-test/src/distribution.rs", // legacy, pending split
-            "crates/alien-helm/src/generator.rs", // legacy, pending split
             "crates/alien-deploy-cli/src/commands/up.rs", // legacy, pending split
             "crates/alien-aws-clients/src/aws/ec2.rs", // legacy, pending split
             "crates/alien-gcp-clients/tests/gcp_compute_client_tests.rs", // legacy, pending split
