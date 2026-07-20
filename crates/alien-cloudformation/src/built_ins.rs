@@ -7,8 +7,8 @@ use crate::{
     emitters::aws::{
         AwsArtifactRegistryEmitter, AwsBuildEmitter, AwsEmailEmitter, AwsKubernetesClusterEmitter,
         AwsKvEmitter, AwsNetworkEmitter, AwsOpenSearchEmitter, AwsQueueEmitter,
-        AwsRemoteStackManagementEmitter,
-        AwsServiceAccountEmitter, AwsStorageEmitter, AwsVaultEmitter, AwsWorkerEmitter,
+        AwsRemoteStackManagementEmitter, AwsServiceAccountEmitter, AwsStorageEmitter,
+        AwsVaultEmitter, AwsWorkerEmitter,
     },
     registry::CfRegistry,
 };

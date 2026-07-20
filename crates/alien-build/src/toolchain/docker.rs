@@ -1119,7 +1119,7 @@ CMD ["cat", "hello.txt"]
     #[ignore = "needs Docker, BuildKit, and ALIEN_ENTERPRISE_CA_CERT_PATH"]
     async fn enterprise_ca_is_forwarded_as_ephemeral_buildkit_secret() {
         assert!(docker_available(), "Docker must be available");
-        let cert_path = std::env::var(ENTERPRISE_CA_CERT_PATH_ENV)
+        let cert_path = std::env::var(DockerToolchain::ENTERPRISE_CA_ENV_VARS[0])
             .expect("ALIEN_ENTERPRISE_CA_CERT_PATH must be configured");
         let cert = fs::read(&cert_path)
             .await

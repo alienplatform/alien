@@ -48,7 +48,9 @@ impl CfEmitter for AwsQueueEmitter {
             "MessageRetentionPeriod".to_string(),
             CfExpression::Integer(345_600),
         );
-        queue_resource.properties.insert("Tags".to_string(), tags(ctx));
+        queue_resource
+            .properties
+            .insert("Tags".to_string(), tags(ctx));
 
         let mut resources = vec![queue_resource];
         resources.extend(queue_iam_policies(ctx, queue, queue_id)?);
