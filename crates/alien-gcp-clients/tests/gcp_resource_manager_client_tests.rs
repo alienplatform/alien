@@ -1,4 +1,6 @@
 #![cfg(all(test, feature = "gcp"))]
+mod common;
+
 use alien_client_core::{ErrorData, Result};
 use alien_error::{Context, IntoAlienError};
 use alien_gcp_clients::iam::{
@@ -181,16 +183,18 @@ impl ResourceManagerTestContext {
             .service_account(service_account)
             .build();
 
-        let created_sa = self
-            .iam_client
-            .create_service_account(unique_account_id.clone(), request)
-            .await
-            .context(ErrorData::GenericError {
-                message: format!(
-                    "Failed to create test service account '{}'",
-                    unique_account_id
-                ),
-            })?;
+        let created_sa = common::create_service_account_with_quota_retry(
+            &self.iam_client,
+            &unique_account_id,
+            &request,
+        )
+        .await
+        .context(ErrorData::GenericError {
+            message: format!(
+                "Failed to create test service account '{}'",
+                unique_account_id
+            ),
+        })?;
 
         let sa_email = created_sa.email.clone().unwrap();
         self.test_service_account_email = Some(sa_email.clone());
