@@ -654,6 +654,68 @@ pub async fn sync_secrets_to_vault(
     Ok(true)
 }
 
+/// Delete only vault keys that this deployment owns before its runtime resources are destroyed.
+///
+/// The vault resource is setup-owned and may outlive runtime cleanup. Its contents are not:
+/// leaving them behind leaks credentials and makes a successful deployment deletion incomplete.
+/// Ownership comes from the persisted sync inventory plus the current config, which also lets
+/// deployments created before the inventory field was introduced clean up their active keys.
+pub async fn delete_deployment_vault_secrets(
+    stack_state: &StackState,
+    client_config: &ClientConfig,
+    config: &DeploymentConfig,
+    runtime_metadata: &mut alien_core::RuntimeMetadata,
+) -> Result<bool> {
+    if client_config.platform() == Platform::Machines {
+        return Ok(false);
+    }
+
+    let mut owned_names = runtime_metadata
+        .last_synced_secret_names
+        .iter()
+        .cloned()
+        .chain(desired_vault_secrets(config).into_keys())
+        .collect::<Vec<_>>();
+    owned_names.push(ENV_ALIEN_COMMANDS_TOKEN.to_string());
+    owned_names.sort();
+    owned_names.dedup();
+
+    if owned_names.is_empty() {
+        return Ok(false);
+    }
+
+    let provider = BindingsProvider::from_stack_state(stack_state, client_config.clone()).context(
+        ErrorData::InternalError {
+            message: "Failed to create bindings provider for secret deletion".to_string(),
+        },
+    )?;
+    let vault = provider
+        .load_vault("secrets")
+        .await
+        .context(ErrorData::SecretSyncFailed {
+            vault_name: "secrets".to_string(),
+            reason: "Failed to load secrets vault for deployment deletion".to_string(),
+        })?;
+
+    for name in &owned_names {
+        vault
+            .delete_secret(name)
+            .await
+            .context(ErrorData::SecretSyncFailed {
+                vault_name: "secrets".to_string(),
+                reason: format!("Failed to delete deployment-owned secret '{name}'"),
+            })?;
+    }
+
+    runtime_metadata.last_synced_env_vars_hash = None;
+    runtime_metadata.last_synced_secret_names.clear();
+    info!(
+        count = owned_names.len(),
+        "Deleted deployment-owned vault secrets"
+    );
+    Ok(true)
+}
+
 fn desired_vault_secrets(config: &DeploymentConfig) -> BTreeMap<String, String> {
     let mut desired = config
         .environment_variables
@@ -1601,6 +1663,90 @@ mod tests {
         .await
         .expect("already-clean token-only sync is idempotent"));
         assert!(vault.get_secret(ENV_ALIEN_COMMANDS_TOKEN).await.is_err());
+    }
+
+    #[tokio::test]
+    async fn deployment_deletion_removes_owned_vault_values_and_preserves_unrelated_values() {
+        let temp = tempfile::TempDir::new().expect("temp dir");
+        let state_dir = temp.path().to_string_lossy().to_string();
+        let client_config = ClientConfig::Local {
+            state_directory: state_dir.clone(),
+        };
+        let mut vault_state = StackResourceState::new_pending(
+            Vault::RESOURCE_TYPE.to_string(),
+            Resource::new(Vault::new("secrets".to_string()).build()),
+            Some(ResourceLifecycle::Frozen),
+            Vec::new(),
+        );
+        vault_state.status = ResourceStatus::Running;
+        vault_state.remote_binding_params = Some(
+            serde_json::to_value(VaultBinding::local("secrets", &state_dir))
+                .expect("local vault binding"),
+        );
+        let mut stack_state = StackState::new(Platform::Local);
+        stack_state
+            .resources
+            .insert("secrets".to_string(), vault_state);
+
+        let provider = BindingsProvider::from_stack_state(&stack_state, client_config.clone())
+            .expect("bindings provider");
+        let vault = provider.load_vault("secrets").await.expect("local vault");
+        for (name, value) in [
+            ("CURRENT", "current-value"),
+            ("REMOVED", "removed-value"),
+            (RUNTIME_OTLP_LOGS_AUTH_HEADER_SECRET, "monitoring-value"),
+            (ENV_ALIEN_COMMANDS_TOKEN, "old-runtime-token"),
+            ("UNRELATED", "keep-me"),
+        ] {
+            vault
+                .set_secret(name, value)
+                .await
+                .expect("seed vault value");
+        }
+
+        let mut config = make_config(make_snapshot(&[], &[("CURRENT", "current-value")]));
+        config.monitoring = Some(OtlpConfig {
+            logs_endpoint: "https://manager.test/v1/logs".to_string(),
+            logs_auth_header: "monitoring-value".to_string(),
+            metrics_endpoint: None,
+            metrics_auth_header: None,
+            resource_attributes: HashMap::new(),
+        });
+        let mut metadata = RuntimeMetadata {
+            last_synced_env_vars_hash: Some("previous-sync".to_string()),
+            last_synced_secret_names: vec!["CURRENT".to_string(), "REMOVED".to_string()],
+            ..RuntimeMetadata::default()
+        };
+
+        assert!(delete_deployment_vault_secrets(
+            &stack_state,
+            &client_config,
+            &config,
+            &mut metadata,
+        )
+        .await
+        .expect("delete deployment-owned vault values"));
+
+        for name in [
+            "CURRENT",
+            "REMOVED",
+            RUNTIME_OTLP_LOGS_AUTH_HEADER_SECRET,
+            ENV_ALIEN_COMMANDS_TOKEN,
+        ] {
+            assert!(
+                vault.get_secret(name).await.is_err(),
+                "{name} should be deleted"
+            );
+        }
+        assert_eq!(
+            vault
+                .get_secret("UNRELATED")
+                .await
+                .expect("unrelated value"),
+            "keep-me"
+        );
+        assert!(metadata.last_synced_env_vars_hash.is_none());
+        assert!(metadata.last_synced_secret_names.is_empty());
     }
 
     fn resource_env<'a>(stack: &'a Stack, id: &str) -> &'a HashMap<String, String> {

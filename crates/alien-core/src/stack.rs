@@ -3,6 +3,7 @@ use crate::{Platform, Resource, ResourceLifecycle, ResourceRef, StackInputDefini
 use bon::Builder;
 use indexmap::IndexMap;
 use serde::{Deserialize, Serialize};
+use sha2::{Digest, Sha256};
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
@@ -49,6 +50,26 @@ pub struct Stack {
 }
 
 impl Stack {
+    /// Returns a deterministic digest of the complete Frozen resource set.
+    /// Resource and object-key ordering do not affect the digest.
+    pub fn frozen_resources_digest(&self) -> String {
+        let mut resources = self
+            .resources
+            .iter()
+            .filter(|(_, entry)| entry.lifecycle == ResourceLifecycle::Frozen)
+            .map(|(id, entry)| {
+                let mut value =
+                    serde_json::to_value(entry).expect("resource entries always serialize to JSON");
+                canonicalize_json(&mut value);
+                (id, value)
+            })
+            .collect::<Vec<_>>();
+        resources.sort_unstable_by(|(left, _), (right, _)| left.cmp(right));
+
+        let encoded = serde_json::to_vec(&resources)
+            .expect("canonical Frozen resource projection always serializes");
+        format!("{:x}", Sha256::digest(encoded))
+    }
     /// Returns an iterator over the resources in the stack, including their lifecycle state.
     pub fn resources(&self) -> impl Iterator<Item = (&String, &ResourceEntry)> {
         self.resources.iter()
@@ -100,6 +121,25 @@ impl Stack {
             Some(platforms) => platforms.contains(platform),
             None => true,
         }
+    }
+}
+
+fn canonicalize_json(value: &mut serde_json::Value) {
+    match value {
+        serde_json::Value::Array(values) => {
+            for value in values {
+                canonicalize_json(value);
+            }
+        }
+        serde_json::Value::Object(object) => {
+            let mut entries = std::mem::take(object).into_iter().collect::<Vec<_>>();
+            entries.sort_unstable_by(|(left, _), (right, _)| left.cmp(right));
+            for (key, mut value) in entries {
+                canonicalize_json(&mut value);
+                object.insert(key, value);
+            }
+        }
+        _ => {}
     }
 }
 
@@ -516,5 +556,42 @@ mod tests {
         let serialized = serde_json::to_string_pretty(&stack_extend).expect("Failed to serialize");
         let deserialized: Stack = serde_json::from_str(&serialized).expect("Failed to deserialize");
         assert_eq!(stack_extend, deserialized);
+    }
+
+    #[test]
+    fn frozen_resource_digest_is_order_independent_and_ignores_live_resources() {
+        let first = Stack::new("first".to_string())
+            .add(
+                Storage::new("alpha".to_string()).build(),
+                ResourceLifecycle::Frozen,
+            )
+            .add(
+                Storage::new("beta".to_string()).build(),
+                ResourceLifecycle::Frozen,
+            )
+            .add(
+                Storage::new("live-one".to_string()).build(),
+                ResourceLifecycle::Live,
+            )
+            .build();
+        let second = Stack::new("second".to_string())
+            .add(
+                Storage::new("beta".to_string()).build(),
+                ResourceLifecycle::Frozen,
+            )
+            .add(
+                Storage::new("alpha".to_string()).build(),
+                ResourceLifecycle::Frozen,
+            )
+            .add(
+                Storage::new("live-two".to_string()).build(),
+                ResourceLifecycle::Live,
+            )
+            .build();
+
+        assert_eq!(
+            first.frozen_resources_digest(),
+            second.frozen_resources_digest()
+        );
     }
 }

@@ -600,6 +600,8 @@ wait "$child_pid"
                 alien_core::PublicEndpointOutput {
                     url: "https://api.example.com".to_string(),
                     host: "api.example.com".to_string(),
+                    protocol: alien_core::ExposeProtocol::Http,
+                    port: 443,
                     wildcard_host: None,
                     load_balancer_endpoint: Some(alien_core::LoadBalancerEndpoint {
                         dns_name: "k8s-api.example.elb.amazonaws.com".to_string(),

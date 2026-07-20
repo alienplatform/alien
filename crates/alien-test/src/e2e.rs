@@ -1453,7 +1453,6 @@ fn deployment_running_timeout(platform: Platform) -> Duration {
 #[cfg(test)]
 mod tests {
     use super::*;
-
     #[test]
     fn azure_readiness_budget_accounts_for_slow_control_plane_propagation() {
         assert_eq!(

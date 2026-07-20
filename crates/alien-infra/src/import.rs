@@ -33,6 +33,21 @@ pub trait ResourceImporter: Send + Sync {
     /// fail at compile time.
     fn import(&self, data: Self::ImportData, ctx: &ImportContext<'_>)
         -> Result<StackResourceState>;
+
+    /// Merge a fresh setup import into an existing runtime state.
+    ///
+    /// Most imported resources are wholly setup-owned, so replacement is the
+    /// safe default. Importers for resources whose lifecycle crosses the
+    /// setup/runtime boundary must override this and preserve controller-owned
+    /// progress while applying only the setup-owned facts from `imported`.
+    fn merge_reimport(
+        &self,
+        _existing: StackResourceState,
+        imported: StackResourceState,
+        _ctx: &ImportContext<'_>,
+    ) -> Result<StackResourceState> {
+        Ok(imported)
+    }
 }
 
 /// Dyn-safe wrapper around [`ResourceImporter`] that takes
@@ -42,6 +57,13 @@ pub trait ErasedImporter: Send + Sync {
     fn import_json(
         &self,
         data: serde_json::Value,
+        ctx: &ImportContext<'_>,
+    ) -> Result<StackResourceState>;
+
+    fn merge_reimport(
+        &self,
+        existing: StackResourceState,
+        imported: StackResourceState,
         ctx: &ImportContext<'_>,
     ) -> Result<StackResourceState>;
 }
@@ -66,6 +88,15 @@ where
                 })
             })?;
         self.import(typed, ctx)
+    }
+
+    fn merge_reimport(
+        &self,
+        existing: StackResourceState,
+        imported: StackResourceState,
+        ctx: &ImportContext<'_>,
+    ) -> Result<StackResourceState> {
+        ResourceImporter::merge_reimport(self, existing, imported, ctx)
     }
 }
 
@@ -187,5 +218,25 @@ impl ImporterRegistry {
             })
         })?;
         importer.import_json(data, ctx)
+    }
+
+    /// Merge an imported state into an existing resource using the registered
+    /// importer's ownership-aware policy.
+    pub fn merge_reimport(
+        &self,
+        resource_type: &ResourceType,
+        platform: Platform,
+        existing: StackResourceState,
+        imported: StackResourceState,
+        ctx: &ImportContext<'_>,
+    ) -> Result<StackResourceState> {
+        let importer = self.importer(resource_type, platform).ok_or_else(|| {
+            AlienError::new(ErrorData::ImportRegistrationMissing {
+                resource_type: resource_type.clone(),
+                platform,
+                registration_kind: "importer".to_string(),
+            })
+        })?;
+        importer.merge_reimport(existing, imported, ctx)
     }
 }

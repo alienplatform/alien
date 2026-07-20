@@ -54,6 +54,7 @@
 mod artifact_registry_manager;
 mod container_manager;
 mod daemon_supervisor;
+mod docker_network;
 mod error;
 mod kv_manager;
 mod local_bindings_provider;
@@ -69,9 +70,10 @@ pub use artifact_registry_manager::LocalArtifactRegistryManager;
 
 pub use container_manager::{
     BindMount, ContainerConfig, ContainerInfo, ContainerMetadata, LocalContainerManager,
-    LocalRuntimeStatus,
+    LocalPublicEndpoint, LocalRuntimeStatus,
 };
 pub use daemon_supervisor::DaemonLaunchOptions;
+pub use docker_network::start_docker_bridge_proxy;
 pub use error::{ErrorData, Result};
 pub use kv_manager::LocalKvManager;
 pub use local_bindings_provider::LocalBindingsProvider;

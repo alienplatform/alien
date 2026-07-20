@@ -395,8 +395,7 @@ fn aws_email_resource_permissions_attach_to_service_account_role() {
     let stack = Stack::new("email-permissions".to_string())
         .permission(
             "sender",
-            PermissionProfile::new()
-                .resource("mailer", ["email/send", "email/manage-identities"]),
+            PermissionProfile::new().resource("mailer", ["email/send", "email/manage-identities"]),
         )
         .add(
             ServiceAccount::new("sender-sa".to_string()).build(),

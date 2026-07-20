@@ -1,4 +1,20 @@
+use std::collections::BTreeMap;
+
 use serde::{Deserialize, Serialize};
+
+/// AWS subnets grouped by their real availability zone.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
+#[cfg_attr(feature = "jsonschema", derive(schemars::JsonSchema))]
+#[serde(rename_all = "camelCase")]
+pub struct AwsFailureDomainSubnets {
+    /// Public subnet IDs in this availability zone.
+    #[serde(default)]
+    pub public_subnet_ids: Vec<String>,
+    /// Private subnet IDs in this availability zone.
+    #[serde(default)]
+    pub private_subnet_ids: Vec<String>,
+}
 
 /// AWS Network ImportData.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -28,6 +44,9 @@ pub struct AwsNetworkImportData {
     pub security_group_id: Option<String>,
     /// Availability zone names used by created or BYO subnets.
     pub availability_zones: Vec<String>,
+    /// Exact subnet membership keyed by real availability zone.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub subnets_by_failure_domain: BTreeMap<String, AwsFailureDomainSubnets>,
     /// True when the VPC is owned outside this stack.
     #[serde(deserialize_with = "crate::import::data::deserialize_bool_from_bool_or_string")]
     pub is_byo_vpc: bool,

@@ -286,6 +286,12 @@ pub async fn start_embedded_dev_manager(port: u16) -> Result<()> {
     info!("Starting dev server on port {}...", port);
     let (server, addr) = build_embedded_dev_manager(port).await?;
 
+    alien_local::start_docker_bridge_proxy(addr)
+        .await
+        .context(ErrorData::ServerStartFailed {
+            reason: "Failed to expose the dev server on Docker's private host gateway".to_string(),
+        })?;
+
     tokio::spawn(async move {
         if let Err(e) = server.start(addr).await {
             tracing::error!("Dev server error: {}", e);

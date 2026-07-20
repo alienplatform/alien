@@ -140,6 +140,13 @@ pub fn public_url_host(public_url: &str) -> Option<String> {
         .filter(|host| !host.is_empty())
 }
 
+/// Return the effective port of an already-validated public URL.
+pub fn public_url_port(public_url: &str) -> Option<u16> {
+    Url::parse(public_url)
+        .ok()
+        .and_then(|url| url.port_or_known_default())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -183,5 +190,12 @@ mod tests {
             Some("gateway.example.test".to_string())
         );
         assert_eq!(public_url_host("not a url"), None);
+    }
+
+    #[test]
+    fn extracts_effective_public_url_port() {
+        assert_eq!(public_url_port("https://gateway.example.test"), Some(443));
+        assert_eq!(public_url_port("http://localhost:8080"), Some(8080));
+        assert_eq!(public_url_port("not a url"), None);
     }
 }

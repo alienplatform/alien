@@ -29,6 +29,7 @@ pub mod monitor;
 pub mod network;
 pub mod private_networking;
 pub mod resource_graph;
+pub mod resource_skus;
 pub mod resources;
 pub mod service_bus;
 pub mod storage_accounts;

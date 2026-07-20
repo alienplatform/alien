@@ -383,8 +383,8 @@ fn is_zero(num: &u32) -> bool {
 mod tests {
     use super::*;
     use crate::{
-        PublicEndpointOutput, ResourceType, Storage, StorageOutputs, Worker, WorkerCode,
-        WorkerOutputs,
+        ExposeProtocol, PublicEndpointOutput, ResourceType, Storage, StorageOutputs, Worker,
+        WorkerCode, WorkerOutputs,
     };
 
     #[test]
@@ -423,6 +423,8 @@ mod tests {
                 PublicEndpointOutput {
                     url: "https://example.lambda-url.us-east-1.on.aws/".to_string(),
                     host: "example.lambda-url.us-east-1.on.aws".to_string(),
+                    protocol: ExposeProtocol::Http,
+                    port: 443,
                     wildcard_host: None,
                     load_balancer_endpoint: None,
                 },
@@ -608,6 +610,8 @@ mod tests {
                 PublicEndpointOutput {
                     url: "https://test.lambda-url.us-east-1.on.aws/".to_string(),
                     host: "test.lambda-url.us-east-1.on.aws".to_string(),
+                    protocol: ExposeProtocol::Http,
+                    port: 443,
                     wildcard_host: None,
                     load_balancer_endpoint: None,
                 },

@@ -107,6 +107,52 @@ fn compute_cluster_execute_does_not_read_workload_secrets() {
 }
 
 #[test]
+fn compute_cluster_lifecycle_can_discover_subscription_sku_availability() {
+    let generator = AzureRuntimePermissionsGenerator::new();
+    let context = create_test_context();
+
+    for permission_set_id in [
+        "compute-cluster/provision",
+        "compute-cluster/management",
+        "compute-cluster/heartbeat",
+    ] {
+        let permission_set = get_permission_set(permission_set_id).expect("permission set exists");
+        let result = generator
+            .generate_grant_plan(permission_set, BindingTarget::Stack, &context)
+            .expect("compute cluster grant plan should generate");
+
+        let sku_role = result
+            .custom_roles
+            .iter()
+            .find(|role| {
+                role.role_definition
+                    .actions
+                    .iter()
+                    .any(|action| action == "Microsoft.Compute/skus/read")
+            })
+            .expect("SKU discovery must have a custom role");
+        assert_eq!(
+            sku_role.role_definition.assignable_scopes,
+            ["/subscriptions/00000000-0000-0000-0000-000000000000"]
+        );
+        let sku_binding = result
+            .bindings
+            .iter()
+            .find(|binding| {
+                binding.role_definition
+                    == AzureRoleDefinitionRef::Custom {
+                        key: sku_role.key.clone(),
+                    }
+            })
+            .expect("SKU discovery role must be assigned");
+        assert_eq!(
+            sku_binding.scope,
+            "/subscriptions/00000000-0000-0000-0000-000000000000"
+        );
+    }
+}
+
+#[test]
 fn test_azure_hybrid_grant_plan() {
     let generator = AzureRuntimePermissionsGenerator::new();
     let permission_set = create_azure_hybrid_permission_set();

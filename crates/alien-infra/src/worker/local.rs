@@ -441,6 +441,8 @@ impl LocalWorkerController {
                     alien_core::PublicEndpointOutput {
                         url: url.clone(),
                         host: alien_core::public_url_host(url).unwrap_or_default(),
+                        protocol: alien_core::ExposeProtocol::Http,
+                        port: alien_core::public_url_port(url).unwrap_or(80),
                         wildcard_host: None,
                         load_balancer_endpoint: None,
                     },

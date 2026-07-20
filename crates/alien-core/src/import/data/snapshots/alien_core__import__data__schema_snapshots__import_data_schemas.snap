@@ -276,6 +276,30 @@ expression: schemas
   },
   "aws_network": {
     "$schema": "http://json-schema.org/draft-07/schema#",
+    "definitions": {
+      "AwsFailureDomainSubnets": {
+        "description": "AWS subnets grouped by their real availability zone.",
+        "properties": {
+          "privateSubnetIds": {
+            "default": [],
+            "description": "Private subnet IDs in this availability zone.",
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "publicSubnetIds": {
+            "default": [],
+            "description": "Public subnet IDs in this availability zone.",
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          }
+        },
+        "type": "object"
+      }
+    },
     "description": "AWS Network ImportData.",
     "properties": {
       "availabilityZones": {
@@ -351,6 +375,13 @@ expression: schemas
           "string",
           "null"
         ]
+      },
+      "subnetsByFailureDomain": {
+        "additionalProperties": {
+          "$ref": "#/definitions/AwsFailureDomainSubnets"
+        },
+        "description": "Exact subnet membership keyed by real availability zone.",
+        "type": "object"
       },
       "vpcId": {
         "description": "VPC ID. Absent when default-VPC mode defers lookup to AWS at runtime.",

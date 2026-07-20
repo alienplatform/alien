@@ -204,6 +204,51 @@ fn test_aws_cloudformation_compute_management_can_use_setup_security_group() {
 }
 
 #[test]
+fn test_aws_cloudformation_compute_management_can_terminate_only_tagged_stack_instances() {
+    let generator = AwsCloudFormationPermissionsGenerator::new();
+    let permission_set =
+        get_permission_set("compute-cluster/management").expect("permission set exists");
+    let context = PermissionContext::new()
+        .with_stack_prefix("")
+        .with_aws_region("${AWS::Region}")
+        .with_aws_account_id("${AWS::AccountId}");
+
+    let result = generator
+        .generate_policy(permission_set, BindingTarget::Stack, &context)
+        .expect("Should generate AWS CloudFormation policy successfully");
+
+    let statement = result
+        .statement
+        .iter()
+        .find(|statement| {
+            statement
+                .action
+                .contains(&json!("autoscaling:TerminateInstanceInAutoScalingGroup"))
+        })
+        .expect("compute-cluster management should allow drained instance termination");
+
+    assert_eq!(
+        statement.resource,
+        [json!({
+            "Fn::Sub": "arn:${AWS::Partition}:autoscaling:${AWS::Region}:${AWS::AccountId}:autoScalingGroup:*:autoScalingGroupName/${AWS::StackName}-*"
+        })]
+    );
+    let string_equals = statement
+        .condition
+        .as_ref()
+        .and_then(|condition| condition.get("StringEquals"))
+        .expect("instance termination must be tag-conditioned");
+    assert_eq!(
+        string_equals.get("aws:ResourceTag/deployment"),
+        Some(&json!({"Fn::Sub": "${AWS::StackName}"}))
+    );
+    assert_eq!(
+        string_equals.get("aws:ResourceTag/managed-by"),
+        Some(&json!("runtime"))
+    );
+}
+
+#[test]
 fn test_aws_cloudformation_container_provision_can_manage_setup_compute_security_group_ingress() {
     let generator = AwsCloudFormationPermissionsGenerator::new();
     let permission_set = get_permission_set("container/provision").expect("permission set exists");

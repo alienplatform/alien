@@ -5,9 +5,10 @@
 //! stack and does not require database access.
 
 use crate::{
-    instance_catalog::{self, WorkloadRequirements},
+    instance_catalog::{self, Architecture, WorkloadRequirements},
     CapacityGroup, CapacityGroupScalePolicy, ComputeChoiceRange, ComputePoolSelection, Container,
-    Daemon, ErrorData, GpuSpec, MachineProfile, Platform, ResourceSpec, Stack,
+    Daemon, ErrorData, FailureDomainSelection, GpuSpec, MachineProfile, Platform, ResourceSpec,
+    Stack,
 };
 use alien_error::{AlienError, Result};
 use serde::{Deserialize, Serialize};
@@ -76,8 +77,25 @@ pub fn plan_compute(
         let group = groups.remove(&pool_id).expect("pool id came from map keys");
         let requirements = group.requirements;
         let selected = selected_settings.and_then(|settings| settings.pools.get(&pool_id));
-        let recommended = recommended_selection(platform, &requirements, &group.scale)?;
-        let selected_choice = selected.cloned().unwrap_or_else(|| recommended.clone());
+        let recommended = recommended_selection(
+            platform,
+            &requirements,
+            &group.scale,
+            group.requires_failure_domain,
+        )?;
+        let mut selected_choice = selected.cloned().unwrap_or_else(|| recommended.clone());
+        if selected_choice.failure_domains().is_none() {
+            if let Some(default_failure_domains) = recommended.failure_domains().cloned() {
+                match &mut selected_choice {
+                    ComputePoolSelection::Fixed {
+                        failure_domains, ..
+                    }
+                    | ComputePoolSelection::Autoscale {
+                        failure_domains, ..
+                    } => *failure_domains = Some(default_failure_domains),
+                }
+            }
+        }
         let errors = validate_compute_pool_selection(
             platform,
             &pool_id,
@@ -107,6 +125,7 @@ struct PlannedGroup {
     workloads: Vec<String>,
     requirements: WorkloadRequirements,
     scale: CapacityGroupScalePolicy,
+    requires_failure_domain: bool,
 }
 
 fn collect_workload_groups(stack: &Stack) -> Result<HashMap<String, PlannedGroup>, ErrorData> {
@@ -137,6 +156,9 @@ fn collect_workload_groups(stack: &Stack) -> Result<HashMap<String, PlannedGroup
     let mut planned = HashMap::new();
     for (pool_id, workloads) in groups {
         let requirements = aggregate_workloads(&workloads);
+        let requires_failure_domain = workloads
+            .iter()
+            .any(|workload| workload.requires_failure_domain);
         let min_size = default_min_machines(&requirements);
         let max_size = default_max_machines(&requirements);
         planned.insert(
@@ -145,6 +167,7 @@ fn collect_workload_groups(stack: &Stack) -> Result<HashMap<String, PlannedGroup
                 workloads: workloads.into_iter().map(|w| w.id).collect(),
                 scale: CapacityGroupScalePolicy::from_selected_bounds(min_size, max_size),
                 requirements,
+                requires_failure_domain,
             },
         );
     }
@@ -156,6 +179,7 @@ fn collect_workload_groups(stack: &Stack) -> Result<HashMap<String, PlannedGroup
                 workloads: Vec::new(),
                 scale: CapacityGroupScalePolicy::from_selected_bounds(1, 1),
                 requirements,
+                requires_failure_domain: false,
             },
         );
     }
@@ -188,6 +212,7 @@ fn merge_explicit_compute_groups(
                     workloads: Vec::new(),
                     scale,
                     requirements: explicit_requirements,
+                    requires_failure_domain: false,
                 });
         }
     }
@@ -198,6 +223,7 @@ fn recommended_selection(
     platform: Platform,
     requirements: &WorkloadRequirements,
     scale: &CapacityGroupScalePolicy,
+    requires_failure_domain: bool,
 ) -> Result<ComputePoolSelection, ErrorData> {
     let machine = match platform {
         Platform::Aws | Platform::Gcp | Platform::Azure => Some(
@@ -213,15 +239,24 @@ fn recommended_selection(
         Platform::Local | Platform::Kubernetes | Platform::Machines | Platform::Test => None,
     };
 
+    let failure_domains = (requires_failure_domain
+        && matches!(platform, Platform::Aws | Platform::Gcp | Platform::Azure))
+    .then_some(FailureDomainSelection {
+        spread: 1,
+        selected_failure_domains: Vec::new(),
+    });
+
     match scale {
         CapacityGroupScalePolicy::Fixed { machines } => Ok(ComputePoolSelection::Fixed {
             machines: machines.default.max(1),
             machine,
+            failure_domains,
         }),
         CapacityGroupScalePolicy::Autoscale { min, max } => Ok(ComputePoolSelection::Autoscale {
             min: min.default,
             max: max.default.max(min.default),
             machine,
+            failure_domains,
         }),
     }
 }
@@ -246,7 +281,8 @@ pub fn validate_compute_pool_selection(
         match selection.machine() {
             Some(machine) => match instance_catalog::find_instance_type(platform, machine) {
                 Some(spec) => {
-                    if !instance_satisfies(spec, requirements) {
+                    let architecture = requirements.architecture.unwrap_or(spec.architecture);
+                    if !instance_satisfies(spec, requirements, architecture) {
                         errors.push(format!(
                             "{} machine '{}' does not satisfy pool '{}' requirements",
                             platform, machine, pool_id
@@ -283,18 +319,31 @@ fn machine_options(
     if !matches!(platform, Platform::Aws | Platform::Gcp | Platform::Azure) {
         return Ok(Vec::new());
     }
-    let recommended = instance_catalog::select_instance_type(platform, requirements)
-        .map_err(|message| {
+    let recommended =
+        instance_catalog::select_instance_type(platform, requirements).map_err(|message| {
             AlienError::new(ErrorData::GenericError {
                 message: format!("Failed to select {platform} machine: {message}"),
             })
-        })?
-        .instance_type
-        .to_string();
+        })?;
+    let resolved_architecture = requirements
+        .architecture
+        .or_else(|| {
+            selected_machine.and_then(|machine| {
+                instance_catalog::find_instance_type(platform, machine)
+                    .map(|spec| spec.architecture)
+            })
+        })
+        .or(recommended.profile.architecture)
+        .ok_or_else(|| {
+            AlienError::new(ErrorData::GenericError {
+                message: format!("Selected {platform} machine has no CPU architecture"),
+            })
+        })?;
+    let recommended = recommended.instance_type.to_string();
 
     let mut options: Vec<ComputeMachineOption> = instance_catalog::catalog_for_platform(platform)
         .into_iter()
-        .filter(|spec| instance_satisfies(spec, requirements))
+        .filter(|spec| instance_satisfies(spec, requirements, resolved_architecture))
         .map(|spec| ComputeMachineOption {
             machine: spec.name.to_string(),
             profile: spec.to_machine_profile(),
@@ -308,11 +357,10 @@ fn machine_options(
 fn instance_satisfies(
     spec: &instance_catalog::InstanceTypeSpec,
     requirements: &WorkloadRequirements,
+    resolved_architecture: Architecture,
 ) -> bool {
-    if let Some(architecture) = requirements.architecture {
-        if spec.architecture != architecture {
-            return false;
-        }
+    if spec.architecture != resolved_architecture {
+        return false;
     }
     if requirements.nested_virt && !spec.is_nested_virt_capable() {
         return false;
@@ -345,6 +393,7 @@ struct Workload {
     max_replicas: f64,
     ephemeral_storage_bytes: u64,
     gpu: Option<GpuSpec>,
+    requires_failure_domain: bool,
 }
 
 impl Workload {
@@ -389,6 +438,7 @@ impl Workload {
                 gpu_type: gpu.gpu_type.clone(),
                 count: gpu.count,
             }),
+            requires_failure_domain: container.stateful && container.persistent_storage.is_some(),
         })
     }
 
@@ -401,6 +451,7 @@ impl Workload {
             max_replicas: 1.0,
             ephemeral_storage_bytes: 0,
             gpu: None,
+            requires_failure_domain: false,
         })
     }
 }
@@ -617,6 +668,9 @@ fn validate_selection_against_scale(
 }
 
 fn needed_container_pool(container: &Container) -> &'static str {
+    if container.stateful && container.persistent_storage.is_some() {
+        return "stateful";
+    }
     if container.gpu.is_some() {
         return "gpu";
     }
@@ -703,6 +757,23 @@ mod tests {
     }
 
     #[test]
+    fn cloud_plan_only_offers_machines_matching_the_default_image_target() {
+        let stack = stack_with_container();
+
+        for platform in [Platform::Aws, Platform::Gcp, Platform::Azure] {
+            let plan = plan_compute(&stack, platform, None).expect("plan should build");
+            let pool = plan.pools.first().expect("general pool should exist");
+            let expected = instance_catalog::default_architecture(platform)
+                .expect("managed cloud should have a default architecture");
+
+            assert!(pool.machines.iter().all(|machine| {
+                instance_catalog::find_instance_type(platform, &machine.machine)
+                    .is_some_and(|spec| spec.architecture == expected)
+            }));
+        }
+    }
+
+    #[test]
     fn selected_machine_is_preserved_as_static_deployment_choice() {
         let stack = stack_with_container();
         let settings = ComputeSettings {
@@ -711,6 +782,7 @@ mod tests {
                 ComputePoolSelection::Fixed {
                     machines: 1,
                     machine: Some("m7g.xlarge".to_string()),
+                    failure_domains: None,
                 },
             )]
             .into_iter()
@@ -725,6 +797,32 @@ mod tests {
     }
 
     #[test]
+    fn selected_machine_defines_architecture_when_workloads_do_not() {
+        let stack = stack_with_container();
+        let settings = ComputeSettings {
+            pools: [(
+                "general".to_string(),
+                ComputePoolSelection::Fixed {
+                    machines: 1,
+                    machine: Some("m7i.xlarge".to_string()),
+                    failure_domains: None,
+                },
+            )]
+            .into_iter()
+            .collect(),
+        };
+
+        let plan = plan_compute(&stack, Platform::Aws, Some(&settings)).expect("plan should build");
+
+        let pool = plan.pools.first().expect("general pool should exist");
+        assert!(pool.errors.is_empty());
+        assert!(pool.machines.iter().all(|machine| {
+            instance_catalog::find_instance_type(Platform::Aws, &machine.machine)
+                .is_some_and(|spec| spec.architecture == Architecture::X86_64)
+        }));
+    }
+
+    #[test]
     fn explicit_capacity_group_requirements_are_merged_with_workloads() {
         let mut stack = stack_with_container();
         let cluster = ComputeCluster::new("compute".to_string())
@@ -735,7 +833,7 @@ mod tests {
                     cpu: "4".to_string(),
                     memory_bytes: 16 * 1024 * 1024 * 1024,
                     ephemeral_storage_bytes: 20 * 1024 * 1024 * 1024,
-                    architecture: None,
+                    architecture: Some(Architecture::X86_64),
                     gpu: None,
                 }),
                 min_size: 2,
@@ -864,6 +962,7 @@ mod tests {
                 ComputePoolSelection::Fixed {
                     machines: 2,
                     machine: Some("m7g.2xlarge".to_string()),
+                    failure_domains: None,
                 },
             )]
             .into_iter()

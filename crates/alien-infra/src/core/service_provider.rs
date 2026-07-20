@@ -40,6 +40,7 @@ use alien_azure_clients::{
     managed_identity::{AzureManagedIdentityClient, ManagedIdentityApi},
     network::{AzureNetworkClient, NetworkApi as AzureNetworkApi},
     private_networking::{AzurePrivateNetworkingClient, PrivateNetworkingApi},
+    resource_skus::{AzureResourceSkusClient, ResourceSkusApi},
     resources::{AzureResourcesClient, ResourcesApi},
     service_bus::{
         AzureServiceBusDataPlaneClient, AzureServiceBusManagementClient, ServiceBusDataPlaneApi,
@@ -180,6 +181,10 @@ pub trait PlatformServiceProvider: Send + Sync {
         &self,
         config: &AzureClientConfig,
     ) -> Result<Arc<dyn VirtualMachineScaleSetsApi>>;
+    fn get_azure_resource_skus_client(
+        &self,
+        config: &AzureClientConfig,
+    ) -> Result<Arc<dyn ResourceSkusApi>>;
     fn get_azure_container_apps_client(
         &self,
         config: &AzureClientConfig,
@@ -828,6 +833,16 @@ impl PlatformServiceProvider for DefaultPlatformServiceProvider {
         config: &AzureClientConfig,
     ) -> Result<Arc<dyn VirtualMachineScaleSetsApi>> {
         Ok(Arc::new(AzureVmssClient::new(
+            reqwest::Client::new(),
+            AzureTokenCache::new(config.clone()),
+        )))
+    }
+
+    fn get_azure_resource_skus_client(
+        &self,
+        config: &AzureClientConfig,
+    ) -> Result<Arc<dyn ResourceSkusApi>> {
+        Ok(Arc::new(AzureResourceSkusClient::new(
             reqwest::Client::new(),
             AzureTokenCache::new(config.clone()),
         )))

@@ -3,8 +3,17 @@ name: Release
 on:
   workflow_dispatch:
     inputs:
+      mode:
+        description: Publication channel
+        type: choice
+        default: stable
+        options: [stable, dev]
+      source_ref:
+        description: Exact 40-character source commit for dev npm packages
+        type: string
+        default: main
       dry_run:
-        description: 'Print the computed version without publishing'
+        description: Validate without publishing
         type: boolean
         default: false
 
@@ -19,7 +28,16 @@ env:
   SCCACHE_IGNORE_SERVER_IO_ERROR: "1"
 
 jobs:
+  publish-npm-dev:
+    if: inputs.mode == 'dev'
+    uses: ./.github/workflows/publish-npm-dev.yml
+    with:
+      source_ref: ${{ inputs.source_ref }}
+      dry_run: ${{ inputs.dry_run }}
+    secrets: inherit
+
   prepare:
+    if: inputs.mode == 'stable'
     runs-on: depot-ubuntu-24.04-arm
     timeout-minutes: 10
     outputs:
@@ -143,7 +161,7 @@ jobs:
 
   generate-changelog:
     needs: prepare
-    if: ${{ !inputs.dry_run }}
+    if: ${{ inputs.mode == 'stable' && !inputs.dry_run }}
     runs-on: depot-ubuntu-24.04-arm
     timeout-minutes: 5
     steps:
@@ -172,7 +190,7 @@ jobs:
 
   publish-crates:
     needs: [prepare]
-    if: ${{ !inputs.dry_run }}
+    if: ${{ inputs.mode == 'stable' && !inputs.dry_run }}
     runs-on: depot-ubuntu-24.04-arm-4
     timeout-minutes: 60
     env:
@@ -230,7 +248,7 @@ jobs:
 
   publish-npm:
     needs: [prepare]
-    if: ${{ !inputs.dry_run }}
+    if: ${{ inputs.mode == 'stable' && !inputs.dry_run }}
     runs-on: depot-ubuntu-24.04-arm-4
     timeout-minutes: 30
     steps:
@@ -278,7 +296,7 @@ jobs:
 
   publish-client-sdks:
     needs: [prepare]
-    if: ${{ !inputs.dry_run }}
+    if: ${{ inputs.mode == 'stable' && !inputs.dry_run }}
     runs-on: depot-ubuntu-24.04-arm-4
     timeout-minutes: 30
     steps:
@@ -329,6 +347,7 @@ jobs:
 
   build-addon:
     needs: prepare
+    if: inputs.mode == 'stable'
     strategy:
       fail-fast: false
       matrix:
@@ -444,6 +463,7 @@ jobs:
   # installs with a real local-provider KV operation.
   smoke-addon:
     needs: [prepare, build-addon]
+    if: inputs.mode == 'stable'
     strategy:
       fail-fast: false
       matrix:
@@ -517,7 +537,7 @@ jobs:
     # publish-npm to succeed: the wrapper's package.json pins
     # `@alienplatform/core: ^<release>`, so publishing it while core's publish
     # failed leaves every `npm install @alienplatform/bindings` ETARGET-broken.
-    if: always() && needs.smoke-addon.result == 'success' && (inputs.dry_run || needs.publish-npm.result == 'success')
+    if: inputs.mode == 'stable' && always() && needs.smoke-addon.result == 'success' && (inputs.dry_run || needs.publish-npm.result == 'success')
     runs-on: depot-ubuntu-24.04-arm-4
     timeout-minutes: 30
     steps:
@@ -625,7 +645,7 @@ jobs:
 
   build-binaries-linux-x86_64:
     needs: prepare
-    if: ${{ !inputs.dry_run }}
+    if: ${{ inputs.mode == 'stable' && !inputs.dry_run }}
     runs-on: depot-ubuntu-24.04-16
     timeout-minutes: 60
     env:
@@ -680,7 +700,7 @@ jobs:
 
   build-binaries-linux-aarch64:
     needs: prepare
-    if: ${{ !inputs.dry_run }}
+    if: ${{ inputs.mode == 'stable' && !inputs.dry_run }}
     runs-on: depot-ubuntu-24.04-arm-16
     timeout-minutes: 60
     env:
@@ -737,7 +757,7 @@ jobs:
 
   build-binaries-darwin:
     needs: prepare
-    if: ${{ !inputs.dry_run }}
+    if: ${{ inputs.mode == 'stable' && !inputs.dry_run }}
     runs-on: depot-macos-15
     timeout-minutes: 60
     env:
@@ -807,7 +827,7 @@ jobs:
 
   build-binaries-windows:
     needs: prepare
-    if: ${{ !inputs.dry_run }}
+    if: ${{ inputs.mode == 'stable' && !inputs.dry_run }}
     runs-on: depot-windows-2025-16
     timeout-minutes: 60
     env:
@@ -880,7 +900,7 @@ jobs:
 
   upload-binaries:
     needs: [prepare, build-binaries-linux-x86_64, build-binaries-linux-aarch64, build-binaries-darwin, build-binaries-windows]
-    if: ${{ !inputs.dry_run }}
+    if: ${{ inputs.mode == 'stable' && !inputs.dry_run }}
     runs-on: depot-ubuntu-24.04-arm
     timeout-minutes: 10
     steps:
@@ -939,7 +959,7 @@ jobs:
 
   create-github-release:
     needs: [prepare, generate-changelog, build-binaries-linux-x86_64, build-binaries-linux-aarch64, build-binaries-darwin, build-binaries-windows]
-    if: ${{ !inputs.dry_run }}
+    if: ${{ inputs.mode == 'stable' && !inputs.dry_run }}
     runs-on: depot-ubuntu-24.04-arm
     timeout-minutes: 10
     steps:
@@ -1004,7 +1024,7 @@ jobs:
 
   publish-images:
     needs: [prepare, build-binaries-linux-x86_64, build-binaries-linux-aarch64, build-binaries-darwin, build-binaries-windows]
-    if: ${{ !inputs.dry_run }}
+    if: ${{ inputs.mode == 'stable' && !inputs.dry_run }}
     runs-on: depot-ubuntu-24.04-arm-16
     timeout-minutes: 30
     steps:
@@ -1131,7 +1151,7 @@ jobs:
 
   publish-homebrew-tap:
     needs: [prepare, create-github-release]
-    if: ${{ !inputs.dry_run }}
+    if: ${{ inputs.mode == 'stable' && !inputs.dry_run }}
     runs-on: depot-ubuntu-24.04-arm
     timeout-minutes: 10
     steps:
@@ -1216,7 +1236,7 @@ jobs:
 
   publish-npm-cli-wrapper:
     needs: [prepare, build-binaries-linux-x86_64, build-binaries-linux-aarch64, build-binaries-darwin, build-binaries-windows]
-    if: ${{ !inputs.dry_run }}
+    if: ${{ inputs.mode == 'stable' && !inputs.dry_run }}
     runs-on: depot-ubuntu-24.04-arm
     timeout-minutes: 20
     steps:

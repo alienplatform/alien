@@ -4,6 +4,7 @@
 */
 
 import * as z from "zod";
+import { AwsFailureDomainSubnetsSchema } from "./aws-failure-domain-subnets-schema.js";
 
 /**
  * @description AWS Network ImportData.
@@ -20,6 +21,9 @@ export const AwsNetworkImportDataSchema = z.object({
 "publicRouteTableId": z.string().describe("Public route table ID.").nullish(),
 "publicSubnetIds": z.array(z.string()).describe("Public subnet IDs."),
 "securityGroupId": z.string().describe("Security group ID for private workloads.").nullish(),
+"subnetsByFailureDomain": z.optional(z.object({
+
+    }).catchall(z.lazy(() => AwsFailureDomainSubnetsSchema).describe("AWS subnets grouped by their real availability zone.")).describe("Exact subnet membership keyed by real availability zone.")),
 "vpcId": z.string().describe("VPC ID. Absent when default-VPC mode defers lookup to AWS at runtime.").nullish()
     }).describe("AWS Network ImportData.")
 
