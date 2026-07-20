@@ -11,7 +11,10 @@ describe("event dispatch source matching", () => {
   })
 
   it("matches a storage handler registered by logical name against the bound bucket", () => {
-    vi.stubEnv("ALIEN_EMAIL_BINDING", JSON.stringify({ service: "s3", bucketName: "stack-email-8b090660" }))
+    vi.stubEnv(
+      "ALIEN_EMAIL_BINDING",
+      JSON.stringify({ service: "s3", bucketName: "stack-email-8b090660" }),
+    )
 
     expect(physicalSourceNames("email")).toEqual(["stack-email-8b090660"])
     expect(sourceMatches("email", "stack-email-8b090660")).toBe(true)
@@ -21,7 +24,10 @@ describe("event dispatch source matching", () => {
   it("matches a queue handler registered by logical name against the queue name from queueUrl", () => {
     vi.stubEnv(
       "ALIEN_SES_EVENTS_BINDING",
-      JSON.stringify({ service: "sqs", queueUrl: "https://sqs.us-east-1.amazonaws.com/230470760195/stack-SesEvents-aHhH" }),
+      JSON.stringify({
+        service: "sqs",
+        queueUrl: "https://sqs.us-east-1.amazonaws.com/230470760195/stack-SesEvents-aHhH",
+      }),
     )
 
     // '-' in the logical name maps to '_' in the env var name.
