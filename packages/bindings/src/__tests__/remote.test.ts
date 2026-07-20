@@ -117,6 +117,7 @@ describe("Bindings.forRemoteDeployment", () => {
     const logs = bindings.storage("logs")
 
     expect(fixture.resolveStorage).not.toHaveBeenCalled()
+    expect(bindings.storage("archive")).toBe(archive)
     await archive.head("a.txt")
     await archive.get("a.txt")
     await logs.head("b.txt")

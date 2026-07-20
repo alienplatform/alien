@@ -6,10 +6,12 @@
 
 use std::collections::HashMap;
 use std::fmt;
+use std::net::IpAddr;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
 
-use alien_error::{AlienError, Context, IntoAlienError};
+use alien_error::{AlienError, Context, ContextError, GenericError, IntoAlienError};
 use alien_platform_api::SdkResultExt;
 use async_trait::async_trait;
 use chrono::{DateTime, Duration as ChronoDuration, Utc};
@@ -26,6 +28,7 @@ use crate::traits::{
 
 const DEFAULT_PLATFORM_API_URL: &str = "https://api.alien.dev";
 const REFRESH_SKEW_SECONDS: i64 = 300;
+const MANAGER_DISCOVERY_TTL_SECONDS: i64 = 300;
 const REMOTE_REQUEST_TIMEOUT: Duration = Duration::from_secs(30);
 
 trait Clock: Send + Sync + fmt::Debug {
@@ -45,7 +48,7 @@ impl Clock for SystemClock {
 ///
 /// The bearer token and all returned client configurations are deliberately
 /// omitted from `Debug` output.
-pub struct RemoteBindingsProvider {
+pub(crate) struct RemoteBindingsProvider {
     source: Arc<RemoteBindingSource>,
     resolvers: RwLock<HashMap<String, Arc<RemoteStorageResolver>>>,
     clock: Arc<dyn Clock>,
@@ -63,7 +66,7 @@ impl fmt::Debug for RemoteBindingsProvider {
 impl RemoteBindingsProvider {
     /// Discovers the deployment's assigned manager through the caller-scoped
     /// Platform API and creates a lazy remote provider.
-    pub async fn for_remote_deployment(
+    pub(crate) async fn for_remote_deployment(
         deployment_id: &str,
         token: &str,
         api_base_url: Option<&str>,
@@ -78,6 +81,10 @@ impl RemoteBindingsProvider {
         clock: Arc<dyn Clock>,
     ) -> Result<Self> {
         let base_url = api_base_url.unwrap_or(DEFAULT_PLATFORM_API_URL);
+        let allow_insecure_manager_url = match api_base_url {
+            Some(base_url) => validate_platform_base_url(base_url)?,
+            None => false,
+        };
         let auth_value = format!("Bearer {token}");
         let mut headers = reqwest::header::HeaderMap::new();
         headers.insert(
@@ -104,32 +111,27 @@ impl RemoteBindingsProvider {
             .send()
             .await
             .into_sdk_error()
-            .context(ErrorData::RemoteAccessFailed {
-                operation: "fetch deployment from Platform API".to_string(),
-            })?
+            .map_err(into_remote_error)?
             .into_inner();
-        let manager_id = deployment.manager_id.to_string();
-        let manager = platform
-            .get_manager()
-            .id(&manager_id)
-            .send()
-            .await
-            .into_sdk_error()
-            .context(ErrorData::RemoteAccessFailed {
-                operation: "fetch assigned manager from Platform API".to_string(),
-            })?
-            .into_inner();
-        let manager_url = manager.url.ok_or_else(|| {
-            AlienError::new(ErrorData::RemoteAccessFailed {
-                operation: "assigned manager has no reachable URL".to_string(),
-            })
-        })?;
+        let manager_url = discover_manager_url(
+            &platform,
+            deployment.manager_id.to_string(),
+            allow_insecure_manager_url,
+        )
+        .await?;
 
         Ok(Self {
             source: Arc::new(RemoteBindingSource {
                 deployment_id: deployment_id.to_string(),
-                manager_url,
+                platform,
+                manager: RwLock::new(DiscoveredManager {
+                    url: manager_url,
+                    discovered_at: clock.now(),
+                }),
+                manager_refresh_lock: Mutex::new(()),
+                allow_insecure_manager_url,
                 http,
+                clock: clock.clone(),
             }),
             resolvers: RwLock::new(HashMap::new()),
             clock,
@@ -150,6 +152,8 @@ impl RemoteBindingsProvider {
                     resource_id: resource_id.to_string(),
                     cache: RwLock::new(None),
                     refresh_lock: Mutex::new(()),
+                    refresh_generation: AtomicU64::new(0),
+                    last_refresh_error: RwLock::new(None),
                     clock: self.clock.clone(),
                 })
             })
@@ -212,29 +216,84 @@ impl BindingsProviderApi for RemoteBindingsProvider {
 
 struct RemoteBindingSource {
     deployment_id: String,
-    manager_url: String,
+    platform: alien_platform_api::Client,
+    manager: RwLock<DiscoveredManager>,
+    manager_refresh_lock: Mutex<()>,
+    allow_insecure_manager_url: bool,
     http: reqwest::Client,
+    clock: Arc<dyn Clock>,
+}
+
+struct DiscoveredManager {
+    url: reqwest::Url,
+    discovered_at: DateTime<Utc>,
 }
 
 impl fmt::Debug for RemoteBindingSource {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("RemoteBindingSource")
             .field("deployment_id", &self.deployment_id)
-            .field("manager_url", &self.manager_url)
+            .field("manager_url", &"<redacted>")
             .field("credentials", &"<redacted>")
             .finish()
     }
 }
 
 impl RemoteBindingSource {
+    async fn manager_url(&self) -> Result<reqwest::Url> {
+        let now = self.clock.now();
+        {
+            let manager = self.manager.read().await;
+            if now < manager.discovered_at + ChronoDuration::seconds(MANAGER_DISCOVERY_TTL_SECONDS)
+            {
+                return Ok(manager.url.clone());
+            }
+        }
+
+        let _refresh = self.manager_refresh_lock.lock().await;
+        let now = self.clock.now();
+        {
+            let manager = self.manager.read().await;
+            if now < manager.discovered_at + ChronoDuration::seconds(MANAGER_DISCOVERY_TTL_SECONDS)
+            {
+                return Ok(manager.url.clone());
+            }
+        }
+
+        let deployment = self
+            .platform
+            .get_deployment()
+            .id(&self.deployment_id)
+            .send()
+            .await
+            .into_sdk_error()
+            .map_err(into_remote_error)?
+            .into_inner();
+        let manager_url = discover_manager_url(
+            &self.platform,
+            deployment.manager_id.to_string(),
+            self.allow_insecure_manager_url,
+        )
+        .await?;
+        *self.manager.write().await = DiscoveredManager {
+            url: manager_url.clone(),
+            discovered_at: self.clock.now(),
+        };
+        Ok(manager_url)
+    }
+
     async fn resolve(&self, resource_id: &str) -> Result<ResolvedRemoteBinding> {
-        let url = format!(
-            "{}/v1/bindings/resolve",
-            self.manager_url.trim_end_matches('/')
-        );
+        let url = self
+            .manager_url()
+            .await?
+            .join("v1/bindings/resolve")
+            .into_alien_error()
+            .context(ErrorData::RemoteAccessFailed {
+                operation: "build remote binding URL".to_string(),
+            })?;
         let response = self
             .http
-            .post(&url)
+            .post(url)
             .json(&ResolveBindingRequest {
                 deployment_id: &self.deployment_id,
                 resource_id,
@@ -245,13 +304,9 @@ impl RemoteBindingSource {
             .context(ErrorData::RemoteAccessFailed {
                 operation: format!("resolve remote Storage binding '{resource_id}'"),
             })?;
-        let response = response.error_for_status().into_alien_error().context(
-            ErrorData::RemoteAccessFailed {
-                operation: format!(
-                    "resolve remote Storage binding '{resource_id}' (non-success status)"
-                ),
-            },
-        )?;
+        if !response.status().is_success() {
+            return Err(remote_http_error(response, resource_id).await);
+        }
 
         response
             .json::<ResolvedRemoteBinding>()
@@ -260,6 +315,130 @@ impl RemoteBindingSource {
             .context(ErrorData::RemoteAccessFailed {
                 operation: format!("parse remote Storage binding '{resource_id}'"),
             })
+    }
+}
+
+async fn discover_manager_url(
+    platform: &alien_platform_api::Client,
+    manager_id: String,
+    allow_insecure: bool,
+) -> Result<reqwest::Url> {
+    let manager = platform
+        .get_manager()
+        .id(&manager_id)
+        .send()
+        .await
+        .into_sdk_error()
+        .map_err(into_remote_error)?
+        .into_inner();
+    let manager_url = manager
+        .url
+        .ok_or_else(|| remote_configuration_error("assigned manager has no reachable URL"))?;
+    validate_manager_url(&manager_url, allow_insecure)
+}
+
+fn validate_manager_url(raw: &str, allow_insecure: bool) -> Result<reqwest::Url> {
+    let url = reqwest::Url::parse(raw)
+        .into_alien_error()
+        .map_err(|error| remote_configuration_source_error(error, "parse assigned manager URL"))?;
+    let valid_scheme =
+        url.scheme() == "https" || (allow_insecure && url.scheme() == "http" && is_loopback(&url));
+    if !valid_scheme
+        || !url.username().is_empty()
+        || url.password().is_some()
+        || url.query().is_some()
+        || url.fragment().is_some()
+        || url.path() != "/"
+    {
+        return Err(remote_configuration_error("validate assigned manager URL"));
+    }
+    Ok(url)
+}
+
+/// Returns whether a caller-supplied Platform base URL may discover a local
+/// HTTP manager. Production discovery is HTTPS-only; loopback HTTP exists for
+/// local development and deterministic tests.
+fn validate_platform_base_url(raw: &str) -> Result<bool> {
+    let url = reqwest::Url::parse(raw)
+        .into_alien_error()
+        .map_err(|error| remote_configuration_source_error(error, "parse Platform API base URL"))?;
+    let allow_insecure = url.scheme() == "http" && is_loopback(&url);
+    let valid_scheme = url.scheme() == "https" || allow_insecure;
+    if !valid_scheme
+        || !url.username().is_empty()
+        || url.password().is_some()
+        || url.query().is_some()
+        || url.fragment().is_some()
+    {
+        return Err(remote_configuration_error("validate Platform API base URL"));
+    }
+    Ok(allow_insecure)
+}
+
+fn remote_configuration_error(operation: &str) -> AlienError<ErrorData> {
+    let mut error = AlienError::new(ErrorData::RemoteAccessFailed {
+        operation: operation.to_string(),
+    });
+    error.retryable = false;
+    error.http_status_code = Some(400);
+    error
+}
+
+fn remote_configuration_source_error(
+    source: AlienError<GenericError>,
+    operation: &str,
+) -> AlienError<ErrorData> {
+    let mut error = source.context(ErrorData::RemoteAccessFailed {
+        operation: operation.to_string(),
+    });
+    error.retryable = false;
+    error.http_status_code = Some(400);
+    error
+}
+
+fn is_loopback(url: &reqwest::Url) -> bool {
+    url.host_str().is_some_and(|host| {
+        host.eq_ignore_ascii_case("localhost")
+            || host
+                .parse::<IpAddr>()
+                .is_ok_and(|address| address.is_loopback())
+    })
+}
+
+async fn remote_http_error(
+    response: reqwest::Response,
+    resource_id: &str,
+) -> AlienError<ErrorData> {
+    let status = response.status();
+    match response.json::<AlienError<GenericError>>().await {
+        Ok(error) => into_remote_error(error),
+        Err(_) => {
+            let mut error = AlienError::new(ErrorData::RemoteAccessFailed {
+                operation: format!(
+                    "resolve remote Storage binding '{resource_id}' (HTTP {status})"
+                ),
+            });
+            error.retryable = status.is_server_error()
+                || status == reqwest::StatusCode::REQUEST_TIMEOUT
+                || status == reqwest::StatusCode::TOO_MANY_REQUESTS;
+            error.http_status_code = Some(status.as_u16());
+            error
+        }
+    }
+}
+
+fn into_remote_error(error: AlienError<GenericError>) -> AlienError<ErrorData> {
+    AlienError {
+        code: error.code,
+        message: error.message,
+        context: error.context,
+        hint: error.hint,
+        retryable: error.retryable,
+        internal: error.internal,
+        http_status_code: error.http_status_code,
+        source: error.source,
+        human_layer_presentation: error.human_layer_presentation,
+        error: None,
     }
 }
 
@@ -288,6 +467,8 @@ struct RemoteStorageResolver {
     resource_id: String,
     cache: RwLock<Option<CachedRemoteBinding>>,
     refresh_lock: Mutex<()>,
+    refresh_generation: AtomicU64,
+    last_refresh_error: RwLock<Option<AlienError<ErrorData>>>,
     clock: Arc<dyn Clock>,
 }
 
@@ -307,6 +488,7 @@ impl RemoteStorageResolver {
     }
 
     async fn provider(&self) -> Result<Arc<BindingsProvider>> {
+        let observed_generation = self.refresh_generation.load(Ordering::Acquire);
         let now = self.clock.now();
         if let Some(provider) = self.fresh_cached(now).await {
             return Ok(provider);
@@ -318,9 +500,27 @@ impl RemoteStorageResolver {
             return Ok(provider);
         }
 
-        match self.source.resolve(&self.resource_id).await {
+        if self.refresh_generation.load(Ordering::Acquire) != observed_generation {
+            if let Some(provider) = self.unexpired_cached(now).await {
+                return Ok(provider);
+            }
+            if let Some(error) = self.last_refresh_error.read().await.clone() {
+                return Err(error);
+            }
+        }
+
+        let result = self.source.resolve(&self.resource_id).await;
+        let now = self.clock.now();
+        let result = match result {
             Ok(resolved) => self.cache_resolved(resolved, now).await,
-            Err(error) => {
+            Err(error) => Err(error),
+        };
+        *self.last_refresh_error.write().await = result.as_ref().err().cloned();
+        self.refresh_generation.fetch_add(1, Ordering::Release);
+
+        match result {
+            Ok(provider) => Ok(provider),
+            Err(error) if error.retryable => {
                 if let Some(provider) = self.unexpired_cached(now).await {
                     debug!(
                         deployment_id = %self.source.deployment_id,
@@ -332,6 +532,7 @@ impl RemoteStorageResolver {
                     Err(error)
                 }
             }
+            Err(error) => Err(error),
         }
     }
 
@@ -353,6 +554,9 @@ impl RemoteStorageResolver {
             resolved.client_config,
             HashMap::from([(self.resource_id.clone(), resolved.binding)]),
         )?);
+        // Validate the typed binding and provider feature before committing the
+        // lease. An invalid response must not poison the cache until expiry.
+        provider.load_storage(&self.resource_id).await?;
         let mut cache = self.cache.write().await;
         *cache = Some(CachedRemoteBinding {
             provider: provider.clone(),
@@ -437,7 +641,7 @@ mod tests {
 
     #[derive(Clone)]
     struct PlatformFixtureState {
-        manager_url: String,
+        manager_url: Arc<StdRwLock<String>>,
         requests: Arc<StdMutex<Vec<RecordedRequest>>>,
     }
 
@@ -445,6 +649,10 @@ mod tests {
     struct ManagerFixtureState {
         calls: Arc<AtomicUsize>,
         fail: Arc<AtomicBool>,
+        failure_response: Arc<StdRwLock<Option<(StatusCode, serde_json::Value)>>>,
+        invalid_binding: Arc<AtomicBool>,
+        advance_clock_to: Arc<StdRwLock<Option<DateTime<Utc>>>>,
+        clock: Arc<ManualClock>,
         expires_at: Arc<StdRwLock<DateTime<Utc>>>,
         storage_path: String,
         requests: Arc<StdMutex<Vec<RecordedRequest>>>,
@@ -454,6 +662,7 @@ mod tests {
         api_url: String,
         clock: Arc<ManualClock>,
         platform_requests: Arc<StdMutex<Vec<RecordedRequest>>>,
+        manager_url: Arc<StdRwLock<String>>,
         manager: ManagerFixtureState,
         _storage_directory: TempDir,
     }
@@ -461,26 +670,32 @@ mod tests {
     impl Fixture {
         async fn new(now: DateTime<Utc>, expires_at: DateTime<Utc>) -> Self {
             let storage_directory = TempDir::new().expect("create fixture storage directory");
+            let clock = Arc::new(ManualClock::new(now));
             let manager = ManagerFixtureState {
                 calls: Arc::new(AtomicUsize::new(0)),
                 fail: Arc::new(AtomicBool::new(false)),
+                failure_response: Arc::new(StdRwLock::new(None)),
+                invalid_binding: Arc::new(AtomicBool::new(false)),
+                advance_clock_to: Arc::new(StdRwLock::new(None)),
+                clock: clock.clone(),
                 expires_at: Arc::new(StdRwLock::new(expires_at)),
                 storage_path: storage_directory.path().display().to_string(),
                 requests: Arc::new(StdMutex::new(Vec::new())),
             };
-            let manager_url = spawn_manager_server(manager.clone()).await;
+            let manager_url = Arc::new(StdRwLock::new(spawn_manager_server(manager.clone()).await));
 
             let platform_requests = Arc::new(StdMutex::new(Vec::new()));
             let api_url = spawn_platform_server(PlatformFixtureState {
-                manager_url,
+                manager_url: manager_url.clone(),
                 requests: platform_requests.clone(),
             })
             .await;
 
             Self {
                 api_url,
-                clock: Arc::new(ManualClock::new(now)),
+                clock,
                 platform_requests,
+                manager_url,
                 manager,
                 _storage_directory: storage_directory,
             }
@@ -505,6 +720,26 @@ mod tests {
                 .expires_at
                 .write()
                 .expect("manager expiry write lock") = expires_at;
+        }
+
+        fn fail_manager_with(&self, status: StatusCode, body: serde_json::Value) {
+            *self
+                .manager
+                .failure_response
+                .write()
+                .expect("manager failure response write lock") = Some((status, body));
+        }
+
+        fn advance_clock_during_next_resolve(&self, now: DateTime<Utc>) {
+            *self
+                .manager
+                .advance_clock_to
+                .write()
+                .expect("manager clock advance write lock") = Some(now);
+        }
+
+        fn assign_manager_url(&self, manager_url: String) {
+            *self.manager_url.write().expect("manager URL write lock") = manager_url;
         }
     }
 
@@ -590,6 +825,11 @@ mod tests {
                 authorization: authorization(&headers),
                 body: None,
             });
+        let manager_url = state
+            .manager_url
+            .read()
+            .expect("manager URL read lock")
+            .clone();
         Json(json!({
             "id": MANAGER_ID,
             "name": "fixture-manager",
@@ -598,7 +838,7 @@ mod tests {
             "isSystem": true,
             "workspaceId": WORKSPACE_ID,
             "status": "healthy",
-            "url": state.manager_url,
+            "url": manager_url,
             "managedDeploymentCount": 1,
             "defaultProjectCount": 0,
             "createdAt": "2026-01-01T00:00:00Z"
@@ -621,16 +861,37 @@ mod tests {
                 authorization: authorization(&headers),
                 body: Some(body),
             });
+        if let Some(now) = state
+            .advance_clock_to
+            .write()
+            .expect("manager clock advance write lock")
+            .take()
+        {
+            state.clock.set(now);
+        }
+        if let Some((status, body)) = state
+            .failure_response
+            .read()
+            .expect("manager failure response read lock")
+            .clone()
+        {
+            return (status, Json(body)).into_response();
+        }
         if state.fail.load(Ordering::SeqCst) {
             return StatusCode::SERVICE_UNAVAILABLE.into_response();
         }
 
         let expires_at = *state.expires_at.read().expect("manager expiry read lock");
-        Json(json!({
-            "binding": {
+        let binding = if state.invalid_binding.load(Ordering::SeqCst) {
+            json!({ "service": "local-storage" })
+        } else {
+            json!({
                 "service": "local-storage",
                 "storagePath": state.storage_path,
-            },
+            })
+        };
+        Json(json!({
+            "binding": binding,
             "clientConfig": {
                 "platform": "local",
                 "state_directory": state.storage_path,
@@ -748,7 +1009,7 @@ mod tests {
     async fn refreshes_once_for_concurrent_operations_without_reconstructing_handle() {
         let fixture = Fixture::new(at(0), at(600)).await;
         let provider = fixture.remote_provider().await;
-        let bindings = Bindings::from_provider(provider);
+        let bindings = Bindings::from_provider(provider.clone());
         let storage = bindings
             .storage("files")
             .await
@@ -775,6 +1036,201 @@ mod tests {
         assert_eq!(results.len(), 16);
         assert!(results.iter().all(|metadata| metadata.size == 5));
         assert_eq!(fixture.manager.calls.load(Ordering::SeqCst), 2);
+        assert_eq!(
+            fixture
+                .platform_requests
+                .lock()
+                .expect("platform requests lock")
+                .len(),
+            4,
+            "refresh must periodically rediscover the assigned manager"
+        );
+    }
+
+    #[tokio::test]
+    async fn existing_storage_handle_follows_manager_reassignment() {
+        let fixture = Fixture::new(at(0), at(600)).await;
+        let provider = fixture.remote_provider().await;
+        let bindings = Bindings::from_provider(provider);
+        let storage = bindings
+            .storage("files")
+            .await
+            .expect("initial manager should resolve Storage");
+        storage
+            .put(
+                &Path::from("reassigned.txt"),
+                PutPayload::from_static(b"value"),
+            )
+            .await
+            .expect("seed fixture object through manager A");
+
+        let manager_b = ManagerFixtureState {
+            calls: Arc::new(AtomicUsize::new(0)),
+            fail: Arc::new(AtomicBool::new(false)),
+            failure_response: Arc::new(StdRwLock::new(None)),
+            invalid_binding: Arc::new(AtomicBool::new(false)),
+            advance_clock_to: Arc::new(StdRwLock::new(None)),
+            clock: fixture.clock.clone(),
+            expires_at: Arc::new(StdRwLock::new(at(3901))),
+            storage_path: fixture.manager.storage_path.clone(),
+            requests: Arc::new(StdMutex::new(Vec::new())),
+        };
+        let manager_b_url = spawn_manager_server(manager_b.clone()).await;
+        fixture.manager.fail.store(true, Ordering::SeqCst);
+        fixture.assign_manager_url(manager_b_url);
+        fixture.clock.set(at(301));
+
+        let metadata = storage
+            .head(&Path::from("reassigned.txt"))
+            .await
+            .expect("same handle should rediscover and use manager B");
+
+        assert_eq!(metadata.size, 5);
+        assert_eq!(fixture.manager.calls.load(Ordering::SeqCst), 1);
+        assert_eq!(manager_b.calls.load(Ordering::SeqCst), 1);
+        assert_eq!(
+            manager_b.requests.lock().expect("manager B requests lock")[0].path,
+            "/v1/bindings/resolve"
+        );
+    }
+
+    #[tokio::test]
+    async fn concurrent_failed_refresh_is_single_flight_while_cache_is_unexpired() {
+        let fixture = Fixture::new(at(0), at(600)).await;
+        let provider = fixture.remote_provider().await;
+        let bindings = Bindings::from_provider(provider);
+        let storage = bindings
+            .storage("files")
+            .await
+            .expect("initial remote Storage resolution");
+        storage
+            .put(&Path::from("shared.txt"), PutPayload::from_static(b"value"))
+            .await
+            .expect("seed fixture object");
+
+        fixture.manager.fail.store(true, Ordering::SeqCst);
+        fixture.clock.set(at(301));
+        let operations = (0..16).map(|_| {
+            let storage = storage.clone();
+            async move { storage.head(&Path::from("shared.txt")).await }
+        });
+        let results = join_all(operations).await;
+
+        assert!(results.iter().all(|result| result.is_ok()));
+        assert_eq!(fixture.manager.calls.load(Ordering::SeqCst), 2);
+    }
+
+    #[tokio::test]
+    async fn non_retryable_manager_error_is_preserved_and_never_uses_cached_credentials() {
+        let fixture = Fixture::new(at(0), at(600)).await;
+        let provider = fixture.remote_provider().await;
+        let bindings = Bindings::from_provider(provider.clone());
+        let storage = bindings
+            .storage("files")
+            .await
+            .expect("initial remote Storage resolution");
+        storage
+            .put(
+                &Path::from("private.txt"),
+                PutPayload::from_static(b"value"),
+            )
+            .await
+            .expect("seed fixture object");
+
+        fixture.fail_manager_with(
+            StatusCode::FORBIDDEN,
+            json!({
+                "code": "FORBIDDEN",
+                "message": "Remote access was revoked",
+                "retryable": false,
+                "internal": false,
+                "httpStatusCode": 403,
+            }),
+        );
+        fixture.clock.set(at(301));
+        let error = provider
+            .load_storage("files")
+            .await
+            .expect_err("revoked access must not fall back to a cached lease");
+
+        assert_eq!(error.code, "FORBIDDEN");
+        assert!(!error.retryable);
+        assert_eq!(error.http_status_code, Some(403));
+        assert_eq!(fixture.manager.calls.load(Ordering::SeqCst), 2);
+    }
+
+    #[tokio::test]
+    async fn refresh_rechecks_expiry_after_the_network_request() {
+        let fixture = Fixture::new(at(0), at(600)).await;
+        let provider = fixture.remote_provider().await;
+        let bindings = Bindings::from_provider(provider.clone());
+        let storage = bindings
+            .storage("files")
+            .await
+            .expect("initial remote Storage resolution");
+        storage
+            .put(&Path::from("lease.txt"), PutPayload::from_static(b"value"))
+            .await
+            .expect("seed fixture object");
+
+        fixture.manager.fail.store(true, Ordering::SeqCst);
+        fixture.clock.set(at(301));
+        fixture.advance_clock_during_next_resolve(at(600));
+        let error = provider
+            .load_storage("files")
+            .await
+            .expect_err("a lease that expired during refresh must not be used");
+
+        assert_eq!(error.code, "REMOTE_ACCESS_FAILED");
+        assert_eq!(fixture.manager.calls.load(Ordering::SeqCst), 2);
+    }
+
+    #[tokio::test]
+    async fn malformed_manager_response_does_not_poison_the_cache() {
+        let fixture = Fixture::new(at(0), at(600)).await;
+        fixture
+            .manager
+            .invalid_binding
+            .store(true, Ordering::SeqCst);
+        let provider = fixture.remote_provider().await;
+        let bindings = Bindings::from_provider(provider);
+
+        bindings
+            .storage("files")
+            .await
+            .expect_err("invalid binding must fail before caching");
+        fixture
+            .manager
+            .invalid_binding
+            .store(false, Ordering::SeqCst);
+        bindings
+            .storage("files")
+            .await
+            .expect("a subsequent valid response must be retried and cached");
+
+        assert_eq!(fixture.manager.calls.load(Ordering::SeqCst), 2);
+    }
+
+    #[test]
+    fn remote_urls_require_https_except_for_loopback_development() {
+        assert!(!validate_platform_base_url("https://api.example.com").unwrap());
+        assert!(validate_platform_base_url("http://127.0.0.1:3000").unwrap());
+        assert!(validate_platform_base_url("http://localhost:3000").unwrap());
+        assert!(validate_platform_base_url("http://api.example.com").is_err());
+        assert!(validate_manager_url("https://manager.example.com/", false).is_ok());
+        assert!(validate_manager_url("http://127.0.0.1:3001/", true).is_ok());
+        assert!(validate_manager_url("http://manager.example.com/", true).is_err());
+        assert!(validate_manager_url("https://user@manager.example.com/", false).is_err());
+        assert!(validate_manager_url("https://manager.example.com/prefix", false).is_err());
+
+        for error in [
+            validate_platform_base_url("not a URL").unwrap_err(),
+            validate_manager_url("not a URL", false).unwrap_err(),
+            validate_manager_url("http://manager.example.com/", true).unwrap_err(),
+        ] {
+            assert!(!error.retryable);
+            assert_eq!(error.http_status_code, Some(400));
+        }
     }
 
     #[tokio::test]

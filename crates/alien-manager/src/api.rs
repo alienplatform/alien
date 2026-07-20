@@ -45,7 +45,6 @@ use utoipa::OpenApi;
         crate::routes::sync::agent_sync,
         crate::routes::sync::initialize,
         // Credentials
-        crate::routes::credentials::resolve_credentials,
         crate::routes::credentials::mint_credentials,
         // Remote bindings
         crate::routes::bindings::resolve_binding,
@@ -88,8 +87,6 @@ use utoipa::OpenApi;
         crate::routes::sync::InitializeRequest,
         crate::routes::sync::InitializeResponse,
         // Credentials types
-        crate::routes::credentials::ResolveCredentialsRequest,
-        crate::routes::credentials::ResolveCredentialsResponse,
         crate::routes::credentials::MintCredentialsRequest,
         crate::routes::credentials::MintCredentialsResponse,
         // Remote binding types

@@ -1087,7 +1087,8 @@ impl GcpClientConfigExt for GcpClientConfig {
     }
 }
 
-async fn generate_impersonated_access_token(
+/// Mint an impersonated service-account token together with Google's authoritative expiry.
+pub async fn generate_impersonated_access_token(
     source: &GcpClientConfig,
     config: &GcpImpersonationConfig,
 ) -> Result<crate::gcp::iam::GenerateAccessTokenResponse> {

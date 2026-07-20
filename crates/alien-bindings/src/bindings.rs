@@ -8,9 +8,9 @@
 use crate::error::Result;
 use crate::provider::BindingsProvider;
 use crate::refreshing::{RefreshingKv, RefreshingQueue, RefreshingStorage, RefreshingVault};
-use crate::traits::{BindingsProviderApi, Kv, Queue, Storage, Vault};
 #[cfg(feature = "platform-sdk")]
-use crate::RemoteBindingsProvider;
+use crate::remote::RemoteBindingsProvider;
+use crate::traits::{BindingsProviderApi, Kv, Queue, Storage, Vault};
 use std::collections::HashMap;
 use std::sync::Arc;
 

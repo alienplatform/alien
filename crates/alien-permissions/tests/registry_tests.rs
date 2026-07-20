@@ -4,6 +4,7 @@ use alien_permissions::{get_permission_set, has_permission_set, list_permission_
 fn test_registry_basic_functionality() {
     // Test that the registry contains expected permission sets
     assert!(has_permission_set("storage/data-read"));
+    assert!(has_permission_set("storage/remote-data-write"));
     assert!(has_permission_set("worker/execute"));
     assert!(has_permission_set("build/provision"));
     assert!(has_permission_set("kubernetes-public-endpoint/management"));
@@ -60,6 +61,7 @@ fn test_list_permission_set_ids() {
     // Should contain some expected IDs
     assert!(ids.contains(&"storage/data-read"));
     assert!(ids.contains(&"storage/data-write"));
+    assert!(ids.contains(&"storage/remote-data-write"));
     assert!(ids.contains(&"storage/management"));
     assert!(ids.contains(&"storage/provision"));
     assert!(ids.contains(&"worker/execute"));

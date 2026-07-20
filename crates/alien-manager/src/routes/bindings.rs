@@ -4,19 +4,22 @@
 //! validates the authoritative stack state before it releases the resource's
 //! binding topology together with materialized, short-lived credentials.
 
-use alien_core::{ResourceLifecycle, ResourceStatus, Storage};
-use alien_error::ContextError;
+use alien_core::{
+    BlobStorageBinding, GcsStorageBinding, Platform, ResourceLifecycle, ResourceStatus,
+    S3StorageBinding, Storage, StorageBinding,
+};
+use alien_error::{Context, ContextError, IntoAlienError};
 use axum::{
     extract::{Json, State},
-    http::HeaderMap,
+    http::{header::CACHE_CONTROL, header::PRAGMA, HeaderMap},
     response::{IntoResponse, Response},
     routing::post,
     Router,
 };
-use chrono::{SecondsFormat, Utc};
+use chrono::{DateTime, SecondsFormat, Utc};
 use serde::{Deserialize, Serialize};
 
-use super::{auth, credentials::materialize_response_safe_client_config, AppState};
+use super::{auth, credentials::materialize_remote_storage_client_config, AppState};
 use crate::error::ErrorData;
 use crate::traits::DeploymentRecord;
 
@@ -41,11 +44,24 @@ pub struct ResolveBindingRequest {
 #[serde(rename_all = "camelCase")]
 pub struct ResolveBindingResponse {
     /// Server-selected storage binding configuration.
-    pub binding: serde_json::Value,
+    pub binding: RemoteStorageBinding,
     /// Materialized credentials safe to hand to the caller.
     pub client_config: alien_core::ClientConfig,
     /// Server refresh hint for the returned credentials.
     pub expires_at: String,
+}
+
+/// Storage binding variants supported by the first hosted remote-bindings release.
+#[derive(Serialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
+#[serde(tag = "service", rename_all = "lowercase")]
+pub enum RemoteStorageBinding {
+    /// AWS S3.
+    S3(S3StorageBinding),
+    /// Azure Blob Storage.
+    Blob(BlobStorageBinding),
+    /// Google Cloud Storage.
+    Gcs(GcsStorageBinding),
 }
 
 /// Manual `Debug`: both the binding payload and client configuration can carry
@@ -102,6 +118,14 @@ async fn resolve_binding(
             .into_response();
     }
 
+    if !deployment_status_allows_remote_bindings(&deployment.status) {
+        return ErrorData::bad_request(format!(
+            "Deployment is not operational for remote bindings (status '{}')",
+            deployment.status
+        ))
+        .into_response();
+    }
+
     let binding = match remote_storage_binding(&deployment, &request.resource_id) {
         Ok(binding) => binding,
         Err(error) => return error.into_response(),
@@ -111,33 +135,81 @@ async fn resolve_binding(
         Ok(client_config) => client_config,
         Err(error) => {
             return error
-                .context(ErrorData::InternalError {
-                    message: "Failed to resolve management credentials for remote binding"
-                        .to_string(),
+                .context(ErrorData::RemoteCredentialHandoffFailed {
+                    deployment_id: deployment.id.clone(),
+                    platform: deployment.platform,
                 })
                 .into_response()
         }
     };
-    let client_config = match materialize_response_safe_client_config(resolved).await {
-        Ok(client_config) => client_config,
+    let (client_config, provider_expires_at) =
+        match materialize_remote_storage_client_config(resolved).await {
+            Ok(materialized) => materialized,
+            Err(error) => return error.into_response(),
+        };
+
+    let now = Utc::now();
+    let expires_at = match remote_binding_expiry(provider_expires_at, now) {
+        Ok(expires_at) => expires_at.to_rfc3339_opts(SecondsFormat::Secs, true),
         Err(error) => return error.into_response(),
     };
 
-    let expires_at = (Utc::now() + chrono::Duration::seconds(REMOTE_BINDING_REFRESH_HINT_SECONDS))
-        .to_rfc3339_opts(SecondsFormat::Secs, true);
+    tracing::info!(
+        event = "remote_binding_credentials_issued",
+        deployment_id = %request.deployment_id,
+        resource_id = %request.resource_id,
+        platform = %client_config.platform(),
+        expires_at = %expires_at,
+        "Issued remote Storage credentials"
+    );
 
-    Json(ResolveBindingResponse {
-        binding,
-        client_config,
-        expires_at,
-    })
-    .into_response()
+    (
+        [(CACHE_CONTROL, "no-store"), (PRAGMA, "no-cache")],
+        Json(ResolveBindingResponse {
+            binding,
+            client_config,
+            expires_at,
+        }),
+    )
+        .into_response()
+}
+
+fn deployment_status_allows_remote_bindings(status: &str) -> bool {
+    matches!(
+        status,
+        "running" | "refresh-failed" | "update-pending" | "updating" | "update-failed"
+    )
+}
+
+fn remote_binding_expiry(
+    provider_expires_at: DateTime<Utc>,
+    now: DateTime<Utc>,
+) -> Result<DateTime<Utc>, alien_error::AlienError<ErrorData>> {
+    let maximum = now + chrono::Duration::seconds(REMOTE_BINDING_REFRESH_HINT_SECONDS);
+    let expires_at = provider_expires_at.min(maximum);
+
+    if expires_at <= now {
+        return Err(ErrorData::internal(
+            "Remote Storage credential lease is already expired",
+        ));
+    }
+
+    Ok(expires_at)
 }
 
 fn remote_storage_binding(
     deployment: &DeploymentRecord,
     resource_id: &str,
-) -> Result<serde_json::Value, alien_error::AlienError<ErrorData>> {
+) -> Result<RemoteStorageBinding, alien_error::AlienError<ErrorData>> {
+    if !matches!(
+        deployment.platform,
+        Platform::Aws | Platform::Gcp | Platform::Azure
+    ) {
+        return Err(ErrorData::bad_request(format!(
+            "Remote Storage is not supported for deployment platform '{}'",
+            deployment.platform
+        )));
+    }
     let stack_state = deployment.stack_state.as_ref().ok_or_else(|| {
         ErrorData::bad_request("Deployment has no stack state (not yet provisioned)")
     })?;
@@ -161,11 +233,26 @@ fn remote_storage_binding(
             "Storage resource '{resource_id}' is not running"
         )));
     }
-    resource.remote_binding_params.clone().ok_or_else(|| {
+    let binding = resource.remote_binding_params.clone().ok_or_else(|| {
         ErrorData::bad_request(format!(
             "Storage resource '{resource_id}' is not enabled for remote access"
         ))
-    })
+    })?;
+    let binding: StorageBinding =
+        serde_json::from_value(binding)
+            .into_alien_error()
+            .context(ErrorData::BadRequest {
+                reason: format!("Storage resource '{resource_id}' has an invalid remote binding"),
+            })?;
+    match (deployment.platform, binding) {
+        (Platform::Aws, StorageBinding::S3(binding)) => Ok(RemoteStorageBinding::S3(binding)),
+        (Platform::Gcp, StorageBinding::Gcs(binding)) => Ok(RemoteStorageBinding::Gcs(binding)),
+        (Platform::Azure, StorageBinding::Blob(binding)) => Ok(RemoteStorageBinding::Blob(binding)),
+        _ => Err(ErrorData::bad_request(format!(
+            "Storage resource '{resource_id}' binding does not match deployment platform '{}'",
+            deployment.platform
+        ))),
+    }
 }
 
 #[cfg(test)]
@@ -201,13 +288,17 @@ mod tests {
     }
 
     fn deployment(stack_state: StackState) -> DeploymentRecord {
+        deployment_on_platform(stack_state, Platform::Aws)
+    }
+
+    fn deployment_on_platform(stack_state: StackState, platform: Platform) -> DeploymentRecord {
         DeploymentRecord {
             id: "deployment".to_string(),
             workspace_id: "default".to_string(),
             project_id: "default".to_string(),
             name: "deployment".to_string(),
             deployment_group_id: "group".to_string(),
-            platform: Platform::Aws,
+            platform,
             deployment_protocol_version: 1,
             base_platform: None,
             status: "running".to_string(),
@@ -238,18 +329,82 @@ mod tests {
 
     #[test]
     fn remote_storage_validation_accepts_only_running_frozen_storage_with_binding() {
-        let binding = serde_json::json!({"service": "s3", "bucketName": "files"});
+        let binding = StorageBinding::s3("files");
         let deployment = deployment(stack_state_with_resource(
             Storage::RESOURCE_TYPE.as_ref(),
             Some(ResourceLifecycle::Frozen),
             ResourceStatus::Running,
-            Some(binding.clone()),
+            Some(serde_json::to_value(&binding).unwrap()),
         ));
 
-        assert_eq!(
-            remote_storage_binding(&deployment, "files").unwrap(),
-            binding
+        assert!(matches!(
+            remote_storage_binding(&deployment, "files"),
+            Ok(RemoteStorageBinding::S3(S3StorageBinding { .. }))
+        ));
+    }
+
+    #[test]
+    fn remote_storage_validation_rejects_unsupported_and_mismatched_platforms() {
+        let s3 = serde_json::to_value(StorageBinding::s3("files")).unwrap();
+        let gcs = serde_json::to_value(StorageBinding::gcs("files")).unwrap();
+        let local = deployment_on_platform(
+            stack_state_with_resource(
+                Storage::RESOURCE_TYPE.as_ref(),
+                Some(ResourceLifecycle::Frozen),
+                ResourceStatus::Running,
+                Some(s3.clone()),
+            ),
+            Platform::Local,
         );
+        assert!(remote_storage_binding(&local, "files").is_err());
+
+        let mismatched = deployment(stack_state_with_resource(
+            Storage::RESOURCE_TYPE.as_ref(),
+            Some(ResourceLifecycle::Frozen),
+            ResourceStatus::Running,
+            Some(gcs),
+        ));
+        assert!(remote_storage_binding(&mismatched, "files").is_err());
+    }
+
+    #[test]
+    fn remote_binding_deployment_status_gate_is_post_handoff_only() {
+        for status in [
+            "running",
+            "refresh-failed",
+            "update-pending",
+            "updating",
+            "update-failed",
+        ] {
+            assert!(deployment_status_allows_remote_bindings(status), "{status}");
+        }
+        for status in [
+            "pending",
+            "initial-setup",
+            "provisioning",
+            "delete-pending",
+            "deleting",
+            "delete-failed",
+            "deleted",
+            "error",
+        ] {
+            assert!(
+                !deployment_status_allows_remote_bindings(status),
+                "{status}"
+            );
+        }
+    }
+
+    #[test]
+    fn aws_remote_binding_expiry_uses_provider_expiry_and_rejects_expired_sessions() {
+        let now = DateTime::parse_from_rfc3339("2030-01-01T00:00:00Z")
+            .unwrap()
+            .with_timezone(&Utc);
+        assert_eq!(
+            remote_binding_expiry(now + chrono::Duration::minutes(15), now).unwrap(),
+            now + chrono::Duration::minutes(15)
+        );
+        assert!(remote_binding_expiry(now - chrono::Duration::seconds(1), now).is_err());
     }
 
     #[test]
@@ -294,7 +449,9 @@ mod tests {
     #[test]
     fn resolve_response_debug_redacts_binding_and_credentials() {
         let response = ResolveBindingResponse {
-            binding: serde_json::json!({"bucketName": "sensitive-bucket"}),
+            binding: RemoteStorageBinding::S3(S3StorageBinding {
+                bucket_name: "sensitive-bucket".into(),
+            }),
             client_config: ClientConfig::Aws(Box::new(alien_core::AwsClientConfig {
                 account_id: "123456789012".to_string(),
                 region: "us-east-1".to_string(),

@@ -204,6 +204,13 @@ export function createFactories(getAddon: () => NativeAddon): Factories {
 /** Build the remote-only storage factory around one native bindings handle. */
 export function createRemoteStorageFactory(bindings: RawBindingsHandle) {
   const getBindings = async () => bindings
-  return (name: string): RemoteStorage =>
-    makeRemoteStorage(lazyHandle(getBindings, name, (b, n) => b.storage(n)))
+  const storages = new Map<string, RemoteStorage>()
+  return (name: string): RemoteStorage => {
+    let storage = storages.get(name)
+    if (!storage) {
+      storage = makeRemoteStorage(lazyHandle(getBindings, name, (b, n) => b.storage(n)))
+      storages.set(name, storage)
+    }
+    return storage
+  }
 }

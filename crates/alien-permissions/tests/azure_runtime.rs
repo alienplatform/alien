@@ -42,6 +42,41 @@ fn test_azure_predefined_grant_plan(
 }
 
 #[test]
+fn remote_storage_data_write_is_scoped_to_the_blob_container() {
+    let generator = AzureRuntimePermissionsGenerator::new();
+    let permission_set =
+        get_permission_set("storage/remote-data-write").expect("permission set exists");
+    let context = create_test_context();
+
+    let grant_plan = generator
+        .generate_grant_plan(permission_set, BindingTarget::Resource, &context)
+        .expect("remote Storage grant plan should generate");
+
+    assert_eq!(grant_plan.custom_roles.len(), 1);
+    assert_eq!(grant_plan.bindings.len(), 1);
+    assert!(matches!(
+        grant_plan.bindings[0].role_definition,
+        AzureRoleDefinitionRef::Custom { .. }
+    ));
+    assert_eq!(
+        grant_plan.bindings[0].scope,
+        "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-observability-prod/providers/Microsoft.Storage/storageAccounts/stcxpaymentsprod/blobServices/default/containers/my-stack-payments-data"
+    );
+    assert!(grant_plan.custom_roles[0]
+        .role_definition
+        .actions
+        .is_empty());
+    assert_eq!(
+        grant_plan.custom_roles[0].role_definition.data_actions,
+        vec![
+            "Microsoft.Storage/storageAccounts/blobServices/containers/blobs/delete",
+            "Microsoft.Storage/storageAccounts/blobServices/containers/blobs/read",
+            "Microsoft.Storage/storageAccounts/blobServices/containers/blobs/write",
+        ]
+    );
+}
+
+#[test]
 fn test_azure_custom_grant_plan() {
     let generator = AzureRuntimePermissionsGenerator::new();
     let permission_set = create_azure_custom_permission_set();

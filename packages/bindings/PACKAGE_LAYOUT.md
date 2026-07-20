@@ -48,6 +48,12 @@ added:
 Remote `Bindings` deliberately exposes no `kv`, `queue`, or `vault` methods.
 Its Storage handle deliberately excludes copy and signed URLs.
 
+Remote access is a trusted-backend API. Its Alien API token and short-lived
+provider credentials must never be shipped to a browser or other untrusted
+client. v0 accepts only Running, Frozen, remote-enabled S3, GCS, and Azure Blob
+resources. The customer setup grants the deployment management identity the
+five public object operations on each opted-in bucket or container.
+
 These live only on the Rust `BindingsProvider` (manager, controllers, tooling,
 remote bindings) and are never part of an app-facing surface.
 
@@ -115,15 +121,18 @@ MAY depend on:
 
 ## Behavior contract
 
-- Importing the package and constructing any factory (`storage("x")`, `kv("y")`, …)
+- Importing the package and constructing any environment factory (`storage("x")`, `kv("y")`, …)
   requires no deployment and no cloud credentials. Construction never performs I/O.
 - The first operation against a binding that has no `ALIEN_<NAME>_BINDING` in the
   environment throws `BindingNotConfiguredError` (code `BINDING_NOT_CONFIGURED`),
   and the error names the missing env var `ALIEN_<NAME>_BINDING` in its context.
 - `Bindings.forRemoteDeployment` forwards only the deployment ID, token, and
-  optional Alien API base URL. It retains one native bindings handle, resolves
-  each named Storage handle lazily, and translates native errors to
-  `AlienError`.
+  optional Alien API base URL. This async constructor loads the native addon and
+  discovers the assigned manager. It retains one native bindings handle,
+  resolves and caches each named Storage handle lazily, refreshes provider
+  credentials without replacing that handle, periodically rediscovers manager
+  assignment, and translates native errors to `AlienError`. Rotating the Alien
+  API token requires constructing a new `Bindings` value.
 
 ## Status
 

@@ -612,6 +612,15 @@ async fn post_mint(
     bearer: Option<&str>,
     body: serde_json::Value,
 ) -> (StatusCode, serde_json::Value) {
+    let (status, _, json) = post_mint_with_headers(fixture, bearer, body).await;
+    (status, json)
+}
+
+async fn post_mint_with_headers(
+    fixture: &Fixture,
+    bearer: Option<&str>,
+    body: serde_json::Value,
+) -> (StatusCode, axum::http::HeaderMap, serde_json::Value) {
     let router = alien_manager::routes::credentials::router().with_state(fixture.state.clone());
 
     let mut req = Request::builder()
@@ -628,13 +637,14 @@ async fn post_mint(
         .unwrap();
     let response = router.oneshot(request).await.unwrap();
     let status = response.status();
+    let headers = response.headers().clone();
     let bytes = to_bytes(response.into_body(), 1024 * 1024).await.unwrap();
     let json = if bytes.is_empty() {
         serde_json::Value::Null
     } else {
         serde_json::from_slice(&bytes).unwrap_or(serde_json::Value::Null)
     };
-    (status, json)
+    (status, headers, json)
 }
 
 async fn remote_binding_fixture() -> (Fixture, Arc<AtomicUsize>) {
@@ -695,7 +705,7 @@ async fn post_resolve_binding(
     fixture: &Fixture,
     bearer: &str,
     body: serde_json::Value,
-) -> (StatusCode, serde_json::Value) {
+) -> (StatusCode, axum::http::HeaderMap, serde_json::Value) {
     let router = alien_manager::routes::bindings::router().with_state(fixture.state.clone());
     let request = Request::builder()
         .method("POST")
@@ -706,9 +716,10 @@ async fn post_resolve_binding(
         .unwrap();
     let response = router.oneshot(request).await.unwrap();
     let status = response.status();
+    let headers = response.headers().clone();
     let bytes = to_bytes(response.into_body(), 1024 * 1024).await.unwrap();
     let json = serde_json::from_slice(&bytes).unwrap_or(serde_json::Value::Null);
-    (status, json)
+    (status, headers, json)
 }
 
 fn mint_body(deployment_id: &str) -> serde_json::Value {
@@ -723,7 +734,7 @@ fn mint_body(deployment_id: &str) -> serde_json::Value {
 async fn remote_binding_route_validates_server_state_before_resolving_credentials() {
     let (fixture, calls) = remote_binding_fixture().await;
 
-    let (status, _) = post_resolve_binding(
+    let (status, _, _) = post_resolve_binding(
         &fixture,
         &fixture.token_a,
         serde_json::json!({
@@ -735,7 +746,7 @@ async fn remote_binding_route_validates_server_state_before_resolving_credential
     assert_eq!(status, StatusCode::BAD_REQUEST);
     assert_eq!(calls.load(Ordering::SeqCst), 0);
 
-    let (status, _) = post_resolve_binding(
+    let (status, _, _) = post_resolve_binding(
         &fixture,
         &fixture.token_a,
         serde_json::json!({
@@ -748,7 +759,7 @@ async fn remote_binding_route_validates_server_state_before_resolving_credential
     assert!(status.is_client_error());
     assert_eq!(calls.load(Ordering::SeqCst), 0);
 
-    let (status, json) = post_resolve_binding(
+    let (status, headers, json) = post_resolve_binding(
         &fixture,
         &fixture.token_a,
         serde_json::json!({
@@ -758,6 +769,8 @@ async fn remote_binding_route_validates_server_state_before_resolving_credential
     )
     .await;
     assert_eq!(status, StatusCode::OK, "body = {json:#}");
+    assert_eq!(headers.get(header::CACHE_CONTROL).unwrap(), "no-store");
+    assert_eq!(headers.get(header::PRAGMA).unwrap(), "no-cache");
     assert_eq!(calls.load(Ordering::SeqCst), 1);
     assert_eq!(json["binding"]["service"], "s3");
     assert_eq!(json["binding"]["bucketName"], "remote-files");
@@ -782,7 +795,7 @@ async fn remote_binding_route_denies_viewer_before_resolving_credentials() {
     )
     .await;
 
-    let (status, _) = post_resolve_binding(
+    let (status, _, _) = post_resolve_binding(
         &fixture,
         &viewer_token,
         serde_json::json!({
@@ -802,7 +815,7 @@ async fn remote_binding_route_denies_viewer_before_resolving_credentials() {
 #[tokio::test]
 async fn deployment_token_for_its_deployment_mints_200() {
     let fixture = impersonation_fixture().await;
-    let (status, json) = post_mint(
+    let (status, headers, json) = post_mint_with_headers(
         &fixture,
         Some(&fixture.token_a),
         mint_body(&fixture.deployment_a),
@@ -810,6 +823,8 @@ async fn deployment_token_for_its_deployment_mints_200() {
     .await;
 
     assert_eq!(status, StatusCode::OK, "body = {json:#}");
+    assert_eq!(headers.get(header::CACHE_CONTROL).unwrap(), "no-store");
+    assert_eq!(headers.get(header::PRAGMA).unwrap(), "no-cache");
     // Response shape.
     assert!(json["clientConfig"].is_object(), "clientConfig present");
     assert_eq!(
@@ -835,10 +850,57 @@ async fn deployment_token_for_other_deployment_is_forbidden() {
 }
 
 #[tokio::test]
+async fn deployment_viewer_cannot_mint_credentials() {
+    let fixture = impersonation_fixture().await;
+    let viewer_token = mint_token(
+        &fixture.state.token_store,
+        TokenType::Deployment,
+        "ax_deploy_",
+        None,
+        None,
+    )
+    .await;
+
+    let (status, json) = post_mint(
+        &fixture,
+        Some(&viewer_token),
+        mint_body(&fixture.deployment_a),
+    )
+    .await;
+    assert_eq!(status, StatusCode::FORBIDDEN, "body = {json:#}");
+}
+
+#[tokio::test]
 async fn missing_bearer_is_unauthorized() {
     let fixture = impersonation_fixture().await;
     let (status, _) = post_mint(&fixture, None, mint_body(&fixture.deployment_a)).await;
     assert_eq!(status, StatusCode::UNAUTHORIZED);
+}
+
+#[tokio::test]
+async fn legacy_unscoped_credential_resolution_route_is_not_mounted() {
+    let fixture = impersonation_fixture().await;
+    let router = alien_manager::routes::credentials::router().with_state(fixture.state.clone());
+    let request = Request::builder()
+        .method("POST")
+        .uri("/v1/resolve-credentials")
+        .header(header::CONTENT_TYPE, "application/json")
+        .header(
+            header::AUTHORIZATION,
+            format!("Bearer {}", fixture.admin_token),
+        )
+        .body(Body::from(
+            serde_json::to_vec(&serde_json::json!({
+                "deploymentId": fixture.deployment_a,
+            }))
+            .unwrap(),
+        ))
+        .unwrap();
+
+    assert_eq!(
+        router.oneshot(request).await.unwrap().status(),
+        StatusCode::NOT_FOUND
+    );
 }
 
 #[tokio::test]
@@ -855,10 +917,8 @@ async fn garbage_bearer_is_unauthorized() {
 
 #[tokio::test]
 async fn deployment_group_token_can_mint_for_deployment_in_its_group() {
-    // Documents the inherited grant: a deployment-group-scoped (`ax_dg_`)
-    // token is not pinned to one deployment id like a deployment token is —
-    // `can_act_on_deployment` (== `can_read_deployment`) passes for any
-    // deployment whose deployment_group_id matches the token's scope.
+    // A deployment-group deployer has write authority for deployments in its
+    // own group, so it may mint for those deployments.
     let fixture = impersonation_fixture().await;
     let (status, json) = post_mint(
         &fixture,

@@ -40,8 +40,16 @@ pub trait Authz: Send + Sync {
     /// Whether a caller may resolve a remote resource binding for a deployment.
     /// This is deliberately separate from read access because the response
     /// includes short-lived credentials for the deployment's management identity.
-    fn can_resolve_remote_bindings(&self, subject: &Subject, deployment: &DeploymentRecord)
-        -> bool;
+    fn can_resolve_remote_bindings(
+        &self,
+        _subject: &Subject,
+        _deployment: &DeploymentRecord,
+    ) -> bool {
+        // Adding a credential-bearing endpoint must not silently grant access
+        // in downstream Authz implementations that have not made an explicit
+        // policy decision for it.
+        false
+    }
     fn can_delete_deployment(&self, subject: &Subject, deployment: &DeploymentRecord) -> bool;
 
     // -- Deployment groups -------------------------------------------------

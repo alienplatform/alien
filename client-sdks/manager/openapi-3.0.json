@@ -4,7 +4,7 @@
     "title": "Alien Manager API",
     "description": "Control plane for Alien applications. Manages deployments, releases, commands, and telemetry.",
     "license": {
-      "name": ""
+      "name": "FSL-1.1-Apache-2.0"
     },
     "version": "1.0.0"
   },
@@ -27,6 +27,41 @@
             }
           }
         }
+      }
+    },
+    "/v1/bindings/resolve": {
+      "post": {
+        "tags": [
+          "bindings"
+        ],
+        "operationId": "resolve_binding",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ResolveBindingRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Remote binding resolved successfully",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ResolveBindingResponse"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ]
       }
     },
     "/v1/commands": {
@@ -462,6 +497,41 @@
         }
       }
     },
+    "/v1/credentials/mint": {
+      "post": {
+        "tags": [
+          "credentials"
+        ],
+        "operationId": "mint_credentials",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/MintCredentialsRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Credentials minted successfully",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MintCredentialsResponse"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ]
+      }
+    },
     "/v1/deployment-groups": {
       "get": {
         "tags": [
@@ -611,6 +681,15 @@
             "name": "deploymentGroupId",
             "in": "query",
             "description": "Filter by deployment group ID",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "name",
+            "in": "query",
+            "description": "Filter by exact deployment name. Requires deploymentGroupId unless the token is scoped to a deployment group.",
             "required": false,
             "schema": {
               "type": "string"
@@ -1052,41 +1131,6 @@
         ]
       }
     },
-    "/v1/resolve-credentials": {
-      "post": {
-        "tags": [
-          "credentials"
-        ],
-        "operationId": "resolve_credentials",
-        "requestBody": {
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/ResolveCredentialsRequest"
-              }
-            }
-          },
-          "required": true
-        },
-        "responses": {
-          "200": {
-            "description": "Credentials resolved successfully",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ResolveCredentialsResponse"
-                }
-              }
-            }
-          }
-        },
-        "security": [
-          {
-            "bearer": []
-          }
-        ]
-      }
-    },
     "/v1/stack/import": {
       "post": {
         "tags": [
@@ -1312,15 +1356,23 @@
       "AcquireRequest": {
         "type": "object",
         "required": [
-          "session"
+          "session",
+          "deploymentModel"
         ],
         "properties": {
+          "acquireMode": {
+            "type": "string",
+            "nullable": true
+          },
           "deploymentIds": {
             "type": "array",
             "items": {
               "type": "string"
             },
             "nullable": true
+          },
+          "deploymentModel": {
+            "$ref": "#/components/schemas/DeploymentModel"
           },
           "limit": {
             "type": "integer",
@@ -1336,6 +1388,10 @@
           },
           "session": {
             "type": "string"
+          },
+          "setupMethod": {
+            "type": "string",
+            "nullable": true
           },
           "statuses": {
             "type": "array",
@@ -1375,11 +1431,34 @@
           "deploymentId"
         ],
         "properties": {
+          "capabilities": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/OperatorCapabilityReport"
+            }
+          },
           "currentState": {
             "description": "Current deployment state as reported by the agent.\nWhen present, the manager updates the deployment record to reflect\nthe agent's progress (status, stack_state, etc.)."
           },
           "deploymentId": {
             "type": "string"
+          },
+          "observedInventoryBatches": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ObservedInventoryBatch"
+            }
+          },
+          "operatorVersion": {
+            "type": "string",
+            "nullable": true
+          },
+          "resourceHeartbeats": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ResourceHeartbeat"
+            },
+            "description": "Managed resource status samples emitted by pull-mode deployment steps."
           }
         }
       },
@@ -1388,7 +1467,7 @@
         "properties": {
           "commandsUrl": {
             "type": "string",
-            "description": "Public URL for the commands API. Cloud-deployed workers use this\nto poll for pending commands instead of the agent's local sync URL.",
+            "description": "Public URL for the commands API. Operators and app-owned receivers use\nit to lease pending commands instead of the agent's local sync URL.",
             "nullable": true
           },
           "currentState": {
@@ -1571,6 +1650,69 @@
           }
         }
       },
+      "AuroraPostgresHeartbeatData": {
+        "type": "object",
+        "required": [
+          "status",
+          "clusterIdentifier",
+          "neverPauses"
+        ],
+        "properties": {
+          "clusterIdentifier": {
+            "type": "string"
+          },
+          "endpoint": {
+            "type": "string",
+            "nullable": true
+          },
+          "engineVersion": {
+            "type": "string",
+            "nullable": true
+          },
+          "neverPauses": {
+            "type": "boolean",
+            "description": "True when a `minCapacity: 0` instance has not reached 0 ACU over the observation\nwindow — it is silently paying always-on prices (auto-pause verification)."
+          },
+          "serverlessCapacity": {
+            "type": "number",
+            "format": "double",
+            "description": "Latest sampled `ServerlessDatabaseCapacity` (ACU).",
+            "nullable": true
+          },
+          "status": {
+            "$ref": "#/components/schemas/PostgresHeartbeatStatus"
+          }
+        }
+      },
+      "AwsClientConfig": {
+        "type": "object",
+        "description": "AWS client configuration",
+        "required": [
+          "accountId",
+          "region",
+          "credentials"
+        ],
+        "properties": {
+          "accountId": {
+            "type": "string",
+            "description": "The AWS Account ID."
+          },
+          "credentials": {
+            "$ref": "#/components/schemas/AwsCredentials",
+            "description": "AWS authentication credentials."
+          },
+          "region": {
+            "type": "string",
+            "description": "The AWS region."
+          },
+          "serviceOverrides": {
+            "$ref": "#/components/schemas/AwsServiceOverrides",
+            "description": "Service endpoint overrides for testing",
+            "nullable": true
+          }
+        },
+        "additionalProperties": false
+      },
       "AwsCodeBuildHeartbeatData": {
         "type": "object",
         "required": [
@@ -1717,6 +1859,136 @@
           }
         }
       },
+      "AwsCredentials": {
+        "oneOf": [
+          {
+            "type": "object",
+            "description": "Static direct access keys.",
+            "required": [
+              "access_key_id",
+              "secret_access_key",
+              "type"
+            ],
+            "properties": {
+              "access_key_id": {
+                "type": "string",
+                "description": "AWS Access Key ID"
+              },
+              "secret_access_key": {
+                "type": "string",
+                "description": "AWS Secret Access Key"
+              },
+              "session_token": {
+                "type": "string",
+                "description": "Optional AWS Session Token",
+                "nullable": true
+              },
+              "type": {
+                "type": "string",
+                "enum": [
+                  "accessKeys"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "description": "Temporary AWS session credentials with an expiration time.",
+            "required": [
+              "access_key_id",
+              "secret_access_key",
+              "session_token",
+              "expires_at",
+              "type"
+            ],
+            "properties": {
+              "access_key_id": {
+                "type": "string",
+                "description": "AWS Access Key ID"
+              },
+              "expires_at": {
+                "type": "string",
+                "description": "Credential expiration as an RFC3339 timestamp"
+              },
+              "secret_access_key": {
+                "type": "string",
+                "description": "AWS Secret Access Key"
+              },
+              "session_token": {
+                "type": "string",
+                "description": "AWS Session Token"
+              },
+              "type": {
+                "type": "string",
+                "enum": [
+                  "sessionCredentials"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "description": "AWS Instance Metadata Service credentials.",
+            "required": [
+              "type"
+            ],
+            "properties": {
+              "endpoint": {
+                "type": "string",
+                "description": "Optional IMDS endpoint override",
+                "nullable": true
+              },
+              "type": {
+                "type": "string",
+                "enum": [
+                  "imds"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "description": "AWS profile credentials loaded via the AWS CLI.",
+            "required": [
+              "name",
+              "type"
+            ],
+            "properties": {
+              "name": {
+                "type": "string",
+                "description": "AWS profile name"
+              },
+              "type": {
+                "type": "string",
+                "enum": [
+                  "profile"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "description": "Web Identity Token for OIDC authentication",
+            "required": [
+              "config",
+              "type"
+            ],
+            "properties": {
+              "config": {
+                "$ref": "#/components/schemas/AwsWebIdentityConfig",
+                "description": "Web identity configuration"
+              },
+              "type": {
+                "type": "string",
+                "enum": [
+                  "webIdentity"
+                ]
+              }
+            }
+          }
+        ],
+        "description": "Supported AWS authentication methods"
+      },
       "AwsCustomCertificateConfig": {
         "type": "object",
         "required": [
@@ -1733,7 +2005,6 @@
         "required": [
           "status",
           "horizonClusterId",
-          "daemonName",
           "horizonStatus",
           "capacityGroup",
           "desiredMachines",
@@ -1798,6 +2069,10 @@
           },
           "latestUpdateTimestamp": {
             "type": "string"
+          },
+          "observedImage": {
+            "type": "string",
+            "nullable": true
           },
           "status": {
             "$ref": "#/components/schemas/WorkloadHeartbeatStatus"
@@ -2404,6 +2679,23 @@
           }
         }
       },
+      "AwsServiceOverrides": {
+        "type": "object",
+        "description": "Service endpoint overrides for testing AWS services",
+        "required": [
+          "endpoints"
+        ],
+        "properties": {
+          "endpoints": {
+            "type": "object",
+            "description": "Override endpoints for specific AWS services\nKey is the service name (e.g., \"lambda\", \"s3\"), value is the base URL",
+            "additionalProperties": {
+              "type": "string"
+            }
+          }
+        },
+        "additionalProperties": false
+      },
       "AwsSqsQueueHeartbeatData": {
         "type": "object",
         "required": [
@@ -2591,6 +2883,36 @@
           }
         }
       },
+      "AwsWebIdentityConfig": {
+        "type": "object",
+        "description": "Configuration for AWS Web Identity Token authentication",
+        "required": [
+          "roleArn",
+          "webIdentityTokenFile"
+        ],
+        "properties": {
+          "durationSeconds": {
+            "type": "integer",
+            "format": "int32",
+            "description": "Optional duration for the assumed role credentials (in seconds)",
+            "nullable": true
+          },
+          "roleArn": {
+            "type": "string",
+            "description": "The ARN of the role to assume"
+          },
+          "sessionName": {
+            "type": "string",
+            "description": "Optional session name for the assumed role session",
+            "nullable": true
+          },
+          "webIdentityTokenFile": {
+            "type": "string",
+            "description": "The path to the web identity token file"
+          }
+        },
+        "additionalProperties": false
+      },
       "AzureBlobStorageHeartbeatData": {
         "type": "object",
         "required": [
@@ -2719,6 +3041,40 @@
             "nullable": true
           }
         }
+      },
+      "AzureClientConfig": {
+        "type": "object",
+        "description": "Azure client configuration",
+        "required": [
+          "subscriptionId",
+          "tenantId",
+          "credentials"
+        ],
+        "properties": {
+          "credentials": {
+            "$ref": "#/components/schemas/AzureCredentials",
+            "description": "Azure authentication credentials."
+          },
+          "region": {
+            "type": "string",
+            "description": "Azure region for resources.",
+            "nullable": true
+          },
+          "serviceOverrides": {
+            "$ref": "#/components/schemas/AzureServiceOverrides",
+            "description": "Service endpoint overrides for testing",
+            "nullable": true
+          },
+          "subscriptionId": {
+            "type": "string",
+            "description": "The Azure Subscription ID where resources will be deployed."
+          },
+          "tenantId": {
+            "type": "string",
+            "description": "The customer's Azure Tenant ID."
+          }
+        },
+        "additionalProperties": false
       },
       "AzureComputeClusterHeartbeatData": {
         "type": "object",
@@ -3113,6 +3469,169 @@
           }
         }
       },
+      "AzureCredentials": {
+        "oneOf": [
+          {
+            "type": "object",
+            "description": "Service principal with client secret",
+            "required": [
+              "client_id",
+              "client_secret",
+              "type"
+            ],
+            "properties": {
+              "client_id": {
+                "type": "string",
+                "description": "The client ID (application ID)"
+              },
+              "client_secret": {
+                "type": "string",
+                "description": "The client secret"
+              },
+              "type": {
+                "type": "string",
+                "enum": [
+                  "servicePrincipal"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "description": "Direct access token",
+            "required": [
+              "token",
+              "type"
+            ],
+            "properties": {
+              "token": {
+                "type": "string",
+                "description": "The bearer token to use for authentication"
+              },
+              "type": {
+                "type": "string",
+                "enum": [
+                  "accessToken"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "description": "Short-lived bearer tokens keyed by their exact Azure OAuth scope.\n\nThis is the only Azure credential form returned by the credential mint\nendpoint. It contains no refreshable source credential and must not be\nused for a scope that is absent from the map.",
+            "required": [
+              "tokens",
+              "type"
+            ],
+            "properties": {
+              "tokens": {
+                "type": "object",
+                "description": "Exact scope-to-token map. Minted configs include only the Azure\nmanagement, storage, Key Vault, and Service Bus scopes used by\nAlien bindings.",
+                "additionalProperties": {
+                  "type": "string"
+                }
+              },
+              "type": {
+                "type": "string",
+                "enum": [
+                  "scopedAccessTokens"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "description": "Azure VM IMDS managed identity.",
+            "required": [
+              "client_id",
+              "type"
+            ],
+            "properties": {
+              "client_id": {
+                "type": "string",
+                "description": "The client ID of the user-assigned managed identity"
+              },
+              "identity_endpoint": {
+                "type": "string",
+                "description": "Optional IMDS endpoint override",
+                "nullable": true
+              },
+              "type": {
+                "type": "string",
+                "enum": [
+                  "vmManagedIdentity"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "description": "Azure AD Workload Identity (federated identity)",
+            "required": [
+              "client_id",
+              "tenant_id",
+              "federated_token_file",
+              "authority_host",
+              "type"
+            ],
+            "properties": {
+              "authority_host": {
+                "type": "string",
+                "description": "The authority host URL"
+              },
+              "client_id": {
+                "type": "string",
+                "description": "The client ID of the managed identity or application"
+              },
+              "federated_token_file": {
+                "type": "string",
+                "description": "Path to the federated token file"
+              },
+              "tenant_id": {
+                "type": "string",
+                "description": "The tenant ID for authentication"
+              },
+              "type": {
+                "type": "string",
+                "enum": [
+                  "workloadIdentity"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "description": "Azure Managed Identity (Container Apps / App Service)\nUses IDENTITY_ENDPOINT + IDENTITY_HEADER injected by the platform",
+            "required": [
+              "client_id",
+              "identity_endpoint",
+              "identity_header",
+              "type"
+            ],
+            "properties": {
+              "client_id": {
+                "type": "string",
+                "description": "The client ID of the user-assigned managed identity"
+              },
+              "identity_endpoint": {
+                "type": "string",
+                "description": "The identity endpoint URL (from IDENTITY_ENDPOINT env var)"
+              },
+              "identity_header": {
+                "type": "string",
+                "description": "The identity header secret (from IDENTITY_HEADER env var)"
+              },
+              "type": {
+                "type": "string",
+                "enum": [
+                  "managedIdentity"
+                ]
+              }
+            }
+          }
+        ],
+        "description": "Represents Azure authentication credentials"
+      },
       "AzureCustomCertificateConfig": {
         "type": "object",
         "required": [
@@ -3133,7 +3652,6 @@
         "required": [
           "status",
           "horizonClusterId",
-          "daemonName",
           "horizonStatus",
           "capacityGroup",
           "desiredMachines",
@@ -3199,6 +3717,10 @@
           "latestUpdateTimestamp": {
             "type": "string"
           },
+          "observedImage": {
+            "type": "string",
+            "nullable": true
+          },
           "status": {
             "$ref": "#/components/schemas/WorkloadHeartbeatStatus"
           },
@@ -3206,6 +3728,29 @@
             "type": "integer",
             "format": "int32",
             "minimum": 0
+          }
+        }
+      },
+      "AzureFlexibleServerPostgresHeartbeatData": {
+        "type": "object",
+        "required": [
+          "status",
+          "serverName"
+        ],
+        "properties": {
+          "serverName": {
+            "type": "string"
+          },
+          "state": {
+            "type": "string",
+            "nullable": true
+          },
+          "status": {
+            "$ref": "#/components/schemas/PostgresHeartbeatStatus"
+          },
+          "version": {
+            "type": "string",
+            "nullable": true
           }
         }
       },
@@ -3788,6 +4333,23 @@
           }
         }
       },
+      "AzureServiceOverrides": {
+        "type": "object",
+        "description": "Service endpoint overrides for testing Azure services",
+        "required": [
+          "endpoints"
+        ],
+        "properties": {
+          "endpoints": {
+            "type": "object",
+            "description": "Override endpoints for specific Azure services\nKey is the service name (e.g., \"management\", \"storage\", \"containerApps\"), value is the base URL",
+            "additionalProperties": {
+              "type": "string"
+            }
+          }
+        },
+        "additionalProperties": false
+      },
       "AzureStorageAccountEndpoints": {
         "type": "object",
         "properties": {
@@ -4013,6 +4575,10 @@
             "type": "string",
             "nullable": true
           },
+          "privateEndpointSubnetName": {
+            "type": "string",
+            "nullable": true
+          },
           "privateSubnetName": {
             "type": "string",
             "nullable": true
@@ -4072,6 +4638,48 @@
           }
         },
         "additionalProperties": true
+      },
+      "BindingValue_String": {
+        "oneOf": [
+          {
+            "type": "string"
+          },
+          {
+            "type": "object",
+            "description": "A Kubernetes Secret reference (must come before Expression)",
+            "required": [
+              "secretRef"
+            ],
+            "properties": {
+              "secretRef": {
+                "$ref": "#/components/schemas/SecretReference"
+              }
+            }
+          },
+          {
+            "$ref": "#/components/schemas/Value",
+            "description": "A template expression (used by IaC template generators)"
+          }
+        ],
+        "description": "Represents a value that can be either a concrete value, a template expression,\nor a reference to a Kubernetes Secret"
+      },
+      "BlobStorageBinding": {
+        "type": "object",
+        "description": "Azure Blob Storage binding configuration",
+        "required": [
+          "accountName",
+          "containerName"
+        ],
+        "properties": {
+          "accountName": {
+            "$ref": "#/components/schemas/BindingValue_String",
+            "description": "The name of the storage account"
+          },
+          "containerName": {
+            "$ref": "#/components/schemas/BindingValue_String",
+            "description": "The name of the container"
+          }
+        }
       },
       "BodySpec": {
         "oneOf": [
@@ -4251,6 +4859,136 @@
           }
         }
       },
+      "ClientConfig": {
+        "oneOf": [
+          {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/AwsClientConfig"
+              },
+              {
+                "type": "object",
+                "required": [
+                  "platform"
+                ],
+                "properties": {
+                  "platform": {
+                    "type": "string",
+                    "enum": [
+                      "aws"
+                    ]
+                  }
+                }
+              }
+            ]
+          },
+          {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/GcpClientConfig"
+              },
+              {
+                "type": "object",
+                "required": [
+                  "platform"
+                ],
+                "properties": {
+                  "platform": {
+                    "type": "string",
+                    "enum": [
+                      "gcp"
+                    ]
+                  }
+                }
+              }
+            ]
+          },
+          {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/AzureClientConfig"
+              },
+              {
+                "type": "object",
+                "required": [
+                  "platform"
+                ],
+                "properties": {
+                  "platform": {
+                    "type": "string",
+                    "enum": [
+                      "azure"
+                    ]
+                  }
+                }
+              }
+            ]
+          },
+          {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/KubernetesClientConfig"
+              },
+              {
+                "type": "object",
+                "required": [
+                  "platform"
+                ],
+                "properties": {
+                  "platform": {
+                    "type": "string",
+                    "enum": [
+                      "kubernetes"
+                    ]
+                  }
+                }
+              }
+            ]
+          },
+          {
+            "type": "object",
+            "required": [
+              "kubernetes",
+              "cloud",
+              "platform"
+            ],
+            "properties": {
+              "cloud": {
+                "type": "object"
+              },
+              "kubernetes": {
+                "$ref": "#/components/schemas/KubernetesClientConfig"
+              },
+              "platform": {
+                "type": "string",
+                "enum": [
+                  "kubernetesCloud"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "required": [
+              "state_directory",
+              "platform"
+            ],
+            "properties": {
+              "platform": {
+                "type": "string",
+                "enum": [
+                  "local"
+                ]
+              },
+              "state_directory": {
+                "type": "string",
+                "description": "State directory for local resources and deployment state"
+              }
+            }
+          }
+        ],
+        "description": "Configuration for different cloud platform clients"
+      },
       "CommandPayloadResponse": {
         "type": "object",
         "description": "Payload response containing params and response data from KV",
@@ -4344,7 +5082,8 @@
         "required": [
           "commandId",
           "state",
-          "attempt"
+          "attempt",
+          "target"
         ],
         "properties": {
           "attempt": {
@@ -4365,8 +5104,39 @@
           "state": {
             "$ref": "#/components/schemas/CommandState",
             "description": "Current command state"
+          },
+          "target": {
+            "$ref": "#/components/schemas/CommandTarget",
+            "description": "The specific resource this command is addressed to"
           }
         }
+      },
+      "CommandTarget": {
+        "type": "object",
+        "description": "Identifies the specific resource a command is addressed to.",
+        "required": [
+          "resourceId",
+          "resourceType"
+        ],
+        "properties": {
+          "resourceId": {
+            "type": "string",
+            "description": "The resource ID within the deployment's stack (e.g. a Worker/Container/Daemon id)."
+          },
+          "resourceType": {
+            "$ref": "#/components/schemas/CommandTargetType",
+            "description": "The kind of resource `resource_id` refers to."
+          }
+        }
+      },
+      "CommandTargetType": {
+        "type": "string",
+        "description": "The kind of command-capable resource a command targets.",
+        "enum": [
+          "worker",
+          "container",
+          "daemon"
+        ]
       },
       "CommandsInfo": {
         "type": "object",
@@ -4441,6 +5211,10 @@
             "type": "integer",
             "format": "int32",
             "minimum": 0
+          },
+          "drainProgress": {
+            "$ref": "#/components/schemas/ComputeDrainProgress",
+            "nullable": true
           },
           "groupId": {
             "type": "string"
@@ -4562,6 +5336,27 @@
           {
             "allOf": [
               {
+                "$ref": "#/components/schemas/MachinesComputeClusterHeartbeatData"
+              },
+              {
+                "type": "object",
+                "required": [
+                  "backend"
+                ],
+                "properties": {
+                  "backend": {
+                    "type": "string",
+                    "enum": [
+                      "machines"
+                    ]
+                  }
+                }
+              }
+            ]
+          },
+          {
+            "allOf": [
+              {
                 "$ref": "#/components/schemas/LocalComputeClusterHeartbeatData"
               },
               {
@@ -4613,6 +5408,166 @@
           },
           "stale": {
             "type": "boolean"
+          }
+        }
+      },
+      "ComputeDrainBlocker": {
+        "type": "object",
+        "required": [
+          "workloadName",
+          "replicaId",
+          "schedulingMode",
+          "state",
+          "reason"
+        ],
+        "properties": {
+          "reason": {
+            "type": "string"
+          },
+          "replicaId": {
+            "type": "string"
+          },
+          "schedulingMode": {
+            "type": "string"
+          },
+          "state": {
+            "type": "string"
+          },
+          "workloadName": {
+            "type": "string"
+          }
+        }
+      },
+      "ComputeDrainProgress": {
+        "type": "object",
+        "required": [
+          "machineId",
+          "status",
+          "replicaCount",
+          "force",
+          "stalled"
+        ],
+        "properties": {
+          "blockers": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ComputeDrainBlocker"
+            }
+          },
+          "drainDeadlineAt": {
+            "type": "string",
+            "nullable": true
+          },
+          "drainRequestedAt": {
+            "type": "string",
+            "nullable": true
+          },
+          "drainedAt": {
+            "type": "string",
+            "nullable": true
+          },
+          "force": {
+            "type": "boolean"
+          },
+          "machineId": {
+            "type": "string"
+          },
+          "replicaCount": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "stalled": {
+            "type": "boolean"
+          },
+          "status": {
+            "$ref": "#/components/schemas/ComputeDrainProgressStatus"
+          }
+        }
+      },
+      "ComputeDrainProgressStatus": {
+        "type": "string",
+        "enum": [
+          "draining",
+          "drained",
+          "terminating"
+        ]
+      },
+      "ComputePoolSelection": {
+        "oneOf": [
+          {
+            "type": "object",
+            "description": "Fixed number of machines.",
+            "required": [
+              "machines",
+              "mode"
+            ],
+            "properties": {
+              "machine": {
+                "type": "string",
+                "description": "Provider machine type selected for this deployment.",
+                "nullable": true
+              },
+              "machines": {
+                "type": "integer",
+                "format": "int32",
+                "description": "Number of machines to run.",
+                "minimum": 0
+              },
+              "mode": {
+                "type": "string",
+                "enum": [
+                  "fixed"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "description": "Autoscaling machine pool.",
+            "required": [
+              "min",
+              "max",
+              "mode"
+            ],
+            "properties": {
+              "machine": {
+                "type": "string",
+                "description": "Provider machine type selected for this deployment.",
+                "nullable": true
+              },
+              "max": {
+                "type": "integer",
+                "format": "int32",
+                "description": "Maximum machine count.",
+                "minimum": 0
+              },
+              "min": {
+                "type": "integer",
+                "format": "int32",
+                "description": "Minimum machine count.",
+                "minimum": 0
+              },
+              "mode": {
+                "type": "string",
+                "enum": [
+                  "autoscale"
+                ]
+              }
+            }
+          }
+        ],
+        "description": "User-selected deployment settings for one compute pool."
+      },
+      "ComputeSettings": {
+        "type": "object",
+        "description": "Deployment-time compute choices for Alien-managed compute pools.\n\nApplication source declares portable pool requirements. This settings\nobject stores the concrete choices made for one deployment, such as the\nprovider machine type and selected machine counts.",
+        "properties": {
+          "pools": {
+            "type": "object",
+            "description": "Selected compute choices keyed by pool ID.",
+            "additionalProperties": {
+              "$ref": "#/components/schemas/ComputePoolSelection"
+            }
           }
         }
       },
@@ -4714,6 +5669,11 @@
           "params": {
             "$ref": "#/components/schemas/BodySpec",
             "description": "Command parameters (JSON, can be large)"
+          },
+          "targetResourceId": {
+            "type": "string",
+            "description": "Optional explicit target resource ID within the deployment's stack.\nWhen omitted, the target is resolved server-side (single-target shorthand):\nexactly one command-capable resource must exist, or resolution fails.",
+            "nullable": true
           }
         }
       },
@@ -4804,11 +5764,15 @@
       "CreateDeploymentResponse": {
         "type": "object",
         "required": [
-          "deployment"
+          "deployment",
+          "deploymentModel"
         ],
         "properties": {
           "deployment": {
             "$ref": "#/components/schemas/DeploymentResponse"
+          },
+          "deploymentModel": {
+            "$ref": "#/components/schemas/DeploymentModel"
           },
           "token": {
             "type": "string",
@@ -4829,7 +5793,7 @@
           },
           "projectId": {
             "type": "string",
-            "description": "Project this release belongs to. Required. The standalone server\nuses the canonical value `\"default\"`."
+            "description": "Project this release belongs to. Required. The standalone server\nuses the canonical value `\"default\"`.\n\nThe OSS CLI sends this field as `project` on `alien release`\n(see `alien-cli` release flow); the underlying alien-managerx\nrelease endpoint accepts both forms. Accept both here too so\n`alien release` against an OSS standalone manager doesn't fail\nat the schema layer with a confusing\n`unknown field \"project\", expected \"projectId\"`."
           },
           "stack": {
             "$ref": "#/components/schemas/StackByPlatform"
@@ -4964,6 +5928,27 @@
           {
             "allOf": [
               {
+                "$ref": "#/components/schemas/MachinesDaemonHeartbeatData"
+              },
+              {
+                "type": "object",
+                "required": [
+                  "backend"
+                ],
+                "properties": {
+                  "backend": {
+                    "type": "string",
+                    "enum": [
+                      "machines"
+                    ]
+                  }
+                }
+              }
+            ]
+          },
+          {
+            "allOf": [
+              {
                 "$ref": "#/components/schemas/KubernetesDaemonHeartbeatData"
               },
               {
@@ -5046,7 +6031,9 @@
           "name",
           "maxDeployments",
           "deploymentCount",
-          "createdAt"
+          "createdAt",
+          "projectId",
+          "workspaceId"
         ],
         "properties": {
           "createdAt": {
@@ -5065,6 +6052,14 @@
           },
           "name": {
             "type": "string"
+          },
+          "projectId": {
+            "type": "string",
+            "description": "Required by the platform-SDK DeploymentGroup schema. Standalone\nOSS mode is single-tenant, so we synthesize a project id\nmatching the workspace id."
+          },
+          "workspaceId": {
+            "type": "string",
+            "description": "Required by the platform-SDK DeploymentGroup schema."
           }
         }
       },
@@ -5111,6 +6106,9 @@
           "platform",
           "status",
           "deploymentGroupId",
+          "deploymentProtocolVersion",
+          "projectId",
+          "workspaceId",
           "retryRequested",
           "createdAt"
         ],
@@ -5128,6 +6126,12 @@
           },
           "deploymentGroupId": {
             "type": "string"
+          },
+          "deploymentProtocolVersion": {
+            "type": "integer",
+            "format": "int32",
+            "description": "Required by the platform-SDK Deployment schema. Hard-coded to\nalien-core's `CURRENT_DEPLOYMENT_PROTOCOL_VERSION` so the CLI\naccepts the response.",
+            "minimum": 0
           },
           "desiredReleaseId": {
             "type": "string",
@@ -5148,6 +6152,10 @@
           "platform": {
             "$ref": "#/components/schemas/Platform"
           },
+          "projectId": {
+            "type": "string",
+            "description": "Required by the platform-SDK Deployment schema. Standalone is\nsingle-tenant; reuse the same synthetic project id used in the\ndeployment-groups route."
+          },
           "retryRequested": {
             "type": "boolean"
           },
@@ -5160,6 +6168,10 @@
           "updatedAt": {
             "type": "string",
             "nullable": true
+          },
+          "workspaceId": {
+            "type": "string",
+            "description": "Required by the platform-SDK Deployment schema."
           }
         }
       },
@@ -5174,6 +6186,11 @@
               "$ref": "#/components/schemas/CustomDomainConfig"
             },
             "nullable": true
+          },
+          "publicEndpointTarget": {
+            "$ref": "#/components/schemas/PublicEndpointTargetSettings",
+            "description": "Public endpoint DNS target selection for machines deployments.\n\nWhen omitted, machines deployments publish healthy machine public\naddresses directly. Use `LoadBalancer` when an external load balancer\nfronts the machines and Alien should publish a CNAME to that target.",
+            "nullable": true
           }
         }
       },
@@ -5183,6 +6200,7 @@
         "required": [
           "protocol",
           "deploymentId",
+          "target",
           "commandId",
           "attempt",
           "command",
@@ -5225,6 +6243,15 @@
           "responseHandling": {
             "$ref": "#/components/schemas/ResponseHandling",
             "description": "Response handling configuration"
+          },
+          "target": {
+            "$ref": "#/components/schemas/CommandTarget",
+            "description": "The specific resource this command is addressed to"
+          },
+          "traceContext": {
+            "$ref": "#/components/schemas/TraceContext",
+            "description": "Optional W3C trace context for the command invocation.",
+            "nullable": true
           }
         }
       },
@@ -5387,6 +6414,40 @@
           }
         }
       },
+      "GcpClientConfig": {
+        "type": "object",
+        "description": "GCP client configuration",
+        "required": [
+          "projectId",
+          "region",
+          "credentials"
+        ],
+        "properties": {
+          "credentials": {
+            "$ref": "#/components/schemas/GcpCredentials",
+            "description": "GCP authentication credentials."
+          },
+          "projectId": {
+            "type": "string",
+            "description": "The GCP Project ID."
+          },
+          "projectNumber": {
+            "type": "string",
+            "description": "The GCP project number (numeric). Resolved at runtime via Resource Manager API.\nUsed in IAM condition expressions where resource.name uses project number.",
+            "nullable": true
+          },
+          "region": {
+            "type": "string",
+            "description": "The GCP region for resources."
+          },
+          "serviceOverrides": {
+            "$ref": "#/components/schemas/GcpServiceOverrides",
+            "description": "Service endpoint overrides for testing",
+            "nullable": true
+          }
+        },
+        "additionalProperties": false
+      },
       "GcpCloudBuildHeartbeatData": {
         "type": "object",
         "required": [
@@ -5493,6 +6554,29 @@
             "items": {
               "type": "string"
             }
+          }
+        }
+      },
+      "GcpCloudSqlPostgresHeartbeatData": {
+        "type": "object",
+        "required": [
+          "status",
+          "instanceName"
+        ],
+        "properties": {
+          "databaseVersion": {
+            "type": "string",
+            "nullable": true
+          },
+          "instanceName": {
+            "type": "string"
+          },
+          "state": {
+            "type": "string",
+            "nullable": true
+          },
+          "status": {
+            "$ref": "#/components/schemas/PostgresHeartbeatStatus"
           }
         }
       },
@@ -5630,6 +6714,184 @@
           }
         }
       },
+      "GcpCredentials": {
+        "oneOf": [
+          {
+            "type": "object",
+            "description": "Use an already-minted OAuth2 access token.",
+            "required": [
+              "token",
+              "type"
+            ],
+            "properties": {
+              "token": {
+                "type": "string"
+              },
+              "type": {
+                "type": "string",
+                "enum": [
+                  "accessToken"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "description": "Use a refreshable service account impersonation source.",
+            "required": [
+              "source",
+              "config",
+              "type"
+            ],
+            "properties": {
+              "config": {
+                "$ref": "#/components/schemas/GcpImpersonationConfig",
+                "description": "Service account impersonation request."
+              },
+              "source": {
+                "type": "object",
+                "description": "Source configuration used to call IAMCredentials."
+              },
+              "type": {
+                "type": "string",
+                "enum": [
+                  "impersonatedServiceAccount"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "description": "Use a full Service Account JSON key (as string). A short-lived JWT will\nbe created and exchanged for a bearer token automatically.",
+            "required": [
+              "json",
+              "type"
+            ],
+            "properties": {
+              "json": {
+                "type": "string"
+              },
+              "type": {
+                "type": "string",
+                "enum": [
+                  "serviceAccountKey"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "description": "Use GCP metadata server for authentication (for instances running on GCP)",
+            "required": [
+              "type"
+            ],
+            "properties": {
+              "type": {
+                "type": "string",
+                "enum": [
+                  "serviceMetadata"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "description": "Use projected service account token (for Kubernetes workload identity)",
+            "required": [
+              "token_file",
+              "service_account_email",
+              "type"
+            ],
+            "properties": {
+              "service_account_email": {
+                "type": "string",
+                "description": "Service account email"
+              },
+              "token_file": {
+                "type": "string",
+                "description": "Path to the projected service account token"
+              },
+              "type": {
+                "type": "string",
+                "enum": [
+                  "projectedServiceAccount"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "description": "Use an external account credential configuration.",
+            "required": [
+              "audience",
+              "subject_token_type",
+              "token_url",
+              "credential_source_file",
+              "type"
+            ],
+            "properties": {
+              "audience": {
+                "type": "string",
+                "description": "Workload identity audience."
+              },
+              "credential_source_file": {
+                "type": "string",
+                "description": "Path to the subject token file."
+              },
+              "service_account_impersonation_url": {
+                "type": "string",
+                "description": "Optional service account impersonation URL.",
+                "nullable": true
+              },
+              "subject_token_type": {
+                "type": "string",
+                "description": "Subject token type for STS token exchange."
+              },
+              "token_url": {
+                "type": "string",
+                "description": "STS token exchange URL."
+              },
+              "type": {
+                "type": "string",
+                "enum": [
+                  "externalAccount"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "description": "Use gcloud Application Default Credentials (authorized_user).\nExchanges refresh_token for an access_token via Google's OAuth2 endpoint.",
+            "required": [
+              "client_id",
+              "client_secret",
+              "refresh_token",
+              "type"
+            ],
+            "properties": {
+              "client_id": {
+                "type": "string",
+                "description": "OAuth2 client ID"
+              },
+              "client_secret": {
+                "type": "string",
+                "description": "OAuth2 client secret"
+              },
+              "refresh_token": {
+                "type": "string",
+                "description": "OAuth2 refresh token"
+              },
+              "type": {
+                "type": "string",
+                "enum": [
+                  "authorizedUser"
+                ]
+              }
+            }
+          }
+        ],
+        "description": "Authentication options for talking to GCP APIs."
+      },
       "GcpCustomCertificateConfig": {
         "type": "object",
         "required": [
@@ -5646,7 +6908,6 @@
         "required": [
           "status",
           "horizonClusterId",
-          "daemonName",
           "horizonStatus",
           "capacityGroup",
           "desiredMachines",
@@ -5711,6 +6972,10 @@
           },
           "latestUpdateTimestamp": {
             "type": "string"
+          },
+          "observedImage": {
+            "type": "string",
+            "nullable": true
           },
           "status": {
             "$ref": "#/components/schemas/WorkloadHeartbeatStatus"
@@ -5800,6 +7065,51 @@
             "nullable": true
           }
         }
+      },
+      "GcpImpersonationConfig": {
+        "type": "object",
+        "description": "Configuration for GCP service account impersonation",
+        "required": [
+          "serviceAccountEmail",
+          "scopes"
+        ],
+        "properties": {
+          "delegates": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Optional sequence of service accounts in a delegation chain",
+            "nullable": true
+          },
+          "lifetime": {
+            "type": "string",
+            "description": "Optional desired lifetime duration of the access token (max 3600s)",
+            "nullable": true
+          },
+          "scopes": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "The OAuth 2.0 scopes that define the access token's permissions"
+          },
+          "serviceAccountEmail": {
+            "type": "string",
+            "description": "The email of the service account to impersonate"
+          },
+          "targetProjectId": {
+            "type": "string",
+            "description": "Optional target project ID override. When provided, the impersonated config\nuses this project ID instead of inheriting the caller's project.",
+            "nullable": true
+          },
+          "targetRegion": {
+            "type": "string",
+            "description": "Optional target region override. When provided, the impersonated config\nuses this region instead of inheriting the caller's region.",
+            "nullable": true
+          }
+        },
+        "additionalProperties": false
       },
       "GcpManagementConfig": {
         "type": "object",
@@ -6100,6 +7410,23 @@
           }
         }
       },
+      "GcpServiceOverrides": {
+        "type": "object",
+        "description": "Service endpoint overrides for testing GCP services",
+        "required": [
+          "endpoints"
+        ],
+        "properties": {
+          "endpoints": {
+            "type": "object",
+            "description": "Override endpoints for specific GCP services\nKey is the service name (e.g., \"cloudrun\", \"storage\"), value is the base URL",
+            "additionalProperties": {
+              "type": "string"
+            }
+          }
+        },
+        "additionalProperties": false
+      },
       "GcpServiceUsageActivationHeartbeatData": {
         "type": "object",
         "required": [
@@ -6187,6 +7514,19 @@
           "subnetworkSelfLink": {
             "type": "string",
             "nullable": true
+          }
+        }
+      },
+      "GcsStorageBinding": {
+        "type": "object",
+        "description": "Google Cloud Storage binding configuration",
+        "required": [
+          "bucketName"
+        ],
+        "properties": {
+          "bucketName": {
+            "$ref": "#/components/schemas/BindingValue_String",
+            "description": "The name of the GCS bucket"
           }
         }
       },
@@ -6331,8 +7671,16 @@
             "type": "string",
             "nullable": true
           },
+          "latestUpdateTimestamp": {
+            "type": "string",
+            "nullable": true
+          },
           "memory": {
             "$ref": "#/components/schemas/MetricSample",
+            "nullable": true
+          },
+          "observedImage": {
+            "type": "string",
             "nullable": true
           },
           "replicaUnits": {
@@ -6392,20 +7740,52 @@
           }
         }
       },
+      "InitialDesiredRelease": {
+        "type": "string",
+        "enum": [
+          "active",
+          "none"
+        ]
+      },
       "InitializeRequest": {
         "type": "object",
+        "required": [
+          "initialDesiredRelease"
+        ],
         "properties": {
           "basePlatform": {
             "$ref": "#/components/schemas/Platform",
             "description": "Optional base cloud platform for Kubernetes setup targets such as\nEKS/GKE/AKS. The runtime platform remains Kubernetes.",
             "nullable": true
           },
+          "initialDesiredRelease": {
+            "$ref": "#/components/schemas/InitialDesiredRelease",
+            "description": "Desired-release selection for a newly registered deployment. This is\ncreation intent, not a permanent deployment mode: a later update can\nassign a desired release to a deployment initialized with `none`."
+          },
+          "inputValues": {
+            "type": "object",
+            "description": "Deployer-provided stack inputs. Embedded platform managers resolve\nthese before creating the deployment; standalone managers accept the\nfield so generated setup clients have one stable initialize contract.",
+            "additionalProperties": {}
+          },
           "name": {
+            "type": "string",
+            "nullable": true
+          },
+          "permission": {
             "type": "string",
             "nullable": true
           },
           "platform": {
             "$ref": "#/components/schemas/Platform",
+            "nullable": true
+          },
+          "scope": {
+            "type": "string",
+            "nullable": true
+          },
+          "setupMethod": {
+            "type": "string",
+            "description": "Setup method that is registering this deployment, such as `manual` for\nrendered Operator manifests or `helm` for generated Helm installs.",
             "nullable": true
           },
           "stackSettings": {
@@ -6417,11 +7797,15 @@
       "InitializeResponse": {
         "type": "object",
         "required": [
-          "deploymentId"
+          "deploymentId",
+          "deploymentModel"
         ],
         "properties": {
           "deploymentId": {
             "type": "string"
+          },
+          "deploymentModel": {
+            "$ref": "#/components/schemas/DeploymentModel"
           },
           "token": {
             "type": "string",
@@ -6599,6 +7983,155 @@
           }
         ],
         "description": "Certificate publication or reference mode for Kubernetes public endpoints."
+      },
+      "KubernetesClientConfig": {
+        "oneOf": [
+          {
+            "type": "object",
+            "description": "Use in-cluster configuration (service account tokens, etc.)",
+            "required": [
+              "mode"
+            ],
+            "properties": {
+              "additional_headers": {
+                "type": "object",
+                "description": "Additional headers to include in requests",
+                "additionalProperties": {
+                  "type": "string"
+                },
+                "nullable": true
+              },
+              "mode": {
+                "type": "string",
+                "enum": [
+                  "inCluster"
+                ]
+              },
+              "namespace": {
+                "type": "string",
+                "description": "The namespace to operate in",
+                "nullable": true
+              }
+            }
+          },
+          {
+            "type": "object",
+            "description": "Use kubeconfig file for configuration",
+            "required": [
+              "mode"
+            ],
+            "properties": {
+              "additional_headers": {
+                "type": "object",
+                "description": "Additional headers to include in requests",
+                "additionalProperties": {
+                  "type": "string"
+                },
+                "nullable": true
+              },
+              "cluster": {
+                "type": "string",
+                "description": "Cluster name to use (optional, defaults to context's cluster)",
+                "nullable": true
+              },
+              "context": {
+                "type": "string",
+                "description": "Context name to use (optional, defaults to current-context)",
+                "nullable": true
+              },
+              "kubeconfig_path": {
+                "type": "string",
+                "description": "Path to kubeconfig file (optional, defaults to standard locations)",
+                "nullable": true
+              },
+              "mode": {
+                "type": "string",
+                "enum": [
+                  "kubeconfig"
+                ]
+              },
+              "namespace": {
+                "type": "string",
+                "description": "The namespace to operate in",
+                "nullable": true
+              },
+              "user": {
+                "type": "string",
+                "description": "User name to use (optional, defaults to context's user)",
+                "nullable": true
+              }
+            }
+          },
+          {
+            "type": "object",
+            "description": "Manual configuration with explicit values",
+            "required": [
+              "server_url",
+              "additional_headers",
+              "mode"
+            ],
+            "properties": {
+              "additional_headers": {
+                "type": "object",
+                "description": "Additional headers to include in requests",
+                "additionalProperties": {
+                  "type": "string"
+                }
+              },
+              "certificate_authority_data": {
+                "type": "string",
+                "description": "The cluster certificate authority data (base64 encoded)",
+                "nullable": true
+              },
+              "client_certificate_data": {
+                "type": "string",
+                "description": "Client certificate data (base64 encoded) for mutual TLS",
+                "nullable": true
+              },
+              "client_key_data": {
+                "type": "string",
+                "description": "Client key data (base64 encoded) for mutual TLS",
+                "nullable": true
+              },
+              "insecure_skip_tls_verify": {
+                "type": "boolean",
+                "description": "Skip TLS verification (insecure)",
+                "nullable": true
+              },
+              "mode": {
+                "type": "string",
+                "enum": [
+                  "manual"
+                ]
+              },
+              "namespace": {
+                "type": "string",
+                "description": "The namespace to operate in",
+                "nullable": true
+              },
+              "password": {
+                "type": "string",
+                "description": "Password for basic authentication",
+                "nullable": true
+              },
+              "server_url": {
+                "type": "string",
+                "description": "The Kubernetes cluster server URL"
+              },
+              "token": {
+                "type": "string",
+                "description": "Bearer token for authentication",
+                "nullable": true
+              },
+              "username": {
+                "type": "string",
+                "description": "Username for basic authentication",
+                "nullable": true
+              }
+            }
+          }
+        ],
+        "description": "Configuration mode for Kubernetes access"
       },
       "KubernetesCloudReference": {
         "type": "object",
@@ -7820,7 +9353,8 @@
         "type": "object",
         "description": "Request for acquiring leases",
         "required": [
-          "deploymentId"
+          "deploymentId",
+          "target"
         ],
         "properties": {
           "deploymentId": {
@@ -7837,6 +9371,10 @@
             "type": "integer",
             "description": "Maximum number of leases to acquire",
             "minimum": 0
+          },
+          "target": {
+            "$ref": "#/components/schemas/CommandTarget",
+            "description": "The specific resource requesting leases. Required: leases are scoped to a\nsingle target, so callers must identify which resource they're polling for."
           }
         }
       },
@@ -8065,7 +9603,6 @@
         "type": "object",
         "required": [
           "status",
-          "daemonName",
           "runtimeId",
           "commandSupported",
           "imagePathPresent",
@@ -8154,6 +9691,35 @@
           "get",
           "delete"
         ]
+      },
+      "LocalPostgresHeartbeatData": {
+        "type": "object",
+        "required": [
+          "status",
+          "name",
+          "version",
+          "processRunning"
+        ],
+        "properties": {
+          "name": {
+            "type": "string"
+          },
+          "port": {
+            "type": "integer",
+            "format": "int32",
+            "minimum": 0,
+            "nullable": true
+          },
+          "processRunning": {
+            "type": "boolean"
+          },
+          "status": {
+            "$ref": "#/components/schemas/PostgresHeartbeatStatus"
+          },
+          "version": {
+            "type": "string"
+          }
+        }
       },
       "LocalQueueHeartbeatData": {
         "type": "object",
@@ -8419,6 +9985,211 @@
             "$ref": "#/components/schemas/WorkloadHeartbeatStatus"
           },
           "triggerCount": {
+            "type": "integer",
+            "format": "int32",
+            "minimum": 0
+          }
+        }
+      },
+      "MachinesComputeClusterHeartbeatData": {
+        "type": "object",
+        "required": [
+          "status",
+          "nodes",
+          "name",
+          "capacityGroups",
+          "machines"
+        ],
+        "properties": {
+          "backendClusterId": {
+            "type": "string",
+            "nullable": true
+          },
+          "capacityGroups": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ComputeCapacityGroupStatus"
+            }
+          },
+          "cpu": {
+            "$ref": "#/components/schemas/MetricSample",
+            "nullable": true
+          },
+          "machines": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/MachinesComputeMachineStatus"
+            }
+          },
+          "memory": {
+            "$ref": "#/components/schemas/MetricSample",
+            "nullable": true
+          },
+          "name": {
+            "type": "string"
+          },
+          "nodes": {
+            "$ref": "#/components/schemas/ObservedCounts"
+          },
+          "status": {
+            "$ref": "#/components/schemas/ComputeClusterHeartbeatStatus"
+          }
+        }
+      },
+      "MachinesComputeMachineStatus": {
+        "type": "object",
+        "required": [
+          "machineId",
+          "status",
+          "capacityGroup",
+          "zone",
+          "lastHeartbeat",
+          "replicaCount",
+          "drainForce"
+        ],
+        "properties": {
+          "capacityGroup": {
+            "type": "string"
+          },
+          "cpuCores": {
+            "type": "number",
+            "format": "double",
+            "nullable": true
+          },
+          "drainBlockers": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ComputeDrainBlocker"
+            }
+          },
+          "drainDeadlineAt": {
+            "type": "string",
+            "nullable": true
+          },
+          "drainForce": {
+            "type": "boolean"
+          },
+          "drainRequestedAt": {
+            "type": "string",
+            "nullable": true
+          },
+          "drainedAt": {
+            "type": "string",
+            "nullable": true
+          },
+          "horizondVersion": {
+            "type": "string",
+            "nullable": true
+          },
+          "lastHeartbeat": {
+            "type": "string"
+          },
+          "machineId": {
+            "type": "string"
+          },
+          "memoryBytes": {
+            "type": "integer",
+            "format": "int64",
+            "nullable": true
+          },
+          "overlayIp": {
+            "type": "string",
+            "nullable": true
+          },
+          "publicIp": {
+            "type": "string",
+            "nullable": true
+          },
+          "replicaCount": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "status": {
+            "type": "string"
+          },
+          "zone": {
+            "type": "string"
+          }
+        }
+      },
+      "MachinesDaemonHeartbeatData": {
+        "type": "object",
+        "required": [
+          "status",
+          "horizonClusterId",
+          "horizonStatus",
+          "capacityGroup",
+          "desiredMachines",
+          "assignedMachines",
+          "healthyInstances",
+          "unavailableInstances",
+          "commandSupported",
+          "latestUpdateTimestamp",
+          "daemonInstances",
+          "events"
+        ],
+        "properties": {
+          "assignedMachines": {
+            "type": "integer",
+            "format": "int32",
+            "minimum": 0
+          },
+          "capacityGroup": {
+            "type": "string"
+          },
+          "commandSupported": {
+            "type": "boolean"
+          },
+          "daemonInstances": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ManagedRuntimeUnitStatus"
+            }
+          },
+          "daemonName": {
+            "type": "string"
+          },
+          "desiredMachines": {
+            "type": "integer",
+            "format": "int32",
+            "minimum": 0
+          },
+          "events": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ManagedRuntimeEventSnapshot"
+            }
+          },
+          "healthyInstances": {
+            "type": "integer",
+            "format": "int32",
+            "minimum": 0
+          },
+          "horizonClusterId": {
+            "type": "string"
+          },
+          "horizonStatus": {
+            "type": "string"
+          },
+          "horizonStatusMessage": {
+            "type": "string",
+            "nullable": true
+          },
+          "horizonStatusReason": {
+            "type": "string",
+            "nullable": true
+          },
+          "latestUpdateTimestamp": {
+            "type": "string"
+          },
+          "observedImage": {
+            "type": "string",
+            "nullable": true
+          },
+          "status": {
+            "$ref": "#/components/schemas/WorkloadHeartbeatStatus"
+          },
+          "unavailableInstances": {
             "type": "integer",
             "format": "int32",
             "minimum": 0
@@ -8723,6 +10494,59 @@
           "requests-per-second"
         ]
       },
+      "MintCredentialsRequest": {
+        "type": "object",
+        "description": "Request body for `POST /v1/credentials/mint`.\n\n`deny_unknown_fields` so clients cannot smuggle in resolver internals\n(platform, stack state, etc.) — the server derives everything from the\nauthenticated deployment.",
+        "required": [
+          "deploymentId",
+          "resourceId",
+          "bindingName"
+        ],
+        "properties": {
+          "bindingName": {
+            "type": "string",
+            "description": "Service-account binding to impersonate on the target platform."
+          },
+          "deploymentId": {
+            "type": "string",
+            "description": "Deployment to mint credentials for. The caller's bearer token must be\nthis deployment's token (or a workspace-admin token)."
+          },
+          "durationSeconds": {
+            "type": "integer",
+            "format": "int32",
+            "description": "Requested lifetime in seconds. Clamped to\n`[MIN_DURATION_SECONDS, MAX_DURATION_SECONDS]`; defaults to\n`DEFAULT_DURATION_SECONDS` when omitted.",
+            "nullable": true
+          },
+          "resourceId": {
+            "type": "string",
+            "description": "Current-release compute resource requesting the credentials. The\nresource must depend on `bindingName` as a service-account resource."
+          }
+        },
+        "additionalProperties": false
+      },
+      "MintCredentialsResponse": {
+        "type": "object",
+        "description": "Response body for `POST /v1/credentials/mint`.",
+        "required": [
+          "clientConfig",
+          "expiresAt",
+          "principal"
+        ],
+        "properties": {
+          "clientConfig": {
+            "$ref": "#/components/schemas/ClientConfig",
+            "description": "Minted platform client configuration (carries the short-lived creds)."
+          },
+          "expiresAt": {
+            "type": "string",
+            "description": "Credential expiry as an RFC3339 timestamp (now + clamped duration).\n\nThis is server-computed (`now + clamped duration`), not read back from\nthe provider — for lazily-resolved configs (e.g. GCP, where the\nresolver doesn't always round-trip an authoritative expiry) it is\nnominal rather than provider truth. Treat it as a refresh hint: fetch\nnew credentials at or before this time, don't rely on it to prove the\nunderlying credential is still valid at that exact instant."
+          },
+          "principal": {
+            "type": "string",
+            "description": "Human-readable identity the credentials act as (role ARN, SA email,\nmanaged-identity client id, or `platform:account` for the local path)."
+          }
+        }
+      },
       "NetworkHeartbeatData": {
         "oneOf": [
           {
@@ -8955,6 +10779,11 @@
                 "description": "Name of the dedicated classic Application Gateway subnet within the VNet.",
                 "nullable": true
               },
+              "private_endpoint_subnet_name": {
+                "type": "string",
+                "description": "Name of the dedicated subnet that hosts Private Endpoints (e.g. for a\nPostgres Flexible Server). A Private Endpoint must not share the private\nsubnet, which is already claimed by the Container Apps environment's\n`infrastructure_subnet_id`. Required only when the stack contains a\nPostgres resource; otherwise unused.",
+                "nullable": true
+              },
               "private_subnet_name": {
                 "type": "string",
                 "description": "Name of the private subnet within the VNet"
@@ -9010,6 +10839,181 @@
           "unhealthy"
         ]
       },
+      "ObservedInventoryBatch": {
+        "type": "object",
+        "required": [
+          "sourceKind",
+          "inventoryScope",
+          "controllerPlatform",
+          "backend",
+          "observedAt",
+          "complete",
+          "resources"
+        ],
+        "properties": {
+          "backend": {
+            "$ref": "#/components/schemas/HeartbeatBackend",
+            "description": "Backend whose observer produced this snapshot."
+          },
+          "complete": {
+            "type": "boolean",
+            "description": "Whether this batch is a complete replacement for the scope. Complete\nbatches tombstone previously observed rows in the same scope when they\nare absent from `resources`."
+          },
+          "controllerPlatform": {
+            "$ref": "#/components/schemas/Platform",
+            "description": "Platform whose observer produced this snapshot."
+          },
+          "inventoryScope": {
+            "type": "string",
+            "description": "Stable scope for the provider list operation that produced this batch."
+          },
+          "observedAt": {
+            "type": "string",
+            "format": "date-time",
+            "description": "Time the inventory scope was observed."
+          },
+          "resources": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ObservedResourceSample"
+            }
+          },
+          "sourceKind": {
+            "type": "string",
+            "description": "Writer/source for this inventory pass, such as `operator` or\n`manager-observer`."
+          }
+        }
+      },
+      "ObservedResourceSample": {
+        "type": "object",
+        "required": [
+          "rawIdentity",
+          "providerKind",
+          "displayName",
+          "health",
+          "lifecycle",
+          "partial",
+          "providerStale"
+        ],
+        "properties": {
+          "alienResourceId": {
+            "type": "string",
+            "nullable": true
+          },
+          "attributes": {
+            "type": "object",
+            "additionalProperties": {
+              "$ref": "#/components/schemas/Value"
+            }
+          },
+          "collectionIssues": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/HeartbeatCollectionIssue"
+            }
+          },
+          "counts": {
+            "$ref": "#/components/schemas/ObservedCounts",
+            "nullable": true
+          },
+          "deploymentId": {
+            "type": "string",
+            "nullable": true
+          },
+          "displayName": {
+            "type": "string"
+          },
+          "health": {
+            "$ref": "#/components/schemas/ObservedHealth"
+          },
+          "labels": {
+            "type": "object",
+            "additionalProperties": {
+              "type": "string"
+            }
+          },
+          "lifecycle": {
+            "$ref": "#/components/schemas/ProviderLifecycleState"
+          },
+          "message": {
+            "type": "string",
+            "nullable": true
+          },
+          "namespace": {
+            "type": "string",
+            "nullable": true
+          },
+          "partial": {
+            "type": "boolean"
+          },
+          "providerKind": {
+            "type": "string",
+            "description": "Provider-native kind, such as `apps/v1/Deployment`,\n`AWS::S3::Bucket`, `storage.googleapis.com/Bucket`, or an Azure\nresource type."
+          },
+          "providerStale": {
+            "type": "boolean"
+          },
+          "raw": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/RawHeartbeatSnippet"
+            }
+          },
+          "rawIdentity": {
+            "type": "string",
+            "description": "Provider-native stable identity: Kubernetes object identity, cloud ARN,\nGCP full resource name, Azure resource id, etc."
+          },
+          "region": {
+            "type": "string",
+            "nullable": true
+          },
+          "resourceTypeHint": {
+            "$ref": "#/components/schemas/ResourceType",
+            "nullable": true
+          },
+          "scope": {
+            "type": "string",
+            "nullable": true
+          },
+          "version": {
+            "type": "string",
+            "description": "Release/version identity observed from the provider resource, when available.",
+            "nullable": true
+          }
+        }
+      },
+      "OperatorCapabilityReport": {
+        "type": "object",
+        "description": "Report-only Operator capability status.",
+        "required": [
+          "key",
+          "state"
+        ],
+        "properties": {
+          "detail": {
+            "type": "string",
+            "description": "Optional human-readable detail from the Operator.",
+            "nullable": true
+          },
+          "key": {
+            "type": "string",
+            "description": "Stable capability key, such as `k8s-workloads` or `logs`."
+          },
+          "state": {
+            "$ref": "#/components/schemas/OperatorCapabilityState",
+            "description": "Whether the capability is currently usable."
+          }
+        }
+      },
+      "OperatorCapabilityState": {
+        "type": "string",
+        "description": "State of an Operator capability as observed inside the environment.",
+        "enum": [
+          "granted",
+          "denied",
+          "unavailable"
+        ]
+      },
       "Platform": {
         "type": "string",
         "description": "Represents the target cloud platform.",
@@ -9018,9 +11022,140 @@
           "gcp",
           "azure",
           "kubernetes",
+          "machines",
           "local",
           "test"
         ]
+      },
+      "PostgresHeartbeatData": {
+        "oneOf": [
+          {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/AuroraPostgresHeartbeatData",
+                "description": "AWS Aurora Serverless v2 backend."
+              },
+              {
+                "type": "object",
+                "required": [
+                  "backend"
+                ],
+                "properties": {
+                  "backend": {
+                    "type": "string",
+                    "enum": [
+                      "aurora"
+                    ]
+                  }
+                }
+              }
+            ],
+            "description": "AWS Aurora Serverless v2 backend."
+          },
+          {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/GcpCloudSqlPostgresHeartbeatData",
+                "description": "GCP Cloud SQL backend."
+              },
+              {
+                "type": "object",
+                "required": [
+                  "backend"
+                ],
+                "properties": {
+                  "backend": {
+                    "type": "string",
+                    "enum": [
+                      "cloudSql"
+                    ]
+                  }
+                }
+              }
+            ],
+            "description": "GCP Cloud SQL backend."
+          },
+          {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/AzureFlexibleServerPostgresHeartbeatData",
+                "description": "Azure Flexible Server backend."
+              },
+              {
+                "type": "object",
+                "required": [
+                  "backend"
+                ],
+                "properties": {
+                  "backend": {
+                    "type": "string",
+                    "enum": [
+                      "flexibleServer"
+                    ]
+                  }
+                }
+              }
+            ],
+            "description": "Azure Flexible Server backend."
+          },
+          {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/LocalPostgresHeartbeatData",
+                "description": "Local embedded Postgres backend."
+              },
+              {
+                "type": "object",
+                "required": [
+                  "backend"
+                ],
+                "properties": {
+                  "backend": {
+                    "type": "string",
+                    "enum": [
+                      "local"
+                    ]
+                  }
+                }
+              }
+            ],
+            "description": "Local embedded Postgres backend."
+          }
+        ]
+      },
+      "PostgresHeartbeatStatus": {
+        "type": "object",
+        "required": [
+          "health",
+          "lifecycle",
+          "stale",
+          "partial",
+          "collectionIssues"
+        ],
+        "properties": {
+          "collectionIssues": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/HeartbeatCollectionIssue"
+            }
+          },
+          "health": {
+            "$ref": "#/components/schemas/ObservedHealth"
+          },
+          "lifecycle": {
+            "$ref": "#/components/schemas/ProviderLifecycleState"
+          },
+          "message": {
+            "type": "string",
+            "nullable": true
+          },
+          "partial": {
+            "type": "boolean"
+          },
+          "stale": {
+            "type": "boolean"
+          }
+        }
       },
       "PresignedOperation": {
         "type": "string",
@@ -9163,6 +11298,46 @@
           "deleted",
           "failed"
         ]
+      },
+      "PublicEndpointTargetSettings": {
+        "oneOf": [
+          {
+            "type": "object",
+            "description": "Publish DNS records directly to healthy machine public IP addresses.",
+            "required": [
+              "mode"
+            ],
+            "properties": {
+              "mode": {
+                "type": "string",
+                "enum": [
+                  "machineAddresses"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "description": "Publish a CNAME record to an external load balancer.",
+            "required": [
+              "cnameTarget",
+              "mode"
+            ],
+            "properties": {
+              "cnameTarget": {
+                "type": "string",
+                "description": "DNS name or URL for the external load balancer."
+              },
+              "mode": {
+                "type": "string",
+                "enum": [
+                  "loadBalancer"
+                ]
+              }
+            }
+          }
+        ],
+        "description": "DNS target mode for public endpoints."
       },
       "QueueHeartbeatData": {
         "oneOf": [
@@ -9330,10 +11505,26 @@
           "state"
         ],
         "properties": {
+          "capabilities": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/OperatorCapabilityReport"
+            }
+          },
           "deploymentId": {
             "type": "string"
           },
-          "heartbeats": {
+          "observedInventoryBatches": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ObservedInventoryBatch"
+            }
+          },
+          "operatorVersion": {
+            "type": "string",
+            "nullable": true
+          },
+          "resourceHeartbeats": {
             "type": "array",
             "items": {
               "$ref": "#/components/schemas/ResourceHeartbeat"
@@ -9409,6 +11600,11 @@
           },
           "projectId": {
             "type": "string"
+          },
+          "setupFingerprints": {
+            "type": "object",
+            "description": "Setup-step fingerprints — used by `alien release` to short-circuit\nre-pushing artifacts that haven't changed across releases. The\nplatform-API client requires this field to be present (even if\nempty). The OSS standalone manager doesn't track per-setup-step\nfingerprints, so we return an empty map.",
+            "additionalProperties": {}
           },
           "stack": {
             "$ref": "#/components/schemas/StackByPlatform"
@@ -9519,24 +11715,120 @@
           }
         }
       },
-      "ResolveCredentialsRequest": {
+      "RemoteStorageBinding": {
+        "oneOf": [
+          {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/S3StorageBinding",
+                "description": "AWS S3."
+              },
+              {
+                "type": "object",
+                "required": [
+                  "service"
+                ],
+                "properties": {
+                  "service": {
+                    "type": "string",
+                    "enum": [
+                      "s3"
+                    ]
+                  }
+                }
+              }
+            ],
+            "description": "AWS S3."
+          },
+          {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/BlobStorageBinding",
+                "description": "Azure Blob Storage."
+              },
+              {
+                "type": "object",
+                "required": [
+                  "service"
+                ],
+                "properties": {
+                  "service": {
+                    "type": "string",
+                    "enum": [
+                      "blob"
+                    ]
+                  }
+                }
+              }
+            ],
+            "description": "Azure Blob Storage."
+          },
+          {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/GcsStorageBinding",
+                "description": "Google Cloud Storage."
+              },
+              {
+                "type": "object",
+                "required": [
+                  "service"
+                ],
+                "properties": {
+                  "service": {
+                    "type": "string",
+                    "enum": [
+                      "gcs"
+                    ]
+                  }
+                }
+              }
+            ],
+            "description": "Google Cloud Storage."
+          }
+        ],
+        "description": "Storage binding variants supported by the first hosted remote-bindings release."
+      },
+      "ResolveBindingRequest": {
         "type": "object",
+        "description": "Request body for `POST /v1/bindings/resolve`.",
         "required": [
-          "deploymentId"
+          "deploymentId",
+          "resourceId"
         ],
         "properties": {
           "deploymentId": {
-            "type": "string"
+            "type": "string",
+            "description": "Deployment containing the remote-enabled resource."
+          },
+          "resourceId": {
+            "type": "string",
+            "description": "Logical Storage resource id in the deployment's stack state."
           }
-        }
+        },
+        "additionalProperties": false
       },
-      "ResolveCredentialsResponse": {
+      "ResolveBindingResponse": {
         "type": "object",
+        "description": "Response containing one approved remote binding and short-lived credentials.",
         "required": [
-          "clientConfig"
+          "binding",
+          "clientConfig",
+          "expiresAt"
         ],
         "properties": {
-          "clientConfig": {}
+          "binding": {
+            "$ref": "#/components/schemas/RemoteStorageBinding",
+            "description": "Server-selected storage binding configuration."
+          },
+          "clientConfig": {
+            "$ref": "#/components/schemas/ClientConfig",
+            "description": "Materialized credentials safe to hand to the caller."
+          },
+          "expiresAt": {
+            "type": "string",
+            "description": "Server refresh hint for the returned credentials."
+          }
         }
       },
       "ResourceEntry": {
@@ -9590,7 +11882,8 @@
             }
           },
           "resourceId": {
-            "type": "string"
+            "type": "string",
+            "description": "Alien resource id, such as the `alien.Container` or `alien.Storage`\nresource id from the stack."
           },
           "resourceType": {
             "$ref": "#/components/schemas/ResourceType"
@@ -9739,6 +12032,24 @@
                 "type": "string",
                 "enum": [
                   "kv"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "required": [
+              "data",
+              "resourceType"
+            ],
+            "properties": {
+              "data": {
+                "$ref": "#/components/schemas/PostgresHeartbeatData"
+              },
+              "resourceType": {
+                "type": "string",
+                "enum": [
+                  "postgres"
                 ]
               }
             }
@@ -9953,7 +12264,7 @@
       },
       "ResourceRef": {
         "type": "object",
-        "description": "New ResourceRef that works with any resource type.\nThis can eventually replace the enum-based ResourceRef for full extensibility.",
+        "description": "Reference to a resource by its stable id and resource type.",
         "required": [
           "type",
           "id"
@@ -10014,6 +12325,19 @@
           }
         }
       },
+      "S3StorageBinding": {
+        "type": "object",
+        "description": "AWS S3 storage binding configuration",
+        "required": [
+          "bucketName"
+        ],
+        "properties": {
+          "bucketName": {
+            "$ref": "#/components/schemas/BindingValue_String",
+            "description": "The name of the S3 bucket"
+          }
+        }
+      },
       "ScopeInfo": {
         "type": "object",
         "required": [
@@ -10033,6 +12357,22 @@
             "nullable": true
           },
           "type": {
+            "type": "string"
+          }
+        }
+      },
+      "SecretReference": {
+        "type": "object",
+        "description": "Reference to a Kubernetes Secret",
+        "required": [
+          "name",
+          "key"
+        ],
+        "properties": {
+          "key": {
+            "type": "string"
+          },
+          "name": {
             "type": "string"
           }
         }
@@ -10248,6 +12588,7 @@
           "gcp": {},
           "kubernetes": {},
           "local": {},
+          "machines": {},
           "test": {}
         }
       },
@@ -10280,6 +12621,11 @@
           "deploymentName": {
             "type": "string",
             "description": "User-chosen deployment name. Must be unique within the deployment\ngroup; the manager returns 409 on collision rather than silently\nresolving to an existing deployment. Each setup adapter picks\nthe natural source: CloudFormation defaults to the CFN stack name,\nHelm to `{namespace}/{release}`, Terraform requires an explicit\n`name` attribute on the `alien_deployment` resource."
+          },
+          "inputValues": {
+            "type": "object",
+            "description": "Deployer-provided stack input values collected by generated setup\nsurfaces. Platform-backed managers resolve these into runtime\nenvironment variables before deployment creation; standalone managers\naccept the field for setup package compatibility.",
+            "additionalProperties": {}
           },
           "managementConfig": {
             "$ref": "#/components/schemas/ManagementConfig",
@@ -10446,6 +12792,11 @@
         "type": "object",
         "description": "User-customizable deployment settings specified at deploy time.\n\nThese settings are provided by the customer via CloudFormation parameters,\nTerraform attributes, CLI flags, or Helm values. They customize how the\ndeployment runs and what capabilities are enabled.\n\n**Key distinction**: StackSettings is user-customizable, while ManagementConfig\nis platform-derived (from the Manager's ServiceAccount).",
         "properties": {
+          "compute": {
+            "$ref": "#/components/schemas/ComputeSettings",
+            "description": "Deployment-time compute selections for Alien-managed compute pools.\n\nThis is where provider machine names such as EC2 instance types, GCE\nmachine types, or Azure VM SKUs belong. Application source should\ndeclare portable requirements instead.",
+            "nullable": true
+          },
           "deploymentModel": {
             "$ref": "#/components/schemas/DeploymentModel",
             "description": "Deployment model: push (Manager) or pull (Agent).\nDefault: Push.\n- Push: Manager drives updates. For cloud platforms, requires cross-account\n  credentials established during initial setup. For push-mode local\n  deployments (currently `alien dev`), the manager has direct access —\n  no bootstrap needed.\n- Pull: Agent in the target environment drives updates via polling.\n  Required for Kubernetes and remote local deployments."
@@ -10683,6 +13034,24 @@
           "approval-required"
         ]
       },
+      "TraceContext": {
+        "type": "object",
+        "description": "W3C Trace Context propagated with a command lease.\n\nThe values are kept in their standard wire form so receivers can attach\nthem to handler telemetry without inventing separate trace/span fields.",
+        "required": [
+          "traceparent"
+        ],
+        "properties": {
+          "traceparent": {
+            "type": "string",
+            "description": "W3C `traceparent` header value."
+          },
+          "tracestate": {
+            "type": "string",
+            "description": "Optional W3C `tracestate` header value.",
+            "nullable": true
+          }
+        }
+      },
       "UpdatesMode": {
         "type": "string",
         "description": "How updates are delivered to the deployment.",
@@ -10874,6 +13243,7 @@
           "kind",
           "id",
           "workspaceId",
+          "workspaceName",
           "role",
           "scope"
         ],
@@ -10892,6 +13262,10 @@
           },
           "workspaceId": {
             "type": "string"
+          },
+          "workspaceName": {
+            "type": "string",
+            "description": "Required by the platform-SDK `ServiceAccountSubject` parser when\nthe CLI looks up a deployment-group token by workspace name."
           }
         }
       },
@@ -11113,6 +13487,10 @@
     {
       "name": "credentials",
       "description": "Credential resolution for deployments"
+    },
+    {
+      "name": "bindings",
+      "description": "Remote resource binding resolution"
     },
     {
       "name": "telemetry",

@@ -347,6 +347,53 @@ pub fn extract_oid_from_token(token: &str) -> Result<String> {
     })
 }
 
+/// Extract the authoritative expiry from an Azure JWT access token.
+pub fn extract_expiry_from_token(token: &str) -> Result<chrono::DateTime<chrono::Utc>> {
+    use base64::Engine;
+
+    let parts: Vec<&str> = token.split('.').collect();
+    if parts.len() != 3 {
+        return Err(AlienError::new(ErrorData::InvalidInput {
+            message: "Azure access token is not a valid JWT (expected 3 parts)".to_string(),
+            field_name: None,
+        }));
+    }
+
+    let payload_bytes = base64::engine::general_purpose::URL_SAFE_NO_PAD
+        .decode(parts[1])
+        .map_err(|error| {
+            AlienError::new(ErrorData::InvalidInput {
+                message: format!("Failed to base64-decode Azure JWT payload: {error}"),
+                field_name: None,
+            })
+        })?;
+
+    #[derive(Deserialize)]
+    struct JwtClaims {
+        exp: Option<i64>,
+    }
+
+    let claims: JwtClaims = serde_json::from_slice(&payload_bytes).map_err(|error| {
+        AlienError::new(ErrorData::InvalidInput {
+            message: format!("Failed to parse Azure JWT payload: {error}"),
+            field_name: None,
+        })
+    })?;
+    let expires_at = claims.exp.ok_or_else(|| {
+        AlienError::new(ErrorData::InvalidInput {
+            message: "Azure JWT does not contain 'exp' claim".to_string(),
+            field_name: None,
+        })
+    })?;
+
+    chrono::DateTime::from_timestamp(expires_at, 0).ok_or_else(|| {
+        AlienError::new(ErrorData::InvalidInput {
+            message: "Azure JWT contains an invalid 'exp' claim".to_string(),
+            field_name: None,
+        })
+    })
+}
+
 /// Trait for Azure platform configuration operations
 #[cfg_attr(target_arch = "wasm32", async_trait::async_trait(?Send))]
 #[cfg_attr(not(target_arch = "wasm32"), async_trait::async_trait)]
@@ -830,6 +877,8 @@ impl AzureClientConfigExt for AzureClientConfig {
 
 #[cfg(test)]
 mod tests {
+    use base64::Engine;
+
     use super::*;
 
     fn scoped_config() -> AzureClientConfig {
@@ -863,5 +912,19 @@ mod tests {
             .await
             .expect_err("a token for another audience must not be reused");
         assert_eq!(error.code, "AUTHENTICATION_ERROR");
+    }
+
+    #[test]
+    fn azure_access_token_expiry_comes_from_the_jwt_claim() {
+        let payload = base64::engine::general_purpose::URL_SAFE_NO_PAD
+            .encode(serde_json::json!({ "exp": 1_893_456_000 }).to_string());
+        let token = format!("e30.{payload}.signature");
+
+        assert_eq!(
+            extract_expiry_from_token(&token)
+                .expect("valid exp claim")
+                .timestamp(),
+            1_893_456_000
+        );
     }
 }

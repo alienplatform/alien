@@ -12,7 +12,7 @@ use indexmap::IndexMap;
 use std::collections::BTreeSet;
 
 const OBSERVE_PERMISSION_SET_ID: &str = "observe/observe";
-const STORAGE_DATA_WRITE_PERMISSION_SET_ID: &str = "storage/data-write";
+const REMOTE_STORAGE_DATA_WRITE_PERMISSION_SET_ID: &str = "storage/remote-data-write";
 
 /// Automatically adds management permission profile with necessary permissions for all resources in the stack.
 ///
@@ -123,6 +123,7 @@ fn remote_storage_resource_ids(stack: &Stack, platform: Platform) -> Vec<String>
         .resources()
         .filter(|(_, resource_entry)| {
             resource_entry.remote_access
+                && resource_entry.lifecycle == ResourceLifecycle::Frozen
                 && resource_entry.config.downcast_ref::<Storage>().is_some()
         })
         .map(|(resource_id, _)| resource_id.clone())
@@ -145,7 +146,7 @@ fn add_remote_storage_data_write_permissions(
     for resource_id in remote_storage_resource_ids {
         let permissions = profile.0.entry(resource_id.clone()).or_default();
         let data_write_permission =
-            PermissionSetReference::from_name(STORAGE_DATA_WRITE_PERMISSION_SET_ID);
+            PermissionSetReference::from_name(REMOTE_STORAGE_DATA_WRITE_PERMISSION_SET_ID);
         if !permissions.contains(&data_write_permission) {
             permissions.push(data_write_permission);
         }
@@ -500,13 +501,14 @@ mod tests {
                     .collect();
                 assert_eq!(
                     storage_permission_names,
-                    vec![STORAGE_DATA_WRITE_PERMISSION_SET_ID],
+                    vec![REMOTE_STORAGE_DATA_WRITE_PERMISSION_SET_ID],
                     "{platform:?} {mode} should grant data access only to the remote storage resource"
                 );
                 assert!(
                     !profile.0.get("*").is_some_and(|permissions| permissions
                         .iter()
-                        .any(|permission| permission.id() == STORAGE_DATA_WRITE_PERMISSION_SET_ID)),
+                        .any(|permission| permission.id()
+                            == REMOTE_STORAGE_DATA_WRITE_PERMISSION_SET_ID)),
                     "{platform:?} {mode} must not grant storage data access with wildcard scope"
                 );
             }
@@ -514,35 +516,43 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn non_remote_storage_gets_no_data_write_management_permission() {
+    async fn endpoint_ineligible_storage_gets_no_remote_data_management_permission() {
         for platform in [Platform::Aws, Platform::Gcp, Platform::Azure] {
-            let storage = Storage::new("uploads".to_string()).build();
-            let stack = Stack::new("test-stack".to_string())
-                .add(storage, ResourceLifecycle::Frozen)
-                .management(ManagementPermissions::Auto)
-                .build();
-            let stack_state = StackState::new(platform);
+            for (remote_access, lifecycle) in [
+                (false, ResourceLifecycle::Frozen),
+                (true, ResourceLifecycle::Live),
+            ] {
+                let storage = Storage::new("uploads".to_string()).build();
+                let mut stack_builder = Stack::new("test-stack".to_string());
+                stack_builder = if remote_access {
+                    stack_builder.add_with_remote_access(storage, lifecycle)
+                } else {
+                    stack_builder.add(storage, lifecycle)
+                };
+                let stack = stack_builder
+                    .management(ManagementPermissions::Auto)
+                    .build();
+                let stack_state = StackState::new(platform);
 
-            let result_stack = ManagementPermissionProfileMutation
-                .mutate(
-                    stack,
-                    &stack_state,
-                    &deployment_config_for_management_permission_test(),
-                )
-                .await
-                .expect("management permission mutation should succeed");
+                let result_stack = ManagementPermissionProfileMutation
+                    .mutate(
+                        stack,
+                        &stack_state,
+                        &deployment_config_for_management_permission_test(),
+                    )
+                    .await
+                    .expect("management permission mutation should succeed");
 
-            let ManagementPermissions::Extend(profile) = result_stack.management() else {
-                panic!("Auto management permissions should become Extend");
-            };
-            assert!(
-                !profile
-                    .0
-                    .values()
-                    .flatten()
-                    .any(|permission| { permission.id() == STORAGE_DATA_WRITE_PERMISSION_SET_ID }),
-                "{platform:?} non-remote storage must not grant management data access"
-            );
+                let ManagementPermissions::Extend(profile) = result_stack.management() else {
+                    panic!("Auto management permissions should become Extend");
+                };
+                assert!(
+                    !profile.0.values().flatten().any(|permission| {
+                        permission.id() == REMOTE_STORAGE_DATA_WRITE_PERMISSION_SET_ID
+                    }),
+                    "{platform:?} remote_access={remote_access} {lifecycle:?} storage must not grant remote data access"
+                );
+            }
         }
     }
 

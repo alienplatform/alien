@@ -7,16 +7,16 @@ use alien_core::{
     AwsCredentials, AzureCredentials, ClientConfig, Container, Daemon, GcpCredentials, Platform,
     ServiceAccount, Worker,
 };
-use alien_error::{AlienError, Context, ContextError};
+use alien_error::{AlienError, Context, ContextError, IntoAlienError};
 use alien_gcp_clients::GcpClientConfigExt;
 use axum::{
     extract::{Json, State},
-    http::HeaderMap,
+    http::{header::CACHE_CONTROL, header::PRAGMA, HeaderMap},
     response::{IntoResponse, Response},
     routing::post,
     Router,
 };
-use chrono::{SecondsFormat, Utc};
+use chrono::{DateTime, SecondsFormat, Utc};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use tracing::info;
@@ -42,43 +42,18 @@ const MAX_SESSION_NAME_LEN: usize = 64;
 /// GCP access tokens minted by this endpoint use the broad cloud-platform
 /// scope; the service account's IAM grants remain the authorization boundary.
 const GCP_CLOUD_PLATFORM_SCOPE: &str = "https://www.googleapis.com/auth/cloud-platform";
+const AZURE_STORAGE_SCOPE: &str = "https://storage.azure.com/.default";
 /// The exact OAuth scopes used by Alien's Azure bindings. Azure access tokens
 /// are audience-specific, so one management token cannot safely stand in for
 /// storage, Key Vault, or Service Bus.
 const AZURE_MINT_SCOPES: [&str; 4] = [
     "https://management.azure.com/.default",
-    "https://storage.azure.com/.default",
+    AZURE_STORAGE_SCOPE,
     "https://vault.azure.net/.default",
     "https://servicebus.azure.net/.default",
 ];
 
 // --- Request / Response types ---
-
-#[derive(Debug, Deserialize)]
-#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
-#[serde(rename_all = "camelCase")]
-pub struct ResolveCredentialsRequest {
-    pub deployment_id: String,
-}
-
-#[derive(Serialize)]
-#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
-#[serde(rename_all = "camelCase")]
-pub struct ResolveCredentialsResponse {
-    pub client_config: ClientConfig,
-}
-
-/// Manual `Debug`: `ClientConfig` carries live credentials. Never let a
-/// `{:?}` of this response (log line, panic message, test failure output)
-/// print them — even indirectly through `serde_json::Value`, which has no
-/// redaction of its own once the typed config is serialized.
-impl std::fmt::Debug for ResolveCredentialsResponse {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("ResolveCredentialsResponse")
-            .field("client_config", &"<redacted>")
-            .finish()
-    }
-}
 
 /// Request body for `POST /v1/credentials/mint`.
 ///
@@ -125,8 +100,8 @@ pub struct MintCredentialsResponse {
     pub principal: String,
 }
 
-/// Manual `Debug`: see [`ResolveCredentialsResponse`]'s impl — same reasoning,
-/// same secret-bearing field.
+/// Manual `Debug`: the client configuration is credential-bearing and must
+/// never be printed.
 impl std::fmt::Debug for MintCredentialsResponse {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("MintCredentialsResponse")
@@ -140,68 +115,18 @@ impl std::fmt::Debug for MintCredentialsResponse {
 // --- Router ---
 
 pub fn router() -> Router<AppState> {
-    Router::new()
-        .route("/v1/resolve-credentials", post(resolve_credentials))
-        .route("/v1/credentials/mint", post(mint_credentials))
-}
-
-// --- Handler ---
-
-#[cfg_attr(feature = "openapi", utoipa::path(
-    post,
-    path = "/v1/resolve-credentials",
-    tag = "credentials",
-    request_body = ResolveCredentialsRequest,
-    responses(
-        (status = 200, description = "Credentials resolved successfully", body = ResolveCredentialsResponse)
-    ),
-    security(
-        ("bearer" = [])
-    )
-))]
-async fn resolve_credentials(
-    State(state): State<AppState>,
-    headers: HeaderMap,
-    Json(req): Json<ResolveCredentialsRequest>,
-) -> Response {
-    let (_subject, deployment) = match authorize_deployment(
-        &state,
-        &headers,
-        &req.deployment_id,
-        "resolve credentials for",
-    )
-    .await
-    {
-        Ok(pair) => pair,
-        Err(response) => return response,
-    };
-
-    // Resolve credentials
-    match state.credential_resolver.resolve(&deployment).await {
-        Ok(client_config) => Json(ResolveCredentialsResponse { client_config }).into_response(),
-        Err(e) => e.into_response(),
-    }
+    Router::new().route("/v1/credentials/mint", post(mint_credentials))
 }
 
 // --- Shared auth/load plumbing ---
 
-/// Load the deployment and authorize the subject on it. Shared by
-/// `resolve_credentials` and `mint_credentials`, which both need "valid
-/// bearer, deployment exists, subject can act on it" before doing anything
-/// endpoint-specific. `action` only affects the forbidden-response wording
-/// (e.g. `"mint credentials for"`).
-///
-/// `can_act_on_deployment` is `can_read_deployment` under the hood: a
-/// Workspace/Project-scoped token passes unconditionally, a
-/// DeploymentGroup-scoped token passes for any deployment in its group, and a
-/// Deployment-scoped token passes only for its own deployment. So a
-/// deployment-group token can mint/resolve for every deployment in its group
-/// — an inherited grant, not a bug (see the DG-token matrix test).
-async fn authorize_deployment(
+/// Load the deployment and require write authority before credential minting.
+/// Viewer access is deliberately insufficient because the response contains
+/// short-lived cloud credentials.
+async fn authorize_credential_mint(
     state: &AppState,
     headers: &HeaderMap,
     deployment_id: &str,
-    action: &str,
 ) -> std::result::Result<(Subject, DeploymentRecord), Response> {
     let subject = auth::require_auth(state, headers)
         .await
@@ -217,9 +142,9 @@ async fn authorize_deployment(
         Err(e) => return Err(e.into_response()),
     };
 
-    if !state.authz.can_act_on_deployment(&subject, &deployment) {
+    if !state.authz.can_update_deployment(&subject, &deployment) {
         return Err(
-            ErrorData::forbidden(format!("Cannot {action} this deployment")).into_response(),
+            ErrorData::forbidden("Cannot mint credentials for this deployment").into_response(),
         );
     }
 
@@ -245,14 +170,9 @@ async fn mint_credentials(
     headers: HeaderMap,
     Json(req): Json<MintCredentialsRequest>,
 ) -> Response {
-    // Auth + load + authorize (401 / 404 / 403). See `authorize_deployment`
-    // for the scope semantics — notably that DeploymentGroup/Project/Workspace
-    // scoped tokens all inherit mint access, not just the deployment's own
-    // token.
+    // Auth + load + write authorization (401 / 404 / 403).
     let (_subject, deployment) =
-        match authorize_deployment(&state, &headers, &req.deployment_id, "mint credentials for")
-            .await
-        {
+        match authorize_credential_mint(&state, &headers, &req.deployment_id).await {
             Ok(pair) => pair,
             Err(response) => return response,
         };
@@ -385,12 +305,15 @@ async fn mint_credentials(
         "Minted deployment credentials"
     );
 
-    Json(MintCredentialsResponse {
-        client_config,
-        expires_at,
-        principal,
-    })
-    .into_response()
+    (
+        [(CACHE_CONTROL, "no-store"), (PRAGMA, "no-cache")],
+        Json(MintCredentialsResponse {
+            client_config,
+            expires_at,
+            principal,
+        }),
+    )
+        .into_response()
 }
 
 // --- Mint helpers ---
@@ -499,6 +422,103 @@ async fn validate_mint_resource_link(
 pub(super) async fn materialize_response_safe_client_config(
     config: ClientConfig,
 ) -> std::result::Result<ClientConfig, AlienError<ErrorData>> {
+    materialize_response_safe_client_config_with_azure_scopes(config, &AZURE_MINT_SCOPES).await
+}
+
+/// Materialize credentials for the remote Storage surface without exporting
+/// tokens for unrelated Azure services.
+pub(super) async fn materialize_remote_storage_client_config(
+    config: ClientConfig,
+) -> std::result::Result<(ClientConfig, DateTime<Utc>), AlienError<ErrorData>> {
+    match config {
+        ClientConfig::Aws(config) => {
+            let AwsCredentials::SessionCredentials { expires_at, .. } = &config.credentials else {
+                return Err(ErrorData::internal(
+                    "Remote AWS Storage credentials are not a short-lived session",
+                ));
+            };
+            let expires_at = DateTime::parse_from_rfc3339(expires_at)
+                .into_alien_error()
+                .context(ErrorData::InternalError {
+                    message: "AWS returned an invalid session credential expiry".to_string(),
+                })?
+                .with_timezone(&Utc);
+            Ok((ClientConfig::Aws(config), expires_at))
+        }
+        ClientConfig::Gcp(config) => {
+            let GcpCredentials::ImpersonatedServiceAccount {
+                source,
+                config: impersonation,
+            } = &config.credentials
+            else {
+                return Err(ErrorData::internal(
+                    "Remote GCP Storage requires an impersonated service-account credential source with authoritative expiry",
+                ));
+            };
+            let response =
+                alien_gcp_clients::generate_impersonated_access_token(source, impersonation)
+                    .await
+                    .context(ErrorData::CredentialMaterializationFailed {
+                        platform: Platform::Gcp,
+                        purpose: "remote Storage".to_string(),
+                    })?;
+            let expires_at = DateTime::parse_from_rfc3339(&response.expire_time)
+                .into_alien_error()
+                .context(ErrorData::InternalError {
+                    message: "GCP returned an invalid access-token expiry".to_string(),
+                })?
+                .with_timezone(&Utc);
+            let config = *config;
+            Ok((
+                ClientConfig::Gcp(Box::new(alien_core::GcpClientConfig {
+                    credentials: GcpCredentials::AccessToken {
+                        token: response.access_token,
+                    },
+                    ..config
+                })),
+                expires_at,
+            ))
+        }
+        ClientConfig::Azure(config) => {
+            if matches!(&config.credentials, AzureCredentials::AccessToken { .. }) {
+                return Err(ErrorData::internal(
+                    "Remote Azure Storage requires an exact storage-scope token",
+                ));
+            }
+            let token = config
+                .get_bearer_token_with_scope(AZURE_STORAGE_SCOPE)
+                .await
+                .context(ErrorData::CredentialMaterializationFailed {
+                    platform: Platform::Azure,
+                    purpose: "remote Storage".to_string(),
+                })?;
+            let expires_at = alien_azure_clients::extract_expiry_from_token(&token).context(
+                ErrorData::InternalError {
+                    message: "Azure returned an access token without a valid expiry".to_string(),
+                },
+            )?;
+            let config = *config;
+            Ok((
+                ClientConfig::Azure(Box::new(alien_core::AzureClientConfig {
+                    credentials: AzureCredentials::ScopedAccessTokens {
+                        tokens: HashMap::from([(AZURE_STORAGE_SCOPE.to_string(), token)]),
+                    },
+                    ..config
+                })),
+                expires_at,
+            ))
+        }
+        other => Err(ErrorData::internal(format!(
+            "Credential impersonation returned unsupported {} client config",
+            other.platform()
+        ))),
+    }
+}
+
+async fn materialize_response_safe_client_config_with_azure_scopes(
+    config: ClientConfig,
+    azure_scopes: &[&str],
+) -> std::result::Result<ClientConfig, AlienError<ErrorData>> {
     match config {
         ClientConfig::Aws(config)
             if matches!(
@@ -515,8 +535,9 @@ pub(super) async fn materialize_response_safe_client_config(
             let token = config
                 .get_bearer_token(GCP_CLOUD_PLATFORM_SCOPE)
                 .await
-                .context(ErrorData::InternalError {
-                    message: "Failed to materialize short-lived GCP credentials".to_string(),
+                .context(ErrorData::CredentialMaterializationFailed {
+                    platform: Platform::Gcp,
+                    purpose: "credential minting".to_string(),
                 })?;
             let config = *config;
             Ok(ClientConfig::Gcp(Box::new(alien_core::GcpClientConfig {
@@ -530,13 +551,12 @@ pub(super) async fn materialize_response_safe_client_config(
                     "Azure impersonation returned a single-scope access token; exact per-scope tokens are required",
                 ));
             }
-            let mut tokens = HashMap::with_capacity(AZURE_MINT_SCOPES.len());
-            for scope in AZURE_MINT_SCOPES {
+            let mut tokens = HashMap::with_capacity(azure_scopes.len());
+            for &scope in azure_scopes {
                 let token = config.get_bearer_token_with_scope(scope).await.context(
-                    ErrorData::InternalError {
-                        message: format!(
-                        "Failed to materialize short-lived Azure credentials for scope '{scope}'"
-                    ),
+                    ErrorData::CredentialMaterializationFailed {
+                        platform: Platform::Azure,
+                        purpose: format!("credential minting scope '{scope}'"),
                     },
                 )?;
                 tokens.insert(scope.to_string(), token);
@@ -646,17 +666,24 @@ fn principal_from_client_config(config: &ClientConfig) -> String {
 
 #[cfg(test)]
 mod tests {
+    use base64::Engine;
+
     use super::{
-        clamp_duration, mint_session_name, principal_from_client_config, principal_from_info,
-        truncate_session_name, MintCredentialsResponse, ResolveCredentialsResponse,
-        MAX_SESSION_NAME_LEN,
+        clamp_duration, materialize_remote_storage_client_config, mint_session_name,
+        principal_from_client_config, principal_from_info, truncate_session_name,
+        MintCredentialsResponse, AZURE_STORAGE_SCOPE, MAX_SESSION_NAME_LEN,
     };
     use alien_bindings::ServiceAccountInfo;
     use alien_bindings::{
         traits::AwsServiceAccountInfo, traits::AzureServiceAccountInfo,
         traits::GcpServiceAccountInfo,
     };
-    use alien_core::{AwsClientConfig, AwsCredentials, ClientConfig};
+    use alien_core::{
+        AwsClientConfig, AwsCredentials, AzureClientConfig, AzureCredentials, ClientConfig,
+        GcpClientConfig, GcpCredentials,
+    };
+    use alien_error::{AlienError, ContextError, GenericError};
+    use std::collections::HashMap;
 
     #[test]
     fn clamp_duration_defaults_when_absent() {
@@ -679,6 +706,83 @@ mod tests {
         assert_eq!(clamp_duration(Some(1800)), 1800);
         assert_eq!(clamp_duration(Some(900)), 900);
         assert_eq!(clamp_duration(Some(3600)), 3600);
+    }
+
+    #[tokio::test]
+    async fn remote_storage_materialization_keeps_only_the_azure_storage_audience() {
+        let expires_at_timestamp = 1_893_456_000;
+        let payload = base64::engine::general_purpose::URL_SAFE_NO_PAD
+            .encode(serde_json::json!({ "exp": expires_at_timestamp }).to_string());
+        let storage_token = format!("e30.{payload}.signature");
+        let config = ClientConfig::Azure(Box::new(AzureClientConfig {
+            subscription_id: "subscription".to_string(),
+            tenant_id: "tenant".to_string(),
+            region: Some("eastus".to_string()),
+            credentials: AzureCredentials::ScopedAccessTokens {
+                tokens: HashMap::from([
+                    (AZURE_STORAGE_SCOPE.to_string(), storage_token.clone()),
+                    (
+                        "https://management.azure.com/.default".to_string(),
+                        "management-token".to_string(),
+                    ),
+                    (
+                        "https://vault.azure.net/.default".to_string(),
+                        "vault-token".to_string(),
+                    ),
+                ]),
+            },
+            service_overrides: None,
+        }));
+
+        let (client_config, expires_at) = materialize_remote_storage_client_config(config)
+            .await
+            .expect("storage token should materialize");
+        let ClientConfig::Azure(config) = client_config else {
+            panic!("expected Azure config");
+        };
+        let AzureCredentials::ScopedAccessTokens { tokens } = config.credentials else {
+            panic!("expected scoped Azure tokens");
+        };
+        assert_eq!(
+            tokens,
+            HashMap::from([(AZURE_STORAGE_SCOPE.to_string(), storage_token)])
+        );
+        assert_eq!(expires_at.timestamp(), expires_at_timestamp);
+    }
+
+    #[tokio::test]
+    async fn remote_gcp_storage_rejects_opaque_access_tokens_without_expiry() {
+        let config = ClientConfig::Gcp(Box::new(GcpClientConfig {
+            project_id: "project".to_string(),
+            region: "us-central1".to_string(),
+            credentials: GcpCredentials::AccessToken {
+                token: "opaque-token".to_string(),
+            },
+            service_overrides: None,
+            project_number: None,
+        }));
+
+        let error = materialize_remote_storage_client_config(config)
+            .await
+            .expect_err("opaque token has no authoritative expiry");
+        assert!(!error.retryable);
+    }
+
+    #[test]
+    fn credential_materialization_context_inherits_transient_metadata() {
+        let mut source = AlienError::new(GenericError {
+            message: "temporary OAuth outage".to_string(),
+        });
+        source.retryable = true;
+        source.http_status_code = Some(503);
+
+        let wrapped: AlienError<crate::error::ErrorData> =
+            source.context(crate::error::ErrorData::CredentialMaterializationFailed {
+                platform: alien_core::Platform::Gcp,
+                purpose: "remote Storage".to_string(),
+            });
+        assert!(wrapped.retryable);
+        assert_eq!(wrapped.http_status_code, Some(503));
     }
 
     #[test]
@@ -775,7 +879,7 @@ mod tests {
         }));
 
         let mint_response = MintCredentialsResponse {
-            client_config: secret_config.clone(),
+            client_config: secret_config,
             expires_at: "2026-01-01T00:00:00Z".to_string(),
             principal: "arn:aws:iam::123:role/r".to_string(),
         };
@@ -786,17 +890,6 @@ mod tests {
         );
         assert!(!mint_debug.contains("TOP_SECRET_KEY_MATERIAL"));
         assert!(!mint_debug.contains("TOP_SECRET_SESSION_TOKEN"));
-
-        let resolve_response = ResolveCredentialsResponse {
-            client_config: secret_config,
-        };
-        let resolve_debug = format!("{:?}", resolve_response);
-        assert!(
-            resolve_debug.contains("<redacted>"),
-            "expected redaction marker: {resolve_debug}"
-        );
-        assert!(!resolve_debug.contains("TOP_SECRET_KEY_MATERIAL"));
-        assert!(!resolve_debug.contains("TOP_SECRET_SESSION_TOKEN"));
     }
 
     #[test]

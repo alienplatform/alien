@@ -1,0 +1,70 @@
+{
+  "id": "storage/remote-data-write",
+  "description": "Allows remote binding object operations on one storage bucket or container",
+  "platforms": {
+    "aws": [
+      {
+        "grant": {
+          "actions": [
+            "s3:ListBucket",
+            "s3:GetObject",
+            "s3:PutObject",
+            "s3:DeleteObject",
+            "s3:AbortMultipartUpload"
+          ]
+        },
+        "binding": {
+          "stack": {
+            "resources": ["arn:aws:s3:::${stackPrefix}-*", "arn:aws:s3:::${stackPrefix}-*/*"]
+          },
+          "resource": {
+            "resources": ["arn:aws:s3:::${resourceName}", "arn:aws:s3:::${resourceName}/*"]
+          }
+        }
+      }
+    ],
+    "gcp": [
+      {
+        "grant": {
+          "permissions": [
+            "storage.objects.get",
+            "storage.objects.list",
+            "storage.objects.create",
+            "storage.objects.delete",
+            "storage.multipartUploads.create",
+            "storage.multipartUploads.abort",
+            "storage.multipartUploads.listParts",
+            "storage.multipartUploads.list"
+          ]
+        },
+        "binding": {
+          "stack": {
+            "scope": "projects/${projectName}"
+          },
+          "resource": {
+            "scope": "projects/${projectName}/buckets/${resourceName}"
+          }
+        }
+      }
+    ],
+    "azure": [
+      {
+        "grant": {
+          "dataActions": [
+            "Microsoft.Storage/storageAccounts/blobServices/containers/blobs/read",
+            "Microsoft.Storage/storageAccounts/blobServices/containers/blobs/write",
+            "Microsoft.Storage/storageAccounts/blobServices/containers/blobs/delete"
+          ]
+        },
+        "binding": {
+          "stack": {
+            "scope": "/subscriptions/${subscriptionId}/resourceGroups/${resourceGroup}"
+          },
+          "resource": {
+            "scope": "/subscriptions/${subscriptionId}/resourceGroups/${resourceGroup}/providers/Microsoft.Storage/storageAccounts/${storageAccountName}/blobServices/default/containers/${resourceName}"
+          }
+        }
+      }
+    ]
+  }
+}

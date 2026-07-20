@@ -29,6 +29,41 @@
         }
       }
     },
+    "/v1/bindings/resolve": {
+      "post": {
+        "tags": [
+          "bindings"
+        ],
+        "operationId": "resolve_binding",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ResolveBindingRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Remote binding resolved successfully",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ResolveBindingResponse"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ]
+      }
+    },
     "/v1/commands": {
       "post": {
         "tags": [
@@ -1087,41 +1122,6 @@
           },
           "404": {
             "description": "Release not found"
-          }
-        },
-        "security": [
-          {
-            "bearer": []
-          }
-        ]
-      }
-    },
-    "/v1/resolve-credentials": {
-      "post": {
-        "tags": [
-          "credentials"
-        ],
-        "operationId": "resolve_credentials",
-        "requestBody": {
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/ResolveCredentialsRequest"
-              }
-            }
-          },
-          "required": true
-        },
-        "responses": {
-          "200": {
-            "description": "Credentials resolved successfully",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ResolveCredentialsResponse"
-                }
-              }
-            }
           }
         },
         "security": [
@@ -5327,6 +5327,48 @@
         },
         "additionalProperties": true
       },
+      "BindingValue_String": {
+        "oneOf": [
+          {
+            "type": "string"
+          },
+          {
+            "type": "object",
+            "description": "A Kubernetes Secret reference (must come before Expression)",
+            "required": [
+              "secretRef"
+            ],
+            "properties": {
+              "secretRef": {
+                "$ref": "#/components/schemas/SecretReference"
+              }
+            }
+          },
+          {
+            "$ref": "#/components/schemas/Value",
+            "description": "A template expression (used by IaC template generators)"
+          }
+        ],
+        "description": "Represents a value that can be either a concrete value, a template expression,\nor a reference to a Kubernetes Secret"
+      },
+      "BlobStorageBinding": {
+        "type": "object",
+        "description": "Azure Blob Storage binding configuration",
+        "required": [
+          "accountName",
+          "containerName"
+        ],
+        "properties": {
+          "accountName": {
+            "$ref": "#/components/schemas/BindingValue_String",
+            "description": "The name of the storage account"
+          },
+          "containerName": {
+            "$ref": "#/components/schemas/BindingValue_String",
+            "description": "The name of the container"
+          }
+        }
+      },
       "BodySpec": {
         "oneOf": [
           {
@@ -8607,6 +8649,19 @@
               "string",
               "null"
             ]
+          }
+        }
+      },
+      "GcsStorageBinding": {
+        "type": "object",
+        "description": "Google Cloud Storage binding configuration",
+        "required": [
+          "bucketName"
+        ],
+        "properties": {
+          "bucketName": {
+            "$ref": "#/components/schemas/BindingValue_String",
+            "description": "The name of the GCS bucket"
           }
         }
       },
@@ -13545,25 +13600,119 @@
           }
         }
       },
-      "ResolveCredentialsRequest": {
+      "RemoteStorageBinding": {
+        "oneOf": [
+          {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/S3StorageBinding",
+                "description": "AWS S3."
+              },
+              {
+                "type": "object",
+                "required": [
+                  "service"
+                ],
+                "properties": {
+                  "service": {
+                    "type": "string",
+                    "enum": [
+                      "s3"
+                    ]
+                  }
+                }
+              }
+            ],
+            "description": "AWS S3."
+          },
+          {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/BlobStorageBinding",
+                "description": "Azure Blob Storage."
+              },
+              {
+                "type": "object",
+                "required": [
+                  "service"
+                ],
+                "properties": {
+                  "service": {
+                    "type": "string",
+                    "enum": [
+                      "blob"
+                    ]
+                  }
+                }
+              }
+            ],
+            "description": "Azure Blob Storage."
+          },
+          {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/GcsStorageBinding",
+                "description": "Google Cloud Storage."
+              },
+              {
+                "type": "object",
+                "required": [
+                  "service"
+                ],
+                "properties": {
+                  "service": {
+                    "type": "string",
+                    "enum": [
+                      "gcs"
+                    ]
+                  }
+                }
+              }
+            ],
+            "description": "Google Cloud Storage."
+          }
+        ],
+        "description": "Storage binding variants supported by the first hosted remote-bindings release."
+      },
+      "ResolveBindingRequest": {
         "type": "object",
+        "description": "Request body for `POST /v1/bindings/resolve`.",
         "required": [
-          "deploymentId"
+          "deploymentId",
+          "resourceId"
         ],
         "properties": {
           "deploymentId": {
-            "type": "string"
+            "type": "string",
+            "description": "Deployment containing the remote-enabled resource."
+          },
+          "resourceId": {
+            "type": "string",
+            "description": "Logical Storage resource id in the deployment's stack state."
           }
-        }
+        },
+        "additionalProperties": false
       },
-      "ResolveCredentialsResponse": {
+      "ResolveBindingResponse": {
         "type": "object",
+        "description": "Response containing one approved remote binding and short-lived credentials.",
         "required": [
-          "clientConfig"
+          "binding",
+          "clientConfig",
+          "expiresAt"
         ],
         "properties": {
+          "binding": {
+            "$ref": "#/components/schemas/RemoteStorageBinding",
+            "description": "Server-selected storage binding configuration."
+          },
           "clientConfig": {
-            "$ref": "#/components/schemas/ClientConfig"
+            "$ref": "#/components/schemas/ClientConfig",
+            "description": "Materialized credentials safe to hand to the caller."
+          },
+          "expiresAt": {
+            "type": "string",
+            "description": "Server refresh hint for the returned credentials."
           }
         }
       },
@@ -14071,6 +14220,19 @@
           }
         }
       },
+      "S3StorageBinding": {
+        "type": "object",
+        "description": "AWS S3 storage binding configuration",
+        "required": [
+          "bucketName"
+        ],
+        "properties": {
+          "bucketName": {
+            "$ref": "#/components/schemas/BindingValue_String",
+            "description": "The name of the S3 bucket"
+          }
+        }
+      },
       "ScopeInfo": {
         "type": "object",
         "required": [
@@ -14096,6 +14258,22 @@
             ]
           },
           "type": {
+            "type": "string"
+          }
+        }
+      },
+      "SecretReference": {
+        "type": "object",
+        "description": "Reference to a Kubernetes Secret",
+        "required": [
+          "name",
+          "key"
+        ],
+        "properties": {
+          "key": {
+            "type": "string"
+          },
+          "name": {
             "type": "string"
           }
         }
@@ -15330,6 +15508,10 @@
     {
       "name": "credentials",
       "description": "Credential resolution for deployments"
+    },
+    {
+      "name": "bindings",
+      "description": "Remote resource binding resolution"
     },
     {
       "name": "telemetry",

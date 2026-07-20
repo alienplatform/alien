@@ -1532,10 +1532,32 @@ impl StackExecutor {
             // in the internal_state and handles its own stepping
             if !current_resource_state.has_internal_state() {
                 if self.is_external_binding_resource(&resource_id) {
-                    debug!(
-                        resource_id = %resource_id,
-                        "External binding resource has no controller state; skipping step"
-                    );
+                    // External bindings intentionally have no controller to
+                    // step. Reconcile the publication gate directly so a
+                    // release that changes only `remote_access` cannot leave
+                    // stale binding parameters visible, or fail to publish
+                    // newly-enabled parameters.
+                    let remote_access = self
+                        .desired_stack
+                        .resources
+                        .get(&resource_id)
+                        .is_some_and(|entry| entry.remote_access);
+                    current_resource_state.remote_binding_params = if remote_access {
+                        self.deployment_config
+                            .external_bindings
+                            .get(&resource_id)
+                            .map(serde_json::to_value)
+                            .transpose()
+                            .into_alien_error()
+                            .context(ErrorData::ResourceStateSerializationFailed {
+                                resource_id: resource_id.clone(),
+                                message: "Failed to serialize external binding parameters"
+                                    .to_string(),
+                            })?
+                    } else {
+                        None
+                    };
+                    subsequent_state_updates.insert(resource_id.clone(), current_resource_state);
                 } else {
                     warn!(
                         "Resource '{}' has no controller state. Skipping step.",
@@ -2027,7 +2049,20 @@ impl StackExecutor {
                         let is_running = current_view.status == ResourceStatus::Running;
 
                         let config_matches = if self.is_external_binding_resource(id) {
+                            let remote_binding_matches =
+                                self.desired_stack.resources.get(id).is_some_and(|entry| {
+                                    if !entry.remote_access {
+                                        return current_view.remote_binding_params.is_none();
+                                    }
+                                    self.deployment_config
+                                        .external_bindings
+                                        .get(id)
+                                        .and_then(|binding| serde_json::to_value(binding).ok())
+                                        .as_ref()
+                                        == current_view.remote_binding_params.as_ref()
+                                });
                             current_view.config == desired_resource_config.resource
+                                && remote_binding_matches
                         } else {
                             current_view
                                 .internal_state
