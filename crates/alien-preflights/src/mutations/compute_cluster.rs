@@ -170,6 +170,13 @@ impl ComputeClusterMutation {
         mut stack: Stack,
         stack_state: &StackState,
     ) -> Result<Stack> {
+        if !matches!(
+            stack_state.platform,
+            Platform::Aws | Platform::Gcp | Platform::Azure
+        ) {
+            return Ok(stack);
+        }
+
         let cluster_groups: std::collections::HashMap<String, std::collections::HashSet<String>> =
             stack
                 .resources
@@ -1268,6 +1275,62 @@ mod tests {
             .await
             .expect_err("an explicit pool must belong to the referenced cluster");
         assert!(error.to_string().contains("Capacity group 'missing'"));
+    }
+
+    #[tokio::test]
+    async fn local_persistent_container_uses_unconstrained_compute_without_pool() {
+        let container = Container::new("database".to_string())
+            .code(ContainerCode::Image {
+                image: "database:latest".to_string(),
+            })
+            .cpu(ResourceSpec {
+                min: "1".to_string(),
+                desired: "1".to_string(),
+            })
+            .memory(ResourceSpec {
+                min: "1Gi".to_string(),
+                desired: "1Gi".to_string(),
+            })
+            .persistent_storage(PersistentStorage {
+                size: "20Gi".to_string(),
+                mount_path: "/data".to_string(),
+            })
+            .stateful(true)
+            .replicas(1)
+            .permissions("database".to_string())
+            .build();
+        let stack = Stack::new("test-stack".to_string())
+            .add(container, ResourceLifecycle::Live)
+            .build();
+        let stack_state = StackState {
+            platform: Platform::Local,
+            resources: Default::default(),
+            resource_prefix: "test".to_string(),
+        };
+        let config = DeploymentConfig::builder()
+            .stack_settings(StackSettings::default())
+            .environment_variables(empty_env_snapshot())
+            .allow_frozen_changes(false)
+            .external_bindings(ExternalBindings::default())
+            .build();
+
+        let mutation = ComputeClusterMutation;
+        let result = mutation
+            .mutate(stack, &stack_state, &config)
+            .await
+            .expect("local persistent container should pass compute preparation");
+        let container = result.resources["database"]
+            .config
+            .downcast_ref::<Container>()
+            .unwrap();
+        assert_eq!(container.pool, None);
+        let cluster = result.resources[container.cluster.as_deref().unwrap()]
+            .config
+            .downcast_ref::<ComputeCluster>()
+            .unwrap();
+        assert_eq!(cluster.capacity_groups.len(), 1);
+        assert_eq!(cluster.capacity_groups[0].group_id, "general");
+        assert!(!mutation.should_run(&result, &stack_state, &config));
     }
 
     #[test]
