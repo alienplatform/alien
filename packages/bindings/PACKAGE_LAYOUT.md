@@ -25,7 +25,9 @@ its own.
 | `kv` | function | `kv(name: string): Kv` | Factory. |
 | `queue` | function | `queue(name: string): Queue` | Factory. |
 | `vault` | function | `vault(name: string): Vault` | Factory. |
+| `Bindings` | class | `Bindings.forRemoteDeployment(options): Promise<Bindings>` | Trusted-backend entry point for remote Storage access to an existing deployment. |
 | `Storage` | type | resource handle | Instance type returned by `storage()`. Operation method signatures mirror the Rust `alien-bindings` storage handle. |
+| `RemoteStorage` | type | `Pick<Storage, "get" \| "put" \| "delete" \| "list" \| "head">` | Narrow handle returned by `Bindings.storage()`. |
 | `Kv` | type | resource handle | Instance type returned by `kv()`. Method signatures mirror the Rust handle. |
 | `Queue` | type | resource handle | Instance type returned by `queue()`. Method signatures mirror the Rust handle. |
 | `Vault` | type | resource handle | Instance type returned by `vault()`. Method signatures mirror the Rust handle. |
@@ -42,6 +44,9 @@ added:
 - build
 - artifact-registry
 - service-account
+
+Remote `Bindings` deliberately exposes no `kv`, `queue`, or `vault` methods.
+Its Storage handle deliberately excludes copy and signed URLs.
 
 These live only on the Rust `BindingsProvider` (manager, controllers, tooling,
 remote bindings) and are never part of an app-facing surface.
@@ -115,6 +120,10 @@ MAY depend on:
 - The first operation against a binding that has no `ALIEN_<NAME>_BINDING` in the
   environment throws `BindingNotConfiguredError` (code `BINDING_NOT_CONFIGURED`),
   and the error names the missing env var `ALIEN_<NAME>_BINDING` in its context.
+- `Bindings.forRemoteDeployment` forwards only the deployment ID, token, and
+  optional Alien API base URL. It retains one native bindings handle, resolves
+  each named Storage handle lazily, and translates native errors to
+  `AlienError`.
 
 ## Status
 

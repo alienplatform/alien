@@ -5,6 +5,35 @@ in-process [napi-rs](https://napi.rs) addon. The addon itself lives in the Rust
 crate `crates/alien-bindings-node`; this package is the published JavaScript
 wrapper that loads it.
 
+## Remote Storage
+
+Use `Bindings.forRemoteDeployment` from a trusted backend to access a Storage
+resource in an existing deployment. The token must be authorized for remote
+bindings on that deployment.
+
+```ts
+import { Bindings } from "@alienplatform/bindings"
+
+const bindings = await Bindings.forRemoteDeployment({
+  deploymentId: process.env.ALIEN_DEPLOYMENT_ID!,
+  token: process.env.ALIEN_API_TOKEN!,
+})
+
+const archive = bindings.storage("archive")
+await archive.put("reports/latest.json", Buffer.from(JSON.stringify({ ready: true })))
+
+const metadata = await archive.head("reports/latest.json")
+const report = await archive.get("reports/latest.json")
+const reports = await archive.list("reports/")
+
+await archive.delete("reports/latest.json")
+```
+
+Remote Storage exposes `get`, `put`, `head`, `list`, and `delete`. It does not
+expose copy or signed URLs. The same `Bindings` and Storage handles remain valid
+while the native client refreshes short-lived cloud credentials. Pass
+`apiBaseUrl` only when targeting a non-default Alien API endpoint.
+
 ## Native addon resolution
 
 The addon is loaded lazily on the first binding operation (never at import — the

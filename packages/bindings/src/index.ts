@@ -12,6 +12,9 @@
 import { createFactories } from "./factories.js"
 import { loadAddon } from "./loader.js"
 
+export { Bindings } from "./remote.js"
+export type { RemoteDeploymentBindingsOptions } from "./remote.js"
+
 const factories = createFactories(loadAddon)
 
 /** Resolve the storage binding named `name`. */
@@ -34,6 +37,7 @@ export type {
   PresignedRequest,
   Queue,
   QueueMessage,
+  RemoteStorage,
   SignedUrlMethod,
   SignedUrlOptions,
   Storage,

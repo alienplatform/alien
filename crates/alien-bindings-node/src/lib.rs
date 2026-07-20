@@ -50,6 +50,23 @@ impl BindingsHandle {
         })
     }
 
+    /// Discover a deployment's assigned manager and create remote bindings.
+    #[cfg(feature = "platform-sdk")]
+    #[napi(factory)]
+    pub async fn for_remote_deployment(
+        deployment_id: String,
+        token: String,
+        api_base_url: Option<String>,
+    ) -> napi::Result<Self> {
+        let bindings =
+            Bindings::for_remote_deployment(&deployment_id, &token, api_base_url.as_deref())
+                .await
+                .map_err(map_alien_error)?;
+        Ok(Self {
+            inner: Arc::new(bindings),
+        })
+    }
+
     /// Resolve the storage binding named `name`.
     #[napi]
     pub async fn storage(&self, name: String) -> napi::Result<StorageHandle> {

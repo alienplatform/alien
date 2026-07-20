@@ -122,9 +122,19 @@ export interface RawBindingsHandle {
   vault(name: string): Promise<RawVaultHandle>
 }
 
+/** Native bindings class, including the remote deployment factory. */
+export interface RawBindingsHandleConstructor {
+  new (): RawBindingsHandle
+  forRemoteDeployment(
+    deploymentId: string,
+    token: string,
+    apiBaseUrl?: string,
+  ): Promise<RawBindingsHandle>
+}
+
 /** The complete napi addon module surface consumed by the wrapper. */
 export interface NativeAddon {
-  BindingsHandle: new () => RawBindingsHandle
+  BindingsHandle: RawBindingsHandleConstructor
   version(): string
 }
 

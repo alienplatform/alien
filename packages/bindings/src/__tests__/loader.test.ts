@@ -3,21 +3,27 @@ import type { NativeAddon } from "../loader.js"
 import { assertAddonVersion, platformTriple } from "../loader.js"
 
 function addonReporting(version: string): NativeAddon {
+  class BindingsHandle {
+    static async forRemoteDeployment(): Promise<never> {
+      throw new Error("not used by version validation")
+    }
+
+    storage(): never {
+      throw new Error("not used by version validation")
+    }
+    kv(): never {
+      throw new Error("not used by version validation")
+    }
+    queue(): never {
+      throw new Error("not used by version validation")
+    }
+    vault(): never {
+      throw new Error("not used by version validation")
+    }
+  }
+
   return {
-    BindingsHandle: class {
-      storage(): never {
-        throw new Error("not used by version validation")
-      }
-      kv(): never {
-        throw new Error("not used by version validation")
-      }
-      queue(): never {
-        throw new Error("not used by version validation")
-      }
-      vault(): never {
-        throw new Error("not used by version validation")
-      }
-    },
+    BindingsHandle,
     version: () => version,
   }
 }
