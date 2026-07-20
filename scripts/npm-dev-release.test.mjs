@@ -25,11 +25,17 @@ function fixture() {
 
 test("rewrites every published package and internal edge to commit-addressed versions", () => {
   const root = fixture()
+  const coreBase = JSON.parse(
+    readFileSync(resolve(root, "packages/core/package.json"), "utf8"),
+  ).version.replace(/-.*/, "")
+  const platformBase = JSON.parse(
+    readFileSync(resolve(root, "client-sdks/platform/typescript/package.json"), "utf8"),
+  ).version.replace(/-.*/, "")
   const versions = rewriteManifests(root, sha)
   validateManifests(root, sha)
 
-  assert.equal(versions.get("@alienplatform/core"), "1.14.1-dev.0123456789ab")
-  assert.equal(versions.get("@alienplatform/platform-api"), "1.14.3-dev.0123456789ab")
+  assert.equal(versions.get("@alienplatform/core"), `${coreBase}-dev.0123456789ab`)
+  assert.equal(versions.get("@alienplatform/platform-api"), `${platformBase}-dev.0123456789ab`)
 
   const commands = JSON.parse(readFileSync(resolve(root, "packages/commands/package.json"), "utf8"))
   assert.equal(commands.dependencies["@alienplatform/core"], versions.get("@alienplatform/core"))

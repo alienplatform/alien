@@ -95,16 +95,6 @@ export function validateManifests(root, sha) {
   return expected
 }
 
-export function describeTarballs(packResults) {
-  return packResults.map(result => ({
-    name: result.name,
-    version: result.version,
-    filename: basename(result.filename),
-    integrity: result.integrity,
-    shasum: result.shasum,
-  }))
-}
-
 function printVersions(versions) {
   process.stdout.write(`${JSON.stringify(Object.fromEntries([...versions].sort()), null, 2)}\n`)
 }
