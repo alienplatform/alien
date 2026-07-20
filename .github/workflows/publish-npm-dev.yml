@@ -1,16 +1,14 @@
 name: Publish npm dev packages
 
 on:
-  workflow_dispatch:
+  workflow_call:
     inputs:
       source_ref:
         description: Exact branch, tag, or commit to package
         required: true
-        default: main
         type: string
       dry_run:
         description: Build, pack, and smoke-test without publishing
-        required: true
         default: true
         type: boolean
 
