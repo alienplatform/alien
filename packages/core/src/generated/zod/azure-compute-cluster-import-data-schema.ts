@@ -11,6 +11,7 @@ import * as z from "zod";
 export const AzureComputeClusterImportDataSchema = z.object({
     "clusterId": z.string().describe("Cluster identifier used by the controller."),
 "clusterIdentityPrincipalId": z.string().describe("AKS cluster identity principal id (system-assigned identity)."),
+"identityId": z.string().describe("Resource ID of the user-assigned identity attached to cluster VMs."),
 "kubeletIdentityClientId": z.string().describe("kubelet UAMI client id used by node pools.")
     }).describe("Azure ComputeCluster ImportData — AKS node pool identity / network.")
 

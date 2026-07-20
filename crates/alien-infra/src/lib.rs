@@ -11,6 +11,9 @@ mod daemon;
 #[cfg(any(feature = "kubernetes", feature = "local"))]
 pub use daemon::*;
 
+mod email;
+pub use email::*;
+
 mod storage;
 pub use storage::*;
 

@@ -101,6 +101,72 @@ expression: schemas
     "title": "AwsComputeClusterImportData",
     "type": "object"
   },
+  "aws_email": {
+    "$schema": "http://json-schema.org/draft-07/schema#",
+    "definitions": {
+      "AwsEmailDkimTokenImportData": {
+        "description": "A single Easy-DKIM CNAME record.",
+        "properties": {
+          "name": {
+            "description": "CNAME record host name.",
+            "type": "string"
+          },
+          "value": {
+            "description": "CNAME record value.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "name",
+          "value"
+        ],
+        "type": "object"
+      },
+      "AwsEmailDomainImportData": {
+        "description": "Per-domain import payload for an AWS Email resource.",
+        "properties": {
+          "dkimTokens": {
+            "description": "Easy-DKIM CNAME tokens (three per domain). The domain is verified by SES once these records exist in its DNS configuration.",
+            "items": {
+              "$ref": "#/definitions/AwsEmailDkimTokenImportData"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "dkimTokens"
+        ],
+        "type": "object"
+      }
+    },
+    "description": "AWS Email ImportData.\n\nMirrors the `emit_import_ref` payload of the AWS SES email emitter: the shared configuration set name, one entry per seed domain carrying its Easy-DKIM CNAME records, and — when inbound mail is configured — the receipt rule set name. Identities created at runtime through the `email/manage-identities` grant are application data and never appear here.",
+    "properties": {
+      "configurationSet": {
+        "description": "SES configuration set name (used when sending).",
+        "type": "string"
+      },
+      "domains": {
+        "additionalProperties": {
+          "$ref": "#/definitions/AwsEmailDomainImportData"
+        },
+        "description": "Per-seed-domain DNS data, keyed by mail domain.",
+        "type": "object"
+      },
+      "ruleSetName": {
+        "description": "SES receipt rule set name, present only when inbound mail is configured. Activating the rule set is a manual post-deploy step.",
+        "type": [
+          "string",
+          "null"
+        ]
+      }
+    },
+    "required": [
+      "configurationSet",
+      "domains"
+    ],
+    "title": "AwsEmailImportData",
+    "type": "object"
+  },
   "aws_function": {
     "$schema": "http://json-schema.org/draft-07/schema#",
     "description": "AWS Worker ImportData.",

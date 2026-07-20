@@ -16,7 +16,7 @@ use alien_core::Daemon;
 use alien_core::Postgres;
 use alien_core::{
     ArtifactRegistry, AzureContainerAppsEnvironment, AzureResourceGroup, AzureServiceBusNamespace,
-    AzureStorageAccount, Build, Kv, Network, RemoteStackManagement, ServiceAccount,
+    AzureStorageAccount, Build, Email, Kv, Network, RemoteStackManagement, ServiceAccount,
     ServiceActivation, Storage, Vault, Worker,
 };
 use alien_core::{Platform, ResourceDefinition, ResourceType};
@@ -228,6 +228,15 @@ impl ResourceRegistry {
             Box::new(DefaultControllerFactory::<
                 crate::daemon::LocalDaemonController,
             >::new()),
+        );
+
+        // Register built-in Email controllers (AWS SES only; the resource is
+        // Frozen-only and enters deployments through stack import).
+        #[cfg(feature = "aws")]
+        registry.register_controller_factory(
+            Email::RESOURCE_TYPE,
+            Platform::Aws,
+            Box::new(DefaultControllerFactory::<crate::email::AwsEmailController>::new()),
         );
 
         // Register built-in Storage controllers

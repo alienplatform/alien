@@ -7,9 +7,10 @@
 use super::helpers::render_built_ins;
 use alien_cloudformation::RegistrationMode;
 use alien_core::{
-    ArtifactRegistry, Build, Kv, ManagementPermissions, Network, NetworkSettings,
-    PermissionProfile, Queue, RemoteStackManagement, ResourceLifecycle, ServiceAccount, Stack,
-    StackSettings, Storage, UpdatesMode, Vault, Worker, WorkerCode, WorkerTrigger,
+    ArtifactRegistry, Build, Email, EmailEvents, EmailInbound, Kv, ManagementPermissions, Network,
+    NetworkSettings, PermissionProfile, Queue, RemoteStackManagement, ResourceLifecycle,
+    ResourceRef, ServiceAccount, Stack, StackSettings, Storage, UpdatesMode, Vault, Worker,
+    WorkerCode, WorkerTrigger,
 };
 
 const LAMBDA_ARN: &str = "arn:aws:lambda:us-east-1:123456789012:function:setup-registration";
@@ -42,6 +43,17 @@ fn aws_full_stack_with_create_network_renders_audit_ready_template() {
     let jobs = Queue::new("jobs".to_string()).build();
     let metadata = Kv::new("metadata".to_string()).build();
     let secrets = Vault::new("secrets".to_string()).build();
+    let mailbox = Storage::new("mailbox".to_string()).build();
+    let mail_events = Queue::new("mail-events".to_string()).build();
+    let mailer = Email::new("mailer".to_string())
+        .domains(vec!["mail.example.com".to_string()])
+        .inbound(EmailInbound {
+            storage: ResourceRef::from(&mailbox),
+        })
+        .events(EmailEvents {
+            queue: ResourceRef::from(&mail_events),
+        })
+        .build();
 
     let public_api = Worker::new("public-api".to_string())
         .code(WorkerCode::Image {
@@ -96,6 +108,9 @@ fn aws_full_stack_with_create_network_renders_audit_ready_template() {
         .add(jobs, ResourceLifecycle::Frozen)
         .add(metadata, ResourceLifecycle::Frozen)
         .add(secrets, ResourceLifecycle::Frozen)
+        .add(mailbox, ResourceLifecycle::Frozen)
+        .add(mail_events, ResourceLifecycle::Frozen)
+        .add(mailer, ResourceLifecycle::Frozen)
         .add(
             ArtifactRegistry::new("registry".to_string()).build(),
             ResourceLifecycle::Frozen,

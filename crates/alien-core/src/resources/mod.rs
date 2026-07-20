@@ -7,6 +7,9 @@ pub use public_endpoint::*;
 mod daemon;
 pub use daemon::*;
 
+mod email;
+pub use email::*;
+
 mod storage;
 pub use storage::*;
 

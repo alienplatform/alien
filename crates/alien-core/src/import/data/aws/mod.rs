@@ -1,6 +1,7 @@
 pub mod artifact_registry;
 pub mod build;
 pub mod compute_cluster;
+pub mod email;
 pub mod kv;
 pub mod network;
 pub mod postgres;
@@ -14,6 +15,7 @@ pub mod worker;
 pub use artifact_registry::*;
 pub use build::*;
 pub use compute_cluster::*;
+pub use email::*;
 pub use kv::*;
 pub use network::*;
 pub use postgres::*;

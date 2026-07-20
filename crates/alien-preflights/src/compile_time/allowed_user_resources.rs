@@ -39,6 +39,7 @@ impl CompileTimeCheck for AllowedUserResourcesCheck {
             // by the ComputeClusterMutation when not declared.
             "compute-cluster",
             "postgres",
+            "email",
         ]);
         let mut errors = Vec::new();
 
@@ -76,6 +77,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_allowed_user_resources_success() {
+        let email = alien_core::Email::new("test-email".to_string()).build();
         let storage = Storage::new("test-storage".to_string()).build();
         let worker = Worker::new("test-worker".to_string())
             .code(WorkerCode::Image {
@@ -90,6 +92,15 @@ mod tests {
             ResourceEntry {
                 config: alien_core::Resource::new(storage),
                 lifecycle: ResourceLifecycle::Live,
+                dependencies: Vec::new(),
+                remote_access: false,
+            },
+        );
+        resources.insert(
+            "test-email".to_string(),
+            ResourceEntry {
+                config: alien_core::Resource::new(email),
+                lifecycle: ResourceLifecycle::Frozen,
                 dependencies: Vec::new(),
                 remote_access: false,
             },

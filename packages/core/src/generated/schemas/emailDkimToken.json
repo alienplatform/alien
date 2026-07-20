@@ -1,0 +1,1 @@
+{"type":"object","description":"A single DKIM CNAME record the operator must create in DNS.","required":["name","value"],"properties":{"name":{"type":"string","description":"CNAME record host name."},"value":{"type":"string","description":"CNAME record value."}},"x-readme-ref-name":"EmailDkimToken"}

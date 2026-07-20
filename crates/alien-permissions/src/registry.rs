@@ -130,6 +130,10 @@ mod tests {
         assert!(has_permission_set("build/management"));
         assert!(has_permission_set("build/provision"));
         assert!(has_permission_set("kubernetes-cluster/heartbeat"));
+        assert!(has_permission_set("email/provision"));
+        assert!(has_permission_set("email/send"));
+        assert!(has_permission_set("email/management"));
+        assert!(has_permission_set("email/manage-identities"));
     }
 
     #[test]
