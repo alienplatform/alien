@@ -884,12 +884,14 @@ mod tests {
                                 ComputePoolSelection::Fixed {
                                     machines: *min_size,
                                     machine: Some((*machine).to_string()),
+                                    failure_domains: None,
                                 }
                             } else {
                                 ComputePoolSelection::Autoscale {
                                     min: *min_size,
                                     max: *max_size,
                                     machine: Some((*machine).to_string()),
+                                    failure_domains: None,
                                 }
                             };
                             ((*pool_id).to_string(), selection)

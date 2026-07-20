@@ -195,6 +195,45 @@ pub struct FailureDomainSelection {
     pub selected_failure_domains: Vec<String>,
 }
 
+impl FailureDomainSelection {
+    /// Resolve a deterministic concrete domain set from provider-discovered domains.
+    pub fn materialize(
+        &self,
+        available_failure_domains: impl IntoIterator<Item = String>,
+    ) -> std::result::Result<Vec<String>, String> {
+        if self.spread == 0 {
+            return Err("failure-domain spread must be at least one".to_string());
+        }
+        let mut available: Vec<String> = available_failure_domains.into_iter().collect();
+        available.sort();
+        available.dedup();
+        let requested = usize::from(self.spread);
+        if available.len() < requested {
+            return Err(format!(
+                "requested {requested} failure domains but only {} are available",
+                available.len()
+            ));
+        }
+        if self.selected_failure_domains.is_empty() {
+            available.truncate(requested);
+            return Ok(available);
+        }
+
+        let mut selected = self.selected_failure_domains.clone();
+        selected.sort();
+        selected.dedup();
+        if selected.len() != requested {
+            return Err("selected failure domains must match the requested spread".to_string());
+        }
+        if let Some(missing) = selected.iter().find(|domain| !available.contains(domain)) {
+            return Err(format!(
+                "selected failure domain '{missing}' is not available"
+            ));
+        }
+        Ok(selected)
+    }
+}
+
 /// User-selected deployment settings for one compute pool.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
@@ -748,4 +787,49 @@ fn is_default_telemetry_mode(mode: &TelemetryMode) -> bool {
 
 fn is_default_heartbeats_mode(mode: &HeartbeatsMode) -> bool {
     *mode == HeartbeatsMode::default()
+}
+
+#[cfg(test)]
+mod failure_domain_tests {
+    use super::*;
+
+    #[test]
+    fn materializes_domains_in_stable_order() {
+        let selection = FailureDomainSelection {
+            spread: 2,
+            selected_failure_domains: Vec::new(),
+        };
+        assert_eq!(
+            selection
+                .materialize(["us-west-2d", "us-west-2b", "us-west-2c"].map(str::to_string))
+                .expect("two domains should be available"),
+            vec!["us-west-2b", "us-west-2c"]
+        );
+    }
+
+    #[test]
+    fn rejects_impossible_spread_before_provider_work() {
+        let selection = FailureDomainSelection {
+            spread: 3,
+            selected_failure_domains: Vec::new(),
+        };
+        let error = selection
+            .materialize(["us-west-2b", "us-west-2d"].map(str::to_string))
+            .expect_err("three domains cannot be selected from two");
+        assert_eq!(
+            error,
+            "requested 3 failure domains but only 2 are available"
+        );
+    }
+
+    #[test]
+    fn old_compute_selection_deserializes_without_topology() {
+        let selection: ComputePoolSelection = serde_json::from_value(serde_json::json!({
+            "mode": "fixed",
+            "machines": 2,
+            "machine": "m7i.xlarge"
+        }))
+        .expect("legacy selection should deserialize");
+        assert!(selection.failure_domains().is_none());
+    }
 }
