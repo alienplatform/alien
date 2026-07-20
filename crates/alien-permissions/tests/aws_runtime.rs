@@ -79,6 +79,35 @@ fn compute_cluster_execute_does_not_read_workload_secrets() {
 }
 
 #[test]
+fn compute_cluster_controllers_can_describe_launch_templates_for_retry_adoption() {
+    let generator = AwsRuntimePermissionsGenerator::new();
+    let context = create_test_context();
+
+    for permission_set_id in ["compute-cluster/management", "compute-cluster/provision"] {
+        let permission_set = get_permission_set(permission_set_id).expect("permission set exists");
+        let result = generator
+            .generate_policy(permission_set, BindingTarget::Stack, &context)
+            .expect("compute cluster policy should generate");
+
+        let statement = result
+            .statement
+            .iter()
+            .find(|statement| {
+                statement
+                    .action
+                    .contains(&"ec2:DescribeLaunchTemplates".to_string())
+            })
+            .expect("compute cluster controller should be able to inspect an existing template");
+
+        assert_eq!(statement.resource, ["*".to_string()]);
+        assert!(
+            statement.condition.is_none(),
+            "EC2 Describe actions do not support IAM conditions"
+        );
+    }
+}
+
+#[test]
 fn test_compute_cluster_management_can_tag_otlp_secrets() {
     let generator = AwsRuntimePermissionsGenerator::new();
     let permission_set =

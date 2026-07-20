@@ -3,6 +3,22 @@
   "description": "Allows managing the worker fleet inside a setup-owned ComputeCluster boundary.",
   "platforms": {
     "aws": [
+      // EC2 Describe actions do not support resource-level permissions or
+      // conditions. Runtime needs this metadata read to adopt a launch template
+      // created by an interrupted attempt.
+      {
+        "grant": {
+          "actions": ["ec2:DescribeLaunchTemplates"]
+        },
+        "binding": {
+          "stack": {
+            "resources": ["*"]
+          },
+          "resource": {
+            "resources": ["*"]
+          }
+        }
+      },
       // Launch templates are the worker-image rollout surface. The IAM role,
       // instance profile, security group, and surrounding network remain setup-owned.
       {
