@@ -95,16 +95,36 @@ impl CompileTimeCheck for ResourceEnabledValidCheck {
 
             // `ServiceAccount::from_permission_profile` builds the runtime role from the
             // profile's "*" key alone. It never sees the resource list, so gating the
-            // resource cannot take a wildcard grant back off the role.
+            // resource cannot take a wildcard grant back off the role. For a resource
+            // in the secret-namespace family the net is wider: a '*'-scoped vault or
+            // postgres data grant binds by secret-name prefix over the whole stack,
+            // whichever type wrote the secret, so either family member's grant keeps
+            // the gated resource's namespace reachable after a deployer says no.
             // Grant ids use the permission namespace, which is not always the
             // raw resource type; a raw-type prefix would let a '*' grant for a
             // remapped type slip past this net.
-            let permission_set_prefix = format!(
+            let own_prefix = format!(
                 "{}/",
                 crate::mutations::management_permission_profile::permission_resource_type(
                     resource_type.as_ref(),
                 )
             );
+            let flagged_prefixes: Vec<String> =
+                if NAME_PREFIX_GRANTED_TYPES.contains(&resource_type.as_ref()) {
+                    NAME_PREFIX_GRANTED_TYPES
+                        .iter()
+                        .map(|family_type| {
+                            format!(
+                                "{}/",
+                                crate::mutations::management_permission_profile::permission_resource_type(
+                                    family_type,
+                                )
+                            )
+                        })
+                        .collect()
+                } else {
+                    vec![own_prefix.clone()]
+                };
             let named_profiles = stack
                 .permissions
                 .profiles
@@ -122,19 +142,34 @@ impl CompileTimeCheck for ResourceEnabledValidCheck {
                 };
 
                 for grant in wildcard_grants {
-                    if !grant.id().starts_with(&permission_set_prefix) {
+                    if !flagged_prefixes
+                        .iter()
+                        .any(|prefix| grant.id().starts_with(prefix))
+                    {
                         continue;
                     }
 
-                    errors.push(format!(
-                        "Profile '{profile_name}' grants '{}' at the '*' scope while resource \
-                         '{resource_id}' is enabled by input '{input_id}'. A '*' grant is read \
-                         off the profile alone, so it stays on the runtime role after a deployer \
-                         says no and leaves the access without the resource. Remove the '*' grant \
-                         and .link() '{resource_id}' from the compute resource instead, which \
-                         scopes the grant to that resource so it follows the gate",
-                        grant.id()
-                    ));
+                    if grant.id().starts_with(&own_prefix) {
+                        errors.push(format!(
+                            "Profile '{profile_name}' grants '{}' at the '*' scope while resource \
+                             '{resource_id}' is enabled by input '{input_id}'. A '*' grant is read \
+                             off the profile alone, so it stays on the runtime role after a deployer \
+                             says no and leaves the access without the resource. Remove the '*' grant \
+                             and .link() '{resource_id}' from the compute resource instead, which \
+                             scopes the grant to that resource so it follows the gate",
+                            grant.id()
+                        ));
+                    } else {
+                        errors.push(format!(
+                            "Profile '{profile_name}' grants '{}' at the '*' scope while resource \
+                             '{resource_id}' is enabled by input '{input_id}'. That grant binds by \
+                             secret-name prefix over the whole stack, which includes \
+                             '{resource_id}'s namespace, and a '*' grant stays on the runtime role \
+                             after a deployer says no. Scope it to its own resource with .link() so \
+                             declining '{resource_id}' leaves nothing over its secrets",
+                            grant.id()
+                        ));
+                    }
                 }
             }
 
@@ -278,13 +313,23 @@ fn gated_resources_inside_a_sibling_namespace(stack: &Stack) -> Vec<String> {
                 continue;
             }
 
+            // The reserved secrets vault cannot be gated, so offering to gate it
+            // would send the deployer down a path the SECRETS_VAULT_ID guard
+            // rejects; only the rename remedy applies there.
+            let remedy = if sibling_id == SECRETS_VAULT_ID {
+                format!("rename '{resource_id}' so its id does not extend '{sibling_id}'")
+            } else {
+                format!(
+                    "Gate '{sibling_id}' on '{input_id}' too, or rename one of them so neither id \
+                     extends the other"
+                )
+            };
             errors.push(format!(
                 "Resource '{resource_id}' is enabled by input '{input_id}', but its id extends \
                  '{sibling_id}', and {} data grants are name-prefix scoped: a grant on \
                  '{sibling_id}' covers every secret named '{sibling_id}-*', which contains all of \
                  '{resource_id}'s. A deployer who says no would still leave '{resource_id}'s \
-                 namespace readable and writable through '{sibling_id}'. Gate '{sibling_id}' on \
-                 '{input_id}' too, or rename one of them so neither id extends the other",
+                 namespace readable and writable through '{sibling_id}'. {remedy}",
                 sibling.config.resource_type()
             ));
         }
@@ -522,6 +567,31 @@ mod tests {
         assert_eq!(errors.len(), 1, "{errors:?}");
         assert!(errors[0].contains("'management'"), "{errors:?}");
         assert!(errors[0].contains("at the '*' scope"), "{errors:?}");
+    }
+
+    /// GCP stores both family types' secrets in Secret Manager and their stack
+    /// bindings match on the stack prefix alone, so a '*'-scoped postgres grant
+    /// keeps reading a declined vault's namespace. The net covers the
+    /// cross-type pair too.
+    #[tokio::test]
+    async fn rejects_a_wildcard_family_grant_over_a_gated_vault() {
+        let stack = Stack::new("test-stack".to_string())
+            .inputs(vec![named_input("vaultEnabled")])
+            .permission(
+                "execution",
+                PermissionProfile::new().global(["postgres/data-access"]),
+            )
+            .add_enabled_when(
+                Vault::new("app-tokens".to_string()).build(),
+                ResourceLifecycle::Frozen,
+                "vaultEnabled",
+            )
+            .build();
+
+        let errors = errors_for(stack).await;
+        assert_eq!(errors.len(), 1, "{errors:?}");
+        assert!(errors[0].contains("postgres/data-access"), "{errors:?}");
+        assert!(errors[0].contains("secret-name prefix"), "{errors:?}");
     }
 
     /// Builds a stack whose bucket depends on a gated store through an explicit
