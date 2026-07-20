@@ -132,6 +132,30 @@ fn azure_remote_stack_management_emits_uami_with_federated_credential() {
 }
 
 #[test]
+fn azure_compute_management_emits_subscription_scoped_sku_discovery() {
+    let stack = Stack::new("acme-compute-zones".to_string())
+        .management(ManagementPermissions::extend(
+            PermissionProfile::new().global(["compute-cluster/management"]),
+        ))
+        .add(resource_group(), ResourceLifecycle::Frozen)
+        .add(
+            RemoteStackManagement::new("management".to_string()).build(),
+            ResourceLifecycle::Frozen,
+        )
+        .build();
+    let module = render(&stack, TerraformTarget::Azure, StackSettings::default());
+    let rendered = module
+        .iter()
+        .map(|(_, contents)| contents)
+        .collect::<Vec<_>>()
+        .join("\n");
+
+    assert!(rendered.contains("Microsoft.Compute/skus/read"));
+    assert!(rendered.contains("\"/subscriptions/${var.azure_subscription_id}\""));
+    assert_terraform_valid(&module, "azure_compute_management_sku_discovery");
+}
+
+#[test]
 fn azure_global_network_heartbeat_does_not_emit_resource_scoped_setup_role() {
     let settings = StackSettings {
         network: Some(NetworkSettings::Create {

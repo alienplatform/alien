@@ -396,6 +396,23 @@
       }
     ],
     "azure": [
+      // Resource SKU availability is subscription-specific and cannot be read through a
+      // resource-group-scoped role assignment.
+      {
+        "grant": {
+          "actions": [
+            "Microsoft.Compute/skus/read"
+          ]
+        },
+        "binding": {
+          "stack": {
+            "scope": "/subscriptions/${subscriptionId}"
+          },
+          "resource": {
+            "scope": "/subscriptions/${subscriptionId}"
+          }
+        }
+      },
       // VMSS management + VM listing + boot diagnostics for startup log visibility
       {
         "grant": {
