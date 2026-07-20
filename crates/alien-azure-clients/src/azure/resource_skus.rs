@@ -189,6 +189,7 @@ impl AzureResourceSkusClient {
 #[cfg_attr(not(target_arch = "wasm32"), async_trait::async_trait)]
 impl ResourceSkusApi for AzureResourceSkusClient {
     async fn list_resource_skus(&self, location: &str) -> Result<Vec<ResourceSku>> {
+        let escaped_location = location.replace('\'', "''");
         let bearer_token = self
             .token_cache
             .get_bearer_token_with_scope("https://management.azure.com/.default")
@@ -200,7 +201,7 @@ impl ResourceSkusApi for AzureResourceSkusClient {
             ),
             Some(vec![
                 ("api-version", Self::API_VERSION.to_string()),
-                ("$filter", format!("location eq '{location}'")),
+                ("$filter", format!("location eq '{escaped_location}'")),
             ]),
         ));
         let mut skus = Vec::new();
@@ -214,6 +215,7 @@ impl ResourceSkusApi for AzureResourceSkusClient {
                 .base
                 .execute_request(signed, "ListResourceSkus", location)
                 .await?;
+            let status = response.status().as_u16();
             let body =
                 response
                     .text()
@@ -224,7 +226,7 @@ impl ResourceSkusApi for AzureResourceSkusClient {
                             "Azure ListResourceSkus: failed to read response body for {location}"
                         ),
                         url: url.clone(),
-                        http_status: 200,
+                        http_status: status,
                         http_response_text: None,
                         http_request_text: None,
                     })?;
@@ -232,7 +234,7 @@ impl ResourceSkusApi for AzureResourceSkusClient {
                 ErrorData::HttpResponseError {
                     message: format!("Azure ListResourceSkus: JSON parse error for {location}"),
                     url,
-                    http_status: 200,
+                    http_status: status,
                     http_response_text: Some(body),
                     http_request_text: None,
                 },
