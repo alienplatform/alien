@@ -2,8 +2,8 @@ import assert from "node:assert/strict"
 import { copyFileSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { dirname, resolve } from "node:path"
-import { fileURLToPath } from "node:url"
 import test from "node:test"
+import { fileURLToPath } from "node:url"
 
 import { packages, rewriteManifests, validateManifests } from "./npm-dev-release.mjs"
 

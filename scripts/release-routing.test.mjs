@@ -13,16 +13,16 @@ function parseJobs(source) {
 
   let current
   for (const line of lines.slice(jobsIndex + 1)) {
-    const job = /^  ([a-z0-9_-]+):$/.exec(line)
+    const job = /^ {2}([a-z0-9_-]+):$/.exec(line)
     if (job) {
       current = { if: "", uses: "" }
       jobs.set(job[1], current)
       continue
     }
     if (!current) continue
-    const condition = /^    if: (.+)$/.exec(line)
+    const condition = /^ {4}if: (.+)$/.exec(line)
     if (condition) current.if = condition[1]
-    const uses = /^    uses: (.+)$/.exec(line)
+    const uses = /^ {4}uses: (.+)$/.exec(line)
     if (uses) current.uses = uses[1]
   }
   return jobs
@@ -49,7 +49,10 @@ const stableJobs = [
 ]
 
 test("stable remains the default release mode", () => {
-  assert.match(workflow, /mode:\n\s+description: Publication channel\n\s+type: choice\n\s+default: stable\n\s+options: \[stable, dev\]/)
+  assert.match(
+    workflow,
+    /mode:\n\s+description: Publication channel\n\s+type: choice\n\s+default: stable\n\s+options: \[stable, dev\]/,
+  )
 })
 
 test("dev publication requires an explicit full source commit", () => {
@@ -68,6 +71,10 @@ test("dev mode can reach only the reusable npm dev workflow", () => {
   assert.equal(jobs.get("publish-npm-dev").uses, "./.github/workflows/publish-npm-dev.yml")
 
   for (const name of stableJobs) {
-    assert.match(jobs.get(name).if, /inputs\.mode == 'stable'/, `${name} must be unreachable in dev mode`)
+    assert.match(
+      jobs.get(name).if,
+      /inputs\.mode == 'stable'/,
+      `${name} must be unreachable in dev mode`,
+    )
   }
 })

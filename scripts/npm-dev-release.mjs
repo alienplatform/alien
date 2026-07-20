@@ -12,7 +12,11 @@ export const packages = [
   { path: "packages/testing/package.json", publish: true },
   { path: "client-sdks/platform/typescript/package.json", publish: true },
   { path: "client-sdks/manager/typescript/package.json", publish: true },
-  { path: "crates/alien-bindings-node/package.json", publish: false, versionFrom: "@alienplatform/bindings" },
+  {
+    path: "crates/alien-bindings-node/package.json",
+    publish: false,
+    versionFrom: "@alienplatform/bindings",
+  },
   ...["darwin-arm64", "darwin-x64", "linux-x64-gnu", "linux-arm64-gnu"].map(triple => ({
     path: `packages/bindings/npm/${triple}/package.json`,
     publish: true,
@@ -20,7 +24,12 @@ export const packages = [
   })),
 ]
 
-const dependencyFields = ["dependencies", "devDependencies", "peerDependencies", "optionalDependencies"]
+const dependencyFields = [
+  "dependencies",
+  "devDependencies",
+  "peerDependencies",
+  "optionalDependencies",
+]
 
 function readJson(path) {
   return JSON.parse(readFileSync(path, "utf8"))
@@ -38,7 +47,10 @@ function baseVersion(version, name) {
 
 export function computeVersions(root, sha) {
   if (!/^[0-9a-f]{40}$/.test(sha)) throw new Error(`Expected a full lowercase git SHA, got ${sha}`)
-  const manifests = packages.map(entry => ({ ...entry, manifest: readJson(resolve(root, entry.path)) }))
+  const manifests = packages.map(entry => ({
+    ...entry,
+    manifest: readJson(resolve(root, entry.path)),
+  }))
   const versions = new Map()
 
   for (const { manifest, versionFrom } of manifests) {
@@ -48,7 +60,8 @@ export function computeVersions(root, sha) {
   for (const { manifest, versionFrom } of manifests) {
     if (!versionFrom) continue
     const version = versions.get(versionFrom)
-    if (!version) throw new Error(`${manifest.name} references unknown version source ${versionFrom}`)
+    if (!version)
+      throw new Error(`${manifest.name} references unknown version source ${versionFrom}`)
     versions.set(manifest.name, version)
   }
   return versions
@@ -77,16 +90,22 @@ export function validateManifests(root, sha) {
   for (const { path } of packages) {
     const manifest = readJson(resolve(root, path))
     if (manifest.version !== expected.get(manifest.name)) {
-      throw new Error(`${manifest.name} version is ${manifest.version}; expected ${expected.get(manifest.name)}`)
+      throw new Error(
+        `${manifest.name} version is ${manifest.version}; expected ${expected.get(manifest.name)}`,
+      )
     }
     if (!/-dev\.[0-9a-f]{40}$/.test(manifest.version)) {
-      throw new Error(`${manifest.name} version is not an immutable dev prerelease: ${manifest.version}`)
+      throw new Error(
+        `${manifest.name} version is not an immutable dev prerelease: ${manifest.version}`,
+      )
     }
     for (const field of dependencyFields) {
       for (const [dependency, range] of Object.entries(manifest[field] ?? {})) {
         const version = expected.get(dependency)
         if (version && range !== version) {
-          throw new Error(`${manifest.name} ${field}.${dependency} is ${range}; expected ${version}`)
+          throw new Error(
+            `${manifest.name} ${field}.${dependency} is ${range}; expected ${version}`,
+          )
         }
       }
     }
