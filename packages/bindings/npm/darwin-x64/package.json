@@ -1,6 +1,6 @@
 {
   "name": "@alienplatform/bindings-darwin-x64",
-  "version": "2.0.0",
+  "version": "2.0.1",
   "cpu": ["x64"],
   "main": "alien-bindings-node.darwin-x64.node",
   "files": ["alien-bindings-node.darwin-x64.node"],
