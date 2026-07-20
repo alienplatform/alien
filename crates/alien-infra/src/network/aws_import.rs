@@ -59,6 +59,7 @@ impl ResourceImporter for AwsNetworkImporter {
             route_table_association_ids: Vec::new(),
             security_group_id: data.security_group_id,
             availability_zones: data.availability_zones,
+            subnets_by_failure_domain: data.subnets_by_failure_domain,
             is_byo_vpc: is_setup_owned_vpc,
             _internal_stay_count: None,
         };
@@ -126,6 +127,7 @@ mod tests {
             private_route_table_id: None,
             security_group_id: None,
             availability_zones: Vec::new(),
+            subnets_by_failure_domain: Default::default(),
             is_byo_vpc: true,
         }
     }

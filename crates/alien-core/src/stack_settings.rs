@@ -183,6 +183,18 @@ pub struct ComputeSettings {
     pub pools: HashMap<String, ComputePoolSelection>,
 }
 
+/// Failure-domain policy selected for a compute pool.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
+#[serde(rename_all = "camelCase")]
+pub struct FailureDomainSelection {
+    /// Number of distinct failure domains across which new stateful replicas may be spread.
+    pub spread: u8,
+    /// Concrete provider domains selected during setup. Empty means the legacy aggregate mode.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub selected_failure_domains: Vec<String>,
+}
+
 /// User-selected deployment settings for one compute pool.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
@@ -195,6 +207,9 @@ pub enum ComputePoolSelection {
         /// Provider machine type selected for this deployment.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         machine: Option<String>,
+        /// Optional failure-domain policy. Absence preserves legacy aggregate placement.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        failure_domains: Option<FailureDomainSelection>,
     },
     /// Autoscaling machine pool.
     Autoscale {
@@ -205,6 +220,9 @@ pub enum ComputePoolSelection {
         /// Provider machine type selected for this deployment.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         machine: Option<String>,
+        /// Optional failure-domain policy. Absence preserves legacy aggregate placement.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        failure_domains: Option<FailureDomainSelection>,
     },
 }
 
@@ -213,6 +231,18 @@ impl ComputePoolSelection {
     pub fn machine(&self) -> Option<&str> {
         match self {
             Self::Fixed { machine, .. } | Self::Autoscale { machine, .. } => machine.as_deref(),
+        }
+    }
+
+    /// Selected failure-domain policy, if this deployment explicitly adopted one.
+    pub fn failure_domains(&self) -> Option<&FailureDomainSelection> {
+        match self {
+            Self::Fixed {
+                failure_domains, ..
+            }
+            | Self::Autoscale {
+                failure_domains, ..
+            } => failure_domains.as_ref(),
         }
     }
 
@@ -234,6 +264,18 @@ impl ComputePoolSelection {
 
     /// Whether the selection has internally valid scale bounds.
     pub fn validate(&self) -> std::result::Result<(), String> {
+        if self
+            .failure_domains()
+            .is_some_and(|selection| selection.spread == 0)
+        {
+            return Err("failure-domain spread must be at least one".to_string());
+        }
+        if self.failure_domains().is_some_and(|selection| {
+            !selection.selected_failure_domains.is_empty()
+                && selection.selected_failure_domains.len() != usize::from(selection.spread)
+        }) {
+            return Err("selected failure domains must match the requested spread".to_string());
+        }
         match self {
             Self::Fixed { machines, .. } => {
                 if *machines == 0 {

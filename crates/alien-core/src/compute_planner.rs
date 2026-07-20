@@ -217,11 +217,13 @@ fn recommended_selection(
         CapacityGroupScalePolicy::Fixed { machines } => Ok(ComputePoolSelection::Fixed {
             machines: machines.default.max(1),
             machine,
+            failure_domains: None,
         }),
         CapacityGroupScalePolicy::Autoscale { min, max } => Ok(ComputePoolSelection::Autoscale {
             min: min.default,
             max: max.default.max(min.default),
             machine,
+            failure_domains: None,
         }),
     }
 }

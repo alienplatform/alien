@@ -159,6 +159,24 @@ impl ComputeClusterMutation {
             };
             for group in cluster.capacity_groups.iter_mut() {
                 materialize_group(group, stack_state.platform, config)?;
+                let Some(selection) = config
+                    .stack_settings
+                    .compute
+                    .as_ref()
+                    .and_then(|settings| settings.pools.get(&group.group_id))
+                    .and_then(|selection| selection.failure_domains())
+                else {
+                    continue;
+                };
+                cluster
+                    .failure_domain_spread
+                    .insert(group.group_id.clone(), selection.spread);
+                if !selection.selected_failure_domains.is_empty() {
+                    cluster.selected_failure_domains.insert(
+                        group.group_id.clone(),
+                        selection.selected_failure_domains.clone(),
+                    );
+                }
             }
         }
         Ok(stack)
