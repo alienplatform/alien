@@ -136,6 +136,22 @@ jobs:
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
 
+      - name: Stamp native addon version
+        shell: bash
+        run: |
+          set -euo pipefail
+          npm_version="$(node -p "require('./packages/bindings/package.json').version")-dev.${{ needs.prepare.outputs.git_sha }}"
+          node --input-type=module "$npm_version" <<'EOF'
+          import { readFileSync, writeFileSync } from "node:fs"
+          const [version] = process.argv.slice(2)
+          const path = "Cargo.toml"
+          const source = readFileSync(path, "utf8")
+          const updated = source.replace(/^(version = ")[^"]+("\s*)$/m, `$1${version}$2`)
+          if (updated === source) throw new Error("workspace Cargo version was not updated")
+          writeFileSync(path, updated)
+          EOF
+          test "$(cargo metadata --no-deps --format-version 1 | jq -r '.packages[] | select(.name == "alien-bindings-node") | .version')" = "$npm_version"
+
       - name: Build addon
         env:
           CARGO_NET_GIT_FETCH_WITH_CLI: "true"
