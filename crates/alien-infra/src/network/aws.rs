@@ -29,7 +29,7 @@ use alien_aws_clients::ec2::{
     DescribeAvailabilityZonesRequest, DescribeNatGatewaysRequest, DescribeRouteTablesRequest,
     DescribeSecurityGroupsRequest, DescribeSubnetsRequest, DescribeVpcsRequest,
     DetachInternetGatewayRequest, Filter, IpPermission, IpPermissionResponse, IpRange,
-    ModifyVpcAttributeRequest, RouteTable, RouteTableAssociation, SecurityGroup, Tag,
+    ModifyVpcAttributeRequest, RouteTable, RouteTableAssociation, SecurityGroup, Subnet, Tag,
     TagSpecification,
 };
 use alien_client_core::ErrorData as CloudClientErrorData;
@@ -357,6 +357,64 @@ pub struct AwsNetworkController {
 }
 
 impl AwsNetworkController {
+    fn map_subnets_to_failure_domains(
+        subnets: Vec<Subnet>,
+        public_subnet_ids: &[String],
+        private_subnet_ids: &[String],
+        resource_id: &str,
+    ) -> Result<BTreeMap<String, AwsFailureDomainSubnets>> {
+        let expected: HashSet<&str> = public_subnet_ids
+            .iter()
+            .chain(private_subnet_ids)
+            .map(String::as_str)
+            .collect();
+        let mut mapped_ids = HashSet::new();
+        let mut by_domain = BTreeMap::<String, AwsFailureDomainSubnets>::new();
+
+        for subnet in subnets {
+            let Some(subnet_id) = subnet.subnet_id else {
+                continue;
+            };
+            if !expected.contains(subnet_id.as_str()) {
+                continue;
+            }
+            let domain = subnet.availability_zone.ok_or_else(|| {
+                AlienError::new(ErrorData::ResourceConfigInvalid {
+                    message: format!("Subnet '{subnet_id}' has no availability zone"),
+                    resource_id: Some(resource_id.to_string()),
+                })
+            })?;
+            let entry = by_domain.entry(domain).or_default();
+            if public_subnet_ids.contains(&subnet_id) {
+                entry.public_subnet_ids.push(subnet_id.clone());
+            }
+            if private_subnet_ids.contains(&subnet_id) {
+                entry.private_subnet_ids.push(subnet_id.clone());
+            }
+            mapped_ids.insert(subnet_id);
+        }
+
+        let mut missing: Vec<&str> = expected
+            .into_iter()
+            .filter(|subnet_id| !mapped_ids.contains(*subnet_id))
+            .collect();
+        missing.sort_unstable();
+        if !missing.is_empty() {
+            return Err(AlienError::new(ErrorData::ResourceConfigInvalid {
+                message: format!(
+                    "Could not resolve failure domains for subnets: {}",
+                    missing.join(", ")
+                ),
+                resource_id: Some(resource_id.to_string()),
+            }));
+        }
+        for subnets in by_domain.values_mut() {
+            subnets.public_subnet_ids.sort();
+            subnets.private_subnet_ids.sort();
+        }
+        Ok(by_domain)
+    }
+
     pub fn private_subnets_ready_for_runtime(&self) -> bool {
         self.is_byo_vpc || matches!(self.state, AwsNetworkState::Ready)
     }
@@ -657,6 +715,100 @@ impl AwsNetworkController {
     }
 }
 
+#[cfg(test)]
+mod failure_domain_compatibility_tests {
+    use super::*;
+
+    fn subnet(id: &str, availability_zone: Option<&str>) -> Subnet {
+        Subnet {
+            subnet_id: Some(id.to_string()),
+            vpc_id: None,
+            state: None,
+            cidr_block: None,
+            availability_zone: availability_zone.map(str::to_string),
+            availability_zone_id: None,
+            available_ip_address_count: None,
+            default_for_az: None,
+            map_public_ip_on_launch: None,
+            tag_set: None,
+        }
+    }
+
+    #[test]
+    fn maps_public_and_private_subnets_to_their_real_failure_domains() {
+        let mapped = AwsNetworkController::map_subnets_to_failure_domains(
+            vec![
+                subnet("subnet-private-b", Some("us-east-1b")),
+                subnet("subnet-public-a", Some("us-east-1a")),
+                subnet("subnet-private-a", Some("us-east-1a")),
+            ],
+            &["subnet-public-a".to_string()],
+            &[
+                "subnet-private-a".to_string(),
+                "subnet-private-b".to_string(),
+            ],
+            "network",
+        )
+        .expect("all requested subnets have an availability zone");
+
+        assert_eq!(
+            mapped["us-east-1a"],
+            AwsFailureDomainSubnets {
+                public_subnet_ids: vec!["subnet-public-a".to_string()],
+                private_subnet_ids: vec!["subnet-private-a".to_string()],
+            }
+        );
+        assert_eq!(
+            mapped["us-east-1b"],
+            AwsFailureDomainSubnets {
+                public_subnet_ids: Vec::new(),
+                private_subnet_ids: vec!["subnet-private-b".to_string()],
+            }
+        );
+    }
+
+    #[test]
+    fn rejects_incomplete_subnet_discovery_before_using_the_network() {
+        let error = AwsNetworkController::map_subnets_to_failure_domains(
+            vec![subnet("subnet-present", Some("us-east-1a"))],
+            &["subnet-present".to_string()],
+            &["subnet-missing".to_string()],
+            "network",
+        )
+        .expect_err("an unresolved requested subnet must fail");
+
+        assert!(error.to_string().contains("subnet-missing"));
+    }
+
+    #[test]
+    fn rejects_subnets_without_a_failure_domain() {
+        let error = AwsNetworkController::map_subnets_to_failure_domains(
+            vec![subnet("subnet-without-zone", None)],
+            &["subnet-without-zone".to_string()],
+            &[],
+            "network",
+        )
+        .expect_err("a subnet without an availability zone must fail");
+
+        assert!(error.to_string().contains("has no availability zone"));
+    }
+
+    #[test]
+    fn legacy_ready_state_remains_aggregate_and_ready() {
+        let controller = AwsNetworkController::mock_ready("vpc-legacy", 2);
+        let mut value = serde_json::to_value(controller).expect("controller should serialize");
+        value
+            .as_object_mut()
+            .expect("controller state should be an object")
+            .remove("subnetsByFailureDomain");
+
+        let restored: AwsNetworkController =
+            serde_json::from_value(value).expect("legacy controller should deserialize");
+        assert_eq!(restored.state, AwsNetworkState::Ready);
+        assert!(restored.subnets_by_failure_domain.is_empty());
+    }
+}
+
 #[controller]
 impl AwsNetworkController {
     // ─────────────── CREATE FLOW ──────────────────────────────
@@ -735,10 +887,20 @@ impl AwsNetworkController {
                         resource_id: Some(config.id.clone()),
                     })?;
 
-                let subnet_ids: Vec<String> = subnets_response
+                let discovered_subnets = subnets_response
                     .subnet_set
-                    .map(|set| set.items.into_iter().filter_map(|s| s.subnet_id).collect())
+                    .map(|set| set.items)
                     .unwrap_or_default();
+                let subnet_ids: Vec<String> = discovered_subnets
+                    .iter()
+                    .filter_map(|subnet| subnet.subnet_id.clone())
+                    .collect();
+                let subnets_by_failure_domain = Self::map_subnets_to_failure_domains(
+                    discovered_subnets,
+                    &subnet_ids,
+                    &[],
+                    &config.id,
+                )?;
 
                 info!(
                     vpc_id = %vpc_id,
@@ -751,10 +913,8 @@ impl AwsNetworkController {
                 self.public_subnet_ids = subnet_ids;
                 self.private_subnet_ids = Vec::new();
                 self.is_byo_vpc = true;
-
-                self.availability_zones = (0..self.public_subnet_ids.len())
-                    .map(|i| format!("az-{}", i))
-                    .collect();
+                self.availability_zones = subnets_by_failure_domain.keys().cloned().collect();
+                self.subnets_by_failure_domain = subnets_by_failure_domain;
 
                 Ok(HandlerAction::Continue {
                     state: Ready,
@@ -774,6 +934,31 @@ impl AwsNetworkController {
                 private_subnet_ids,
                 security_group_ids,
             } => {
+                let aws_config = ctx.get_aws_config()?;
+                let ec2_client = ctx.service_provider.get_aws_ec2_client(aws_config).await?;
+                let requested_subnet_ids: Vec<String> = public_subnet_ids
+                    .iter()
+                    .chain(private_subnet_ids)
+                    .cloned()
+                    .collect();
+                let response = ec2_client
+                    .describe_subnets(
+                        DescribeSubnetsRequest::builder()
+                            .subnet_ids(requested_subnet_ids)
+                            .build(),
+                    )
+                    .await
+                    .context(ErrorData::InfrastructureError {
+                        message: "Failed to resolve existing subnet failure domains".to_string(),
+                        operation: Some("discover_existing_subnet_domains".to_string()),
+                        resource_id: Some(config.id.clone()),
+                    })?;
+                let subnets_by_failure_domain = Self::map_subnets_to_failure_domains(
+                    response.subnet_set.map(|set| set.items).unwrap_or_default(),
+                    public_subnet_ids,
+                    private_subnet_ids,
+                    &config.id,
+                )?;
                 // BYO-VPC mode: store the provided IDs and transition to Ready
                 info!(
                     vpc_id = %vpc_id,
@@ -788,10 +973,8 @@ impl AwsNetworkController {
                 self.security_group_id = security_group_ids.first().cloned();
                 self.is_byo_vpc = true;
 
-                // Determine availability zones from subnet count
-                self.availability_zones = (0..private_subnet_ids.len())
-                    .map(|i| format!("az-{}", i))
-                    .collect();
+                self.availability_zones = subnets_by_failure_domain.keys().cloned().collect();
+                self.subnets_by_failure_domain = subnets_by_failure_domain;
 
                 Ok(HandlerAction::Continue {
                     state: Ready,
@@ -803,6 +986,49 @@ impl AwsNetworkController {
                 resource_id: Some(config.id.clone()),
             })),
         }
+    }
+
+    #[handler(
+        state = DiscoveringSubnetFailureDomains,
+        on_failure = CreateFailed,
+        status = ResourceStatus::Provisioning,
+    )]
+    async fn discovering_subnet_failure_domains(
+        &mut self,
+        ctx: &ResourceControllerContext<'_>,
+    ) -> Result<HandlerAction> {
+        let config = ctx.desired_resource_config::<Network>()?;
+        let aws_config = ctx.get_aws_config()?;
+        let ec2_client = ctx.service_provider.get_aws_ec2_client(aws_config).await?;
+        let requested_subnet_ids = self
+            .public_subnet_ids
+            .iter()
+            .chain(&self.private_subnet_ids)
+            .cloned()
+            .collect();
+        let response = ec2_client
+            .describe_subnets(
+                DescribeSubnetsRequest::builder()
+                    .subnet_ids(requested_subnet_ids)
+                    .build(),
+            )
+            .await
+            .context(ErrorData::InfrastructureError {
+                message: "Failed to resolve imported subnet failure domains".to_string(),
+                operation: Some("discover_imported_subnet_domains".to_string()),
+                resource_id: Some(config.id.clone()),
+            })?;
+        self.subnets_by_failure_domain = Self::map_subnets_to_failure_domains(
+            response.subnet_set.map(|set| set.items).unwrap_or_default(),
+            &self.public_subnet_ids,
+            &self.private_subnet_ids,
+            &config.id,
+        )?;
+        self.availability_zones = self.subnets_by_failure_domain.keys().cloned().collect();
+        Ok(HandlerAction::Continue {
+            state: Ready,
+            suggested_delay: None,
+        })
     }
 
     #[handler(
@@ -1069,7 +1295,12 @@ impl AwsNetworkController {
                 })?;
 
             if let Some(subnet_id) = subnet_response.subnet.and_then(|s| s.subnet_id) {
-                self.public_subnet_ids.push(subnet_id);
+                self.public_subnet_ids.push(subnet_id.clone());
+                self.subnets_by_failure_domain
+                    .entry(az.clone())
+                    .or_default()
+                    .public_subnet_ids
+                    .push(subnet_id);
             }
         }
 
@@ -1103,7 +1334,12 @@ impl AwsNetworkController {
                 })?;
 
             if let Some(subnet_id) = subnet_response.subnet.and_then(|s| s.subnet_id) {
-                self.private_subnet_ids.push(subnet_id);
+                self.private_subnet_ids.push(subnet_id.clone());
+                self.subnets_by_failure_domain
+                    .entry(az.clone())
+                    .or_default()
+                    .private_subnet_ids
+                    .push(subnet_id);
             }
         }
 
@@ -1938,13 +2174,37 @@ impl AwsNetworkController {
             security_group_ids,
         } = &config.settings
         {
+            let aws_config = ctx.get_aws_config()?;
+            let ec2_client = ctx.service_provider.get_aws_ec2_client(aws_config).await?;
+            let requested_subnet_ids = public_subnet_ids
+                .iter()
+                .chain(private_subnet_ids)
+                .cloned()
+                .collect();
+            let response = ec2_client
+                .describe_subnets(
+                    DescribeSubnetsRequest::builder()
+                        .subnet_ids(requested_subnet_ids)
+                        .build(),
+                )
+                .await
+                .context(ErrorData::InfrastructureError {
+                    message: "Failed to resolve updated subnet failure domains".to_string(),
+                    operation: Some("discover_updated_subnet_domains".to_string()),
+                    resource_id: Some(config.id.clone()),
+                })?;
+            let subnets_by_failure_domain = Self::map_subnets_to_failure_domains(
+                response.subnet_set.map(|set| set.items).unwrap_or_default(),
+                public_subnet_ids,
+                private_subnet_ids,
+                &config.id,
+            )?;
             self.vpc_id = Some(vpc_id.clone());
             self.public_subnet_ids = public_subnet_ids.clone();
             self.private_subnet_ids = private_subnet_ids.clone();
             self.security_group_id = security_group_ids.first().cloned();
-            self.availability_zones = (0..private_subnet_ids.len())
-                .map(|i| format!("az-{}", i))
-                .collect();
+            self.availability_zones = subnets_by_failure_domain.keys().cloned().collect();
+            self.subnets_by_failure_domain = subnets_by_failure_domain;
 
             info!(
                 network_id = %config.id,

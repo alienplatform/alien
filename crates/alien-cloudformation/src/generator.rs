@@ -1367,16 +1367,16 @@ fn compute_settings_expression(
             "machine",
             CfExpression::ref_(compute_machine_parameter_name(&group.group_id)),
         );
-        let expression = match selection {
-            ComputePoolSelection::Fixed { .. } => CfExpression::object([
+        let mut fields = match selection {
+            ComputePoolSelection::Fixed { .. } => vec![
                 ("mode", CfExpression::from("fixed")),
                 (
                     "machines",
                     CfExpression::ref_(compute_fixed_machines_parameter_name(&group.group_id)),
                 ),
                 machine,
-            ]),
-            ComputePoolSelection::Autoscale { .. } => CfExpression::object([
+            ],
+            ComputePoolSelection::Autoscale { .. } => vec![
                 ("mode", CfExpression::from("autoscale")),
                 (
                     "min",
@@ -1387,8 +1387,30 @@ fn compute_settings_expression(
                     CfExpression::ref_(compute_autoscale_max_parameter_name(&group.group_id)),
                 ),
                 machine,
-            ]),
+            ],
         };
+        if let Some(failure_domains) = selection.failure_domains() {
+            fields.push((
+                "failureDomains",
+                CfExpression::object([
+                    (
+                        "spread",
+                        CfExpression::from(u32::from(failure_domains.spread)),
+                    ),
+                    (
+                        "selectedFailureDomains",
+                        CfExpression::list(
+                            failure_domains
+                                .selected_failure_domains
+                                .iter()
+                                .cloned()
+                                .map(CfExpression::from),
+                        ),
+                    ),
+                ]),
+            ));
+        }
+        let expression = CfExpression::object(fields);
         pools.push((group.group_id.as_str(), expression));
     }
     if pools.is_empty() {

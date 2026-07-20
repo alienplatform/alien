@@ -715,6 +715,7 @@ mod tests {
                 ComputePoolSelection::Fixed {
                     machines: 1,
                     machine: Some("m7i.xlarge".to_string()),
+                    failure_domains: None,
                 },
             )]
             .into_iter()
@@ -868,6 +869,7 @@ mod tests {
                 ComputePoolSelection::Fixed {
                     machines: 2,
                     machine: Some("m7g.2xlarge".to_string()),
+                    failure_domains: None,
                 },
             )]
             .into_iter()
