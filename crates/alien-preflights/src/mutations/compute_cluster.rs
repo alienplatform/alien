@@ -66,6 +66,38 @@ impl StackMutation for ComputeClusterMutation {
             return true;
         }
 
+        if matches!(
+            stack_state.platform,
+            Platform::Aws | Platform::Gcp | Platform::Azure
+        ) && stack.resources.values().any(|entry| {
+            let Some(container) = entry.config.downcast_ref::<Container>() else {
+                return false;
+            };
+            if !requires_persisted_pool(container) {
+                return false;
+            }
+            if container.pool.is_none() && persisted_without_pool(stack_state, container) {
+                return false;
+            }
+            let (Some(cluster_id), Some(pool)) = (&container.cluster, &container.pool) else {
+                return true;
+            };
+            !stack
+                .resources
+                .get(cluster_id)
+                .and_then(|entry| entry.config.downcast_ref::<ComputeCluster>())
+                .is_some_and(|cluster| {
+                    cluster
+                        .capacity_groups
+                        .iter()
+                        .any(|group| group.group_id == *pool)
+                })
+        }) {
+            // Stateful persistent workloads need a concrete group before runtime so
+            // ordinal volumes and replicas use the same placement boundary.
+            return true;
+        }
+
         // Cluster exists — check if new containers need a missing capacity group.
         if !matches!(
             stack_state.platform,
@@ -127,11 +159,74 @@ impl StackMutation for ComputeClusterMutation {
                 .await?
         };
 
-        self.materialize_capacity_groups(stack, stack_state, config)
+        let stack = self.materialize_capacity_groups(stack, stack_state, config)?;
+        self.materialize_persistent_container_pools(stack, stack_state)
     }
 }
 
 impl ComputeClusterMutation {
+    fn materialize_persistent_container_pools(
+        &self,
+        mut stack: Stack,
+        stack_state: &StackState,
+    ) -> Result<Stack> {
+        let cluster_groups: std::collections::HashMap<String, std::collections::HashSet<String>> =
+            stack
+                .resources
+                .iter()
+                .filter_map(|(id, entry)| {
+                    let cluster = entry.config.downcast_ref::<ComputeCluster>()?;
+                    Some((
+                        id.clone(),
+                        cluster
+                            .capacity_groups
+                            .iter()
+                            .map(|group| group.group_id.clone())
+                            .collect(),
+                    ))
+                })
+                .collect();
+
+        for (container_id, entry) in &mut stack.resources {
+            let Some(container) = entry.config.downcast_mut::<Container>() else {
+                continue;
+            };
+            if !requires_persisted_pool(container)
+                || (container.pool.is_none() && persisted_without_pool(stack_state, container))
+            {
+                continue;
+            }
+            let cluster_id = container.cluster.as_ref().ok_or_else(|| {
+                AlienError::new(crate::error::ErrorData::StackMutationFailed {
+                    mutation_name: "ComputeClusterMutation".to_string(),
+                    message: "Stateful persistent container has no compute cluster".to_string(),
+                    resource_id: Some(container_id.clone()),
+                })
+            })?;
+            let groups = cluster_groups.get(cluster_id).ok_or_else(|| {
+                AlienError::new(crate::error::ErrorData::StackMutationFailed {
+                    mutation_name: "ComputeClusterMutation".to_string(),
+                    message: format!("Referenced compute cluster '{cluster_id}' does not exist"),
+                    resource_id: Some(container_id.clone()),
+                })
+            })?;
+            let inferred_pool = needed_capacity_group(container).to_string();
+            let pool = container.pool.get_or_insert(inferred_pool);
+            if !groups.contains(pool) {
+                return Err(AlienError::new(
+                    crate::error::ErrorData::StackMutationFailed {
+                        mutation_name: "ComputeClusterMutation".to_string(),
+                        message: format!(
+                            "Capacity group '{pool}' does not exist in compute cluster '{cluster_id}'"
+                        ),
+                        resource_id: Some(container_id.clone()),
+                    },
+                ));
+            }
+        }
+        Ok(stack)
+    }
+
     fn materialize_capacity_groups(
         &self,
         mut stack: Stack,
@@ -153,7 +248,23 @@ impl ComputeClusterMutation {
             return Ok(stack);
         }
 
-        for entry in stack.resources.values_mut() {
+        let fresh_persistent_pools: std::collections::HashSet<String> = stack
+            .resources
+            .values()
+            .filter_map(|entry| entry.config.downcast_ref::<Container>())
+            .filter(|container| {
+                requires_persisted_pool(container)
+                    && !stack_state.resources.contains_key(&container.id)
+            })
+            .map(|container| {
+                container
+                    .pool
+                    .clone()
+                    .unwrap_or_else(|| needed_capacity_group(container).to_string())
+            })
+            .collect();
+
+        for (cluster_id, entry) in &mut stack.resources {
             let Some(cluster) = entry.config.downcast_mut::<ComputeCluster>() else {
                 continue;
             };
@@ -168,6 +279,20 @@ impl ComputeClusterMutation {
                 else {
                     continue;
                 };
+                let existing_aggregate_cluster = stack_state
+                    .resources
+                    .get(cluster_id)
+                    .and_then(|state| state.config.downcast_ref::<ComputeCluster>())
+                    .is_some_and(|existing| {
+                        existing.failure_domain_spread.is_empty()
+                            && existing.selected_failure_domains.is_empty()
+                    });
+                let is_implicit_single_domain_default = selection.spread == 1
+                    && selection.selected_failure_domains.is_empty()
+                    && !fresh_persistent_pools.contains(&group.group_id);
+                if existing_aggregate_cluster && is_implicit_single_domain_default {
+                    continue;
+                }
                 cluster
                     .failure_domain_spread
                     .insert(group.group_id.clone(), selection.spread);
@@ -333,7 +458,7 @@ impl ComputeClusterMutation {
                 .iter()
                 .filter_map(|(cid, entry)| {
                     let c = entry.config.downcast_ref::<Container>()?;
-                    if c.pool.is_some() {
+                    if c.pool.is_some() || persisted_without_pool(stack_state, c) {
                         return None;
                     }
                     let g = needed_capacity_group(c).to_string();
@@ -364,7 +489,11 @@ impl ComputeClusterMutation {
                 .resources
                 .values()
                 .filter_map(|e| e.config.downcast_ref::<Container>())
-                .filter(|c| c.pool.is_none() && needed_capacity_group(c) == group_id.as_str())
+                .filter(|c| {
+                    c.pool.is_none()
+                        && !persisted_without_pool(stack_state, c)
+                        && needed_capacity_group(c) == group_id.as_str()
+                })
                 .collect();
             let group = build_capacity_group_for_id(
                 group_id,
@@ -430,6 +559,9 @@ fn referenced_daemon_clusters_for_platform(stack: &Stack, platform: Platform) ->
 
 /// Determine which capacity group a container needs based on its hardware requirements.
 fn needed_capacity_group(container: &Container) -> &'static str {
+    if requires_persisted_pool(container) {
+        return "stateful";
+    }
     if container.gpu.is_some() {
         return "gpu";
     }
@@ -442,6 +574,18 @@ fn needed_capacity_group(container: &Container) -> &'static str {
         }
     }
     "general"
+}
+
+fn requires_persisted_pool(container: &Container) -> bool {
+    container.stateful && container.persistent_storage.is_some()
+}
+
+fn persisted_without_pool(stack_state: &StackState, container: &Container) -> bool {
+    stack_state
+        .resources
+        .get(&container.id)
+        .and_then(|state| state.config.downcast_ref::<Container>())
+        .is_some_and(|persisted| persisted.pool.is_none())
 }
 
 fn group_needs_materialization(
@@ -579,20 +723,32 @@ fn build_categorized_capacity_groups(
     match platform {
         Platform::Aws | Platform::Gcp | Platform::Azure => {
             let mut general: Vec<&Container> = vec![];
+            let mut stateful: Vec<&Container> = vec![];
             let mut storage: Vec<&Container> = vec![];
             let mut gpu: Vec<&Container> = vec![];
             for c in containers {
                 match needed_capacity_group(c) {
+                    "stateful" => stateful.push(c),
                     "gpu" => gpu.push(c),
                     "storage" => storage.push(c),
                     _ => general.push(c),
                 }
             }
             let mut groups = vec![];
-            if !general.is_empty() || (gpu.is_empty() && storage.is_empty()) {
+            if !general.is_empty() || (stateful.is_empty() && gpu.is_empty() && storage.is_empty())
+            {
                 groups.push(build_capacity_group_for_id(
                     "general",
                     &general,
+                    platform,
+                    needs_nested_virt,
+                    config,
+                )?);
+            }
+            if !stateful.is_empty() {
+                groups.push(build_capacity_group_for_id(
+                    "stateful",
+                    &stateful,
                     platform,
                     needs_nested_virt,
                     config,
@@ -834,7 +990,7 @@ mod tests {
     use alien_core::{
         compute_planner::plan_compute, ComputeChoiceRange, ComputePoolSelection, ComputeSettings,
         ContainerAutoscaling, ContainerCode, DaemonCode, EnvironmentVariablesSnapshot,
-        ExternalBindings, NetworkSettings, ResourceSpec, StackSettings,
+        ExternalBindings, NetworkSettings, PersistentStorage, ResourceSpec, StackSettings,
     };
     use indexmap::IndexMap;
 
@@ -861,6 +1017,250 @@ mod tests {
             })
             .permissions("test".to_string())
             .build()
+    }
+
+    #[tokio::test]
+    async fn persistent_stateful_container_gets_pool_with_single_capacity_group() {
+        let container = Container::new("database".to_string())
+            .code(ContainerCode::Image {
+                image: "database:latest".to_string(),
+            })
+            .cpu(ResourceSpec {
+                min: "1".to_string(),
+                desired: "1".to_string(),
+            })
+            .memory(ResourceSpec {
+                min: "1Gi".to_string(),
+                desired: "1Gi".to_string(),
+            })
+            .persistent_storage(PersistentStorage {
+                size: "20Gi".to_string(),
+                mount_path: "/data".to_string(),
+            })
+            .stateful(true)
+            .replicas(3)
+            .port(8080)
+            .permissions("database".to_string())
+            .build();
+        let stack = Stack::new("test-stack".to_string())
+            .add(container, ResourceLifecycle::Live)
+            .build();
+        let stack_state = StackState {
+            platform: Platform::Aws,
+            resources: Default::default(),
+            resource_prefix: "test".to_string(),
+        };
+        let initial_plan =
+            plan_compute(&stack, Platform::Aws, None).expect("compute plan should build");
+        let pool_id = initial_plan.pools[0].pool_id.clone();
+        assert_eq!(pool_id, "stateful");
+        let recommendation = initial_plan.pools[0].recommended.clone();
+        let mut installer_selection = recommendation.clone();
+        match &mut installer_selection {
+            ComputePoolSelection::Fixed {
+                failure_domains, ..
+            }
+            | ComputePoolSelection::Autoscale {
+                failure_domains, ..
+            } => *failure_domains = None,
+        }
+        let installer_settings = ComputeSettings {
+            pools: [(pool_id.clone(), installer_selection)]
+                .into_iter()
+                .collect(),
+        };
+        let planned_selection = plan_compute(&stack, Platform::Aws, Some(&installer_settings))
+            .expect("installer selection should preserve required topology")
+            .pools[0]
+            .selected
+            .clone();
+        assert_eq!(
+            planned_selection
+                .failure_domains()
+                .map(|selection| selection.spread),
+            Some(1)
+        );
+        let config = DeploymentConfig::builder()
+            .stack_settings(StackSettings {
+                compute: Some(ComputeSettings {
+                    pools: [(pool_id.clone(), planned_selection)].into_iter().collect(),
+                }),
+                ..StackSettings::default()
+            })
+            .environment_variables(empty_env_snapshot())
+            .allow_frozen_changes(false)
+            .external_bindings(ExternalBindings::default())
+            .build();
+
+        let mutation = ComputeClusterMutation;
+        let result = mutation
+            .mutate(stack, &stack_state, &config)
+            .await
+            .expect("persistent container should be planned");
+        let container = result.resources["database"]
+            .config
+            .downcast_ref::<Container>()
+            .expect("container should remain present");
+
+        assert_eq!(container.pool.as_deref(), Some("stateful"));
+        let cluster = result.resources[container.cluster.as_deref().unwrap()]
+            .config
+            .downcast_ref::<ComputeCluster>()
+            .expect("assigned cluster should exist");
+        assert!(cluster
+            .capacity_groups
+            .iter()
+            .any(|group| Some(group.group_id.as_str()) == container.pool.as_deref()));
+        assert_eq!(cluster.failure_domain_spread.get("stateful"), Some(&1));
+
+        assert!(!mutation.should_run(&result, &stack_state, &config));
+        let second = mutation
+            .mutate(result.clone(), &stack_state, &config)
+            .await
+            .expect("a second pass should be a no-op");
+        assert_eq!(
+            serde_json::to_value(&second).unwrap(),
+            serde_json::to_value(&result).unwrap()
+        );
+
+        let mut existing_aggregate = result.clone();
+        existing_aggregate.resources["database"]
+            .config
+            .downcast_mut::<Container>()
+            .unwrap()
+            .pool = None;
+        let cluster_id = existing_aggregate.resources["database"]
+            .config
+            .downcast_ref::<Container>()
+            .unwrap()
+            .cluster
+            .clone()
+            .unwrap();
+        let existing_cluster = existing_aggregate.resources[&cluster_id]
+            .config
+            .downcast_mut::<ComputeCluster>()
+            .unwrap();
+        existing_cluster.failure_domain_spread.clear();
+        existing_cluster.selected_failure_domains.clear();
+        let mut existing_state = stack_state.clone();
+        for (id, entry) in &existing_aggregate.resources {
+            existing_state.resources.insert(
+                id.clone(),
+                alien_core::StackResourceState::new_pending(
+                    entry.config.resource_type().to_string(),
+                    entry.config.clone(),
+                    Some(entry.lifecycle),
+                    entry.dependencies.clone(),
+                ),
+            );
+        }
+        assert!(!mutation.should_run(&existing_aggregate, &existing_state, &config));
+        let redeployed = mutation
+            .mutate(existing_aggregate.clone(), &existing_state, &config)
+            .await
+            .expect("existing aggregate deployment should remain compatible");
+        assert_eq!(
+            serde_json::to_value(&redeployed).unwrap(),
+            serde_json::to_value(&existing_aggregate).unwrap(),
+            "redeploy must not rewrite immutable pool or opt into topology"
+        );
+
+        let mut aggregate_general = existing_aggregate.clone();
+        aggregate_general.resources[&cluster_id]
+            .config
+            .downcast_mut::<ComputeCluster>()
+            .unwrap()
+            .capacity_groups[0]
+            .group_id = "general".to_string();
+        let mut aggregate_state = stack_state.clone();
+        for (id, entry) in &aggregate_general.resources {
+            aggregate_state.resources.insert(
+                id.clone(),
+                alien_core::StackResourceState::new_pending(
+                    entry.config.resource_type().to_string(),
+                    entry.config.clone(),
+                    Some(entry.lifecycle),
+                    entry.dependencies.clone(),
+                ),
+            );
+        }
+        let mut with_new_stateful = aggregate_general;
+        let mut new_entry = with_new_stateful.resources["database"].clone();
+        let new_container = new_entry.config.downcast_mut::<Container>().unwrap();
+        new_container.id = "database-new".to_string();
+        new_container.pool = None;
+        with_new_stateful
+            .resources
+            .insert("database-new".to_string(), new_entry);
+        let mut migration_config = config.clone();
+        let compute = migration_config.stack_settings.compute.as_mut().unwrap();
+        let mut general_selection = compute.pools["stateful"].clone();
+        match &mut general_selection {
+            ComputePoolSelection::Fixed {
+                failure_domains, ..
+            }
+            | ComputePoolSelection::Autoscale {
+                failure_domains, ..
+            } => *failure_domains = None,
+        }
+        compute
+            .pools
+            .insert("general".to_string(), general_selection);
+
+        let expanded = mutation
+            .mutate(with_new_stateful, &aggregate_state, &migration_config)
+            .await
+            .expect("new stateful workload should get a separate pool");
+        assert_eq!(
+            expanded.resources["database"]
+                .config
+                .downcast_ref::<Container>()
+                .unwrap()
+                .pool,
+            None,
+            "existing aggregate workload must remain unchanged"
+        );
+        assert_eq!(
+            expanded.resources["database-new"]
+                .config
+                .downcast_ref::<Container>()
+                .unwrap()
+                .pool
+                .as_deref(),
+            Some("stateful")
+        );
+        let expanded_cluster = expanded.resources[&cluster_id]
+            .config
+            .downcast_ref::<ComputeCluster>()
+            .unwrap();
+        assert!(expanded_cluster
+            .capacity_groups
+            .iter()
+            .any(|group| group.group_id == "general"));
+        assert!(expanded_cluster
+            .capacity_groups
+            .iter()
+            .any(|group| group.group_id == "stateful"));
+        assert!(!expanded_cluster
+            .failure_domain_spread
+            .contains_key("general"));
+        assert_eq!(
+            expanded_cluster.failure_domain_spread.get("stateful"),
+            Some(&1)
+        );
+
+        let mut invalid = result;
+        invalid.resources["database"]
+            .config
+            .downcast_mut::<Container>()
+            .unwrap()
+            .pool = Some("missing".to_string());
+        assert!(mutation.should_run(&invalid, &stack_state, &config));
+        let error = mutation
+            .mutate(invalid, &stack_state, &config)
+            .await
+            .expect_err("an explicit pool must belong to the referenced cluster");
+        assert!(error.to_string().contains("Capacity group 'missing'"));
     }
 
     fn deployment_config_with_compute_pool(
