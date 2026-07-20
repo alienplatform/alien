@@ -918,7 +918,7 @@ mod tests {
         let refs: Vec<&Container> = containers.iter().collect();
 
         for (platform, expected_instance) in [
-            (Platform::Aws, "m7g.xlarge"),
+            (Platform::Aws, "m7i.xlarge"),
             (Platform::Gcp, "n2-standard-4"),
             (Platform::Azure, "Standard_D4s_v5"),
         ] {
@@ -1029,7 +1029,7 @@ mod tests {
         let cluster = ComputeCluster::new("compute".to_string())
             .capacity_group(CapacityGroup {
                 group_id: "general".to_string(),
-                instance_type: Some("m7g.large".to_string()),
+                instance_type: Some("m7i.large".to_string()),
                 profile: Some(MachineProfile {
                     cpu: "2.0".to_string(),
                     memory_bytes: 8 * 1024 * 1024 * 1024,
@@ -1198,7 +1198,7 @@ mod tests {
         };
 
         let mutation = ComputeClusterMutation;
-        let config = deployment_config_with_compute_pool("m7g.large", 1, 1);
+        let config = deployment_config_with_compute_pool("m7i.large", 1, 1);
         let result = mutation.mutate(stack, &stack_state, &config).await;
 
         assert!(result.is_ok());
@@ -1276,7 +1276,7 @@ mod tests {
         };
 
         let mutation = ComputeClusterMutation;
-        let config = deployment_config_with_compute_pool("m7g.large", 1, 1);
+        let config = deployment_config_with_compute_pool("m7i.large", 1, 1);
         let result = mutation.mutate(stack, &stack_state, &config).await.unwrap();
 
         // Check that Local platform gets min=1, max=1 with synthetic profile
@@ -1342,7 +1342,7 @@ mod tests {
         };
 
         let mutation = ComputeClusterMutation;
-        let config = deployment_config_with_compute_pool("m7g.large", 1, 1);
+        let config = deployment_config_with_compute_pool("m7i.large", 1, 1);
         let result = mutation.mutate(stack, &stack_state, &config).await;
 
         assert!(result.is_ok());
@@ -1419,7 +1419,7 @@ mod tests {
         };
 
         let mutation = ComputeClusterMutation;
-        let config = deployment_config_with_compute_pool("m7g.large", 1, 1);
+        let config = deployment_config_with_compute_pool("m7i.large", 1, 1);
         let result = mutation.mutate(stack, &stack_state, &config).await.unwrap();
 
         // Cluster should depend on default-network since it exists
@@ -1530,7 +1530,7 @@ mod tests {
             };
 
             let machine = match platform {
-                Platform::Aws => "m7g.large",
+                Platform::Aws => "m7i.large",
                 Platform::Gcp => "n2-standard-2",
                 Platform::Azure => "Standard_D2s_v5",
                 _ => unreachable!("test only covers cloud platforms"),
@@ -1577,7 +1577,7 @@ mod tests {
         let cluster = ComputeCluster::new("compute".to_string())
             .capacity_group(CapacityGroup {
                 group_id: "general".to_string(),
-                instance_type: Some("m7g.large".to_string()),
+                instance_type: Some("m7i.large".to_string()),
                 profile: Some(MachineProfile {
                     cpu: "2.0".to_string(),
                     memory_bytes: 8 * 1024 * 1024 * 1024,
@@ -1643,7 +1643,7 @@ mod tests {
             resource_prefix: "test".to_string(),
         };
         let config = deployment_config_with_compute_pools(&[
-            ("general", "m7g.large", 1, 10),
+            ("general", "m7i.large", 1, 10),
             ("gpu", "p4d.24xlarge", 1, 1),
         ]);
 
@@ -1763,7 +1763,7 @@ mod tests {
         };
 
         let mutation = ComputeClusterMutation;
-        let config = deployment_config_with_compute_pool("m7g.xlarge", 1, 8);
+        let config = deployment_config_with_compute_pool("m7i.xlarge", 1, 8);
         let result = mutation.mutate(stack, &stack_state, &config).await.unwrap();
 
         let cluster_entry = result.resources.get("compute").unwrap();
@@ -1837,7 +1837,7 @@ mod tests {
             resource_prefix: "test".to_string(),
         };
         let mutation = ComputeClusterMutation;
-        let config = deployment_config_with_compute_pool("m7g.large", 1, 1);
+        let config = deployment_config_with_compute_pool("m7i.large", 1, 1);
 
         let result = mutation.mutate(stack, &stack_state, &config).await.unwrap();
         let cluster = result
