@@ -271,10 +271,17 @@ jobs:
           cd "$consumer"
           node --input-type=module <<'EOF'
           import { Container } from "@alienplatform/core"
+          import { BindingNotConfiguredError, storage } from "@alienplatform/bindings"
           const resource = new Container("dev-package-smoke").commandsEnabled(true)
           if (resource.config.commandsEnabled !== true) throw new Error("packed core lacks commandsEnabled")
           await import("@alienplatform/commands")
           await import("@alienplatform/sdk")
+          try {
+            await storage("dev-package-smoke").list()
+            throw new Error("unconfigured binding unexpectedly succeeded")
+          } catch (error) {
+            if (!(error instanceof BindingNotConfiguredError)) throw error
+          }
           EOF
 
       - name: Validate npm authentication
