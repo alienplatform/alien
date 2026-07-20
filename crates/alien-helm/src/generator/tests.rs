@@ -542,7 +542,7 @@ logCollector:
   enabled: true
   token: test-collector-token
   scope:
-deploymentLabelValue: e2e123
+    deploymentLabelValue: e2e123
 "#;
 
     let files = chart.files.clone();
