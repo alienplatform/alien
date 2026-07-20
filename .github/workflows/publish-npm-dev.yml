@@ -3,6 +3,11 @@ name: Publish npm dev packages
 on:
   workflow_dispatch:
     inputs:
+      source_ref:
+        description: Exact branch, tag, or commit to package
+        required: true
+        default: main
+        type: string
       dry_run:
         description: Build, pack, and smoke-test without publishing
         required: true
@@ -13,7 +18,7 @@ permissions:
   contents: read
 
 concurrency:
-  group: npm-dev-${{ github.sha }}
+  group: npm-dev-${{ inputs.source_ref }}
   cancel-in-progress: false
 
 jobs:
@@ -25,6 +30,13 @@ jobs:
       short_sha: ${{ steps.identity.outputs.short_sha }}
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.source_ref }}
+
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.ref }}
+          path: .npm-dev-tools
 
       - id: identity
         name: Record immutable source identity
@@ -32,7 +44,6 @@ jobs:
         run: |
           set -euo pipefail
           git_sha="$(git rev-parse HEAD)"
-          test "$git_sha" = "${GITHUB_SHA}"
           echo "git_sha=$git_sha" >> "$GITHUB_OUTPUT"
           echo "short_sha=${git_sha:0:12}" >> "$GITHUB_OUTPUT"
 
@@ -46,7 +57,9 @@ jobs:
           cache: pnpm
 
       - name: Test version and dependency rewriting
-        run: node --test scripts/npm-dev-release.test.mjs
+        env:
+          NPM_DEV_SOURCE_ROOT: ${{ github.workspace }}
+        run: node --test .npm-dev-tools/scripts/npm-dev-release.test.mjs
 
   build-addon:
     needs: prepare
@@ -80,6 +93,8 @@ jobs:
       CARGO_INCREMENTAL: "0"
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.source_ref }}
 
       - name: Setup Rust (linux)
         if: matrix.os == 'linux'
@@ -140,6 +155,13 @@ jobs:
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.source_ref }}
+
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.ref }}
+          path: .npm-dev-tools
 
       - uses: pnpm/action-setup@v4
         with:
@@ -176,9 +198,9 @@ jobs:
 
       - name: Rewrite package graph to immutable dev versions
         run: |
-          node scripts/npm-dev-release.mjs rewrite "${{ needs.prepare.outputs.git_sha }}" | tee npm-dev-versions.json
+          node .npm-dev-tools/scripts/npm-dev-release.mjs rewrite "${{ needs.prepare.outputs.git_sha }}" | tee npm-dev-versions.json
           node packages/bindings/scripts/inject-optional-deps.mjs
-          node scripts/npm-dev-release.mjs validate "${{ needs.prepare.outputs.git_sha }}"
+          node .npm-dev-tools/scripts/npm-dev-release.mjs validate "${{ needs.prepare.outputs.git_sha }}"
           {
             echo '## npm dev package versions'
             echo '```json'
@@ -208,7 +230,7 @@ jobs:
           packages/bindings/npm/linux-x64-gnu
           packages/bindings/npm/linux-arm64-gnu
           EOF
-          node scripts/npm-dev-release.mjs digest npm-dev-tarballs/*.tgz | tee npm-dev-digests.json
+          node .npm-dev-tools/scripts/npm-dev-release.mjs digest npm-dev-tarballs/*.tgz | tee npm-dev-digests.json
           {
             echo '## npm tarball SHA-256 digests'
             echo '```json'

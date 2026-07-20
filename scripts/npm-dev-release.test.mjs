@@ -7,7 +7,9 @@ import test from "node:test"
 
 import { packages, rewriteManifests, validateManifests } from "./npm-dev-release.mjs"
 
-const repositoryRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..")
+const repositoryRoot = process.env.NPM_DEV_SOURCE_ROOT
+  ? resolve(process.env.NPM_DEV_SOURCE_ROOT)
+  : resolve(dirname(fileURLToPath(import.meta.url)), "..")
 const sha = "0123456789abcdef0123456789abcdef01234567"
 
 function fixture() {
