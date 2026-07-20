@@ -272,7 +272,13 @@ jobs:
           node --input-type=module <<'EOF'
           import { Container } from "@alienplatform/core"
           import { BindingNotConfiguredError, storage } from "@alienplatform/bindings"
-          const resource = new Container("dev-package-smoke").commandsEnabled(true)
+          const resource = new Container("dev-package-smoke")
+            .code({ type: "image", image: "busybox:stable" })
+            .cpu(0.25)
+            .memory("256Mi")
+            .permissions("dev-package-smoke")
+            .commandsEnabled(true)
+            .build()
           if (resource.config.commandsEnabled !== true) throw new Error("packed core lacks commandsEnabled")
           await import("@alienplatform/commands")
           await import("@alienplatform/sdk")
