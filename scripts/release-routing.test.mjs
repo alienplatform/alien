@@ -64,6 +64,15 @@ test("dev publication requires an explicit full source commit", () => {
   assert.match(reusable, /\^\[0-9a-f\]\{40\}\$/)
 })
 
+test("dev publication passes npm an unambiguous local tarball path", () => {
+  const reusable = readFileSync(
+    resolve(process.cwd(), ".github/workflows/publish-npm-dev.yml"),
+    "utf8",
+  )
+  assert.match(reusable, /tarball="\$\(realpath "\$1"\)"/)
+  assert.match(reusable, /npm publish "\$tarball" --access public --tag dev/)
+})
+
 test("dev mode can reach only the reusable npm dev workflow", () => {
   const jobs = parseJobs(workflow)
   assert.deepEqual([...jobs.keys()].sort(), ["publish-npm-dev", ...stableJobs].sort())

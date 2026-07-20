@@ -320,7 +320,8 @@ jobs:
         run: |
           set -euo pipefail
           publish_tarball() {
-            local tarball="$1"
+            local tarball
+            tarball="$(realpath "$1")"
             local manifest name version local_integrity remote_integrity
             manifest="$(tar -xOzf "$tarball" package/package.json)"
             name="$(jq -er '.name' <<< "$manifest")"
