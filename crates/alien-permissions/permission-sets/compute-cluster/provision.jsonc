@@ -401,9 +401,7 @@
       // resource-group-scoped role assignment.
       {
         "grant": {
-          "actions": [
-            "Microsoft.Compute/skus/read"
-          ]
+          "actions": ["Microsoft.Compute/skus/read"]
         },
         "binding": {
           "stack": {
