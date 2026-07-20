@@ -386,3 +386,59 @@ fn resolve_cfn_intrinsics(value: serde_json::Value) -> serde_json::Value {
         other => other,
     }
 }
+
+#[test]
+fn aws_email_resource_permissions_attach_to_service_account_role() {
+    use alien_core::{PermissionProfile, ServiceAccount};
+
+    let email = Email::new("mailer".to_string()).build();
+    let stack = Stack::new("email-permissions".to_string())
+        .permission(
+            "sender",
+            PermissionProfile::new()
+                .resource("mailer", ["email/send", "email/manage-identities"]),
+        )
+        .add(
+            ServiceAccount::new("sender-sa".to_string()).build(),
+            ResourceLifecycle::Frozen,
+        )
+        .add(email, ResourceLifecycle::Frozen)
+        .build();
+
+    let yaml = render_built_ins(
+        &stack,
+        StackSettings::default(),
+        RegistrationMode::OutputsFallback,
+        "aws email service account permissions",
+    );
+    let template: serde_json::Value =
+        serde_yaml::from_str(&yaml).expect("template YAML should parse");
+
+    let send_policy = &template["Resources"]["MailerSenderSaRoleEmailPermission00"];
+    let identities_policy = &template["Resources"]["MailerSenderSaRoleEmailPermission01"];
+    assert_eq!(send_policy["Type"], "AWS::IAM::Policy");
+    assert_eq!(identities_policy["Type"], "AWS::IAM::Policy");
+
+    let send_actions = send_policy["Properties"]["PolicyDocument"]["Statement"][0]["Action"]
+        .as_array()
+        .expect("send statement should list actions");
+    assert!(send_actions.contains(&serde_json::json!("ses:SendEmail")));
+    assert!(send_actions.contains(&serde_json::json!("ses:SendRawEmail")));
+
+    let identity_statements = identities_policy["Properties"]["PolicyDocument"]["Statement"]
+        .as_array()
+        .expect("manage-identities statements");
+    let identity_actions: Vec<String> = identity_statements
+        .iter()
+        .flat_map(|statement| statement["Action"].as_array().cloned().unwrap_or_default())
+        .filter_map(|action| action.as_str().map(str::to_string))
+        .collect();
+    assert!(identity_actions.contains(&"ses:CreateEmailIdentity".to_string()));
+
+    for policy in [send_policy, identities_policy] {
+        assert_eq!(
+            policy["Properties"]["Roles"][0]["Ref"],
+            serde_json::json!("SenderSaRole")
+        );
+    }
+}
