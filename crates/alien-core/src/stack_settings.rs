@@ -290,21 +290,39 @@ impl ComputePoolSelection {
         match self {
             Self::Fixed { machines, .. } => {
                 if *machines == 0 {
-                    Err("fixed compute pools must select at least one machine".to_string())
-                } else {
-                    Ok(())
+                    return Err("fixed compute pools must select at least one machine".to_string());
+                }
+                if let Some(failure_domains) = self.failure_domains() {
+                    if *machines < u32::from(failure_domains.spread) {
+                        return Err(format!(
+                            "fixed compute pool machines ({machines}) must be at least failure-domain spread ({})",
+                            failure_domains.spread
+                        ));
+                    }
                 }
             }
             Self::Autoscale { min, max, .. } => {
                 if min > max {
-                    Err(format!(
+                    return Err(format!(
                         "autoscaling compute pool minimum ({min}) cannot exceed maximum ({max})"
-                    ))
-                } else {
-                    Ok(())
+                    ));
+                }
+                if let Some(failure_domains) = self.failure_domains() {
+                    let spread = u32::from(failure_domains.spread);
+                    if *max < spread {
+                        return Err(format!(
+                            "autoscaling compute pool maximum ({max}) must be at least failure-domain spread ({spread})"
+                        ));
+                    }
+                    if *min < spread {
+                        return Err(format!(
+                            "autoscaling compute pool minimum ({min}) must be at least failure-domain spread ({spread})"
+                        ));
+                    }
                 }
             }
         }
+        Ok(())
     }
 }
 
@@ -790,5 +808,82 @@ mod failure_domain_tests {
             selection.validate(),
             Err("selected failure domains must be unique".to_string())
         );
+    }
+
+    #[test]
+    fn fixed_pool_must_have_one_machine_per_failure_domain() {
+        let invalid = ComputePoolSelection::Fixed {
+            machines: 1,
+            machine: None,
+            failure_domains: Some(FailureDomainSelection {
+                spread: 2,
+                selected_failure_domains: Vec::new(),
+            }),
+        };
+        assert_eq!(
+            invalid.validate(),
+            Err(
+                "fixed compute pool machines (1) must be at least failure-domain spread (2)"
+                    .to_string()
+            )
+        );
+
+        let valid = ComputePoolSelection::Fixed {
+            machines: 2,
+            machine: None,
+            failure_domains: Some(FailureDomainSelection {
+                spread: 2,
+                selected_failure_domains: Vec::new(),
+            }),
+        };
+        assert_eq!(valid.validate(), Ok(()));
+    }
+
+    #[test]
+    fn autoscaling_pool_bounds_must_cover_every_failure_domain() {
+        let invalid_max = ComputePoolSelection::Autoscale {
+            min: 1,
+            max: 1,
+            machine: None,
+            failure_domains: Some(FailureDomainSelection {
+                spread: 2,
+                selected_failure_domains: Vec::new(),
+            }),
+        };
+        assert_eq!(
+            invalid_max.validate(),
+            Err(
+                "autoscaling compute pool maximum (1) must be at least failure-domain spread (2)"
+                    .to_string()
+            )
+        );
+
+        let invalid_min = ComputePoolSelection::Autoscale {
+            min: 1,
+            max: 3,
+            machine: None,
+            failure_domains: Some(FailureDomainSelection {
+                spread: 2,
+                selected_failure_domains: Vec::new(),
+            }),
+        };
+        assert_eq!(
+            invalid_min.validate(),
+            Err(
+                "autoscaling compute pool minimum (1) must be at least failure-domain spread (2)"
+                    .to_string()
+            )
+        );
+
+        let valid = ComputePoolSelection::Autoscale {
+            min: 2,
+            max: 2,
+            machine: None,
+            failure_domains: Some(FailureDomainSelection {
+                spread: 2,
+                selected_failure_domains: Vec::new(),
+            }),
+        };
+        assert_eq!(valid.validate(), Ok(()));
     }
 }
