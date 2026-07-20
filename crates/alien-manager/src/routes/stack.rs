@@ -174,7 +174,7 @@ pub async fn stack_import(
         Err(e) => return e.into_response(),
     };
 
-    let stack_state = match build_stack_state(&state, &subject, &req, &prepared_stack) {
+    let mut stack_state = match build_stack_state(&state, &subject, &req, &prepared_stack) {
         Ok(s) => s,
         Err(e) => return e.into_response(),
     };
@@ -204,6 +204,18 @@ pub async fn stack_import(
                     ),
                 })
                 .into_response();
+            }
+            if let Some(existing_stack_state) = existing.stack_state.as_ref() {
+                stack_state = match merge_reimported_stack_state(
+                    &state,
+                    &req,
+                    &prepared_stack,
+                    existing_stack_state,
+                    stack_state,
+                ) {
+                    Ok(state) => state,
+                    Err(error) => return error.into_response(),
+                };
             }
             if !can_accept_reimport(&existing, &stack_state, &release.id, &req) {
                 return AlienError::new(ErrorData::ImportedDeploymentConflict {
@@ -387,6 +399,82 @@ pub async fn stack_import(
         }),
     )
         .into_response()
+}
+
+fn merge_reimported_stack_state(
+    state: &AppState,
+    req: &StackImportRequest,
+    stack: &Stack,
+    existing: &StackState,
+    mut imported: StackState,
+) -> crate::error::Result<StackState> {
+    for resource in &req.resources {
+        let Some(existing_resource) = existing.resources.get(&resource.id) else {
+            continue;
+        };
+        let imported_resource = imported.resources.remove(&resource.id).ok_or_else(|| {
+            AlienError::new(ErrorData::BadRequest {
+                reason: format!(
+                    "Imported resource '{}' is missing from generated state",
+                    resource.id
+                ),
+            })
+        })?;
+        if existing_resource.resource_type != imported_resource.resource_type {
+            return Err(AlienError::new(ErrorData::BadRequest {
+                reason: format!(
+                    "Cannot re-import resource '{}': existing type '{}' does not match imported type '{}'",
+                    resource.id, existing_resource.resource_type, imported_resource.resource_type
+                ),
+            }));
+        }
+        let platform = import_platform_for_resource(state, req, &resource.resource_type);
+        if existing_resource
+            .controller_platform
+            .is_some_and(|existing_platform| existing_platform != platform)
+        {
+            return Err(AlienError::new(ErrorData::BadRequest {
+                reason: format!(
+                    "Cannot re-import resource '{}': existing controller platform does not match '{}'",
+                    resource.id, platform
+                ),
+            }));
+        }
+        let entry = stack.resources.get(&resource.id).ok_or_else(|| {
+            AlienError::new(ErrorData::BadRequest {
+                reason: format!(
+                    "Imported resource '{}' is absent from the prepared stack",
+                    resource.id
+                ),
+            })
+        })?;
+        let merged = state
+            .import_registry
+            .merge_reimport(
+                &resource.resource_type,
+                platform,
+                existing_resource.clone(),
+                imported_resource,
+                &ImportContext {
+                    resource_id: &resource.id,
+                    platform,
+                    region: &req.region,
+                    stack_settings: &req.stack_settings,
+                    management_config: req.management_config.as_ref(),
+                    resource: entry,
+                },
+            )
+            .map_err(|error| {
+                AlienError::new(ErrorData::BadRequest {
+                    reason: format!(
+                        "Failed to merge re-imported resource '{}': {}",
+                        resource.id, error.message
+                    ),
+                })
+            })?;
+        imported.resources.insert(resource.id.clone(), merged);
+    }
+    Ok(imported)
 }
 
 fn assert_supported_import_region(
