@@ -332,7 +332,7 @@ async fn mint_credentials(
                 }
             };
 
-            let materialized = match materialize_minted_client_config(impersonated).await {
+            let materialized = match materialize_response_safe_client_config(impersonated).await {
                 Ok(config) => config,
                 Err(e) => return e.into_response(),
             };
@@ -496,7 +496,7 @@ async fn validate_mint_resource_link(
 /// Convert provider impersonation output into a response-safe credential
 /// form. Refreshable sources (service-account keys, workload identity files,
 /// managed-identity endpoints, manager profiles, etc.) never cross the API.
-async fn materialize_minted_client_config(
+pub(super) async fn materialize_response_safe_client_config(
     config: ClientConfig,
 ) -> std::result::Result<ClientConfig, AlienError<ErrorData>> {
     match config {

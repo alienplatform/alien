@@ -47,6 +47,8 @@ use utoipa::OpenApi;
         // Credentials
         crate::routes::credentials::resolve_credentials,
         crate::routes::credentials::mint_credentials,
+        // Remote bindings
+        crate::routes::bindings::resolve_binding,
     ),
     components(schemas(
         // Deployment types
@@ -90,6 +92,9 @@ use utoipa::OpenApi;
         crate::routes::credentials::ResolveCredentialsResponse,
         crate::routes::credentials::MintCredentialsRequest,
         crate::routes::credentials::MintCredentialsResponse,
+        // Remote binding types
+        crate::routes::bindings::ResolveBindingRequest,
+        crate::routes::bindings::ResolveBindingResponse,
         // Identity types
         crate::routes::whoami::WhoamiResponse,
         // Health types
@@ -106,6 +111,7 @@ use utoipa::OpenApi;
         (name = "stack-import", description = "Setup artifact stack import (CFN, TF, Helm)"),
         (name = "sync", description = "Agent sync and state reconciliation"),
         (name = "credentials", description = "Credential resolution for deployments"),
+        (name = "bindings", description = "Remote resource binding resolution"),
         (name = "telemetry", description = "OTLP telemetry ingestion"),
     )
 )]

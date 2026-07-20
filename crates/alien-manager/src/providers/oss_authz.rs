@@ -94,6 +94,10 @@ impl Authz for OssAuthz {
         )
     }
 
+    fn can_resolve_remote_bindings(&self, s: &Subject, deployment: &DeploymentRecord) -> bool {
+        self.can_update_deployment(s, deployment)
+    }
+
     fn can_delete_deployment(&self, s: &Subject, deployment: &DeploymentRecord) -> bool {
         // Deletion is workspace-write only — a deployment-group token can
         // create/update its own deployments, but tearing them down is an
@@ -255,6 +259,12 @@ mod tests {
         }
     }
 
+    fn deployment_viewer_token(deployment_id: &str) -> Subject {
+        let mut subject = deployment_token(deployment_id);
+        subject.role = Role::DeploymentViewer;
+        subject
+    }
+
     fn deployment(id: &str, dg: &str) -> DeploymentRecord {
         DeploymentRecord {
             deployment_protocol_version: alien_core::CURRENT_DEPLOYMENT_PROTOCOL_VERSION,
@@ -309,6 +319,13 @@ mod tests {
         let dep = deployment("d1", "dg-a");
         assert!(OssAuthz.can_read_deployment(&deployment_token("d1"), &dep));
         assert!(!OssAuthz.can_read_deployment(&deployment_token("d2"), &dep));
+    }
+
+    #[test]
+    fn remote_binding_resolution_uses_deployment_writer_roles_not_viewers() {
+        let dep = deployment("d1", "dg-a");
+        assert!(OssAuthz.can_resolve_remote_bindings(&deployment_token("d1"), &dep));
+        assert!(!OssAuthz.can_resolve_remote_bindings(&deployment_viewer_token("d1"), &dep));
     }
 
     #[test]

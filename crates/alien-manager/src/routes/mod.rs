@@ -1,5 +1,6 @@
 //! REST API route handlers for alien-manager.
 
+pub mod bindings;
 pub mod build_config;
 pub mod commands;
 pub mod credentials;
@@ -129,6 +130,8 @@ pub fn create_router_inner(state: AppState, options: RouterOptions) -> Router {
         .merge(sync::router())
         // Credentials
         .merge(credentials::router())
+        // Remote resource bindings
+        .merge(bindings::router())
         // Vault secrets
         .merge(vault::router())
         // Token management (list, revoke)

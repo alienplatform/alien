@@ -37,6 +37,11 @@ pub trait Authz: Send + Sync {
     fn can_create_deployment(&self, subject: &Subject, ctx: DeploymentCreateCtx<'_>) -> bool;
     fn can_read_deployment(&self, subject: &Subject, deployment: &DeploymentRecord) -> bool;
     fn can_update_deployment(&self, subject: &Subject, deployment: &DeploymentRecord) -> bool;
+    /// Whether a caller may resolve a remote resource binding for a deployment.
+    /// This is deliberately separate from read access because the response
+    /// includes short-lived credentials for the deployment's management identity.
+    fn can_resolve_remote_bindings(&self, subject: &Subject, deployment: &DeploymentRecord)
+        -> bool;
     fn can_delete_deployment(&self, subject: &Subject, deployment: &DeploymentRecord) -> bool;
 
     // -- Deployment groups -------------------------------------------------
