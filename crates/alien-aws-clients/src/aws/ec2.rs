@@ -189,6 +189,11 @@ pub trait Ec2Api: Send + Sync + std::fmt::Debug {
 
     // Volume Operations
     async fn create_volume(&self, request: CreateVolumeRequest) -> Result<CreateVolumeResponse>;
+    async fn modify_volume(&self, request: ModifyVolumeRequest) -> Result<ModifyVolumeResponse>;
+    async fn describe_volumes_modifications(
+        &self,
+        request: DescribeVolumesModificationsRequest,
+    ) -> Result<DescribeVolumesModificationsResponse>;
     async fn delete_volume(&self, volume_id: &str) -> Result<()>;
     async fn describe_volumes(
         &self,
@@ -486,6 +491,12 @@ impl Ec2Client {
                 resource_type: "RouteTableAssociation".into(),
                 resource_name: resource.into(),
             },
+            "InvalidVolume.NotFound" | "InvalidVolumeID.NotFound" => {
+                ErrorData::RemoteResourceNotFound {
+                    resource_type: "Volume".into(),
+                    resource_name: resource.into(),
+                }
+            }
             // Conflict / already exists errors
             "VpcLimitExceeded"
             | "SubnetLimitExceeded"
@@ -599,6 +610,83 @@ impl Ec2Client {
                 );
             }
         }
+    }
+
+    fn create_volume_form_data(request: &CreateVolumeRequest) -> HashMap<String, String> {
+        let mut form_data = HashMap::new();
+        form_data.insert("Action".to_string(), "CreateVolume".to_string());
+        form_data.insert("Version".to_string(), "2016-11-15".to_string());
+        form_data.insert(
+            "AvailabilityZone".to_string(),
+            request.availability_zone.clone(),
+        );
+
+        if let Some(client_token) = &request.client_token {
+            form_data.insert("ClientToken".to_string(), client_token.clone());
+        }
+        if let Some(size) = request.size {
+            form_data.insert("Size".to_string(), size.to_string());
+        }
+        if let Some(snapshot_id) = &request.snapshot_id {
+            form_data.insert("SnapshotId".to_string(), snapshot_id.clone());
+        }
+        if let Some(volume_type) = &request.volume_type {
+            form_data.insert("VolumeType".to_string(), volume_type.clone());
+        }
+        if let Some(iops) = request.iops {
+            form_data.insert("Iops".to_string(), iops.to_string());
+        }
+        if let Some(throughput) = request.throughput {
+            form_data.insert("Throughput".to_string(), throughput.to_string());
+        }
+        if let Some(encrypted) = request.encrypted {
+            form_data.insert("Encrypted".to_string(), encrypted.to_string());
+        }
+        if let Some(kms_key_id) = &request.kms_key_id {
+            form_data.insert("KmsKeyId".to_string(), kms_key_id.clone());
+        }
+        if let Some(tag_specs) = &request.tag_specifications {
+            Self::add_tag_specifications(&mut form_data, tag_specs);
+        }
+
+        form_data
+    }
+
+    fn modify_volume_form_data(request: &ModifyVolumeRequest) -> HashMap<String, String> {
+        let mut form_data = HashMap::new();
+        form_data.insert("Action".to_string(), "ModifyVolume".to_string());
+        form_data.insert("Version".to_string(), "2016-11-15".to_string());
+        form_data.insert("VolumeId".to_string(), request.volume_id.clone());
+        form_data.insert("Size".to_string(), request.size.to_string());
+        form_data
+    }
+
+    fn describe_volumes_modifications_form_data(
+        request: &DescribeVolumesModificationsRequest,
+    ) -> HashMap<String, String> {
+        let mut form_data = HashMap::new();
+        form_data.insert(
+            "Action".to_string(),
+            "DescribeVolumesModifications".to_string(),
+        );
+        form_data.insert("Version".to_string(), "2016-11-15".to_string());
+
+        if let Some(volume_ids) = &request.volume_ids {
+            for (i, volume_id) in volume_ids.iter().enumerate() {
+                form_data.insert(format!("VolumeId.{}", i + 1), volume_id.clone());
+            }
+        }
+        if let Some(filters) = &request.filters {
+            Self::add_filters(&mut form_data, filters);
+        }
+        if let Some(max_results) = request.max_results {
+            form_data.insert("MaxResults".to_string(), max_results.to_string());
+        }
+        if let Some(next_token) = &request.next_token {
+            form_data.insert("NextToken".to_string(), next_token.clone());
+        }
+
+        form_data
     }
 }
 
@@ -1456,48 +1544,29 @@ impl Ec2Api for Ec2Client {
     // ---------------------------------------------------------------------------
 
     async fn create_volume(&self, request: CreateVolumeRequest) -> Result<CreateVolumeResponse> {
-        let mut form_data = HashMap::new();
-        form_data.insert("Action".to_string(), "CreateVolume".to_string());
-        form_data.insert("Version".to_string(), "2016-11-15".to_string());
-        form_data.insert(
-            "AvailabilityZone".to_string(),
-            request.availability_zone.clone(),
-        );
-
-        if let Some(size) = request.size {
-            form_data.insert("Size".to_string(), size.to_string());
-        }
-
-        if let Some(snapshot_id) = &request.snapshot_id {
-            form_data.insert("SnapshotId".to_string(), snapshot_id.clone());
-        }
-
-        if let Some(volume_type) = &request.volume_type {
-            form_data.insert("VolumeType".to_string(), volume_type.clone());
-        }
-
-        if let Some(iops) = request.iops {
-            form_data.insert("Iops".to_string(), iops.to_string());
-        }
-
-        if let Some(throughput) = request.throughput {
-            form_data.insert("Throughput".to_string(), throughput.to_string());
-        }
-
-        if let Some(encrypted) = request.encrypted {
-            form_data.insert("Encrypted".to_string(), encrypted.to_string());
-        }
-
-        if let Some(kms_key_id) = &request.kms_key_id {
-            form_data.insert("KmsKeyId".to_string(), kms_key_id.clone());
-        }
-
-        if let Some(tag_specs) = &request.tag_specifications {
-            Self::add_tag_specifications(&mut form_data, tag_specs);
-        }
+        let form_data = Self::create_volume_form_data(&request);
 
         self.send_form(form_data, "CreateVolume", &request.availability_zone)
             .await
+    }
+
+    async fn modify_volume(&self, request: ModifyVolumeRequest) -> Result<ModifyVolumeResponse> {
+        let form_data = Self::modify_volume_form_data(&request);
+        self.send_form(form_data, "ModifyVolume", &request.volume_id)
+            .await
+    }
+
+    async fn describe_volumes_modifications(
+        &self,
+        request: DescribeVolumesModificationsRequest,
+    ) -> Result<DescribeVolumesModificationsResponse> {
+        let form_data = Self::describe_volumes_modifications_form_data(&request);
+        self.send_form(
+            form_data,
+            "DescribeVolumesModifications",
+            "VolumeModification",
+        )
+        .await
     }
 
     async fn delete_volume(&self, volume_id: &str) -> Result<()> {
@@ -3159,6 +3228,9 @@ pub struct StateReason {
 pub struct CreateVolumeRequest {
     /// The availability zone.
     pub availability_zone: String,
+    /// Stable token used by EC2 to make retries idempotent.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub client_token: Option<String>,
     /// The size of the volume in GiBs.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub size: Option<i32>,
@@ -3200,6 +3272,66 @@ pub struct CreateVolumeResponse {
     pub create_time: Option<String>,
     #[serde(rename = "tagSet")]
     pub tag_set: Option<TagSet>,
+}
+
+/// Request to grow an EBS volume.
+#[derive(Debug, Clone, Serialize, Builder)]
+pub struct ModifyVolumeRequest {
+    /// ID of the volume to modify.
+    pub volume_id: String,
+    /// Target size in GiB. EC2 does not permit shrinking a volume.
+    pub size: i32,
+}
+
+/// Response returned after starting a volume modification.
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ModifyVolumeResponse {
+    pub volume_modification: Option<VolumeModification>,
+}
+
+/// Request to inspect the latest modifications for EBS volumes.
+#[derive(Debug, Clone, Serialize, Builder, Default)]
+pub struct DescribeVolumesModificationsRequest {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub volume_ids: Option<Vec<String>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub filters: Option<Vec<Filter>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub max_results: Option<i32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub next_token: Option<String>,
+}
+
+/// Response containing the latest requested volume modifications.
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DescribeVolumesModificationsResponse {
+    #[serde(rename = "volumeModificationSet")]
+    pub volume_modification_set: Option<VolumeModificationSet>,
+    pub next_token: Option<String>,
+}
+
+/// Collection of EBS volume modifications.
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct VolumeModificationSet {
+    #[serde(rename = "item", default)]
+    pub items: Vec<VolumeModification>,
+}
+
+/// Latest modification state reported by EC2 for an EBS volume.
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct VolumeModification {
+    pub volume_id: Option<String>,
+    pub modification_state: Option<String>,
+    pub status_message: Option<String>,
+    pub progress: Option<i64>,
+    pub original_size: Option<i32>,
+    pub target_size: Option<i32>,
+    pub start_time: Option<String>,
+    pub end_time: Option<String>,
 }
 
 /// Request to describe volumes.
@@ -3564,6 +3696,142 @@ pub struct GetConsoleOutputResponse {
     pub timestamp: Option<String>,
 }
 
+#[cfg(test)]
+mod volume_operation_tests {
+    use super::*;
+
+    #[test]
+    fn create_volume_maps_idempotency_token_to_ec2_query_parameter() {
+        let request = CreateVolumeRequest::builder()
+            .availability_zone("us-west-2a".to_string())
+            .client_token("deployment-disk-ordinal-3".to_string())
+            .size(64)
+            .volume_type("gp3".to_string())
+            .encrypted(true)
+            .build();
+
+        let form = Ec2Client::create_volume_form_data(&request);
+
+        assert_eq!(form.get("Action").map(String::as_str), Some("CreateVolume"));
+        assert_eq!(
+            form.get("ClientToken").map(String::as_str),
+            Some("deployment-disk-ordinal-3")
+        );
+        assert_eq!(
+            form.get("AvailabilityZone").map(String::as_str),
+            Some("us-west-2a")
+        );
+        assert_eq!(form.get("Size").map(String::as_str), Some("64"));
+        assert_eq!(form.get("VolumeType").map(String::as_str), Some("gp3"));
+        assert_eq!(form.get("Encrypted").map(String::as_str), Some("true"));
+    }
+
+    #[test]
+    fn volume_growth_operations_map_to_ec2_query_parameters() {
+        let modify = ModifyVolumeRequest::builder()
+            .volume_id("vol-0123456789abcdef0".to_string())
+            .size(128)
+            .build();
+        let modify_form = Ec2Client::modify_volume_form_data(&modify);
+        assert_eq!(
+            modify_form.get("Action").map(String::as_str),
+            Some("ModifyVolume")
+        );
+        assert_eq!(
+            modify_form.get("VolumeId").map(String::as_str),
+            Some("vol-0123456789abcdef0")
+        );
+        assert_eq!(modify_form.get("Size").map(String::as_str), Some("128"));
+
+        let describe = DescribeVolumesModificationsRequest::builder()
+            .volume_ids(vec![
+                "vol-0123456789abcdef0".to_string(),
+                "vol-0123456789abcdef1".to_string(),
+            ])
+            .max_results(2)
+            .next_token("next-page".to_string())
+            .build();
+        let describe_form = Ec2Client::describe_volumes_modifications_form_data(&describe);
+        assert_eq!(
+            describe_form.get("Action").map(String::as_str),
+            Some("DescribeVolumesModifications")
+        );
+        assert_eq!(
+            describe_form.get("VolumeId.1").map(String::as_str),
+            Some("vol-0123456789abcdef0")
+        );
+        assert_eq!(
+            describe_form.get("VolumeId.2").map(String::as_str),
+            Some("vol-0123456789abcdef1")
+        );
+        assert_eq!(
+            describe_form.get("MaxResults").map(String::as_str),
+            Some("2")
+        );
+        assert_eq!(
+            describe_form.get("NextToken").map(String::as_str),
+            Some("next-page")
+        );
+    }
+
+    #[test]
+    fn volume_modification_responses_deserialize_from_ec2_xml() {
+        let modify: ModifyVolumeResponse = quick_xml::de::from_str(
+            r#"<ModifyVolumeResponse xmlns="http://ec2.amazonaws.com/doc/2016-11-15/">
+                <volumeModification>
+                    <volumeId>vol-0123456789abcdef0</volumeId>
+                    <modificationState>modifying</modificationState>
+                    <progress>0</progress>
+                    <originalSize>64</originalSize>
+                    <targetSize>128</targetSize>
+                </volumeModification>
+            </ModifyVolumeResponse>"#,
+        )
+        .expect("ModifyVolume response should deserialize");
+        let modification = modify
+            .volume_modification
+            .expect("ModifyVolume should include its modification");
+        assert_eq!(
+            modification.volume_id.as_deref(),
+            Some("vol-0123456789abcdef0")
+        );
+        assert_eq!(
+            modification.modification_state.as_deref(),
+            Some("modifying")
+        );
+        assert_eq!(modification.progress, Some(0));
+        assert_eq!(modification.original_size, Some(64));
+        assert_eq!(modification.target_size, Some(128));
+
+        let described: DescribeVolumesModificationsResponse = quick_xml::de::from_str(
+            r#"<DescribeVolumesModificationsResponse xmlns="http://ec2.amazonaws.com/doc/2016-11-15/">
+                <volumeModificationSet>
+                    <item>
+                        <volumeId>vol-0123456789abcdef0</volumeId>
+                        <modificationState>completed</modificationState>
+                        <progress>100</progress>
+                        <originalSize>64</originalSize>
+                        <targetSize>128</targetSize>
+                        <endTime>2026-07-20T10:00:00.000Z</endTime>
+                    </item>
+                </volumeModificationSet>
+                <nextToken>next-page</nextToken>
+            </DescribeVolumesModificationsResponse>"#,
+        )
+        .expect("DescribeVolumesModifications response should deserialize");
+        let modifications = described
+            .volume_modification_set
+            .expect("response should include modifications");
+        assert_eq!(modifications.items.len(), 1);
+        assert_eq!(
+            modifications.items[0].modification_state.as_deref(),
+            Some("completed")
+        );
+        assert_eq!(modifications.items[0].progress, Some(100));
+        assert_eq!(described.next_token.as_deref(), Some("next-page"));
+    }
+}
+
 impl GetConsoleOutputResponse {
     /// Decodes the base64-encoded output to a UTF-8 string.
     pub fn decode_output(&self) -> Option<String> {
@@ -3633,6 +3901,31 @@ mod tests {
                 ..
             }) if resource_type == "EC2 Resource"
                 && resource_name == "deployment-compute-general-lt"
+        ));
+    }
+
+    #[test]
+    fn missing_volume_is_a_typed_remote_resource_not_found() {
+        let response = r#"<?xml version="1.0" encoding="UTF-8"?>
+            <Response><Errors><Error>
+                <Code>InvalidVolume.NotFound</Code>
+                <Message>The volume does not exist.</Message>
+            </Error></Errors><RequestID>request-id</RequestID></Response>"#;
+
+        let error = Ec2Client::map_ec2_error(
+            StatusCode::BAD_REQUEST,
+            response,
+            "DescribeVolumesModifications",
+            "vol-0123456789abcdef0",
+            Some("VolumeId.1=vol-0123456789abcdef0"),
+        );
+
+        assert!(matches!(
+            error,
+            Some(ErrorData::RemoteResourceNotFound {
+                resource_type,
+                resource_name,
+            }) if resource_type == "Volume" && resource_name == "vol-0123456789abcdef0"
         ));
     }
 
