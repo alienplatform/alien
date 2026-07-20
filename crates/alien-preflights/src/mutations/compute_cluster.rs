@@ -279,18 +279,24 @@ impl ComputeClusterMutation {
                 else {
                     continue;
                 };
-                let existing_aggregate_cluster = stack_state
+                let existing_group_is_aggregate = stack_state
                     .resources
                     .get(cluster_id)
                     .and_then(|state| state.config.downcast_ref::<ComputeCluster>())
                     .is_some_and(|existing| {
-                        existing.failure_domain_spread.is_empty()
-                            && existing.selected_failure_domains.is_empty()
+                        existing
+                            .capacity_groups
+                            .iter()
+                            .any(|existing_group| existing_group.group_id == group.group_id)
+                            && !existing.failure_domain_spread.contains_key(&group.group_id)
+                            && !existing
+                                .selected_failure_domains
+                                .contains_key(&group.group_id)
                     });
                 let is_implicit_single_domain_default = selection.spread == 1
                     && selection.selected_failure_domains.is_empty()
                     && !fresh_persistent_pools.contains(&group.group_id);
-                if existing_aggregate_cluster && is_implicit_single_domain_default {
+                if existing_group_is_aggregate && is_implicit_single_domain_default {
                     continue;
                 }
                 cluster
@@ -990,7 +996,8 @@ mod tests {
     use alien_core::{
         compute_planner::plan_compute, ComputeChoiceRange, ComputePoolSelection, ComputeSettings,
         ContainerAutoscaling, ContainerCode, DaemonCode, EnvironmentVariablesSnapshot,
-        ExternalBindings, NetworkSettings, PersistentStorage, ResourceSpec, StackSettings,
+        ExternalBindings, FailureDomainSelection, NetworkSettings, PersistentStorage, ResourceSpec,
+        StackSettings,
     };
     use indexmap::IndexMap;
 
@@ -1261,6 +1268,96 @@ mod tests {
             .await
             .expect_err("an explicit pool must belong to the referenced cluster");
         assert!(error.to_string().contains("Capacity group 'missing'"));
+    }
+
+    #[test]
+    fn explicit_domain_pool_does_not_materialize_unrelated_persisted_aggregate_pool() {
+        let capacity_group = |group_id: &str| CapacityGroup {
+            group_id: group_id.to_string(),
+            instance_type: Some("m7i.large".to_string()),
+            profile: None,
+            min_size: 1,
+            max_size: 1,
+            scale_policy: None,
+            nested_virtualization: None,
+        };
+        let mut cluster = ComputeCluster::new("compute".to_string())
+            .capacity_group(capacity_group("general"))
+            .capacity_group(capacity_group("stateful"))
+            .build();
+        cluster
+            .failure_domain_spread
+            .insert("stateful".to_string(), 1);
+        cluster
+            .selected_failure_domains
+            .insert("stateful".to_string(), vec!["us-east-1b".to_string()]);
+        let stack = Stack::new("test-stack".to_string())
+            .add(cluster.clone(), ResourceLifecycle::Frozen)
+            .build();
+
+        let mut persisted_cluster = cluster;
+        persisted_cluster
+            .selected_failure_domains
+            .insert("stateful".to_string(), vec!["us-east-1a".to_string()]);
+        let persisted_stack = Stack::new("persisted-stack".to_string())
+            .add(persisted_cluster, ResourceLifecycle::Frozen)
+            .build();
+        let persisted_entry = &persisted_stack.resources["compute"];
+        let mut stack_state = StackState {
+            platform: Platform::Aws,
+            resources: Default::default(),
+            resource_prefix: "test".to_string(),
+        };
+        stack_state.resources.insert(
+            "compute".to_string(),
+            alien_core::StackResourceState::new_pending(
+                ComputeCluster::RESOURCE_TYPE.to_string(),
+                persisted_entry.config.clone(),
+                Some(ResourceLifecycle::Frozen),
+                Vec::new(),
+            ),
+        );
+
+        let selection = |selected_failure_domains| ComputePoolSelection::Fixed {
+            machines: 1,
+            machine: Some("m7i.large".to_string()),
+            failure_domains: Some(FailureDomainSelection {
+                spread: 1,
+                selected_failure_domains,
+            }),
+        };
+        let config = DeploymentConfig::builder()
+            .stack_settings(StackSettings {
+                compute: Some(ComputeSettings {
+                    pools: [
+                        ("general".to_string(), selection(Vec::new())),
+                        (
+                            "stateful".to_string(),
+                            selection(vec!["us-east-1b".to_string()]),
+                        ),
+                    ]
+                    .into_iter()
+                    .collect(),
+                }),
+                ..StackSettings::default()
+            })
+            .environment_variables(empty_env_snapshot())
+            .allow_frozen_changes(false)
+            .external_bindings(ExternalBindings::default())
+            .build();
+
+        let materialized = ComputeClusterMutation
+            .materialize_capacity_groups(stack, &stack_state, &config)
+            .expect("mixed aggregate and domain-aware pools should materialize independently");
+        let cluster = materialized.resources["compute"]
+            .config
+            .downcast_ref::<ComputeCluster>()
+            .expect("compute cluster should remain present");
+
+        assert!(!cluster.failure_domain_spread.contains_key("general"));
+        assert!(!cluster.selected_failure_domains.contains_key("general"));
+        assert_eq!(cluster.failure_domain_spread.get("stateful"), Some(&1));
+        assert_eq!(cluster.selected_failure_domains["stateful"], ["us-east-1b"]);
     }
 
     fn deployment_config_with_compute_pool(
