@@ -338,6 +338,7 @@
             "compute.instanceGroupManagers.get",
             "compute.instanceGroupManagers.list",
             "compute.instanceGroupManagers.update",
+            "compute.globalOperations.get",
             "compute.zones.list",
             "compute.zoneOperations.get",
             "compute.instances.getSerialPortOutput"

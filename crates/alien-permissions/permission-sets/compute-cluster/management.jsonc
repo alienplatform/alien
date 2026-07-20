@@ -483,6 +483,7 @@
             "compute.instanceGroupManagers.update",
             "compute.instanceGroupManagers.get",
             "compute.instanceGroupManagers.list",
+            "compute.globalOperations.get",
             "compute.zoneOperations.get",
             "compute.instanceTemplates.create",
             "compute.instanceTemplates.delete",
