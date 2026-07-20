@@ -227,13 +227,13 @@ pub struct ComputeCluster {
     pub capacity_groups: Vec<CapacityGroup>,
 
     /// Concrete provider failure domains selected during setup, keyed by capacity group.
-    /// Empty preserves the legacy aggregate-fleet behavior for existing deployments.
+    /// Empty preserves the existing aggregate layout when no spread policy is configured.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     #[builder(default)]
     pub selected_failure_domains: BTreeMap<String, Vec<String>>,
 
     /// Requested failure-domain spread keyed by capacity group.
-    /// Empty preserves legacy aggregate placement.
+    /// Empty preserves the existing aggregate layout.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     #[builder(default)]
     pub failure_domain_spread: BTreeMap<String, u8>,

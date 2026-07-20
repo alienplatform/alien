@@ -794,7 +794,7 @@ mod failure_domain_compatibility_tests {
     }
 
     #[test]
-    fn legacy_ready_state_remains_aggregate_and_ready() {
+    fn existing_ready_state_remains_aggregate_and_ready() {
         let controller = AwsNetworkController::mock_ready("vpc-legacy", 2);
         let mut value = serde_json::to_value(controller).expect("controller should serialize");
         value
