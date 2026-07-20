@@ -357,15 +357,12 @@ fn aws_email_round_trip() {
     assert_eq!(domain.dkim_tokens[0].name, "t1._domainkey.mail.example.com");
     assert_eq!(domain.dkim_tokens[0].value, "t1.dkim.amazonses.com");
 
-    // Manager-provisioned workers receive the mail binding from the imported
-    // controller state, mirroring the CloudFormation emitter's binding ref.
+    // Imported resources must not publish binding material unless the entry
+    // explicitly opts into remote access.
     assert_eq!(
         state.remote_binding_params,
-        Some(json!({
-            "service": "ses",
-            "configurationSet": "alien-stack-mailer",
-            "region": "us-east-1",
-        }))
+        None,
+        "an imported resource without remote access must not publish its binding params"
     );
 }
 
@@ -474,16 +471,12 @@ fn aws_open_search_round_trip() {
         "arn:aws:aoss:us-east-1:123456789012:collection/abc123def456"
     );
 
-    // Manager-provisioned workers receive the collection binding from the
-    // imported controller state, mirroring the CloudFormation emitter's
-    // binding ref (SigV4 HTTP with service name `aoss`).
+    // Imported resources must not publish binding material unless the entry
+    // explicitly opts into remote access.
     assert_eq!(
         state.remote_binding_params,
-        Some(json!({
-            "service": "aoss",
-            "endpoint": "https://abc123def456.aoss.us-east-1.on.aws",
-            "collectionName": "search-a2591da2",
-        }))
+        None,
+        "an imported resource without remote access must not publish its binding params"
     );
 }
 
