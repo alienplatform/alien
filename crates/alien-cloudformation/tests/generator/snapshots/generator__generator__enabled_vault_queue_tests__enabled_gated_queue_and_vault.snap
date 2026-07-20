@@ -150,6 +150,32 @@ Resources:
       - Key: resource-type
         Value: queue
     Condition: InputQueueEnabledIsTrue
+  JobsExecutionSaRoleQueuePermission00:
+    Type: AWS::IAM::Policy
+    Properties:
+      PolicyName:
+        Fn::Sub: ${AWS::StackName}-jobs-queue-0-0
+      PolicyDocument:
+        Version: 2012-10-17
+        Statement:
+        - Action:
+          - sqs:ChangeMessageVisibility
+          - sqs:DeleteMessage
+          - sqs:GetQueueAttributes
+          - sqs:GetQueueUrl
+          - sqs:SendMessage
+          Effect: Allow
+          Resource:
+            Fn::GetAtt:
+            - Jobs
+            - Arn
+          Sid: SendSqsMessages
+      Roles:
+      - Ref: ExecutionSaRole
+    DependsOn:
+    - Jobs
+    - ExecutionSaRole
+    Condition: InputQueueEnabledIsTrue
   AppTokensExecutionSaRoleVaultPermission00:
     Type: AWS::IAM::Policy
     Properties:

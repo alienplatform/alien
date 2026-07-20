@@ -186,8 +186,11 @@ fn a_gated_queue_is_created_only_when_the_deployer_says_yes() {
     assert_eq!(queue.condition.as_deref(), Some(QUEUE_CONDITION));
     assert_eq!(
         resources_conditioned_on(&template, QUEUE_CONDITION),
-        vec!["Jobs".to_string()],
-        "the queue owns exactly one resource, and it is gated"
+        vec![
+            "Jobs".to_string(),
+            "JobsExecutionSaRoleQueuePermission00".to_string(),
+        ],
+        "the queue owns the SQS queue and its resource-scoped grant, both gated"
     );
 }
 
