@@ -18,17 +18,18 @@ use alien_azure_clients::models::authorization_role_definitions::{
 use alien_azure_clients::models::managed_identity::Identity;
 use alien_client_core::ErrorData as CloudClientErrorData;
 use alien_core::{
-    AzureRemoteStackManagementHeartbeatData, HeartbeatBackend, KubernetesCluster, NetworkSettings,
-    ObservedHealth, PermissionProfile, Platform, ProviderLifecycleState, RemoteStackManagement,
-    RemoteStackManagementHeartbeatData, RemoteStackManagementHeartbeatStatus,
-    RemoteStackManagementOutputs, ResourceHeartbeat, ResourceHeartbeatData, ResourceOutputs,
-    ResourceStatus,
+    AzureRemoteStackManagementHeartbeatData, BindingValue, ExternalBinding, HeartbeatBackend,
+    KubernetesCluster, NetworkSettings, ObservedHealth, PermissionProfile, Platform,
+    ProviderLifecycleState, RemoteStackManagement, RemoteStackManagementHeartbeatData,
+    RemoteStackManagementHeartbeatStatus, RemoteStackManagementOutputs, ResourceHeartbeat,
+    ResourceHeartbeatData, ResourceLifecycle, ResourceOutputs, ResourceStatus, Storage,
+    StorageBinding,
 };
-use alien_error::{AlienError, Context, ContextError};
+use alien_error::{AlienError, Context, ContextError, IntoAlienError};
 use alien_macros::controller;
 use alien_permissions::{
     generators::{
-        dedupe_azure_role_bindings, AzureGrantPlan, AzureRoleDefinitionRef,
+        dedupe_azure_role_bindings, AzureCustomRole, AzureGrantPlan, AzureRoleDefinitionRef,
         AzureRuntimePermissionsGenerator,
     },
     get_permission_set, BindingTarget, PermissionContext,
@@ -46,6 +47,7 @@ const AZURE_RBAC_WAIT_POLL_SECS: u64 = 10;
 // setup can drive this state quickly, so keep the Stay guard comfortably above
 // the number of reconciles that can happen inside the deadline.
 const AZURE_RBAC_WAIT_MAX_ATTEMPTS: u32 = 100_000;
+const REMOTE_STORAGE_DATA_WRITE_PERMISSION_SET_ID: &str = "storage/remote-data-write";
 
 fn get_management_identity_name(prefix: &str) -> String {
     format!("{}-management-identity", prefix)
@@ -119,6 +121,10 @@ fn management_role_assignment_key(
     )
 }
 
+fn resource_role_definition_key(custom_role_key: &str, scope: &str) -> String {
+    format!("{custom_role_key}:{scope}")
+}
+
 fn existing_role_assignment_id_from_conflict(
     scope: &str,
     err: &AlienError<CloudClientErrorData>,
@@ -171,6 +177,9 @@ pub struct AzureRemoteStackManagementController {
     pub(crate) fic_name: Option<String>,
     /// The full resource ID of the custom role definition
     pub(crate) role_definition_id: Option<String>,
+    /// Exact-scope custom role definitions keyed by permission entry and resource scope.
+    #[serde(default)]
+    pub(crate) resource_role_definition_ids: HashMap<String, String>,
     /// Resource IDs of created role assignments
     pub(crate) role_assignment_ids: Vec<String>,
     /// Deadline for Azure RBAC propagation after management assignments.
@@ -366,64 +375,67 @@ impl AzureRemoteStackManagementController {
             .service_provider
             .get_azure_authorization_client(azure_cfg)?;
 
-        let role_definition_uuid = Uuid::new_v5(
-            &Uuid::NAMESPACE_OID,
-            format!("deployment:azure:mgmt-role-def:{}", ctx.resource_prefix).as_bytes(),
-        )
-        .to_string();
-
-        let Some(role_definition_props) = role_definition_props else {
-            info!("No residual Azure management custom role required");
-            self.role_definition_id = None;
-            return Ok(HandlerAction::Continue {
-                state: CreatingRoleAssignments,
-                suggested_delay: None,
-            });
-        };
-
-        let role_definition = RoleDefinition {
-            properties: Some(role_definition_props),
-            ..Default::default()
-        };
-        let scope = management_role_definition_scope(
-            role_definition
-                .properties
-                .as_ref()
-                .map(|properties| properties.assignable_scopes.as_slice())
-                .unwrap_or_default(),
-            &azure_cfg.subscription_id,
-            &resource_group_name,
-        );
-
-        let created = client
-            .create_or_update_role_definition(
-                &scope,
-                role_definition_uuid.clone(),
-                &role_definition,
+        if let Some(role_definition_props) = role_definition_props {
+            let role_definition_uuid = Uuid::new_v5(
+                &Uuid::NAMESPACE_OID,
+                format!("deployment:azure:mgmt-role-def:{}", ctx.resource_prefix).as_bytes(),
             )
-            .await
-            .context(ErrorData::CloudPlatformError {
-                message: format!(
-                    "Failed to create management role definition for stack '{}'",
-                    ctx.resource_prefix
-                ),
-                resource_id: Some(config.id.clone()),
+            .to_string();
+            let role_definition = RoleDefinition {
+                properties: Some(role_definition_props),
+                ..Default::default()
+            };
+            let scope = management_role_definition_scope(
+                role_definition
+                    .properties
+                    .as_ref()
+                    .map(|properties| properties.assignable_scopes.as_slice())
+                    .unwrap_or_default(),
+                &azure_cfg.subscription_id,
+                &resource_group_name,
+            );
+
+            let created = client
+                .create_or_update_role_definition(
+                    &scope,
+                    role_definition_uuid.clone(),
+                    &role_definition,
+                )
+                .await
+                .context(ErrorData::CloudPlatformError {
+                    message: format!(
+                        "Failed to create management role definition for stack '{}'",
+                        ctx.resource_prefix
+                    ),
+                    resource_id: Some(config.id.clone()),
+                })?;
+
+            let role_id = created.id.ok_or_else(|| {
+                AlienError::new(ErrorData::InfrastructureError {
+                    message: "Created role definition missing ID".to_string(),
+                    operation: Some("create_management_role_definition".to_string()),
+                    resource_id: Some(config.id.clone()),
+                })
             })?;
 
-        let role_id = created.id.ok_or_else(|| {
-            AlienError::new(ErrorData::InfrastructureError {
-                message: "Created role definition missing ID".to_string(),
-                operation: Some("create_management_role_definition".to_string()),
-                resource_id: Some(config.id.clone()),
-            })
-        })?;
+            info!(
+                role_definition_id = %role_id,
+                "Management role definition created"
+            );
+            self.role_definition_id = Some(role_id);
+        } else {
+            info!("No residual Azure stack-level management custom role required");
+            self.role_definition_id = None;
+        }
 
-        info!(
-            role_definition_id = %role_id,
-            "Management role definition created"
-        );
-
-        self.role_definition_id = Some(role_id);
+        self.create_remote_storage_role_definitions(
+            ctx,
+            &client,
+            azure_cfg,
+            &resource_group_name,
+            &config.id,
+        )
+        .await?;
 
         Ok(HandlerAction::Continue {
             state: CreatingRoleAssignments,
@@ -460,13 +472,32 @@ impl AzureRemoteStackManagementController {
                 AzureRoleDefinitionRef::Predefined { role_definition_id } => {
                     role_definition_id.clone()
                 }
-                AzureRoleDefinitionRef::Custom { .. } => self.role_definition_id.clone().ok_or_else(|| {
-                    AlienError::new(ErrorData::InfrastructureError {
-                        message: "Role definition ID not available for custom management role assignment".to_string(),
-                        operation: Some("create_role_assignments".to_string()),
-                        resource_id: Some(config.id.clone()),
-                    })
-                })?,
+                AzureRoleDefinitionRef::Custom { key }
+                    if binding.permission_set_id == REMOTE_STORAGE_DATA_WRITE_PERMISSION_SET_ID =>
+                {
+                    self.resource_role_definition_ids
+                        .get(&resource_role_definition_key(key, &binding.scope))
+                        .cloned()
+                        .ok_or_else(|| {
+                            AlienError::new(ErrorData::InfrastructureError {
+                                message: format!(
+                                    "Exact-scope role definition is not available for '{}' at '{}'",
+                                    binding.permission_set_id, binding.scope
+                                ),
+                                operation: Some("create_role_assignments".to_string()),
+                                resource_id: Some(config.id.clone()),
+                            })
+                        })?
+                }
+                AzureRoleDefinitionRef::Custom { .. } => {
+                    self.role_definition_id.clone().ok_or_else(|| {
+                        AlienError::new(ErrorData::InfrastructureError {
+                            message: "Role definition ID not available for custom management role assignment".to_string(),
+                            operation: Some("create_role_assignments".to_string()),
+                            resource_id: Some(config.id.clone()),
+                        })
+                    })?
+                }
             };
             let assignment_id = Uuid::new_v5(
                 &Uuid::NAMESPACE_OID,
@@ -696,6 +727,8 @@ impl AzureRemoteStackManagementController {
             }
         }
         self.role_definition_id = None;
+        self.delete_resource_role_definitions(&auth_client, &resource_group_name, &config.id)
+            .await?;
 
         // Update FIC if OIDC config changed
         let azure_management = ctx.get_azure_management_config()?.ok_or_else(|| {
@@ -808,14 +841,13 @@ impl AzureRemoteStackManagementController {
         ctx: &ResourceControllerContext<'_>,
     ) -> Result<HandlerAction> {
         let config = ctx.desired_resource_config::<RemoteStackManagement>()?;
+        let resource_group_name = azure_utils::get_resource_group_name(ctx.state)?;
+        let azure_cfg = ctx.get_azure_config()?;
+        let client = ctx
+            .service_provider
+            .get_azure_authorization_client(azure_cfg)?;
 
         if let Some(role_def_id) = &self.role_definition_id {
-            let resource_group_name = azure_utils::get_resource_group_name(ctx.state)?;
-            let azure_cfg = ctx.get_azure_config()?;
-            let client = ctx
-                .service_provider
-                .get_azure_authorization_client(azure_cfg)?;
-
             let scope = role_definition_scope_from_id(role_def_id, &resource_group_name);
 
             let role_def_uuid = role_def_id.split('/').last().unwrap_or(role_def_id);
@@ -845,6 +877,8 @@ impl AzureRemoteStackManagementController {
 
             self.role_definition_id = None;
         }
+        self.delete_resource_role_definitions(&client, &resource_group_name, &config.id)
+            .await?;
 
         Ok(HandlerAction::Continue {
             state: DeletingFederatedCredential,
@@ -994,10 +1028,113 @@ impl AzureRemoteStackManagementController {
     }
 }
 
+fn is_remote_frozen_storage(resource_entry: &alien_core::ResourceEntry) -> bool {
+    resource_entry.lifecycle == ResourceLifecycle::Frozen
+        && resource_entry.remote_access
+        && resource_entry.config.downcast_ref::<Storage>().is_some()
+}
+
+fn azure_remote_storage_permission_context(
+    ctx: &ResourceControllerContext<'_>,
+    resource_id: &str,
+) -> Result<PermissionContext> {
+    let (storage_account_name, container_name) = match remote_storage_binding(ctx, resource_id)? {
+        Some(StorageBinding::Blob(binding)) => (
+            concrete_storage_binding_value(
+                binding.account_name,
+                resource_id,
+                "accountName",
+                "Azure Blob Storage",
+            )?,
+            concrete_storage_binding_value(
+                binding.container_name,
+                resource_id,
+                "containerName",
+                "Azure Blob Storage",
+            )?,
+        ),
+        Some(other) => {
+            return Err(AlienError::new(ErrorData::ResourceConfigInvalid {
+                message: format!(
+                    "Remote Storage resource '{resource_id}' must use a Blob binding on Azure, got {other:?}"
+                ),
+                resource_id: Some(resource_id.to_string()),
+            }));
+        }
+        None => (
+            azure_utils::get_storage_account_name(ctx.state)?,
+            format!("{}-{}", ctx.resource_prefix, resource_id)
+                .to_lowercase()
+                .replace('_', "-"),
+        ),
+    };
+
+    Ok(
+        ResourcePermissionsHelper::build_azure_permission_context(ctx, &container_name)?
+            .with_resource_id(resource_id.to_string())
+            .with_storage_account_name(storage_account_name),
+    )
+}
+
+fn remote_storage_binding(
+    ctx: &ResourceControllerContext<'_>,
+    resource_id: &str,
+) -> Result<Option<StorageBinding>> {
+    match ctx.deployment_config.external_bindings.get(resource_id) {
+        Some(ExternalBinding::Storage(binding)) => return Ok(Some(binding.clone())),
+        Some(other) => {
+            return Err(AlienError::new(ErrorData::ResourceConfigInvalid {
+                message: format!(
+                    "Remote Storage resource '{resource_id}' has a non-Storage external binding: {other:?}"
+                ),
+                resource_id: Some(resource_id.to_string()),
+            }));
+        }
+        None => {}
+    }
+
+    let Some(binding) = ctx
+        .state
+        .resource(resource_id)
+        .and_then(|state| state.remote_binding_params.as_ref())
+    else {
+        return Ok(None);
+    };
+
+    serde_json::from_value(binding.clone())
+        .into_alien_error()
+        .context(ErrorData::ResourceConfigInvalid {
+            message: format!(
+                "Remote Storage resource '{resource_id}' has invalid binding parameters"
+            ),
+            resource_id: Some(resource_id.to_string()),
+        })
+        .map(Some)
+}
+
+fn concrete_storage_binding_value(
+    value: BindingValue<String>,
+    resource_id: &str,
+    field_name: &str,
+    provider: &str,
+) -> Result<String> {
+    match value {
+        BindingValue::Value(value) => Ok(value),
+        BindingValue::Expression(_) | BindingValue::SecretRef { .. } => {
+            Err(AlienError::new(ErrorData::ResourceConfigInvalid {
+                message: format!(
+                    "Remote Storage resource '{resource_id}' requires a concrete {provider} {field_name}"
+                ),
+                resource_id: Some(resource_id.to_string()),
+            }))
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
-    use alien_core::{PermissionProfile, PermissionSetReference};
+    use alien_core::{PermissionProfile, PermissionSetReference, Resource, ResourceEntry};
 
     fn permission_context() -> PermissionContext {
         PermissionContext::new()
@@ -1144,6 +1281,52 @@ mod tests {
                 .count(),
             1,
             "worker dispatch is a stack management transport grant and should be deduped"
+        );
+    }
+
+    #[test]
+    fn remote_storage_management_is_limited_to_opted_in_frozen_storage() {
+        let entry = |lifecycle, remote_access| ResourceEntry {
+            config: Resource::new(Storage::new("archive".to_string()).build()),
+            lifecycle,
+            dependencies: Vec::new(),
+            remote_access,
+        };
+
+        assert!(is_remote_frozen_storage(&entry(
+            ResourceLifecycle::Frozen,
+            true
+        )));
+        assert!(!is_remote_frozen_storage(&entry(
+            ResourceLifecycle::Frozen,
+            false
+        )));
+        assert!(!is_remote_frozen_storage(&entry(
+            ResourceLifecycle::Live,
+            true
+        )));
+    }
+
+    #[test]
+    fn remote_storage_management_grant_uses_the_exact_blob_container_scope() {
+        let context = permission_context()
+            .with_resource_id("archive".to_string())
+            .with_resource_name("imported-archive-container".to_string())
+            .with_storage_account_name("importedstorageaccount".to_string());
+        let permission_set = get_permission_set("storage/remote-data-write").unwrap();
+
+        let grant_plan = AzureRuntimePermissionsGenerator::new()
+            .generate_grant_plan(permission_set, BindingTarget::Resource, &context)
+            .unwrap();
+
+        assert_eq!(grant_plan.bindings.len(), 1);
+        assert_eq!(
+            grant_plan.bindings[0].scope,
+            "/subscriptions/sub-123/resourceGroups/rg-123/providers/Microsoft.Storage/storageAccounts/importedstorageaccount/blobServices/default/containers/imported-archive-container"
+        );
+        assert!(
+            custom_roles_for_combined_management_role(grant_plan).is_empty(),
+            "container data actions must not be merged into the RG-scoped management role"
         );
     }
 }
@@ -1317,15 +1500,178 @@ fn dedupe_management_role_bindings(
     deduped
 }
 
+fn custom_roles_for_combined_management_role(grant_plan: AzureGrantPlan) -> Vec<AzureCustomRole> {
+    let resource_scoped_role_keys: BTreeSet<_> = grant_plan
+        .bindings
+        .iter()
+        .filter(|binding| binding.permission_set_id == REMOTE_STORAGE_DATA_WRITE_PERMISSION_SET_ID)
+        .filter_map(|binding| match &binding.role_definition {
+            AzureRoleDefinitionRef::Custom { key } => Some(key.clone()),
+            AzureRoleDefinitionRef::Predefined { .. } => None,
+        })
+        .collect();
+
+    grant_plan
+        .custom_roles
+        .into_iter()
+        .filter(|custom_role| !resource_scoped_role_keys.contains(&custom_role.key))
+        .collect()
+}
+
 impl AzureRemoteStackManagementController {
+    async fn delete_resource_role_definitions(
+        &mut self,
+        client: &std::sync::Arc<dyn alien_azure_clients::authorization::AuthorizationApi>,
+        resource_group_name: &str,
+        config_id: &str,
+    ) -> Result<()> {
+        for role_definition_id in self.resource_role_definition_ids.values() {
+            let role_definition_uuid = role_definition_id
+                .split('/')
+                .next_back()
+                .unwrap_or(role_definition_id);
+            let scope = role_definition_scope_from_id(role_definition_id, resource_group_name);
+            match client
+                .delete_role_definition(&scope, role_definition_uuid.to_string())
+                .await
+            {
+                Ok(_) => {
+                    info!(role_definition_id = %role_definition_id, "Exact-scope management role definition deleted");
+                }
+                Err(error)
+                    if matches!(
+                        &error.error,
+                        Some(CloudClientErrorData::RemoteResourceNotFound { .. })
+                    ) =>
+                {
+                    info!(role_definition_id = %role_definition_id, "Exact-scope management role definition already absent");
+                }
+                Err(error) => {
+                    return Err(error.context(ErrorData::CloudPlatformError {
+                        message: format!(
+                            "Failed to delete exact-scope management role definition '{}'",
+                            role_definition_id
+                        ),
+                        resource_id: Some(config_id.to_string()),
+                    }));
+                }
+            }
+        }
+        self.resource_role_definition_ids.clear();
+        Ok(())
+    }
+
+    async fn create_remote_storage_role_definitions(
+        &mut self,
+        ctx: &ResourceControllerContext<'_>,
+        client: &std::sync::Arc<dyn alien_azure_clients::authorization::AuthorizationApi>,
+        azure_cfg: &alien_azure_clients::AzureClientConfig,
+        resource_group_name: &str,
+        config_id: &str,
+    ) -> Result<()> {
+        let grant_plan = self.generate_management_grant_plan(ctx)?;
+        self.resource_role_definition_ids.clear();
+        let definition_scope = Scope::ResourceGroup {
+            resource_group_name: resource_group_name.to_string(),
+        };
+        let assignable_scope = definition_scope.to_resource_id_string(azure_cfg);
+
+        for binding in grant_plan.bindings.iter().filter(|binding| {
+            binding.permission_set_id == REMOTE_STORAGE_DATA_WRITE_PERMISSION_SET_ID
+        }) {
+            let AzureRoleDefinitionRef::Custom { key } = &binding.role_definition else {
+                continue;
+            };
+            let state_key = resource_role_definition_key(key, &binding.scope);
+            if self.resource_role_definition_ids.contains_key(&state_key) {
+                continue;
+            }
+            let custom_role = grant_plan
+                .custom_roles
+                .iter()
+                .find(|custom_role| {
+                    custom_role.key == *key
+                        && custom_role
+                            .role_definition
+                            .assignable_scopes
+                            .contains(&binding.scope)
+                })
+                .ok_or_else(|| {
+                    AlienError::new(ErrorData::InfrastructureError {
+                        message: format!(
+                            "Missing exact-scope custom role for '{}' at '{}'",
+                            binding.permission_set_id, binding.scope
+                        ),
+                        operation: Some("create_management_role_definition".to_string()),
+                        resource_id: Some(config_id.to_string()),
+                    })
+                })?;
+            let role_definition_uuid = Uuid::new_v5(
+                &Uuid::NAMESPACE_OID,
+                format!(
+                    "deployment:azure:mgmt-resource-role-def:{}:{}",
+                    ctx.resource_prefix, state_key
+                )
+                .as_bytes(),
+            )
+            .to_string();
+            let short_id = role_definition_uuid.split('-').next().unwrap_or("remote");
+            let role = &custom_role.role_definition;
+            let role_definition = RoleDefinition {
+                properties: Some(RoleDefinitionProperties {
+                    role_name: Some(format!(
+                        "{}-remote-storage-data-write-{}",
+                        ctx.resource_prefix, short_id
+                    )),
+                    description: Some(role.description.clone()),
+                    type_: Some("CustomRole".to_string()),
+                    permissions: vec![Permission {
+                        actions: role.actions.clone(),
+                        not_actions: role.not_actions.clone(),
+                        data_actions: role.data_actions.clone(),
+                        not_data_actions: role.not_data_actions.clone(),
+                    }],
+                    assignable_scopes: vec![assignable_scope.clone()],
+                    ..Default::default()
+                }),
+                ..Default::default()
+            };
+            let created = client
+                .create_or_update_role_definition(
+                    &definition_scope,
+                    role_definition_uuid,
+                    &role_definition,
+                )
+                .await
+                .context(ErrorData::CloudPlatformError {
+                    message: format!(
+                        "Failed to create exact-scope role definition for remote Storage at '{}'",
+                        binding.scope
+                    ),
+                    resource_id: Some(config_id.to_string()),
+                })?;
+            let role_definition_id = created.id.ok_or_else(|| {
+                AlienError::new(ErrorData::InfrastructureError {
+                    message: "Created remote Storage role definition missing ID".to_string(),
+                    operation: Some("create_management_role_definition".to_string()),
+                    resource_id: Some(config_id.to_string()),
+                })
+            })?;
+            self.resource_role_definition_ids
+                .insert(state_key, role_definition_id);
+        }
+
+        Ok(())
+    }
+
     /// Generate management role definition properties from /provision permission sets
     fn generate_management_role_definition(
         &self,
         ctx: &ResourceControllerContext<'_>,
     ) -> Result<Option<RoleDefinitionProperties>> {
         let grant_plan = self.generate_management_grant_plan(ctx)?;
-
-        if grant_plan.custom_roles.is_empty() {
+        let custom_roles = custom_roles_for_combined_management_role(grant_plan);
+        if custom_roles.is_empty() {
             return Ok(None);
         }
 
@@ -1333,7 +1679,7 @@ impl AzureRemoteStackManagementController {
         let mut combined_data_actions = Vec::new();
         let mut assignable_scopes = Vec::new();
 
-        for custom_role in grant_plan.custom_roles {
+        for custom_role in custom_roles {
             combined_actions.extend(custom_role.role_definition.actions);
             combined_data_actions.extend(custom_role.role_definition.data_actions);
             assignable_scopes.extend(custom_role.role_definition.assignable_scopes);
@@ -1417,15 +1763,23 @@ impl AzureRemoteStackManagementController {
             let Some(resource_entry) = ctx.desired_stack.resources.get(resource_id) else {
                 continue;
             };
-            let Some(cluster) = resource_entry.config.downcast_ref::<KubernetesCluster>() else {
-                continue;
-            };
             let permission_context =
-                ResourcePermissionsHelper::azure_kubernetes_cluster_permission_context(
-                    ctx, cluster,
-                )?;
+                if let Some(cluster) = resource_entry.config.downcast_ref::<KubernetesCluster>() {
+                    ResourcePermissionsHelper::azure_kubernetes_cluster_permission_context(
+                        ctx, cluster,
+                    )?
+                } else if is_remote_frozen_storage(resource_entry) {
+                    azure_remote_storage_permission_context(ctx, resource_id)?
+                } else {
+                    continue;
+                };
 
             for permission_set_ref in permission_set_refs {
+                if is_remote_frozen_storage(resource_entry)
+                    && permission_set_ref.id().ends_with("/provision")
+                {
+                    continue;
+                }
                 let Some(permission_set) =
                     permission_set_ref.resolve(|name| get_permission_set(name).cloned())
                 else {
@@ -1551,6 +1905,7 @@ impl AzureRemoteStackManagementController {
                 "/subscriptions/sub-1234/providers/Microsoft.Authorization/roleDefinitions/{}-mgmt-role",
                 prefix
             )),
+            resource_role_definition_ids: HashMap::new(),
             role_assignment_ids: vec![],
             role_assignment_wait_until_epoch_secs: None,
             _internal_stay_count: None,

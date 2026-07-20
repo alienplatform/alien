@@ -1,4 +1,5 @@
 use crate::error::Result;
+use crate::remote_storage::{resource_ids, REMOTE_STORAGE_DATA_WRITE_PERMISSION_SET_ID};
 use crate::StackMutation;
 use alien_core::permissions::{ManagementPermissions, PermissionProfile, PermissionSetReference};
 use alien_core::{
@@ -12,7 +13,6 @@ use indexmap::IndexMap;
 use std::collections::BTreeSet;
 
 const OBSERVE_PERMISSION_SET_ID: &str = "observe/observe";
-const REMOTE_STORAGE_DATA_WRITE_PERMISSION_SET_ID: &str = "storage/remote-data-write";
 
 /// Automatically adds management permission profile with necessary permissions for all resources in the stack.
 ///
@@ -51,7 +51,7 @@ impl StackMutation for ManagementPermissionProfileMutation {
         config: &DeploymentConfig,
     ) -> Result<Stack> {
         let current_management = stack.management().clone();
-        let remote_storage_resource_ids = remote_storage_resource_ids(&stack, stack_state.platform);
+        let remote_storage_resource_ids = resource_ids(&stack, stack_state.platform);
 
         match current_management {
             ManagementPermissions::Auto => {
@@ -114,22 +114,6 @@ fn ensure_observe_permission(profile: &mut PermissionProfile) {
     }
 }
 
-fn remote_storage_resource_ids(stack: &Stack, platform: Platform) -> Vec<String> {
-    if !matches!(platform, Platform::Aws | Platform::Gcp | Platform::Azure) {
-        return Vec::new();
-    }
-
-    stack
-        .resources()
-        .filter(|(_, resource_entry)| {
-            resource_entry.remote_access
-                && resource_entry.lifecycle == ResourceLifecycle::Frozen
-                && resource_entry.config.downcast_ref::<Storage>().is_some()
-        })
-        .map(|(resource_id, _)| resource_id.clone())
-        .collect()
-}
-
 /// Grants management explicit data access only for storage resources whose
 /// bindings are exposed for remote use. The concrete resource scope is needed
 /// because this grant can read and write customer object contents.
@@ -137,9 +121,7 @@ fn add_remote_storage_data_write_permissions(
     management_permissions: &mut ManagementPermissions,
     remote_storage_resource_ids: &[String],
 ) {
-    let (ManagementPermissions::Extend(profile) | ManagementPermissions::Override(profile)) =
-        management_permissions
-    else {
+    let ManagementPermissions::Extend(profile) = management_permissions else {
         return;
     };
 
@@ -470,7 +452,7 @@ mod tests {
     #[tokio::test]
     async fn remote_storage_gets_concrete_data_write_management_permissions() {
         for platform in [Platform::Aws, Platform::Gcp, Platform::Azure] {
-            for mode in ["auto", "extend", "override"] {
+            for mode in ["auto", "extend"] {
                 let storage = Storage::new("uploads".to_string()).build();
                 let stack = Stack::new("test-stack".to_string())
                     .add_with_remote_access(storage, ResourceLifecycle::Frozen)
@@ -487,9 +469,8 @@ mod tests {
                     .await
                     .expect("management permission mutation should succeed");
 
-                let profile = match (mode, result_stack.management()) {
-                    ("auto" | "extend", ManagementPermissions::Extend(profile))
-                    | ("override", ManagementPermissions::Override(profile)) => profile,
+                let profile = match result_stack.management() {
+                    ManagementPermissions::Extend(profile) => profile,
                     _ => panic!("unexpected management permissions for {platform:?} {mode}"),
                 };
                 let storage_permission_names: Vec<&str> = profile
@@ -513,6 +494,33 @@ mod tests {
                 );
             }
         }
+    }
+
+    #[tokio::test]
+    async fn remote_storage_does_not_rewrite_management_override() {
+        let storage = Storage::new("uploads".to_string()).build();
+        let stack = Stack::new("test-stack".to_string())
+            .add_with_remote_access(storage, ResourceLifecycle::Frozen)
+            .management(management_permissions_for_test("override"))
+            .build();
+
+        let result_stack = ManagementPermissionProfileMutation
+            .mutate(
+                stack,
+                &StackState::new(Platform::Aws),
+                &deployment_config_for_management_permission_test(),
+            )
+            .await
+            .expect("management permission mutation should succeed");
+
+        let ManagementPermissions::Override(profile) = result_stack.management() else {
+            panic!("override mode must be preserved");
+        };
+        assert!(!profile.0.get("uploads").is_some_and(|permissions| {
+            permissions
+                .iter()
+                .any(|permission| permission.id() == REMOTE_STORAGE_DATA_WRITE_PERMISSION_SET_ID)
+        }));
     }
 
     #[tokio::test]

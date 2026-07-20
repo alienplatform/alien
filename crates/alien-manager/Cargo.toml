@@ -42,6 +42,7 @@ alien-local = { workspace = true }
 
 # Client config extensions (always available — needed for cross-account credential resolution)
 alien-client-config = { workspace = true }
+alien-aws-clients = { workspace = true }
 alien-azure-clients = { workspace = true }
 alien-gcp-clients = { workspace = true }
 

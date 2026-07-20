@@ -1,14 +1,9 @@
 //! Credential resolution and minting endpoints.
 
-use alien_azure_clients::AzureClientConfigExt;
 use alien_bindings::traits::ImpersonationRequest;
 use alien_bindings::ServiceAccountInfo;
-use alien_core::{
-    AwsCredentials, AzureCredentials, ClientConfig, Container, Daemon, GcpCredentials, Platform,
-    ServiceAccount, Worker,
-};
-use alien_error::{AlienError, Context, ContextError, IntoAlienError};
-use alien_gcp_clients::GcpClientConfigExt;
+use alien_core::{ClientConfig, Container, Daemon, Platform, ServiceAccount, Worker};
+use alien_error::ContextError;
 use axum::{
     extract::{Json, State},
     http::{header::CACHE_CONTROL, header::PRAGMA, HeaderMap},
@@ -16,12 +11,12 @@ use axum::{
     routing::post,
     Router,
 };
-use chrono::{DateTime, SecondsFormat, Utc};
+use chrono::{SecondsFormat, Utc};
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
 use tracing::info;
 
 use crate::auth::Subject;
+use crate::credential_materialization::materialize_minted_client_config;
 use crate::error::ErrorData;
 use crate::ids::sha256_hash;
 use crate::traits::DeploymentRecord;
@@ -39,19 +34,6 @@ const DEFAULT_DURATION_SECONDS: i32 = 3600;
 /// Maximum length of an STS `RoleSessionName`. Session names longer than this
 /// are hash-suffix truncated (see [`mint_session_name`]).
 const MAX_SESSION_NAME_LEN: usize = 64;
-/// GCP access tokens minted by this endpoint use the broad cloud-platform
-/// scope; the service account's IAM grants remain the authorization boundary.
-const GCP_CLOUD_PLATFORM_SCOPE: &str = "https://www.googleapis.com/auth/cloud-platform";
-const AZURE_STORAGE_SCOPE: &str = "https://storage.azure.com/.default";
-/// The exact OAuth scopes used by Alien's Azure bindings. Azure access tokens
-/// are audience-specific, so one management token cannot safely stand in for
-/// storage, Key Vault, or Service Bus.
-const AZURE_MINT_SCOPES: [&str; 4] = [
-    "https://management.azure.com/.default",
-    AZURE_STORAGE_SCOPE,
-    "https://vault.azure.net/.default",
-    "https://servicebus.azure.net/.default",
-];
 
 // --- Request / Response types ---
 
@@ -252,7 +234,7 @@ async fn mint_credentials(
                 }
             };
 
-            let materialized = match materialize_response_safe_client_config(impersonated).await {
+            let materialized = match materialize_minted_client_config(impersonated).await {
                 Ok(config) => config,
                 Err(e) => return e.into_response(),
             };
@@ -416,166 +398,6 @@ async fn validate_mint_resource_link(
     Ok(())
 }
 
-/// Convert provider impersonation output into a response-safe credential
-/// form. Refreshable sources (service-account keys, workload identity files,
-/// managed-identity endpoints, manager profiles, etc.) never cross the API.
-pub(super) async fn materialize_response_safe_client_config(
-    config: ClientConfig,
-) -> std::result::Result<ClientConfig, AlienError<ErrorData>> {
-    materialize_response_safe_client_config_with_azure_scopes(config, &AZURE_MINT_SCOPES).await
-}
-
-/// Materialize credentials for the remote Storage surface without exporting
-/// tokens for unrelated Azure services.
-pub(super) async fn materialize_remote_storage_client_config(
-    config: ClientConfig,
-) -> std::result::Result<(ClientConfig, DateTime<Utc>), AlienError<ErrorData>> {
-    match config {
-        ClientConfig::Aws(config) => {
-            let AwsCredentials::SessionCredentials { expires_at, .. } = &config.credentials else {
-                return Err(ErrorData::internal(
-                    "Remote AWS Storage credentials are not a short-lived session",
-                ));
-            };
-            let expires_at = DateTime::parse_from_rfc3339(expires_at)
-                .into_alien_error()
-                .context(ErrorData::InternalError {
-                    message: "AWS returned an invalid session credential expiry".to_string(),
-                })?
-                .with_timezone(&Utc);
-            Ok((ClientConfig::Aws(config), expires_at))
-        }
-        ClientConfig::Gcp(config) => {
-            let GcpCredentials::ImpersonatedServiceAccount {
-                source,
-                config: impersonation,
-            } = &config.credentials
-            else {
-                return Err(ErrorData::internal(
-                    "Remote GCP Storage requires an impersonated service-account credential source with authoritative expiry",
-                ));
-            };
-            let response =
-                alien_gcp_clients::generate_impersonated_access_token(source, impersonation)
-                    .await
-                    .context(ErrorData::CredentialMaterializationFailed {
-                        platform: Platform::Gcp,
-                        purpose: "remote Storage".to_string(),
-                    })?;
-            let expires_at = DateTime::parse_from_rfc3339(&response.expire_time)
-                .into_alien_error()
-                .context(ErrorData::InternalError {
-                    message: "GCP returned an invalid access-token expiry".to_string(),
-                })?
-                .with_timezone(&Utc);
-            let config = *config;
-            Ok((
-                ClientConfig::Gcp(Box::new(alien_core::GcpClientConfig {
-                    credentials: GcpCredentials::AccessToken {
-                        token: response.access_token,
-                    },
-                    ..config
-                })),
-                expires_at,
-            ))
-        }
-        ClientConfig::Azure(config) => {
-            if matches!(&config.credentials, AzureCredentials::AccessToken { .. }) {
-                return Err(ErrorData::internal(
-                    "Remote Azure Storage requires an exact storage-scope token",
-                ));
-            }
-            let token = config
-                .get_bearer_token_with_scope(AZURE_STORAGE_SCOPE)
-                .await
-                .context(ErrorData::CredentialMaterializationFailed {
-                    platform: Platform::Azure,
-                    purpose: "remote Storage".to_string(),
-                })?;
-            let expires_at = alien_azure_clients::extract_expiry_from_token(&token).context(
-                ErrorData::InternalError {
-                    message: "Azure returned an access token without a valid expiry".to_string(),
-                },
-            )?;
-            let config = *config;
-            Ok((
-                ClientConfig::Azure(Box::new(alien_core::AzureClientConfig {
-                    credentials: AzureCredentials::ScopedAccessTokens {
-                        tokens: HashMap::from([(AZURE_STORAGE_SCOPE.to_string(), token)]),
-                    },
-                    ..config
-                })),
-                expires_at,
-            ))
-        }
-        other => Err(ErrorData::internal(format!(
-            "Credential impersonation returned unsupported {} client config",
-            other.platform()
-        ))),
-    }
-}
-
-async fn materialize_response_safe_client_config_with_azure_scopes(
-    config: ClientConfig,
-    azure_scopes: &[&str],
-) -> std::result::Result<ClientConfig, AlienError<ErrorData>> {
-    match config {
-        ClientConfig::Aws(config)
-            if matches!(
-                &config.credentials,
-                AwsCredentials::SessionCredentials { .. }
-            ) =>
-        {
-            Ok(ClientConfig::Aws(config))
-        }
-        ClientConfig::Aws(_) => Err(ErrorData::internal(
-            "AWS impersonation did not return short-lived session credentials",
-        )),
-        ClientConfig::Gcp(config) => {
-            let token = config
-                .get_bearer_token(GCP_CLOUD_PLATFORM_SCOPE)
-                .await
-                .context(ErrorData::CredentialMaterializationFailed {
-                    platform: Platform::Gcp,
-                    purpose: "credential minting".to_string(),
-                })?;
-            let config = *config;
-            Ok(ClientConfig::Gcp(Box::new(alien_core::GcpClientConfig {
-                credentials: GcpCredentials::AccessToken { token },
-                ..config
-            })))
-        }
-        ClientConfig::Azure(config) => {
-            if matches!(&config.credentials, AzureCredentials::AccessToken { .. }) {
-                return Err(ErrorData::internal(
-                    "Azure impersonation returned a single-scope access token; exact per-scope tokens are required",
-                ));
-            }
-            let mut tokens = HashMap::with_capacity(azure_scopes.len());
-            for &scope in azure_scopes {
-                let token = config.get_bearer_token_with_scope(scope).await.context(
-                    ErrorData::CredentialMaterializationFailed {
-                        platform: Platform::Azure,
-                        purpose: format!("credential minting scope '{scope}'"),
-                    },
-                )?;
-                tokens.insert(scope.to_string(), token);
-            }
-            let config = *config;
-            Ok(ClientConfig::Azure(Box::new(
-                alien_core::AzureClientConfig {
-                    credentials: AzureCredentials::ScopedAccessTokens { tokens },
-                    ..config
-                },
-            )))
-        }
-        other => Err(ErrorData::internal(format!(
-            "Credential impersonation returned unsupported {} client config",
-            other.platform()
-        ))),
-    }
-}
-
 /// Clamp a requested duration into the allowed window, defaulting when absent.
 fn clamp_duration(requested: Option<i32>) -> i32 {
     requested
@@ -666,24 +488,17 @@ fn principal_from_client_config(config: &ClientConfig) -> String {
 
 #[cfg(test)]
 mod tests {
-    use base64::Engine;
-
     use super::{
-        clamp_duration, materialize_remote_storage_client_config, mint_session_name,
-        principal_from_client_config, principal_from_info, truncate_session_name,
-        MintCredentialsResponse, AZURE_STORAGE_SCOPE, MAX_SESSION_NAME_LEN,
+        clamp_duration, mint_session_name, principal_from_client_config, principal_from_info,
+        truncate_session_name, MintCredentialsResponse, MAX_SESSION_NAME_LEN,
     };
     use alien_bindings::ServiceAccountInfo;
     use alien_bindings::{
         traits::AwsServiceAccountInfo, traits::AzureServiceAccountInfo,
         traits::GcpServiceAccountInfo,
     };
-    use alien_core::{
-        AwsClientConfig, AwsCredentials, AzureClientConfig, AzureCredentials, ClientConfig,
-        GcpClientConfig, GcpCredentials,
-    };
+    use alien_core::{AwsClientConfig, AwsCredentials, ClientConfig};
     use alien_error::{AlienError, ContextError, GenericError};
-    use std::collections::HashMap;
 
     #[test]
     fn clamp_duration_defaults_when_absent() {
@@ -706,66 +521,6 @@ mod tests {
         assert_eq!(clamp_duration(Some(1800)), 1800);
         assert_eq!(clamp_duration(Some(900)), 900);
         assert_eq!(clamp_duration(Some(3600)), 3600);
-    }
-
-    #[tokio::test]
-    async fn remote_storage_materialization_keeps_only_the_azure_storage_audience() {
-        let expires_at_timestamp = 1_893_456_000;
-        let payload = base64::engine::general_purpose::URL_SAFE_NO_PAD
-            .encode(serde_json::json!({ "exp": expires_at_timestamp }).to_string());
-        let storage_token = format!("e30.{payload}.signature");
-        let config = ClientConfig::Azure(Box::new(AzureClientConfig {
-            subscription_id: "subscription".to_string(),
-            tenant_id: "tenant".to_string(),
-            region: Some("eastus".to_string()),
-            credentials: AzureCredentials::ScopedAccessTokens {
-                tokens: HashMap::from([
-                    (AZURE_STORAGE_SCOPE.to_string(), storage_token.clone()),
-                    (
-                        "https://management.azure.com/.default".to_string(),
-                        "management-token".to_string(),
-                    ),
-                    (
-                        "https://vault.azure.net/.default".to_string(),
-                        "vault-token".to_string(),
-                    ),
-                ]),
-            },
-            service_overrides: None,
-        }));
-
-        let (client_config, expires_at) = materialize_remote_storage_client_config(config)
-            .await
-            .expect("storage token should materialize");
-        let ClientConfig::Azure(config) = client_config else {
-            panic!("expected Azure config");
-        };
-        let AzureCredentials::ScopedAccessTokens { tokens } = config.credentials else {
-            panic!("expected scoped Azure tokens");
-        };
-        assert_eq!(
-            tokens,
-            HashMap::from([(AZURE_STORAGE_SCOPE.to_string(), storage_token)])
-        );
-        assert_eq!(expires_at.timestamp(), expires_at_timestamp);
-    }
-
-    #[tokio::test]
-    async fn remote_gcp_storage_rejects_opaque_access_tokens_without_expiry() {
-        let config = ClientConfig::Gcp(Box::new(GcpClientConfig {
-            project_id: "project".to_string(),
-            region: "us-central1".to_string(),
-            credentials: GcpCredentials::AccessToken {
-                token: "opaque-token".to_string(),
-            },
-            service_overrides: None,
-            project_number: None,
-        }));
-
-        let error = materialize_remote_storage_client_config(config)
-            .await
-            .expect_err("opaque token has no authoritative expiry");
-        assert!(!error.retryable);
     }
 
     #[test]

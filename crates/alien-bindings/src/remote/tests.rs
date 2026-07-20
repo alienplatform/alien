@@ -1,0 +1,924 @@
+use std::net::SocketAddr;
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+use std::sync::{Mutex as StdMutex, RwLock as StdRwLock};
+
+use axum::extract::{Path as AxumPath, State};
+use axum::http::{HeaderMap, StatusCode};
+use axum::response::{IntoResponse, Response};
+use axum::routing::{get, post};
+use axum::{Json, Router};
+use futures::future::join_all;
+use object_store::path::Path;
+use object_store::PutPayload;
+use serde_json::json;
+use tempfile::TempDir;
+
+use super::*;
+use crate::RemoteBindings;
+
+const DEPLOYMENT_ID: &str = "dep_aaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+const MANAGER_ID: &str = "mgr_bbbbbbbbbbbbbbbbbbbbbbbbbbbb";
+const PROJECT_ID: &str = "prj_cccccccccccccccccccccccccccc";
+const DEPLOYMENT_GROUP_ID: &str = "dg_dddddddddddddddddddddddddddd";
+const WORKSPACE_ID: &str = "ws_eeeeeeeeeeeeeeeeeeeeeeee";
+const TOKEN: &str = "remote-secret-token";
+
+#[derive(Debug)]
+struct ManualClock {
+    now: StdRwLock<DateTime<Utc>>,
+}
+
+impl ManualClock {
+    fn new(now: DateTime<Utc>) -> Self {
+        Self {
+            now: StdRwLock::new(now),
+        }
+    }
+
+    fn set(&self, now: DateTime<Utc>) {
+        *self.now.write().expect("manual clock write lock") = now;
+    }
+}
+
+impl Clock for ManualClock {
+    fn now(&self) -> DateTime<Utc> {
+        *self.now.read().expect("manual clock read lock")
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct RecordedRequest {
+    method: String,
+    path: String,
+    authorization: Option<String>,
+    body: Option<serde_json::Value>,
+}
+
+#[derive(Clone)]
+struct PlatformFixtureState {
+    manager_url: Arc<StdRwLock<String>>,
+    requests: Arc<StdMutex<Vec<RecordedRequest>>>,
+}
+
+#[derive(Clone)]
+struct ManagerFixtureState {
+    calls: Arc<AtomicUsize>,
+    fail: Arc<AtomicBool>,
+    failure_response: Arc<StdRwLock<Option<(StatusCode, serde_json::Value)>>>,
+    invalid_binding: Arc<AtomicBool>,
+    advance_clock_to: Arc<StdRwLock<Option<DateTime<Utc>>>>,
+    clock: Arc<ManualClock>,
+    expires_at: Arc<StdRwLock<DateTime<Utc>>>,
+    storage_path: String,
+    requests: Arc<StdMutex<Vec<RecordedRequest>>>,
+}
+
+#[derive(Clone)]
+struct GeneratedContractState {
+    response: Arc<StdRwLock<(StatusCode, serde_json::Value)>>,
+    requests: Arc<StdMutex<Vec<RecordedRequest>>>,
+}
+
+struct Fixture {
+    api_url: String,
+    clock: Arc<ManualClock>,
+    platform_requests: Arc<StdMutex<Vec<RecordedRequest>>>,
+    manager_url: Arc<StdRwLock<String>>,
+    manager: ManagerFixtureState,
+    _storage_directory: TempDir,
+}
+
+impl Fixture {
+    async fn new(now: DateTime<Utc>, expires_at: DateTime<Utc>) -> Self {
+        let storage_directory = TempDir::new().expect("create fixture storage directory");
+        let clock = Arc::new(ManualClock::new(now));
+        let manager = ManagerFixtureState {
+            calls: Arc::new(AtomicUsize::new(0)),
+            fail: Arc::new(AtomicBool::new(false)),
+            failure_response: Arc::new(StdRwLock::new(None)),
+            invalid_binding: Arc::new(AtomicBool::new(false)),
+            advance_clock_to: Arc::new(StdRwLock::new(None)),
+            clock: clock.clone(),
+            expires_at: Arc::new(StdRwLock::new(expires_at)),
+            storage_path: storage_directory.path().display().to_string(),
+            requests: Arc::new(StdMutex::new(Vec::new())),
+        };
+        let manager_url = Arc::new(StdRwLock::new(spawn_manager_server(manager.clone()).await));
+
+        let platform_requests = Arc::new(StdMutex::new(Vec::new()));
+        let api_url = spawn_platform_server(PlatformFixtureState {
+            manager_url: manager_url.clone(),
+            requests: platform_requests.clone(),
+        })
+        .await;
+
+        Self {
+            api_url,
+            clock,
+            platform_requests,
+            manager_url,
+            manager,
+            _storage_directory: storage_directory,
+        }
+    }
+
+    async fn remote_provider(&self) -> Arc<RemoteBindingsProvider> {
+        Arc::new(
+            RemoteBindingsProvider::discover_local_fixture(
+                DEPLOYMENT_ID,
+                TOKEN,
+                Some(&self.api_url),
+                self.clock.clone(),
+            )
+            .await
+            .expect("discover assigned manager"),
+        )
+    }
+
+    fn set_manager_expiry(&self, expires_at: DateTime<Utc>) {
+        *self
+            .manager
+            .expires_at
+            .write()
+            .expect("manager expiry write lock") = expires_at;
+    }
+
+    fn fail_manager_with(&self, status: StatusCode, body: serde_json::Value) {
+        *self
+            .manager
+            .failure_response
+            .write()
+            .expect("manager failure response write lock") = Some((status, body));
+    }
+
+    fn advance_clock_during_next_resolve(&self, now: DateTime<Utc>) {
+        *self
+            .manager
+            .advance_clock_to
+            .write()
+            .expect("manager clock advance write lock") = Some(now);
+    }
+
+    fn assign_manager_url(&self, manager_url: String) {
+        *self.manager_url.write().expect("manager URL write lock") = manager_url;
+    }
+}
+
+async fn spawn_server(app: Router) -> String {
+    let listener = tokio::net::TcpListener::bind(SocketAddr::from(([127, 0, 0, 1], 0)))
+        .await
+        .expect("bind fixture server");
+    let address = listener.local_addr().expect("read fixture server address");
+    tokio::spawn(async move {
+        axum::serve(listener, app)
+            .await
+            .expect("serve HTTP fixture");
+    });
+    format!("http://{address}")
+}
+
+async fn spawn_platform_server(state: PlatformFixtureState) -> String {
+    let app = Router::new()
+        .route("/v1/deployments/{id}", get(deployment_handler))
+        .route("/v1/managers/{id}", get(manager_handler))
+        .with_state(state);
+    spawn_server(app).await
+}
+
+async fn spawn_manager_server(state: ManagerFixtureState) -> String {
+    let app = Router::new()
+        .route("/v1/bindings/resolve", post(resolve_handler))
+        .with_state(state);
+    spawn_server(app).await
+}
+
+async fn spawn_generated_contract_server(state: GeneratedContractState) -> String {
+    let app = Router::new()
+        .route("/v1/bindings/resolve", post(generated_contract_handler))
+        .with_state(state);
+    spawn_server(app).await
+}
+
+fn authorization(headers: &HeaderMap) -> Option<String> {
+    headers
+        .get(reqwest::header::AUTHORIZATION)
+        .and_then(|value| value.to_str().ok())
+        .map(str::to_string)
+}
+
+async fn deployment_handler(
+    State(state): State<PlatformFixtureState>,
+    AxumPath(id): AxumPath<String>,
+    headers: HeaderMap,
+) -> Json<serde_json::Value> {
+    state
+        .requests
+        .lock()
+        .expect("platform requests lock")
+        .push(RecordedRequest {
+            method: "GET".to_string(),
+            path: format!("/v1/deployments/{id}"),
+            authorization: authorization(&headers),
+            body: None,
+        });
+    Json(json!({
+        "id": DEPLOYMENT_ID,
+        "name": "remote-storage-test",
+        "status": "running",
+        "projectId": PROJECT_ID,
+        "platform": "local",
+        "deploymentProtocolVersion": 1,
+        "deploymentGroupId": DEPLOYMENT_GROUP_ID,
+        "stackSettings": {},
+        "retryRequested": false,
+        "createdAt": "2026-01-01T00:00:00Z",
+        "updatedAt": "2026-01-01T00:00:00Z",
+        "managerId": MANAGER_ID,
+        "workspaceId": WORKSPACE_ID
+    }))
+}
+
+async fn manager_handler(
+    State(state): State<PlatformFixtureState>,
+    AxumPath(id): AxumPath<String>,
+    headers: HeaderMap,
+) -> Json<serde_json::Value> {
+    state
+        .requests
+        .lock()
+        .expect("platform requests lock")
+        .push(RecordedRequest {
+            method: "GET".to_string(),
+            path: format!("/v1/managers/{id}"),
+            authorization: authorization(&headers),
+            body: None,
+        });
+    let manager_url = state
+        .manager_url
+        .read()
+        .expect("manager URL read lock")
+        .clone();
+    Json(json!({
+        "id": MANAGER_ID,
+        "name": "fixture-manager",
+        "targets": ["local"],
+        "managementConfigs": {},
+        "isSystem": true,
+        "workspaceId": WORKSPACE_ID,
+        "status": "healthy",
+        "url": manager_url,
+        "managedDeploymentCount": 1,
+        "defaultProjectCount": 0,
+        "createdAt": "2026-01-01T00:00:00Z"
+    }))
+}
+
+async fn resolve_handler(
+    State(state): State<ManagerFixtureState>,
+    headers: HeaderMap,
+    Json(body): Json<serde_json::Value>,
+) -> Response {
+    state.calls.fetch_add(1, Ordering::SeqCst);
+    state
+        .requests
+        .lock()
+        .expect("manager requests lock")
+        .push(RecordedRequest {
+            method: "POST".to_string(),
+            path: "/v1/bindings/resolve".to_string(),
+            authorization: authorization(&headers),
+            body: Some(body),
+        });
+    if let Some(now) = state
+        .advance_clock_to
+        .write()
+        .expect("manager clock advance write lock")
+        .take()
+    {
+        state.clock.set(now);
+    }
+    if let Some((status, body)) = state
+        .failure_response
+        .read()
+        .expect("manager failure response read lock")
+        .clone()
+    {
+        return (status, Json(body)).into_response();
+    }
+    if state.fail.load(Ordering::SeqCst) {
+        return StatusCode::SERVICE_UNAVAILABLE.into_response();
+    }
+
+    let expires_at = *state.expires_at.read().expect("manager expiry read lock");
+    let binding = if state.invalid_binding.load(Ordering::SeqCst) {
+        json!({ "service": "local-storage" })
+    } else {
+        json!({
+            "service": "local-storage",
+            "storagePath": state.storage_path,
+        })
+    };
+    let service = binding
+        .get("service")
+        .and_then(serde_json::Value::as_str)
+        .expect("fixture binding service")
+        .to_string();
+    let mut binding = binding;
+    binding
+        .as_object_mut()
+        .expect("fixture binding object")
+        .remove("service");
+    Json(json!({
+            "service": service,
+            "binding": binding,
+            "clientConfig": {
+                "platform": "local",
+            "state_directory": state.storage_path,
+        },
+        "expiresAt": expires_at.to_rfc3339(),
+    }))
+    .into_response()
+}
+
+async fn generated_contract_handler(
+    State(state): State<GeneratedContractState>,
+    headers: HeaderMap,
+    Json(body): Json<serde_json::Value>,
+) -> Response {
+    state
+        .requests
+        .lock()
+        .expect("generated contract requests lock")
+        .push(RecordedRequest {
+            method: "POST".to_string(),
+            path: "/v1/bindings/resolve".to_string(),
+            authorization: authorization(&headers),
+            body: Some(body),
+        });
+    let (status, body) = state
+        .response
+        .read()
+        .expect("generated contract response lock")
+        .clone();
+    (status, Json(body)).into_response()
+}
+
+fn at(second: i64) -> DateTime<Utc> {
+    DateTime::parse_from_rfc3339("2030-01-01T00:00:00Z")
+        .expect("valid fixed timestamp")
+        .with_timezone(&Utc)
+        + ChronoDuration::seconds(second)
+}
+
+#[tokio::test]
+async fn generated_manager_adapter_decodes_cloud_lease_and_structured_error() {
+    let response = Arc::new(StdRwLock::new((
+        StatusCode::OK,
+        json!({
+            "service": "s3",
+            "binding": { "bucketName": "customer-bucket" },
+            "clientConfig": {
+                "accountId": "123456789012",
+                "region": "us-east-1",
+                "credentials": {
+                    "type": "sessionCredentials",
+                    "access_key_id": "AKIAEXAMPLE",
+                    "secret_access_key": "secret",
+                    "session_token": "session",
+                    "expires_at": at(3600).to_rfc3339(),
+                },
+            },
+            "expiresAt": at(3600).to_rfc3339(),
+        }),
+    )));
+    let requests = Arc::new(StdMutex::new(Vec::new()));
+    let manager_url = spawn_generated_contract_server(GeneratedContractState {
+        response: response.clone(),
+        requests: requests.clone(),
+    })
+    .await;
+    let mut headers = reqwest::header::HeaderMap::new();
+    headers.insert(
+        reqwest::header::AUTHORIZATION,
+        format!("Bearer {TOKEN}")
+            .parse()
+            .expect("valid auth header"),
+    );
+    let adapter = GeneratedManagerBindingResolver {
+        http: reqwest::Client::builder()
+            .default_headers(headers)
+            .build()
+            .expect("build generated contract client"),
+    };
+    let manager_url = reqwest::Url::parse(&manager_url).expect("valid manager URL");
+
+    let lease = adapter
+        .resolve(&manager_url, DEPLOYMENT_ID, "files")
+        .await
+        .expect("generated client should decode an S3 lease");
+    assert!(matches!(lease, ResolvedRemoteBinding::S3 { .. }));
+    assert_eq!(
+        requests
+            .lock()
+            .expect("generated contract requests lock")
+            .as_slice(),
+        &[RecordedRequest {
+            method: "POST".to_string(),
+            path: "/v1/bindings/resolve".to_string(),
+            authorization: Some(format!("Bearer {TOKEN}")),
+            body: Some(json!({
+                "deploymentId": DEPLOYMENT_ID,
+                "resourceId": "files",
+            })),
+        }]
+    );
+
+    *response.write().expect("generated contract response lock") = (
+        StatusCode::OK,
+        json!({
+            "service": "blob",
+            "binding": {
+                "accountName": "customeraccount",
+                "containerName": "customer-container",
+            },
+            "clientConfig": {
+                "subscriptionId": "subscription-id",
+                "tenantId": "tenant-id",
+                "region": "eastus",
+                "credentials": {
+                    "type": "scopedAccessTokens",
+                    "tokens": {
+                        "https://storage.azure.com/.default": "azure-storage-token",
+                    },
+                },
+            },
+            "expiresAt": at(3600).to_rfc3339(),
+        }),
+    );
+    let lease = adapter
+        .resolve(&manager_url, DEPLOYMENT_ID, "files")
+        .await
+        .expect("generated client should decode a Blob lease");
+    assert!(matches!(lease, ResolvedRemoteBinding::Blob { .. }));
+
+    *response.write().expect("generated contract response lock") = (
+        StatusCode::OK,
+        json!({
+            "service": "gcs",
+            "binding": { "bucketName": "customer-bucket" },
+            "clientConfig": {
+                "projectId": "customer-project",
+                "projectNumber": "123456789",
+                "region": "us-central1",
+                "credentials": {
+                    "type": "accessToken",
+                    "token": "gcp-access-token",
+                },
+            },
+            "expiresAt": at(3600).to_rfc3339(),
+        }),
+    );
+    let lease = adapter
+        .resolve(&manager_url, DEPLOYMENT_ID, "files")
+        .await
+        .expect("generated client should decode a GCS lease");
+    assert!(matches!(lease, ResolvedRemoteBinding::Gcs { .. }));
+
+    *response.write().expect("generated contract response lock") = (
+        StatusCode::FORBIDDEN,
+        json!({
+            "code": "FORBIDDEN",
+            "message": "Remote access was revoked",
+            "retryable": false,
+            "internal": false,
+            "httpStatusCode": 403,
+        }),
+    );
+    let error = match adapter.resolve(&manager_url, DEPLOYMENT_ID, "files").await {
+        Ok(_) => panic!("generated client should preserve a structured manager error"),
+        Err(error) => error,
+    };
+    assert_eq!(error.code, "FORBIDDEN");
+    assert_eq!(error.message, "Remote access was revoked");
+    assert!(!error.retryable);
+    assert_eq!(error.http_status_code, Some(403));
+}
+
+#[tokio::test]
+async fn discovers_assigned_manager_and_caches_each_requested_storage() {
+    let fixture = Fixture::new(at(0), at(3600)).await;
+    let bindings = RemoteBindings::from_provider(fixture.remote_provider().await);
+    let bindings_debug = format!("{bindings:?}");
+    assert!(bindings_debug.contains("<redacted>"));
+    assert!(!bindings_debug.contains(TOKEN));
+    let storage = bindings
+        .storage("files")
+        .await
+        .expect("resolve remote Storage");
+    storage
+        .put(&Path::from("hello.txt"), PutPayload::from_static(b"hello"))
+        .await
+        .expect("write through resolved Storage");
+    let result = storage
+        .get(&Path::from("hello.txt"))
+        .await
+        .expect("read through same Storage handle");
+    assert_eq!(
+        result.bytes().await.expect("read fixture object bytes"),
+        "hello"
+    );
+
+    let archive = bindings
+        .storage("archive")
+        .await
+        .expect("resolve a second remote Storage resource");
+    archive
+        .put(
+            &Path::from("archive.txt"),
+            PutPayload::from_static(b"archive"),
+        )
+        .await
+        .expect("reuse the second resource's cached lease");
+
+    assert_eq!(fixture.manager.calls.load(Ordering::SeqCst), 2);
+    assert_eq!(
+        fixture
+            .manager
+            .requests
+            .lock()
+            .expect("manager requests lock")
+            .as_slice(),
+        &[
+            RecordedRequest {
+                method: "POST".to_string(),
+                path: "/v1/bindings/resolve".to_string(),
+                authorization: Some(format!("Bearer {TOKEN}")),
+                body: Some(json!({
+                    "deploymentId": DEPLOYMENT_ID,
+                    "resourceId": "files",
+                })),
+            },
+            RecordedRequest {
+                method: "POST".to_string(),
+                path: "/v1/bindings/resolve".to_string(),
+                authorization: Some(format!("Bearer {TOKEN}")),
+                body: Some(json!({
+                    "deploymentId": DEPLOYMENT_ID,
+                    "resourceId": "archive",
+                })),
+            },
+        ]
+    );
+    assert_eq!(
+        fixture
+            .platform_requests
+            .lock()
+            .expect("platform requests lock")
+            .as_slice(),
+        &[
+            RecordedRequest {
+                method: "GET".to_string(),
+                path: format!("/v1/deployments/{DEPLOYMENT_ID}"),
+                authorization: Some(format!("Bearer {TOKEN}")),
+                body: None,
+            },
+            RecordedRequest {
+                method: "GET".to_string(),
+                path: format!("/v1/managers/{MANAGER_ID}"),
+                authorization: Some(format!("Bearer {TOKEN}")),
+                body: None,
+            },
+        ]
+    );
+}
+
+#[tokio::test]
+async fn refreshes_once_for_concurrent_operations_without_reconstructing_handle() {
+    let fixture = Fixture::new(at(0), at(600)).await;
+    let provider = fixture.remote_provider().await;
+    let bindings = RemoteBindings::from_provider(provider.clone());
+    let storage = bindings
+        .storage("files")
+        .await
+        .expect("initial remote Storage resolution");
+    storage
+        .put(&Path::from("shared.txt"), PutPayload::from_static(b"value"))
+        .await
+        .expect("seed fixture object");
+    assert_eq!(fixture.manager.calls.load(Ordering::SeqCst), 1);
+
+    fixture.clock.set(at(481));
+    fixture.set_manager_expiry(at(3901));
+    let operations = (0..16).map(|_| {
+        let storage = storage.clone();
+        async move {
+            storage
+                .head(&Path::from("shared.txt"))
+                .await
+                .expect("same Storage handle should refresh and read")
+        }
+    });
+    let results = join_all(operations).await;
+
+    assert_eq!(results.len(), 16);
+    assert!(results.iter().all(|metadata| metadata.size == 5));
+    assert_eq!(fixture.manager.calls.load(Ordering::SeqCst), 2);
+    assert_eq!(
+        fixture
+            .platform_requests
+            .lock()
+            .expect("platform requests lock")
+            .len(),
+        4,
+        "refresh must periodically rediscover the assigned manager"
+    );
+}
+
+#[tokio::test]
+async fn short_valid_lease_is_not_immediately_refreshed() {
+    let fixture = Fixture::new(at(0), at(60)).await;
+    let provider = fixture.remote_provider().await;
+    let bindings = RemoteBindings::from_provider(provider);
+    let storage = bindings
+        .storage("files")
+        .await
+        .expect("initial short lease should resolve");
+    storage
+        .put(&Path::from("short.txt"), PutPayload::from_static(b"value"))
+        .await
+        .expect("short lease should remain usable");
+
+    fixture.clock.set(at(1));
+    storage
+        .head(&Path::from("short.txt"))
+        .await
+        .expect("a valid short lease must not cause a refresh storm");
+    assert_eq!(fixture.manager.calls.load(Ordering::SeqCst), 1);
+
+    fixture.clock.set(at(49));
+    fixture.set_manager_expiry(at(3600));
+    storage
+        .head(&Path::from("short.txt"))
+        .await
+        .expect("lease should refresh inside its proportional window");
+    assert_eq!(fixture.manager.calls.load(Ordering::SeqCst), 2);
+}
+
+#[tokio::test]
+async fn existing_storage_handle_follows_manager_reassignment() {
+    let fixture = Fixture::new(at(0), at(600)).await;
+    let provider = fixture.remote_provider().await;
+    let bindings = RemoteBindings::from_provider(provider);
+    let storage = bindings
+        .storage("files")
+        .await
+        .expect("initial manager should resolve Storage");
+    storage
+        .put(
+            &Path::from("reassigned.txt"),
+            PutPayload::from_static(b"value"),
+        )
+        .await
+        .expect("seed fixture object through manager A");
+
+    let manager_b = ManagerFixtureState {
+        calls: Arc::new(AtomicUsize::new(0)),
+        fail: Arc::new(AtomicBool::new(false)),
+        failure_response: Arc::new(StdRwLock::new(None)),
+        invalid_binding: Arc::new(AtomicBool::new(false)),
+        advance_clock_to: Arc::new(StdRwLock::new(None)),
+        clock: fixture.clock.clone(),
+        expires_at: Arc::new(StdRwLock::new(at(3901))),
+        storage_path: fixture.manager.storage_path.clone(),
+        requests: Arc::new(StdMutex::new(Vec::new())),
+    };
+    let manager_b_url = spawn_manager_server(manager_b.clone()).await;
+    fixture.manager.fail.store(true, Ordering::SeqCst);
+    fixture.assign_manager_url(manager_b_url);
+    fixture.clock.set(at(481));
+
+    let metadata = storage
+        .head(&Path::from("reassigned.txt"))
+        .await
+        .expect("same handle should rediscover and use manager B");
+
+    assert_eq!(metadata.size, 5);
+    assert_eq!(fixture.manager.calls.load(Ordering::SeqCst), 1);
+    assert_eq!(manager_b.calls.load(Ordering::SeqCst), 1);
+    assert_eq!(
+        manager_b.requests.lock().expect("manager B requests lock")[0].path,
+        "/v1/bindings/resolve"
+    );
+}
+
+#[tokio::test]
+async fn concurrent_failed_refresh_is_single_flight_while_cache_is_unexpired() {
+    let fixture = Fixture::new(at(0), at(600)).await;
+    let provider = fixture.remote_provider().await;
+    let bindings = RemoteBindings::from_provider(provider);
+    let storage = bindings
+        .storage("files")
+        .await
+        .expect("initial remote Storage resolution");
+    storage
+        .put(&Path::from("shared.txt"), PutPayload::from_static(b"value"))
+        .await
+        .expect("seed fixture object");
+
+    fixture.manager.fail.store(true, Ordering::SeqCst);
+    fixture.clock.set(at(481));
+    let operations = (0..16).map(|_| {
+        let storage = storage.clone();
+        async move { storage.head(&Path::from("shared.txt")).await }
+    });
+    let results = join_all(operations).await;
+
+    assert!(results.iter().all(|result| result.is_ok()));
+    assert_eq!(fixture.manager.calls.load(Ordering::SeqCst), 2);
+}
+
+#[tokio::test]
+async fn non_retryable_manager_error_is_preserved_and_never_uses_cached_credentials() {
+    let fixture = Fixture::new(at(0), at(600)).await;
+    let provider = fixture.remote_provider().await;
+    let bindings = RemoteBindings::from_provider(provider.clone());
+    let storage = bindings
+        .storage("files")
+        .await
+        .expect("initial remote Storage resolution");
+    storage
+        .put(
+            &Path::from("private.txt"),
+            PutPayload::from_static(b"value"),
+        )
+        .await
+        .expect("seed fixture object");
+
+    fixture.fail_manager_with(
+        StatusCode::FORBIDDEN,
+        json!({
+            "code": "FORBIDDEN",
+            "message": "Remote access was revoked",
+            "retryable": false,
+            "internal": false,
+            "httpStatusCode": 403,
+        }),
+    );
+    fixture.clock.set(at(481));
+    let error = provider
+        .load_storage("files")
+        .await
+        .expect_err("revoked access must not fall back to a cached lease");
+
+    assert_eq!(error.code, "FORBIDDEN");
+    assert!(!error.retryable);
+    assert_eq!(error.http_status_code, Some(403));
+    assert_eq!(fixture.manager.calls.load(Ordering::SeqCst), 2);
+}
+
+#[tokio::test]
+async fn refresh_rechecks_expiry_after_the_network_request() {
+    let fixture = Fixture::new(at(0), at(600)).await;
+    let provider = fixture.remote_provider().await;
+    let bindings = RemoteBindings::from_provider(provider.clone());
+    let storage = bindings
+        .storage("files")
+        .await
+        .expect("initial remote Storage resolution");
+    storage
+        .put(&Path::from("lease.txt"), PutPayload::from_static(b"value"))
+        .await
+        .expect("seed fixture object");
+
+    fixture.manager.fail.store(true, Ordering::SeqCst);
+    fixture.clock.set(at(481));
+    fixture.advance_clock_during_next_resolve(at(600));
+    let error = provider
+        .load_storage("files")
+        .await
+        .expect_err("a lease that expired during refresh must not be used");
+
+    assert_eq!(error.code, "REMOTE_ACCESS_FAILED");
+    assert_eq!(fixture.manager.calls.load(Ordering::SeqCst), 2);
+}
+
+#[tokio::test]
+async fn malformed_manager_response_does_not_poison_the_cache() {
+    let fixture = Fixture::new(at(0), at(600)).await;
+    fixture
+        .manager
+        .invalid_binding
+        .store(true, Ordering::SeqCst);
+    let provider = fixture.remote_provider().await;
+    let bindings = RemoteBindings::from_provider(provider);
+
+    bindings
+        .storage("files")
+        .await
+        .expect_err("invalid binding must fail before caching");
+    fixture
+        .manager
+        .invalid_binding
+        .store(false, Ordering::SeqCst);
+    bindings
+        .storage("files")
+        .await
+        .expect("a subsequent valid response must be retried and cached");
+
+    assert_eq!(fixture.manager.calls.load(Ordering::SeqCst), 2);
+}
+
+#[test]
+fn remote_urls_require_https_except_for_loopback_development() {
+    assert!(!validate_platform_base_url("https://api.example.com").unwrap());
+    assert!(validate_platform_base_url("http://127.0.0.1:3000").unwrap());
+    assert!(validate_platform_base_url("http://localhost:3000").unwrap());
+    assert!(validate_platform_base_url("http://api.example.com").is_err());
+    assert!(validate_manager_url("https://manager.example.com/", false).is_ok());
+    assert!(validate_manager_url("http://127.0.0.1:3001/", true).is_ok());
+    assert!(validate_manager_url("http://manager.example.com/", true).is_err());
+    assert!(validate_manager_url("https://user@manager.example.com/", false).is_err());
+    assert!(validate_manager_url("https://manager.example.com/prefix", false).is_err());
+
+    for error in [
+        validate_platform_base_url("not a URL").unwrap_err(),
+        validate_manager_url("not a URL", false).unwrap_err(),
+        validate_manager_url("http://manager.example.com/", true).unwrap_err(),
+    ] {
+        assert!(!error.retryable);
+        assert_eq!(error.http_status_code, Some(400));
+    }
+}
+
+#[test]
+fn remote_lease_validation_rejects_refreshable_or_overbroad_credentials() {
+    let aws = alien_core::AwsClientConfig {
+        account_id: "123456789012".to_string(),
+        region: "us-east-1".to_string(),
+        credentials: alien_core::AwsCredentials::AccessKeys {
+            access_key_id: "access".to_string(),
+            secret_access_key: "secret".to_string(),
+            session_token: None,
+        },
+        service_overrides: None,
+    };
+    assert!(validate_aws_remote_client_config(&aws, at(3600)).is_err());
+
+    let gcp = alien_core::GcpClientConfig {
+        project_id: "project".to_string(),
+        region: "us-central1".to_string(),
+        credentials: alien_core::GcpCredentials::ServiceMetadata,
+        service_overrides: None,
+        project_number: None,
+    };
+    assert!(validate_gcp_remote_client_config(&gcp).is_err());
+
+    let azure = alien_core::AzureClientConfig {
+        subscription_id: "subscription".to_string(),
+        tenant_id: "tenant".to_string(),
+        region: Some("eastus".to_string()),
+        credentials: alien_core::AzureCredentials::ScopedAccessTokens {
+            tokens: HashMap::from([
+                (AZURE_STORAGE_SCOPE.to_string(), "storage".to_string()),
+                (
+                    "https://management.azure.com/.default".to_string(),
+                    "management".to_string(),
+                ),
+            ]),
+        },
+        service_overrides: None,
+    };
+    assert!(validate_azure_remote_client_config(&azure).is_err());
+}
+
+#[tokio::test]
+async fn serves_unexpired_cache_on_refresh_failure_then_fails_closed_at_expiry() {
+    let fixture = Fixture::new(at(0), at(600)).await;
+    let provider = fixture.remote_provider().await;
+    let bindings = RemoteBindings::from_provider(provider);
+    let storage = bindings
+        .storage("files")
+        .await
+        .expect("initial remote Storage resolution");
+    storage
+        .put(&Path::from("lease.txt"), PutPayload::from_static(b"valid"))
+        .await
+        .expect("seed fixture object");
+
+    fixture.manager.fail.store(true, Ordering::SeqCst);
+    fixture.clock.set(at(481));
+    let metadata = storage
+        .head(&Path::from("lease.txt"))
+        .await
+        .expect("unexpired lease should survive failed refresh");
+    assert_eq!(metadata.size, 5);
+    assert_eq!(fixture.manager.calls.load(Ordering::SeqCst), 2);
+
+    fixture.clock.set(at(600));
+    let error = storage
+        .head(&Path::from("lease.txt"))
+        .await
+        .expect_err("expired lease must fail closed when refresh fails");
+    assert!(error.to_string().contains("Remote access failed"));
+    assert_eq!(fixture.manager.calls.load(Ordering::SeqCst), 3);
+}

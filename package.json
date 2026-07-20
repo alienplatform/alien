@@ -16,7 +16,7 @@
     "generate:platform-api": "speakeasy generate sdk --lang typescript --schema ./client-sdks/platform/openapi.json --out client-sdks/platform/typescript && NODE_OPTIONS=--max-old-space-size=8192 pnpm -C ./client-sdks/platform/typescript build",
     "generate:manager-api": "speakeasy generate sdk --lang typescript --schema ./client-sdks/manager/openapi.json --out client-sdks/manager/typescript && pnpm -C ./client-sdks/manager/typescript build",
     "generate:manager-openapi": "cargo run --bin alien-manager-schema-exporter --features openapi -p alien-manager -- --output crates/alien-manager/openapi.json && cp crates/alien-manager/openapi.json client-sdks/manager/openapi.json",
-    "generate:manager-rust-sdk": "pnpm run generate:manager-openapi && openapi-down-convert -i crates/alien-manager/openapi.json -o client-sdks/manager/rust/openapi-3.0.json && cd client-sdks/manager/rust && node ../scripts/fix-openapi.mjs",
+    "generate:manager-rust-sdk": "pnpm run generate:manager-openapi && openapi-down-convert -i crates/alien-manager/openapi.json -o client-sdks/manager/openapi-3.0.json && openapi-down-convert -i crates/alien-manager/openapi.json -o client-sdks/manager/rust/openapi-3.0.json && cd client-sdks/manager && node scripts/fix-openapi.mjs && cd rust && node ../scripts/fix-openapi.mjs",
     "test": "turbo test",
     "test:examples": "./scripts/test-examples-local.sh",
     "changeset": "changeset",

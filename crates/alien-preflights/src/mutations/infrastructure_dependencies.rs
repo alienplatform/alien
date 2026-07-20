@@ -3,7 +3,8 @@
 use crate::error::Result;
 use crate::StackMutation;
 use alien_core::{
-    DeploymentConfig, Platform, RemoteStackManagement, ResourceRef, Stack, StackState,
+    DeploymentConfig, Platform, RemoteStackManagement, ResourceLifecycle, ResourceRef, Stack,
+    StackState, Storage,
 };
 use async_trait::async_trait;
 use tracing::{debug, info};
@@ -58,10 +59,16 @@ impl StackMutation for InfrastructureDependenciesMutation {
                 continue;
             };
             let resource_type = entry.config.resource_type();
+            let remote_frozen_storage = is_remote_frozen_storage(entry);
             let deps =
                 self.get_dependencies_for_resource(&stack, &resource_id, &resource_type, platform);
 
             if let Some(entry) = stack.resources.get_mut(&resource_id) {
+                if remote_frozen_storage {
+                    entry.dependencies.retain(|dependency| {
+                        dependency.resource_type() != &RemoteStackManagement::RESOURCE_TYPE
+                    });
+                }
                 for dependency in deps {
                     if dependency.id() == resource_id {
                         continue;
@@ -93,6 +100,10 @@ impl InfrastructureDependenciesMutation {
         let mut dependencies = Vec::new();
         let is_infrastructure_resource =
             self.is_infrastructure_resource(resource_id, Some(resource_type));
+        let is_remote_frozen_storage = stack
+            .resources
+            .get(resource_id)
+            .is_some_and(is_remote_frozen_storage);
 
         if platform == Platform::Azure
             && resource_id != "default-resource-group"
@@ -104,7 +115,9 @@ impl InfrastructureDependenciesMutation {
             ));
         }
 
-        if !is_infrastructure_resource {
+        if resource_type == &RemoteStackManagement::RESOURCE_TYPE {
+            dependencies.extend(remote_frozen_storage_refs(stack));
+        } else if !is_infrastructure_resource && !is_remote_frozen_storage {
             if let Some(management_id) = remote_stack_management_id(stack) {
                 dependencies.push(ResourceRef::new(
                     RemoteStackManagement::RESOURCE_TYPE,
@@ -371,15 +384,30 @@ fn remote_stack_management_id(stack: &Stack) -> Option<&str> {
         .map(|(resource_id, _)| resource_id.as_str())
 }
 
+fn is_remote_frozen_storage(entry: &alien_core::ResourceEntry) -> bool {
+    entry.lifecycle == ResourceLifecycle::Frozen
+        && entry.remote_access
+        && entry.config.downcast_ref::<Storage>().is_some()
+}
+
+fn remote_frozen_storage_refs(stack: &Stack) -> Vec<ResourceRef> {
+    stack
+        .resources
+        .iter()
+        .filter(|(_, entry)| is_remote_frozen_storage(entry))
+        .map(|(resource_id, _)| ResourceRef::new(Storage::RESOURCE_TYPE, resource_id))
+        .collect()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use alien_core::permissions::{ManagementPermissions, PermissionsConfig};
     use alien_core::{
-        AzureResourceGroup, AzureStorageAccount, EnvironmentVariablesSnapshot, ExternalBindings,
-        KubernetesCluster, KubernetesClusterOwnership, KubernetesClusterProvider,
+        AzureResourceGroup, AzureStorageAccount, EnvironmentVariablesSnapshot, ExternalBinding,
+        ExternalBindings, KubernetesCluster, KubernetesClusterOwnership, KubernetesClusterProvider,
         KubernetesHeartbeatMode, Resource, ResourceEntry, ResourceLifecycle, StackSettings,
-        Storage, Worker, WorkerCode, WorkerTrigger,
+        Storage, StorageBinding, Worker, WorkerCode, WorkerTrigger,
     };
     use indexmap::IndexMap;
 
@@ -565,5 +593,70 @@ mod tests {
             .unwrap()
             .dependencies
             .contains(&remote_management));
+    }
+
+    #[tokio::test]
+    async fn remote_storage_is_ready_before_management_and_normal_resources_wait_for_management() {
+        let storage = Storage::new("archive".to_string()).build();
+        let worker = Worker::new("processor".to_string())
+            .code(WorkerCode::Image {
+                image: "test:latest".to_string(),
+            })
+            .permissions("worker".to_string())
+            .build();
+        let mut stack = Stack::new("test-stack".to_string())
+            .add_with_remote_access(storage, ResourceLifecycle::Frozen)
+            .add(
+                RemoteStackManagement::new("management".to_string()).build(),
+                ResourceLifecycle::Frozen,
+            )
+            .add(worker, ResourceLifecycle::Live)
+            .build();
+        let management_ref = ResourceRef::new(RemoteStackManagement::RESOURCE_TYPE, "management");
+        stack
+            .resources
+            .get_mut("archive")
+            .unwrap()
+            .dependencies
+            .push(management_ref.clone());
+
+        let mut external_bindings = ExternalBindings::new();
+        external_bindings.insert(
+            "archive",
+            ExternalBinding::Storage(StorageBinding::gcs("imported-archive-bucket")),
+        );
+        let stack_state = StackState::new(Platform::Gcp);
+        let config = DeploymentConfig::builder()
+            .stack_settings(StackSettings::default())
+            .environment_variables(empty_env_snapshot())
+            .allow_frozen_changes(false)
+            .external_bindings(external_bindings)
+            .build();
+
+        let result = InfrastructureDependenciesMutation
+            .mutate(stack, &stack_state, &config)
+            .await
+            .unwrap();
+        let storage_ref = ResourceRef::new(Storage::RESOURCE_TYPE, "archive");
+
+        assert!(!result
+            .resources
+            .get("archive")
+            .unwrap()
+            .dependencies
+            .contains(&management_ref));
+        assert!(result
+            .resources
+            .get("management")
+            .unwrap()
+            .dependencies
+            .contains(&storage_ref));
+        assert!(result
+            .resources
+            .get("processor")
+            .unwrap()
+            .dependencies
+            .contains(&management_ref));
+        assert!(crate::compile_time::validate_stack_dependencies(&result).success);
     }
 }

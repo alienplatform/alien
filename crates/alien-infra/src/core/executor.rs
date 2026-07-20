@@ -523,6 +523,31 @@ impl StackExecutor {
         self.deployment_config.external_bindings.has(resource_id)
     }
 
+    fn desired_external_binding_params(
+        &self,
+        resource_id: &str,
+    ) -> Result<Option<serde_json::Value>> {
+        if !self
+            .desired_stack
+            .resources
+            .get(resource_id)
+            .is_some_and(|entry| entry.remote_access)
+        {
+            return Ok(None);
+        }
+
+        self.deployment_config
+            .external_bindings
+            .get(resource_id)
+            .map(serde_json::to_value)
+            .transpose()
+            .into_alien_error()
+            .context(ErrorData::ResourceStateSerializationFailed {
+                resource_id: resource_id.to_string(),
+                message: "Failed to serialize external binding parameters".to_string(),
+            })
+    }
+
     fn resource_lifecycle(
         &self,
         resource_id: &str,
@@ -1075,10 +1100,6 @@ impl StackExecutor {
 
                 info!("Using external binding for '{}' -> Running", resource_id);
 
-                // Get resource entry to check remote_access flag
-                let resource_entry = self.desired_stack.resources.get(resource_id);
-                let remote_access = resource_entry.map(|e| e.remote_access).unwrap_or(false);
-
                 // Create resource state as Running with external binding
                 let mut resource_state = StackResourceState::new_pending(
                     desired_config.resource.resource_type().to_string(),
@@ -1088,17 +1109,10 @@ impl StackExecutor {
                 );
                 resource_state.status = ResourceStatus::Running;
 
-                // Only sync binding params if remote_access is enabled
-                if remote_access {
-                    resource_state.remote_binding_params =
-                        Some(serde_json::to_value(binding).into_alien_error().context(
-                            ErrorData::ResourceStateSerializationFailed {
-                                resource_id: resource_id.clone(),
-                                message:
-                                    "Failed to serialize external binding parameters".to_string(),
-                            },
-                        )?);
-                }
+                // Publish binding parameters only for explicit remote access;
+                // external bindings may contain inline credentials.
+                resource_state.remote_binding_params =
+                    self.desired_external_binding_params(resource_id)?;
 
                 // Populate outputs from the binding so dependent resources can
                 // call get_resource_outputs() (e.g., functions reading the
@@ -1533,30 +1547,9 @@ impl StackExecutor {
             if !current_resource_state.has_internal_state() {
                 if self.is_external_binding_resource(&resource_id) {
                     // External bindings intentionally have no controller to
-                    // step. Reconcile the publication gate directly so a
-                    // release that changes only `remote_access` cannot leave
-                    // stale binding parameters visible, or fail to publish
-                    // newly-enabled parameters.
-                    let remote_access = self
-                        .desired_stack
-                        .resources
-                        .get(&resource_id)
-                        .is_some_and(|entry| entry.remote_access);
-                    current_resource_state.remote_binding_params = if remote_access {
-                        self.deployment_config
-                            .external_bindings
-                            .get(&resource_id)
-                            .map(serde_json::to_value)
-                            .transpose()
-                            .into_alien_error()
-                            .context(ErrorData::ResourceStateSerializationFailed {
-                                resource_id: resource_id.clone(),
-                                message: "Failed to serialize external binding parameters"
-                                    .to_string(),
-                            })?
-                    } else {
-                        None
-                    };
+                    // step. Reconcile the explicit publication gate directly.
+                    current_resource_state.remote_binding_params =
+                        self.desired_external_binding_params(&resource_id)?;
                     subsequent_state_updates.insert(resource_id.clone(), current_resource_state);
                 } else {
                     warn!(
@@ -2049,18 +2042,9 @@ impl StackExecutor {
                         let is_running = current_view.status == ResourceStatus::Running;
 
                         let config_matches = if self.is_external_binding_resource(id) {
-                            let remote_binding_matches =
-                                self.desired_stack.resources.get(id).is_some_and(|entry| {
-                                    if !entry.remote_access {
-                                        return current_view.remote_binding_params.is_none();
-                                    }
-                                    self.deployment_config
-                                        .external_bindings
-                                        .get(id)
-                                        .and_then(|binding| serde_json::to_value(binding).ok())
-                                        .as_ref()
-                                        == current_view.remote_binding_params.as_ref()
-                                });
+                            let remote_binding_matches = self
+                                .desired_external_binding_params(id)
+                                .is_ok_and(|desired| current_view.remote_binding_params == desired);
                             current_view.config == desired_resource_config.resource
                                 && remote_binding_matches
                         } else {

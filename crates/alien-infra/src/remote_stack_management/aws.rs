@@ -5,11 +5,12 @@ use crate::core::{ResourceControllerContext, ResourcePermissionsHelper};
 use crate::error::{ErrorData, Result};
 use alien_aws_clients::iam::{CreateRoleRequest, CreateRoleTag, IamApi};
 use alien_core::{
-    standard_resource_tags, AwsRemoteStackManagementHeartbeatData, HeartbeatBackend,
-    KubernetesCluster, ObservedHealth, Platform, ProviderLifecycleState, RemoteStackManagement,
-    RemoteStackManagementHeartbeatData, RemoteStackManagementHeartbeatStatus,
-    RemoteStackManagementOutputs, ResourceHeartbeat, ResourceHeartbeatData, ResourceLifecycle,
-    ResourceOutputs, ResourceStatus, Worker,
+    standard_resource_tags, AwsRemoteStackManagementHeartbeatData, BindingValue, ExternalBinding,
+    HeartbeatBackend, KubernetesCluster, ObservedHealth, Platform, ProviderLifecycleState,
+    RemoteStackManagement, RemoteStackManagementHeartbeatData,
+    RemoteStackManagementHeartbeatStatus, RemoteStackManagementOutputs, ResourceHeartbeat,
+    ResourceHeartbeatData, ResourceLifecycle, ResourceOutputs, ResourceStatus, Storage,
+    StorageBinding, Worker,
 };
 use alien_error::{AlienError, Context, ContextError, IntoAlienError};
 use alien_macros::controller;
@@ -673,15 +674,22 @@ impl AwsRemoteStackManagementController {
             let Some(resource_entry) = ctx.desired_stack.resources.get(resource_id) else {
                 continue;
             };
-            if resource_entry.lifecycle != ResourceLifecycle::Live {
+            let permission_context = if resource_entry.lifecycle == ResourceLifecycle::Live {
+                Self::resource_scoped_management_permission_context(
+                    ctx,
+                    base_permission_context,
+                    resource_id,
+                    resource_entry,
+                )?
+            } else if is_remote_frozen_storage(resource_entry) {
+                let bucket_name = aws_remote_storage_bucket_name(ctx, resource_id)?;
+                base_permission_context
+                    .clone()
+                    .with_resource_id(resource_id.to_string())
+                    .with_resource_name(bucket_name)
+            } else {
                 continue;
-            }
-            let permission_context = Self::resource_scoped_management_permission_context(
-                ctx,
-                base_permission_context,
-                resource_id,
-                resource_entry,
-            )?;
+            };
 
             for permission_set_ref in permission_set_refs {
                 if !seen.insert((resource_id.clone(), permission_set_ref.id().to_string())) {
@@ -1117,4 +1125,140 @@ fn is_remote_not_found(error: &alien_error::AlienError<alien_client_core::ErrorD
         error.error,
         Some(alien_client_core::ErrorData::RemoteResourceNotFound { .. })
     )
+}
+
+fn is_remote_frozen_storage(resource_entry: &alien_core::ResourceEntry) -> bool {
+    resource_entry.lifecycle == ResourceLifecycle::Frozen
+        && resource_entry.remote_access
+        && resource_entry.config.downcast_ref::<Storage>().is_some()
+}
+
+fn aws_remote_storage_bucket_name(
+    ctx: &ResourceControllerContext<'_>,
+    resource_id: &str,
+) -> Result<String> {
+    match remote_storage_binding(ctx, resource_id)? {
+        Some(StorageBinding::S3(binding)) => concrete_storage_binding_value(
+            binding.bucket_name,
+            resource_id,
+            "bucketName",
+            "AWS S3",
+        ),
+        Some(other) => Err(AlienError::new(ErrorData::ResourceConfigInvalid {
+            message: format!(
+                "Remote Storage resource '{resource_id}' must use an S3 binding on AWS, got {other:?}"
+            ),
+            resource_id: Some(resource_id.to_string()),
+        })),
+        None => Ok(format!("{}-{}", ctx.resource_prefix, resource_id)),
+    }
+}
+
+fn remote_storage_binding(
+    ctx: &ResourceControllerContext<'_>,
+    resource_id: &str,
+) -> Result<Option<StorageBinding>> {
+    match ctx.deployment_config.external_bindings.get(resource_id) {
+        Some(ExternalBinding::Storage(binding)) => return Ok(Some(binding.clone())),
+        Some(other) => {
+            return Err(AlienError::new(ErrorData::ResourceConfigInvalid {
+                message: format!(
+                    "Remote Storage resource '{resource_id}' has a non-Storage external binding: {other:?}"
+                ),
+                resource_id: Some(resource_id.to_string()),
+            }));
+        }
+        None => {}
+    }
+
+    let Some(binding) = ctx
+        .state
+        .resource(resource_id)
+        .and_then(|state| state.remote_binding_params.as_ref())
+    else {
+        return Ok(None);
+    };
+
+    serde_json::from_value(binding.clone())
+        .into_alien_error()
+        .context(ErrorData::ResourceConfigInvalid {
+            message: format!(
+                "Remote Storage resource '{resource_id}' has invalid binding parameters"
+            ),
+            resource_id: Some(resource_id.to_string()),
+        })
+        .map(Some)
+}
+
+fn concrete_storage_binding_value(
+    value: BindingValue<String>,
+    resource_id: &str,
+    field_name: &str,
+    provider: &str,
+) -> Result<String> {
+    match value {
+        BindingValue::Value(value) => Ok(value),
+        BindingValue::Expression(_) | BindingValue::SecretRef { .. } => {
+            Err(AlienError::new(ErrorData::ResourceConfigInvalid {
+                message: format!(
+                    "Remote Storage resource '{resource_id}' requires a concrete {provider} {field_name}"
+                ),
+                resource_id: Some(resource_id.to_string()),
+            }))
+        }
+    }
+}
+
+#[cfg(test)]
+mod remote_storage_tests {
+    use super::*;
+    use alien_core::{Resource, ResourceEntry};
+
+    fn storage_entry(lifecycle: ResourceLifecycle, remote_access: bool) -> ResourceEntry {
+        ResourceEntry {
+            config: Resource::new(Storage::new("archive".to_string()).build()),
+            lifecycle,
+            dependencies: Vec::new(),
+            remote_access,
+        }
+    }
+
+    #[test]
+    fn remote_storage_management_is_limited_to_opted_in_frozen_storage() {
+        assert!(is_remote_frozen_storage(&storage_entry(
+            ResourceLifecycle::Frozen,
+            true
+        )));
+        assert!(!is_remote_frozen_storage(&storage_entry(
+            ResourceLifecycle::Frozen,
+            false
+        )));
+        assert!(!is_remote_frozen_storage(&storage_entry(
+            ResourceLifecycle::Live,
+            true
+        )));
+    }
+
+    #[test]
+    fn remote_storage_management_policy_uses_the_exact_bucket() {
+        let context = PermissionContext::new()
+            .with_aws_account_id("123456789012".to_string())
+            .with_aws_region("us-east-1".to_string())
+            .with_stack_prefix("deployment-prefix".to_string())
+            .with_resource_id("archive".to_string())
+            .with_resource_name("imported-archive-bucket".to_string());
+        let permission_set = get_permission_set("storage/remote-data-write").unwrap();
+
+        let policy = AwsRuntimePermissionsGenerator::new()
+            .generate_policy(permission_set, BindingTarget::Resource, &context)
+            .unwrap();
+
+        assert_eq!(
+            policy.statement[0].resource,
+            [
+                "arn:aws:s3:::imported-archive-bucket",
+                "arn:aws:s3:::imported-archive-bucket/*",
+            ]
+        );
+    }
 }

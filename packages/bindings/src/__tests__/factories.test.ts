@@ -10,6 +10,14 @@ import type {
   RawVaultHandle,
 } from "../loader.js"
 
+function unusedRemoteBindingsHandle(): NativeAddon["RemoteBindingsHandle"] {
+  return {
+    async forDeployment(): Promise<never> {
+      throw new Error("unused")
+    },
+  }
+}
+
 /**
  * A fake addon that records every `BindingsHandle` construction and returns
  * trivial resource handles, so factory behavior can be exercised without the
@@ -69,6 +77,7 @@ function fakeAddon(): { addon: NativeAddon; constructions: unknown[] } {
   return {
     addon: {
       BindingsHandle: FakeBindingsHandle as unknown as NativeAddon["BindingsHandle"],
+      RemoteBindingsHandle: unusedRemoteBindingsHandle(),
       version: () => "test",
     },
     constructions,
@@ -93,6 +102,7 @@ function addonForKv(kvHandle: RawKvHandle): NativeAddon {
   }
   return {
     BindingsHandle: FakeBindingsHandle as unknown as NativeAddon["BindingsHandle"],
+    RemoteBindingsHandle: unusedRemoteBindingsHandle(),
     version: () => "test",
   }
 }
@@ -244,6 +254,7 @@ describe("createFactories method mapping", () => {
     }
     const addon = {
       BindingsHandle: FakeBindingsHandle as unknown as NativeAddon["BindingsHandle"],
+      RemoteBindingsHandle: unusedRemoteBindingsHandle(),
       version: () => "test",
     }
     const { queue } = createFactories(() => addon)

@@ -11,16 +11,22 @@
 mod error;
 mod kv;
 mod queue;
+#[cfg(feature = "platform-sdk")]
+mod remote_storage;
 mod storage;
 mod vault;
 
 use crate::error::map_alien_error;
 use alien_bindings::Bindings;
+#[cfg(feature = "platform-sdk")]
+use alien_bindings::RemoteBindings;
 use napi_derive::napi;
 use std::sync::Arc;
 
 pub use kv::KvHandle;
 pub use queue::QueueHandle;
+#[cfg(feature = "platform-sdk")]
+pub use remote_storage::RemoteStorageHandle;
 pub use storage::StorageHandle;
 pub use vault::VaultHandle;
 
@@ -45,23 +51,6 @@ impl BindingsHandle {
     #[napi(constructor)]
     pub fn new() -> napi::Result<Self> {
         let bindings = Bindings::from_env().map_err(map_alien_error)?;
-        Ok(Self {
-            inner: Arc::new(bindings),
-        })
-    }
-
-    /// Discover a deployment's assigned manager and create remote bindings.
-    #[cfg(feature = "platform-sdk")]
-    #[napi(factory)]
-    pub async fn for_remote_deployment(
-        deployment_id: String,
-        token: String,
-        api_base_url: Option<String>,
-    ) -> napi::Result<Self> {
-        let bindings =
-            Bindings::for_remote_deployment(&deployment_id, &token, api_base_url.as_deref())
-                .await
-                .map_err(map_alien_error)?;
         Ok(Self {
             inner: Arc::new(bindings),
         })
@@ -97,5 +86,40 @@ impl BindingsHandle {
         let inner = self.inner.clone();
         let vault = inner.vault(&name).await.map_err(map_alien_error)?;
         Ok(VaultHandle::new(vault))
+    }
+}
+
+/// The JS-facing remote entry point. Its narrow surface makes unsupported
+/// binding kinds impossible to request through the native addon.
+#[cfg(feature = "platform-sdk")]
+#[napi]
+pub struct RemoteBindingsHandle {
+    inner: Arc<RemoteBindings>,
+}
+
+#[cfg(feature = "platform-sdk")]
+#[napi]
+impl RemoteBindingsHandle {
+    /// Discover a deployment's assigned manager and create remote bindings.
+    #[napi(factory)]
+    pub async fn for_deployment(
+        deployment_id: String,
+        token: String,
+        api_base_url: Option<String>,
+    ) -> napi::Result<Self> {
+        let bindings =
+            RemoteBindings::for_deployment(&deployment_id, &token, api_base_url.as_deref())
+                .await
+                .map_err(map_alien_error)?;
+        Ok(Self {
+            inner: Arc::new(bindings),
+        })
+    }
+
+    /// Resolve the storage binding named `name`.
+    #[napi]
+    pub async fn storage(&self, name: String) -> napi::Result<RemoteStorageHandle> {
+        let storage = self.inner.storage(&name).await.map_err(map_alien_error)?;
+        Ok(RemoteStorageHandle::new(storage, name))
     }
 }

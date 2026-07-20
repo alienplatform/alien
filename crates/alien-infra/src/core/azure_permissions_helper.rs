@@ -5,7 +5,7 @@
 
 use std::sync::Arc;
 
-use crate::core::ResourceControllerContext;
+use crate::core::{ResourceControllerContext, ResourcePermissionsHelper};
 use crate::error::{ErrorData, Result};
 use alien_azure_clients::authorization::{AuthorizationApi, Scope};
 use alien_azure_clients::models::authorization_role_assignments::{
@@ -230,16 +230,25 @@ impl AzurePermissionsHelper {
             }
         }
 
-        Self::apply_management_permissions_tracking_assignment_ids(
+        // Remote-access Frozen Storage is ordered before RemoteStackManagement.
+        // Its exact management role assignment is therefore owned by the
+        // management controller, after the container exists.
+        if !ResourcePermissionsHelper::remote_management_owns_resource_grants(
             ctx,
             resource_id,
             resource_type,
-            &resource_scope,
-            permission_context,
-            role_assignment_ids,
-            apply,
-        )
-        .await?;
+        ) {
+            Self::apply_management_permissions_tracking_assignment_ids(
+                ctx,
+                resource_id,
+                resource_type,
+                &resource_scope,
+                permission_context,
+                role_assignment_ids,
+                apply,
+            )
+            .await?;
+        }
 
         Ok(())
     }

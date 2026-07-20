@@ -5,6 +5,8 @@ pub use alien_core::{Platform, ENV_ALIEN_DEPLOYMENT_TYPE, ENV_OPERATOR_BASE_PLAT
 pub use bindings::Bindings;
 pub use error::{ErrorData, Result};
 pub use provider::BindingsProvider;
+#[cfg(feature = "platform-sdk")]
+pub use remote::{RemoteBindings, RemoteStorage};
 pub use traits::{
     ArtifactRegistry, ArtifactRegistryCredentials, ArtifactRegistryPermissions,
     AwsServiceAccountInfo, AzureServiceAccountInfo, Binding, BindingsProviderApi, Build, Container,

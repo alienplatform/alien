@@ -29,6 +29,10 @@ pub trait AwsClientConfigExt {
     /// Get credentials for web identity token authentication
     async fn get_web_identity_credentials(&self) -> Result<AwsClientConfig>;
 
+    /// Resolve any refreshable source and exchange static keys for an expiring
+    /// STS session, returning only `SessionCredentials`.
+    async fn materialize_session_credentials(&self) -> Result<AwsClientConfig>;
+
     /// Get service endpoint, checking for overrides first
     fn get_service_endpoint(&self, service_name: &str, default_endpoint: &str) -> String;
 
@@ -273,6 +277,41 @@ impl AwsClientConfigExt for AwsClientConfig {
             }
             AwsCredentials::AccessKeys { .. } | AwsCredentials::SessionCredentials { .. } => {
                 Ok(self.clone())
+            }
+        }
+    }
+
+    async fn materialize_session_credentials(&self) -> Result<AwsClientConfig> {
+        use crate::aws::sts::{StsApi, StsClient};
+
+        let resolved = self.get_web_identity_credentials().await?;
+        match resolved.credentials {
+            AwsCredentials::SessionCredentials { .. } => Ok(resolved),
+            AwsCredentials::AccessKeys { .. } => {
+                let response = StsClient::new(reqwest::Client::new(), resolved.clone())
+                    .get_session_token(Some(3600))
+                    .await?;
+                let credentials = response.get_session_token_result.credentials;
+                Ok(AwsClientConfig {
+                    account_id: resolved.account_id,
+                    region: resolved.region,
+                    credentials: AwsCredentials::SessionCredentials {
+                        access_key_id: credentials.access_key_id,
+                        secret_access_key: credentials.secret_access_key,
+                        session_token: credentials.session_token,
+                        expires_at: credentials.expiration,
+                    },
+                    service_overrides: resolved.service_overrides,
+                })
+            }
+            AwsCredentials::Imds { .. }
+            | AwsCredentials::Profile { .. }
+            | AwsCredentials::WebIdentity { .. } => {
+                Err(AlienError::new(ErrorData::InvalidClientConfig {
+                    message: "AWS credential source did not resolve to session credentials"
+                        .to_string(),
+                    errors: None,
+                }))
             }
         }
     }

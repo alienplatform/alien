@@ -1,21 +1,17 @@
 //! App-facing convenience API for accessing bindings.
 //!
-//! [`Bindings`] wraps a [`crate::traits::BindingsProviderApi`], giving application code a
+//! [`Bindings`] wraps an environment-backed provider, giving application code a
 //! small, stable surface — `storage`, `kv`, `queue`, `vault` — instead of the full provider
-//! API used internally by the manager and controllers. Environment-backed clients support
-//! all configured kinds; remote v0 clients support Storage only.
+//! API used internally by the manager and controllers.
 
 use crate::error::Result;
 use crate::provider::BindingsProvider;
 use crate::refreshing::{RefreshingKv, RefreshingQueue, RefreshingStorage, RefreshingVault};
-#[cfg(feature = "platform-sdk")]
-use crate::remote::RemoteBindingsProvider;
 use crate::traits::{BindingsProviderApi, Kv, Queue, Storage, Vault};
 use std::collections::HashMap;
 use std::sync::Arc;
 
-/// App-facing entry point for environment-backed or resource-scoped remote
-/// bindings.
+/// App-facing entry point for environment-backed bindings.
 ///
 /// Construction is synchronous and only validates each configured binding's JSON
 /// shape (see [`BindingsProvider::from_env_deferred`]); the deployment platform,
@@ -45,15 +41,10 @@ use std::sync::Arc;
 /// ```
 #[derive(Debug)]
 pub struct Bindings {
-    provider: Arc<dyn BindingsProviderApi>,
+    provider: Arc<crate::provider::LazyEnvBindingsProvider>,
 }
 
 impl Bindings {
-    #[cfg(test)]
-    pub(crate) fn from_provider(provider: Arc<dyn BindingsProviderApi>) -> Self {
-        Self { provider }
-    }
-
     /// Sync-constructs `Bindings` from the current process environment.
     pub fn from_env() -> Result<Self> {
         Self::from_env_map(std::env::vars().collect())
@@ -73,27 +64,6 @@ impl Bindings {
         })
     }
 
-    /// Discovers a deployment's assigned manager and creates a resource-scoped
-    /// remote bindings client.
-    ///
-    /// The Platform API supplies only manager discovery. Each Storage binding
-    /// is validated and resolved independently by the assigned manager, and its
-    /// short-lived credentials refresh lazily without reconstructing this value
-    /// or previously returned Storage handles.
-    #[cfg(feature = "platform-sdk")]
-    pub async fn for_remote_deployment(
-        deployment_id: &str,
-        token: &str,
-        api_base_url: Option<&str>,
-    ) -> Result<Self> {
-        Ok(Self {
-            provider: Arc::new(
-                RemoteBindingsProvider::for_remote_deployment(deployment_id, token, api_base_url)
-                    .await?,
-            ),
-        })
-    }
-
     /// Loads the object storage binding named `binding_name`.
     ///
     /// The returned handle checks credential freshness before each operation.
@@ -110,8 +80,7 @@ impl Bindings {
     }
 
     /// Loads an environment-backed key-value binding that refreshes minted
-    /// credentials before use. Remote v0 clients return
-    /// `OPERATION_NOT_SUPPORTED`.
+    /// credentials before use.
     pub async fn kv(&self, binding_name: &str) -> Result<Arc<dyn Kv>> {
         self.provider.load_kv(binding_name).await?;
         Ok(Arc::new(RefreshingKv::new(
@@ -121,8 +90,7 @@ impl Bindings {
     }
 
     /// Loads an environment-backed queue binding that refreshes minted
-    /// credentials before use. Remote v0 clients return
-    /// `OPERATION_NOT_SUPPORTED`.
+    /// credentials before use.
     pub async fn queue(&self, binding_name: &str) -> Result<Arc<dyn Queue>> {
         self.provider.load_queue(binding_name).await?;
         Ok(Arc::new(RefreshingQueue::new(
@@ -132,8 +100,7 @@ impl Bindings {
     }
 
     /// Loads an environment-backed vault binding that refreshes minted
-    /// credentials before use. Remote v0 clients return
-    /// `OPERATION_NOT_SUPPORTED`.
+    /// credentials before use.
     pub async fn vault(&self, binding_name: &str) -> Result<Arc<dyn Vault>> {
         self.provider.load_vault(binding_name).await?;
         Ok(Arc::new(RefreshingVault::new(

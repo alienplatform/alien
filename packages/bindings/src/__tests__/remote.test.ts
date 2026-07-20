@@ -5,6 +5,8 @@ import type {
   RawBindingsHandle,
   RawKvHandle,
   RawQueueHandle,
+  RawRemoteBindingsHandle,
+  RawRemoteStorageHandle,
   RawStorageHandle,
   RawVaultHandle,
 } from "../loader.js"
@@ -19,50 +21,62 @@ vi.mock("../loader.js", async importOriginal => {
 import { Bindings } from "../remote.js"
 
 function fakeRemoteAddon() {
-  const head = vi.fn<RawStorageHandle["head"]>(async () => {
+  const head = vi.fn<RawRemoteStorageHandle["head"]>(async () => {
     throw new Error("unused")
   })
-  const storage: RawStorageHandle = {
+  const storage: RawRemoteStorageHandle = {
     get: async path => Buffer.from(path),
     put: async () => {},
     delete: async () => {},
     list: async () => [],
     head,
+  }
+  const resolveStorage = vi.fn<(name: string) => Promise<RawRemoteStorageHandle>>(
+    async () => storage,
+  )
+  const localStorage: RawStorageHandle = {
+    ...storage,
     copy: async () => {},
     signedUrl: async () => ({ url: "https://example.invalid", method: "GET", headers: {} }),
   }
-  const resolveStorage = vi.fn<(name: string) => Promise<RawStorageHandle>>(async () => storage)
 
   class FakeBindingsHandle implements RawBindingsHandle {
-    static forRemoteDeployment: (
-      deploymentId: string,
-      token: string,
-      apiBaseUrl?: string,
-    ) => Promise<RawBindingsHandle>
-
-    storage = resolveStorage
+    async storage(): Promise<RawStorageHandle> {
+      return localStorage
+    }
 
     async kv(): Promise<RawKvHandle> {
-      throw new Error("remote bindings do not expose kv")
+      throw new Error("unused")
     }
 
     async queue(): Promise<RawQueueHandle> {
-      throw new Error("remote bindings do not expose queue")
+      throw new Error("unused")
     }
 
     async vault(): Promise<RawVaultHandle> {
-      throw new Error("remote bindings do not expose vault")
+      throw new Error("unused")
     }
   }
 
+  class FakeRemoteBindingsHandle implements RawRemoteBindingsHandle {
+    static forDeployment: (
+      deploymentId: string,
+      token: string,
+      apiBaseUrl?: string,
+    ) => Promise<RawRemoteBindingsHandle>
+
+    storage = resolveStorage
+  }
+
   const forRemoteDeployment = vi.fn<
-    (deploymentId: string, token: string, apiBaseUrl?: string) => Promise<RawBindingsHandle>
-  >(async () => new FakeBindingsHandle())
-  FakeBindingsHandle.forRemoteDeployment = forRemoteDeployment
+    (deploymentId: string, token: string, apiBaseUrl?: string) => Promise<RawRemoteBindingsHandle>
+  >(async () => new FakeRemoteBindingsHandle())
+  FakeRemoteBindingsHandle.forDeployment = forRemoteDeployment
 
   return {
     addon: {
       BindingsHandle: FakeBindingsHandle,
+      RemoteBindingsHandle: FakeRemoteBindingsHandle,
       version: () => "test",
     },
     forRemoteDeployment,

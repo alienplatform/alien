@@ -181,6 +181,7 @@ dependencies = [
  "alien-error",
  "alien-gcp-clients",
  "alien-k8s-clients",
+ "alien-manager-api",
  "alien-platform-api",
  "async-trait",
  "axum 0.8.9",
@@ -775,6 +776,7 @@ name = "alien-manager"
 version = "1.14.1"
 dependencies = [
  "aegis",
+ "alien-aws-clients",
  "alien-azure-clients",
  "alien-bindings",
  "alien-client-config",

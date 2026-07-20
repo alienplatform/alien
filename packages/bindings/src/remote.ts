@@ -25,7 +25,7 @@ export class Bindings {
   static async forRemoteDeployment(options: RemoteDeploymentBindingsOptions): Promise<Bindings> {
     try {
       const addon = loadAddon()
-      const bindings = await addon.BindingsHandle.forRemoteDeployment(
+      const bindings = await addon.RemoteBindingsHandle.forDeployment(
         options.deploymentId,
         options.token,
         options.apiBaseUrl,

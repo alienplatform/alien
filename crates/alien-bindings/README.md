@@ -29,9 +29,9 @@ With the `platform-sdk` feature, trusted backend code can open the hosted
 remote Storage surface through the deployment's assigned manager:
 
 ```rust,no_run
-use alien_bindings::Bindings;
+use alien_bindings::RemoteBindings;
 
-let bindings = Bindings::for_remote_deployment(
+let bindings = RemoteBindings::for_deployment(
     "dep_...",
     &std::env::var("ALIEN_API_TOKEN")?,
     None,
@@ -47,9 +47,8 @@ identity exact object read, write, list, delete, and multipart permissions on
 the selected bucket or container; it does not create a separate identity per
 resource.
 
-This replaces the former `BindingsProvider::for_remote_deployment` constructor
-and unscoped `/v1/resolve-credentials` flow. Callers must use
-`Bindings::for_remote_deployment`, whose Storage handles refresh credentials and
+This replaces the former unscoped `/v1/resolve-credentials` flow. The dedicated
+`RemoteBindings` type exposes only Storage; its handles refresh credentials and
 rediscover manager assignment without exposing a non-refreshing provider.
 
 ## Adding New Providers

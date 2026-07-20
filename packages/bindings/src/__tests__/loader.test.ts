@@ -4,10 +4,6 @@ import { assertAddonVersion, platformTriple } from "../loader.js"
 
 function addonReporting(version: string): NativeAddon {
   class BindingsHandle {
-    static async forRemoteDeployment(): Promise<never> {
-      throw new Error("not used by version validation")
-    }
-
     storage(): never {
       throw new Error("not used by version validation")
     }
@@ -22,8 +18,15 @@ function addonReporting(version: string): NativeAddon {
     }
   }
 
+  const RemoteBindingsHandle: NativeAddon["RemoteBindingsHandle"] = {
+    async forDeployment(): Promise<never> {
+      throw new Error("not used by version validation")
+    },
+  }
+
   return {
     BindingsHandle,
+    RemoteBindingsHandle,
     version: () => version,
   }
 }

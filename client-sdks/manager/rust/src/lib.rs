@@ -219,23 +219,15 @@ pub fn convert_sdk_error(err: Error<()>) -> AlienError<GenericError> {
             }
         }
         Error::InvalidResponsePayload(bytes, json_err) => {
-            let raw_body = String::from_utf8_lossy(&bytes);
-            let truncated = if raw_body.len() > 1000 {
-                format!(
-                    "{}...(truncated {} bytes)",
-                    &raw_body[..1000],
-                    raw_body.len() - 1000
-                )
-            } else {
-                raw_body.to_string()
-            };
-
             AlienError {
                 code: "INVALID_RESPONSE_PAYLOAD".to_string(),
                 message: format!("Failed to parse response: {}", json_err),
                 context: Some(serde_json::json!({
                     "parseError": json_err.to_string(),
-                    "responseBody": truncated,
+                    // Manager responses can contain short-lived credentials.
+                    // Preserve enough metadata to diagnose truncation or
+                    // schema drift without copying response bytes into errors.
+                    "responseBodyLength": bytes.len(),
                 })),
                 hint: None,
                 retryable: false,
@@ -413,5 +405,28 @@ mod tests {
             error.context.as_ref().unwrap()["url"],
             "http://127.0.0.1:9/v1/initialize"
         );
+    }
+
+    #[test]
+    fn invalid_success_payload_never_copies_response_credentials_into_errors() {
+        let body = br#"{"accessToken":"sensitive-token","unexpected":true}"#.to_vec();
+        let parse_error = serde_json::from_slice::<serde_json::Value>(b"{")
+            .expect_err("fixture JSON should be invalid");
+        let error =
+            super::convert_sdk_error(Error::InvalidResponsePayload(body.clone(), parse_error));
+        let rendered = format!("{error:?}");
+
+        assert_eq!(error.code, "INVALID_RESPONSE_PAYLOAD");
+        assert_eq!(
+            error.context.as_ref().unwrap()["responseBodyLength"],
+            body.len()
+        );
+        assert!(!rendered.contains("sensitive-token"));
+        assert!(error
+            .context
+            .as_ref()
+            .unwrap()
+            .get("responseBody")
+            .is_none());
     }
 }

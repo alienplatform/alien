@@ -729,17 +729,21 @@ impl ResourcePermissionsHelper {
             }
         }
 
-        // Process management SA permissions that match this resource type
-        Self::collect_gcp_management_bindings(
-            ctx,
-            resource_id,
-            resource_name,
-            resource_type,
-            &generator,
-            &permission_context,
-            all_bindings,
-        )
-        .await?;
+        // Remote-access Frozen Storage must become ready before the management
+        // controller. That controller owns its exact data grant, so the Storage
+        // controller must not wait on the management identity here.
+        if !Self::remote_management_owns_resource_grants(ctx, resource_id, resource_type) {
+            Self::collect_gcp_management_bindings(
+                ctx,
+                resource_id,
+                resource_name,
+                resource_type,
+                &generator,
+                &permission_context,
+                all_bindings,
+            )
+            .await?;
+        }
 
         Ok(())
     }
@@ -1132,7 +1136,9 @@ impl ResourcePermissionsHelper {
             }
         }
 
-        if Self::resource_is_setup_owned(ctx, resource_id) {
+        if Self::resource_is_setup_owned(ctx, resource_id)
+            && !Self::remote_management_owns_resource_grants(ctx, resource_id, resource_type)
+        {
             // Setup-owned resources run while setup credentials are still active.
             // Live resource controllers must not edit the management role after
             // the deployment has moved to provisioning credentials.
@@ -1145,6 +1151,12 @@ impl ResourcePermissionsHelper {
                 &permission_context,
             )
             .await?;
+        } else if Self::remote_management_owns_resource_grants(ctx, resource_id, resource_type) {
+            debug!(
+                resource_id = %resource_id,
+                resource_name = %resource_name,
+                "Skipping Storage-owned management permissions; remote management reconciles the exact grant after Storage is ready"
+            );
         } else if ctx
             .desired_stack
             .management()
@@ -1169,6 +1181,29 @@ impl ResourcePermissionsHelper {
             .resources
             .get(resource_id)
             .is_some_and(|entry| entry.lifecycle == ResourceLifecycle::Frozen)
+    }
+
+    pub(crate) fn remote_management_owns_resource_grants(
+        ctx: &ResourceControllerContext<'_>,
+        resource_id: &str,
+        resource_type: &str,
+    ) -> bool {
+        Self::remote_management_owns_resource_grants_in_stack(
+            ctx.desired_stack,
+            resource_id,
+            resource_type,
+        )
+    }
+
+    fn remote_management_owns_resource_grants_in_stack(
+        stack: &alien_core::Stack,
+        resource_id: &str,
+        resource_type: &str,
+    ) -> bool {
+        resource_type == "storage"
+            && stack.resources.get(resource_id).is_some_and(|entry| {
+                entry.lifecycle == ResourceLifecycle::Frozen && entry.remote_access
+            })
     }
 
     /// Process AWS permissions for a specific profile by attaching inline policies
@@ -1685,6 +1720,44 @@ mod tests {
             &frozen_stack,
             "missing"
         ));
+    }
+
+    #[test]
+    fn remote_management_owns_only_opted_in_frozen_storage_grants() {
+        let remote_frozen_stack = Stack::new("test-stack".to_string())
+            .add_with_remote_access(
+                Storage::new("logs".to_string()).build(),
+                ResourceLifecycle::Frozen,
+            )
+            .build();
+        let non_remote_frozen_stack = Stack::new("test-stack".to_string())
+            .add(
+                Storage::new("logs".to_string()).build(),
+                ResourceLifecycle::Frozen,
+            )
+            .build();
+
+        assert!(
+            ResourcePermissionsHelper::remote_management_owns_resource_grants_in_stack(
+                &remote_frozen_stack,
+                "logs",
+                "storage"
+            )
+        );
+        assert!(
+            !ResourcePermissionsHelper::remote_management_owns_resource_grants_in_stack(
+                &non_remote_frozen_stack,
+                "logs",
+                "storage"
+            )
+        );
+        assert!(
+            !ResourcePermissionsHelper::remote_management_owns_resource_grants_in_stack(
+                &remote_frozen_stack,
+                "logs",
+                "worker"
+            )
+        );
     }
 
     #[test]

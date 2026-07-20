@@ -11614,6 +11614,192 @@
           }
         }
       },
+      "RemoteAwsClientConfig": {
+        "type": "object",
+        "description": "Response-safe AWS client configuration. The public contract deliberately\nhas no static, profile, metadata, or web-identity credential variants.",
+        "required": [
+          "accountId",
+          "region",
+          "credentials"
+        ],
+        "properties": {
+          "accountId": {
+            "type": "string",
+            "description": "AWS account containing the bucket."
+          },
+          "credentials": {
+            "$ref": "#/components/schemas/RemoteAwsCredentials",
+            "description": "Expiring AWS session credentials."
+          },
+          "region": {
+            "type": "string",
+            "description": "AWS region containing the bucket."
+          }
+        },
+        "additionalProperties": false
+      },
+      "RemoteAwsCredentials": {
+        "oneOf": [
+          {
+            "type": "object",
+            "description": "Temporary AWS session credentials with an authoritative expiry.",
+            "required": [
+              "access_key_id",
+              "secret_access_key",
+              "session_token",
+              "expires_at",
+              "type"
+            ],
+            "properties": {
+              "access_key_id": {
+                "type": "string",
+                "description": "AWS access key id."
+              },
+              "expires_at": {
+                "type": "string",
+                "description": "Provider-reported credential expiry."
+              },
+              "secret_access_key": {
+                "type": "string",
+                "description": "AWS secret access key."
+              },
+              "session_token": {
+                "type": "string",
+                "description": "AWS session token."
+              },
+              "type": {
+                "type": "string",
+                "enum": [
+                  "sessionCredentials"
+                ]
+              }
+            }
+          }
+        ],
+        "description": "The only AWS credential form remote binding resolution can return."
+      },
+      "RemoteAzureClientConfig": {
+        "type": "object",
+        "description": "Response-safe Azure client configuration. It contains one exact\nstorage-audience token and no refreshable identity source.",
+        "required": [
+          "subscriptionId",
+          "tenantId",
+          "credentials"
+        ],
+        "properties": {
+          "credentials": {
+            "$ref": "#/components/schemas/RemoteAzureCredentials",
+            "description": "One token keyed by the exact Azure Storage OAuth scope."
+          },
+          "region": {
+            "type": "string",
+            "description": "Azure region configured for the deployment.",
+            "nullable": true
+          },
+          "subscriptionId": {
+            "type": "string",
+            "description": "Azure subscription containing the storage account."
+          },
+          "tenantId": {
+            "type": "string",
+            "description": "Azure tenant owning the identity."
+          }
+        },
+        "additionalProperties": false
+      },
+      "RemoteAzureCredentials": {
+        "oneOf": [
+          {
+            "type": "object",
+            "description": "Exact scope-to-token map containing only the Azure Storage scope.",
+            "required": [
+              "tokens",
+              "type"
+            ],
+            "properties": {
+              "tokens": {
+                "$ref": "#/components/schemas/RemoteAzureStorageToken",
+                "description": "The one Azure Storage OAuth token."
+              },
+              "type": {
+                "type": "string",
+                "enum": [
+                  "scopedAccessTokens"
+                ]
+              }
+            }
+          }
+        ],
+        "description": "The only Azure credential form remote binding resolution can return."
+      },
+      "RemoteAzureStorageToken": {
+        "type": "object",
+        "description": "Exact Azure Storage OAuth scope-to-token object.",
+        "required": [
+          "https://storage.azure.com/.default"
+        ],
+        "properties": {
+          "https://storage.azure.com/.default": {
+            "type": "string",
+            "description": "Bearer token for `https://storage.azure.com/.default`."
+          }
+        },
+        "additionalProperties": false
+      },
+      "RemoteGcpClientConfig": {
+        "type": "object",
+        "description": "Response-safe GCP client configuration. Refreshable source credentials and\nservice endpoint overrides cannot be represented by this type.",
+        "required": [
+          "projectId",
+          "region",
+          "credentials"
+        ],
+        "properties": {
+          "credentials": {
+            "$ref": "#/components/schemas/RemoteGcpCredentials",
+            "description": "Already-minted OAuth access token."
+          },
+          "projectId": {
+            "type": "string",
+            "description": "GCP project containing the bucket."
+          },
+          "projectNumber": {
+            "type": "string",
+            "description": "Numeric GCP project id, when known.",
+            "nullable": true
+          },
+          "region": {
+            "type": "string",
+            "description": "GCP region configured for the deployment."
+          }
+        },
+        "additionalProperties": false
+      },
+      "RemoteGcpCredentials": {
+        "oneOf": [
+          {
+            "type": "object",
+            "description": "Short-lived OAuth access token. Its expiry is the response `expiresAt`.",
+            "required": [
+              "token",
+              "type"
+            ],
+            "properties": {
+              "token": {
+                "type": "string",
+                "description": "OAuth bearer token."
+              },
+              "type": {
+                "type": "string",
+                "enum": [
+                  "accessToken"
+                ]
+              }
+            }
+          }
+        ],
+        "description": "The only GCP credential form remote binding resolution can return."
+      },
       "RemoteStackManagementHeartbeatData": {
         "oneOf": [
           {
@@ -11715,80 +11901,6 @@
           }
         }
       },
-      "RemoteStorageBinding": {
-        "oneOf": [
-          {
-            "allOf": [
-              {
-                "$ref": "#/components/schemas/S3StorageBinding",
-                "description": "AWS S3."
-              },
-              {
-                "type": "object",
-                "required": [
-                  "service"
-                ],
-                "properties": {
-                  "service": {
-                    "type": "string",
-                    "enum": [
-                      "s3"
-                    ]
-                  }
-                }
-              }
-            ],
-            "description": "AWS S3."
-          },
-          {
-            "allOf": [
-              {
-                "$ref": "#/components/schemas/BlobStorageBinding",
-                "description": "Azure Blob Storage."
-              },
-              {
-                "type": "object",
-                "required": [
-                  "service"
-                ],
-                "properties": {
-                  "service": {
-                    "type": "string",
-                    "enum": [
-                      "blob"
-                    ]
-                  }
-                }
-              }
-            ],
-            "description": "Azure Blob Storage."
-          },
-          {
-            "allOf": [
-              {
-                "$ref": "#/components/schemas/GcsStorageBinding",
-                "description": "Google Cloud Storage."
-              },
-              {
-                "type": "object",
-                "required": [
-                  "service"
-                ],
-                "properties": {
-                  "service": {
-                    "type": "string",
-                    "enum": [
-                      "gcs"
-                    ]
-                  }
-                }
-              }
-            ],
-            "description": "Google Cloud Storage."
-          }
-        ],
-        "description": "Storage binding variants supported by the first hosted remote-bindings release."
-      },
       "ResolveBindingRequest": {
         "type": "object",
         "description": "Request body for `POST /v1/bindings/resolve`.",
@@ -11809,27 +11921,90 @@
         "additionalProperties": false
       },
       "ResolveBindingResponse": {
-        "type": "object",
-        "description": "Response containing one approved remote binding and short-lived credentials.",
-        "required": [
-          "binding",
-          "clientConfig",
-          "expiresAt"
-        ],
-        "properties": {
-          "binding": {
-            "$ref": "#/components/schemas/RemoteStorageBinding",
-            "description": "Server-selected storage binding configuration."
+        "oneOf": [
+          {
+            "type": "object",
+            "description": "AWS S3 and an AWS session.",
+            "required": [
+              "binding",
+              "clientConfig",
+              "expiresAt",
+              "service"
+            ],
+            "properties": {
+              "binding": {
+                "$ref": "#/components/schemas/S3StorageBinding"
+              },
+              "clientConfig": {
+                "$ref": "#/components/schemas/RemoteAwsClientConfig"
+              },
+              "expiresAt": {
+                "type": "string"
+              },
+              "service": {
+                "type": "string",
+                "enum": [
+                  "s3"
+                ]
+              }
+            }
           },
-          "clientConfig": {
-            "$ref": "#/components/schemas/ClientConfig",
-            "description": "Materialized credentials safe to hand to the caller."
+          {
+            "type": "object",
+            "description": "Azure Blob Storage and an exact storage-audience token.",
+            "required": [
+              "binding",
+              "clientConfig",
+              "expiresAt",
+              "service"
+            ],
+            "properties": {
+              "binding": {
+                "$ref": "#/components/schemas/BlobStorageBinding"
+              },
+              "clientConfig": {
+                "$ref": "#/components/schemas/RemoteAzureClientConfig"
+              },
+              "expiresAt": {
+                "type": "string"
+              },
+              "service": {
+                "type": "string",
+                "enum": [
+                  "blob"
+                ]
+              }
+            }
           },
-          "expiresAt": {
-            "type": "string",
-            "description": "Server refresh hint for the returned credentials."
+          {
+            "type": "object",
+            "description": "Google Cloud Storage and a minted access token.",
+            "required": [
+              "binding",
+              "clientConfig",
+              "expiresAt",
+              "service"
+            ],
+            "properties": {
+              "binding": {
+                "$ref": "#/components/schemas/GcsStorageBinding"
+              },
+              "clientConfig": {
+                "$ref": "#/components/schemas/RemoteGcpClientConfig"
+              },
+              "expiresAt": {
+                "type": "string"
+              },
+              "service": {
+                "type": "string",
+                "enum": [
+                  "gcs"
+                ]
+              }
+            }
           }
-        }
+        ],
+        "description": "One approved remote Storage binding paired with credentials for the same\nprovider. The discriminant makes cross-provider combinations impossible."
       },
       "ResourceEntry": {
         "type": "object",

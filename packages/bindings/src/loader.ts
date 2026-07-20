@@ -82,6 +82,15 @@ export interface RawStorageHandle {
   signedUrl(method: string, path: string, expiresInSecs: number): Promise<RawPresignedRequest>
 }
 
+/** Raw napi remote Storage v0 handle. */
+export interface RawRemoteStorageHandle {
+  get(path: string): Promise<Buffer>
+  put(path: string, data: Buffer): Promise<void>
+  delete(path: string): Promise<void>
+  list(prefix?: string | null): Promise<RawObjectMeta[]>
+  head(path: string): Promise<RawObjectMeta>
+}
+
 /** Raw napi key-value handle. */
 export interface RawKvHandle {
   get(key: string): Promise<Buffer | null>
@@ -122,19 +131,29 @@ export interface RawBindingsHandle {
   vault(name: string): Promise<RawVaultHandle>
 }
 
-/** Native bindings class, including the remote deployment factory. */
+/** Raw napi remote bindings entry point. Storage is the entire v0 surface. */
+export interface RawRemoteBindingsHandle {
+  storage(name: string): Promise<RawRemoteStorageHandle>
+}
+
+/** Native environment-backed bindings class. */
 export interface RawBindingsHandleConstructor {
   new (): RawBindingsHandle
-  forRemoteDeployment(
+}
+
+/** Native remote bindings class. */
+export interface RawRemoteBindingsHandleConstructor {
+  forDeployment(
     deploymentId: string,
     token: string,
     apiBaseUrl?: string,
-  ): Promise<RawBindingsHandle>
+  ): Promise<RawRemoteBindingsHandle>
 }
 
 /** The complete napi addon module surface consumed by the wrapper. */
 export interface NativeAddon {
   BindingsHandle: RawBindingsHandleConstructor
+  RemoteBindingsHandle: RawRemoteBindingsHandleConstructor
   version(): string
 }
 

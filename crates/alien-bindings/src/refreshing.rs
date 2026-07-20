@@ -30,12 +30,34 @@ use url::Url;
 
 use crate::error::{ErrorData, Result};
 use crate::presigned::PresignedRequest;
+#[cfg(feature = "platform-sdk")]
+use crate::remote::RemoteStorage;
 use crate::traits::{
     Binding, BindingsProviderApi, Kv, MessagePayload, PutOptions as KvPutOptions, Queue,
     QueueMessage, ScanResult, Storage, Vault,
 };
 
 const OBJECT_STORE_NAME: &str = "Alien binding";
+
+/// The smallest provider surface needed by a refreshable Storage handle.
+///
+/// Environment-backed providers implement the full bindings API and receive
+/// this implementation automatically. Remote bindings implement only this
+/// trait, so unsupported binding kinds cannot leak into their public surface.
+#[async_trait]
+pub(super) trait StorageProviderApi: Send + Sync + fmt::Debug {
+    async fn load_storage(&self, binding_name: &str) -> Result<Arc<dyn Storage>>;
+}
+
+#[async_trait]
+impl<T> StorageProviderApi for T
+where
+    T: BindingsProviderApi + Send + Sync + fmt::Debug,
+{
+    async fn load_storage(&self, binding_name: &str) -> Result<Arc<dyn Storage>> {
+        BindingsProviderApi::load_storage(self, binding_name).await
+    }
+}
 
 #[derive(Debug, Clone)]
 struct Resolver {
@@ -49,10 +71,6 @@ impl Resolver {
             provider,
             binding_name,
         }
-    }
-
-    async fn storage(&self) -> Result<Arc<dyn Storage>> {
-        self.provider.load_storage(&self.binding_name).await
     }
 
     async fn kv(&self) -> Result<Arc<dyn Kv>> {
@@ -78,7 +96,8 @@ fn object_store_error(source: AlienError<ErrorData>) -> object_store::Error {
 /// Storage handle that resolves a fresh-enough provider for every operation.
 #[derive(Debug, Clone)]
 pub(super) struct RefreshingStorage {
-    resolver: Resolver,
+    provider: Arc<dyn StorageProviderApi>,
+    binding_name: String,
     /// Storage topology does not change when credentials rotate. Capture it
     /// from the initially validated handle for the trait's synchronous calls,
     /// without retaining that handle's eventually stale credential client.
@@ -88,27 +107,31 @@ pub(super) struct RefreshingStorage {
 
 impl RefreshingStorage {
     pub(super) fn new(
-        provider: Arc<dyn BindingsProviderApi>,
+        provider: Arc<dyn StorageProviderApi>,
         binding_name: String,
         initial: Arc<dyn Storage>,
     ) -> Self {
         let base_dir = initial.get_base_dir();
         let url = initial.get_url();
         Self {
-            resolver: Resolver::new(provider, binding_name),
+            provider,
+            binding_name,
             base_dir,
             url,
         }
     }
 
     async fn current(&self) -> object_store::Result<Arc<dyn Storage>> {
-        self.resolver.storage().await.map_err(object_store_error)
+        self.provider
+            .load_storage(&self.binding_name)
+            .await
+            .map_err(object_store_error)
     }
 }
 
 impl fmt::Display for RefreshingStorage {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "Alien storage binding '{}'", self.resolver.binding_name)
+        write!(f, "Alien storage binding '{}'", self.binding_name)
     }
 }
 
@@ -125,16 +148,16 @@ impl Storage for RefreshingStorage {
     }
 
     async fn presigned_put(&self, path: &Path, expires_in: Duration) -> Result<PresignedRequest> {
-        self.resolver
-            .storage()
+        self.provider
+            .load_storage(&self.binding_name)
             .await?
             .presigned_put(path, expires_in)
             .await
     }
 
     async fn presigned_get(&self, path: &Path, expires_in: Duration) -> Result<PresignedRequest> {
-        self.resolver
-            .storage()
+        self.provider
+            .load_storage(&self.binding_name)
             .await?
             .presigned_get(path, expires_in)
             .await
@@ -145,8 +168,8 @@ impl Storage for RefreshingStorage {
         path: &Path,
         expires_in: Duration,
     ) -> Result<PresignedRequest> {
-        self.resolver
-            .storage()
+        self.provider
+            .load_storage(&self.binding_name)
             .await?
             .presigned_delete(path, expires_in)
             .await
@@ -222,10 +245,14 @@ impl ObjectStore for RefreshingStorage {
     }
 
     fn list(&self, prefix: Option<&Path>) -> BoxStream<'static, object_store::Result<ObjectMeta>> {
-        let resolver = self.resolver.clone();
+        let provider = self.provider.clone();
+        let binding_name = self.binding_name.clone();
         let prefix = prefix.cloned();
         stream::once(async move {
-            let storage = resolver.storage().await.map_err(object_store_error)?;
+            let storage = provider
+                .load_storage(&binding_name)
+                .await
+                .map_err(object_store_error)?;
             Ok::<BoxStream<'static, object_store::Result<ObjectMeta>>, object_store::Error>(
                 storage.list(prefix.as_ref()),
             )
@@ -239,11 +266,15 @@ impl ObjectStore for RefreshingStorage {
         prefix: Option<&Path>,
         offset: &Path,
     ) -> BoxStream<'static, object_store::Result<ObjectMeta>> {
-        let resolver = self.resolver.clone();
+        let provider = self.provider.clone();
+        let binding_name = self.binding_name.clone();
         let prefix = prefix.cloned();
         let offset = offset.clone();
         stream::once(async move {
-            let storage = resolver.storage().await.map_err(object_store_error)?;
+            let storage = provider
+                .load_storage(&binding_name)
+                .await
+                .map_err(object_store_error)?;
             Ok::<BoxStream<'static, object_store::Result<ObjectMeta>>, object_store::Error>(
                 storage.list_with_offset(prefix.as_ref(), &offset),
             )
@@ -270,6 +301,30 @@ impl ObjectStore for RefreshingStorage {
 
     async fn rename_if_not_exists(&self, from: &Path, to: &Path) -> object_store::Result<()> {
         self.current().await?.rename_if_not_exists(from, to).await
+    }
+}
+
+#[async_trait]
+#[cfg(feature = "platform-sdk")]
+impl RemoteStorage for RefreshingStorage {
+    async fn get(&self, path: &Path) -> object_store::Result<GetResult> {
+        ObjectStore::get(self, path).await
+    }
+
+    async fn put(&self, path: &Path, payload: PutPayload) -> object_store::Result<PutResult> {
+        ObjectStore::put(self, path, payload).await
+    }
+
+    async fn head(&self, path: &Path) -> object_store::Result<ObjectMeta> {
+        ObjectStore::head(self, path).await
+    }
+
+    async fn delete(&self, path: &Path) -> object_store::Result<()> {
+        ObjectStore::delete(self, path).await
+    }
+
+    fn list(&self, prefix: Option<&Path>) -> BoxStream<'static, object_store::Result<ObjectMeta>> {
+        ObjectStore::list(self, prefix)
     }
 }
 

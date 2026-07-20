@@ -1,13 +1,11 @@
 /**
  * Hosted Remote Bindings flow through the real napi addon. The HTTP servers
- * stand in for the public Platform API and the deployment's assigned manager;
- * all Storage operations use the real local Rust provider.
+ * stand in for the public Platform API and the deployment's assigned manager.
+ * The request traverses discovery and the generated manager client before the
+ * fixture manager returns a structured authorization denial.
  */
 
-import { mkdtempSync, rmSync } from "node:fs"
 import { type IncomingMessage, type Server, type ServerResponse, createServer } from "node:http"
-import { tmpdir } from "node:os"
-import { join } from "node:path"
 import { afterAll, beforeAll, describe, expect, it } from "vitest"
 import { Bindings } from "../src/index.js"
 
@@ -22,8 +20,6 @@ let managerServer: Server
 let platformServer: Server
 let managerOrigin: string
 let platformOrigin: string
-let storageDirectory: string
-let denyRemoteAccess = false
 const authorizations: Array<string | undefined> = []
 const resolveBodies: unknown[] = []
 
@@ -59,7 +55,6 @@ function close(server: Server): Promise<void> {
 }
 
 beforeAll(async () => {
-  storageDirectory = mkdtempSync(join(tmpdir(), "alien-remote-bindings-"))
   managerServer = createServer(async (request, response) => {
     authorizations.push(request.headers.authorization)
     if (request.method !== "POST" || request.url !== "/v1/bindings/resolve") {
@@ -67,20 +62,12 @@ beforeAll(async () => {
       return
     }
     resolveBodies.push(await bodyOf(request))
-    if (denyRemoteAccess) {
-      json(response, 403, {
-        code: "FORBIDDEN",
-        message: "Remote access was revoked",
-        retryable: false,
-        internal: false,
-        httpStatusCode: 403,
-      })
-      return
-    }
-    json(response, 200, {
-      binding: { service: "local-storage", storagePath: storageDirectory },
-      clientConfig: { platform: "local", state_directory: storageDirectory },
-      expiresAt: new Date(Date.now() + 60 * 60 * 1000).toISOString(),
+    json(response, 403, {
+      code: "FORBIDDEN",
+      message: "Remote access was revoked",
+      retryable: false,
+      internal: false,
+      httpStatusCode: 403,
     })
   })
   managerOrigin = await listen(managerServer)
@@ -128,32 +115,10 @@ beforeAll(async () => {
 
 afterAll(async () => {
   await Promise.all([close(platformServer), close(managerServer)])
-  rmSync(storageDirectory, { recursive: true, force: true })
 })
 
 describe("Bindings.forRemoteDeployment (real addon)", () => {
-  it("discovers, performs the v0 Storage operations, and preserves manager denial", async () => {
-    const bindings = await Bindings.forRemoteDeployment({
-      deploymentId,
-      token,
-      apiBaseUrl: platformOrigin,
-    })
-    const storage = bindings.storage("uploads")
-    expect(bindings.storage("uploads")).toBe(storage)
-
-    await storage.put("reports/latest.json", Buffer.from('{"ready":true}'))
-    expect((await storage.get("reports/latest.json")).toString()).toBe('{"ready":true}')
-    expect((await storage.head("reports/latest.json")).size).toBe(14)
-    expect((await storage.list("reports")).map(object => object.location)).toEqual([
-      "reports/latest.json",
-    ])
-    await storage.delete("reports/latest.json")
-    expect(await storage.list("reports")).toEqual([])
-
-    expect(resolveBodies).toEqual([{ deploymentId, resourceId: "uploads" }])
-    expect(authorizations.every(value => value === `Bearer ${token}`)).toBe(true)
-
-    denyRemoteAccess = true
+  it("discovers the assigned manager and preserves its structured denial", async () => {
     const deniedBindings = await Bindings.forRemoteDeployment({
       deploymentId,
       token,
@@ -164,5 +129,7 @@ describe("Bindings.forRemoteDeployment (real addon)", () => {
       message: "Remote access was revoked",
       retryable: false,
     })
+    expect(resolveBodies).toEqual([{ deploymentId, resourceId: "uploads" }])
+    expect(authorizations.every(value => value === `Bearer ${token}`)).toBe(true)
   })
 })

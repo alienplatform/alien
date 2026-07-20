@@ -18,7 +18,7 @@ kubernetes = ["dep:alien-k8s-clients", "dep:k8s-openapi", "alien-client-config/k
 local = ["object_store/fs", "dep:oci-client", "dep:turso", "dep:sha2", "tokio/fs", "tokio/process", "alien-core/local"]
 test = []  # Test platform support - fast mock implementations without real cloud APIs
 openapi = ["dep:utoipa"]
-platform-sdk = ["dep:alien-platform-api"]  # Platform API access (for_remote_deployment)
+platform-sdk = ["dep:alien-platform-api", "dep:alien-manager-api"]  # Platform/manager API access for RemoteBindings
 
 [dependencies]
 async-trait = { workspace = true }
@@ -40,6 +40,7 @@ serde_json = { workspace = true }
 chrono = { workspace = true, features = ["serde"] }
 reqwest = { workspace = true, features = ["rustls-tls-webpki-roots"] }
 alien-platform-api = { workspace = true, optional = true }
+alien-manager-api = { workspace = true, optional = true }
 tracing = { workspace = true }
 regex = { workspace = true }
 uuid = { workspace = true, features = ["v4", "serde"] }

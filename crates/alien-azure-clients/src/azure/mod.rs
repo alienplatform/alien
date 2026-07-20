@@ -1,5 +1,7 @@
 use alien_client_core::{ErrorData, Result};
 use alien_error::{AlienError, Context, IntoAlienError};
+use base64::Engine;
+use chrono::{DateTime, Utc};
 use serde::Deserialize;
 use std::collections::HashMap;
 
@@ -305,11 +307,13 @@ async fn get_impersonated_token(
     }
 }
 
-/// Extract the caller's object ID (oid) from an Azure JWT access token.
-/// Azure access tokens are JWTs — we decode the payload to read the `oid` claim.
-pub fn extract_oid_from_token(token: &str) -> Result<String> {
-    use base64::Engine;
+#[derive(Deserialize)]
+struct AzureAccessTokenClaims {
+    oid: Option<String>,
+    exp: Option<i64>,
+}
 
+fn decode_access_token_claims(token: &str) -> Result<AzureAccessTokenClaims> {
     let parts: Vec<&str> = token.split('.').collect();
     if parts.len() != 3 {
         return Err(AlienError::new(ErrorData::InvalidInput {
@@ -327,17 +331,18 @@ pub fn extract_oid_from_token(token: &str) -> Result<String> {
             })
         })?;
 
-    #[derive(Deserialize)]
-    struct JwtClaims {
-        oid: Option<String>,
-    }
-
-    let claims: JwtClaims = serde_json::from_slice(&payload_bytes).map_err(|e| {
+    serde_json::from_slice(&payload_bytes).map_err(|error| {
         AlienError::new(ErrorData::InvalidInput {
-            message: format!("Failed to parse Azure JWT payload: {}", e),
+            message: format!("Failed to parse Azure JWT payload: {error}"),
             field_name: None,
         })
-    })?;
+    })
+}
+
+/// Extract the caller's object ID (oid) from an Azure JWT access token.
+/// Azure access tokens are JWTs — we decode the payload to read the `oid` claim.
+pub fn extract_oid_from_token(token: &str) -> Result<String> {
+    let claims = decode_access_token_claims(token)?;
 
     claims.oid.ok_or_else(|| {
         AlienError::new(ErrorData::InvalidInput {
@@ -347,38 +352,8 @@ pub fn extract_oid_from_token(token: &str) -> Result<String> {
     })
 }
 
-/// Extract the authoritative expiry from an Azure JWT access token.
-pub fn extract_expiry_from_token(token: &str) -> Result<chrono::DateTime<chrono::Utc>> {
-    use base64::Engine;
-
-    let parts: Vec<&str> = token.split('.').collect();
-    if parts.len() != 3 {
-        return Err(AlienError::new(ErrorData::InvalidInput {
-            message: "Azure access token is not a valid JWT (expected 3 parts)".to_string(),
-            field_name: None,
-        }));
-    }
-
-    let payload_bytes = base64::engine::general_purpose::URL_SAFE_NO_PAD
-        .decode(parts[1])
-        .map_err(|error| {
-            AlienError::new(ErrorData::InvalidInput {
-                message: format!("Failed to base64-decode Azure JWT payload: {error}"),
-                field_name: None,
-            })
-        })?;
-
-    #[derive(Deserialize)]
-    struct JwtClaims {
-        exp: Option<i64>,
-    }
-
-    let claims: JwtClaims = serde_json::from_slice(&payload_bytes).map_err(|error| {
-        AlienError::new(ErrorData::InvalidInput {
-            message: format!("Failed to parse Azure JWT payload: {error}"),
-            field_name: None,
-        })
-    })?;
+fn extract_expiry_from_token(token: &str) -> Result<DateTime<Utc>> {
+    let claims = decode_access_token_claims(token)?;
     let expires_at = claims.exp.ok_or_else(|| {
         AlienError::new(ErrorData::InvalidInput {
             message: "Azure JWT does not contain 'exp' claim".to_string(),
@@ -386,12 +361,27 @@ pub fn extract_expiry_from_token(token: &str) -> Result<chrono::DateTime<chrono:
         })
     })?;
 
-    chrono::DateTime::from_timestamp(expires_at, 0).ok_or_else(|| {
+    DateTime::from_timestamp(expires_at, 0).ok_or_else(|| {
         AlienError::new(ErrorData::InvalidInput {
             message: "Azure JWT contains an invalid 'exp' claim".to_string(),
             field_name: None,
         })
     })
+}
+
+/// A bearer token paired with the authoritative expiry from its JWT claims.
+pub struct ExpiringAccessToken {
+    pub token: String,
+    pub expires_at: DateTime<Utc>,
+}
+
+impl std::fmt::Debug for ExpiringAccessToken {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("ExpiringAccessToken")
+            .field("token", &"[REDACTED]")
+            .field("expires_at", &self.expires_at)
+            .finish()
+    }
 }
 
 /// Trait for Azure platform configuration operations
@@ -413,6 +403,9 @@ pub trait AzureClientConfigExt {
 
     /// Gets a bearer token for Azure API authentication with a specific scope
     async fn get_bearer_token_with_scope(&self, scope: &str) -> Result<String>;
+
+    /// Gets a scoped bearer token together with its authoritative JWT expiry.
+    async fn get_bearer_token_with_expiry(&self, scope: &str) -> Result<ExpiringAccessToken>;
 
     /// Gets the Azure resource management endpoint URL
     fn management_endpoint(&self) -> &str;
@@ -807,6 +800,12 @@ impl AzureClientConfigExt for AzureClientConfig {
                 Ok(token_response.access_token)
             }
         }
+    }
+
+    async fn get_bearer_token_with_expiry(&self, scope: &str) -> Result<ExpiringAccessToken> {
+        let token = self.get_bearer_token_with_scope(scope).await?;
+        let expires_at = extract_expiry_from_token(&token)?;
+        Ok(ExpiringAccessToken { token, expires_at })
     }
 
     /// Gets the Azure resource management endpoint URL
