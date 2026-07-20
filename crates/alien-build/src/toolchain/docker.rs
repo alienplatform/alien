@@ -240,6 +240,10 @@ impl DockerToolchain {
             ))));
         }
 
+        Self::bootstrap_builder(builder_name).await
+    }
+
+    async fn bootstrap_builder(builder_name: &str) -> Result<()> {
         let output = Command::new("docker")
             .args(["buildx", "inspect", "--bootstrap", builder_name])
             .output()
@@ -285,6 +289,7 @@ impl DockerToolchain {
         })?;
 
         if Self::driver_supports_oci_export(driver) {
+            Self::bootstrap_builder(name).await?;
             return Ok(BuildxBuilder {
                 name: name.to_string(),
                 owned: false,
