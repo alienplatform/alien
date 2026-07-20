@@ -1,10 +1,10 @@
 //! App-facing binding handles that keep minted credentials fresh.
 //!
-//! Each operation re-enters [`LazyEnvBindingsProvider`]. Static/native
-//! providers and fresh minted providers remain cheap cache hits; a minted
-//! provider inside its refresh window is rebuilt once by `MintingResolver`'s
-//! existing single-flight path. The resolved provider is held for the full
-//! operation so credential rotation cannot swap it midway through a request.
+//! Each operation re-enters the configured [`BindingsProviderApi`]. Static or
+//! fresh providers remain cheap cache hits; short-lived providers inside their
+//! refresh window are rebuilt through their single-flight path. The resolved
+//! provider is held for the full operation so credential rotation cannot swap
+//! it midway through a request.
 //!
 //! Methods that return an owned stream or multipart-upload session refresh
 //! before creating it. An already-returned opaque stream/session remains bound
@@ -30,7 +30,6 @@ use url::Url;
 
 use crate::error::{ErrorData, Result};
 use crate::presigned::PresignedRequest;
-use crate::provider::LazyEnvBindingsProvider;
 use crate::traits::{
     Binding, BindingsProviderApi, Kv, MessagePayload, PutOptions as KvPutOptions, Queue,
     QueueMessage, ScanResult, Storage, Vault,
@@ -40,12 +39,12 @@ const OBJECT_STORE_NAME: &str = "Alien binding";
 
 #[derive(Debug, Clone)]
 struct Resolver {
-    provider: Arc<LazyEnvBindingsProvider>,
+    provider: Arc<dyn BindingsProviderApi>,
     binding_name: String,
 }
 
 impl Resolver {
-    fn new(provider: Arc<LazyEnvBindingsProvider>, binding_name: String) -> Self {
+    fn new(provider: Arc<dyn BindingsProviderApi>, binding_name: String) -> Self {
         Self {
             provider,
             binding_name,
@@ -89,7 +88,7 @@ pub(super) struct RefreshingStorage {
 
 impl RefreshingStorage {
     pub(super) fn new(
-        provider: Arc<LazyEnvBindingsProvider>,
+        provider: Arc<dyn BindingsProviderApi>,
         binding_name: String,
         initial: Arc<dyn Storage>,
     ) -> Self {
@@ -281,7 +280,7 @@ pub(super) struct RefreshingKv {
 }
 
 impl RefreshingKv {
-    pub(super) fn new(provider: Arc<LazyEnvBindingsProvider>, binding_name: String) -> Self {
+    pub(super) fn new(provider: Arc<dyn BindingsProviderApi>, binding_name: String) -> Self {
         Self {
             resolver: Resolver::new(provider, binding_name),
         }
@@ -329,7 +328,7 @@ pub(super) struct RefreshingQueue {
 }
 
 impl RefreshingQueue {
-    pub(super) fn new(provider: Arc<LazyEnvBindingsProvider>, binding_name: String) -> Self {
+    pub(super) fn new(provider: Arc<dyn BindingsProviderApi>, binding_name: String) -> Self {
         Self {
             resolver: Resolver::new(provider, binding_name),
         }
@@ -380,7 +379,7 @@ pub(super) struct RefreshingVault {
 }
 
 impl RefreshingVault {
-    pub(super) fn new(provider: Arc<LazyEnvBindingsProvider>, binding_name: String) -> Self {
+    pub(super) fn new(provider: Arc<dyn BindingsProviderApi>, binding_name: String) -> Self {
         Self {
             resolver: Resolver::new(provider, binding_name),
         }

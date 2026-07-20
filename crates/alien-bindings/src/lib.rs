@@ -5,6 +5,8 @@ pub use alien_core::{Platform, ENV_ALIEN_DEPLOYMENT_TYPE, ENV_OPERATOR_BASE_PLAT
 pub use bindings::Bindings;
 pub use error::{ErrorData, Result};
 pub use provider::BindingsProvider;
+#[cfg(feature = "platform-sdk")]
+pub use remote::RemoteBindingsProvider;
 pub use traits::{
     ArtifactRegistry, ArtifactRegistryCredentials, ArtifactRegistryPermissions,
     AwsServiceAccountInfo, AzureServiceAccountInfo, Binding, BindingsProviderApi, Build, Container,
@@ -25,6 +27,8 @@ mod credential_source;
 pub mod http_client;
 pub mod provider;
 mod refreshing;
+#[cfg(feature = "platform-sdk")]
+mod remote;
 
 /// Gets the current platform from the ALIEN_DEPLOYMENT_TYPE environment variable.
 /// This is used by the runtime to determine which platform-specific implementations to use.
