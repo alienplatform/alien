@@ -33,8 +33,12 @@ pub struct DockerToolchain {
 }
 
 impl DockerToolchain {
-    const ENTERPRISE_CA_ENV_VARS: [&'static str; 3] =
-        ["SSL_CERT_FILE", "REQUESTS_CA_BUNDLE", "NODE_EXTRA_CA_CERTS"];
+    const ENTERPRISE_CA_ENV_VARS: [&'static str; 4] = [
+        "ALIEN_ENTERPRISE_CA_CERT_PATH",
+        "SSL_CERT_FILE",
+        "REQUESTS_CA_BUNDLE",
+        "NODE_EXTRA_CA_CERTS",
+    ];
 
     /// Check if the source directory contains a Dockerfile
     pub fn has_dockerfile(src_dir: &Path, dockerfile: Option<&String>) -> bool {
@@ -76,7 +80,8 @@ impl DockerToolchain {
     /// Dockerfiles can opt in with
     /// `RUN --mount=type=secret,id=enterprise_ca,required=false ...`. BuildKit
     /// keeps the certificate out of the image layers and build context.
-    /// Language-neutral variables take precedence over runtime-specific ones.
+    /// Alien's explicit override takes precedence, followed by language-neutral
+    /// variables and finally the Node-specific additional certificate variable.
     fn enterprise_ca_path() -> Result<Option<PathBuf>> {
         Self::enterprise_ca_path_from(|name| std::env::var_os(name))
     }
@@ -717,17 +722,39 @@ mod tests {
     }
 
     #[test]
+    fn enterprise_ca_explicit_override_has_highest_precedence() {
+        let temp_dir = tempdir().unwrap();
+        let explicit = temp_dir.path().join("explicit.pem");
+        let ssl = temp_dir.path().join("ssl.pem");
+        std::fs::write(&explicit, "explicit certificate").unwrap();
+        std::fs::write(&ssl, "standard certificate").unwrap();
+        let values = HashMap::from([
+            (
+                "ALIEN_ENTERPRISE_CA_CERT_PATH",
+                explicit.as_os_str().to_owned(),
+            ),
+            ("SSL_CERT_FILE", ssl.as_os_str().to_owned()),
+        ]);
+
+        let selected = DockerToolchain::enterprise_ca_path_from(|name| values.get(name).cloned())
+            .expect("certificate discovery should succeed");
+
+        assert_eq!(selected.as_deref(), Some(explicit.as_path()));
+    }
+
+    #[test]
     fn enterprise_ca_is_optional_but_invalid_configuration_fails() {
         let absent = DockerToolchain::enterprise_ca_path_from(|_| None)
             .expect("absent certificate variables should be accepted");
         assert_eq!(absent, None);
 
         let error = DockerToolchain::enterprise_ca_path_from(|name| {
-            (name == "SSL_CERT_FILE").then(|| OsString::from("/missing/certificate.pem"))
+            (name == "ALIEN_ENTERPRISE_CA_CERT_PATH")
+                .then(|| OsString::from("/missing/certificate.pem"))
         })
         .expect_err("an advertised missing certificate must fail fast");
         let message = error.to_string();
-        assert!(message.contains("SSL_CERT_FILE"));
+        assert!(message.contains("ALIEN_ENTERPRISE_CA_CERT_PATH"));
         assert!(!message.contains("/missing/certificate.pem"));
     }
 
