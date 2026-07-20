@@ -33,6 +33,7 @@ use alien_aws_clients::ec2::{
     TagSpecification,
 };
 use alien_client_core::ErrorData as CloudClientErrorData;
+use alien_core::aws::AwsFailureDomainSubnets;
 use alien_core::{
     standard_resource_tags, AwsVpcNetworkHeartbeatData, HeartbeatBackend, Network,
     NetworkHeartbeatData, NetworkHeartbeatStatus, NetworkOutputs, NetworkSettings, ObservedHealth,
@@ -42,7 +43,7 @@ use alien_core::{
 use alien_error::{AlienError, Context, ContextError};
 use alien_macros::controller;
 use chrono::Utc;
-use std::collections::HashSet;
+use std::collections::{BTreeMap, HashSet};
 use std::fmt::Debug;
 use std::time::Duration;
 use tracing::{debug, info, warn};
@@ -349,6 +350,9 @@ pub struct AwsNetworkController {
 
     // Metadata
     pub(crate) availability_zones: Vec<String>,
+    /// Exact subnet membership keyed by real availability zone.
+    #[serde(default)]
+    pub subnets_by_failure_domain: BTreeMap<String, AwsFailureDomainSubnets>,
     pub is_byo_vpc: bool,
 }
 
@@ -2393,6 +2397,7 @@ impl AwsNetworkController {
             availability_zones: (0..az_count)
                 .map(|i| format!("us-east-1{}", (b'a' + i as u8) as char))
                 .collect(),
+            subnets_by_failure_domain: BTreeMap::new(),
             is_byo_vpc: false,
             _internal_stay_count: None,
         }
@@ -2430,6 +2435,7 @@ impl AwsNetworkController {
             availability_zones: (0..private_subnet_ids.len())
                 .map(|i| format!("az-{}", i))
                 .collect(),
+            subnets_by_failure_domain: BTreeMap::new(),
             is_byo_vpc: true,
             _internal_stay_count: None,
         }

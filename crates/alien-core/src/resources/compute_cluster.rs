@@ -15,6 +15,7 @@ use alien_error::AlienError;
 use bon::Builder;
 use serde::{Deserialize, Serialize};
 use std::any::Any;
+use std::collections::BTreeMap;
 use std::fmt::Debug;
 
 /// GPU specification for a capacity group.
@@ -224,6 +225,18 @@ pub struct ComputeCluster {
     /// Each group becomes a separate ASG/MIG/VMSS.
     #[builder(field)]
     pub capacity_groups: Vec<CapacityGroup>,
+
+    /// Concrete provider failure domains selected during setup, keyed by capacity group.
+    /// Empty preserves the legacy aggregate-fleet behavior for existing deployments.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    #[builder(default)]
+    pub selected_failure_domains: BTreeMap<String, Vec<String>>,
+
+    /// Requested failure-domain spread keyed by capacity group.
+    /// Empty preserves legacy aggregate placement.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    #[builder(default)]
+    pub failure_domain_spread: BTreeMap<String, u8>,
 
     /// Container CIDR block for internal container networking.
     /// Auto-generated as "10.244.0.0/16" if not specified.
