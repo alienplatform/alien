@@ -5,7 +5,7 @@
 //! stack and does not require database access.
 
 use crate::{
-    instance_catalog::{self, WorkloadRequirements},
+    instance_catalog::{self, Architecture, WorkloadRequirements},
     CapacityGroup, CapacityGroupScalePolicy, ComputeChoiceRange, ComputePoolSelection, Container,
     Daemon, ErrorData, FailureDomainSelection, GpuSpec, MachineProfile, Platform, ResourceSpec,
     Stack,
@@ -278,10 +278,15 @@ pub fn validate_compute_pool_selection(
         errors.push(format!("Pool '{pool_id}' {message}"));
     }
     if matches!(platform, Platform::Aws | Platform::Gcp | Platform::Azure) {
+        let resolved_architecture = instance_catalog::select_instance_type(platform, requirements)
+            .ok()
+            .and_then(|selection| selection.profile.architecture);
         match selection.machine() {
             Some(machine) => match instance_catalog::find_instance_type(platform, machine) {
                 Some(spec) => {
-                    if !instance_satisfies(spec, requirements) {
+                    if resolved_architecture.is_none_or(|architecture| {
+                        !instance_satisfies(spec, requirements, architecture)
+                    }) {
                         errors.push(format!(
                             "{} machine '{}' does not satisfy pool '{}' requirements",
                             platform, machine, pool_id
@@ -318,18 +323,22 @@ fn machine_options(
     if !matches!(platform, Platform::Aws | Platform::Gcp | Platform::Azure) {
         return Ok(Vec::new());
     }
-    let recommended = instance_catalog::select_instance_type(platform, requirements)
-        .map_err(|message| {
+    let recommended =
+        instance_catalog::select_instance_type(platform, requirements).map_err(|message| {
             AlienError::new(ErrorData::GenericError {
                 message: format!("Failed to select {platform} machine: {message}"),
             })
-        })?
-        .instance_type
-        .to_string();
+        })?;
+    let resolved_architecture = recommended.profile.architecture.ok_or_else(|| {
+        AlienError::new(ErrorData::GenericError {
+            message: format!("Selected {platform} machine has no CPU architecture"),
+        })
+    })?;
+    let recommended = recommended.instance_type.to_string();
 
     let mut options: Vec<ComputeMachineOption> = instance_catalog::catalog_for_platform(platform)
         .into_iter()
-        .filter(|spec| instance_satisfies(spec, requirements))
+        .filter(|spec| instance_satisfies(spec, requirements, resolved_architecture))
         .map(|spec| ComputeMachineOption {
             machine: spec.name.to_string(),
             profile: spec.to_machine_profile(),
@@ -343,12 +352,9 @@ fn machine_options(
 fn instance_satisfies(
     spec: &instance_catalog::InstanceTypeSpec,
     requirements: &WorkloadRequirements,
+    resolved_architecture: Architecture,
 ) -> bool {
-    if spec.architecture
-        != requirements
-            .architecture
-            .unwrap_or(instance_catalog::Architecture::X86_64)
-    {
+    if spec.architecture != resolved_architecture {
         return false;
     }
     if requirements.nested_virt && !spec.is_nested_virt_capable() {
@@ -746,6 +752,23 @@ mod tests {
     }
 
     #[test]
+    fn cloud_plan_only_offers_machines_matching_the_default_image_target() {
+        let stack = stack_with_container();
+
+        for platform in [Platform::Aws, Platform::Gcp, Platform::Azure] {
+            let plan = plan_compute(&stack, platform, None).expect("plan should build");
+            let pool = plan.pools.first().expect("general pool should exist");
+            let expected = instance_catalog::default_architecture(platform)
+                .expect("managed cloud should have a default architecture");
+
+            assert!(pool.machines.iter().all(|machine| {
+                instance_catalog::find_instance_type(platform, &machine.machine)
+                    .is_some_and(|spec| spec.architecture == expected)
+            }));
+        }
+    }
+
+    #[test]
     fn selected_machine_is_preserved_as_static_deployment_choice() {
         let stack = stack_with_container();
         let settings = ComputeSettings {
@@ -753,7 +776,7 @@ mod tests {
                 "general".to_string(),
                 ComputePoolSelection::Fixed {
                     machines: 1,
-                    machine: Some("m7i.xlarge".to_string()),
+                    machine: Some("m7g.xlarge".to_string()),
                     failure_domains: None,
                 },
             )]
@@ -764,7 +787,7 @@ mod tests {
         let plan = plan_compute(&stack, Platform::Aws, Some(&settings)).expect("plan should build");
 
         let pool = plan.pools.first().expect("general pool should exist");
-        assert_eq!(pool.selected.machine(), Some("m7i.xlarge"));
+        assert_eq!(pool.selected.machine(), Some("m7g.xlarge"));
         assert!(pool.errors.is_empty());
     }
 
@@ -779,7 +802,7 @@ mod tests {
                     cpu: "4".to_string(),
                     memory_bytes: 16 * 1024 * 1024 * 1024,
                     ephemeral_storage_bytes: 20 * 1024 * 1024 * 1024,
-                    architecture: None,
+                    architecture: Some(Architecture::X86_64),
                     gpu: None,
                 }),
                 min_size: 2,

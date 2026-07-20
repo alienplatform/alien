@@ -3,7 +3,7 @@ use crate::error::{ErrorData, Result};
 use crate::get_current_dir;
 use crate::output::print_json;
 use crate::ui::{accent, command, contextual_heading, dim_label, success_line};
-use alien_build::plan::{plan_runner_groups, stack_targets_native_host_binaries};
+use alien_build::plan::{plan_runner_groups_for_stack, resolve_targets_for_stack_platform};
 use alien_build::settings::{BuildSettings, PlatformBuildSettings};
 use alien_core::events::AlienEvent;
 use alien_core::{BinaryTarget, Platform};
@@ -184,7 +184,8 @@ async fn plan_command(args: &BuildPlanArgs) -> Result<()> {
         Some(platforms) => platforms.to_vec(),
         None => Platform::DEPLOYABLE.to_vec(),
     };
-    let groups = plan_runner_groups(&supported, stack_targets_native_host_binaries(&stack));
+    let groups =
+        plan_runner_groups_for_stack(&supported, &stack).context(ErrorData::BuildFailed)?;
 
     if args.json {
         print_json(&groups)?;
@@ -338,7 +339,10 @@ pub async fn build_task(args: &BuildArgs) -> Result<Vec<BuildOutput>> {
             settings: BuildSettings {
                 output_directory: output_dir.clone(),
                 platform: target_platform,
-                targets: targets.clone(),
+                targets: Some(
+                    resolve_targets_for_stack_platform(&stack, parsed_platform, targets.as_deref())
+                        .context(ErrorData::BuildFailed)?,
+                ),
                 cache_url: args.cache_url.clone(),
                 override_base_image: args.override_base_image.clone(),
                 debug_mode: false,
