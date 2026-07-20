@@ -38,6 +38,15 @@ fn render(stack: &Stack, description: &str) -> CfTemplate {
 const QUEUE_CONDITION: &str = "InputQueueEnabledIsTrue";
 const VAULT_CONDITION: &str = "InputVaultEnabledIsTrue";
 
+/// A vault id a customer could actually gate. `secrets` is the reserved
+/// deployment secrets vault, auto-wired to workers after validation, and the
+/// preflight refuses to gate it.
+const VAULT_ID: &str = "app-tokens";
+
+/// The Parameter Store namespace the vault's grants are written against, exactly
+/// as it appears inside the rendered `Fn::Sub`.
+const VAULT_NAMESPACE: &str = "${AWS::StackName}-app-tokens-";
+
 fn gate_inputs() -> Vec<StackInputDefinition> {
     vec![
         gate_input("queueEnabled", "queue", "Whether to create the queue."),
@@ -54,7 +63,7 @@ fn base() -> StackBuilder {
         .permission(
             "execution",
             PermissionProfile::new()
-                .resource("secrets", ["vault/data-read"])
+                .resource(VAULT_ID, ["vault/data-read"])
                 .resource("jobs", ["queue/data-write"]),
         )
         .add(
@@ -65,7 +74,7 @@ fn base() -> StackBuilder {
 
 fn stack(gated: bool) -> Stack {
     let queue = Queue::new("jobs".to_string()).build();
-    let vault = Vault::new("secrets".to_string()).build();
+    let vault = Vault::new(VAULT_ID.to_string()).build();
     let builder = base();
     if gated {
         builder
@@ -215,7 +224,7 @@ fn a_gated_vault_gates_the_iam_policies_that_are_its_only_resources() {
                 && resource
                     .properties
                     .get("PolicyName")
-                    .map(|name| format!("{name:?}").contains("secrets"))
+                    .map(|name| format!("{name:?}").contains(VAULT_ID))
                     .unwrap_or(false)),
         "no vault policy may survive the gate being off"
     );
@@ -234,7 +243,7 @@ fn declined_resources_leave_no_registration_entry() {
         vec![
             "execution-sa".to_string(),
             "jobs".to_string(),
-            "secrets".to_string()
+            VAULT_ID.to_string()
         ],
         "everything registers when the deployer says yes"
     );
@@ -276,7 +285,7 @@ fn the_outputs_fallback_omits_declined_resources() {
         vec![
             "execution-sa".to_string(),
             "jobs".to_string(),
-            "secrets".to_string()
+            VAULT_ID.to_string()
         ],
         "everything registers when the deployer says yes"
     );
@@ -347,7 +356,7 @@ fn an_ungated_stack_gains_no_conditions() {
         vec![
             "execution-sa".to_string(),
             "jobs".to_string(),
-            "secrets".to_string()
+            VAULT_ID.to_string()
         ],
     );
 }
@@ -365,15 +374,6 @@ fn the_gated_template_snapshot_stays_reviewable() {
 }
 
 // ------------------------------------------- the grant, whoever emitted it
-
-/// A vault id a customer could actually gate. `secrets` — which `stack()` above
-/// still uses — is the reserved deployment secrets vault, auto-wired to workers
-/// after validation, and the preflight refuses to gate it.
-const VAULT_ID: &str = "app-tokens";
-
-/// The Parameter Store namespace the vault's grants are written against, exactly
-/// as it appears inside the rendered `Fn::Sub`.
-const VAULT_NAMESPACE: &str = "${AWS::StackName}-app-tokens-";
 
 /// The vault grant scoped to the resource, which is the shape `.link()` authors.
 /// A `"*"`-scoped grant is deliberately excluded: it lands on the role through

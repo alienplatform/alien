@@ -150,11 +150,11 @@ Resources:
       - Key: resource-type
         Value: queue
     Condition: InputQueueEnabledIsTrue
-  SecretsExecutionSaRoleVaultPermission00:
+  AppTokensExecutionSaRoleVaultPermission00:
     Type: AWS::IAM::Policy
     Properties:
       PolicyName:
-        Fn::Sub: ${AWS::StackName}-secrets-vault-0-0
+        Fn::Sub: ${AWS::StackName}-app-tokens-vault-0-0
       PolicyDocument:
         Version: 2012-10-17
         Statement:
@@ -162,7 +162,7 @@ Resources:
           - ssm:GetParameter
           Effect: Allow
           Resource:
-          - Fn::Sub: arn:${AWS::Partition}:ssm:${AWS::Region}:${AWS::AccountId}:parameter/${AWS::StackName}-secrets-*
+          - Fn::Sub: arn:${AWS::Partition}:ssm:${AWS::Region}:${AWS::AccountId}:parameter/${AWS::StackName}-app-tokens-*
           Sid: VaultDataRead
       Roles:
       - Ref: ExecutionSaRole
@@ -263,7 +263,7 @@ Outputs:
                 - ${entry}
                 - entry:
                     Fn::ToJsonString:
-                      id: secrets
+                      id: app-tokens
                       type: vault
                       importData:
                         accountId:
@@ -271,7 +271,7 @@ Outputs:
                         region:
                           Ref: AWS::Region
                         parameterPrefix:
-                          Fn::Sub: ${AWS::StackName}-secrets
+                          Fn::Sub: ${AWS::StackName}-app-tokens
               - Ref: AWS::NoValue
         - ']'
     Description: Deployment registration resources JSON.
