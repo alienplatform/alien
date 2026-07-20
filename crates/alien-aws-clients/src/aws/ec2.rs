@@ -494,11 +494,14 @@ impl Ec2Client {
             "InvalidVpcState"
             | "InvalidSubnetID.DuplicateSubnet"
             | "InvalidGroup.Duplicate"
-            | "InvalidPermission.Duplicate" => ErrorData::RemoteResourceConflict {
-                message,
-                resource_type: "EC2 Resource".into(),
-                resource_name: resource.into(),
-            },
+            | "InvalidPermission.Duplicate"
+            | "InvalidLaunchTemplateName.AlreadyExistsException" => {
+                ErrorData::RemoteResourceConflict {
+                    message,
+                    resource_type: "EC2 Resource".into(),
+                    resource_name: resource.into(),
+                }
+            }
             "DependencyViolation" | "ResourceInUse" => ErrorData::RemoteResourceConflict {
                 message,
                 resource_type: "EC2 Resource".into(),
@@ -3604,6 +3607,33 @@ mod tests {
             Some("vol-0123456789abcdef0")
         );
         assert_eq!(volumes[0].state.as_deref(), Some("available"));
+    }
+
+    #[test]
+    fn launch_template_already_exists_is_a_typed_resource_conflict() {
+        let response = r#"<?xml version="1.0" encoding="UTF-8"?>
+            <Response><Errors><Error>
+                <Code>InvalidLaunchTemplateName.AlreadyExistsException</Code>
+                <Message>Launch template name already in use.</Message>
+            </Error></Errors><RequestID>request-id</RequestID></Response>"#;
+
+        let error = Ec2Client::map_ec2_error(
+            StatusCode::BAD_REQUEST,
+            response,
+            "CreateLaunchTemplate",
+            "deployment-compute-general-lt",
+            Some("LaunchTemplateName=deployment-compute-general-lt"),
+        );
+
+        assert!(matches!(
+            error,
+            Some(ErrorData::RemoteResourceConflict {
+                resource_type,
+                resource_name,
+                ..
+            }) if resource_type == "EC2 Resource"
+                && resource_name == "deployment-compute-general-lt"
+        ));
     }
 
     /// Setting `nested_virtualization=Some("enabled")` emits the AWS
