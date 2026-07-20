@@ -237,7 +237,7 @@ fn subnet(
         .insert("VpcId".to_string(), CfExpression::ref_(vpc_id));
     resource
         .properties
-        .insert("CidrBlock".to_string(), cidr_block(cidr_index));
+        .insert("CidrBlock".to_string(), cidr_block(vpc_id, cidr_index));
     resource
         .properties
         .insert("AvailabilityZone".to_string(), availability_zone(az_index));
@@ -497,7 +497,7 @@ fn oidc_provider(id: &str, cluster_id: &str) -> CfResource {
     resource
 }
 
-fn cidr_block(index: usize) -> CfExpression {
+fn cidr_block(vpc_id: &str, index: usize) -> CfExpression {
     CfExpression::object([(
         "Fn::Select",
         CfExpression::list([
@@ -505,7 +505,7 @@ fn cidr_block(index: usize) -> CfExpression {
             CfExpression::object([(
                 "Fn::Cidr",
                 CfExpression::list([
-                    CfExpression::ref_(PARAM_VPC_CIDR),
+                    CfExpression::get_att(vpc_id, "CidrBlock"),
                     CfExpression::from(16u8),
                     CfExpression::from(8u8),
                 ]),

@@ -81,8 +81,8 @@ Parameters:
     - use-default
   VpcCidr:
     Type: String
-    Description: Only used with create-new. CIDR for the new VPC.
-    Default: 10.42.0.0/16
+    Description: Only used with create-new. CIDR for the new VPC; leave unset for the generated default.
+    Default: ''
   AvailabilityZones:
     Type: Number
     Description: Only used with create-new. Number of availability zones for the new VPC.

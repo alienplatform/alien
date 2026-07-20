@@ -1,5 +1,6 @@
 ---
 source: crates/alien-cloudformation/tests/generator/aws_full_stack_tests.rs
+assertion_line: 122
 expression: yaml
 ---
 AWSTemplateFormatVersion: 2010-09-09
@@ -93,7 +94,7 @@ Parameters:
     - use-default
   VpcCidr:
     Type: String
-    Description: Only used with create-new. CIDR for the new VPC.
+    Description: Only used with create-new. CIDR for the new VPC; leave unset for the generated default.
     Default: 10.44.0.0/16
   AvailabilityZones:
     Type: Number
@@ -263,7 +264,9 @@ Resources:
         Fn::Select:
         - 0
         - Fn::Cidr:
-          - Ref: VpcCidr
+          - Fn::GetAtt:
+            - DefaultNetworkVpc
+            - CidrBlock
           - 6
           - 8
       MapPublicIpOnLaunch: true
@@ -292,7 +295,9 @@ Resources:
         Fn::Select:
         - 3
         - Fn::Cidr:
-          - Ref: VpcCidr
+          - Fn::GetAtt:
+            - DefaultNetworkVpc
+            - CidrBlock
           - 6
           - 8
       Tags:
@@ -320,7 +325,9 @@ Resources:
         Fn::Select:
         - 1
         - Fn::Cidr:
-          - Ref: VpcCidr
+          - Fn::GetAtt:
+            - DefaultNetworkVpc
+            - CidrBlock
           - 6
           - 8
       MapPublicIpOnLaunch: true
@@ -349,7 +356,9 @@ Resources:
         Fn::Select:
         - 4
         - Fn::Cidr:
-          - Ref: VpcCidr
+          - Fn::GetAtt:
+            - DefaultNetworkVpc
+            - CidrBlock
           - 6
           - 8
       Tags:
@@ -377,7 +386,9 @@ Resources:
         Fn::Select:
         - 2
         - Fn::Cidr:
-          - Ref: VpcCidr
+          - Fn::GetAtt:
+            - DefaultNetworkVpc
+            - CidrBlock
           - 6
           - 8
       MapPublicIpOnLaunch: true
@@ -406,7 +417,9 @@ Resources:
         Fn::Select:
         - 5
         - Fn::Cidr:
-          - Ref: VpcCidr
+          - Fn::GetAtt:
+            - DefaultNetworkVpc
+            - CidrBlock
           - 6
           - 8
       Tags:
