@@ -1,0 +1,288 @@
+name: Publish npm dev packages
+
+on:
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: Build, pack, and smoke-test without publishing
+        required: true
+        default: true
+        type: boolean
+
+permissions:
+  contents: read
+
+concurrency:
+  group: npm-dev-${{ github.sha }}
+  cancel-in-progress: false
+
+jobs:
+  prepare:
+    runs-on: depot-ubuntu-24.04-arm-4
+    timeout-minutes: 30
+    outputs:
+      git_sha: ${{ steps.identity.outputs.git_sha }}
+      short_sha: ${{ steps.identity.outputs.short_sha }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - id: identity
+        name: Record immutable source identity
+        shell: bash
+        run: |
+          set -euo pipefail
+          git_sha="$(git rev-parse HEAD)"
+          test "$git_sha" = "${GITHUB_SHA}"
+          echo "git_sha=$git_sha" >> "$GITHUB_OUTPUT"
+          echo "short_sha=${git_sha:0:12}" >> "$GITHUB_OUTPUT"
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10.11.0
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+
+      - name: Test version and dependency rewriting
+        run: node --test scripts/npm-dev-release.test.mjs
+
+  build-addon:
+    needs: prepare
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: depot-macos-15
+            os: macos
+            target: aarch64-apple-darwin
+            triple: darwin-arm64
+            expect_arch: arm64
+          - runner: depot-macos-15
+            os: macos
+            target: x86_64-apple-darwin
+            triple: darwin-x64
+            expect_arch: x86_64
+          - runner: depot-ubuntu-24.04-16
+            os: linux
+            target: x86_64-unknown-linux-gnu
+            triple: linux-x64-gnu
+            expect_arch: x86-64
+          - runner: depot-ubuntu-24.04-arm-16
+            os: linux
+            target: aarch64-unknown-linux-gnu
+            triple: linux-arm64-gnu
+            expect_arch: aarch64
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 60
+    env:
+      CARGO_INCREMENTAL: "0"
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Rust (linux)
+        if: matrix.os == 'linux'
+        uses: ./.github/actions/setup-rust
+        with:
+          depot-project-id: ${{ vars.DEPOT_PROJECT_ID }}
+          repo-access-token: ${{ secrets.REPO_ACCESS_TOKEN }}
+          install-protoc: "true"
+
+      - uses: dtolnay/rust-toolchain@nightly
+        if: matrix.os == 'macos'
+
+      - name: Configure git credentials for cargo (macos)
+        if: matrix.os == 'macos'
+        run: git config --global url."https://x-access-token:${{ secrets.REPO_ACCESS_TOKEN }}@github.com/".insteadOf "https://github.com/"
+
+      - name: Install protoc (macos)
+        if: matrix.os == 'macos'
+        run: brew install protobuf
+
+      - name: Add cross target
+        if: matrix.target == 'x86_64-apple-darwin'
+        run: rustup target add x86_64-apple-darwin
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10.11.0
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Build addon
+        env:
+          CARGO_NET_GIT_FETCH_WITH_CLI: "true"
+        run: |
+          pnpm --filter @alienplatform/bindings exec napi build \
+            --platform --release --target ${{ matrix.target }} \
+            --cwd "$GITHUB_WORKSPACE/crates/alien-bindings-node"
+          cp "crates/alien-bindings-node/alien-bindings-node.${{ matrix.triple }}.node" \
+            "packages/bindings/npm/${{ matrix.triple }}/alien-bindings-node.${{ matrix.triple }}.node"
+          file "packages/bindings/npm/${{ matrix.triple }}/alien-bindings-node.${{ matrix.triple }}.node" \
+            | grep -q "${{ matrix.expect_arch }}"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: npm-dev-addon-${{ matrix.triple }}
+          retention-days: 1
+          path: packages/bindings/npm/${{ matrix.triple }}/alien-bindings-node.${{ matrix.triple }}.node
+
+  pack-and-publish:
+    needs: [prepare, build-addon]
+    runs-on: depot-ubuntu-24.04-arm-4
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10.11.0
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+          registry-url: https://registry.npmjs.org
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Build JavaScript packages
+        run: pnpm build
+        env:
+          NODE_OPTIONS: --max-old-space-size=8192
+
+      - name: Restore native addons
+        uses: actions/download-artifact@v4
+        with:
+          pattern: npm-dev-addon-*
+          path: addons
+
+      - name: Stage native addons
+        shell: bash
+        run: |
+          set -euo pipefail
+          for triple in darwin-arm64 darwin-x64 linux-x64-gnu linux-arm64-gnu; do
+            cp "addons/npm-dev-addon-${triple}/alien-bindings-node.${triple}.node" \
+              "packages/bindings/npm/${triple}/alien-bindings-node.${triple}.node"
+          done
+
+      - name: Rewrite package graph to immutable dev versions
+        run: |
+          node scripts/npm-dev-release.mjs rewrite "${{ needs.prepare.outputs.git_sha }}" | tee npm-dev-versions.json
+          node packages/bindings/scripts/inject-optional-deps.mjs
+          node scripts/npm-dev-release.mjs validate "${{ needs.prepare.outputs.git_sha }}"
+          {
+            echo '## npm dev package versions'
+            echo '```json'
+            cat npm-dev-versions.json
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Pack every publishable package
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p npm-dev-tarballs npm-dev-pack-results
+          while IFS= read -r package_dir; do
+            safe_name="$(basename "$package_dir")-$(printf '%s' "$package_dir" | sha256sum | cut -c1-8)"
+            (cd "$package_dir" && npm pack --json --pack-destination "$GITHUB_WORKSPACE/npm-dev-tarballs") \
+              > "npm-dev-pack-results/${safe_name}.json"
+          done <<'EOF'
+          packages/core
+          packages/commands
+          packages/bindings
+          packages/sdk
+          packages/testing
+          client-sdks/platform/typescript
+          client-sdks/manager/typescript
+          packages/bindings/npm/darwin-arm64
+          packages/bindings/npm/darwin-x64
+          packages/bindings/npm/linux-x64-gnu
+          packages/bindings/npm/linux-arm64-gnu
+          EOF
+          node scripts/npm-dev-release.mjs digest npm-dev-tarballs/*.tgz | tee npm-dev-digests.json
+          {
+            echo '## npm tarball SHA-256 digests'
+            echo '```json'
+            cat npm-dev-digests.json
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Smoke install packed dependency graph
+        shell: bash
+        run: |
+          set -euo pipefail
+          consumer="$(mktemp -d)"
+          npm init --yes --prefix "$consumer" >/dev/null
+          npm install --prefix "$consumer" "$GITHUB_WORKSPACE"/npm-dev-tarballs/*.tgz
+          cd "$consumer"
+          node --input-type=module <<'EOF'
+          import { Container } from "@alienplatform/core"
+          const resource = new Container("dev-package-smoke").commandsEnabled(true)
+          if (resource.config.commandsEnabled !== true) throw new Error("packed core lacks commandsEnabled")
+          await import("@alienplatform/commands")
+          await import("@alienplatform/sdk")
+          EOF
+
+      - name: Validate npm authentication
+        if: ${{ !inputs.dry_run }}
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+        run: npm whoami
+
+      - name: Publish immutable packages under dev tag
+        if: ${{ !inputs.dry_run }}
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          publish_tarball() {
+            local tarball="$1"
+            local manifest name version local_integrity remote_integrity
+            manifest="$(tar -xOzf "$tarball" package/package.json)"
+            name="$(jq -er '.name' <<< "$manifest")"
+            version="$(jq -er '.version' <<< "$manifest")"
+            local_integrity="sha512-$(openssl dgst -sha512 -binary "$tarball" | openssl base64 -A)"
+            [[ "$version" =~ -dev\.[0-9a-f]{12}$ ]] || { echo "Refusing stable version $name@$version" >&2; exit 1; }
+            remote_integrity="$(npm view "$name@$version" dist.integrity 2>/dev/null || true)"
+            if [ -n "$remote_integrity" ]; then
+              test "$remote_integrity" = "$local_integrity" || {
+                echo "Published $name@$version has different bytes" >&2
+                exit 1
+              }
+              echo "$name@$version already exists with matching integrity"
+            else
+              npm publish "$tarball" --access public --tag dev
+            fi
+          }
+
+          # Native packages and leaf dependencies first; public entry points last.
+          for pattern in \
+            '*bindings-darwin-arm64*' '*bindings-darwin-x64*' \
+            '*bindings-linux-x64-gnu*' '*bindings-linux-arm64-gnu*' \
+            '*core*' '*bindings-[0-9]*' '*commands*' '*sdk*' '*testing*' \
+            '*platform-api*' '*manager-api*'; do
+            mapfile -t matches < <(compgen -G "npm-dev-tarballs/${pattern}.tgz" || true)
+            test "${#matches[@]}" -gt 0 || continue
+            for tarball in "${matches[@]}"; do publish_tarball "$tarball"; done
+          done
+
+      - name: Upload package evidence
+        uses: actions/upload-artifact@v4
+        with:
+          name: npm-dev-packages-${{ needs.prepare.outputs.short_sha }}
+          retention-days: 7
+          path: |
+            npm-dev-versions.json
+            npm-dev-digests.json
+            npm-dev-pack-results
+            npm-dev-tarballs
