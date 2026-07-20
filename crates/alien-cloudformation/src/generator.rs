@@ -1391,7 +1391,7 @@ fn compute_settings_expression(
         };
         if let Some(failure_domains) = selection.failure_domains() {
             fields.push((
-                "failureDomains",
+                "failure_domains",
                 CfExpression::object([
                     (
                         "spread",

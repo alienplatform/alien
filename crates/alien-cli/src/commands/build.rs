@@ -238,7 +238,7 @@ pub async fn build_task(args: &BuildArgs) -> Result<Vec<BuildOutput>> {
         .clone()
         .unwrap_or_else(|| current_dir.join(".alien").display().to_string());
 
-    let targets = args
+    let targets: Option<Vec<BinaryTarget>> = args
         .targets
         .as_ref()
         .map(|targets| targets.iter().map(|target| parse_target(target)).collect())
