@@ -552,6 +552,7 @@ impl DockerToolchain {
         const SMALL_BLOB_BYTES: u64 = 1 << 20;
         let mut index: Option<Value> = None;
         let mut blobs: HashMap<String, Value> = HashMap::new();
+        let mut has_docker_manifest = false;
 
         let archive_file =
             File::open(tarball_path)
@@ -577,6 +578,8 @@ impl DockerToolchain {
 
             if path == "index.json" {
                 index = Some(read_entry_json(&mut entry)?);
+            } else if path == "manifest.json" {
+                has_docker_manifest = true;
             } else if path.starts_with("blobs/") && entry.size() <= SMALL_BLOB_BYTES {
                 // Only descriptors are stored by digest; key small blobs by "sha256:<hex>".
                 if let Some(digest) = blob_path_to_digest(&path) {
@@ -594,23 +597,47 @@ impl DockerToolchain {
         })?;
 
         let chosen = select_image_manifest_descriptor(&index, &blobs, target_arch)?;
-        if index_points_only_at(&index, &chosen) {
+        let new_index = if index_points_only_at(&index, &chosen) {
+            None
+        } else {
+            Some(json!({
+                "schemaVersion": 2,
+                "mediaType": "application/vnd.oci.image.index.v1+json",
+                "manifests": [chosen.clone()],
+            }))
+        };
+        let docker_manifest = if has_docker_manifest {
+            None
+        } else {
+            Some(docker_manifest_for_descriptor(&chosen, &blobs)?)
+        };
+
+        if new_index.is_none() && docker_manifest.is_none() {
             return Ok(());
         }
 
-        let flat_index = json!({
-            "schemaVersion": 2,
-            "mediaType": "application/vnd.oci.image.index.v1+json",
-            "manifests": [chosen],
-        });
-        let flat_index_bytes =
-            serde_json::to_vec(&flat_index)
-                .into_alien_error()
-                .context(docker_read_error(
-                    "Failed to serialize flattened index.json",
-                ))?;
+        let new_index_bytes = new_index
+            .as_ref()
+            .map(serde_json::to_vec)
+            .transpose()
+            .into_alien_error()
+            .context(docker_read_error(
+                "Failed to serialize flattened index.json",
+            ))?;
+        let docker_manifest_bytes = docker_manifest
+            .as_ref()
+            .map(serde_json::to_vec)
+            .transpose()
+            .into_alien_error()
+            .context(docker_read_error(
+                "Failed to serialize Docker manifest.json",
+            ))?;
 
-        rewrite_archive_index_json(tarball_path, &flat_index_bytes)
+        rewrite_archive(
+            tarball_path,
+            new_index_bytes.as_deref(),
+            docker_manifest_bytes.as_deref(),
+        )
     }
 }
 
@@ -721,9 +748,72 @@ fn index_points_only_at(index: &Value, chosen: &Value) -> bool {
         .is_some_and(|m| m.len() == 1 && m[0].get("digest") == chosen.get("digest"))
 }
 
+/// Build the compatibility manifest consumed by `docker load` from the selected OCI image
+/// manifest. The paths continue to reference the same content-addressed blobs, so the archive
+/// stays a valid OCI layout for remote ingestion while also being loadable by a local daemon.
+fn docker_manifest_for_descriptor(
+    descriptor: &Value,
+    blobs: &HashMap<String, Value>,
+) -> Result<Value> {
+    let digest = descriptor
+        .get("digest")
+        .and_then(Value::as_str)
+        .ok_or_else(|| AlienError::new(docker_read_error("OCI image descriptor has no digest")))?;
+    let manifest = blobs.get(digest).ok_or_else(|| {
+        AlienError::new(docker_read_error(
+            "OCI archive is missing the selected image manifest blob",
+        ))
+    })?;
+    let config = manifest
+        .get("config")
+        .and_then(|value| value.get("digest"))
+        .and_then(Value::as_str)
+        .and_then(digest_to_blob_path)
+        .ok_or_else(|| {
+            AlienError::new(docker_read_error(
+                "OCI image manifest has no valid config digest",
+            ))
+        })?;
+    let layers = manifest
+        .get("layers")
+        .and_then(Value::as_array)
+        .ok_or_else(|| AlienError::new(docker_read_error("OCI image manifest has no layers")))?
+        .iter()
+        .map(|layer| {
+            layer
+                .get("digest")
+                .and_then(Value::as_str)
+                .and_then(digest_to_blob_path)
+                .ok_or_else(|| {
+                    AlienError::new(docker_read_error(
+                        "OCI image manifest has an invalid layer digest",
+                    ))
+                })
+        })
+        .collect::<Result<Vec<_>>>()?;
+
+    Ok(json!([{
+        "Config": config,
+        "RepoTags": null,
+        "Layers": layers,
+    }]))
+}
+
+fn digest_to_blob_path(digest: &str) -> Option<String> {
+    let (algorithm, hex) = digest.split_once(':')?;
+    if algorithm != "sha256" || hex.is_empty() {
+        return None;
+    }
+    Some(format!("blobs/{algorithm}/{hex}"))
+}
+
 /// Stream the archive into a sibling temp file, replacing only `index.json`, then swap it
 /// in. Other entries (blobs, oci-layout) are copied verbatim.
-fn rewrite_archive_index_json(tarball_path: &Path, new_index: &[u8]) -> Result<()> {
+fn rewrite_archive(
+    tarball_path: &Path,
+    new_index: Option<&[u8]>,
+    docker_manifest: Option<&[u8]>,
+) -> Result<()> {
     let temp_path = tarball_path.with_extension("tar.normalizing");
 
     {
@@ -751,7 +841,8 @@ fn rewrite_archive_index_json(tarball_path: &Path, new_index: &[u8]) -> Result<(
                 .into_owned();
             let mut header = entry.header().clone();
 
-            if path == Path::new("index.json") {
+            if path == Path::new("index.json") && new_index.is_some() {
+                let new_index = new_index.expect("checked above");
                 header.set_size(new_index.len() as u64);
                 builder
                     .append_data(&mut header, &path, new_index)
@@ -763,6 +854,17 @@ fn rewrite_archive_index_json(tarball_path: &Path, new_index: &[u8]) -> Result<(
                     .into_alien_error()
                     .context(docker_read_error("Failed to copy OCI tarball entry"))?;
             }
+        }
+
+        if let Some(docker_manifest) = docker_manifest {
+            let mut header = tar::Header::new_gnu();
+            header.set_mode(0o644);
+            header.set_size(docker_manifest.len() as u64);
+            header.set_cksum();
+            builder
+                .append_data(&mut header, "manifest.json", docker_manifest)
+                .into_alien_error()
+                .context(docker_read_error("Failed to write Docker manifest.json"))?;
         }
 
         builder
@@ -920,6 +1022,41 @@ CMD ["cat", "hello.txt"]
             metadata.cmd.is_some(),
             "Image should have CMD from Dockerfile"
         );
+
+        // The same artifact is consumed remotely as OCI and locally by `docker load`.
+        // Loading and running it proves the compatibility manifest references the real
+        // config and layers, rather than merely checking for a filename in the archive.
+        let load = Command::new("docker")
+            .args(["load", "-i"])
+            .arg(&tarball_path)
+            .output()
+            .expect("docker load should execute");
+        assert!(
+            load.status.success(),
+            "docker load failed: {}",
+            String::from_utf8_lossy(&load.stderr)
+        );
+        let loaded = String::from_utf8_lossy(&load.stdout)
+            .lines()
+            .find_map(|line| line.strip_prefix("Loaded image ID: "))
+            .expect("docker load should report the untagged image ID")
+            .to_string();
+        let run = Command::new("docker")
+            .args(["run", "--rm", &loaded])
+            .output()
+            .expect("loaded image should run");
+        assert!(
+            run.status.success(),
+            "loaded image failed: {}",
+            String::from_utf8_lossy(&run.stderr)
+        );
+        assert_eq!(
+            String::from_utf8_lossy(&run.stdout).trim(),
+            "Hello from Docker"
+        );
+        let _ = Command::new("docker")
+            .args(["image", "rm", &loaded])
+            .output();
     }
 
     #[tokio::test]
@@ -1116,6 +1253,29 @@ CMD ["true"]
             ]
         });
         assert!(select_image_manifest_descriptor(&index, &HashMap::new(), "ppc64le").is_err());
+    }
+
+    #[test]
+    fn docker_manifest_reuses_selected_oci_config_and_layers() {
+        let descriptor = json!({ "digest": "sha256:image" });
+        let mut blobs = HashMap::new();
+        blobs.insert(
+            "sha256:image".to_string(),
+            json!({
+                "config": { "digest": "sha256:config" },
+                "layers": [
+                    { "digest": "sha256:first" },
+                    { "digest": "sha256:second" }
+                ]
+            }),
+        );
+
+        let manifest = docker_manifest_for_descriptor(&descriptor, &blobs).unwrap();
+        assert_eq!(manifest[0]["Config"], "blobs/sha256/config");
+        assert_eq!(
+            manifest[0]["Layers"],
+            json!(["blobs/sha256/first", "blobs/sha256/second"])
+        );
     }
 
     #[tokio::test]
