@@ -57,11 +57,7 @@ pub struct AwsWebIdentityConfig {
 /// Supported AWS authentication methods
 #[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
-#[serde(
-    rename_all = "camelCase",
-    rename_all_fields = "camelCase",
-    tag = "type"
-)]
+#[serde(rename_all = "camelCase", tag = "type")]
 pub enum AwsCredentials {
     /// Static direct access keys.
     AccessKeys {
