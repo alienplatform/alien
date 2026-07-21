@@ -1,7 +1,7 @@
 //! App-owned pull command receiver for Containers and Daemons.
 //!
 //! A [`Receiver`] leases commands addressed to its own target resource from
-//! the command server over outbound HTTPS (no inbound connections, no gRPC),
+//! the command server over outbound HTTPS (no inbound connections),
 //! dispatches them to in-process handlers, and submits responses through the
 //! envelope's response-handling flow (inline or presigned storage upload).
 //!
@@ -10,8 +10,7 @@
 //! ```no_run
 //! # async fn example() -> alien_commands::error::Result<()> {
 //! let mut receiver = alien_commands::Receiver::from_env()?;
-//! receiver.handle("generate-report", |ctx| async move {
-//!     let params: serde_json::Value = ctx.input_json()?;
+//! receiver.command("generate-report", |params: serde_json::Value, _ctx| async move {
 //!     Ok(serde_json::json!({ "report": params }))
 //! });
 //! receiver.run().await?;
@@ -452,13 +451,37 @@ impl Receiver {
         self
     }
 
-    /// Register a handler for a command name.
+    /// Register a JSON command handler.
     ///
-    /// The handler receives a [`Context`] and returns any serializable
-    /// value, submitted as the command's JSON success response. A returned
-    /// error is submitted as a `HANDLER_ERROR` response. Registering the
-    /// same name twice replaces the previous handler.
-    pub fn handle<F, Fut, T>(&mut self, name: impl Into<String>, handler: F) -> &mut Self
+    /// The command input is deserialized as `P` before the handler runs. The
+    /// handler returns any serializable value, which is submitted as the
+    /// command's JSON success response. Deserialization and handler errors are
+    /// submitted as `HANDLER_ERROR` responses. Registering the same name twice
+    /// replaces the previous handler.
+    pub fn command<P, F, Fut, T>(&mut self, name: impl Into<String>, handler: F) -> &mut Self
+    where
+        P: DeserializeOwned + Send + 'static,
+        F: Fn(P, Context) -> Fut + Send + Sync + 'static,
+        Fut: Future<Output = HandlerResult<T>> + Send + 'static,
+        T: Serialize + 'static,
+    {
+        let handler = Arc::new(handler);
+        self.handle_raw(name, move |context| {
+            let handler = Arc::clone(&handler);
+            async move {
+                let input = context.input_json::<P>()?;
+                handler(input, context).await
+            }
+        })
+    }
+
+    /// Register a raw command handler.
+    ///
+    /// Raw handlers receive the encoded input bytes through [`Context::input`].
+    /// Prefer [`Receiver::command`] for normal JSON commands. The returned
+    /// value is still serialized as JSON. Registering the same name twice
+    /// replaces the previous handler.
+    pub fn handle_raw<F, Fut, T>(&mut self, name: impl Into<String>, handler: F) -> &mut Self
     where
         F: Fn(Context) -> Fut + Send + Sync + 'static,
         Fut: Future<Output = HandlerResult<T>> + Send + 'static,
@@ -1551,10 +1574,11 @@ mod tests {
         let server = tokio::spawn(async move {
             let (mut socket, _) = listener.accept().await.expect("accept params request");
             let mut request = [0_u8; 1024];
-            socket
+            let bytes_read = socket
                 .read(&mut request)
                 .await
                 .expect("read params request");
+            assert!(bytes_read > 0, "params request was empty");
             tokio::time::sleep(Duration::from_millis(500)).await;
             let body = br#"{"fromStorage":true}"#;
             let headers = format!(

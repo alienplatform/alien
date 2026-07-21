@@ -1,5 +1,5 @@
 /**
- * Public types for `@alienplatform/bindings`: the four resource handle
+ * Public types for `@alienplatform/bindings`: the app-facing resource handle
  * interfaces and their operation option/result shapes. These mirror the Rust
  * `alien-bindings` handles; the native (napi) surface is an internal detail.
  */
@@ -142,6 +142,14 @@ export interface Queue {
   nack(receipt: string): Promise<void>
   /** Delete every message in the queue. */
   purge(): Promise<void>
+}
+
+/** Read-only service discovery for a linked container. */
+export interface Container {
+  /** Get the URL reachable from the deployment's private network. */
+  getInternalUrl(): Promise<string>
+  /** Get the public URL when the container is publicly exposed. */
+  getPublicUrl(): Promise<string | null>
 }
 
 /** A resolved vault (secrets) binding. */

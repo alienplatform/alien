@@ -68,6 +68,29 @@ export interface WorkerCommandContext {
   deadline?: Date
 }
 
+/** The part of Standard Schema v1 used to validate command inputs. */
+export interface StandardSchema<Input = unknown, Output = Input> {
+  readonly "~standard": {
+    readonly version: 1
+    readonly vendor: string
+    readonly validate: (
+      value: unknown,
+    ) =>
+      | { readonly value: Output; readonly issues?: undefined }
+      | { readonly issues: ReadonlyArray<{ readonly message: string }> }
+      | Promise<
+          | { readonly value: Output; readonly issues?: undefined }
+          | { readonly issues: ReadonlyArray<{ readonly message: string }> }
+        >
+    readonly types?: { readonly input: Input; readonly output: Output }
+  }
+}
+
+/** Infer the validated output type of a Standard Schema. */
+export type StandardSchemaOutput<Schema extends StandardSchema> = NonNullable<
+  Schema["~standard"]["types"]
+>["output"]
+
 /**
  * Command definition.
  */
@@ -162,18 +185,49 @@ function registry(): RegistryState {
  * ```typescript
  * import { command } from "@alienplatform/sdk"
  *
- * command("echo", async ({ message }: { message: string }, { attempt }) => {
- *   return { message, attempt, timestamp: new Date().toISOString() }
+ * command("echo", schema, async ({ message }, { attempt }) => {
+ *   return { message, attempt }
  * })
  * ```
  */
-export function command<TParams = unknown, TResult = unknown>(
+export function command<TResult = unknown>(
   name: string,
-  handler: (params: TParams, context: WorkerCommandContext) => Promise<TResult>,
+  handler: (params: unknown, context: WorkerCommandContext) => TResult | Promise<TResult>,
+): void
+export function command<Schema extends StandardSchema, TResult = unknown>(
+  name: string,
+  schema: Schema,
+  handler: (
+    params: StandardSchemaOutput<Schema>,
+    context: WorkerCommandContext,
+  ) => TResult | Promise<TResult>,
+): void
+export function command<Schema extends StandardSchema, TResult = unknown>(
+  name: string,
+  schemaOrHandler:
+    | Schema
+    | ((params: unknown, context: WorkerCommandContext) => TResult | Promise<TResult>),
+  validatedHandler?: (
+    params: StandardSchemaOutput<Schema>,
+    context: WorkerCommandContext,
+  ) => TResult | Promise<TResult>,
 ): void {
+  const schema = validatedHandler === undefined ? undefined : (schemaOrHandler as Schema)
+  const handler = (validatedHandler ?? schemaOrHandler) as (
+    params: unknown,
+    context: WorkerCommandContext,
+  ) => TResult | Promise<TResult>
   registry().commands.set(name, {
     name,
-    handler: handler as (params: unknown, context: WorkerCommandContext) => Promise<unknown>,
+    handler: async (params, context) => {
+      if (schema === undefined) return await handler(params, context)
+      const result = await schema["~standard"].validate(params)
+      if (result.issues !== undefined) {
+        const details = result.issues.map(issue => issue.message).join("; ")
+        throw new Error(`Command input failed validation${details ? `: ${details}` : ""}`)
+      }
+      return await handler(result.value, context)
+    },
   })
 }
 

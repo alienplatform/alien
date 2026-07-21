@@ -202,10 +202,9 @@ fn command_receiver_from_env(
 }
 
 fn register_stats_handler(receiver: &mut alien_commands::Receiver, reader: Arc<Reader>) {
-    receiver.handle("stats", move |ctx| {
+    receiver.command("stats", move |request: StatsRequest, _ctx| {
         let reader = reader.clone();
         async move {
-            let request: StatsRequest = ctx.input_json()?;
             let stats = reader.stats(&request.namespace).await?;
             Ok(stats)
         }

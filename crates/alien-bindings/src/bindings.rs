@@ -1,13 +1,15 @@
 //! App-facing convenience API for accessing bindings.
 //!
 //! [`Bindings`] wraps a [`crate::provider::LazyEnvBindingsProvider`], giving application
-//! code a small, stable surface — `storage`, `kv`, `queue`, `vault` — instead of the full
+//! code a small, stable surface — `storage`, `kv`, `queue`, `vault`, `container` — instead of the full
 //! [`crate::traits::BindingsProviderApi`] used internally by the manager and controllers.
 
 use crate::error::Result;
 use crate::provider::{BindingsProvider, LazyEnvBindingsProvider};
 use crate::refreshing::{RefreshingKv, RefreshingQueue, RefreshingStorage, RefreshingVault};
-use crate::traits::{BindingsProviderApi, Kv, Queue, Storage, Vault};
+use crate::traits::{
+    BindingsProviderApi, Container, Kv, MessagePayload, Queue, QueueMessage, Storage, Vault,
+};
 use std::collections::HashMap;
 use std::sync::Arc;
 
@@ -43,6 +45,56 @@ use std::sync::Arc;
 #[derive(Debug)]
 pub struct Bindings {
     provider: Arc<LazyEnvBindingsProvider>,
+}
+
+/// A queue binding scoped to its configured queue name.
+#[derive(Clone)]
+pub struct BoundQueue {
+    inner: Arc<dyn Queue>,
+    name: Arc<str>,
+}
+
+impl std::fmt::Debug for BoundQueue {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("Queue")
+            .field("name", &self.name)
+            .finish_non_exhaustive()
+    }
+}
+
+impl BoundQueue {
+    fn new(inner: Arc<dyn Queue>, name: impl Into<Arc<str>>) -> Self {
+        Self {
+            inner,
+            name: name.into(),
+        }
+    }
+
+    /// Send a message to this queue.
+    pub async fn send(&self, message: MessagePayload) -> Result<()> {
+        self.inner.send(&self.name, message).await
+    }
+
+    /// Receive up to `max_messages` messages from this queue.
+    pub async fn receive(&self, max_messages: usize) -> Result<Vec<QueueMessage>> {
+        self.inner.receive(&self.name, max_messages).await
+    }
+
+    /// Acknowledge a received message.
+    pub async fn ack(&self, receipt_handle: &str) -> Result<()> {
+        self.inner.ack(&self.name, receipt_handle).await
+    }
+
+    /// Release a received message for redelivery.
+    pub async fn nack(&self, receipt_handle: &str) -> Result<()> {
+        self.inner.nack(&self.name, receipt_handle).await
+    }
+
+    /// Delete every message in this queue.
+    pub async fn purge(&self) -> Result<()> {
+        self.inner.purge(&self.name).await
+    }
 }
 
 impl Bindings {
@@ -90,12 +142,13 @@ impl Bindings {
     }
 
     /// Loads a queue binding that refreshes minted credentials before use.
-    pub async fn queue(&self, binding_name: &str) -> Result<Arc<dyn Queue>> {
+    pub async fn queue(&self, binding_name: &str) -> Result<BoundQueue> {
         self.provider.load_queue(binding_name).await?;
-        Ok(Arc::new(RefreshingQueue::new(
+        let queue: Arc<dyn Queue> = Arc::new(RefreshingQueue::new(
             self.provider.clone(),
             binding_name.to_string(),
-        )))
+        ));
+        Ok(BoundQueue::new(queue, binding_name))
     }
 
     /// Loads a vault binding that refreshes minted credentials before use.
@@ -105,6 +158,11 @@ impl Bindings {
             self.provider.clone(),
             binding_name.to_string(),
         )))
+    }
+
+    /// Loads a linked container for read-only service discovery.
+    pub async fn container(&self, binding_name: &str) -> Result<Arc<dyn Container>> {
+        self.provider.load_container(binding_name).await
     }
 }
 
@@ -338,20 +396,15 @@ mod tests {
             .expect("queue binding should load");
 
         queue
-            .send("jobs", MessagePayload::Text("hello".to_string()))
+            .send(MessagePayload::Text("hello".to_string()))
             .await
             .expect("send should succeed");
-        let messages = queue
-            .receive("jobs", 1)
-            .await
-            .expect("receive should succeed");
+        let messages = queue.receive(1).await.expect("receive should succeed");
         assert_eq!(messages.len(), 1);
     }
 
     #[tokio::test]
-    async fn queue_nack_and_purge_reachable_through_trait_object() {
-        // The point of promoting nack/purge onto the Queue trait: they must be
-        // callable on the `Arc<dyn Queue>` the app-facing API hands back.
+    async fn bound_queue_uses_its_configured_name_for_every_operation() {
         let temp_dir = TempDir::new().expect("tempdir");
         let json = format!(
             r#"{{"service":"local-queue","queuePath":"{}"}}"#,
@@ -368,42 +421,57 @@ mod tests {
         // nack: an in-flight message under the default lease is hidden, but a
         // nack makes it immediately redeliverable.
         queue
-            .send("jobs", MessagePayload::Text("retry".to_string()))
+            .send(MessagePayload::Text("retry".to_string()))
             .await
             .expect("send should succeed");
-        let first = queue
-            .receive("jobs", 1)
-            .await
-            .expect("receive should succeed");
+        let first = queue.receive(1).await.expect("receive should succeed");
         assert_eq!(first.len(), 1);
         assert!(
             queue
-                .receive("jobs", 1)
+                .receive(1)
                 .await
                 .expect("receive should succeed")
                 .is_empty(),
             "in-flight message must be hidden before nack"
         );
         queue
-            .nack("jobs", &first[0].receipt_handle)
+            .nack(&first[0].receipt_handle)
             .await
             .expect("nack should succeed");
-        let redelivered = queue
-            .receive("jobs", 1)
-            .await
-            .expect("receive should succeed");
+        let redelivered = queue.receive(1).await.expect("receive should succeed");
         assert_eq!(redelivered.len(), 1, "nacked message must be redelivered");
 
         // purge: clears everything, in flight or visible.
-        queue.purge("jobs").await.expect("purge should succeed");
+        queue.purge().await.expect("purge should succeed");
         assert!(
             queue
-                .receive("jobs", 1)
+                .receive(1)
                 .await
                 .expect("receive should succeed")
                 .is_empty(),
             "purge must empty the queue"
         );
+    }
+
+    #[tokio::test]
+    async fn container_exposes_internal_and_optional_public_urls() {
+        let env = with_binding(
+            base_env(),
+            "database",
+            r#"{"service":"local","containerName":"database","internalUrl":"http://database.internal:5432","publicUrl":"http://localhost:15432"}"#,
+        );
+        let bindings = Bindings::from_env_map(env).expect("valid env should construct Bindings");
+
+        let container = bindings
+            .container("database")
+            .await
+            .expect("container binding should load");
+
+        assert_eq!(
+            container.get_internal_url(),
+            "http://database.internal:5432"
+        );
+        assert_eq!(container.get_public_url(), Some("http://localhost:15432"));
     }
 
     #[tokio::test]

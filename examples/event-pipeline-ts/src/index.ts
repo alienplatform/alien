@@ -9,6 +9,7 @@ import {
 } from "@alienplatform/sdk"
 import type { Kv } from "@alienplatform/sdk"
 import { Hono } from "hono"
+import { z } from "zod"
 
 /** Iterate every key under a prefix, following the scan cursor across pages. */
 async function* scanAll(store: Kv, prefix: string) {
@@ -67,21 +68,25 @@ onCronEvent("*", async event => {
 
 // --- Commands for querying processed events ---
 
-command("get-events", async ({ type, limit }: { type?: string; limit?: number }) => {
-  const ev = kv("events")
-  const prefix = type ? `${type}:` : ""
-  const results: { key: string; value: unknown }[] = []
+command(
+  "get-events",
+  z.object({ type: z.string().optional(), limit: z.number().optional() }),
+  async ({ type, limit }) => {
+    const ev = kv("events")
+    const prefix = type ? `${type}:` : ""
+    const results: { key: string; value: unknown }[] = []
 
-  for await (const entry of scanAll(ev, prefix)) {
-    results.push({
-      key: entry.key,
-      value: JSON.parse(new TextDecoder().decode(entry.value)),
-    })
-    if (limit && results.length >= limit) break
-  }
+    for await (const entry of scanAll(ev, prefix)) {
+      results.push({
+        key: entry.key,
+        value: JSON.parse(new TextDecoder().decode(entry.value)),
+      })
+      if (limit && results.length >= limit) break
+    }
 
-  return { events: results, count: results.length }
-})
+    return { events: results, count: results.length }
+  },
+)
 
 command("get-stats", async () => {
   const ev = kv("events")
@@ -98,7 +103,7 @@ command("get-stats", async () => {
 
 // --- Send a test message (useful during development) ---
 
-command("send-test-message", async ({ message }: { message: string }) => {
+command("send-test-message", z.object({ message: z.string() }), async ({ message }) => {
   const q = queue("inbox")
   await q.send(message)
   return { sent: true }

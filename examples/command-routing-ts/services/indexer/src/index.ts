@@ -43,7 +43,7 @@ const receiver = createCommandReceiver()
 
 // Overlapping command #1: `status`. Answered by the daemon, so `role` is
 // "daemon" and `model` is "pull".
-receiver.handle("status", async () => ({
+receiver.command("status", async () => ({
   resource: RESOURCE,
   role: "daemon",
   model: "pull",
@@ -52,8 +52,11 @@ receiver.handle("status", async () => ({
 }))
 
 // Overlapping command #2: `search`, reading the index this daemon maintains.
-receiver.handle("search", async ctx => {
-  const { term } = JSON.parse(new TextDecoder().decode(ctx.input)) as { term: string }
+receiver.command("search", async input => {
+  if (typeof input !== "object" || input === null || !("term" in input) || typeof input.term !== "string") {
+    throw new TypeError("term must be a string")
+  }
+  const { term } = input
   return { resource: RESOURCE, term, hits: await searchIndex(index, term) }
 })
 

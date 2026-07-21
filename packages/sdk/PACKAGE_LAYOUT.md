@@ -28,13 +28,13 @@ in [`@alienplatform/bindings`](../bindings/PACKAGE_LAYOUT.md).
 
 | Export | Kind | Signature sketch | Notes |
 |---|---|---|---|
-| `command` | function | `command(name, handler): void` | Register a Worker command handler. |
+| `command` | function | `command(name, handler)` or `command(name, schema, handler)` | Register a Worker command handler. Schema-less input is `unknown`; Standard Schema validation infers the handler input. |
 | `onStorageEvent` | function | Worker storage-event handler registrar | Signature pinned by `src/worker-runtime`. |
 | `onCronEvent` | function | Worker cron-event handler registrar | Signature pinned by `src/worker-runtime`. |
 | `onQueueMessage` | function | Worker queue-message handler registrar | Signature pinned by `src/worker-runtime`. |
 | `waitUntil` | function | `waitUntil(promise): void` | Extend Worker task lifetime past the response. |
 | handler types | type | `StorageEvent`, `StorageEventType`, `CronEvent`, `QueueMessage`, `QueueMessageEvent`, `ScheduledEvent` | The event/handler types for the APIs above. |
-| `storage`, `kv`, `queue`, `vault` | function | re-export from `@alienplatform/bindings` | Facade re-export of the binding factories. |
+| `storage`, `kv`, `queue`, `vault`, `container` | function | re-export from `@alienplatform/bindings` | Facade re-export of the binding factories. |
 | `Storage`, `Kv`, `Queue`, `Vault` | type | re-export from `@alienplatform/bindings` | Facade re-export of the instance types. |
 | error re-exports | error | from `@alienplatform/bindings` and `@alienplatform/core` | Includes `BindingNotConfiguredError`; `AlienError`. |
 
@@ -132,7 +132,7 @@ No deep imports.
 
 ## Handler and runtime details
 
-- `command(name, handler): void`, `onStorageEvent(bucket, handler,
+- `command(name, handler): void`, `command(name, schema, handler): void`, `onStorageEvent(bucket, handler,
   options?): () => void`, `onCronEvent(schedule, handler): () => void`,
   `onQueueMessage(queue, handler): () => void`, `waitUntil(promise): void`. These
   are protocol-only registrars in `src/worker-runtime/registry.ts` (no gRPC); the

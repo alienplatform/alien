@@ -174,6 +174,19 @@ export function localVaultBindingEnv(
   return fixture
 }
 
+/** Build the env for a local linked-container binding. */
+export function localContainerBindingEnv(bindingName: string): void {
+  installBindingEnv({
+    ...LOCAL_DEPLOYMENT_ENV,
+    [bindingEnvVarName(bindingName)]: JSON.stringify({
+      service: "local",
+      containerName: "database",
+      internalUrl: "http://database.internal:5432",
+      publicUrl: "http://localhost:15432",
+    }),
+  })
+}
+
 /** Return the sole element of `items`, throwing (with a useful message) if there isn't exactly one. */
 export function only<T>(items: T[]): T {
   if (items.length !== 1) {

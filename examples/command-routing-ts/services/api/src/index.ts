@@ -9,6 +9,7 @@
 
 import { command, kv } from "@alienplatform/sdk"
 import { Hono } from "hono"
+import { z } from "zod"
 import { countDocs, searchIndex } from "../../../shared/scan-all"
 
 const RESOURCE = "api"
@@ -24,7 +25,7 @@ command("status", async () => ({
 }))
 
 // Overlapping command #2: `search`. Reads the shared index the daemon builds.
-command("search", async ({ term }: { term: string }) => ({
+command("search", z.object({ term: z.string() }), async ({ term }) => ({
   resource: RESOURCE,
   term,
   hits: await searchIndex(kv("index"), term),
