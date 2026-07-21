@@ -57,7 +57,7 @@ use alien_manager::stores::sqlite::{
 use alien_manager::traits::{
     AuthValidator, CreateDeploymentGroupParams, CreateImportedDeploymentParams,
     CreateReleaseParams, CreateTokenParams, CredentialResolver, DeploymentRecord, DeploymentStore,
-    ReleaseStore, TelemetryBackend, TokenStore, TokenType,
+    ReleaseStore, TelemetryBackend, TokenStore, TokenType, UpdateImportedDeploymentParams,
 };
 
 // ---------------------------------------------------------------------------

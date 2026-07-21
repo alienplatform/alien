@@ -356,6 +356,44 @@ mod tests {
     use super::*;
 
     #[test]
+    fn reconcile_state_preserves_runtime_update_metadata() {
+        let state = serde_json::json!({
+            "status": "updating",
+            "platform": "machines",
+            "protocolVersion": 1,
+            "runtimeMetadata": {
+                "pendingPreparedStack": {
+                    "id": "updated-stack",
+                    "resources": {}
+                },
+                "setupUpdateAuthorization": {
+                    "nonce": "nonce-1",
+                    "baselineFrozenDigest": "before",
+                    "targetFrozenDigest": "after",
+                    "releaseId": "rel_123",
+                    "setupTarget": "aws",
+                    "setupFingerprint": "fingerprint",
+                    "setupFingerprintVersion": 1
+                }
+            }
+        });
+
+        let sdk_state: types::SyncReconcileRequestState =
+            serde_json::from_value(state).expect("deployment state should deserialize");
+        let serialized =
+            serde_json::to_value(sdk_state).expect("deployment state should serialize");
+
+        assert_eq!(
+            serialized["runtimeMetadata"]["pendingPreparedStack"]["id"],
+            "updated-stack"
+        );
+        assert_eq!(
+            serialized["runtimeMetadata"]["setupUpdateAuthorization"]["nonce"],
+            "nonce-1"
+        );
+    }
+
+    #[test]
     fn test_api_error_code_deref() {
         // Verify generated types work as expected
         let code = types::ApiErrorCode::try_from("TEST_ERROR").unwrap();

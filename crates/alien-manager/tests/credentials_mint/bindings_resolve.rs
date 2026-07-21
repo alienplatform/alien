@@ -40,13 +40,17 @@ async fn fixture() -> (Fixture, Arc<AtomicUsize>) {
         .update_imported_stack_state(
             &Subject::system(),
             &fixture.deployment_a,
-            stack_state,
-            None,
-            RuntimeMetadata::default(),
-            None,
-            "test".to_string(),
-            "test".to_string(),
-            1,
+            UpdateImportedDeploymentParams {
+                stack_state,
+                environment_info: None,
+                runtime_metadata: RuntimeMetadata::default(),
+                setup_metadata: None,
+                current_release_id: None,
+                setup_target: "test".to_string(),
+                setup_fingerprint: "test".to_string(),
+                setup_fingerprint_version: 1,
+                schedule_reconciliation: false,
+            },
         )
         .await
         .expect("remote binding fixture should persist stack state");
