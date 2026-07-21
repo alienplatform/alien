@@ -1248,6 +1248,10 @@ jobs:
         with:
           ref: v${{ needs.prepare.outputs.version }}
 
+      - uses: pnpm/action-setup@v6
+        with:
+          version: 10.11.0
+
       - uses: actions/setup-node@v5
         with:
           node-version: 22
