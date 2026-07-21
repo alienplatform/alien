@@ -105,7 +105,7 @@ export interface RawKvHandle {
   scan(prefix: string, limit?: number | null, cursor?: string | null): Promise<RawScanResult>
 }
 
-/** Raw napi queue handle. Every method takes the queue name as its first arg. */
+/** Raw napi queue handle, already scoped to its configured queue. */
 export interface RawQueueHandle {
   sendJson(jsonString: string): Promise<void>
   sendText(text: string): Promise<void>
