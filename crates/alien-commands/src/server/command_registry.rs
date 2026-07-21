@@ -59,6 +59,8 @@ pub struct CommandEnvelopeData {
 #[derive(Debug, Clone)]
 pub struct CommandStatus {
     pub command_id: String,
+    pub workspace_id: String,
+    pub project_id: String,
     pub deployment_id: String,
     pub command: String, // command name
     pub state: CommandState,
@@ -71,6 +73,14 @@ pub struct CommandStatus {
     pub request_size_bytes: Option<u64>,
     pub response_size_bytes: Option<u64>,
     pub target: CommandTarget,
+}
+
+/// Canonical ownership fields needed to authorize command reads.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CommandAccessContext {
+    pub workspace_id: String,
+    pub project_id: String,
+    pub deployment_id: String,
 }
 
 /// Internal command record stored in memory
@@ -248,6 +258,24 @@ pub trait CommandRegistry: Send + Sync {
     ///
     /// Returns None if command doesn't exist.
     async fn get_command_status(&self, command_id: &str) -> Result<Option<CommandStatus>>;
+
+    /// Get the canonical ownership fields used to authorize command reads.
+    ///
+    /// The status record is the command registry's source of truth for these
+    /// fields, so this does not require a deployment lookup.
+    async fn get_command_access_context(
+        &self,
+        command_id: &str,
+    ) -> Result<Option<CommandAccessContext>> {
+        Ok(self
+            .get_command_status(command_id)
+            .await?
+            .map(|status| CommandAccessContext {
+                workspace_id: status.workspace_id,
+                project_id: status.project_id,
+                deployment_id: status.deployment_id,
+            }))
+    }
 
     /// Atomically update a non-terminal command's lifecycle state.
     ///
@@ -453,6 +481,8 @@ impl CommandRegistry for InMemoryCommandRegistry {
 
         Ok(commands.get(command_id).map(|r| CommandStatus {
             command_id: r.id.clone(),
+            workspace_id: "default".to_string(),
+            project_id: r.project_id.clone(),
             deployment_id: r.deployment_id.clone(),
             command: r.command.clone(),
             state: r.state,

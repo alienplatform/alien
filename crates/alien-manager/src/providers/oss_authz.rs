@@ -68,7 +68,8 @@ impl Authz for OssAuthz {
 
     fn can_read_deployment(&self, s: &Subject, deployment: &DeploymentRecord) -> bool {
         match &s.scope {
-            Scope::Workspace | Scope::Project { .. } => true,
+            Scope::Workspace => true,
+            Scope::Project { project_id } => project_id == &deployment.project_id,
             Scope::DeploymentGroup {
                 deployment_group_id,
                 ..
@@ -149,6 +150,22 @@ impl Authz for OssAuthz {
 
     fn can_read_command(&self, s: &Subject, deployment: &DeploymentRecord) -> bool {
         self.can_read_deployment(s, deployment)
+    }
+
+    fn can_read_command_context(
+        &self,
+        s: &Subject,
+        command: &alien_commands::server::CommandAccessContext,
+    ) -> bool {
+        match &s.scope {
+            Scope::Workspace => true,
+            Scope::Project { project_id } => project_id == &command.project_id,
+            Scope::Deployment { deployment_id, .. } => {
+                deployment_id == &command.deployment_id
+                    && matches!(s.role, Role::DeploymentManager | Role::DeploymentViewer)
+            }
+            Scope::DeploymentGroup { .. } => false,
+        }
     }
 
     // -- Sync protocol -----------------------------------------------------
@@ -309,6 +326,35 @@ mod tests {
         let dep = deployment("d1", "dg-a");
         assert!(OssAuthz.can_read_deployment(&deployment_token("d1"), &dep));
         assert!(!OssAuthz.can_read_deployment(&deployment_token("d2"), &dep));
+    }
+
+    #[test]
+    fn project_token_only_reads_commands_in_its_project() {
+        let subject = Subject {
+            kind: SubjectKind::ServiceAccount {
+                id: "tok-project".to_string(),
+            },
+            workspace_id: "default".to_string(),
+            scope: Scope::Project {
+                project_id: "project-a".to_string(),
+            },
+            role: Role::ProjectViewer,
+            bearer_token: String::new(),
+        };
+        let command = alien_commands::server::CommandAccessContext {
+            workspace_id: "default".to_string(),
+            project_id: "project-a".to_string(),
+            deployment_id: "deployment-a".to_string(),
+        };
+
+        assert!(OssAuthz.can_read_command_context(&subject, &command));
+        assert!(!OssAuthz.can_read_command_context(
+            &subject,
+            &alien_commands::server::CommandAccessContext {
+                project_id: "project-b".to_string(),
+                ..command
+            }
+        ));
     }
 
     #[test]

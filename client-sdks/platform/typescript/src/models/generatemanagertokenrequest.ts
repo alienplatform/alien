@@ -6,14 +6,14 @@ import * as z from "zod/v4";
 
 export type GenerateManagerTokenRequest = {
   /**
-   * Project ID or name to scope token access to. When omitted, the token is scoped to all projects accessible by the current user.
+   * Project ID or name to scope token access to.
    */
-  project?: string | undefined;
+  project: string;
 };
 
 /** @internal */
 export type GenerateManagerTokenRequest$Outbound = {
-  project?: string | undefined;
+  project: string;
 };
 
 /** @internal */
@@ -21,7 +21,7 @@ export const GenerateManagerTokenRequest$outboundSchema: z.ZodType<
   GenerateManagerTokenRequest$Outbound,
   GenerateManagerTokenRequest
 > = z.object({
-  project: z.string().optional(),
+  project: z.string(),
 });
 
 export function generateManagerTokenRequestToJSON(
