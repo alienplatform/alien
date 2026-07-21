@@ -5,7 +5,9 @@
 //! `=== <path> ===` separators. Snapshots stay reviewable as a unit, the
 //! way a security team would actually read the module.
 
-use alien_core::{Stack, StackSettings};
+use alien_core::{
+    Stack, StackInputDefinition, StackSettings,
+};
 use alien_terraform::{
     generate_terraform_module, ModuleFiles, TerraformOptions, TerraformTarget, TfRegistry,
 };
@@ -15,9 +17,50 @@ use indexmap::IndexMap;
 #[path = "../../src/test_utils.rs"]
 mod test_utils;
 
+/// A boolean deployer input, the shape `.enabled(input)` gates on.
+pub fn gate_input(id: &str, label: &str, description: &str) -> StackInputDefinition {
+    StackInputDefinition::deployer_boolean(id, label, description, Some(true))
+}
+
+/// HCL re-pads `=` alignment whenever a sibling attribute lands, so assertions
+/// have to compare on collapsed whitespace rather than the rendered columns.
+pub fn normalized(module: &ModuleFiles) -> String {
+    module
+        .files
+        .values()
+        .cloned()
+        .collect::<Vec<_>>()
+        .join("\n")
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
+/// The registration list only changes shape once something in the stack is
+/// gated. Everything else must render exactly as it did before this feature.
+pub fn assert_ungated_registration_list_is_a_plain_array(main: &str) {
+    assert!(
+        main.contains("deployment_resources = ["),
+        "an ungated stack still renders a plain array:\n{main}"
+    );
+    assert!(
+        !main.contains("concat("),
+        "no concat wrapping when nothing is gated:\n{main}"
+    );
+}
+
 /// Render `stack` for `target` against the built-in registry with the given
 /// settings. Panics on render failure so test bodies stay short.
 pub fn render(stack: &Stack, target: TerraformTarget, settings: StackSettings) -> ModuleFiles {
+    try_render(stack, target, settings).expect("module should render")
+}
+
+/// [`render`] without the unwrap, for tests asserting a render refusal.
+pub fn try_render(
+    stack: &Stack,
+    target: TerraformTarget,
+    settings: StackSettings,
+) -> alien_core::Result<ModuleFiles> {
     let registry = TfRegistry::built_in();
     generate_terraform_module(
         stack,
@@ -31,7 +74,6 @@ pub fn render(stack: &Stack, target: TerraformTarget, settings: StackSettings) -
             supported_aws_regions: Vec::new(),
         },
     )
-    .expect("module should render")
 }
 
 /// Convert the rendered module into the `LinterFiles` shape consumed by
