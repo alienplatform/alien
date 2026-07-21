@@ -171,7 +171,13 @@ pub async fn logs_task(args: LogsArgs, ctx: ExecutionMode) -> Result<()> {
     let project_override = args.project.as_deref().or(ctx.project_override());
     let target =
         resolve_logs_target(&ctx, &platform_client, &workspace, &args, project_override).await?;
-    let token_scope_project = target.project_id.as_deref();
+    let token_scope_project = target.project_id.as_deref().ok_or_else(|| {
+        AlienError::new(ErrorData::ConfigurationError {
+            message:
+                "A project is required to query logs. Pass --project <name> or run `alien link`."
+                    .to_string(),
+        })
+    })?;
     let token = generate_logs_token(
         &platform_client,
         &workspace,
@@ -200,7 +206,7 @@ pub async fn logs_task(args: LogsArgs, ctx: ExecutionMode) -> Result<()> {
     let shared_client = Arc::new(platform_client);
     let provider_workspace = workspace.clone();
     let provider_manager = target.manager_id.clone();
-    let provider_project = token_scope_project.map(str::to_string);
+    let provider_project = token_scope_project.to_string();
     let deepstore = DeepstoreClient::builder()
         .control_plane_url(control_plane_url)
         .auth_proxy_url(token.manager_url)
@@ -210,12 +216,11 @@ pub async fn logs_task(args: LogsArgs, ctx: ExecutionMode) -> Result<()> {
             let manager_id = provider_manager.clone();
             let project = provider_project.clone();
             async move {
-                let token =
-                    generate_logs_token(&client, &workspace, &manager_id, project.as_deref())
-                        .await
-                        .map_err(|error| {
-                            deepstore_client::DeepstoreError::Authentication(error.to_string())
-                        })?;
+                let token = generate_logs_token(&client, &workspace, &manager_id, &project)
+                    .await
+                    .map_err(|error| {
+                        deepstore_client::DeepstoreError::Authentication(error.to_string())
+                    })?;
                 Ok(token.access_token)
             }
         })
@@ -542,11 +547,9 @@ async fn generate_logs_token(
     client: &alien_platform_api::Client,
     workspace: &str,
     manager_id: &str,
-    project: Option<&str>,
+    project: &str,
 ) -> Result<types::GenerateManagerTokenResponse> {
-    let project = project
-        .map(types::GenerateManagerTokenRequestProject::try_from)
-        .transpose()
+    let project = types::GenerateManagerTokenRequestProject::try_from(project)
         .into_alien_error()
         .context(ErrorData::ValidationError {
             field: "project".to_string(),
