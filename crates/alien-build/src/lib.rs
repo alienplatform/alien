@@ -2491,6 +2491,34 @@ async fn write_artifact_cache_metadata(
     Ok(())
 }
 
+fn paths_resolve_to_same_file(left: &Path, right: &Path) -> bool {
+    if left == right {
+        return true;
+    }
+
+    match (std::fs::canonicalize(left), std::fs::canonicalize(right)) {
+        (Ok(left), Ok(right)) => left == right,
+        _ => false,
+    }
+}
+
+async fn materialize_complete_oci_tarball(tarball_path: &Path, output_path: &Path) -> Result<bool> {
+    if paths_resolve_to_same_file(tarball_path, output_path) {
+        return Ok(false);
+    }
+
+    fs::copy(tarball_path, output_path)
+        .await
+        .into_alien_error()
+        .context(ErrorData::FileOperationFailed {
+            operation: "copy file".to_string(),
+            file_path: tarball_path.display().to_string(),
+            reason: format!("Failed to copy OCI tarball to {}", output_path.display()),
+        })?;
+
+    Ok(true)
+}
+
 /// Build a specific OS/architecture target to an OCI tarball file
 #[allow(clippy::too_many_arguments)]
 async fn build_target_to_file(
@@ -2569,16 +2597,7 @@ async fn build_target_to_file(
         toolchain::ImageBuildStrategy::CompleteOCITarball { tarball_path } => {
             // Toolchain produced a complete OCI tarball (e.g., Docker toolchain)
             // Use it as-is without re-packaging
-            if tarball_path != output_path {
-                fs::copy(tarball_path, output_path)
-                    .await
-                    .into_alien_error()
-                    .context(ErrorData::FileOperationFailed {
-                        operation: "copy file".to_string(),
-                        file_path: tarball_path.display().to_string(),
-                        reason: format!("Failed to copy OCI tarball to {}", output_path.display()),
-                    })?;
-
+            if materialize_complete_oci_tarball(tarball_path, output_path).await? {
                 info!("Copied complete OCI tarball to {}", output_path.display());
             }
         }
@@ -3191,6 +3210,24 @@ async fn compute_function_content_hash(dir: &Path) -> Result<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn materializing_same_artifact_preserves_its_contents() {
+        let directory = tempfile::tempdir_in(".").unwrap();
+        let absolute = std::fs::canonicalize(directory.path())
+            .unwrap()
+            .join("image.oci.tar");
+        std::fs::write(&absolute, b"oci archive").unwrap();
+        let relative = absolute
+            .strip_prefix(std::env::current_dir().unwrap())
+            .unwrap();
+
+        assert_ne!(relative, absolute);
+        assert!(!materialize_complete_oci_tarball(&absolute, relative)
+            .await
+            .unwrap());
+        assert_eq!(std::fs::read(absolute).unwrap(), b"oci archive");
+    }
     use dockdash::Image;
     use std::path::PathBuf;
     use std::process::Command;
