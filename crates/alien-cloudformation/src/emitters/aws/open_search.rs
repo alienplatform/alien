@@ -186,17 +186,58 @@ fn collection_name(id: &str) -> CfExpression {
     )])
 }
 
+// AOSS policy documents as structs rather than `serde_json::json!` maps: the
+// macro's key order follows serde_json's `preserve_order` feature, which
+// feature-unification can toggle between builds, changing the emitted
+// template text. Struct fields always serialize in declaration order.
+// PascalCase names are the AOSS policy document schema.
+#[derive(serde::Serialize)]
+#[serde(rename_all = "PascalCase")]
+struct AossPolicyRule {
+    resource_type: &'static str,
+    resource: [&'static str; 1],
+    #[serde(skip_serializing_if = "Option::is_none")]
+    permission: Option<&'static [&'static str]>,
+}
+
+#[derive(serde::Serialize)]
+#[serde(rename_all = "PascalCase")]
+struct AossNetworkPolicy {
+    rules: [AossPolicyRule; 2],
+    allow_from_public: bool,
+}
+
+#[derive(serde::Serialize)]
+#[serde(rename_all = "PascalCase")]
+struct AossDataAccessPolicy {
+    description: String,
+    rules: [AossPolicyRule; 2],
+    principal: Vec<String>,
+}
+
+fn policy_json<T: serde::Serialize>(policy: &[&T; 1]) -> String {
+    serde_json::to_string(policy).expect("static AOSS policy document serializes")
+}
+
 /// Public network policy for the collection and its dashboard. Requests are
 /// still gated by IAM (`aoss:APIAccessAll`) plus the data-access policy.
 fn network_policy(name: &CfExpression) -> CfExpression {
-    let policy = serde_json::json!([{
-        "Rules": [
-            {"ResourceType": "collection", "Resource": ["collection/${Name}"]},
-            {"ResourceType": "dashboard", "Resource": ["collection/${Name}"]}
+    let policy = AossNetworkPolicy {
+        rules: [
+            AossPolicyRule {
+                resource_type: "collection",
+                resource: ["collection/${Name}"],
+                permission: None,
+            },
+            AossPolicyRule {
+                resource_type: "dashboard",
+                resource: ["collection/${Name}"],
+                permission: None,
+            },
         ],
-        "AllowFromPublic": true
-    }]);
-    CfExpression::sub_with(policy.to_string(), [("Name", name.clone())])
+        allow_from_public: true,
+    };
+    CfExpression::sub_with(policy_json(&[&policy]), [("Name", name.clone())])
 }
 
 /// Data-access policy granting collection- and index-level permissions to the
@@ -232,34 +273,34 @@ fn data_access_policy(
         principals.push(format!("${{Principal{index}}}"));
     }
 
-    let policy = serde_json::json!([{
-        "Description": format!("Alien-managed data access for '{}'", search.id()),
-        "Rules": [
-            {
-                "ResourceType": "collection",
-                "Resource": ["collection/${Name}"],
-                "Permission": [
+    let policy = AossDataAccessPolicy {
+        description: format!("Alien-managed data access for '{}'", search.id()),
+        rules: [
+            AossPolicyRule {
+                resource_type: "collection",
+                resource: ["collection/${Name}"],
+                permission: Some(&[
                     "aoss:CreateCollectionItems",
                     "aoss:DeleteCollectionItems",
                     "aoss:UpdateCollectionItems",
-                    "aoss:DescribeCollectionItems"
-                ]
+                    "aoss:DescribeCollectionItems",
+                ]),
             },
-            {
-                "ResourceType": "index",
-                "Resource": ["index/${Name}/*"],
-                "Permission": [
+            AossPolicyRule {
+                resource_type: "index",
+                resource: ["index/${Name}/*"],
+                permission: Some(&[
                     "aoss:CreateIndex",
                     "aoss:DeleteIndex",
                     "aoss:UpdateIndex",
                     "aoss:DescribeIndex",
                     "aoss:ReadDocument",
-                    "aoss:WriteDocument"
-                ]
-            }
+                    "aoss:WriteDocument",
+                ]),
+            },
         ],
-        "Principal": principals
-    }]);
+        principal: principals,
+    };
 
     let logical_id = ctx.name_for(ctx.resource_id)?;
     let mut access = CfResource::new(
@@ -272,7 +313,7 @@ fn data_access_policy(
         .insert("Type".to_string(), CfExpression::from("data"));
     access.properties.insert(
         "Policy".to_string(),
-        CfExpression::sub_with(policy.to_string(), variables),
+        CfExpression::sub_with(policy_json(&[&policy]), variables),
     );
     Some(access)
 }
