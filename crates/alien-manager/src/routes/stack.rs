@@ -32,6 +32,7 @@ use axum::{
     routing::post,
     Router,
 };
+use sha2::{Digest, Sha256};
 
 use alien_core::{
     import::{
@@ -134,6 +135,10 @@ pub async fn stack_import(
     if let Err(e) = assert_supported_import_region(&state.config, &req) {
         return e.into_response();
     }
+    let setup_metadata = match setup_metadata_for_persistence(&req) {
+        Ok(metadata) => metadata,
+        Err(error) => return error.into_response(),
+    };
 
     let dg = match state
         .deployment_store
@@ -204,6 +209,36 @@ pub async fn stack_import(
                     ),
                 })
                 .into_response();
+            }
+            match setup_registration_replay(&existing.setup_metadata, &setup_metadata) {
+                SetupRegistrationReplay::Exact => {
+                    let Some(stack_settings) = existing.stack_settings else {
+                        return ErrorData::internal(
+                            "imported deployment is missing stack_settings",
+                        )
+                        .into_response();
+                    };
+                    return (
+                        StatusCode::OK,
+                        Json(StackImportResponse {
+                            deployment_id: existing.id,
+                            deployment_token: existing.deployment_token,
+                            stack_settings,
+                            stack_state,
+                        }),
+                    )
+                        .into_response();
+                }
+                SetupRegistrationReplay::Conflict => {
+                    return AlienError::new(ErrorData::ImportedDeploymentConflict {
+                        reason: format!(
+                            "Setup registration operation for deployment '{}' was replayed with a different payload",
+                            existing.id
+                        ),
+                    })
+                    .into_response();
+                }
+                SetupRegistrationReplay::None => {}
             }
             if let Some(existing_stack_state) = existing.stack_state.as_ref() {
                 stack_state = match merge_reimported_stack_state(
@@ -350,7 +385,7 @@ pub async fn stack_import(
         current_release_id: None,
         desired_release_id: Some(release.id.clone()),
         import_source: req.source_kind,
-        setup_metadata: req.setup_metadata.clone(),
+        setup_metadata,
         setup_target: req.setup_target.clone(),
         setup_fingerprint: req.setup_fingerprint.clone(),
         setup_fingerprint_version: req.setup_fingerprint_version,
@@ -539,6 +574,114 @@ fn parse_stack_import_request(raw: serde_json::Value) -> crate::error::Result<St
 fn setup_contract_lane_matches(existing: &DeploymentRecord, req: &StackImportRequest) -> bool {
     existing.setup_target.as_deref() == Some(req.setup_target.as_str())
         && existing.setup_fingerprint_version == Some(req.setup_fingerprint_version)
+}
+
+const SETUP_REGISTRATION_OPERATION_ID: &str = "setupRegistrationOperationId";
+const SETUP_REGISTRATION_IMPORT_HASH: &str = "setupRegistrationImportHash";
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum SetupRegistrationReplay {
+    Exact,
+    Conflict,
+    None,
+}
+
+fn canonical_json(value: &serde_json::Value) -> String {
+    match value {
+        serde_json::Value::Array(values) => {
+            let values = values
+                .iter()
+                .map(canonical_json)
+                .collect::<Vec<_>>()
+                .join(",");
+            format!("[{values}]")
+        }
+        serde_json::Value::Object(values) => {
+            let mut entries = values.iter().collect::<Vec<_>>();
+            entries.sort_unstable_by(|(left, _), (right, _)| left.cmp(right));
+            let entries = entries
+                .into_iter()
+                .map(|(key, value)| {
+                    format!(
+                        "{}:{}",
+                        serde_json::Value::String(key.clone()),
+                        canonical_json(value)
+                    )
+                })
+                .collect::<Vec<_>>()
+                .join(",");
+            format!("{{{entries}}}")
+        }
+        scalar => scalar.to_string(),
+    }
+}
+
+fn setup_metadata_for_persistence(
+    req: &StackImportRequest,
+) -> Result<Option<serde_json::Value>, AlienError<ErrorData>> {
+    let Some(serde_json::Value::Object(mut metadata)) = req.setup_metadata.clone() else {
+        return Ok(req.setup_metadata.clone());
+    };
+    let Some(serde_json::Value::String(operation_id)) =
+        metadata.get(SETUP_REGISTRATION_OPERATION_ID)
+    else {
+        return Ok(Some(serde_json::Value::Object(metadata)));
+    };
+    if operation_id.is_empty() {
+        return Ok(Some(serde_json::Value::Object(metadata)));
+    }
+
+    metadata.remove(SETUP_REGISTRATION_IMPORT_HASH);
+    let mut request = req.clone();
+    request.deployment_group_token.clear();
+    request.setup_metadata = Some(serde_json::Value::Object(metadata.clone()));
+    let request = serde_json::to_value(request).map_err(|error| {
+        AlienError::new(ErrorData::BadRequest {
+            reason: format!("Failed to fingerprint stack import payload: {error}"),
+        })
+    })?;
+    let hash = format!("{:x}", Sha256::digest(canonical_json(&request).as_bytes()));
+    metadata.insert(
+        SETUP_REGISTRATION_IMPORT_HASH.to_string(),
+        serde_json::Value::String(hash),
+    );
+    Ok(Some(serde_json::Value::Object(metadata)))
+}
+
+fn setup_registration_replay(
+    existing_metadata: &Option<serde_json::Value>,
+    incoming_metadata: &Option<serde_json::Value>,
+) -> SetupRegistrationReplay {
+    let (Some(existing), Some(incoming)) = (
+        existing_metadata
+            .as_ref()
+            .and_then(serde_json::Value::as_object),
+        incoming_metadata
+            .as_ref()
+            .and_then(serde_json::Value::as_object),
+    ) else {
+        return SetupRegistrationReplay::None;
+    };
+    let Some(operation_id) = existing
+        .get(SETUP_REGISTRATION_OPERATION_ID)
+        .and_then(serde_json::Value::as_str)
+    else {
+        return SetupRegistrationReplay::None;
+    };
+    if incoming
+        .get(SETUP_REGISTRATION_OPERATION_ID)
+        .and_then(serde_json::Value::as_str)
+        != Some(operation_id)
+    {
+        return SetupRegistrationReplay::None;
+    }
+
+    if existing.get(SETUP_REGISTRATION_IMPORT_HASH) == incoming.get(SETUP_REGISTRATION_IMPORT_HASH)
+    {
+        SetupRegistrationReplay::Exact
+    } else {
+        SetupRegistrationReplay::Conflict
+    }
 }
 
 fn can_accept_reimport(
@@ -1033,6 +1176,59 @@ mod setup_update_authorization_tests {
                 ResourceLifecycle::Live,
             )
             .build()
+    }
+
+    #[test]
+    fn setup_registration_replay_is_exact_for_the_same_operation_and_payload() {
+        let mut req = request();
+        req.setup_metadata = Some(serde_json::json!({
+            SETUP_REGISTRATION_OPERATION_ID: "operation-1",
+        }));
+        let metadata = setup_metadata_for_persistence(&req).expect("metadata should hash");
+
+        assert_eq!(
+            setup_registration_replay(&metadata, &metadata),
+            SetupRegistrationReplay::Exact
+        );
+    }
+
+    #[test]
+    fn setup_registration_replay_conflicts_when_the_payload_changes() {
+        let mut original = request();
+        original.setup_metadata = Some(serde_json::json!({
+            SETUP_REGISTRATION_OPERATION_ID: "operation-1",
+        }));
+        let original_metadata =
+            setup_metadata_for_persistence(&original).expect("metadata should hash");
+        let mut changed = original;
+        changed.resource_prefix = "different-prefix".to_string();
+        let changed_metadata =
+            setup_metadata_for_persistence(&changed).expect("metadata should hash");
+
+        assert_eq!(
+            setup_registration_replay(&original_metadata, &changed_metadata),
+            SetupRegistrationReplay::Conflict
+        );
+    }
+
+    #[test]
+    fn setup_registration_replay_ignores_a_different_operation() {
+        let mut original = request();
+        original.setup_metadata = Some(serde_json::json!({
+            SETUP_REGISTRATION_OPERATION_ID: "operation-1",
+        }));
+        let original_metadata =
+            setup_metadata_for_persistence(&original).expect("metadata should hash");
+        let mut next = original;
+        next.setup_metadata = Some(serde_json::json!({
+            SETUP_REGISTRATION_OPERATION_ID: "operation-2",
+        }));
+        let next_metadata = setup_metadata_for_persistence(&next).expect("metadata should hash");
+
+        assert_eq!(
+            setup_registration_replay(&original_metadata, &next_metadata),
+            SetupRegistrationReplay::None
+        );
     }
 
     #[test]
