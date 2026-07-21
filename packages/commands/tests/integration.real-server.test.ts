@@ -275,7 +275,7 @@ describe("real-wire command twins", () => {
       pollIntervalMs: 25,
       leaseSeconds: 60,
     })
-    receiver.handle("echo", ctx => {
+    receiver.handleRaw("echo", ctx => {
       seen = ctx
       const params = JSON.parse(new TextDecoder().decode(ctx.input)) as Record<string, unknown>
       return { echoed: params, attempt: ctx.attempt }
@@ -313,7 +313,7 @@ describe("real-wire command twins", () => {
       pollIntervalMs: 25,
       leaseSeconds: 6,
     })
-    receiver.handle("slow", async ctx => {
+    receiver.handleRaw("slow", async ctx => {
       // Deliberately ignore the abort signal (only record it) and outlive the
       // budget so the receiver must time it out on us.
       ctx.signal.addEventListener("abort", () => {
@@ -369,7 +369,7 @@ describe("real-wire command twins", () => {
       pollIntervalMs: 25,
       leaseSeconds: 60,
     })
-    receiver.handle("redeliver", ctx => ({ ok: true, attempt: ctx.attempt }))
+    receiver.handleRaw("redeliver", ctx => ({ ok: true, attempt: ctx.attempt }))
     const running = receiver.run()
 
     const result = await invoked
@@ -389,7 +389,7 @@ describe("real-wire command twins", () => {
       pollIntervalMs: 25,
       leaseSeconds: 60,
     })
-    receiver.handle("something-else", () => ({}))
+    receiver.handleRaw("something-else", () => ({}))
     const running = receiver.run()
 
     const err = await makeSender(server)

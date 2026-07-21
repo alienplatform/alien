@@ -1,5 +1,5 @@
 /**
- * The four binding factories, parameterized over how the native addon is
+ * The binding factories, parameterized over how the native addon is
  * obtained. `index.ts` binds them to the lazy {@link loadAddon}; `native.ts`
  * binds them to a statically-embedded addon.
  *
@@ -17,12 +17,14 @@ import { unwrapNapiError } from "./errors.js"
 import type {
   NativeAddon,
   RawBindingsHandle,
+  RawContainerHandle,
   RawKvHandle,
   RawQueueHandle,
   RawStorageHandle,
   RawVaultHandle,
 } from "./loader.js"
 import type {
+  Container,
   Kv,
   KvScanResult,
   KvSetOptions,
@@ -136,14 +138,21 @@ function makeKv(handle: () => Promise<RawKvHandle>): Kv {
 
 // The napi queue methods take the queue name as their first argument; the
 // binding name is used for it (providers key the queue off the binding).
-function makeQueue(handle: () => Promise<RawQueueHandle>, name: string): Queue {
+function makeQueue(handle: () => Promise<RawQueueHandle>): Queue {
   return {
-    send: message => guard(handle, raw => raw.sendJson(name, JSON.stringify(message))),
-    sendText: text => guard(handle, raw => raw.sendText(name, text)),
-    receive: (max): Promise<QueueMessage[]> => guard(handle, raw => raw.receive(name, max)),
-    ack: receipt => guard(handle, raw => raw.ack(name, receipt)),
-    nack: receipt => guard(handle, raw => raw.nack(name, receipt)),
-    purge: () => guard(handle, raw => raw.purge(name)),
+    send: message => guard(handle, raw => raw.sendJson(JSON.stringify(message))),
+    sendText: text => guard(handle, raw => raw.sendText(text)),
+    receive: (max): Promise<QueueMessage[]> => guard(handle, raw => raw.receive(max)),
+    ack: receipt => guard(handle, raw => raw.ack(receipt)),
+    nack: receipt => guard(handle, raw => raw.nack(receipt)),
+    purge: () => guard(handle, raw => raw.purge()),
+  }
+}
+
+function makeContainer(handle: () => Promise<RawContainerHandle>): Container {
+  return {
+    getInternalUrl: () => guard(handle, raw => raw.getInternalUrl()),
+    getPublicUrl: () => guard(handle, raw => raw.getPublicUrl()),
   }
 }
 
@@ -165,18 +174,16 @@ export interface Factories {
   kv(name: string): Kv
   queue(name: string): Queue
   vault(name: string): Vault
+  container(name: string): Container
 }
 
-/** Build the four factories bound to a given addon provider. */
+/** Build the factories bound to a given addon provider. */
 export function createFactories(getAddon: () => NativeAddon): Factories {
   return {
     storage: name => makeStorage(lazyHandle(getAddon, name, (b, n) => b.storage(n))),
     kv: name => makeKv(lazyHandle(getAddon, name, (b, n) => b.kv(n))),
-    queue: name =>
-      makeQueue(
-        lazyHandle(getAddon, name, (b, n) => b.queue(n)),
-        name,
-      ),
+    queue: name => makeQueue(lazyHandle(getAddon, name, (b, n) => b.queue(n))),
     vault: name => makeVault(lazyHandle(getAddon, name, (b, n) => b.vault(n))),
+    container: name => makeContainer(lazyHandle(getAddon, name, (b, n) => b.container(n))),
   }
 }

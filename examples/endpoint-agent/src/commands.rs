@@ -8,8 +8,7 @@ use crate::monitor;
 
 /// Register all command handlers on the app-owned pull command receiver.
 ///
-/// Each handler deserializes its params from the command context
-/// (`ctx.input_json()`) and returns a JSON value that the receiver submits as
+/// Each handler receives typed JSON params and returns a JSON value that the receiver submits as
 /// the command's success response. Handler errors are submitted as
 /// `HANDLER_ERROR` responses — both our `Error` and the receiver's own errors
 /// reach the `?` boundary as `std::error::Error`, so no manual conversion is
@@ -18,36 +17,33 @@ pub fn register(receiver: &mut Receiver, db: EncryptedDb) {
     // get-events command
     {
         let db = db.clone();
-        receiver.handle("get-events", move |ctx| {
+        receiver.command("get-events", move |params: GetEventsParams, _ctx| {
             let db = db.clone();
-            async move {
-                let params: GetEventsParams = ctx.input_json()?;
-                Ok(handle_get_events(db, params).await?)
-            }
+            async move { Ok(handle_get_events(db, params).await?) }
         });
     }
 
     // get-config command
-    receiver.handle("get-config", move |_ctx| async move {
+    receiver.command("get-config", move |_: serde_json::Value, _ctx| async move {
         Ok(handle_get_config().await?)
     });
 
     // scan-path command
-    receiver.handle("scan-path", move |ctx| async move {
-        let params: ScanPathParams = ctx.input_json()?;
-        Ok(handle_scan_path(params).await?)
-    });
+    receiver.command(
+        "scan-path",
+        move |params: ScanPathParams, _ctx| async move { Ok(handle_scan_path(params).await?) },
+    );
 
     // simulate-clipboard command (for testing)
     {
         let db = db.clone();
-        receiver.handle("simulate-clipboard", move |ctx| {
-            let db = db.clone();
-            async move {
-                let params: SimulateClipboardParams = ctx.input_json()?;
-                Ok(handle_simulate_clipboard(db, params).await?)
-            }
-        });
+        receiver.command(
+            "simulate-clipboard",
+            move |params: SimulateClipboardParams, _ctx| {
+                let db = db.clone();
+                async move { Ok(handle_simulate_clipboard(db, params).await?) }
+            },
+        );
     }
 }
 

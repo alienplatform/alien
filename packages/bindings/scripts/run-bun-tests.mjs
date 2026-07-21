@@ -48,6 +48,12 @@ env[bindingEnvName("bun-process-env")] = JSON.stringify({
   service: "local-kv",
   dataDir: dataDir("bun-process-env"),
 })
+env[bindingEnvName("bun-container")] = JSON.stringify({
+  service: "local",
+  containerName: "database",
+  internalUrl: "http://database.internal:5432",
+  publicUrl: "http://localhost:15432",
+})
 const testFiles = readdirSync("tests")
   .filter(file => file.endsWith(".test.ts") && file !== "errors.test.ts")
   .map(file => `tests/${file}`)

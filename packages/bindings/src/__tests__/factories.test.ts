@@ -4,6 +4,7 @@ import { createFactories } from "../factories.js"
 import type {
   NativeAddon,
   RawBindingsHandle,
+  RawContainerHandle,
   RawKvHandle,
   RawQueueHandle,
   RawStorageHandle,
@@ -48,12 +49,17 @@ function fakeAddon(): { addon: NativeAddon; constructions: unknown[] } {
     deleteSecret: async () => {},
     listSecrets: async () => [],
   }
+  const containerHandle: RawContainerHandle = {
+    getInternalUrl: async () => "http://service.internal:8080",
+    getPublicUrl: async () => null,
+  }
 
   const bindings: RawBindingsHandle = {
     storage: async () => storageHandle,
     kv: async () => kvHandle,
     queue: async () => queueHandle,
     vault: async () => vaultHandle,
+    container: async () => containerHandle,
   }
 
   class FakeBindingsHandle {
@@ -64,6 +70,7 @@ function fakeAddon(): { addon: NativeAddon; constructions: unknown[] } {
     kv = bindings.kv
     queue = bindings.queue
     vault = bindings.vault
+    container = bindings.container
   }
 
   return {
@@ -88,6 +95,9 @@ function addonForKv(kvHandle: RawKvHandle): NativeAddon {
       throw new Error("unused")
     }
     async vault() {
+      throw new Error("unused")
+    }
+    async container() {
       throw new Error("unused")
     }
   }
@@ -218,7 +228,7 @@ describe("createFactories kv surface", () => {
 })
 
 describe("createFactories method mapping", () => {
-  it("serializes queue.send payloads as JSON via sendJson using the binding name", async () => {
+  it("serializes queue.send payloads as JSON via the bound queue handle", async () => {
     const sendJson = vi.fn(async () => {})
     const queueHandle: RawQueueHandle = {
       sendJson,
@@ -250,6 +260,16 @@ describe("createFactories method mapping", () => {
 
     await queue("events").send({ hello: "world" })
 
-    expect(sendJson).toHaveBeenCalledWith("events", JSON.stringify({ hello: "world" }))
+    expect(sendJson).toHaveBeenCalledWith(JSON.stringify({ hello: "world" }))
+  })
+
+  it("exposes linked-container URLs through the lazy handle", async () => {
+    const { addon } = fakeAddon()
+    const { container } = createFactories(() => addon)
+
+    await expect(container("database").getInternalUrl()).resolves.toBe(
+      "http://service.internal:8080",
+    )
+    await expect(container("database").getPublicUrl()).resolves.toBeNull()
   })
 })

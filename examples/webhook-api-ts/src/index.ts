@@ -1,6 +1,7 @@
 import { command, kv } from "@alienplatform/sdk"
 import type { Kv } from "@alienplatform/sdk"
 import { Hono } from "hono"
+import { z } from "zod"
 
 const app = new Hono()
 
@@ -58,23 +59,27 @@ app.get("/health", c => c.json({ status: "ok" }))
 // --- Commands ---
 // Query stored events from your control plane.
 
-command("get-events", async ({ source, limit }: { source?: string; limit?: number }) => {
-  const ev = kv("events")
-  const prefix = source ? `${source}:` : ""
-  const results: { key: string; value: unknown }[] = []
+command(
+  "get-events",
+  z.object({ source: z.string().optional(), limit: z.number().optional() }),
+  async ({ source, limit }) => {
+    const ev = kv("events")
+    const prefix = source ? `${source}:` : ""
+    const results: { key: string; value: unknown }[] = []
 
-  for await (const entry of scanAll(ev, prefix)) {
-    results.push({
-      key: entry.key,
-      value: JSON.parse(new TextDecoder().decode(entry.value)),
-    })
-    if (limit && results.length >= limit) break
-  }
+    for await (const entry of scanAll(ev, prefix)) {
+      results.push({
+        key: entry.key,
+        value: JSON.parse(new TextDecoder().decode(entry.value)),
+      })
+      if (limit && results.length >= limit) break
+    }
 
-  return { events: results, count: results.length }
-})
+    return { events: results, count: results.length }
+  },
+)
 
-command("get-stats", async ({ sources }: { sources: string[] }) => {
+command("get-stats", z.object({ sources: z.array(z.string()) }), async ({ sources }) => {
   const ev = kv("events")
   const counts: Record<string, number> = {}
 
