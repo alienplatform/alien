@@ -61,6 +61,12 @@ pub trait Authz: Send + Sync {
 
     // -- Commands ----------------------------------------------------------
     fn can_dispatch_command(&self, subject: &Subject, deployment: &DeploymentRecord) -> bool;
+    /// Callers that may act on the target deployment may complete its command
+    /// execution lifecycle. This remains distinct from dispatch authorization:
+    /// deployment tokens can execute commands but cannot create them.
+    fn can_execute_command(&self, subject: &Subject, deployment: &DeploymentRecord) -> bool {
+        self.can_act_on_deployment(subject, deployment)
+    }
     fn can_read_command(&self, subject: &Subject, deployment: &DeploymentRecord) -> bool;
     /// Whether a caller holds an exact capability for one command payload.
     /// This path deliberately does not infer access from workspace scope: a

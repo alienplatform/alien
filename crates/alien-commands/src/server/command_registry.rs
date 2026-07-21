@@ -445,7 +445,7 @@ impl CommandRegistry for InMemoryCommandRegistry {
             error: None,
             target: target.target.clone(),
             delivery_mode: target.delivery_mode,
-            project_id: "local-dev".to_string(),
+            project_id: "default".to_string(),
         };
 
         self.commands
@@ -457,7 +457,7 @@ impl CommandRegistry for InMemoryCommandRegistry {
             command_id,
             target: target.target.clone(),
             delivery_mode: target.delivery_mode,
-            project_id: "local-dev".to_string(),
+            project_id: "default".to_string(),
         })
     }
 
@@ -832,6 +832,34 @@ mod tests {
                 .unwrap()
                 .state,
             CommandState::Succeeded
+        );
+    }
+
+    #[tokio::test]
+    async fn in_memory_command_access_uses_oss_tenant_context() {
+        let registry = InMemoryCommandRegistry::new();
+        registry
+            .register_target("worker-1", CommandTargetType::Worker)
+            .await
+            .unwrap();
+        let target = registry.resolve_target("dep-1", None).await.unwrap();
+        let command = registry
+            .create_command("dep-1", "run", &target, CommandState::Pending, None, None)
+            .await
+            .unwrap();
+
+        assert_eq!(command.project_id, "default");
+        assert_eq!(
+            registry
+                .get_command_access_context(&command.command_id)
+                .await
+                .unwrap()
+                .unwrap(),
+            CommandAccessContext {
+                workspace_id: "default".to_string(),
+                project_id: "default".to_string(),
+                deployment_id: "dep-1".to_string(),
+            }
         );
     }
 

@@ -402,6 +402,19 @@ mod tests {
     }
 
     #[test]
+    fn command_execution_follows_deployment_access_without_granting_dispatch() {
+        let dep = deployment("d1", "dg-a");
+
+        assert!(OssAuthz.can_execute_command(&admin(), &dep));
+        assert!(OssAuthz.can_execute_command(&dg_token("dg-a"), &dep));
+        assert!(OssAuthz.can_execute_command(&deployment_token("d1"), &dep));
+
+        assert!(!OssAuthz.can_execute_command(&dg_token("dg-b"), &dep));
+        assert!(!OssAuthz.can_execute_command(&deployment_token("d2"), &dep));
+        assert!(!OssAuthz.can_dispatch_command(&deployment_token("d1"), &dep));
+    }
+
+    #[test]
     fn project_token_only_reads_commands_in_its_project() {
         let subject = Subject {
             kind: SubjectKind::ServiceAccount {
