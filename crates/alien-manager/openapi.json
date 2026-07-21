@@ -15882,6 +15882,12 @@
           }
         }
       }
+    },
+    "securitySchemes": {
+      "bearer": {
+        "type": "http",
+        "scheme": "bearer"
+      }
     }
   },
   "tags": [

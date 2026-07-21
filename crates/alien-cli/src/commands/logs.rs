@@ -560,7 +560,7 @@ async fn generate_logs_token(
         .generate_manager_token()
         .id(manager_id)
         .workspace(workspace)
-        .body(types::GenerateManagerTokenRequest::Project(project))
+        .body(types::GenerateManagerTokenRequest { project })
         .send()
         .await
         .into_sdk_error()

@@ -95,7 +95,7 @@ jobs:
         env:
           VERSION: ${{ steps.bump.outputs.version }}
 
-      - name: Set npm package versions
+      - name: Set JavaScript package versions
         run: |
           VERSION="${{ steps.bump.outputs.version }}"
           # The bindings addon ships as a wrapper + per-platform prebuild packages
@@ -114,6 +114,29 @@ jobs:
               fs.writeFileSync(path, content.replace(/\"version\": \"[^\"]*\"/, '\"version\": \"${VERSION}\"'));
             "
           done
+          # The generated Manager SDK publishes a JSR manifest alongside
+          # package.json. Keep the two registry versions identical.
+          node -e "
+            const fs = require('fs');
+            const path = 'client-sdks/manager/typescript/jsr.json';
+            const content = fs.readFileSync(path, 'utf8');
+            fs.writeFileSync(path, content.replace(/\"version\": \"[^\"]*\"/, '\"version\": \"${VERSION}\"'));
+          "
+          # Speakeasy emits npm locks for the SDK and its examples. Stamp the
+          # embedded local-package metadata alongside the publish manifests.
+          node -e "
+            const fs = require('fs');
+            const sdkLockPath = 'client-sdks/manager/typescript/package-lock.json';
+            const sdkLock = JSON.parse(fs.readFileSync(sdkLockPath, 'utf8'));
+            sdkLock.version = '${VERSION}';
+            sdkLock.packages[''].version = '${VERSION}';
+            fs.writeFileSync(sdkLockPath, JSON.stringify(sdkLock, null, 2) + '\\n');
+
+            const examplesLockPath = 'client-sdks/manager/typescript/examples/package-lock.json';
+            const examplesLock = JSON.parse(fs.readFileSync(examplesLockPath, 'utf8'));
+            examplesLock.packages['..'].version = '${VERSION}';
+            fs.writeFileSync(examplesLockPath, JSON.stringify(examplesLock, null, 2) + '\\n');
+          "
 
       # Dry-run build jobs start from the untagged commit, so carry the exact
       # versioned manifests that a real release would commit into those fresh
@@ -133,6 +156,9 @@ jobs:
             packages/testing/package.json
             client-sdks/platform/typescript/package.json
             client-sdks/manager/typescript/package.json
+            client-sdks/manager/typescript/jsr.json
+            client-sdks/manager/typescript/package-lock.json
+            client-sdks/manager/typescript/examples/package-lock.json
             packages/bindings/package.json
             crates/alien-bindings-node/package.json
             packages/bindings/npm/darwin-arm64/package.json
@@ -148,7 +174,9 @@ jobs:
           git config user.email "github-actions[bot]@users.noreply.github.com"
           git add Cargo.toml packages/core/package.json packages/commands/package.json \
             packages/sdk/package.json packages/testing/package.json \
-            client-sdks/platform/typescript/package.json client-sdks/manager/typescript/package.json \
+            client-sdks/platform/typescript/package.json \
+            client-sdks/manager/typescript/package.json client-sdks/manager/typescript/jsr.json \
+            client-sdks/manager/typescript/package-lock.json client-sdks/manager/typescript/examples/package-lock.json \
             packages/bindings/package.json crates/alien-bindings-node/package.json \
             packages/bindings/npm/darwin-arm64/package.json packages/bindings/npm/darwin-x64/package.json \
             packages/bindings/npm/linux-x64-gnu/package.json packages/bindings/npm/linux-arm64-gnu/package.json

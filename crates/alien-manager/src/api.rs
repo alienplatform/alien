@@ -1,7 +1,26 @@
 //! OpenAPI documentation for the alien-manager API.
 
 #[cfg(feature = "openapi")]
-use utoipa::OpenApi;
+use utoipa::{
+    openapi::security::{Http, HttpAuthScheme, SecurityScheme},
+    Modify, OpenApi,
+};
+
+#[cfg(feature = "openapi")]
+struct BearerSecurity;
+
+#[cfg(feature = "openapi")]
+impl Modify for BearerSecurity {
+    fn modify(&self, openapi: &mut utoipa::openapi::OpenApi) {
+        openapi
+            .components
+            .get_or_insert_default()
+            .add_security_scheme(
+                "bearer",
+                SecurityScheme::Http(Http::new(HttpAuthScheme::Bearer)),
+            );
+    }
+}
 
 /// OpenAPI documentation for the Alien Manager API
 #[cfg(feature = "openapi")]
@@ -99,6 +118,7 @@ use utoipa::OpenApi;
         // Core types
         alien_core::Platform,
     )),
+    modifiers(&BearerSecurity),
     tags(
         (name = "health", description = "Health check"),
         (name = "identity", description = "Authentication identity"),
@@ -113,3 +133,35 @@ use utoipa::OpenApi;
     )
 )]
 pub struct ApiDoc;
+
+#[cfg(all(test, feature = "openapi"))]
+mod tests {
+    use serde_json::json;
+    use utoipa::OpenApi;
+
+    use super::ApiDoc;
+
+    #[test]
+    fn openapi_declares_http_bearer_security_without_dropping_schemas() {
+        let document = serde_json::to_value(ApiDoc::openapi())
+            .expect("manager OpenAPI should serialize as JSON");
+
+        assert_eq!(
+            document.pointer("/components/securitySchemes/bearer"),
+            Some(&json!({
+                "type": "http",
+                "scheme": "bearer",
+            }))
+        );
+        assert!(
+            document
+                .pointer("/components/schemas/ResolveBindingRequest")
+                .is_some(),
+            "adding bearer security must preserve generated component schemas"
+        );
+        assert_eq!(
+            document.pointer("/paths/~1v1~1bindings~1resolve/post/security/0/bearer"),
+            Some(&json!([]))
+        );
+    }
+}

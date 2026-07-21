@@ -1,0 +1,10 @@
+workflowVersion: 1.0.0
+speakeasyVersion: 1.790.3
+sources:
+    manager-api:
+        inputs:
+            - location: ../openapi.json
+targets:
+    manager-typescript:
+        target: typescript
+        source: manager-api

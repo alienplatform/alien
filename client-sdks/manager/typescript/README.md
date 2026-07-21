@@ -111,9 +111,9 @@ run();
 
 This SDK supports the following security scheme globally:
 
-| Name     | Type   | Scheme  | Environment Variable   |
-| -------- | ------ | ------- | ---------------------- |
-| `bearer` | apiKey | API key | `ALIEN_MANAGER_BEARER` |
+| Name     | Type | Scheme      | Environment Variable   |
+| -------- | ---- | ----------- | ---------------------- |
+| `bearer` | http | HTTP Bearer | `ALIEN_MANAGER_BEARER` |
 
 To authenticate with the API the `bearer` parameter must be set when initializing the SDK client instance. For example:
 ```typescript
