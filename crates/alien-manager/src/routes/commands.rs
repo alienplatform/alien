@@ -75,7 +75,7 @@ async fn require_command_read_access(
     require_command_access(state, subject, &command.deployment_id).await
 }
 
-async fn require_command_mutation_access(
+async fn require_command_execution_access(
     state: &AppState,
     subject: &crate::auth::Subject,
     deployment_id: &str,
@@ -86,7 +86,7 @@ async fn require_command_mutation_access(
         .await
         .map_err(|e| e.into_response())?
         .ok_or_else(|| ErrorData::not_found_deployment(deployment_id).into_response())?;
-    if state.authz.can_dispatch_command(subject, &deployment) {
+    if state.authz.can_execute_command(subject, &deployment) {
         Ok(())
     } else {
         Err(ErrorData::forbidden("Access denied").into_response())
@@ -281,11 +281,9 @@ async fn submit_response(
             Ok(None) => return ErrorData::not_found_deployment(&deployment_id).into_response(),
             Err(e) => return e.into_response(),
         };
-        if !state.authz.can_dispatch_command(&subject, &deployment) {
-            return ErrorData::forbidden(
-                "Access denied: only the target deployment can submit responses",
-            )
-            .into_response();
+        if !state.authz.can_execute_command(&subject, &deployment) {
+            return ErrorData::forbidden("Access denied: cannot act on the target deployment")
+                .into_response();
         }
     } else {
         // No Bearer token — try presigned URL auth from query parameters.
@@ -485,7 +483,7 @@ async fn release_lease(
         }
         Err(e) => return e.into_response(),
     };
-    if let Err(e) = require_command_mutation_access(&state, &subject, &owner).await {
+    if let Err(e) = require_command_execution_access(&state, &subject, &owner).await {
         return e;
     }
 

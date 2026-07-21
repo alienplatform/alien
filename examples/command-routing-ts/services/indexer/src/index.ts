@@ -53,7 +53,12 @@ receiver.command("status", async () => ({
 
 // Overlapping command #2: `search`, reading the index this daemon maintains.
 receiver.command("search", async input => {
-  if (typeof input !== "object" || input === null || !("term" in input) || typeof input.term !== "string") {
+  if (
+    typeof input !== "object" ||
+    input === null ||
+    !("term" in input) ||
+    typeof input.term !== "string"
+  ) {
     throw new TypeError("term must be a string")
   }
   const { term } = input

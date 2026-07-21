@@ -26,7 +26,12 @@ const files = storage(process.env.FILES_BUCKET ?? "files")
 if (process.env.ALIEN_COMMANDS_URL) {
   const receiver = createCommandReceiver()
   receiver.command("reprocess", async input => {
-    if (typeof input !== "object" || input === null || !("issueId" in input) || typeof input.issueId !== "string") {
+    if (
+      typeof input !== "object" ||
+      input === null ||
+      !("issueId" in input) ||
+      typeof input.issueId !== "string"
+    ) {
       throw new TypeError("issueId must be a string")
     }
     const { issueId } = input
