@@ -1217,12 +1217,6 @@ const MAX_MACHINES_PER_CLUSTER: u32 = 10;
 /// Beyond this, horizontal scaling is always preferred over bigger machines.
 const MAX_STANDARD_VCPU: u32 = 8;
 
-/// How many of the largest standard container we want to fit per machine.
-const STANDARD_CONTAINERS_PER_MACHINE: f64 = 2.0;
-
-/// Overhead factor for system processes and bin-packing inefficiency.
-const OVERHEAD_FACTOR: f64 = 1.25;
-
 /// Runtime CPU reserved for system processes on each managed container machine.
 const SYSTEM_RESERVE_CPU: f64 = 0.5;
 
@@ -1338,29 +1332,24 @@ pub fn select_instance_type(
         };
 
     let desired_target_machines = desired_target_machines(requirements);
-    let target_cpu =
-        (requirements.max_cpu_per_container * STANDARD_CONTAINERS_PER_MACHINE * OVERHEAD_FACTOR)
-            .max(
-                requirements.total_cpu_at_desired * WORKLOAD_HEADROOM_FACTOR
-                    / desired_target_machines as f64,
-            )
-            .max(0.25);
-    let target_memory = (requirements.max_memory_per_container as f64
-        * STANDARD_CONTAINERS_PER_MACHINE
-        * OVERHEAD_FACTOR)
-        .max(
-            requirements.total_memory_bytes_at_desired as f64 * WORKLOAD_HEADROOM_FACTOR
-                / desired_target_machines as f64,
-        )
-        .max(256.0 * MI as f64);
+    let target_cpu = requirements
+        .max_cpu_per_container
+        .max(requirements.total_cpu_at_desired / desired_target_machines as f64)
+        * WORKLOAD_HEADROOM_FACTOR;
+    let target_memory = (requirements.max_memory_per_container as f64)
+        .max(requirements.total_memory_bytes_at_desired as f64 / desired_target_machines as f64)
+        * WORKLOAD_HEADROOM_FACTOR;
 
-    // Find the smallest instance that meets per-container targets within the cap.
+    // Find the smallest instance whose allocatable capacity meets the workload
+    // target after host reserve and workload headroom. Machine count already
+    // accounts for multiple replicas; requiring space for an arbitrary second
+    // copy here would size the same demand twice.
     let selected = candidates
         .iter()
         .filter(|spec| {
             spec.vcpu <= vcpu_cap
-                && spec.vcpu as f64 >= target_cpu
-                && spec.memory_bytes as f64 >= target_memory
+                && allocatable_cpu(spec) >= target_cpu
+                && allocatable_memory_bytes(spec) as f64 >= target_memory
         })
         .min_by_key(|spec| spec.vcpu)
         .or_else(|| {
@@ -1638,6 +1627,28 @@ mod tests {
         let sel = select_instance_type(Platform::Aws, &req).unwrap();
         let spec = find_instance_type(Platform::Aws, sel.instance_type).unwrap();
         assert_eq!(spec.family, InstanceFamily::Burstable);
+    }
+
+    #[test]
+    fn test_selects_smallest_burstable_machine_with_real_headroom() {
+        let req = WorkloadRequirements {
+            total_cpu_at_desired: 1.0,
+            total_memory_bytes_at_desired: 2 * GI,
+            total_cpu_at_max: 1.0,
+            total_memory_bytes_at_max: 2 * GI,
+            max_cpu_per_container: 1.0,
+            max_memory_per_container: 2 * GI,
+            max_ephemeral_storage_bytes: 10 * GI,
+            gpu: None,
+            architecture: None,
+            nested_virt: false,
+        };
+
+        let selection = select_instance_type(Platform::Aws, &req).unwrap();
+
+        assert_eq!(selection.instance_type, "t4g.medium");
+        assert_eq!(selection.min_machines, 1);
+        assert_eq!(selection.max_machines, 1);
     }
 
     #[test]
