@@ -26,6 +26,7 @@ pub(crate) enum Deployments {
     CurrentReleaseId,
     DesiredReleaseId,
     ImportSource,
+    SetupMetadata,
     SetupTarget,
     SetupFingerprint,
     SetupFingerprintVersion,
@@ -147,6 +148,7 @@ pub async fn run_migrations(db: &SqliteDatabase) -> Result<(), AlienError> {
             .col(ColumnDef::new(Deployments::CurrentReleaseId).text())
             .col(ColumnDef::new(Deployments::DesiredReleaseId).text())
             .col(ColumnDef::new(Deployments::ImportSource).text())
+            .col(ColumnDef::new(Deployments::SetupMetadata).text())
             .col(ColumnDef::new(Deployments::SetupTarget).text())
             .col(ColumnDef::new(Deployments::SetupFingerprint).text())
             .col(ColumnDef::new(Deployments::SetupFingerprintVersion).integer())
@@ -333,6 +335,7 @@ pub async fn run_migrations(db: &SqliteDatabase) -> Result<(), AlienError> {
         "ALTER TABLE deployments ADD COLUMN workspace_id TEXT NOT NULL DEFAULT 'default'",
         "ALTER TABLE deployments ADD COLUMN project_id TEXT NOT NULL DEFAULT 'default'",
         "ALTER TABLE deployments ADD COLUMN import_source TEXT",
+        "ALTER TABLE deployments ADD COLUMN setup_metadata TEXT",
         "ALTER TABLE deployments ADD COLUMN base_platform TEXT",
         "ALTER TABLE deployments ADD COLUMN deployment_protocol_version INTEGER NOT NULL DEFAULT 1",
         "ALTER TABLE releases ADD COLUMN workspace_id TEXT NOT NULL DEFAULT 'default'",
