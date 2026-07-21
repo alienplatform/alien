@@ -749,6 +749,49 @@ mod tests {
     };
 
     #[test]
+    fn aws_credentials_wire_format_matches_manager_api_contract() {
+        let cases = [
+            (
+                AwsCredentials::AccessKeys {
+                    access_key_id: "access-key".to_string(),
+                    secret_access_key: "secret-key".to_string(),
+                    session_token: Some("session-token".to_string()),
+                },
+                serde_json::json!({
+                    "type": "accessKeys",
+                    "access_key_id": "access-key",
+                    "secret_access_key": "secret-key",
+                    "session_token": "session-token",
+                }),
+            ),
+            (
+                AwsCredentials::SessionCredentials {
+                    access_key_id: "access-key".to_string(),
+                    secret_access_key: "secret-key".to_string(),
+                    session_token: "session-token".to_string(),
+                    expires_at: "2099-01-01T00:00:00Z".to_string(),
+                },
+                serde_json::json!({
+                    "type": "sessionCredentials",
+                    "access_key_id": "access-key",
+                    "secret_access_key": "secret-key",
+                    "session_token": "session-token",
+                    "expires_at": "2099-01-01T00:00:00Z",
+                }),
+            ),
+        ];
+
+        for (credentials, expected) in cases {
+            let serialized = serde_json::to_value(&credentials).unwrap();
+            assert_eq!(serialized, expected);
+            assert_eq!(
+                serde_json::from_value::<AwsCredentials>(serialized).unwrap(),
+                credentials
+            );
+        }
+    }
+
+    #[test]
     fn kubernetes_cloud_exposes_nested_aws_config() {
         let config = ClientConfig::KubernetesCloud {
             kubernetes: Box::new(KubernetesClientConfig::InCluster {
