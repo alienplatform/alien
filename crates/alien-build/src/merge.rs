@@ -11,7 +11,7 @@ use crate::error::{ErrorData, Result};
 use alien_core::{Container, ContainerCode, Daemon, DaemonCode, Stack, Worker, WorkerCode};
 use alien_error::{AlienError, Context, IntoAlienError};
 use sha2::{Digest, Sha256};
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 use tracing::info;
 
@@ -69,14 +69,21 @@ pub fn merge_build_outputs(input_dir: &Path, output_dir: &Path) -> Result<Vec<St
     }
 
     let mut merged = Vec::new();
+    let mut artifact_rewrites = BTreeMap::new();
     for (platform, partials) in &by_platform {
-        merge_platform(platform, partials, output_dir)?;
+        merge_platform(platform, partials, output_dir, &mut artifact_rewrites)?;
         merged.push(platform.clone());
     }
+    rewrite_cross_platform_images(&merged, output_dir, &artifact_rewrites)?;
     Ok(merged)
 }
 
-fn merge_platform(platform: &str, partials: &[PartialPlatform], output_dir: &Path) -> Result<()> {
+fn merge_platform(
+    platform: &str,
+    partials: &[PartialPlatform],
+    output_dir: &Path,
+    artifact_rewrites: &mut BTreeMap<(String, String, String), String>,
+) -> Result<()> {
     // All partials for a platform must be the same stack except for image references and
     // whether each compute resource was built here (`blank_images` erases both — see its
     // doc). The resource set and the rest of every resource's config must still match, so a
@@ -102,6 +109,7 @@ fn merge_platform(platform: &str, partials: &[PartialPlatform], output_dir: &Pat
         // A partial's stored `code.image` is the build runner's absolute path, which doesn't
         // exist here — resolve the artifact dir by joining its basename to the partial's real dir.
         let mut tarballs: BTreeMap<String, PathBuf> = BTreeMap::new();
+        let mut source_locations = BTreeSet::new();
         let mut is_local = false;
 
         for partial in partials {
@@ -115,6 +123,12 @@ fn merge_platform(platform: &str, partials: &[PartialPlatform], output_dir: &Pat
             if !artifact_dir.is_dir() {
                 continue; // remote-URI image (no local dir) — leave it untouched
             }
+            source_locations.insert(build_artifact_location(&image).unwrap_or_else(|| {
+                (
+                    platform.to_string(),
+                    basename.to_string_lossy().into_owned(),
+                )
+            }));
             is_local = true;
             for tar in read_oci_tarballs(&artifact_dir)? {
                 let name = tar
@@ -167,6 +181,12 @@ fn merge_platform(platform: &str, partials: &[PartialPlatform], output_dir: &Pat
             &resource_id,
             absolute.to_string_lossy().into_owned(),
         );
+        for (source_platform, basename) in source_locations {
+            artifact_rewrites.insert(
+                (source_platform, resource_id.clone(), basename),
+                absolute.to_string_lossy().into_owned(),
+            );
+        }
         info!(
             "Merged {} tarball(s) for resource '{}' on platform '{}'",
             tarballs.len(),
@@ -175,13 +195,69 @@ fn merge_platform(platform: &str, partials: &[PartialPlatform], output_dir: &Pat
         );
     }
 
-    let stack_json = serde_json::to_string_pretty(&merged_stack)
+    write_stack(&out_platform_dir.join("stack.json"), &merged_stack)?;
+    Ok(())
+}
+
+fn rewrite_cross_platform_images(
+    platforms: &[String],
+    output_dir: &Path,
+    artifact_rewrites: &BTreeMap<(String, String, String), String>,
+) -> Result<()> {
+    for platform in platforms {
+        let stack_path = output_dir.join("build").join(platform).join("stack.json");
+        let mut stack = read_stack(&stack_path)?;
+        let resource_ids: Vec<String> = stack.resources().map(|(id, _)| id.clone()).collect();
+        let mut changed = false;
+
+        for resource_id in resource_ids {
+            let Some(image) = compute_image(&stack, &resource_id) else {
+                continue;
+            };
+            let Some((source_platform, basename)) = build_artifact_location(&image) else {
+                continue;
+            };
+            let Some(merged_image) =
+                artifact_rewrites.get(&(source_platform, resource_id.clone(), basename))
+            else {
+                continue;
+            };
+            if &image != merged_image {
+                set_compute_image(&mut stack, &resource_id, merged_image.clone());
+                changed = true;
+            }
+        }
+
+        if changed {
+            write_stack(&stack_path, &stack)?;
+        }
+    }
+    Ok(())
+}
+
+fn build_artifact_location(image: &str) -> Option<(String, String)> {
+    let components = Path::new(image)
+        .components()
+        .filter_map(|component| component.as_os_str().to_str())
+        .collect::<Vec<_>>();
+
+    components.windows(4).find_map(|window| {
+        let is_build_root = window[0] == ".alien"
+            || window[0]
+                .strip_prefix(".alien-")
+                .is_some_and(|suffix| !suffix.is_empty());
+        (is_build_root && window[1] == "build")
+            .then(|| (window[2].to_string(), window[3].to_string()))
+    })
+}
+
+fn write_stack(stack_path: &Path, stack: &Stack) -> Result<()> {
+    let stack_json = serde_json::to_string_pretty(stack)
         .into_alien_error()
         .context(ErrorData::JsonSerializationError {
             message: "Failed to serialize merged stack.json".to_string(),
         })?;
-    let stack_path = out_platform_dir.join("stack.json");
-    std::fs::write(&stack_path, stack_json)
+    std::fs::write(stack_path, stack_json)
         .into_alien_error()
         .context(ErrorData::FileOperationFailed {
             operation: "write".to_string(),
@@ -620,6 +696,54 @@ mod tests {
         );
         assert!(merged_dir.join("linux-aarch64.oci.tar").exists());
         assert!(merged_dir.join("linux-x64.oci.tar").exists());
+    }
+
+    #[test]
+    fn rewrites_other_platforms_that_share_a_renamed_artifact() {
+        let root = tempdir().unwrap();
+        let out = tempdir().unwrap();
+        write_partial(
+            root.path(),
+            "arm",
+            "local",
+            "web",
+            "web-arm-source",
+            &[("linux-aarch64.oci.tar", b"arm")],
+        );
+        write_partial(
+            root.path(),
+            "x64",
+            "local",
+            "web",
+            "web-x64-source",
+            &[("linux-x64.oci.tar", b"x64")],
+        );
+
+        let aws_dir = root.path().join("arm/build/aws");
+        std::fs::create_dir_all(&aws_dir).unwrap();
+        let aws_stack = stack_with("web", ".alien-arm64/build/local/web-arm-source");
+        std::fs::write(
+            aws_dir.join("stack.json"),
+            serde_json::to_string_pretty(&aws_stack).unwrap(),
+        )
+        .unwrap();
+
+        assert_eq!(
+            merge_build_outputs(root.path(), out.path()).unwrap(),
+            vec!["aws".to_string(), "local".to_string()]
+        );
+
+        let local = read_stack(&out.path().join("build/local/stack.json")).unwrap();
+        let aws = read_stack(&out.path().join("build/aws/stack.json")).unwrap();
+        let merged_image = compute_image(&local, "web").unwrap();
+        assert_eq!(
+            compute_image(&aws, "web").as_deref(),
+            Some(merged_image.as_str())
+        );
+        assert!(Path::new(&merged_image)
+            .join("linux-aarch64.oci.tar")
+            .is_file());
+        assert!(Path::new(&merged_image).join("linux-x64.oci.tar").is_file());
     }
 
     #[test]
