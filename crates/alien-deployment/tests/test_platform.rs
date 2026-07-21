@@ -784,6 +784,7 @@ async fn setup_authorized_update_clears_authority_only_on_success() {
 
 #[tokio::test]
 async fn update_completes_after_removed_resource_is_deleted() {
+    let _vault_env = test_vault_env().await;
     let config = create_test_config("hash_v1", false);
     let mut stack_v1 = create_test_stack("test-stack", "function-a");
     let function_b = Worker::new("function-b".to_string())
