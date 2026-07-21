@@ -56,6 +56,43 @@ async fn require_command_access(
     }
 }
 
+/// Authorize from the command record when it contains everything required by
+/// the caller's scope. Deployment-group tokens still load the deployment,
+/// because group ownership is not duplicated on command records.
+async fn require_command_read_access(
+    state: &AppState,
+    subject: &crate::auth::Subject,
+    command: &alien_commands::server::CommandAccessContext,
+) -> Result<(), Response> {
+    if !matches!(subject.scope, crate::auth::Scope::DeploymentGroup { .. }) {
+        return if state.authz.can_read_command_context(subject, command) {
+            Ok(())
+        } else {
+            Err(ErrorData::forbidden("Access denied").into_response())
+        };
+    }
+
+    require_command_access(state, subject, &command.deployment_id).await
+}
+
+async fn require_command_mutation_access(
+    state: &AppState,
+    subject: &crate::auth::Subject,
+    deployment_id: &str,
+) -> Result<(), Response> {
+    let deployment = state
+        .deployment_store
+        .get_deployment(subject, deployment_id)
+        .await
+        .map_err(|e| e.into_response())?
+        .ok_or_else(|| ErrorData::not_found_deployment(deployment_id).into_response())?;
+    if state.authz.can_dispatch_command(subject, &deployment) {
+        Ok(())
+    } else {
+        Err(ErrorData::forbidden("Access denied").into_response())
+    }
+}
+
 // --- Router ---
 
 pub fn router() -> Router<AppState> {
@@ -134,12 +171,24 @@ async fn get_command_status(
         Ok(s) => s,
         Err(e) => return e.into_response(),
     };
-    let deployment_id = match get_command_owner(&state, &command_id).await {
-        Ok(id) => id,
-        Err(e) => return e,
+    let command = match state
+        .command_server
+        .get_command_access_context(&command_id)
+        .await
+    {
+        Ok(Some(command)) => command,
+        Ok(None) => {
+            return alien_error::AlienError::new(
+                alien_commands::error::ErrorData::CommandNotFound {
+                    command_id: command_id.clone(),
+                },
+            )
+            .into_response()
+        }
+        Err(e) => return e.into_response(),
     };
 
-    if let Err(e) = require_command_access(&state, &subject, &deployment_id).await {
+    if let Err(e) = require_command_read_access(&state, &subject, &command).await {
         return e;
     }
 
@@ -232,7 +281,7 @@ async fn submit_response(
             Ok(None) => return ErrorData::not_found_deployment(&deployment_id).into_response(),
             Err(e) => return e.into_response(),
         };
-        if !state.authz.can_act_on_deployment(&subject, &deployment) {
+        if !state.authz.can_dispatch_command(&subject, &deployment) {
             return ErrorData::forbidden(
                 "Access denied: only the target deployment can submit responses",
             )
@@ -283,11 +332,11 @@ async fn get_command_payload(
     // expose its payload to any workspace-admin/member token.
     match state
         .command_server
-        .get_command_deployment_id(&command_id)
+        .get_command_access_context(&command_id)
         .await
     {
-        Ok(Some(deployment_id)) => {
-            if let Err(e) = require_command_access(&state, &subject, &deployment_id).await {
+        Ok(Some(command)) => {
+            if let Err(e) = require_command_read_access(&state, &subject, &command).await {
                 return e;
             }
         }
@@ -436,7 +485,7 @@ async fn release_lease(
         }
         Err(e) => return e.into_response(),
     };
-    if let Err(e) = require_command_access(&state, &subject, &owner).await {
+    if let Err(e) = require_command_mutation_access(&state, &subject, &owner).await {
         return e;
     }
 
