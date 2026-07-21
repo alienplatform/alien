@@ -1,18 +1,18 @@
-# Credentials
+# Bindings
 
 ## Overview
 
-Credential resolution for deployments
+Remote resource binding resolution
 
 ### Available Operations
 
-* [mintCredentials](#mintcredentials)
+* [resolveBinding](#resolvebinding)
 
-## mintCredentials
+## resolveBinding
 
 ### Example Usage
 
-<!-- UsageSnippet language="typescript" operationID="mint_credentials" method="post" path="/v1/credentials/mint" -->
+<!-- UsageSnippet language="typescript" operationID="resolve_binding" method="post" path="/v1/bindings/resolve" -->
 ```typescript
 import { AlienManager } from "@alienplatform/manager-api";
 
@@ -22,8 +22,7 @@ const alienManager = new AlienManager({
 });
 
 async function run() {
-  const result = await alienManager.credentials.mintCredentials({
-    bindingName: "<value>",
+  const result = await alienManager.bindings.resolveBinding({
     deploymentId: "<id>",
     resourceId: "<id>",
   });
@@ -40,7 +39,7 @@ The standalone function version of this method:
 
 ```typescript
 import { AlienManagerCore } from "@alienplatform/manager-api/core.js";
-import { credentialsMintCredentials } from "@alienplatform/manager-api/funcs/credentialsMintCredentials.js";
+import { bindingsResolveBinding } from "@alienplatform/manager-api/funcs/bindingsResolveBinding.js";
 
 // Use `AlienManagerCore` for best tree-shaking performance.
 // You can create one instance of it to use across an application.
@@ -50,8 +49,7 @@ const alienManager = new AlienManagerCore({
 });
 
 async function run() {
-  const res = await credentialsMintCredentials(alienManager, {
-    bindingName: "<value>",
+  const res = await bindingsResolveBinding(alienManager, {
     deploymentId: "<id>",
     resourceId: "<id>",
   });
@@ -59,7 +57,7 @@ async function run() {
     const { value: result } = res;
     console.log(result);
   } else {
-    console.log("credentialsMintCredentials failed:", res.error);
+    console.log("bindingsResolveBinding failed:", res.error);
   }
 }
 
@@ -70,17 +68,18 @@ run();
 
 | Parameter                                                                                                                                                                      | Type                                                                                                                                                                           | Required                                                                                                                                                                       | Description                                                                                                                                                                    |
 | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `request`                                                                                                                                                                      | [models.MintCredentialsRequest](../../models/mintcredentialsrequest.md)                                                                                                        | :heavy_check_mark:                                                                                                                                                             | The request object to use for the request.                                                                                                                                     |
+| `request`                                                                                                                                                                      | [models.ResolveBindingRequest](../../models/resolvebindingrequest.md)                                                                                                          | :heavy_check_mark:                                                                                                                                                             | The request object to use for the request.                                                                                                                                     |
 | `options`                                                                                                                                                                      | RequestOptions                                                                                                                                                                 | :heavy_minus_sign:                                                                                                                                                             | Used to set various options for making HTTP requests.                                                                                                                          |
 | `options.fetchOptions`                                                                                                                                                         | [RequestInit](https://developer.mozilla.org/en-US/docs/Web/API/Request/Request#options)                                                                                        | :heavy_minus_sign:                                                                                                                                                             | Options that are passed to the underlying HTTP request. This can be used to inject extra headers for examples. All `Request` options, except `method` and `body`, are allowed. |
 | `options.retries`                                                                                                                                                              | [RetryConfig](../../lib/utils/retryconfig.md)                                                                                                                                  | :heavy_minus_sign:                                                                                                                                                             | Enables retrying HTTP requests under certain failure conditions.                                                                                                               |
 
 ### Response
 
-**Promise\<[models.MintCredentialsResponse](../../models/mintcredentialsresponse.md)\>**
+**Promise\<[models.ResolveBindingResponse](../../models/resolvebindingresponse.md)\>**
 
 ### Errors
 
 | Error Type                      | Status Code                     | Content Type                    |
 | ------------------------------- | ------------------------------- | ------------------------------- |
+| errors.AlienError               | 400, 401, 403, 404              | application/json                |
 | errors.AlienManagerDefaultError | 4XX, 5XX                        | \*/\*                           |

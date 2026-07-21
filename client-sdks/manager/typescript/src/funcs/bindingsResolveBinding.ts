@@ -19,19 +19,21 @@ import {
   RequestTimeoutError,
   UnexpectedClientError,
 } from "../models/errors/httpclienterrors.js";
+import * as errors from "../models/errors/index.js";
 import { ResponseValidationError } from "../models/errors/responsevalidationerror.js";
 import { SDKValidationError } from "../models/errors/sdkvalidationerror.js";
 import * as models from "../models/index.js";
 import { APICall, APIPromise } from "../types/async.js";
 import { Result } from "../types/fp.js";
 
-export function credentialsResolveCredentials(
+export function bindingsResolveBinding(
   client: AlienManagerCore,
-  request: models.ResolveCredentialsRequest,
+  request: models.ResolveBindingRequest,
   options?: RequestOptions,
 ): APIPromise<
   Result<
-    models.ResolveCredentialsResponse,
+    models.ResolveBindingResponse,
+    | errors.AlienError
     | AlienManagerError
     | ResponseValidationError
     | ConnectionError
@@ -51,12 +53,13 @@ export function credentialsResolveCredentials(
 
 async function $do(
   client: AlienManagerCore,
-  request: models.ResolveCredentialsRequest,
+  request: models.ResolveBindingRequest,
   options?: RequestOptions,
 ): Promise<
   [
     Result<
-      models.ResolveCredentialsResponse,
+      models.ResolveBindingResponse,
+      | errors.AlienError
       | AlienManagerError
       | ResponseValidationError
       | ConnectionError
@@ -71,7 +74,7 @@ async function $do(
 > {
   const parsed = safeParse(
     request,
-    (value) => models.ResolveCredentialsRequest$outboundSchema.parse(value),
+    (value) => models.ResolveBindingRequest$outboundSchema.parse(value),
     "Input validation failed",
   );
   if (!parsed.ok) {
@@ -80,7 +83,7 @@ async function $do(
   const payload = parsed.value;
   const body = encodeJSON("body", payload, { explode: true });
 
-  const path = pathToFunc("/v1/resolve-credentials")();
+  const path = pathToFunc("/v1/bindings/resolve")();
 
   const headers = new Headers(compactMap({
     "Content-Type": "application/json",
@@ -94,7 +97,7 @@ async function $do(
   const context = {
     options: client._options,
     baseURL: options?.serverURL ?? client._baseURL ?? "",
-    operationID: "resolve_credentials",
+    operationID: "resolve_binding",
     oAuth2Scopes: null,
 
     resolvedSecurity: requestSecurity,
@@ -133,8 +136,13 @@ async function $do(
   }
   const response = doResult.value;
 
+  const responseFields = {
+    HttpMeta: { Response: response, Request: req },
+  };
+
   const [result] = await M.match<
-    models.ResolveCredentialsResponse,
+    models.ResolveBindingResponse,
+    | errors.AlienError
     | AlienManagerError
     | ResponseValidationError
     | ConnectionError
@@ -144,10 +152,11 @@ async function $do(
     | UnexpectedClientError
     | SDKValidationError
   >(
-    M.json(200, models.ResolveCredentialsResponse$inboundSchema),
+    M.json(200, models.ResolveBindingResponse$inboundSchema),
+    M.jsonErr([400, 401, 403, 404], errors.AlienError$inboundSchema),
     M.fail("4XX"),
     M.fail("5XX"),
-  )(response, req);
+  )(response, req, { extraFields: responseFields });
   if (!result.ok) {
     return [result, { status: "complete", request: req, response }];
   }

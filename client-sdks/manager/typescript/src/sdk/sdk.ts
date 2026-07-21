@@ -3,6 +3,7 @@
  */
 
 import { ClientSDK } from "../lib/sdks.js";
+import { Bindings } from "./bindings.js";
 import { Commands } from "./commands.js";
 import { Credentials } from "./credentials.js";
 import { DeploymentGroups } from "./deploymentgroups.js";
@@ -18,6 +19,11 @@ export class AlienManager extends ClientSDK {
   private _health?: Health;
   get health(): Health {
     return (this._health ??= new Health(this._options));
+  }
+
+  private _bindings?: Bindings;
+  get bindings(): Bindings {
+    return (this._bindings ??= new Bindings(this._options));
   }
 
   private _commands?: Commands;
