@@ -144,7 +144,7 @@ impl SqliteDeploymentStore {
     }
 
     /// All columns needed for deployment queries (must match parse_deployment order).
-    const DEPLOYMENT_COLUMNS: [Deployments; 28] = [
+    const DEPLOYMENT_COLUMNS: [Deployments; 29] = [
         Deployments::Id,
         Deployments::Name,
         Deployments::DeploymentGroupId,
@@ -173,6 +173,7 @@ impl SqliteDeploymentStore {
         Deployments::Error,
         Deployments::WorkspaceId,
         Deployments::ProjectId,
+        Deployments::InputValues,
     ];
 
     fn parse_deployment(row: &turso::Row) -> Result<DeploymentRecord, AlienError> {
@@ -243,6 +244,7 @@ impl SqliteDeploymentStore {
             project_id: p
                 .optional_string(27, "project_id")?
                 .unwrap_or_else(|| "default".to_string()),
+            input_values: p.optional_json(28, "input_values")?.unwrap_or_default(),
         })
     }
 
@@ -340,6 +342,7 @@ mod tests {
         let now = Utc::now();
         DeploymentRecord {
             id: "dep_test".to_string(),
+            input_values: Default::default(),
             workspace_id: "default".to_string(),
             project_id: "default".to_string(),
             name: "test".to_string(),
@@ -420,6 +423,12 @@ impl DeploymentStore for SqliteDeploymentStore {
                 message: "Failed to serialize environment_variables".to_string(),
             })?;
 
+        let input_values_json = serde_json::to_string(&params.input_values)
+            .into_alien_error()
+            .context(GenericError {
+                message: "Failed to serialize input_values".to_string(),
+            })?;
+
         // Build SQL in a block so sea_query types (which contain Rc and are !Send)
         // are dropped before the .await.
         let sql = {
@@ -433,6 +442,7 @@ impl DeploymentStore for SqliteDeploymentStore {
                 Deployments::StackSettings,
                 Deployments::RetryRequested,
                 Deployments::CreatedAt,
+                Deployments::InputValues,
             ];
             let mut values: Vec<sea_query::SimpleExpr> = vec![
                 id.clone().into(),
@@ -444,6 +454,7 @@ impl DeploymentStore for SqliteDeploymentStore {
                 stack_settings_json.into(),
                 0i64.into(),
                 now.to_rfc3339().into(),
+                input_values_json.into(),
             ];
 
             if let Some(ref ev_json) = env_vars_json {
@@ -495,6 +506,7 @@ impl DeploymentStore for SqliteDeploymentStore {
             setup_fingerprint_version: None,
             user_environment_variables: params.environment_variables,
             deployment_token: params.deployment_token,
+            input_values: params.input_values,
             management_config: None,
             deployment_config: None,
             retry_requested: false,
@@ -552,6 +564,12 @@ impl DeploymentStore for SqliteDeploymentStore {
                 message: "Failed to serialize imported environment_info".to_string(),
             })?;
 
+        let input_values_json = serde_json::to_string(&params.input_values)
+            .into_alien_error()
+            .context(GenericError {
+                message: "Failed to serialize input_values".to_string(),
+            })?;
+
         let sql = {
             let mut columns = vec![
                 Deployments::Id,
@@ -570,6 +588,7 @@ impl DeploymentStore for SqliteDeploymentStore {
                 Deployments::SetupFingerprintVersion,
                 Deployments::RetryRequested,
                 Deployments::CreatedAt,
+                Deployments::InputValues,
             ];
             let mut values: Vec<sea_query::SimpleExpr> = vec![
                 id.clone().into(),
@@ -595,6 +614,7 @@ impl DeploymentStore for SqliteDeploymentStore {
                 (params.setup_fingerprint_version as i64).into(),
                 0i64.into(),
                 now.to_rfc3339().into(),
+                input_values_json.into(),
             ];
 
             if let Some(ref release_id) = params.current_release_id {
@@ -664,6 +684,7 @@ impl DeploymentStore for SqliteDeploymentStore {
             setup_fingerprint_version: Some(params.setup_fingerprint_version),
             user_environment_variables: None,
             deployment_token: params.deployment_token,
+            input_values: params.input_values,
             management_config: params.management_config,
             deployment_config: None,
             retry_requested: false,
@@ -691,10 +712,7 @@ impl DeploymentStore for SqliteDeploymentStore {
             setup_fingerprint,
             setup_fingerprint_version,
             schedule_reconciliation,
-            // Carried for gate resolution on re-import; this store has no
-            // input-values column, so gated live resources resolve to their
-            // declared defaults on later steps.
-            input_values: _,
+            input_values,
         } = params;
         let mut merged_stack_state = stack_state;
         if let Some(existing) = self.get_deployment(caller, deployment_id).await? {
@@ -727,6 +745,14 @@ impl DeploymentStore for SqliteDeploymentStore {
                 message: "Failed to serialize imported environment_info".to_string(),
             })?;
 
+        // The re-import request carries the deployer's current answers, so it
+        // overwrites the stored map — that's the edit surface for gate flips.
+        let input_values_json = serde_json::to_string(&input_values)
+            .into_alien_error()
+            .context(GenericError {
+                message: "Failed to serialize input_values".to_string(),
+            })?;
+
         let now = Utc::now();
 
         let sql = {
@@ -740,6 +766,7 @@ impl DeploymentStore for SqliteDeploymentStore {
                     Deployments::SetupMetadata,
                     setup_metadata.map(|metadata| metadata.to_string()),
                 )
+                .value(Deployments::InputValues, input_values_json)
                 .value(Deployments::SetupTarget, setup_target)
                 .value(Deployments::SetupFingerprint, setup_fingerprint)
                 .value(

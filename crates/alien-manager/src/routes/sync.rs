@@ -932,6 +932,47 @@ mod tests {
         assert_eq!(config.public_endpoints, Some(public_endpoints));
     }
 
+    /// Remote runners resolve gated live resources from the acquired config,
+    /// so the stored deployer answers must reach it — an empty map here would
+    /// flip gated resources back to their declared defaults.
+    #[test]
+    fn target_config_carries_stored_input_values() {
+        let stored_values =
+            HashMap::from([("enableAnalytics".to_string(), serde_json::json!(true))]);
+        let mut deployment = deployment_record_with_state("provisioning", None);
+        deployment.input_values = stored_values.clone();
+
+        let config = build_target_deployment_config(
+            &deployment,
+            StackSettings::default(),
+            None,
+            vec![],
+            "https://manager.example.test".to_string(),
+            None,
+            None,
+        );
+        assert_eq!(config.input_values, stored_values);
+
+        // A control-plane-supplied config owns the values when present.
+        let control_plane_values =
+            HashMap::from([("enableAnalytics".to_string(), serde_json::json!(false))]);
+        deployment.deployment_config = Some(DeploymentConfig {
+            input_values: control_plane_values.clone(),
+            ..test_deployment_config()
+        });
+
+        let config = build_target_deployment_config(
+            &deployment,
+            StackSettings::default(),
+            None,
+            vec![],
+            "https://manager.example.test".to_string(),
+            None,
+            None,
+        );
+        assert_eq!(config.input_values, control_plane_values);
+    }
+
     fn uninitialized_state() -> DeploymentState {
         DeploymentState {
             platform: Platform::Kubernetes,
@@ -1004,6 +1045,7 @@ mod tests {
             user_environment_variables: None,
             management_config: None,
             deployment_token: None,
+            input_values: Default::default(),
             deployment_config: None,
             retry_requested: false,
             locked_by: None,
@@ -1348,6 +1390,11 @@ fn build_target_deployment_config(
     DeploymentConfig::builder()
         .deployment_name(deployment.name.clone())
         .stack_settings(stack_settings.clone())
+        .input_values(
+            deployment_config
+                .map(|config| config.input_values.clone())
+                .unwrap_or_else(|| deployment.input_values.clone()),
+        )
         .maybe_management_config(management_config)
         .environment_variables(EnvironmentVariablesSnapshot {
             variables: env_vars,

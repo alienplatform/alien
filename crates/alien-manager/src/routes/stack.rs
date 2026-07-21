@@ -775,6 +775,10 @@ fn import_changes_deployment(
         || existing.stack_settings.as_ref() != Some(&req.stack_settings)
         || existing.environment_info.as_ref() != environment_info.as_ref()
         || existing.runtime_metadata.as_ref() != Some(runtime_metadata)
+        // An edited gate answer changes nothing else in the payload, but the
+        // reconcile it schedules is what provisions or deprovisions the
+        // gated resource.
+        || existing.input_values != req.input_values
         || !imported_resources_are_unchanged(existing, imported_stack_state)
 }
 
@@ -1155,6 +1159,7 @@ mod setup_update_authorization_tests {
             management_config: None,
             deployment_config: None,
             deployment_token: None,
+            input_values: Default::default(),
             retry_requested: false,
             locked_by: None,
             locked_at: None,
@@ -1194,6 +1199,39 @@ mod setup_update_authorization_tests {
             setup_registration_replay(&metadata, &metadata),
             SetupRegistrationReplay::Exact
         );
+    }
+
+    /// A re-register that only flips a gate answer changes nothing else in
+    /// the payload; without the input-values clause the deployment never
+    /// reconciles and the toggle silently does nothing.
+    #[test]
+    fn an_input_only_edit_schedules_reconciliation() {
+        let prepared = stack("live-worker", "frozen-storage");
+        let existing = record(prepared);
+        let mut req = request();
+        req.stack_settings = existing.stack_settings.clone().unwrap();
+        let runtime_metadata = existing.runtime_metadata.clone().unwrap();
+        let imported_state = StackState::new(Platform::Aws);
+
+        assert!(!import_changes_deployment(
+            &existing,
+            &imported_state,
+            &None,
+            &runtime_metadata,
+            "release",
+            &req,
+        ));
+
+        req.input_values
+            .insert("enableAnalytics".to_string(), serde_json::json!(false));
+        assert!(import_changes_deployment(
+            &existing,
+            &imported_state,
+            &None,
+            &runtime_metadata,
+            "release",
+            &req,
+        ));
     }
 
     #[test]

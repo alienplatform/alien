@@ -590,7 +590,7 @@ impl DeploymentLoop {
                 .expect("stored deployment carries stack_settings");
 
             DeploymentConfig {
-                input_values: Default::default(),
+                input_values: deployment.input_values.clone(),
                 deployment_name: Some(deployment.name.clone()),
                 stack_settings: stack_settings.clone(),
                 management_config,
@@ -1066,6 +1066,7 @@ mod tests {
             user_environment_variables: None,
             management_config: None,
             deployment_token: None,
+            input_values: Default::default(),
             deployment_config: None,
             retry_requested: false,
             locked_by: None,
