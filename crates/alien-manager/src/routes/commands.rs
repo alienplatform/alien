@@ -282,10 +282,8 @@ async fn submit_response(
             Err(e) => return e.into_response(),
         };
         if !state.authz.can_execute_command(&subject, &deployment) {
-            return ErrorData::forbidden(
-                "Access denied: only the target deployment can submit responses",
-            )
-            .into_response();
+            return ErrorData::forbidden("Access denied: cannot act on the target deployment")
+                .into_response();
         }
     } else {
         // No Bearer token — try presigned URL auth from query parameters.

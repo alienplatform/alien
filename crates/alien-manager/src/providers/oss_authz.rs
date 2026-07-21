@@ -329,13 +329,16 @@ mod tests {
     }
 
     #[test]
-    fn deployment_token_executes_but_does_not_dispatch_its_own_command() {
+    fn command_execution_follows_deployment_access_without_granting_dispatch() {
         let dep = deployment("d1", "dg-a");
-        let subject = deployment_token("d1");
 
-        assert!(OssAuthz.can_execute_command(&subject, &dep));
-        assert!(!OssAuthz.can_dispatch_command(&subject, &dep));
+        assert!(OssAuthz.can_execute_command(&admin(), &dep));
+        assert!(OssAuthz.can_execute_command(&dg_token("dg-a"), &dep));
+        assert!(OssAuthz.can_execute_command(&deployment_token("d1"), &dep));
+
+        assert!(!OssAuthz.can_execute_command(&dg_token("dg-b"), &dep));
         assert!(!OssAuthz.can_execute_command(&deployment_token("d2"), &dep));
+        assert!(!OssAuthz.can_dispatch_command(&deployment_token("d1"), &dep));
     }
 
     #[test]

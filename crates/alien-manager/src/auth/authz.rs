@@ -7,7 +7,7 @@
 //! impl inspect every field without re-querying. Create paths take a context
 //! struct instead because the entity does not exist yet.
 
-use crate::auth::{Role, Subject};
+use crate::auth::Subject;
 use crate::traits::{
     deployment_store::{DeploymentGroupRecord, DeploymentRecord},
     release_store::ReleaseRecord,
@@ -48,10 +48,11 @@ pub trait Authz: Send + Sync {
 
     // -- Commands ----------------------------------------------------------
     fn can_dispatch_command(&self, subject: &Subject, deployment: &DeploymentRecord) -> bool;
-    /// The target deployment may complete its own command execution lifecycle.
-    /// This is intentionally narrower than dispatch authorization.
+    /// Callers that may act on the target deployment may complete its command
+    /// execution lifecycle. This remains distinct from dispatch authorization:
+    /// deployment tokens can execute commands but cannot create them.
     fn can_execute_command(&self, subject: &Subject, deployment: &DeploymentRecord) -> bool {
-        subject.role == Role::DeploymentManager && self.can_read_command(subject, deployment)
+        self.can_act_on_deployment(subject, deployment)
     }
     fn can_read_command(&self, subject: &Subject, deployment: &DeploymentRecord) -> bool;
     /// Authorize a read from the canonical command record without loading its
