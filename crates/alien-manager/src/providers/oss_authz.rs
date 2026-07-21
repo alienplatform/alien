@@ -20,7 +20,9 @@ impl OssAuthz {
     fn is_internal_capability(s: &Subject) -> bool {
         matches!(
             s.role,
-            Role::WorkspaceTelemetryReader | Role::CommandPayloadReader
+            Role::WorkspaceTelemetryReader
+                | Role::CommandPayloadReader
+                | Role::RemoteBindingResolver
         )
     }
 
@@ -112,6 +114,17 @@ impl Authz for OssAuthz {
     }
 
     fn can_resolve_remote_bindings(&self, s: &Subject, deployment: &DeploymentRecord) -> bool {
+        if let (
+            Scope::Deployment {
+                project_id,
+                deployment_id,
+            },
+            Role::RemoteBindingResolver,
+        ) = (&s.scope, s.role)
+        {
+            return project_id == &deployment.project_id && deployment_id == &deployment.id;
+        }
+
         self.can_update_deployment(s, deployment)
     }
 
@@ -322,6 +335,21 @@ mod tests {
         subject
     }
 
+    fn remote_binding_resolver(project_id: &str, deployment_id: &str) -> Subject {
+        Subject {
+            kind: SubjectKind::ServiceAccount {
+                id: "platform-remote-binding-resolver".to_string(),
+            },
+            workspace_id: "default".to_string(),
+            scope: Scope::Deployment {
+                project_id: project_id.to_string(),
+                deployment_id: deployment_id.to_string(),
+            },
+            role: Role::RemoteBindingResolver,
+            bearer_token: "bearer".to_string(),
+        }
+    }
+
     fn command_payload_reader(command_id: &str) -> Subject {
         Subject {
             kind: SubjectKind::ServiceAccount {
@@ -399,6 +427,26 @@ mod tests {
         let dep = deployment("d1", "dg-a");
         assert!(OssAuthz.can_resolve_remote_bindings(&deployment_token("d1"), &dep));
         assert!(!OssAuthz.can_resolve_remote_bindings(&deployment_viewer_token("d1"), &dep));
+    }
+
+    #[test]
+    fn remote_binding_capability_is_exact_and_has_no_other_deployment_access() {
+        let dep = deployment("d1", "dg-a");
+        let subject = remote_binding_resolver("default", "d1");
+
+        assert!(OssAuthz.can_resolve_remote_bindings(&subject, &dep));
+        assert!(!OssAuthz
+            .can_resolve_remote_bindings(&remote_binding_resolver("other-project", "d1"), &dep));
+        assert!(
+            !OssAuthz.can_resolve_remote_bindings(&remote_binding_resolver("default", "d2"), &dep)
+        );
+        assert!(!OssAuthz.can_read_deployment(&subject, &dep));
+        assert!(!OssAuthz.can_update_deployment(&subject, &dep));
+        assert!(!OssAuthz.can_delete_deployment(&subject, &dep));
+        assert!(!OssAuthz.can_dispatch_command(&subject, &dep));
+        assert!(!OssAuthz.can_read_command(&subject, &dep));
+        assert!(!OssAuthz.can_sync_deployment(&subject, &dep));
+        assert!(!OssAuthz.can_ingest_telemetry_for(&subject, "d1"));
     }
 
     #[test]

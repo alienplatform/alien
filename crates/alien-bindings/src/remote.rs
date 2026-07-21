@@ -1,18 +1,14 @@
 //! Remote, resource-scoped binding resolution for app-facing clients.
 //!
-//! The Platform API is used only to discover the deployment's assigned manager.
-//! Binding topology and short-lived cloud credentials always come from that
-//! manager's resource-scoped resolver.
+//! The Platform API discovers the deployment's assigned manager and mints a
+//! short-lived, deployment-scoped manager capability. Binding topology and
+//! short-lived cloud credentials come from that manager's resource resolver.
 
 use std::collections::HashMap;
 use std::fmt;
-use std::net::IpAddr;
 use std::sync::Arc;
-use std::time::Duration;
 
-use alien_error::{AlienError, Context, ContextError, GenericError, IntoAlienError};
-use alien_manager_api::SdkResultExtReadingBody;
-use alien_platform_api::SdkResultExt;
+use alien_error::{AlienError, Context, IntoAlienError};
 use async_trait::async_trait;
 use chrono::{DateTime, Duration as ChronoDuration, Utc};
 use serde::Deserialize;
@@ -24,14 +20,20 @@ use crate::provider::BindingsProvider;
 use crate::refreshing::{RefreshingStorage, StorageProviderApi};
 use crate::traits::{BindingsProviderApi, Storage};
 
+mod access;
 mod manager_conversion;
 
-const DEFAULT_PLATFORM_API_URL: &str = "https://api.alien.dev";
+use access::{ManagerResolverKind, RemoteBindingSource};
+
+#[cfg(test)]
+use access::{
+    authenticated_http_client, validate_manager_url, validate_platform_base_url, DiscoveredManager,
+    GeneratedManagerBindingResolver, ManagerBindingResolver,
+};
+
 const INITIAL_REFRESH_RETRY_DELAY_SECONDS: i64 = 5;
 const MAX_REFRESH_RETRY_DELAY_SECONDS: i64 = 30;
 const MAX_REFRESH_SKEW_SECONDS: i64 = 300;
-const MANAGER_DISCOVERY_TTL_SECONDS: i64 = 300;
-const REMOTE_REQUEST_TIMEOUT: Duration = Duration::from_secs(30);
 
 trait Clock: Send + Sync + fmt::Debug {
     fn now(&self) -> DateTime<Utc>;
@@ -116,68 +118,17 @@ impl RemoteBindingsProvider {
         clock: Arc<dyn Clock>,
         resolver_kind: ManagerResolverKind,
     ) -> Result<Self> {
-        let base_url = api_base_url.unwrap_or(DEFAULT_PLATFORM_API_URL);
-        let allow_insecure_manager_url = match api_base_url {
-            Some(base_url) => validate_platform_base_url(base_url)?,
-            None => false,
-        };
-        let auth_value = format!("Bearer {token}");
-        let mut headers = reqwest::header::HeaderMap::new();
-        headers.insert(
-            reqwest::header::AUTHORIZATION,
-            reqwest::header::HeaderValue::from_str(&auth_value)
-                .into_alien_error()
-                .context(ErrorData::RemoteAccessFailed {
-                    operation: "build Platform API client with token".to_string(),
-                })?,
-        );
-        let http = reqwest::Client::builder()
-            .default_headers(headers)
-            .timeout(REMOTE_REQUEST_TIMEOUT)
-            .build()
-            .into_alien_error()
-            .context(ErrorData::RemoteAccessFailed {
-                operation: "build remote binding HTTP client".to_string(),
-            })?;
-        let platform = alien_platform_api::Client::new_with_client(base_url, http.clone());
-        let manager_resolver: Arc<dyn ManagerBindingResolver> = match resolver_kind {
-            ManagerResolverKind::Generated => {
-                Arc::new(GeneratedManagerBindingResolver { http: http.clone() })
-            }
-            #[cfg(test)]
-            ManagerResolverKind::LocalFixture => {
-                Arc::new(LocalFixtureManagerBindingResolver { http: http.clone() })
-            }
-        };
-
-        let deployment = platform
-            .get_deployment()
-            .id(deployment_id)
-            .send()
-            .await
-            .into_sdk_error()
-            .map_err(into_remote_error)?
-            .into_inner();
-        let manager_url = discover_manager_url(
-            &platform,
-            deployment.manager_id.to_string(),
-            allow_insecure_manager_url,
-        )
-        .await?;
-
         Ok(Self {
-            source: Arc::new(RemoteBindingSource {
-                deployment_id: deployment_id.to_string(),
-                platform,
-                manager: RwLock::new(DiscoveredManager {
-                    url: manager_url,
-                    discovered_at: clock.now(),
-                }),
-                manager_refresh_lock: Mutex::new(()),
-                allow_insecure_manager_url,
-                manager_resolver,
-                clock: clock.clone(),
-            }),
+            source: Arc::new(
+                RemoteBindingSource::discover(
+                    deployment_id,
+                    token,
+                    api_base_url,
+                    resolver_kind,
+                    clock.clone(),
+                )
+                .await?,
+            ),
             resolvers: RwLock::new(HashMap::new()),
             clock,
         })
@@ -276,305 +227,6 @@ impl RemoteBindings {
             resource_id.to_string(),
             initial,
         )))
-    }
-}
-
-struct RemoteBindingSource {
-    deployment_id: String,
-    platform: alien_platform_api::Client,
-    manager: RwLock<DiscoveredManager>,
-    manager_refresh_lock: Mutex<()>,
-    allow_insecure_manager_url: bool,
-    manager_resolver: Arc<dyn ManagerBindingResolver>,
-    clock: Arc<dyn Clock>,
-}
-
-enum ManagerResolverKind {
-    Generated,
-    #[cfg(test)]
-    LocalFixture,
-}
-
-#[async_trait]
-trait ManagerBindingResolver: Send + Sync + fmt::Debug {
-    async fn resolve(
-        &self,
-        manager_url: &reqwest::Url,
-        deployment_id: &str,
-        resource_id: &str,
-    ) -> Result<ResolvedRemoteBinding>;
-}
-
-#[derive(Debug)]
-struct GeneratedManagerBindingResolver {
-    http: reqwest::Client,
-}
-
-struct DiscoveredManager {
-    url: reqwest::Url,
-    discovered_at: DateTime<Utc>,
-}
-
-impl fmt::Debug for RemoteBindingSource {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.debug_struct("RemoteBindingSource")
-            .field("deployment_id", &self.deployment_id)
-            .field("manager_url", &"<redacted>")
-            .field("credentials", &"<redacted>")
-            .finish()
-    }
-}
-
-impl RemoteBindingSource {
-    async fn manager_url(&self) -> Result<reqwest::Url> {
-        let now = self.clock.now();
-        {
-            let manager = self.manager.read().await;
-            if now < manager.discovered_at + ChronoDuration::seconds(MANAGER_DISCOVERY_TTL_SECONDS)
-            {
-                return Ok(manager.url.clone());
-            }
-        }
-
-        let _refresh = self.manager_refresh_lock.lock().await;
-        let now = self.clock.now();
-        {
-            let manager = self.manager.read().await;
-            if now < manager.discovered_at + ChronoDuration::seconds(MANAGER_DISCOVERY_TTL_SECONDS)
-            {
-                return Ok(manager.url.clone());
-            }
-        }
-
-        let deployment = self
-            .platform
-            .get_deployment()
-            .id(&self.deployment_id)
-            .send()
-            .await
-            .into_sdk_error()
-            .map_err(into_remote_error)?
-            .into_inner();
-        let manager_url = discover_manager_url(
-            &self.platform,
-            deployment.manager_id.to_string(),
-            self.allow_insecure_manager_url,
-        )
-        .await?;
-        *self.manager.write().await = DiscoveredManager {
-            url: manager_url.clone(),
-            discovered_at: self.clock.now(),
-        };
-        Ok(manager_url)
-    }
-
-    async fn resolve(&self, resource_id: &str) -> Result<ResolvedRemoteBinding> {
-        let manager_url = self.manager_url().await?;
-        self.manager_resolver
-            .resolve(&manager_url, &self.deployment_id, resource_id)
-            .await
-    }
-}
-
-#[async_trait]
-impl ManagerBindingResolver for GeneratedManagerBindingResolver {
-    async fn resolve(
-        &self,
-        manager_url: &reqwest::Url,
-        deployment_id: &str,
-        resource_id: &str,
-    ) -> Result<ResolvedRemoteBinding> {
-        let manager = alien_manager_api::Client::new_with_client(
-            manager_url.as_str().trim_end_matches('/'),
-            self.http.clone(),
-        );
-        let response = manager
-            .resolve_binding()
-            .body(alien_manager_api::types::ResolveBindingRequest {
-                deployment_id: deployment_id.to_string(),
-                resource_id: resource_id.to_string(),
-            })
-            .send()
-            .await
-            .into_sdk_error_reading_body()
-            .await
-            .map_err(into_remote_error)?
-            .into_inner();
-
-        ResolvedRemoteBinding::from_manager_response(response, resource_id)
-    }
-}
-
-/// Test-only adapter for typed local leases. Local is deliberately absent from
-/// the hosted API contract; cache tests inject this adapter explicitly instead
-/// of changing the production generated-client path.
-#[cfg(test)]
-#[derive(Debug)]
-struct LocalFixtureManagerBindingResolver {
-    http: reqwest::Client,
-}
-
-#[cfg(test)]
-#[async_trait]
-impl ManagerBindingResolver for LocalFixtureManagerBindingResolver {
-    async fn resolve(
-        &self,
-        manager_url: &reqwest::Url,
-        deployment_id: &str,
-        resource_id: &str,
-    ) -> Result<ResolvedRemoteBinding> {
-        let url = manager_url
-            .join("v1/bindings/resolve")
-            .into_alien_error()
-            .context(ErrorData::RemoteAccessFailed {
-                operation: "build remote binding fixture URL".to_string(),
-            })?;
-        let response = self
-            .http
-            .post(url)
-            .json(&serde_json::json!({
-                "deploymentId": deployment_id,
-                "resourceId": resource_id,
-            }))
-            .send()
-            .await
-            .into_alien_error()
-            .context(ErrorData::RemoteAccessFailed {
-                operation: format!("resolve remote Storage binding '{resource_id}'"),
-            })?;
-        if !response.status().is_success() {
-            return Err(test_fixture_http_error(response, resource_id).await);
-        }
-        response
-            .json()
-            .await
-            .into_alien_error()
-            .context(ErrorData::RemoteAccessFailed {
-                operation: format!("parse remote Storage binding '{resource_id}'"),
-            })
-    }
-}
-
-#[cfg(test)]
-async fn test_fixture_http_error(
-    response: reqwest::Response,
-    resource_id: &str,
-) -> AlienError<ErrorData> {
-    let status = response.status();
-    match response.json::<AlienError<GenericError>>().await {
-        Ok(error) => into_remote_error(error),
-        Err(_) => {
-            let mut error = AlienError::new(ErrorData::RemoteAccessFailed {
-                operation: format!(
-                    "resolve remote Storage binding '{resource_id}' (HTTP {status})"
-                ),
-            });
-            error.retryable = alien_manager_api::is_retryable_http_status(status.as_u16());
-            error.http_status_code = Some(status.as_u16());
-            error
-        }
-    }
-}
-
-async fn discover_manager_url(
-    platform: &alien_platform_api::Client,
-    manager_id: String,
-    allow_insecure: bool,
-) -> Result<reqwest::Url> {
-    let manager = platform
-        .get_manager()
-        .id(&manager_id)
-        .send()
-        .await
-        .into_sdk_error()
-        .map_err(into_remote_error)?
-        .into_inner();
-    let manager_url = manager
-        .url
-        .ok_or_else(|| remote_configuration_error("assigned manager has no reachable URL"))?;
-    validate_manager_url(&manager_url, allow_insecure)
-}
-
-fn validate_manager_url(raw: &str, allow_insecure: bool) -> Result<reqwest::Url> {
-    let url = reqwest::Url::parse(raw)
-        .into_alien_error()
-        .map_err(|error| remote_configuration_source_error(error, "parse assigned manager URL"))?;
-    let valid_scheme =
-        url.scheme() == "https" || (allow_insecure && url.scheme() == "http" && is_loopback(&url));
-    if !valid_scheme
-        || !url.username().is_empty()
-        || url.password().is_some()
-        || url.query().is_some()
-        || url.fragment().is_some()
-        || url.path() != "/"
-    {
-        return Err(remote_configuration_error("validate assigned manager URL"));
-    }
-    Ok(url)
-}
-
-/// Returns whether a caller-supplied Platform base URL may discover a local
-/// HTTP manager. Production discovery is HTTPS-only; loopback HTTP exists for
-/// local development and deterministic tests.
-fn validate_platform_base_url(raw: &str) -> Result<bool> {
-    let url = reqwest::Url::parse(raw)
-        .into_alien_error()
-        .map_err(|error| remote_configuration_source_error(error, "parse Platform API base URL"))?;
-    let allow_insecure = url.scheme() == "http" && is_loopback(&url);
-    let valid_scheme = url.scheme() == "https" || allow_insecure;
-    if !valid_scheme
-        || !url.username().is_empty()
-        || url.password().is_some()
-        || url.query().is_some()
-        || url.fragment().is_some()
-    {
-        return Err(remote_configuration_error("validate Platform API base URL"));
-    }
-    Ok(allow_insecure)
-}
-
-fn remote_configuration_error(operation: &str) -> AlienError<ErrorData> {
-    let mut error = AlienError::new(ErrorData::RemoteAccessFailed {
-        operation: operation.to_string(),
-    });
-    error.retryable = false;
-    error.http_status_code = Some(400);
-    error
-}
-
-fn remote_configuration_source_error(
-    source: AlienError<GenericError>,
-    operation: &str,
-) -> AlienError<ErrorData> {
-    let mut error = source.context(ErrorData::RemoteAccessFailed {
-        operation: operation.to_string(),
-    });
-    error.retryable = false;
-    error.http_status_code = Some(400);
-    error
-}
-
-fn is_loopback(url: &reqwest::Url) -> bool {
-    url.host_str().is_some_and(|host| {
-        host.eq_ignore_ascii_case("localhost")
-            || host
-                .parse::<IpAddr>()
-                .is_ok_and(|address| address.is_loopback())
-    })
-}
-
-fn into_remote_error(error: AlienError<GenericError>) -> AlienError<ErrorData> {
-    AlienError {
-        code: error.code,
-        message: error.message,
-        context: error.context,
-        hint: error.hint,
-        retryable: error.retryable,
-        internal: error.internal,
-        http_status_code: error.http_status_code,
-        source: error.source,
-        human_layer_presentation: error.human_layer_presentation,
-        error: None,
     }
 }
 

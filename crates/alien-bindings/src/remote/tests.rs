@@ -18,10 +18,19 @@ use crate::RemoteBindings;
 
 const DEPLOYMENT_ID: &str = "dep_aaaaaaaaaaaaaaaaaaaaaaaaaaaa";
 const MANAGER_ID: &str = "mgr_bbbbbbbbbbbbbbbbbbbbbbbbbbbb";
+const MANAGER_B_ID: &str = "mgr_ffffffffffffffffffffffffffff";
 const PROJECT_ID: &str = "prj_cccccccccccccccccccccccccccc";
 const DEPLOYMENT_GROUP_ID: &str = "dg_dddddddddddddddddddddddddddd";
 const WORKSPACE_ID: &str = "ws_eeeeeeeeeeeeeeeeeeeeeeee";
-const TOKEN: &str = "remote-secret-token";
+const PLATFORM_TOKEN: &str = "platform-secret-token";
+const GENERATED_MANAGER_TOKEN: &str = "generated-manager-token";
+
+#[derive(Clone)]
+struct ManagerAssignment {
+    id: String,
+    url: String,
+    expected_token: Arc<StdRwLock<String>>,
+}
 
 #[derive(Debug)]
 struct ManualClock {
@@ -56,7 +65,9 @@ struct RecordedRequest {
 
 #[derive(Clone)]
 struct PlatformFixtureState {
-    manager_url: Arc<StdRwLock<String>>,
+    assignment: Arc<StdRwLock<ManagerAssignment>>,
+    token_calls: Arc<AtomicUsize>,
+    token_expires_in: Arc<StdRwLock<Option<f64>>>,
     requests: Arc<StdMutex<Vec<RecordedRequest>>>,
 }
 
@@ -70,6 +81,7 @@ struct ManagerFixtureState {
     clock: Arc<ManualClock>,
     expires_at: Arc<StdRwLock<DateTime<Utc>>>,
     storage_path: String,
+    expected_token: Arc<StdRwLock<String>>,
     requests: Arc<StdMutex<Vec<RecordedRequest>>>,
 }
 
@@ -89,7 +101,9 @@ struct Fixture {
     api_url: String,
     clock: Arc<ManualClock>,
     platform_requests: Arc<StdMutex<Vec<RecordedRequest>>>,
-    manager_url: Arc<StdRwLock<String>>,
+    assignment: Arc<StdRwLock<ManagerAssignment>>,
+    token_calls: Arc<AtomicUsize>,
+    token_expires_in: Arc<StdRwLock<Option<f64>>>,
     manager: ManagerFixtureState,
     _storage_directory: TempDir,
 }
@@ -98,6 +112,7 @@ impl Fixture {
     async fn new(now: DateTime<Utc>, expires_at: DateTime<Utc>) -> Self {
         let storage_directory = TempDir::new().expect("create fixture storage directory");
         let clock = Arc::new(ManualClock::new(now));
+        let expected_token = Arc::new(StdRwLock::new("unminted-manager-token".to_string()));
         let manager = ManagerFixtureState {
             calls: Arc::new(AtomicUsize::new(0)),
             fail: Arc::new(AtomicBool::new(false)),
@@ -107,13 +122,23 @@ impl Fixture {
             clock: clock.clone(),
             expires_at: Arc::new(StdRwLock::new(expires_at)),
             storage_path: storage_directory.path().display().to_string(),
+            expected_token: expected_token.clone(),
             requests: Arc::new(StdMutex::new(Vec::new())),
         };
-        let manager_url = Arc::new(StdRwLock::new(spawn_manager_server(manager.clone()).await));
+        let manager_url = spawn_manager_server(manager.clone()).await;
+        let assignment = Arc::new(StdRwLock::new(ManagerAssignment {
+            id: MANAGER_ID.to_string(),
+            url: manager_url,
+            expected_token,
+        }));
 
         let platform_requests = Arc::new(StdMutex::new(Vec::new()));
+        let token_calls = Arc::new(AtomicUsize::new(0));
+        let token_expires_in = Arc::new(StdRwLock::new(Some(300.0)));
         let api_url = spawn_platform_server(PlatformFixtureState {
-            manager_url: manager_url.clone(),
+            assignment: assignment.clone(),
+            token_calls: token_calls.clone(),
+            token_expires_in: token_expires_in.clone(),
             requests: platform_requests.clone(),
         })
         .await;
@@ -122,7 +147,9 @@ impl Fixture {
             api_url,
             clock,
             platform_requests,
-            manager_url,
+            assignment,
+            token_calls,
+            token_expires_in,
             manager,
             _storage_directory: storage_directory,
         }
@@ -132,7 +159,7 @@ impl Fixture {
         Arc::new(
             RemoteBindingsProvider::discover_local_fixture(
                 DEPLOYMENT_ID,
-                TOKEN,
+                PLATFORM_TOKEN,
                 Some(&self.api_url),
                 self.clock.clone(),
             )
@@ -175,8 +202,22 @@ impl Fixture {
             .expect("manager clock advance write lock") = Some(now);
     }
 
-    fn assign_manager_url(&self, manager_url: String) {
-        *self.manager_url.write().expect("manager URL write lock") = manager_url;
+    fn assign_manager(&self, id: &str, url: String, expected_token: Arc<StdRwLock<String>>) {
+        *self
+            .assignment
+            .write()
+            .expect("manager assignment write lock") = ManagerAssignment {
+            id: id.to_string(),
+            url,
+            expected_token,
+        };
+    }
+
+    fn set_binding_token_expiry(&self, expires_in: Option<f64>) {
+        *self
+            .token_expires_in
+            .write()
+            .expect("binding token expiry write lock") = expires_in;
     }
 }
 
@@ -196,7 +237,10 @@ async fn spawn_server(app: Router) -> String {
 async fn spawn_platform_server(state: PlatformFixtureState) -> String {
     let app = Router::new()
         .route("/v1/deployments/{id}", get(deployment_handler))
-        .route("/v1/managers/{id}", get(manager_handler))
+        .route(
+            "/v1/managers/{id}/binding-token",
+            post(binding_token_handler),
+        )
         .with_state(state);
     spawn_server(app).await
 }
@@ -226,7 +270,7 @@ async fn deployment_handler(
     State(state): State<PlatformFixtureState>,
     AxumPath(id): AxumPath<String>,
     headers: HeaderMap,
-) -> Json<serde_json::Value> {
+) -> Response {
     state
         .requests
         .lock()
@@ -237,6 +281,19 @@ async fn deployment_handler(
             authorization: authorization(&headers),
             body: None,
         });
+    let expected_authorization = format!("Bearer {PLATFORM_TOKEN}");
+    if authorization(&headers).as_deref() != Some(expected_authorization.as_str()) {
+        return StatusCode::UNAUTHORIZED.into_response();
+    }
+    if id != DEPLOYMENT_ID {
+        return StatusCode::NOT_FOUND.into_response();
+    }
+    let manager_id = state
+        .assignment
+        .read()
+        .expect("manager assignment read lock")
+        .id
+        .clone();
     Json(json!({
         "id": DEPLOYMENT_ID,
         "name": "remote-storage-test",
@@ -249,44 +306,62 @@ async fn deployment_handler(
         "retryRequested": false,
         "createdAt": "2026-01-01T00:00:00Z",
         "updatedAt": "2026-01-01T00:00:00Z",
-        "managerId": MANAGER_ID,
+        "managerId": manager_id,
         "workspaceId": WORKSPACE_ID
     }))
+    .into_response()
 }
 
-async fn manager_handler(
+async fn binding_token_handler(
     State(state): State<PlatformFixtureState>,
     AxumPath(id): AxumPath<String>,
     headers: HeaderMap,
-) -> Json<serde_json::Value> {
+    Json(body): Json<serde_json::Value>,
+) -> Response {
     state
         .requests
         .lock()
         .expect("platform requests lock")
         .push(RecordedRequest {
-            method: "GET".to_string(),
-            path: format!("/v1/managers/{id}"),
+            method: "POST".to_string(),
+            path: format!("/v1/managers/{id}/binding-token"),
             authorization: authorization(&headers),
-            body: None,
+            body: Some(body.clone()),
         });
-    let manager_url = state
-        .manager_url
+    let expected_authorization = format!("Bearer {PLATFORM_TOKEN}");
+    if authorization(&headers).as_deref() != Some(expected_authorization.as_str()) {
+        return StatusCode::UNAUTHORIZED.into_response();
+    }
+    if body != json!({ "deploymentId": DEPLOYMENT_ID }) {
+        return StatusCode::BAD_REQUEST.into_response();
+    }
+    let assignment = state
+        .assignment
         .read()
-        .expect("manager URL read lock")
+        .expect("manager assignment read lock")
         .clone();
+    if id != assignment.id {
+        return StatusCode::NOT_FOUND.into_response();
+    }
+    let token_number = state.token_calls.fetch_add(1, Ordering::SeqCst) + 1;
+    let access_token = format!("manager-binding-token-{token_number}");
+    *assignment
+        .expected_token
+        .write()
+        .expect("expected manager token write lock") = access_token.clone();
+    let expires_in = *state
+        .token_expires_in
+        .read()
+        .expect("binding token expiry read lock");
     Json(json!({
-        "id": MANAGER_ID,
-        "name": "fixture-manager",
-        "targets": ["local"],
-        "managementConfigs": {},
-        "isSystem": true,
-        "workspaceId": WORKSPACE_ID,
-        "status": "healthy",
-        "url": manager_url,
-        "managedDeploymentCount": 1,
-        "defaultProjectCount": 0,
-        "createdAt": "2026-01-01T00:00:00Z"
+        "accessToken": access_token,
+        "expiresIn": expires_in,
+        "tokenType": "Bearer",
+        "managerUrl": assignment.url,
+        "databaseId": null,
+        "controlPlaneUrl": null
     }))
+    .into_response()
 }
 
 async fn resolve_handler(
@@ -305,6 +380,16 @@ async fn resolve_handler(
             authorization: authorization(&headers),
             body: Some(body),
         });
+    let expected_authorization = format!(
+        "Bearer {}",
+        state
+            .expected_token
+            .read()
+            .expect("expected manager token read lock")
+    );
+    if authorization(&headers).as_deref() != Some(expected_authorization.as_str()) {
+        return StatusCode::UNAUTHORIZED.into_response();
+    }
     if let Some(now) = state
         .advance_clock_to
         .write()
@@ -389,270 +474,8 @@ fn at(second: i64) -> DateTime<Utc> {
         + ChronoDuration::seconds(second)
 }
 
-#[tokio::test]
-async fn generated_manager_adapter_decodes_cloud_lease_and_structured_error() {
-    let response = Arc::new(StdRwLock::new((
-        StatusCode::OK,
-        json!({
-            "service": "s3",
-            "binding": { "bucketName": "customer-bucket" },
-            "clientConfig": {
-                "accountId": "123456789012",
-                "region": "us-east-1",
-                "credentials": {
-                    "type": "sessionCredentials",
-                    "accessKeyId": "AKIAEXAMPLE",
-                    "secretAccessKey": "secret",
-                    "sessionToken": "session",
-                    "expiresAt": at(3600).to_rfc3339(),
-                },
-            },
-            "expiresAt": at(3600).to_rfc3339(),
-        }),
-    )));
-    let requests = Arc::new(StdMutex::new(Vec::new()));
-    let manager_url = spawn_generated_contract_server(GeneratedContractState {
-        response: response.clone(),
-        requests: requests.clone(),
-    })
-    .await;
-    let mut headers = reqwest::header::HeaderMap::new();
-    headers.insert(
-        reqwest::header::AUTHORIZATION,
-        format!("Bearer {TOKEN}")
-            .parse()
-            .expect("valid auth header"),
-    );
-    let adapter = GeneratedManagerBindingResolver {
-        http: reqwest::Client::builder()
-            .default_headers(headers)
-            .build()
-            .expect("build generated contract client"),
-    };
-    let manager_url = reqwest::Url::parse(&manager_url).expect("valid manager URL");
-
-    let lease = adapter
-        .resolve(&manager_url, DEPLOYMENT_ID, "files")
-        .await
-        .expect("generated client should decode an S3 lease");
-    let ResolvedRemoteBinding::S3 {
-        binding,
-        client_config,
-        expires_at,
-    } = lease
-    else {
-        panic!("generated client returned the wrong lease variant for S3");
-    };
-    assert_eq!(
-        binding.bucket_name,
-        alien_core::BindingValue::Value("customer-bucket".to_string())
-    );
-    assert_eq!(client_config.account_id, "123456789012");
-    assert_eq!(client_config.region, "us-east-1");
-    assert!(client_config.service_overrides.is_none());
-    let alien_core::AwsCredentials::SessionCredentials {
-        access_key_id,
-        secret_access_key,
-        session_token,
-        expires_at: credential_expires_at,
-    } = client_config.credentials
-    else {
-        panic!("generated client returned a non-session AWS credential");
-    };
-    assert_eq!(access_key_id, "AKIAEXAMPLE");
-    assert_eq!(secret_access_key, "secret");
-    assert_eq!(session_token, "session");
-    assert_eq!(credential_expires_at, at(3600).to_rfc3339());
-    assert_eq!(expires_at, at(3600));
-    assert_eq!(
-        requests
-            .lock()
-            .expect("generated contract requests lock")
-            .as_slice(),
-        &[RecordedRequest {
-            method: "POST".to_string(),
-            path: "/v1/bindings/resolve".to_string(),
-            authorization: Some(format!("Bearer {TOKEN}")),
-            body: Some(json!({
-                "deploymentId": DEPLOYMENT_ID,
-                "resourceId": "files",
-            })),
-        }]
-    );
-
-    *response.write().expect("generated contract response lock") = (
-        StatusCode::OK,
-        json!({
-            "service": "blob",
-            "binding": {
-                "accountName": "customeraccount",
-                "containerName": "customer-container",
-            },
-            "clientConfig": {
-                "subscriptionId": "subscription-id",
-                "tenantId": "tenant-id",
-                "region": "eastus",
-                "credentials": {
-                    "type": "containerSas",
-                    "sas": {
-                        "accountName": "customeraccount",
-                        "containerName": "customer-container",
-                        "permissions": "rcwdl",
-                        "startsAt": at(-300).to_rfc3339(),
-                        "expiresAt": at(3600).to_rfc3339(),
-                        "signedObjectId": "signed-object-id",
-                        "signedTenantId": "signed-tenant-id",
-                        "signedKeyStart": at(-600).to_rfc3339(),
-                        "signedKeyExpiry": at(7200).to_rfc3339(),
-                        "signedKeyService": "b",
-                        "signedKeyVersion": "2023-11-03",
-                        "protocol": "https",
-                        "serviceVersion": "2023-11-03",
-                        "signedResource": "c",
-                        "signature": "azure-sas-signature",
-                    }
-                },
-            },
-            "expiresAt": at(3600).to_rfc3339(),
-        }),
-    );
-    let lease = adapter
-        .resolve(&manager_url, DEPLOYMENT_ID, "files")
-        .await
-        .expect("generated client should decode a Blob lease");
-    let ResolvedRemoteBinding::Blob {
-        binding,
-        client_config,
-        expires_at,
-    } = lease
-    else {
-        panic!("generated client returned the wrong lease variant for Blob");
-    };
-    assert_eq!(
-        binding.account_name,
-        alien_core::BindingValue::Value("customeraccount".to_string())
-    );
-    assert_eq!(
-        binding.container_name,
-        alien_core::BindingValue::Value("customer-container".to_string())
-    );
-    assert_eq!(client_config.subscription_id, "subscription-id");
-    assert_eq!(client_config.tenant_id, "tenant-id");
-    assert_eq!(client_config.region.as_deref(), Some("eastus"));
-    assert!(client_config.service_overrides.is_none());
-    let alien_core::AzureCredentials::SasToken { query_parameters } = client_config.credentials
-    else {
-        panic!("generated client returned the wrong Azure credential type");
-    };
-    assert_eq!(query_parameters.len(), 13);
-    assert_eq!(
-        query_parameters.get("sp").map(String::as_str),
-        Some("rcwdl")
-    );
-    assert_eq!(query_parameters.get("sr").map(String::as_str), Some("c"));
-    assert_eq!(
-        query_parameters.get("sig").map(String::as_str),
-        Some("azure-sas-signature")
-    );
-    assert_eq!(expires_at, at(3600));
-
-    *response.write().expect("generated contract response lock") = (
-        StatusCode::OK,
-        json!({
-            "service": "gcs",
-            "binding": { "bucketName": "customer-bucket" },
-            "clientConfig": {
-                "projectId": "customer-project",
-                "projectNumber": "123456789",
-                "region": "us-central1",
-                "credentials": {
-                    "type": "accessToken",
-                    "token": "gcp-access-token",
-                },
-            },
-            "expiresAt": at(3600).to_rfc3339(),
-        }),
-    );
-    let lease = adapter
-        .resolve(&manager_url, DEPLOYMENT_ID, "files")
-        .await
-        .expect("generated client should decode a GCS lease");
-    let ResolvedRemoteBinding::Gcs {
-        binding,
-        client_config,
-        expires_at,
-    } = lease
-    else {
-        panic!("generated client returned the wrong lease variant for GCS");
-    };
-    assert_eq!(
-        binding.bucket_name,
-        alien_core::BindingValue::Value("customer-bucket".to_string())
-    );
-    assert_eq!(client_config.project_id, "customer-project");
-    assert_eq!(client_config.project_number.as_deref(), Some("123456789"));
-    assert_eq!(client_config.region, "us-central1");
-    assert!(client_config.service_overrides.is_none());
-    let alien_core::GcpCredentials::AccessToken { token } = client_config.credentials else {
-        panic!("generated client returned the wrong GCP credential type");
-    };
-    assert_eq!(token, "gcp-access-token");
-    assert_eq!(expires_at, at(3600));
-
-    *response.write().expect("generated contract response lock") = (
-        StatusCode::OK,
-        json!({
-            "service": "s3",
-            "binding": { "bucketName": "customer-bucket" },
-            "clientConfig": {
-                "accountId": "123456789012",
-                "region": "us-east-1",
-                "credentials": {
-                    "type": "sessionCredentials",
-                    "accessKeyId": "SENTINEL_ACCESS_KEY",
-                    "secretAccessKey": "SENTINEL_SECRET_KEY",
-                    "sessionToken": "SENTINEL_SESSION_TOKEN",
-                    "expiresAt": at(3600).to_rfc3339(),
-                },
-            },
-            "expiresAt": "not-a-timestamp",
-        }),
-    );
-    let error = match adapter.resolve(&manager_url, DEPLOYMENT_ID, "files").await {
-        Ok(_) => panic!("an invalid lease expiry must fail typed conversion"),
-        Err(error) => error,
-    };
-    let error_debug = format!("{error:?}");
-    for secret in [
-        "SENTINEL_ACCESS_KEY",
-        "SENTINEL_SECRET_KEY",
-        "SENTINEL_SESSION_TOKEN",
-    ] {
-        assert!(
-            !error_debug.contains(secret),
-            "typed conversion errors must not retain response credentials"
-        );
-    }
-
-    *response.write().expect("generated contract response lock") = (
-        StatusCode::FORBIDDEN,
-        json!({
-            "code": "FORBIDDEN",
-            "message": "Remote access was revoked",
-            "retryable": false,
-            "internal": false,
-            "httpStatusCode": 403,
-        }),
-    );
-    let error = match adapter.resolve(&manager_url, DEPLOYMENT_ID, "files").await {
-        Ok(_) => panic!("generated client should preserve a structured manager error"),
-        Err(error) => error,
-    };
-    assert_eq!(error.code, "FORBIDDEN");
-    assert_eq!(error.message, "Remote access was revoked");
-    assert!(!error.retryable);
-    assert_eq!(error.http_status_code, Some(403));
-}
+#[path = "tests/manager_contract.rs"]
+mod manager_contract;
 
 #[tokio::test]
 async fn discovers_assigned_manager_and_caches_each_requested_storage() {
@@ -660,7 +483,8 @@ async fn discovers_assigned_manager_and_caches_each_requested_storage() {
     let bindings = RemoteBindings::from_provider(fixture.remote_provider().await);
     let bindings_debug = format!("{bindings:?}");
     assert!(bindings_debug.contains("<redacted>"));
-    assert!(!bindings_debug.contains(TOKEN));
+    assert!(!bindings_debug.contains(PLATFORM_TOKEN));
+    assert!(!bindings_debug.contains("manager-binding-token"));
     let storage = bindings
         .storage("files")
         .await
@@ -702,7 +526,7 @@ async fn discovers_assigned_manager_and_caches_each_requested_storage() {
             RecordedRequest {
                 method: "POST".to_string(),
                 path: "/v1/bindings/resolve".to_string(),
-                authorization: Some(format!("Bearer {TOKEN}")),
+                authorization: Some("Bearer manager-binding-token-1".to_string()),
                 body: Some(json!({
                     "deploymentId": DEPLOYMENT_ID,
                     "resourceId": "files",
@@ -711,7 +535,7 @@ async fn discovers_assigned_manager_and_caches_each_requested_storage() {
             RecordedRequest {
                 method: "POST".to_string(),
                 path: "/v1/bindings/resolve".to_string(),
-                authorization: Some(format!("Bearer {TOKEN}")),
+                authorization: Some("Bearer manager-binding-token-1".to_string()),
                 body: Some(json!({
                     "deploymentId": DEPLOYMENT_ID,
                     "resourceId": "archive",
@@ -729,18 +553,22 @@ async fn discovers_assigned_manager_and_caches_each_requested_storage() {
             RecordedRequest {
                 method: "GET".to_string(),
                 path: format!("/v1/deployments/{DEPLOYMENT_ID}"),
-                authorization: Some(format!("Bearer {TOKEN}")),
+                authorization: Some(format!("Bearer {PLATFORM_TOKEN}")),
                 body: None,
             },
             RecordedRequest {
-                method: "GET".to_string(),
-                path: format!("/v1/managers/{MANAGER_ID}"),
-                authorization: Some(format!("Bearer {TOKEN}")),
-                body: None,
+                method: "POST".to_string(),
+                path: format!("/v1/managers/{MANAGER_ID}/binding-token"),
+                authorization: Some(format!("Bearer {PLATFORM_TOKEN}")),
+                body: Some(json!({ "deploymentId": DEPLOYMENT_ID })),
             },
         ]
     );
+    assert_eq!(fixture.token_calls.load(Ordering::SeqCst), 1);
 }
+
+#[path = "tests/access_behavior.rs"]
+mod access_behavior;
 
 #[tokio::test]
 async fn refreshes_once_for_concurrent_operations_without_reconstructing_handle() {
@@ -831,6 +659,7 @@ async fn existing_storage_handle_follows_manager_reassignment() {
         .await
         .expect("seed fixture object through manager A");
 
+    let manager_b_token = Arc::new(StdRwLock::new("unminted-manager-b-token".to_string()));
     let manager_b = ManagerFixtureState {
         calls: Arc::new(AtomicUsize::new(0)),
         fail: Arc::new(AtomicBool::new(false)),
@@ -840,11 +669,12 @@ async fn existing_storage_handle_follows_manager_reassignment() {
         clock: fixture.clock.clone(),
         expires_at: Arc::new(StdRwLock::new(at(3901))),
         storage_path: fixture.manager.storage_path.clone(),
+        expected_token: manager_b_token.clone(),
         requests: Arc::new(StdMutex::new(Vec::new())),
     };
     let manager_b_url = spawn_manager_server(manager_b.clone()).await;
     fixture.manager.fail.store(true, Ordering::SeqCst);
-    fixture.assign_manager_url(manager_b_url);
+    fixture.assign_manager(MANAGER_B_ID, manager_b_url, manager_b_token);
     fixture.clock.set(at(481));
 
     let metadata = storage
@@ -859,10 +689,18 @@ async fn existing_storage_handle_follows_manager_reassignment() {
         manager_b.requests.lock().expect("manager B requests lock")[0].path,
         "/v1/bindings/resolve"
     );
+    let platform_requests = fixture
+        .platform_requests
+        .lock()
+        .expect("platform requests lock");
+    assert_eq!(
+        platform_requests[3].path,
+        format!("/v1/managers/{MANAGER_B_ID}/binding-token")
+    );
 }
 
 #[tokio::test]
-async fn non_retryable_manager_error_is_preserved_and_never_uses_cached_credentials() {
+async fn manager_rejection_is_rediscovered_once_then_preserved_without_cached_fallback() {
     let fixture = Fixture::new(at(0), at(600)).await;
     let provider = fixture.remote_provider().await;
     let bindings = RemoteBindings::from_provider(provider.clone());
@@ -897,7 +735,8 @@ async fn non_retryable_manager_error_is_preserved_and_never_uses_cached_credenti
     assert_eq!(error.code, "FORBIDDEN");
     assert!(!error.retryable);
     assert_eq!(error.http_status_code, Some(403));
-    assert_eq!(fixture.manager.calls.load(Ordering::SeqCst), 2);
+    assert_eq!(fixture.manager.calls.load(Ordering::SeqCst), 3);
+    assert_eq!(fixture.token_calls.load(Ordering::SeqCst), 3);
 }
 
 #[tokio::test]

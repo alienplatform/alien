@@ -9,8 +9,8 @@
     "run:vendor": "pnpm run build && node dist/src/vendor.js"
   },
   "dependencies": {
-    "@alienplatform/bindings": "^2.0.2",
-    "@alienplatform/core": "^1.7.0"
+    "@alienplatform/bindings": "^3.0.0",
+    "@alienplatform/core": "^3.0.0"
   },
   "devDependencies": {
     "@types/node": "^24.0.15",

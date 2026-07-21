@@ -89,6 +89,13 @@ jobs:
           NODE_OPTIONS: "--max-old-space-size=8192"
         run: pnpm test:ts
 
+      - name: Generated SDK wire contracts
+        env:
+          NODE_OPTIONS: "--max-old-space-size=8192"
+        run: |
+          pnpm test:manager-sdk-wire
+          pnpm test:platform-sdk-wire
+
       - name: Rust tests (non-cloud)
         run: |
           cargo nextest run --workspace \
@@ -101,3 +108,10 @@ jobs:
             --exclude endpoint-agent \
             --exclude alien-test-server \
             --filter-expr 'not binary_id(alien-build::build_integration_tests) and not binary_id(alien-build::image_shape_tests) and not binary_id(alien-build::rust_integration_tests) and not binary_id(alien-build::typescript_integration_tests) and not binary_id(alien-worker-runtime::lambda) and not binary_id(alien-test::distribution) and not binary_id(alien-test::pull) and not binary_id(alien-test::push) and not binary_id(alien-manager::registry_proxy_cloud_test)'
+
+      - name: Remote bindings tests (non-cloud)
+        run: |
+          cargo test -p alien-bindings --features platform-sdk --lib remote::
+          cargo test -p alien-aws-clients --lib remote_storage_credentials
+          cargo test -p alien-gcp-clients --lib remote_storage_credentials
+          cargo test -p alien-azure-clients --lib user_delegation_sas

@@ -20,7 +20,6 @@ use crate::traits::RemoteStorageCredentialSource;
 const GCP_CLOUD_PLATFORM_SCOPE: &str = "https://www.googleapis.com/auth/cloud-platform";
 pub(crate) const AZURE_STORAGE_SCOPE: &str = "https://storage.azure.com/.default";
 pub(crate) const AZURE_REMOTE_STORAGE_PERMISSIONS: &str = "rcwdl";
-const GCP_REMOTE_STORAGE_ROLE: &str = "roles/storage.objectAdmin";
 const REMOTE_STORAGE_DURATION_SECONDS: i32 = 3600;
 const AZURE_MINT_SCOPES: [&str; 4] = [
     "https://management.azure.com/.default",
@@ -184,11 +183,12 @@ pub(crate) async fn materialize_remote_storage_lease(
             aws_remote_storage_lease(config)
         }
         (
-            RemoteStorageCredentialSource::Direct(ClientConfig::Gcp(config)),
+            RemoteStorageCredentialSource::GcpCredentialAccessBoundary(source),
             RemoteStorageCredentialScope::GcpGcs { bucket_name },
         ) => {
-            let token = config
-                .downscope_access_token_for_bucket(&bucket_name, GCP_REMOTE_STORAGE_ROLE)
+            let token = source
+                .source
+                .downscope_access_token_for_bucket(&bucket_name, &source.available_role)
                 .await
                 .context(ErrorData::CredentialMaterializationFailed {
                     platform: Platform::Gcp,
@@ -196,11 +196,11 @@ pub(crate) async fn materialize_remote_storage_lease(
                 })?;
             Ok(MaterializedCredentialLease {
                 client_config: ClientConfig::Gcp(Box::new(GcpClientConfig {
-                    project_id: config.project_id,
-                    region: config.region,
+                    project_id: source.source.project_id,
+                    region: source.source.region,
                     credentials: GcpCredentials::AccessToken { token: token.token },
                     service_overrides: None,
-                    project_number: config.project_number,
+                    project_number: source.source.project_number,
                 })),
                 expires_at: token.expires_at,
             })
@@ -391,7 +391,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn remote_gcp_storage_rejects_opaque_access_tokens_without_expiry() {
+    async fn remote_gcp_storage_rejects_unproven_direct_credentials() {
         let config = ClientConfig::Gcp(Box::new(GcpClientConfig {
             project_id: "project".to_string(),
             region: "us-central1".to_string(),
@@ -409,7 +409,7 @@ mod tests {
             },
         )
         .await
-        .expect_err("opaque token has no authoritative expiry");
+        .expect_err("unproven direct GCP credentials must fail closed");
         assert!(!error.retryable);
     }
 

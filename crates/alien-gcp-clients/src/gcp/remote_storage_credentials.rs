@@ -37,9 +37,17 @@ pub(super) async fn downscope_access_token_for_bucket(
             field_name: Some("bucket_name".to_string()),
         }));
     }
-    if !available_role.starts_with("roles/storage.") {
+    let project_role_prefix = format!("projects/{}/roles/", config.project_id);
+    let role_id = available_role.strip_prefix(&project_role_prefix);
+    let valid_custom_role = role_id.is_some_and(|role_id| {
+        role_id.starts_with("role_")
+            && role_id
+                .bytes()
+                .all(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit() || byte == b'_')
+    });
+    if !available_role.starts_with("roles/storage.") && !valid_custom_role {
         return Err(AlienError::new(ErrorData::InvalidInput {
-            message: "Credential Access Boundary role must be a Cloud Storage role".to_string(),
+            message: "Credential Access Boundary role must be a Cloud Storage role or an Alien-generated custom role in the target project".to_string(),
             field_name: Some("available_role".to_string()),
         }));
     }
@@ -225,7 +233,10 @@ mod tests {
         };
 
         let token = config
-            .downscope_access_token_for_bucket("one-bucket", "roles/storage.objectAdmin")
+            .downscope_access_token_for_bucket(
+                "one-bucket",
+                "projects/project/roles/role_test_prefix_storage_remote_data_write",
+            )
             .await
             .expect("exchange downscoped token");
         assert_eq!(token.token, "bucket-confined-token");
@@ -266,7 +277,7 @@ mod tests {
                 "accessBoundary": {
                     "accessBoundaryRules": [{
                         "availableResource": "//storage.googleapis.com/projects/_/buckets/one-bucket",
-                        "availablePermissions": ["inRole:roles/storage.objectAdmin"]
+                        "availablePermissions": ["inRole:projects/project/roles/role_test_prefix_storage_remote_data_write"]
                     }]
                 }
             })
@@ -331,7 +342,10 @@ mod tests {
         };
 
         let error = config
-            .downscope_access_token_for_bucket("one-bucket", "roles/storage.objectAdmin")
+            .downscope_access_token_for_bucket(
+                "one-bucket",
+                "projects/project/roles/role_test_prefix_storage_remote_data_write",
+            )
             .await
             .expect_err("STS failure should propagate");
         server.await.expect("join STS server");
@@ -339,6 +353,32 @@ mod tests {
         assert!(!serialized.contains(SUBJECT_SENTINEL));
         assert!(!serialized.contains(SOURCE_SENTINEL));
         assert!(!serialized.contains(RESPONSE_SENTINEL));
+    }
+
+    #[tokio::test]
+    async fn downscope_rejects_unproven_or_foreign_custom_roles_before_network() {
+        let config = GcpClientConfig {
+            project_id: "target-project".to_string(),
+            region: "us-central1".to_string(),
+            credentials: GcpCredentials::AccessToken {
+                token: "not-used".to_string(),
+            },
+            service_overrides: None,
+            project_number: None,
+        };
+
+        for role in [
+            "projects/other-project/roles/role_remote_data_write",
+            "projects/target-project/roles/admin",
+            "projects/target-project/roles/role_remote-data-write",
+        ] {
+            assert!(
+                downscope_access_token_for_bucket(&config, "one-bucket", role)
+                    .await
+                    .is_err(),
+                "role {role} must fail closed"
+            );
+        }
     }
 
     async fn start_sts_server() -> (String, tokio::task::JoinHandle<Vec<String>>) {

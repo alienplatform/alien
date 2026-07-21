@@ -13,7 +13,7 @@
     "build": "turbo build",
     "build:images": "echo 'Use GitHub Actions workflows (.github/workflows/images*.yml) for canonical image builds'",
     "generate": "turbo run generate",
-    "generate:platform-api": "speakeasy generate sdk --lang typescript --schema ./client-sdks/platform/openapi.json --out client-sdks/platform/typescript && NODE_OPTIONS=--max-old-space-size=8192 pnpm -C ./client-sdks/platform/typescript build",
+    "generate:platform-api": "bash ./scripts/generate-platform-sdk.sh",
     "generate:manager-api": "bash ./scripts/generate-manager-sdk.sh",
     "generate:manager-openapi": "cargo run --bin alien-manager-schema-exporter --features openapi -p alien-manager -- --output crates/alien-manager/openapi.json && cp crates/alien-manager/openapi.json client-sdks/manager/openapi.json",
     "generate:manager-rust-sdk": "pnpm run generate:manager-openapi && openapi-down-convert -i crates/alien-manager/openapi.json -o client-sdks/manager/openapi-3.0.json && openapi-down-convert -i crates/alien-manager/openapi.json -o client-sdks/manager/rust/openapi-3.0.json && cd client-sdks/manager && node scripts/fix-openapi.mjs && cd rust && node ../scripts/fix-openapi.mjs",
@@ -23,6 +23,7 @@
     "version:npm": "changeset version",
     "test:ts": "turbo test:ts --concurrency 15",
     "test:manager-sdk-wire": "pnpm -C ./client-sdks/manager/typescript build && node --test ./scripts/manager-sdk-wire.test.mjs",
+    "test:platform-sdk-wire": "pnpm -C ./client-sdks/platform/typescript build && node --test ./scripts/platform-sdk-command-token-wire.test.mjs",
     "validate:package-layout": "node --experimental-strip-types packages/scripts/validate-package-layout.ts && pnpm --filter @alienplatform/package-layout check",
     "format-and-lint": "biome check .",
     "format-and-lint:fix": "biome check . --write"

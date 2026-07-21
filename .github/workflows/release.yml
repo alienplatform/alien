@@ -114,28 +114,59 @@ jobs:
               fs.writeFileSync(path, content.replace(/\"version\": \"[^\"]*\"/, '\"version\": \"${VERSION}\"'));
             "
           done
-          # The generated Manager SDK publishes a JSR manifest alongside
-          # package.json. Keep the two registry versions identical.
+          # Both generated SDKs publish a JSR manifest alongside package.json.
+          # Keep the two registries on the release version.
           node -e "
             const fs = require('fs');
-            const path = 'client-sdks/manager/typescript/jsr.json';
-            const content = fs.readFileSync(path, 'utf8');
-            fs.writeFileSync(path, content.replace(/\"version\": \"[^\"]*\"/, '\"version\": \"${VERSION}\"'));
+            for (const path of [
+              'client-sdks/platform/typescript/jsr.json',
+              'client-sdks/manager/typescript/jsr.json',
+            ]) {
+              const content = fs.readFileSync(path, 'utf8');
+              fs.writeFileSync(path, content.replace(/\"version\": \"[^\"]*\"/, '\"version\": \"${VERSION}\"'));
+            }
           "
-          # Speakeasy emits npm locks for the SDK and its examples. Stamp the
-          # embedded local-package metadata alongside the publish manifests.
+          # Speakeasy emits npm locks for both SDKs and the Manager examples.
+          # Stamp embedded package metadata alongside the publish manifests.
           node -e "
             const fs = require('fs');
-            const sdkLockPath = 'client-sdks/manager/typescript/package-lock.json';
-            const sdkLock = JSON.parse(fs.readFileSync(sdkLockPath, 'utf8'));
-            sdkLock.version = '${VERSION}';
-            sdkLock.packages[''].version = '${VERSION}';
-            fs.writeFileSync(sdkLockPath, JSON.stringify(sdkLock, null, 2) + '\\n');
+            for (const sdk of ['platform', 'manager']) {
+              const lockPath = 'client-sdks/' + sdk + '/typescript/package-lock.json';
+              const lock = JSON.parse(fs.readFileSync(lockPath, 'utf8'));
+              lock.version = '${VERSION}';
+              lock.packages[''].version = '${VERSION}';
+              fs.writeFileSync(lockPath, JSON.stringify(lock, null, 2) + '\\n');
+            }
 
             const examplesLockPath = 'client-sdks/manager/typescript/examples/package-lock.json';
             const examplesLock = JSON.parse(fs.readFileSync(examplesLockPath, 'utf8'));
             examplesLock.packages['..'].version = '${VERSION}';
             fs.writeFileSync(examplesLockPath, JSON.stringify(examplesLock, null, 2) + '\\n');
+          "
+          # Both checked-in generation workflows use the version from gen.yaml.
+          # Advance them with the release so later regeneration cannot reset manifests.
+          node -e "
+            const fs = require('fs');
+            for (const sdk of ['platform', 'manager']) {
+              const root = 'client-sdks/' + sdk + '/typescript/.speakeasy/';
+              const configPath = root + 'gen.yaml';
+              const config = fs.readFileSync(configPath, 'utf8');
+              const updatedConfig = config.replace(
+                /(typescript:\\n  version: )[^\\n]+/,
+                (_, prefix) => prefix + '${VERSION}',
+              );
+              if (updatedConfig === config) throw new Error(sdk + ' SDK version not found in gen.yaml');
+              fs.writeFileSync(configPath, updatedConfig);
+
+              const lockPath = root + 'gen.lock';
+              const lock = fs.readFileSync(lockPath, 'utf8');
+              const updatedLock = lock.replace(
+                /(  releaseVersion: )[^\\n]+/,
+                (_, prefix) => prefix + '${VERSION}',
+              );
+              if (updatedLock === lock) throw new Error(sdk + ' SDK releaseVersion not found in gen.lock');
+              fs.writeFileSync(lockPath, updatedLock);
+            }
           "
 
       # Dry-run build jobs start from the untagged commit, so carry the exact
@@ -155,10 +186,16 @@ jobs:
             packages/sdk/package.json
             packages/testing/package.json
             client-sdks/platform/typescript/package.json
+            client-sdks/platform/typescript/jsr.json
+            client-sdks/platform/typescript/package-lock.json
+            client-sdks/platform/typescript/.speakeasy/gen.yaml
+            client-sdks/platform/typescript/.speakeasy/gen.lock
             client-sdks/manager/typescript/package.json
             client-sdks/manager/typescript/jsr.json
             client-sdks/manager/typescript/package-lock.json
             client-sdks/manager/typescript/examples/package-lock.json
+            client-sdks/manager/typescript/.speakeasy/gen.yaml
+            client-sdks/manager/typescript/.speakeasy/gen.lock
             packages/bindings/package.json
             crates/alien-bindings-node/package.json
             packages/bindings/npm/darwin-arm64/package.json
@@ -174,9 +211,13 @@ jobs:
           git config user.email "github-actions[bot]@users.noreply.github.com"
           git add Cargo.toml packages/core/package.json packages/commands/package.json \
             packages/sdk/package.json packages/testing/package.json \
-            client-sdks/platform/typescript/package.json \
+            client-sdks/platform/typescript/package.json client-sdks/platform/typescript/jsr.json \
+            client-sdks/platform/typescript/package-lock.json client-sdks/platform/typescript/.speakeasy/gen.yaml \
+            client-sdks/platform/typescript/.speakeasy/gen.lock \
             client-sdks/manager/typescript/package.json client-sdks/manager/typescript/jsr.json \
             client-sdks/manager/typescript/package-lock.json client-sdks/manager/typescript/examples/package-lock.json \
+            client-sdks/manager/typescript/.speakeasy/gen.yaml \
+            client-sdks/manager/typescript/.speakeasy/gen.lock \
             packages/bindings/package.json crates/alien-bindings-node/package.json \
             packages/bindings/npm/darwin-arm64/package.json packages/bindings/npm/darwin-x64/package.json \
             packages/bindings/npm/linux-x64-gnu/package.json packages/bindings/npm/linux-arm64-gnu/package.json

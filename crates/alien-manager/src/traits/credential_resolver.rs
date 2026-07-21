@@ -1,6 +1,6 @@
 use async_trait::async_trait;
 
-use alien_core::{AwsClientConfig, ClientConfig, ManagementConfig, Platform};
+use alien_core::{AwsClientConfig, ClientConfig, GcpClientConfig, ManagementConfig, Platform};
 use alien_error::AlienError;
 
 use super::deployment_store::DeploymentRecord;
@@ -13,6 +13,15 @@ pub struct ResolvedCredentials {
     pub client_config: ClientConfig,
     /// Whether these credentials may create the bootstrap layer-2 resources.
     pub has_provision_capability: bool,
+}
+
+/// Manager-proven GCP source and exact access-boundary role.
+///
+/// Private fields prevent external credential resolvers from asserting this
+/// provenance; they must use `Direct`, which the GCP materializer rejects.
+pub struct GcpCredentialAccessBoundarySource {
+    pub(crate) source: Box<GcpClientConfig>,
+    pub(crate) available_role: String,
 }
 
 /// Credential authority retained specifically for remote Storage attenuation.
@@ -32,6 +41,9 @@ pub enum RemoteStorageCredentialSource {
         target_account_id: String,
         target_region: String,
     },
+    /// A GCP source whose Credential Access Boundary is capped by the exact
+    /// custom role generated for `storage/remote-data-write`.
+    GcpCredentialAccessBoundary(GcpCredentialAccessBoundarySource),
 }
 
 impl std::fmt::Debug for RemoteStorageCredentialSource {
@@ -52,6 +64,11 @@ impl std::fmt::Debug for RemoteStorageCredentialSource {
                 .field("role_arn", role_arn)
                 .field("target_account_id", target_account_id)
                 .field("target_region", target_region)
+                .field("credentials", &"[REDACTED]")
+                .finish(),
+            Self::GcpCredentialAccessBoundary(source) => f
+                .debug_struct("RemoteStorageCredentialSource::GcpCredentialAccessBoundary")
+                .field("available_role", &source.available_role)
                 .field("credentials", &"[REDACTED]")
                 .finish(),
         }
