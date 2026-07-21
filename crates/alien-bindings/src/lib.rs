@@ -2,7 +2,7 @@ use alien_error::AlienError;
 
 // Re-export core traits and types
 pub use alien_core::{Platform, ENV_ALIEN_DEPLOYMENT_TYPE, ENV_OPERATOR_BASE_PLATFORM};
-pub use bindings::Bindings;
+pub use bindings::{Bindings, BoundQueue};
 pub use error::{ErrorData, Result};
 pub use provider::BindingsProvider;
 #[cfg(feature = "platform-sdk")]

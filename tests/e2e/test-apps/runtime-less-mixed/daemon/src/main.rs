@@ -36,7 +36,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
 
     let mut receiver = alien_commands::receiver::Receiver::from_env()?;
-    receiver.handle("status", move |_ctx| {
+    receiver.command("status", move |_: serde_json::Value, _ctx| {
         let kv = kv.clone();
         async move {
             Ok(serde_json::json!({

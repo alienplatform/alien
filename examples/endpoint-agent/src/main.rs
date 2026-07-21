@@ -3,7 +3,7 @@
 //!
 //! Its only interface is Alien commands, so it drives the app-owned pull
 //! command receiver (`alien_commands::Receiver`) directly:
-//! `Receiver::from_env()` → register handlers with `receiver.handle(...)` →
+//! `Receiver::from_env()` → register typed handlers with `receiver.command(...)` →
 //! `receiver.run().await`. There are no resource bindings to load — the
 //! encrypted store is a local Turso database, not a linked binding.
 

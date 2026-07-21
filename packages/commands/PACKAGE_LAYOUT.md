@@ -25,7 +25,7 @@ the same wire protocol.
 | `CommandsClient#invoke` | method | `.invoke(name: string, input, options?)` | Invokes a command and resolves to its response. See the API details below. |
 | `createCommandReceiver` | function | `createCommandReceiver(options?: CommandReceiverOptions): CommandReceiver` | Constructs the pull receiver from environment configuration. |
 | `CommandReceiverOptions` | type | constructor options | `{ env?, fetch?, pollIntervalMs?, pollMaxIntervalMs?, pollJitter?, leaseSeconds?, maxLeases?, drainTimeoutMs? }`. Constructor values override environment values. |
-| `CommandReceiver` | type | receiver handle | `.handle(name: string, handler)` registers a handler; `.run(): Promise<void>` leases and dispatches. Handler context includes input, cancellation, deadline, command identity, attempt, target identity, and optional W3C trace context. |
+| `CommandReceiver` | type | receiver handle | `.command(name, handler)` parses JSON as `unknown`; `.command(name, schema, handler)` also validates with Standard Schema and infers the validated type. `.handleRaw(name, handler)` is the byte-level escape hatch. `.run()` leases and dispatches until stopped. |
 | `CommandReceiverConfigInvalidError` | error | `defineError({ code: "COMMAND_RECEIVER_CONFIG_INVALID", context: { … } })` | Thrown when receiver env config is empty or invalid. Context names the offending identity, token-source, or tuning variable. |
 | sender error types | error | migrated from the former `@alienplatform/sdk/commands` error set | The seven exported sender errors are listed in the API details below. |
 | shared error primitives | re-export | `AlienError`, `defineError` (from `@alienplatform/core`) | Re-exported for consumer error handling. |
@@ -77,7 +77,6 @@ Single entry point. Every condition carries `types`. No deep imports.
 MUST NOT depend on, import, or reference:
 
 - Worker app protocol files.
-- gRPC packages — `@grpc/grpc-js`, `nice-grpc`.
 - [`@alienplatform/bindings`](../bindings/PACKAGE_LAYOUT.md) (large payloads use
   presigned HTTP, not the bindings addon).
 
@@ -158,9 +157,11 @@ MAY depend on:
   budget `min(envelope.deadline, leaseExpiresAt − 5 seconds)`, always present.
   `traceContext` carries the envelope's optional W3C `traceparent` and
   `tracestate`. A
-  `CommandHandler` is `(ctx: CommandContext) => unknown | Promise<unknown>`; its
-  return value is the JSON success body. `createCommandReceiver()` returns a
-  `CommandReceiver` (`.handle` / `.run` / `.stop`); `.stop()` is the exposed
+  `CommandHandler<T>` is `(input: T, ctx: CommandContext) => unknown | Promise<unknown>`;
+  its return value is the JSON success body. Schema-less commands use `unknown`;
+  Standard Schema commands infer `T`. `RawCommandHandler` receives only the
+  context and reads `ctx.input`. `createCommandReceiver()` returns a
+  `CommandReceiver` (`.command` / `.handleRaw` / `.run` / `.stop`); `.stop()` is the exposed
   drain-and-return mechanism (twin of the Rust `ShutdownHandle`).
 
 - **`CommandReceiverOptions`** (constructor options for `createCommandReceiver`,

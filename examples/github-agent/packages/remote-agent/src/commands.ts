@@ -1,20 +1,18 @@
 import { command } from "@alienplatform/sdk"
+import { z } from "zod"
 import { applyLabels, classifyPullRequests, computeMetrics, fetchPullRequests } from "./github.js"
 import { loadIntegrationConfig, saveIntegrationConfig } from "./integrations.js"
-import type { IntegrationConfig, LabelResult } from "./types.js"
+import type { IntegrationConfig } from "./types.js"
 
-type SetIntegrationParams = {
-  integrationId: string
-  config: IntegrationConfig
-}
-
-type AnalyzeParams = {
-  integrationId: string
-}
-
-type LabelParams = {
-  integrationId: string
-}
+const integrationIdSchema = z.object({ integrationId: z.string() })
+const setIntegrationSchema = integrationIdSchema.extend({
+  config: z.object({
+    owner: z.string(),
+    repo: z.string(),
+    token: z.string().optional(),
+    baseUrl: z.string().optional(),
+  }),
+})
 
 function normalizeConfig(config: IntegrationConfig): IntegrationConfig {
   const owner = config.owner?.trim()
@@ -41,34 +39,28 @@ function ensureIntegrationId(integrationId?: string): string {
 }
 
 export function registerCommands(): void {
-  command<SetIntegrationParams, { ok: boolean }>(
-    "set-integration",
-    async ({ integrationId, config }) => {
-      const id = ensureIntegrationId(integrationId)
-      const normalized = normalizeConfig(config)
-      console.log(`Saving integration config for ${id}: ${normalized.owner}/${normalized.repo}`)
-      await saveIntegrationConfig(id, normalized)
-      return { ok: true }
-    },
-  )
+  command("set-integration", setIntegrationSchema, async ({ integrationId, config }) => {
+    const id = ensureIntegrationId(integrationId)
+    const normalized = normalizeConfig(config)
+    console.log(`Saving integration config for ${id}: ${normalized.owner}/${normalized.repo}`)
+    await saveIntegrationConfig(id, normalized)
+    return { ok: true }
+  })
 
-  command<AnalyzeParams, ReturnType<typeof computeMetrics>>(
-    "analyze-repository",
-    async ({ integrationId }) => {
-      const id = ensureIntegrationId(integrationId)
-      console.log(`Analyzing repository for integration ${id}`)
-      const config = await loadIntegrationConfig(id)
-      const prs = await fetchPullRequests(config)
-      const classified = classifyPullRequests(prs)
-      const metrics = computeMetrics(classified)
-      console.log(
-        `Analysis complete: ${metrics.totalPRs} PRs, review throughput score ${metrics.reviewThroughputScore}`,
-      )
-      return metrics
-    },
-  )
+  command("analyze-repository", integrationIdSchema, async ({ integrationId }) => {
+    const id = ensureIntegrationId(integrationId)
+    console.log(`Analyzing repository for integration ${id}`)
+    const config = await loadIntegrationConfig(id)
+    const prs = await fetchPullRequests(config)
+    const classified = classifyPullRequests(prs)
+    const metrics = computeMetrics(classified)
+    console.log(
+      `Analysis complete: ${metrics.totalPRs} PRs, review throughput score ${metrics.reviewThroughputScore}`,
+    )
+    return metrics
+  })
 
-  command<LabelParams, LabelResult>("label-pull-requests", async ({ integrationId }) => {
+  command("label-pull-requests", integrationIdSchema, async ({ integrationId }) => {
     const id = ensureIntegrationId(integrationId)
     const config = await loadIntegrationConfig(id)
 

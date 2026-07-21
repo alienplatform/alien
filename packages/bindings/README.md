@@ -1,6 +1,6 @@
 # `@alienplatform/bindings`
 
-Direct TypeScript bindings for Alien storage, kv, queue, and vault over an
+Direct TypeScript bindings for Alien storage, kv, queue, vault, and linked-container discovery over an
 in-process [napi-rs](https://napi.rs) addon. The addon itself lives in the Rust
 crate `crates/alien-bindings-node`; this package is the published JavaScript
 wrapper that loads it.
@@ -46,6 +46,23 @@ enabling it on an existing deployment. The endpoint returns a short-lived lease
 for that deployment identity only after it validates the named resource, so the
 Alien token and all returned provider credentials must be treated as backend
 secrets.
+
+## Linked containers
+
+The same factories are re-exported by `@alienplatform/sdk` for Worker apps.
+Long-running Container and Daemon apps can import this package directly. A
+linked container is read-only service discovery:
+
+```ts
+import { container } from "@alienplatform/bindings"
+
+const database = container("database")
+const internalUrl = await database.getInternalUrl()
+const publicUrl = await database.getPublicUrl() // string | null
+```
+
+Use the internal URL for calls between resources in the same deployment. Use
+the public URL only when the caller is outside that private network.
 
 ## Native addon resolution
 

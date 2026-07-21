@@ -97,6 +97,8 @@ impl SqliteCommandRegistry {
 
         Ok(CommandStatus {
             command_id: p.string(0, "id").map_err(to_cmd_err)?,
+            workspace_id: "default".to_string(),
+            project_id: "default".to_string(),
             deployment_id: p.string(1, "deployment_id").map_err(to_cmd_err)?,
             command: p.string(2, "name").map_err(to_cmd_err)?,
             state: deserialize_command_state(&state_str),

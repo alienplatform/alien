@@ -1,5 +1,5 @@
 //! `alien-bindings-node` — a napi-rs addon exposing `alien-bindings`
-//! storage / kv / queue / vault to JavaScript.
+//! storage / kv / queue / vault / container to JavaScript.
 //!
 //! This crate is a pure argument/error translation layer. It contains no
 //! provider logic: every method marshals arguments across the JS boundary,
@@ -8,6 +8,7 @@
 
 #![deny(clippy::all)]
 
+mod container;
 mod error;
 mod kv;
 mod queue;
@@ -23,6 +24,7 @@ use alien_bindings::RemoteBindings;
 use napi_derive::napi;
 use std::sync::Arc;
 
+pub use container::ContainerHandle;
 pub use kv::KvHandle;
 pub use queue::QueueHandle;
 #[cfg(feature = "platform-sdk")]
@@ -86,6 +88,14 @@ impl BindingsHandle {
         let inner = self.inner.clone();
         let vault = inner.vault(&name).await.map_err(map_alien_error)?;
         Ok(VaultHandle::new(vault))
+    }
+
+    /// Resolve the linked-container binding named `name`.
+    #[napi]
+    pub async fn container(&self, name: String) -> napi::Result<ContainerHandle> {
+        let inner = self.inner.clone();
+        let container = inner.container(&name).await.map_err(map_alien_error)?;
+        Ok(ContainerHandle::new(container))
     }
 }
 

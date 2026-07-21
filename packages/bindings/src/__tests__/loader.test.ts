@@ -16,6 +16,9 @@ function addonReporting(version: string): NativeAddon {
     vault(): never {
       throw new Error("not used by version validation")
     }
+    container(): never {
+      throw new Error("not used by version validation")
+    }
   }
 
   const RemoteBindingsHandle: NativeAddon["RemoteBindingsHandle"] = {

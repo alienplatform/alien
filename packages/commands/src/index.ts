@@ -4,7 +4,7 @@
  * Pure `fetch` over the command wire protocol: the command **sender**
  * ({@link CommandsClient}, with {@link CommandsClient.target}) and the
  * non-Worker pull **receiver** (`createCommandReceiver`).
- * No native code, no gRPC, no bindings.
+ * No native code or bindings.
  *
  * @example
  * ```typescript
@@ -38,6 +38,9 @@ export type {
   CommandHandler,
   CommandReceiver,
   CommandReceiverOptions,
+  RawCommandHandler,
+  StandardSchema,
+  StandardSchemaOutput,
 } from "./receiver.js"
 
 // Error set

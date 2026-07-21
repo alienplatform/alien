@@ -47,8 +47,8 @@ pub use axum_handlers::{
 };
 pub use command_registry::{
     delivery_mode_for, select_command_target, validate_command_name, validate_command_target_id,
-    CommandEnvelopeData, CommandMetadata, CommandRegistry, CommandStatus, InMemoryCommandRegistry,
-    ResolvedCommandTarget,
+    CommandAccessContext, CommandEnvelopeData, CommandMetadata, CommandRegistry, CommandStatus,
+    InMemoryCommandRegistry, ResolvedCommandTarget,
 };
 
 // =============================================================================
@@ -1032,6 +1032,16 @@ impl CommandServer {
     pub async fn get_command_deployment_id(&self, command_id: &str) -> Result<Option<String>> {
         let status = self.command_registry.get_command_status(command_id).await?;
         Ok(status.map(|s| s.deployment_id))
+    }
+
+    /// Get the command's canonical ownership fields for route authorization.
+    pub async fn get_command_access_context(
+        &self,
+        command_id: &str,
+    ) -> Result<Option<CommandAccessContext>> {
+        self.command_registry
+            .get_command_access_context(command_id)
+            .await
     }
 
     /// Resolve a lease_id to `(command_id, owner_deployment_id)` via the

@@ -46,10 +46,13 @@ export const kv = factories.kv
 export const queue = factories.queue
 /** Resolve the vault binding named `name`. */
 export const vault = factories.vault
+/** Resolve the linked-container binding named `name`. */
+export const container = factories.container
 
 export { AlienError, BindingNotConfiguredError, defineError } from "./errors.js"
 
 export type {
+  Container,
   Kv,
   KvScanItem,
   KvScanResult,

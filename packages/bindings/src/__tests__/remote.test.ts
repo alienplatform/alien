@@ -3,6 +3,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest"
 import type {
   NativeAddon,
   RawBindingsHandle,
+  RawContainerHandle,
   RawKvHandle,
   RawQueueHandle,
   RawRemoteBindingsHandle,
@@ -54,6 +55,10 @@ function fakeRemoteAddon() {
     }
 
     async vault(): Promise<RawVaultHandle> {
+      throw new Error("unused")
+    }
+
+    async container(): Promise<RawContainerHandle> {
       throw new Error("unused")
     }
   }

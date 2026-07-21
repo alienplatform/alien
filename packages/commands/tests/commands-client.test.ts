@@ -112,6 +112,19 @@ describe("CommandsClient.invoke", () => {
     expect(alien.context).toMatchObject({ errorCode: "BOOM", errorMessage: "handler blew up" })
   })
 
+  it("encodes string input as a JSON string", async () => {
+    server = await startStubServer(req => {
+      if (req.method === "POST") return { json: createResponse() }
+      return { json: successStatus("cmd_1", null) }
+    })
+
+    await client(server.baseUrl).invoke("echo", "hello", FAST_POLL)
+
+    const create = server.requests.find(request => request.method === "POST") as CapturedRequest
+    const body = create.body as Record<string, unknown>
+    expect(body.params).toEqual({ mode: "inline", inlineBase64: encodeInlineJson("hello") })
+  })
+
   it("maps an EXPIRED terminal state to CommandExpiredError", async () => {
     server = await startStubServer((req): RouteResult => {
       if (req.method === "POST") return { json: createResponse() }

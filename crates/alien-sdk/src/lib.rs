@@ -1,12 +1,12 @@
 //! Alien SDK for Rust.
 //!
-//! Cloud-agnostic bindings for storage, KV, queues, and vaults, plus the
+//! Cloud-agnostic bindings for storage, KV, queues, vaults, and linked containers, plus the
 //! Worker application context.
 //! Works on AWS, GCP, Azure, Kubernetes, and locally.
 //!
 //! This is the public-facing crate for Alien app developers. Its binding API is
-//! deliberately limited to [`Bindings`] and the four kinds applications can
-//! use directly: [`Storage`], [`Kv`], [`Queue`], and [`Vault`].
+//! deliberately limited to [`Bindings`] and the kinds applications use directly:
+//! [`Storage`], [`Kv`], [`Queue`], [`Vault`], and [`Container`].
 //!
 //! Platform tooling that needs provider construction or managed resource kinds
 //! such as builds and artifact registries uses `alien_bindings` directly.
@@ -46,7 +46,7 @@
 //! ```
 //!
 //! ```compile_fail
-//! use alien_sdk::{ArtifactRegistry, Build, Container, Postgres, ServiceAccount, Worker};
+//! use alien_sdk::{ArtifactRegistry, Build, Postgres, ServiceAccount, Worker};
 //! ```
 //!
 //! ```compile_fail
@@ -61,7 +61,9 @@
 //! use alien_sdk::http_client;
 //! ```
 //!
-pub use alien_bindings::{Bindings, ErrorData, Kv, Queue, Result, Storage, Vault};
+pub use alien_bindings::{
+    Bindings, BoundQueue as Queue, Container, ErrorData, Kv, Result, Storage, Vault,
+};
 
 /// Errors returned by the application binding and Worker APIs.
 pub mod error {
@@ -77,11 +79,12 @@ pub mod presigned {
 }
 
 /// App-facing binding value types (the option/message/result types that flow
-/// through storage/KV/queue/vault calls).
+/// through storage/KV/queue/vault/container calls).
 pub mod traits {
     pub use alien_bindings::traits::{
-        Kv, MessagePayload, PutOptions, Queue, QueueMessage, ScanResult, Storage, Vault,
+        Kv, MessagePayload, PutOptions, QueueMessage, ScanResult, Storage, Vault,
     };
+    pub use alien_bindings::{BoundQueue as Queue, Container};
 }
 
 #[cfg(feature = "worker")]
@@ -94,7 +97,7 @@ mod wait_until;
 pub mod worker {
     //! Worker task, event, lifecycle, and `waitUntil` APIs.
     //!
-    //! `AlienContext` exposes the same four-kind application [`Bindings`]
+    //! `AlienContext` exposes the same application [`Bindings`]
     //! facade, not the internal provider API:
     //!
     //! ```compile_fail

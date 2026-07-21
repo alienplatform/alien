@@ -16,7 +16,7 @@ fn alien_context_accessors_return_the_application_bindings_facade() {
 }
 
 #[tokio::test]
-async fn bindings_facade_exposes_all_four_application_binding_kinds() {
+async fn bindings_facade_exposes_all_application_binding_kinds() {
     let bindings =
         Bindings::from_env_map(HashMap::new()).expect("empty environment should construct");
 
@@ -36,6 +36,10 @@ async fn bindings_facade_exposes_all_four_application_binding_kinds() {
         .vault("secrets")
         .await
         .expect_err("missing vault binding should fail");
+    let container_error = bindings
+        .container("database")
+        .await
+        .expect_err("missing container binding should fail");
 
     assert_eq!(
         [
@@ -43,7 +47,8 @@ async fn bindings_facade_exposes_all_four_application_binding_kinds() {
             kv_error.code.as_str(),
             queue_error.code.as_str(),
             vault_error.code.as_str(),
+            container_error.code.as_str(),
         ],
-        ["BINDING_NOT_CONFIGURED"; 4],
+        ["BINDING_NOT_CONFIGURED"; 5],
     );
 }

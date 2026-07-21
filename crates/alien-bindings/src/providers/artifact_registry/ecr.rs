@@ -144,8 +144,57 @@ impl EcrArtifactRegistry {
         repo_name: &str,
         aws_access: &AwsCrossAccountAccess,
     ) -> Result<()> {
-        self.set_full_policy_with_client(&self.ecr_client, repo_name, aws_access)
+        let ecr_client = self
+            .policy_management_client(self.credentials.region(), repo_name)
+            .await?;
+        self.set_full_policy_with_client(&ecr_client, repo_name, aws_access)
             .await
+    }
+
+    async fn policy_management_client(&self, region: &str, repo_name: &str) -> Result<EcrClient> {
+        let credentials = if let Some(push_role_arn) = &self.push_role_arn {
+            let config = self
+                .credentials
+                .config()
+                .impersonate(alien_aws_clients::AwsImpersonationConfig {
+                    role_arn: push_role_arn.clone(),
+                    session_name: Some("alien-ecr-policy".to_string()),
+                    duration_seconds: None,
+                    external_id: None,
+                    target_region: Some(region.to_string()),
+                })
+                .await
+                .map_err(|error| {
+                    map_cloud_client_error(
+                        error,
+                        "Failed to assume ECR push role for policy management".to_string(),
+                        Some(repo_name.to_string()),
+                    )
+                })?;
+            AwsCredentialProvider::from_config(config).await.context(
+                ErrorData::BindingSetupFailed {
+                    binding_type: "artifact_registry.ecr".to_string(),
+                    reason: "Failed to create credential provider for ECR policy management"
+                        .to_string(),
+                },
+            )?
+        } else {
+            self.credentials
+                .with_region(region)
+                .await
+                .map_err(|error| {
+                    map_cloud_client_error(
+                        error,
+                        format!("Failed to create ECR credentials for region '{region}'"),
+                        Some(repo_name.to_string()),
+                    )
+                })?
+        };
+
+        Ok(EcrClient::new(
+            crate::http_client::create_http_client(),
+            credentials,
+        ))
     }
 
     async fn set_full_policy_with_client(
@@ -642,15 +691,9 @@ impl ArtifactRegistry for EcrArtifactRegistry {
                 continue; // Already set on source region above.
             }
 
-            let target_creds = self.credentials.with_region(region).await.map_err(|e| {
-                map_cloud_client_error(
-                    e,
-                    format!("Failed to create ECR credentials for region '{}'", region),
-                    Some(full_repo_name.clone()),
-                )
-            })?;
-            let http_client = crate::http_client::create_http_client();
-            let target_ecr = EcrClient::new(http_client, target_creds);
+            let target_ecr = self
+                .policy_management_client(region, &full_repo_name)
+                .await?;
 
             self.wait_for_repository_with_client(&target_ecr, &full_repo_name, region)
                 .await?;
@@ -752,8 +795,10 @@ impl ArtifactRegistry for EcrArtifactRegistry {
             .repository_name(full_repo_name.clone())
             .build();
 
-        let response = self
-            .ecr_client
+        let ecr_client = self
+            .policy_management_client(self.credentials.region(), &full_repo_name)
+            .await?;
+        let response = ecr_client
             .get_repository_policy(request)
             .await
             .map_err(|e| {

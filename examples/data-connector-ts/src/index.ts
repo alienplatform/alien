@@ -1,5 +1,6 @@
 import { createHash } from "node:crypto"
 import { command, kv, vault } from "@alienplatform/sdk"
+import { z } from "zod"
 
 // --- Sample data ---
 // In production, replace this with a real database client (pg, mysql2, etc.).
@@ -46,27 +47,31 @@ command("test-connection", async () => {
   }
 })
 
-command("query", async ({ sql, useCache }: { sql: string; useCache?: boolean }) => {
-  const c = await kv("cache")
-  const cacheKey = `query:${createHash("sha256").update(sql).digest("hex").slice(0, 16)}`
+command(
+  "query",
+  z.object({ sql: z.string(), useCache: z.boolean().optional() }),
+  async ({ sql, useCache }) => {
+    const c = await kv("cache")
+    const cacheKey = `query:${createHash("sha256").update(sql).digest("hex").slice(0, 16)}`
 
-  if (useCache) {
-    const cached = await c.get(cacheKey)
-    if (cached) {
-      return { ...JSON.parse(new TextDecoder().decode(cached)), cached: true }
+    if (useCache) {
+      const cached = await c.get(cacheKey)
+      if (cached) {
+        return { ...JSON.parse(new TextDecoder().decode(cached)), cached: true }
+      }
     }
-  }
 
-  // In production, use the connection config to connect to the actual database
-  await getConnectionConfig()
-  const result = simulateQuery(sql)
+    // In production, use the connection config to connect to the actual database
+    await getConnectionConfig()
+    const result = simulateQuery(sql)
 
-  if (useCache) {
-    await c.set(cacheKey, JSON.stringify(result))
-  }
+    if (useCache) {
+      await c.set(cacheKey, JSON.stringify(result))
+    }
 
-  return { ...result, cached: false }
-})
+    return { ...result, cached: false }
+  },
+)
 
 command("list-tables", async () => {
   return { tables: Object.keys(SAMPLE_DATA) }

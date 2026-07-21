@@ -295,7 +295,7 @@ describe("CommandReceiver.run", () => {
       env: { ...FULL_ENV, ALIEN_COMMANDS_URL: `${server.baseUrl}/v1/` },
       pollIntervalMs: 5,
     })
-    r.handle("echo", (ctx: CommandContext) => {
+    r.handleRaw("echo", (ctx: CommandContext) => {
       seen = {
         input: new TextDecoder().decode(ctx.input),
         deadline: ctx.deadline.getTime(),
@@ -360,7 +360,7 @@ describe("CommandReceiver.run", () => {
         env: { ...FULL_ENV, ALIEN_COMMANDS_URL: `${server.baseUrl}/v1/` },
         pollIntervalMs: 5,
       })
-      r.handle("echo", () => ({ ok: true }))
+      r.handleRaw("echo", () => ({ ok: true }))
       receiverStop = () => r.stop()
       running = r.run()
 
@@ -397,7 +397,7 @@ describe("CommandReceiver.run", () => {
       env: { ...FULL_ENV, ALIEN_COMMANDS_URL: `${server.baseUrl}/v1/` },
       pollIntervalMs: 5,
     })
-    r.handle("echo", () => {
+    r.handleRaw("echo", () => {
       throw new Error("database on fire")
     })
     receiverStop = () => r.stop()
@@ -419,7 +419,7 @@ describe("CommandReceiver.run", () => {
       env: { ...FULL_ENV, ALIEN_COMMANDS_URL: `${server.baseUrl}/v1` },
       pollIntervalMs: 5,
     })
-    r.handle("echo", () => {
+    r.handleRaw("echo", () => {
       throw Object.assign(new Error("upstream unavailable"), { code: "UPSTREAM_UNAVAILABLE" })
     })
     receiverStop = () => r.stop()
@@ -452,7 +452,7 @@ describe("CommandReceiver.run", () => {
       env: { ...FULL_ENV, ALIEN_COMMANDS_URL: `${server.baseUrl}/v1/` },
       pollIntervalMs: 5,
     })
-    r.handle("echo", async (ctx: CommandContext) => {
+    r.handleRaw("echo", async (ctx: CommandContext) => {
       ctx.signal.addEventListener("abort", () => {
         signalFired = true
       })
@@ -487,7 +487,7 @@ describe("CommandReceiver.run", () => {
       env: { ...FULL_ENV, ALIEN_COMMANDS_URL: `${server.baseUrl}/v1/` },
       pollIntervalMs: 5,
     })
-    r.handle("echo", (ctx: CommandContext) => ({ attempt: ctx.attempt }))
+    r.handleRaw("echo", (ctx: CommandContext) => ({ attempt: ctx.attempt }))
     receiverStop = () => r.stop()
     running = r.run()
 
@@ -522,13 +522,71 @@ describe("CommandReceiver.run", () => {
       env: { ...FULL_ENV, ALIEN_COMMANDS_URL: `${server.baseUrl}/v1/` },
       pollIntervalMs: 5,
     })
-    r.handle("echo", (ctx: CommandContext) => JSON.parse(new TextDecoder().decode(ctx.input)))
+    r.command("echo", params => params)
     receiverStop = () => r.stop()
     running = r.run()
 
     await waitFor(() => submitBody("cmd_1") !== undefined)
     const body = submitBody("cmd_1") as Extract<CommandResponse, { status: "success" }>
     expect(decodeInline(body)).toEqual(params)
+  })
+
+  it("validates JSON with an asynchronous Standard Schema before running the handler", async () => {
+    server = await openServer()
+    const env = envelope({ baseUrl: server.baseUrl, params: inlineParams({ count: 3 }) })
+    const serve = leaseOnce([lease(env)])
+    route = req => serve(req) ?? { status: 200 }
+    const schema = {
+      "~standard": {
+        version: 1 as const,
+        vendor: "test",
+        types: undefined as unknown as { input: unknown; output: { count: number } },
+        validate: async (value: unknown) =>
+          typeof value === "object" &&
+          value !== null &&
+          "count" in value &&
+          typeof value.count === "number"
+            ? { value: { count: value.count } }
+            : { issues: [{ message: "count must be a number" }] },
+      },
+    }
+    const r = createCommandReceiver({
+      env: { ...FULL_ENV, ALIEN_COMMANDS_URL: `${server.baseUrl}/v1/` },
+      pollIntervalMs: 5,
+    })
+    r.command("echo", schema, input => ({ doubled: input.count * 2 }))
+    receiverStop = () => r.stop()
+    running = r.run()
+
+    await waitFor(() => submitBody("cmd_1") !== undefined)
+    const body = submitBody("cmd_1") as Extract<CommandResponse, { status: "success" }>
+    expect(decodeInline(body)).toEqual({ doubled: 6 })
+  })
+
+  it("reports malformed JSON as a handler error without running the command", async () => {
+    server = await openServer()
+    const env = envelope({
+      baseUrl: server.baseUrl,
+      params: { mode: "inline", inlineBase64: Buffer.from("{").toString("base64") },
+    })
+    const serve = leaseOnce([lease(env)])
+    route = req => serve(req) ?? { status: 200 }
+    const handler = vi.fn()
+    const r = createCommandReceiver({
+      env: { ...FULL_ENV, ALIEN_COMMANDS_URL: `${server.baseUrl}/v1/` },
+      pollIntervalMs: 5,
+    })
+    r.command("echo", handler)
+    receiverStop = () => r.stop()
+    running = r.run()
+
+    await waitFor(() => submitBody("cmd_1") !== undefined)
+    expect(submitBody("cmd_1")).toMatchObject({
+      status: "error",
+      code: "HANDLER_ERROR",
+      message: "Command input is not valid JSON",
+    })
+    expect(handler).not.toHaveBeenCalled()
   })
 
   it("counts a slow storage GET against the same budget as the handler", async () => {
@@ -563,7 +621,7 @@ describe("CommandReceiver.run", () => {
       pollIntervalMs: 5,
       pollJitter: 0,
     })
-    r.handle("echo", () => {
+    r.handleRaw("echo", () => {
       handlerCalled = true
       return { shouldNotRun: true }
     })
@@ -598,7 +656,7 @@ describe("CommandReceiver.run", () => {
       pollIntervalMs: 5,
       pollJitter: 0,
     })
-    r.handle("echo", () => {
+    r.handleRaw("echo", () => {
       handlerCalled = true
       return { shouldNotRun: true }
     })
@@ -626,7 +684,7 @@ describe("CommandReceiver.run", () => {
       env: { ...FULL_ENV, ALIEN_COMMANDS_URL: `${server.baseUrl}/v1/` },
       pollIntervalMs: 5,
     })
-    r.handle("echo", () => big)
+    r.handleRaw("echo", () => big)
     receiverStop = () => r.stop()
     running = r.run()
 
@@ -677,7 +735,7 @@ describe("CommandReceiver.run", () => {
       pollIntervalMs: 5,
       pollJitter: 0,
     })
-    receiver.handle("echo", () => ({ payload: "x".repeat(64) }))
+    receiver.handleRaw("echo", () => ({ payload: "x".repeat(64) }))
     receiverStop = () => receiver.stop()
     running = receiver.run()
 
@@ -714,7 +772,7 @@ describe("CommandReceiver.run", () => {
       pollIntervalMs: 5,
     })
     let handlerStarted = false
-    r.handle("echo", async () => {
+    r.handleRaw("echo", async () => {
       handlerStarted = true
       await gate
       return { drained: true }
@@ -755,7 +813,7 @@ describe("CommandReceiver.run", () => {
       drainTimeoutMs: 10,
       pollJitter: 0,
     })
-    r.handle("echo", async ctx => {
+    r.handleRaw("echo", async ctx => {
       handlerStarted = true
       await new Promise<void>(resolve => {
         ctx.signal.addEventListener(
@@ -803,7 +861,7 @@ describe("CommandReceiver.run", () => {
       pollIntervalMs: 5,
       pollJitter: 0,
     })
-    r.handle("echo", async () => {
+    r.handleRaw("echo", async () => {
       calls += 1
       await gate
       return { ok: true }
@@ -843,7 +901,7 @@ describe("CommandReceiver.run", () => {
       pollIntervalMs: 5,
       pollJitter: 0,
     })
-    r.handle("echo", async () => {
+    r.handleRaw("echo", async () => {
       handlerStarted = true
       await gate
       return { ok: true }
@@ -899,7 +957,7 @@ describe("CommandReceiver.run", () => {
         pollIntervalMs: 5,
         pollJitter: 0,
       })
-      r.handle("echo", () => ({ ok: true }))
+      r.handleRaw("echo", () => ({ ok: true }))
       receiverStop = () => r.stop()
       running = r.run()
 
@@ -983,7 +1041,7 @@ describe("CommandReceiver.run", () => {
       env: { ...FULL_ENV, ALIEN_COMMANDS_URL: `${server.baseUrl}/v1/` },
       pollIntervalMs: 5,
     })
-    r.handle("echo", () => ({ ok: true }))
+    r.handleRaw("echo", () => ({ ok: true }))
     receiverStop = () => r.stop()
     running = r.run()
 
@@ -1006,7 +1064,7 @@ describe("CommandReceiver.run", () => {
       env: { ...FULL_ENV, ALIEN_COMMANDS_URL: `${server.baseUrl}/v1/` },
       pollIntervalMs: 5,
     })
-    r.handle("echo", () => ({ ok: true }))
+    r.handleRaw("echo", () => ({ ok: true }))
     receiverStop = () => r.stop()
     running = r.run()
 
@@ -1026,7 +1084,7 @@ describe("CommandReceiver.run", () => {
       env: { ...FULL_ENV, ALIEN_COMMANDS_URL: `${server.baseUrl}/v1/` },
       pollIntervalMs: 5,
     })
-    r.handle("echo", () => ({ ok: true }))
+    r.handleRaw("echo", () => ({ ok: true }))
     receiverStop = () => r.stop()
     running = r.run()
 
@@ -1066,7 +1124,7 @@ describe("CommandReceiver.run", () => {
       env: { ...FULL_ENV, ALIEN_COMMANDS_URL: `${server.baseUrl}/v1?token=abc` },
       pollIntervalMs: 5,
     })
-    r.handle("echo", () => ({ ok: true }))
+    r.handleRaw("echo", () => ({ ok: true }))
     receiverStop = () => r.stop()
     running = r.run()
 
@@ -1089,7 +1147,7 @@ describe("CommandReceiver.run", () => {
       env: { ...FULL_ENV, ALIEN_COMMANDS_URL: `${server.baseUrl}/v1/` },
       pollIntervalMs: 5,
     })
-    r.handle("echo", () => big)
+    r.handleRaw("echo", () => big)
     receiverStop = () => r.stop()
     running = r.run()
 
@@ -1125,7 +1183,7 @@ describe("CommandReceiver.run", () => {
       env: { ...FULL_ENV, ALIEN_COMMANDS_URL: `${server.baseUrl}/v1/` },
       pollIntervalMs: 5,
     })
-    r.handle("echo", () => big)
+    r.handleRaw("echo", () => big)
     receiverStop = () => r.stop()
     running = r.run()
 
@@ -1156,7 +1214,7 @@ describe("CommandReceiver.run", () => {
       env: { ...FULL_ENV, ALIEN_COMMANDS_URL: `${server.baseUrl}/v1/` },
       pollIntervalMs: 5,
     })
-    r.handle("echo", () => ({ ok: true }))
+    r.handleRaw("echo", () => ({ ok: true }))
     receiverStop = () => r.stop()
     running = r.run()
 
@@ -1201,7 +1259,7 @@ describe("CommandReceiver.run", () => {
       fetch: failingFetch,
       pollIntervalMs: 5,
     })
-    r.handle("echo", () => ({ ok: true }))
+    r.handleRaw("echo", () => ({ ok: true }))
     receiverStop = () => r.stop()
     running = r.run()
 
@@ -1232,7 +1290,7 @@ describe("CommandReceiver.run", () => {
           pollIntervalMs: 5,
           pollJitter: 0,
         })
-        r.handle("echo", () => ({ ok: true }))
+        r.handleRaw("echo", () => ({ ok: true }))
         receiverStop = () => r.stop()
         running = r.run()
 

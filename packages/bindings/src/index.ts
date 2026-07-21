@@ -1,6 +1,6 @@
 /**
  * `@alienplatform/bindings` — direct TypeScript bindings for Alien storage, kv,
- * queue, and vault, backed by an in-process napi-rs addon over the Rust
+ * queue, vault, and linked containers, backed by an in-process napi-rs addon over the Rust
  * `alien-bindings` crate.
  *
  * Constructing a factory (`storage("x")`, `kv("y")`, …) does no I/O and needs no
@@ -25,10 +25,13 @@ export const kv = factories.kv
 export const queue = factories.queue
 /** Resolve the vault binding named `name`. */
 export const vault = factories.vault
+/** Resolve the linked-container binding named `name`. */
+export const container = factories.container
 
 export { AlienError, BindingNotConfiguredError, defineError } from "./errors.js"
 
 export type {
+  Container,
   Kv,
   KvScanItem,
   KvScanResult,
