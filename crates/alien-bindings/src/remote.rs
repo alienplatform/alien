@@ -469,7 +469,7 @@ async fn test_fixture_http_error(
                     "resolve remote Storage binding '{resource_id}' (HTTP {status})"
                 ),
             });
-            error.retryable = status.is_server_error();
+            error.retryable = alien_manager_api::is_retryable_http_status(status.as_u16());
             error.http_status_code = Some(status.as_u16());
             error
         }

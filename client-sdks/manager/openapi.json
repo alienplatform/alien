@@ -55,6 +55,56 @@
                 }
               }
             }
+          },
+          "400": {
+            "description": "The deployment, release, or binding is not eligible for remote access",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AlienError"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Authentication is required",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AlienError"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The caller cannot resolve bindings for this deployment",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AlienError"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "The deployment, release, or binding was not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AlienError"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Credential materialization or another internal operation failed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AlienError"
+                }
+              }
+            }
           }
         },
         "security": [

@@ -465,7 +465,12 @@ pub fn router() -> Router<AppState> {
     tag = "bindings",
     request_body = ResolveBindingRequest,
     responses(
-        (status = 200, description = "Remote binding resolved successfully", body = ResolveBindingResponse)
+        (status = 200, description = "Remote binding resolved successfully", body = ResolveBindingResponse),
+        (status = 400, description = "The deployment, release, or binding is not eligible for remote access", body = alien_error::AlienError),
+        (status = 401, description = "Authentication is required", body = alien_error::AlienError),
+        (status = 403, description = "The caller cannot resolve bindings for this deployment", body = alien_error::AlienError),
+        (status = 404, description = "The deployment, release, or binding was not found", body = alien_error::AlienError),
+        (status = 500, description = "Credential materialization or another internal operation failed", body = alien_error::AlienError)
     ),
     security(
         ("bearer" = [])

@@ -55,6 +55,22 @@ impl<T: Send> SdkResultExtReadingBody<ResponseValue<T>> for Result<ResponseValue
     }
 }
 
+impl<T: Send> SdkResultExtReadingBody<ResponseValue<T>>
+    for Result<ResponseValue<T>, Error<types::AlienError>>
+{
+    fn into_sdk_error_reading_body(
+        self,
+    ) -> impl std::future::Future<Output = Result<ResponseValue<T>, AlienError<GenericError>>> + Send
+    {
+        async move {
+            match self {
+                Ok(response) => Ok(response),
+                Err(error) => Err(convert_typed_sdk_error_reading_body(error).await),
+            }
+        }
+    }
+}
+
 impl<T> SdkResultExt<ResponseValue<T>> for Result<ResponseValue<T>, Error<()>> {
     fn into_sdk_error(self) -> Result<ResponseValue<T>, AlienError<GenericError>> {
         self.map_err(convert_sdk_error)
@@ -71,53 +87,106 @@ impl<T> SdkResultExt<ResponseValue<T>> for Result<ResponseValue<T>, Error<()>> {
 pub async fn convert_sdk_error_reading_body(err: Error<()>) -> AlienError<GenericError> {
     match err {
         Error::UnexpectedResponse(response) => {
-            let status = response.status().as_u16();
-            let canonical_reason = response
-                .status()
-                .canonical_reason()
-                .unwrap_or("Unknown")
-                .to_string();
-            let url = response.url().to_string();
-            let header_request_id = response
-                .headers()
-                .get("x-request-id")
-                .and_then(|value| value.to_str().ok())
-                .map(str::to_string);
-            let body = response.text().await.unwrap_or_default();
-
-            if let Ok(mut api_error) = serde_json::from_str::<AlienError<GenericError>>(&body) {
-                if api_error.http_status_code.is_none() {
-                    api_error.http_status_code = Some(status);
-                }
-                let body_request_id = serde_json::from_str::<serde_json::Value>(&body)
-                    .ok()
-                    .and_then(|value| value.get("requestId")?.as_str().map(str::to_string));
-                api_error.context = context_with_request_id(
-                    api_error.context,
-                    header_request_id.as_deref().or(body_request_id.as_deref()),
-                );
-                return api_error;
-            }
-
-            AlienError {
-                code: "UNEXPECTED_RESPONSE".to_string(),
-                message: format!("Unexpected response: {} {}", status, canonical_reason),
-                context: Some(serde_json::json!({
-                    "status": status,
-                    "url": url,
-                })),
-                hint: None,
-                retryable: is_retryable_http_status(status),
-                internal: false,
-                http_status_code: Some(status),
-                source: None,
-                human_layer_presentation: HumanLayerPresentation::Normal,
-                error: Some(GenericError {
-                    message: format!("Unexpected response status: {}", status),
-                }),
-            }
+            convert_unexpected_response_reading_body(response).await
         }
         other => convert_sdk_error(other),
+    }
+}
+
+async fn convert_typed_sdk_error_reading_body(
+    err: Error<types::AlienError>,
+) -> AlienError<GenericError> {
+    match err {
+        Error::ErrorResponse(response) => convert_typed_error_response(response),
+        Error::UnexpectedResponse(response) => {
+            convert_unexpected_response_reading_body(response).await
+        }
+        other => convert_sdk_error(other.into_untyped()),
+    }
+}
+
+fn convert_typed_error_response(
+    response: ResponseValue<types::AlienError>,
+) -> AlienError<GenericError> {
+    let status = response.status().as_u16();
+    let request_id = response
+        .headers()
+        .get("x-request-id")
+        .and_then(|value| value.to_str().ok())
+        .map(str::to_string);
+    let api_error = response.into_inner();
+    let message = String::from(api_error.message);
+    let source = api_error
+        .source
+        .and_then(|value| serde_json::from_value::<AlienError<GenericError>>(value).ok())
+        .map(Box::new);
+    let http_status_code = api_error
+        .http_status_code
+        .and_then(|value| u16::try_from(value).ok())
+        .filter(|value| (100..=599).contains(value))
+        .or(Some(status));
+
+    AlienError {
+        code: String::from(api_error.code),
+        message: message.clone(),
+        context: context_with_request_id(api_error.context, request_id.as_deref()),
+        hint: api_error.hint,
+        retryable: api_error.retryable,
+        internal: api_error.internal,
+        http_status_code,
+        source,
+        human_layer_presentation: HumanLayerPresentation::Normal,
+        error: Some(GenericError { message }),
+    }
+}
+
+async fn convert_unexpected_response_reading_body(
+    response: reqwest::Response,
+) -> AlienError<GenericError> {
+    let status = response.status().as_u16();
+    let canonical_reason = response
+        .status()
+        .canonical_reason()
+        .unwrap_or("Unknown")
+        .to_string();
+    let url = response.url().to_string();
+    let header_request_id = response
+        .headers()
+        .get("x-request-id")
+        .and_then(|value| value.to_str().ok())
+        .map(str::to_string);
+    let body = response.text().await.unwrap_or_default();
+
+    if let Ok(mut api_error) = serde_json::from_str::<AlienError<GenericError>>(&body) {
+        if api_error.http_status_code.is_none() {
+            api_error.http_status_code = Some(status);
+        }
+        let body_request_id = serde_json::from_str::<serde_json::Value>(&body)
+            .ok()
+            .and_then(|value| value.get("requestId")?.as_str().map(str::to_string));
+        api_error.context = context_with_request_id(
+            api_error.context,
+            header_request_id.as_deref().or(body_request_id.as_deref()),
+        );
+        return api_error;
+    }
+
+    AlienError {
+        code: "UNEXPECTED_RESPONSE".to_string(),
+        message: format!("Unexpected response: {} {}", status, canonical_reason),
+        context: Some(serde_json::json!({
+            "status": status,
+            "url": url,
+        })),
+        hint: None,
+        retryable: is_retryable_http_status(status),
+        internal: false,
+        http_status_code: Some(status),
+        source: None,
+        human_layer_presentation: HumanLayerPresentation::Normal,
+        error: Some(GenericError {
+            message: format!("Unexpected response status: {}", status),
+        }),
     }
 }
 
@@ -144,7 +213,9 @@ fn context_with_request_id(
     }
 }
 
-fn is_retryable_http_status(status: u16) -> bool {
+/// Returns whether an HTTP response represents a transient failure that a
+/// caller may safely retry.
+pub fn is_retryable_http_status(status: u16) -> bool {
     matches!(status, 408 | 425 | 429) || (500..=599).contains(&status)
 }
 
@@ -341,7 +412,7 @@ fn build_reqwest_source(reqwest_err: &reqwest::Error) -> Option<Box<AlienError<G
 mod tests {
     use super::*;
 
-    fn unexpected_response(status: u16, body: &str) -> Error<()> {
+    fn unexpected_response<E>(status: u16, body: &str) -> Error<E> {
         let response = http::Response::builder()
             .status(status)
             .body(body.to_string())
@@ -380,6 +451,44 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn typed_error_response_preserves_alien_error_and_request_id() {
+        let api_error = serde_json::from_value::<types::AlienError>(serde_json::json!({
+            "code": "FORBIDDEN",
+            "message": "Binding access denied",
+            "context": { "deploymentId": "dep_123" },
+            "hint": "Use the assigned manager",
+            "retryable": false,
+            "internal": false,
+            "httpStatusCode": 403,
+            "source": {
+                "code": "GENERIC_ERROR",
+                "message": "policy rejected request",
+                "retryable": false,
+                "internal": false
+            }
+        }))
+        .expect("typed API error should deserialize");
+        let mut headers = reqwest::header::HeaderMap::new();
+        headers.insert("x-request-id", "req_header_123".parse().unwrap());
+        let response = ResponseValue::new(api_error, reqwest::StatusCode::FORBIDDEN, headers);
+
+        let error = convert_typed_sdk_error_reading_body(Error::ErrorResponse(response)).await;
+
+        assert_eq!(error.code, "FORBIDDEN");
+        assert_eq!(error.message, "Binding access denied");
+        assert_eq!(error.http_status_code, Some(403));
+        assert_eq!(error.hint.as_deref(), Some("Use the assigned manager"));
+        assert_eq!(error.context.as_ref().unwrap()["deploymentId"], "dep_123");
+        assert_eq!(
+            error.context.as_ref().unwrap()["requestId"],
+            "req_header_123"
+        );
+        assert_eq!(error.source.as_ref().unwrap().code, "GENERIC_ERROR");
+        assert!(!error.retryable);
+        assert!(!error.internal);
+    }
+
+    #[tokio::test]
     async fn reading_body_falls_back_to_generic_error_for_non_alien_payloads() {
         let error =
             convert_sdk_error_reading_body(unexpected_response(502, "<html>bad gateway</html>"))
@@ -394,6 +503,19 @@ mod tests {
     #[tokio::test]
     async fn reading_body_classifies_unstructured_rate_limits_as_retryable() {
         let error = convert_sdk_error_reading_body(unexpected_response(429, "rate limited")).await;
+
+        assert_eq!(error.code, "UNEXPECTED_RESPONSE");
+        assert_eq!(error.http_status_code, Some(429));
+        assert!(error.retryable);
+    }
+
+    #[tokio::test]
+    async fn typed_endpoint_classifies_undocumented_rate_limits_as_retryable() {
+        let error = convert_typed_sdk_error_reading_body(unexpected_response::<types::AlienError>(
+            429,
+            "rate limited",
+        ))
+        .await;
 
         assert_eq!(error.code, "UNEXPECTED_RESPONSE");
         assert_eq!(error.http_status_code, Some(429));
