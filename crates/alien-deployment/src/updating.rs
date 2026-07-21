@@ -2,7 +2,8 @@ use crate::{
     DeploymentConfig, DeploymentState, DeploymentStatus, DeploymentStepResult, ErrorData, Result,
 };
 use alien_core::{
-    ComputeClusterOutputs, Platform, ResourceLifecycle, Stack, StackState, StackStatus,
+    ComputeClusterOutputs, Platform, ResourceLifecycle, ResourceStatus, Stack, StackState,
+    StackStatus,
 };
 use alien_error::{AlienError, Context};
 use alien_infra::StackExecutor;
@@ -17,6 +18,28 @@ fn machines_deployment_has_zero_machines(platform: Platform, stack_state: &Stack
                 .and_then(|outputs| outputs.downcast_ref::<ComputeClusterOutputs>())
                 .is_some_and(|outputs| outputs.total_machines == 0)
         })
+}
+
+fn compute_update_status(stack_state: &StackState, target_stack: &Stack) -> Result<StackStatus> {
+    let statuses = stack_state
+        .resources
+        .iter()
+        .filter_map(|(resource_id, resource)| {
+            (target_stack.resources.contains_key(resource_id)
+                || resource.status != ResourceStatus::Deleted)
+                .then_some(resource.status)
+        })
+        .collect::<Vec<_>>();
+
+    if statuses.is_empty() {
+        return Ok(StackStatus::Running);
+    }
+
+    StackState::compute_stack_status_from_resources(&statuses).context(
+        ErrorData::StackExecutionFailed {
+            message: "Failed to compute update status".to_string(),
+        },
+    )
 }
 
 /// Handle UpdatePending → Updating transition
@@ -218,13 +241,7 @@ pub async fn handle_updating(
             })?;
 
     // Compute the stack status from the resulting state
-    let stack_status =
-        step_result
-            .next_state
-            .compute_stack_status()
-            .context(ErrorData::StackExecutionFailed {
-                message: "Failed to compute stack status".to_string(),
-            })?;
+    let stack_status = compute_update_status(&step_result.next_state, &target_stack)?;
 
     // Check if update is complete
     let waiting_for_machines =

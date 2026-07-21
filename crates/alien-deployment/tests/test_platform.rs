@@ -778,6 +778,60 @@ async fn setup_authorized_update_clears_authority_only_on_success() {
 }
 
 #[tokio::test]
+async fn update_completes_after_removed_resource_is_deleted() {
+    let config = create_test_config("hash_v1", false);
+    let mut stack_v1 = create_test_stack("test-stack", "function-a");
+    let function_b = Worker::new("function-b".to_string())
+        .code(WorkerCode::Image {
+            image: "test:latest".to_string(),
+        })
+        .permissions("default".to_string())
+        .build();
+    stack_v1.resources.insert(
+        "function-b".to_string(),
+        ResourceEntry {
+            config: alien_core::Resource::new(function_b),
+            lifecycle: ResourceLifecycle::Live,
+            dependencies: Vec::new(),
+            remote_access: false,
+        },
+    );
+
+    let mut state = run_to_completion(create_initial_state(stack_v1), config.clone()).await;
+    let stack_v2 = create_test_stack("test-stack", "function-a");
+    start_update(
+        &mut state,
+        ReleaseInfo {
+            release_id: Some("rel_v2".to_string()),
+            version: Some("2.0.0".to_string()),
+            description: None,
+            stack: stack_v2,
+        },
+    );
+
+    let completed = run_to_completion(state, config).await;
+
+    assert_eq!(completed.status, DeploymentStatus::Running);
+    assert_eq!(
+        completed
+            .stack_state
+            .as_ref()
+            .unwrap()
+            .resources
+            .get("function-b")
+            .unwrap()
+            .status,
+        alien_core::ResourceStatus::Deleted,
+        "the executor's deletion tombstone should be preserved"
+    );
+    assert_eq!(
+        completed.current_release.as_ref().unwrap().release_id,
+        Some("rel_v2".to_string())
+    );
+    assert!(completed.target_release.is_none());
+}
+
+#[tokio::test]
 async fn stale_waiting_for_machines_returns_to_updating() {
     let stack_v1 = create_test_stack("test-stack", "test-function");
     let config = create_test_config("hash_v1", false);
