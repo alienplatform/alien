@@ -1633,199 +1633,205 @@ pub fn setup(
     // E2E setup composes every platform and deployment path into one large
     // future. Allocate it on the heap so nextest's test-thread stack does not
     // depend on the largest generated SDK or cloud-controller future.
-    Box::pin(async move {
-        init_tracing();
+    Box::pin(setup_inner(platform, model, app))
+}
 
-        let test_name = format!("{}_{}_{}", model, platform.as_str(), app);
-        info!(%test_name, "Starting E2E test setup");
+async fn setup_inner(
+    platform: Platform,
+    model: DeploymentModel,
+    app: TestApp,
+) -> anyhow::Result<TestContext> {
+    init_tracing();
 
-        // Skip if platform credentials are not available
-        let config = TestConfig::from_env();
-        if !is_platform_available(&config, platform, model, app) {
-            anyhow::bail!(
+    let test_name = format!("{}_{}_{}", model, platform.as_str(), app);
+    info!(%test_name, "Starting E2E test setup");
+
+    // Skip if platform credentials are not available
+    let config = TestConfig::from_env();
+    if !is_platform_available(&config, platform, model, app) {
+        anyhow::bail!(
             "Skipping {}: platform credentials not available or platform not supported for this model",
             test_name,
         );
-        }
+    }
 
-        // Start the in-process manager with cloud credentials.
-        // For Local platform, we still need cloud credentials for the artifact
-        // registry (images are pushed to a cloud registry). Use all available
-        // cloud platforms so the manager has registry access configured.
-        let manager_platforms: Vec<Platform> = if platform == Platform::Local {
-            [Platform::Aws, Platform::Gcp, Platform::Azure]
-                .into_iter()
-                .filter(|p| config.has_platform(*p))
-                .collect()
-        } else {
-            vec![platform]
-        };
+    // Start the in-process manager with cloud credentials.
+    // For Local platform, we still need cloud credentials for the artifact
+    // registry (images are pushed to a cloud registry). Use all available
+    // cloud platforms so the manager has registry access configured.
+    let manager_platforms: Vec<Platform> = if platform == Platform::Local {
+        [Platform::Aws, Platform::Gcp, Platform::Azure]
+            .into_iter()
+            .filter(|p| config.has_platform(*p))
+            .collect()
+    } else {
+        vec![platform]
+    };
 
-        let manager = if manager_platforms.is_empty() {
-            Arc::new(
-                TestManager::start()
-                    .await
-                    .map_err(|e| anyhow::anyhow!("Failed to start TestManager: {}", e))?,
-            )
-        } else {
-            Arc::new(
-                TestManager::start_with_config(&config, &manager_platforms)
-                    .await
-                    .map_err(|e| anyhow::anyhow!("Failed to start TestManager: {}", e))?,
-            )
-        };
-        info!(url = %manager.url, "Manager started");
+    let manager = if manager_platforms.is_empty() {
+        Arc::new(
+            TestManager::start()
+                .await
+                .map_err(|e| anyhow::anyhow!("Failed to start TestManager: {}", e))?,
+        )
+    } else {
+        Arc::new(
+            TestManager::start_with_config(&config, &manager_platforms)
+                .await
+                .map_err(|e| anyhow::anyhow!("Failed to start TestManager: {}", e))?,
+        )
+    };
+    info!(url = %manager.url, "Manager started");
 
-        // ── Route to the correct flow based on platform + model ─────────
+    // ── Route to the correct flow based on platform + model ─────────
+    //
+    // Push (AWS/GCP/Azure) and Local pull use separate real product flows.
+    //   Developer role: build, push, release, create DG + token.
+    //   Customer role: `alien-deploy deploy --token <dg_token> --platform <platform>`.
+    // Kubernetes pull belongs to `setup_distribution`; it needs the setup
+    // artifact outputs to select a cloud registry and configure Helm.
+
+    // Only local pull uses `alien-deploy deploy` for now.
+    // Push model has an auth issue: alien-deploy deploy uses the DG token for
+    // sync/acquire, but the manager only accepts admin/deployment tokens there.
+    // TODO: fix alien-deploy-cli to re-create client with deployment token
+    // after initialize, then enable push model here too.
+    let uses_alien_deploy_up = model == DeploymentModel::Pull && platform == Platform::Local;
+
+    let (mut deployment, agent) = if uses_alien_deploy_up {
+        // ── alien-deploy deploy flow (local pull) ─────────────────────────
         //
-        // Push (AWS/GCP/Azure) and Local pull use separate real product flows.
-        //   Developer role: build, push, release, create DG + token.
-        //   Customer role: `alien-deploy deploy --token <dg_token> --platform <platform>`.
-        // Kubernetes pull belongs to `setup_distribution`; it needs the setup
-        // artifact outputs to select a cloud registry and configure Helm.
+        // Developer side: build, push, release, create DG + DG token.
+        let dev = developer_setup(&manager, platform, app).await?;
 
-        // Only local pull uses `alien-deploy deploy` for now.
-        // Push model has an auth issue: alien-deploy deploy uses the DG token for
-        // sync/acquire, but the manager only accepts admin/deployment tokens there.
-        // TODO: fix alien-deploy-cli to re-create client with deployment token
-        // after initialize, then enable push model here too.
-        let uses_alien_deploy_up = model == DeploymentModel::Pull && platform == Platform::Local;
-
-        let (mut deployment, agent) = if uses_alien_deploy_up {
-            // ── alien-deploy deploy flow (local pull) ─────────────────────────
-            //
-            // Developer side: build, push, release, create DG + DG token.
-            let dev = developer_setup(&manager, platform, app).await?;
-
-            // Customer side: alien-deploy deploy installs alien-operator as OS service.
-            let deployment =
-                run_alien_deploy_up(&manager, &dev.dg_token, platform, &dev.group_id).await?;
-            info!(
-                deployment_id = %deployment.id,
-                "Deployment created via alien-deploy deploy"
-            );
-
-            // Track agent for cleanup. In foreground mode the agent runs as a
-            // child process owned by the deployment (no OS service installed).
-            // Only create a service tracker when not using foreground mode.
-            let foreground = std::env::var("ALIEN_E2E_FOREGROUND")
-                .ok()
-                .filter(|v| v == "0" || v == "false")
-                .is_none();
-            let agent = if foreground {
-                None
-            } else {
-                let deploy_binary = find_deploy_binary().ok();
-                Some(crate::operator::TestAlienOperator::from_service(
-                    deploy_binary,
-                ))
-            };
-
-            (deployment, agent)
-        } else {
-            // ── Direct cloud push flow ──────────────────────────────────
-            //
-            // Push model: test harness calls push_initial_setup() directly
-            // with the admin token (alien-deploy deploy auth not yet supported).
-            if model == DeploymentModel::Pull {
-                anyhow::bail!(
-                "direct pull is not supported by this E2E path; use local pull or a Terraform+Helm Kubernetes distribution test"
-            );
-            }
-
-            let (deployment, stack) = deploy_test_app(&manager, platform, model, app).await?;
-            info!(
-                deployment_id = %deployment.id,
-                "Deployment created, waiting for running status"
-            );
-
-            // Push model: run initial setup with scoped credentials
-            if model == DeploymentModel::Push {
-                if config.has_platform(platform)
-                    && matches!(platform, Platform::Aws | Platform::Gcp | Platform::Azure)
-                {
-                    let management_config = manager.management_config();
-                    info!(
-                        deployment_id = %deployment.id,
-                        has_management_config = management_config.is_some(),
-                        "Running setup_target for cross-account deployment"
-                    );
-                    crate::setup::setup_target(
-                        &config,
-                        platform,
-                        &deployment,
-                        &stack,
-                        &manager,
-                        management_config,
-                    )
-                    .await?;
-                }
-            }
-
-            (deployment, None)
-        };
-
-        // Capture agent container ID for debug logging (avoids holding non-Send
-        // types across the wait_until_running await boundary).
-        let agent_container_id = agent.as_ref().and_then(|a| a.container_id.clone());
-
-        // Wait for the deployment to be running (populates URL).
-        // For push: the manager's deployment loop drives this after alien-deploy deploy completes.
-        // For pull: the alien-operator drives this via sync + deployment loop.
-        let wait_result = deployment
-            .wait_until_running(deployment_running_timeout(platform))
-            .await
-            .map_err(|e| e.to_string());
-
-        if let Err(err_msg) = wait_result {
-            if let Some(ref cid) = agent_container_id {
-                let logs = crate::operator::docker_container_logs(cid).await;
-                tracing::error!(container_id = %cid, "Agent container logs on timeout:\n{}", logs);
-            }
-            if let Some(ref agent) = agent {
-                if agent.installed_as_service {
-                    let logs = crate::operator::collect_service_logs().await;
-                    tracing::error!("Agent service logs on timeout:\n{}", logs);
-                }
-            }
-
-            // Clean up partially-created resources before returning the error.
-            // Without this, the test macro's .expect() panics and teardown() never
-            // runs because Self was never constructed — leaking cloud resources.
-            cleanup_failed_setup(&mut deployment, agent, &manager, platform).await;
-
-            return Err(anyhow::anyhow!(
-                "Deployment failed to reach running: {}",
-                err_msg
-            ));
-        }
+        // Customer side: alien-deploy deploy installs alien-operator as OS service.
+        let deployment =
+            run_alien_deploy_up(&manager, &dev.dg_token, platform, &dev.group_id).await?;
         info!(
             deployment_id = %deployment.id,
-            url = ?deployment.url,
-            "Deployment is running"
+            "Deployment created via alien-deploy deploy"
         );
 
-        // Provision the managed test secret via the manager vault API.
-        // Only for push mode — pull-mode agents manage secrets directly.
-        if model == DeploymentModel::Push
-            && matches!(platform, Platform::Aws | Platform::Gcp | Platform::Azure)
-        {
-            if let Err(e) = provision_managed_test_secret(&manager, &deployment).await {
-                tracing::warn!(error = %e, "Failed to provision managed test secret, cleaning up");
-                cleanup_failed_setup(&mut deployment, agent, &manager, platform).await;
-                return Err(e);
+        // Track agent for cleanup. In foreground mode the agent runs as a
+        // child process owned by the deployment (no OS service installed).
+        // Only create a service tracker when not using foreground mode.
+        let foreground = std::env::var("ALIEN_E2E_FOREGROUND")
+            .ok()
+            .filter(|v| v == "0" || v == "false")
+            .is_none();
+        let agent = if foreground {
+            None
+        } else {
+            let deploy_binary = find_deploy_binary().ok();
+            Some(crate::operator::TestAlienOperator::from_service(
+                deploy_binary,
+            ))
+        };
+
+        (deployment, agent)
+    } else {
+        // ── Direct cloud push flow ──────────────────────────────────
+        //
+        // Push model: test harness calls push_initial_setup() directly
+        // with the admin token (alien-deploy deploy auth not yet supported).
+        if model == DeploymentModel::Pull {
+            anyhow::bail!(
+                "direct pull is not supported by this E2E path; use local pull or a Terraform+Helm Kubernetes distribution test"
+            );
+        }
+
+        let (deployment, stack) = deploy_test_app(&manager, platform, model, app).await?;
+        info!(
+            deployment_id = %deployment.id,
+            "Deployment created, waiting for running status"
+        );
+
+        // Push model: run initial setup with scoped credentials
+        if model == DeploymentModel::Push {
+            if config.has_platform(platform)
+                && matches!(platform, Platform::Aws | Platform::Gcp | Platform::Azure)
+            {
+                let management_config = manager.management_config();
+                info!(
+                    deployment_id = %deployment.id,
+                    has_management_config = management_config.is_some(),
+                    "Running setup_target for cross-account deployment"
+                );
+                crate::setup::setup_target(
+                    &config,
+                    platform,
+                    &deployment,
+                    &stack,
+                    &manager,
+                    management_config,
+                )
+                .await?;
             }
         }
 
-        Ok(TestContext {
-            deployment,
-            manager,
-            platform,
-            model,
-            app,
-            agent,
-            distribution_cleanups: Vec::new(),
-        })
+        (deployment, None)
+    };
+
+    // Capture agent container ID for debug logging (avoids holding non-Send
+    // types across the wait_until_running await boundary).
+    let agent_container_id = agent.as_ref().and_then(|a| a.container_id.clone());
+
+    // Wait for the deployment to be running (populates URL).
+    // For push: the manager's deployment loop drives this after alien-deploy deploy completes.
+    // For pull: the alien-operator drives this via sync + deployment loop.
+    let wait_result = deployment
+        .wait_until_running(deployment_running_timeout(platform))
+        .await
+        .map_err(|e| e.to_string());
+
+    if let Err(err_msg) = wait_result {
+        if let Some(ref cid) = agent_container_id {
+            let logs = crate::operator::docker_container_logs(cid).await;
+            tracing::error!(container_id = %cid, "Agent container logs on timeout:\n{}", logs);
+        }
+        if let Some(ref agent) = agent {
+            if agent.installed_as_service {
+                let logs = crate::operator::collect_service_logs().await;
+                tracing::error!("Agent service logs on timeout:\n{}", logs);
+            }
+        }
+
+        // Clean up partially-created resources before returning the error.
+        // Without this, the test macro's .expect() panics and teardown() never
+        // runs because Self was never constructed — leaking cloud resources.
+        cleanup_failed_setup(&mut deployment, agent, &manager, platform).await;
+
+        return Err(anyhow::anyhow!(
+            "Deployment failed to reach running: {}",
+            err_msg
+        ));
+    }
+    info!(
+        deployment_id = %deployment.id,
+        url = ?deployment.url,
+        "Deployment is running"
+    );
+
+    // Provision the managed test secret via the manager vault API.
+    // Only for push mode — pull-mode agents manage secrets directly.
+    if model == DeploymentModel::Push
+        && matches!(platform, Platform::Aws | Platform::Gcp | Platform::Azure)
+    {
+        if let Err(e) = provision_managed_test_secret(&manager, &deployment).await {
+            tracing::warn!(error = %e, "Failed to provision managed test secret, cleaning up");
+            cleanup_failed_setup(&mut deployment, agent, &manager, platform).await;
+            return Err(e);
+        }
+    }
+
+    Ok(TestContext {
+        deployment,
+        manager,
+        platform,
+        model,
+        app,
+        agent,
+        distribution_cleanups: Vec::new(),
     })
 }
 

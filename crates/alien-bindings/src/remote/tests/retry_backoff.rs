@@ -133,6 +133,42 @@ async fn unstructured_rate_limit_uses_unexpired_cache_during_backoff() {
     assert_eq!(fixture.manager.calls.load(Ordering::SeqCst), 2);
 }
 
+#[tokio::test]
+async fn malformed_server_error_uses_unexpired_cache_during_backoff() {
+    let fixture = Fixture::new(at(0), at(600)).await;
+    let provider = fixture.remote_provider().await;
+    let bindings = RemoteBindings::from_provider(provider);
+    let storage = bindings
+        .storage("files")
+        .await
+        .expect("initial remote Storage resolution");
+    storage
+        .put(
+            &Path::from("server-error.txt"),
+            PutPayload::from_static(b"value"),
+        )
+        .await
+        .expect("seed fixture object");
+
+    fixture.fail_manager_with_text(
+        StatusCode::INTERNAL_SERVER_ERROR,
+        "<html>upstream exploded</html>",
+    );
+    fixture.clock.set(at(481));
+    storage
+        .head(&Path::from("server-error.txt"))
+        .await
+        .expect("malformed server error should use the unexpired cached lease");
+    assert_eq!(fixture.manager.calls.load(Ordering::SeqCst), 2);
+
+    fixture.clock.set(at(485));
+    storage
+        .head(&Path::from("server-error.txt"))
+        .await
+        .expect("server-error cooldown should continue using the cached lease");
+    assert_eq!(fixture.manager.calls.load(Ordering::SeqCst), 2);
+}
+
 #[test]
 fn refresh_retry_delay_is_exponential_and_bounded() {
     assert_eq!(refresh_retry_delay(1), ChronoDuration::seconds(5));

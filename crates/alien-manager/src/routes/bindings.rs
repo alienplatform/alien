@@ -459,6 +459,10 @@ pub fn router() -> Router<AppState> {
     Router::new().route("/v1/bindings/resolve", post(resolve_binding))
 }
 
+// Keep transient errors out of OpenAPI. Progenitor only supports one error
+// response type per operation, while its typed payload parse failure drops the
+// HTTP status. Leaving 408/425/429/5xx on the unexpected-response path preserves
+// retryability and lets callers use still-valid cached credentials.
 #[cfg_attr(feature = "openapi", utoipa::path(
     post,
     path = "/v1/bindings/resolve",
@@ -469,8 +473,7 @@ pub fn router() -> Router<AppState> {
         (status = 400, description = "The deployment, release, or binding is not eligible for remote access", body = alien_error::AlienError),
         (status = 401, description = "Authentication is required", body = alien_error::AlienError),
         (status = 403, description = "The caller cannot resolve bindings for this deployment", body = alien_error::AlienError),
-        (status = 404, description = "The deployment, release, or binding was not found", body = alien_error::AlienError),
-        (status = 500, description = "Credential materialization or another internal operation failed", body = alien_error::AlienError)
+        (status = 404, description = "The deployment, release, or binding was not found", body = alien_error::AlienError)
     ),
     security(
         ("bearer" = [])

@@ -64,13 +64,19 @@ struct PlatformFixtureState {
 struct ManagerFixtureState {
     calls: Arc<AtomicUsize>,
     fail: Arc<AtomicBool>,
-    failure_response: Arc<StdRwLock<Option<(StatusCode, serde_json::Value)>>>,
+    failure_response: Arc<StdRwLock<Option<(StatusCode, FailureBody)>>>,
     invalid_binding: Arc<AtomicBool>,
     advance_clock_to: Arc<StdRwLock<Option<DateTime<Utc>>>>,
     clock: Arc<ManualClock>,
     expires_at: Arc<StdRwLock<DateTime<Utc>>>,
     storage_path: String,
     requests: Arc<StdMutex<Vec<RecordedRequest>>>,
+}
+
+#[derive(Clone)]
+enum FailureBody {
+    Json(serde_json::Value),
+    Text(String),
 }
 
 #[derive(Clone)]
@@ -148,7 +154,17 @@ impl Fixture {
             .manager
             .failure_response
             .write()
-            .expect("manager failure response write lock") = Some((status, body));
+            .expect("manager failure response write lock") =
+            Some((status, FailureBody::Json(body)));
+    }
+
+    fn fail_manager_with_text(&self, status: StatusCode, body: impl Into<String>) {
+        *self
+            .manager
+            .failure_response
+            .write()
+            .expect("manager failure response write lock") =
+            Some((status, FailureBody::Text(body.into())));
     }
 
     fn advance_clock_during_next_resolve(&self, now: DateTime<Utc>) {
@@ -303,7 +319,10 @@ async fn resolve_handler(
         .expect("manager failure response read lock")
         .clone()
     {
-        return (status, Json(body)).into_response();
+        return match body {
+            FailureBody::Json(body) => (status, Json(body)).into_response(),
+            FailureBody::Text(body) => (status, body).into_response(),
+        };
     }
     if state.fail.load(Ordering::SeqCst) {
         return StatusCode::SERVICE_UNAVAILABLE.into_response();

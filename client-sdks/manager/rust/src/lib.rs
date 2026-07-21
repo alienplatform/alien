@@ -522,6 +522,53 @@ mod tests {
         assert!(error.retryable);
     }
 
+    #[tokio::test]
+    async fn generated_typed_endpoint_preserves_malformed_server_error_status() {
+        use std::io::{Read, Write};
+
+        let listener = std::net::TcpListener::bind("127.0.0.1:0")
+            .expect("test server should bind to a loopback port");
+        let address = listener
+            .local_addr()
+            .expect("test server should have a local address");
+        let server = std::thread::spawn(move || {
+            let (mut stream, _) = listener
+                .accept()
+                .expect("test server should accept the SDK request");
+            let mut request = [0_u8; 4096];
+            stream
+                .read(&mut request)
+                .expect("test server should read the SDK request");
+            stream
+                .write_all(
+                    b"HTTP/1.1 500 Internal Server Error\r\ncontent-type: text/html\r\ncontent-length: 17\r\nconnection: close\r\n\r\nupstream exploded",
+                )
+                .expect("test server should return its malformed error body");
+        });
+
+        let sdk_error = Client::new(&format!("http://{address}"))
+            .resolve_binding()
+            .body(types::ResolveBindingRequest {
+                deployment_id: "dep_test".to_string(),
+                resource_id: "storage".to_string(),
+            })
+            .send()
+            .await
+            .expect_err("the generated SDK should return the server error");
+        server.join().expect("test server should stop cleanly");
+
+        assert!(matches!(
+            &sdk_error,
+            Error::UnexpectedResponse(response)
+                if response.status() == reqwest::StatusCode::INTERNAL_SERVER_ERROR
+        ));
+        let error = convert_typed_sdk_error_reading_body(sdk_error).await;
+
+        assert_eq!(error.code, "UNEXPECTED_RESPONSE");
+        assert_eq!(error.http_status_code, Some(500));
+        assert!(error.retryable);
+    }
+
     #[test]
     fn retryable_http_statuses_are_limited_to_transient_failures() {
         for status in [408, 425, 429, 500, 502, 503, 504, 599] {

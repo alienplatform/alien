@@ -95,16 +95,6 @@
                 }
               }
             }
-          },
-          "500": {
-            "description": "Credential materialization or another internal operation failed",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/AlienError"
-                }
-              }
-            }
           }
         },
         "security": [
