@@ -1,12 +1,14 @@
 //! Infrastructure Dependencies mutation that adds dependencies from user resources to infrastructure resources.
 
-use crate::error::Result;
+use crate::error::{ErrorData, Result};
 use crate::StackMutation;
 use alien_core::{
     DeploymentConfig, Platform, RemoteStackManagement, ResourceLifecycle, ResourceRef, Stack,
     StackState, Storage,
 };
+use alien_error::AlienError;
 use async_trait::async_trait;
+use std::collections::HashSet;
 use tracing::{debug, info};
 
 /// Mutation that adds dependencies from user resources to infrastructure resources.
@@ -82,6 +84,10 @@ impl StackMutation for InfrastructureDependenciesMutation {
                     }
                 }
             }
+        }
+
+        if matches!(platform, Platform::Aws | Platform::Gcp | Platform::Azure) {
+            validate_management_bootstrap_permissions(&stack)?;
         }
 
         Ok(stack)
@@ -399,15 +405,76 @@ fn remote_frozen_storage_refs(stack: &Stack) -> Vec<ResourceRef> {
         .collect()
 }
 
+/// Reject exact management grants on resources that must become ready before
+/// RemoteStackManagement. Their controllers apply exact grants through the
+/// management identity, which would make the prerequisite wait on its own
+/// dependent. Remote Storage is exempt because its exact grants are reconciled
+/// by RemoteStackManagement after the storage resource exists.
+fn validate_management_bootstrap_permissions(stack: &Stack) -> Result<()> {
+    let Some(management_id) = remote_stack_management_id(stack) else {
+        return Ok(());
+    };
+    let Some(management_profile) = stack.management().profile() else {
+        return Ok(());
+    };
+    let Some(management) = stack.resources.get(management_id) else {
+        return Ok(());
+    };
+
+    let mut pending = management
+        .config
+        .get_dependencies()
+        .into_iter()
+        .chain(management.dependencies.iter().cloned())
+        .map(|dependency| dependency.id().to_string())
+        .collect::<Vec<_>>();
+    let mut visited = HashSet::new();
+
+    while let Some(resource_id) = pending.pop() {
+        if resource_id == management_id || !visited.insert(resource_id.clone()) {
+            continue;
+        }
+        let Some(entry) = stack.resources.get(&resource_id) else {
+            continue;
+        };
+
+        if !is_remote_frozen_storage(entry)
+            && management_profile
+                .0
+                .get(&resource_id)
+                .is_some_and(|references| !references.is_empty())
+        {
+            return Err(AlienError::new(ErrorData::InvalidResourceDependency {
+                resource_id: management_id.to_string(),
+                dependency_id: resource_id.clone(),
+                reason: format!(
+                    "management permissions cannot be scoped to bootstrap prerequisite '{resource_id}'; use stack-wide permissions or remove the exact scope"
+                ),
+            }));
+        }
+
+        pending.extend(
+            entry
+                .config
+                .get_dependencies()
+                .into_iter()
+                .chain(entry.dependencies.iter().cloned())
+                .map(|dependency| dependency.id().to_string()),
+        );
+    }
+
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
-    use alien_core::permissions::{ManagementPermissions, PermissionsConfig};
+    use alien_core::permissions::{ManagementPermissions, PermissionProfile, PermissionsConfig};
     use alien_core::{
-        AzureResourceGroup, AzureStorageAccount, EnvironmentVariablesSnapshot, ExternalBinding,
-        ExternalBindings, KubernetesCluster, KubernetesClusterOwnership, KubernetesClusterProvider,
-        KubernetesHeartbeatMode, Resource, ResourceEntry, ResourceLifecycle, StackSettings,
-        Storage, StorageBinding, Worker, WorkerCode, WorkerTrigger,
+        AzureResourceGroup, AzureStorageAccount, EnvironmentVariablesSnapshot, ExternalBindings,
+        KubernetesCluster, KubernetesClusterOwnership, KubernetesClusterProvider,
+        KubernetesHeartbeatMode, Resource, ResourceEntry, ResourceLifecycle, ServiceAccount,
+        ServiceActivation, StackSettings, Storage, Worker, WorkerCode, WorkerTrigger,
     };
     use indexmap::IndexMap;
 
@@ -610,6 +677,16 @@ mod tests {
                 RemoteStackManagement::new("management".to_string()).build(),
                 ResourceLifecycle::Frozen,
             )
+            .add(
+                ServiceActivation::new("enable-cloud-storage".to_string())
+                    .service_name("storage.googleapis.com".to_string())
+                    .build(),
+                ResourceLifecycle::Frozen,
+            )
+            .add(
+                ServiceAccount::new("execution-sa".to_string()).build(),
+                ResourceLifecycle::Frozen,
+            )
             .add(worker, ResourceLifecycle::Live)
             .build();
         let management_ref = ResourceRef::new(RemoteStackManagement::RESOURCE_TYPE, "management");
@@ -619,18 +696,19 @@ mod tests {
             .unwrap()
             .dependencies
             .push(management_ref.clone());
-
-        let mut external_bindings = ExternalBindings::new();
-        external_bindings.insert(
-            "archive",
-            ExternalBinding::Storage(StorageBinding::gcs("imported-archive-bucket")),
-        );
+        let execution_sa_ref = ResourceRef::new(ServiceAccount::RESOURCE_TYPE, "execution-sa");
+        stack
+            .resources
+            .get_mut("archive")
+            .unwrap()
+            .dependencies
+            .push(execution_sa_ref);
         let stack_state = StackState::new(Platform::Gcp);
         let config = DeploymentConfig::builder()
             .stack_settings(StackSettings::default())
             .environment_variables(empty_env_snapshot())
             .allow_frozen_changes(false)
-            .external_bindings(external_bindings)
+            .external_bindings(ExternalBindings::default())
             .build();
 
         let result = InfrastructureDependenciesMutation
@@ -638,10 +716,39 @@ mod tests {
             .await
             .unwrap();
         let storage_ref = ResourceRef::new(Storage::RESOURCE_TYPE, "archive");
+        let storage_activation_ref =
+            ResourceRef::new(ServiceActivation::RESOURCE_TYPE, "enable-cloud-storage");
 
         assert!(!result
             .resources
             .get("archive")
+            .unwrap()
+            .dependencies
+            .contains(&management_ref));
+        assert!(result
+            .resources
+            .get("archive")
+            .unwrap()
+            .dependencies
+            .contains(&storage_activation_ref));
+        assert!(result
+            .resources
+            .get("archive")
+            .unwrap()
+            .dependencies
+            .contains(&ResourceRef::new(
+                ServiceAccount::RESOURCE_TYPE,
+                "execution-sa",
+            )));
+        assert!(!result
+            .resources
+            .get("enable-cloud-storage")
+            .unwrap()
+            .dependencies
+            .contains(&management_ref));
+        assert!(!result
+            .resources
+            .get("execution-sa")
             .unwrap()
             .dependencies
             .contains(&management_ref));
@@ -658,5 +765,52 @@ mod tests {
             .dependencies
             .contains(&management_ref));
         assert!(crate::compile_time::validate_stack_dependencies(&result).success);
+    }
+
+    #[tokio::test]
+    async fn explicit_management_scope_on_remote_storage_prerequisite_is_rejected() {
+        let storage = Storage::new("archive".to_string()).build();
+        let mut stack = Stack::new("test-stack".to_string())
+            .add_with_remote_access(storage, ResourceLifecycle::Frozen)
+            .add(
+                RemoteStackManagement::new("management".to_string()).build(),
+                ResourceLifecycle::Frozen,
+            )
+            .add(
+                ServiceAccount::new("execution-sa".to_string()).build(),
+                ResourceLifecycle::Frozen,
+            )
+            .management(ManagementPermissions::Override(
+                PermissionProfile::new()
+                    .resource("execution-sa", ["service-account/management"])
+                    .resource("archive", ["storage/remote-data-write"]),
+            ))
+            .build();
+        stack
+            .resources
+            .get_mut("archive")
+            .unwrap()
+            .dependencies
+            .push(ResourceRef::new(
+                ServiceAccount::RESOURCE_TYPE,
+                "execution-sa",
+            ));
+
+        let error = InfrastructureDependenciesMutation
+            .mutate(
+                stack,
+                &StackState::new(Platform::Gcp),
+                &DeploymentConfig::builder()
+                    .stack_settings(StackSettings::default())
+                    .environment_variables(empty_env_snapshot())
+                    .allow_frozen_changes(false)
+                    .external_bindings(ExternalBindings::default())
+                    .build(),
+            )
+            .await
+            .expect_err("an exact management grant on a bootstrap prerequisite must fail fast");
+
+        assert_eq!(error.code, "INVALID_RESOURCE_DEPENDENCY");
+        assert!(error.message.contains("execution-sa"));
     }
 }

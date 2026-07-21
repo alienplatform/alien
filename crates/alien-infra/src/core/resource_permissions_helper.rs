@@ -737,7 +737,6 @@ impl ResourcePermissionsHelper {
                 ctx,
                 resource_id,
                 resource_name,
-                resource_type,
                 &generator,
                 &permission_context,
                 all_bindings,
@@ -929,14 +928,12 @@ impl ResourcePermissionsHelper {
 
     /// Collect GCP resource-scoped bindings for the management service account
     ///
-    /// Processes management permissions (from `stack.permissions.management`) that match
-    /// the given resource type and applies them via resource-level IAM using the
-    /// management service account.
+    /// Processes management permissions explicitly scoped to this resource and
+    /// applies them via resource-level IAM using the management service account.
     async fn collect_gcp_management_bindings(
         ctx: &ResourceControllerContext<'_>,
         resource_id: &str,
         resource_name: &str,
-        resource_type: &str,
         generator: &GcpRuntimePermissionsGenerator,
         permission_context: &PermissionContext,
         all_bindings: &mut Vec<GcpIamBinding>,
@@ -946,31 +943,8 @@ impl ResourcePermissionsHelper {
             None => return Ok(()),
         };
 
-        let type_prefix = format!("{}/", resource_type);
-
-        // Combine resource-specific and wildcard management permissions,
-        // deduplicating by permission set ID
-        let mut seen_ids = std::collections::HashSet::new();
-        let mut combined_refs: Vec<PermissionSetReference> = Vec::new();
-
-        if let Some(permission_set_refs) = management_profile.0.get(resource_id) {
-            for r in permission_set_refs {
-                if seen_ids.insert(r.id().to_string()) {
-                    combined_refs.push(r.clone());
-                }
-            }
-        }
-
-        if let Some(wildcard_refs) = management_profile.0.get("*") {
-            for r in wildcard_refs
-                .iter()
-                .filter(|r| r.id().starts_with(&type_prefix))
-            {
-                if seen_ids.insert(r.id().to_string()) {
-                    combined_refs.push(r.clone());
-                }
-            }
-        }
+        let combined_refs =
+            Self::explicit_management_resource_permission_refs(management_profile, resource_id);
 
         if combined_refs.is_empty() {
             return Ok(());
@@ -1162,7 +1136,7 @@ impl ResourcePermissionsHelper {
             .management()
             .profile()
             .map(|profile| {
-                !Self::aws_management_resource_permission_refs(profile, resource_id).is_empty()
+                !Self::explicit_management_resource_permission_refs(profile, resource_id).is_empty()
             })
             .unwrap_or(false)
         {
@@ -1296,7 +1270,7 @@ impl ResourcePermissionsHelper {
         };
 
         let combined_refs =
-            Self::aws_management_resource_permission_refs(management_profile, resource_id);
+            Self::explicit_management_resource_permission_refs(management_profile, resource_id);
 
         if combined_refs.is_empty() {
             return Ok(());
@@ -1415,21 +1389,25 @@ impl ResourcePermissionsHelper {
         Ok(())
     }
 
-    fn aws_management_resource_permission_refs(
+    fn explicit_management_resource_permission_refs(
         management_profile: &PermissionProfile,
         resource_id: &str,
     ) -> Vec<PermissionSetReference> {
-        // On AWS the RemoteStackManagement role policy is the stack-level
-        // grant point for wildcard management permissions. Re-applying those
-        // wildcard-derived permissions as per-resource inline policies duplicates
-        // authority and can exceed IAM's per-role inline policy quota. Resource
+        // RemoteStackManagement is the stack-level grant point for wildcard
+        // management permissions. Re-applying those wildcard-derived grants in
+        // resource controllers duplicates authority and, on bootstrap resources,
+        // can introduce a runtime dependency cycle back to management. Resource
         // controllers only attach management permissions explicitly scoped to
         // this resource ID.
+        let mut seen_ids = HashSet::new();
         management_profile
             .0
             .get(resource_id)
+            .into_iter()
+            .flatten()
+            .filter(|reference| seen_ids.insert(reference.id().to_string()))
             .cloned()
-            .unwrap_or_default()
+            .collect()
     }
 
     /// Get the AWS IAM role name for a service account permission profile
@@ -1761,7 +1739,7 @@ mod tests {
     }
 
     #[test]
-    fn aws_management_resource_permissions_ignore_wildcard_scope() {
+    fn management_resource_permissions_dedupe_explicit_and_ignore_wildcard_scope() {
         let mut profile = IndexMap::new();
         profile.insert(
             "*".to_string(),
@@ -1771,12 +1749,13 @@ mod tests {
         );
         profile.insert(
             "worker-a".to_string(),
-            vec![PermissionSetReference::from_name(
-                "worker/invoke".to_string(),
-            )],
+            vec![
+                PermissionSetReference::from_name("worker/invoke".to_string()),
+                PermissionSetReference::from_name("worker/invoke".to_string()),
+            ],
         );
 
-        let refs = ResourcePermissionsHelper::aws_management_resource_permission_refs(
+        let refs = ResourcePermissionsHelper::explicit_management_resource_permission_refs(
             &PermissionProfile(profile),
             "worker-a",
         );
@@ -1786,7 +1765,7 @@ mod tests {
     }
 
     #[test]
-    fn aws_management_resource_permissions_empty_without_resource_scope() {
+    fn management_resource_permissions_empty_without_resource_scope() {
         let mut profile = IndexMap::new();
         profile.insert(
             "*".to_string(),
@@ -1795,7 +1774,7 @@ mod tests {
             )],
         );
 
-        let refs = ResourcePermissionsHelper::aws_management_resource_permission_refs(
+        let refs = ResourcePermissionsHelper::explicit_management_resource_permission_refs(
             &PermissionProfile(profile),
             "worker-a",
         );
