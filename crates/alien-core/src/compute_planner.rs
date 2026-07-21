@@ -205,7 +205,21 @@ fn merge_explicit_compute_groups(
             groups
                 .entry(group.group_id.clone())
                 .and_modify(|planned| {
-                    merge_requirements(&mut planned.requirements, &explicit_requirements);
+                    if group.instance_type.is_none() {
+                        merge_requirements(&mut planned.requirements, &explicit_requirements);
+                    } else {
+                        // A materialized capacity group profile describes the
+                        // selected machine, not additional workload demand.
+                        // Merging its full CPU and memory into requirements
+                        // would cause deployment package planning to size an
+                        // already-sized machine a second time. Keep only the
+                        // constraints that affect artifact compatibility.
+                        planned.requirements.architecture = planned
+                            .requirements
+                            .architecture
+                            .or(explicit_requirements.architecture);
+                        planned.requirements.nested_virt |= explicit_requirements.nested_virt;
+                    }
                     planned.scale = merge_scale_policy(&planned.scale, &scale);
                 })
                 .or_insert_with(|| PlannedGroup {
@@ -865,6 +879,44 @@ mod tests {
         assert_eq!(pool.selected.min_size(), 2);
         assert_eq!(pool.selected.max_size(), 5);
         assert!(pool.errors.is_empty());
+    }
+
+    #[test]
+    fn materialized_machine_profile_is_not_counted_as_workload_demand() {
+        let mut stack = stack_with_container();
+        let selected = instance_catalog::find_instance_type(Platform::Aws, "m7g.xlarge")
+            .expect("machine should exist in catalog");
+        let cluster = ComputeCluster::new("compute".to_string())
+            .capacity_group(CapacityGroup {
+                group_id: "general".to_string(),
+                instance_type: Some(selected.name.to_string()),
+                profile: Some(selected.to_machine_profile()),
+                min_size: 1,
+                max_size: 1,
+                scale_policy: None,
+                nested_virtualization: None,
+            })
+            .build();
+        stack.resources.insert(
+            "compute".to_string(),
+            ResourceEntry {
+                config: Resource::new(cluster),
+                lifecycle: ResourceLifecycle::Frozen,
+                dependencies: Vec::new(),
+                remote_access: false,
+            },
+        );
+
+        let plan = plan_compute(&stack, Platform::Aws, None).expect("plan should build");
+        let pool = plan.pools.first().expect("general pool should exist");
+
+        assert_eq!(pool.requirements.cpu, "2");
+        assert_eq!(pool.requirements.memory_bytes, 4 * 1024 * 1024 * 1024);
+        assert_eq!(pool.recommended.machine(), Some("m7g.xlarge"));
+        assert!(pool
+            .machines
+            .iter()
+            .any(|option| option.machine == "m7g.xlarge"));
     }
 
     #[test]
