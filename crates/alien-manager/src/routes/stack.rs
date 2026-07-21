@@ -53,6 +53,7 @@ use crate::error::ErrorData;
 use crate::ids;
 use crate::traits::{
     CreateImportedDeploymentParams, CreateTokenParams, DeploymentRecord, ReleaseRecord, TokenType,
+    UpdateImportedDeploymentParams,
 };
 
 pub fn router() -> Router<AppState> {
@@ -283,49 +284,28 @@ pub async fn stack_import(
                 &release.id,
                 &req,
             );
+            let setup_metadata = merge_setup_metadata(&existing.setup_metadata, setup_metadata);
             let updated = match state
                 .deployment_store
                 .update_imported_stack_state(
                     &subject,
                     &existing.id,
-                    stack_state.clone(),
-                    environment_info.clone(),
-                    runtime_metadata.clone(),
-                    Some(release.id.clone()),
-                    req.setup_target.clone(),
-                    req.setup_fingerprint.clone(),
-                    req.setup_fingerprint_version,
+                    UpdateImportedDeploymentParams {
+                        stack_state: stack_state.clone(),
+                        environment_info: environment_info.clone(),
+                        runtime_metadata: runtime_metadata.clone(),
+                        setup_metadata,
+                        current_release_id: Some(release.id.clone()),
+                        setup_target: req.setup_target.clone(),
+                        setup_fingerprint: req.setup_fingerprint.clone(),
+                        setup_fingerprint_version: req.setup_fingerprint_version,
+                        schedule_reconciliation: should_reconcile,
+                    },
                 )
                 .await
             {
                 Ok(d) => d,
                 Err(e) => return e.into_response(),
-            };
-
-            let updated = if should_reconcile
-                && can_reconcile_after_import(&existing)
-                && !reconciliation_already_scheduled(&updated)
-            {
-                if let Err(e) = state
-                    .deployment_store
-                    .set_redeploy(&subject, &existing.id)
-                    .await
-                {
-                    return e.into_response();
-                }
-                match state
-                    .deployment_store
-                    .get_deployment(&subject, &existing.id)
-                    .await
-                {
-                    Ok(Some(d)) => d,
-                    Ok(None) => {
-                        return ErrorData::not_found_deployment(&existing.id).into_response();
-                    }
-                    Err(e) => return e.into_response(),
-                }
-            } else {
-                updated
             };
 
             let stack_settings = match updated.stack_settings {
@@ -684,6 +664,21 @@ fn setup_registration_replay(
     }
 }
 
+fn merge_setup_metadata(
+    existing: &Option<serde_json::Value>,
+    incoming: Option<serde_json::Value>,
+) -> Option<serde_json::Value> {
+    match (existing, incoming) {
+        (Some(serde_json::Value::Object(existing)), Some(serde_json::Value::Object(incoming))) => {
+            let mut merged = existing.clone();
+            merged.extend(incoming);
+            Some(serde_json::Value::Object(merged))
+        }
+        (_, Some(incoming)) => Some(incoming),
+        (existing, None) => existing.clone(),
+    }
+}
+
 fn can_accept_reimport(
     existing: &DeploymentRecord,
     imported_stack_state: &StackState,
@@ -704,13 +699,6 @@ fn can_reconcile_after_import(existing: &DeploymentRecord) -> bool {
     matches!(
         existing.status.as_str(),
         "running" | "update-failed" | "refresh-failed"
-    )
-}
-
-fn reconciliation_already_scheduled(deployment: &DeploymentRecord) -> bool {
-    matches!(
-        deployment.status.as_str(),
-        "provisioning" | "update-pending" | "updating"
     )
 }
 

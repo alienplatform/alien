@@ -171,6 +171,21 @@ pub struct CreateImportedDeploymentParams {
     pub input_values: HashMap<String, serde_json::Value>,
 }
 
+/// Import-owned fields replaced when setup re-registers a deployment.
+#[derive(Debug, Clone)]
+pub struct UpdateImportedDeploymentParams {
+    pub stack_state: StackState,
+    pub environment_info: Option<EnvironmentInfo>,
+    pub runtime_metadata: RuntimeMetadata,
+    pub setup_metadata: Option<serde_json::Value>,
+    pub current_release_id: Option<String>,
+    pub setup_target: String,
+    pub setup_fingerprint: String,
+    pub setup_fingerprint_version: u32,
+    /// Move the deployment to `update-pending` in the same write as the import data.
+    pub schedule_reconciliation: bool,
+}
+
 /// A deployment group record.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -287,18 +302,13 @@ pub trait DeploymentStore: Send + Sync {
     /// upgrades all fire this path. Implementations must update only
     /// import-owned fields/resources from the import payload and leave fields outside the
     /// import contract (status, deployment token, environment variables, …)
-    /// untouched.
+    /// untouched. `setup_metadata` advances the durable replay baseline for
+    /// the registration operation that produced this update.
     async fn update_imported_stack_state(
         &self,
         caller: &crate::auth::Subject,
         deployment_id: &str,
-        stack_state: StackState,
-        environment_info: Option<EnvironmentInfo>,
-        runtime_metadata: RuntimeMetadata,
-        current_release_id: Option<String>,
-        setup_target: String,
-        setup_fingerprint: String,
-        setup_fingerprint_version: u32,
+        params: UpdateImportedDeploymentParams,
     ) -> Result<DeploymentRecord, AlienError>;
 
     async fn get_deployment(
