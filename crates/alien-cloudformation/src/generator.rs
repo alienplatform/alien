@@ -580,10 +580,20 @@ fn quote_yaml_1_1_mode_scalars(yaml: &str) -> String {
     quoted
 }
 
-/// Generate a CloudFormation stack policy that prevents stack updates from
-/// mutating runtime-managed resources after setup registration.
+/// Generate the baseline CloudFormation stack policy.
+///
+/// Runtime-managed resources are not part of the setup stack, so the baseline
+/// policy is equivalent to CloudFormation's behavior when no policy is set.
+/// An empty statement list is not valid when supplied through `StackPolicyURL`.
 pub fn generate_cloudformation_stack_policy(_stack: &Stack) -> Result<serde_json::Value> {
-    Ok(json!({ "Statement": [] }))
+    Ok(json!({
+        "Statement": [{
+            "Effect": "Allow",
+            "Action": "Update:*",
+            "Principal": "*",
+            "Resource": "*"
+        }]
+    }))
 }
 
 fn validate_stack_for_cloudformation(stack: &Stack) -> Result<()> {

@@ -1,6 +1,6 @@
 {
   "name": "@alienplatform/bindings-linux-x64-gnu",
-  "version": "2.0.2",
+  "version": "2.1.4",
   "cpu": ["x64"],
   "main": "alien-bindings-node.linux-x64-gnu.node",
   "files": ["alien-bindings-node.linux-x64-gnu.node"],

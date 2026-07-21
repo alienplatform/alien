@@ -1431,10 +1431,11 @@ fn parse_kubernetes_base_platform(
 /// Rebase copied prebuilt artifact paths to the current checkout.
 ///
 /// `alien build` writes local artifact directories into stack.json. CI may build
-/// those artifacts in one checkout and copy `.alien/build` into another image,
-/// so a prebuilt release must resolve stale `.alien/build/{platform}/{artifact}`
-/// paths before pushing. The artifact path may point at a different platform
-/// than the release currently being pushed when platforms share a built image.
+/// those artifacts in one checkout and merge `.alien-*` build directories into
+/// another checkout, so a prebuilt release must resolve stale
+/// `.alien[-target]/build/{platform}/{artifact}` paths before pushing. The
+/// artifact path may point at a different platform than the release currently
+/// being pushed when platforms share a built image.
 fn rebase_prebuilt_stack_image_paths(stack: &mut Stack, output_dir: &Path) -> Result<()> {
     for (_resource_id, resource_entry) in stack.resources_mut() {
         if let Some(func) = resource_entry.config.downcast_ref::<Worker>() {
@@ -1549,7 +1550,11 @@ fn artifact_location_from_build_path(path: &Path) -> Option<(String, String)> {
         .collect::<Vec<_>>();
 
     components.windows(4).find_map(|window| {
-        if window[0] == ".alien" && window[1] == "build" {
+        let is_build_output = window[0] == ".alien"
+            || window[0]
+                .strip_prefix(".alien-")
+                .is_some_and(|suffix| !suffix.is_empty());
+        if is_build_output && window[1] == "build" {
             Some((window[2].to_string(), window[3].to_string()))
         } else {
             None
@@ -1986,13 +1991,13 @@ mod tests {
     }
 
     #[test]
-    fn rebase_prebuilt_stack_image_paths_rewrites_cross_platform_artifact_path() {
+    fn rebase_prebuilt_stack_image_paths_rewrites_merged_target_artifact_path() {
         let temp = tempfile::tempdir().unwrap();
         let output_dir = temp.path().join(".alien");
         let artifact_dir = output_dir.join("build").join("aws").join("web-12345678");
         std::fs::create_dir_all(&artifact_dir).unwrap();
 
-        let original_image = "/tmp/original-checkout/.alien/build/aws/web-12345678";
+        let original_image = "/tmp/original-checkout/.alien-arm64/build/aws/web-12345678";
         let mut stack = Stack::new("demo".to_string())
             .add(
                 test_container("web", original_image.to_string()),

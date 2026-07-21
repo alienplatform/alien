@@ -51,21 +51,6 @@ impl DockerToolchain {
         src_dir.join(dockerfile_name).exists()
     }
 
-    #[cfg(test)]
-    fn generate_temp_tag(resource_name: &str) -> String {
-        use rand::distr::Alphanumeric;
-        use rand::Rng;
-
-        let random_suffix: String = rand::rng()
-            .sample_iter(&Alphanumeric)
-            .take(8)
-            .map(char::from)
-            .collect::<String>()
-            .to_lowercase();
-
-        format!("alien-build-{}:{}", resource_name, random_suffix)
-    }
-
     fn generate_builder_name() -> String {
         use rand::distr::Alphanumeric;
         use rand::Rng;
@@ -77,6 +62,21 @@ impl DockerToolchain {
             .collect::<String>()
             .to_lowercase();
         format!("alien-build-{}-{suffix}", std::process::id())
+    }
+
+    fn absolute_path(path: &Path) -> Result<PathBuf> {
+        if path.is_absolute() {
+            return Ok(path.to_path_buf());
+        }
+
+        let current_dir =
+            std::env::current_dir()
+                .into_alien_error()
+                .context(Self::docker_build_error(
+                    "Failed to resolve the Docker build output directory",
+                ))?;
+
+        Ok(current_dir.join(path))
     }
 
     fn humanize_buildx_failure(stderr_output: &str) -> String {
@@ -347,10 +347,10 @@ impl Toolchain for DockerToolchain {
 
         // Build arguments for docker buildx build
         // Note: Target architecture is automatically handled by build_target
-        let output_tarball = context.build_dir.join(format!(
+        let output_tarball = Self::absolute_path(&context.build_dir.join(format!(
             "{}.oci.tar",
             context.build_target.runtime_platform_id()
-        ));
+        )))?;
         let output = format!("type=oci,dest={}", output_tarball.display());
         let arch_str = match context.build_target.to_dockdash_arch() {
             dockdash::Arch::Amd64 => "amd64",
@@ -540,8 +540,8 @@ impl DockerToolchain {
     /// Rewrite an OCI archive's `index.json` to point straight at the single image manifest
     /// for `target_arch`.
     ///
-    /// The containerd image store's `docker save` writes a nested `index.json` → image-index →
-    /// [image manifest, attestation]; our reader (ocipkg, via dockdash) treats the first
+    /// Buildx can write a nested `index.json` → image-index → [image manifest, attestation];
+    /// our reader (ocipkg, via dockdash) treats the first
     /// descriptor as an image manifest and fails with "missing field `config`". The classic
     /// store already writes a flat layout, so this is a no-op there.
     pub(crate) fn normalize_oci_archive(tarball_path: &Path, target_arch: &str) -> Result<()> {
@@ -918,13 +918,12 @@ mod tests {
     }
 
     #[test]
-    fn test_generate_temp_tag() {
-        let tag1 = DockerToolchain::generate_temp_tag("my-app");
-        let tag2 = DockerToolchain::generate_temp_tag("my-app");
+    fn absolute_path_resolves_output_before_build_context_changes() {
+        let relative = Path::new(".alien/build/aws/router/linux-arm64.oci.tar");
+        let resolved = DockerToolchain::absolute_path(relative).unwrap();
 
-        assert!(tag1.starts_with("alien-build-my-app:"));
-        assert!(tag2.starts_with("alien-build-my-app:"));
-        assert_ne!(tag1, tag2); // Should be unique
+        assert!(resolved.is_absolute());
+        assert!(resolved.ends_with(relative));
     }
 
     #[test]
