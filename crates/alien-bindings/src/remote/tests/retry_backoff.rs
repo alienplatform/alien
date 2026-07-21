@@ -97,6 +97,42 @@ async fn retryable_refresh_failures_back_off_then_recover_on_the_same_handle() {
     assert_eq!(fixture.manager.calls.load(Ordering::SeqCst), 4);
 }
 
+#[tokio::test]
+async fn unstructured_rate_limit_uses_unexpired_cache_during_backoff() {
+    let fixture = Fixture::new(at(0), at(600)).await;
+    let provider = fixture.remote_provider().await;
+    let bindings = RemoteBindings::from_provider(provider);
+    let storage = bindings
+        .storage("files")
+        .await
+        .expect("initial remote Storage resolution");
+    storage
+        .put(
+            &Path::from("rate-limited.txt"),
+            PutPayload::from_static(b"value"),
+        )
+        .await
+        .expect("seed fixture object");
+
+    fixture.fail_manager_with(
+        StatusCode::TOO_MANY_REQUESTS,
+        serde_json::json!("rate limited"),
+    );
+    fixture.clock.set(at(481));
+    storage
+        .head(&Path::from("rate-limited.txt"))
+        .await
+        .expect("unstructured rate limit should use the unexpired cached lease");
+    assert_eq!(fixture.manager.calls.load(Ordering::SeqCst), 2);
+
+    fixture.clock.set(at(485));
+    storage
+        .head(&Path::from("rate-limited.txt"))
+        .await
+        .expect("rate-limit cooldown should continue using the cached lease");
+    assert_eq!(fixture.manager.calls.load(Ordering::SeqCst), 2);
+}
+
 #[test]
 fn refresh_retry_delay_is_exponential_and_bounded() {
     assert_eq!(refresh_retry_delay(1), ChronoDuration::seconds(5));

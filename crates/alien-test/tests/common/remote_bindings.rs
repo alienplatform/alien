@@ -5,7 +5,9 @@
 //! manager authorization, credential attenuation, and object operations all
 //! run through their production paths.
 
+use std::future::Future;
 use std::net::SocketAddr;
+use std::pin::Pin;
 
 use alien_bindings::RemoteBindings;
 use alien_core::Platform;
@@ -147,52 +149,62 @@ async fn manager_handler(
 
 /// Resolve the deployment's real cloud Storage through the public remote API
 /// and exercise every operation in its intentionally narrow v0 surface.
-pub async fn check_remote_storage(
-    deployment: &TestDeployment,
+pub fn check_remote_storage<'a>(
+    deployment: &'a TestDeployment,
     platform: Platform,
-) -> anyhow::Result<()> {
-    info!(
-        platform = %platform.as_str(),
-        "Checking remote Storage through assigned-manager discovery"
-    );
-    let discovery = DiscoveryServer::start(deployment, platform).await?;
-    let bindings =
-        RemoteBindings::for_deployment(&deployment.id, &deployment.token, Some(&discovery.url))
+) -> Pin<Box<dyn Future<Output = anyhow::Result<()>> + Send + 'a>> {
+    // This check includes generated SDK and provider futures that are large
+    // enough to overflow nextest's test-thread stack when embedded directly in
+    // the comprehensive runner's async state machine. Keep that state on the
+    // heap; this is also the boundary between the generic runner and the
+    // feature-specific live-cloud flow.
+    Box::pin(async move {
+        info!(
+            platform = %platform.as_str(),
+            "Checking remote Storage through assigned-manager discovery"
+        );
+        let discovery = DiscoveryServer::start(deployment, platform).await?;
+        let bindings =
+            RemoteBindings::for_deployment(&deployment.id, &deployment.token, Some(&discovery.url))
+                .await
+                .context("discover assigned manager for remote bindings")?;
+        let storage = bindings
+            .storage(STORAGE_BINDING)
             .await
-            .context("discover assigned manager for remote bindings")?;
-    let storage = bindings
-        .storage(STORAGE_BINDING)
-        .await
-        .context("resolve real remote Storage binding")?;
+            .context("resolve real remote Storage binding")?;
 
-    let prefix = Path::from(format!(
-        "alien-e2e/remote-bindings/{}/{}",
-        deployment.id,
-        uuid::Uuid::new_v4().simple()
-    ));
-    let object = prefix.child("payload.txt");
+        let prefix = Path::from(format!(
+            "alien-e2e/remote-bindings/{}/{}",
+            deployment.id,
+            uuid::Uuid::new_v4().simple()
+        ));
+        let object = prefix.child("payload.txt");
 
-    let verification = verify_before_delete(storage.as_ref(), &prefix, &object).await;
-    let deletion = storage.delete(&object).await;
-    match (verification, deletion) {
-        // A failed PUT may leave no object; NotFound still proves cleanup is safe.
-        (Err(verification), Err(ObjectStoreError::NotFound { .. })) => return Err(verification),
-        (Err(verification), Err(deletion)) => {
-            bail!("remote Storage verification failed: {verification:#}; cleanup also failed: {deletion:#}")
+        let verification = verify_before_delete(storage.as_ref(), &prefix, &object).await;
+        let deletion = storage.delete(&object).await;
+        match (verification, deletion) {
+            // A failed PUT may leave no object; NotFound still proves cleanup is safe.
+            (Err(verification), Err(ObjectStoreError::NotFound { .. })) => {
+                return Err(verification)
+            }
+            (Err(verification), Err(deletion)) => {
+                bail!("remote Storage verification failed: {verification:#}; cleanup also failed: {deletion:#}")
+            }
+            (Err(verification), Ok(())) => return Err(verification),
+            (Ok(()), Err(deletion)) => {
+                return Err(deletion)
+                    .context("delete remote Storage object during mandatory cleanup")
+            }
+            (Ok(()), Ok(())) => {}
         }
-        (Err(verification), Ok(())) => return Err(verification),
-        (Ok(()), Err(deletion)) => {
-            return Err(deletion).context("delete remote Storage object during mandatory cleanup")
-        }
-        (Ok(()), Ok(())) => {}
-    }
 
-    verify_deleted(storage.as_ref(), &prefix, &object).await?;
-    info!(
-        platform = %platform.as_str(),
-        "Remote Storage put/head/get/list/delete check passed"
-    );
-    Ok(())
+        verify_deleted(storage.as_ref(), &prefix, &object).await?;
+        info!(
+            platform = %platform.as_str(),
+            "Remote Storage put/head/get/list/delete check passed"
+        );
+        Ok(())
+    })
 }
 
 async fn verify_before_delete(

@@ -107,7 +107,7 @@ pub async fn convert_sdk_error_reading_body(err: Error<()>) -> AlienError<Generi
                     "url": url,
                 })),
                 hint: None,
-                retryable: status >= 500,
+                retryable: is_retryable_http_status(status),
                 internal: false,
                 http_status_code: Some(status),
                 source: None,
@@ -144,6 +144,10 @@ fn context_with_request_id(
     }
 }
 
+fn is_retryable_http_status(status: u16) -> bool {
+    matches!(status, 408 | 425 | 429) || (500..=599).contains(&status)
+}
+
 /// Convert a progenitor SDK error to AlienError, preserving all details.
 pub fn convert_sdk_error(err: Error<()>) -> AlienError<GenericError> {
     match err {
@@ -160,7 +164,7 @@ pub fn convert_sdk_error(err: Error<()>) -> AlienError<GenericError> {
                     "status": status,
                 })),
                 hint: None,
-                retryable: status >= 500,
+                retryable: is_retryable_http_status(status),
                 internal: false,
                 http_status_code: Some(status),
                 source: None,
@@ -272,7 +276,7 @@ pub fn convert_sdk_error(err: Error<()>) -> AlienError<GenericError> {
                     "url": response.url().to_string(),
                 })),
                 hint: None,
-                retryable: status >= 500,
+                retryable: is_retryable_http_status(status),
                 internal: false,
                 http_status_code: Some(status),
                 source: None,
@@ -385,6 +389,31 @@ mod tests {
         assert_eq!(error.message, "Unexpected response: 502 Bad Gateway");
         assert_eq!(error.http_status_code, Some(502));
         assert!(error.retryable);
+    }
+
+    #[tokio::test]
+    async fn reading_body_classifies_unstructured_rate_limits_as_retryable() {
+        let error = convert_sdk_error_reading_body(unexpected_response(429, "rate limited")).await;
+
+        assert_eq!(error.code, "UNEXPECTED_RESPONSE");
+        assert_eq!(error.http_status_code, Some(429));
+        assert!(error.retryable);
+    }
+
+    #[test]
+    fn retryable_http_statuses_are_limited_to_transient_failures() {
+        for status in [408, 425, 429, 500, 502, 503, 504, 599] {
+            assert!(
+                is_retryable_http_status(status),
+                "status {status} should be retryable"
+            );
+        }
+        for status in [400, 401, 403, 404, 409, 422, 600] {
+            assert!(
+                !is_retryable_http_status(status),
+                "status {status} should not be retryable"
+            );
+        }
     }
 
     #[tokio::test]

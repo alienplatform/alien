@@ -5,6 +5,8 @@
 //! initial setup; scoped cloud deployment identities are covered by the
 //! Terraform/Helm pull flows, not the legacy Docker cloud-pull path.
 
+use std::future::Future;
+use std::pin::Pin;
 use std::sync::Arc;
 
 use alien_aws_clients::{ErrorData as AwsErrorData, IamApi};
@@ -27,85 +29,91 @@ use crate::manager::TestManager;
 ///
 /// After this function returns, the manager's deployment loop will resume
 /// from `Provisioning` using its own management SA impersonation chain.
-pub async fn setup_target(
-    config: &TestConfig,
+pub fn setup_target<'a>(
+    config: &'a TestConfig,
     platform: Platform,
-    deployment: &TestDeployment,
-    _stack: &Stack,
-    manager: &Arc<TestManager>,
+    deployment: &'a TestDeployment,
+    _stack: &'a Stack,
+    manager: &'a Arc<TestManager>,
     management_config: Option<ManagementConfig>,
-) -> anyhow::Result<()> {
-    if !config.has_platform(platform) {
-        anyhow::bail!(
-            "Cannot set up target for {}: missing management or target credentials",
-            platform.as_str()
-        );
-    }
-
-    info!(
-        platform = %platform.as_str(),
-        deployment_id = %deployment.id,
-        "setup_target: preparing target credentials and running initial setup"
-    );
-
-    let target_config = build_initial_setup_target_config(config, platform, &deployment.name)
-        .await
-        .context("Failed to build initial setup target config")?;
-    let has_remote_management = management_config.is_some();
-
-    if let Err(error) = alien_deploy_cli::commands::push_initial_setup(
-        manager.client(),
-        &deployment.id,
-        platform,
-        None,
-        target_config.clone(),
-        management_config,
-        &manager.public_url,
-        &deployment.token,
-        None, // no network override from tests
-        None,
-    )
-    .await
-    {
-        let manager_error = manager
-            .client()
-            .get_deployment()
-            .id(&deployment.id)
-            .send()
-            .await
-            .ok()
-            .and_then(|state| state.error.clone())
-            .map(|state_error| state_error.to_string())
-            .unwrap_or_else(|| "manager returned no deployment error details".to_string());
-        anyhow::bail!(
-            "push_initial_setup failed: {error}; manager deployment error: {manager_error}"
-        );
-    }
-
-    // For Azure with shared (external) Container Apps Environment: when remote
-    // stack management is configured, the management UAMI now exists but lacks
-    // permissions on the shared environment (which is in a different resource
-    // group). Grant it before the manager's Provisioning phase starts.
-    if platform == Platform::Azure && has_remote_management {
-        if let Some(ref shared_env) = config.azure_resources.shared_container_env {
-            grant_shared_env_join_permission(
-                config,
-                &target_config,
-                deployment,
-                manager,
-                shared_env,
-            )
-            .await
-            .context("Failed to grant join permission on shared Container Apps Environment")?;
+) -> Pin<Box<dyn Future<Output = anyhow::Result<()>> + Send + 'a>> {
+    // Initial setup composes several large cloud-provider futures. Keep the
+    // aggregate state machine off nextest's test-thread stack so adding a
+    // provider path cannot make every cloud E2E overflow before its first API
+    // call.
+    Box::pin(async move {
+        if !config.has_platform(platform) {
+            anyhow::bail!(
+                "Cannot set up target for {}: missing management or target credentials",
+                platform.as_str()
+            );
         }
-    }
 
-    info!(
-        deployment_id = %deployment.id,
-        "setup_target complete — manager will continue from Provisioning"
-    );
+        info!(
+            platform = %platform.as_str(),
+            deployment_id = %deployment.id,
+            "setup_target: preparing target credentials and running initial setup"
+        );
 
-    Ok(())
+        let target_config = build_initial_setup_target_config(config, platform, &deployment.name)
+            .await
+            .context("Failed to build initial setup target config")?;
+        let has_remote_management = management_config.is_some();
+
+        if let Err(error) = alien_deploy_cli::commands::push_initial_setup(
+            manager.client(),
+            &deployment.id,
+            platform,
+            None,
+            target_config.clone(),
+            management_config,
+            &manager.public_url,
+            &deployment.token,
+            None, // no network override from tests
+            None,
+        )
+        .await
+        {
+            let manager_error = manager
+                .client()
+                .get_deployment()
+                .id(&deployment.id)
+                .send()
+                .await
+                .ok()
+                .and_then(|state| state.error.clone())
+                .map(|state_error| state_error.to_string())
+                .unwrap_or_else(|| "manager returned no deployment error details".to_string());
+            anyhow::bail!(
+                "push_initial_setup failed: {error}; manager deployment error: {manager_error}"
+            );
+        }
+
+        // For Azure with shared (external) Container Apps Environment: when remote
+        // stack management is configured, the management UAMI now exists but lacks
+        // permissions on the shared environment (which is in a different resource
+        // group). Grant it before the manager's Provisioning phase starts.
+        if platform == Platform::Azure && has_remote_management {
+            if let Some(ref shared_env) = config.azure_resources.shared_container_env {
+                grant_shared_env_join_permission(
+                    config,
+                    &target_config,
+                    deployment,
+                    manager,
+                    shared_env,
+                )
+                .await
+                .context("Failed to grant join permission on shared Container Apps Environment")?;
+            }
+        }
+
+        info!(
+            deployment_id = %deployment.id,
+            "setup_target complete — manager will continue from Provisioning"
+        );
+
+        Ok(())
+    })
 }
 
 /// Build a `ClientConfig` for initial setup.
