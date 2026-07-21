@@ -329,6 +329,16 @@ mod tests {
     }
 
     #[test]
+    fn deployment_token_executes_but_does_not_dispatch_its_own_command() {
+        let dep = deployment("d1", "dg-a");
+        let subject = deployment_token("d1");
+
+        assert!(OssAuthz.can_execute_command(&subject, &dep));
+        assert!(!OssAuthz.can_dispatch_command(&subject, &dep));
+        assert!(!OssAuthz.can_execute_command(&deployment_token("d2"), &dep));
+    }
+
+    #[test]
     fn project_token_only_reads_commands_in_its_project() {
         let subject = Subject {
             kind: SubjectKind::ServiceAccount {
