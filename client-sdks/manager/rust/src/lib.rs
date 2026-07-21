@@ -412,8 +412,10 @@ mod tests {
         let body = br#"{"accessToken":"sensitive-token","unexpected":true}"#.to_vec();
         let parse_error = serde_json::from_slice::<serde_json::Value>(b"{")
             .expect_err("fixture JSON should be invalid");
-        let error =
-            super::convert_sdk_error(Error::InvalidResponsePayload(body.clone(), parse_error));
+        let error = super::convert_sdk_error(Error::InvalidResponsePayload(
+            body.clone().into(),
+            parse_error,
+        ));
         let rendered = format!("{error:?}");
 
         assert_eq!(error.code, "INVALID_RESPONSE_PAYLOAD");
