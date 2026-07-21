@@ -731,8 +731,22 @@ pub struct TargetHttpProxy {
 }
 
 // =============================================================================================
-// Data Structures - Target HTTPS Proxy
+// Data Structures - Target TCP/HTTPS Proxy
 // =============================================================================================
+
+/// Global target TCP proxy.
+/// See: https://cloud.google.com/compute/docs/reference/rest/v1/targetTcpProxies
+#[derive(Debug, Serialize, Deserialize, Clone, Default, Builder)]
+#[serde(rename_all = "camelCase")]
+pub struct TargetTcpProxy {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub name: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub description: Option<String>,
+    pub service: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub proxy_header: Option<String>,
+}
 
 /// Represents a target HTTPS proxy resource (with SSL certificate support).
 /// See: https://cloud.google.com/compute/docs/reference/rest/v1/targetHttpsProxies

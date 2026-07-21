@@ -84,6 +84,14 @@ pub enum ExecutionMode {
 }
 
 impl ExecutionMode {
+    pub fn is_platform(&self) -> bool {
+        #[cfg(feature = "platform")]
+        if matches!(self, Self::Platform { .. }) {
+            return true;
+        }
+        false
+    }
+
     /// Get the manager URL for this execution mode.
     pub fn manager_url(&self) -> String {
         match self {
@@ -457,6 +465,54 @@ impl ExecutionMode {
         platform: &str,
     ) -> Result<ManagerContext> {
         self.resolve_manager_inner(project, platform, false).await
+    }
+
+    #[cfg(feature = "platform")]
+    pub async fn connect_manager_by_id(
+        &self,
+        manager_id: &str,
+        workspace: &str,
+    ) -> Result<ManagerContext> {
+        let http = self.auth_http().await?;
+        let manager = http
+            .sdk_client()
+            .get_manager()
+            .id(manager_id)
+            .workspace(workspace)
+            .send()
+            .await
+            .into_sdk_error()
+            .context(ErrorData::ApiRequestFailed {
+                message: format!("Failed to get manager {manager_id}"),
+                url: None,
+            })?
+            .into_inner();
+        let manager_url = normalize_base_url(manager.url.as_deref().ok_or_else(|| {
+            AlienError::new(ErrorData::ApiRequestFailed {
+                message: format!("Manager {manager_id} has not reported a URL"),
+                url: None,
+            })
+        })?);
+        let auth_token = http.bearer_token.clone();
+        let manager_http_client = match &auth_token {
+            Some(token) => {
+                crate::auth::client_with_auth_and_workspace(&format!("Bearer {token}"), workspace)?
+            }
+            None => http.client.clone(),
+        };
+        let client = ServerSdkClient::new_with_client(&manager_url, manager_http_client.clone());
+        Ok(ManagerContext {
+            manager_url,
+            manager_name: Some(manager.name),
+            manager_is_system: Some(manager.is_system),
+            manager_cloud: manager.cloud.map(|cloud| cloud.to_string()),
+            client,
+            http_client: manager_http_client,
+            auth_token,
+            repository_name: None,
+            repository_uri: None,
+            workspace: Some(workspace.to_string()),
+        })
     }
 
     /// Resolve manager URL and return an authenticated manager SDK client.

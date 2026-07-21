@@ -11,6 +11,9 @@ use serde::{Deserialize, Serialize};
 pub struct CreateVolumeRequest {
     /// The availability zone.
     pub availability_zone: String,
+    /// Stable token used by EC2 to make retries idempotent.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub client_token: Option<String>,
     /// The size of the volume in GiBs.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub size: Option<i32>,
@@ -54,6 +57,66 @@ pub struct CreateVolumeResponse {
     pub tag_set: Option<TagSet>,
 }
 
+/// Request to grow an EBS volume.
+#[derive(Debug, Clone, Serialize, Builder)]
+pub struct ModifyVolumeRequest {
+    /// ID of the volume to modify.
+    pub volume_id: String,
+    /// Target size in GiB. EC2 does not permit shrinking a volume.
+    pub size: i32,
+}
+
+/// Response returned after starting a volume modification.
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ModifyVolumeResponse {
+    pub volume_modification: Option<VolumeModification>,
+}
+
+/// Request to inspect the latest modifications for EBS volumes.
+#[derive(Debug, Clone, Serialize, Builder, Default)]
+pub struct DescribeVolumesModificationsRequest {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub volume_ids: Option<Vec<String>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub filters: Option<Vec<Filter>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub max_results: Option<i32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub next_token: Option<String>,
+}
+
+/// Response containing the latest requested volume modifications.
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DescribeVolumesModificationsResponse {
+    #[serde(rename = "volumeModificationSet")]
+    pub volume_modification_set: Option<VolumeModificationSet>,
+    pub next_token: Option<String>,
+}
+
+/// Collection of EBS volume modifications.
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct VolumeModificationSet {
+    #[serde(rename = "item", default)]
+    pub items: Vec<VolumeModification>,
+}
+
+/// Latest modification state reported by EC2 for an EBS volume.
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct VolumeModification {
+    pub volume_id: Option<String>,
+    pub modification_state: Option<String>,
+    pub status_message: Option<String>,
+    pub progress: Option<i64>,
+    pub original_size: Option<i32>,
+    pub target_size: Option<i32>,
+    pub start_time: Option<String>,
+    pub end_time: Option<String>,
+}
+
 /// Request to describe volumes.
 #[derive(Debug, Clone, Serialize, Builder, Default)]
 pub struct DescribeVolumesRequest {
@@ -91,6 +154,7 @@ pub struct Volume {
     pub volume_id: Option<String>,
     pub size: Option<i32>,
     pub availability_zone: Option<String>,
+    #[serde(rename = "status")]
     pub state: Option<String>,
     pub volume_type: Option<String>,
     pub iops: Option<i32>,

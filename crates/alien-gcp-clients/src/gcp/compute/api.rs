@@ -234,6 +234,11 @@ pub trait ComputeApi: Send + Sync + Debug {
     async fn delete_target_https_proxy(&self, target_https_proxy_name: String)
         -> Result<Operation>;
 
+    // --- Target TCP Proxy Operations ---
+
+    async fn insert_target_tcp_proxy(&self, target_tcp_proxy: TargetTcpProxy) -> Result<Operation>;
+    async fn delete_target_tcp_proxy(&self, target_tcp_proxy_name: String) -> Result<Operation>;
+
     // --- SSL Certificate Operations ---
 
     /// Gets an SSL certificate.

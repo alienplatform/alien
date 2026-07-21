@@ -1,6 +1,5 @@
 ---
 source: crates/alien-cloudformation/tests/generator/aws_full_stack_tests.rs
-assertion_line: 122
 expression: yaml
 ---
 AWSTemplateFormatVersion: 2010-09-09
@@ -1104,6 +1103,232 @@ Resources:
           Sid: WriteSsmParameters
       Roles:
       - Ref: ManagementRole
+  Mailbox:
+    Type: AWS::S3::Bucket
+    Properties:
+      BucketName:
+        Fn::Join:
+        - '-'
+        - - Ref: AWS::StackName
+          - mailbox
+          - Fn::Select:
+            - 0
+            - Fn::Split:
+              - '-'
+              - Fn::Select:
+                - 2
+                - Fn::Split:
+                  - /
+                  - Ref: AWS::StackId
+      BucketEncryption:
+        ServerSideEncryptionConfiguration:
+        - ServerSideEncryptionByDefault:
+            SSEAlgorithm: AES256
+      OwnershipControls:
+        Rules:
+        - ObjectOwnership: BucketOwnerEnforced
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        BlockPublicPolicy: true
+        IgnorePublicAcls: true
+        RestrictPublicBuckets: true
+      Tags:
+      - Key: managed-by
+        Value: setup
+      - Key: deployment
+        Value:
+          Ref: AWS::StackName
+      - Key: resource
+        Value: mailbox
+      - Key: resource-type
+        Value: storage
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
+  MailboxBucketPolicy:
+    Type: AWS::S3::BucketPolicy
+    Properties:
+      Bucket:
+        Ref: Mailbox
+      PolicyDocument:
+        Version: 2012-10-17
+        Statement:
+        - Sid: DenyInsecureTransport
+          Effect: Deny
+          Principal: '*'
+          Action: s3:*
+          Resource:
+          - Fn::GetAtt:
+            - Mailbox
+            - Arn
+          - Fn::Sub: arn:${AWS::Partition}:s3:::${Mailbox}/*
+          Condition:
+            Bool:
+              aws:SecureTransport: 'false'
+        - Sid: AllowSesInboundDelivery
+          Effect: Allow
+          Principal:
+            Service: ses.amazonaws.com
+          Action: s3:PutObject
+          Resource:
+            Fn::Sub: arn:${AWS::Partition}:s3:::${Mailbox}/*
+          Condition:
+            StringEquals:
+              aws:SourceAccount:
+                Ref: AWS::AccountId
+  MailboxManagementRoleStoragePermission00:
+    Type: AWS::IAM::Policy
+    Properties:
+      PolicyName:
+        Fn::Sub: ${AWS::StackName}-mailbox-storage-0-0
+      PolicyDocument:
+        Version: 2012-10-17
+        Statement:
+        - Action:
+          - s3:GetBucketAcl
+          - s3:GetBucketLocation
+          - s3:GetBucketPolicy
+          - s3:GetBucketPublicAccessBlock
+          - s3:GetBucketVersioning
+          - s3:GetEncryptionConfiguration
+          - s3:GetLifecycleConfiguration
+          Effect: Allow
+          Resource:
+          - Fn::GetAtt:
+            - Mailbox
+            - Arn
+          Sid: CheckS3BucketHealth
+      Roles:
+      - Ref: ManagementRole
+    DependsOn:
+    - Mailbox
+    - ManagementRole
+  MailEvents:
+    Type: AWS::SQS::Queue
+    Properties:
+      SqsManagedSseEnabled: true
+      VisibilityTimeout: 30
+      MessageRetentionPeriod: 345600
+      Tags:
+      - Key: managed-by
+        Value: setup
+      - Key: deployment
+        Value:
+          Ref: AWS::StackName
+      - Key: resource
+        Value: mail-events
+      - Key: resource-type
+        Value: queue
+  MailerConfigSet:
+    Type: AWS::SES::ConfigurationSet
+    Properties:
+      Name:
+        Fn::Sub: ${AWS::StackName}-mailer
+  MailerIdentity0:
+    Type: AWS::SES::EmailIdentity
+    Properties:
+      EmailIdentity: mail.example.com
+      DkimAttributes:
+        SigningEnabled: true
+      ConfigurationSetAttributes:
+        ConfigurationSetName:
+          Ref: MailerConfigSet
+      Tags:
+      - Key: managed-by
+        Value: setup
+      - Key: deployment
+        Value:
+          Ref: AWS::StackName
+      - Key: resource
+        Value: mailer
+      - Key: resource-type
+        Value: email
+  MailerEventsTopic:
+    Type: AWS::SNS::Topic
+    Properties:
+      TopicName:
+        Fn::Sub: ${AWS::StackName}-mailer-email-events
+      Tags:
+      - Key: managed-by
+        Value: setup
+      - Key: deployment
+        Value:
+          Ref: AWS::StackName
+      - Key: resource
+        Value: mailer
+      - Key: resource-type
+        Value: email
+  MailerEventDestination:
+    Type: AWS::SES::ConfigurationSetEventDestination
+    Properties:
+      ConfigurationSetName:
+        Ref: MailerConfigSet
+      EventDestination:
+        Name:
+          Fn::Sub: ${AWS::StackName}-mailer-events
+        Enabled: true
+        MatchingEventTypes:
+        - SEND
+        - DELIVERY
+        - BOUNCE
+        - COMPLAINT
+        - DELIVERY_DELAY
+        - REJECT
+        SnsDestination:
+          TopicARN:
+            Ref: MailerEventsTopic
+  MailerEventsSubscription:
+    Type: AWS::SNS::Subscription
+    Properties:
+      TopicArn:
+        Ref: MailerEventsTopic
+      Protocol: sqs
+      Endpoint:
+        Fn::GetAtt:
+        - MailEvents
+        - Arn
+      RawMessageDelivery: true
+  MailerEventsQueuePolicy:
+    Type: AWS::SQS::QueuePolicy
+    Properties:
+      Queues:
+      - Ref: MailEvents
+      PolicyDocument:
+        Version: 2012-10-17
+        Statement:
+        - Sid: AllowSesEventsTopic
+          Effect: Allow
+          Principal:
+            Service: sns.amazonaws.com
+          Action: sqs:SendMessage
+          Resource:
+            Fn::GetAtt:
+            - MailEvents
+            - Arn
+          Condition:
+            ArnEquals:
+              aws:SourceArn:
+                Ref: MailerEventsTopic
+  MailerRuleSet:
+    Type: AWS::SES::ReceiptRuleSet
+    Properties:
+      RuleSetName:
+        Fn::Sub: ${AWS::StackName}-mailer
+  MailerInboundRule:
+    Type: AWS::SES::ReceiptRule
+    Properties:
+      RuleSetName:
+        Ref: MailerRuleSet
+      Rule:
+        Name:
+          Fn::Sub: ${AWS::StackName}-mailer-inbound
+        Enabled: true
+        ScanEnabled: true
+        Actions:
+        - S3Action:
+            BucketName:
+              Ref: Mailbox
+    DependsOn:
+    - MailboxBucketPolicy
   RegistryRepository:
     Type: AWS::ECR::Repository
     Properties:
@@ -1508,6 +1733,62 @@ Resources:
             Ref: AWS::Region
           parameterPrefix:
             Fn::Sub: ${AWS::StackName}-secrets
+      - id: mailbox
+        type: storage
+        importData:
+          bucketName:
+            Ref: Mailbox
+          bucketArn:
+            Fn::GetAtt:
+            - Mailbox
+            - Arn
+      - id: mail-events
+        type: queue
+        importData:
+          queueName:
+            Fn::GetAtt:
+            - MailEvents
+            - QueueName
+          queueUrl:
+            Ref: MailEvents
+          queueArn:
+            Fn::GetAtt:
+            - MailEvents
+            - Arn
+      - id: mailer
+        type: email
+        importData:
+          configurationSet:
+            Ref: MailerConfigSet
+          domains:
+            mail.example.com:
+              dkimTokens:
+              - name:
+                  Fn::GetAtt:
+                  - MailerIdentity0
+                  - DkimDNSTokenName1
+                value:
+                  Fn::GetAtt:
+                  - MailerIdentity0
+                  - DkimDNSTokenValue1
+              - name:
+                  Fn::GetAtt:
+                  - MailerIdentity0
+                  - DkimDNSTokenName2
+                value:
+                  Fn::GetAtt:
+                  - MailerIdentity0
+                  - DkimDNSTokenValue2
+              - name:
+                  Fn::GetAtt:
+                  - MailerIdentity0
+                  - DkimDNSTokenName3
+                value:
+                  Fn::GetAtt:
+                  - MailerIdentity0
+                  - DkimDNSTokenValue3
+          ruleSetName:
+            Ref: MailerRuleSet
       - id: registry
         type: artifact-registry
         importData:
@@ -1551,6 +1832,18 @@ Resources:
     - Jobs
     - Metadata
     - SecretsManagementVaultPolicy
+    - Mailbox
+    - MailboxBucketPolicy
+    - MailboxManagementRoleStoragePermission00
+    - MailEvents
+    - MailerConfigSet
+    - MailerIdentity0
+    - MailerEventsTopic
+    - MailerEventDestination
+    - MailerEventsSubscription
+    - MailerEventsQueuePolicy
+    - MailerRuleSet
+    - MailerInboundRule
     - RegistryRepository
     - RegistryPullRole
     - RegistryPushRole
@@ -1642,7 +1935,7 @@ Outputs:
                       Ref: CertificateArn
           - Ref: AWS::NoValue
     Description: Deployment registration settings JSON.
-  DeploymentResources:
+  DeploymentResources0:
     Value:
       Fn::ToJsonString:
       - id: default-network
@@ -1790,6 +2083,66 @@ Outputs:
             Ref: AWS::Region
           parameterPrefix:
             Fn::Sub: ${AWS::StackName}-secrets
+      - id: mailbox
+        type: storage
+        importData:
+          bucketName:
+            Ref: Mailbox
+          bucketArn:
+            Fn::GetAtt:
+            - Mailbox
+            - Arn
+      - id: mail-events
+        type: queue
+        importData:
+          queueName:
+            Fn::GetAtt:
+            - MailEvents
+            - QueueName
+          queueUrl:
+            Ref: MailEvents
+          queueArn:
+            Fn::GetAtt:
+            - MailEvents
+            - Arn
+    Description: Deployment registration resources JSON chunk. Reassemble chunks in numeric suffix order.
+  DeploymentResources1:
+    Value:
+      Fn::ToJsonString:
+      - id: mailer
+        type: email
+        importData:
+          configurationSet:
+            Ref: MailerConfigSet
+          domains:
+            mail.example.com:
+              dkimTokens:
+              - name:
+                  Fn::GetAtt:
+                  - MailerIdentity0
+                  - DkimDNSTokenName1
+                value:
+                  Fn::GetAtt:
+                  - MailerIdentity0
+                  - DkimDNSTokenValue1
+              - name:
+                  Fn::GetAtt:
+                  - MailerIdentity0
+                  - DkimDNSTokenName2
+                value:
+                  Fn::GetAtt:
+                  - MailerIdentity0
+                  - DkimDNSTokenValue2
+              - name:
+                  Fn::GetAtt:
+                  - MailerIdentity0
+                  - DkimDNSTokenName3
+                value:
+                  Fn::GetAtt:
+                  - MailerIdentity0
+                  - DkimDNSTokenValue3
+          ruleSetName:
+            Ref: MailerRuleSet
       - id: registry
         type: artifact-registry
         importData:
@@ -1822,4 +2175,4 @@ Outputs:
             - Arn
           buildEnvVars:
             PROFILE: release
-    Description: Deployment registration resources JSON.
+    Description: Deployment registration resources JSON chunk. Reassemble chunks in numeric suffix order.

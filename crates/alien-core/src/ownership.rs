@@ -89,7 +89,13 @@ pub fn ownership_policy_for_resource_type(resource_type: &str) -> ResourceOwners
         | "azure_container_apps_environment"
         | "azure-container-apps-environment"
         | "azure_service_bus_namespace"
-        | "azure-service-bus-namespace" => frozen_only(),
+        | "azure-service-bus-namespace"
+        // Email holds durable routing state (domain identities, DKIM
+        // verification, receipt rules) that setup owns end to end.
+        | "email" => frozen_only(),
+        // Durable search state, setup-owned only: there is no runtime
+        // controller that could provision or replace the collection.
+        "experimental/aws-opensearch" => frozen_only(),
         "storage" | "queue" | "kv" | "vault" | "postgres" => user_choice(),
         _ => user_choice(),
     }
@@ -180,6 +186,16 @@ mod tests {
     }
 
     #[test]
+    fn experimental_aws_opensearch_is_frozen_only() {
+        let policy = ownership_policy_for_resource_type("experimental/aws-opensearch");
+        assert_eq!(policy.default_lifecycle(), ResourceLifecycle::Frozen);
+        assert!(policy.allows_lifecycle(ResourceLifecycle::Frozen));
+        assert!(!policy.allows_lifecycle(ResourceLifecycle::Live));
+        assert!(policy.should_emit_in_setup(ResourceLifecycle::Frozen));
+        assert!(!policy.requires_management_permissions());
+    }
+
+    #[test]
     fn setup_resources_are_frozen_only() {
         for resource_type in [
             "build",
@@ -191,6 +207,7 @@ mod tests {
             "azure_storage_account",
             "azure_container_apps_environment",
             "azure_service_bus_namespace",
+            "email",
         ] {
             let policy = ownership_policy_for_resource_type(resource_type);
             assert!(policy.allows_lifecycle(ResourceLifecycle::Frozen));

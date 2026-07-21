@@ -23,12 +23,12 @@ impl CompileTimeCheck for SingleExposedPortCheck {
         })
     }
 
-    async fn check(&self, stack: &Stack, _platform: Platform) -> crate::error::Result<CheckResult> {
+    async fn check(&self, stack: &Stack, platform: Platform) -> crate::error::Result<CheckResult> {
         let mut failures = Vec::new();
 
         for (_id, resource_entry) in stack.resources() {
             if let Some(container) = resource_entry.config.downcast_ref::<Container>() {
-                validate_container_public_endpoints(container, &mut failures);
+                validate_container_public_endpoints(container, platform, &mut failures);
             }
             if let Some(daemon) = resource_entry.config.downcast_ref::<Daemon>() {
                 validate_daemon_public_endpoints(daemon, &mut failures);
@@ -47,9 +47,14 @@ impl CompileTimeCheck for SingleExposedPortCheck {
     }
 }
 
-fn validate_container_public_endpoints(container: &Container, failures: &mut Vec<String>) {
+fn validate_container_public_endpoints(
+    container: &Container,
+    platform: Platform,
+    failures: &mut Vec<String>,
+) {
     let mut endpoint_names = std::collections::BTreeSet::new();
     let mut public_backend_ports = std::collections::BTreeSet::new();
+    let mut protocols = std::collections::BTreeSet::new();
 
     for endpoint in &container.public_endpoints {
         if let Err(error) = endpoint.validate_for_resource(&container.id) {
@@ -72,6 +77,25 @@ fn validate_container_public_endpoints(container: &Container, failures: &mut Vec
             ));
         }
         public_backend_ports.insert(endpoint.port);
+        protocols.insert(endpoint.protocol);
+        if !container_endpoint_supported(platform, endpoint.protocol) {
+            failures.push(format!(
+                "Container '{}': {} public endpoints are not supported on {}",
+                container.id,
+                match endpoint.protocol {
+                    ExposeProtocol::Http => "HTTP",
+                    ExposeProtocol::Tcp => "TCP",
+                },
+                platform
+            ));
+        }
+    }
+
+    if protocols.len() > 1 {
+        failures.push(format!(
+            "Container '{}' cannot mix HTTP and TCP public endpoints",
+            container.id
+        ));
     }
 
     if public_backend_ports.len() > 1 {
@@ -79,6 +103,26 @@ fn validate_container_public_endpoints(container: &Container, failures: &mut Vec
             "Container '{}' has public endpoints on multiple backend ports ({:?}), but one backend port is currently supported. Split the endpoints across separate resources or route them through one port.",
             container.id, public_backend_ports
         ));
+    }
+}
+
+fn container_endpoint_supported(platform: Platform, protocol: ExposeProtocol) -> bool {
+    match (platform, protocol) {
+        (
+            Platform::Aws
+            | Platform::Gcp
+            | Platform::Azure
+            | Platform::Kubernetes
+            | Platform::Machines
+            | Platform::Local
+            | Platform::Test,
+            ExposeProtocol::Http,
+        ) => true,
+        (
+            Platform::Aws | Platform::Gcp | Platform::Azure | Platform::Local,
+            ExposeProtocol::Tcp,
+        ) => true,
+        (_, ExposeProtocol::Tcp) => false,
     }
 }
 
@@ -192,6 +236,75 @@ mod tests {
         ContainerCode, DaemonCode, DaemonRuntime, DaemonRuntimeMount, PublicEndpoint, ResourceSpec,
         Stack,
     };
+
+    fn container_with_endpoint_protocol(protocol: ExposeProtocol) -> Container {
+        Container::new("gateway".to_string())
+            .code(ContainerCode::Image {
+                image: "example.test/gateway:latest".to_string(),
+            })
+            .cpu(ResourceSpec {
+                min: "1".to_string(),
+                desired: "1".to_string(),
+            })
+            .memory(ResourceSpec {
+                min: "1Gi".to_string(),
+                desired: "1Gi".to_string(),
+            })
+            .port(8080)
+            .public_endpoint(PublicEndpoint {
+                name: "api".to_string(),
+                port: 8080,
+                protocol,
+                host_label: None,
+                wildcard_subdomains: false,
+            })
+            .replicas(1)
+            .permissions("test".to_string())
+            .build()
+    }
+
+    #[tokio::test]
+    async fn container_http_is_supported_on_every_deployable_platform() {
+        for &platform in Platform::DEPLOYABLE {
+            let stack = Stack::new("test-stack".to_string())
+                .add(
+                    container_with_endpoint_protocol(ExposeProtocol::Http),
+                    alien_core::ResourceLifecycle::Live,
+                )
+                .build();
+
+            let result = SingleExposedPortCheck
+                .check(&stack, platform)
+                .await
+                .expect("preflight should run");
+            assert!(result.success, "HTTP should be supported on {platform}");
+        }
+    }
+
+    #[tokio::test]
+    async fn container_tcp_is_supported_on_cloud_and_local_container_platforms() {
+        for &platform in Platform::DEPLOYABLE {
+            let stack = Stack::new("test-stack".to_string())
+                .add(
+                    container_with_endpoint_protocol(ExposeProtocol::Tcp),
+                    alien_core::ResourceLifecycle::Live,
+                )
+                .build();
+
+            let result = SingleExposedPortCheck
+                .check(&stack, platform)
+                .await
+                .expect("preflight should run");
+            let expected = matches!(
+                platform,
+                Platform::Aws | Platform::Gcp | Platform::Azure | Platform::Local
+            );
+            assert_eq!(
+                result.success, expected,
+                "unexpected TCP support on {platform}"
+            );
+        }
+    }
 
     #[tokio::test]
     async fn test_single_exposed_port_passes() {

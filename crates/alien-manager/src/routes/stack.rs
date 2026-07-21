@@ -32,6 +32,7 @@ use axum::{
     routing::post,
     Router,
 };
+use sha2::{Digest, Sha256};
 
 use alien_core::{
     import::{
@@ -41,7 +42,8 @@ use alien_core::{
     is_valid_resource_prefix, AwsEnvironmentInfo, AzureEnvironmentInfo, DeploymentConfig,
     DeploymentStatus, EnvironmentInfo, EnvironmentVariablesSnapshot, ExternalBindings,
     GcpEnvironmentInfo, KubernetesCluster, Platform, ResourceLifecycle, ResourceStatus,
-    RuntimeMetadata, Stack, StackResourceState, StackState, RESOURCE_PREFIX_ERROR_MESSAGE,
+    RuntimeMetadata, SetupUpdateAuthorization, Stack, StackResourceState, StackState,
+    RESOURCE_PREFIX_ERROR_MESSAGE,
 };
 use alien_error::AlienError;
 
@@ -133,6 +135,10 @@ pub async fn stack_import(
     if let Err(e) = assert_supported_import_region(&state.config, &req) {
         return e.into_response();
     }
+    let setup_metadata = match setup_metadata_for_persistence(&req) {
+        Ok(metadata) => metadata,
+        Err(error) => return error.into_response(),
+    };
 
     let dg = match state
         .deployment_store
@@ -173,13 +179,11 @@ pub async fn stack_import(
         Err(e) => return e.into_response(),
     };
 
-    let stack_state = match build_stack_state(&state, &subject, &req, &prepared_stack) {
+    let mut stack_state = match build_stack_state(&state, &subject, &req, &prepared_stack) {
         Ok(s) => s,
         Err(e) => return e.into_response(),
     };
     let environment_info = infer_import_environment_info(&req);
-    let runtime_metadata = import_runtime_metadata(&prepared_stack);
-
     match state
         .deployment_store
         .get_deployment_by_name(&subject, &deployment_group_id, &deployment_name)
@@ -206,6 +210,48 @@ pub async fn stack_import(
                 })
                 .into_response();
             }
+            match setup_registration_replay(&existing.setup_metadata, &setup_metadata) {
+                SetupRegistrationReplay::Exact => {
+                    let Some(stack_settings) = existing.stack_settings else {
+                        return ErrorData::internal(
+                            "imported deployment is missing stack_settings",
+                        )
+                        .into_response();
+                    };
+                    return (
+                        StatusCode::OK,
+                        Json(StackImportResponse {
+                            deployment_id: existing.id,
+                            deployment_token: existing.deployment_token,
+                            stack_settings,
+                            stack_state,
+                        }),
+                    )
+                        .into_response();
+                }
+                SetupRegistrationReplay::Conflict => {
+                    return AlienError::new(ErrorData::ImportedDeploymentConflict {
+                        reason: format!(
+                            "Setup registration operation for deployment '{}' was replayed with a different payload",
+                            existing.id
+                        ),
+                    })
+                    .into_response();
+                }
+                SetupRegistrationReplay::None => {}
+            }
+            if let Some(existing_stack_state) = existing.stack_state.as_ref() {
+                stack_state = match merge_reimported_stack_state(
+                    &state,
+                    &req,
+                    &prepared_stack,
+                    existing_stack_state,
+                    stack_state,
+                ) {
+                    Ok(state) => state,
+                    Err(error) => return error.into_response(),
+                };
+            }
             if !can_accept_reimport(&existing, &stack_state, &release.id, &req) {
                 return AlienError::new(ErrorData::ImportedDeploymentConflict {
                     reason: format!(
@@ -215,6 +261,20 @@ pub async fn stack_import(
                 })
                 .into_response();
             }
+            if !can_reconcile_after_import(&existing) {
+                return AlienError::new(ErrorData::ImportedDeploymentConflict {
+                    reason: format!(
+                        "Imported deployment '{}' is currently reconciling; retry setup after it reaches a stable state",
+                        existing.id
+                    ),
+                })
+                .into_response();
+            }
+            let runtime_metadata =
+                match reimport_runtime_metadata(&existing, &prepared_stack, &release.id, &req) {
+                    Ok(metadata) => metadata,
+                    Err(error) => return error.into_response(),
+                };
             let should_reconcile = import_changes_deployment(
                 &existing,
                 &stack_state,
@@ -290,6 +350,8 @@ pub async fn stack_import(
         Err(e) => return e.into_response(),
     }
 
+    let runtime_metadata = import_runtime_metadata(&prepared_stack);
+
     let create_ctx = crate::auth::DeploymentCreateCtx {
         workspace_id: &dg.workspace_id,
         project_id: &dg.project_id,
@@ -323,7 +385,7 @@ pub async fn stack_import(
         current_release_id: None,
         desired_release_id: Some(release.id.clone()),
         import_source: req.source_kind,
-        setup_metadata: req.setup_metadata.clone(),
+        setup_metadata,
         setup_target: req.setup_target.clone(),
         setup_fingerprint: req.setup_fingerprint.clone(),
         setup_fingerprint_version: req.setup_fingerprint_version,
@@ -372,6 +434,82 @@ pub async fn stack_import(
         }),
     )
         .into_response()
+}
+
+fn merge_reimported_stack_state(
+    state: &AppState,
+    req: &StackImportRequest,
+    stack: &Stack,
+    existing: &StackState,
+    mut imported: StackState,
+) -> crate::error::Result<StackState> {
+    for resource in &req.resources {
+        let Some(existing_resource) = existing.resources.get(&resource.id) else {
+            continue;
+        };
+        let imported_resource = imported.resources.remove(&resource.id).ok_or_else(|| {
+            AlienError::new(ErrorData::BadRequest {
+                reason: format!(
+                    "Imported resource '{}' is missing from generated state",
+                    resource.id
+                ),
+            })
+        })?;
+        if existing_resource.resource_type != imported_resource.resource_type {
+            return Err(AlienError::new(ErrorData::BadRequest {
+                reason: format!(
+                    "Cannot re-import resource '{}': existing type '{}' does not match imported type '{}'",
+                    resource.id, existing_resource.resource_type, imported_resource.resource_type
+                ),
+            }));
+        }
+        let platform = import_platform_for_resource(state, req, &resource.resource_type);
+        if existing_resource
+            .controller_platform
+            .is_some_and(|existing_platform| existing_platform != platform)
+        {
+            return Err(AlienError::new(ErrorData::BadRequest {
+                reason: format!(
+                    "Cannot re-import resource '{}': existing controller platform does not match '{}'",
+                    resource.id, platform
+                ),
+            }));
+        }
+        let entry = stack.resources.get(&resource.id).ok_or_else(|| {
+            AlienError::new(ErrorData::BadRequest {
+                reason: format!(
+                    "Imported resource '{}' is absent from the prepared stack",
+                    resource.id
+                ),
+            })
+        })?;
+        let merged = state
+            .import_registry
+            .merge_reimport(
+                &resource.resource_type,
+                platform,
+                existing_resource.clone(),
+                imported_resource,
+                &ImportContext {
+                    resource_id: &resource.id,
+                    platform,
+                    region: &req.region,
+                    stack_settings: &req.stack_settings,
+                    management_config: req.management_config.as_ref(),
+                    resource: entry,
+                },
+            )
+            .map_err(|error| {
+                AlienError::new(ErrorData::BadRequest {
+                    reason: format!(
+                        "Failed to merge re-imported resource '{}': {}",
+                        resource.id, error.message
+                    ),
+                })
+            })?;
+        imported.resources.insert(resource.id.clone(), merged);
+    }
+    Ok(imported)
 }
 
 fn assert_supported_import_region(
@@ -438,6 +576,114 @@ fn setup_contract_lane_matches(existing: &DeploymentRecord, req: &StackImportReq
         && existing.setup_fingerprint_version == Some(req.setup_fingerprint_version)
 }
 
+const SETUP_REGISTRATION_OPERATION_ID: &str = "setupRegistrationOperationId";
+const SETUP_REGISTRATION_IMPORT_HASH: &str = "setupRegistrationImportHash";
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum SetupRegistrationReplay {
+    Exact,
+    Conflict,
+    None,
+}
+
+fn canonical_json(value: &serde_json::Value) -> String {
+    match value {
+        serde_json::Value::Array(values) => {
+            let values = values
+                .iter()
+                .map(canonical_json)
+                .collect::<Vec<_>>()
+                .join(",");
+            format!("[{values}]")
+        }
+        serde_json::Value::Object(values) => {
+            let mut entries = values.iter().collect::<Vec<_>>();
+            entries.sort_unstable_by(|(left, _), (right, _)| left.cmp(right));
+            let entries = entries
+                .into_iter()
+                .map(|(key, value)| {
+                    format!(
+                        "{}:{}",
+                        serde_json::Value::String(key.clone()),
+                        canonical_json(value)
+                    )
+                })
+                .collect::<Vec<_>>()
+                .join(",");
+            format!("{{{entries}}}")
+        }
+        scalar => scalar.to_string(),
+    }
+}
+
+fn setup_metadata_for_persistence(
+    req: &StackImportRequest,
+) -> Result<Option<serde_json::Value>, AlienError<ErrorData>> {
+    let Some(serde_json::Value::Object(mut metadata)) = req.setup_metadata.clone() else {
+        return Ok(req.setup_metadata.clone());
+    };
+    let Some(serde_json::Value::String(operation_id)) =
+        metadata.get(SETUP_REGISTRATION_OPERATION_ID)
+    else {
+        return Ok(Some(serde_json::Value::Object(metadata)));
+    };
+    if operation_id.is_empty() {
+        return Ok(Some(serde_json::Value::Object(metadata)));
+    }
+
+    metadata.remove(SETUP_REGISTRATION_IMPORT_HASH);
+    let mut request = req.clone();
+    request.deployment_group_token.clear();
+    request.setup_metadata = Some(serde_json::Value::Object(metadata.clone()));
+    let request = serde_json::to_value(request).map_err(|error| {
+        AlienError::new(ErrorData::BadRequest {
+            reason: format!("Failed to fingerprint stack import payload: {error}"),
+        })
+    })?;
+    let hash = format!("{:x}", Sha256::digest(canonical_json(&request).as_bytes()));
+    metadata.insert(
+        SETUP_REGISTRATION_IMPORT_HASH.to_string(),
+        serde_json::Value::String(hash),
+    );
+    Ok(Some(serde_json::Value::Object(metadata)))
+}
+
+fn setup_registration_replay(
+    existing_metadata: &Option<serde_json::Value>,
+    incoming_metadata: &Option<serde_json::Value>,
+) -> SetupRegistrationReplay {
+    let (Some(existing), Some(incoming)) = (
+        existing_metadata
+            .as_ref()
+            .and_then(serde_json::Value::as_object),
+        incoming_metadata
+            .as_ref()
+            .and_then(serde_json::Value::as_object),
+    ) else {
+        return SetupRegistrationReplay::None;
+    };
+    let Some(operation_id) = existing
+        .get(SETUP_REGISTRATION_OPERATION_ID)
+        .and_then(serde_json::Value::as_str)
+    else {
+        return SetupRegistrationReplay::None;
+    };
+    if incoming
+        .get(SETUP_REGISTRATION_OPERATION_ID)
+        .and_then(serde_json::Value::as_str)
+        != Some(operation_id)
+    {
+        return SetupRegistrationReplay::None;
+    }
+
+    if existing.get(SETUP_REGISTRATION_IMPORT_HASH) == incoming.get(SETUP_REGISTRATION_IMPORT_HASH)
+    {
+        SetupRegistrationReplay::Exact
+    } else {
+        SetupRegistrationReplay::Conflict
+    }
+}
+
 fn can_accept_reimport(
     existing: &DeploymentRecord,
     imported_stack_state: &StackState,
@@ -447,13 +693,6 @@ fn can_accept_reimport(
     let idempotent = existing.current_release_id.as_deref() == Some(release_id)
         && existing.setup_fingerprint.as_deref() == Some(req.setup_fingerprint.as_str())
         && imported_resources_are_unchanged(existing, imported_stack_state);
-
-    if matches!(
-        existing.status.as_str(),
-        "initial-setup" | "provisioning" | "update-pending" | "updating"
-    ) {
-        return true;
-    }
 
     matches!(
         existing.status.as_str(),
@@ -559,6 +798,37 @@ fn import_runtime_metadata(stack: &Stack) -> RuntimeMetadata {
         prepared_stack: Some(stack.clone()),
         ..RuntimeMetadata::default()
     }
+}
+
+fn reimport_runtime_metadata(
+    existing: &DeploymentRecord,
+    prepared_stack: &Stack,
+    release_id: &str,
+    req: &StackImportRequest,
+) -> crate::error::Result<RuntimeMetadata> {
+    let mut metadata = existing.runtime_metadata.clone().unwrap_or_default();
+    let baseline_stack = metadata.prepared_stack.as_ref().ok_or_else(|| {
+        AlienError::new(ErrorData::ImportedDeploymentConflict {
+            reason: format!(
+                "Imported deployment '{}' has no successful prepared stack; complete or repair its current deployment before rerunning setup",
+                existing.id
+            ),
+        })
+    })?;
+    let baseline_frozen_digest = baseline_stack.frozen_resources_digest();
+    let target_frozen_digest = prepared_stack.frozen_resources_digest();
+
+    metadata.setup_update_authorization =
+        (baseline_frozen_digest != target_frozen_digest).then(|| SetupUpdateAuthorization {
+            nonce: uuid::Uuid::new_v4().to_string(),
+            baseline_frozen_digest,
+            target_frozen_digest,
+            release_id: release_id.to_string(),
+            setup_target: req.setup_target.clone(),
+            setup_fingerprint: req.setup_fingerprint.clone(),
+            setup_fingerprint_version: req.setup_fingerprint_version,
+        });
+    Ok(metadata)
 }
 
 async fn prepare_import_stack(
@@ -819,4 +1089,193 @@ fn import_platform_for_resource(
     }
 
     Platform::Kubernetes
+}
+
+#[cfg(test)]
+mod setup_update_authorization_tests {
+    use super::*;
+    use alien_core::{Storage, Worker, WorkerCode};
+    use chrono::Utc;
+
+    fn request() -> StackImportRequest {
+        StackImportRequest {
+            setup_import_format_version: CURRENT_SETUP_IMPORT_FORMAT_VERSION,
+            deployment_group_token: String::new(),
+            deployment_name: "deployment".to_string(),
+            resource_prefix: "deployment".to_string(),
+            source_kind: None,
+            setup_metadata: None,
+            release_id: Some("release".to_string()),
+            platform: Platform::Aws,
+            base_platform: None,
+            region: "region".to_string(),
+            setup_target: "target".to_string(),
+            setup_fingerprint: "fingerprint".to_string(),
+            setup_fingerprint_version: 1,
+            stack_settings: Default::default(),
+            management_config: None,
+            input_values: HashMap::new(),
+            resources: vec![],
+        }
+    }
+
+    fn record(prepared_stack: Stack) -> DeploymentRecord {
+        DeploymentRecord {
+            id: "deployment".to_string(),
+            workspace_id: "workspace".to_string(),
+            project_id: "project".to_string(),
+            name: "deployment".to_string(),
+            deployment_group_id: "group".to_string(),
+            platform: Platform::Aws,
+            deployment_protocol_version: alien_core::CURRENT_DEPLOYMENT_PROTOCOL_VERSION,
+            base_platform: None,
+            status: "running".to_string(),
+            stack_settings: Some(Default::default()),
+            stack_state: Some(StackState::new(Platform::Aws)),
+            environment_info: None,
+            runtime_metadata: Some(RuntimeMetadata {
+                prepared_stack: Some(prepared_stack),
+                last_synced_env_vars_hash: Some("env-hash".to_string()),
+                registry_access_granted: true,
+                ..RuntimeMetadata::default()
+            }),
+            current_release_id: Some("release".to_string()),
+            desired_release_id: Some("release".to_string()),
+            import_source: None,
+            setup_method: None,
+            setup_metadata: None,
+            setup_target: Some("target".to_string()),
+            setup_fingerprint: Some("fingerprint".to_string()),
+            setup_fingerprint_version: Some(1),
+            user_environment_variables: None,
+            management_config: None,
+            deployment_config: None,
+            deployment_token: None,
+            retry_requested: false,
+            locked_by: None,
+            locked_at: None,
+            created_at: Utc::now(),
+            updated_at: None,
+            error: None,
+        }
+    }
+
+    fn stack(live_id: &str, frozen_id: &str) -> Stack {
+        Stack::new("stack".to_string())
+            .add(
+                Storage::new(frozen_id.to_string()).build(),
+                ResourceLifecycle::Frozen,
+            )
+            .add(
+                Worker::new(live_id.to_string())
+                    .code(WorkerCode::Image {
+                        image: "image".to_string(),
+                    })
+                    .permissions("default".to_string())
+                    .build(),
+                ResourceLifecycle::Live,
+            )
+            .build()
+    }
+
+    #[test]
+    fn setup_registration_replay_is_exact_for_the_same_operation_and_payload() {
+        let mut req = request();
+        req.setup_metadata = Some(serde_json::json!({
+            SETUP_REGISTRATION_OPERATION_ID: "operation-1",
+        }));
+        let metadata = setup_metadata_for_persistence(&req).expect("metadata should hash");
+
+        assert_eq!(
+            setup_registration_replay(&metadata, &metadata),
+            SetupRegistrationReplay::Exact
+        );
+    }
+
+    #[test]
+    fn setup_registration_replay_conflicts_when_the_payload_changes() {
+        let mut original = request();
+        original.setup_metadata = Some(serde_json::json!({
+            SETUP_REGISTRATION_OPERATION_ID: "operation-1",
+        }));
+        let original_metadata =
+            setup_metadata_for_persistence(&original).expect("metadata should hash");
+        let mut changed = original;
+        changed.resource_prefix = "different-prefix".to_string();
+        let changed_metadata =
+            setup_metadata_for_persistence(&changed).expect("metadata should hash");
+
+        assert_eq!(
+            setup_registration_replay(&original_metadata, &changed_metadata),
+            SetupRegistrationReplay::Conflict
+        );
+    }
+
+    #[test]
+    fn setup_registration_replay_ignores_a_different_operation() {
+        let mut original = request();
+        original.setup_metadata = Some(serde_json::json!({
+            SETUP_REGISTRATION_OPERATION_ID: "operation-1",
+        }));
+        let original_metadata =
+            setup_metadata_for_persistence(&original).expect("metadata should hash");
+        let mut next = original;
+        next.setup_metadata = Some(serde_json::json!({
+            SETUP_REGISTRATION_OPERATION_ID: "operation-2",
+        }));
+        let next_metadata = setup_metadata_for_persistence(&next).expect("metadata should hash");
+
+        assert_eq!(
+            setup_registration_replay(&original_metadata, &next_metadata),
+            SetupRegistrationReplay::None
+        );
+    }
+
+    #[test]
+    fn no_op_and_live_only_reimports_do_not_mint_setup_authority() {
+        let baseline = stack("live-a", "frozen");
+        for target in [baseline.clone(), stack("live-b", "frozen")] {
+            let metadata = reimport_runtime_metadata(
+                &record(baseline.clone()),
+                &target,
+                "release",
+                &request(),
+            )
+            .expect("stable setup import should succeed");
+
+            assert!(metadata.setup_update_authorization.is_none());
+            assert_eq!(
+                metadata.last_synced_env_vars_hash.as_deref(),
+                Some("env-hash")
+            );
+            assert!(metadata.registry_access_granted);
+        }
+    }
+
+    #[test]
+    fn frozen_reimport_mints_exact_authority_without_losing_runtime_metadata() {
+        let baseline = stack("live", "frozen-a");
+        let target = stack("live", "frozen-b");
+        let metadata =
+            reimport_runtime_metadata(&record(baseline.clone()), &target, "release", &request())
+                .expect("setup-owned update should succeed");
+        let authorization = metadata
+            .setup_update_authorization
+            .expect("frozen change should mint setup authority");
+
+        assert_eq!(
+            authorization.baseline_frozen_digest,
+            baseline.frozen_resources_digest()
+        );
+        assert_eq!(
+            authorization.target_frozen_digest,
+            target.frozen_resources_digest()
+        );
+        assert_eq!(authorization.release_id, "release");
+        assert_eq!(
+            metadata.last_synced_env_vars_hash.as_deref(),
+            Some("env-hash")
+        );
+        assert!(metadata.registry_access_granted);
+    }
 }

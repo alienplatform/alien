@@ -87,11 +87,10 @@ impl TfEmitter for AzureContainerAppsEnvironmentEmitter {
         // VNet-integrate the environment when the stack has a Network, so Container Apps can reach
         // private-only resources (a Flexible Server reachable only through its private endpoint).
         // Without this the environment is public and a worker's connection to the private server
-        // times out. The stack private subnet IS the infrastructure subnet (the network emitter
-        // delegates it to `Microsoft.App/environments`; the postgres private endpoint gets its own
-        // subnet); `internal_load_balancer_enabled = false` keeps public ingress while egressing
-        // through the VNet. Mirrors the runtime controller's `get_vnet_configuration` — a
-        // consumption environment on the /24 private subnet, proven to reach a private server.
+        // times out. Managed networks give the environment its own delegated infrastructure
+        // subnet so VMSS NICs can continue using the private workload subnet. BYO networks retain
+        // their explicitly supplied private subnet contract. `internal_load_balancer_enabled =
+        // false` keeps public ingress while egressing through the VNet.
         if let Some(infrastructure_subnet_id) = infrastructure_subnet_id(ctx) {
             env_body.push(attr("infrastructure_subnet_id", infrastructure_subnet_id));
             env_body.push(attr(
@@ -243,9 +242,8 @@ impl TfEmitter for AzureContainerAppsEnvironmentEmitter {
 /// Network (then the environment stays public, matching the runtime controller's
 /// `get_vnet_configuration` returning `None`).
 ///
-/// Resolves to the network emitter's private subnet, matching how the Azure network emitter
-/// materializes it: a managed `azurerm_subnet.<network>_private` in create / use-default mode, a
-/// looked-up `data.azurerm_subnet.<network>_private` in bring-your-own-VNet mode.
+/// Resolves to the network emitter's dedicated Container Apps subnet for managed networks and the
+/// explicitly supplied private subnet in bring-your-own-VNet mode.
 fn infrastructure_subnet_id(ctx: &EmitContext<'_>) -> Option<Expression> {
     let (network_id, entry) = ctx
         .stack
@@ -253,12 +251,19 @@ fn infrastructure_subnet_id(ctx: &EmitContext<'_>) -> Option<Expression> {
         .find(|(_id, entry)| entry.config.resource_type() == Network::RESOURCE_TYPE)?;
     let network = entry.config.downcast_ref::<Network>()?;
     let network_label = ctx.name_for(network_id)?;
-    let private_subnet_label = format!("{network_label}_private");
-
     let byo = matches!(network.settings, NetworkSettings::ByoVnetAzure { .. });
     Some(if byo {
-        expr::traversal(["data", "azurerm_subnet", &private_subnet_label, "id"])
+        expr::traversal([
+            "data",
+            "azurerm_subnet",
+            &format!("{network_label}_private"),
+            "id",
+        ])
     } else {
-        expr::traversal(["azurerm_subnet", &private_subnet_label, "id"])
+        expr::traversal([
+            "azurerm_subnet",
+            &format!("{network_label}_container_apps"),
+            "id",
+        ])
     })
 }

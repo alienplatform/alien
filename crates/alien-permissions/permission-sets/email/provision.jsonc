@@ -1,0 +1,136 @@
+{
+  // Allows creating and deleting SES email infrastructure (deployment/provisioning
+  // operations): domain identities, configuration sets with event destinations,
+  // receipt rule sets/rules, plus the SNS/SQS event wiring and the S3 bucket
+  // policy that inbound mail delivery requires.
+  "id": "email/provision",
+  "description": "Allows creating and deleting email identities, configuration sets, and inbound/event wiring during deployment",
+  "platforms": {
+    "aws": [
+      {
+        // SES identities are named after customer mail domains, not after the
+        // stack, so identity ARNs cannot be scoped with the stack prefix.
+        "grant": {
+          "actions": [
+            "ses:CreateEmailIdentity",
+            "ses:DeleteEmailIdentity",
+            "ses:GetEmailIdentity",
+            "ses:PutEmailIdentityDkimAttributes",
+            "ses:PutEmailIdentityConfigurationSetAttributes",
+            "ses:TagResource",
+            "ses:UntagResource"
+          ]
+        },
+        "binding": {
+          "stack": {
+            "resources": ["arn:aws:ses:${awsRegion}:${awsAccountId}:identity/*"]
+          },
+          "resource": {
+            "resources": ["arn:aws:ses:${awsRegion}:${awsAccountId}:identity/*"]
+          }
+        }
+      },
+      {
+        "grant": {
+          "actions": [
+            "ses:CreateConfigurationSet",
+            "ses:DeleteConfigurationSet",
+            "ses:GetConfigurationSet",
+            "ses:CreateConfigurationSetEventDestination",
+            "ses:UpdateConfigurationSetEventDestination",
+            "ses:DeleteConfigurationSetEventDestination",
+            "ses:GetConfigurationSetEventDestinations",
+            "ses:TagResource",
+            "ses:UntagResource"
+          ]
+        },
+        "binding": {
+          "stack": {
+            "resources": [
+              "arn:aws:ses:${awsRegion}:${awsAccountId}:configuration-set/${stackPrefix}-*"
+            ]
+          },
+          "resource": {
+            "resources": [
+              "arn:aws:ses:${awsRegion}:${awsAccountId}:configuration-set/${resourceName}"
+            ]
+          }
+        }
+      },
+      {
+        // Receipt rule set management uses the SES v1 API, which does not
+        // support resource-level scoping for these actions.
+        "grant": {
+          "actions": [
+            "ses:CreateReceiptRuleSet",
+            "ses:DeleteReceiptRuleSet",
+            "ses:DescribeReceiptRuleSet",
+            "ses:CreateReceiptRule",
+            "ses:UpdateReceiptRule",
+            "ses:DeleteReceiptRule",
+            "ses:DescribeReceiptRule",
+            "ses:SetActiveReceiptRuleSet"
+          ]
+        },
+        "binding": {
+          "stack": {
+            "resources": ["*"]
+          },
+          "resource": {
+            "resources": ["*"]
+          }
+        }
+      },
+      {
+        "grant": {
+          "actions": [
+            "sns:CreateTopic",
+            "sns:DeleteTopic",
+            "sns:GetTopicAttributes",
+            "sns:SetTopicAttributes",
+            "sns:Subscribe",
+            "sns:Unsubscribe",
+            "sns:TagResource",
+            "sns:UntagResource"
+          ]
+        },
+        "binding": {
+          "stack": {
+            "resources": ["arn:aws:sns:${awsRegion}:${awsAccountId}:${stackPrefix}-*"]
+          },
+          "resource": {
+            "resources": ["arn:aws:sns:${awsRegion}:${awsAccountId}:${resourceName}-*"]
+          }
+        }
+      },
+      {
+        // Event wiring attaches a queue policy to the linked queue, and inbound
+        // delivery attaches a bucket policy to the linked bucket.
+        "grant": {
+          "actions": ["sqs:GetQueueAttributes", "sqs:SetQueueAttributes"]
+        },
+        "binding": {
+          "stack": {
+            "resources": ["arn:aws:sqs:${awsRegion}:${awsAccountId}:${stackPrefix}-*"]
+          },
+          "resource": {
+            "resources": ["arn:aws:sqs:${awsRegion}:${awsAccountId}:${stackPrefix}-*"]
+          }
+        }
+      },
+      {
+        "grant": {
+          "actions": ["s3:GetBucketPolicy", "s3:PutBucketPolicy", "s3:DeleteBucketPolicy"]
+        },
+        "binding": {
+          "stack": {
+            "resources": ["arn:aws:s3:::${stackPrefix}-*"]
+          },
+          "resource": {
+            "resources": ["arn:aws:s3:::${stackPrefix}-*"]
+          }
+        }
+      }
+    ]
+  }
+}

@@ -642,6 +642,33 @@ impl ComputeApi for ComputeClient {
             .await
     }
 
+    async fn insert_target_tcp_proxy(&self, target_tcp_proxy: TargetTcpProxy) -> Result<Operation> {
+        let path = format!("projects/{}/global/targetTcpProxies", self.project_id);
+        let name = target_tcp_proxy
+            .name
+            .clone()
+            .unwrap_or_else(|| "targetTcpProxy".to_string());
+        self.base
+            .execute_request(Method::POST, &path, None, Some(target_tcp_proxy), &name)
+            .await
+    }
+
+    async fn delete_target_tcp_proxy(&self, target_tcp_proxy_name: String) -> Result<Operation> {
+        let path = format!(
+            "projects/{}/global/targetTcpProxies/{}",
+            self.project_id, target_tcp_proxy_name
+        );
+        self.base
+            .execute_request(
+                Method::DELETE,
+                &path,
+                None,
+                Option::<()>::None,
+                &target_tcp_proxy_name,
+            )
+            .await
+    }
+
     // --- SSL Certificate Operations ---
 
     async fn get_ssl_certificate(&self, ssl_certificate_name: String) -> Result<SslCertificate> {

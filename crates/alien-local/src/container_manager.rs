@@ -11,7 +11,7 @@
 //! - Streams container logs to dev command
 
 use crate::error::{ErrorData, Result};
-use alien_core::ENV_ALIEN_COMMANDS_URL;
+use alien_core::{ExposeProtocol, ENV_ALIEN_COMMANDS_URL};
 use alien_error::{AlienError, Context, IntoAlienError};
 use bollard::container::{
     Config, CreateContainerOptions, ListContainersOptions, LogOutput, LogsOptions,
@@ -19,7 +19,7 @@ use bollard::container::{
 };
 use bollard::models::{EndpointSettings, HostConfig, PortBinding};
 use bollard::network::{CreateNetworkOptions, InspectNetworkOptions};
-use bollard::volume::CreateVolumeOptions;
+use bollard::volume::{CreateVolumeOptions, RemoveVolumeOptions};
 use bollard::Docker;
 use futures_util::StreamExt;
 use serde::{Deserialize, Serialize};
@@ -48,6 +48,13 @@ fn rewrite_dev_server_localhost_urls(env_vars: &mut HashMap<String, String>) {
                 *value = value.replace("://localhost:", "://host.docker.internal:");
             }
         }
+    }
+}
+
+fn endpoint_scheme(protocol: ExposeProtocol) -> &'static str {
+    match protocol {
+        ExposeProtocol::Http => "http",
+        ExposeProtocol::Tcp => "tcp",
     }
 }
 
@@ -145,12 +152,28 @@ pub struct ContainerMetadata {
     pub ports: Vec<u16>,
     /// Host port mapping (if exposed - maps first exposed port)
     pub host_port: Option<u16>,
+    /// Public endpoint served by the mapped host port.
+    #[serde(default)]
+    pub public_endpoint: Option<LocalPublicEndpoint>,
     /// Whether this is a stateful container
     pub stateful: bool,
     /// Ordinal for stateful containers
     pub ordinal: Option<u32>,
     /// Creation timestamp
     pub created_at: chrono::DateTime<chrono::Utc>,
+}
+
+/// The one backend endpoint published by the Local Docker runtime.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct LocalPublicEndpoint {
+    /// Container port published on loopback.
+    pub port: u16,
+    /// Application protocol used to construct endpoint URLs.
+    pub protocol: ExposeProtocol,
+    /// Resource endpoint names resolved to this one backend.
+    #[serde(default)]
+    pub names: Vec<String>,
 }
 
 /// Configuration for starting a container.
@@ -162,8 +185,8 @@ pub struct ContainerConfig {
     pub command: Option<Vec<String>>,
     /// Container ports to expose internally
     pub ports: Vec<u16>,
-    /// Whether to expose ports publicly (map to host ports)
-    pub expose_public: bool,
+    /// Backend endpoint to publish on a loopback host port.
+    pub public_endpoint: Option<LocalPublicEndpoint>,
     /// Environment variables
     pub env_vars: HashMap<String, String>,
     /// Whether this is a stateful container
@@ -213,6 +236,9 @@ pub struct ContainerInfo {
     pub docker_container_id: String,
     /// Host port (if exposed publicly - uses first exposed port)
     pub host_port: Option<u16>,
+    /// Public endpoint served by the mapped host port.
+    #[serde(default)]
+    pub public_endpoint: Option<LocalPublicEndpoint>,
     /// Container ports
     pub ports: Vec<u16>,
     /// Internal DNS name
@@ -244,6 +270,73 @@ pub struct LocalContainerManager {
 }
 
 impl LocalContainerManager {
+    fn persistent_storage_dir(&self, container_id: &str) -> PathBuf {
+        self.state_dir.join("container-volumes").join(container_id)
+    }
+
+    async fn persistent_storage_bind(
+        &self,
+        container_id: &str,
+        mount_path: &str,
+        run_as_host_user: bool,
+    ) -> Result<String> {
+        let volume_name = format!("alien-{container_id}-data");
+
+        // Preserve data created by releases that always used Docker named
+        // volumes. New Linux containers that run as the host operator use a
+        // host-owned directory instead: Docker initializes an empty named
+        // volume as root, so the explicitly non-root workload cannot write to
+        // it. A directory created by this process has the exact uid/gid the
+        // container is configured to use and requires no privileged init
+        // container or helper image.
+        match self.docker.inspect_volume(&volume_name).await {
+            Ok(_) => return Ok(format!("{volume_name}:{mount_path}")),
+            Err(bollard::errors::Error::DockerResponseServerError {
+                status_code: 404, ..
+            }) => {}
+            Err(error) => {
+                return Err(error)
+                    .into_alien_error()
+                    .context(ErrorData::DockerVolumeError {
+                        volume: volume_name,
+                        operation: "inspect".to_string(),
+                        reason: "Failed to inspect Docker volume".to_string(),
+                    });
+            }
+        }
+
+        #[cfg(target_os = "linux")]
+        if run_as_host_user {
+            let storage_dir = self.persistent_storage_dir(container_id);
+            tokio::fs::create_dir_all(&storage_dir)
+                .await
+                .into_alien_error()
+                .context(ErrorData::LocalDirectoryError {
+                    path: storage_dir.display().to_string(),
+                    operation: "create".to_string(),
+                    reason: "Failed to create container persistent storage directory".to_string(),
+                })?;
+            return Ok(format!("{}:{mount_path}", storage_dir.display()));
+        }
+
+        self.docker
+            .create_volume(CreateVolumeOptions::<String> {
+                name: volume_name.clone(),
+                driver: "local".to_string(),
+                driver_opts: HashMap::new(),
+                labels: HashMap::new(),
+            })
+            .await
+            .into_alien_error()
+            .context(ErrorData::DockerVolumeError {
+                volume: volume_name.clone(),
+                operation: "create".to_string(),
+                reason: "Failed to create Docker volume".to_string(),
+            })?;
+
+        Ok(format!("{volume_name}:{mount_path}"))
+    }
+
     /// Creates a new container manager.
     ///
     /// Attempts to connect to the local Docker daemon.
@@ -760,7 +853,7 @@ impl LocalContainerManager {
         // Allocate host port if exposed publicly
         // This must be done BEFORE building env vars so we can inject the container binding
         // Try to reuse saved port for transparent recovery
-        let host_port = if config.expose_public {
+        let host_port = if config.public_endpoint.is_some() {
             Some(allocate_host_port(saved_host_port, container_id)?)
         } else {
             None
@@ -780,13 +873,18 @@ impl LocalContainerManager {
                 ENV_ALIEN_CURRENT_CONTAINER_BINDING_NAME,
             };
 
-            // Internal URL uses Docker network DNS with first port
+            // Internal URL uses Docker network DNS with the public backend port.
             let internal_dns = format!("{}.svc", container_id);
-            let first_port = config.ports.first().copied().unwrap_or(8080);
-            let internal_url = format!("http://{}:{}", internal_dns, first_port);
+            let endpoint = config.public_endpoint.as_ref();
+            let internal_port = endpoint
+                .map(|endpoint| endpoint.port)
+                .or_else(|| config.ports.first().copied())
+                .unwrap_or(8080);
+            let scheme = endpoint.map_or("http", |endpoint| endpoint_scheme(endpoint.protocol));
+            let internal_url = format!("{scheme}://{internal_dns}:{internal_port}");
 
             // Public URL is the localhost-mapped port (if exposed publicly)
-            let public_url = host_port.map(|p| format!("http://localhost:{}", p));
+            let public_url = host_port.map(|port| format!("{scheme}://localhost:{port}"));
 
             let binding = if let Some(url) = public_url {
                 ContainerBinding::local_with_public_url(
@@ -821,24 +919,20 @@ impl LocalContainerManager {
             .collect();
 
         // Build port bindings for all ports
-        let (exposed_ports, port_bindings) = if config.expose_public && host_port.is_some() {
-            let hp = host_port.unwrap();
+        let (exposed_ports, port_bindings) = if let (Some(endpoint), Some(host_port)) =
+            (config.public_endpoint.as_ref(), host_port)
+        {
             let mut exposed = HashMap::new();
             let mut bindings = HashMap::new();
-
-            // Map first port to the assigned host port
-            if let Some(&first_port) = config.ports.first() {
-                let port_key = format!("{}/tcp", first_port);
-                exposed.insert(port_key.clone(), HashMap::new());
-
-                bindings.insert(
-                    port_key,
-                    Some(vec![PortBinding {
-                        host_ip: Some("127.0.0.1".to_string()),
-                        host_port: Some(hp.to_string()),
-                    }]),
-                );
-            }
+            let port_key = format!("{}/tcp", endpoint.port);
+            exposed.insert(port_key.clone(), HashMap::new());
+            bindings.insert(
+                port_key,
+                Some(vec![PortBinding {
+                    host_ip: Some("127.0.0.1".to_string()),
+                    host_port: Some(host_port.to_string()),
+                }]),
+            );
 
             (Some(exposed), Some(bindings))
         } else {
@@ -850,26 +944,11 @@ impl LocalContainerManager {
 
         // Add persistent storage volume if configured
         if let Some(mount_path) = &config.volume_mount {
-            let volume_name = format!("alien-{}-data", container_id);
-
-            // Create Docker volume
-            self.docker
-                .create_volume(CreateVolumeOptions::<String> {
-                    name: volume_name.clone(),
-                    driver: "local".to_string(),
-                    driver_opts: HashMap::new(),
-                    labels: HashMap::new(),
-                })
-                .await
-                .into_alien_error()
-                .context(ErrorData::DockerVolumeError {
-                    volume: volume_name.clone(),
-                    operation: "create".to_string(),
-                    reason: "Failed to create Docker volume".to_string(),
-                })?;
-
-            let bind = format!("{}:{}", volume_name, mount_path);
-            binds.push(bind);
+            let run_as_host_user = shared_bind_mount_user(&config.bind_mounts).is_some();
+            binds.push(
+                self.persistent_storage_bind(container_id, mount_path, run_as_host_user)
+                    .await?,
+            );
         }
 
         // Add bind mounts for linked resources (Storage, KV, Vault directories)
@@ -1005,6 +1084,7 @@ impl LocalContainerManager {
             image,
             ports: config.ports.clone(),
             host_port,
+            public_endpoint: config.public_endpoint.clone(),
             stateful: config.stateful,
             ordinal: config.ordinal,
             created_at: chrono::Utc::now(),
@@ -1029,6 +1109,7 @@ impl LocalContainerManager {
             container_id: container_id.to_string(),
             docker_container_id: response.id,
             host_port,
+            public_endpoint: config.public_endpoint,
             ports: config.ports,
             internal_dns: format!("{}.svc", container_id),
         })
@@ -1108,6 +1189,62 @@ impl LocalContainerManager {
         Ok(())
     }
 
+    /// Deletes a container and the persistent storage owned by the resource.
+    ///
+    /// Container replacement uses [`Self::delete_container`] so data survives
+    /// updates. Resource deletion uses this method so neither the current
+    /// host-backed directory nor a named volume created by an older release is
+    /// leaked.
+    pub async fn delete_container_and_storage(&self, container_id: &str) -> Result<()> {
+        self.delete_container(container_id).await?;
+
+        let volume_name = format!("alien-{container_id}-data");
+        match self
+            .docker
+            .remove_volume(&volume_name, Some(RemoveVolumeOptions { force: true }))
+            .await
+        {
+            Ok(_) => {
+                info!(volume = %volume_name, "Container persistent volume deleted");
+            }
+            Err(bollard::errors::Error::DockerResponseServerError {
+                status_code: 404, ..
+            }) => {}
+            Err(error) => {
+                return Err(error)
+                    .into_alien_error()
+                    .context(ErrorData::DockerVolumeError {
+                        volume: volume_name,
+                        operation: "delete".to_string(),
+                        reason: "Failed to delete container persistent volume".to_string(),
+                    });
+            }
+        }
+
+        let storage_dir = self.persistent_storage_dir(container_id);
+        match tokio::fs::remove_dir_all(&storage_dir).await {
+            Ok(_) => {
+                info!(
+                    path = %storage_dir.display(),
+                    "Container persistent storage directory deleted"
+                );
+            }
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+            Err(error) => {
+                return Err(error)
+                    .into_alien_error()
+                    .context(ErrorData::LocalDirectoryError {
+                        path: storage_dir.display().to_string(),
+                        operation: "delete".to_string(),
+                        reason: "Failed to delete container persistent storage directory"
+                            .to_string(),
+                    });
+            }
+        }
+
+        Ok(())
+    }
+
     /// Checks if a container is running.
     pub async fn is_running(&self, container_id: &str) -> bool {
         let docker_name = format!("alien-{}", container_id);
@@ -1166,15 +1303,24 @@ impl LocalContainerManager {
             })
         })?;
 
-        // Internal URL uses Docker network DNS
+        // Internal URL uses Docker network DNS.
         let internal_dns = format!("{}.svc", container_id);
-        let first_port = metadata.ports.first().copied().unwrap_or(8080);
-        let internal_url = format!("http://{}:{}", internal_dns, first_port);
+        let internal_port = metadata
+            .public_endpoint
+            .as_ref()
+            .map(|endpoint| endpoint.port)
+            .or_else(|| metadata.ports.first().copied())
+            .unwrap_or(8080);
+        let scheme = metadata
+            .public_endpoint
+            .as_ref()
+            .map_or("http", |endpoint| endpoint_scheme(endpoint.protocol));
+        let internal_url = format!("{scheme}://{internal_dns}:{internal_port}");
 
-        // Public URL is the localhost-mapped port (if exposed publicly)
+        // Public URL is the localhost-mapped port (if exposed publicly).
         let public_url = metadata
             .host_port
-            .map(|p| format!("http://localhost:{}", p));
+            .map(|port| format!("{scheme}://localhost:{port}"));
 
         let binding = if let Some(url) = public_url {
             ContainerBinding::local_with_public_url(

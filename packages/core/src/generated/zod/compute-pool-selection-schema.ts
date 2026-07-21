@@ -4,16 +4,23 @@
 */
 
 import * as z from "zod";
+import { FailureDomainSelectionSchema } from "./failure-domain-selection-schema.js";
 
 /**
  * @description User-selected deployment settings for one compute pool.
  */
 export const ComputePoolSelectionSchema = z.union([z.object({
-    "machine": z.string().describe("Provider machine type selected for this deployment.").nullish(),
+    get "failure_domains"(){
+                return z.union([FailureDomainSelectionSchema, z.null()]).optional()
+              },
+"machine": z.string().describe("Provider machine type selected for this deployment.").nullish(),
 "machines": z.int().min(0).describe("Number of machines to run."),
 "mode": z.enum(["fixed"])
     }), z.object({
-    "machine": z.string().describe("Provider machine type selected for this deployment.").nullish(),
+    get "failure_domains"(){
+                return z.union([FailureDomainSelectionSchema, z.null()]).optional()
+              },
+"machine": z.string().describe("Provider machine type selected for this deployment.").nullish(),
 "max": z.int().min(0).describe("Maximum machine count."),
 "min": z.int().min(0).describe("Minimum machine count."),
 "mode": z.enum(["autoscale"])

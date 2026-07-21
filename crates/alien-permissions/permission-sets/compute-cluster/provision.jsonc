@@ -3,6 +3,22 @@
   "description": "Allows creating and managing ComputeCluster compute infrastructure. Derived from AwsComputeClusterController, GcpComputeClusterController, AzureComputeClusterController API calls.",
   "platforms": {
     "aws": [
+      // EC2 Describe actions do not support resource-level permissions or
+      // conditions. Provisioning needs this metadata read to adopt a launch
+      // template created by an interrupted attempt.
+      {
+        "grant": {
+          "actions": ["ec2:DescribeLaunchTemplates"]
+        },
+        "binding": {
+          "stack": {
+            "resources": ["*"]
+          },
+          "resource": {
+            "resources": ["*"]
+          }
+        }
+      },
       // Launch template creation must include Alien boundary tags in the request.
       {
         "grant": {
@@ -322,6 +338,7 @@
             "compute.instanceGroupManagers.get",
             "compute.instanceGroupManagers.list",
             "compute.instanceGroupManagers.update",
+            "compute.globalOperations.get",
             "compute.zones.list",
             "compute.zoneOperations.get",
             "compute.instances.getSerialPortOutput"
@@ -380,6 +397,21 @@
       }
     ],
     "azure": [
+      // Resource SKU availability is subscription-specific and cannot be read through a
+      // resource-group-scoped role assignment.
+      {
+        "grant": {
+          "actions": ["Microsoft.Compute/skus/read"]
+        },
+        "binding": {
+          "stack": {
+            "scope": "/subscriptions/${subscriptionId}"
+          },
+          "resource": {
+            "scope": "/subscriptions/${subscriptionId}"
+          }
+        }
+      },
       // VMSS management + VM listing + boot diagnostics for startup log visibility
       {
         "grant": {

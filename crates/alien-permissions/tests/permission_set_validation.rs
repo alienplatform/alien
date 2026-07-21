@@ -105,7 +105,7 @@ async fn fetch_aws_iam_dataset() -> Result<HashMap<String, HashSet<String>>> {
     }
 
     println!("Downloading AWS IAM dataset...");
-    let url = "https://raw.githubusercontent.com/iann0036/iam-dataset/c8c82d0deee411fa4864cbdf99f85816a3daca64/aws/iam_definition.json";
+    let url = "https://raw.githubusercontent.com/iann0036/iam-dataset/29a302595d1c105fc7e5dbd12097f10bf8435bd6/aws/iam_definition.json";
 
     let client = reqwest::Client::new();
     let response = client

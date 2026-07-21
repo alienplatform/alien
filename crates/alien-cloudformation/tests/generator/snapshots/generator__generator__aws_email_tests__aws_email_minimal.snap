@@ -1,0 +1,185 @@
+---
+source: crates/alien-cloudformation/tests/generator/aws_email_tests.rs
+expression: yaml
+---
+AWSTemplateFormatVersion: 2010-09-09
+Description: aws email minimal
+Transform:
+- AWS::LanguageExtensions
+Metadata:
+  AWS::CloudFormation::Interface:
+    ParameterGroups:
+    - Label:
+        default: Registration
+      Parameters:
+      - Token
+      - ManagingRoleArn
+      - ManagingAccountId
+    - Label:
+        default: Operations
+      Parameters:
+      - UpdatesMode
+      - TelemetryMode
+      - HeartbeatsMode
+    ParameterLabels:
+      HeartbeatsMode:
+        default: Heartbeats
+      ManagingAccountId:
+        default: Image account ID
+      ManagingRoleArn:
+        default: Management role ARN
+      TelemetryMode:
+        default: Telemetry
+      Token:
+        default: Install token
+      UpdatesMode:
+        default: Updates
+Parameters:
+  Token:
+    Type: String
+    Description: Install token from the application setup page.
+    NoEcho: true
+  ManagingRoleArn:
+    Type: String
+    Description: ARN of the management identity allowed to assume setup-created roles.
+    Default: ''
+  ManagingAccountId:
+    Type: String
+    Description: AWS account ID for the management account that hosts application container images.
+    Default: ''
+  NetworkMode:
+    Type: String
+    Description: Choose create-new for a managed VPC, use-existing for your VPC, or use-default for the account default VPC.
+    Default: create-new
+    AllowedValues:
+    - create-new
+    - use-existing
+    - use-default
+  UpdatesMode:
+    Type: String
+    Description: How updates are applied after setup registration.
+    Default: auto
+    AllowedValues:
+    - auto
+    - approval-required
+  TelemetryMode:
+    Type: String
+    Description: Telemetry collection behavior.
+    Default: auto
+    AllowedValues:
+    - auto
+  HeartbeatsMode:
+    Type: String
+    Description: Heartbeat health-check behavior.
+    Default: "on"
+    AllowedValues:
+    - "off"
+    - "on"
+Resources:
+  MailerConfigSet:
+    Type: AWS::SES::ConfigurationSet
+    Properties:
+      Name:
+        Fn::Sub: ${AWS::StackName}-mailer
+  MailerIdentity0:
+    Type: AWS::SES::EmailIdentity
+    Properties:
+      EmailIdentity: mail.example.com
+      DkimAttributes:
+        SigningEnabled: true
+      ConfigurationSetAttributes:
+        ConfigurationSetName:
+          Ref: MailerConfigSet
+      Tags:
+      - Key: managed-by
+        Value: setup
+      - Key: deployment
+        Value:
+          Ref: AWS::StackName
+      - Key: resource
+        Value: mailer
+      - Key: resource-type
+        Value: email
+Outputs:
+  DeploymentSourceKind:
+    Value: cloudformation
+    Description: Setup source kind.
+  DeploymentResourcePrefix:
+    Value:
+      Ref: AWS::StackName
+    Description: Stable physical resource prefix.
+  DeploymentPlatform:
+    Value: aws
+    Description: Target platform.
+  DeploymentRegion:
+    Value:
+      Ref: AWS::Region
+    Description: AWS region.
+  DeploymentSetupTarget:
+    Value: aws
+    Description: Setup target.
+  DeploymentSetupFingerprint:
+    Value: test
+    Description: Setup compatibility fingerprint.
+  DeploymentSetupImportFormatVersion:
+    Value: 1
+    Description: Setup registration payload format version.
+  DeploymentSetupFingerprintVersion:
+    Value: 1
+    Description: Setup fingerprint algorithm version.
+  DeploymentManagementConfig:
+    Value:
+      Fn::ToJsonString:
+        platform: aws
+        managingRoleArn:
+          Ref: ManagingRoleArn
+    Description: Deployment registration management configuration JSON.
+  DeploymentStackSettings:
+    Value:
+      Fn::ToJsonString:
+        deploymentModel: push
+        updates:
+          Ref: UpdatesMode
+        telemetry:
+          Ref: TelemetryMode
+        heartbeats:
+          Ref: HeartbeatsMode
+        network:
+          Ref: AWS::NoValue
+    Description: Deployment registration settings JSON.
+  DeploymentResources:
+    Value:
+      Fn::ToJsonString:
+      - id: mailer
+        type: email
+        importData:
+          configurationSet:
+            Ref: MailerConfigSet
+          domains:
+            mail.example.com:
+              dkimTokens:
+              - name:
+                  Fn::GetAtt:
+                  - MailerIdentity0
+                  - DkimDNSTokenName1
+                value:
+                  Fn::GetAtt:
+                  - MailerIdentity0
+                  - DkimDNSTokenValue1
+              - name:
+                  Fn::GetAtt:
+                  - MailerIdentity0
+                  - DkimDNSTokenName2
+                value:
+                  Fn::GetAtt:
+                  - MailerIdentity0
+                  - DkimDNSTokenValue2
+              - name:
+                  Fn::GetAtt:
+                  - MailerIdentity0
+                  - DkimDNSTokenName3
+                value:
+                  Fn::GetAtt:
+                  - MailerIdentity0
+                  - DkimDNSTokenValue3
+    Description: Deployment registration resources JSON.

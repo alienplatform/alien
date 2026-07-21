@@ -14,6 +14,24 @@ use std::path::PathBuf;
 use std::process::Command;
 use tempfile::tempdir;
 
+#[tokio::test]
+async fn materializing_same_artifact_preserves_its_contents() {
+    let directory = tempfile::tempdir_in(".").unwrap();
+    let absolute = std::fs::canonicalize(directory.path())
+        .unwrap()
+        .join("image.oci.tar");
+    std::fs::write(&absolute, b"oci archive").unwrap();
+    let relative = absolute
+        .strip_prefix(std::env::current_dir().unwrap())
+        .unwrap();
+
+    assert_ne!(relative, absolute);
+    assert!(!materialize_complete_oci_tarball(&absolute, relative)
+        .await
+        .unwrap());
+    assert_eq!(std::fs::read(absolute).unwrap(), b"oci archive");
+}
+
 fn toolchain_output(
     entrypoint: Option<Vec<String>>,
     runtime_command: Vec<String>,

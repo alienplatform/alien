@@ -1,5 +1,5 @@
 use super::{Toolchain, ToolchainContext, ToolchainOutput};
-use crate::command_output::{image_build_error_with_output, wait_with_captured_output};
+use crate::command_output::wait_with_captured_output;
 use crate::error::{ErrorData, Result};
 use crate::settings::BinaryTargetExt;
 use alien_core::AlienEvent;
@@ -7,12 +7,13 @@ use alien_error::{AlienError, Context, IntoAlienError};
 use async_trait::async_trait;
 use serde_json::{json, Value};
 use std::collections::HashMap;
+use std::ffi::OsString;
 use std::fs::File;
 use std::io::Read;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::process::Stdio;
 use tokio::process::Command;
-use tracing::info;
+use tracing::{info, warn};
 
 /// Docker toolchain implementation using Docker buildx for multi-architecture builds.
 ///
@@ -31,26 +32,51 @@ pub struct DockerToolchain {
     pub target: Option<String>,
 }
 
+struct BuildxBuilder {
+    name: String,
+    owned: bool,
+}
+
 impl DockerToolchain {
+    const ENTERPRISE_CA_ENV_VARS: [&'static str; 4] = [
+        "ALIEN_ENTERPRISE_CA_CERT_PATH",
+        "SSL_CERT_FILE",
+        "REQUESTS_CA_BUNDLE",
+        "NODE_EXTRA_CA_CERTS",
+    ];
+
     /// Check if the source directory contains a Dockerfile
     pub fn has_dockerfile(src_dir: &Path, dockerfile: Option<&String>) -> bool {
         let dockerfile_name = dockerfile.map(|s| s.as_str()).unwrap_or("Dockerfile");
         src_dir.join(dockerfile_name).exists()
     }
 
-    /// Generate a temporary tag for the build
-    fn generate_temp_tag(resource_name: &str) -> String {
+    fn generate_builder_name() -> String {
         use rand::distr::Alphanumeric;
         use rand::Rng;
 
-        let random_suffix: String = rand::rng()
+        let suffix: String = rand::rng()
             .sample_iter(&Alphanumeric)
             .take(8)
             .map(char::from)
             .collect::<String>()
             .to_lowercase();
+        format!("alien-build-{}-{suffix}", std::process::id())
+    }
 
-        format!("alien-build-{}:{}", resource_name, random_suffix)
+    fn absolute_path(path: &Path) -> Result<PathBuf> {
+        if path.is_absolute() {
+            return Ok(path.to_path_buf());
+        }
+
+        let current_dir =
+            std::env::current_dir()
+                .into_alien_error()
+                .context(Self::docker_build_error(
+                    "Failed to resolve the Docker build output directory",
+                ))?;
+
+        Ok(current_dir.join(path))
     }
 
     fn humanize_buildx_failure(stderr_output: &str) -> String {
@@ -76,6 +102,47 @@ impl DockerToolchain {
         }
     }
 
+    fn enterprise_ca_path() -> Result<Option<PathBuf>> {
+        Self::enterprise_ca_path_from(|name| std::env::var_os(name))
+    }
+
+    fn enterprise_ca_path_from(
+        mut env_value: impl FnMut(&str) -> Option<OsString>,
+    ) -> Result<Option<PathBuf>> {
+        for name in Self::ENTERPRISE_CA_ENV_VARS {
+            let Some(value) = env_value(name) else {
+                continue;
+            };
+            let path = PathBuf::from(value);
+            let valid = File::open(&path)
+                .and_then(|mut file| {
+                    let mut first_byte = [0_u8; 1];
+                    file.read_exact(&mut first_byte)
+                })
+                .is_ok();
+            if !valid {
+                return Err(AlienError::new(Self::docker_build_error(format!(
+                    "{name} must point to a readable, non-empty certificate file"
+                ))));
+            }
+            return Ok(Some(path));
+        }
+        Ok(None)
+    }
+
+    fn redacted_build_args(args: &[String]) -> Vec<&str> {
+        args.iter()
+            .enumerate()
+            .map(|(index, arg)| {
+                if index > 0 && args[index - 1] == "--secret" {
+                    "<redacted>"
+                } else {
+                    arg.as_str()
+                }
+            })
+            .collect()
+    }
+
     /// std reports x86_64/aarch64; docker wants amd64/arm64 — map the host CPU.
     fn host_docker_arch() -> Option<&'static str> {
         match std::env::consts::ARCH {
@@ -95,16 +162,29 @@ impl DockerToolchain {
             .any(|line| line.contains(&needle))
     }
 
-    /// Whether the active builder already supports `target_arch` (the default `docker` builder
-    /// reflects the kernel's binfmt handlers). A failed inspect counts as "no".
-    async fn host_can_emulate(target_arch: &str) -> Result<bool> {
+    fn inspect_field<'a>(inspect_stdout: &'a str, field: &str) -> Option<&'a str> {
+        inspect_stdout.lines().find_map(|line| {
+            line.strip_prefix(field)
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+        })
+    }
+
+    fn driver_supports_oci_export(driver: &str) -> bool {
+        matches!(
+            driver,
+            "docker-container" | "kubernetes" | "remote" | "cloud"
+        )
+    }
+
+    async fn builder_supports_arch(builder_name: &str, target_arch: &str) -> Result<bool> {
         let output = Command::new("docker")
-            .args(["buildx", "inspect", "default"])
+            .args(["buildx", "inspect", builder_name])
             .output()
             .await
             .into_alien_error()
             .context(Self::docker_build_error(
-                "Could not inspect the default buildx builder",
+                "Could not inspect the scoped buildx builder",
             ))?;
         if !output.status.success() {
             return Ok(false);
@@ -119,19 +199,126 @@ impl DockerToolchain {
         host_arch != Some(target_arch) && !builder_supports
     }
 
-    /// Fail fast when the active builder can't build `target_arch`. We don't set up emulation
-    /// here — that's the CI runner's job; a native target, or one the builder already supports,
-    /// passes through.
-    async fn ensure_builder_supports_arch(target_arch: &str) -> Result<()> {
+    async fn ensure_builder_supports_arch(builder_name: &str, target_arch: &str) -> Result<()> {
         let host_arch = Self::host_docker_arch();
         if host_arch == Some(target_arch) {
             return Ok(());
         }
-        let builder_supports = Self::host_can_emulate(target_arch).await?;
+        let builder_supports = Self::builder_supports_arch(builder_name, target_arch).await?;
         if Self::build_blocked(host_arch, target_arch, builder_supports) {
             return Err(AlienError::new(Self::docker_build_error(format!(
                 "Cannot build linux/{t} on this host: the active buildx builder doesn't support that architecture. Build on a native {t} runner, or configure a buildx builder with emulation for it.",
                 t = target_arch
+            ))));
+        }
+        Ok(())
+    }
+
+    async fn create_builder(builder_name: &str) -> Result<()> {
+        let output = Command::new("docker")
+            .args([
+                "buildx",
+                "create",
+                "--name",
+                builder_name,
+                "--driver",
+                "docker-container",
+            ])
+            .output()
+            .await
+            .into_alien_error()
+            .context(Self::docker_build_error(
+                "Could not create a scoped docker-container buildx builder",
+            ))?;
+        if !output.status.success() {
+            return Err(AlienError::new(Self::docker_build_error(format!(
+                "Could not create a scoped docker-container buildx builder: {}",
+                String::from_utf8_lossy(&output.stderr).trim()
+            ))));
+        }
+
+        Self::bootstrap_builder(builder_name).await
+    }
+
+    async fn bootstrap_builder(builder_name: &str) -> Result<()> {
+        let output = Command::new("docker")
+            .args(["buildx", "inspect", "--bootstrap", builder_name])
+            .output()
+            .await
+            .into_alien_error()
+            .context(Self::docker_build_error(
+                "Could not bootstrap the scoped buildx builder",
+            ))?;
+        if !output.status.success() {
+            return Err(AlienError::new(Self::docker_build_error(format!(
+                "Could not bootstrap the scoped buildx builder: {}",
+                String::from_utf8_lossy(&output.stderr).trim()
+            ))));
+        }
+        Ok(())
+    }
+
+    async fn select_builder() -> Result<BuildxBuilder> {
+        let output = Command::new("docker")
+            .args(["buildx", "inspect"])
+            .output()
+            .await
+            .into_alien_error()
+            .context(Self::docker_build_error(
+                "Could not inspect the current buildx builder",
+            ))?;
+        if !output.status.success() {
+            return Err(AlienError::new(Self::docker_build_error(format!(
+                "Could not inspect the current buildx builder: {}",
+                String::from_utf8_lossy(&output.stderr).trim()
+            ))));
+        }
+        let inspect = String::from_utf8_lossy(&output.stdout);
+        let name = Self::inspect_field(&inspect, "Name:").ok_or_else(|| {
+            AlienError::new(Self::docker_build_error(
+                "Current buildx builder inspection did not report a name",
+            ))
+        })?;
+        let driver = Self::inspect_field(&inspect, "Driver:").ok_or_else(|| {
+            AlienError::new(Self::docker_build_error(
+                "Current buildx builder inspection did not report a driver",
+            ))
+        })?;
+
+        if Self::driver_supports_oci_export(driver) {
+            Self::bootstrap_builder(name).await?;
+            return Ok(BuildxBuilder {
+                name: name.to_string(),
+                owned: false,
+            });
+        }
+        if driver != "docker" {
+            return Err(AlienError::new(Self::docker_build_error(format!(
+                "The current buildx driver '{driver}' does not support OCI archive export"
+            ))));
+        }
+
+        let name = Self::generate_builder_name();
+        if let Err(error) = Self::create_builder(&name).await {
+            let _ = Self::remove_builder(&name).await;
+            return Err(error);
+        }
+        Ok(BuildxBuilder { name, owned: true })
+    }
+
+    async fn remove_builder(builder_name: &str) -> Result<()> {
+        let output = Command::new("docker")
+            .args(["buildx", "rm", "--force", builder_name])
+            .output()
+            .await
+            .into_alien_error()
+            .context(Self::docker_build_error(
+                "Could not remove the scoped buildx builder",
+            ))?;
+        if !output.status.success() {
+            return Err(AlienError::new(Self::docker_build_error(format!(
+                "Could not remove the scoped buildx builder: {}",
+                String::from_utf8_lossy(&output.stderr).trim()
             ))));
         }
         Ok(())
@@ -160,7 +347,11 @@ impl Toolchain for DockerToolchain {
 
         // Build arguments for docker buildx build
         // Note: Target architecture is automatically handled by build_target
-        let temp_tag = Self::generate_temp_tag("docker-build");
+        let output_tarball = Self::absolute_path(&context.build_dir.join(format!(
+            "{}.oci.tar",
+            context.build_target.runtime_platform_id()
+        )))?;
+        let output = format!("type=oci,dest={}", output_tarball.display());
         let arch_str = match context.build_target.to_dockdash_arch() {
             dockdash::Arch::Amd64 => "amd64",
             dockdash::Arch::ARM64 => "arm64",
@@ -168,16 +359,27 @@ impl Toolchain for DockerToolchain {
         };
         let platform_str = format!("linux/{}", arch_str);
 
-        Self::ensure_builder_supports_arch(arch_str).await?;
+        let builder = Self::select_builder().await?;
+        if let Err(error) = Self::ensure_builder_supports_arch(&builder.name, arch_str).await {
+            if builder.owned {
+                if let Err(cleanup_error) = Self::remove_builder(&builder.name).await {
+                    warn!(%cleanup_error, builder_name = %builder.name, "failed to clean up buildx builder");
+                }
+            }
+            return Err(error);
+        }
 
-        let mut args: Vec<&str> = vec![
-            "buildx",
-            "build",
-            "--platform",
-            platform_str.as_str(),
-            "--load", // export into the docker daemon so we can `docker save` it
-            "-f",
-            dockerfile_name,
+        let mut args = vec![
+            "buildx".to_string(),
+            "build".to_string(),
+            "--builder".to_string(),
+            builder.name.clone(),
+            "--platform".to_string(),
+            platform_str,
+            "--output".to_string(),
+            output,
+            "-f".to_string(),
+            dockerfile_name.to_string(),
         ];
 
         // Add build args if provided
@@ -188,27 +390,32 @@ impl Toolchain for DockerToolchain {
             .unwrap_or_default();
 
         for build_arg in &build_arg_strings {
-            args.push("--build-arg");
-            args.push(build_arg);
+            args.push("--build-arg".to_string());
+            args.push(build_arg.clone());
+        }
+
+        let enterprise_ca = Self::enterprise_ca_path()?;
+        if let Some(path) = &enterprise_ca {
+            args.push("--secret".to_string());
+            args.push(format!("id=enterprise_ca,src={}", path.display()));
         }
 
         // Add target if specified
-        let target_str;
         if let Some(target) = &self.target {
-            target_str = target.clone();
-            args.push("--target");
-            args.push(&target_str);
+            args.push("--target".to_string());
+            args.push(target.clone());
         }
 
-        // Add tag and context
-        args.push("-t");
-        args.push(&temp_tag);
-        args.push("."); // Build context is the src_dir
+        // Add build context
+        args.push(".".to_string()); // Build context is the src_dir
 
-        info!("Running docker buildx build with args: {:?}", args);
+        info!(
+            "Running docker buildx build with args: {:?}",
+            Self::redacted_build_args(&args)
+        );
 
         // Run docker buildx build with progress reporting
-        AlienEvent::CompilingCode {
+        let build_result = AlienEvent::CompilingCode {
             language: "docker".to_string(),
             progress: None,
         }
@@ -261,54 +468,24 @@ impl Toolchain for DockerToolchain {
             info!("docker buildx build completed successfully");
             Ok(())
         })
-        .await?;
+        .await;
 
-        // Export the built image to OCI tarball
-        let output_tarball = context.build_dir.join(format!(
-            "{}.oci.tar",
-            context.build_target.runtime_platform_id()
-        ));
-
-        info!(
-            "Exporting Docker image {} to OCI tarball: {}",
-            temp_tag,
-            output_tarball.display()
-        );
-
-        let output_tarball_str = output_tarball.to_string_lossy().to_string();
-        let save_args = vec!["save", "-o", &output_tarball_str, &temp_tag];
-
-        let save_output = Command::new("docker")
-            .args(&save_args)
-            .stdout(Stdio::piped())
-            .stderr(Stdio::piped())
-            .output()
-            .await
-            .into_alien_error()
-            .context(ErrorData::ImageBuildFailed {
-                resource_name: "docker-build".to_string(),
-                reason: "Failed to execute docker save".to_string(),
-                build_output: None,
-            })?;
-
-        if !save_output.status.success() {
-            return Err(image_build_error_with_output(
-                "docker-build",
-                "docker save failed",
-                &save_output,
-            ));
+        let cleanup_result = if builder.owned {
+            Self::remove_builder(&builder.name).await
+        } else {
+            Ok(())
+        };
+        if let Err(build_error) = build_result {
+            if let Err(cleanup_error) = cleanup_result {
+                warn!(%cleanup_error, builder_name = %builder.name, "failed to clean up buildx builder after a failed build");
+            }
+            return Err(build_error);
         }
+        cleanup_result?;
 
-        info!("Successfully exported Docker image to OCI tarball");
-
-        // Flatten the saved archive to a single image manifest before the OCI reader sees it.
+        // Buildx may wrap the image manifest in an index alongside provenance attestations.
+        // Flatten the archive before the runtime OCI reader sees it.
         Self::normalize_oci_archive(&output_tarball, arch_str)?;
-
-        // Clean up the temporary image
-        let _ = Command::new("docker")
-            .args(&["rmi", &temp_tag])
-            .output()
-            .await;
 
         // Extract CMD from the built image for the runtime_command field
         let runtime_command = Self::extract_cmd_from_tarball(&output_tarball)?;
@@ -363,8 +540,8 @@ impl DockerToolchain {
     /// Rewrite an OCI archive's `index.json` to point straight at the single image manifest
     /// for `target_arch`.
     ///
-    /// The containerd image store's `docker save` writes a nested `index.json` → image-index →
-    /// [image manifest, attestation]; our reader (ocipkg, via dockdash) treats the first
+    /// Buildx can write a nested `index.json` → image-index → [image manifest, attestation];
+    /// our reader (ocipkg, via dockdash) treats the first
     /// descriptor as an image manifest and fails with "missing field `config`". The classic
     /// store already writes a flat layout, so this is a no-op there.
     pub(crate) fn normalize_oci_archive(tarball_path: &Path, target_arch: &str) -> Result<()> {
@@ -373,6 +550,7 @@ impl DockerToolchain {
         const SMALL_BLOB_BYTES: u64 = 1 << 20;
         let mut index: Option<Value> = None;
         let mut blobs: HashMap<String, Value> = HashMap::new();
+        let mut has_docker_manifest = false;
 
         let archive_file =
             File::open(tarball_path)
@@ -398,6 +576,8 @@ impl DockerToolchain {
 
             if path == "index.json" {
                 index = Some(read_entry_json(&mut entry)?);
+            } else if path == "manifest.json" {
+                has_docker_manifest = true;
             } else if path.starts_with("blobs/") && entry.size() <= SMALL_BLOB_BYTES {
                 // Only descriptors are stored by digest; key small blobs by "sha256:<hex>".
                 if let Some(digest) = blob_path_to_digest(&path) {
@@ -415,23 +595,47 @@ impl DockerToolchain {
         })?;
 
         let chosen = select_image_manifest_descriptor(&index, &blobs, target_arch)?;
-        if index_points_only_at(&index, &chosen) {
+        let new_index = if index_points_only_at(&index, &chosen) {
+            None
+        } else {
+            Some(json!({
+                "schemaVersion": 2,
+                "mediaType": "application/vnd.oci.image.index.v1+json",
+                "manifests": [chosen.clone()],
+            }))
+        };
+        let docker_manifest = if has_docker_manifest {
+            None
+        } else {
+            Some(docker_manifest_for_descriptor(&chosen, &blobs)?)
+        };
+
+        if new_index.is_none() && docker_manifest.is_none() {
             return Ok(());
         }
 
-        let flat_index = json!({
-            "schemaVersion": 2,
-            "mediaType": "application/vnd.oci.image.index.v1+json",
-            "manifests": [chosen],
-        });
-        let flat_index_bytes =
-            serde_json::to_vec(&flat_index)
-                .into_alien_error()
-                .context(docker_read_error(
-                    "Failed to serialize flattened index.json",
-                ))?;
+        let new_index_bytes = new_index
+            .as_ref()
+            .map(serde_json::to_vec)
+            .transpose()
+            .into_alien_error()
+            .context(docker_read_error(
+                "Failed to serialize flattened index.json",
+            ))?;
+        let docker_manifest_bytes = docker_manifest
+            .as_ref()
+            .map(serde_json::to_vec)
+            .transpose()
+            .into_alien_error()
+            .context(docker_read_error(
+                "Failed to serialize Docker manifest.json",
+            ))?;
 
-        rewrite_archive_index_json(tarball_path, &flat_index_bytes)
+        rewrite_archive(
+            tarball_path,
+            new_index_bytes.as_deref(),
+            docker_manifest_bytes.as_deref(),
+        )
     }
 }
 
@@ -542,9 +746,72 @@ fn index_points_only_at(index: &Value, chosen: &Value) -> bool {
         .is_some_and(|m| m.len() == 1 && m[0].get("digest") == chosen.get("digest"))
 }
 
+/// Build the compatibility manifest consumed by `docker load` from the selected OCI image
+/// manifest. The paths continue to reference the same content-addressed blobs, so the archive
+/// stays a valid OCI layout for remote ingestion while also being loadable by a local daemon.
+fn docker_manifest_for_descriptor(
+    descriptor: &Value,
+    blobs: &HashMap<String, Value>,
+) -> Result<Value> {
+    let digest = descriptor
+        .get("digest")
+        .and_then(Value::as_str)
+        .ok_or_else(|| AlienError::new(docker_read_error("OCI image descriptor has no digest")))?;
+    let manifest = blobs.get(digest).ok_or_else(|| {
+        AlienError::new(docker_read_error(
+            "OCI archive is missing the selected image manifest blob",
+        ))
+    })?;
+    let config = manifest
+        .get("config")
+        .and_then(|value| value.get("digest"))
+        .and_then(Value::as_str)
+        .and_then(digest_to_blob_path)
+        .ok_or_else(|| {
+            AlienError::new(docker_read_error(
+                "OCI image manifest has no valid config digest",
+            ))
+        })?;
+    let layers = manifest
+        .get("layers")
+        .and_then(Value::as_array)
+        .ok_or_else(|| AlienError::new(docker_read_error("OCI image manifest has no layers")))?
+        .iter()
+        .map(|layer| {
+            layer
+                .get("digest")
+                .and_then(Value::as_str)
+                .and_then(digest_to_blob_path)
+                .ok_or_else(|| {
+                    AlienError::new(docker_read_error(
+                        "OCI image manifest has an invalid layer digest",
+                    ))
+                })
+        })
+        .collect::<Result<Vec<_>>>()?;
+
+    Ok(json!([{
+        "Config": config,
+        "RepoTags": null,
+        "Layers": layers,
+    }]))
+}
+
+fn digest_to_blob_path(digest: &str) -> Option<String> {
+    let (algorithm, hex) = digest.split_once(':')?;
+    if algorithm != "sha256" || hex.is_empty() {
+        return None;
+    }
+    Some(format!("blobs/{algorithm}/{hex}"))
+}
+
 /// Stream the archive into a sibling temp file, replacing only `index.json`, then swap it
 /// in. Other entries (blobs, oci-layout) are copied verbatim.
-fn rewrite_archive_index_json(tarball_path: &Path, new_index: &[u8]) -> Result<()> {
+fn rewrite_archive(
+    tarball_path: &Path,
+    new_index: Option<&[u8]>,
+    docker_manifest: Option<&[u8]>,
+) -> Result<()> {
     let temp_path = tarball_path.with_extension("tar.normalizing");
 
     {
@@ -572,7 +839,8 @@ fn rewrite_archive_index_json(tarball_path: &Path, new_index: &[u8]) -> Result<(
                 .into_owned();
             let mut header = entry.header().clone();
 
-            if path == Path::new("index.json") {
+            if path == Path::new("index.json") && new_index.is_some() {
+                let new_index = new_index.expect("checked above");
                 header.set_size(new_index.len() as u64);
                 builder
                     .append_data(&mut header, &path, new_index)
@@ -584,6 +852,17 @@ fn rewrite_archive_index_json(tarball_path: &Path, new_index: &[u8]) -> Result<(
                     .into_alien_error()
                     .context(docker_read_error("Failed to copy OCI tarball entry"))?;
             }
+        }
+
+        if let Some(docker_manifest) = docker_manifest {
+            let mut header = tar::Header::new_gnu();
+            header.set_mode(0o644);
+            header.set_size(docker_manifest.len() as u64);
+            header.set_cksum();
+            builder
+                .append_data(&mut header, "manifest.json", docker_manifest)
+                .into_alien_error()
+                .context(docker_read_error("Failed to write Docker manifest.json"))?;
         }
 
         builder
@@ -639,13 +918,89 @@ mod tests {
     }
 
     #[test]
-    fn test_generate_temp_tag() {
-        let tag1 = DockerToolchain::generate_temp_tag("my-app");
-        let tag2 = DockerToolchain::generate_temp_tag("my-app");
+    fn absolute_path_resolves_output_before_build_context_changes() {
+        let relative = Path::new(".alien/build/aws/router/linux-arm64.oci.tar");
+        let resolved = DockerToolchain::absolute_path(relative).unwrap();
 
-        assert!(tag1.starts_with("alien-build-my-app:"));
-        assert!(tag2.starts_with("alien-build-my-app:"));
-        assert_ne!(tag1, tag2); // Should be unique
+        assert!(resolved.is_absolute());
+        assert!(resolved.ends_with(relative));
+    }
+
+    #[test]
+    fn build_logs_redact_enterprise_ca_secret() {
+        let sentinel = "/private/sentinel-enterprise-ca.pem";
+        let args = vec![
+            "buildx".to_string(),
+            "build".to_string(),
+            "--secret".to_string(),
+            format!("id=enterprise_ca,src={sentinel}"),
+            ".".to_string(),
+        ];
+
+        let rendered = format!("{:?}", DockerToolchain::redacted_build_args(&args));
+        assert!(
+            !rendered.contains(sentinel),
+            "secret path leaked: {rendered}"
+        );
+        assert!(rendered.contains("<redacted>"), "secret was not redacted");
+    }
+
+    #[test]
+    fn enterprise_ca_uses_standard_precedence() {
+        let temp_dir = tempdir().unwrap();
+        let ssl = temp_dir.path().join("ssl.pem");
+        let requests = temp_dir.path().join("requests.pem");
+        let node = temp_dir.path().join("node.pem");
+        for path in [&ssl, &requests, &node] {
+            std::fs::write(path, "certificate").unwrap();
+        }
+        let values = HashMap::from([
+            ("SSL_CERT_FILE", ssl.as_os_str().to_owned()),
+            ("REQUESTS_CA_BUNDLE", requests.as_os_str().to_owned()),
+            ("NODE_EXTRA_CA_CERTS", node.as_os_str().to_owned()),
+        ]);
+
+        let selected = DockerToolchain::enterprise_ca_path_from(|name| values.get(name).cloned())
+            .expect("certificate discovery should succeed");
+
+        assert_eq!(selected.as_deref(), Some(ssl.as_path()));
+    }
+
+    #[test]
+    fn enterprise_ca_explicit_override_has_highest_precedence() {
+        let temp_dir = tempdir().unwrap();
+        let explicit = temp_dir.path().join("explicit.pem");
+        let ssl = temp_dir.path().join("ssl.pem");
+        std::fs::write(&explicit, "explicit certificate").unwrap();
+        std::fs::write(&ssl, "standard certificate").unwrap();
+        let values = HashMap::from([
+            (
+                "ALIEN_ENTERPRISE_CA_CERT_PATH",
+                explicit.as_os_str().to_owned(),
+            ),
+            ("SSL_CERT_FILE", ssl.as_os_str().to_owned()),
+        ]);
+
+        let selected = DockerToolchain::enterprise_ca_path_from(|name| values.get(name).cloned())
+            .expect("certificate discovery should succeed");
+
+        assert_eq!(selected.as_deref(), Some(explicit.as_path()));
+    }
+
+    #[test]
+    fn enterprise_ca_is_optional_but_invalid_configuration_fails() {
+        let absent = DockerToolchain::enterprise_ca_path_from(|_| None)
+            .expect("absent certificate variables should be accepted");
+        assert_eq!(absent, None);
+
+        let error = DockerToolchain::enterprise_ca_path_from(|name| {
+            (name == "ALIEN_ENTERPRISE_CA_CERT_PATH")
+                .then(|| OsString::from("/missing/certificate.pem"))
+        })
+        .expect_err("an advertised missing certificate must fail fast");
+        let message = error.to_string();
+        assert!(message.contains("ALIEN_ENTERPRISE_CA_CERT_PATH"));
+        assert!(!message.contains("/missing/certificate.pem"));
     }
 
     #[tokio::test]
@@ -722,6 +1077,101 @@ CMD ["cat", "hello.txt"]
             metadata.cmd.is_some(),
             "Image should have CMD from Dockerfile"
         );
+
+        // The same artifact is consumed remotely as OCI and locally by `docker load`.
+        // Loading and running it proves the compatibility manifest references the real
+        // config and layers, rather than merely checking for a filename in the archive.
+        let load = Command::new("docker")
+            .args(["load", "-i"])
+            .arg(&tarball_path)
+            .output()
+            .expect("docker load should execute");
+        assert!(
+            load.status.success(),
+            "docker load failed: {}",
+            String::from_utf8_lossy(&load.stderr)
+        );
+        let loaded = String::from_utf8_lossy(&load.stdout)
+            .lines()
+            .find_map(|line| line.strip_prefix("Loaded image ID: "))
+            .expect("docker load should report the untagged image ID")
+            .to_string();
+        let run = Command::new("docker")
+            .args(["run", "--rm", &loaded])
+            .output()
+            .expect("loaded image should run");
+        assert!(
+            run.status.success(),
+            "loaded image failed: {}",
+            String::from_utf8_lossy(&run.stderr)
+        );
+        assert_eq!(
+            String::from_utf8_lossy(&run.stdout).trim(),
+            "Hello from Docker"
+        );
+        let _ = Command::new("docker")
+            .args(["image", "rm", &loaded])
+            .output();
+    }
+
+    #[tokio::test]
+    #[ignore = "needs Docker, BuildKit, and ALIEN_ENTERPRISE_CA_CERT_PATH"]
+    async fn enterprise_ca_is_forwarded_as_ephemeral_buildkit_secret() {
+        assert!(docker_available(), "Docker must be available");
+        let cert_path = std::env::var(DockerToolchain::ENTERPRISE_CA_ENV_VARS[0])
+            .expect("ALIEN_ENTERPRISE_CA_CERT_PATH must be configured");
+        let cert = fs::read(&cert_path)
+            .await
+            .expect("configured enterprise CA must be readable");
+        assert!(
+            !cert.is_empty(),
+            "configured enterprise CA must not be empty"
+        );
+
+        let source = tempdir().expect("source temp dir");
+        let build = tempdir().expect("build temp dir");
+        fs::write(
+            source.path().join("Dockerfile"),
+            r#"# syntax=docker/dockerfile:1
+FROM alpine:3.20
+RUN --mount=type=secret,id=enterprise_ca,required=true test -s /run/secrets/enterprise_ca
+CMD ["true"]
+"#,
+        )
+        .await
+        .expect("write Dockerfile");
+
+        let toolchain = DockerToolchain {
+            dockerfile: None,
+            build_args: None,
+            target: None,
+        };
+        let context = ToolchainContext {
+            src_dir: source.path().to_path_buf(),
+            build_dir: build.path().to_path_buf(),
+            cache_store: None,
+            cache_prefix: "enterprise-ca-test".to_string(),
+            build_target: BinaryTarget::linux_container_target(),
+            runtime_platform_name: "local".to_string(),
+            debug_mode: false,
+            workload: crate::toolchain::WorkloadKind::Container,
+        };
+
+        toolchain
+            .build(&context)
+            .await
+            .expect("Docker toolchain should forward the configured BuildKit secret");
+
+        let archive = fs::read(build.path().join(format!(
+            "{}.oci.tar",
+            context.build_target.runtime_platform_id()
+        )))
+        .await
+        .expect("read built OCI archive");
+        assert!(
+            !archive.windows(cert.len()).any(|window| window == cert),
+            "enterprise CA contents must not be persisted in the image archive"
+        );
     }
 
     #[test]
@@ -755,6 +1205,24 @@ CMD ["cat", "hello.txt"]
             "Name: linux/arm64-builder\nPlatforms: linux/amd64\n",
             "arm64"
         ));
+    }
+
+    #[test]
+    fn selects_oci_capable_buildx_drivers_without_replacing_them() {
+        let inspect = "Name:          team-builder\nDriver:        docker-container\n";
+        assert_eq!(
+            DockerToolchain::inspect_field(inspect, "Name:"),
+            Some("team-builder")
+        );
+        assert_eq!(
+            DockerToolchain::inspect_field(inspect, "Driver:"),
+            Some("docker-container")
+        );
+        assert!(DockerToolchain::driver_supports_oci_export(
+            "docker-container"
+        ));
+        assert!(DockerToolchain::driver_supports_oci_export("remote"));
+        assert!(!DockerToolchain::driver_supports_oci_export("docker"));
     }
 
     /// The capability decision is pure: a native target, or a non-native one the builder
@@ -840,6 +1308,29 @@ CMD ["cat", "hello.txt"]
             ]
         });
         assert!(select_image_manifest_descriptor(&index, &HashMap::new(), "ppc64le").is_err());
+    }
+
+    #[test]
+    fn docker_manifest_reuses_selected_oci_config_and_layers() {
+        let descriptor = json!({ "digest": "sha256:image" });
+        let mut blobs = HashMap::new();
+        blobs.insert(
+            "sha256:image".to_string(),
+            json!({
+                "config": { "digest": "sha256:config" },
+                "layers": [
+                    { "digest": "sha256:first" },
+                    { "digest": "sha256:second" }
+                ]
+            }),
+        );
+
+        let manifest = docker_manifest_for_descriptor(&descriptor, &blobs).unwrap();
+        assert_eq!(manifest[0]["Config"], "blobs/sha256/config");
+        assert_eq!(
+            manifest[0]["Layers"],
+            json!(["blobs/sha256/first", "blobs/sha256/second"])
+        );
     }
 
     #[tokio::test]

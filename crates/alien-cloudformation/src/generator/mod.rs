@@ -262,7 +262,7 @@ pub fn generate_cloudformation_template(
         stack,
         &stack_settings,
         supports_custom_domain,
-    );
+    )?;
     add_stack_input_parameters(&mut template, &stack_inputs);
     add_supported_region_rule(&mut template, &options.registration);
     if supports_custom_domain {
@@ -590,10 +590,20 @@ fn quote_yaml_1_1_mode_scalars(yaml: &str) -> String {
     quoted
 }
 
-/// Generate a CloudFormation stack policy that prevents stack updates from
-/// mutating runtime-managed resources after setup registration.
+/// Generate the baseline CloudFormation stack policy.
+///
+/// Runtime-managed resources are not part of the setup stack, so the baseline
+/// policy is equivalent to CloudFormation's behavior when no policy is set.
+/// An empty statement list is not valid when supplied through `StackPolicyURL`.
 pub fn generate_cloudformation_stack_policy(_stack: &Stack) -> Result<serde_json::Value> {
-    Ok(json!({ "Statement": [] }))
+    Ok(json!({
+        "Statement": [{
+            "Effect": "Allow",
+            "Action": "Update:*",
+            "Principal": "*",
+            "Resource": "*"
+        }]
+    }))
 }
 
 fn validate_stack_for_cloudformation(stack: &Stack) -> Result<()> {
@@ -978,16 +988,16 @@ fn compute_settings_expression(
             "machine",
             CfExpression::ref_(compute_machine_parameter_name(&group.group_id)),
         );
-        let expression = match selection {
-            ComputePoolSelection::Fixed { .. } => CfExpression::object([
+        let mut fields = match selection {
+            ComputePoolSelection::Fixed { .. } => vec![
                 ("mode", CfExpression::from("fixed")),
                 (
                     "machines",
                     CfExpression::ref_(compute_fixed_machines_parameter_name(&group.group_id)),
                 ),
                 machine,
-            ]),
-            ComputePoolSelection::Autoscale { .. } => CfExpression::object([
+            ],
+            ComputePoolSelection::Autoscale { .. } => vec![
                 ("mode", CfExpression::from("autoscale")),
                 (
                     "min",
@@ -998,8 +1008,30 @@ fn compute_settings_expression(
                     CfExpression::ref_(compute_autoscale_max_parameter_name(&group.group_id)),
                 ),
                 machine,
-            ]),
+            ],
         };
+        if let Some(failure_domains) = selection.failure_domains() {
+            fields.push((
+                "failure_domains",
+                CfExpression::object([
+                    (
+                        "spread",
+                        CfExpression::from(u32::from(failure_domains.spread)),
+                    ),
+                    (
+                        "selectedFailureDomains",
+                        CfExpression::list(
+                            failure_domains
+                                .selected_failure_domains
+                                .iter()
+                                .cloned()
+                                .map(CfExpression::from),
+                        ),
+                    ),
+                ]),
+            ));
+        }
+        let expression = CfExpression::object(fields);
         pools.push((group.group_id.as_str(), expression));
     }
     if pools.is_empty() {

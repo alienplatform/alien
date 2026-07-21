@@ -297,6 +297,12 @@ impl Ec2Client {
                 resource_type: "RouteTableAssociation".into(),
                 resource_name: resource.into(),
             },
+            "InvalidVolume.NotFound" | "InvalidVolumeID.NotFound" => {
+                ErrorData::RemoteResourceNotFound {
+                    resource_type: "Volume".into(),
+                    resource_name: resource.into(),
+                }
+            }
             // Conflict / already exists errors
             "VpcLimitExceeded"
             | "SubnetLimitExceeded"
@@ -305,11 +311,14 @@ impl Ec2Client {
             "InvalidVpcState"
             | "InvalidSubnetID.DuplicateSubnet"
             | "InvalidGroup.Duplicate"
-            | "InvalidPermission.Duplicate" => ErrorData::RemoteResourceConflict {
-                message,
-                resource_type: "EC2 Resource".into(),
-                resource_name: resource.into(),
-            },
+            | "InvalidPermission.Duplicate"
+            | "InvalidLaunchTemplateName.AlreadyExistsException" => {
+                ErrorData::RemoteResourceConflict {
+                    message,
+                    resource_type: "EC2 Resource".into(),
+                    resource_name: resource.into(),
+                }
+            }
             "DependencyViolation" | "ResourceInUse" => ErrorData::RemoteResourceConflict {
                 message,
                 resource_type: "EC2 Resource".into(),
@@ -1264,48 +1273,29 @@ impl Ec2Api for Ec2Client {
     // ---------------------------------------------------------------------------
 
     async fn create_volume(&self, request: CreateVolumeRequest) -> Result<CreateVolumeResponse> {
-        let mut form_data = HashMap::new();
-        form_data.insert("Action".to_string(), "CreateVolume".to_string());
-        form_data.insert("Version".to_string(), "2016-11-15".to_string());
-        form_data.insert(
-            "AvailabilityZone".to_string(),
-            request.availability_zone.clone(),
-        );
-
-        if let Some(size) = request.size {
-            form_data.insert("Size".to_string(), size.to_string());
-        }
-
-        if let Some(snapshot_id) = &request.snapshot_id {
-            form_data.insert("SnapshotId".to_string(), snapshot_id.clone());
-        }
-
-        if let Some(volume_type) = &request.volume_type {
-            form_data.insert("VolumeType".to_string(), volume_type.clone());
-        }
-
-        if let Some(iops) = request.iops {
-            form_data.insert("Iops".to_string(), iops.to_string());
-        }
-
-        if let Some(throughput) = request.throughput {
-            form_data.insert("Throughput".to_string(), throughput.to_string());
-        }
-
-        if let Some(encrypted) = request.encrypted {
-            form_data.insert("Encrypted".to_string(), encrypted.to_string());
-        }
-
-        if let Some(kms_key_id) = &request.kms_key_id {
-            form_data.insert("KmsKeyId".to_string(), kms_key_id.clone());
-        }
-
-        if let Some(tag_specs) = &request.tag_specifications {
-            Self::add_tag_specifications(&mut form_data, tag_specs);
-        }
+        let form_data = Self::create_volume_form_data(&request);
 
         self.send_form(form_data, "CreateVolume", &request.availability_zone)
             .await
+    }
+
+    async fn modify_volume(&self, request: ModifyVolumeRequest) -> Result<ModifyVolumeResponse> {
+        let form_data = Self::modify_volume_form_data(&request);
+        self.send_form(form_data, "ModifyVolume", &request.volume_id)
+            .await
+    }
+
+    async fn describe_volumes_modifications(
+        &self,
+        request: DescribeVolumesModificationsRequest,
+    ) -> Result<DescribeVolumesModificationsResponse> {
+        let form_data = Self::describe_volumes_modifications_form_data(&request);
+        self.send_form(
+            form_data,
+            "DescribeVolumesModifications",
+            "VolumeModification",
+        )
+        .await
     }
 
     async fn delete_volume(&self, volume_id: &str) -> Result<()> {
@@ -1764,6 +1754,83 @@ impl Ec2Api for Ec2Client {
 }
 
 impl Ec2Client {
+    fn create_volume_form_data(request: &CreateVolumeRequest) -> HashMap<String, String> {
+        let mut form_data = HashMap::new();
+        form_data.insert("Action".to_string(), "CreateVolume".to_string());
+        form_data.insert("Version".to_string(), "2016-11-15".to_string());
+        form_data.insert(
+            "AvailabilityZone".to_string(),
+            request.availability_zone.clone(),
+        );
+
+        if let Some(client_token) = &request.client_token {
+            form_data.insert("ClientToken".to_string(), client_token.clone());
+        }
+        if let Some(size) = request.size {
+            form_data.insert("Size".to_string(), size.to_string());
+        }
+        if let Some(snapshot_id) = &request.snapshot_id {
+            form_data.insert("SnapshotId".to_string(), snapshot_id.clone());
+        }
+        if let Some(volume_type) = &request.volume_type {
+            form_data.insert("VolumeType".to_string(), volume_type.clone());
+        }
+        if let Some(iops) = request.iops {
+            form_data.insert("Iops".to_string(), iops.to_string());
+        }
+        if let Some(throughput) = request.throughput {
+            form_data.insert("Throughput".to_string(), throughput.to_string());
+        }
+        if let Some(encrypted) = request.encrypted {
+            form_data.insert("Encrypted".to_string(), encrypted.to_string());
+        }
+        if let Some(kms_key_id) = &request.kms_key_id {
+            form_data.insert("KmsKeyId".to_string(), kms_key_id.clone());
+        }
+        if let Some(tag_specs) = &request.tag_specifications {
+            Self::add_tag_specifications(&mut form_data, tag_specs);
+        }
+
+        form_data
+    }
+
+    fn modify_volume_form_data(request: &ModifyVolumeRequest) -> HashMap<String, String> {
+        let mut form_data = HashMap::new();
+        form_data.insert("Action".to_string(), "ModifyVolume".to_string());
+        form_data.insert("Version".to_string(), "2016-11-15".to_string());
+        form_data.insert("VolumeId".to_string(), request.volume_id.clone());
+        form_data.insert("Size".to_string(), request.size.to_string());
+        form_data
+    }
+
+    fn describe_volumes_modifications_form_data(
+        request: &DescribeVolumesModificationsRequest,
+    ) -> HashMap<String, String> {
+        let mut form_data = HashMap::new();
+        form_data.insert(
+            "Action".to_string(),
+            "DescribeVolumesModifications".to_string(),
+        );
+        form_data.insert("Version".to_string(), "2016-11-15".to_string());
+
+        if let Some(volume_ids) = &request.volume_ids {
+            for (i, volume_id) in volume_ids.iter().enumerate() {
+                form_data.insert(format!("VolumeId.{}", i + 1), volume_id.clone());
+            }
+        }
+        if let Some(filters) = &request.filters {
+            Self::add_filters(&mut form_data, filters);
+        }
+        if let Some(max_results) = request.max_results {
+            form_data.insert("MaxResults".to_string(), max_results.to_string());
+        }
+        if let Some(next_token) = &request.next_token {
+            form_data.insert("NextToken".to_string(), next_token.clone());
+        }
+
+        form_data
+    }
+
     /// Append `LaunchTemplateData.CpuOptions.*` form fields.
     ///
     /// Currently only emits `NestedVirtualization` when set. AWS validates
@@ -1862,44 +1929,4 @@ impl Ec2Client {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-
-    /// Setting `nested_virtualization=Some("enabled")` emits the AWS
-    /// form-encoded key `LaunchTemplateData.CpuOptions.NestedVirtualization`
-    /// with value `enabled`. Locks in the exact wire-format string AWS
-    /// rejects/accepts on the LT create endpoint.
-    #[test]
-    fn add_cpu_options_emits_nested_virtualization_key() {
-        let mut form_data = HashMap::new();
-        let cpu_options = LaunchTemplateCpuOptions::builder()
-            .nested_virtualization("enabled".to_string())
-            .build();
-        Ec2Client::add_cpu_options(&mut form_data, Some(&cpu_options));
-        assert_eq!(
-            form_data.get("LaunchTemplateData.CpuOptions.NestedVirtualization"),
-            Some(&"enabled".to_string())
-        );
-        assert_eq!(form_data.len(), 1);
-    }
-
-    /// `None` cpu_options → nothing is appended. Guards against accidentally
-    /// sending an empty `CpuOptions` block on non-privileged daemon deploys.
-    #[test]
-    fn add_cpu_options_with_none_emits_nothing() {
-        let mut form_data = HashMap::new();
-        Ec2Client::add_cpu_options(&mut form_data, None);
-        assert!(form_data.is_empty());
-    }
-
-    /// `Some(CpuOptions { nested_virtualization: None })` → nothing appended.
-    /// Future fields on CpuOptions could be set independently; the encoder
-    /// should not emit a key for an unset NestedVirtualization specifically.
-    #[test]
-    fn add_cpu_options_with_unset_nested_field_emits_nothing() {
-        let mut form_data = HashMap::new();
-        let cpu_options = LaunchTemplateCpuOptions::builder().build();
-        Ec2Client::add_cpu_options(&mut form_data, Some(&cpu_options));
-        assert!(form_data.is_empty());
-    }
-}
+mod tests;

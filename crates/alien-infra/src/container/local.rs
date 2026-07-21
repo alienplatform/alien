@@ -10,15 +10,18 @@ use crate::container::local_utils;
 use crate::core::{environment_variables::EnvironmentVariableBuilder, ResourceControllerContext};
 use crate::error::{ErrorData, Result};
 use alien_core::{
+    bindings::{BindingValue, ContainerBinding},
     Container, ContainerCode, ContainerHeartbeatData, ContainerOutputs, ContainerStatus,
-    EnvironmentVariable, EnvironmentVariableType, HeartbeatBackend, Kv,
+    EnvironmentVariable, EnvironmentVariableType, ExposeProtocol, HeartbeatBackend, Kv,
     LocalContainerHeartbeatData, LocalRuntimeUnitKind, LocalRuntimeUnitStatus, ObservedHealth,
-    Platform, Postgres, ProviderLifecycleState, Queue, ResourceHeartbeat, ResourceHeartbeatData,
-    ResourceOutputs as CoreResourceOutputs, ResourceStatus, Storage, Vault,
+    Platform, Postgres, ProviderLifecycleState, PublicEndpointOutput, Queue, ResourceHeartbeat,
+    ResourceHeartbeatData, ResourceOutputs as CoreResourceOutputs, ResourceStatus, Storage, Vault,
     WorkloadHeartbeatStatus,
 };
 use alien_error::{AlienError, Context, IntoAlienError as _};
-use alien_local::{BindMount, ContainerConfig, ContainerInfo, LocalQueueManager};
+use alien_local::{
+    BindMount, ContainerConfig, ContainerInfo, LocalPublicEndpoint, LocalQueueManager,
+};
 use alien_macros::controller;
 use chrono::Utc;
 
@@ -140,9 +143,6 @@ impl LocalContainerController {
                 }));
             }
         };
-
-        // Determine if this container should be exposed publicly.
-        let expose_public = !config.public_endpoints.is_empty();
 
         // First, collect bind mounts for linked filesystem resources (Storage, KV, Queue, Vault)
         // We need to know the container paths before building env vars so we can rewrite bindings
@@ -310,7 +310,18 @@ impl LocalContainerController {
             image,
             command: config.command.clone(),
             ports,
-            expose_public,
+            public_endpoint: config
+                .public_endpoints
+                .first()
+                .map(|endpoint| LocalPublicEndpoint {
+                    port: endpoint.port,
+                    protocol: endpoint.protocol,
+                    names: config
+                        .public_endpoints
+                        .iter()
+                        .map(|endpoint| endpoint.name.clone())
+                        .collect(),
+                }),
             env_vars,
             stateful: config.stateful,
             ordinal: None, // TODO: Handle ordinals for stateful containers
@@ -386,13 +397,10 @@ impl LocalContainerController {
                     resource_id: Some(config.id.clone()),
                 })?;
 
-        // Extract host_port from the binding's public URL if present
+        // Extract host_port from the binding's public URL if present.
         let current_host_port = current_binding.get_public_url().and_then(|binding_value| {
-            // Extract the actual URL string from BindingValue
             if let alien_core::bindings::BindingValue::Value(url) = binding_value {
-                // Parse "http://localhost:12345" -> 12345
-                url.strip_prefix("http://localhost:")
-                    .and_then(|port_str| port_str.parse::<u16>().ok())
+                local_public_url_port(url)
             } else {
                 None
             }
@@ -483,12 +491,13 @@ impl LocalContainerController {
         info!(container_id = %config.id, "Deleting container");
 
         // Delete the container
-        container_mgr.delete_container(&config.id).await.context(
-            ErrorData::CloudPlatformError {
+        container_mgr
+            .delete_container_and_storage(&config.id)
+            .await
+            .context(ErrorData::CloudPlatformError {
                 message: "Failed to delete container".to_string(),
                 resource_id: Some(config.id.clone()),
-            },
-        )?;
+            })?;
 
         info!(container_id = %config.id, "Container deleted successfully");
 
@@ -522,52 +531,18 @@ impl LocalContainerController {
                 current_replicas: 1,
                 desired_replicas: 1,
                 internal_dns: info.internal_dns.clone(),
-                public_endpoints: info
-                    .host_port
-                    .map(|p| {
-                        let url = format!("http://localhost:{p}");
-                        std::collections::HashMap::from([(
-                            "default".to_string(),
-                            alien_core::PublicEndpointOutput {
-                                host: alien_core::public_url_host(&url).unwrap_or_default(),
-                                url,
-                                wildcard_host: None,
-                                load_balancer_endpoint: None,
-                            },
-                        )])
-                    })
-                    .unwrap_or_default(),
+                public_endpoints: local_public_endpoint_outputs(info),
                 replicas: Vec::new(), // TODO: Add replica status
             })
         })
     }
 
     fn get_binding_params(&self) -> Result<Option<serde_json::Value>> {
-        use alien_core::bindings::{BindingValue, ContainerBinding};
-
         let Some(info) = &self.container_info else {
             return Ok(None);
         };
 
-        // Internal URL uses Docker network DNS with first port
-        let first_port = info.ports.first().copied().unwrap_or(8080);
-        let internal_url = format!("http://{}:{}", info.internal_dns, first_port);
-
-        // Public URL is the localhost-mapped port (if exposed publicly)
-        let public_url = info.host_port.map(|p| format!("http://localhost:{}", p));
-
-        let binding = if let Some(url) = public_url {
-            ContainerBinding::local_with_public_url(
-                BindingValue::value(info.container_id.clone()),
-                BindingValue::value(internal_url),
-                BindingValue::value(url),
-            )
-        } else {
-            ContainerBinding::local(
-                BindingValue::value(info.container_id.clone()),
-                BindingValue::value(internal_url),
-            )
-        };
+        let binding = local_container_binding(info);
 
         Ok(Some(
             serde_json::to_value(binding).into_alien_error().context(
@@ -580,6 +555,83 @@ impl LocalContainerController {
     }
 }
 
+fn local_endpoint_scheme(protocol: ExposeProtocol) -> &'static str {
+    match protocol {
+        ExposeProtocol::Http => "http",
+        ExposeProtocol::Tcp => "tcp",
+    }
+}
+
+fn local_public_url_port(url: &str) -> Option<u16> {
+    url.rsplit_once(':')?.1.parse().ok()
+}
+
+fn local_container_binding(info: &ContainerInfo) -> ContainerBinding {
+    let endpoint = info.public_endpoint.as_ref();
+    let protocol = endpoint.map_or(ExposeProtocol::Http, |endpoint| endpoint.protocol);
+    let internal_port = endpoint
+        .map(|endpoint| endpoint.port)
+        .or_else(|| info.ports.first().copied())
+        .unwrap_or(8080);
+    let scheme = local_endpoint_scheme(protocol);
+    let internal_url = format!("{scheme}://{}:{internal_port}", info.internal_dns);
+
+    if let Some(host_port) = info.host_port {
+        ContainerBinding::local_with_public_url(
+            BindingValue::value(info.container_id.clone()),
+            BindingValue::value(internal_url),
+            BindingValue::value(format!("{scheme}://localhost:{host_port}")),
+        )
+    } else {
+        ContainerBinding::local(
+            BindingValue::value(info.container_id.clone()),
+            BindingValue::value(internal_url),
+        )
+    }
+}
+
+fn local_public_endpoint_outputs(
+    info: &ContainerInfo,
+) -> std::collections::HashMap<String, PublicEndpointOutput> {
+    let Some(host_port) = info.host_port else {
+        return std::collections::HashMap::new();
+    };
+    let protocol = info
+        .public_endpoint
+        .as_ref()
+        .map_or(ExposeProtocol::Http, |endpoint| endpoint.protocol);
+    let scheme = local_endpoint_scheme(protocol);
+    let url = format!("{scheme}://localhost:{host_port}");
+    let names = info
+        .public_endpoint
+        .as_ref()
+        .map(|endpoint| endpoint.names.as_slice())
+        .filter(|names| !names.is_empty())
+        .unwrap_or(&[]);
+    let names: Vec<&str> = if names.is_empty() {
+        vec!["default"]
+    } else {
+        names.iter().map(String::as_str).collect()
+    };
+
+    names
+        .into_iter()
+        .map(|name| {
+            (
+                name.to_string(),
+                PublicEndpointOutput {
+                    host: alien_core::public_url_host(&url).unwrap_or_default(),
+                    protocol,
+                    port: host_port,
+                    url: url.clone(),
+                    wildcard_host: None,
+                    load_balancer_endpoint: None,
+                },
+            )
+        })
+        .collect()
+}
+
 fn emit_local_container_heartbeat(
     ctx: &ResourceControllerContext<'_>,
     config: &Container,
@@ -590,9 +642,17 @@ fn emit_local_container_heartbeat(
         ContainerCode::Image { image } => Some(image.clone()),
         ContainerCode::Source { .. } => None,
     };
-    let local_url = container_info
-        .and_then(|info| info.host_port)
-        .map(|port| format!("http://localhost:{port}"));
+    let local_url = container_info.and_then(|info| {
+        let host_port = info.host_port?;
+        let protocol = info
+            .public_endpoint
+            .as_ref()
+            .map_or(ExposeProtocol::Http, |endpoint| endpoint.protocol);
+        Some(format!(
+            "{}://localhost:{host_port}",
+            local_endpoint_scheme(protocol)
+        ))
+    });
 
     ctx.emit_heartbeat(ResourceHeartbeat {
         deployment_id: None,
@@ -646,6 +706,61 @@ fn emit_local_container_heartbeat(
 mod tests {
     use super::*;
     use std::collections::HashMap;
+
+    #[test]
+    fn tcp_binding_and_named_outputs_describe_the_published_endpoint() {
+        let info = ContainerInfo {
+            container_id: "database".to_string(),
+            docker_container_id: "docker-id".to_string(),
+            host_port: Some(49152),
+            public_endpoint: Some(LocalPublicEndpoint {
+                port: 5432,
+                protocol: ExposeProtocol::Tcp,
+                names: vec!["primary".to_string(), "direct".to_string()],
+            }),
+            ports: vec![8080, 5432],
+            internal_dns: "database.svc".to_string(),
+        };
+
+        let binding =
+            serde_json::to_value(local_container_binding(&info)).expect("binding should serialize");
+        assert_eq!(binding["internalUrl"], "tcp://database.svc:5432");
+        assert_eq!(binding["publicUrl"], "tcp://localhost:49152");
+
+        let outputs = local_public_endpoint_outputs(&info);
+        assert_eq!(outputs.len(), 2);
+        for name in ["primary", "direct"] {
+            let endpoint = outputs.get(name).expect("named endpoint should exist");
+            assert_eq!(endpoint.protocol, ExposeProtocol::Tcp);
+            assert_eq!(endpoint.port, 49152);
+            assert_eq!(endpoint.host, "localhost");
+            assert_eq!(endpoint.url, "tcp://localhost:49152");
+        }
+    }
+
+    #[test]
+    fn public_url_port_supports_http_and_tcp_bindings() {
+        assert_eq!(local_public_url_port("http://localhost:49152"), Some(49152));
+        assert_eq!(local_public_url_port("tcp://localhost:49153"), Some(49153));
+        assert_eq!(local_public_url_port("tcp://localhost"), None);
+    }
+
+    #[test]
+    fn old_local_container_state_defaults_public_endpoint_to_http() {
+        let info: ContainerInfo = serde_json::from_value(serde_json::json!({
+            "containerId": "web",
+            "dockerContainerId": "docker-id",
+            "hostPort": 49153,
+            "ports": [8080],
+            "internalDns": "web.svc"
+        }))
+        .expect("old controller state should deserialize");
+
+        let binding =
+            serde_json::to_value(local_container_binding(&info)).expect("binding should serialize");
+        assert_eq!(binding["internalUrl"], "http://web.svc:8080");
+        assert_eq!(binding["publicUrl"], "http://localhost:49153");
+    }
 
     #[test]
     fn local_queue_mount_requires_queue_manager() {

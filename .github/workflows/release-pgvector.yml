@@ -45,7 +45,7 @@ jobs:
     timeout-minutes: 30
     steps:
       - name: Install build tools
-        run: sudo apt-get update && sudo apt-get install -y build-essential git curl jq
+        run: sudo apt-get -o Acquire::Retries=5 update && sudo apt-get -o Acquire::Retries=5 install -y build-essential git curl jq
 
       - name: Resolve embedded Postgres version
         id: pg
@@ -81,7 +81,7 @@ jobs:
           cp "$EXTDIR"/vector.control "$EXTDIR"/vector--*.sql out/
           (cd out && zip -j "pgvector_compiled.zip" vector.so vector.control vector--*.sql)
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v6
         with:
           name: pgvector-linux-${{ matrix.target.arch }}-pg${{ matrix.pg_major }}
           retention-days: 1
@@ -132,7 +132,7 @@ jobs:
           cp "$EXTDIR"/vector.control "$EXTDIR"/vector--*.sql out/
           (cd out && zip -j "pgvector_compiled.zip" vector.dylib vector.control vector--*.sql)
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v6
         with:
           name: pgvector-darwin-aarch64-pg${{ matrix.pg_major }}
           retention-days: 1
@@ -187,7 +187,7 @@ jobs:
           cp "$PGROOT"/share/extension/vector.control "$PGROOT"/share/extension/vector--*.sql out/
           (cd out && 7z a -tzip "pgvector_compiled.zip" vector.dll vector.control vector--*.sql)
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v6
         with:
           name: pgvector-windows-x86_64-pg${{ matrix.pg_major }}
           retention-days: 1
@@ -201,7 +201,7 @@ jobs:
     timeout-minutes: 10
     steps:
       - name: Download all artifacts
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v7
         with:
           pattern: pgvector-*
           path: ./artifacts

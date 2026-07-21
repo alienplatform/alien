@@ -183,6 +183,19 @@ pub struct ComputeSettings {
     pub pools: HashMap<String, ComputePoolSelection>,
 }
 
+/// Failure-domain policy selected for a compute pool.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
+#[serde(rename_all = "camelCase")]
+pub struct FailureDomainSelection {
+    /// Number of distinct failure domains across which new stateful replicas may be spread.
+    pub spread: u8,
+    /// Concrete provider domains selected during setup.
+    /// Empty delegates deterministic selection to the provider setup implementation.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub selected_failure_domains: Vec<String>,
+}
+
 /// User-selected deployment settings for one compute pool.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
@@ -195,6 +208,9 @@ pub enum ComputePoolSelection {
         /// Provider machine type selected for this deployment.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         machine: Option<String>,
+        /// Optional failure-domain policy. Absence preserves the existing aggregate layout.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        failure_domains: Option<FailureDomainSelection>,
     },
     /// Autoscaling machine pool.
     Autoscale {
@@ -205,6 +221,9 @@ pub enum ComputePoolSelection {
         /// Provider machine type selected for this deployment.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         machine: Option<String>,
+        /// Optional failure-domain policy. Absence preserves the existing aggregate layout.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        failure_domains: Option<FailureDomainSelection>,
     },
 }
 
@@ -213,6 +232,18 @@ impl ComputePoolSelection {
     pub fn machine(&self) -> Option<&str> {
         match self {
             Self::Fixed { machine, .. } | Self::Autoscale { machine, .. } => machine.as_deref(),
+        }
+    }
+
+    /// Selected failure-domain policy, if this deployment explicitly adopted one.
+    pub fn failure_domains(&self) -> Option<&FailureDomainSelection> {
+        match self {
+            Self::Fixed {
+                failure_domains, ..
+            }
+            | Self::Autoscale {
+                failure_domains, ..
+            } => failure_domains.as_ref(),
         }
     }
 
@@ -234,24 +265,64 @@ impl ComputePoolSelection {
 
     /// Whether the selection has internally valid scale bounds.
     pub fn validate(&self) -> std::result::Result<(), String> {
+        if self
+            .failure_domains()
+            .is_some_and(|selection| selection.spread == 0)
+        {
+            return Err("failure-domain spread must be at least one".to_string());
+        }
+        if self.failure_domains().is_some_and(|selection| {
+            !selection.selected_failure_domains.is_empty()
+                && selection.selected_failure_domains.len() != usize::from(selection.spread)
+        }) {
+            return Err("selected failure domains must match the requested spread".to_string());
+        }
+        if self.failure_domains().is_some_and(|selection| {
+            selection.selected_failure_domains.len()
+                != selection
+                    .selected_failure_domains
+                    .iter()
+                    .collect::<std::collections::HashSet<_>>()
+                    .len()
+        }) {
+            return Err("selected failure domains must be unique".to_string());
+        }
         match self {
             Self::Fixed { machines, .. } => {
                 if *machines == 0 {
-                    Err("fixed compute pools must select at least one machine".to_string())
-                } else {
-                    Ok(())
+                    return Err("fixed compute pools must select at least one machine".to_string());
+                }
+                if let Some(failure_domains) = self.failure_domains() {
+                    if *machines < u32::from(failure_domains.spread) {
+                        return Err(format!(
+                            "fixed compute pool machines ({machines}) must be at least failure-domain spread ({})",
+                            failure_domains.spread
+                        ));
+                    }
                 }
             }
             Self::Autoscale { min, max, .. } => {
                 if min > max {
-                    Err(format!(
+                    return Err(format!(
                         "autoscaling compute pool minimum ({min}) cannot exceed maximum ({max})"
-                    ))
-                } else {
-                    Ok(())
+                    ));
+                }
+                if let Some(failure_domains) = self.failure_domains() {
+                    let spread = u32::from(failure_domains.spread);
+                    if *max < spread {
+                        return Err(format!(
+                            "autoscaling compute pool maximum ({max}) must be at least failure-domain spread ({spread})"
+                        ));
+                    }
+                    if *min < spread {
+                        return Err(format!(
+                            "autoscaling compute pool minimum ({min}) must be at least failure-domain spread ({spread})"
+                        ));
+                    }
                 }
             }
         }
+        Ok(())
     }
 }
 
@@ -706,4 +777,113 @@ fn is_default_telemetry_mode(mode: &TelemetryMode) -> bool {
 
 fn is_default_heartbeats_mode(mode: &HeartbeatsMode) -> bool {
     *mode == HeartbeatsMode::default()
+}
+
+#[cfg(test)]
+mod failure_domain_tests {
+    use super::*;
+
+    #[test]
+    fn old_compute_selection_deserializes_without_topology() {
+        let selection: ComputePoolSelection = serde_json::from_value(serde_json::json!({
+            "mode": "fixed",
+            "machines": 2,
+            "machine": "m7i.xlarge"
+        }))
+        .expect("existing selection should deserialize");
+        assert!(selection.failure_domains().is_none());
+    }
+
+    #[test]
+    fn rejects_duplicate_concrete_failure_domains() {
+        let selection = ComputePoolSelection::Fixed {
+            machines: 2,
+            machine: Some("m7i.xlarge".to_string()),
+            failure_domains: Some(FailureDomainSelection {
+                spread: 2,
+                selected_failure_domains: vec!["us-west-2a".to_string(); 2],
+            }),
+        };
+        assert_eq!(
+            selection.validate(),
+            Err("selected failure domains must be unique".to_string())
+        );
+    }
+
+    #[test]
+    fn fixed_pool_must_have_one_machine_per_failure_domain() {
+        let invalid = ComputePoolSelection::Fixed {
+            machines: 1,
+            machine: None,
+            failure_domains: Some(FailureDomainSelection {
+                spread: 2,
+                selected_failure_domains: Vec::new(),
+            }),
+        };
+        assert_eq!(
+            invalid.validate(),
+            Err(
+                "fixed compute pool machines (1) must be at least failure-domain spread (2)"
+                    .to_string()
+            )
+        );
+
+        let valid = ComputePoolSelection::Fixed {
+            machines: 2,
+            machine: None,
+            failure_domains: Some(FailureDomainSelection {
+                spread: 2,
+                selected_failure_domains: Vec::new(),
+            }),
+        };
+        assert_eq!(valid.validate(), Ok(()));
+    }
+
+    #[test]
+    fn autoscaling_pool_bounds_must_cover_every_failure_domain() {
+        let invalid_max = ComputePoolSelection::Autoscale {
+            min: 1,
+            max: 1,
+            machine: None,
+            failure_domains: Some(FailureDomainSelection {
+                spread: 2,
+                selected_failure_domains: Vec::new(),
+            }),
+        };
+        assert_eq!(
+            invalid_max.validate(),
+            Err(
+                "autoscaling compute pool maximum (1) must be at least failure-domain spread (2)"
+                    .to_string()
+            )
+        );
+
+        let invalid_min = ComputePoolSelection::Autoscale {
+            min: 1,
+            max: 3,
+            machine: None,
+            failure_domains: Some(FailureDomainSelection {
+                spread: 2,
+                selected_failure_domains: Vec::new(),
+            }),
+        };
+        assert_eq!(
+            invalid_min.validate(),
+            Err(
+                "autoscaling compute pool minimum (1) must be at least failure-domain spread (2)"
+                    .to_string()
+            )
+        );
+
+        let valid = ComputePoolSelection::Autoscale {
+            min: 2,
+            max: 2,
+            machine: None,
+            failure_domains: Some(FailureDomainSelection {
+                spread: 2,
+                selected_failure_domains: Vec::new(),
+            }),
+        };
+        assert_eq!(valid.validate(), Ok(()));
+    }
 }

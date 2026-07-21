@@ -26,6 +26,36 @@ import {
 import type { getControlServiceDefinition } from "./service-definitions.js"
 
 /**
+ * Handlers register by the resource's logical name (the name given in the
+ * stack program), but cloud transports deliver events keyed by the provider's
+ * physical identifier — the S3 bucket name for storage events, the SQS queue
+ * name for queue messages. Resolve a registered source through its
+ * `ALIEN_<NAME>_BINDING` env payload so both spellings match. Local transports
+ * dispatch logical names directly, so this only widens the match.
+ */
+export function physicalSourceNames(source: string): string[] {
+  const raw = process.env[`ALIEN_${source.replaceAll("-", "_").toUpperCase()}_BINDING`]
+  if (!raw) return []
+  try {
+    const binding = JSON.parse(raw) as {
+      bucketName?: string
+      queueName?: string
+      queueUrl?: string
+    }
+    return [binding.bucketName, binding.queueName, binding.queueUrl?.split("/").pop()].filter(
+      (name): name is string => typeof name === "string" && name.length > 0,
+    )
+  } catch {
+    return []
+  }
+}
+
+/** @internal exported for tests */
+export function sourceMatches(src: string, physical: string): boolean {
+  return src === "*" || src === physical || physicalSourceNames(src).includes(physical)
+}
+
+/**
  * Event loop runner for processing tasks from the runtime.
  *
  * @internal
@@ -134,7 +164,7 @@ export class EventLoop {
       for (const entry of getEventHandlers().values()) {
         const src = entry.registration.source
         if (task.storageEvent && entry.registration.type === "storage") {
-          if (src === "*" || src === task.storageEvent.bucket) {
+          if (sourceMatches(src, task.storageEvent.bucket)) {
             matchedEntry = entry
             break
           }
@@ -144,7 +174,7 @@ export class EventLoop {
             break
           }
         } else if (task.queueMessage && entry.registration.type === "queue") {
-          if (src === "*" || src === task.queueMessage.source) {
+          if (sourceMatches(src, task.queueMessage.source)) {
             matchedEntry = entry
             break
           }
@@ -152,7 +182,14 @@ export class EventLoop {
       }
 
       if (!matchedEntry) {
+        // Report the miss as a failed result — without it the runtime waits
+        // for the task until its event timeout (a 2-minute hang per event on
+        // Lambda) instead of failing loudly.
         console.warn(`No handler found for task: ${task.taskId}`)
+        await this.sendTaskResult(task.taskId, {
+          success: false,
+          error: `No handler registered for task ${task.taskId}`,
+        })
         return
       }
 

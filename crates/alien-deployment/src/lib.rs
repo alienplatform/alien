@@ -122,6 +122,9 @@ pub async fn step(
         })
     {
         info!("A newer target release is available; starting update reconciliation");
+        if let Some(metadata) = current.runtime_metadata.as_mut() {
+            metadata.setup_update_authorization = None;
+        }
         current.status = DeploymentStatus::UpdatePending;
     }
 

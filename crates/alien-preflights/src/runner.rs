@@ -376,8 +376,8 @@ impl PreflightRunner {
         config: &DeploymentConfig,
         client_config: &ClientConfig,
         old_stack: Option<&Stack>,
-        skip_frozen_check: bool,
-    ) -> Result<(Stack, PreflightSummary)> {
+        setup_update_authorization: Option<&alien_core::SetupUpdateAuthorization>,
+    ) -> Result<(Stack, PreflightSummary, bool)> {
         let platform = stack_state.platform;
         info!(
             "Running deployment-time preflights for platform {:?}",
@@ -393,6 +393,9 @@ impl PreflightRunner {
         // Apply mutations BEFORE compatibility checks
         // This ensures compatibility checks compare mutated stacks (old mutated vs new mutated)
         let mutated_stack = self.apply_mutations(stack, stack_state, config).await?;
+        let setup_update_authorized = setup_update_authorization.is_some_and(|authorization| {
+            setup_update_authorization_matches(old_stack, &mutated_stack, authorization)
+        });
 
         let prerequisite_summary = self
             .run_deployment_prerequisite_checks(&mutated_stack, stack_state, config)
@@ -403,13 +406,13 @@ impl PreflightRunner {
         // This detects if mutations added frozen resources during updates
         // Skip the check if allow_frozen_changes flag is set
         if let Some(old_stack) = old_stack {
-            if !skip_frozen_check {
+            if !config.allow_frozen_changes && !setup_update_authorized {
                 let compatibility_summary = self
                     .run_compatibility_checks(old_stack, &mutated_stack)
                     .await?;
                 all_results.extend(compatibility_summary.results);
             } else {
-                info!("Skipping frozen resource compatibility checks (allow_frozen_changes=true)");
+                info!("Applying explicit authority for frozen resource changes");
             }
         }
 
@@ -446,12 +449,80 @@ impl PreflightRunner {
             }));
         }
 
-        Ok((mutated_stack, summary))
+        Ok((mutated_stack, summary, setup_update_authorized))
     }
+}
+
+fn setup_update_authorization_matches(
+    old_stack: Option<&Stack>,
+    target_stack: &Stack,
+    authorization: &alien_core::SetupUpdateAuthorization,
+) -> bool {
+    old_stack.is_some_and(|old_stack| {
+        old_stack.frozen_resources_digest() == authorization.baseline_frozen_digest
+    }) && target_stack.frozen_resources_digest() == authorization.target_frozen_digest
 }
 
 impl Default for PreflightRunner {
     fn default() -> Self {
         Self::new()
+    }
+}
+
+#[cfg(test)]
+mod setup_update_authorization_tests {
+    use super::*;
+    use alien_core::{PermissionsConfig, SetupUpdateAuthorization};
+    use indexmap::IndexMap;
+
+    fn empty_stack() -> Stack {
+        Stack {
+            id: "stack".to_string(),
+            resources: IndexMap::new(),
+            inputs: vec![],
+            permissions: PermissionsConfig::default(),
+            supported_platforms: None,
+        }
+    }
+
+    fn authorization(stack: &Stack) -> SetupUpdateAuthorization {
+        SetupUpdateAuthorization {
+            nonce: "revision".to_string(),
+            baseline_frozen_digest: stack.frozen_resources_digest(),
+            target_frozen_digest: stack.frozen_resources_digest(),
+            release_id: "release".to_string(),
+            setup_target: "target".to_string(),
+            setup_fingerprint: "fingerprint".to_string(),
+            setup_fingerprint_version: 1,
+        }
+    }
+
+    #[test]
+    fn setup_authority_requires_exact_baseline_and_target_revisions() {
+        let stack = empty_stack();
+        let mut authority = authorization(&stack);
+        assert!(setup_update_authorization_matches(
+            Some(&stack),
+            &stack,
+            &authority
+        ));
+
+        authority.baseline_frozen_digest = "different".to_string();
+        assert!(!setup_update_authorization_matches(
+            Some(&stack),
+            &stack,
+            &authority
+        ));
+
+        authority = authorization(&stack);
+        authority.target_frozen_digest = "different".to_string();
+        assert!(!setup_update_authorization_matches(
+            Some(&stack),
+            &stack,
+            &authority
+        ));
+        assert!(!setup_update_authorization_matches(
+            None, &stack, &authority
+        ));
     }
 }

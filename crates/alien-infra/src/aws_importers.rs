@@ -10,15 +10,20 @@
 
 #[cfg(feature = "kubernetes")]
 use alien_core::KubernetesCluster;
-use alien_core::{ArtifactRegistry, Build, Kv, Network, Platform, Queue, Storage, Vault, Worker};
+use alien_core::{
+    ArtifactRegistry, AwsOpenSearch, Build, Email, Kv, Network, Platform, Queue, Storage, Vault,
+    Worker,
+};
 use alien_core::{RemoteStackManagement, ServiceAccount};
 
 use crate::artifact_registry::AwsArtifactRegistryImporter;
 use crate::build::AwsBuildImporter;
+use crate::email::AwsEmailImporter;
 #[cfg(feature = "kubernetes")]
 use crate::kubernetes_cluster::KubernetesClusterImporter;
 use crate::kv::AwsKvImporter;
 use crate::network::AwsNetworkImporter;
+use crate::open_search::AwsOpenSearchImporter;
 use crate::queue::AwsQueueImporter;
 use crate::remote_stack_management::AwsRemoteStackManagementImporter;
 use crate::service_account::AwsServiceAccountImporter;
@@ -51,7 +56,13 @@ pub fn register(registry: &mut ImporterRegistry) {
             Platform::Aws,
             AwsArtifactRegistryImporter,
         )
-        .register(Worker::RESOURCE_TYPE, Platform::Aws, AwsWorkerImporter);
+        .register(Worker::RESOURCE_TYPE, Platform::Aws, AwsWorkerImporter)
+        .register(Email::RESOURCE_TYPE, Platform::Aws, AwsEmailImporter)
+        .register(
+            AwsOpenSearch::RESOURCE_TYPE,
+            Platform::Aws,
+            AwsOpenSearchImporter,
+        );
     #[cfg(feature = "kubernetes")]
     registry.register(
         KubernetesCluster::RESOURCE_TYPE,

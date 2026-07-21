@@ -134,6 +134,13 @@ impl CredentialResolver for ImpersonationCredentialResolver {
         &self,
         deployment: &DeploymentRecord,
     ) -> Result<ResolvedCredentials, AlienError> {
+        if uses_control_plane_credentials(deployment.platform) {
+            return Ok(ResolvedCredentials {
+                client_config: self.resolve(deployment).await?,
+                has_provision_capability: true,
+            });
+        }
+
         if !self
             .management_binding_platforms
             .contains(&deployment.platform)
@@ -643,5 +650,27 @@ mod tests {
         assert!(!uses_control_plane_credentials(Platform::Kubernetes));
         assert!(!uses_control_plane_credentials(Platform::Local));
         assert!(!uses_control_plane_credentials(Platform::Test));
+    }
+
+    #[tokio::test]
+    async fn machines_resolves_without_environment_or_management_bindings() {
+        let provider: Arc<dyn BindingsProviderApi> = Arc::new(
+            BindingsProvider::new(ClientConfig::Test, HashMap::new())
+                .expect("empty test provider should be valid"),
+        );
+        let resolver =
+            ImpersonationCredentialResolver::new(provider, HashMap::new(), HashSet::new());
+        let mut deployment = gcp_handoff_deployment();
+        deployment.platform = Platform::Machines;
+        deployment.stack_state = None;
+        deployment.environment_info = None;
+
+        let resolved = resolver
+            .resolve_with_capability(&deployment)
+            .await
+            .expect("Machines should use control-plane credentials");
+
+        assert!(matches!(resolved.client_config, ClientConfig::Machines));
+        assert!(resolved.has_provision_capability);
     }
 }

@@ -31,6 +31,10 @@ pub use azure::managed_identity::{
 pub use azure::monitor::{AzureMonitorClient, MonitorApi};
 pub use azure::network::{AzureNetworkClient, NetworkApi};
 pub use azure::resource_graph::{AzureResourceGraphClient, ResourceGraphApi};
+pub use azure::resource_skus::{
+    AzureResourceSkusClient, ResourceSku, ResourceSkuLocationInfo, ResourceSkuRestriction,
+    ResourceSkuRestrictionInfo, ResourceSkusApi,
+};
 pub use azure::resources::{AzureResourcesClient, ResourcesApi};
 pub use azure::service_bus::{
     AzureServiceBusDataPlaneClient, AzureServiceBusManagementClient, ServiceBusDataPlaneApi,

@@ -15,8 +15,8 @@ use tracing::info;
 /// 2. Transitions to Deleting status.
 pub async fn handle_delete_pending(
     current: DeploymentState,
-    _config: DeploymentConfig,
-    _client_config: alien_core::ClientConfig,
+    config: DeploymentConfig,
+    client_config: alien_core::ClientConfig,
     _service_provider: std::sync::Arc<dyn alien_infra::PlatformServiceProvider>,
 ) -> Result<DeploymentStepResult> {
     info!("Handling DeletePending status");
@@ -27,6 +27,21 @@ pub async fn handle_delete_pending(
             message: "Stack state required for deletion".to_string(),
         })
     })?;
+
+    if stack_state.resources.contains_key("secrets") {
+        let runtime_metadata = next.runtime_metadata.get_or_insert_default();
+        crate::helpers::delete_deployment_vault_secrets(
+            &stack_state,
+            &client_config,
+            &config,
+            runtime_metadata,
+        )
+        .await
+        .context(ErrorData::SecretSyncFailed {
+            vault_name: "secrets".to_string(),
+            reason: "Failed to delete deployment-owned secrets before runtime cleanup".to_string(),
+        })?;
+    }
 
     let prepared = prepare_runtime_resources_for_destroy(&mut stack_state).context(
         ErrorData::StackExecutionFailed {

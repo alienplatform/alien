@@ -50,7 +50,8 @@ if [[ "${ALIEN_EXAMPLES_REUSE_BUILT_PACKAGES:-}" != "true" ]]; then
 fi
 
 if (( ${#build_filters[@]} > 0 )); then
-  pnpm -r "${build_filters[@]}" run build
+  NODE_OPTIONS="${NODE_OPTIONS:-} --max-old-space-size=8192" \
+    pnpm -r "${build_filters[@]}" run build
 fi
 
 node - "$EXAMPLES_PACKAGE_JSON" "$ROOT_DIR" <<'NODE'

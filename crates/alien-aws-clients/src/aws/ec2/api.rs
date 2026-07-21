@@ -135,6 +135,11 @@ pub trait Ec2Api: Send + Sync + std::fmt::Debug {
 
     // Volume Operations
     async fn create_volume(&self, request: CreateVolumeRequest) -> Result<CreateVolumeResponse>;
+    async fn modify_volume(&self, request: ModifyVolumeRequest) -> Result<ModifyVolumeResponse>;
+    async fn describe_volumes_modifications(
+        &self,
+        request: DescribeVolumesModificationsRequest,
+    ) -> Result<DescribeVolumesModificationsResponse>;
     async fn delete_volume(&self, volume_id: &str) -> Result<()>;
     async fn describe_volumes(
         &self,

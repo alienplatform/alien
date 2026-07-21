@@ -1,0 +1,29 @@
+{
+  // AWS-only experimental resource: OpenSearch Serverless (next generation).
+  "id": "experimental/aws-opensearch/data-access",
+  "description": "Allows SigV4-signed data-plane access to OpenSearch Serverless collections (indexing and querying)",
+  "platforms": {
+    "aws": [
+      {
+        "label": "opensearch-data-plane",
+        "description": "Call the OpenSearch Serverless data plane. AOSS uses a single IAM action (aoss:APIAccessAll); fine-grained index/document permissions are enforced by the collection's data-access policy, which the AWS emitter scopes to roles holding this permission set.",
+        "grant": {
+          "actions": ["aoss:APIAccessAll"]
+        },
+        // Collection ARNs use the server-assigned collection id
+        // (arn:aws:aoss:<region>:<account>:collection/<id>), which doesn't
+        // exist before apply time, so the static binding can only scope to
+        // all collections in the account. The CloudFormation emitter rewrites
+        // the resource to the exact collection ARN via Fn::GetAtt.
+        "binding": {
+          "stack": {
+            "resources": ["arn:aws:aoss:${awsRegion}:${awsAccountId}:collection/*"]
+          },
+          "resource": {
+            "resources": ["arn:aws:aoss:${awsRegion}:${awsAccountId}:collection/*"]
+          }
+        }
+      }
+    ]
+  }
+}

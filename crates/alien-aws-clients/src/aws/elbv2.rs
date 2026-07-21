@@ -69,6 +69,10 @@ pub trait Elbv2Api: Send + Sync + std::fmt::Debug {
         &self,
         request: DescribeLoadBalancersRequest,
     ) -> Result<DescribeLoadBalancersResponse>;
+    async fn modify_load_balancer_attributes(
+        &self,
+        request: ModifyLoadBalancerAttributesRequest,
+    ) -> Result<ModifyLoadBalancerAttributesResponse>;
     async fn delete_load_balancer(&self, load_balancer_arn: &str) -> Result<()>;
 
     // Target Group Operations
@@ -516,6 +520,39 @@ impl Elbv2Api for Elbv2Client {
 
         self.send_form(form_data, "DescribeLoadBalancers", "LoadBalancer")
             .await
+    }
+
+    async fn modify_load_balancer_attributes(
+        &self,
+        request: ModifyLoadBalancerAttributesRequest,
+    ) -> Result<ModifyLoadBalancerAttributesResponse> {
+        let mut form_data = HashMap::new();
+        form_data.insert(
+            "Action".to_string(),
+            "ModifyLoadBalancerAttributes".to_string(),
+        );
+        form_data.insert("Version".to_string(), "2015-12-01".to_string());
+        form_data.insert(
+            "LoadBalancerArn".to_string(),
+            request.load_balancer_arn.clone(),
+        );
+        for (index, attribute) in request.attributes.iter().enumerate() {
+            form_data.insert(
+                format!("Attributes.member.{}.Key", index + 1),
+                attribute.key.clone(),
+            );
+            form_data.insert(
+                format!("Attributes.member.{}.Value", index + 1),
+                attribute.value.clone(),
+            );
+        }
+
+        self.send_form(
+            form_data,
+            "ModifyLoadBalancerAttributes",
+            &request.load_balancer_arn,
+        )
+        .await
     }
 
     async fn delete_load_balancer(&self, load_balancer_arn: &str) -> Result<()> {
@@ -1209,6 +1246,38 @@ pub struct CreateLoadBalancerResponse {
 #[serde(rename_all = "PascalCase")]
 pub struct CreateLoadBalancerResult {
     pub load_balancers: Option<LoadBalancersWrapper>,
+}
+
+#[derive(Debug, Clone, Serialize, Builder)]
+pub struct ModifyLoadBalancerAttributesRequest {
+    pub load_balancer_arn: String,
+    pub attributes: Vec<LoadBalancerAttribute>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "PascalCase")]
+pub struct LoadBalancerAttribute {
+    pub key: String,
+    pub value: String,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "PascalCase")]
+pub struct ModifyLoadBalancerAttributesResponse {
+    pub modify_load_balancer_attributes_result: ModifyLoadBalancerAttributesResult,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "PascalCase")]
+pub struct ModifyLoadBalancerAttributesResult {
+    pub attributes: Option<LoadBalancerAttributesWrapper>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "PascalCase")]
+pub struct LoadBalancerAttributesWrapper {
+    #[serde(rename = "member")]
+    pub members: Vec<LoadBalancerAttribute>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -1926,3 +1995,6 @@ pub struct AlpnPolicyWrapper {
     #[serde(rename = "member", default)]
     pub members: Vec<String>,
 }
+
+#[cfg(test)]
+mod wire_tests;

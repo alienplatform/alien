@@ -1,0 +1,80 @@
+{
+  // AWS-only experimental resource: OpenSearch Serverless (next generation).
+  "id": "experimental/aws-opensearch/provision",
+  "description": "Allows creating, updating, and deleting OpenSearch Serverless collection groups, collections, and their security/access policies",
+  "platforms": {
+    "aws": [
+      {
+        // Derived from the AWS::OpenSearchServerless::{CollectionGroup,Collection,
+        // SecurityPolicy,AccessPolicy} CloudFormation handler permissions.
+        // OpenSearch Serverless control-plane actions cannot be resource-scoped:
+        // security and access policies have no ARNs, and collection/group ARNs
+        // use server-assigned ids that don't exist until after creation, so the
+        // grant is account-wide for the aoss service (documented exception in
+        // aws_abac_validation.rs).
+        "grant": {
+          "actions": [
+            "aoss:CreateCollectionGroup",
+            "aoss:UpdateCollectionGroup",
+            "aoss:DeleteCollectionGroup",
+            "aoss:BatchGetCollectionGroup",
+            "aoss:ListCollectionGroups",
+            "aoss:CreateCollection",
+            "aoss:UpdateCollection",
+            "aoss:DeleteCollection",
+            "aoss:BatchGetCollection",
+            "aoss:ListCollections",
+            "aoss:AddCollectionToCollectionGroup",
+            "aoss:CreateSecurityPolicy",
+            "aoss:GetSecurityPolicy",
+            "aoss:UpdateSecurityPolicy",
+            "aoss:DeleteSecurityPolicy",
+            "aoss:ListSecurityPolicies",
+            "aoss:CreateAccessPolicy",
+            "aoss:GetAccessPolicy",
+            "aoss:UpdateAccessPolicy",
+            "aoss:DeleteAccessPolicy",
+            "aoss:ListAccessPolicies",
+            "aoss:TagResource",
+            "aoss:UntagResource",
+            "aoss:ListTagsForResource"
+          ]
+        },
+        "binding": {
+          "stack": {
+            "resources": ["*"]
+          },
+          "resource": {
+            "resources": ["*"]
+          }
+        }
+      },
+      {
+        // The first collection in an account creates the
+        // AWSServiceRoleForAmazonOpenSearchServerless service-linked role
+        // (CloudWatch metrics publishing), pinned to the aoss service name.
+        "grant": {
+          "actions": ["iam:CreateServiceLinkedRole"]
+        },
+        "binding": {
+          "stack": {
+            "resources": ["*"],
+            "condition": {
+              "StringEquals": {
+                "iam:AWSServiceName": "observability.aoss.amazonaws.com"
+              }
+            }
+          },
+          "resource": {
+            "resources": ["*"],
+            "condition": {
+              "StringEquals": {
+                "iam:AWSServiceName": "observability.aoss.amazonaws.com"
+              }
+            }
+          }
+        }
+      }
+    ]
+  }
+}

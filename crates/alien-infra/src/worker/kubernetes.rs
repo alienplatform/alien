@@ -766,6 +766,8 @@ impl KubernetesWorkerController {
                             "default".to_string(),
                             alien_core::PublicEndpointOutput {
                                 host: alien_core::public_url_host(&url).unwrap_or_default(),
+                                protocol: alien_core::ExposeProtocol::Http,
+                                port: alien_core::public_url_port(&url).unwrap_or(443),
                                 url,
                                 wildcard_host: None,
                                 load_balancer_endpoint: self
