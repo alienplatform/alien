@@ -49,9 +49,10 @@ function listen(server: Server): Promise<string> {
 }
 
 function close(server: Server | undefined): Promise<void> {
-  if (!server) return Promise.resolve()
+  if (!server?.listening) return Promise.resolve()
   return new Promise((resolve, reject) => {
     server.close(error => (error ? reject(error) : resolve()))
+    server.closeAllConnections()
   })
 }
 
