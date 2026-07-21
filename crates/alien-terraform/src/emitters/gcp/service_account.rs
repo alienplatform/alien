@@ -89,10 +89,8 @@ impl TfEmitter for GcpServiceAccountEmitter {
                         .with_resource_name(format!("${{local.resource_prefix}}-{resource_id}"));
                     // These grants name the target resource's namespace, so they
                     // follow that resource's gate — not this account's. The
-                    // resource's own emitter renders the same grant, and the
-                    // generator only dedupes the two while their bodies match;
-                    // an ungated copy here would survive the resource being
-                    // declined and keep handing out its access.
+                    // generator later coalesces project-wide grants shared by
+                    // multiple resources into one Terraform owner.
                     let enabled_when = ctx
                         .stack
                         .resources

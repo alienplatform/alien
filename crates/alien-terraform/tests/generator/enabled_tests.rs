@@ -1,6 +1,6 @@
 use super::helpers::{
     assert_terraform_valid, assert_ungated_registration_list_is_a_plain_array, gate_input,
-    normalized, render, try_render,
+    normalized, render, snapshot_module, try_render,
 };
 use alien_core::{
     AzureResourceGroup, AzureStorageAccount, Kv, PermissionProfile, ResourceLifecycle,
@@ -295,8 +295,8 @@ fn an_ungated_azure_resource_is_untouched() {
     assert_ungated_registration_list_is_a_plain_array(main);
 }
 
-/// A resource-scoped grant renders through the service account's profile loop
-/// too, and on GCP the kv binding is project-wide — Firestore cannot scope IAM
+/// A resource-scoped grant renders through the service account's profile loop,
+/// and on GCP the kv binding is project-wide — Firestore cannot scope IAM
 /// to a table — so the binding must follow the store's gate or a decline
 /// leaves project-wide data access behind.
 #[test]
@@ -339,6 +339,117 @@ fn a_gated_gcp_stores_profile_grant_follows_its_gate() {
         }
     }
     assert_terraform_valid(&module, "gated gcp kv with a profile grant");
+}
+
+fn gcp_shared_grant_stack(first_gate: Option<&str>, second_gate: Option<&str>) -> Stack {
+    let builder = Stack::new("gated-stack".to_string())
+        .inputs(vec![
+            gate_input(
+                "firstEnabled",
+                "Enable first",
+                "Whether to create the first store.",
+            ),
+            gate_input(
+                "secondEnabled",
+                "Enable second",
+                "Whether to create the second store.",
+            ),
+        ])
+        .permission(
+            "execution",
+            PermissionProfile::new()
+                .resource("first", ["kv/data-write"])
+                .resource("second", ["kv/data-write"]),
+        )
+        .add(
+            ServiceAccount::new("execution-sa".to_string()).build(),
+            ResourceLifecycle::Frozen,
+        );
+    let builder = match first_gate {
+        Some(gate) => builder.add_enabled_when(
+            Kv::new("first".to_string()).build(),
+            ResourceLifecycle::Frozen,
+            gate,
+        ),
+        None => builder.add(
+            Kv::new("first".to_string()).build(),
+            ResourceLifecycle::Frozen,
+        ),
+    };
+    let builder = match second_gate {
+        Some(gate) => builder.add_enabled_when(
+            Kv::new("second".to_string()).build(),
+            ResourceLifecycle::Frozen,
+            gate,
+        ),
+        None => builder.add(
+            Kv::new("second".to_string()).build(),
+            ResourceLifecycle::Frozen,
+        ),
+    };
+    builder.build()
+}
+
+fn datastore_user_grants(module: &str) -> Vec<&str> {
+    module
+        .split("resource \"")
+        .skip(1)
+        .filter(|block| {
+            block.starts_with("google_project_iam_member") && block.contains("roles/datastore.user")
+        })
+        .collect()
+}
+
+#[test]
+fn gcp_shared_project_grant_combines_independent_gates() {
+    let module = render(
+        &gcp_shared_grant_stack(Some("firstEnabled"), Some("secondEnabled")),
+        TerraformTarget::Gcp,
+        StackSettings::default(),
+    );
+    let main = normalized(&module);
+    let grants = datastore_user_grants(&main);
+
+    assert_eq!(
+        grants.len(),
+        1,
+        "one real GCP membership must have one Terraform owner:\n{main}"
+    );
+    assert!(
+        grants[0].contains(
+            "count = max(var.input_first_enabled ? 1 : 0, var.input_second_enabled ? 1 : 0)"
+        ),
+        "the shared membership must survive while either store needs it:\n{}",
+        grants[0]
+    );
+    snapshot_module("gcp_gated_kv_shared_project_grant", &module);
+    assert_terraform_valid(&module, "gated GCP kv stores with a shared project grant");
+}
+
+#[test]
+fn gcp_shared_project_grant_stays_ungated_when_any_resource_is_ungated() {
+    let module = render(
+        &gcp_shared_grant_stack(None, Some("secondEnabled")),
+        TerraformTarget::Gcp,
+        StackSettings::default(),
+    );
+    let main = normalized(&module);
+    let grants = datastore_user_grants(&main);
+
+    assert_eq!(
+        grants.len(),
+        1,
+        "one real GCP membership must have one Terraform owner:\n{main}"
+    );
+    assert!(
+        !grants[0].contains("count ="),
+        "an ungated consumer makes the shared membership unconditional:\n{}",
+        grants[0]
+    );
+    assert_terraform_valid(
+        &module,
+        "mixed-gate GCP kv stores with a shared project grant",
+    );
 }
 
 /// Rendering a gated resource through an emitter that ignores the gate would

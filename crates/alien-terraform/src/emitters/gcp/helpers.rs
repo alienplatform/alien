@@ -237,10 +237,8 @@ pub fn permission_context(label: &str, _stack_name: &str) -> PermissionContext {
 ///
 /// Every emitter that grants against a gated resource has to call this,
 /// including registered extension emitters outside this crate — which is why
-/// it is public. Two emitters can produce the same grant — the resource's own
-/// emitter and the service account's profile loop — and the generator only
-/// dedupes them while their bodies match. Gating one and not the other leaves
-/// the ungated copy behind, which hands out the access the deployer declined.
+/// it is public. The generator coalesces duplicate cloud memberships only after
+/// every contributor carries the gate of the resource that needs it.
 pub fn gate_bindings(
     fragment: &mut TfFragment,
     appended_from: usize,
