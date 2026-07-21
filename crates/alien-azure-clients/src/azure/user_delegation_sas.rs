@@ -3,7 +3,7 @@ use std::collections::HashMap;
 use alien_client_core::{ErrorData, Result};
 use alien_error::{AlienError, Context, IntoAlienError};
 use base64::{engine::general_purpose::STANDARD as BASE64_STANDARD, Engine};
-use chrono::{DateTime, SecondsFormat, Utc};
+use chrono::{DateTime, Duration, SecondsFormat, Utc};
 use hmac::{Hmac, Mac};
 use quick_xml::de::from_str;
 use serde::Deserialize;
@@ -72,8 +72,12 @@ pub(super) async fn create_container_user_delegation_sas(
         .get_bearer_token_with_expiry(AZURE_STORAGE_SCOPE)
         .await?;
     let now = Utc::now();
-    let starts_at = now - chrono::Duration::minutes(5);
-    let expires_at = expires_at.min(token.expires_at);
+    // Azure Storage accepts fractional seconds, but the SAS wire format below
+    // deliberately uses whole seconds. Normalize the requested key lifetime to
+    // that same precision before validating Azure's response and signing the
+    // SAS, so the in-memory bounds exactly match the values sent on the wire.
+    let starts_at = truncate_to_seconds(now - Duration::minutes(5));
+    let expires_at = truncate_to_seconds(expires_at.min(token.expires_at));
     if expires_at <= now {
         return Err(AlienError::new(ErrorData::InvalidClientConfig {
             message: "Azure Storage user-delegation SAS expiry is not in the future".to_string(),
@@ -317,6 +321,10 @@ fn timestamp(value: DateTime<Utc>) -> String {
     value.to_rfc3339_opts(SecondsFormat::Secs, true)
 }
 
+fn truncate_to_seconds(value: DateTime<Utc>) -> DateTime<Utc> {
+    value - Duration::nanoseconds(i64::from(value.timestamp_subsec_nanos()))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -393,8 +401,20 @@ mod tests {
         let server = tokio::spawn(async move {
             let (mut stream, _) = listener.accept().await.expect("accept storage request");
             let request = read_http_request(&mut stream).await;
+            let request_start = request
+                .split_once("<Start>")
+                .and_then(|(_, body)| body.split_once("</Start>"))
+                .map(|(value, _)| value)
+                .expect("delegation-key request start")
+                .to_string();
+            let request_expiry = request
+                .split_once("<Expiry>")
+                .and_then(|(_, body)| body.split_once("</Expiry>"))
+                .map(|(value, _)| value)
+                .expect("delegation-key request expiry")
+                .to_string();
             let body = format!(
-                "<UserDelegationKey><SignedOid>11111111-1111-1111-1111-111111111111</SignedOid><SignedTid>22222222-2222-2222-2222-222222222222</SignedTid><SignedStart>2000-01-01T00:00:00Z</SignedStart><SignedExpiry>2099-01-01T00:00:00Z</SignedExpiry><SignedService>b</SignedService><SignedVersion>{AZURE_STORAGE_VERSION}</SignedVersion><Value>{}</Value></UserDelegationKey>",
+                "<UserDelegationKey><SignedOid>11111111-1111-1111-1111-111111111111</SignedOid><SignedTid>22222222-2222-2222-2222-222222222222</SignedTid><SignedStart>{request_start}</SignedStart><SignedExpiry>{request_expiry}</SignedExpiry><SignedService>b</SignedService><SignedVersion>{AZURE_STORAGE_VERSION}</SignedVersion><Value>{}</Value></UserDelegationKey>",
                 BASE64_STANDARD.encode("protocol-test-signing-key")
             );
             let response = format!(
@@ -406,15 +426,16 @@ mod tests {
                 .write_all(response.as_bytes())
                 .await
                 .expect("write key response");
-            request
+            (request, request_start, request_expiry)
         });
-        let token_expiry = Utc::now() + chrono::Duration::hours(1);
+        let token_expiry = Utc::now() + Duration::hours(1);
         let token = format!(
             "{}.{}.signature",
             URL_SAFE_NO_PAD.encode(r#"{"alg":"none"}"#),
             URL_SAFE_NO_PAD.encode(format!(r#"{{"exp":{}}}"#, token_expiry.timestamp()))
         );
-        let requested_expiry = Utc::now() + chrono::Duration::minutes(30);
+        let requested_expiry =
+            truncate_to_seconds(Utc::now() + Duration::minutes(30)) + Duration::milliseconds(500);
         let config = AzureClientConfig {
             subscription_id: "subscription".to_string(),
             tenant_id: "tenant".to_string(),
@@ -436,7 +457,7 @@ mod tests {
         )
         .await
         .expect("mint container SAS");
-        let request = server.await.expect("join storage server");
+        let (request, returned_start, returned_expiry) = server.await.expect("join storage server");
         let (headers, request_body) = request.split_once("\r\n\r\n").expect("request body");
 
         assert!(
@@ -466,6 +487,11 @@ mod tests {
         assert_eq!(sas.account_name, "oneaccount");
         assert_eq!(sas.container_name, "one-container");
         assert_eq!(sas.permissions, "rcwdl");
+        assert_eq!(returned_start, request_start);
+        assert_eq!(returned_expiry, timestamp(requested_expiry));
+        assert_eq!(timestamp(sas.starts_at), request_start);
+        assert_eq!(timestamp(sas.expires_at), returned_expiry);
+        assert_eq!(sas.expires_at, truncate_to_seconds(requested_expiry));
         assert_eq!(
             sas.query_parameters.get("sr").map(String::as_str),
             Some("c")
@@ -477,6 +503,42 @@ mod tests {
         assert_eq!(
             sas.query_parameters.get("sp").map(String::as_str),
             Some("rcwdl")
+        );
+        assert_eq!(
+            sas.query_parameters.get("st").map(String::as_str),
+            Some(request_start)
+        );
+        assert_eq!(
+            sas.query_parameters.get("se").map(String::as_str),
+            Some(returned_expiry.as_str())
+        );
+    }
+
+    #[test]
+    fn rejects_a_delegation_key_that_does_not_cover_the_signed_sas_lifetime() {
+        let requested_start = DateTime::parse_from_rfc3339("2030-01-01T00:00:00Z")
+            .unwrap()
+            .with_timezone(&Utc);
+        let requested_expiry = DateTime::parse_from_rfc3339("2030-01-01T01:00:00Z")
+            .unwrap()
+            .with_timezone(&Utc);
+        let key = UserDelegationKey {
+            signed_oid: "11111111-1111-1111-1111-111111111111".to_string(),
+            signed_tid: "22222222-2222-2222-2222-222222222222".to_string(),
+            signed_start: timestamp(requested_start),
+            signed_expiry: timestamp(requested_expiry - Duration::seconds(1)),
+            signed_service: "b".to_string(),
+            signed_version: AZURE_STORAGE_VERSION.to_string(),
+            value: BASE64_STANDARD.encode("signing-key"),
+        };
+
+        let error = validate_delegation_key(&key, requested_start, requested_expiry)
+            .expect_err("shorter delegation-key lifetime must be rejected");
+
+        assert_eq!(error.code, "INVALID_INPUT");
+        assert_eq!(
+            error.message,
+            "Invalid input: Azure Storage returned a user-delegation key outside the requested lifetime"
         );
     }
 
@@ -501,7 +563,7 @@ mod tests {
                 .await
                 .expect("write error response");
         });
-        let token_expiry = Utc::now() + chrono::Duration::hours(1);
+        let token_expiry = Utc::now() + Duration::hours(1);
         let token = format!(
             "{}.{}.{}",
             URL_SAFE_NO_PAD.encode(r#"{"alg":"none"}"#),
@@ -525,7 +587,7 @@ mod tests {
             "oneaccount",
             "one-container",
             "rcwdl",
-            Utc::now() + chrono::Duration::minutes(30),
+            Utc::now() + Duration::minutes(30),
         )
         .await
         .expect_err("delegation-key failure should propagate");
