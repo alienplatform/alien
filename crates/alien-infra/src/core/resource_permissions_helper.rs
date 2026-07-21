@@ -8,30 +8,15 @@ use std::collections::HashSet;
 use crate::core::{azure_permissions_helper::AzurePermissionsHelper, ResourceControllerContext};
 use crate::error::{ErrorData, Result};
 use alien_azure_clients::authorization::Scope;
-use alien_client_core::ErrorData as CloudClientErrorData;
 use alien_core::permissions::{PermissionProfile, PermissionSetReference};
 use alien_core::{KubernetesCluster, PermissionSet, RemoteStackManagement, ResourceLifecycle};
-use alien_error::{AlienError, Context, ContextError, IntoAlienError};
+use alien_error::{AlienError, Context, IntoAlienError};
 use alien_gcp_clients::iam::{Binding, IamPolicy};
 use alien_permissions::{generators::*, BindingTarget, PermissionContext};
 
 use tracing::{debug, info, warn};
 
-fn gcp_custom_role_matches(
-    existing: &alien_gcp_clients::iam::Role,
-    desired: &alien_gcp_clients::iam::Role,
-) -> bool {
-    let mut existing_permissions = existing.included_permissions.clone();
-    let mut desired_permissions = desired.included_permissions.clone();
-    existing_permissions.sort();
-    desired_permissions.sort();
-
-    existing.title == desired.title
-        && existing.description == desired.description
-        && existing.stage == desired.stage
-        && existing_permissions == desired_permissions
-        && !existing.deleted.unwrap_or(false)
-}
+mod gcp_custom_roles;
 
 /// Helper for applying resource-scoped permissions across all platforms
 pub struct ResourcePermissionsHelper;
@@ -294,120 +279,7 @@ impl ResourcePermissionsHelper {
         permission_set_id: &str,
         custom_roles: Vec<GcpCustomRole>,
     ) -> Result<()> {
-        if custom_roles.is_empty() {
-            return Ok(());
-        }
-
-        let gcp_config = ctx.get_gcp_config()?;
-        let iam_client = ctx.service_provider.get_gcp_iam_client(gcp_config)?;
-
-        let mut seen_role_names = HashSet::new();
-        for custom_role in custom_roles {
-            if !seen_role_names.insert(custom_role.name.clone()) {
-                continue;
-            }
-
-            let role_id = custom_role.role_id.clone();
-
-            info!(
-                role_id = %role_id,
-                permission_set = %permission_set_id,
-                permissions_count = custom_role.included_permissions.len(),
-                "Ensuring GCP custom role exists"
-            );
-
-            let role_request = alien_gcp_clients::iam::CreateRoleRequest::builder()
-                .role(
-                    alien_gcp_clients::iam::Role::builder()
-                        .title(custom_role.title.clone())
-                        .description(custom_role.description.clone())
-                        .included_permissions(custom_role.included_permissions.clone())
-                        .stage(alien_gcp_clients::iam::RoleLaunchStage::Ga)
-                        .build(),
-                )
-                .build();
-
-            let updated_role = alien_gcp_clients::iam::Role::builder()
-                .title(custom_role.title.clone())
-                .description(custom_role.description.clone())
-                .included_permissions(custom_role.included_permissions.clone())
-                .stage(alien_gcp_clients::iam::RoleLaunchStage::Ga)
-                .build();
-
-            match iam_client.get_role(custom_role.name.clone()).await {
-                Ok(existing_role) => {
-                    if existing_role.deleted.unwrap_or(false) {
-                        iam_client
-                            .undelete_role(custom_role.name.clone())
-                            .await
-                            .context(ErrorData::CloudPlatformError {
-                                message: format!(
-                                    "Failed to undelete existing custom role '{}'",
-                                    role_id
-                                ),
-                                resource_id: Some(permission_set_id.to_string()),
-                            })?;
-                        iam_client
-                            .patch_role(
-                                custom_role.name.clone(),
-                                updated_role,
-                                Some("includedPermissions,title,description,stage".to_string()),
-                            )
-                            .await
-                            .context(ErrorData::CloudPlatformError {
-                                message: format!(
-                                    "Failed to update undeleted custom role '{}'",
-                                    role_id
-                                ),
-                                resource_id: Some(permission_set_id.to_string()),
-                            })?;
-                    } else if gcp_custom_role_matches(&existing_role, &updated_role) {
-                        info!(
-                            role_id = %role_id,
-                            permission_set = %permission_set_id,
-                            "GCP custom role already matches desired permissions"
-                        );
-                    } else {
-                        iam_client
-                            .patch_role(
-                                custom_role.name.clone(),
-                                updated_role,
-                                Some("includedPermissions,title,description,stage".to_string()),
-                            )
-                            .await
-                            .context(ErrorData::CloudPlatformError {
-                                message: format!(
-                                    "Failed to update existing custom role '{}'",
-                                    role_id
-                                ),
-                                resource_id: Some(permission_set_id.to_string()),
-                            })?;
-                    }
-                }
-                Err(e)
-                    if matches!(
-                        e.error,
-                        Some(CloudClientErrorData::RemoteResourceNotFound { .. })
-                    ) =>
-                {
-                    iam_client
-                        .create_role(role_id.clone(), role_request)
-                        .await
-                        .context(ErrorData::CloudPlatformError {
-                            message: format!("Failed to create custom role '{}'", role_id),
-                            resource_id: Some(permission_set_id.to_string()),
-                        })?;
-                }
-                Err(e) => {
-                    return Err(e.context(ErrorData::CloudPlatformError {
-                        message: format!("Failed to check existence of custom role '{}'", role_id),
-                        resource_id: Some(permission_set_id.to_string()),
-                    }));
-                }
-            }
-        }
-
-        Ok(())
+        gcp_custom_roles::ensure(ctx, permission_set_id, custom_roles).await
     }
 
     /// Setup-delete: delete the GCP custom roles generated for the selected permission sets.
@@ -418,86 +290,12 @@ impl ResourcePermissionsHelper {
         ctx: &ResourceControllerContext<'_>,
         permission_context: &PermissionContext,
     ) -> Result<()> {
-        let gcp_config = ctx.get_gcp_config()?;
-        let iam_client = ctx.service_provider.get_gcp_iam_client(gcp_config)?;
-        let role_name_prefix = format!(
-            "projects/{}/roles/{}",
-            gcp_config.project_id,
-            custom_role_prefix(permission_context)
-        );
-        let mut role_names = Vec::new();
-        let mut page_token = None;
-
-        loop {
-            let response = iam_client
-                .list_roles(Some(100), page_token, Some(false))
-                .await
-                .context(ErrorData::CloudPlatformError {
-                    message: "Failed to list GCP custom roles before cleanup".to_string(),
-                    resource_id: Some(ctx.resource_prefix.to_string()),
-                })?;
-
-            for role in response.roles {
-                let Some(role_name) = role.name else {
-                    continue;
-                };
-                if role_name.starts_with(&role_name_prefix) {
-                    role_names.push(role_name);
-                }
-            }
-
-            match response.next_page_token {
-                Some(token) if !token.is_empty() => page_token = Some(token),
-                _ => break,
-            }
-        }
-
-        for role_name in role_names {
-            let role_id = role_name
-                .rsplit('/')
-                .next()
-                .unwrap_or(role_name.as_str())
-                .to_string();
-            match iam_client.delete_role(role_name.clone()).await {
-                Ok(_) => {
-                    info!(
-                        role_id = %role_id,
-                        "Deleted GCP custom role"
-                    );
-                }
-                Err(e)
-                    if matches!(
-                        e.error,
-                        Some(CloudClientErrorData::RemoteResourceNotFound { .. })
-                    ) =>
-                {
-                    info!(
-                        role_id = %role_id,
-                        "GCP custom role already deleted"
-                    );
-                }
-                Err(e) => {
-                    return Err(e.context(ErrorData::CloudPlatformError {
-                        message: format!("Failed to delete GCP custom role '{}'", role_id),
-                        resource_id: Some(ctx.resource_prefix.to_string()),
-                    }));
-                }
-            }
-        }
-
-        Ok(())
+        gcp_custom_roles::delete(ctx, permission_context).await
     }
 
     /// Return the fully-qualified custom-role prefix owned by this stack.
     pub fn gcp_stack_custom_role_name_prefix(permission_context: &PermissionContext) -> String {
-        let project = permission_context
-            .project_name
-            .as_deref()
-            .unwrap_or("PROJECT_NAME");
-        format!(
-            "projects/{project}/roles/{}",
-            custom_role_prefix(permission_context)
-        )
+        gcp_custom_roles::stack_role_name_prefix(permission_context)
     }
 
     /// Return fully-qualified custom-role prefixes for the permission sets owned
@@ -1991,22 +1789,5 @@ mod tests {
                     .members
                     .contains(&"serviceAccount:app@p.iam.gserviceaccount.com".to_string())
         }));
-    }
-
-    #[test]
-    fn gcp_deleted_custom_role_does_not_match_desired_role() {
-        let desired = alien_gcp_clients::iam::Role::builder()
-            .title("Role".to_string())
-            .description("Test role".to_string())
-            .included_permissions(vec!["storage.objects.get".to_string()])
-            .stage(alien_gcp_clients::iam::RoleLaunchStage::Ga)
-            .build();
-        let mut deleted_existing = desired.clone();
-        deleted_existing.deleted = Some(true);
-
-        assert!(
-            !gcp_custom_role_matches(&deleted_existing, &desired),
-            "soft-deleted custom roles cannot be treated as grantable"
-        );
     }
 }

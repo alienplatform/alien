@@ -90,7 +90,7 @@ pub trait IamApi: Send + Sync + Debug {
 
     async fn delete_role(&self, role_name: String) -> Result<Role>;
 
-    async fn undelete_role(&self, role_name: String) -> Result<Role>;
+    async fn undelete_role(&self, role_name: String, request: UndeleteRoleRequest) -> Result<Role>;
 
     async fn get_role(&self, role_name: String) -> Result<Role>;
 
@@ -99,6 +99,7 @@ pub trait IamApi: Send + Sync + Debug {
         page_size: Option<i32>,
         page_token: Option<String>,
         show_deleted: Option<bool>,
+        view: Option<RoleView>,
     ) -> Result<ListRolesResponse>;
 
     async fn patch_role(
@@ -321,17 +322,11 @@ impl IamApi for IamClient {
 
     /// Undeletes a custom role.
     /// See: https://cloud.google.com/iam/docs/reference/rest/v1/projects.roles/undelete
-    async fn undelete_role(&self, role_name: String) -> Result<Role> {
+    async fn undelete_role(&self, role_name: String, request: UndeleteRoleRequest) -> Result<Role> {
         let path = format!("{}:undelete", self.build_role_path(role_name.clone()));
 
         self.base
-            .execute_request(
-                Method::POST,
-                &path,
-                None,
-                Some(UndeleteRoleRequest {}),
-                &role_name,
-            )
+            .execute_request(Method::POST, &path, None, Some(request), &role_name)
             .await
     }
 
@@ -352,6 +347,7 @@ impl IamApi for IamClient {
         page_size: Option<i32>,
         page_token: Option<String>,
         show_deleted: Option<bool>,
+        view: Option<RoleView>,
     ) -> Result<ListRolesResponse> {
         let path = format!("projects/{}/roles", self.project_id);
         let mut query_params = Vec::new();
@@ -363,6 +359,9 @@ impl IamApi for IamClient {
         }
         if let Some(show_deleted) = show_deleted {
             query_params.push(("showDeleted", show_deleted.to_string()));
+        }
+        if let Some(view) = view {
+            query_params.push(("view", view.as_query_value().to_string()));
         }
 
         self.base
@@ -544,7 +543,28 @@ pub struct PatchServiceAccountRequest {
 /// Based on: https://cloud.google.com/iam/docs/reference/rest/v1/projects.roles/undelete
 #[derive(Debug, Serialize, Deserialize, Clone, Default, Builder)]
 #[serde(rename_all = "camelCase")]
-pub struct UndeleteRoleRequest {}
+pub struct UndeleteRoleRequest {
+    /// Optional role etag used for a consistent read-modify-write.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub etag: Option<String>,
+}
+
+/// Amount of role data returned by list operations.
+#[derive(Debug, Serialize, Deserialize, Clone, Copy, PartialEq, Eq)]
+#[serde(rename_all = "SCREAMING_SNAKE_CASE")]
+pub enum RoleView {
+    Basic,
+    Full,
+}
+
+impl RoleView {
+    fn as_query_value(self) -> &'static str {
+        match self {
+            Self::Basic => "BASIC",
+            Self::Full => "FULL",
+        }
+    }
+}
 
 /// Represents the launch stage of a role.
 /// Based on: https://cloud.google.com/iam/docs/reference/rest/v1/organizations.roles#Role.RoleLaunchStage
@@ -647,4 +667,26 @@ pub struct GenerateAccessTokenResponse {
 
     /// The expiration time of the access token in RFC3339 format.
     pub expire_time: String,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{RoleView, UndeleteRoleRequest};
+
+    #[test]
+    fn undelete_role_request_serializes_etag_for_consistent_recovery() {
+        let request = UndeleteRoleRequest {
+            etag: Some("BwYQ2M3J5UY=".to_string()),
+        };
+
+        assert_eq!(
+            serde_json::to_value(request).expect("undelete request should serialize"),
+            serde_json::json!({ "etag": "BwYQ2M3J5UY=" })
+        );
+    }
+
+    #[test]
+    fn full_role_view_uses_the_google_iam_query_value() {
+        assert_eq!(RoleView::Full.as_query_value(), "FULL");
+    }
 }
