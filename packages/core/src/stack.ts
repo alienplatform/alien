@@ -81,6 +81,9 @@ export class Stack {
     if (options?.remoteAccess) {
       entry.remoteAccess = true
     }
+    if (resource.enabledWhen !== undefined) {
+      entry.enabledWhen = resource.enabledWhen
+    }
     this._config.resources![resource.config.id] = entry
     return this
   }

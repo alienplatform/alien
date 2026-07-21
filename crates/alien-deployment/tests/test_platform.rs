@@ -132,6 +132,7 @@ fn create_test_stack(stack_id: &str, function_id: &str) -> Stack {
             lifecycle: ResourceLifecycle::Live,
             dependencies: Vec::new(),
             remote_access: false,
+            enabled_when: None,
         },
     );
 
@@ -168,6 +169,7 @@ fn create_test_stack_with_storage(stack_id: &str, storage_id: &str, function_id:
             lifecycle: ResourceLifecycle::Frozen,
             dependencies: Vec::new(),
             remote_access: false,
+            enabled_when: None,
         },
     );
     resources.insert(
@@ -177,6 +179,7 @@ fn create_test_stack_with_storage(stack_id: &str, storage_id: &str, function_id:
             lifecycle: ResourceLifecycle::Live,
             dependencies: Vec::new(),
             remote_access: false,
+            enabled_when: None,
         },
     );
 
@@ -230,6 +233,7 @@ fn expected_secrets_sync_hash(snapshot_hash: &str) -> String {
 /// Create a deployment config fixture
 fn create_test_config(env_vars_hash: &str, include_secret: bool) -> DeploymentConfig {
     DeploymentConfig {
+        input_values: Default::default(),
         deployment_name: Some("test deployment".to_string()),
         stack_settings: StackSettings::default(),
         management_config: None,
@@ -628,6 +632,7 @@ async fn test_running_transitions_to_refresh_failed_on_health_check_failure() {
             lifecycle: ResourceLifecycle::Live,
             dependencies: Vec::new(),
             remote_access: false,
+            enabled_when: None,
         },
     );
 
@@ -794,6 +799,7 @@ async fn update_completes_after_removed_resource_is_deleted() {
             lifecycle: ResourceLifecycle::Live,
             dependencies: Vec::new(),
             remote_access: false,
+            enabled_when: None,
         },
     );
 
@@ -888,6 +894,7 @@ async fn test_update_failed_retry_gate_returns_to_update_pending() {
             lifecycle: ResourceLifecycle::Live,
             dependencies: Vec::new(),
             remote_access: false,
+            enabled_when: None,
         },
     );
 
@@ -1177,6 +1184,7 @@ fn create_two_function_stack_one_fails(stack_id: &str) -> Stack {
             lifecycle: ResourceLifecycle::Live,
             dependencies: Vec::new(),
             remote_access: false,
+            enabled_when: None,
         },
     );
     resources.insert(
@@ -1186,6 +1194,7 @@ fn create_two_function_stack_one_fails(stack_id: &str) -> Stack {
             lifecycle: ResourceLifecycle::Live,
             dependencies: Vec::new(),
             remote_access: false,
+            enabled_when: None,
         },
     );
 
@@ -1237,6 +1246,7 @@ fn create_two_function_stack_dependent_one_fails(stack_id: &str) -> Stack {
             lifecycle: ResourceLifecycle::Live,
             dependencies: Vec::new(),
             remote_access: false,
+            enabled_when: None,
         },
     );
     resources.insert(
@@ -1249,6 +1259,7 @@ fn create_two_function_stack_dependent_one_fails(stack_id: &str) -> Stack {
                 "failing-fn".to_string(),
             )],
             remote_access: false,
+            enabled_when: None,
         },
     );
 
@@ -1438,4 +1449,151 @@ async fn test_deleted_is_noop() {
     // Assert state unchanged
     assert_eq!(result.state.status, DeploymentStatus::Deleted);
     assert!(!result.update_heartbeat, "should not heartbeat on Deleted");
+}
+
+/// F) Live gating flow tests
+
+/// A deployer-provided boolean gate input with a declared default of true.
+fn boolean_gate_input(id: &str, label: &str, description: &str) -> alien_core::StackInputDefinition {
+    alien_core::StackInputDefinition::deployer_boolean(id, label, description, Some(true))
+}
+
+/// A stack whose live storage is gated on a deployer boolean with a declared
+/// default of true.
+fn create_live_gated_stack(stack_id: &str, store_id: &str, function_id: &str) -> Stack {
+    let mut stack = create_test_stack(stack_id, function_id);
+    stack.resources.insert(
+        store_id.to_string(),
+        ResourceEntry {
+            config: alien_core::Resource::new(Storage::new(store_id.to_string()).build()),
+            lifecycle: ResourceLifecycle::Live,
+            dependencies: Vec::new(),
+            remote_access: false,
+            enabled_when: Some("storeEnabled".to_string()),
+        },
+    );
+    stack.inputs = vec![boolean_gate_input(
+        "storeEnabled",
+        "Enable the store",
+        "Whether to run the store.",
+    )];
+    stack
+}
+
+fn config_with_store_enabled(enabled: bool) -> DeploymentConfig {
+    let mut config = create_test_config("hash_v1", false);
+    config.input_values =
+        HashMap::from([("storeEnabled".to_string(), serde_json::json!(enabled))]);
+    config
+}
+
+fn release_of(release_id: &str, stack: Stack) -> ReleaseInfo {
+    ReleaseInfo {
+        release_id: Some(release_id.to_string()),
+        version: Some("1.0.0".to_string()),
+        description: None,
+        stack,
+    }
+}
+
+/// The full live-gate cycle through the real state machine: default creates
+/// the store, a false answer on an update deprovisions it AND lets the
+/// deployment converge back to Running (the Deleted entry is pruned), and a
+/// true answer on a later update recreates it.
+#[tokio::test]
+async fn live_gate_flip_deprovisions_and_reprovisions_across_updates() {
+    let _temp_dir = TempDir::new().expect("Failed to create temp dir");
+
+    let stack = create_live_gated_stack("gated-stack", "cache", "test-function");
+    let config = create_test_config("hash_v1", false);
+    let mut state = create_initial_state(stack.clone());
+
+    // No answer given: the declared default (true) creates the store.
+    state = run_to_completion(state, config.clone()).await;
+    assert_eq!(state.status, DeploymentStatus::Running);
+    assert!(state
+        .stack_state
+        .as_ref()
+        .unwrap()
+        .resources
+        .contains_key("cache"));
+
+    // The deployer answers false on an update: the store is deprovisioned
+    // and its Deleted entry leaves the state, so the stack computes Running.
+    start_update(&mut state, release_of("rel_v2", stack.clone()));
+    state = run_to_completion(state, config_with_store_enabled(false)).await;
+    assert_eq!(state.status, DeploymentStatus::Running);
+    assert!(!state
+        .stack_state
+        .as_ref()
+        .unwrap()
+        .resources
+        .contains_key("cache"));
+
+    // Back to true on the next update: the store is recreated.
+    start_update(&mut state, release_of("rel_v3", stack));
+    state = run_to_completion(state, config_with_store_enabled(true)).await;
+    assert_eq!(state.status, DeploymentStatus::Running);
+    let store = state
+        .stack_state
+        .as_ref()
+        .unwrap()
+        .resources
+        .get("cache")
+        .expect("an accepted gate must recreate the store");
+    assert_eq!(store.status, alien_core::ResourceStatus::Running);
+}
+
+/// A setup import that omitted a gated frozen resource: the runner must not
+/// create the resource the deployer declined, while the delivered sibling
+/// and the live function still deploy.
+#[tokio::test]
+async fn a_declined_gated_import_is_not_created_by_the_runner() {
+    let _temp_dir = TempDir::new().expect("Failed to create temp dir");
+
+    let mut stack = create_test_stack_with_storage("test-stack", "assets", "test-function");
+    stack.resources.insert(
+        "analytics".to_string(),
+        ResourceEntry {
+            config: alien_core::Resource::new(Storage::new("analytics".to_string()).build()),
+            lifecycle: ResourceLifecycle::Frozen,
+            dependencies: Vec::new(),
+            remote_access: false,
+            enabled_when: Some("analyticsEnabled".to_string()),
+        },
+    );
+    stack.inputs = vec![boolean_gate_input(
+        "analyticsEnabled",
+        "Enable analytics",
+        "Whether to create the analytics store.",
+    )];
+
+    // The import delivered only the ungated frozen storage; the gated one is
+    // absent, which IS the deployer's answer.
+    let mut imported_assets = alien_core::StackResourceState::new_pending(
+        "storage".to_string(),
+        alien_core::Resource::new(Storage::new("assets".to_string()).build()),
+        Some(ResourceLifecycle::Frozen),
+        Vec::new(),
+    );
+    imported_assets.status = alien_core::ResourceStatus::Running;
+    let mut imported_state = StackState::new(Platform::Test);
+    imported_state
+        .resources
+        .insert("assets".to_string(), imported_assets);
+
+    let config = create_test_config("hash_v1", false);
+    let mut state = create_initial_state(stack);
+    state.stack_state = Some(imported_state);
+
+    state = run_to_completion(state, config).await;
+    assert_eq!(state.status, DeploymentStatus::Running);
+
+    let resources = &state.stack_state.as_ref().unwrap().resources;
+    assert!(
+        !resources.contains_key("analytics"),
+        "the runner must not create the gated resource the import omitted"
+    );
+    assert!(resources.contains_key("assets"));
+    assert!(resources.contains_key("test-function"));
 }

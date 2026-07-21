@@ -344,6 +344,7 @@ mod tests {
                 lifecycle: ResourceLifecycle::Live,
                 dependencies: vec![],
                 remote_access: false,
+                enabled_when: None,
             },
         );
 

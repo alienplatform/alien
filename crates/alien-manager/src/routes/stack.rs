@@ -184,6 +184,20 @@ pub async fn stack_import(
         Ok(s) => s,
         Err(e) => return e.into_response(),
     };
+    // A gated resource renders behind its input in the setup template, so its
+    // absence from the import IS the deployer's answer. Imported deployments
+    // enter the runner at InitialSetup with this prepared stack; leaving the
+    // declined entry in would make the runner create the very resource the
+    // deployer said no to. A live gated resource follows the request's input
+    // values here for the same reason.
+    let prepared_stack = match alien_deployment::strip_declined_resources(
+        prepared_stack,
+        &stack_state,
+        &req.input_values,
+    ) {
+        Ok(stack) => stack,
+        Err(e) => return e.into_response(),
+    };
     let environment_info = infer_import_environment_info(&req);
     match state
         .deployment_store
@@ -300,6 +314,7 @@ pub async fn stack_import(
                         setup_fingerprint: req.setup_fingerprint.clone(),
                         setup_fingerprint_version: req.setup_fingerprint_version,
                         schedule_reconciliation: should_reconcile,
+                        input_values: req.input_values.clone(),
                     },
                 )
                 .await
@@ -839,6 +854,7 @@ async fn prepare_import_stack(
 
     let stack_state = StackState::new(mutation_platform);
     let config = DeploymentConfig {
+        input_values: Default::default(),
         deployment_name: Some(req.deployment_name.clone()),
         stack_settings: req.stack_settings.clone(),
         management_config: req.management_config.clone(),

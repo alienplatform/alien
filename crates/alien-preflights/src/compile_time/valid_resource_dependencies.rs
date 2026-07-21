@@ -132,6 +132,7 @@ mod tests {
                 lifecycle: ResourceLifecycle::Frozen,
                 dependencies: Vec::new(),
                 remote_access: false,
+                enabled_when: None,
             },
         );
         resources.insert(
@@ -141,6 +142,7 @@ mod tests {
                 lifecycle: ResourceLifecycle::Live,
                 dependencies: Vec::new(),
                 remote_access: false,
+                enabled_when: None,
             },
         );
 
@@ -179,6 +181,7 @@ mod tests {
                     "worker".to_string(),
                 )], // storage depends on worker - creates cycle
                 remote_access: false,
+                enabled_when: None,
             },
         );
         resources.insert(
@@ -188,6 +191,7 @@ mod tests {
                 lifecycle: ResourceLifecycle::Live,
                 dependencies: Vec::new(),
                 remote_access: false,
+                enabled_when: None,
             },
         );
 

@@ -691,6 +691,10 @@ impl DeploymentStore for SqliteDeploymentStore {
             setup_fingerprint,
             setup_fingerprint_version,
             schedule_reconciliation,
+            // Carried for gate resolution on re-import; this store has no
+            // input-values column, so gated live resources resolve to their
+            // declared defaults on later steps.
+            input_values: _,
         } = params;
         let mut merged_stack_state = stack_state;
         if let Some(existing) = self.get_deployment(caller, deployment_id).await? {

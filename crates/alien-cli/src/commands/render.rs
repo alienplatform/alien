@@ -115,6 +115,7 @@ async fn prepare_stack_for_render(
 
     let stack_state = StackState::new(platform);
     let config = DeploymentConfig {
+        input_values: Default::default(),
         deployment_name: Some(stack.id().to_string()),
         stack_settings: stack_settings.clone(),
         management_config: None,

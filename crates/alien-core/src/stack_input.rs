@@ -142,3 +142,60 @@ pub struct StackInputDefinition {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub env: Vec<StackInputEnvironmentMapping>,
 }
+
+impl StackInputDefinition {
+    /// A deployer-provided boolean input, the shape `.enabled(input)` gates
+    /// on. With a default the input is optional; without one it is required,
+    /// since an unanswered gate would leave the resource's existence
+    /// undecided. This is the Rust-side seam gated-stack tests build inputs
+    /// with.
+    #[doc(hidden)]
+    pub fn deployer_boolean(
+        id: &str,
+        label: &str,
+        description: &str,
+        default: Option<bool>,
+    ) -> Self {
+        Self {
+            id: id.to_string(),
+            kind: StackInputKind::Boolean,
+            provided_by: vec![StackInputProvider::Deployer],
+            required: default.is_none(),
+            label: label.to_string(),
+            description: description.to_string(),
+            placeholder: None,
+            default: default.map(StackInputDefaultValue::Boolean),
+            platforms: None,
+            validation: None,
+            env: Vec::new(),
+        }
+    }
+}
+
+/// Finds the boolean deployer input a gate references, for render-time
+/// re-validation. The compile-time preflight enforces the same two rules;
+/// generators repeat them so a caller that renders without preflights cannot
+/// ship a template whose gate variable is undeclared or non-boolean.
+pub fn find_boolean_gate_input<'a>(
+    inputs: &'a [StackInputDefinition],
+    input_id: &str,
+) -> Result<&'a StackInputDefinition, GateInputIssue> {
+    let input = inputs
+        .iter()
+        .find(|input| input.id == input_id)
+        .ok_or(GateInputIssue::Undeclared)?;
+    if input.kind != StackInputKind::Boolean {
+        return Err(GateInputIssue::NotBoolean(input.kind.clone()));
+    }
+    Ok(input)
+}
+
+/// Why a gate input failed render-time validation; the caller owns the
+/// backend-specific error message.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum GateInputIssue {
+    /// The stack declares no input with the gate's id.
+    Undeclared,
+    /// The input exists but is not a boolean.
+    NotBoolean(StackInputKind),
+}

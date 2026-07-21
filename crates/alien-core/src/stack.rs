@@ -21,6 +21,14 @@ pub struct ResourceEntry {
     /// Default: false (prevents sensitive data in synced state).
     #[serde(default)]
     pub remote_access: bool,
+    /// Id of the boolean stack input that decides whether this resource is
+    /// created at all. `None` means always create it.
+    ///
+    /// Set by `.enabled(input)` in the SDK. Setup emitters render the resource
+    /// conditionally on the matching template variable, so a deployer who says no
+    /// never gets the resource, its outputs, or anything derived from it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub enabled_when: Option<String>,
 }
 
 /// A bag of resources, unaware of any cloud.
@@ -158,41 +166,64 @@ impl StackBuilder {
     /// Adds a resource to the stack with its lifecycle state and additional dependencies.
     /// The total dependencies will be: resource.get_dependencies() + additional_dependencies
     pub fn add_with_dependencies<T: crate::ResourceDefinition>(
-        mut self,
+        self,
         resource: T,
         lifecycle: ResourceLifecycle,
         additional_dependencies: Vec<ResourceRef>,
     ) -> Self {
-        let resource = Resource::new(resource);
-        self.resources.insert(
-            resource.id().to_string(),
-            ResourceEntry {
-                config: resource,
-                lifecycle,
-                dependencies: additional_dependencies,
-                remote_access: false,
-            },
-        );
-        self
+        let mut entry = Self::entry(resource, lifecycle);
+        entry.dependencies = additional_dependencies;
+        self.insert(entry)
+    }
+
+    /// Adds a resource whose creation follows a boolean stack input.
+    /// The deployer's answer decides whether it is provisioned at all.
+    ///
+    /// Stacks are authored through the TypeScript SDK's `.enabled(input)`, which
+    /// sets the field on the resource; this is the Rust-side seam the generator
+    /// and preflight tests build gated stacks with.
+    #[doc(hidden)]
+    pub fn add_enabled_when<T: crate::ResourceDefinition>(
+        self,
+        resource: T,
+        lifecycle: ResourceLifecycle,
+        input_id: impl Into<String>,
+    ) -> Self {
+        let mut entry = Self::entry(resource, lifecycle);
+        entry.enabled_when = Some(input_id.into());
+        self.insert(entry)
     }
 
     /// Adds a resource with remote access enabled.
     /// When remote_access is true, binding params are synced to StackState for external access.
     pub fn add_with_remote_access<T: crate::ResourceDefinition>(
-        mut self,
+        self,
         resource: T,
         lifecycle: ResourceLifecycle,
     ) -> Self {
-        let resource = Resource::new(resource);
-        self.resources.insert(
-            resource.id().to_string(),
-            ResourceEntry {
-                config: resource,
-                lifecycle,
-                dependencies: vec![],
-                remote_access: true,
-            },
-        );
+        let mut entry = Self::entry(resource, lifecycle);
+        entry.remote_access = true;
+        self.insert(entry)
+    }
+
+    /// The only place a `ResourceEntry` is spelled out. Each public `add_*`
+    /// varies one field of it, so a new per-entry field costs one edit here
+    /// instead of one per method.
+    fn entry<T: crate::ResourceDefinition>(
+        resource: T,
+        lifecycle: ResourceLifecycle,
+    ) -> ResourceEntry {
+        ResourceEntry {
+            config: Resource::new(resource),
+            lifecycle,
+            dependencies: Vec::new(),
+            remote_access: false,
+            enabled_when: None,
+        }
+    }
+
+    fn insert(mut self, entry: ResourceEntry) -> Self {
+        self.resources.insert(entry.config.id().to_string(), entry);
         self
     }
 

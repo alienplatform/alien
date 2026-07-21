@@ -184,6 +184,9 @@ pub struct UpdateImportedDeploymentParams {
     pub setup_fingerprint_version: u32,
     /// Move the deployment to `update-pending` in the same write as the import data.
     pub schedule_reconciliation: bool,
+    /// Deployer stack input values carried by the re-import; they overwrite
+    /// the stored map — the edit surface for gate flips.
+    pub input_values: HashMap<String, serde_json::Value>,
 }
 
 /// A deployment group record.

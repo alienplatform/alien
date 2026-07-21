@@ -57,6 +57,7 @@ fn entry<T: ResourceDefinition>(resource: T) -> ResourceEntry {
         lifecycle: ResourceLifecycle::Live,
         dependencies: vec![],
         remote_access: false,
+        enabled_when: None,
     }
 }
 
@@ -66,6 +67,7 @@ fn frozen_entry<T: ResourceDefinition>(resource: T) -> ResourceEntry {
         lifecycle: ResourceLifecycle::Frozen,
         dependencies: vec![],
         remote_access: false,
+        enabled_when: None,
     }
 }
 

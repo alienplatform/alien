@@ -260,6 +260,7 @@ mod tests {
             lifecycle: ResourceLifecycle::Live,
             dependencies: Vec::new(),
             remote_access: false,
+            enabled_when: None,
         }
     }
 
@@ -282,6 +283,7 @@ mod tests {
     #[test]
     fn aws_remote_management_resource_scope_does_not_inherit_management_name() {
         let entry = ResourceEntry {
+            enabled_when: None,
             config: Resource::new(Storage::new("uploads".to_string()).build()),
             lifecycle: ResourceLifecycle::Live,
             dependencies: Vec::new(),

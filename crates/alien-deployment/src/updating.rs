@@ -68,6 +68,21 @@ pub async fn handle_update_pending(
         })
     })?;
 
+    // Drop gated resources the deployer declined, BEFORE the preflights: the
+    // frozen-compatibility check compares against the previous prepared
+    // stack, which was stripped the same way, and an unstripped new stack
+    // would read as "frozen resource added" and refuse the update — or
+    // worse, resurrect the resource the deployer declined. For a live gate
+    // this strip is also what applies an input edit: the resource enters or
+    // leaves the desired stack here, and the executor's create/delete
+    // planning provisions or deprovisions it. Dependents share their
+    // dependency's gate, so the strip stays closed.
+    let target_stack = crate::pending::strip_declined_resources(
+        target_stack,
+        &stack_state,
+        &config.input_values,
+    )?;
+
     let runner = alien_preflights::runner::PreflightRunner::new();
 
     // For compatibility checks, use the prepared (mutated) stack from the previous deployment
@@ -232,13 +247,19 @@ pub async fn handle_updating(
         })?;
 
     // Execute one step
-    let step_result =
+    let mut step_result =
         executor
             .step(stack_state)
             .await
             .context(ErrorData::StackExecutionFailed {
                 message: "Failed to execute update step".to_string(),
             })?;
+
+    prune_deprovisioned_resources(
+        &mut step_result.next_state,
+        &target_stack,
+        current.target_release.as_ref().map(|release| &release.stack),
+    );
 
     // Compute the stack status from the resulting state
     let stack_status = compute_update_status(&step_result.next_state, &target_stack)?;
@@ -409,4 +430,153 @@ pub async fn handle_update_failed(
         heartbeats: vec![],
         observed_inventory_batches: vec![],
     })
+}
+
+/// Drop the terminally deleted entries of gate-declined resources.
+///
+/// A declined resource is still declared by the release, so a later
+/// re-enable must start from a clean slate rather than a `Deleted`
+/// tombstone the executor would have to reconcile. Resources REMOVED from
+/// the release keep their tombstone — it is the executor's deletion record,
+/// and the update-status computation already ignores it. Destroy flows keep
+/// their `Deleted` entries too — they never pass through the update handler.
+fn prune_deprovisioned_resources(
+    state: &mut StackState,
+    target_stack: &Stack,
+    release_stack: Option<&Stack>,
+) {
+    state.resources.retain(|resource_id, resource_state| {
+        resource_state.status != ResourceStatus::Deleted
+            || target_stack.resources.contains_key(resource_id)
+            || !release_stack
+                .and_then(|stack| stack.resources.get(resource_id))
+                .is_some_and(|entry| entry.enabled_when.is_some())
+    });
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use alien_core::{Kv, Resource, ResourceLifecycle, StackResourceState, Worker, WorkerCode};
+
+    fn state_entry(resource: Resource, status: ResourceStatus) -> StackResourceState {
+        let mut entry = StackResourceState::new_pending(
+            resource.resource_type().as_ref().to_string(),
+            resource,
+            Some(ResourceLifecycle::Live),
+            Vec::new(),
+        );
+        entry.status = status;
+        entry
+    }
+
+    /// Build a release stack where `cache` is declared behind a gate.
+    fn release_stack_with_gated_cache(agent: &alien_core::Worker) -> Stack {
+        let mut stack = Stack::new("s".to_string())
+            .add(agent.clone(), ResourceLifecycle::Live)
+            .add(
+                Kv::new("cache".to_string()).build(),
+                ResourceLifecycle::Live,
+            )
+            .build();
+        stack
+            .resources
+            .get_mut("cache")
+            .expect("cache entry exists")
+            .enabled_when = Some("cacheEnabled".to_string());
+        stack
+    }
+
+    /// The declined gated store leaves the state so the stack computes back
+    /// to Running; the survivors stay untouched.
+    #[test]
+    fn a_deprovisioned_gated_resource_leaves_the_state() {
+        let agent = Worker::new("agent".to_string())
+            .permissions("execution".to_string())
+            .code(WorkerCode::Image {
+                image: "example.com/agent:latest".to_string(),
+            })
+            .build();
+        let target_stack = Stack::new("s".to_string())
+            .add(agent.clone(), ResourceLifecycle::Live)
+            .build();
+        let release_stack = release_stack_with_gated_cache(&agent);
+
+        let mut state = StackState::new(Platform::Aws);
+        state.resources.insert(
+            "agent".to_string(),
+            state_entry(Resource::new(agent), ResourceStatus::Running),
+        );
+        state.resources.insert(
+            "cache".to_string(),
+            state_entry(
+                Resource::new(Kv::new("cache".to_string()).build()),
+                ResourceStatus::Deleted,
+            ),
+        );
+
+        prune_deprovisioned_resources(&mut state, &target_stack, Some(&release_stack));
+
+        assert!(!state.resources.contains_key("cache"));
+        assert!(state.resources.contains_key("agent"));
+        assert_eq!(
+            state.compute_stack_status().expect("status computes"),
+            StackStatus::Running
+        );
+    }
+
+    /// A Deleted entry the desired stack still wants is the executor's to
+    /// recreate, not ours to forget.
+    #[test]
+    fn a_deleted_but_still_desired_resource_stays() {
+        let cache = Kv::new("cache".to_string()).build();
+        let target_stack = Stack::new("s".to_string())
+            .add(cache.clone(), ResourceLifecycle::Live)
+            .build();
+        let release_stack = target_stack.clone();
+
+        let mut state = StackState::new(Platform::Aws);
+        state.resources.insert(
+            "cache".to_string(),
+            state_entry(Resource::new(cache), ResourceStatus::Deleted),
+        );
+
+        prune_deprovisioned_resources(&mut state, &target_stack, Some(&release_stack));
+
+        assert!(state.resources.contains_key("cache"));
+    }
+
+    /// A resource removed from the release entirely keeps its Deleted entry:
+    /// the tombstone is the executor's deletion record, and only gate
+    /// declines are ours to clean up.
+    #[test]
+    fn a_removed_ungated_resource_keeps_its_tombstone() {
+        let agent = Worker::new("agent".to_string())
+            .permissions("execution".to_string())
+            .code(WorkerCode::Image {
+                image: "example.com/agent:latest".to_string(),
+            })
+            .build();
+        let target_stack = Stack::new("s".to_string())
+            .add(agent.clone(), ResourceLifecycle::Live)
+            .build();
+        let release_stack = target_stack.clone();
+
+        let mut state = StackState::new(Platform::Aws);
+        state.resources.insert(
+            "agent".to_string(),
+            state_entry(Resource::new(agent), ResourceStatus::Running),
+        );
+        state.resources.insert(
+            "cache".to_string(),
+            state_entry(
+                Resource::new(Kv::new("cache".to_string()).build()),
+                ResourceStatus::Deleted,
+            ),
+        );
+
+        prune_deprovisioned_resources(&mut state, &target_stack, Some(&release_stack));
+
+        assert!(state.resources.contains_key("cache"));
+    }
 }

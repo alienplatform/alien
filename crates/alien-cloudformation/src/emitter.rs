@@ -34,6 +34,19 @@ pub trait CfEmitter: Send + Sync {
     /// into the setup registration payload by the generator.
     fn emit_import_ref(&self, ctx: &EmitContext<'_>) -> Result<CfExpression>;
 
+    /// Whether this emitter renders correctly for a resource gated by
+    /// `.enabled(input)`.
+    ///
+    /// Opting in means the emitter leaves the generator free to stamp the gate's
+    /// `Condition` onto its resources, and folds its own import ref through
+    /// `Fn::If` so nothing references a resource the condition skipped. The
+    /// generator refuses to render a gated resource whose emitter has not, so a
+    /// half-converted emitter fails loudly instead of silently creating the
+    /// resource the deployer declined.
+    fn supports_enabled_when(&self) -> bool {
+        false
+    }
+
     /// Expression that resolves to this resource's runtime binding payload.
     /// Import data feeds the manager; binding data feeds user code.
     fn emit_binding_ref(&self, _ctx: &EmitContext<'_>) -> Result<Option<CfExpression>> {
