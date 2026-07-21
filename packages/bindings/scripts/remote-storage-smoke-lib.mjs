@@ -67,7 +67,11 @@ export async function verifyRemoteStorage(storage, object) {
 
     await storage.delete(object)
     cleanupRequired = false
-    await assert.rejects(storage.head(object))
+    const listedAfterDelete = await storage.list(prefix)
+    assert.ok(
+      !listedAfterDelete.some(item => item.location === object),
+      "deleted object remained in list",
+    )
   } catch (error) {
     verificationError = error
   }

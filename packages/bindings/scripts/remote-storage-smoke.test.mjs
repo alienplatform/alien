@@ -63,9 +63,19 @@ describe("remote Storage smoke", () => {
 
     expect(fixture.put).toHaveBeenCalledOnce()
     expect(fixture.get).toHaveBeenCalledWith(object)
-    expect(fixture.head).toHaveBeenCalledTimes(2)
+    expect(fixture.head).toHaveBeenCalledOnce()
+    expect(fixture.list).toHaveBeenCalledTimes(2)
     expect(fixture.list).toHaveBeenCalledWith("alien-e2e/remote-storage-smoke/test/")
     expect(fixture.remove).toHaveBeenCalledOnce()
+  })
+
+  it("fails when delete leaves the object visible", async () => {
+    const fixture = fakeStorage()
+    fixture.remove.mockImplementationOnce(async () => {})
+
+    await expect(verifyRemoteStorage(fixture.storage, object)).rejects.toThrow(
+      "deleted object remained in list",
+    )
   })
 
   it("deletes the object when verification fails", async () => {
