@@ -971,6 +971,21 @@ mod tests {
             None,
         );
         assert_eq!(config.input_values, control_plane_values);
+
+        // A config from a control plane that predates gate answers has an
+        // empty map; the stored answers must stand in, not the defaults.
+        deployment.deployment_config = Some(test_deployment_config());
+
+        let config = build_target_deployment_config(
+            &deployment,
+            StackSettings::default(),
+            None,
+            vec![],
+            "https://manager.example.test".to_string(),
+            None,
+            None,
+        );
+        assert_eq!(config.input_values, stored_values);
     }
 
     fn uninitialized_state() -> DeploymentState {
@@ -1391,8 +1406,12 @@ fn build_target_deployment_config(
         .deployment_name(deployment.name.clone())
         .stack_settings(stack_settings.clone())
         .input_values(
+            // A stored config from a control plane that predates gate answers
+            // has an empty map; the record's persisted answers stand in so
+            // gates don't fall back to their declared defaults.
             deployment_config
                 .map(|config| config.input_values.clone())
+                .filter(|values| !values.is_empty())
                 .unwrap_or_else(|| deployment.input_values.clone()),
         )
         .maybe_management_config(management_config)
