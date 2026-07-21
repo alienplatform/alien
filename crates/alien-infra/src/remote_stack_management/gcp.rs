@@ -5,13 +5,12 @@ use crate::core::{ResourceControllerContext, ResourcePermissionsHelper};
 use crate::error::{ErrorData, Result};
 use alien_core::permissions::PermissionSet;
 use alien_core::{
-    BindingValue, ExternalBinding, GcpRemoteStackManagementHeartbeatData, HeartbeatBackend,
-    KubernetesCluster, ObservedHealth, Platform, ProviderLifecycleState, RemoteStackManagement,
-    RemoteStackManagementHeartbeatData, RemoteStackManagementHeartbeatStatus,
-    RemoteStackManagementOutputs, ResourceHeartbeat, ResourceHeartbeatData, ResourceLifecycle,
-    ResourceOutputs, ResourceStatus, Storage, StorageBinding,
+    GcpRemoteStackManagementHeartbeatData, HeartbeatBackend, KubernetesCluster, ObservedHealth,
+    Platform, ProviderLifecycleState, RemoteStackManagement, RemoteStackManagementHeartbeatData,
+    RemoteStackManagementHeartbeatStatus, RemoteStackManagementOutputs, ResourceHeartbeat,
+    ResourceHeartbeatData, ResourceOutputs, ResourceStatus,
 };
-use alien_error::{AlienError, Context, ContextError, IntoAlienError};
+use alien_error::{AlienError, Context, ContextError};
 use alien_gcp_clients::iam::{
     Binding, CreateServiceAccountRequest, IamPolicy, ServiceAccount as GcpServiceAccount,
 };
@@ -29,12 +28,6 @@ fn get_gcp_management_service_account_id(prefix: &str) -> String {
     format!("{}-management", prefix)
 }
 
-struct GcpRemoteStorageGrantPlan {
-    bucket_name: String,
-    bindings: Vec<Binding>,
-    owned_role_prefixes: Vec<String>,
-}
-
 #[controller]
 pub struct GcpRemoteStackManagementController {
     /// The email of the created management service account.
@@ -45,6 +38,12 @@ pub struct GcpRemoteStackManagementController {
     pub(crate) role_bound: bool,
     /// Whether impersonation permissions have been granted
     pub(crate) impersonation_granted: bool,
+    /// Fingerprint of the management grant plan last applied to the service account.
+    #[serde(default)]
+    pub(crate) applied_management_grant_fingerprint: Option<String>,
+    /// Bucket policies currently owned by this controller, retained for revocation.
+    #[serde(default)]
+    pub(crate) remote_storage_bucket_names: Vec<String>,
 }
 
 #[controller]
@@ -157,7 +156,7 @@ impl GcpRemoteStackManagementController {
     async fn binding_role(&mut self, ctx: &ResourceControllerContext<'_>) -> Result<HandlerAction> {
         let config = ctx.desired_resource_config::<RemoteStackManagement>()?;
 
-        let service_account_email = self.service_account_email.as_ref().ok_or_else(|| {
+        let service_account_email = self.service_account_email.clone().ok_or_else(|| {
             AlienError::new(ErrorData::InfrastructureError {
                 message: "Management service account email not available for role binding"
                     .to_string(),
@@ -186,7 +185,7 @@ impl GcpRemoteStackManagementController {
         let service_account_id = service_account_email
             .split('@')
             .next()
-            .unwrap_or(service_account_email);
+            .unwrap_or(&service_account_email);
 
         let mut permission_context = PermissionContext::new()
             .with_stack_prefix(ctx.resource_prefix.to_string())
@@ -241,14 +240,15 @@ impl GcpRemoteStackManagementController {
         }
 
         let mut owned_role_prefixes = Self::global_management_role_prefixes(&permission_context);
-        let mut remote_storage_grant_plans = Vec::new();
+        let remote_storage_grant_plans =
+            super::gcp_remote_storage::build_grant_plans(ctx, &generator, service_account_id)
+                .await?;
         Self::append_resource_scoped_management_bindings(
             ctx,
             &generator,
             service_account_id,
             &mut new_bindings,
             &mut owned_role_prefixes,
-            &mut remote_storage_grant_plans,
         )
         .await?;
 
@@ -307,14 +307,23 @@ impl GcpRemoteStackManagementController {
             );
         }
 
-        Self::apply_remote_storage_grant_plans(
+        let mut previously_owned_buckets = self.remote_storage_bucket_names.clone();
+        previously_owned_buckets.extend(super::gcp_remote_storage::observed_bucket_names(ctx)?);
+        previously_owned_buckets.sort_unstable();
+        previously_owned_buckets.dedup();
+        let desired_remote_storage_bucket_names = super::gcp_remote_storage::reconcile_grants(
             ctx,
-            service_account_email,
+            &service_account_email,
             remote_storage_grant_plans,
+            &previously_owned_buckets,
         )
         .await?;
 
         self.role_bound = true;
+        self.remote_storage_bucket_names = desired_remote_storage_bucket_names;
+        self.applied_management_grant_fingerprint = Some(
+            super::desired_management_grant_fingerprint(ctx, &self.remote_storage_bucket_names)?,
+        );
 
         Ok(HandlerAction::Continue {
             state: GrantingImpersonation,
@@ -507,6 +516,20 @@ impl GcpRemoteStackManagementController {
     async fn delete_start(&mut self, ctx: &ResourceControllerContext<'_>) -> Result<HandlerAction> {
         let config = ctx.desired_resource_config::<RemoteStackManagement>()?;
 
+        if let Some(service_account_email) = &self.service_account_email {
+            let mut owned_buckets = self.remote_storage_bucket_names.clone();
+            owned_buckets.extend(super::gcp_remote_storage::observed_bucket_names(ctx)?);
+            owned_buckets.sort_unstable();
+            owned_buckets.dedup();
+            super::gcp_remote_storage::revoke_all_owned_grants(
+                ctx,
+                service_account_email,
+                &owned_buckets,
+            )
+            .await?;
+            self.remote_storage_bucket_names.clear();
+        }
+
         // Remove all IAM bindings where our service account is a member
         if !self.role_bound {
             info!(config_id = %config.id, "Role was never bound, skipping unbinding");
@@ -668,6 +691,12 @@ impl GcpRemoteStackManagementController {
             None
         }
     }
+
+    fn needs_update(&self, ctx: &ResourceControllerContext<'_>) -> Result<bool> {
+        let desired_bucket_names = super::gcp_remote_storage::desired_bucket_names(ctx)?;
+        let desired = super::desired_management_grant_fingerprint(ctx, &desired_bucket_names)?;
+        Ok(self.applied_management_grant_fingerprint.as_ref() != Some(&desired))
+    }
 }
 
 fn emit_gcp_remote_stack_management_heartbeat(
@@ -760,103 +789,10 @@ impl GcpRemoteStackManagementController {
         service_account_id: &str,
         new_bindings: &mut Vec<Binding>,
         owned_role_prefixes: &mut Vec<String>,
-        remote_storage_grant_plans: &mut Vec<GcpRemoteStorageGrantPlan>,
     ) -> Result<()> {
         let Some(management_profile) = ctx.desired_stack.management().profile() else {
             return Ok(());
         };
-
-        for (resource_id, resource_entry) in &ctx.desired_stack.resources {
-            if !is_remote_frozen_storage(resource_entry) {
-                continue;
-            }
-
-            let bucket_name = gcp_remote_storage_bucket_name(ctx, resource_id)?;
-            let permission_context =
-                ResourcePermissionsHelper::build_gcp_permission_context(ctx, &bucket_name)?
-                    .with_resource_id(resource_id.clone())
-                    .with_service_account_name(service_account_id.to_string());
-            let mut bucket_bindings = Vec::new();
-
-            if let Some(permission_set_refs) = management_profile.0.get(resource_id) {
-                for permission_set_ref in permission_set_refs {
-                    if permission_set_ref.id().ends_with("/provision") {
-                        continue;
-                    }
-                    let Some(permission_set) =
-                        permission_set_ref.resolve(|name| get_permission_set(name).cloned())
-                    else {
-                        continue;
-                    };
-                    if permission_set.platforms.gcp.is_none() {
-                        continue;
-                    }
-
-                    let grant_plan = generator
-                        .generate_grant_plan(
-                            &permission_set,
-                            BindingTarget::Resource,
-                            &permission_context,
-                        )
-                        .context(ErrorData::InfrastructureError {
-                            message: format!(
-                                "Failed to generate bucket-scoped IAM grant plan for management permission set '{}'",
-                                permission_set.id
-                            ),
-                            operation: Some("binding_role".to_string()),
-                            resource_id: Some(resource_id.clone()),
-                        })?;
-                    ResourcePermissionsHelper::ensure_all_gcp_custom_roles(
-                        ctx,
-                        &permission_set.id,
-                        &grant_plan,
-                    )
-                    .await?;
-
-                    bucket_bindings.extend(
-                        grant_plan
-                            .bindings_for_target(GcpBindingTargetScope::CurrentResource)
-                            .into_iter()
-                            .map(|binding| Binding {
-                                role: binding.role,
-                                members: binding.members,
-                                condition: binding.condition.map(|cond| {
-                                    alien_gcp_clients::iam::Expr {
-                                        expression: cond.expression,
-                                        title: Some(cond.title),
-                                        description: Some(cond.description),
-                                        location: None,
-                                    }
-                                }),
-                            }),
-                    );
-                }
-            }
-
-            let mut owned_permission_set_ids = vec!["storage/remote-data-write"];
-            if let Some(permission_set_refs) = management_profile.0.get(resource_id) {
-                owned_permission_set_ids.extend(
-                    permission_set_refs
-                        .iter()
-                        .filter(|permission_set_ref| {
-                            !permission_set_ref.id().ends_with("/provision")
-                        })
-                        .map(|permission_set_ref| permission_set_ref.id()),
-                );
-            }
-            owned_permission_set_ids.sort_unstable();
-            owned_permission_set_ids.dedup();
-            let storage_role_prefixes =
-                ResourcePermissionsHelper::gcp_permission_set_custom_role_name_prefixes(
-                    &permission_context,
-                    owned_permission_set_ids,
-                );
-            remote_storage_grant_plans.push(GcpRemoteStorageGrantPlan {
-                bucket_name,
-                bindings: bucket_bindings,
-                owned_role_prefixes: storage_role_prefixes,
-            });
-        }
 
         for (resource_id, permission_set_refs) in management_profile
             .0
@@ -938,60 +874,6 @@ impl GcpRemoteStackManagementController {
         Ok(())
     }
 
-    async fn apply_remote_storage_grant_plans(
-        ctx: &ResourceControllerContext<'_>,
-        service_account_email: &str,
-        grant_plans: Vec<GcpRemoteStorageGrantPlan>,
-    ) -> Result<()> {
-        if grant_plans.is_empty() {
-            return Ok(());
-        }
-
-        let gcp_config = ctx.get_gcp_config()?;
-        let client = ctx.service_provider.get_gcp_gcs_client(gcp_config)?;
-        let member = format!("serviceAccount:{service_account_email}");
-
-        for grant_plan in grant_plans {
-            let mut current_policy = client
-                .get_bucket_iam_policy(grant_plan.bucket_name.clone())
-                .await
-                .context(ErrorData::CloudPlatformError {
-                    message: format!(
-                        "Failed to get IAM policy for remote Storage bucket '{}' before binding management permissions",
-                        grant_plan.bucket_name
-                    ),
-                    resource_id: Some(grant_plan.bucket_name.clone()),
-                })?;
-            let owned_exact_roles =
-                ResourcePermissionsHelper::gcp_predefined_role_names(&grant_plan.bindings);
-            let changed = ResourcePermissionsHelper::reconcile_gcp_project_member_bindings(
-                &mut current_policy.bindings,
-                grant_plan.bindings,
-                &member,
-                &grant_plan.owned_role_prefixes,
-                &owned_exact_roles,
-            );
-
-            if !changed {
-                continue;
-            }
-
-            current_policy.version = Some(3);
-            client
-                .set_bucket_iam_policy(grant_plan.bucket_name.clone(), current_policy)
-                .await
-                .context(ErrorData::CloudPlatformError {
-                    message: format!(
-                        "Failed to apply management permissions to remote Storage bucket '{}'",
-                        grant_plan.bucket_name
-                    ),
-                    resource_id: Some(grant_plan.bucket_name.clone()),
-                })?;
-        }
-
-        Ok(())
-    }
-
     #[cfg(test)]
     fn project_management_bindings(bindings: Vec<GcpIamBinding>) -> Vec<GcpIamBinding> {
         bindings
@@ -1012,89 +894,9 @@ impl GcpRemoteStackManagementController {
             service_account_unique_id: Some("123456789012345678901".to_string()),
             role_bound: true,
             impersonation_granted: true,
+            applied_management_grant_fingerprint: None,
+            remote_storage_bucket_names: Vec::new(),
             _internal_stay_count: None,
-        }
-    }
-}
-
-fn is_remote_frozen_storage(resource_entry: &alien_core::ResourceEntry) -> bool {
-    resource_entry.lifecycle == ResourceLifecycle::Frozen
-        && resource_entry.remote_access
-        && resource_entry.config.downcast_ref::<Storage>().is_some()
-}
-
-fn gcp_remote_storage_bucket_name(
-    ctx: &ResourceControllerContext<'_>,
-    resource_id: &str,
-) -> Result<String> {
-    match remote_storage_binding(ctx, resource_id)? {
-        Some(StorageBinding::Gcs(binding)) => concrete_storage_binding_value(
-            binding.bucket_name,
-            resource_id,
-            "bucketName",
-            "GCP GCS",
-        ),
-        Some(other) => Err(AlienError::new(ErrorData::ResourceConfigInvalid {
-            message: format!(
-                "Remote Storage resource '{resource_id}' must use a GCS binding on GCP, got {other:?}"
-            ),
-            resource_id: Some(resource_id.to_string()),
-        })),
-        None => Ok(format!("{}-{}", ctx.resource_prefix, resource_id)),
-    }
-}
-
-fn remote_storage_binding(
-    ctx: &ResourceControllerContext<'_>,
-    resource_id: &str,
-) -> Result<Option<StorageBinding>> {
-    match ctx.deployment_config.external_bindings.get(resource_id) {
-        Some(ExternalBinding::Storage(binding)) => return Ok(Some(binding.clone())),
-        Some(other) => {
-            return Err(AlienError::new(ErrorData::ResourceConfigInvalid {
-                message: format!(
-                    "Remote Storage resource '{resource_id}' has a non-Storage external binding: {other:?}"
-                ),
-                resource_id: Some(resource_id.to_string()),
-            }));
-        }
-        None => {}
-    }
-
-    let Some(binding) = ctx
-        .state
-        .resource(resource_id)
-        .and_then(|state| state.remote_binding_params.as_ref())
-    else {
-        return Ok(None);
-    };
-
-    serde_json::from_value(binding.clone())
-        .into_alien_error()
-        .context(ErrorData::ResourceConfigInvalid {
-            message: format!(
-                "Remote Storage resource '{resource_id}' has invalid binding parameters"
-            ),
-            resource_id: Some(resource_id.to_string()),
-        })
-        .map(Some)
-}
-
-fn concrete_storage_binding_value(
-    value: BindingValue<String>,
-    resource_id: &str,
-    field_name: &str,
-    provider: &str,
-) -> Result<String> {
-    match value {
-        BindingValue::Value(value) => Ok(value),
-        BindingValue::Expression(_) | BindingValue::SecretRef { .. } => {
-            Err(AlienError::new(ErrorData::ResourceConfigInvalid {
-                message: format!(
-                    "Remote Storage resource '{resource_id}' requires a concrete {provider} {field_name}"
-                ),
-                resource_id: Some(resource_id.to_string()),
-            }))
         }
     }
 }
@@ -1102,7 +904,6 @@ fn concrete_storage_binding_value(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use alien_core::{Resource, ResourceEntry};
 
     fn test_permission_context() -> PermissionContext {
         PermissionContext::new()
@@ -1148,52 +949,5 @@ mod tests {
 
         assert_eq!(project_bindings.len(), 1);
         assert_eq!(project_bindings[0].target, GcpBindingTargetScope::Project);
-    }
-
-    #[test]
-    fn remote_storage_management_is_limited_to_opted_in_frozen_storage() {
-        let entry = |lifecycle, remote_access| ResourceEntry {
-            config: Resource::new(Storage::new("archive".to_string()).build()),
-            lifecycle,
-            dependencies: Vec::new(),
-            remote_access,
-        };
-
-        assert!(is_remote_frozen_storage(&entry(
-            ResourceLifecycle::Frozen,
-            true
-        )));
-        assert!(!is_remote_frozen_storage(&entry(
-            ResourceLifecycle::Frozen,
-            false
-        )));
-        assert!(!is_remote_frozen_storage(&entry(
-            ResourceLifecycle::Live,
-            true
-        )));
-    }
-
-    #[test]
-    fn remote_storage_management_grant_targets_the_current_bucket_policy() {
-        let context = test_permission_context()
-            .with_resource_id("archive".to_string())
-            .with_resource_name("imported-archive-bucket".to_string())
-            .with_service_account_name("deployment-management".to_string());
-        let permission_set = get_permission_set("storage/remote-data-write").unwrap();
-
-        let grant_plan = GcpRuntimePermissionsGenerator::new()
-            .generate_grant_plan(permission_set, BindingTarget::Resource, &context)
-            .unwrap();
-        let bucket_bindings =
-            grant_plan.bindings_for_target(GcpBindingTargetScope::CurrentResource);
-
-        assert!(grant_plan
-            .bindings_for_target(GcpBindingTargetScope::Project)
-            .is_empty());
-        assert_eq!(bucket_bindings.len(), 1);
-        assert_eq!(
-            bucket_bindings[0].members,
-            ["serviceAccount:deployment-management@test-project.iam.gserviceaccount.com"]
-        );
     }
 }

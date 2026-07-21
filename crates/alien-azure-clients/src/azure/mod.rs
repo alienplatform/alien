@@ -37,6 +37,9 @@ pub mod service_bus;
 pub mod storage_accounts;
 pub mod tables;
 pub mod token_cache;
+mod user_delegation_sas;
+
+pub use user_delegation_sas::AzureContainerSas;
 
 const AZURE_IMDS_ENDPOINT: &str = "http://169.254.169.254/metadata/identity/oauth2/token";
 
@@ -147,7 +150,9 @@ async fn get_impersonated_token(
     // with the specified scope and client context.
 
     match &config.credentials {
-        AzureCredentials::AccessToken { .. } | AzureCredentials::ScopedAccessTokens { .. } => {
+        AzureCredentials::AccessToken { .. }
+        | AzureCredentials::ScopedAccessTokens { .. }
+        | AzureCredentials::SasToken { .. } => {
             // If we already have an access token, we can't directly impersonate
             // In practice, you'd need to use Azure AD's on-behalf-of flow
             Err(AlienError::new(ErrorData::InvalidInput {
@@ -408,6 +413,15 @@ pub trait AzureClientConfigExt {
     /// Gets a scoped bearer token together with its authoritative JWT expiry.
     async fn get_bearer_token_with_expiry(&self, scope: &str) -> Result<ExpiringAccessToken>;
 
+    /// Creates a short-lived user-delegation SAS confined to one Blob container.
+    async fn create_container_user_delegation_sas(
+        &self,
+        account_name: &str,
+        container_name: &str,
+        permissions: &str,
+        expires_at: DateTime<Utc>,
+    ) -> Result<AzureContainerSas>;
+
     /// Gets the Azure resource management endpoint URL
     fn management_endpoint(&self) -> &str;
 
@@ -577,7 +591,8 @@ impl AzureClientConfigExt for AzureClientConfig {
             },
             AzureCredentials::ServicePrincipal { .. }
             | AzureCredentials::AccessToken { .. }
-            | AzureCredentials::ScopedAccessTokens { .. } => {
+            | AzureCredentials::ScopedAccessTokens { .. }
+            | AzureCredentials::SasToken { .. } => {
                 let token = get_impersonated_token(self, &config).await?;
                 AzureCredentials::AccessToken { token }
             }
@@ -604,6 +619,12 @@ impl AzureClientConfigExt for AzureClientConfig {
     /// Gets a bearer token for Azure API authentication with a specific scope
     async fn get_bearer_token_with_scope(&self, scope: &str) -> Result<String> {
         match &self.credentials {
+            AzureCredentials::SasToken { .. } => {
+                Err(AlienError::new(ErrorData::AuthenticationError {
+                    message: "An Azure Storage SAS cannot be used as an OAuth bearer token"
+                        .to_string(),
+                }))
+            }
             AzureCredentials::AccessToken { token } => Ok(token.clone()),
             AzureCredentials::ScopedAccessTokens { tokens } => tokens
                 .get(scope)
@@ -807,6 +828,23 @@ impl AzureClientConfigExt for AzureClientConfig {
         let token = self.get_bearer_token_with_scope(scope).await?;
         let expires_at = extract_expiry_from_token(&token)?;
         Ok(ExpiringAccessToken { token, expires_at })
+    }
+
+    async fn create_container_user_delegation_sas(
+        &self,
+        account_name: &str,
+        container_name: &str,
+        permissions: &str,
+        expires_at: DateTime<Utc>,
+    ) -> Result<AzureContainerSas> {
+        user_delegation_sas::create_container_user_delegation_sas(
+            self,
+            account_name,
+            container_name,
+            permissions,
+            expires_at,
+        )
+        .await
     }
 
     /// Gets the Azure resource management endpoint URL

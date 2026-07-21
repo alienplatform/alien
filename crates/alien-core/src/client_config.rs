@@ -57,7 +57,11 @@ pub struct AwsWebIdentityConfig {
 /// Supported AWS authentication methods
 #[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
-#[serde(rename_all = "camelCase", tag = "type")]
+#[serde(
+    rename_all = "camelCase",
+    rename_all_fields = "camelCase",
+    tag = "type"
+)]
 pub enum AwsCredentials {
     /// Static direct access keys.
     AccessKeys {
@@ -370,6 +374,14 @@ pub enum AzureCredentials {
         /// Alien bindings.
         tokens: HashMap<String, String>,
     },
+    /// A short-lived Azure Storage shared access signature.
+    ///
+    /// Query parameter values are kept decoded. Azure clients must encode them
+    /// when attaching them to a request URL.
+    SasToken {
+        /// Exact SAS query parameters, including the signature and expiry.
+        query_parameters: HashMap<String, String>,
+    },
     /// Azure VM IMDS managed identity.
     VmManagedIdentity {
         /// The client ID of the user-assigned managed identity
@@ -416,6 +428,14 @@ impl std::fmt::Debug for AzureCredentials {
                 .debug_struct("AzureCredentials::ScopedAccessTokens")
                 .field("scopes", &tokens.keys().collect::<Vec<_>>())
                 .field("tokens", &"[REDACTED]")
+                .finish(),
+            AzureCredentials::SasToken { query_parameters } => f
+                .debug_struct("AzureCredentials::SasToken")
+                .field(
+                    "parameter_names",
+                    &query_parameters.keys().collect::<Vec<_>>(),
+                )
+                .field("query_parameters", &"[REDACTED]")
                 .finish(),
             AzureCredentials::VmManagedIdentity {
                 client_id,

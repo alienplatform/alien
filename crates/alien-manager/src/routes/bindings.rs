@@ -5,9 +5,9 @@
 //! binding topology together with materialized, short-lived credentials.
 
 use alien_core::{
-    AwsClientConfig, AwsCredentials, AzureClientConfig, AzureCredentials, BlobStorageBinding,
-    ClientConfig, GcpClientConfig, GcpCredentials, GcsStorageBinding, Platform, ResourceLifecycle,
-    ResourceStatus, S3StorageBinding, Storage, StorageBinding,
+    AwsClientConfig, AwsCredentials, AzureClientConfig, AzureCredentials, BindingValue,
+    ClientConfig, GcpClientConfig, GcpCredentials, Platform, ResourceLifecycle, ResourceStatus,
+    Storage, StorageBinding,
 };
 use alien_error::{Context, ContextError, IntoAlienError};
 use axum::{
@@ -23,7 +23,8 @@ use serde::{Deserialize, Serialize};
 use super::{auth, AppState};
 use crate::auth::Subject;
 use crate::credential_materialization::{
-    materialize_remote_storage_lease, MaterializedCredentialLease, AZURE_STORAGE_SCOPE,
+    materialize_remote_storage_lease, MaterializedCredentialLease, RemoteStorageCredentialScope,
+    AZURE_REMOTE_STORAGE_PERMISSIONS,
 };
 use crate::error::ErrorData;
 use crate::traits::{DeploymentRecord, ReleaseStore};
@@ -51,28 +52,57 @@ pub struct ResolveBindingRequest {
 pub enum ResolveBindingResponse {
     /// AWS S3 and an AWS session.
     S3 {
-        binding: S3StorageBinding,
+        binding: RemoteS3StorageBinding,
         #[serde(rename = "clientConfig")]
         client_config: RemoteAwsClientConfig,
         #[serde(rename = "expiresAt")]
         expires_at: String,
     },
-    /// Azure Blob Storage and an exact storage-audience token.
+    /// Azure Blob Storage and an exact container-scoped SAS.
     Blob {
-        binding: BlobStorageBinding,
+        binding: RemoteBlobStorageBinding,
         #[serde(rename = "clientConfig")]
         client_config: RemoteAzureClientConfig,
         #[serde(rename = "expiresAt")]
         expires_at: String,
     },
-    /// Google Cloud Storage and a minted access token.
+    /// Google Cloud Storage and a bucket-downscoped access token.
     Gcs {
-        binding: GcsStorageBinding,
+        binding: RemoteGcsStorageBinding,
         #[serde(rename = "clientConfig")]
         client_config: RemoteGcpClientConfig,
         #[serde(rename = "expiresAt")]
         expires_at: String,
     },
+}
+
+/// Concrete S3 topology returned to remote clients.
+#[derive(Serialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct RemoteS3StorageBinding {
+    /// S3 bucket name authorized by the credential lease.
+    pub bucket_name: String,
+}
+
+/// Concrete Google Cloud Storage topology returned to remote clients.
+#[derive(Serialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct RemoteGcsStorageBinding {
+    /// GCS bucket name authorized by the credential lease.
+    pub bucket_name: String,
+}
+
+/// Concrete Azure Blob Storage topology returned to remote clients.
+#[derive(Serialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct RemoteBlobStorageBinding {
+    /// Storage account containing the authorized container.
+    pub account_name: String,
+    /// Blob container authorized by the credential lease.
+    pub container_name: String,
 }
 
 /// Response-safe AWS client configuration. The public contract deliberately
@@ -92,17 +122,29 @@ pub struct RemoteAwsClientConfig {
 /// The only AWS credential form remote binding resolution can return.
 #[derive(Serialize)]
 #[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
-#[serde(rename_all = "camelCase", tag = "type")]
+#[serde(
+    rename_all = "camelCase",
+    rename_all_fields = "camelCase",
+    tag = "type"
+)]
 pub enum RemoteAwsCredentials {
     /// Temporary AWS session credentials with an authoritative expiry.
     SessionCredentials {
         /// AWS access key id.
+        #[serde(rename = "accessKeyId")]
+        #[cfg_attr(feature = "openapi", schema(rename = "accessKeyId"))]
         access_key_id: String,
         /// AWS secret access key.
+        #[serde(rename = "secretAccessKey")]
+        #[cfg_attr(feature = "openapi", schema(rename = "secretAccessKey"))]
         secret_access_key: String,
         /// AWS session token.
+        #[serde(rename = "sessionToken")]
+        #[cfg_attr(feature = "openapi", schema(rename = "sessionToken"))]
         session_token: String,
         /// Provider-reported credential expiry.
+        #[serde(rename = "expiresAt")]
+        #[cfg_attr(feature = "openapi", schema(rename = "expiresAt"))]
         expires_at: String,
     },
 }
@@ -136,8 +178,8 @@ pub enum RemoteGcpCredentials {
     },
 }
 
-/// Response-safe Azure client configuration. It contains one exact
-/// storage-audience token and no refreshable identity source.
+/// Response-safe Azure client configuration. It contains one container-bound
+/// user-delegation SAS and no OAuth or refreshable identity source.
 #[derive(Serialize)]
 #[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -148,7 +190,7 @@ pub struct RemoteAzureClientConfig {
     pub tenant_id: String,
     /// Azure region configured for the deployment.
     pub region: Option<String>,
-    /// One token keyed by the exact Azure Storage OAuth scope.
+    /// A short-lived SAS bound to the requested Blob container.
     pub credentials: RemoteAzureCredentials,
 }
 
@@ -157,21 +199,50 @@ pub struct RemoteAzureClientConfig {
 #[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 #[serde(rename_all = "camelCase", tag = "type")]
 pub enum RemoteAzureCredentials {
-    /// Exact scope-to-token map containing only the Azure Storage scope.
-    ScopedAccessTokens {
-        /// The one Azure Storage OAuth token.
-        tokens: RemoteAzureStorageToken,
+    /// User-delegation SAS signed for exactly one container.
+    ContainerSas {
+        /// Explicit signed fields required to reconstruct the SAS query.
+        sas: RemoteAzureContainerSas,
     },
 }
 
-/// Exact Azure Storage OAuth scope-to-token object.
+/// Explicit fields of an Azure user-delegation SAS. Keeping the fields typed
+/// lets clients independently validate container scope, permissions, protocol,
+/// and expiry before constructing query parameters.
 #[derive(Serialize)]
 #[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
-#[serde(deny_unknown_fields)]
-pub struct RemoteAzureStorageToken {
-    /// Bearer token for `https://storage.azure.com/.default`.
-    #[serde(rename = "https://storage.azure.com/.default")]
-    pub token: String,
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct RemoteAzureContainerSas {
+    /// Storage account named by the signed canonical resource.
+    pub account_name: String,
+    /// Blob container named by the signed canonical resource.
+    pub container_name: String,
+    /// Canonically ordered SAS permissions (`sp`).
+    pub permissions: String,
+    /// SAS validity start (`st`).
+    pub starts_at: String,
+    /// SAS validity end (`se`).
+    pub expires_at: String,
+    /// Object ID that requested the delegation key (`skoid`).
+    pub signed_object_id: String,
+    /// Tenant ID that issued the delegation key (`sktid`).
+    pub signed_tenant_id: String,
+    /// Delegation-key validity start (`skt`).
+    pub signed_key_start: String,
+    /// Delegation-key validity end (`ske`).
+    pub signed_key_expiry: String,
+    /// Delegation-key service (`sks`).
+    pub signed_key_service: String,
+    /// Delegation-key version (`skv`).
+    pub signed_key_version: String,
+    /// Required transport protocol (`spr`).
+    pub protocol: String,
+    /// Storage authorization version (`sv`).
+    pub service_version: String,
+    /// Signed resource kind (`sr`).
+    pub signed_resource: String,
+    /// HMAC-SHA256 signature (`sig`).
+    pub signature: String,
 }
 
 /// Storage binding variants supported by the first hosted remote-bindings release.
@@ -180,11 +251,28 @@ pub struct RemoteAzureStorageToken {
 #[serde(tag = "service", rename_all = "lowercase")]
 pub enum RemoteStorageBinding {
     /// AWS S3.
-    S3(S3StorageBinding),
+    S3(RemoteS3StorageBinding),
     /// Azure Blob Storage.
-    Blob(BlobStorageBinding),
+    Blob(RemoteBlobStorageBinding),
     /// Google Cloud Storage.
-    Gcs(GcsStorageBinding),
+    Gcs(RemoteGcsStorageBinding),
+}
+
+impl RemoteStorageBinding {
+    fn credential_scope(&self) -> RemoteStorageCredentialScope {
+        match self {
+            Self::S3(binding) => RemoteStorageCredentialScope::AwsS3 {
+                bucket_name: binding.bucket_name.clone(),
+            },
+            Self::Gcs(binding) => RemoteStorageCredentialScope::GcpGcs {
+                bucket_name: binding.bucket_name.clone(),
+            },
+            Self::Blob(binding) => RemoteStorageCredentialScope::AzureBlob {
+                account_name: binding.account_name.clone(),
+                container_name: binding.container_name.clone(),
+            },
+        }
+    }
 }
 
 /// Manual `Debug`: both the binding payload and client configuration can carry
@@ -255,41 +343,82 @@ impl TryFrom<GcpClientConfig> for RemoteGcpClientConfig {
     }
 }
 
-impl TryFrom<AzureClientConfig> for RemoteAzureClientConfig {
+impl TryFrom<(AzureClientConfig, &RemoteBlobStorageBinding)> for RemoteAzureClientConfig {
     type Error = alien_error::AlienError<ErrorData>;
 
-    fn try_from(config: AzureClientConfig) -> Result<Self, Self::Error> {
+    fn try_from(
+        (config, binding): (AzureClientConfig, &RemoteBlobStorageBinding),
+    ) -> Result<Self, Self::Error> {
         if config.service_overrides.is_some() {
             return Err(ErrorData::internal(
                 "Remote Azure Storage response contains service endpoint overrides",
             ));
         }
-        let AzureCredentials::ScopedAccessTokens { mut tokens } = config.credentials else {
+        let AzureCredentials::SasToken {
+            mut query_parameters,
+        } = config.credentials
+        else {
             return Err(ErrorData::internal(
-                "Remote Azure Storage response credentials are not exact scoped access tokens",
+                "Remote Azure Storage response credentials are not a container SAS",
             ));
         };
-        if tokens.len() != 1 {
+        let credentials = RemoteAzureContainerSas {
+            account_name: binding.account_name.clone(),
+            container_name: binding.container_name.clone(),
+            permissions: take_sas_parameter(&mut query_parameters, "sp")?,
+            starts_at: take_sas_parameter(&mut query_parameters, "st")?,
+            expires_at: take_sas_parameter(&mut query_parameters, "se")?,
+            signed_object_id: take_sas_parameter(&mut query_parameters, "skoid")?,
+            signed_tenant_id: take_sas_parameter(&mut query_parameters, "sktid")?,
+            signed_key_start: take_sas_parameter(&mut query_parameters, "skt")?,
+            signed_key_expiry: take_sas_parameter(&mut query_parameters, "ske")?,
+            signed_key_service: take_sas_parameter(&mut query_parameters, "sks")?,
+            signed_key_version: take_sas_parameter(&mut query_parameters, "skv")?,
+            protocol: take_sas_parameter(&mut query_parameters, "spr")?,
+            service_version: take_sas_parameter(&mut query_parameters, "sv")?,
+            signed_resource: take_sas_parameter(&mut query_parameters, "sr")?,
+            signature: take_sas_parameter(&mut query_parameters, "sig")?,
+        };
+        if !query_parameters.is_empty()
+            || credentials.permissions != AZURE_REMOTE_STORAGE_PERMISSIONS
+            || credentials.protocol != "https"
+            || credentials.signed_resource != "c"
+            || credentials.signed_key_service != "b"
+        {
             return Err(ErrorData::internal(
-                "Remote Azure Storage response must contain only the exact storage-scope token",
+                "Remote Azure Storage SAS is not exactly container scoped",
             ));
         }
-        let storage_token = tokens.remove(AZURE_STORAGE_SCOPE).ok_or_else(|| {
-            ErrorData::internal(
-                "Remote Azure Storage response must contain only the exact storage-scope token",
-            )
-        })?;
 
         Ok(Self {
             subscription_id: config.subscription_id,
             tenant_id: config.tenant_id,
             region: config.region,
-            credentials: RemoteAzureCredentials::ScopedAccessTokens {
-                tokens: RemoteAzureStorageToken {
-                    token: storage_token,
-                },
-            },
+            credentials: RemoteAzureCredentials::ContainerSas { sas: credentials },
         })
+    }
+}
+
+fn take_sas_parameter(
+    parameters: &mut std::collections::HashMap<String, String>,
+    name: &str,
+) -> Result<String, alien_error::AlienError<ErrorData>> {
+    parameters.remove(name).ok_or_else(|| {
+        ErrorData::internal(format!(
+            "Remote Azure Storage SAS is missing required parameter '{name}'"
+        ))
+    })
+}
+
+fn concrete_binding_value(
+    value: &BindingValue<String>,
+    field: &str,
+) -> Result<String, alien_error::AlienError<ErrorData>> {
+    match value {
+        BindingValue::Value(value) if !value.is_empty() => Ok(value.clone()),
+        _ => Err(ErrorData::internal(format!(
+            "Remote Storage binding field '{field}' is not a concrete value"
+        ))),
     }
 }
 
@@ -307,8 +436,8 @@ impl ResolveBindingResponse {
             }),
             (RemoteStorageBinding::Blob(binding), ClientConfig::Azure(client_config)) => {
                 Ok(Self::Blob {
+                    client_config: ((*client_config), &binding).try_into()?,
                     binding,
-                    client_config: (*client_config).try_into()?,
                     expires_at,
                 })
             }
@@ -386,13 +515,22 @@ async fn resolve_binding(
         return error.into_response();
     }
 
+    if let Err(error) = require_setup_owned_remote_storage(&deployment, &request.resource_id) {
+        return error.into_response();
+    }
+
     let binding = match remote_storage_binding(&deployment, &request.resource_id) {
         Ok(binding) => binding,
         Err(error) => return error.into_response(),
     };
 
-    let resolved = match state.credential_resolver.resolve(&deployment).await {
-        Ok(client_config) => client_config,
+    let scope = binding.credential_scope();
+    let resolved = match state
+        .credential_resolver
+        .resolve_remote_storage_source(&deployment)
+        .await
+    {
+        Ok(source) => source,
         Err(error) => {
             return error
                 .context(ErrorData::RemoteCredentialHandoffFailed {
@@ -402,15 +540,7 @@ async fn resolve_binding(
                 .into_response()
         }
     };
-    if resolved.platform() != deployment.platform {
-        return ErrorData::internal(format!(
-            "Credential resolver returned platform '{}' for deployment platform '{}'",
-            resolved.platform(),
-            deployment.platform
-        ))
-        .into_response();
-    }
-    let lease = match materialize_remote_storage_lease(resolved).await {
+    let lease = match materialize_remote_storage_lease(resolved, scope).await {
         Ok(materialized) => materialized,
         Err(error) => return error.into_response(),
     };
@@ -440,6 +570,31 @@ async fn resolve_binding(
         Json(response),
     )
         .into_response()
+}
+
+/// External bindings import caller-supplied resource references; they do not
+/// prove that generated setup created the resource. Remote Bindings v0 must
+/// therefore reject them even if stale synchronized state contains binding
+/// parameters from an older manager.
+fn require_setup_owned_remote_storage(
+    deployment: &DeploymentRecord,
+    resource_id: &str,
+) -> Result<(), alien_error::AlienError<ErrorData>> {
+    let in_deployment_config = deployment
+        .deployment_config
+        .as_ref()
+        .is_some_and(|config| config.external_bindings.has(resource_id));
+    let in_stack_settings = deployment
+        .stack_settings
+        .as_ref()
+        .and_then(|settings| settings.external_bindings.as_ref())
+        .is_some_and(|bindings| bindings.has(resource_id));
+    if in_deployment_config || in_stack_settings {
+        return Err(ErrorData::bad_request(format!(
+            "Remote Storage resource '{resource_id}' cannot use an external binding; remote access is limited to resources created by setup"
+        )));
+    }
+    Ok(())
 }
 
 fn deployment_status_allows_remote_bindings(status: &str) -> bool {
@@ -577,9 +732,28 @@ fn remote_storage_binding(
                 reason: format!("Storage resource '{resource_id}' has an invalid remote binding"),
             })?;
     match (deployment.platform, binding) {
-        (Platform::Aws, StorageBinding::S3(binding)) => Ok(RemoteStorageBinding::S3(binding)),
-        (Platform::Gcp, StorageBinding::Gcs(binding)) => Ok(RemoteStorageBinding::Gcs(binding)),
-        (Platform::Azure, StorageBinding::Blob(binding)) => Ok(RemoteStorageBinding::Blob(binding)),
+        (Platform::Aws, StorageBinding::S3(binding)) => {
+            Ok(RemoteStorageBinding::S3(RemoteS3StorageBinding {
+                bucket_name: concrete_binding_value(&binding.bucket_name, "S3 bucketName")?,
+            }))
+        }
+        (Platform::Gcp, StorageBinding::Gcs(binding)) => {
+            Ok(RemoteStorageBinding::Gcs(RemoteGcsStorageBinding {
+                bucket_name: concrete_binding_value(&binding.bucket_name, "GCS bucketName")?,
+            }))
+        }
+        (Platform::Azure, StorageBinding::Blob(binding)) => {
+            Ok(RemoteStorageBinding::Blob(RemoteBlobStorageBinding {
+                account_name: concrete_binding_value(
+                    &binding.account_name,
+                    "Azure Blob Storage accountName",
+                )?,
+                container_name: concrete_binding_value(
+                    &binding.container_name,
+                    "Azure Blob Storage containerName",
+                )?,
+            }))
+        }
         _ => Err(ErrorData::bad_request(format!(
             "Storage resource '{resource_id}' binding does not match deployment platform '{}'",
             deployment.platform
@@ -588,546 +762,5 @@ fn remote_storage_binding(
 }
 
 #[cfg(test)]
-mod tests {
-    use std::collections::HashMap;
-
-    use alien_core::{Platform, Resource, Stack, StackResourceState, StackState};
-    use alien_error::AlienError;
-    use async_trait::async_trait;
-
-    use super::*;
-    use crate::traits::{CreateReleaseParams, ReleaseRecord};
-
-    #[derive(Default)]
-    struct StubReleaseStore {
-        releases: HashMap<String, ReleaseRecord>,
-    }
-
-    #[async_trait]
-    impl ReleaseStore for StubReleaseStore {
-        async fn create_release(
-            &self,
-            caller: &Subject,
-            params: CreateReleaseParams,
-        ) -> Result<ReleaseRecord, AlienError> {
-            Ok(ReleaseRecord {
-                id: "created-release".to_string(),
-                workspace_id: caller.workspace_id.clone(),
-                project_id: params.project_id,
-                stacks: params.stacks,
-                git_commit_sha: params.git_commit_sha,
-                git_commit_ref: params.git_commit_ref,
-                git_commit_message: params.git_commit_message,
-                created_at: Utc::now(),
-            })
-        }
-
-        async fn get_release(
-            &self,
-            _caller: &Subject,
-            id: &str,
-        ) -> Result<Option<ReleaseRecord>, AlienError> {
-            Ok(self.releases.get(id).cloned())
-        }
-
-        async fn get_latest_release(
-            &self,
-            _caller: &Subject,
-        ) -> Result<Option<ReleaseRecord>, AlienError> {
-            Ok(self.releases.values().next().cloned())
-        }
-
-        async fn list_releases(&self, _caller: &Subject) -> Result<Vec<ReleaseRecord>, AlienError> {
-            Ok(self.releases.values().cloned().collect())
-        }
-    }
-
-    fn stack_state_with_resource(
-        resource_type: &str,
-        lifecycle: Option<ResourceLifecycle>,
-        status: ResourceStatus,
-        remote_binding_params: Option<serde_json::Value>,
-    ) -> StackState {
-        let mut stack_state = StackState::new(Platform::Aws);
-        stack_state.resources.insert(
-            "files".to_string(),
-            StackResourceState::builder()
-                .resource_type(resource_type.to_string())
-                .status(status)
-                .config(Resource::new(Storage {
-                    id: "files".to_string(),
-                    public_read: false,
-                    versioning: false,
-                    lifecycle_rules: Vec::new(),
-                }))
-                .maybe_lifecycle(lifecycle)
-                .maybe_remote_binding_params(remote_binding_params)
-                .dependencies(Vec::new())
-                .build(),
-        );
-        stack_state
-    }
-
-    fn deployment(stack_state: StackState) -> DeploymentRecord {
-        deployment_on_platform(stack_state, Platform::Aws)
-    }
-
-    fn deployment_on_platform(stack_state: StackState, platform: Platform) -> DeploymentRecord {
-        DeploymentRecord {
-            id: "deployment".to_string(),
-            workspace_id: "default".to_string(),
-            project_id: "default".to_string(),
-            name: "deployment".to_string(),
-            deployment_group_id: "group".to_string(),
-            platform,
-            deployment_protocol_version: 1,
-            base_platform: None,
-            status: "running".to_string(),
-            stack_settings: None,
-            stack_state: Some(stack_state),
-            environment_info: None,
-            runtime_metadata: None,
-            current_release_id: None,
-            desired_release_id: None,
-            import_source: None,
-            setup_method: None,
-            setup_metadata: None,
-            setup_target: None,
-            setup_fingerprint: None,
-            setup_fingerprint_version: None,
-            user_environment_variables: None,
-            management_config: None,
-            deployment_config: None,
-            deployment_token: None,
-            retry_requested: false,
-            locked_by: None,
-            locked_at: None,
-            created_at: Utc::now(),
-            updated_at: None,
-            error: None,
-        }
-    }
-
-    fn storage() -> Storage {
-        Storage {
-            id: "files".to_string(),
-            public_read: false,
-            versioning: false,
-            lifecycle_rules: Vec::new(),
-        }
-    }
-
-    fn storage_stack(remote_access: bool) -> Stack {
-        let builder = Stack::new("stack".to_string());
-        if remote_access {
-            builder
-                .add_with_remote_access(storage(), ResourceLifecycle::Frozen)
-                .build()
-        } else {
-            builder.add(storage(), ResourceLifecycle::Frozen).build()
-        }
-    }
-
-    fn release(id: &str, platform: Platform, stack: Stack) -> ReleaseRecord {
-        ReleaseRecord {
-            id: id.to_string(),
-            workspace_id: "default".to_string(),
-            project_id: "default".to_string(),
-            stacks: HashMap::from([(platform, stack)]),
-            git_commit_sha: None,
-            git_commit_ref: None,
-            git_commit_message: None,
-            created_at: Utc::now(),
-        }
-    }
-
-    fn lease(client_config: ClientConfig) -> MaterializedCredentialLease {
-        MaterializedCredentialLease {
-            client_config,
-            expires_at: Utc::now() + chrono::Duration::minutes(15),
-        }
-    }
-
-    #[test]
-    fn remote_storage_validation_accepts_only_running_frozen_storage_with_binding() {
-        let binding = StorageBinding::s3("files");
-        let deployment = deployment(stack_state_with_resource(
-            Storage::RESOURCE_TYPE.as_ref(),
-            Some(ResourceLifecycle::Frozen),
-            ResourceStatus::Running,
-            Some(serde_json::to_value(&binding).unwrap()),
-        ));
-
-        assert!(matches!(
-            remote_storage_binding(&deployment, "files"),
-            Ok(RemoteStorageBinding::S3(S3StorageBinding { .. }))
-        ));
-    }
-
-    #[tokio::test]
-    async fn remote_access_uses_the_current_release_not_the_desired_release() {
-        let mut deployment = deployment(stack_state_with_resource(
-            Storage::RESOURCE_TYPE.as_ref(),
-            Some(ResourceLifecycle::Frozen),
-            ResourceStatus::Running,
-            Some(serde_json::to_value(StorageBinding::s3("files")).unwrap()),
-        ));
-        deployment.current_release_id = Some("current".to_string());
-        deployment.desired_release_id = Some("desired".to_string());
-        let store = StubReleaseStore {
-            releases: HashMap::from([
-                (
-                    "current".to_string(),
-                    release("current", Platform::Aws, storage_stack(true)),
-                ),
-                (
-                    "desired".to_string(),
-                    release("desired", Platform::Aws, storage_stack(false)),
-                ),
-            ]),
-        };
-
-        require_current_release_remote_access(&store, &deployment, "files")
-            .await
-            .expect("the current release explicitly enables remote access");
-    }
-
-    #[tokio::test]
-    async fn legacy_binding_params_cannot_bypass_a_disabled_current_release() {
-        let mut deployment = deployment(stack_state_with_resource(
-            Storage::RESOURCE_TYPE.as_ref(),
-            Some(ResourceLifecycle::Frozen),
-            ResourceStatus::Running,
-            Some(serde_json::to_value(StorageBinding::s3("files")).unwrap()),
-        ));
-        deployment.current_release_id = Some("current".to_string());
-        let store = StubReleaseStore {
-            releases: HashMap::from([(
-                "current".to_string(),
-                release("current", Platform::Aws, storage_stack(false)),
-            )]),
-        };
-
-        assert!(remote_storage_binding(&deployment, "files").is_ok());
-        let error = require_current_release_remote_access(&store, &deployment, "files")
-            .await
-            .expect_err("stack-state binding params cannot grant access by themselves");
-        assert_eq!(error.code, "BAD_REQUEST");
-        assert!(error.message.contains("current release"));
-        assert!(error.message.contains("not enabled for remote access"));
-    }
-
-    #[tokio::test]
-    async fn remote_access_fails_closed_when_current_release_context_is_missing() {
-        let stack_state = stack_state_with_resource(
-            Storage::RESOURCE_TYPE.as_ref(),
-            Some(ResourceLifecycle::Frozen),
-            ResourceStatus::Running,
-            Some(serde_json::to_value(StorageBinding::s3("files")).unwrap()),
-        );
-        let store = StubReleaseStore::default();
-
-        let no_current_release = deployment(stack_state.clone());
-        let error = require_current_release_remote_access(&store, &no_current_release, "files")
-            .await
-            .expect_err("missing current release must deny access");
-        assert_eq!(error.code, "BAD_REQUEST");
-
-        let mut missing_release = deployment(stack_state.clone());
-        missing_release.current_release_id = Some("missing".to_string());
-        let error = require_current_release_remote_access(&store, &missing_release, "files")
-            .await
-            .expect_err("a dangling current release id must deny access");
-        assert_eq!(error.code, "INTERNAL_ERROR");
-
-        let mut missing_platform_stack = deployment(stack_state.clone());
-        missing_platform_stack.current_release_id = Some("current".to_string());
-        let store = StubReleaseStore {
-            releases: HashMap::from([(
-                "current".to_string(),
-                release("current", Platform::Gcp, storage_stack(true)),
-            )]),
-        };
-        let error = require_current_release_remote_access(&store, &missing_platform_stack, "files")
-            .await
-            .expect_err("missing platform stack must deny access");
-        assert_eq!(error.code, "INTERNAL_ERROR");
-
-        let mut missing_resource = deployment(stack_state);
-        missing_resource.current_release_id = Some("current".to_string());
-        let empty_stack = Stack::new("stack".to_string()).build();
-        let store = StubReleaseStore {
-            releases: HashMap::from([(
-                "current".to_string(),
-                release("current", Platform::Aws, empty_stack),
-            )]),
-        };
-        let error = require_current_release_remote_access(&store, &missing_resource, "files")
-            .await
-            .expect_err("resource absent from the current release must deny access");
-        assert_eq!(error.code, "BAD_REQUEST");
-    }
-
-    #[test]
-    fn remote_storage_validation_rejects_unsupported_and_mismatched_platforms() {
-        let s3 = serde_json::to_value(StorageBinding::s3("files")).unwrap();
-        let gcs = serde_json::to_value(StorageBinding::gcs("files")).unwrap();
-        let local = deployment_on_platform(
-            stack_state_with_resource(
-                Storage::RESOURCE_TYPE.as_ref(),
-                Some(ResourceLifecycle::Frozen),
-                ResourceStatus::Running,
-                Some(s3.clone()),
-            ),
-            Platform::Local,
-        );
-        assert!(remote_storage_binding(&local, "files").is_err());
-
-        let mismatched = deployment(stack_state_with_resource(
-            Storage::RESOURCE_TYPE.as_ref(),
-            Some(ResourceLifecycle::Frozen),
-            ResourceStatus::Running,
-            Some(gcs),
-        ));
-        assert!(remote_storage_binding(&mismatched, "files").is_err());
-    }
-
-    #[test]
-    fn remote_binding_deployment_status_gate_is_post_handoff_only() {
-        for status in [
-            "running",
-            "refresh-failed",
-            "update-pending",
-            "updating",
-            "update-failed",
-        ] {
-            assert!(deployment_status_allows_remote_bindings(status), "{status}");
-        }
-        for status in [
-            "pending",
-            "initial-setup",
-            "provisioning",
-            "delete-pending",
-            "deleting",
-            "delete-failed",
-            "deleted",
-            "error",
-        ] {
-            assert!(
-                !deployment_status_allows_remote_bindings(status),
-                "{status}"
-            );
-        }
-    }
-
-    #[test]
-    fn aws_remote_binding_expiry_uses_provider_expiry_and_rejects_expired_sessions() {
-        let now = DateTime::parse_from_rfc3339("2030-01-01T00:00:00Z")
-            .unwrap()
-            .with_timezone(&Utc);
-        assert_eq!(
-            remote_binding_expiry(now + chrono::Duration::minutes(15), now).unwrap(),
-            now + chrono::Duration::minutes(15)
-        );
-        assert!(remote_binding_expiry(now - chrono::Duration::seconds(1), now).is_err());
-    }
-
-    #[test]
-    fn remote_storage_validation_rejects_missing_non_storage_non_frozen_non_running_and_non_remote()
-    {
-        let rejected = [
-            stack_state_with_resource(
-                Storage::RESOURCE_TYPE.as_ref(),
-                Some(ResourceLifecycle::Frozen),
-                ResourceStatus::Running,
-                None,
-            ),
-            stack_state_with_resource(
-                "queue",
-                Some(ResourceLifecycle::Frozen),
-                ResourceStatus::Running,
-                Some(serde_json::json!({"service": "s3"})),
-            ),
-            stack_state_with_resource(
-                Storage::RESOURCE_TYPE.as_ref(),
-                Some(ResourceLifecycle::Live),
-                ResourceStatus::Running,
-                Some(serde_json::json!({"service": "s3"})),
-            ),
-            stack_state_with_resource(
-                Storage::RESOURCE_TYPE.as_ref(),
-                Some(ResourceLifecycle::Frozen),
-                ResourceStatus::Provisioning,
-                Some(serde_json::json!({"service": "s3"})),
-            ),
-        ];
-
-        for stack_state in rejected {
-            assert!(remote_storage_binding(&deployment(stack_state), "files").is_err());
-        }
-
-        assert!(
-            remote_storage_binding(&deployment(StackState::new(Platform::Aws)), "missing").is_err()
-        );
-    }
-
-    #[test]
-    fn response_contract_constructs_only_materialized_provider_credentials() {
-        let aws = ResolveBindingResponse::from_parts(
-            RemoteStorageBinding::S3(S3StorageBinding {
-                bucket_name: "bucket".into(),
-            }),
-            lease(ClientConfig::Aws(Box::new(AwsClientConfig {
-                account_id: "123456789012".to_string(),
-                region: "us-east-1".to_string(),
-                credentials: AwsCredentials::SessionCredentials {
-                    access_key_id: "AKIA".to_string(),
-                    secret_access_key: "secret".to_string(),
-                    session_token: "session".to_string(),
-                    expires_at: "2030-01-01T00:00:00Z".to_string(),
-                },
-                service_overrides: None,
-            }))),
-            "2030-01-01T00:00:00Z".to_string(),
-        )
-        .expect("short-lived AWS session should be accepted");
-        let aws = serde_json::to_value(aws).unwrap();
-        assert_eq!(
-            aws.pointer("/clientConfig/credentials/type"),
-            Some(&serde_json::json!("sessionCredentials"))
-        );
-        assert!(aws.pointer("/clientConfig/serviceOverrides").is_none());
-
-        let gcp = ResolveBindingResponse::from_parts(
-            RemoteStorageBinding::Gcs(GcsStorageBinding {
-                bucket_name: "bucket".into(),
-            }),
-            lease(ClientConfig::Gcp(Box::new(GcpClientConfig {
-                project_id: "project".to_string(),
-                region: "us-central1".to_string(),
-                credentials: GcpCredentials::AccessToken {
-                    token: "token".to_string(),
-                },
-                service_overrides: None,
-                project_number: Some("123".to_string()),
-            }))),
-            "2030-01-01T00:00:00Z".to_string(),
-        )
-        .expect("short-lived GCP access token should be accepted");
-        let gcp = serde_json::to_value(gcp).unwrap();
-        assert_eq!(
-            gcp.pointer("/clientConfig/credentials/type"),
-            Some(&serde_json::json!("accessToken"))
-        );
-        assert_eq!(
-            gcp.pointer("/clientConfig/projectNumber"),
-            Some(&serde_json::json!("123"))
-        );
-
-        let azure = ResolveBindingResponse::from_parts(
-            RemoteStorageBinding::Blob(BlobStorageBinding {
-                account_name: "account".into(),
-                container_name: "container".into(),
-            }),
-            lease(ClientConfig::Azure(Box::new(AzureClientConfig {
-                subscription_id: "subscription".to_string(),
-                tenant_id: "tenant".to_string(),
-                region: Some("eastus".to_string()),
-                credentials: AzureCredentials::ScopedAccessTokens {
-                    tokens: HashMap::from([(AZURE_STORAGE_SCOPE.to_string(), "token".to_string())]),
-                },
-                service_overrides: None,
-            }))),
-            "2030-01-01T00:00:00Z".to_string(),
-        )
-        .expect("exact Azure storage-scope token should be accepted");
-        let azure = serde_json::to_value(azure).unwrap();
-        assert_eq!(
-            azure.pointer("/clientConfig/credentials/type"),
-            Some(&serde_json::json!("scopedAccessTokens"))
-        );
-        assert_eq!(
-            azure.pointer(&format!(
-                "/clientConfig/credentials/tokens/{}",
-                AZURE_STORAGE_SCOPE.replace('~', "~0").replace('/', "~1")
-            )),
-            Some(&serde_json::json!("token"))
-        );
-    }
-
-    #[test]
-    fn response_contract_rejects_refreshable_static_and_overbroad_credentials() {
-        let aws_error = RemoteAwsClientConfig::try_from(AwsClientConfig {
-            account_id: "123456789012".to_string(),
-            region: "us-east-1".to_string(),
-            credentials: AwsCredentials::AccessKeys {
-                access_key_id: "AKIA".to_string(),
-                secret_access_key: "secret".to_string(),
-                session_token: None,
-            },
-            service_overrides: None,
-        })
-        .err()
-        .expect("static AWS access keys must not enter a remote response");
-        assert_eq!(aws_error.code, "INTERNAL_ERROR");
-
-        let gcp_error = RemoteGcpClientConfig::try_from(GcpClientConfig {
-            project_id: "project".to_string(),
-            region: "us-central1".to_string(),
-            credentials: GcpCredentials::ServiceMetadata,
-            service_overrides: None,
-            project_number: None,
-        })
-        .err()
-        .expect("refreshable GCP metadata credentials must not enter a remote response");
-        assert_eq!(gcp_error.code, "INTERNAL_ERROR");
-
-        let azure_error = RemoteAzureClientConfig::try_from(AzureClientConfig {
-            subscription_id: "subscription".to_string(),
-            tenant_id: "tenant".to_string(),
-            region: Some("eastus".to_string()),
-            credentials: AzureCredentials::ScopedAccessTokens {
-                tokens: HashMap::from([
-                    (AZURE_STORAGE_SCOPE.to_string(), "storage".to_string()),
-                    (
-                        "https://management.azure.com/.default".to_string(),
-                        "management".to_string(),
-                    ),
-                ]),
-            },
-            service_overrides: None,
-        })
-        .err()
-        .expect("non-storage Azure scopes must not enter a remote response");
-        assert_eq!(azure_error.code, "INTERNAL_ERROR");
-    }
-
-    #[test]
-    fn resolve_response_debug_redacts_binding_and_credentials() {
-        let response = ResolveBindingResponse::from_parts(
-            RemoteStorageBinding::S3(S3StorageBinding {
-                bucket_name: "sensitive-bucket".into(),
-            }),
-            lease(ClientConfig::Aws(Box::new(AwsClientConfig {
-                account_id: "123456789012".to_string(),
-                region: "us-east-1".to_string(),
-                credentials: AwsCredentials::SessionCredentials {
-                    access_key_id: "AKIASECRET".to_string(),
-                    secret_access_key: "TOP_SECRET".to_string(),
-                    session_token: "SESSION_SECRET".to_string(),
-                    expires_at: "2099-01-01T00:00:00Z".to_string(),
-                },
-                service_overrides: None,
-            }))),
-            "2099-01-01T00:00:00Z".to_string(),
-        )
-        .expect("short-lived AWS session should construct a response");
-
-        let debug = format!("{response:?}");
-        assert!(debug.contains("<redacted>"));
-        assert!(!debug.contains("sensitive-bucket"));
-        assert!(!debug.contains("AKIASECRET"));
-        assert!(!debug.contains("TOP_SECRET"));
-        assert!(!debug.contains("SESSION_SECRET"));
-    }
-}
+#[path = "bindings/tests.rs"]
+mod tests;

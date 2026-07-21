@@ -178,13 +178,24 @@ mod azure {
                 }
             }
 
-            let token = self
-                .config
-                .get_bearer_token_with_scope("https://storage.azure.com/.default")
-                .await
-                .map_err(|e| to_object_store_error("AzureBlob", e))?;
-
-            let credential = Arc::new(AzureCredential::BearerToken(token));
+            let credential = match &self.config.credentials {
+                alien_core::AzureCredentials::SasToken { query_parameters } => {
+                    Arc::new(AzureCredential::SASToken(
+                        query_parameters
+                            .iter()
+                            .map(|(name, value)| (name.clone(), value.clone()))
+                            .collect(),
+                    ))
+                }
+                _ => {
+                    let token = self
+                        .config
+                        .get_bearer_token_with_scope("https://storage.azure.com/.default")
+                        .await
+                        .map_err(|e| to_object_store_error("AzureBlob", e))?;
+                    Arc::new(AzureCredential::BearerToken(token))
+                }
+            };
             *cache = Some(CachedCredential {
                 credential: Arc::clone(&credential),
                 expires_at: Instant::now() + CACHE_TTL,

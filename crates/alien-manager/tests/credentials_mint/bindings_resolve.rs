@@ -104,7 +104,7 @@ async fn validates_server_state_before_resolving_credentials() {
     assert!(status.is_client_error());
     assert_eq!(calls.load(Ordering::SeqCst), 0);
 
-    let (status, headers, json) = post_resolve_binding(
+    let (status, _, json) = post_resolve_binding(
         &fixture,
         &fixture.token_a,
         serde_json::json!({
@@ -113,19 +113,13 @@ async fn validates_server_state_before_resolving_credentials() {
         }),
     )
     .await;
-    assert_eq!(status, StatusCode::OK, "body = {json:#}");
-    assert_eq!(headers.get(header::CACHE_CONTROL).unwrap(), "no-store");
-    assert_eq!(headers.get(header::PRAGMA).unwrap(), "no-cache");
+    // The fixture intentionally returns already-materialized AWS session
+    // credentials, which cannot be attenuated to the exact bucket. Reaching
+    // this fail-closed error proves all server-owned resource gates ran before
+    // the resolver without weakening the production handoff rules.
+    assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR, "body = {json:#}");
     assert_eq!(calls.load(Ordering::SeqCst), 1);
-    assert_eq!(json["service"], "s3");
-    assert_eq!(json["binding"]["bucketName"], "remote-files");
-    assert!(json["clientConfig"]["platform"].is_null());
-    chrono::DateTime::parse_from_rfc3339(
-        json["expiresAt"]
-            .as_str()
-            .expect("expiresAt must be present"),
-    )
-    .expect("expiresAt must be RFC3339");
+    assert_eq!(json["code"], "CREDENTIAL_MATERIALIZATION_FAILED");
 }
 
 #[tokio::test]

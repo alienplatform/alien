@@ -15,7 +15,9 @@ pub(crate) fn default_string() -> String {
 }
 
 pub use auth_validator::{AuthValidator, TokenType};
-pub use credential_resolver::{CredentialResolver, ResolvedCredentials};
+pub use credential_resolver::{
+    CredentialResolver, RemoteStorageCredentialSource, ResolvedCredentials,
+};
 pub use deployment_store::{
     AcquiredDeployment, CreateDeploymentGroupParams, CreateDeploymentParams,
     CreateImportedDeploymentParams, DeploymentAcquireMode, DeploymentFilter, DeploymentGroupRecord,

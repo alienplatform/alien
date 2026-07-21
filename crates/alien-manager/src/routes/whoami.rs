@@ -11,6 +11,7 @@ use serde::Serialize;
 
 use super::{auth, AppState};
 use crate::auth::{Scope, SubjectKind};
+use crate::error::ErrorData;
 
 #[derive(Debug, Serialize)]
 #[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
@@ -92,6 +93,10 @@ async fn whoami(State(state): State<AppState>, headers: HeaderMap) -> Response {
             None,
             Some(deployment_id.clone()),
         ),
+        Scope::Command { .. } => {
+            return ErrorData::forbidden("Command payload tokens cannot inspect identity")
+                .into_response()
+        }
     };
 
     // Translate the internal kebab-case role serialization to the

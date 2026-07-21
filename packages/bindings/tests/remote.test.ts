@@ -16,8 +16,8 @@ const deploymentGroupId = "dg_dddddddddddddddddddddddddddd"
 const workspaceId = "ws_eeeeeeeeeeeeeeeeeeeeeeee"
 const token = "remote-secret-token"
 
-let managerServer: Server
-let platformServer: Server
+let managerServer: Server | undefined
+let platformServer: Server | undefined
 let managerOrigin: string
 let platformOrigin: string
 const authorizations: Array<string | undefined> = []
@@ -48,7 +48,8 @@ function listen(server: Server): Promise<string> {
   })
 }
 
-function close(server: Server): Promise<void> {
+function close(server: Server | undefined): Promise<void> {
+  if (!server) return Promise.resolve()
   return new Promise((resolve, reject) => {
     server.close(error => (error ? reject(error) : resolve()))
   })

@@ -382,10 +382,10 @@ async fn generated_manager_adapter_decodes_cloud_lease_and_structured_error() {
                 "region": "us-east-1",
                 "credentials": {
                     "type": "sessionCredentials",
-                    "access_key_id": "AKIAEXAMPLE",
-                    "secret_access_key": "secret",
-                    "session_token": "session",
-                    "expires_at": at(3600).to_rfc3339(),
+                    "accessKeyId": "AKIAEXAMPLE",
+                    "secretAccessKey": "secret",
+                    "sessionToken": "session",
+                    "expiresAt": at(3600).to_rfc3339(),
                 },
             },
             "expiresAt": at(3600).to_rfc3339(),
@@ -416,7 +416,35 @@ async fn generated_manager_adapter_decodes_cloud_lease_and_structured_error() {
         .resolve(&manager_url, DEPLOYMENT_ID, "files")
         .await
         .expect("generated client should decode an S3 lease");
-    assert!(matches!(lease, ResolvedRemoteBinding::S3 { .. }));
+    let ResolvedRemoteBinding::S3 {
+        binding,
+        client_config,
+        expires_at,
+    } = lease
+    else {
+        panic!("generated client returned the wrong lease variant for S3");
+    };
+    assert_eq!(
+        binding.bucket_name,
+        alien_core::BindingValue::Value("customer-bucket".to_string())
+    );
+    assert_eq!(client_config.account_id, "123456789012");
+    assert_eq!(client_config.region, "us-east-1");
+    assert!(client_config.service_overrides.is_none());
+    let alien_core::AwsCredentials::SessionCredentials {
+        access_key_id,
+        secret_access_key,
+        session_token,
+        expires_at: credential_expires_at,
+    } = client_config.credentials
+    else {
+        panic!("generated client returned a non-session AWS credential");
+    };
+    assert_eq!(access_key_id, "AKIAEXAMPLE");
+    assert_eq!(secret_access_key, "secret");
+    assert_eq!(session_token, "session");
+    assert_eq!(credential_expires_at, at(3600).to_rfc3339());
+    assert_eq!(expires_at, at(3600));
     assert_eq!(
         requests
             .lock()
@@ -446,10 +474,24 @@ async fn generated_manager_adapter_decodes_cloud_lease_and_structured_error() {
                 "tenantId": "tenant-id",
                 "region": "eastus",
                 "credentials": {
-                    "type": "scopedAccessTokens",
-                    "tokens": {
-                        "https://storage.azure.com/.default": "azure-storage-token",
-                    },
+                    "type": "containerSas",
+                    "sas": {
+                        "accountName": "customeraccount",
+                        "containerName": "customer-container",
+                        "permissions": "rcwdl",
+                        "startsAt": at(-300).to_rfc3339(),
+                        "expiresAt": at(3600).to_rfc3339(),
+                        "signedObjectId": "signed-object-id",
+                        "signedTenantId": "signed-tenant-id",
+                        "signedKeyStart": at(-600).to_rfc3339(),
+                        "signedKeyExpiry": at(7200).to_rfc3339(),
+                        "signedKeyService": "b",
+                        "signedKeyVersion": "2023-11-03",
+                        "protocol": "https",
+                        "serviceVersion": "2023-11-03",
+                        "signedResource": "c",
+                        "signature": "azure-sas-signature",
+                    }
                 },
             },
             "expiresAt": at(3600).to_rfc3339(),
@@ -459,7 +501,41 @@ async fn generated_manager_adapter_decodes_cloud_lease_and_structured_error() {
         .resolve(&manager_url, DEPLOYMENT_ID, "files")
         .await
         .expect("generated client should decode a Blob lease");
-    assert!(matches!(lease, ResolvedRemoteBinding::Blob { .. }));
+    let ResolvedRemoteBinding::Blob {
+        binding,
+        client_config,
+        expires_at,
+    } = lease
+    else {
+        panic!("generated client returned the wrong lease variant for Blob");
+    };
+    assert_eq!(
+        binding.account_name,
+        alien_core::BindingValue::Value("customeraccount".to_string())
+    );
+    assert_eq!(
+        binding.container_name,
+        alien_core::BindingValue::Value("customer-container".to_string())
+    );
+    assert_eq!(client_config.subscription_id, "subscription-id");
+    assert_eq!(client_config.tenant_id, "tenant-id");
+    assert_eq!(client_config.region.as_deref(), Some("eastus"));
+    assert!(client_config.service_overrides.is_none());
+    let alien_core::AzureCredentials::SasToken { query_parameters } = client_config.credentials
+    else {
+        panic!("generated client returned the wrong Azure credential type");
+    };
+    assert_eq!(query_parameters.len(), 13);
+    assert_eq!(
+        query_parameters.get("sp").map(String::as_str),
+        Some("rcwdl")
+    );
+    assert_eq!(query_parameters.get("sr").map(String::as_str), Some("c"));
+    assert_eq!(
+        query_parameters.get("sig").map(String::as_str),
+        Some("azure-sas-signature")
+    );
+    assert_eq!(expires_at, at(3600));
 
     *response.write().expect("generated contract response lock") = (
         StatusCode::OK,
@@ -482,7 +558,62 @@ async fn generated_manager_adapter_decodes_cloud_lease_and_structured_error() {
         .resolve(&manager_url, DEPLOYMENT_ID, "files")
         .await
         .expect("generated client should decode a GCS lease");
-    assert!(matches!(lease, ResolvedRemoteBinding::Gcs { .. }));
+    let ResolvedRemoteBinding::Gcs {
+        binding,
+        client_config,
+        expires_at,
+    } = lease
+    else {
+        panic!("generated client returned the wrong lease variant for GCS");
+    };
+    assert_eq!(
+        binding.bucket_name,
+        alien_core::BindingValue::Value("customer-bucket".to_string())
+    );
+    assert_eq!(client_config.project_id, "customer-project");
+    assert_eq!(client_config.project_number.as_deref(), Some("123456789"));
+    assert_eq!(client_config.region, "us-central1");
+    assert!(client_config.service_overrides.is_none());
+    let alien_core::GcpCredentials::AccessToken { token } = client_config.credentials else {
+        panic!("generated client returned the wrong GCP credential type");
+    };
+    assert_eq!(token, "gcp-access-token");
+    assert_eq!(expires_at, at(3600));
+
+    *response.write().expect("generated contract response lock") = (
+        StatusCode::OK,
+        json!({
+            "service": "s3",
+            "binding": { "bucketName": "customer-bucket" },
+            "clientConfig": {
+                "accountId": "123456789012",
+                "region": "us-east-1",
+                "credentials": {
+                    "type": "sessionCredentials",
+                    "accessKeyId": "SENTINEL_ACCESS_KEY",
+                    "secretAccessKey": "SENTINEL_SECRET_KEY",
+                    "sessionToken": "SENTINEL_SESSION_TOKEN",
+                    "expiresAt": at(3600).to_rfc3339(),
+                },
+            },
+            "expiresAt": "not-a-timestamp",
+        }),
+    );
+    let error = match adapter.resolve(&manager_url, DEPLOYMENT_ID, "files").await {
+        Ok(_) => panic!("an invalid lease expiry must fail typed conversion"),
+        Err(error) => error,
+    };
+    let error_debug = format!("{error:?}");
+    for secret in [
+        "SENTINEL_ACCESS_KEY",
+        "SENTINEL_SECRET_KEY",
+        "SENTINEL_SESSION_TOKEN",
+    ] {
+        assert!(
+            !error_debug.contains(secret),
+            "typed conversion errors must not retain response credentials"
+        );
+    }
 
     *response.write().expect("generated contract response lock") = (
         StatusCode::FORBIDDEN,
@@ -712,32 +843,6 @@ async fn existing_storage_handle_follows_manager_reassignment() {
 }
 
 #[tokio::test]
-async fn concurrent_failed_refresh_is_single_flight_while_cache_is_unexpired() {
-    let fixture = Fixture::new(at(0), at(600)).await;
-    let provider = fixture.remote_provider().await;
-    let bindings = RemoteBindings::from_provider(provider);
-    let storage = bindings
-        .storage("files")
-        .await
-        .expect("initial remote Storage resolution");
-    storage
-        .put(&Path::from("shared.txt"), PutPayload::from_static(b"value"))
-        .await
-        .expect("seed fixture object");
-
-    fixture.manager.fail.store(true, Ordering::SeqCst);
-    fixture.clock.set(at(481));
-    let operations = (0..16).map(|_| {
-        let storage = storage.clone();
-        async move { storage.head(&Path::from("shared.txt")).await }
-    });
-    let results = join_all(operations).await;
-
-    assert!(results.iter().all(|result| result.is_ok()));
-    assert_eq!(fixture.manager.calls.load(Ordering::SeqCst), 2);
-}
-
-#[tokio::test]
 async fn non_retryable_manager_error_is_preserved_and_never_uses_cached_credentials() {
     let fixture = Fixture::new(at(0), at(600)).await;
     let provider = fixture.remote_provider().await;
@@ -802,32 +907,6 @@ async fn refresh_rechecks_expiry_after_the_network_request() {
     assert_eq!(fixture.manager.calls.load(Ordering::SeqCst), 2);
 }
 
-#[tokio::test]
-async fn malformed_manager_response_does_not_poison_the_cache() {
-    let fixture = Fixture::new(at(0), at(600)).await;
-    fixture
-        .manager
-        .invalid_binding
-        .store(true, Ordering::SeqCst);
-    let provider = fixture.remote_provider().await;
-    let bindings = RemoteBindings::from_provider(provider);
-
-    bindings
-        .storage("files")
-        .await
-        .expect_err("invalid binding must fail before caching");
-    fixture
-        .manager
-        .invalid_binding
-        .store(false, Ordering::SeqCst);
-    bindings
-        .storage("files")
-        .await
-        .expect("a subsequent valid response must be retried and cached");
-
-    assert_eq!(fixture.manager.calls.load(Ordering::SeqCst), 2);
-}
-
 #[test]
 fn remote_urls_require_https_except_for_loopback_development() {
     assert!(!validate_platform_base_url("https://api.example.com").unwrap());
@@ -879,7 +958,10 @@ fn remote_lease_validation_rejects_refreshable_or_overbroad_credentials() {
         region: Some("eastus".to_string()),
         credentials: alien_core::AzureCredentials::ScopedAccessTokens {
             tokens: HashMap::from([
-                (AZURE_STORAGE_SCOPE.to_string(), "storage".to_string()),
+                (
+                    "https://storage.azure.com/.default".to_string(),
+                    "storage".to_string(),
+                ),
                 (
                     "https://management.azure.com/.default".to_string(),
                     "management".to_string(),
@@ -891,34 +973,5 @@ fn remote_lease_validation_rejects_refreshable_or_overbroad_credentials() {
     assert!(validate_azure_remote_client_config(&azure).is_err());
 }
 
-#[tokio::test]
-async fn serves_unexpired_cache_on_refresh_failure_then_fails_closed_at_expiry() {
-    let fixture = Fixture::new(at(0), at(600)).await;
-    let provider = fixture.remote_provider().await;
-    let bindings = RemoteBindings::from_provider(provider);
-    let storage = bindings
-        .storage("files")
-        .await
-        .expect("initial remote Storage resolution");
-    storage
-        .put(&Path::from("lease.txt"), PutPayload::from_static(b"valid"))
-        .await
-        .expect("seed fixture object");
-
-    fixture.manager.fail.store(true, Ordering::SeqCst);
-    fixture.clock.set(at(481));
-    let metadata = storage
-        .head(&Path::from("lease.txt"))
-        .await
-        .expect("unexpired lease should survive failed refresh");
-    assert_eq!(metadata.size, 5);
-    assert_eq!(fixture.manager.calls.load(Ordering::SeqCst), 2);
-
-    fixture.clock.set(at(600));
-    let error = storage
-        .head(&Path::from("lease.txt"))
-        .await
-        .expect_err("expired lease must fail closed when refresh fails");
-    assert!(error.to_string().contains("Remote access failed"));
-    assert_eq!(fixture.manager.calls.load(Ordering::SeqCst), 3);
-}
+#[path = "tests/retry_backoff.rs"]
+mod retry_backoff;

@@ -275,35 +275,41 @@ async fn get_command_payload(
         Ok(s) => s,
         Err(e) => return e.into_response(),
     };
-    // Verify the caller has access to this command's deployment via Authz.
-    // If the command isn't in the local registry (e.g. when command metadata
-    // is managed externally), fall back to requiring workspace-write
-    // authority. A *registry lookup error* must NOT trigger that fallback —
-    // a transient store error for a deployment-owned command would otherwise
-    // expose its payload to any workspace-admin/member token.
-    match state
-        .command_server
-        .get_command_deployment_id(&command_id)
-        .await
-    {
-        Ok(Some(deployment_id)) => {
-            if let Err(e) = require_command_access(&state, &subject, &deployment_id).await {
-                return e;
+    // A platform-issued browser token can carry an exact command capability.
+    // It was authorized against the control-plane command row before minting,
+    // so it neither needs nor receives broader deployment access. All other
+    // callers follow the entity-backed policy below.
+    if !state.authz.can_read_command_payload(&subject, &command_id) {
+        // Verify the caller has access to this command's deployment via Authz.
+        // If the command isn't in the local registry (e.g. when command metadata
+        // is managed externally), fall back to requiring workspace-write
+        // authority. A *registry lookup error* must NOT trigger that fallback —
+        // a transient store error for a deployment-owned command would otherwise
+        // expose its payload to any workspace-admin/member token.
+        match state
+            .command_server
+            .get_command_deployment_id(&command_id)
+            .await
+        {
+            Ok(Some(deployment_id)) => {
+                if let Err(e) = require_command_access(&state, &subject, &deployment_id).await {
+                    return e;
+                }
             }
-        }
-        Ok(None) => {
-            // No canonical owner in the local registry — only workspace-wide
-            // writers may inspect such payloads.
-            if !matches!(subject.scope, crate::auth::Scope::Workspace)
-                || !matches!(
-                    subject.role,
-                    crate::auth::Role::WorkspaceAdmin | crate::auth::Role::WorkspaceMember
-                )
-            {
-                return ErrorData::forbidden("Workspace-write access required").into_response();
+            Ok(None) => {
+                // No canonical owner in the local registry — only workspace-wide
+                // writers may inspect such payloads.
+                if !matches!(subject.scope, crate::auth::Scope::Workspace)
+                    || !matches!(
+                        subject.role,
+                        crate::auth::Role::WorkspaceAdmin | crate::auth::Role::WorkspaceMember
+                    )
+                {
+                    return ErrorData::forbidden("Workspace-write access required").into_response();
+                }
             }
+            Err(e) => return e.into_response(),
         }
-        Err(e) => return e.into_response(),
     }
 
     let params = match state.command_server.get_params(&command_id).await {
@@ -443,5 +449,181 @@ async fn release_lease(
     match state.command_server.release_lease_by_id(&lease_id).await {
         Ok(()) => StatusCode::OK.into_response(),
         Err(e) => e.into_response(),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::{collections::HashMap, sync::Arc};
+
+    use alien_bindings::providers::{kv::local::LocalKv, storage::local::LocalStorage};
+    use alien_commands::{
+        dispatchers::NullCommandDispatcher,
+        server::{CommandDispatcher, CommandRegistry, CommandServer},
+        types::BodySpec,
+        InMemoryCommandRegistry,
+    };
+    use async_trait::async_trait;
+    use axum::{body::Body, http::Request, http::StatusCode};
+    use tower::ServiceExt;
+
+    use crate::{
+        auth::{Role, Scope, Subject, SubjectKind},
+        config::ManagerConfig,
+        providers::{local_credentials::LocalCredentialResolver, NullTelemetryBackend, OssAuthz},
+        routes::{
+            registry_proxy::{CredentialCache, PullValidationCache, RegistryRoutingTable},
+            AppState,
+        },
+        stores::sqlite::{
+            SqliteDatabase, SqliteDeploymentStore, SqliteReleaseStore, SqliteTokenStore,
+        },
+        traits::{
+            AuthValidator, CredentialResolver, DeploymentStore, ReleaseStore, TelemetryBackend,
+            TokenStore,
+        },
+    };
+
+    use super::router;
+
+    #[derive(Clone)]
+    struct FixedSubjectValidator(Subject);
+
+    #[async_trait]
+    impl AuthValidator for FixedSubjectValidator {
+        async fn validate(
+            &self,
+            _headers: &http::HeaderMap,
+        ) -> Result<Option<Subject>, alien_error::AlienError> {
+            Ok(Some(self.0.clone()))
+        }
+    }
+
+    async fn command_capability_state(command_id: &str) -> (AppState, tempfile::TempDir) {
+        let temp = tempfile::tempdir().expect("create command route test directory");
+        let db = Arc::new(
+            SqliteDatabase::new(&temp.path().join("manager.db").to_string_lossy())
+                .await
+                .expect("create test database"),
+        );
+        let deployment_store: Arc<dyn DeploymentStore> =
+            Arc::new(SqliteDeploymentStore::new(db.clone()));
+        let release_store: Arc<dyn ReleaseStore> = Arc::new(SqliteReleaseStore::new(db.clone()));
+        let token_store: Arc<dyn TokenStore> = Arc::new(SqliteTokenStore::new(db));
+        let kv: Arc<dyn alien_bindings::traits::Kv> = Arc::new(
+            LocalKv::new(temp.path().join("kv"))
+                .await
+                .expect("create command KV"),
+        );
+        let storage: Arc<dyn alien_bindings::traits::Storage> = Arc::new(
+            LocalStorage::new(temp.path().join("storage").to_string_lossy().to_string())
+                .expect("create command storage"),
+        );
+        let dispatcher: Arc<dyn CommandDispatcher> = Arc::new(NullCommandDispatcher);
+        let registry: Arc<dyn CommandRegistry> = Arc::new(InMemoryCommandRegistry::default());
+        let command_server = Arc::new(CommandServer::new(
+            kv.clone(),
+            storage,
+            dispatcher,
+            registry,
+            "http://localhost:0/v1".to_string(),
+            b"test-signing-key".to_vec(),
+        ));
+        command_server
+            .store_params(command_id, &BodySpec::inline(br#"{"safe":true}"#))
+            .await
+            .expect("store exact command payload");
+
+        let subject = Subject {
+            kind: SubjectKind::ServiceAccount {
+                id: "platform-command-reader".to_string(),
+            },
+            workspace_id: "default".to_string(),
+            scope: Scope::Command {
+                project_id: "default".to_string(),
+                deployment_id: "dep-1".to_string(),
+                command_id: command_id.to_string(),
+            },
+            role: Role::CommandPayloadReader,
+            bearer_token: "command-token".to_string(),
+        };
+        let credential_resolver: Arc<dyn CredentialResolver> = Arc::new(
+            LocalCredentialResolver::new(temp.path().join("local-credentials")),
+        );
+        let telemetry_backend: Arc<dyn TelemetryBackend> = Arc::new(NullTelemetryBackend);
+
+        (
+            AppState {
+                deployment_store,
+                release_store,
+                token_store,
+                auth_validator: Arc::new(FixedSubjectValidator(subject)),
+                authz: Arc::new(OssAuthz),
+                telemetry_backend,
+                credential_resolver,
+                command_server,
+                config: Arc::new(ManagerConfig::default()),
+                bindings_provider: None,
+                target_bindings_providers: HashMap::new(),
+                kv,
+                http_client: reqwest::Client::new(),
+                credential_cache: Arc::new(CredentialCache::new()),
+                pull_validation_cache: Arc::new(PullValidationCache::new()),
+                registry_routing_table: Arc::new(
+                    RegistryRoutingTable::new(vec![]).expect("empty registry routing table"),
+                ),
+                import_registry: Arc::new(alien_infra::ImporterRegistry::built_in()),
+            },
+            temp,
+        )
+    }
+
+    fn request(method: &str, uri: &str, body: Body) -> Request<Body> {
+        Request::builder()
+            .method(method)
+            .uri(uri)
+            .header(http::header::AUTHORIZATION, "Bearer command-token")
+            .header(http::header::CONTENT_TYPE, "application/json")
+            .body(body)
+            .expect("build command route request")
+    }
+
+    #[tokio::test]
+    async fn exact_command_capability_only_reads_its_payload() {
+        let command_id = "cmd-allowed";
+        let (state, _temp) = command_capability_state(command_id).await;
+        let app = router().with_state(state);
+
+        let allowed = app
+            .clone()
+            .oneshot(request(
+                "GET",
+                &format!("/v1/commands/{command_id}/payload"),
+                Body::empty(),
+            ))
+            .await
+            .expect("exact payload request should complete");
+        assert_eq!(allowed.status(), StatusCode::OK);
+
+        let different_command = app
+            .clone()
+            .oneshot(request(
+                "GET",
+                "/v1/commands/cmd-denied/payload",
+                Body::empty(),
+            ))
+            .await
+            .expect("cross-command payload request should complete");
+        assert_eq!(different_command.status(), StatusCode::FORBIDDEN);
+
+        let store = app
+            .oneshot(request(
+                "PUT",
+                &format!("/v1/commands/{command_id}/payload"),
+                Body::from(r#"{"params":{"mode":"inline","inlineBase64":"e30="}}"#),
+            ))
+            .await
+            .expect("payload store request should complete");
+        assert_eq!(store.status(), StatusCode::FORBIDDEN);
     }
 }

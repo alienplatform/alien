@@ -93,6 +93,16 @@ pub enum Scope {
         project_id: String,
         deployment_id: String,
     },
+    /// Exact capability for reading one manager-local command payload.
+    ///
+    /// Platform-issued browser tokens use this scope after the control plane
+    /// has authorized the command and verified its current manager assignment.
+    /// It must not imply access to the owning deployment or project.
+    Command {
+        project_id: String,
+        deployment_id: String,
+        command_id: String,
+    },
 }
 
 impl Scope {
@@ -103,7 +113,8 @@ impl Scope {
             Scope::Workspace => None,
             Scope::Project { project_id }
             | Scope::DeploymentGroup { project_id, .. }
-            | Scope::Deployment { project_id, .. } => Some(project_id),
+            | Scope::Deployment { project_id, .. }
+            | Scope::Command { project_id, .. } => Some(project_id),
         }
     }
 }
@@ -164,6 +175,13 @@ pub enum Role {
     DeploymentTelemetryWriter,
     DeploymentViewer,
     DeploymentGroupDeployer,
+    /// Read-only capability used by Platform telemetry-query JWTs. Query
+    /// handlers validate their signed scopes separately; generic manager
+    /// control-plane authorization grants this role nothing.
+    WorkspaceTelemetryReader,
+    /// Read-only capability for one command payload, paired with
+    /// [`Scope::Command`].
+    CommandPayloadReader,
 }
 
 #[cfg(test)]

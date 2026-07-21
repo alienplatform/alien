@@ -9,12 +9,17 @@ use std::sync::Arc;
 
 use alien_bindings::traits::ImpersonationRequest;
 use alien_bindings::{BindingsProviderApi, ServiceAccountInfo};
-use alien_core::{ClientConfig, DeploymentStatus, EnvironmentInfo, ManagementConfig, Platform};
+use alien_core::{
+    ClientConfig, DeploymentStatus, EnvironmentInfo, ManagementConfig, Platform,
+    RemoteStackManagement, RemoteStackManagementOutputs,
+};
 use alien_error::{AlienError, Context, GenericError, IntoAlienError};
 use async_trait::async_trait;
 
 use crate::error::ErrorData;
-use crate::traits::{CredentialResolver, DeploymentRecord, ResolvedCredentials};
+use crate::traits::{
+    CredentialResolver, DeploymentRecord, RemoteStorageCredentialSource, ResolvedCredentials,
+};
 
 /// Resolves cloud credentials for push-model deployments via service account impersonation.
 ///
@@ -164,6 +169,79 @@ impl CredentialResolver for ImpersonationCredentialResolver {
         Ok(ResolvedCredentials {
             client_config,
             has_provision_capability,
+        })
+    }
+
+    async fn resolve_remote_storage_source(
+        &self,
+        deployment: &DeploymentRecord,
+    ) -> Result<RemoteStorageCredentialSource, AlienError> {
+        if deployment.platform != Platform::Aws
+            || !self.management_binding_platforms.contains(&Platform::Aws)
+            || uses_direct_impersonation_credentials(deployment)
+        {
+            return Ok(RemoteStorageCredentialSource::Direct(
+                self.resolve(deployment).await?,
+            ));
+        }
+
+        let stack_state = deployment.stack_state.as_ref().ok_or_else(|| {
+            AlienError::new(GenericError {
+                message: format!(
+                    "Remote stack state is required to attenuate AWS Storage credentials for deployment {}",
+                    deployment.id
+                ),
+            })
+        })?;
+        let outputs = stack_state
+            .resources
+            .values()
+            .find(|resource| {
+                resource.resource_type == RemoteStackManagement::RESOURCE_TYPE.as_ref()
+            })
+            .and_then(|resource| resource.outputs.as_ref())
+            .and_then(|outputs| outputs.downcast_ref::<RemoteStackManagementOutputs>())
+            .ok_or_else(|| {
+                AlienError::new(GenericError {
+                    message: format!(
+                        "Remote stack management outputs are required to attenuate AWS Storage credentials for deployment {}",
+                        deployment.id
+                    ),
+                })
+            })?;
+        let provider = self.provider_for_target(Platform::Aws);
+        let base = impersonate_management_sa(&**provider, Platform::Aws).await?;
+        let ClientConfig::Aws(source) = base else {
+            return Err(AlienError::new(GenericError {
+                message: "AWS management service-account impersonation returned a non-AWS config"
+                    .to_string(),
+            }));
+        };
+        let (target_account_id, target_region) = if let Some(EnvironmentInfo::Aws(environment)) =
+            &deployment.environment_info
+        {
+            (environment.account_id.clone(), environment.region.clone())
+        } else {
+            let account_id = outputs
+                    .access_configuration
+                    .split(':')
+                    .nth(4)
+                    .filter(|account| account.len() == 12 && account.bytes().all(|b| b.is_ascii_digit()))
+                    .ok_or_else(|| {
+                        AlienError::new(GenericError {
+                            message: "AWS target account cannot be proven from deployment environment or remote role ARN".to_string(),
+                        })
+                    })?
+                    .to_string();
+            (account_id, source.region.clone())
+        };
+
+        Ok(RemoteStorageCredentialSource::AwsAssumeRole {
+            source,
+            role_arn: outputs.access_configuration.clone(),
+            role_session_name: format!("alien-remote-storage-{}", uuid::Uuid::new_v4().simple()),
+            target_account_id,
+            target_region,
         })
     }
 

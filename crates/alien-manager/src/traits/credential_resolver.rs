@@ -1,6 +1,6 @@
 use async_trait::async_trait;
 
-use alien_core::{ClientConfig, ManagementConfig, Platform};
+use alien_core::{AwsClientConfig, ClientConfig, ManagementConfig, Platform};
 use alien_error::AlienError;
 
 use super::deployment_store::DeploymentRecord;
@@ -13,6 +13,49 @@ pub struct ResolvedCredentials {
     pub client_config: ClientConfig,
     /// Whether these credentials may create the bootstrap layer-2 resources.
     pub has_provision_capability: bool,
+}
+
+/// Credential authority retained specifically for remote Storage attenuation.
+///
+/// The AWS cross-account variant keeps the pre-handoff source and target role
+/// so the bucket policy is applied by STS on the target-role session itself.
+pub enum RemoteStorageCredentialSource {
+    /// A direct provider config. The materializer accepts it only when the
+    /// provider can prove resource attenuation from this form.
+    Direct(ClientConfig),
+    /// AWS source credentials plus the exact target role for a policy-bearing
+    /// AssumeRole handoff.
+    AwsAssumeRole {
+        source: Box<AwsClientConfig>,
+        role_arn: String,
+        role_session_name: String,
+        target_account_id: String,
+        target_region: String,
+    },
+}
+
+impl std::fmt::Debug for RemoteStorageCredentialSource {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Direct(config) => f
+                .debug_struct("RemoteStorageCredentialSource::Direct")
+                .field("platform", &config.platform())
+                .field("credentials", &"[REDACTED]")
+                .finish(),
+            Self::AwsAssumeRole {
+                role_arn,
+                target_account_id,
+                target_region,
+                ..
+            } => f
+                .debug_struct("RemoteStorageCredentialSource::AwsAssumeRole")
+                .field("role_arn", role_arn)
+                .field("target_account_id", target_account_id)
+                .field("target_region", target_region)
+                .field("credentials", &"[REDACTED]")
+                .finish(),
+        }
+    }
 }
 
 /// Resolves cloud credentials for push-model deployments.
@@ -44,6 +87,19 @@ pub trait CredentialResolver: Send + Sync {
             client_config,
             has_provision_capability: true,
         })
+    }
+
+    /// Resolve authority for a purpose-specific remote Storage lease.
+    ///
+    /// Custom resolvers default to their direct config. Provider materializers
+    /// still fail closed when that form cannot be attenuated cryptographically.
+    async fn resolve_remote_storage_source(
+        &self,
+        deployment: &DeploymentRecord,
+    ) -> Result<RemoteStorageCredentialSource, AlienError> {
+        Ok(RemoteStorageCredentialSource::Direct(
+            self.resolve(deployment).await?,
+        ))
     }
 
     /// Resolve the management identity for a target platform.

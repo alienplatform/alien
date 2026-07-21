@@ -33,14 +33,5 @@
     "@changesets/cli": "^2.29.7",
     "turbo": "^2.5.8"
   },
-  "packageManager": "pnpm@10.11.0",
-  "pnpm": {
-    "overrides": {
-      "@alienplatform/sdk": "link:packages/sdk",
-      "@alienplatform/core": "link:packages/core",
-      "@alienplatform/typescript-config": "link:packages/config-typescript",
-      "@alienplatform/testing": "link:packages/testing",
-      "@alienplatform/platform-api": "link:client-sdks/platform/typescript"
-    }
-  }
+  "packageManager": "pnpm@10.11.0"
 }

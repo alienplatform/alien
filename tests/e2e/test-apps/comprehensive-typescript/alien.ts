@@ -4,6 +4,10 @@ import * as alien from "@alienplatform/core"
 // so declaring it on a cloud target would ask the executor to provision a backend with no registered
 // controller. Gate on the target platform the e2e harness exposes to config evaluation.
 const isLocal = process.env.ALIEN_TARGET_PLATFORM === "local"
+// Remote Storage is intentionally limited to native AWS/GCP/Azure deployments.
+const supportsRemoteStorage = ["aws", "gcp", "azure"].includes(
+  process.env.ALIEN_TARGET_PLATFORM ?? "",
+)
 
 const storage = new alien.Storage("alien-storage").build()
 const vault = new alien.Vault("alien-vault").build()
@@ -69,7 +73,7 @@ let stackBuilder = new alien.Stack("alien-ts-stack")
       },
     },
   })
-  .add(storage, "frozen")
+  .add(storage, "frozen", { remoteAccess: supportsRemoteStorage })
   .add(vault, "frozen")
   .add(kv, "frozen")
   .add(queue, "frozen")

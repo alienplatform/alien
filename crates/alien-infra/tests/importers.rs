@@ -28,8 +28,9 @@ use alien_core::import::{
         AwsStorageImportData, AzureContainerAppsEnvironmentImportData,
         AzureRemoteStackManagementImportData, AzureResourceGroupImportData,
         AzureServiceAccountImportData, AzureStorageAccountImportData, AzureStorageImportData,
-        GcpBuildImportData, GcpKvImportData, GcpNetworkImportData, GcpServiceActivationImportData,
-        GcpStorageImportData, KubernetesClusterImportData,
+        GcpBuildImportData, GcpKvImportData, GcpNetworkImportData,
+        GcpRemoteStackManagementImportData, GcpServiceActivationImportData, GcpStorageImportData,
+        KubernetesClusterImportData,
     },
     ImportContext,
 };
@@ -47,6 +48,9 @@ use alien_core::{
 use alien_infra::ImporterRegistry;
 use serde_json::json;
 use std::collections::HashMap;
+
+#[path = "importers/remote_stack_management.rs"]
+mod remote_stack_management;
 
 /// Build a `ResourceEntry` whose `config` is `T`. The importer reads
 /// `ctx.resource.config` to derive the resource_type written into the
@@ -278,25 +282,6 @@ fn aws_service_account_round_trip() {
     assert_eq!(internal["stackPermissionsApplied"], true);
 }
 
-#[test]
-fn aws_remote_stack_management_round_trip() {
-    let entry = entry(RemoteStackManagement::new("rsm".to_string()).build());
-    let data = AwsRemoteStackManagementImportData {
-        role_arn: "arn:aws:iam::123456789012:role/alien-stack-mgmt".to_string(),
-        role_name: "alien-stack-mgmt".to_string(),
-        management_permissions_applied: true,
-    };
-    let state = run_through_registry(
-        &RemoteStackManagement::RESOURCE_TYPE,
-        Platform::Aws,
-        serde_json::to_value(&data).unwrap(),
-        &entry,
-        "us-east-1",
-        &aws_management_config(),
-    );
-    assert_running_with_internal_state(&state);
-}
-
 /// A fully wired email resource (seed domain + inbound) imports as Running
 /// with typed [`EmailOutputs`] carrying exactly what the setup stack handed
 /// over: DKIM CNAME records per domain, the configuration set, and the
@@ -360,8 +345,7 @@ fn aws_email_round_trip() {
     // Imported resources must not publish binding material unless the entry
     // explicitly opts into remote access.
     assert_eq!(
-        state.remote_binding_params,
-        None,
+        state.remote_binding_params, None,
         "an imported resource without remote access must not publish its binding params"
     );
 }
@@ -474,8 +458,7 @@ fn aws_open_search_round_trip() {
     // Imported resources must not publish binding material unless the entry
     // explicitly opts into remote access.
     assert_eq!(
-        state.remote_binding_params,
-        None,
+        state.remote_binding_params, None,
         "an imported resource without remote access must not publish its binding params"
     );
 }
@@ -857,47 +840,6 @@ fn azure_service_account_import_waits_for_stack_permission_propagation() {
     );
     assert_provisioning_with_internal_state(&state);
     assert_eq!(internal_state(&state)["state"], "waitingForRbacPropagation");
-}
-
-#[test]
-fn azure_remote_stack_management_round_trip_includes_access_outputs() {
-    let entry = entry(RemoteStackManagement::new("rsm".to_string()).build());
-    let data = AzureRemoteStackManagementImportData {
-        subscription_id: "00000000-0000-0000-0000-000000000000".to_string(),
-        resource_group: "rg-alien".to_string(),
-        identity_id: "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-alien/providers/Microsoft.ManagedIdentity/userAssignedIdentities/alien-management".to_string(),
-        client_id: "11111111-1111-1111-1111-111111111111".to_string(),
-        principal_id: "22222222-2222-2222-2222-222222222222".to_string(),
-        tenant_id: "33333333-3333-3333-3333-333333333333".to_string(),
-        management_permissions_applied: true,
-    };
-    let state = run_through_registry(
-        &RemoteStackManagement::RESOURCE_TYPE,
-        Platform::Azure,
-        serde_json::to_value(&data).unwrap(),
-        &entry,
-        "eastus",
-        &azure_management_config(),
-    );
-    assert_provisioning_with_internal_state(&state);
-    assert_eq!(internal_state(&state)["state"], "waitingForRbacPropagation");
-
-    let outputs = state
-        .outputs
-        .as_ref()
-        .and_then(|outputs| outputs.downcast_ref::<RemoteStackManagementOutputs>())
-        .expect("Azure remote-stack-management import must produce outputs");
-    assert_eq!(outputs.management_resource_id, data.identity_id);
-
-    let access_config: serde_json::Value =
-        serde_json::from_str(&outputs.access_configuration).unwrap();
-    assert_eq!(
-        access_config,
-        json!({
-            "uamiClientId": data.client_id,
-            "tenantId": data.tenant_id,
-        })
-    );
 }
 
 #[test]

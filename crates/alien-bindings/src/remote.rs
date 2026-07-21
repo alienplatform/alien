@@ -24,11 +24,14 @@ use crate::provider::BindingsProvider;
 use crate::refreshing::{RefreshingStorage, StorageProviderApi};
 use crate::traits::{BindingsProviderApi, Storage};
 
+mod manager_conversion;
+
 const DEFAULT_PLATFORM_API_URL: &str = "https://api.alien.dev";
+const INITIAL_REFRESH_RETRY_DELAY_SECONDS: i64 = 5;
+const MAX_REFRESH_RETRY_DELAY_SECONDS: i64 = 30;
 const MAX_REFRESH_SKEW_SECONDS: i64 = 300;
 const MANAGER_DISCOVERY_TTL_SECONDS: i64 = 300;
 const REMOTE_REQUEST_TIMEOUT: Duration = Duration::from_secs(30);
-const AZURE_STORAGE_SCOPE: &str = "https://storage.azure.com/.default";
 
 trait Clock: Send + Sync + fmt::Debug {
     fn now(&self) -> DateTime<Utc>;
@@ -398,18 +401,7 @@ impl ManagerBindingResolver for GeneratedManagerBindingResolver {
             .map_err(into_remote_error)?
             .into_inner();
 
-        serde_json::to_value(response)
-            .into_alien_error()
-            .context(ErrorData::RemoteAccessFailed {
-                operation: format!("convert remote Storage binding '{resource_id}'"),
-            })
-            .and_then(|response| {
-                serde_json::from_value(response).into_alien_error().context(
-                    ErrorData::RemoteAccessFailed {
-                        operation: format!("parse remote Storage binding '{resource_id}'"),
-                    },
-                )
-            })
+        ResolvedRemoteBinding::from_manager_response(response, resource_id)
     }
 }
 
@@ -747,16 +739,29 @@ fn validate_azure_remote_client_config(config: &alien_core::AzureClientConfig) -
             "service endpoint overrides are forbidden",
         ));
     }
-    let alien_core::AzureCredentials::ScopedAccessTokens { tokens } = &config.credentials else {
+    let alien_core::AzureCredentials::SasToken { query_parameters } = &config.credentials else {
         return Err(invalid_remote_lease(
             "Azure",
-            "an exact storage-scoped access token is required",
+            "an exact container SAS is required",
         ));
     };
-    if tokens.len() != 1 || !tokens.contains_key(AZURE_STORAGE_SCOPE) {
+    const REQUIRED_PARAMETERS: [&str; 13] = [
+        "sp", "st", "se", "skoid", "sktid", "skt", "ske", "sks", "skv", "spr", "sv", "sr", "sig",
+    ];
+    if query_parameters.len() != REQUIRED_PARAMETERS.len()
+        || REQUIRED_PARAMETERS.iter().any(|name| {
+            !query_parameters
+                .get(*name)
+                .is_some_and(|value| !value.is_empty())
+        })
+        || query_parameters.get("sp").map(String::as_str) != Some("rcwdl")
+        || query_parameters.get("spr").map(String::as_str) != Some("https")
+        || query_parameters.get("sr").map(String::as_str) != Some("c")
+        || query_parameters.get("sks").map(String::as_str) != Some("b")
+    {
         return Err(invalid_remote_lease(
             "Azure",
-            "the credential must contain only the Azure Storage audience",
+            "the credential must contain only one exact container SAS",
         ));
     }
     Ok(())
@@ -773,6 +778,8 @@ struct RemoteStorageState {
     cache: Option<CachedRemoteBinding>,
     generation: u64,
     last_refresh_error: Option<AlienError<ErrorData>>,
+    retryable_failure_count: u32,
+    retry_not_before: Option<DateTime<Utc>>,
 }
 
 impl RemoteStorageState {
@@ -787,6 +794,46 @@ impl RemoteStorageState {
             .as_ref()
             .and_then(|cached| (now < cached.expires_at).then(|| cached.provider.clone()))
     }
+
+    fn cooldown_result(&self, now: DateTime<Utc>) -> Option<Result<Arc<BindingsProvider>>> {
+        if !self.retry_not_before.is_some_and(|retry_at| now < retry_at) {
+            return None;
+        }
+        let error = self.last_refresh_error.as_ref()?.clone();
+        Some(self.unexpired(now).ok_or(error))
+    }
+
+    fn record_success(&mut self, cache: CachedRemoteBinding) -> Arc<BindingsProvider> {
+        let provider = cache.provider.clone();
+        self.cache = Some(cache);
+        self.last_refresh_error = None;
+        self.retryable_failure_count = 0;
+        self.retry_not_before = None;
+        provider
+    }
+
+    fn record_failure(&mut self, error: AlienError<ErrorData>, now: DateTime<Utc>) {
+        if error.retryable {
+            self.retryable_failure_count = self.retryable_failure_count.saturating_add(1);
+            let retry_at = now + refresh_retry_delay(self.retryable_failure_count);
+            self.retry_not_before = Some(match self.cache.as_ref() {
+                Some(cache) if cache.expires_at > now => retry_at.min(cache.expires_at),
+                _ => retry_at,
+            });
+        } else {
+            self.retryable_failure_count = 0;
+            self.retry_not_before = None;
+        }
+        self.last_refresh_error = Some(error);
+    }
+}
+
+fn refresh_retry_delay(failure_count: u32) -> ChronoDuration {
+    let multiplier = 2_i64.saturating_pow(failure_count.saturating_sub(1));
+    let seconds = INITIAL_REFRESH_RETRY_DELAY_SECONDS
+        .saturating_mul(multiplier)
+        .min(MAX_REFRESH_RETRY_DELAY_SECONDS);
+    ChronoDuration::seconds(seconds)
 }
 
 struct RemoteStorageResolver {
@@ -819,6 +866,9 @@ impl RemoteStorageResolver {
             if let Some(provider) = state.fresh(now) {
                 return Ok(provider);
             }
+            if let Some(result) = state.cooldown_result(now) {
+                return result;
+            }
             state.generation
         };
 
@@ -828,6 +878,9 @@ impl RemoteStorageResolver {
             let state = self.state.read().await;
             if let Some(provider) = state.fresh(now) {
                 return Ok(provider);
+            }
+            if let Some(result) = state.cooldown_result(now) {
+                return result;
             }
             if state.generation != observed_generation {
                 if let Some(error) = state.last_refresh_error.clone() {
@@ -852,15 +905,14 @@ impl RemoteStorageResolver {
         };
         let mut state = self.state.write().await;
         state.generation = state.generation.wrapping_add(1);
-        state.last_refresh_error = result.as_ref().err().cloned();
 
         match result {
             Ok(cache) => {
-                let provider = cache.provider.clone();
-                state.cache = Some(cache);
+                let provider = state.record_success(cache);
                 Ok(provider)
             }
             Err(error) if error.retryable => {
+                state.record_failure(error.clone(), now);
                 if let Some(provider) = state.unexpired(now) {
                     debug!(
                         deployment_id = %self.source.deployment_id,
@@ -872,7 +924,10 @@ impl RemoteStorageResolver {
                     Err(error)
                 }
             }
-            Err(error) => Err(error),
+            Err(error) => {
+                state.record_failure(error.clone(), now);
+                Err(error)
+            }
         }
     }
 

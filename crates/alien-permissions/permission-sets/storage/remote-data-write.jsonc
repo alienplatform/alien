@@ -64,6 +64,18 @@
             "scope": "/subscriptions/${subscriptionId}/resourceGroups/${resourceGroup}/providers/Microsoft.Storage/storageAccounts/${storageAccountName}/blobServices/default/containers/${resourceName}"
           }
         }
+      },
+      {
+        "grant": {
+          "actions": [
+            "Microsoft.Storage/storageAccounts/blobServices/generateUserDelegationKey/action"
+          ]
+        },
+        "binding": {
+          "resource": {
+            "scope": "/subscriptions/${subscriptionId}/resourceGroups/${resourceGroup}/providers/Microsoft.Storage/storageAccounts/${storageAccountName}"
+          }
+        }
       }
     ]
   }

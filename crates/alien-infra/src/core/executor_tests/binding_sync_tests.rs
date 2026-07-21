@@ -52,7 +52,7 @@ async fn remote_binding_params_synced_only_for_remote_access_resources() -> Resu
 }
 
 #[tokio::test]
-async fn external_storage_reconciles_remote_access_toggles_without_a_controller() -> Result<()> {
+async fn external_storage_rejects_remote_access_without_a_controller() -> Result<()> {
     let storage = Storage::new("uploads".to_owned()).build();
     let disabled_stack = Stack::new("external-binding-toggle".to_owned())
         .add(storage.clone(), ResourceLifecycle::Frozen)
@@ -90,24 +90,11 @@ async fn external_storage_reconciles_remote_access_toggles_without_a_controller(
         crate::core::StackExecutor::builder(&enabled_stack, client_config.clone())
             .deployment_config(&deployment_config)
             .build()?;
-    let enabled_state = run_to_synced(&enabled_executor, disabled_state).await?;
-    assert!(
-        enabled_state.resources["uploads"]
-            .remote_binding_params
-            .is_some(),
-        "enabling remote access must publish the external binding"
-    );
-
-    let disabled_executor = crate::core::StackExecutor::builder(&disabled_stack, client_config)
-        .deployment_config(&deployment_config)
-        .build()?;
-    let disabled_again = run_to_synced(&disabled_executor, enabled_state).await?;
-    assert!(
-        disabled_again.resources["uploads"]
-            .remote_binding_params
-            .is_none(),
-        "disabling remote access must remove the external binding"
-    );
+    let error = run_to_synced(&enabled_executor, disabled_state)
+        .await
+        .expect_err("external Storage must not be exposed through Remote Bindings");
+    assert_eq!(error.code, "RESOURCE_CONFIG_INVALID");
+    assert!(error.message.contains("cannot use an external binding"));
 
     Ok(())
 }

@@ -521,6 +521,15 @@ fn mint_test_stack(platform: Platform) -> Stack {
             ServiceAccountResource::new(BINDING_NAME.to_string()).build(),
             ResourceLifecycle::Live,
         )
+        .add_with_remote_access(
+            Storage {
+                id: "files".to_string(),
+                public_read: false,
+                versioning: false,
+                lifecycle_rules: Vec::new(),
+            },
+            ResourceLifecycle::Frozen,
+        )
         .add(container, ResourceLifecycle::Live)
         .build()
 }

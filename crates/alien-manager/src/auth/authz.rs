@@ -61,6 +61,11 @@ pub trait Authz: Send + Sync {
     // -- Commands ----------------------------------------------------------
     fn can_dispatch_command(&self, subject: &Subject, deployment: &DeploymentRecord) -> bool;
     fn can_read_command(&self, subject: &Subject, deployment: &DeploymentRecord) -> bool;
+    /// Whether a caller holds an exact capability for one command payload.
+    /// This path deliberately does not infer access from workspace scope: a
+    /// manager may serve multiple workspaces and externally registered
+    /// commands have no local entity to authorize against.
+    fn can_read_command_payload(&self, subject: &Subject, command_id: &str) -> bool;
 
     // -- Sync protocol -----------------------------------------------------
     fn can_sync_deployment(&self, subject: &Subject, deployment: &DeploymentRecord) -> bool;
