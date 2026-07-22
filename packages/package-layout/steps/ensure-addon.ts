@@ -67,7 +67,11 @@ export function ensureAddon(ctx: Ctx): CheckResult[] {
     console.log(
       `[addon] no prebuild and no dev addon for ${crateName} '${triple}' — building one with \`napi build --platform --release\` in crates/${crateName} (CI path)...`,
     )
-    const build = run(process.execPath, [napiBinPath(), "build", "--platform", "--release"], crateDir)
+    const build = run(
+      process.execPath,
+      [napiBinPath(), "build", "--platform", "--release"],
+      crateDir,
+    )
     if (build.status === 0 && existsSync(devAddonPath)) {
       console.log(`[addon] built ${relative(scriptDir, devAddonPath)}.`)
       return devAddonPath

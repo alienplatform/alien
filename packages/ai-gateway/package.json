@@ -14,9 +14,7 @@
       "import": "./dist/native.js"
     }
   },
-  "files": [
-    "dist"
-  ],
+  "files": ["dist"],
   "engines": {
     "node": ">=18",
     "bun": ">=1.0.23"
@@ -30,12 +28,7 @@
     "format-and-lint": "biome check .",
     "format-and-lint:fix": "biome check . --write"
   },
-  "keywords": [
-    "alien",
-    "ai",
-    "gateway",
-    "napi"
-  ],
+  "keywords": ["alien", "ai", "gateway", "napi"],
   "author": "Alien Software, Inc. <hi@alien.dev>",
   "license": "FSL-1.1-Apache-2.0",
   "description": "Thin TypeScript wrapper that starts the Alien AI gateway (a Rust napi-rs addon) in-process",

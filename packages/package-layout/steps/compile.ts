@@ -29,12 +29,26 @@ export function compileNativeEmbed(ctx: Ctx): CheckResult[] {
   const stages = [
     {
       pkg: "bindings",
-      staged: join(fixtureDir, "node_modules", "@alienplatform", "bindings", "dist", "alien-bindings.node"),
+      staged: join(
+        fixtureDir,
+        "node_modules",
+        "@alienplatform",
+        "bindings",
+        "dist",
+        "alien-bindings.node",
+      ),
       addonPath,
     },
     {
       pkg: "ai-gateway",
-      staged: join(fixtureDir, "node_modules", "@alienplatform", "ai-gateway", "dist", "alien-ai-gateway.node"),
+      staged: join(
+        fixtureDir,
+        "node_modules",
+        "@alienplatform",
+        "ai-gateway",
+        "dist",
+        "alien-ai-gateway.node",
+      ),
       addonPath: aiAddonPath,
     },
   ] as const
