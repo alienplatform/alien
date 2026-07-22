@@ -23,8 +23,8 @@
  * `/native` only runs where that addon has been staged.
  */
 
-import { installEmbeddedAddon as installBindingsAddon } from "@alienplatform/bindings/native"
 import { installEmbeddedAddon as installAiGatewayAddon } from "@alienplatform/ai-gateway/native"
+import { installEmbeddedAddon as installBindingsAddon } from "@alienplatform/bindings/native"
 
 /** Register both bun-embedded addons (bindings + ai-gateway) with their default loaders. */
 export function installEmbeddedAddon(): void {
