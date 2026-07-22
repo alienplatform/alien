@@ -1,4 +1,0 @@
-# Per-platform prebuild skeletons: only the manifest is committed. The .node addon
-# is staged into each dir at build/publish time (locally by `napi build`, in CI by
-# the build-addon/publish-ai-gateway jobs) and must never be committed.
-*/*.node

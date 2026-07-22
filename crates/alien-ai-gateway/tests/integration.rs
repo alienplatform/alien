@@ -10,7 +10,7 @@
 use std::net::Ipv4Addr;
 
 use alien_core::Platform;
-use alien_gateway::{build_router, AmbientCred, AwsSigV4Cred, BearerTokenCred, GatewayRoute};
+use alien_ai_gateway::{build_router, AmbientCred, AwsSigV4Cred, BearerTokenCred, GatewayRoute};
 use aws_credential_types::provider::SharedCredentialsProvider;
 use aws_credential_types::Credentials;
 use httpmock::prelude::*;

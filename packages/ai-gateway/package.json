@@ -21,17 +21,16 @@
   },
   "scripts": {
     "build": "tsdown && tsc -p tsconfig.build.json --emitDeclarationOnly",
-    "build:addon": "napi build --platform --release --cwd ../../crates/alien-ai-gateway-node",
     "prepare": "npm run build",
     "test": "vitest run",
     "test:ts": "tsc --noEmit",
     "format-and-lint": "biome check .",
     "format-and-lint:fix": "biome check . --write"
   },
-  "keywords": ["alien", "ai", "gateway", "napi"],
+  "keywords": ["alien", "ai", "gateway"],
   "author": "Alien Software, Inc. <hi@alien.dev>",
   "license": "FSL-1.1-Apache-2.0",
-  "description": "Thin TypeScript wrapper that starts the Alien AI gateway (a Rust napi-rs addon) in-process",
+  "description": "Thin TypeScript wrapper that spawns the Alien AI gateway (a Rust binary) and points an OpenAI-compatible client at it",
   "homepage": "https://alien.dev",
   "repository": {
     "type": "git",
@@ -44,8 +43,8 @@
   "devDependencies": {
     "@alienplatform/typescript-config": "workspace:^",
     "@biomejs/biome": "^1.9.4",
-    "@napi-rs/cli": "^3.0.0",
     "@types/node": "^24.0.15",
+    "openai": "^4",
     "tsdown": "^0.13.0",
     "typescript": "^5.8.3",
     "vitest": "^3.1.4"

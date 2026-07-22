@@ -8,14 +8,10 @@ if (!expected) {
 }
 
 const repoRoot = join(dirname(fileURLToPath(import.meta.url)), "../../..")
-const manifests = [
-  "packages/ai-gateway/package.json",
-  "crates/alien-ai-gateway-node/package.json",
-  "packages/ai-gateway/npm/darwin-arm64/package.json",
-  "packages/ai-gateway/npm/darwin-x64/package.json",
-  "packages/ai-gateway/npm/linux-x64-gnu/package.json",
-  "packages/ai-gateway/npm/linux-arm64-gnu/package.json",
-]
+// The wrapper package. Per-platform binary prebuild manifests
+// (packages/ai-gateway/npm/<triple>/package.json) are generated + version-stamped
+// by the release pipeline, so they are validated there rather than pinned here.
+const manifests = ["packages/ai-gateway/package.json"]
 
 for (const path of manifests) {
   const actual = JSON.parse(readFileSync(join(repoRoot, path), "utf8")).version
@@ -28,11 +24,6 @@ const cargo = readFileSync(join(repoRoot, "Cargo.toml"), "utf8")
 const workspaceVersion = cargo.match(/\[workspace\.package\]\nversion = "([^"]+)"/)?.[1]
 if (workspaceVersion !== expected) {
   throw new Error(`Cargo workspace: expected version ${expected}, got ${workspaceVersion}`)
-}
-
-const addonCargo = readFileSync(join(repoRoot, "crates/alien-ai-gateway-node/Cargo.toml"), "utf8")
-if (!/^version\.workspace = true$/m.test(addonCargo)) {
-  throw new Error("alien-ai-gateway-node must inherit the validated Cargo workspace version")
 }
 
 console.log(`AI-gateway release manifests are locked to ${expected}`)

@@ -1,27 +1,22 @@
-//! Live verification of Claude on Azure Foundry. Ignored by default — it makes a
-//! real inference call and needs a Foundry endpoint + Entra token in the
-//! environment.
+//! Live verification of Claude on Azure Foundry. Ignored by default because it
+//! makes a real inference call and needs a Foundry endpoint plus a short-lived
+//! Entra token in the environment. Verified green against the alien-test-target
+//! resource alien-ai-foundry-e2e1 (RG alien-ai-e2e).
 //!
 //! Run it with:
 //!   export AZURE_AI_ENDPOINT="https://<resource>.cognitiveservices.azure.com/"
 //!   export AZURE_ACCESS_TOKEN="$(az account get-access-token --resource https://ai.azure.com --query accessToken -o tsv)"
-//!   cargo test -p alien-gateway --test live_foundry_claude -- --ignored --nocapture
+//!   cargo test -p alien-ai-gateway --test live_foundry_claude -- --ignored --nocapture
 //!
-//! Besides proving the arm end-to-end, this settles the host/audience question the
-//! code left open. AZURE_AI_ENDPOINT must be the account endpoint the AiBinding
-//! carries in production (the AIServices account's `properties.endpoint`, the
-//! `cognitiveservices.azure.com` shape) — a green run against the
-//! `services.ai.azure.com` host would validate a host production bindings never
-//! use. Probe order: (1) the binding-carried host with the `ai.azure.com` token
-//! above; (2) on 404, the `services.ai.azure.com` host — meaning the arm needs a
-//! host derivation; (3) on 401, retry the token with
-//! `--resource https://cognitiveservices.azure.com` — meaning the audience swap
-//! is unnecessary. Record which combination Foundry accepted.
+//! Host and audience are settled: production bindings carry the AIServices
+//! account's `properties.endpoint` (the `cognitiveservices.azure.com` shape), and
+//! Foundry accepts that host with an `ai.azure.com`-audience token on the first
+//! probe, with no host derivation or audience swap needed.
 
 use std::net::Ipv4Addr;
 
 use alien_core::Platform;
-use alien_gateway::{build_router, AmbientCred, BearerTokenCred, GatewayRoute};
+use alien_ai_gateway::{build_router, AmbientCred, BearerTokenCred, GatewayRoute};
 use serde_json::{json, Value};
 
 async fn serve(router: axum::Router) -> String {
@@ -52,7 +47,7 @@ fn foundry_route() -> GatewayRoute {
 }
 
 #[tokio::test]
-#[ignore = "hits real Foundry Claude; needs AZURE_AI_ENDPOINT + AZURE_ACCESS_TOKEN and a Claude deployment on the resource"]
+#[ignore = "hits real Foundry Claude; verified green against alien-ai-foundry-e2e1. Needs a minted (short-lived) AZURE_ACCESS_TOKEN, so it can't run in static-cred CI; see the module docstring to run it"]
 async fn live_foundry_claude_messages() {
     let base = serve(build_router(vec![foundry_route()])).await;
 
@@ -84,7 +79,7 @@ async fn live_foundry_claude_messages() {
 }
 
 #[tokio::test]
-#[ignore = "hits real Foundry Claude streaming; needs AZURE_AI_ENDPOINT + AZURE_ACCESS_TOKEN and a Claude deployment on the resource"]
+#[ignore = "hits real Foundry Claude streaming; verified green against alien-ai-foundry-e2e1. Needs a minted (short-lived) AZURE_ACCESS_TOKEN, so it can't run in static-cred CI; see the module docstring to run it"]
 async fn live_foundry_claude_streaming() {
     // Standard Anthropic streaming on the body's `stream` flag; the reply must be
     // native Anthropic SSE passed through untouched.

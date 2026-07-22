@@ -84,16 +84,30 @@ dependencies = [
 ]
 
 [[package]]
-name = "alien-ai-gateway-node"
+name = "alien-ai-gateway"
 version = "2.1.6"
 dependencies = [
+ "alien-bindings",
+ "alien-core",
  "alien-error",
- "alien-gateway",
- "napi",
- "napi-build",
- "napi-derive",
+ "aws-config",
+ "aws-credential-types",
+ "aws-sigv4",
+ "aws-smithy-eventstream",
+ "aws-smithy-types",
+ "axum 0.8.9",
+ "base64 0.22.1",
+ "dotenvy",
+ "futures",
+ "http 1.4.2",
+ "httpmock",
+ "reqwest 0.12.28",
  "serde",
  "serde_json",
+ "temp-env",
+ "tokio",
+ "tracing",
+ "workspace_root",
 ]
 
 [[package]]
@@ -594,31 +608,6 @@ dependencies = [
  "quote",
  "serde_json",
  "syn 2.0.118",
-]
-
-[[package]]
-name = "alien-gateway"
-version = "2.1.6"
-dependencies = [
- "alien-bindings",
- "alien-core",
- "alien-error",
- "aws-config",
- "aws-credential-types",
- "aws-sigv4",
- "aws-smithy-eventstream",
- "aws-smithy-types",
- "axum 0.8.9",
- "base64 0.22.1",
- "futures",
- "http 1.4.2",
- "httpmock",
- "reqwest 0.12.28",
- "serde",
- "serde_json",
- "temp-env",
- "tokio",
- "tracing",
 ]
 
 [[package]]

@@ -2,9 +2,10 @@
 //
 // The entry (fixture/src/compile-entry.ts) calls `installEmbeddedAddon()` from
 // `@alienplatform/sdk/native`, which pulls in both `@alienplatform/bindings/native`
-// and `@alienplatform/ai-gateway/native`. Each `./native` entry imports its addon
-// through a literal specifier (`./alien-bindings.node`, `./alien-ai-gateway.node`)
-// so bun's compiler stages it into the single-file binary — but only if that file
+// and `@alienplatform/ai-gateway/native`. Each `./native` entry imports its native
+// asset through a literal specifier (`./alien-bindings.node`, the bindings addon;
+// `./alien-ai-gateway.bin`, the gateway launcher binary) so bun's compiler stages
+// it into the single-file binary, but only if that file
 // is physically present next to the installed package's dist/native.js at build
 // time (in production `alien build`'s TypeScript toolchain owns that staging, see
 // PACKAGE_LAYOUT.md; here `run.ts` staged the host addons resolved above).
@@ -17,7 +18,7 @@ import { dirname, join } from "node:path"
 import { type CheckResult, type Ctx, lastLine, run } from "./shared.ts"
 
 export function compileNativeEmbed(ctx: Ctx): CheckResult[] {
-  const { fixtureDir, bunAvailable, addonPath, aiAddonPath } = ctx
+  const { fixtureDir, bunAvailable, addonPath, aiBinaryPath } = ctx
   if (!bunAvailable) return []
 
   const compiledDir = join(fixtureDir, ".compiled")
@@ -47,9 +48,9 @@ export function compileNativeEmbed(ctx: Ctx): CheckResult[] {
         "@alienplatform",
         "ai-gateway",
         "dist",
-        "alien-ai-gateway.node",
+        "alien-ai-gateway.bin",
       ),
-      addonPath: aiAddonPath,
+      addonPath: aiBinaryPath,
     },
   ] as const
 
@@ -108,7 +109,7 @@ export function compileNativeEmbed(ctx: Ctx): CheckResult[] {
     ]
   }
 
-  // Remove BOTH staged .node files: if the binary didn't truly embed them,
+  // Remove BOTH staged native files: if the binary didn't truly embed them,
   // running with the source files gone proves that.
   for (const stage of stages) rmSync(stage.staged, { force: true })
   const ran = run(outFile, [], fixtureDir)

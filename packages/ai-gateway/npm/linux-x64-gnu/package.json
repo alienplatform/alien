@@ -1,9 +1,0 @@
-{
-  "name": "@alienplatform/ai-gateway-linux-x64-gnu",
-  "version": "0.0.0",
-  "cpu": ["x64"],
-  "main": "alien-ai-gateway-node.linux-x64-gnu.node",
-  "files": ["alien-ai-gateway-node.linux-x64-gnu.node"],
-  "description": "napi-rs addon exposing the alien AI gateway to JavaScript",
-  "os": ["linux"]
-}

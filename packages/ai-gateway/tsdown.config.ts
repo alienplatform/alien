@@ -6,7 +6,7 @@ export default defineConfig({
   dts: false,
   hash: false,
   ignoreWatch: ".turbo",
-  // Never bundle the native addon: the `./alien-ai-gateway.node` specifier in
+  // Never bundle the embedded binary: the `./alien-ai-gateway.bin` specifier in
   // native.ts must survive into the output as a literal so bun can embed it.
-  external: [/\.node$/],
+  external: [/\.bin$/],
 })

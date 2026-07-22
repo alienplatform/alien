@@ -28,11 +28,26 @@ use tokio::fs;
 use tokio::process::Command;
 use tracing::info;
 
-/// One napi-addon package that a compiled binary embeds statically. Two ship
-/// today — `@alienplatform/bindings` (kv/storage/queue/vault/container) and
-/// `@alienplatform/ai-gateway` (the `ai()` client) — and each stages its own
-/// addon next to its own `dist/native.js` under the literal file name its
-/// `./native` entry imports.
+/// The native-asset shape a package embeds into a compiled binary.
+enum AddonKind {
+    /// A napi-rs addon: `<crate_dir>.<triple>.node`, sourced from a per-triple
+    /// napi prebuild, a workspace dev build, or the napi CLI.
+    Napi { crate_dir: &'static str },
+    /// A standalone launcher executable, sourced from a per-triple binary
+    /// prebuild, the workspace cargo target dir, or a host `cargo build`.
+    Binary {
+        /// The executable's file name (also its source name in a prebuild).
+        bin_name: &'static str,
+        /// The workspace crate producing the `[[bin]]` (`cargo build -p …`).
+        cargo_package: &'static str,
+    },
+}
+
+/// One package whose native asset a compiled binary embeds statically. Two ship
+/// today: `@alienplatform/bindings` (a napi addon: kv/storage/queue/vault/
+/// container) and `@alienplatform/ai-gateway` (a launcher binary the `ai()`
+/// client spawns). Each stages its own asset next to its own `dist/native.js`
+/// under the literal file name its `./native` entry imports.
 struct NativeAddonSpec {
     /// npm package carrying the JS side (e.g. "@alienplatform/bindings").
     package: &'static str,
@@ -40,11 +55,11 @@ struct NativeAddonSpec {
     /// for the sibling prebuild directory `<scope>/<scoped_name>-<triple>`.
     scoped_name: &'static str,
     /// File name the package's `./native` entry statically imports
-    /// (`import addon from "./<staged_file>"` next to `dist/native.js`).
+    /// (`import x from "./<staged_file>"` next to `dist/native.js`).
     staged_file: &'static str,
-    /// Workspace crate dir under `crates/` — also the addon file-name prefix
-    /// (`<crate_dir>.<triple>.node`).
-    crate_dir: &'static str,
+    /// Whether the asset is a napi addon or a standalone binary; this drives
+    /// where the source is found and how it is (re)built.
+    kind: AddonKind,
 }
 
 /// The bindings addon: required whenever the app resolves it (every consumer
@@ -53,26 +68,32 @@ const BINDINGS: NativeAddonSpec = NativeAddonSpec {
     package: "@alienplatform/bindings",
     scoped_name: "bindings",
     staged_file: "alien-bindings.node",
-    crate_dir: "alien-bindings-node",
+    kind: AddonKind::Napi {
+        crate_dir: "alien-bindings-node",
+    },
 };
 
-/// The AI-gateway addon: staged best-effort. A Worker resolves it transitively
-/// through the SDK even when it never calls `ai()`, so a missing addon for the
-/// target is skipped (not a build error) — requiring it would regress every
-/// non-AI Worker. When the addon is present it is embedded so a compiled
-/// `ai()`/`getAiConnection()` resolves.
+/// The AI-gateway launcher binary: staged best-effort. A Worker resolves the
+/// ai-gateway package transitively through the SDK even when it never calls
+/// `ai()`, so a missing binary for the target is skipped (not a build error):
+/// requiring it would regress every non-AI Worker. When present it is embedded
+/// so a compiled `ai()`/`getAiConnection()` can extract and spawn it.
 const AI_GATEWAY: NativeAddonSpec = NativeAddonSpec {
     package: "@alienplatform/ai-gateway",
     scoped_name: "ai-gateway",
-    staged_file: "alien-ai-gateway.node",
-    crate_dir: "alien-ai-gateway-node",
+    staged_file: "alien-ai-gateway.bin",
+    kind: AddonKind::Binary {
+        bin_name: "alien-ai-gateway",
+        cargo_package: "alien-ai-gateway",
+    },
 };
 
 /// Map a build target to the napi triple used in prebuild package names
 /// (`@alienplatform/bindings-<triple>`) and addon file names
 /// (`alien-bindings-node.<triple>.node`). Mirrors `platformTriple()` in
 /// `packages/bindings/src/loader.ts`. `None` means no addon exists for the
-/// target.
+/// target. `Binary` assets (the ai-gateway launcher) key their per-triple
+/// prebuild packages off this same triple.
 fn napi_triple(target: BinaryTarget) -> Option<&'static str> {
     match target {
         BinaryTarget::LinuxX64 => Some("linux-x64-gnu"),
@@ -102,11 +123,12 @@ fn napi_triple(target: BinaryTarget) -> Option<&'static str> {
 ///
 /// Returns `Ok(None)` when no source exists (the caller turns that into a
 /// build error naming the missing prebuild package).
-async fn find_addon_source(
+async fn find_napi_source(
     src_dir: &Path,
     spec: &NativeAddonSpec,
     addon_dist: &Path,
     triple: &str,
+    crate_name: &str,
     addon_file_name: &str,
     resource_name: &str,
     checked: &mut Vec<String>,
@@ -147,10 +169,10 @@ async fn find_addon_source(
     'anchors: for anchor in std::iter::once(src_dir).chain(canonical_dist.as_deref()) {
         let mut dir = Some(anchor);
         while let Some(current) = dir {
-            let crate_dir = current.join("crates").join(spec.crate_dir);
-            if crate_dir.is_dir() {
-                workspace_addon_crate = Some(crate_dir.clone());
-                let dev_addon = crate_dir.join(addon_file_name);
+            let crate_path = current.join("crates").join(crate_name);
+            if crate_path.is_dir() {
+                workspace_addon_crate = Some(crate_path.clone());
+                let dev_addon = crate_path.join(addon_file_name);
                 if dev_addon.is_file() {
                     return Ok(Some(dev_addon));
                 }
@@ -161,7 +183,7 @@ async fn find_addon_source(
         }
         checked.push(format!(
             "(no crates/{} above {})",
-            spec.crate_dir,
+            crate_name,
             anchor.display()
         ));
     }
@@ -214,6 +236,122 @@ async fn find_addon_source(
     let dev_addon = crate_dir.join(addon_file_name);
     if dev_addon.is_file() {
         Ok(Some(dev_addon))
+    } else {
+        Ok(None)
+    }
+}
+
+/// Locate the launcher binary for `triple`, trying (in order):
+///
+/// 1. The per-platform prebuild package (`@alienplatform/ai-gateway-<triple>`,
+///    an `optionalDependency` that ships the executable), as a sibling of the
+///    resolved package and in the app's own `node_modules`.
+/// 2. The workspace cargo target dir (`target/release` then `target/debug`),
+///    found by walking up to the crate that produces the bin. Only usable when
+///    building for the host arch, since the dev binary is host-native.
+/// 3. In-repo host-triple build: `cargo build --release --bin <bin> -p <pkg>`.
+///
+/// Returns `Ok(None)` when no source exists (the caller skips this best-effort
+/// asset).
+async fn find_binary_source(
+    src_dir: &Path,
+    spec: &NativeAddonSpec,
+    addon_dist: &Path,
+    triple: &str,
+    bin_name: &str,
+    cargo_package: &str,
+    resource_name: &str,
+    checked: &mut Vec<String>,
+) -> Result<Option<PathBuf>> {
+    // 1a. Prebuild linked next to the resolved package.
+    if let Some(scope_dir) = addon_dist.parent().and_then(Path::parent) {
+        let sibling = scope_dir
+            .join(format!("{}-{}", spec.scoped_name, triple))
+            .join(bin_name);
+        if sibling.is_file() {
+            return Ok(Some(sibling));
+        }
+        checked.push(sibling.display().to_string());
+    }
+    // 1b. Prebuild installed in the app's own node_modules.
+    let prebuild = src_dir
+        .join("node_modules")
+        .join(format!("{}-{}", spec.package, triple))
+        .join(bin_name);
+    if prebuild.is_file() {
+        return Ok(Some(prebuild));
+    }
+    checked.push(prebuild.display().to_string());
+
+    // 2. Workspace cargo target. Walk up (from the app and the resolved dist) to
+    //    the crate that produces the bin; its workspace root holds `target/`.
+    let canonical_dist = addon_dist.canonicalize().ok();
+    let mut workspace_root: Option<PathBuf> = None;
+    'anchors: for anchor in std::iter::once(src_dir).chain(canonical_dist.as_deref()) {
+        let mut dir = Some(anchor);
+        while let Some(current) = dir {
+            if current.join("crates").join(cargo_package).is_dir() {
+                workspace_root = Some(current.to_path_buf());
+                break 'anchors;
+            }
+            dir = current.parent();
+        }
+    }
+    let Some(root) = workspace_root else {
+        checked.push(format!(
+            "(no crates/{cargo_package} above the app or resolved package)"
+        ));
+        return Ok(None);
+    };
+
+    // The dev/target binary is host-native, so only usable when building for the
+    // host triple; a cross target must come from a prebuild.
+    let host_triple = napi_triple(BinaryTarget::current_os());
+    if host_triple != Some(triple) {
+        checked.push(format!(
+            "(cargo build skipped: host triple {host_triple:?} != target '{triple}')"
+        ));
+        return Ok(None);
+    }
+    for profile in ["release", "debug"] {
+        let candidate = root.join("target").join(profile).join(bin_name);
+        if candidate.is_file() {
+            return Ok(Some(candidate));
+        }
+        checked.push(candidate.display().to_string());
+    }
+
+    // 3. Host build.
+    info!(
+        "Gateway binary {} not built yet; running `cargo build --release --bin {} -p {}` in {}",
+        bin_name,
+        bin_name,
+        cargo_package,
+        root.display()
+    );
+    let output = Command::new("cargo")
+        .args(["build", "--release", "--bin", bin_name, "-p", cargo_package])
+        .current_dir(&root)
+        .output()
+        .await
+        .into_alien_error()
+        .context(ErrorData::ImageBuildFailed {
+            resource_name: resource_name.to_string(),
+            reason: format!("Failed to execute `cargo build --bin {bin_name} -p {cargo_package}`"),
+            build_output: None,
+        })?;
+    if !output.status.success() {
+        let mut build_output = String::from_utf8_lossy(&output.stdout).into_owned();
+        build_output.push_str(&String::from_utf8_lossy(&output.stderr));
+        return Err(AlienError::new(ErrorData::ImageBuildFailed {
+            resource_name: resource_name.to_string(),
+            reason: format!("`cargo build --release --bin {bin_name} -p {cargo_package}` failed"),
+            build_output: Some(build_output),
+        }));
+    }
+    let built = root.join("target").join("release").join(bin_name);
+    if built.is_file() {
+        Ok(Some(built))
     } else {
         Ok(None)
     }
@@ -366,33 +504,59 @@ pub(super) struct StagedAddon {
     _guards: Vec<tokio::sync::OwnedMutexGuard<()>>,
 }
 
-/// Workspace dev addon files that exist for the requested targets, walking
-/// up from `anchor` (typically the realpath of the resolved bindings
-/// package). Used by the build cache key: the compiled binary embeds these
-/// bytes, so a rebuilt addon must invalidate cached artifacts.
+/// Walk up from `anchor` to the first `<dir>/crates/<name>` that exists.
+fn find_workspace_crate(anchor: &Path, name: &str) -> Option<PathBuf> {
+    let mut dir = Some(anchor);
+    while let Some(current) = dir {
+        let candidate = current.join("crates").join(name);
+        if candidate.is_dir() {
+            return Some(candidate);
+        }
+        dir = current.parent();
+    }
+    None
+}
+
+/// Workspace-built native assets that exist for the requested targets, walking
+/// up from `anchor` (typically the realpath of the resolved package). Used by
+/// the build cache key: the compiled binary embeds these bytes, so a rebuilt
+/// addon or launcher binary must invalidate cached artifacts.
 pub(crate) fn workspace_addon_inputs(anchor: &Path, targets: &[BinaryTarget]) -> Vec<PathBuf> {
     let mut inputs: Vec<PathBuf> = Vec::new();
     for spec in [&BINDINGS, &AI_GATEWAY] {
-        let mut crate_dir: Option<PathBuf> = None;
-        let mut dir = Some(anchor);
-        while let Some(current) = dir {
-            let candidate = current.join("crates").join(spec.crate_dir);
-            if candidate.is_dir() {
-                crate_dir = Some(candidate);
-                break;
+        match &spec.kind {
+            AddonKind::Napi { crate_dir } => {
+                let Some(crate_path) = find_workspace_crate(anchor, crate_dir) else {
+                    continue;
+                };
+                inputs.extend(
+                    targets
+                        .iter()
+                        .filter_map(|target| napi_triple(*target))
+                        .map(|triple| crate_path.join(format!("{crate_dir}.{triple}.node")))
+                        .filter(|path| path.is_file()),
+                );
             }
-            dir = current.parent();
+            AddonKind::Binary {
+                bin_name,
+                cargo_package,
+            } => {
+                // The host-built launcher binary under the workspace target dir.
+                let Some(root) =
+                    find_workspace_crate(anchor, cargo_package).and_then(|c| {
+                        c.parent().and_then(Path::parent).map(Path::to_path_buf)
+                    })
+                else {
+                    continue;
+                };
+                inputs.extend(
+                    ["release", "debug"]
+                        .iter()
+                        .map(|profile| root.join("target").join(profile).join(bin_name))
+                        .filter(|path| path.is_file()),
+                );
+            }
         }
-        let Some(crate_dir) = crate_dir else {
-            continue;
-        };
-        inputs.extend(
-            targets
-                .iter()
-                .filter_map(|target| napi_triple(*target))
-                .map(|triple| crate_dir.join(format!("{}.{triple}.node", spec.crate_dir)))
-                .filter(|path| path.is_file()),
-        );
     }
     inputs.sort();
     inputs.dedup();
@@ -469,6 +633,46 @@ pub(super) async fn stage_native_addon(
     }))
 }
 
+/// The build error when a required native asset has no source for `target`,
+/// tailored to its kind (napi addon vs launcher binary).
+fn missing_source_reason(
+    spec: &NativeAddonSpec,
+    triple: &str,
+    target: BinaryTarget,
+    checked: &[String],
+) -> String {
+    let pkg = spec.package;
+    let checked = checked.join(", ");
+    match &spec.kind {
+        AddonKind::Napi { crate_dir } => {
+            let lib_name = format!("lib{}.so", crate_dir.replace('-', "_"));
+            format!(
+                "{pkg} is installed, but the native addon for target '{target}' was not found. \
+                 Install the prebuild package '{pkg}-{triple}' (it ships {crate_dir}.{triple}.node), \
+                 or, in the alien workspace, build the dev addon with \
+                 `npx napi build --platform --release` in crates/{crate_dir}. \
+                 Cross-building from another OS: zig/napi-cross cannot build this cdylib; \
+                 build natively in Docker instead: \
+                 `docker run --rm --platform linux/<arch> -v <workspace>:/work \
+                 -e CARGO_TARGET_DIR=/tmp/target -w /work/crates/{crate_dir} \
+                 rust:1-bookworm sh -c 'apt-get update -qq && apt-get install -y -qq \
+                 protobuf-compiler && cargo build --release --lib && \
+                 cp /tmp/target/release/{lib_name} {crate_dir}.{triple}.node'`. \
+                 Checked: {checked}."
+            )
+        }
+        AddonKind::Binary {
+            bin_name,
+            cargo_package,
+        } => format!(
+            "{pkg} is installed, but the launcher binary for target '{target}' was not found. \
+             Install the prebuild package '{pkg}-{triple}' (it ships {bin_name}), or, in the \
+             alien workspace building for the host, build it with \
+             `cargo build --release --bin {bin_name} -p {cargo_package}`. Checked: {checked}."
+        ),
+    }
+}
+
 /// Source the target addon for `spec` and copy it into `addon_dist` as the
 /// staged `spec.staged_file`. Split from {@link stage_native_addon} so the
 /// sourcing and copy logic is unit-testable against a fixture `dist/` directory
@@ -506,23 +710,43 @@ async fn stage_addon_into(
             build_output: None,
         }));
     };
-    let addon_file_name = format!("{}.{}.node", spec.crate_dir, triple);
-
     let mut checked = Vec::new();
-    let Some(source) = find_addon_source(
-        src_dir,
-        spec,
-        addon_dist,
-        triple,
-        &addon_file_name,
-        resource_name,
-        &mut checked,
-    )
-    .await?
-    else {
+    let source = match &spec.kind {
+        AddonKind::Napi { crate_dir } => {
+            let addon_file_name = format!("{crate_dir}.{triple}.node");
+            find_napi_source(
+                src_dir,
+                spec,
+                addon_dist,
+                triple,
+                crate_dir,
+                &addon_file_name,
+                resource_name,
+                &mut checked,
+            )
+            .await?
+        }
+        AddonKind::Binary {
+            bin_name,
+            cargo_package,
+        } => {
+            find_binary_source(
+                src_dir,
+                spec,
+                addon_dist,
+                triple,
+                bin_name,
+                cargo_package,
+                resource_name,
+                &mut checked,
+            )
+            .await?
+        }
+    };
+    let Some(source) = source else {
         if !required {
             info!(
-                "Optional native addon {} for target '{}' not found; skipping (the app may not \
+                "Optional native asset {} for target '{}' not found; skipping (the app may not \
                  use it). Checked: {}",
                 spec.package,
                 target,
@@ -530,26 +754,9 @@ async fn stage_addon_into(
             );
             return Ok(None);
         }
-        let lib_name = format!("lib{}.so", spec.crate_dir.replace('-', "_"));
         return Err(AlienError::new(ErrorData::ImageBuildFailed {
             resource_name: resource_name.to_string(),
-            reason: format!(
-                "{pkg} is installed, but the native addon for target '{target}' was not found. \
-                 Install the prebuild package '{pkg}-{triple}' (it ships {addon_file_name}), \
-                 or, in the alien workspace, build the dev addon with \
-                 `npx napi build --platform --release` in crates/{crate_dir}. \
-                 Cross-building from another OS: zig/napi-cross cannot build this cdylib; \
-                 build natively in Docker instead: \
-                 `docker run --rm --platform linux/<arch> -v <workspace>:/work \
-                 -e CARGO_TARGET_DIR=/tmp/target -w /work/crates/{crate_dir} \
-                 rust:1-bookworm sh -c 'apt-get update -qq && apt-get install -y -qq \
-                 protobuf-compiler && cargo build --release --lib && \
-                 cp /tmp/target/release/{lib_name} {addon_file_name}'`. \
-                 Checked: {checked}.",
-                pkg = spec.package,
-                crate_dir = spec.crate_dir,
-                checked = checked.join(", "),
-            ),
+            reason: missing_source_reason(spec, triple, target, &checked),
             build_output: None,
         }));
     };
@@ -821,10 +1028,11 @@ mod tests {
         );
     }
 
-    /// When the ai-gateway addon IS present it stages under its own literal file
-    /// name (`alien-ai-gateway.node`) next to its own dist/native.js.
+    /// When the ai-gateway launcher binary IS present (shipped by the per-triple
+    /// prebuild package as the bare `alien-ai-gateway` executable) it stages under
+    /// its own literal file name (`alien-ai-gateway.bin`) next to its dist/native.js.
     #[tokio::test]
-    async fn optional_ai_gateway_addon_stages_when_present() {
+    async fn optional_ai_gateway_binary_stages_when_present() {
         let app = tempdir().unwrap();
         let ai_dist = install_fake_addon_package(app.path(), &AI_GATEWAY).await;
 
@@ -833,13 +1041,10 @@ mod tests {
             .join("node_modules")
             .join("@alienplatform/ai-gateway-linux-arm64-gnu");
         fs::create_dir_all(&prebuild_dir).await.unwrap();
-        let addon_bytes = b"fake-ai-gateway-linux-arm64-addon";
-        fs::write(
-            prebuild_dir.join("alien-ai-gateway-node.linux-arm64-gnu.node"),
-            addon_bytes,
-        )
-        .await
-        .unwrap();
+        let binary_bytes = b"fake-ai-gateway-linux-arm64-binary";
+        fs::write(prebuild_dir.join("alien-ai-gateway"), binary_bytes)
+            .await
+            .unwrap();
 
         let staged = stage_addon_into(
             app.path(),
@@ -851,8 +1056,8 @@ mod tests {
         )
         .await
         .expect("staging should succeed from the installed prebuild")
-        .expect("present optional addon must stage");
+        .expect("present optional binary must stage");
         assert_eq!(staged, ai_dist.join(AI_GATEWAY.staged_file));
-        assert_eq!(fs::read(&staged).await.unwrap(), addon_bytes);
+        assert_eq!(fs::read(&staged).await.unwrap(), binary_bytes);
     }
 }

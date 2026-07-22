@@ -1,7 +1,7 @@
 /**
  * AI binding — a thin OpenAI-compatible client to the workload's AI gateway.
  *
- * For an ambient-cloud binding the in-process Rust gateway is started on the first call; for a
+ * For an ambient-cloud binding the gateway process is started on the first call; for a
  * BYO-key (External) binding the client talks to the provider directly. Either way the client
  * only forwards OpenAI-shaped requests and streams responses back — it holds no ambient
  * credentials and rewrites nothing (the gateway rewrites the model id and injects the
@@ -9,6 +9,14 @@
  */
 
 import { AlienError } from "@alienplatform/core"
+// Types only (erased at build): OpenAI's canonical result shapes, so callers get
+// a typed completion without reinventing them. `@alienplatform/ai-gateway` keeps
+// `openai` a devDependency; its runtime dependency stays `@alienplatform/core`.
+import type { ChatCompletion, ChatCompletionChunk } from "openai/resources/chat/completions"
+import type {
+  Response as OpenAIResponse,
+  ResponseStreamEvent,
+} from "openai/resources/responses/responses"
 
 import { isExternalAiBinding, parseAiBinding } from "./binding.js"
 import { AiTransportError, AiUpstreamError, BindingNotFoundError } from "./errors.js"
@@ -35,6 +43,27 @@ export interface ResponseCreateParams {
 /** One model the gateway exposes for this binding's cloud. */
 export interface AiModel {
   id: string
+}
+
+/**
+ * OpenAI-compatible chat-completions surface, typed so a non-streaming call
+ * resolves to a full {@link ChatCompletion} and a streaming call to an
+ * async-iterable of {@link ChatCompletionChunk}; the caller reads
+ * `.choices[0].message.content` (or iterates chunks) with no cast.
+ */
+export interface ChatCompletionsApi {
+  create(params: ChatCompletionCreateParams & { stream?: false }): Promise<ChatCompletion>
+  create(
+    params: ChatCompletionCreateParams & { stream: true },
+  ): Promise<AsyncIterable<ChatCompletionChunk>>
+}
+
+/** OpenAI-compatible Responses surface (the API Codex speaks), typed like above. */
+export interface ResponsesApi {
+  create(params: ResponseCreateParams & { stream?: false }): Promise<OpenAIResponse>
+  create(
+    params: ResponseCreateParams & { stream: true },
+  ): Promise<AsyncIterable<ResponseStreamEvent>>
 }
 
 // Upstream base URL (no `/v1`) for a BYO-key provider. `ALIEN_AI_LOCAL_BASE_URL` overrides it so
@@ -202,28 +231,26 @@ export class Ai {
   private connectionPromise: Promise<ResolvedAiBinding> | null = null
 
   /** OpenAI-compatible chat namespace. */
-  readonly chat: {
-    completions: {
-      create(params: ChatCompletionCreateParams): Promise<unknown>
-    }
-  }
+  readonly chat: { completions: ChatCompletionsApi }
 
   /** OpenAI-compatible Responses API namespace (the surface Codex speaks). */
-  readonly responses: {
-    create(params: ResponseCreateParams): Promise<unknown>
-  }
+  readonly responses: ResponsesApi
 
   constructor(resolve: () => Promise<ResolvedAiBinding>) {
     this.resolve = resolve
 
+    // One internal cast bridges the single passthrough impl to the typed
+    // stream/non-stream overloads, so callers never cast the result themselves.
     this.chat = {
       completions: {
-        create: (params: ChatCompletionCreateParams) => this._chatCompletionsCreate(params),
+        create: ((params: ChatCompletionCreateParams) =>
+          this._chatCompletionsCreate(params)) as ChatCompletionsApi["create"],
       },
     }
 
     this.responses = {
-      create: (params: ResponseCreateParams) => this._responsesCreate(params),
+      create: ((params: ResponseCreateParams) =>
+        this._responsesCreate(params)) as ResponsesApi["create"],
     }
   }
 

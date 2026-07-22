@@ -4,7 +4,8 @@
 //! injection is exercised only by the end-to-end cloud tests; the lib's
 //! `gateway_starts_and_serves_health` covers startup and health on empty bindings.
 
-use std::process::Command;
+use std::io::{BufRead, BufReader};
+use std::process::{Command, Stdio};
 
 // With no ALIEN_*_BINDING for an AI resource, the launcher must exec the app
 // unchanged and must NOT set ALIEN_AI_GATEWAY_URL.
@@ -24,6 +25,43 @@ fn passthrough_execs_app_without_gateway_when_no_ai_binding() {
         String::from_utf8_lossy(&out.stderr)
     );
     assert_eq!(String::from_utf8_lossy(&out.stdout), "gw=unset");
+}
+
+// The SDK-spawn path: `--gateway-serve` with no pinned port must bind an ephemeral
+// port and print exactly one machine-readable URL line to stdout, then serve a
+// reachable gateway at that URL. This is the contract the TS side (gateway.ts)
+// parses; it is the only test that drives the real binary end to end.
+#[test]
+fn gateway_serve_announces_a_reachable_ephemeral_url() {
+    let exe = env!("CARGO_BIN_EXE_alien-ai-gateway");
+    // env_clear so no stray ALIEN_AI_GATEWAY_PORT forces a fixed port and no
+    // ALIEN_*_BINDING is present (empty bindings still serve /healthz).
+    let mut child = Command::new(exe)
+        .env_clear()
+        .arg("--gateway-serve")
+        .stdout(Stdio::piped())
+        .spawn()
+        .expect("gateway-serve should start");
+
+    let mut line = String::new();
+    let read = BufReader::new(child.stdout.take().expect("piped stdout")).read_line(&mut line);
+    let url = read
+        .ok()
+        .and_then(|_| serde_json::from_str::<serde_json::Value>(line.trim()).ok())
+        .and_then(|v| v["aiGatewayUrl"].as_str().map(str::to_owned));
+    // Probe reachability while the child is still alive.
+    let reachable = url.as_deref().map(alien_ai_gateway::wait_until_ready_blocking);
+
+    // Reap unconditionally, before any assertion, so a broken binary (crash before
+    // printing, malformed output, missing field) can't leave the `--gateway-serve`
+    // child orphaned on its `pending` future.
+    let _ = child.kill();
+    let _ = child.wait();
+
+    let url = url.expect("gateway-serve must print a JSON line carrying aiGatewayUrl");
+    assert!(url.starts_with("http://127.0.0.1:"), "expected a loopback URL, got {url:?}");
+    assert!(!url.ends_with(":0"), "must report the OS-assigned port, not :0: {url:?}");
+    assert_eq!(reachable, Some(true), "the announced gateway URL must be reachable: {url}");
 }
 
 // A malformed invocation (no `--` separator, no command) fails fast, non-zero.

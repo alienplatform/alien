@@ -1,9 +1,0 @@
-{
-  "name": "@alienplatform/ai-gateway-darwin-arm64",
-  "version": "0.0.0",
-  "cpu": ["arm64"],
-  "main": "alien-ai-gateway-node.darwin-arm64.node",
-  "files": ["alien-ai-gateway-node.darwin-arm64.node"],
-  "description": "napi-rs addon exposing the alien AI gateway to JavaScript",
-  "os": ["darwin"]
-}
