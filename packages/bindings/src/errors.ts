@@ -130,3 +130,24 @@ export function unwrapNapiError(err: unknown): AlienError {
     context,
   })
 }
+
+// Shared with the AI binding surface in @alienplatform/ai-gateway.
+export { BindingNotFoundError } from "@alienplatform/core"
+
+/**
+ * Error thrown when reading a Postgres connection-password secret from a cloud secret store yields
+ * no usable value — an upstream read failure (throttle, network blip, service unavailable) or an
+ * empty stored secret. Always transient from the workload's perspective, so retryable.
+ */
+export const PostgresSecretResolutionError = defineError({
+  code: "POSTGRES_SECRET_RESOLUTION_ERROR",
+  context: z.object({
+    secret: z.string(),
+    reason: z.string(),
+  }),
+  message: ({ secret, reason }) =>
+    `Failed to read Postgres connection-password secret '${secret}': ${reason}`,
+  retryable: true,
+  internal: false,
+  httpStatusCode: 503,
+})

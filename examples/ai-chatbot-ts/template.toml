@@ -1,0 +1,3 @@
+name = "ai-chatbot-ts"
+description = "A streaming AI chatbot that calls models in the customer's cloud through the embedded Alien AI gateway (no API keys)."
+language = "TypeScript"

@@ -7,7 +7,7 @@
 //! worker runtime that [`crate::worker_manager`] hosts for the Worker path.
 
 use crate::error::{ErrorData, Result};
-use crate::worker_manager::{LocalWorkerManager, WorkerMetadata};
+use crate::worker_manager::{LocalWorkerManager, RuntimeOnlyBindingRef, WorkerMetadata};
 use alien_error::{AlienError, Context, ContextError as _, IntoAlienError};
 use alien_worker_runtime::{LogExporter, OwnedOtlpLogger};
 use std::collections::HashMap;
@@ -48,9 +48,10 @@ pub(crate) struct DaemonRuntime {
 /// shape without the caller re-supplying it.
 #[derive(Debug, Default, Clone)]
 pub struct DaemonLaunchOptions {
-    /// Linked-resource names whose binding is a runtime-only secret (a local
-    /// Postgres password): re-resolved live at every start, never persisted.
-    pub runtime_only_binding_names: Vec<String>,
+    /// Linked resources whose binding is a runtime-only secret (a local
+    /// Postgres password or a local BYO-key AI binding): re-resolved live at
+    /// every start by resource type, never persisted.
+    pub runtime_only_bindings: Vec<RuntimeOnlyBindingRef>,
     /// Env var NAMES whose resolved values are deployment secrets (including
     /// the receiver's `ALIEN_COMMANDS_TOKEN`): delivered to the process but
     /// stripped from the persisted metadata. The in-memory runtime keeps the
@@ -166,15 +167,15 @@ impl LocalWorkerManager {
 
         // Re-resolve each secret live (kept out of persisted metadata; see plan_worker_launch).
         let mut resolved_bindings = Vec::new();
-        for name in &options.runtime_only_binding_names {
+        for binding in &options.runtime_only_bindings {
             if let Some(entry) = bindings_provider
-                .resolve_runtime_only_binding_env(name)
+                .resolve_runtime_only_binding_env(&binding.name, &binding.resource_type)
                 .await
                 .context(ErrorData::Other {
-                    message: format!("Failed to resolve runtime-only binding '{}'", name),
+                    message: format!("Failed to resolve runtime-only binding '{}'", binding.name),
                 })?
             {
-                resolved_bindings.push((name.clone(), entry));
+                resolved_bindings.push((binding.name.clone(), entry));
             }
         }
         let (updated_metadata, runtime_env_vars) = Self::plan_worker_launch(
@@ -183,7 +184,7 @@ impl LocalWorkerManager {
             &existing_metadata,
             None,
             env_vars,
-            options.runtime_only_binding_names,
+            options.runtime_only_bindings,
             &existing_metadata.runtime_only_env_names.clone(),
             &resolved_bindings,
         );

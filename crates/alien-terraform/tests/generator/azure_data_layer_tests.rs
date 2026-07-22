@@ -1,4 +1,4 @@
-//! Azure data-layer scenarios — storage / kv / queue / vault.
+//! Azure data-layer scenarios — storage / kv / queue / vault / ai.
 //!
 //! Mirror of `gcp_data_layer_tests.rs` for Azure. Each scenario is a
 //! single multi-file snapshot — the security team reads the full
@@ -13,7 +13,7 @@
 
 use super::helpers::{assert_terraform_valid, render, snapshot_module};
 use alien_core::{
-    AzureResourceGroup, AzureServiceBusNamespace, AzureStorageAccount, Kv, LifecycleRule,
+    Ai, AzureResourceGroup, AzureServiceBusNamespace, AzureStorageAccount, Kv, LifecycleRule,
     PermissionProfile, Queue, ResourceLifecycle, ResourceRef, ServiceAccount, Stack, StackSettings,
     Storage, Vault,
 };
@@ -273,4 +273,82 @@ fn azure_data_layer_renders_complete_stack() {
     let module = render(&stack, TerraformTarget::Azure, StackSettings::default());
     snapshot_module("azure_data_layer_full", &module);
     assert_terraform_valid(&module, "azure_data_layer_full");
+}
+
+#[test]
+fn azure_ai_renders_cognitive_account() {
+    // Azure AI provisions an azurerm_cognitive_account (kind=AIServices, sku=S0).
+    let stack = Stack::new("acme-ai".to_string())
+        .add(resource_group(), ResourceLifecycle::Frozen)
+        .add(Ai::new("llm".to_string()).build(), ResourceLifecycle::Frozen)
+        .build();
+    let module = render(&stack, TerraformTarget::Azure, StackSettings::default());
+    snapshot_module("azure_ai_minimal", &module);
+    assert_terraform_valid(&module, "azure_ai_minimal");
+
+    let rendered = module
+        .iter()
+        .map(|(_, contents)| contents)
+        .collect::<String>();
+    assert!(
+        rendered.contains("azurerm_cognitive_account"),
+        "must emit azurerm_cognitive_account"
+    );
+    assert!(rendered.contains("AIServices"), "kind must be AIServices");
+    assert!(rendered.contains("S0"), "sku_name must be S0");
+
+    assert!(
+        rendered.contains("azurerm_cognitive_deployment"),
+        "must emit a model deployment"
+    );
+    assert!(rendered.contains("gpt-4.1"), "must deploy the curated gpt-4.1 model");
+    assert!(
+        rendered.contains("cognitive_account_id"),
+        "deployment must reference the account via cognitive_account_id"
+    );
+    assert!(
+        rendered.contains("GlobalStandard"),
+        "deployment sku must be GlobalStandard"
+    );
+
+    // Import metadata must carry accountName, endpoint, resourceGroup, location.
+    // The import ref appears in locals.tf.
+    let locals = module
+        .get("locals.tf")
+        .expect("locals.tf should render");
+    assert!(locals.contains("accountName"), "import ref must carry accountName");
+    assert!(locals.contains("endpoint"), "import ref must carry endpoint");
+    assert!(locals.contains("resourceGroup"), "import ref must carry resourceGroup");
+    assert!(locals.contains("location"), "import ref must carry location");
+}
+
+#[test]
+fn azure_ai_invoke_permissions_emit_cognitive_services_openai_user_role() {
+    // When a permission profile references ai/invoke, the AI emitter emits a
+    // Cognitive Services OpenAI User role assignment scoped to the cognitive
+    // account, bound to the workload service account.
+    let stack = Stack::new("acme-ai".to_string())
+        .permissions(alien_core::PermissionsConfig::new().with_profile(
+            "execution",
+            PermissionProfile::new().resource("llm", ["ai/invoke"]),
+        ))
+        .add(resource_group(), ResourceLifecycle::Frozen)
+        .add(
+            ServiceAccount::new("execution-sa".to_string()).build(),
+            ResourceLifecycle::Frozen,
+        )
+        .add(Ai::new("llm".to_string()).build(), ResourceLifecycle::Frozen)
+        .build();
+    let module = render(&stack, TerraformTarget::Azure, StackSettings::default());
+    let rendered = module
+        .iter()
+        .map(|(_, contents)| contents)
+        .collect::<String>();
+
+    // The predefined role ID for "Cognitive Services OpenAI User" must appear.
+    assert!(
+        rendered.contains("5e0bd9bd-7b93-4f28-af87-19fc36ad61bd"),
+        "Cognitive Services OpenAI User role ID must appear"
+    );
+    assert_terraform_valid(&module, "azure_ai_invoke_permissions");
 }

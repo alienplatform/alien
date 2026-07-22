@@ -31,7 +31,7 @@
   "author": "Alien Software, Inc. <hi@alien.dev>",
   "license": "FSL-1.1-Apache-2.0",
   "homepage": "https://alien.dev",
-  "description": "TypeScript SDK for Alien Worker apps — handler APIs and re-exported binding factories",
+  "description": "TypeScript SDK for Alien Worker apps \u2014 handler APIs and re-exported binding factories",
   "repository": {
     "type": "git",
     "url": "https://github.com/alienplatform/alien.git",
@@ -50,6 +50,7 @@
     "vitest": "^3.1.4"
   },
   "dependencies": {
+    "@alienplatform/ai-gateway": "workspace:^",
     "@alienplatform/bindings": "workspace:^",
     "@alienplatform/core": "workspace:^",
     "@bufbuild/protobuf": "^2.5.3",

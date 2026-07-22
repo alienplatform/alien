@@ -4,9 +4,9 @@ use super::helpers::*;
 use crate::core::StackExecutor;
 use crate::error::Result;
 use alien_core::{
-    ClientConfig, DeploymentConfig, EnvironmentVariablesSnapshot, ExternalBinding,
-    ExternalBindings, Resource, ResourceLifecycle, ResourceRef, ResourceStatus, Stack,
-    StackSettings, Storage, StorageBinding,
+    bindings::ExternalAiBinding, Ai, ClientConfig, DeploymentConfig, EnvironmentVariablesSnapshot,
+    ExternalBinding, ExternalBindings, Resource, ResourceLifecycle, ResourceRef, ResourceStatus,
+    Stack, StackSettings, Storage, StorageBinding,
 };
 
 fn external_storage_config(resource_id: &str) -> DeploymentConfig {
@@ -14,6 +14,28 @@ fn external_storage_config(resource_id: &str) -> DeploymentConfig {
     external_bindings.insert(
         resource_id,
         ExternalBinding::Storage(StorageBinding::s3("external-test-bucket")),
+    );
+
+    DeploymentConfig::builder()
+        .stack_settings(StackSettings::default())
+        .environment_variables(EnvironmentVariablesSnapshot {
+            variables: vec![],
+            hash: String::new(),
+            created_at: String::new(),
+        })
+        .external_bindings(external_bindings)
+        .allow_frozen_changes(false)
+        .build()
+}
+
+fn external_ai_config(resource_id: &str) -> DeploymentConfig {
+    let mut external_bindings = ExternalBindings::new();
+    external_bindings.insert(
+        resource_id,
+        ExternalBinding::Ai(ExternalAiBinding {
+            provider: "openai".to_string(),
+            api_key: "sk-test".into(),
+        }),
     );
 
     DeploymentConfig::builder()
@@ -558,6 +580,37 @@ async fn test_external_binding_resource_syncs_without_controller() -> Result<()>
     assert!(
         executor.is_synced(&state),
         "Desired external binding should be considered synced while Running"
+    );
+
+    Ok(())
+}
+
+/// An external (BYO-key) AI resource must be treated as an external binding:
+/// the cloud AI controller (Bedrock/Vertex/Foundry) is SKIPPED and the resource
+/// syncs Running with no controller state. Without this, an external OpenAI
+/// resource would silently provision and route to Bedrock.
+#[tokio::test]
+async fn test_external_ai_binding_skips_cloud_controller() -> Result<()> {
+    let ai = Ai::new("llm".to_string()).build();
+    let stack = Stack::new("external-ai-sync-test".to_owned())
+        .add(ai.clone(), ResourceLifecycle::Frozen)
+        .build();
+    let deployment_config = external_ai_config("llm");
+    let executor = StackExecutor::builder(&stack, ClientConfig::Test)
+        .deployment_config(&deployment_config)
+        .build()?;
+
+    let state = run_to_synced(&executor, new_test_state()).await?;
+    let external_state = state.resources.get("llm").unwrap();
+
+    assert_eq!(external_state.status, ResourceStatus::Running);
+    assert!(
+        external_state.internal_state.is_none(),
+        "External AI binding must not run the cloud controller (no controller state)"
+    );
+    assert!(
+        executor.is_synced(&state),
+        "Desired external AI binding should be considered synced while Running"
     );
 
     Ok(())

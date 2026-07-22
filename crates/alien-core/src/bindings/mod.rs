@@ -14,6 +14,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value as JsonValue;
 use std::collections::HashMap;
 
+mod ai;
 mod artifact_registry;
 mod build;
 mod container;
@@ -26,6 +27,9 @@ mod storage;
 mod vault;
 mod worker;
 
+pub use ai::{
+    AiBinding, BedrockAiBinding, ExternalAiBinding, FoundryAiBinding, VertexAiBinding,
+};
 pub use artifact_registry::{
     AcrArtifactRegistryBinding, ArtifactRegistryBinding, EcrArtifactRegistryBinding,
     GarArtifactRegistryBinding, LocalArtifactRegistryBinding,

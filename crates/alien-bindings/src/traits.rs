@@ -825,13 +825,15 @@ pub trait BindingsProviderApi: Send + Sync + std::fmt::Debug {
     /// Given a binding identifier, builds a ServiceAccount implementation.
     async fn load_service_account(&self, binding_name: &str) -> Result<Arc<dyn ServiceAccount>>;
 
-    /// Runtime-only binding env vars (a local Postgres connection with its password) for the given
-    /// resource — re-resolved on every (re)start so the secret reaches the worker process but is
-    /// never written to persisted worker metadata. Default `None`: cloud providers carry a secret
-    /// locator (not a password) and use the normal persisted path.
+    /// Runtime-only binding env vars (a local Postgres connection with its password, a local
+    /// BYO-key AI binding) for the given resource — re-resolved on every (re)start so the secret
+    /// reaches the worker process but is never written to persisted worker metadata. The resource
+    /// type routes resolution to the right local source. Default `None`: cloud providers carry a
+    /// secret locator (not a raw secret) and use the normal persisted path.
     async fn resolve_runtime_only_binding_env(
         &self,
         _binding_name: &str,
+        _resource_type: &str,
     ) -> Result<Option<std::collections::HashMap<String, String>>> {
         Ok(None)
     }

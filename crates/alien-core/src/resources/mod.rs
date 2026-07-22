@@ -60,6 +60,9 @@ pub use vault::*;
 mod kv;
 pub use kv::*;
 
+mod ai;
+pub use ai::*;
+
 mod network;
 pub use network::*;
 

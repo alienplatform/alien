@@ -15,6 +15,7 @@ const KV_BINDING: &str = "alien-kv";
 const VAULT_BINDING: &str = "alien-vault";
 const POSTGRES_BINDING: &str = "alien-postgres";
 const QUEUE_BINDING: &str = "alien-queue";
+const AI_BINDING: &str = "test-ai";
 
 /// Standard response shape returned by binding test endpoints.
 #[derive(Debug, Deserialize)]
@@ -926,5 +927,116 @@ pub async fn check_service_account(deployment: &TestDeployment) -> anyhow::Resul
     }
 
     info!("Service account binding check passed");
+    Ok(())
+}
+
+// ---------------------------------------------------------------------------
+// AI Gateway
+// ---------------------------------------------------------------------------
+
+/// Response from the /ai-test endpoint. `model_count`, `model`, and `reply` are
+/// present only on `?invoke=1` responses.
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct AiTestResponse {
+    injected: bool,
+    service: String,
+    locator: Option<String>,
+    model_count: Option<usize>,
+    model: Option<String>,
+    reply: Option<String>,
+}
+
+/// Check the AI binding end to end: GET /ai-test, then GET /ai-test?invoke=1.
+///
+/// The first call proves the runtime injected ALIEN_TEST_AI_BINDING and that it
+/// parsed to a well-formed bedrock config. The second lists the model catalog and
+/// makes a real one-line chat call through the embedded gateway under the
+/// workload's ambient credentials — proving the full app -> gateway -> cloud LLM
+/// path, not just provisioning. The invoke half needs nonzero Bedrock on-demand
+/// quota in the deployment's account; set ALIEN_E2E_AI_SKIP_INVOKE=1 to run
+/// provisioning-only in a quota-zeroed account.
+pub async fn check_ai(deployment: &TestDeployment) -> anyhow::Result<()> {
+    let url = deployment_url(deployment)?;
+    info!(binding = AI_BINDING, "Checking AI binding injection");
+
+    let resp = reqwest::Client::new()
+        .get(format!("{}/ai-test", url))
+        .send()
+        .await
+        .context("AI test request failed")?;
+
+    let status = resp.status();
+    if !status.is_success() {
+        let body = resp.text().await.unwrap_or_default();
+        bail!("AI test returned {}: {}", status, body);
+    }
+
+    let data: AiTestResponse = resp
+        .json()
+        .await
+        .context("Failed to parse AI test response")?;
+
+    if !data.injected {
+        bail!(
+            "AI binding not injected: ALIEN_TEST_AI_BINDING was missing or unparseable. \
+             Response: {:?}",
+            data
+        );
+    }
+    let expected_service = match deployment.platform.as_str() {
+        "aws" => "bedrock",
+        "gcp" => "vertex",
+        "azure" => "foundry",
+        other => bail!("AI binding check has no expected service for platform '{other}'"),
+    };
+    if data.service != expected_service {
+        bail!(
+            "AI binding service mismatch: expected '{}', got '{}'.",
+            expected_service,
+            data.service
+        );
+    }
+    let locator = data.locator.as_deref().unwrap_or("");
+    if locator.is_empty() {
+        bail!("AI binding locator is empty; the controller must fill the service scope (region / project / endpoint)");
+    }
+
+    info!(service = %data.service, %locator, "AI binding injection check passed");
+
+    if std::env::var("ALIEN_E2E_AI_SKIP_INVOKE").as_deref() == Ok("1") {
+        info!("Skipping the real model invoke (ALIEN_E2E_AI_SKIP_INVOKE=1)");
+        return Ok(());
+    }
+
+    let resp = reqwest::Client::new()
+        .get(format!("{}/ai-test?invoke=1", url))
+        .timeout(std::time::Duration::from_secs(120))
+        .send()
+        .await
+        .context("AI invoke request failed")?;
+    let status = resp.status();
+    if !status.is_success() {
+        let body = resp.text().await.unwrap_or_default();
+        bail!("AI invoke returned {}: {}", status, body);
+    }
+    let data: AiTestResponse = resp
+        .json()
+        .await
+        .context("Failed to parse AI invoke response")?;
+    let model_count = data.model_count.unwrap_or(0);
+    if model_count == 0 {
+        bail!("AI model catalog is empty; expected at least one curated model");
+    }
+    let reply = data.reply.as_deref().unwrap_or("");
+    if !reply.to_ascii_lowercase().contains("pong") {
+        bail!(
+            "AI chat reply did not contain 'pong': model={:?} reply={:?}",
+            data.model,
+            reply
+        );
+    }
+
+    info!(model = %data.model.as_deref().unwrap_or(""), %reply, "AI model invoke check passed");
     Ok(())
 }

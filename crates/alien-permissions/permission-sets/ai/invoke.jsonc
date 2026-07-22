@@ -1,0 +1,79 @@
+{
+  "id": "ai/invoke",
+  "description": "Allows invoking AI models for inference (no deployment writes)",
+  "platforms": {
+    "aws": [
+      {
+        "grant": {
+          "actions": [
+            "bedrock:InvokeModel",
+            "bedrock:InvokeModelWithResponseStream",
+            "bedrock-mantle:CreateInference"
+          ]
+        },
+        // AWS Bedrock foundation models are not per-account or per-stack resources;
+        // they are a global namespace. Claude models are invoked via cross-region
+        // inference profiles (us.anthropic.* and the region-agnostic global.anthropic.*),
+        // which live in the invoking account and must be allowed alongside the
+        // foundation-model ARN in the same statement (AWS docs: "Prerequisites for
+        // inference profiles").
+        // The bedrock-mantle endpoint (native Anthropic Messages + OpenAI Responses)
+        // authorizes CreateInference against a project resource. The gateway sends no
+        // project id, so requests use the account's system default project; scope the
+        // grant to that one project (project/default) rather than project/*, which
+        // would also cover any user-created bedrock-mantle project.
+        "binding": {
+          "stack": {
+            "resources": [
+              "arn:aws:bedrock:*::foundation-model/*",
+              "arn:aws:bedrock:*:${awsAccountId}:inference-profile/*",
+              "arn:aws:bedrock-mantle:*:${awsAccountId}:project/default"
+            ]
+          },
+          "resource": {
+            "resources": [
+              "arn:aws:bedrock:*::foundation-model/*",
+              "arn:aws:bedrock:*:${awsAccountId}:inference-profile/*",
+              "arn:aws:bedrock-mantle:*:${awsAccountId}:project/default"
+            ]
+          }
+        }
+      }
+    ],
+    "gcp": [
+      {
+        "grant": {
+          // Custom role containing only prediction permissions. roles/aiplatform.user
+          // includes control-plane write actions (endpoints.deploy/undeploy, models.upload/delete)
+          // and sensitive-data reads (datasets.export, featurestores.readFeatures, etc.) that
+          // a workload must never hold. A custom role with the two predict permissions is the
+          // minimum required for Vertex AI inference.
+          "permissions": ["aiplatform.endpoints.predict", "aiplatform.endpoints.explain"]
+        },
+        // Vertex AI is a project-level service; IAM bindings are scoped to the project.
+        "binding": {
+          "stack": { "scope": "projects/${projectName}" },
+          "resource": { "scope": "projects/${projectName}" }
+        }
+      }
+    ],
+    "azure": [
+      {
+        "grant": {
+          // "Cognitive Services OpenAI User" is the least-privilege data-plane role for the
+          // OpenAI-compatible inference endpoint: it grants inference only, not deployment
+          // management or account configuration.
+          "predefinedRoles": ["Cognitive Services OpenAI User"]
+        },
+        "binding": {
+          "stack": {
+            "scope": "/subscriptions/${subscriptionId}/resourceGroups/${resourceGroup}"
+          },
+          "resource": {
+            "scope": "/subscriptions/${subscriptionId}/resourceGroups/${resourceGroup}/providers/Microsoft.CognitiveServices/accounts/${resourceName}"
+          }
+        }
+      }
+    ]
+  }
+}

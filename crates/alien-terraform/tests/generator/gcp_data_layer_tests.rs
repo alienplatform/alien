@@ -1,4 +1,4 @@
-//! GCP data-layer scenarios — storage / kv / queue / vault.
+//! GCP data-layer scenarios — storage / kv / queue / vault / ai.
 //!
 //! Each scenario is one multi-file snapshot so reviewers see the
 //! complete module a developer would `terraform apply`. Every scenario
@@ -7,7 +7,7 @@
 
 use super::helpers::{assert_terraform_valid, render, snapshot_module};
 use alien_core::{
-    Kv, LifecycleRule, ManagementPermissions, PermissionProfile, PermissionsConfig, Queue,
+    Ai, Kv, LifecycleRule, ManagementPermissions, PermissionProfile, PermissionsConfig, Queue,
     RemoteStackManagement, ResourceLifecycle, ServiceAccount, Stack, StackSettings, Storage, Vault,
 };
 use alien_terraform::TerraformTarget;
@@ -203,4 +203,57 @@ fn gcp_data_layer_renders_complete_stack() {
     let module = render(&stack, TerraformTarget::Gcp, StackSettings::default());
     snapshot_module("gcp_data_layer_full", &module);
     assert_terraform_valid(&module, "gcp_data_layer_full");
+}
+
+#[test]
+fn gcp_ai_emits_only_import_data() {
+    // GCP Vertex AI has no per-stack cloud resource to provision. The emitter
+    // returns an empty fragment so only the import metadata JSON is produced.
+    let stack = Stack::new("acme-ai".to_string())
+        .add(Ai::new("llm".to_string()).build(), ResourceLifecycle::Frozen)
+        .build();
+    let module = render(&stack, TerraformTarget::Gcp, StackSettings::default());
+    snapshot_module("gcp_ai_minimal", &module);
+    assert_terraform_valid(&module, "gcp_ai_minimal");
+
+    // Import metadata must carry project and location so the controller can
+    // reconstruct the Vertex AI endpoint. The import ref appears in locals.tf.
+    let locals = module
+        .get("locals.tf")
+        .expect("locals.tf should render");
+    assert!(locals.contains("projectId"), "import ref must carry projectId");
+    assert!(locals.contains("location"), "import ref must carry location");
+}
+
+#[test]
+fn gcp_ai_invoke_permissions_attach_to_service_account() {
+    // When a permission profile references ai/invoke, the AI emitter emits a custom
+    // role containing only predict permissions (not the over-broad
+    // roles/aiplatform.user) and binds it to the workload service account.
+    let stack = Stack::new("acme-ai".to_string())
+        .permissions(PermissionsConfig::new().with_profile(
+            "execution",
+            PermissionProfile::new().resource("llm", ["ai/invoke"]),
+        ))
+        .add(
+            ServiceAccount::new("execution-sa".to_string()).build(),
+            ResourceLifecycle::Frozen,
+        )
+        .add(Ai::new("llm".to_string()).build(), ResourceLifecycle::Frozen)
+        .build();
+    let module = render(&stack, TerraformTarget::Gcp, StackSettings::default());
+    let rendered = module
+        .iter()
+        .map(|(_, contents)| contents)
+        .collect::<String>();
+
+    assert!(
+        !rendered.contains("roles/aiplatform.user"),
+        "roles/aiplatform.user must NOT appear in rendered output; ai/invoke uses a least-privilege custom role"
+    );
+    assert!(
+        rendered.contains("aiplatform.endpoints.predict"),
+        "aiplatform.endpoints.predict must appear in the custom role in rendered output"
+    );
+    assert_terraform_valid(&module, "gcp_ai_invoke_permissions");
 }

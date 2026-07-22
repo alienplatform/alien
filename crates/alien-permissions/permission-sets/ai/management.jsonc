@@ -1,0 +1,49 @@
+{
+  "id": "ai/management",
+  "description": "Allows reading AI gateway account configuration and listing available models",
+  "platforms": {
+    "aws": [
+      {
+        "grant": {
+          "actions": ["bedrock:ListFoundationModels"]
+        },
+        "binding": {
+          "stack": {
+            "resources": ["arn:aws:bedrock:*::foundation-model/*"]
+          },
+          "resource": {
+            "resources": ["arn:aws:bedrock:*::foundation-model/*"]
+          }
+        }
+      }
+    ],
+    "gcp": [
+      {
+        "grant": {
+          "permissions": ["aiplatform.models.list", "aiplatform.endpoints.list"]
+        },
+        "binding": {
+          "stack": { "scope": "projects/${projectName}" },
+          "resource": { "scope": "projects/${projectName}" }
+        }
+      }
+    ],
+    "azure": [
+      {
+        "grant": {
+          // Read-only management: inspect the account configuration. Deploying the
+          // predefined model set is a provision-time action (ai/provision), not management.
+          "actions": ["Microsoft.CognitiveServices/accounts/read"]
+        },
+        "binding": {
+          "stack": {
+            "scope": "/subscriptions/${subscriptionId}/resourceGroups/${resourceGroup}"
+          },
+          "resource": {
+            "scope": "/subscriptions/${subscriptionId}/resourceGroups/${resourceGroup}/providers/Microsoft.CognitiveServices/accounts/${resourceName}"
+          }
+        }
+      }
+    ]
+  }
+}

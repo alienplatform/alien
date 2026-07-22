@@ -106,7 +106,10 @@ jobs:
             client-sdks/platform/typescript client-sdks/manager/typescript \
             packages/bindings crates/alien-bindings-node \
             packages/bindings/npm/darwin-arm64 packages/bindings/npm/darwin-x64 \
-            packages/bindings/npm/linux-x64-gnu packages/bindings/npm/linux-arm64-gnu; do
+            packages/bindings/npm/linux-x64-gnu packages/bindings/npm/linux-arm64-gnu \
+            packages/ai-gateway crates/alien-ai-gateway-node \
+            packages/ai-gateway/npm/darwin-arm64 packages/ai-gateway/npm/darwin-x64 \
+            packages/ai-gateway/npm/linux-x64-gnu packages/ai-gateway/npm/linux-arm64-gnu; do
             node -e "
               const fs = require('fs');
               const path = '${pkg}/package.json';
@@ -151,7 +154,10 @@ jobs:
             client-sdks/platform/typescript/package.json client-sdks/manager/typescript/package.json \
             packages/bindings/package.json crates/alien-bindings-node/package.json \
             packages/bindings/npm/darwin-arm64/package.json packages/bindings/npm/darwin-x64/package.json \
-            packages/bindings/npm/linux-x64-gnu/package.json packages/bindings/npm/linux-arm64-gnu/package.json
+            packages/bindings/npm/linux-x64-gnu/package.json packages/bindings/npm/linux-arm64-gnu/package.json \
+            packages/ai-gateway/package.json crates/alien-ai-gateway-node/package.json \
+            packages/ai-gateway/npm/darwin-arm64/package.json packages/ai-gateway/npm/darwin-x64/package.json \
+            packages/ai-gateway/npm/linux-x64-gnu/package.json packages/ai-gateway/npm/linux-arm64-gnu/package.json
           git commit -m "chore: release v${VERSION}"
           git tag "v${VERSION}"
           git push
@@ -397,6 +403,11 @@ jobs:
           VERSION: ${{ needs.prepare.outputs.version }}
         run: node packages/bindings/scripts/validate-release-version.mjs "$VERSION"
 
+      - name: Validate ai-gateway release version lockstep
+        env:
+          VERSION: ${{ needs.prepare.outputs.version }}
+        run: node packages/ai-gateway/scripts/validate-release-version.mjs "$VERSION"
+
       # Rust toolchain: Linux via the shared composite; macOS uses dtolnay +
       # brew protoc directly (plain `napi build`, not `depot cargo`, so no
       # Depot/sccache setup here). The addon depends on alien-bindings, whose
@@ -460,6 +471,31 @@ jobs:
           retention-days: 1
           path: packages/bindings/npm/${{ matrix.triple }}/alien-bindings-node.${{ matrix.triple }}.node
 
+      # The AI gateway addon reuses this matrix (same runners/toolchain) — it also
+      # depends on alien-bindings' credential resolver, so protoc is already set up.
+      - name: Build ai-gateway addon (${{ matrix.triple }})
+        env:
+          CARGO_NET_GIT_FETCH_WITH_CLI: "true"
+        run: |
+          pnpm --filter @alienplatform/ai-gateway exec napi build \
+            --platform --release --target ${{ matrix.target }} \
+            --cwd "$GITHUB_WORKSPACE/crates/alien-ai-gateway-node"
+
+      - name: Stage ai-gateway addon into platform package
+        run: |
+          cp "crates/alien-ai-gateway-node/alien-ai-gateway-node.${{ matrix.triple }}.node" \
+            "packages/ai-gateway/npm/${{ matrix.triple }}/alien-ai-gateway-node.${{ matrix.triple }}.node"
+
+      - name: Assert staged ai-gateway binary architecture
+        run: file "packages/ai-gateway/npm/${{ matrix.triple }}/alien-ai-gateway-node.${{ matrix.triple }}.node" | grep -q "${{ matrix.expect_arch }}"
+
+      - name: Upload ai-gateway addon artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ai-gateway-addon-${{ matrix.triple }}
+          retention-days: 1
+          path: packages/ai-gateway/npm/${{ matrix.triple }}/alien-ai-gateway-node.${{ matrix.triple }}.node
+
   # This job deliberately has no Rust compiler or protoc setup. It
   # starts from the already-built artifacts and proves that a consumer whose
   # only direct dependency is @alienplatform/bindings gets the right optional
@@ -502,6 +538,11 @@ jobs:
         env:
           VERSION: ${{ needs.prepare.outputs.version }}
         run: node packages/bindings/scripts/validate-release-version.mjs "$VERSION"
+
+      - name: Validate ai-gateway release version lockstep
+        env:
+          VERSION: ${{ needs.prepare.outputs.version }}
+        run: node packages/ai-gateway/scripts/validate-release-version.mjs "$VERSION"
 
       - uses: pnpm/action-setup@v6
         with:
@@ -560,6 +601,11 @@ jobs:
         env:
           VERSION: ${{ needs.prepare.outputs.version }}
         run: node packages/bindings/scripts/validate-release-version.mjs "$VERSION"
+
+      - name: Validate ai-gateway release version lockstep
+        env:
+          VERSION: ${{ needs.prepare.outputs.version }}
+        run: node packages/ai-gateway/scripts/validate-release-version.mjs "$VERSION"
 
       - uses: pnpm/action-setup@v6
         with:
@@ -644,6 +690,76 @@ jobs:
           else
             pnpm --filter @alienplatform/bindings publish --access public --no-git-checks
           fi
+
+  publish-ai-gateway:
+    needs: [prepare, build-addon, publish-npm]
+    # Same ordering rules as publish-bindings: the wrapper pins
+    # `@alienplatform/core: ^<release>`, so it publishes only after core, and
+    # its per-platform prebuilds publish before the wrapper that pins them.
+    if: always() && needs.build-addon.result == 'success' && (inputs.dry_run || needs.publish-npm.result == 'success')
+    runs-on: depot-ubuntu-24.04-arm-4
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.dry_run && github.sha || format('v{0}', needs.prepare.outputs.version) }}
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10.11.0
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+          registry-url: https://registry.npmjs.org
+
+      - name: Validate npm auth
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+        run: npm whoami
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Download ai-gateway addon artifacts
+        uses: actions/download-artifact@v4
+        with:
+          pattern: ai-gateway-addon-*
+          path: ./addons
+          merge-multiple: false
+
+      - name: Stage addons into platform packages
+        run: |
+          for triple in darwin-arm64 darwin-x64 linux-x64-gnu linux-arm64-gnu; do
+            cp "./addons/ai-gateway-addon-${triple}/alien-ai-gateway-node.${triple}.node" \
+              "packages/ai-gateway/npm/${triple}/alien-ai-gateway-node.${triple}.node"
+          done
+
+      - name: Build wrapper
+        run: pnpm --filter @alienplatform/ai-gateway build
+
+      - name: Publish platform prebuild packages (first)
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+        run: |
+          DRY=""
+          if [ "${{ inputs.dry_run }}" = "true" ]; then DRY="--dry-run"; fi
+          for triple in darwin-arm64 darwin-x64 linux-x64-gnu linux-arm64-gnu; do
+            echo "Publishing @alienplatform/ai-gateway-${triple}..."
+            ( cd "packages/ai-gateway/npm/${triple}" && npm publish --access public $DRY )
+          done
+
+      - name: Inject optionalDependencies into the wrapper
+        run: node packages/ai-gateway/scripts/inject-optional-deps.mjs
+
+      - name: Publish wrapper (last)
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+        run: |
+          DRY=""
+          if [ "${{ inputs.dry_run }}" = "true" ]; then DRY="--dry-run"; fi
+          pnpm --filter @alienplatform/ai-gateway publish --access public --no-git-checks $DRY
 
   # ─── Binary builds (4 targets, all parallel) ───────────────────────
 

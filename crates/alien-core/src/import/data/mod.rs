@@ -8,23 +8,23 @@ pub mod gcp;
 pub mod kubernetes_cluster;
 
 pub use aws::{
-    AwsArtifactRegistryImportData, AwsBuildImportData, AwsComputeClusterImportData,
+    AwsAiImportData, AwsArtifactRegistryImportData, AwsBuildImportData, AwsComputeClusterImportData,
     AwsEmailDkimTokenImportData, AwsEmailDomainImportData, AwsEmailImportData, AwsKvImportData,
     AwsNetworkImportData, AwsOpenSearchImportData, AwsPostgresImportData, AwsQueueImportData,
     AwsRemoteStackManagementImportData, AwsServiceAccountImportData, AwsStorageImportData,
     AwsVaultImportData, AwsWorkerImportData,
 };
 pub use azure::{
-    AzureArtifactRegistryImportData, AzureBuildImportData, AzureComputeClusterImportData,
-    AzureContainerAppsEnvironmentImportData, AzureFlexibleServerPostgresImportData,
-    AzureKvImportData, AzureNetworkImportData, AzureQueueImportData,
-    AzureRemoteStackManagementImportData, AzureResourceGroupImportData,
+    AzureAiImportData, AzureArtifactRegistryImportData, AzureBuildImportData,
+    AzureComputeClusterImportData, AzureContainerAppsEnvironmentImportData,
+    AzureFlexibleServerPostgresImportData, AzureKvImportData, AzureNetworkImportData,
+    AzureQueueImportData, AzureRemoteStackManagementImportData, AzureResourceGroupImportData,
     AzureServiceAccountImportData, AzureServiceActivationImportData,
     AzureServiceBusNamespaceImportData, AzureStorageAccountImportData, AzureStorageImportData,
     AzureVaultImportData, AzureWorkerImportData,
 };
 pub use gcp::{
-    GcpArtifactRegistryImportData, GcpBuildImportData, GcpComputeClusterImportData,
+    GcpAiImportData, GcpArtifactRegistryImportData, GcpBuildImportData, GcpComputeClusterImportData,
     GcpKvImportData, GcpNetworkImportData, GcpPostgresImportData, GcpQueueImportData,
     GcpRemoteStackManagementImportData, GcpServiceAccountImportData,
     GcpServiceActivationImportData, GcpStorageImportData, GcpVaultImportData, GcpWorkerImportData,

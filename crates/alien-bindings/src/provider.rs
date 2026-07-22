@@ -117,6 +117,14 @@ impl BindingsProvider {
         })
     }
 
+    /// The workload's resolved cloud credentials (native/projected identity or Alien-minted
+    /// short-lived credentials). Consumers that need to authorize a request themselves — the
+    /// AI gateway signs upstream model calls with this — read it here rather than going
+    /// through a per-resource binding.
+    pub fn client_config(&self) -> &ClientConfig {
+        &self.client_config
+    }
+
     /// Get a cached binding by type and name, or return None.
     async fn get_cached<T: Clone + Send + Sync + 'static>(
         &self,
@@ -468,7 +476,7 @@ impl LazyEnvBindingsProvider {
     /// The strategy selection happens exactly once (via `OnceCell`); on the
     /// minting path each call additionally checks credential freshness and
     /// re-mints on access if stale.
-    async fn provider(&self) -> Result<Arc<BindingsProvider>> {
+    pub async fn provider(&self) -> Result<Arc<BindingsProvider>> {
         let resolver = self
             .resolver
             .get_or_try_init(|| async { self.select().await })
