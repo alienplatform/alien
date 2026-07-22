@@ -135,12 +135,18 @@ async function* parseSse(
     try {
       chunk = JSON.parse(payload) as Record<string, unknown>
     } catch (cause) {
-      throw new AlienError(
-        AiTransportError.create({
+      throw new AlienError({
+        ...AiTransportError.create({
           url,
           reason: `Malformed SSE chunk: ${cause instanceof Error ? cause.message : String(cause)}`,
-        }),
-      )
+        }).toOptions(),
+        source: {
+          code: "GENERIC_ERROR",
+          message: cause instanceof Error ? (cause.stack ?? cause.message) : String(cause),
+          retryable: false,
+          internal: true,
+        },
+      })
     }
     yield chunk
   }

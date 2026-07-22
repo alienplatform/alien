@@ -1873,9 +1873,9 @@ mod tests {
 
     #[tokio::test]
     async fn bedrock_path_keeps_a_string_form_body_beta_alongside_header_betas() {
-        // The body's `anthropic_beta` also takes a single string; merging header
-        // betas used to overwrite that form entirely, silently dropping the beta
-        // the client's tool depended on.
+        // The body's `anthropic_beta` can be a single string; merging header
+        // betas must keep that string form so a beta the client set on the body
+        // still reaches Bedrock alongside the header betas.
         let server = MockServer::start_async().await;
         let mock = server
             .mock_async(|when, then| {

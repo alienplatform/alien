@@ -20,6 +20,8 @@ interface NapiErrorEnvelope {
   context?: Record<string, unknown>
   retryable?: boolean
   internal?: boolean
+  httpStatusCode?: number
+  hint?: string
 }
 
 /**
@@ -75,5 +77,9 @@ export function unwrapNapiError(err: unknown): AlienError {
     // addon omits it.
     internal: envelope.internal ?? true,
     context: envelope.context ?? {},
+    // Carry the Rust error's status code through rather than defaulting to 500,
+    // so a startup config error (e.g. 400) is not rendered as a server fault.
+    httpStatusCode: envelope.httpStatusCode,
+    hint: envelope.hint,
   })
 }
