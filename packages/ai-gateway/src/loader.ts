@@ -97,10 +97,30 @@ function packageVersion(): string {
 }
 
 let cached: NativeAddon | undefined
+let embedded: NativeAddon | undefined
+
+/**
+ * Register a bun-embedded addon with the default loader, so plain
+ * `@alienplatform/ai-gateway` imports (which go through {@link loadAddon})
+ * resolve to it inside a `bun build --compile` binary — where the
+ * filesystem/prebuild resolution below cannot find the addon. In a normal
+ * install this is never called and {@link loadAddon} falls through to its
+ * normal resolution. The `/native` entry calls this at bootstrap.
+ */
+export function registerEmbeddedAddon(addon: NativeAddon): void {
+  embedded = addon
+}
 
 /** Load (and memoize) the native addon, or throw if none resolves for this platform. */
 export function loadAddon(): NativeAddon {
   if (cached) return cached
+
+  // A compiled binary registers its embedded addon up front; prefer it over the
+  // filesystem/prebuild resolution below, which cannot work inside the binary.
+  if (embedded) {
+    cached = embedded
+    return cached
+  }
 
   const triple = platformTriple()
   const pkg = `@alienplatform/ai-gateway-${triple}`
@@ -202,4 +222,5 @@ function requireAddon(path: string, triple: string, source: string): NativeAddon
 /** Test-only: reset the memoized addon. */
 export function resetAddonCacheForTests(): void {
   cached = undefined
+  embedded = undefined
 }
