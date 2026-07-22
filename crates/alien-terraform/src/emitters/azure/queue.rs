@@ -16,6 +16,7 @@ use crate::{
     block::{attr, resource_block},
     emitter::{TfEmitter, TfFragment},
     emitters::azure::helpers::{downcast, required_label, resource_prefix_template},
+    emitters::enabled,
     expr,
 };
 use alien_core::{
@@ -32,14 +33,17 @@ impl TfEmitter for AzureQueueEmitter {
         let queue = downcast::<Queue>(ctx, Queue::RESOURCE_TYPE)?;
         let label = required_label(ctx)?;
         let parent_label = parent_namespace_label(ctx)?.to_string();
+        let enabled_when = ctx.resource.enabled_when.as_deref();
 
         let lock_duration = lock_duration_for(ctx);
 
-        let q = resource_block(
+        let mut q = resource_block(
             "azurerm_servicebus_queue",
             label,
             [
                 attr("name", resource_prefix_template(queue.id())),
+                // The namespace is a separate, ungated resource, so this
+                // reference stays unindexed even when the queue is counted.
                 attr(
                     "namespace_id",
                     expr::traversal(["azurerm_servicebus_namespace", &parent_label, "id"]),
@@ -63,6 +67,7 @@ impl TfEmitter for AzureQueueEmitter {
                 ),
             ],
         );
+        enabled::gate(&mut q, enabled_when)?;
 
         Ok(TfFragment::default().with_resource(q))
     }
@@ -70,32 +75,42 @@ impl TfEmitter for AzureQueueEmitter {
     fn emit_import_ref(&self, ctx: &EmitContext<'_>) -> Result<Expression> {
         let label = required_label(ctx)?;
         let parent_label = parent_namespace_label(ctx)?.to_string();
+        let enabled_when = ctx.resource.enabled_when.as_deref();
         Ok(expr::object([
             ("subscriptionId", expr::raw("var.azure_subscription_id")),
             ("resourceGroup", expr::raw("var.azure_resource_group_name")),
+            // The namespace hosting the queue is ungated; only the queue below
+            // is counted.
             (
                 "namespaceName",
                 expr::traversal(["azurerm_servicebus_namespace", &parent_label, "name"]),
             ),
             (
                 "queueName",
-                expr::traversal(["azurerm_servicebus_queue", label, "name"]),
+                enabled::attribute(enabled_when, "azurerm_servicebus_queue", label, "name"),
             ),
         ]))
+    }
+
+    fn supports_enabled_when(&self) -> bool {
+        true
     }
 
     fn emit_binding_ref(&self, ctx: &EmitContext<'_>) -> Result<Option<Expression>> {
         let label = required_label(ctx)?;
         let parent_label = parent_namespace_label(ctx)?.to_string();
+        let enabled_when = ctx.resource.enabled_when.as_deref();
         Ok(Some(expr::object([
             ("service", Expression::String("servicebus".to_string())),
+            // The namespace hosting the queue is ungated; only the queue below
+            // is counted.
             (
                 "namespace",
                 expr::traversal(["azurerm_servicebus_namespace", &parent_label, "name"]),
             ),
             (
                 "queueName",
-                expr::traversal(["azurerm_servicebus_queue", label, "name"]),
+                enabled::attribute(enabled_when, "azurerm_servicebus_queue", label, "name"),
             ),
         ])))
     }

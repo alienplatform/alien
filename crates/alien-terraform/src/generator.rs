@@ -444,16 +444,29 @@ fn emit_azure_setup_resource_role_definitions(
 }
 
 fn dedupe_gcp_support_resources(per_resource: &mut IndexMap<String, TfFragment>) -> Result<()> {
+    let iam_member_counts = gcp_iam_member_counts(per_resource);
     let mut seen_custom_roles = HashSet::new();
     let mut seen_iam_member_grants = HashSet::new();
     let mut seen_resource_addresses: IndexMap<String, Block> = IndexMap::new();
 
     for fragment in per_resource.values_mut() {
         let mut retained = Vec::with_capacity(fragment.resource_blocks.len());
-        for resource in std::mem::take(&mut fragment.resource_blocks) {
+        for mut resource in std::mem::take(&mut fragment.resource_blocks) {
             if resource.identifier.as_str() != "resource" {
                 retained.push(resource);
                 continue;
+            }
+
+            let iam_member_grant_key = gcp_iam_member_grant_key(&resource);
+            if let Some(grant_key) = &iam_member_grant_key {
+                let counts = iam_member_counts.get(grant_key).ok_or_else(|| {
+                    AlienError::new(ErrorData::GenericError {
+                        message: format!(
+                            "missing collected count expressions for GCP IAM grant '{grant_key}'"
+                        ),
+                    })
+                })?;
+                set_resource_count(&mut resource, combined_count_expression(counts)?);
             }
 
             let Some(provider_type) = resource.labels.first().map(|label| label.as_str()) else {
@@ -486,11 +499,7 @@ fn dedupe_gcp_support_resources(per_resource: &mut IndexMap<String, TfFragment>)
                 continue;
             }
 
-            if provider_type.ends_with("_iam_member") {
-                let grant_key = format!(
-                    "{provider_type}:{}",
-                    terraform_body_identity(&resource.body)
-                );
+            if let Some(grant_key) = iam_member_grant_key {
                 if seen_iam_member_grants.insert(grant_key) {
                     retained.push(resource);
                 }
@@ -505,8 +514,98 @@ fn dedupe_gcp_support_resources(per_resource: &mut IndexMap<String, TfFragment>)
     Ok(())
 }
 
-fn terraform_body_identity(body: &Body) -> String {
-    format!("{body:?}")
+fn gcp_iam_member_counts(
+    per_resource: &IndexMap<String, TfFragment>,
+) -> IndexMap<String, Option<Vec<Expression>>> {
+    let mut counts_by_grant = IndexMap::new();
+
+    for resource in per_resource
+        .values()
+        .flat_map(|fragment| &fragment.resource_blocks)
+    {
+        let Some(grant_key) = gcp_iam_member_grant_key(resource) else {
+            continue;
+        };
+        let count = resource_count(resource);
+        let counts = counts_by_grant
+            .entry(grant_key)
+            .or_insert_with(|| count.clone().map(|count| vec![count]));
+
+        let Some(count) = count else {
+            *counts = None;
+            continue;
+        };
+        let Some(existing) = counts.as_mut() else {
+            continue;
+        };
+        if !existing.contains(&count) {
+            existing.push(count);
+        }
+    }
+
+    counts_by_grant
+}
+
+fn gcp_iam_member_grant_key(resource: &Block) -> Option<String> {
+    if resource.identifier.as_str() != "resource" {
+        return None;
+    }
+    let provider_type = resource.labels.first()?.as_str();
+    if !provider_type.ends_with("_iam_member") {
+        return None;
+    }
+    let grant_body = resource
+        .body
+        .iter()
+        .filter(|structure| !is_count_attribute(structure))
+        .collect::<Vec<_>>();
+    Some(format!("{provider_type}:{grant_body:?}"))
+}
+
+fn resource_count(resource: &Block) -> Option<Expression> {
+    resource
+        .body
+        .attributes()
+        .find(|attribute| attribute.key.as_str() == "count")
+        .map(|attribute| attribute.expr.clone())
+}
+
+fn combined_count_expression(counts: &Option<Vec<Expression>>) -> Result<Option<Expression>> {
+    let Some(counts) = counts else {
+        return Ok(None);
+    };
+    if counts.is_empty() {
+        return Err(AlienError::new(ErrorData::GenericError {
+            message: "cannot combine an empty set of GCP IAM count expressions".to_string(),
+        }));
+    }
+    if counts.len() == 1 {
+        return Ok(Some(counts[0].clone()));
+    }
+
+    let mut max = hcl::expr::FuncCall::builder(Identifier::sanitized("max"));
+    for count in counts {
+        max = max.arg(count.clone());
+    }
+    Ok(Some(Expression::FuncCall(Box::new(max.build()))))
+}
+
+fn set_resource_count(resource: &mut Block, count: Option<Expression>) {
+    let mut body: Vec<Structure> = std::mem::take(&mut resource.body)
+        .into_iter()
+        .filter(|structure| !is_count_attribute(structure))
+        .collect();
+    if let Some(count) = count {
+        body.insert(0, attr("count", count));
+    }
+    resource.body = Body::from(body);
+}
+
+fn is_count_attribute(structure: &Structure) -> bool {
+    matches!(
+        structure,
+        Structure::Attribute(attribute) if attribute.key.as_str() == "count"
+    )
 }
 
 fn fragment_to_body(fragment: TfFragment) -> Body {

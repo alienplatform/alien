@@ -76,6 +76,10 @@ impl CfEmitter for AwsKvEmitter {
         ]))
     }
 
+    fn supports_enabled_when(&self) -> bool {
+        true
+    }
+
     fn emit_binding_ref(&self, ctx: &EmitContext<'_>) -> Result<Option<CfExpression>> {
         let table_id = required_logical_id(ctx)?;
         Ok(Some(CfExpression::object([
