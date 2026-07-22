@@ -63,10 +63,6 @@ const KNOWN_TEMPLATES: &[(&str, &str)] = &[
         "Deploy a Next.js app as a single container in the customer's cloud.",
     ),
     (
-        "ai-chatbot-ts",
-        "A streaming AI chatbot that calls cloud LLMs through the embedded AI gateway.",
-    ),
-    (
         "ai-quickstart-ts",
         "The smallest AI setup: one worker calling cloud LLMs, no API keys, no database.",
     ),
