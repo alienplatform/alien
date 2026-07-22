@@ -46,6 +46,71 @@ fn get_azure_container_app_name(prefix: &str, name: &str) -> String {
     format!("{}-{}", prefix, name)
 }
 
+const AZURE_DAPR_COMPONENT_NAME_MAX_LEN: usize = 60;
+const AZURE_DAPR_COMPONENT_HASH_LEN: usize = 8;
+
+/// Normalizes and, when necessary, collision-safely shortens a Dapr component name.
+///
+/// Azure requires lowercase alphanumeric, `-`, or `.` names that start with a
+/// letter, end with an alphanumeric character, contain no `--`, and are at
+/// most 60 characters long.
+fn get_azure_dapr_component_name(raw: &str) -> String {
+    let mut normalized = String::with_capacity(raw.len());
+    let mut previous_was_hyphen = false;
+
+    for character in raw.chars() {
+        let character = if character.is_ascii_alphanumeric() {
+            character.to_ascii_lowercase()
+        } else if character == '.' {
+            character
+        } else {
+            '-'
+        };
+
+        if character == '-' && previous_was_hyphen {
+            continue;
+        }
+        normalized.push(character);
+        previous_was_hyphen = character == '-';
+    }
+
+    while normalized
+        .chars()
+        .last()
+        .is_some_and(|character| !character.is_ascii_alphanumeric())
+    {
+        normalized.pop();
+    }
+    if normalized.is_empty() {
+        normalized.push_str("dapr");
+    } else if !normalized
+        .chars()
+        .next()
+        .is_some_and(|character| character.is_ascii_alphabetic())
+    {
+        normalized.insert_str(0, "dapr-");
+    }
+
+    if normalized.len() <= AZURE_DAPR_COMPONENT_NAME_MAX_LEN {
+        return normalized;
+    }
+
+    let hash = uuid::Uuid::new_v5(&uuid::Uuid::NAMESPACE_OID, raw.as_bytes())
+        .simple()
+        .to_string();
+    let hash = &hash[..AZURE_DAPR_COMPONENT_HASH_LEN];
+    let max_stem_len = AZURE_DAPR_COMPONENT_NAME_MAX_LEN - 1 - hash.len();
+    let mut stem: String = normalized.chars().take(max_stem_len).collect();
+    while stem
+        .chars()
+        .last()
+        .is_some_and(|character| !character.is_ascii_alphanumeric())
+    {
+        stem.pop();
+    }
+    format!("{stem}-{hash}")
+}
+
 fn get_azure_storage_event_subscription_name(worker_id: &str, storage_id: &str) -> String {
     let mut stem: String = format!("alien{worker_id}{storage_id}")
         .chars()
@@ -1746,7 +1811,8 @@ impl AzureWorkerController {
         };
 
         let ns_fqdn = format!("{}.servicebus.windows.net", namespace_name);
-        let component_name = format!("servicebus-{}-commands", container_app_name);
+        let component_name =
+            get_azure_dapr_component_name(&format!("servicebus-{container_app_name}-commands"));
 
         // Use Dapr input binding (not pubsub) because the manager sends directly
         // to Service Bus via Azure SDK — this is external-system integration, not
@@ -3586,7 +3652,8 @@ impl AzureWorkerController {
         };
 
         let ns_fqdn = format!("{}.servicebus.windows.net", namespace_name);
-        let component_name = format!("servicebus-{}-commands", container_app_name);
+        let component_name =
+            get_azure_dapr_component_name(&format!("servicebus-{container_app_name}-commands"));
 
         let mut metadata = vec![
             DaprMetadata {
@@ -4321,7 +4388,10 @@ impl AzureWorkerController {
         let ns_fqdn = format!("{}.servicebus.windows.net", namespace);
 
         // Generate component name: servicebus-{containerAppName}-{queueId}
-        let component_name = format!("servicebus-{}-{}", container_app_name, queue_ref.id);
+        let component_name = get_azure_dapr_component_name(&format!(
+            "servicebus-{container_app_name}-{}",
+            queue_ref.id
+        ));
 
         // Use Dapr input binding — the manager/user code sends directly to Service Bus
         // via Azure SDK, not through Dapr pubsub. Input bindings auto-deliver from the
@@ -4528,7 +4598,10 @@ impl AzureWorkerController {
             .clone();
 
         let queue_name = format!("{}-storage-{}", container_app_name, storage_ref.id);
-        let component_name = format!("blobstorage-{}-{}", container_app_name, storage_ref.id);
+        let component_name = get_azure_dapr_component_name(&format!(
+            "blobstorage-{container_app_name}-{}",
+            storage_ref.id
+        ));
         let event_subscription_name =
             get_azure_storage_event_subscription_name(&worker_config.id, &storage_ref.id);
         let deployment_resource_group = get_resource_group_name(ctx.state)?;
@@ -4813,7 +4886,8 @@ impl AzureWorkerController {
         let resource_group_name = env_outputs.resource_group_name.clone();
         let environment_name = env_outputs.environment_name.clone();
 
-        let component_name = format!("cron-{}-{}", container_app_name, index);
+        let component_name =
+            get_azure_dapr_component_name(&format!("cron-{container_app_name}-{index}"));
 
         let dapr_component = DaprComponent {
             name: Some(component_name.clone()),
@@ -5125,7 +5199,8 @@ mod tests {
 
     use super::{
         azure_storage_event_types, current_unix_timestamp_secs, dns_name_from_url,
-        get_azure_storage_event_subscription_name, AZURE_RBAC_WAIT_POLL_SECS,
+        get_azure_dapr_component_name, get_azure_storage_event_subscription_name,
+        AZURE_DAPR_COMPONENT_NAME_MAX_LEN, AZURE_RBAC_WAIT_POLL_SECS,
     };
     use crate::core::{controller_test::SingleControllerExecutor, MockPlatformServiceProvider};
     use crate::error::ErrorData;
@@ -5172,6 +5247,48 @@ mod tests {
         assert!(first
             .chars()
             .all(|character| character.is_ascii_alphanumeric()));
+    }
+
+    #[test]
+    fn azure_dapr_component_name_preserves_valid_short_names() {
+        assert_eq!(
+            get_azure_dapr_component_name("servicebus-worker-commands"),
+            "servicebus-worker-commands"
+        );
+    }
+
+    #[test]
+    fn azure_dapr_component_name_is_valid_stable_and_collision_safe() {
+        let first_raw = "servicebus-e2e-03-azure-terraform-provider-very-long-worker-name-commands";
+        let second_raw = "servicebus-e2e-03-azure-terraform-provider-very-long-worker-name-events";
+        let first = get_azure_dapr_component_name(first_raw);
+
+        assert_eq!(first, get_azure_dapr_component_name(first_raw));
+        assert_ne!(first, get_azure_dapr_component_name(second_raw));
+        assert!(first.len() <= AZURE_DAPR_COMPONENT_NAME_MAX_LEN);
+        assert!(first
+            .chars()
+            .next()
+            .is_some_and(|character| character.is_ascii_alphabetic()));
+        assert!(first
+            .chars()
+            .last()
+            .is_some_and(|character| character.is_ascii_alphanumeric()));
+        assert!(first.chars().all(|character| {
+            character.is_ascii_lowercase()
+                || character.is_ascii_digit()
+                || matches!(character, '-' | '.')
+        }));
+        assert!(!first.contains("--"));
+    }
+
+    #[test]
+    fn azure_dapr_component_name_normalizes_invalid_resource_id_characters() {
+        assert_eq!(
+            get_azure_dapr_component_name("servicebus-worker__name--queue_"),
+            "servicebus-worker-name-queue"
+        );
+        assert_eq!(get_azure_dapr_component_name("___"), "dapr");
     }
 
     #[test]
