@@ -66,10 +66,33 @@ export type {
   PostgresConnection,
   PostgresSslMode,
 } from "@alienplatform/bindings"
+export { getPostgresConnection } from "@alienplatform/bindings"
+
+// ============================================================================
+// AI — re-exported from @alienplatform/ai-gateway (the in-process Rust gateway)
+// ============================================================================
+
+export {
+  ai,
+  getAiConnection,
+  Ai,
+  isExternalAiBinding,
+  parseAiBinding,
+} from "@alienplatform/ai-gateway"
+export type {
+  AiBinding,
+  AmbientAiBinding,
+  ExternalAiBinding,
+  AiConnection,
+  AiModel,
+  ChatCompletionCreateParams,
+  ResponseCreateParams,
+} from "@alienplatform/ai-gateway"
 
 // ============================================================================
 // Errors — re-exported from @alienplatform/bindings and @alienplatform/core
 // ============================================================================
 
-export { BindingNotConfiguredError } from "@alienplatform/bindings"
-export { AlienError } from "@alienplatform/core"
+export { BindingNotConfiguredError, PostgresSecretResolutionError } from "@alienplatform/bindings"
+export { AiTransportError, AiUpstreamError } from "@alienplatform/ai-gateway"
+export { AlienError, BindingNotFoundError, InvalidBindingConfigError } from "@alienplatform/core"

@@ -4,6 +4,7 @@
 */
 
 import * as z from "zod";
+import { AiHeartbeatDataSchema } from "./ai-heartbeat-data-schema.js";
 import { ArtifactRegistryHeartbeatDataSchema } from "./artifact-registry-heartbeat-data-schema.js";
 import { AzureContainerAppsEnvironmentHeartbeatDataSchema } from "./azure-container-apps-environment-heartbeat-data-schema.js";
 import { AzureResourceGroupHeartbeatDataSchema } from "./azure-resource-group-heartbeat-data-schema.js";
@@ -125,6 +126,11 @@ export const ResourceHeartbeatDataSchema = z.union([z.object({
                 return AzureServiceBusNamespaceHeartbeatDataSchema
               },
 "resourceType": z.enum(["azure_service_bus_namespace"])
+    }), z.object({
+    get "data"(){
+                return AiHeartbeatDataSchema
+              },
+"resourceType": z.enum(["ai"])
     })])
 
 export type ResourceHeartbeatData = z.infer<typeof ResourceHeartbeatDataSchema>

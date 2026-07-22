@@ -275,33 +275,84 @@ impl LocalBindingsProvider {
             }
         }
     }
+
+    /// Inherent counterpart of [`BindingsProviderApi::resolve_runtime_only_binding_env`], so
+    /// controllers holding the concrete provider (the container path) can resolve without
+    /// importing the trait. The resource type routes to the local secret source.
+    pub async fn resolve_runtime_only_binding_env(
+        &self,
+        binding_name: &str,
+        resource_type: &str,
+    ) -> alien_bindings::error::Result<Option<std::collections::HashMap<String, String>>> {
+        if resource_type == alien_core::Postgres::RESOURCE_TYPE.0 {
+            // Re-reads the password live from the manager's 0600 metadata. `try_get_binding`
+            // is `None` for a name absent on recover; external (Remote Access) Postgres is
+            // rejected upstream on the local platform, so it never reaches here.
+            return match self.postgres_manager.try_get_binding(binding_name).context(
+                BindingsErrorData::config_invalid(
+                    binding_name,
+                    "Failed to read the local Postgres metadata",
+                ),
+            )? {
+                Some(binding) => Ok(Some(
+                    alien_core::bindings::serialize_binding_as_env_var(binding_name, &binding)
+                        .context(BindingsErrorData::config_invalid(
+                            binding_name,
+                            "Failed to serialize local Postgres binding",
+                        ))?,
+                )),
+                None => Ok(None),
+            };
+        }
+        if resource_type == alien_core::Ai::RESOURCE_TYPE.0 {
+            let api_key = std::env::var(alien_core::bindings::AiBinding::LOCAL_API_KEY_ENV)
+                .ok()
+                .filter(|key| !key.is_empty())
+                .ok_or_else(|| {
+                    AlienError::new(BindingsErrorData::config_invalid(
+                        binding_name,
+                        format!(
+                            "local AI binding needs {} set in the environment",
+                            alien_core::bindings::AiBinding::LOCAL_API_KEY_ENV
+                        ),
+                    ))
+                })?;
+            return Ok(Some(local_ai_binding_env(binding_name, api_key)?));
+        }
+        // Only types a controller marked runtime-only reach this resolver; anything else is a
+        // marking/resolution mismatch, not a missing resource.
+        Err(AlienError::new(BindingsErrorData::config_invalid(
+            binding_name,
+            format!("no local runtime-only secret source for resource type '{resource_type}'"),
+        )))
+    }
+}
+
+/// Builds the full BYO-key AI binding env entry for a linked workload. Pure so the
+/// key handling is unit-testable; the caller reads the key from the environment.
+fn local_ai_binding_env(
+    binding_name: &str,
+    api_key: String,
+) -> alien_bindings::error::Result<std::collections::HashMap<String, String>> {
+    let binding = alien_core::bindings::AiBinding::external(
+        alien_core::bindings::AiBinding::LOCAL_DEFAULT_PROVIDER,
+        api_key,
+    );
+    alien_core::bindings::serialize_binding_as_env_var(binding_name, &binding).context(
+        BindingsErrorData::config_invalid(binding_name, "Failed to serialize local AI binding"),
+    )
 }
 
 #[async_trait]
 impl BindingsProviderApi for LocalBindingsProvider {
-    /// `try_get_binding` is `None` for any name that isn't a managed local Postgres; the password is
-    /// read live from the manager's 0600 metadata each call. (External/Remote-Access Postgres is
-    /// rejected upstream on the local platform, so it never reaches here.)
     async fn resolve_runtime_only_binding_env(
         &self,
         binding_name: &str,
+        resource_type: &str,
     ) -> alien_bindings::error::Result<Option<std::collections::HashMap<String, String>>> {
-        match self
-            .postgres_manager
-            .try_get_binding(binding_name)
-            .context(BindingsErrorData::config_invalid(
-                binding_name,
-                "Failed to read the local Postgres metadata",
-            ))? {
-            Some(binding) => Ok(Some(
-                alien_core::bindings::serialize_binding_as_env_var(binding_name, &binding)
-                    .context(BindingsErrorData::config_invalid(
-                        binding_name,
-                        "Failed to serialize local Postgres binding",
-                    ))?,
-            )),
-            None => Ok(None),
-        }
+        // The inherent method shadows this trait method on the concrete type.
+        LocalBindingsProvider::resolve_runtime_only_binding_env(self, binding_name, resource_type)
+            .await
     }
 
     async fn load_storage(
@@ -600,5 +651,32 @@ impl BindingsProviderApi for LocalBindingsProvider {
                 binding_name
             ),
         }))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn local_ai_binding_env_carries_the_full_external_binding() {
+        let env = local_ai_binding_env("llm", "sk-test-key".to_string())
+            .expect("AI binding env should serialize");
+        let raw = env
+            .get("ALIEN_LLM_BINDING")
+            .expect("binding env var should be present");
+        let value: serde_json::Value = serde_json::from_str(raw).expect("binding is JSON");
+        assert_eq!(
+            value.get("service").and_then(|v| v.as_str()),
+            Some("external")
+        );
+        assert_eq!(
+            value.get("provider").and_then(|v| v.as_str()),
+            Some("openai")
+        );
+        assert_eq!(
+            value.get("apiKey").and_then(|v| v.as_str()),
+            Some("sk-test-key")
+        );
     }
 }

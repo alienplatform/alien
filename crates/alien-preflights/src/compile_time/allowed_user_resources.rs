@@ -39,6 +39,7 @@ impl CompileTimeCheck for AllowedUserResourcesCheck {
             // by the ComputeClusterMutation when not declared.
             "compute-cluster",
             "postgres",
+            "ai",
             "email",
             "experimental/aws-opensearch",
         ]);

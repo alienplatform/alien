@@ -10,6 +10,7 @@
 mod generator {
     pub mod helpers;
 
+    pub mod aws_ai_tests;
     pub mod aws_compute_tests;
     pub mod aws_data_layer_tests;
     pub mod aws_email_tests;

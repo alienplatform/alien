@@ -4,7 +4,7 @@ use crate::{
 use alien_core::{ResourceLifecycle, ResourceStatus, Stack, StackState, StackStatus};
 use alien_error::{AlienError, Context};
 use alien_infra::StackExecutor;
-use tracing::{debug, info};
+use tracing::{debug, error, info};
 
 /// Handle InitialSetup status (deploy setup-owned Frozen resources)
 ///
@@ -176,6 +176,15 @@ pub async fn handle_initial_setup(
                             | alien_core::ResourceStatus::DeleteFailed
                             | alien_core::ResourceStatus::RefreshFailed
                     )
+            })
+            .inspect(|r| {
+                error!(
+                    resource_id = %r.config.id(),
+                    resource_type = %r.resource_type,
+                    status = ?r.status,
+                    error = ?r.error,
+                    "InitialSetup failure: resource in failed state"
+                );
             })
             .map(|r| (r.config.id().to_string(), r.resource_type.clone()))
             .collect();

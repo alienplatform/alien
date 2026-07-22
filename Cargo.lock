@@ -84,6 +84,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "alien-ai-gateway-node"
+version = "3.1.0"
+dependencies = [
+ "alien-error",
+ "alien-gateway",
+ "napi",
+ "napi-build",
+ "napi-derive",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
 name = "alien-aws-clients"
 version = "3.2.0"
 dependencies = [
@@ -582,6 +595,31 @@ dependencies = [
  "quote",
  "serde_json",
  "syn 2.0.118",
+]
+
+[[package]]
+name = "alien-gateway"
+version = "3.1.0"
+dependencies = [
+ "alien-bindings",
+ "alien-core",
+ "alien-error",
+ "aws-config",
+ "aws-credential-types",
+ "aws-sigv4",
+ "aws-smithy-eventstream",
+ "aws-smithy-types",
+ "axum 0.8.9",
+ "base64 0.22.1",
+ "futures",
+ "http 1.4.2",
+ "httpmock",
+ "reqwest 0.12.28",
+ "serde",
+ "serde_json",
+ "temp-env",
+ "tokio",
+ "tracing",
 ]
 
 [[package]]
@@ -1830,6 +1868,17 @@ dependencies = [
  "futures-util",
  "pin-project-lite",
  "tokio",
+]
+
+[[package]]
+name = "aws-smithy-eventstream"
+version = "0.60.21"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "78d8391e65fcea47c586a22e1a41f173b38615b112b2c6b7a44e80cec3e6b706"
+dependencies = [
+ "aws-smithy-types",
+ "bytes",
+ "crc32fast",
 ]
 
 [[package]]

@@ -1,0 +1,191 @@
+---
+source: crates/alien-cloudformation/tests/generator/aws_ai_tests.rs
+expression: yaml
+---
+AWSTemplateFormatVersion: 2010-09-09
+Description: aws ai bedrock invoke permissions
+Transform:
+- AWS::LanguageExtensions
+Metadata:
+  AWS::CloudFormation::Interface:
+    ParameterGroups:
+    - Label:
+        default: Registration
+      Parameters:
+      - Token
+      - ManagingRoleArn
+      - ManagingAccountId
+    - Label:
+        default: Operations
+      Parameters:
+      - UpdatesMode
+      - TelemetryMode
+      - HeartbeatsMode
+    ParameterLabels:
+      HeartbeatsMode:
+        default: Heartbeats
+      ManagingAccountId:
+        default: Image account ID
+      ManagingRoleArn:
+        default: Management role ARN
+      TelemetryMode:
+        default: Telemetry
+      Token:
+        default: Install token
+      UpdatesMode:
+        default: Updates
+Parameters:
+  Token:
+    Type: String
+    Description: Install token from the application setup page.
+    NoEcho: true
+  ManagingRoleArn:
+    Type: String
+    Description: ARN of the management identity allowed to assume setup-created roles.
+    Default: ''
+  ManagingAccountId:
+    Type: String
+    Description: AWS account ID for the management account that hosts application container images.
+    Default: ''
+  NetworkMode:
+    Type: String
+    Description: Choose create-new for a managed VPC, use-existing for your VPC, or use-default for the account default VPC.
+    Default: create-new
+    AllowedValues:
+    - create-new
+    - use-existing
+    - use-default
+  UpdatesMode:
+    Type: String
+    Description: How updates are applied after setup registration.
+    Default: auto
+    AllowedValues:
+    - auto
+    - approval-required
+  TelemetryMode:
+    Type: String
+    Description: Telemetry collection behavior.
+    Default: auto
+    AllowedValues:
+    - auto
+  HeartbeatsMode:
+    Type: String
+    Description: Heartbeat health-check behavior.
+    Default: "on"
+    AllowedValues:
+    - "off"
+    - "on"
+Resources:
+  ExecutionSaRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName:
+        Fn::Sub: ${AWS::StackName}-execution-sa
+      AssumeRolePolicyDocument:
+        Version: 2012-10-17
+        Statement:
+        - Effect: Allow
+          Principal:
+            Service:
+            - codebuild.amazonaws.com
+            - ec2.amazonaws.com
+            - lambda.amazonaws.com
+          Action: sts:AssumeRole
+      Tags:
+      - Key: managed-by
+        Value: setup
+      - Key: deployment
+        Value:
+          Ref: AWS::StackName
+      - Key: resource
+        Value: execution-sa
+      - Key: resource-type
+        Value: service-account
+  LlmExecutionSaRoleAiPermission00:
+    Type: AWS::IAM::Policy
+    Properties:
+      PolicyName:
+        Fn::Sub: ${AWS::StackName}-llm-ai-0-0
+      PolicyDocument:
+        Version: 2012-10-17
+        Statement:
+        - Action:
+          - bedrock-mantle:CreateInference
+          - bedrock:InvokeModel
+          - bedrock:InvokeModelWithResponseStream
+          Effect: Allow
+          Resource:
+          - Fn::Sub: arn:${AWS::Partition}:bedrock-mantle:*:${AWS::AccountId}:project/default
+          - Fn::Sub: arn:${AWS::Partition}:bedrock:*:${AWS::AccountId}:inference-profile/*
+          - Fn::Sub: arn:${AWS::Partition}:bedrock:*::foundation-model/*
+          Sid: AiInvoke
+      Roles:
+      - Ref: ExecutionSaRole
+    DependsOn:
+    - ExecutionSaRole
+Outputs:
+  DeploymentSourceKind:
+    Value: cloudformation
+    Description: Setup source kind.
+  DeploymentResourcePrefix:
+    Value:
+      Ref: AWS::StackName
+    Description: Stable physical resource prefix.
+  DeploymentPlatform:
+    Value: aws
+    Description: Target platform.
+  DeploymentRegion:
+    Value:
+      Ref: AWS::Region
+    Description: AWS region.
+  DeploymentSetupTarget:
+    Value: aws
+    Description: Setup target.
+  DeploymentSetupFingerprint:
+    Value: test
+    Description: Setup compatibility fingerprint.
+  DeploymentSetupImportFormatVersion:
+    Value: 1
+    Description: Setup registration payload format version.
+  DeploymentSetupFingerprintVersion:
+    Value: 1
+    Description: Setup fingerprint algorithm version.
+  DeploymentManagementConfig:
+    Value:
+      Fn::ToJsonString:
+        platform: aws
+        managingRoleArn:
+          Ref: ManagingRoleArn
+    Description: Deployment registration management configuration JSON.
+  DeploymentStackSettings:
+    Value:
+      Fn::ToJsonString:
+        deploymentModel: push
+        updates:
+          Ref: UpdatesMode
+        telemetry:
+          Ref: TelemetryMode
+        heartbeats:
+          Ref: HeartbeatsMode
+        network:
+          Ref: AWS::NoValue
+    Description: Deployment registration settings JSON.
+  DeploymentResources:
+    Value:
+      Fn::ToJsonString:
+      - id: execution-sa
+        type: service-account
+        importData:
+          roleName:
+            Ref: ExecutionSaRole
+          roleArn:
+            Fn::GetAtt:
+            - ExecutionSaRole
+            - Arn
+          stackPermissionsApplied: true
+      - id: llm
+        type: ai
+        importData:
+          region:
+            Ref: AWS::Region
+    Description: Deployment registration resources JSON.

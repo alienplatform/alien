@@ -1,3 +1,4 @@
+pub mod ai;
 pub mod artifact_registry;
 pub mod build;
 pub mod compute_cluster;
@@ -13,6 +14,7 @@ pub mod storage;
 pub mod vault;
 pub mod worker;
 
+pub use ai::*;
 pub use artifact_registry::*;
 pub use build::*;
 pub use compute_cluster::*;

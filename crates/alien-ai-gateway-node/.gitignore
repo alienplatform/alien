@@ -1,0 +1,10 @@
+# Prebuilt native binaries — produced by `napi build`, assembled into per-platform
+# npm packages at build time; never committed.
+*.node
+node_modules/
+# napi-rs generates these beside the native translation crate, but the public
+# loader and declarations live in packages/ai-gateway. Keep the generated shim
+# out of the repository so it cannot become a second public surface.
+index.js
+index.d.ts
+pnpm-lock.yaml

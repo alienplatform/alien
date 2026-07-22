@@ -30,8 +30,10 @@ export const postgres = factories.postgres
 export {
   AlienError,
   BindingNotConfiguredError,
+  BindingNotFoundError,
   defineError,
   InvalidPostgresTlsConfigError,
+  PostgresSecretResolutionError,
   UnknownPostgresSslModeError,
 } from "./errors.js"
 
@@ -54,3 +56,8 @@ export type {
   Storage,
   Vault,
 } from "./types.js"
+
+// Postgres is connection-only (no gRPC service): the binding env var carries the
+// connection details and the workload dials the database directly.
+export { getPostgresConnection, encodeUserinfo } from "./postgres.js"
+export type { PostgresConnection } from "./postgres.js"

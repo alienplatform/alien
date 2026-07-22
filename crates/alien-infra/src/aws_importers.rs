@@ -11,11 +11,12 @@
 #[cfg(feature = "kubernetes")]
 use alien_core::KubernetesCluster;
 use alien_core::{
-    ArtifactRegistry, AwsOpenSearch, Build, Email, Kv, Network, Platform, Queue, Storage, Vault,
+    Ai, ArtifactRegistry, AwsOpenSearch, Build, Email, Kv, Network, Platform, Queue, Storage, Vault,
     Worker,
 };
 use alien_core::{RemoteStackManagement, ServiceAccount};
 
+use crate::ai::AwsAiImporter;
 use crate::artifact_registry::AwsArtifactRegistryImporter;
 use crate::build::AwsBuildImporter;
 use crate::email::AwsEmailImporter;
@@ -35,6 +36,7 @@ use crate::ImporterRegistry;
 /// Register every OSS AWS importer with `registry`.
 pub fn register(registry: &mut ImporterRegistry) {
     registry
+        .register(Ai::RESOURCE_TYPE, Platform::Aws, AwsAiImporter)
         .register(Storage::RESOURCE_TYPE, Platform::Aws, AwsStorageImporter)
         .register(Kv::RESOURCE_TYPE, Platform::Aws, AwsKvImporter)
         .register(Vault::RESOURCE_TYPE, Platform::Aws, AwsVaultImporter)

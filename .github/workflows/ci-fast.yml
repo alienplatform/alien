@@ -285,7 +285,7 @@ jobs:
       - name: TypeScript unit tests
         env:
           NODE_OPTIONS: "--max-old-space-size=8192"
-        run: pnpm --filter @alienplatform/core --filter @alienplatform/bindings --filter @alienplatform/commands test
+        run: pnpm --filter @alienplatform/core --filter @alienplatform/bindings --filter @alienplatform/commands --filter @alienplatform/ai-gateway test
 
       - name: Build all CLIs
         if: steps.changes.outcome != 'success' || steps.changes.outputs.examples == 'true' || github.event_name == 'workflow_dispatch'

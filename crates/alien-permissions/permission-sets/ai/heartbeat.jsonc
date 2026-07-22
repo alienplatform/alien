@@ -1,0 +1,53 @@
+{
+  "id": "ai/heartbeat",
+  "description": "Allows readonly monitoring and health checks for AI gateway resources",
+  "platforms": {
+    "aws": [
+      {
+        "label": "check-bedrock-availability",
+        "description": "Read Bedrock foundation model availability needed for application health checks.",
+        "grant": {
+          "actions": ["bedrock:ListFoundationModels"]
+        },
+        "binding": {
+          "stack": {
+            "resources": ["arn:aws:bedrock:*::foundation-model/*"]
+          },
+          "resource": {
+            "resources": ["arn:aws:bedrock:*::foundation-model/*"]
+          }
+        }
+      }
+    ],
+    "gcp": [
+      {
+        "label": "check-vertex-ai-health",
+        "description": "Read Vertex AI model and endpoint metadata needed for application health checks.",
+        "grant": {
+          "permissions": ["aiplatform.models.list", "aiplatform.endpoints.list"]
+        },
+        "binding": {
+          "stack": { "scope": "projects/${projectName}" },
+          "resource": { "scope": "projects/${projectName}" }
+        }
+      }
+    ],
+    "azure": [
+      {
+        "label": "check-cognitive-services-health",
+        "description": "Read Azure Cognitive Services account metadata needed for application health checks.",
+        "grant": {
+          "actions": ["Microsoft.CognitiveServices/accounts/read"]
+        },
+        "binding": {
+          "stack": {
+            "scope": "/subscriptions/${subscriptionId}/resourceGroups/${resourceGroup}"
+          },
+          "resource": {
+            "scope": "/subscriptions/${subscriptionId}/resourceGroups/${resourceGroup}/providers/Microsoft.CognitiveServices/accounts/${resourceName}"
+          }
+        }
+      }
+    ]
+  }
+}
