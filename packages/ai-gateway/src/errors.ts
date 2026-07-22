@@ -8,7 +8,7 @@
 import { defineError } from "@alienplatform/core"
 import * as z from "zod/v4"
 
-// Shared with the other binding surfaces (e.g. Postgres in @alienplatform/bindings).
+// Shared with the binding surfaces in @alienplatform/bindings.
 export { BindingNotFoundError, InvalidBindingConfigError } from "@alienplatform/core"
 
 /**

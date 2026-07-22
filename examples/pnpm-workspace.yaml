@@ -1,5 +1,4 @@
 packages:
-  - ai-chatbot-ts
   - ai-quickstart-ts
   - basic-worker-ts
   - basic-worker-rs

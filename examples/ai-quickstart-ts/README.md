@@ -23,8 +23,3 @@ curl "$URL/ask?q=Reply+with+exactly+one+word:+pong"
 
 `/models` lists the curated models for the cloud you deployed to; `/ask` picks
 the first one unless you pass `?model=`.
-
-## Extending it
-
-The full pattern — streaming chat UI plus a Postgres the model queries through a
-tool — lives in [`examples/ai-chatbot-ts`](../ai-chatbot-ts).

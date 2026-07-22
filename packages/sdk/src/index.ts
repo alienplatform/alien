@@ -57,8 +57,6 @@ export type {
 
 export { storage, kv, queue, vault, container } from "@alienplatform/bindings"
 export type { Storage, Kv, Queue, Vault, Container } from "@alienplatform/bindings"
-export { getPostgresConnection } from "@alienplatform/bindings"
-export type { PostgresConnection } from "@alienplatform/bindings"
 
 // ============================================================================
 // AI — re-exported from @alienplatform/ai-gateway (the in-process Rust gateway)
@@ -85,6 +83,6 @@ export type {
 // Errors — re-exported from @alienplatform/bindings and @alienplatform/core
 // ============================================================================
 
-export { BindingNotConfiguredError, PostgresSecretResolutionError } from "@alienplatform/bindings"
+export { BindingNotConfiguredError } from "@alienplatform/bindings"
 export { AiTransportError, AiUpstreamError } from "@alienplatform/ai-gateway"
 export { AlienError, BindingNotFoundError, InvalidBindingConfigError } from "@alienplatform/core"
