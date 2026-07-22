@@ -224,7 +224,29 @@ export type SyncListResponseEnvironmentInfoUnion =
   | SyncListResponseEnvironmentInfoTest
   | any;
 
+/**
+ * Failure-domain policy selected for a compute pool.
+ */
+export type SyncListResponseFailureDomains2 = {
+  /**
+   * Concrete provider domains selected during setup.
+   *
+   * @remarks
+   * Empty delegates deterministic selection to the provider setup implementation.
+   */
+  selectedFailureDomains?: Array<string> | undefined;
+  /**
+   * Number of distinct failure domains across which new stateful replicas may be spread.
+   */
+  spread: number;
+};
+
+export type SyncListResponseFailureDomainsUnion2 =
+  | SyncListResponseFailureDomains2
+  | any;
+
 export type SyncListResponsePoolsAutoscale = {
+  failureDomains?: SyncListResponseFailureDomains2 | any | null | undefined;
   /**
    * Provider machine type selected for this deployment.
    */
@@ -240,7 +262,29 @@ export type SyncListResponsePoolsAutoscale = {
   mode: "autoscale";
 };
 
+/**
+ * Failure-domain policy selected for a compute pool.
+ */
+export type SyncListResponseFailureDomains1 = {
+  /**
+   * Concrete provider domains selected during setup.
+   *
+   * @remarks
+   * Empty delegates deterministic selection to the provider setup implementation.
+   */
+  selectedFailureDomains?: Array<string> | undefined;
+  /**
+   * Number of distinct failure domains across which new stateful replicas may be spread.
+   */
+  spread: number;
+};
+
+export type SyncListResponseFailureDomainsUnion1 =
+  | SyncListResponseFailureDomains1
+  | any;
+
 export type SyncListResponsePoolsFixed = {
+  failureDomains?: SyncListResponseFailureDomains1 | any | null | undefined;
   /**
    * Provider machine type selected for this deployment.
    */
@@ -1645,93 +1689,95 @@ export type SyncListResponseStackState = {
   resources: { [k: string]: SyncListResponseStackStateResources };
 };
 
-export const SyncListResponseTypeStringList = {
+export const SyncListResponsePendingPreparedStackTypeStringList = {
   StringList: "stringList",
 } as const;
-export type SyncListResponseTypeStringList = ClosedEnum<
-  typeof SyncListResponseTypeStringList
+export type SyncListResponsePendingPreparedStackTypeStringList = ClosedEnum<
+  typeof SyncListResponsePendingPreparedStackTypeStringList
 >;
 
-export type SyncListResponseDefaultStringList = {
-  type: SyncListResponseTypeStringList;
+export type SyncListResponsePendingPreparedStackDefaultStringList = {
+  type: SyncListResponsePendingPreparedStackTypeStringList;
   /**
    * String list default.
    */
   value: Array<string>;
 };
 
-export const SyncListResponseTypeBoolean = {
+export const SyncListResponsePendingPreparedStackTypeBoolean = {
   Boolean: "boolean",
 } as const;
-export type SyncListResponseTypeBoolean = ClosedEnum<
-  typeof SyncListResponseTypeBoolean
+export type SyncListResponsePendingPreparedStackTypeBoolean = ClosedEnum<
+  typeof SyncListResponsePendingPreparedStackTypeBoolean
 >;
 
-export type SyncListResponseDefaultBoolean = {
-  type: SyncListResponseTypeBoolean;
+export type SyncListResponsePendingPreparedStackDefaultBoolean = {
+  type: SyncListResponsePendingPreparedStackTypeBoolean;
   /**
    * Boolean default.
    */
   value: boolean;
 };
 
-export const SyncListResponseTypeNumber = {
+export const SyncListResponsePendingPreparedStackTypeNumber = {
   Number: "number",
 } as const;
-export type SyncListResponseTypeNumber = ClosedEnum<
-  typeof SyncListResponseTypeNumber
+export type SyncListResponsePendingPreparedStackTypeNumber = ClosedEnum<
+  typeof SyncListResponsePendingPreparedStackTypeNumber
 >;
 
-export type SyncListResponseDefaultNumber = {
-  type: SyncListResponseTypeNumber;
+export type SyncListResponsePendingPreparedStackDefaultNumber = {
+  type: SyncListResponsePendingPreparedStackTypeNumber;
   /**
    * Number default.
    */
   value: string;
 };
 
-export const SyncListResponseTypeString = {
+export const SyncListResponsePendingPreparedStackTypeString = {
   String: "string",
 } as const;
-export type SyncListResponseTypeString = ClosedEnum<
-  typeof SyncListResponseTypeString
+export type SyncListResponsePendingPreparedStackTypeString = ClosedEnum<
+  typeof SyncListResponsePendingPreparedStackTypeString
 >;
 
-export type SyncListResponseDefaultString = {
-  type: SyncListResponseTypeString;
+export type SyncListResponsePendingPreparedStackDefaultString = {
+  type: SyncListResponsePendingPreparedStackTypeString;
   /**
    * String default.
    */
   value: string;
 };
 
-export type SyncListResponseDefaultUnion =
-  | SyncListResponseDefaultString
-  | SyncListResponseDefaultNumber
-  | SyncListResponseDefaultBoolean
-  | SyncListResponseDefaultStringList
+export type SyncListResponsePendingPreparedStackDefaultUnion =
+  | SyncListResponsePendingPreparedStackDefaultString
+  | SyncListResponsePendingPreparedStackDefaultNumber
+  | SyncListResponsePendingPreparedStackDefaultBoolean
+  | SyncListResponsePendingPreparedStackDefaultStringList
   | any;
 
 /**
  * Environment variable handling for a stack input mapping.
  */
-export const SyncListResponseTypeEnvEnum = {
+export const SyncListResponsePendingPreparedStackTypeEnvEnum = {
   Plain: "plain",
   Secret: "secret",
 } as const;
 /**
  * Environment variable handling for a stack input mapping.
  */
-export type SyncListResponseTypeEnvEnum = ClosedEnum<
-  typeof SyncListResponseTypeEnvEnum
+export type SyncListResponsePendingPreparedStackTypeEnvEnum = ClosedEnum<
+  typeof SyncListResponsePendingPreparedStackTypeEnvEnum
 >;
 
-export type SyncListResponseTypeUnion = SyncListResponseTypeEnvEnum | any;
+export type SyncListResponsePendingPreparedStackTypeUnion =
+  | SyncListResponsePendingPreparedStackTypeEnvEnum
+  | any;
 
 /**
  * How a resolved stack input is injected into runtime environment variables.
  */
-export type SyncListResponseEnv = {
+export type SyncListResponsePendingPreparedStackEnv = {
   /**
    * Environment variable name.
    */
@@ -1740,13 +1786,17 @@ export type SyncListResponseEnv = {
    * Target resource IDs or patterns. None means every env-capable resource.
    */
   targetResources?: Array<string> | null | undefined;
-  type?: SyncListResponseTypeEnvEnum | any | null | undefined;
+  type?:
+    | SyncListResponsePendingPreparedStackTypeEnvEnum
+    | any
+    | null
+    | undefined;
 };
 
 /**
  * Primitive stack input kind.
  */
-export const SyncListResponseKind = {
+export const SyncListResponsePendingPreparedStackKind = {
   String: "string",
   Secret: "secret",
   Number: "number",
@@ -1758,12 +1808,14 @@ export const SyncListResponseKind = {
 /**
  * Primitive stack input kind.
  */
-export type SyncListResponseKind = ClosedEnum<typeof SyncListResponseKind>;
+export type SyncListResponsePendingPreparedStackKind = ClosedEnum<
+  typeof SyncListResponsePendingPreparedStackKind
+>;
 
 /**
  * Represents the target cloud platform.
  */
-export const SyncListResponsePreparedStackPlatform = {
+export const SyncListResponsePendingPreparedStackPlatform = {
   Aws: "aws",
   Gcp: "gcp",
   Azure: "azure",
@@ -1775,28 +1827,28 @@ export const SyncListResponsePreparedStackPlatform = {
 /**
  * Represents the target cloud platform.
  */
-export type SyncListResponsePreparedStackPlatform = ClosedEnum<
-  typeof SyncListResponsePreparedStackPlatform
+export type SyncListResponsePendingPreparedStackPlatform = ClosedEnum<
+  typeof SyncListResponsePendingPreparedStackPlatform
 >;
 
 /**
  * Who can provide a stack input value.
  */
-export const SyncListResponseProvidedBy = {
+export const SyncListResponsePendingPreparedStackProvidedBy = {
   Developer: "developer",
   Deployer: "deployer",
 } as const;
 /**
  * Who can provide a stack input value.
  */
-export type SyncListResponseProvidedBy = ClosedEnum<
-  typeof SyncListResponseProvidedBy
+export type SyncListResponsePendingPreparedStackProvidedBy = ClosedEnum<
+  typeof SyncListResponsePendingPreparedStackProvidedBy
 >;
 
 /**
  * Portable stack input validation constraints.
  */
-export type SyncListResponseValidation = {
+export type SyncListResponsePendingPreparedStackValidation = {
   /**
    * Semantic format hint such as url.
    */
@@ -1835,17 +1887,19 @@ export type SyncListResponseValidation = {
   values?: Array<string> | null | undefined;
 };
 
-export type SyncListResponseValidationUnion = SyncListResponseValidation | any;
+export type SyncListResponsePendingPreparedStackValidationUnion =
+  | SyncListResponsePendingPreparedStackValidation
+  | any;
 
 /**
  * Stack input definition serialized into a release stack.
  */
-export type SyncListResponseInput = {
+export type SyncListResponsePendingPreparedStackInput = {
   default?:
-    | SyncListResponseDefaultString
-    | SyncListResponseDefaultNumber
-    | SyncListResponseDefaultBoolean
-    | SyncListResponseDefaultStringList
+    | SyncListResponsePendingPreparedStackDefaultString
+    | SyncListResponsePendingPreparedStackDefaultNumber
+    | SyncListResponsePendingPreparedStackDefaultBoolean
+    | SyncListResponsePendingPreparedStackDefaultStringList
     | any
     | null
     | undefined;
@@ -1856,7 +1910,7 @@ export type SyncListResponseInput = {
   /**
    * Runtime env-var mappings for v1 input resolution.
    */
-  env?: Array<SyncListResponseEnv> | undefined;
+  env?: Array<SyncListResponsePendingPreparedStackEnv> | undefined;
   /**
    * Stable input ID used by CLI/API calls.
    */
@@ -1864,7 +1918,1529 @@ export type SyncListResponseInput = {
   /**
    * Primitive stack input kind.
    */
-  kind: SyncListResponseKind;
+  kind: SyncListResponsePendingPreparedStackKind;
+  /**
+   * Human-facing field label.
+   */
+  label: string;
+  /**
+   * Example placeholder shown in UI.
+   */
+  placeholder?: string | null | undefined;
+  /**
+   * Platforms where this input applies.
+   */
+  platforms?:
+    | Array<SyncListResponsePendingPreparedStackPlatform>
+    | null
+    | undefined;
+  /**
+   * Who can provide this value.
+   */
+  providedBy: Array<SyncListResponsePendingPreparedStackProvidedBy>;
+  /**
+   * Whether a resolved value is required before deployment can proceed.
+   */
+  required: boolean;
+  validation?:
+    | SyncListResponsePendingPreparedStackValidation
+    | any
+    | null
+    | undefined;
+};
+
+export const SyncListResponsePendingPreparedStackManagementEnum = {
+  Auto: "auto",
+} as const;
+export type SyncListResponsePendingPreparedStackManagementEnum = ClosedEnum<
+  typeof SyncListResponsePendingPreparedStackManagementEnum
+>;
+
+/**
+ * AWS-specific binding specification
+ */
+export type SyncListResponsePendingPreparedStackOverrideAwResource = {
+  /**
+   * Optional condition for additional filtering (rare)
+   */
+  condition?: { [k: string]: { [k: string]: string } } | null | undefined;
+  /**
+   * Resource ARNs to bind to
+   */
+  resources: Array<string>;
+};
+
+/**
+ * AWS-specific binding specification
+ */
+export type SyncListResponsePendingPreparedStackOverrideAwStack = {
+  /**
+   * Optional condition for additional filtering (rare)
+   */
+  condition?: { [k: string]: { [k: string]: string } } | null | undefined;
+  /**
+   * Resource ARNs to bind to
+   */
+  resources: Array<string>;
+};
+
+/**
+ * Generic binding configuration for permissions
+ */
+export type SyncListResponsePendingPreparedStackOverrideAwBinding = {
+  /**
+   * AWS-specific binding specification
+   */
+  resource?: SyncListResponsePendingPreparedStackOverrideAwResource | undefined;
+  /**
+   * AWS-specific binding specification
+   */
+  stack?: SyncListResponsePendingPreparedStackOverrideAwStack | undefined;
+};
+
+/**
+ * IAM effect. Defaults to Allow.
+ */
+export const SyncListResponsePendingPreparedStackOverrideEffect = {
+  Allow: "Allow",
+  Deny: "Deny",
+} as const;
+/**
+ * IAM effect. Defaults to Allow.
+ */
+export type SyncListResponsePendingPreparedStackOverrideEffect = ClosedEnum<
+  typeof SyncListResponsePendingPreparedStackOverrideEffect
+>;
+
+/**
+ * Grant permissions for a specific cloud platform
+ */
+export type SyncListResponsePendingPreparedStackOverrideAwGrant = {
+  /**
+   * AWS IAM actions (only for AWS)
+   */
+  actions?: Array<string> | null | undefined;
+  /**
+   * Azure actions (only for Azure)
+   */
+  dataActions?: Array<string> | null | undefined;
+  /**
+   * GCP permissions that require an exact residual custom role.
+   */
+  permissions?: Array<string> | null | undefined;
+  /**
+   * Provider predefined roles to bind directly.
+   */
+  predefinedRoles?: Array<string> | null | undefined;
+  /**
+   * GCP residual custom permissions to pair with predefined roles.
+   */
+  residualPermissions?: Array<string> | null | undefined;
+};
+
+/**
+ * AWS-specific platform permission configuration
+ */
+export type SyncListResponsePendingPreparedStackOverrideAw = {
+  /**
+   * Generic binding configuration for permissions
+   */
+  binding: SyncListResponsePendingPreparedStackOverrideAwBinding;
+  /**
+   * Short admin-facing description of why this entry exists.
+   */
+  description?: string | null | undefined;
+  /**
+   * IAM effect. Defaults to Allow.
+   */
+  effect?: SyncListResponsePendingPreparedStackOverrideEffect | undefined;
+  /**
+   * Grant permissions for a specific cloud platform
+   */
+  grant: SyncListResponsePendingPreparedStackOverrideAwGrant;
+  /**
+   * Stable admin-facing label for this permission entry.
+   */
+  label?: string | null | undefined;
+};
+
+/**
+ * Azure-specific binding specification
+ */
+export type SyncListResponsePendingPreparedStackOverrideAzureResource = {
+  /**
+   * Scope (subscription/resource group/resource level)
+   */
+  scope: string;
+};
+
+/**
+ * Azure-specific binding specification
+ */
+export type SyncListResponsePendingPreparedStackOverrideAzureStack = {
+  /**
+   * Scope (subscription/resource group/resource level)
+   */
+  scope: string;
+};
+
+/**
+ * Generic binding configuration for permissions
+ */
+export type SyncListResponsePendingPreparedStackOverrideAzureBinding = {
+  /**
+   * Azure-specific binding specification
+   */
+  resource?:
+    | SyncListResponsePendingPreparedStackOverrideAzureResource
+    | undefined;
+  /**
+   * Azure-specific binding specification
+   */
+  stack?: SyncListResponsePendingPreparedStackOverrideAzureStack | undefined;
+};
+
+/**
+ * Grant permissions for a specific cloud platform
+ */
+export type SyncListResponsePendingPreparedStackOverrideAzureGrant = {
+  /**
+   * AWS IAM actions (only for AWS)
+   */
+  actions?: Array<string> | null | undefined;
+  /**
+   * Azure actions (only for Azure)
+   */
+  dataActions?: Array<string> | null | undefined;
+  /**
+   * GCP permissions that require an exact residual custom role.
+   */
+  permissions?: Array<string> | null | undefined;
+  /**
+   * Provider predefined roles to bind directly.
+   */
+  predefinedRoles?: Array<string> | null | undefined;
+  /**
+   * GCP residual custom permissions to pair with predefined roles.
+   */
+  residualPermissions?: Array<string> | null | undefined;
+};
+
+/**
+ * Azure-specific platform permission configuration
+ */
+export type SyncListResponsePendingPreparedStackOverrideAzure = {
+  /**
+   * Generic binding configuration for permissions
+   */
+  binding: SyncListResponsePendingPreparedStackOverrideAzureBinding;
+  /**
+   * Short admin-facing description of why this entry exists.
+   */
+  description?: string | null | undefined;
+  /**
+   * Grant permissions for a specific cloud platform
+   */
+  grant: SyncListResponsePendingPreparedStackOverrideAzureGrant;
+  /**
+   * Stable admin-facing label for this permission entry.
+   */
+  label?: string | null | undefined;
+};
+
+/**
+ * GCP IAM condition
+ */
+export type SyncListResponsePendingPreparedStackOverrideConditionResource = {
+  expression: string;
+  title: string;
+};
+
+export type SyncListResponsePendingPreparedStackOverrideResourceConditionUnion =
+  | SyncListResponsePendingPreparedStackOverrideConditionResource
+  | any;
+
+/**
+ * GCP-specific binding specification
+ */
+export type SyncListResponsePendingPreparedStackOverrideGcpResource = {
+  condition?:
+    | SyncListResponsePendingPreparedStackOverrideConditionResource
+    | any
+    | null
+    | undefined;
+  /**
+   * Scope (project/resource level)
+   */
+  scope: string;
+};
+
+/**
+ * GCP IAM condition
+ */
+export type SyncListResponsePendingPreparedStackOverrideConditionStack = {
+  expression: string;
+  title: string;
+};
+
+export type SyncListResponsePendingPreparedStackOverrideStackConditionUnion =
+  | SyncListResponsePendingPreparedStackOverrideConditionStack
+  | any;
+
+/**
+ * GCP-specific binding specification
+ */
+export type SyncListResponsePendingPreparedStackOverrideGcpStack = {
+  condition?:
+    | SyncListResponsePendingPreparedStackOverrideConditionStack
+    | any
+    | null
+    | undefined;
+  /**
+   * Scope (project/resource level)
+   */
+  scope: string;
+};
+
+/**
+ * Generic binding configuration for permissions
+ */
+export type SyncListResponsePendingPreparedStackOverrideGcpBinding = {
+  /**
+   * GCP-specific binding specification
+   */
+  resource?:
+    | SyncListResponsePendingPreparedStackOverrideGcpResource
+    | undefined;
+  /**
+   * GCP-specific binding specification
+   */
+  stack?: SyncListResponsePendingPreparedStackOverrideGcpStack | undefined;
+};
+
+/**
+ * Grant permissions for a specific cloud platform
+ */
+export type SyncListResponsePendingPreparedStackOverrideGcpGrant = {
+  /**
+   * AWS IAM actions (only for AWS)
+   */
+  actions?: Array<string> | null | undefined;
+  /**
+   * Azure actions (only for Azure)
+   */
+  dataActions?: Array<string> | null | undefined;
+  /**
+   * GCP permissions that require an exact residual custom role.
+   */
+  permissions?: Array<string> | null | undefined;
+  /**
+   * Provider predefined roles to bind directly.
+   */
+  predefinedRoles?: Array<string> | null | undefined;
+  /**
+   * GCP residual custom permissions to pair with predefined roles.
+   */
+  residualPermissions?: Array<string> | null | undefined;
+};
+
+/**
+ * GCP-specific platform permission configuration
+ */
+export type SyncListResponsePendingPreparedStackOverrideGcp = {
+  /**
+   * Generic binding configuration for permissions
+   */
+  binding: SyncListResponsePendingPreparedStackOverrideGcpBinding;
+  /**
+   * Short admin-facing description of why this entry exists.
+   */
+  description?: string | null | undefined;
+  /**
+   * Grant permissions for a specific cloud platform
+   */
+  grant: SyncListResponsePendingPreparedStackOverrideGcpGrant;
+  /**
+   * Stable admin-facing label for this permission entry.
+   */
+  label?: string | null | undefined;
+};
+
+/**
+ * Platform-specific permission configurations
+ */
+export type SyncListResponsePendingPreparedStackOverridePlatforms = {
+  /**
+   * AWS permission configurations
+   */
+  aws?:
+    | Array<SyncListResponsePendingPreparedStackOverrideAw>
+    | null
+    | undefined;
+  /**
+   * Azure permission configurations
+   */
+  azure?:
+    | Array<SyncListResponsePendingPreparedStackOverrideAzure>
+    | null
+    | undefined;
+  /**
+   * GCP permission configurations
+   */
+  gcp?:
+    | Array<SyncListResponsePendingPreparedStackOverrideGcp>
+    | null
+    | undefined;
+};
+
+/**
+ * A permission set that can be applied across different cloud platforms
+ */
+export type SyncListResponsePendingPreparedStackOverride = {
+  /**
+   * Human-readable description of what this permission set allows
+   */
+  description: string;
+  /**
+   * Unique identifier for the permission set (e.g., "storage/data-read")
+   */
+  id: string;
+  /**
+   * Platform-specific permission configurations
+   */
+  platforms: SyncListResponsePendingPreparedStackOverridePlatforms;
+};
+
+/**
+ * Reference to a permission set - either by name or inline definition
+ */
+export type SyncListResponsePendingPreparedStackOverrideUnion =
+  | SyncListResponsePendingPreparedStackOverride
+  | string;
+
+export type SyncListResponsePendingPreparedStackManagement2 = {
+  /**
+   * Permission profile that maps resources to permission sets
+   *
+   * @remarks
+   * Key can be "*" for all resources or resource name for specific resource
+   */
+  override: {
+    [k: string]: Array<SyncListResponsePendingPreparedStackOverride | string>;
+  };
+};
+
+/**
+ * AWS-specific binding specification
+ */
+export type SyncListResponsePendingPreparedStackExtendAwResource = {
+  /**
+   * Optional condition for additional filtering (rare)
+   */
+  condition?: { [k: string]: { [k: string]: string } } | null | undefined;
+  /**
+   * Resource ARNs to bind to
+   */
+  resources: Array<string>;
+};
+
+/**
+ * AWS-specific binding specification
+ */
+export type SyncListResponsePendingPreparedStackExtendAwStack = {
+  /**
+   * Optional condition for additional filtering (rare)
+   */
+  condition?: { [k: string]: { [k: string]: string } } | null | undefined;
+  /**
+   * Resource ARNs to bind to
+   */
+  resources: Array<string>;
+};
+
+/**
+ * Generic binding configuration for permissions
+ */
+export type SyncListResponsePendingPreparedStackExtendAwBinding = {
+  /**
+   * AWS-specific binding specification
+   */
+  resource?: SyncListResponsePendingPreparedStackExtendAwResource | undefined;
+  /**
+   * AWS-specific binding specification
+   */
+  stack?: SyncListResponsePendingPreparedStackExtendAwStack | undefined;
+};
+
+/**
+ * IAM effect. Defaults to Allow.
+ */
+export const SyncListResponsePendingPreparedStackExtendEffect = {
+  Allow: "Allow",
+  Deny: "Deny",
+} as const;
+/**
+ * IAM effect. Defaults to Allow.
+ */
+export type SyncListResponsePendingPreparedStackExtendEffect = ClosedEnum<
+  typeof SyncListResponsePendingPreparedStackExtendEffect
+>;
+
+/**
+ * Grant permissions for a specific cloud platform
+ */
+export type SyncListResponsePendingPreparedStackExtendAwGrant = {
+  /**
+   * AWS IAM actions (only for AWS)
+   */
+  actions?: Array<string> | null | undefined;
+  /**
+   * Azure actions (only for Azure)
+   */
+  dataActions?: Array<string> | null | undefined;
+  /**
+   * GCP permissions that require an exact residual custom role.
+   */
+  permissions?: Array<string> | null | undefined;
+  /**
+   * Provider predefined roles to bind directly.
+   */
+  predefinedRoles?: Array<string> | null | undefined;
+  /**
+   * GCP residual custom permissions to pair with predefined roles.
+   */
+  residualPermissions?: Array<string> | null | undefined;
+};
+
+/**
+ * AWS-specific platform permission configuration
+ */
+export type SyncListResponsePendingPreparedStackExtendAw = {
+  /**
+   * Generic binding configuration for permissions
+   */
+  binding: SyncListResponsePendingPreparedStackExtendAwBinding;
+  /**
+   * Short admin-facing description of why this entry exists.
+   */
+  description?: string | null | undefined;
+  /**
+   * IAM effect. Defaults to Allow.
+   */
+  effect?: SyncListResponsePendingPreparedStackExtendEffect | undefined;
+  /**
+   * Grant permissions for a specific cloud platform
+   */
+  grant: SyncListResponsePendingPreparedStackExtendAwGrant;
+  /**
+   * Stable admin-facing label for this permission entry.
+   */
+  label?: string | null | undefined;
+};
+
+/**
+ * Azure-specific binding specification
+ */
+export type SyncListResponsePendingPreparedStackExtendAzureResource = {
+  /**
+   * Scope (subscription/resource group/resource level)
+   */
+  scope: string;
+};
+
+/**
+ * Azure-specific binding specification
+ */
+export type SyncListResponsePendingPreparedStackExtendAzureStack = {
+  /**
+   * Scope (subscription/resource group/resource level)
+   */
+  scope: string;
+};
+
+/**
+ * Generic binding configuration for permissions
+ */
+export type SyncListResponsePendingPreparedStackExtendAzureBinding = {
+  /**
+   * Azure-specific binding specification
+   */
+  resource?:
+    | SyncListResponsePendingPreparedStackExtendAzureResource
+    | undefined;
+  /**
+   * Azure-specific binding specification
+   */
+  stack?: SyncListResponsePendingPreparedStackExtendAzureStack | undefined;
+};
+
+/**
+ * Grant permissions for a specific cloud platform
+ */
+export type SyncListResponsePendingPreparedStackExtendAzureGrant = {
+  /**
+   * AWS IAM actions (only for AWS)
+   */
+  actions?: Array<string> | null | undefined;
+  /**
+   * Azure actions (only for Azure)
+   */
+  dataActions?: Array<string> | null | undefined;
+  /**
+   * GCP permissions that require an exact residual custom role.
+   */
+  permissions?: Array<string> | null | undefined;
+  /**
+   * Provider predefined roles to bind directly.
+   */
+  predefinedRoles?: Array<string> | null | undefined;
+  /**
+   * GCP residual custom permissions to pair with predefined roles.
+   */
+  residualPermissions?: Array<string> | null | undefined;
+};
+
+/**
+ * Azure-specific platform permission configuration
+ */
+export type SyncListResponsePendingPreparedStackExtendAzure = {
+  /**
+   * Generic binding configuration for permissions
+   */
+  binding: SyncListResponsePendingPreparedStackExtendAzureBinding;
+  /**
+   * Short admin-facing description of why this entry exists.
+   */
+  description?: string | null | undefined;
+  /**
+   * Grant permissions for a specific cloud platform
+   */
+  grant: SyncListResponsePendingPreparedStackExtendAzureGrant;
+  /**
+   * Stable admin-facing label for this permission entry.
+   */
+  label?: string | null | undefined;
+};
+
+/**
+ * GCP IAM condition
+ */
+export type SyncListResponsePendingPreparedStackExtendConditionResource = {
+  expression: string;
+  title: string;
+};
+
+export type SyncListResponsePendingPreparedStackExtendResourceConditionUnion =
+  | SyncListResponsePendingPreparedStackExtendConditionResource
+  | any;
+
+/**
+ * GCP-specific binding specification
+ */
+export type SyncListResponsePendingPreparedStackExtendGcpResource = {
+  condition?:
+    | SyncListResponsePendingPreparedStackExtendConditionResource
+    | any
+    | null
+    | undefined;
+  /**
+   * Scope (project/resource level)
+   */
+  scope: string;
+};
+
+/**
+ * GCP IAM condition
+ */
+export type SyncListResponsePendingPreparedStackExtendConditionStack = {
+  expression: string;
+  title: string;
+};
+
+export type SyncListResponsePendingPreparedStackExtendStackConditionUnion =
+  | SyncListResponsePendingPreparedStackExtendConditionStack
+  | any;
+
+/**
+ * GCP-specific binding specification
+ */
+export type SyncListResponsePendingPreparedStackExtendGcpStack = {
+  condition?:
+    | SyncListResponsePendingPreparedStackExtendConditionStack
+    | any
+    | null
+    | undefined;
+  /**
+   * Scope (project/resource level)
+   */
+  scope: string;
+};
+
+/**
+ * Generic binding configuration for permissions
+ */
+export type SyncListResponsePendingPreparedStackExtendGcpBinding = {
+  /**
+   * GCP-specific binding specification
+   */
+  resource?: SyncListResponsePendingPreparedStackExtendGcpResource | undefined;
+  /**
+   * GCP-specific binding specification
+   */
+  stack?: SyncListResponsePendingPreparedStackExtendGcpStack | undefined;
+};
+
+/**
+ * Grant permissions for a specific cloud platform
+ */
+export type SyncListResponsePendingPreparedStackExtendGcpGrant = {
+  /**
+   * AWS IAM actions (only for AWS)
+   */
+  actions?: Array<string> | null | undefined;
+  /**
+   * Azure actions (only for Azure)
+   */
+  dataActions?: Array<string> | null | undefined;
+  /**
+   * GCP permissions that require an exact residual custom role.
+   */
+  permissions?: Array<string> | null | undefined;
+  /**
+   * Provider predefined roles to bind directly.
+   */
+  predefinedRoles?: Array<string> | null | undefined;
+  /**
+   * GCP residual custom permissions to pair with predefined roles.
+   */
+  residualPermissions?: Array<string> | null | undefined;
+};
+
+/**
+ * GCP-specific platform permission configuration
+ */
+export type SyncListResponsePendingPreparedStackExtendGcp = {
+  /**
+   * Generic binding configuration for permissions
+   */
+  binding: SyncListResponsePendingPreparedStackExtendGcpBinding;
+  /**
+   * Short admin-facing description of why this entry exists.
+   */
+  description?: string | null | undefined;
+  /**
+   * Grant permissions for a specific cloud platform
+   */
+  grant: SyncListResponsePendingPreparedStackExtendGcpGrant;
+  /**
+   * Stable admin-facing label for this permission entry.
+   */
+  label?: string | null | undefined;
+};
+
+/**
+ * Platform-specific permission configurations
+ */
+export type SyncListResponsePendingPreparedStackExtendPlatforms = {
+  /**
+   * AWS permission configurations
+   */
+  aws?: Array<SyncListResponsePendingPreparedStackExtendAw> | null | undefined;
+  /**
+   * Azure permission configurations
+   */
+  azure?:
+    | Array<SyncListResponsePendingPreparedStackExtendAzure>
+    | null
+    | undefined;
+  /**
+   * GCP permission configurations
+   */
+  gcp?: Array<SyncListResponsePendingPreparedStackExtendGcp> | null | undefined;
+};
+
+/**
+ * A permission set that can be applied across different cloud platforms
+ */
+export type SyncListResponsePendingPreparedStackExtend = {
+  /**
+   * Human-readable description of what this permission set allows
+   */
+  description: string;
+  /**
+   * Unique identifier for the permission set (e.g., "storage/data-read")
+   */
+  id: string;
+  /**
+   * Platform-specific permission configurations
+   */
+  platforms: SyncListResponsePendingPreparedStackExtendPlatforms;
+};
+
+/**
+ * Reference to a permission set - either by name or inline definition
+ */
+export type SyncListResponsePendingPreparedStackExtendUnion =
+  | SyncListResponsePendingPreparedStackExtend
+  | string;
+
+export type SyncListResponsePendingPreparedStackManagement1 = {
+  /**
+   * Permission profile that maps resources to permission sets
+   *
+   * @remarks
+   * Key can be "*" for all resources or resource name for specific resource
+   */
+  extend: {
+    [k: string]: Array<SyncListResponsePendingPreparedStackExtend | string>;
+  };
+};
+
+/**
+ * Management permissions configuration for stack management access
+ */
+export type SyncListResponsePendingPreparedStackManagementUnion =
+  | SyncListResponsePendingPreparedStackManagement1
+  | SyncListResponsePendingPreparedStackManagement2
+  | SyncListResponsePendingPreparedStackManagementEnum;
+
+/**
+ * AWS-specific binding specification
+ */
+export type SyncListResponsePendingPreparedStackProfileAwResource = {
+  /**
+   * Optional condition for additional filtering (rare)
+   */
+  condition?: { [k: string]: { [k: string]: string } } | null | undefined;
+  /**
+   * Resource ARNs to bind to
+   */
+  resources: Array<string>;
+};
+
+/**
+ * AWS-specific binding specification
+ */
+export type SyncListResponsePendingPreparedStackProfileAwStack = {
+  /**
+   * Optional condition for additional filtering (rare)
+   */
+  condition?: { [k: string]: { [k: string]: string } } | null | undefined;
+  /**
+   * Resource ARNs to bind to
+   */
+  resources: Array<string>;
+};
+
+/**
+ * Generic binding configuration for permissions
+ */
+export type SyncListResponsePendingPreparedStackProfileAwBinding = {
+  /**
+   * AWS-specific binding specification
+   */
+  resource?: SyncListResponsePendingPreparedStackProfileAwResource | undefined;
+  /**
+   * AWS-specific binding specification
+   */
+  stack?: SyncListResponsePendingPreparedStackProfileAwStack | undefined;
+};
+
+/**
+ * IAM effect. Defaults to Allow.
+ */
+export const SyncListResponsePendingPreparedStackProfileEffect = {
+  Allow: "Allow",
+  Deny: "Deny",
+} as const;
+/**
+ * IAM effect. Defaults to Allow.
+ */
+export type SyncListResponsePendingPreparedStackProfileEffect = ClosedEnum<
+  typeof SyncListResponsePendingPreparedStackProfileEffect
+>;
+
+/**
+ * Grant permissions for a specific cloud platform
+ */
+export type SyncListResponsePendingPreparedStackProfileAwGrant = {
+  /**
+   * AWS IAM actions (only for AWS)
+   */
+  actions?: Array<string> | null | undefined;
+  /**
+   * Azure actions (only for Azure)
+   */
+  dataActions?: Array<string> | null | undefined;
+  /**
+   * GCP permissions that require an exact residual custom role.
+   */
+  permissions?: Array<string> | null | undefined;
+  /**
+   * Provider predefined roles to bind directly.
+   */
+  predefinedRoles?: Array<string> | null | undefined;
+  /**
+   * GCP residual custom permissions to pair with predefined roles.
+   */
+  residualPermissions?: Array<string> | null | undefined;
+};
+
+/**
+ * AWS-specific platform permission configuration
+ */
+export type SyncListResponsePendingPreparedStackProfileAw = {
+  /**
+   * Generic binding configuration for permissions
+   */
+  binding: SyncListResponsePendingPreparedStackProfileAwBinding;
+  /**
+   * Short admin-facing description of why this entry exists.
+   */
+  description?: string | null | undefined;
+  /**
+   * IAM effect. Defaults to Allow.
+   */
+  effect?: SyncListResponsePendingPreparedStackProfileEffect | undefined;
+  /**
+   * Grant permissions for a specific cloud platform
+   */
+  grant: SyncListResponsePendingPreparedStackProfileAwGrant;
+  /**
+   * Stable admin-facing label for this permission entry.
+   */
+  label?: string | null | undefined;
+};
+
+/**
+ * Azure-specific binding specification
+ */
+export type SyncListResponsePendingPreparedStackProfileAzureResource = {
+  /**
+   * Scope (subscription/resource group/resource level)
+   */
+  scope: string;
+};
+
+/**
+ * Azure-specific binding specification
+ */
+export type SyncListResponsePendingPreparedStackProfileAzureStack = {
+  /**
+   * Scope (subscription/resource group/resource level)
+   */
+  scope: string;
+};
+
+/**
+ * Generic binding configuration for permissions
+ */
+export type SyncListResponsePendingPreparedStackProfileAzureBinding = {
+  /**
+   * Azure-specific binding specification
+   */
+  resource?:
+    | SyncListResponsePendingPreparedStackProfileAzureResource
+    | undefined;
+  /**
+   * Azure-specific binding specification
+   */
+  stack?: SyncListResponsePendingPreparedStackProfileAzureStack | undefined;
+};
+
+/**
+ * Grant permissions for a specific cloud platform
+ */
+export type SyncListResponsePendingPreparedStackProfileAzureGrant = {
+  /**
+   * AWS IAM actions (only for AWS)
+   */
+  actions?: Array<string> | null | undefined;
+  /**
+   * Azure actions (only for Azure)
+   */
+  dataActions?: Array<string> | null | undefined;
+  /**
+   * GCP permissions that require an exact residual custom role.
+   */
+  permissions?: Array<string> | null | undefined;
+  /**
+   * Provider predefined roles to bind directly.
+   */
+  predefinedRoles?: Array<string> | null | undefined;
+  /**
+   * GCP residual custom permissions to pair with predefined roles.
+   */
+  residualPermissions?: Array<string> | null | undefined;
+};
+
+/**
+ * Azure-specific platform permission configuration
+ */
+export type SyncListResponsePendingPreparedStackProfileAzure = {
+  /**
+   * Generic binding configuration for permissions
+   */
+  binding: SyncListResponsePendingPreparedStackProfileAzureBinding;
+  /**
+   * Short admin-facing description of why this entry exists.
+   */
+  description?: string | null | undefined;
+  /**
+   * Grant permissions for a specific cloud platform
+   */
+  grant: SyncListResponsePendingPreparedStackProfileAzureGrant;
+  /**
+   * Stable admin-facing label for this permission entry.
+   */
+  label?: string | null | undefined;
+};
+
+/**
+ * GCP IAM condition
+ */
+export type SyncListResponsePendingPreparedStackProfileConditionResource = {
+  expression: string;
+  title: string;
+};
+
+export type SyncListResponsePendingPreparedStackProfileResourceConditionUnion =
+  | SyncListResponsePendingPreparedStackProfileConditionResource
+  | any;
+
+/**
+ * GCP-specific binding specification
+ */
+export type SyncListResponsePendingPreparedStackProfileGcpResource = {
+  condition?:
+    | SyncListResponsePendingPreparedStackProfileConditionResource
+    | any
+    | null
+    | undefined;
+  /**
+   * Scope (project/resource level)
+   */
+  scope: string;
+};
+
+/**
+ * GCP IAM condition
+ */
+export type SyncListResponsePendingPreparedStackProfileConditionStack = {
+  expression: string;
+  title: string;
+};
+
+export type SyncListResponsePendingPreparedStackProfileStackConditionUnion =
+  | SyncListResponsePendingPreparedStackProfileConditionStack
+  | any;
+
+/**
+ * GCP-specific binding specification
+ */
+export type SyncListResponsePendingPreparedStackProfileGcpStack = {
+  condition?:
+    | SyncListResponsePendingPreparedStackProfileConditionStack
+    | any
+    | null
+    | undefined;
+  /**
+   * Scope (project/resource level)
+   */
+  scope: string;
+};
+
+/**
+ * Generic binding configuration for permissions
+ */
+export type SyncListResponsePendingPreparedStackProfileGcpBinding = {
+  /**
+   * GCP-specific binding specification
+   */
+  resource?: SyncListResponsePendingPreparedStackProfileGcpResource | undefined;
+  /**
+   * GCP-specific binding specification
+   */
+  stack?: SyncListResponsePendingPreparedStackProfileGcpStack | undefined;
+};
+
+/**
+ * Grant permissions for a specific cloud platform
+ */
+export type SyncListResponsePendingPreparedStackProfileGcpGrant = {
+  /**
+   * AWS IAM actions (only for AWS)
+   */
+  actions?: Array<string> | null | undefined;
+  /**
+   * Azure actions (only for Azure)
+   */
+  dataActions?: Array<string> | null | undefined;
+  /**
+   * GCP permissions that require an exact residual custom role.
+   */
+  permissions?: Array<string> | null | undefined;
+  /**
+   * Provider predefined roles to bind directly.
+   */
+  predefinedRoles?: Array<string> | null | undefined;
+  /**
+   * GCP residual custom permissions to pair with predefined roles.
+   */
+  residualPermissions?: Array<string> | null | undefined;
+};
+
+/**
+ * GCP-specific platform permission configuration
+ */
+export type SyncListResponsePendingPreparedStackProfileGcp = {
+  /**
+   * Generic binding configuration for permissions
+   */
+  binding: SyncListResponsePendingPreparedStackProfileGcpBinding;
+  /**
+   * Short admin-facing description of why this entry exists.
+   */
+  description?: string | null | undefined;
+  /**
+   * Grant permissions for a specific cloud platform
+   */
+  grant: SyncListResponsePendingPreparedStackProfileGcpGrant;
+  /**
+   * Stable admin-facing label for this permission entry.
+   */
+  label?: string | null | undefined;
+};
+
+/**
+ * Platform-specific permission configurations
+ */
+export type SyncListResponsePendingPreparedStackProfilePlatforms = {
+  /**
+   * AWS permission configurations
+   */
+  aws?: Array<SyncListResponsePendingPreparedStackProfileAw> | null | undefined;
+  /**
+   * Azure permission configurations
+   */
+  azure?:
+    | Array<SyncListResponsePendingPreparedStackProfileAzure>
+    | null
+    | undefined;
+  /**
+   * GCP permission configurations
+   */
+  gcp?:
+    | Array<SyncListResponsePendingPreparedStackProfileGcp>
+    | null
+    | undefined;
+};
+
+/**
+ * A permission set that can be applied across different cloud platforms
+ */
+export type SyncListResponsePendingPreparedStackProfile = {
+  /**
+   * Human-readable description of what this permission set allows
+   */
+  description: string;
+  /**
+   * Unique identifier for the permission set (e.g., "storage/data-read")
+   */
+  id: string;
+  /**
+   * Platform-specific permission configurations
+   */
+  platforms: SyncListResponsePendingPreparedStackProfilePlatforms;
+};
+
+/**
+ * Reference to a permission set - either by name or inline definition
+ */
+export type SyncListResponsePendingPreparedStackProfileUnion =
+  | SyncListResponsePendingPreparedStackProfile
+  | string;
+
+/**
+ * Combined permissions configuration that contains both profiles and management
+ */
+export type SyncListResponsePendingPreparedStackPermissions = {
+  /**
+   * Management permissions configuration for stack management access
+   */
+  management?:
+    | SyncListResponsePendingPreparedStackManagement1
+    | SyncListResponsePendingPreparedStackManagement2
+    | SyncListResponsePendingPreparedStackManagementEnum
+    | undefined;
+  /**
+   * Permission profiles that define access control for compute services
+   *
+   * @remarks
+   * Key is the profile name, value is the permission configuration
+   */
+  profiles: {
+    [k: string]: {
+      [k: string]: Array<SyncListResponsePendingPreparedStackProfile | string>;
+    };
+  };
+};
+
+/**
+ * Resource that can hold any resource type in the Alien system. All resources share common 'type' and 'id' fields with additional type-specific properties.
+ */
+export type SyncListResponsePendingPreparedStackConfig = {
+  /**
+   * The unique identifier for this specific resource instance. Must contain only alphanumeric characters, hyphens, and underscores ([A-Za-z0-9-_]). Maximum 64 characters.
+   */
+  id: string;
+  /**
+   * Resource type identifier that determines the specific kind of resource. This field is used for polymorphic deserialization and resource-specific behavior.
+   */
+  type: string;
+  additionalProperties?: { [k: string]: any | null } | undefined;
+};
+
+/**
+ * Reference to a resource by its stable id and resource type.
+ */
+export type SyncListResponsePendingPreparedStackDependency = {
+  id: string;
+  /**
+   * Resource type identifier that determines the specific kind of resource. This field is used for polymorphic deserialization and resource-specific behavior.
+   */
+  type: string;
+};
+
+/**
+ * Describes the lifecycle of a resource within a stack, determining how it's managed and deployed.
+ */
+export const SyncListResponsePendingPreparedStackLifecycle = {
+  Frozen: "frozen",
+  Live: "live",
+} as const;
+/**
+ * Describes the lifecycle of a resource within a stack, determining how it's managed and deployed.
+ */
+export type SyncListResponsePendingPreparedStackLifecycle = ClosedEnum<
+  typeof SyncListResponsePendingPreparedStackLifecycle
+>;
+
+export type SyncListResponsePendingPreparedStackResources = {
+  /**
+   * Resource that can hold any resource type in the Alien system. All resources share common 'type' and 'id' fields with additional type-specific properties.
+   */
+  config: SyncListResponsePendingPreparedStackConfig;
+  /**
+   * Additional dependencies for this resource beyond those defined in the resource itself.
+   *
+   * @remarks
+   * The total dependencies are: resource.get_dependencies() + this list
+   */
+  dependencies: Array<SyncListResponsePendingPreparedStackDependency>;
+  /**
+   * Id of the boolean stack input that decides whether this resource is
+   *
+   * @remarks
+   * created at all. `None` means always create it.
+   *
+   * Set by `.enabled(input)` in the SDK. Setup emitters render the resource
+   * conditionally on the matching template variable, so a deployer who says no
+   * never gets the resource, its outputs, or anything derived from it.
+   */
+  enabledWhen?: string | null | undefined;
+  /**
+   * Describes the lifecycle of a resource within a stack, determining how it's managed and deployed.
+   */
+  lifecycle: SyncListResponsePendingPreparedStackLifecycle;
+  /**
+   * Enable remote bindings for this resource (BYOB use case).
+   *
+   * @remarks
+   * When true, binding params are synced to StackState's `remote_binding_params`.
+   * Default: false (prevents sensitive data in synced state).
+   */
+  remoteAccess?: boolean | undefined;
+};
+
+/**
+ * Represents the target cloud platform.
+ */
+export const SyncListResponsePendingPreparedStackSupportedPlatform = {
+  Aws: "aws",
+  Gcp: "gcp",
+  Azure: "azure",
+  Kubernetes: "kubernetes",
+  Machines: "machines",
+  Local: "local",
+  Test: "test",
+} as const;
+/**
+ * Represents the target cloud platform.
+ */
+export type SyncListResponsePendingPreparedStackSupportedPlatform = ClosedEnum<
+  typeof SyncListResponsePendingPreparedStackSupportedPlatform
+>;
+
+/**
+ * A bag of resources, unaware of any cloud.
+ */
+export type SyncListResponsePendingPreparedStack = {
+  /**
+   * Unique identifier for the stack
+   */
+  id: string;
+  /**
+   * Input definitions required before setup or deployment can proceed.
+   */
+  inputs?: Array<SyncListResponsePendingPreparedStackInput> | undefined;
+  /**
+   * Combined permissions configuration that contains both profiles and management
+   */
+  permissions?: SyncListResponsePendingPreparedStackPermissions | undefined;
+  /**
+   * Map of resource IDs to their configurations and lifecycle settings
+   */
+  resources: { [k: string]: SyncListResponsePendingPreparedStackResources };
+  /**
+   * Which platforms this stack supports. When None, all platforms are supported.
+   */
+  supportedPlatforms?:
+    | Array<SyncListResponsePendingPreparedStackSupportedPlatform>
+    | null
+    | undefined;
+};
+
+export type SyncListResponsePendingPreparedStackUnion =
+  | SyncListResponsePendingPreparedStack
+  | any;
+
+export const SyncListResponsePreparedStackTypeStringList = {
+  StringList: "stringList",
+} as const;
+export type SyncListResponsePreparedStackTypeStringList = ClosedEnum<
+  typeof SyncListResponsePreparedStackTypeStringList
+>;
+
+export type SyncListResponsePreparedStackDefaultStringList = {
+  type: SyncListResponsePreparedStackTypeStringList;
+  /**
+   * String list default.
+   */
+  value: Array<string>;
+};
+
+export const SyncListResponsePreparedStackTypeBoolean = {
+  Boolean: "boolean",
+} as const;
+export type SyncListResponsePreparedStackTypeBoolean = ClosedEnum<
+  typeof SyncListResponsePreparedStackTypeBoolean
+>;
+
+export type SyncListResponsePreparedStackDefaultBoolean = {
+  type: SyncListResponsePreparedStackTypeBoolean;
+  /**
+   * Boolean default.
+   */
+  value: boolean;
+};
+
+export const SyncListResponsePreparedStackTypeNumber = {
+  Number: "number",
+} as const;
+export type SyncListResponsePreparedStackTypeNumber = ClosedEnum<
+  typeof SyncListResponsePreparedStackTypeNumber
+>;
+
+export type SyncListResponsePreparedStackDefaultNumber = {
+  type: SyncListResponsePreparedStackTypeNumber;
+  /**
+   * Number default.
+   */
+  value: string;
+};
+
+export const SyncListResponsePreparedStackTypeString = {
+  String: "string",
+} as const;
+export type SyncListResponsePreparedStackTypeString = ClosedEnum<
+  typeof SyncListResponsePreparedStackTypeString
+>;
+
+export type SyncListResponsePreparedStackDefaultString = {
+  type: SyncListResponsePreparedStackTypeString;
+  /**
+   * String default.
+   */
+  value: string;
+};
+
+export type SyncListResponsePreparedStackDefaultUnion =
+  | SyncListResponsePreparedStackDefaultString
+  | SyncListResponsePreparedStackDefaultNumber
+  | SyncListResponsePreparedStackDefaultBoolean
+  | SyncListResponsePreparedStackDefaultStringList
+  | any;
+
+/**
+ * Environment variable handling for a stack input mapping.
+ */
+export const SyncListResponsePreparedStackTypeEnvEnum = {
+  Plain: "plain",
+  Secret: "secret",
+} as const;
+/**
+ * Environment variable handling for a stack input mapping.
+ */
+export type SyncListResponsePreparedStackTypeEnvEnum = ClosedEnum<
+  typeof SyncListResponsePreparedStackTypeEnvEnum
+>;
+
+export type SyncListResponsePreparedStackTypeUnion =
+  | SyncListResponsePreparedStackTypeEnvEnum
+  | any;
+
+/**
+ * How a resolved stack input is injected into runtime environment variables.
+ */
+export type SyncListResponsePreparedStackEnv = {
+  /**
+   * Environment variable name.
+   */
+  name: string;
+  /**
+   * Target resource IDs or patterns. None means every env-capable resource.
+   */
+  targetResources?: Array<string> | null | undefined;
+  type?: SyncListResponsePreparedStackTypeEnvEnum | any | null | undefined;
+};
+
+/**
+ * Primitive stack input kind.
+ */
+export const SyncListResponsePreparedStackKind = {
+  String: "string",
+  Secret: "secret",
+  Number: "number",
+  Integer: "integer",
+  Boolean: "boolean",
+  Enum: "enum",
+  StringList: "stringList",
+} as const;
+/**
+ * Primitive stack input kind.
+ */
+export type SyncListResponsePreparedStackKind = ClosedEnum<
+  typeof SyncListResponsePreparedStackKind
+>;
+
+/**
+ * Represents the target cloud platform.
+ */
+export const SyncListResponsePreparedStackPlatform = {
+  Aws: "aws",
+  Gcp: "gcp",
+  Azure: "azure",
+  Kubernetes: "kubernetes",
+  Machines: "machines",
+  Local: "local",
+  Test: "test",
+} as const;
+/**
+ * Represents the target cloud platform.
+ */
+export type SyncListResponsePreparedStackPlatform = ClosedEnum<
+  typeof SyncListResponsePreparedStackPlatform
+>;
+
+/**
+ * Who can provide a stack input value.
+ */
+export const SyncListResponsePreparedStackProvidedBy = {
+  Developer: "developer",
+  Deployer: "deployer",
+} as const;
+/**
+ * Who can provide a stack input value.
+ */
+export type SyncListResponsePreparedStackProvidedBy = ClosedEnum<
+  typeof SyncListResponsePreparedStackProvidedBy
+>;
+
+/**
+ * Portable stack input validation constraints.
+ */
+export type SyncListResponsePreparedStackValidation = {
+  /**
+   * Semantic format hint such as url.
+   */
+  format?: string | null | undefined;
+  /**
+   * Maximum number.
+   */
+  max?: string | null | undefined;
+  /**
+   * Maximum string-list items.
+   */
+  maxItems?: number | null | undefined;
+  /**
+   * Maximum string length.
+   */
+  maxLength?: number | null | undefined;
+  /**
+   * Minimum number.
+   */
+  min?: string | null | undefined;
+  /**
+   * Minimum string-list items.
+   */
+  minItems?: number | null | undefined;
+  /**
+   * Minimum string length.
+   */
+  minLength?: number | null | undefined;
+  /**
+   * Portable whole-value regex pattern.
+   */
+  pattern?: string | null | undefined;
+  /**
+   * Allowed string enum values.
+   */
+  values?: Array<string> | null | undefined;
+};
+
+export type SyncListResponsePreparedStackValidationUnion =
+  | SyncListResponsePreparedStackValidation
+  | any;
+
+/**
+ * Stack input definition serialized into a release stack.
+ */
+export type SyncListResponsePreparedStackInput = {
+  default?:
+    | SyncListResponsePreparedStackDefaultString
+    | SyncListResponsePreparedStackDefaultNumber
+    | SyncListResponsePreparedStackDefaultBoolean
+    | SyncListResponsePreparedStackDefaultStringList
+    | any
+    | null
+    | undefined;
+  /**
+   * Human-facing helper text.
+   */
+  description: string;
+  /**
+   * Runtime env-var mappings for v1 input resolution.
+   */
+  env?: Array<SyncListResponsePreparedStackEnv> | undefined;
+  /**
+   * Stable input ID used by CLI/API calls.
+   */
+  id: string;
+  /**
+   * Primitive stack input kind.
+   */
+  kind: SyncListResponsePreparedStackKind;
   /**
    * Human-facing field label.
    */
@@ -1880,25 +3456,25 @@ export type SyncListResponseInput = {
   /**
    * Who can provide this value.
    */
-  providedBy: Array<SyncListResponseProvidedBy>;
+  providedBy: Array<SyncListResponsePreparedStackProvidedBy>;
   /**
    * Whether a resolved value is required before deployment can proceed.
    */
   required: boolean;
-  validation?: SyncListResponseValidation | any | null | undefined;
+  validation?: SyncListResponsePreparedStackValidation | any | null | undefined;
 };
 
-export const SyncListResponseManagementEnum = {
+export const SyncListResponsePreparedStackManagementEnum = {
   Auto: "auto",
 } as const;
-export type SyncListResponseManagementEnum = ClosedEnum<
-  typeof SyncListResponseManagementEnum
+export type SyncListResponsePreparedStackManagementEnum = ClosedEnum<
+  typeof SyncListResponsePreparedStackManagementEnum
 >;
 
 /**
  * AWS-specific binding specification
  */
-export type SyncListResponseOverrideAwResource = {
+export type SyncListResponsePreparedStackOverrideAwResource = {
   /**
    * Optional condition for additional filtering (rare)
    */
@@ -1912,7 +3488,7 @@ export type SyncListResponseOverrideAwResource = {
 /**
  * AWS-specific binding specification
  */
-export type SyncListResponseOverrideAwStack = {
+export type SyncListResponsePreparedStackOverrideAwStack = {
   /**
    * Optional condition for additional filtering (rare)
    */
@@ -1926,35 +3502,35 @@ export type SyncListResponseOverrideAwStack = {
 /**
  * Generic binding configuration for permissions
  */
-export type SyncListResponseOverrideAwBinding = {
+export type SyncListResponsePreparedStackOverrideAwBinding = {
   /**
    * AWS-specific binding specification
    */
-  resource?: SyncListResponseOverrideAwResource | undefined;
+  resource?: SyncListResponsePreparedStackOverrideAwResource | undefined;
   /**
    * AWS-specific binding specification
    */
-  stack?: SyncListResponseOverrideAwStack | undefined;
+  stack?: SyncListResponsePreparedStackOverrideAwStack | undefined;
 };
 
 /**
  * IAM effect. Defaults to Allow.
  */
-export const SyncListResponseOverrideEffect = {
+export const SyncListResponsePreparedStackOverrideEffect = {
   Allow: "Allow",
   Deny: "Deny",
 } as const;
 /**
  * IAM effect. Defaults to Allow.
  */
-export type SyncListResponseOverrideEffect = ClosedEnum<
-  typeof SyncListResponseOverrideEffect
+export type SyncListResponsePreparedStackOverrideEffect = ClosedEnum<
+  typeof SyncListResponsePreparedStackOverrideEffect
 >;
 
 /**
  * Grant permissions for a specific cloud platform
  */
-export type SyncListResponseOverrideAwGrant = {
+export type SyncListResponsePreparedStackOverrideAwGrant = {
   /**
    * AWS IAM actions (only for AWS)
    */
@@ -1980,11 +3556,11 @@ export type SyncListResponseOverrideAwGrant = {
 /**
  * AWS-specific platform permission configuration
  */
-export type SyncListResponseOverrideAw = {
+export type SyncListResponsePreparedStackOverrideAw = {
   /**
    * Generic binding configuration for permissions
    */
-  binding: SyncListResponseOverrideAwBinding;
+  binding: SyncListResponsePreparedStackOverrideAwBinding;
   /**
    * Short admin-facing description of why this entry exists.
    */
@@ -1992,11 +3568,11 @@ export type SyncListResponseOverrideAw = {
   /**
    * IAM effect. Defaults to Allow.
    */
-  effect?: SyncListResponseOverrideEffect | undefined;
+  effect?: SyncListResponsePreparedStackOverrideEffect | undefined;
   /**
    * Grant permissions for a specific cloud platform
    */
-  grant: SyncListResponseOverrideAwGrant;
+  grant: SyncListResponsePreparedStackOverrideAwGrant;
   /**
    * Stable admin-facing label for this permission entry.
    */
@@ -2006,7 +3582,7 @@ export type SyncListResponseOverrideAw = {
 /**
  * Azure-specific binding specification
  */
-export type SyncListResponseOverrideAzureResource = {
+export type SyncListResponsePreparedStackOverrideAzureResource = {
   /**
    * Scope (subscription/resource group/resource level)
    */
@@ -2016,7 +3592,7 @@ export type SyncListResponseOverrideAzureResource = {
 /**
  * Azure-specific binding specification
  */
-export type SyncListResponseOverrideAzureStack = {
+export type SyncListResponsePreparedStackOverrideAzureStack = {
   /**
    * Scope (subscription/resource group/resource level)
    */
@@ -2026,21 +3602,21 @@ export type SyncListResponseOverrideAzureStack = {
 /**
  * Generic binding configuration for permissions
  */
-export type SyncListResponseOverrideAzureBinding = {
+export type SyncListResponsePreparedStackOverrideAzureBinding = {
   /**
    * Azure-specific binding specification
    */
-  resource?: SyncListResponseOverrideAzureResource | undefined;
+  resource?: SyncListResponsePreparedStackOverrideAzureResource | undefined;
   /**
    * Azure-specific binding specification
    */
-  stack?: SyncListResponseOverrideAzureStack | undefined;
+  stack?: SyncListResponsePreparedStackOverrideAzureStack | undefined;
 };
 
 /**
  * Grant permissions for a specific cloud platform
  */
-export type SyncListResponseOverrideAzureGrant = {
+export type SyncListResponsePreparedStackOverrideAzureGrant = {
   /**
    * AWS IAM actions (only for AWS)
    */
@@ -2066,11 +3642,11 @@ export type SyncListResponseOverrideAzureGrant = {
 /**
  * Azure-specific platform permission configuration
  */
-export type SyncListResponseOverrideAzure = {
+export type SyncListResponsePreparedStackOverrideAzure = {
   /**
    * Generic binding configuration for permissions
    */
-  binding: SyncListResponseOverrideAzureBinding;
+  binding: SyncListResponsePreparedStackOverrideAzureBinding;
   /**
    * Short admin-facing description of why this entry exists.
    */
@@ -2078,7 +3654,7 @@ export type SyncListResponseOverrideAzure = {
   /**
    * Grant permissions for a specific cloud platform
    */
-  grant: SyncListResponseOverrideAzureGrant;
+  grant: SyncListResponsePreparedStackOverrideAzureGrant;
   /**
    * Stable admin-facing label for this permission entry.
    */
@@ -2088,21 +3664,21 @@ export type SyncListResponseOverrideAzure = {
 /**
  * GCP IAM condition
  */
-export type SyncListResponseOverrideConditionResource = {
+export type SyncListResponsePreparedStackOverrideConditionResource = {
   expression: string;
   title: string;
 };
 
-export type SyncListResponseOverrideResourceConditionUnion =
-  | SyncListResponseOverrideConditionResource
+export type SyncListResponsePreparedStackOverrideResourceConditionUnion =
+  | SyncListResponsePreparedStackOverrideConditionResource
   | any;
 
 /**
  * GCP-specific binding specification
  */
-export type SyncListResponseOverrideGcpResource = {
+export type SyncListResponsePreparedStackOverrideGcpResource = {
   condition?:
-    | SyncListResponseOverrideConditionResource
+    | SyncListResponsePreparedStackOverrideConditionResource
     | any
     | null
     | undefined;
@@ -2115,20 +3691,24 @@ export type SyncListResponseOverrideGcpResource = {
 /**
  * GCP IAM condition
  */
-export type SyncListResponseOverrideConditionStack = {
+export type SyncListResponsePreparedStackOverrideConditionStack = {
   expression: string;
   title: string;
 };
 
-export type SyncListResponseOverrideStackConditionUnion =
-  | SyncListResponseOverrideConditionStack
+export type SyncListResponsePreparedStackOverrideStackConditionUnion =
+  | SyncListResponsePreparedStackOverrideConditionStack
   | any;
 
 /**
  * GCP-specific binding specification
  */
-export type SyncListResponseOverrideGcpStack = {
-  condition?: SyncListResponseOverrideConditionStack | any | null | undefined;
+export type SyncListResponsePreparedStackOverrideGcpStack = {
+  condition?:
+    | SyncListResponsePreparedStackOverrideConditionStack
+    | any
+    | null
+    | undefined;
   /**
    * Scope (project/resource level)
    */
@@ -2138,21 +3718,21 @@ export type SyncListResponseOverrideGcpStack = {
 /**
  * Generic binding configuration for permissions
  */
-export type SyncListResponseOverrideGcpBinding = {
+export type SyncListResponsePreparedStackOverrideGcpBinding = {
   /**
    * GCP-specific binding specification
    */
-  resource?: SyncListResponseOverrideGcpResource | undefined;
+  resource?: SyncListResponsePreparedStackOverrideGcpResource | undefined;
   /**
    * GCP-specific binding specification
    */
-  stack?: SyncListResponseOverrideGcpStack | undefined;
+  stack?: SyncListResponsePreparedStackOverrideGcpStack | undefined;
 };
 
 /**
  * Grant permissions for a specific cloud platform
  */
-export type SyncListResponseOverrideGcpGrant = {
+export type SyncListResponsePreparedStackOverrideGcpGrant = {
   /**
    * AWS IAM actions (only for AWS)
    */
@@ -2178,11 +3758,11 @@ export type SyncListResponseOverrideGcpGrant = {
 /**
  * GCP-specific platform permission configuration
  */
-export type SyncListResponseOverrideGcp = {
+export type SyncListResponsePreparedStackOverrideGcp = {
   /**
    * Generic binding configuration for permissions
    */
-  binding: SyncListResponseOverrideGcpBinding;
+  binding: SyncListResponsePreparedStackOverrideGcpBinding;
   /**
    * Short admin-facing description of why this entry exists.
    */
@@ -2190,7 +3770,7 @@ export type SyncListResponseOverrideGcp = {
   /**
    * Grant permissions for a specific cloud platform
    */
-  grant: SyncListResponseOverrideGcpGrant;
+  grant: SyncListResponsePreparedStackOverrideGcpGrant;
   /**
    * Stable admin-facing label for this permission entry.
    */
@@ -2200,25 +3780,25 @@ export type SyncListResponseOverrideGcp = {
 /**
  * Platform-specific permission configurations
  */
-export type SyncListResponseOverridePlatforms = {
+export type SyncListResponsePreparedStackOverridePlatforms = {
   /**
    * AWS permission configurations
    */
-  aws?: Array<SyncListResponseOverrideAw> | null | undefined;
+  aws?: Array<SyncListResponsePreparedStackOverrideAw> | null | undefined;
   /**
    * Azure permission configurations
    */
-  azure?: Array<SyncListResponseOverrideAzure> | null | undefined;
+  azure?: Array<SyncListResponsePreparedStackOverrideAzure> | null | undefined;
   /**
    * GCP permission configurations
    */
-  gcp?: Array<SyncListResponseOverrideGcp> | null | undefined;
+  gcp?: Array<SyncListResponsePreparedStackOverrideGcp> | null | undefined;
 };
 
 /**
  * A permission set that can be applied across different cloud platforms
  */
-export type SyncListResponseOverride = {
+export type SyncListResponsePreparedStackOverride = {
   /**
    * Human-readable description of what this permission set allows
    */
@@ -2230,28 +3810,32 @@ export type SyncListResponseOverride = {
   /**
    * Platform-specific permission configurations
    */
-  platforms: SyncListResponseOverridePlatforms;
+  platforms: SyncListResponsePreparedStackOverridePlatforms;
 };
 
 /**
  * Reference to a permission set - either by name or inline definition
  */
-export type SyncListResponseOverrideUnion = SyncListResponseOverride | string;
+export type SyncListResponsePreparedStackOverrideUnion =
+  | SyncListResponsePreparedStackOverride
+  | string;
 
-export type SyncListResponseManagement2 = {
+export type SyncListResponsePreparedStackManagement2 = {
   /**
    * Permission profile that maps resources to permission sets
    *
    * @remarks
    * Key can be "*" for all resources or resource name for specific resource
    */
-  override: { [k: string]: Array<SyncListResponseOverride | string> };
+  override: {
+    [k: string]: Array<SyncListResponsePreparedStackOverride | string>;
+  };
 };
 
 /**
  * AWS-specific binding specification
  */
-export type SyncListResponseExtendAwResource = {
+export type SyncListResponsePreparedStackExtendAwResource = {
   /**
    * Optional condition for additional filtering (rare)
    */
@@ -2265,7 +3849,7 @@ export type SyncListResponseExtendAwResource = {
 /**
  * AWS-specific binding specification
  */
-export type SyncListResponseExtendAwStack = {
+export type SyncListResponsePreparedStackExtendAwStack = {
   /**
    * Optional condition for additional filtering (rare)
    */
@@ -2279,35 +3863,35 @@ export type SyncListResponseExtendAwStack = {
 /**
  * Generic binding configuration for permissions
  */
-export type SyncListResponseExtendAwBinding = {
+export type SyncListResponsePreparedStackExtendAwBinding = {
   /**
    * AWS-specific binding specification
    */
-  resource?: SyncListResponseExtendAwResource | undefined;
+  resource?: SyncListResponsePreparedStackExtendAwResource | undefined;
   /**
    * AWS-specific binding specification
    */
-  stack?: SyncListResponseExtendAwStack | undefined;
+  stack?: SyncListResponsePreparedStackExtendAwStack | undefined;
 };
 
 /**
  * IAM effect. Defaults to Allow.
  */
-export const SyncListResponseExtendEffect = {
+export const SyncListResponsePreparedStackExtendEffect = {
   Allow: "Allow",
   Deny: "Deny",
 } as const;
 /**
  * IAM effect. Defaults to Allow.
  */
-export type SyncListResponseExtendEffect = ClosedEnum<
-  typeof SyncListResponseExtendEffect
+export type SyncListResponsePreparedStackExtendEffect = ClosedEnum<
+  typeof SyncListResponsePreparedStackExtendEffect
 >;
 
 /**
  * Grant permissions for a specific cloud platform
  */
-export type SyncListResponseExtendAwGrant = {
+export type SyncListResponsePreparedStackExtendAwGrant = {
   /**
    * AWS IAM actions (only for AWS)
    */
@@ -2333,11 +3917,11 @@ export type SyncListResponseExtendAwGrant = {
 /**
  * AWS-specific platform permission configuration
  */
-export type SyncListResponseExtendAw = {
+export type SyncListResponsePreparedStackExtendAw = {
   /**
    * Generic binding configuration for permissions
    */
-  binding: SyncListResponseExtendAwBinding;
+  binding: SyncListResponsePreparedStackExtendAwBinding;
   /**
    * Short admin-facing description of why this entry exists.
    */
@@ -2345,11 +3929,11 @@ export type SyncListResponseExtendAw = {
   /**
    * IAM effect. Defaults to Allow.
    */
-  effect?: SyncListResponseExtendEffect | undefined;
+  effect?: SyncListResponsePreparedStackExtendEffect | undefined;
   /**
    * Grant permissions for a specific cloud platform
    */
-  grant: SyncListResponseExtendAwGrant;
+  grant: SyncListResponsePreparedStackExtendAwGrant;
   /**
    * Stable admin-facing label for this permission entry.
    */
@@ -2359,7 +3943,7 @@ export type SyncListResponseExtendAw = {
 /**
  * Azure-specific binding specification
  */
-export type SyncListResponseExtendAzureResource = {
+export type SyncListResponsePreparedStackExtendAzureResource = {
   /**
    * Scope (subscription/resource group/resource level)
    */
@@ -2369,7 +3953,7 @@ export type SyncListResponseExtendAzureResource = {
 /**
  * Azure-specific binding specification
  */
-export type SyncListResponseExtendAzureStack = {
+export type SyncListResponsePreparedStackExtendAzureStack = {
   /**
    * Scope (subscription/resource group/resource level)
    */
@@ -2379,21 +3963,21 @@ export type SyncListResponseExtendAzureStack = {
 /**
  * Generic binding configuration for permissions
  */
-export type SyncListResponseExtendAzureBinding = {
+export type SyncListResponsePreparedStackExtendAzureBinding = {
   /**
    * Azure-specific binding specification
    */
-  resource?: SyncListResponseExtendAzureResource | undefined;
+  resource?: SyncListResponsePreparedStackExtendAzureResource | undefined;
   /**
    * Azure-specific binding specification
    */
-  stack?: SyncListResponseExtendAzureStack | undefined;
+  stack?: SyncListResponsePreparedStackExtendAzureStack | undefined;
 };
 
 /**
  * Grant permissions for a specific cloud platform
  */
-export type SyncListResponseExtendAzureGrant = {
+export type SyncListResponsePreparedStackExtendAzureGrant = {
   /**
    * AWS IAM actions (only for AWS)
    */
@@ -2419,11 +4003,11 @@ export type SyncListResponseExtendAzureGrant = {
 /**
  * Azure-specific platform permission configuration
  */
-export type SyncListResponseExtendAzure = {
+export type SyncListResponsePreparedStackExtendAzure = {
   /**
    * Generic binding configuration for permissions
    */
-  binding: SyncListResponseExtendAzureBinding;
+  binding: SyncListResponsePreparedStackExtendAzureBinding;
   /**
    * Short admin-facing description of why this entry exists.
    */
@@ -2431,7 +4015,7 @@ export type SyncListResponseExtendAzure = {
   /**
    * Grant permissions for a specific cloud platform
    */
-  grant: SyncListResponseExtendAzureGrant;
+  grant: SyncListResponsePreparedStackExtendAzureGrant;
   /**
    * Stable admin-facing label for this permission entry.
    */
@@ -2441,20 +4025,24 @@ export type SyncListResponseExtendAzure = {
 /**
  * GCP IAM condition
  */
-export type SyncListResponseExtendConditionResource = {
+export type SyncListResponsePreparedStackExtendConditionResource = {
   expression: string;
   title: string;
 };
 
-export type SyncListResponseExtendResourceConditionUnion =
-  | SyncListResponseExtendConditionResource
+export type SyncListResponsePreparedStackExtendResourceConditionUnion =
+  | SyncListResponsePreparedStackExtendConditionResource
   | any;
 
 /**
  * GCP-specific binding specification
  */
-export type SyncListResponseExtendGcpResource = {
-  condition?: SyncListResponseExtendConditionResource | any | null | undefined;
+export type SyncListResponsePreparedStackExtendGcpResource = {
+  condition?:
+    | SyncListResponsePreparedStackExtendConditionResource
+    | any
+    | null
+    | undefined;
   /**
    * Scope (project/resource level)
    */
@@ -2464,20 +4052,24 @@ export type SyncListResponseExtendGcpResource = {
 /**
  * GCP IAM condition
  */
-export type SyncListResponseExtendConditionStack = {
+export type SyncListResponsePreparedStackExtendConditionStack = {
   expression: string;
   title: string;
 };
 
-export type SyncListResponseExtendStackConditionUnion =
-  | SyncListResponseExtendConditionStack
+export type SyncListResponsePreparedStackExtendStackConditionUnion =
+  | SyncListResponsePreparedStackExtendConditionStack
   | any;
 
 /**
  * GCP-specific binding specification
  */
-export type SyncListResponseExtendGcpStack = {
-  condition?: SyncListResponseExtendConditionStack | any | null | undefined;
+export type SyncListResponsePreparedStackExtendGcpStack = {
+  condition?:
+    | SyncListResponsePreparedStackExtendConditionStack
+    | any
+    | null
+    | undefined;
   /**
    * Scope (project/resource level)
    */
@@ -2487,21 +4079,21 @@ export type SyncListResponseExtendGcpStack = {
 /**
  * Generic binding configuration for permissions
  */
-export type SyncListResponseExtendGcpBinding = {
+export type SyncListResponsePreparedStackExtendGcpBinding = {
   /**
    * GCP-specific binding specification
    */
-  resource?: SyncListResponseExtendGcpResource | undefined;
+  resource?: SyncListResponsePreparedStackExtendGcpResource | undefined;
   /**
    * GCP-specific binding specification
    */
-  stack?: SyncListResponseExtendGcpStack | undefined;
+  stack?: SyncListResponsePreparedStackExtendGcpStack | undefined;
 };
 
 /**
  * Grant permissions for a specific cloud platform
  */
-export type SyncListResponseExtendGcpGrant = {
+export type SyncListResponsePreparedStackExtendGcpGrant = {
   /**
    * AWS IAM actions (only for AWS)
    */
@@ -2527,11 +4119,11 @@ export type SyncListResponseExtendGcpGrant = {
 /**
  * GCP-specific platform permission configuration
  */
-export type SyncListResponseExtendGcp = {
+export type SyncListResponsePreparedStackExtendGcp = {
   /**
    * Generic binding configuration for permissions
    */
-  binding: SyncListResponseExtendGcpBinding;
+  binding: SyncListResponsePreparedStackExtendGcpBinding;
   /**
    * Short admin-facing description of why this entry exists.
    */
@@ -2539,7 +4131,7 @@ export type SyncListResponseExtendGcp = {
   /**
    * Grant permissions for a specific cloud platform
    */
-  grant: SyncListResponseExtendGcpGrant;
+  grant: SyncListResponsePreparedStackExtendGcpGrant;
   /**
    * Stable admin-facing label for this permission entry.
    */
@@ -2549,25 +4141,25 @@ export type SyncListResponseExtendGcp = {
 /**
  * Platform-specific permission configurations
  */
-export type SyncListResponseExtendPlatforms = {
+export type SyncListResponsePreparedStackExtendPlatforms = {
   /**
    * AWS permission configurations
    */
-  aws?: Array<SyncListResponseExtendAw> | null | undefined;
+  aws?: Array<SyncListResponsePreparedStackExtendAw> | null | undefined;
   /**
    * Azure permission configurations
    */
-  azure?: Array<SyncListResponseExtendAzure> | null | undefined;
+  azure?: Array<SyncListResponsePreparedStackExtendAzure> | null | undefined;
   /**
    * GCP permission configurations
    */
-  gcp?: Array<SyncListResponseExtendGcp> | null | undefined;
+  gcp?: Array<SyncListResponsePreparedStackExtendGcp> | null | undefined;
 };
 
 /**
  * A permission set that can be applied across different cloud platforms
  */
-export type SyncListResponseExtend = {
+export type SyncListResponsePreparedStackExtend = {
   /**
    * Human-readable description of what this permission set allows
    */
@@ -2579,36 +4171,38 @@ export type SyncListResponseExtend = {
   /**
    * Platform-specific permission configurations
    */
-  platforms: SyncListResponseExtendPlatforms;
+  platforms: SyncListResponsePreparedStackExtendPlatforms;
 };
 
 /**
  * Reference to a permission set - either by name or inline definition
  */
-export type SyncListResponseExtendUnion = SyncListResponseExtend | string;
+export type SyncListResponsePreparedStackExtendUnion =
+  | SyncListResponsePreparedStackExtend
+  | string;
 
-export type SyncListResponseManagement1 = {
+export type SyncListResponsePreparedStackManagement1 = {
   /**
    * Permission profile that maps resources to permission sets
    *
    * @remarks
    * Key can be "*" for all resources or resource name for specific resource
    */
-  extend: { [k: string]: Array<SyncListResponseExtend | string> };
+  extend: { [k: string]: Array<SyncListResponsePreparedStackExtend | string> };
 };
 
 /**
  * Management permissions configuration for stack management access
  */
-export type SyncListResponseManagementUnion =
-  | SyncListResponseManagement1
-  | SyncListResponseManagement2
-  | SyncListResponseManagementEnum;
+export type SyncListResponsePreparedStackManagementUnion =
+  | SyncListResponsePreparedStackManagement1
+  | SyncListResponsePreparedStackManagement2
+  | SyncListResponsePreparedStackManagementEnum;
 
 /**
  * AWS-specific binding specification
  */
-export type SyncListResponseProfileAwResource = {
+export type SyncListResponsePreparedStackProfileAwResource = {
   /**
    * Optional condition for additional filtering (rare)
    */
@@ -2622,7 +4216,7 @@ export type SyncListResponseProfileAwResource = {
 /**
  * AWS-specific binding specification
  */
-export type SyncListResponseProfileAwStack = {
+export type SyncListResponsePreparedStackProfileAwStack = {
   /**
    * Optional condition for additional filtering (rare)
    */
@@ -2636,35 +4230,35 @@ export type SyncListResponseProfileAwStack = {
 /**
  * Generic binding configuration for permissions
  */
-export type SyncListResponseProfileAwBinding = {
+export type SyncListResponsePreparedStackProfileAwBinding = {
   /**
    * AWS-specific binding specification
    */
-  resource?: SyncListResponseProfileAwResource | undefined;
+  resource?: SyncListResponsePreparedStackProfileAwResource | undefined;
   /**
    * AWS-specific binding specification
    */
-  stack?: SyncListResponseProfileAwStack | undefined;
+  stack?: SyncListResponsePreparedStackProfileAwStack | undefined;
 };
 
 /**
  * IAM effect. Defaults to Allow.
  */
-export const SyncListResponseProfileEffect = {
+export const SyncListResponsePreparedStackProfileEffect = {
   Allow: "Allow",
   Deny: "Deny",
 } as const;
 /**
  * IAM effect. Defaults to Allow.
  */
-export type SyncListResponseProfileEffect = ClosedEnum<
-  typeof SyncListResponseProfileEffect
+export type SyncListResponsePreparedStackProfileEffect = ClosedEnum<
+  typeof SyncListResponsePreparedStackProfileEffect
 >;
 
 /**
  * Grant permissions for a specific cloud platform
  */
-export type SyncListResponseProfileAwGrant = {
+export type SyncListResponsePreparedStackProfileAwGrant = {
   /**
    * AWS IAM actions (only for AWS)
    */
@@ -2690,11 +4284,11 @@ export type SyncListResponseProfileAwGrant = {
 /**
  * AWS-specific platform permission configuration
  */
-export type SyncListResponseProfileAw = {
+export type SyncListResponsePreparedStackProfileAw = {
   /**
    * Generic binding configuration for permissions
    */
-  binding: SyncListResponseProfileAwBinding;
+  binding: SyncListResponsePreparedStackProfileAwBinding;
   /**
    * Short admin-facing description of why this entry exists.
    */
@@ -2702,11 +4296,11 @@ export type SyncListResponseProfileAw = {
   /**
    * IAM effect. Defaults to Allow.
    */
-  effect?: SyncListResponseProfileEffect | undefined;
+  effect?: SyncListResponsePreparedStackProfileEffect | undefined;
   /**
    * Grant permissions for a specific cloud platform
    */
-  grant: SyncListResponseProfileAwGrant;
+  grant: SyncListResponsePreparedStackProfileAwGrant;
   /**
    * Stable admin-facing label for this permission entry.
    */
@@ -2716,7 +4310,7 @@ export type SyncListResponseProfileAw = {
 /**
  * Azure-specific binding specification
  */
-export type SyncListResponseProfileAzureResource = {
+export type SyncListResponsePreparedStackProfileAzureResource = {
   /**
    * Scope (subscription/resource group/resource level)
    */
@@ -2726,7 +4320,7 @@ export type SyncListResponseProfileAzureResource = {
 /**
  * Azure-specific binding specification
  */
-export type SyncListResponseProfileAzureStack = {
+export type SyncListResponsePreparedStackProfileAzureStack = {
   /**
    * Scope (subscription/resource group/resource level)
    */
@@ -2736,21 +4330,21 @@ export type SyncListResponseProfileAzureStack = {
 /**
  * Generic binding configuration for permissions
  */
-export type SyncListResponseProfileAzureBinding = {
+export type SyncListResponsePreparedStackProfileAzureBinding = {
   /**
    * Azure-specific binding specification
    */
-  resource?: SyncListResponseProfileAzureResource | undefined;
+  resource?: SyncListResponsePreparedStackProfileAzureResource | undefined;
   /**
    * Azure-specific binding specification
    */
-  stack?: SyncListResponseProfileAzureStack | undefined;
+  stack?: SyncListResponsePreparedStackProfileAzureStack | undefined;
 };
 
 /**
  * Grant permissions for a specific cloud platform
  */
-export type SyncListResponseProfileAzureGrant = {
+export type SyncListResponsePreparedStackProfileAzureGrant = {
   /**
    * AWS IAM actions (only for AWS)
    */
@@ -2776,11 +4370,11 @@ export type SyncListResponseProfileAzureGrant = {
 /**
  * Azure-specific platform permission configuration
  */
-export type SyncListResponseProfileAzure = {
+export type SyncListResponsePreparedStackProfileAzure = {
   /**
    * Generic binding configuration for permissions
    */
-  binding: SyncListResponseProfileAzureBinding;
+  binding: SyncListResponsePreparedStackProfileAzureBinding;
   /**
    * Short admin-facing description of why this entry exists.
    */
@@ -2788,7 +4382,7 @@ export type SyncListResponseProfileAzure = {
   /**
    * Grant permissions for a specific cloud platform
    */
-  grant: SyncListResponseProfileAzureGrant;
+  grant: SyncListResponsePreparedStackProfileAzureGrant;
   /**
    * Stable admin-facing label for this permission entry.
    */
@@ -2798,20 +4392,24 @@ export type SyncListResponseProfileAzure = {
 /**
  * GCP IAM condition
  */
-export type SyncListResponseProfileConditionResource = {
+export type SyncListResponsePreparedStackProfileConditionResource = {
   expression: string;
   title: string;
 };
 
-export type SyncListResponseProfileResourceConditionUnion =
-  | SyncListResponseProfileConditionResource
+export type SyncListResponsePreparedStackProfileResourceConditionUnion =
+  | SyncListResponsePreparedStackProfileConditionResource
   | any;
 
 /**
  * GCP-specific binding specification
  */
-export type SyncListResponseProfileGcpResource = {
-  condition?: SyncListResponseProfileConditionResource | any | null | undefined;
+export type SyncListResponsePreparedStackProfileGcpResource = {
+  condition?:
+    | SyncListResponsePreparedStackProfileConditionResource
+    | any
+    | null
+    | undefined;
   /**
    * Scope (project/resource level)
    */
@@ -2821,20 +4419,24 @@ export type SyncListResponseProfileGcpResource = {
 /**
  * GCP IAM condition
  */
-export type SyncListResponseProfileConditionStack = {
+export type SyncListResponsePreparedStackProfileConditionStack = {
   expression: string;
   title: string;
 };
 
-export type SyncListResponseProfileStackConditionUnion =
-  | SyncListResponseProfileConditionStack
+export type SyncListResponsePreparedStackProfileStackConditionUnion =
+  | SyncListResponsePreparedStackProfileConditionStack
   | any;
 
 /**
  * GCP-specific binding specification
  */
-export type SyncListResponseProfileGcpStack = {
-  condition?: SyncListResponseProfileConditionStack | any | null | undefined;
+export type SyncListResponsePreparedStackProfileGcpStack = {
+  condition?:
+    | SyncListResponsePreparedStackProfileConditionStack
+    | any
+    | null
+    | undefined;
   /**
    * Scope (project/resource level)
    */
@@ -2844,21 +4446,21 @@ export type SyncListResponseProfileGcpStack = {
 /**
  * Generic binding configuration for permissions
  */
-export type SyncListResponseProfileGcpBinding = {
+export type SyncListResponsePreparedStackProfileGcpBinding = {
   /**
    * GCP-specific binding specification
    */
-  resource?: SyncListResponseProfileGcpResource | undefined;
+  resource?: SyncListResponsePreparedStackProfileGcpResource | undefined;
   /**
    * GCP-specific binding specification
    */
-  stack?: SyncListResponseProfileGcpStack | undefined;
+  stack?: SyncListResponsePreparedStackProfileGcpStack | undefined;
 };
 
 /**
  * Grant permissions for a specific cloud platform
  */
-export type SyncListResponseProfileGcpGrant = {
+export type SyncListResponsePreparedStackProfileGcpGrant = {
   /**
    * AWS IAM actions (only for AWS)
    */
@@ -2884,11 +4486,11 @@ export type SyncListResponseProfileGcpGrant = {
 /**
  * GCP-specific platform permission configuration
  */
-export type SyncListResponseProfileGcp = {
+export type SyncListResponsePreparedStackProfileGcp = {
   /**
    * Generic binding configuration for permissions
    */
-  binding: SyncListResponseProfileGcpBinding;
+  binding: SyncListResponsePreparedStackProfileGcpBinding;
   /**
    * Short admin-facing description of why this entry exists.
    */
@@ -2896,7 +4498,7 @@ export type SyncListResponseProfileGcp = {
   /**
    * Grant permissions for a specific cloud platform
    */
-  grant: SyncListResponseProfileGcpGrant;
+  grant: SyncListResponsePreparedStackProfileGcpGrant;
   /**
    * Stable admin-facing label for this permission entry.
    */
@@ -2906,25 +4508,25 @@ export type SyncListResponseProfileGcp = {
 /**
  * Platform-specific permission configurations
  */
-export type SyncListResponseProfilePlatforms = {
+export type SyncListResponsePreparedStackProfilePlatforms = {
   /**
    * AWS permission configurations
    */
-  aws?: Array<SyncListResponseProfileAw> | null | undefined;
+  aws?: Array<SyncListResponsePreparedStackProfileAw> | null | undefined;
   /**
    * Azure permission configurations
    */
-  azure?: Array<SyncListResponseProfileAzure> | null | undefined;
+  azure?: Array<SyncListResponsePreparedStackProfileAzure> | null | undefined;
   /**
    * GCP permission configurations
    */
-  gcp?: Array<SyncListResponseProfileGcp> | null | undefined;
+  gcp?: Array<SyncListResponsePreparedStackProfileGcp> | null | undefined;
 };
 
 /**
  * A permission set that can be applied across different cloud platforms
  */
-export type SyncListResponseProfile = {
+export type SyncListResponsePreparedStackProfile = {
   /**
    * Human-readable description of what this permission set allows
    */
@@ -2936,25 +4538,27 @@ export type SyncListResponseProfile = {
   /**
    * Platform-specific permission configurations
    */
-  platforms: SyncListResponseProfilePlatforms;
+  platforms: SyncListResponsePreparedStackProfilePlatforms;
 };
 
 /**
  * Reference to a permission set - either by name or inline definition
  */
-export type SyncListResponseProfileUnion = SyncListResponseProfile | string;
+export type SyncListResponsePreparedStackProfileUnion =
+  | SyncListResponsePreparedStackProfile
+  | string;
 
 /**
  * Combined permissions configuration that contains both profiles and management
  */
-export type SyncListResponsePermissions = {
+export type SyncListResponsePreparedStackPermissions = {
   /**
    * Management permissions configuration for stack management access
    */
   management?:
-    | SyncListResponseManagement1
-    | SyncListResponseManagement2
-    | SyncListResponseManagementEnum
+    | SyncListResponsePreparedStackManagement1
+    | SyncListResponsePreparedStackManagement2
+    | SyncListResponsePreparedStackManagementEnum
     | undefined;
   /**
    * Permission profiles that define access control for compute services
@@ -2963,7 +4567,9 @@ export type SyncListResponsePermissions = {
    * Key is the profile name, value is the permission configuration
    */
   profiles: {
-    [k: string]: { [k: string]: Array<SyncListResponseProfile | string> };
+    [k: string]: {
+      [k: string]: Array<SyncListResponsePreparedStackProfile | string>;
+    };
   };
 };
 
@@ -3020,6 +4626,17 @@ export type SyncListResponsePreparedStackResources = {
    */
   dependencies: Array<SyncListResponsePreparedStackDependency>;
   /**
+   * Id of the boolean stack input that decides whether this resource is
+   *
+   * @remarks
+   * created at all. `None` means always create it.
+   *
+   * Set by `.enabled(input)` in the SDK. Setup emitters render the resource
+   * conditionally on the matching template variable, so a deployer who says no
+   * never gets the resource, its outputs, or anything derived from it.
+   */
+  enabledWhen?: string | null | undefined;
+  /**
    * Describes the lifecycle of a resource within a stack, determining how it's managed and deployed.
    */
   lifecycle: SyncListResponsePreparedStackLifecycle;
@@ -3036,7 +4653,7 @@ export type SyncListResponsePreparedStackResources = {
 /**
  * Represents the target cloud platform.
  */
-export const SyncListResponseSupportedPlatform = {
+export const SyncListResponsePreparedStackSupportedPlatform = {
   Aws: "aws",
   Gcp: "gcp",
   Azure: "azure",
@@ -3048,8 +4665,8 @@ export const SyncListResponseSupportedPlatform = {
 /**
  * Represents the target cloud platform.
  */
-export type SyncListResponseSupportedPlatform = ClosedEnum<
-  typeof SyncListResponseSupportedPlatform
+export type SyncListResponsePreparedStackSupportedPlatform = ClosedEnum<
+  typeof SyncListResponsePreparedStackSupportedPlatform
 >;
 
 /**
@@ -3063,11 +4680,11 @@ export type SyncListResponsePreparedStack = {
   /**
    * Input definitions required before setup or deployment can proceed.
    */
-  inputs?: Array<SyncListResponseInput> | undefined;
+  inputs?: Array<SyncListResponsePreparedStackInput> | undefined;
   /**
    * Combined permissions configuration that contains both profiles and management
    */
-  permissions?: SyncListResponsePermissions | undefined;
+  permissions?: SyncListResponsePreparedStackPermissions | undefined;
   /**
    * Map of resource IDs to their configurations and lifecycle settings
    */
@@ -3076,13 +4693,51 @@ export type SyncListResponsePreparedStack = {
    * Which platforms this stack supports. When None, all platforms are supported.
    */
   supportedPlatforms?:
-    | Array<SyncListResponseSupportedPlatform>
+    | Array<SyncListResponsePreparedStackSupportedPlatform>
     | null
     | undefined;
 };
 
 export type SyncListResponsePreparedStackUnion =
   | SyncListResponsePreparedStack
+  | any;
+
+/**
+ * One-shot authority for a setup re-import to replace setup-owned resources.
+ */
+export type SyncListResponseSetupUpdateAuthorization = {
+  /**
+   * Frozen resource projection from the last successful deployment.
+   */
+  baselineFrozenDigest: string;
+  /**
+   * Unique revision used by persistence layers for compare-and-swap updates.
+   */
+  nonce: string;
+  /**
+   * Release whose stack was prepared by setup.
+   */
+  releaseId: string;
+  /**
+   * Exact setup artifact revision that authored this authority.
+   */
+  setupFingerprint: string;
+  /**
+   * Setup fingerprint contract version.
+   */
+  setupFingerprintVersion: number;
+  /**
+   * Stable setup target recorded on the imported deployment.
+   */
+  setupTarget: string;
+  /**
+   * Frozen resource projection prepared by the setup re-import.
+   */
+  targetFrozenDigest: string;
+};
+
+export type SyncListResponseSetupUpdateAuthorizationUnion =
+  | SyncListResponseSetupUpdateAuthorization
   | any;
 
 /**
@@ -3104,6 +4759,11 @@ export type SyncListResponseRuntimeMetadata = {
    * touching unrelated values in the same vault.
    */
   lastSyncedSecretNames?: Array<string> | undefined;
+  pendingPreparedStack?:
+    | SyncListResponsePendingPreparedStack
+    | any
+    | null
+    | undefined;
   preparedStack?: SyncListResponsePreparedStack | any | null | undefined;
   /**
    * Whether cross-account registry access has been successfully granted.
@@ -3114,6 +4774,11 @@ export type SyncListResponseRuntimeMetadata = {
    * every reconcile tick.
    */
   registryAccessGranted?: boolean | undefined;
+  setupUpdateAuthorization?:
+    | SyncListResponseSetupUpdateAuthorization
+    | any
+    | null
+    | undefined;
 };
 
 /**
@@ -3661,14 +5326,63 @@ export function syncListResponseEnvironmentInfoUnionFromJSON(
 }
 
 /** @internal */
+export const SyncListResponseFailureDomains2$inboundSchema: z.ZodType<
+  SyncListResponseFailureDomains2,
+  unknown
+> = z.object({
+  selectedFailureDomains: z.array(z.string()).optional(),
+  spread: z.int(),
+});
+
+export function syncListResponseFailureDomains2FromJSON(
+  jsonString: string,
+): SafeParseResult<SyncListResponseFailureDomains2, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => SyncListResponseFailureDomains2$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'SyncListResponseFailureDomains2' from JSON`,
+  );
+}
+
+/** @internal */
+export const SyncListResponseFailureDomainsUnion2$inboundSchema: z.ZodType<
+  SyncListResponseFailureDomainsUnion2,
+  unknown
+> = z.union([
+  z.lazy(() => SyncListResponseFailureDomains2$inboundSchema),
+  z.any(),
+]);
+
+export function syncListResponseFailureDomainsUnion2FromJSON(
+  jsonString: string,
+): SafeParseResult<SyncListResponseFailureDomainsUnion2, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) =>
+      SyncListResponseFailureDomainsUnion2$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'SyncListResponseFailureDomainsUnion2' from JSON`,
+  );
+}
+
+/** @internal */
 export const SyncListResponsePoolsAutoscale$inboundSchema: z.ZodType<
   SyncListResponsePoolsAutoscale,
   unknown
 > = z.object({
+  failure_domains: z.nullable(
+    z.union([
+      z.lazy(() => SyncListResponseFailureDomains2$inboundSchema),
+      z.any(),
+    ]),
+  ).optional(),
   machine: z.nullable(z.string()).optional(),
   max: z.int(),
   min: z.int(),
   mode: z.literal("autoscale"),
+}).transform((v) => {
+  return remap$(v, {
+    "failure_domains": "failureDomains",
+  });
 });
 
 export function syncListResponsePoolsAutoscaleFromJSON(
@@ -3682,13 +5396,62 @@ export function syncListResponsePoolsAutoscaleFromJSON(
 }
 
 /** @internal */
+export const SyncListResponseFailureDomains1$inboundSchema: z.ZodType<
+  SyncListResponseFailureDomains1,
+  unknown
+> = z.object({
+  selectedFailureDomains: z.array(z.string()).optional(),
+  spread: z.int(),
+});
+
+export function syncListResponseFailureDomains1FromJSON(
+  jsonString: string,
+): SafeParseResult<SyncListResponseFailureDomains1, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => SyncListResponseFailureDomains1$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'SyncListResponseFailureDomains1' from JSON`,
+  );
+}
+
+/** @internal */
+export const SyncListResponseFailureDomainsUnion1$inboundSchema: z.ZodType<
+  SyncListResponseFailureDomainsUnion1,
+  unknown
+> = z.union([
+  z.lazy(() => SyncListResponseFailureDomains1$inboundSchema),
+  z.any(),
+]);
+
+export function syncListResponseFailureDomainsUnion1FromJSON(
+  jsonString: string,
+): SafeParseResult<SyncListResponseFailureDomainsUnion1, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) =>
+      SyncListResponseFailureDomainsUnion1$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'SyncListResponseFailureDomainsUnion1' from JSON`,
+  );
+}
+
+/** @internal */
 export const SyncListResponsePoolsFixed$inboundSchema: z.ZodType<
   SyncListResponsePoolsFixed,
   unknown
 > = z.object({
+  failure_domains: z.nullable(
+    z.union([
+      z.lazy(() => SyncListResponseFailureDomains1$inboundSchema),
+      z.any(),
+    ]),
+  ).optional(),
   machine: z.nullable(z.string()).optional(),
   machines: z.int(),
   mode: z.literal("fixed"),
+}).transform((v) => {
+  return remap$(v, {
+    "failure_domains": "failureDomains",
+  });
 });
 
 export function syncListResponsePoolsFixedFromJSON(
@@ -5789,170 +7552,2676 @@ export function syncListResponseStackStateFromJSON(
 }
 
 /** @internal */
-export const SyncListResponseTypeStringList$inboundSchema: z.ZodEnum<
-  typeof SyncListResponseTypeStringList
-> = z.enum(SyncListResponseTypeStringList);
+export const SyncListResponsePendingPreparedStackTypeStringList$inboundSchema:
+  z.ZodEnum<typeof SyncListResponsePendingPreparedStackTypeStringList> = z.enum(
+    SyncListResponsePendingPreparedStackTypeStringList,
+  );
 
 /** @internal */
-export const SyncListResponseDefaultStringList$inboundSchema: z.ZodType<
-  SyncListResponseDefaultStringList,
-  unknown
-> = z.object({
-  type: SyncListResponseTypeStringList$inboundSchema,
-  value: z.array(z.string()),
-});
+export const SyncListResponsePendingPreparedStackDefaultStringList$inboundSchema:
+  z.ZodType<SyncListResponsePendingPreparedStackDefaultStringList, unknown> = z
+    .object({
+      type: SyncListResponsePendingPreparedStackTypeStringList$inboundSchema,
+      value: z.array(z.string()),
+    });
 
-export function syncListResponseDefaultStringListFromJSON(
+export function syncListResponsePendingPreparedStackDefaultStringListFromJSON(
   jsonString: string,
-): SafeParseResult<SyncListResponseDefaultStringList, SDKValidationError> {
+): SafeParseResult<
+  SyncListResponsePendingPreparedStackDefaultStringList,
+  SDKValidationError
+> {
   return safeParse(
     jsonString,
-    (x) => SyncListResponseDefaultStringList$inboundSchema.parse(JSON.parse(x)),
-    `Failed to parse 'SyncListResponseDefaultStringList' from JSON`,
+    (x) =>
+      SyncListResponsePendingPreparedStackDefaultStringList$inboundSchema.parse(
+        JSON.parse(x),
+      ),
+    `Failed to parse 'SyncListResponsePendingPreparedStackDefaultStringList' from JSON`,
   );
 }
 
 /** @internal */
-export const SyncListResponseTypeBoolean$inboundSchema: z.ZodEnum<
-  typeof SyncListResponseTypeBoolean
-> = z.enum(SyncListResponseTypeBoolean);
+export const SyncListResponsePendingPreparedStackTypeBoolean$inboundSchema:
+  z.ZodEnum<typeof SyncListResponsePendingPreparedStackTypeBoolean> = z.enum(
+    SyncListResponsePendingPreparedStackTypeBoolean,
+  );
 
 /** @internal */
-export const SyncListResponseDefaultBoolean$inboundSchema: z.ZodType<
-  SyncListResponseDefaultBoolean,
-  unknown
-> = z.object({
-  type: SyncListResponseTypeBoolean$inboundSchema,
-  value: z.boolean(),
-});
+export const SyncListResponsePendingPreparedStackDefaultBoolean$inboundSchema:
+  z.ZodType<SyncListResponsePendingPreparedStackDefaultBoolean, unknown> = z
+    .object({
+      type: SyncListResponsePendingPreparedStackTypeBoolean$inboundSchema,
+      value: z.boolean(),
+    });
 
-export function syncListResponseDefaultBooleanFromJSON(
+export function syncListResponsePendingPreparedStackDefaultBooleanFromJSON(
   jsonString: string,
-): SafeParseResult<SyncListResponseDefaultBoolean, SDKValidationError> {
+): SafeParseResult<
+  SyncListResponsePendingPreparedStackDefaultBoolean,
+  SDKValidationError
+> {
   return safeParse(
     jsonString,
-    (x) => SyncListResponseDefaultBoolean$inboundSchema.parse(JSON.parse(x)),
-    `Failed to parse 'SyncListResponseDefaultBoolean' from JSON`,
+    (x) =>
+      SyncListResponsePendingPreparedStackDefaultBoolean$inboundSchema.parse(
+        JSON.parse(x),
+      ),
+    `Failed to parse 'SyncListResponsePendingPreparedStackDefaultBoolean' from JSON`,
   );
 }
 
 /** @internal */
-export const SyncListResponseTypeNumber$inboundSchema: z.ZodEnum<
-  typeof SyncListResponseTypeNumber
-> = z.enum(SyncListResponseTypeNumber);
+export const SyncListResponsePendingPreparedStackTypeNumber$inboundSchema:
+  z.ZodEnum<typeof SyncListResponsePendingPreparedStackTypeNumber> = z.enum(
+    SyncListResponsePendingPreparedStackTypeNumber,
+  );
 
 /** @internal */
-export const SyncListResponseDefaultNumber$inboundSchema: z.ZodType<
-  SyncListResponseDefaultNumber,
-  unknown
-> = z.object({
-  type: SyncListResponseTypeNumber$inboundSchema,
-  value: z.string(),
-});
+export const SyncListResponsePendingPreparedStackDefaultNumber$inboundSchema:
+  z.ZodType<SyncListResponsePendingPreparedStackDefaultNumber, unknown> = z
+    .object({
+      type: SyncListResponsePendingPreparedStackTypeNumber$inboundSchema,
+      value: z.string(),
+    });
 
-export function syncListResponseDefaultNumberFromJSON(
+export function syncListResponsePendingPreparedStackDefaultNumberFromJSON(
   jsonString: string,
-): SafeParseResult<SyncListResponseDefaultNumber, SDKValidationError> {
+): SafeParseResult<
+  SyncListResponsePendingPreparedStackDefaultNumber,
+  SDKValidationError
+> {
   return safeParse(
     jsonString,
-    (x) => SyncListResponseDefaultNumber$inboundSchema.parse(JSON.parse(x)),
-    `Failed to parse 'SyncListResponseDefaultNumber' from JSON`,
+    (x) =>
+      SyncListResponsePendingPreparedStackDefaultNumber$inboundSchema.parse(
+        JSON.parse(x),
+      ),
+    `Failed to parse 'SyncListResponsePendingPreparedStackDefaultNumber' from JSON`,
   );
 }
 
 /** @internal */
-export const SyncListResponseTypeString$inboundSchema: z.ZodEnum<
-  typeof SyncListResponseTypeString
-> = z.enum(SyncListResponseTypeString);
+export const SyncListResponsePendingPreparedStackTypeString$inboundSchema:
+  z.ZodEnum<typeof SyncListResponsePendingPreparedStackTypeString> = z.enum(
+    SyncListResponsePendingPreparedStackTypeString,
+  );
 
 /** @internal */
-export const SyncListResponseDefaultString$inboundSchema: z.ZodType<
-  SyncListResponseDefaultString,
-  unknown
-> = z.object({
-  type: SyncListResponseTypeString$inboundSchema,
-  value: z.string(),
-});
+export const SyncListResponsePendingPreparedStackDefaultString$inboundSchema:
+  z.ZodType<SyncListResponsePendingPreparedStackDefaultString, unknown> = z
+    .object({
+      type: SyncListResponsePendingPreparedStackTypeString$inboundSchema,
+      value: z.string(),
+    });
 
-export function syncListResponseDefaultStringFromJSON(
+export function syncListResponsePendingPreparedStackDefaultStringFromJSON(
   jsonString: string,
-): SafeParseResult<SyncListResponseDefaultString, SDKValidationError> {
+): SafeParseResult<
+  SyncListResponsePendingPreparedStackDefaultString,
+  SDKValidationError
+> {
   return safeParse(
     jsonString,
-    (x) => SyncListResponseDefaultString$inboundSchema.parse(JSON.parse(x)),
-    `Failed to parse 'SyncListResponseDefaultString' from JSON`,
+    (x) =>
+      SyncListResponsePendingPreparedStackDefaultString$inboundSchema.parse(
+        JSON.parse(x),
+      ),
+    `Failed to parse 'SyncListResponsePendingPreparedStackDefaultString' from JSON`,
   );
 }
 
 /** @internal */
-export const SyncListResponseDefaultUnion$inboundSchema: z.ZodType<
-  SyncListResponseDefaultUnion,
-  unknown
-> = z.union([
-  z.lazy(() => SyncListResponseDefaultString$inboundSchema),
-  z.lazy(() => SyncListResponseDefaultNumber$inboundSchema),
-  z.lazy(() => SyncListResponseDefaultBoolean$inboundSchema),
-  z.lazy(() => SyncListResponseDefaultStringList$inboundSchema),
-  z.any(),
-]);
+export const SyncListResponsePendingPreparedStackDefaultUnion$inboundSchema:
+  z.ZodType<SyncListResponsePendingPreparedStackDefaultUnion, unknown> = z
+    .union([
+      z.lazy(() =>
+        SyncListResponsePendingPreparedStackDefaultString$inboundSchema
+      ),
+      z.lazy(() =>
+        SyncListResponsePendingPreparedStackDefaultNumber$inboundSchema
+      ),
+      z.lazy(() =>
+        SyncListResponsePendingPreparedStackDefaultBoolean$inboundSchema
+      ),
+      z.lazy(() =>
+        SyncListResponsePendingPreparedStackDefaultStringList$inboundSchema
+      ),
+      z.any(),
+    ]);
 
-export function syncListResponseDefaultUnionFromJSON(
+export function syncListResponsePendingPreparedStackDefaultUnionFromJSON(
   jsonString: string,
-): SafeParseResult<SyncListResponseDefaultUnion, SDKValidationError> {
+): SafeParseResult<
+  SyncListResponsePendingPreparedStackDefaultUnion,
+  SDKValidationError
+> {
   return safeParse(
     jsonString,
-    (x) => SyncListResponseDefaultUnion$inboundSchema.parse(JSON.parse(x)),
-    `Failed to parse 'SyncListResponseDefaultUnion' from JSON`,
+    (x) =>
+      SyncListResponsePendingPreparedStackDefaultUnion$inboundSchema.parse(
+        JSON.parse(x),
+      ),
+    `Failed to parse 'SyncListResponsePendingPreparedStackDefaultUnion' from JSON`,
   );
 }
 
 /** @internal */
-export const SyncListResponseTypeEnvEnum$inboundSchema: z.ZodEnum<
-  typeof SyncListResponseTypeEnvEnum
-> = z.enum(SyncListResponseTypeEnvEnum);
+export const SyncListResponsePendingPreparedStackTypeEnvEnum$inboundSchema:
+  z.ZodEnum<typeof SyncListResponsePendingPreparedStackTypeEnvEnum> = z.enum(
+    SyncListResponsePendingPreparedStackTypeEnvEnum,
+  );
 
 /** @internal */
-export const SyncListResponseTypeUnion$inboundSchema: z.ZodType<
-  SyncListResponseTypeUnion,
-  unknown
-> = z.union([SyncListResponseTypeEnvEnum$inboundSchema, z.any()]);
+export const SyncListResponsePendingPreparedStackTypeUnion$inboundSchema:
+  z.ZodType<SyncListResponsePendingPreparedStackTypeUnion, unknown> = z.union([
+    SyncListResponsePendingPreparedStackTypeEnvEnum$inboundSchema,
+    z.any(),
+  ]);
 
-export function syncListResponseTypeUnionFromJSON(
+export function syncListResponsePendingPreparedStackTypeUnionFromJSON(
   jsonString: string,
-): SafeParseResult<SyncListResponseTypeUnion, SDKValidationError> {
+): SafeParseResult<
+  SyncListResponsePendingPreparedStackTypeUnion,
+  SDKValidationError
+> {
   return safeParse(
     jsonString,
-    (x) => SyncListResponseTypeUnion$inboundSchema.parse(JSON.parse(x)),
-    `Failed to parse 'SyncListResponseTypeUnion' from JSON`,
+    (x) =>
+      SyncListResponsePendingPreparedStackTypeUnion$inboundSchema.parse(
+        JSON.parse(x),
+      ),
+    `Failed to parse 'SyncListResponsePendingPreparedStackTypeUnion' from JSON`,
   );
 }
 
 /** @internal */
-export const SyncListResponseEnv$inboundSchema: z.ZodType<
-  SyncListResponseEnv,
+export const SyncListResponsePendingPreparedStackEnv$inboundSchema: z.ZodType<
+  SyncListResponsePendingPreparedStackEnv,
   unknown
 > = z.object({
   name: z.string(),
   targetResources: z.nullable(z.array(z.string())).optional(),
   type: z.nullable(
-    z.union([SyncListResponseTypeEnvEnum$inboundSchema, z.any()]),
+    z.union([
+      SyncListResponsePendingPreparedStackTypeEnvEnum$inboundSchema,
+      z.any(),
+    ]),
   ).optional(),
 });
 
-export function syncListResponseEnvFromJSON(
+export function syncListResponsePendingPreparedStackEnvFromJSON(
   jsonString: string,
-): SafeParseResult<SyncListResponseEnv, SDKValidationError> {
+): SafeParseResult<
+  SyncListResponsePendingPreparedStackEnv,
+  SDKValidationError
+> {
   return safeParse(
     jsonString,
-    (x) => SyncListResponseEnv$inboundSchema.parse(JSON.parse(x)),
-    `Failed to parse 'SyncListResponseEnv' from JSON`,
+    (x) =>
+      SyncListResponsePendingPreparedStackEnv$inboundSchema.parse(
+        JSON.parse(x),
+      ),
+    `Failed to parse 'SyncListResponsePendingPreparedStackEnv' from JSON`,
   );
 }
 
 /** @internal */
-export const SyncListResponseKind$inboundSchema: z.ZodEnum<
-  typeof SyncListResponseKind
-> = z.enum(SyncListResponseKind);
+export const SyncListResponsePendingPreparedStackKind$inboundSchema: z.ZodEnum<
+  typeof SyncListResponsePendingPreparedStackKind
+> = z.enum(SyncListResponsePendingPreparedStackKind);
+
+/** @internal */
+export const SyncListResponsePendingPreparedStackPlatform$inboundSchema:
+  z.ZodEnum<typeof SyncListResponsePendingPreparedStackPlatform> = z.enum(
+    SyncListResponsePendingPreparedStackPlatform,
+  );
+
+/** @internal */
+export const SyncListResponsePendingPreparedStackProvidedBy$inboundSchema:
+  z.ZodEnum<typeof SyncListResponsePendingPreparedStackProvidedBy> = z.enum(
+    SyncListResponsePendingPreparedStackProvidedBy,
+  );
+
+/** @internal */
+export const SyncListResponsePendingPreparedStackValidation$inboundSchema:
+  z.ZodType<SyncListResponsePendingPreparedStackValidation, unknown> = z.object(
+    {
+      format: z.nullable(z.string()).optional(),
+      max: z.nullable(z.string()).optional(),
+      maxItems: z.nullable(z.int()).optional(),
+      maxLength: z.nullable(z.int()).optional(),
+      min: z.nullable(z.string()).optional(),
+      minItems: z.nullable(z.int()).optional(),
+      minLength: z.nullable(z.int()).optional(),
+      pattern: z.nullable(z.string()).optional(),
+      values: z.nullable(z.array(z.string())).optional(),
+    },
+  );
+
+export function syncListResponsePendingPreparedStackValidationFromJSON(
+  jsonString: string,
+): SafeParseResult<
+  SyncListResponsePendingPreparedStackValidation,
+  SDKValidationError
+> {
+  return safeParse(
+    jsonString,
+    (x) =>
+      SyncListResponsePendingPreparedStackValidation$inboundSchema.parse(
+        JSON.parse(x),
+      ),
+    `Failed to parse 'SyncListResponsePendingPreparedStackValidation' from JSON`,
+  );
+}
+
+/** @internal */
+export const SyncListResponsePendingPreparedStackValidationUnion$inboundSchema:
+  z.ZodType<SyncListResponsePendingPreparedStackValidationUnion, unknown> = z
+    .union([
+      z.lazy(() =>
+        SyncListResponsePendingPreparedStackValidation$inboundSchema
+      ),
+      z.any(),
+    ]);
+
+export function syncListResponsePendingPreparedStackValidationUnionFromJSON(
+  jsonString: string,
+): SafeParseResult<
+  SyncListResponsePendingPreparedStackValidationUnion,
+  SDKValidationError
+> {
+  return safeParse(
+    jsonString,
+    (x) =>
+      SyncListResponsePendingPreparedStackValidationUnion$inboundSchema.parse(
+        JSON.parse(x),
+      ),
+    `Failed to parse 'SyncListResponsePendingPreparedStackValidationUnion' from JSON`,
+  );
+}
+
+/** @internal */
+export const SyncListResponsePendingPreparedStackInput$inboundSchema: z.ZodType<
+  SyncListResponsePendingPreparedStackInput,
+  unknown
+> = z.object({
+  default: z.nullable(
+    z.union([
+      z.lazy(() =>
+        SyncListResponsePendingPreparedStackDefaultString$inboundSchema
+      ),
+      z.lazy(() =>
+        SyncListResponsePendingPreparedStackDefaultNumber$inboundSchema
+      ),
+      z.lazy(() =>
+        SyncListResponsePendingPreparedStackDefaultBoolean$inboundSchema
+      ),
+      z.lazy(() =>
+        SyncListResponsePendingPreparedStackDefaultStringList$inboundSchema
+      ),
+      z.any(),
+    ]),
+  ).optional(),
+  description: z.string(),
+  env: z.array(
+    z.lazy(() => SyncListResponsePendingPreparedStackEnv$inboundSchema),
+  ).optional(),
+  id: z.string(),
+  kind: SyncListResponsePendingPreparedStackKind$inboundSchema,
+  label: z.string(),
+  placeholder: z.nullable(z.string()).optional(),
+  platforms: z.nullable(
+    z.array(SyncListResponsePendingPreparedStackPlatform$inboundSchema),
+  ).optional(),
+  providedBy: z.array(
+    SyncListResponsePendingPreparedStackProvidedBy$inboundSchema,
+  ),
+  required: z.boolean(),
+  validation: z.nullable(
+    z.union([
+      z.lazy(() =>
+        SyncListResponsePendingPreparedStackValidation$inboundSchema
+      ),
+      z.any(),
+    ]),
+  ).optional(),
+});
+
+export function syncListResponsePendingPreparedStackInputFromJSON(
+  jsonString: string,
+): SafeParseResult<
+  SyncListResponsePendingPreparedStackInput,
+  SDKValidationError
+> {
+  return safeParse(
+    jsonString,
+    (x) =>
+      SyncListResponsePendingPreparedStackInput$inboundSchema.parse(
+        JSON.parse(x),
+      ),
+    `Failed to parse 'SyncListResponsePendingPreparedStackInput' from JSON`,
+  );
+}
+
+/** @internal */
+export const SyncListResponsePendingPreparedStackManagementEnum$inboundSchema:
+  z.ZodEnum<typeof SyncListResponsePendingPreparedStackManagementEnum> = z.enum(
+    SyncListResponsePendingPreparedStackManagementEnum,
+  );
+
+/** @internal */
+export const SyncListResponsePendingPreparedStackOverrideAwResource$inboundSchema:
+  z.ZodType<SyncListResponsePendingPreparedStackOverrideAwResource, unknown> = z
+    .object({
+      condition: z.nullable(
+        z.record(z.string(), z.record(z.string(), z.string())),
+      ).optional(),
+      resources: z.array(z.string()),
+    });
+
+export function syncListResponsePendingPreparedStackOverrideAwResourceFromJSON(
+  jsonString: string,
+): SafeParseResult<
+  SyncListResponsePendingPreparedStackOverrideAwResource,
+  SDKValidationError
+> {
+  return safeParse(
+    jsonString,
+    (x) =>
+      SyncListResponsePendingPreparedStackOverrideAwResource$inboundSchema
+        .parse(JSON.parse(x)),
+    `Failed to parse 'SyncListResponsePendingPreparedStackOverrideAwResource' from JSON`,
+  );
+}
+
+/** @internal */
+export const SyncListResponsePendingPreparedStackOverrideAwStack$inboundSchema:
+  z.ZodType<SyncListResponsePendingPreparedStackOverrideAwStack, unknown> = z
+    .object({
+      condition: z.nullable(
+        z.record(z.string(), z.record(z.string(), z.string())),
+      ).optional(),
+      resources: z.array(z.string()),
+    });
+
+export function syncListResponsePendingPreparedStackOverrideAwStackFromJSON(
+  jsonString: string,
+): SafeParseResult<
+  SyncListResponsePendingPreparedStackOverrideAwStack,
+  SDKValidationError
+> {
+  return safeParse(
+    jsonString,
+    (x) =>
+      SyncListResponsePendingPreparedStackOverrideAwStack$inboundSchema.parse(
+        JSON.parse(x),
+      ),
+    `Failed to parse 'SyncListResponsePendingPreparedStackOverrideAwStack' from JSON`,
+  );
+}
+
+/** @internal */
+export const SyncListResponsePendingPreparedStackOverrideAwBinding$inboundSchema:
+  z.ZodType<SyncListResponsePendingPreparedStackOverrideAwBinding, unknown> = z
+    .object({
+      resource: z.lazy(() =>
+        SyncListResponsePendingPreparedStackOverrideAwResource$inboundSchema
+      ).optional(),
+      stack: z.lazy(() =>
+        SyncListResponsePendingPreparedStackOverrideAwStack$inboundSchema
+      ).optional(),
+    });
+
+export function syncListResponsePendingPreparedStackOverrideAwBindingFromJSON(
+  jsonString: string,
+): SafeParseResult<
+  SyncListResponsePendingPreparedStackOverrideAwBinding,
+  SDKValidationError
+> {
+  return safeParse(
+    jsonString,
+    (x) =>
+      SyncListResponsePendingPreparedStackOverrideAwBinding$inboundSchema.parse(
+        JSON.parse(x),
+      ),
+    `Failed to parse 'SyncListResponsePendingPreparedStackOverrideAwBinding' from JSON`,
+  );
+}
+
+/** @internal */
+export const SyncListResponsePendingPreparedStackOverrideEffect$inboundSchema:
+  z.ZodEnum<typeof SyncListResponsePendingPreparedStackOverrideEffect> = z.enum(
+    SyncListResponsePendingPreparedStackOverrideEffect,
+  );
+
+/** @internal */
+export const SyncListResponsePendingPreparedStackOverrideAwGrant$inboundSchema:
+  z.ZodType<SyncListResponsePendingPreparedStackOverrideAwGrant, unknown> = z
+    .object({
+      actions: z.nullable(z.array(z.string())).optional(),
+      dataActions: z.nullable(z.array(z.string())).optional(),
+      permissions: z.nullable(z.array(z.string())).optional(),
+      predefinedRoles: z.nullable(z.array(z.string())).optional(),
+      residualPermissions: z.nullable(z.array(z.string())).optional(),
+    });
+
+export function syncListResponsePendingPreparedStackOverrideAwGrantFromJSON(
+  jsonString: string,
+): SafeParseResult<
+  SyncListResponsePendingPreparedStackOverrideAwGrant,
+  SDKValidationError
+> {
+  return safeParse(
+    jsonString,
+    (x) =>
+      SyncListResponsePendingPreparedStackOverrideAwGrant$inboundSchema.parse(
+        JSON.parse(x),
+      ),
+    `Failed to parse 'SyncListResponsePendingPreparedStackOverrideAwGrant' from JSON`,
+  );
+}
+
+/** @internal */
+export const SyncListResponsePendingPreparedStackOverrideAw$inboundSchema:
+  z.ZodType<SyncListResponsePendingPreparedStackOverrideAw, unknown> = z.object(
+    {
+      binding: z.lazy(() =>
+        SyncListResponsePendingPreparedStackOverrideAwBinding$inboundSchema
+      ),
+      description: z.nullable(z.string()).optional(),
+      effect: SyncListResponsePendingPreparedStackOverrideEffect$inboundSchema
+        .optional(),
+      grant: z.lazy(() =>
+        SyncListResponsePendingPreparedStackOverrideAwGrant$inboundSchema
+      ),
+      label: z.nullable(z.string()).optional(),
+    },
+  );
+
+export function syncListResponsePendingPreparedStackOverrideAwFromJSON(
+  jsonString: string,
+): SafeParseResult<
+  SyncListResponsePendingPreparedStackOverrideAw,
+  SDKValidationError
+> {
+  return safeParse(
+    jsonString,
+    (x) =>
+      SyncListResponsePendingPreparedStackOverrideAw$inboundSchema.parse(
+        JSON.parse(x),
+      ),
+    `Failed to parse 'SyncListResponsePendingPreparedStackOverrideAw' from JSON`,
+  );
+}
+
+/** @internal */
+export const SyncListResponsePendingPreparedStackOverrideAzureResource$inboundSchema:
+  z.ZodType<
+    SyncListResponsePendingPreparedStackOverrideAzureResource,
+    unknown
+  > = z.object({
+    scope: z.string(),
+  });
+
+export function syncListResponsePendingPreparedStackOverrideAzureResourceFromJSON(
+  jsonString: string,
+): SafeParseResult<
+  SyncListResponsePendingPreparedStackOverrideAzureResource,
+  SDKValidationError
+> {
+  return safeParse(
+    jsonString,
+    (x) =>
+      SyncListResponsePendingPreparedStackOverrideAzureResource$inboundSchema
+        .parse(JSON.parse(x)),
+    `Failed to parse 'SyncListResponsePendingPreparedStackOverrideAzureResource' from JSON`,
+  );
+}
+
+/** @internal */
+export const SyncListResponsePendingPreparedStackOverrideAzureStack$inboundSchema:
+  z.ZodType<SyncListResponsePendingPreparedStackOverrideAzureStack, unknown> = z
+    .object({
+      scope: z.string(),
+    });
+
+export function syncListResponsePendingPreparedStackOverrideAzureStackFromJSON(
+  jsonString: string,
+): SafeParseResult<
+  SyncListResponsePendingPreparedStackOverrideAzureStack,
+  SDKValidationError
+> {
+  return safeParse(
+    jsonString,
+    (x) =>
+      SyncListResponsePendingPreparedStackOverrideAzureStack$inboundSchema
+        .parse(JSON.parse(x)),
+    `Failed to parse 'SyncListResponsePendingPreparedStackOverrideAzureStack' from JSON`,
+  );
+}
+
+/** @internal */
+export const SyncListResponsePendingPreparedStackOverrideAzureBinding$inboundSchema:
+  z.ZodType<SyncListResponsePendingPreparedStackOverrideAzureBinding, unknown> =
+    z.object({
+      resource: z.lazy(() =>
+        SyncListResponsePendingPreparedStackOverrideAzureResource$inboundSchema
+      ).optional(),
+      stack: z.lazy(() =>
+        SyncListResponsePendingPreparedStackOverrideAzureStack$inboundSchema
+      ).optional(),
+    });
+
+export function syncListResponsePendingPreparedStackOverrideAzureBindingFromJSON(
+  jsonString: string,
+): SafeParseResult<
+  SyncListResponsePendingPreparedStackOverrideAzureBinding,
+  SDKValidationError
+> {
+  return safeParse(
+    jsonString,
+    (x) =>
+      SyncListResponsePendingPreparedStackOverrideAzureBinding$inboundSchema
+        .parse(JSON.parse(x)),
+    `Failed to parse 'SyncListResponsePendingPreparedStackOverrideAzureBinding' from JSON`,
+  );
+}
+
+/** @internal */
+export const SyncListResponsePendingPreparedStackOverrideAzureGrant$inboundSchema:
+  z.ZodType<SyncListResponsePendingPreparedStackOverrideAzureGrant, unknown> = z
+    .object({
+      actions: z.nullable(z.array(z.string())).optional(),
+      dataActions: z.nullable(z.array(z.string())).optional(),
+      permissions: z.nullable(z.array(z.string())).optional(),
+      predefinedRoles: z.nullable(z.array(z.string())).optional(),
+      residualPermissions: z.nullable(z.array(z.string())).optional(),
+    });
+
+export function syncListResponsePendingPreparedStackOverrideAzureGrantFromJSON(
+  jsonString: string,
+): SafeParseResult<
+  SyncListResponsePendingPreparedStackOverrideAzureGrant,
+  SDKValidationError
+> {
+  return safeParse(
+    jsonString,
+    (x) =>
+      SyncListResponsePendingPreparedStackOverrideAzureGrant$inboundSchema
+        .parse(JSON.parse(x)),
+    `Failed to parse 'SyncListResponsePendingPreparedStackOverrideAzureGrant' from JSON`,
+  );
+}
+
+/** @internal */
+export const SyncListResponsePendingPreparedStackOverrideAzure$inboundSchema:
+  z.ZodType<SyncListResponsePendingPreparedStackOverrideAzure, unknown> = z
+    .object({
+      binding: z.lazy(() =>
+        SyncListResponsePendingPreparedStackOverrideAzureBinding$inboundSchema
+      ),
+      description: z.nullable(z.string()).optional(),
+      grant: z.lazy(() =>
+        SyncListResponsePendingPreparedStackOverrideAzureGrant$inboundSchema
+      ),
+      label: z.nullable(z.string()).optional(),
+    });
+
+export function syncListResponsePendingPreparedStackOverrideAzureFromJSON(
+  jsonString: string,
+): SafeParseResult<
+  SyncListResponsePendingPreparedStackOverrideAzure,
+  SDKValidationError
+> {
+  return safeParse(
+    jsonString,
+    (x) =>
+      SyncListResponsePendingPreparedStackOverrideAzure$inboundSchema.parse(
+        JSON.parse(x),
+      ),
+    `Failed to parse 'SyncListResponsePendingPreparedStackOverrideAzure' from JSON`,
+  );
+}
+
+/** @internal */
+export const SyncListResponsePendingPreparedStackOverrideConditionResource$inboundSchema:
+  z.ZodType<
+    SyncListResponsePendingPreparedStackOverrideConditionResource,
+    unknown
+  > = z.object({
+    expression: z.string(),
+    title: z.string(),
+  });
+
+export function syncListResponsePendingPreparedStackOverrideConditionResourceFromJSON(
+  jsonString: string,
+): SafeParseResult<
+  SyncListResponsePendingPreparedStackOverrideConditionResource,
+  SDKValidationError
+> {
+  return safeParse(
+    jsonString,
+    (x) =>
+      SyncListResponsePendingPreparedStackOverrideConditionResource$inboundSchema
+        .parse(JSON.parse(x)),
+    `Failed to parse 'SyncListResponsePendingPreparedStackOverrideConditionResource' from JSON`,
+  );
+}
+
+/** @internal */
+export const SyncListResponsePendingPreparedStackOverrideResourceConditionUnion$inboundSchema:
+  z.ZodType<
+    SyncListResponsePendingPreparedStackOverrideResourceConditionUnion,
+    unknown
+  > = z.union([
+    z.lazy(() =>
+      SyncListResponsePendingPreparedStackOverrideConditionResource$inboundSchema
+    ),
+    z.any(),
+  ]);
+
+export function syncListResponsePendingPreparedStackOverrideResourceConditionUnionFromJSON(
+  jsonString: string,
+): SafeParseResult<
+  SyncListResponsePendingPreparedStackOverrideResourceConditionUnion,
+  SDKValidationError
+> {
+  return safeParse(
+    jsonString,
+    (x) =>
+      SyncListResponsePendingPreparedStackOverrideResourceConditionUnion$inboundSchema
+        .parse(JSON.parse(x)),
+    `Failed to parse 'SyncListResponsePendingPreparedStackOverrideResourceConditionUnion' from JSON`,
+  );
+}
+
+/** @internal */
+export const SyncListResponsePendingPreparedStackOverrideGcpResource$inboundSchema:
+  z.ZodType<SyncListResponsePendingPreparedStackOverrideGcpResource, unknown> =
+    z.object({
+      condition: z.nullable(
+        z.union([
+          z.lazy(() =>
+            SyncListResponsePendingPreparedStackOverrideConditionResource$inboundSchema
+          ),
+          z.any(),
+        ]),
+      ).optional(),
+      scope: z.string(),
+    });
+
+export function syncListResponsePendingPreparedStackOverrideGcpResourceFromJSON(
+  jsonString: string,
+): SafeParseResult<
+  SyncListResponsePendingPreparedStackOverrideGcpResource,
+  SDKValidationError
+> {
+  return safeParse(
+    jsonString,
+    (x) =>
+      SyncListResponsePendingPreparedStackOverrideGcpResource$inboundSchema
+        .parse(JSON.parse(x)),
+    `Failed to parse 'SyncListResponsePendingPreparedStackOverrideGcpResource' from JSON`,
+  );
+}
+
+/** @internal */
+export const SyncListResponsePendingPreparedStackOverrideConditionStack$inboundSchema:
+  z.ZodType<
+    SyncListResponsePendingPreparedStackOverrideConditionStack,
+    unknown
+  > = z.object({
+    expression: z.string(),
+    title: z.string(),
+  });
+
+export function syncListResponsePendingPreparedStackOverrideConditionStackFromJSON(
+  jsonString: string,
+): SafeParseResult<
+  SyncListResponsePendingPreparedStackOverrideConditionStack,
+  SDKValidationError
+> {
+  return safeParse(
+    jsonString,
+    (x) =>
+      SyncListResponsePendingPreparedStackOverrideConditionStack$inboundSchema
+        .parse(JSON.parse(x)),
+    `Failed to parse 'SyncListResponsePendingPreparedStackOverrideConditionStack' from JSON`,
+  );
+}
+
+/** @internal */
+export const SyncListResponsePendingPreparedStackOverrideStackConditionUnion$inboundSchema:
+  z.ZodType<
+    SyncListResponsePendingPreparedStackOverrideStackConditionUnion,
+    unknown
+  > = z.union([
+    z.lazy(() =>
+      SyncListResponsePendingPreparedStackOverrideConditionStack$inboundSchema
+    ),
+    z.any(),
+  ]);
+
+export function syncListResponsePendingPreparedStackOverrideStackConditionUnionFromJSON(
+  jsonString: string,
+): SafeParseResult<
+  SyncListResponsePendingPreparedStackOverrideStackConditionUnion,
+  SDKValidationError
+> {
+  return safeParse(
+    jsonString,
+    (x) =>
+      SyncListResponsePendingPreparedStackOverrideStackConditionUnion$inboundSchema
+        .parse(JSON.parse(x)),
+    `Failed to parse 'SyncListResponsePendingPreparedStackOverrideStackConditionUnion' from JSON`,
+  );
+}
+
+/** @internal */
+export const SyncListResponsePendingPreparedStackOverrideGcpStack$inboundSchema:
+  z.ZodType<SyncListResponsePendingPreparedStackOverrideGcpStack, unknown> = z
+    .object({
+      condition: z.nullable(
+        z.union([
+          z.lazy(() =>
+            SyncListResponsePendingPreparedStackOverrideConditionStack$inboundSchema
+          ),
+          z.any(),
+        ]),
+      ).optional(),
+      scope: z.string(),
+    });
+
+export function syncListResponsePendingPreparedStackOverrideGcpStackFromJSON(
+  jsonString: string,
+): SafeParseResult<
+  SyncListResponsePendingPreparedStackOverrideGcpStack,
+  SDKValidationError
+> {
+  return safeParse(
+    jsonString,
+    (x) =>
+      SyncListResponsePendingPreparedStackOverrideGcpStack$inboundSchema.parse(
+        JSON.parse(x),
+      ),
+    `Failed to parse 'SyncListResponsePendingPreparedStackOverrideGcpStack' from JSON`,
+  );
+}
+
+/** @internal */
+export const SyncListResponsePendingPreparedStackOverrideGcpBinding$inboundSchema:
+  z.ZodType<SyncListResponsePendingPreparedStackOverrideGcpBinding, unknown> = z
+    .object({
+      resource: z.lazy(() =>
+        SyncListResponsePendingPreparedStackOverrideGcpResource$inboundSchema
+      ).optional(),
+      stack: z.lazy(() =>
+        SyncListResponsePendingPreparedStackOverrideGcpStack$inboundSchema
+      ).optional(),
+    });
+
+export function syncListResponsePendingPreparedStackOverrideGcpBindingFromJSON(
+  jsonString: string,
+): SafeParseResult<
+  SyncListResponsePendingPreparedStackOverrideGcpBinding,
+  SDKValidationError
+> {
+  return safeParse(
+    jsonString,
+    (x) =>
+      SyncListResponsePendingPreparedStackOverrideGcpBinding$inboundSchema
+        .parse(JSON.parse(x)),
+    `Failed to parse 'SyncListResponsePendingPreparedStackOverrideGcpBinding' from JSON`,
+  );
+}
+
+/** @internal */
+export const SyncListResponsePendingPreparedStackOverrideGcpGrant$inboundSchema:
+  z.ZodType<SyncListResponsePendingPreparedStackOverrideGcpGrant, unknown> = z
+    .object({
+      actions: z.nullable(z.array(z.string())).optional(),
+      dataActions: z.nullable(z.array(z.string())).optional(),
+      permissions: z.nullable(z.array(z.string())).optional(),
+      predefinedRoles: z.nullable(z.array(z.string())).optional(),
+      residualPermissions: z.nullable(z.array(z.string())).optional(),
+    });
+
+export function syncListResponsePendingPreparedStackOverrideGcpGrantFromJSON(
+  jsonString: string,
+): SafeParseResult<
+  SyncListResponsePendingPreparedStackOverrideGcpGrant,
+  SDKValidationError
+> {
+  return safeParse(
+    jsonString,
+    (x) =>
+      SyncListResponsePendingPreparedStackOverrideGcpGrant$inboundSchema.parse(
+        JSON.parse(x),
+      ),
+    `Failed to parse 'SyncListResponsePendingPreparedStackOverrideGcpGrant' from JSON`,
+  );
+}
+
+/** @internal */
+export const SyncListResponsePendingPreparedStackOverrideGcp$inboundSchema:
+  z.ZodType<SyncListResponsePendingPreparedStackOverrideGcp, unknown> = z
+    .object({
+      binding: z.lazy(() =>
+        SyncListResponsePendingPreparedStackOverrideGcpBinding$inboundSchema
+      ),
+      description: z.nullable(z.string()).optional(),
+      grant: z.lazy(() =>
+        SyncListResponsePendingPreparedStackOverrideGcpGrant$inboundSchema
+      ),
+      label: z.nullable(z.string()).optional(),
+    });
+
+export function syncListResponsePendingPreparedStackOverrideGcpFromJSON(
+  jsonString: string,
+): SafeParseResult<
+  SyncListResponsePendingPreparedStackOverrideGcp,
+  SDKValidationError
+> {
+  return safeParse(
+    jsonString,
+    (x) =>
+      SyncListResponsePendingPreparedStackOverrideGcp$inboundSchema.parse(
+        JSON.parse(x),
+      ),
+    `Failed to parse 'SyncListResponsePendingPreparedStackOverrideGcp' from JSON`,
+  );
+}
+
+/** @internal */
+export const SyncListResponsePendingPreparedStackOverridePlatforms$inboundSchema:
+  z.ZodType<SyncListResponsePendingPreparedStackOverridePlatforms, unknown> = z
+    .object({
+      aws: z.nullable(
+        z.array(z.lazy(() =>
+          SyncListResponsePendingPreparedStackOverrideAw$inboundSchema
+        )),
+      ).optional(),
+      azure: z.nullable(
+        z.array(z.lazy(() =>
+          SyncListResponsePendingPreparedStackOverrideAzure$inboundSchema
+        )),
+      ).optional(),
+      gcp: z.nullable(
+        z.array(z.lazy(() =>
+          SyncListResponsePendingPreparedStackOverrideGcp$inboundSchema
+        )),
+      ).optional(),
+    });
+
+export function syncListResponsePendingPreparedStackOverridePlatformsFromJSON(
+  jsonString: string,
+): SafeParseResult<
+  SyncListResponsePendingPreparedStackOverridePlatforms,
+  SDKValidationError
+> {
+  return safeParse(
+    jsonString,
+    (x) =>
+      SyncListResponsePendingPreparedStackOverridePlatforms$inboundSchema.parse(
+        JSON.parse(x),
+      ),
+    `Failed to parse 'SyncListResponsePendingPreparedStackOverridePlatforms' from JSON`,
+  );
+}
+
+/** @internal */
+export const SyncListResponsePendingPreparedStackOverride$inboundSchema:
+  z.ZodType<SyncListResponsePendingPreparedStackOverride, unknown> = z.object({
+    description: z.string(),
+    id: z.string(),
+    platforms: z.lazy(() =>
+      SyncListResponsePendingPreparedStackOverridePlatforms$inboundSchema
+    ),
+  });
+
+export function syncListResponsePendingPreparedStackOverrideFromJSON(
+  jsonString: string,
+): SafeParseResult<
+  SyncListResponsePendingPreparedStackOverride,
+  SDKValidationError
+> {
+  return safeParse(
+    jsonString,
+    (x) =>
+      SyncListResponsePendingPreparedStackOverride$inboundSchema.parse(
+        JSON.parse(x),
+      ),
+    `Failed to parse 'SyncListResponsePendingPreparedStackOverride' from JSON`,
+  );
+}
+
+/** @internal */
+export const SyncListResponsePendingPreparedStackOverrideUnion$inboundSchema:
+  z.ZodType<SyncListResponsePendingPreparedStackOverrideUnion, unknown> = z
+    .union([
+      z.lazy(() => SyncListResponsePendingPreparedStackOverride$inboundSchema),
+      z.string(),
+    ]);
+
+export function syncListResponsePendingPreparedStackOverrideUnionFromJSON(
+  jsonString: string,
+): SafeParseResult<
+  SyncListResponsePendingPreparedStackOverrideUnion,
+  SDKValidationError
+> {
+  return safeParse(
+    jsonString,
+    (x) =>
+      SyncListResponsePendingPreparedStackOverrideUnion$inboundSchema.parse(
+        JSON.parse(x),
+      ),
+    `Failed to parse 'SyncListResponsePendingPreparedStackOverrideUnion' from JSON`,
+  );
+}
+
+/** @internal */
+export const SyncListResponsePendingPreparedStackManagement2$inboundSchema:
+  z.ZodType<SyncListResponsePendingPreparedStackManagement2, unknown> = z
+    .object({
+      override: z.record(
+        z.string(),
+        z.array(z.union([
+          z.lazy(() =>
+            SyncListResponsePendingPreparedStackOverride$inboundSchema
+          ),
+          z.string(),
+        ])),
+      ),
+    });
+
+export function syncListResponsePendingPreparedStackManagement2FromJSON(
+  jsonString: string,
+): SafeParseResult<
+  SyncListResponsePendingPreparedStackManagement2,
+  SDKValidationError
+> {
+  return safeParse(
+    jsonString,
+    (x) =>
+      SyncListResponsePendingPreparedStackManagement2$inboundSchema.parse(
+        JSON.parse(x),
+      ),
+    `Failed to parse 'SyncListResponsePendingPreparedStackManagement2' from JSON`,
+  );
+}
+
+/** @internal */
+export const SyncListResponsePendingPreparedStackExtendAwResource$inboundSchema:
+  z.ZodType<SyncListResponsePendingPreparedStackExtendAwResource, unknown> = z
+    .object({
+      condition: z.nullable(
+        z.record(z.string(), z.record(z.string(), z.string())),
+      ).optional(),
+      resources: z.array(z.string()),
+    });
+
+export function syncListResponsePendingPreparedStackExtendAwResourceFromJSON(
+  jsonString: string,
+): SafeParseResult<
+  SyncListResponsePendingPreparedStackExtendAwResource,
+  SDKValidationError
+> {
+  return safeParse(
+    jsonString,
+    (x) =>
+      SyncListResponsePendingPreparedStackExtendAwResource$inboundSchema.parse(
+        JSON.parse(x),
+      ),
+    `Failed to parse 'SyncListResponsePendingPreparedStackExtendAwResource' from JSON`,
+  );
+}
+
+/** @internal */
+export const SyncListResponsePendingPreparedStackExtendAwStack$inboundSchema:
+  z.ZodType<SyncListResponsePendingPreparedStackExtendAwStack, unknown> = z
+    .object({
+      condition: z.nullable(
+        z.record(z.string(), z.record(z.string(), z.string())),
+      ).optional(),
+      resources: z.array(z.string()),
+    });
+
+export function syncListResponsePendingPreparedStackExtendAwStackFromJSON(
+  jsonString: string,
+): SafeParseResult<
+  SyncListResponsePendingPreparedStackExtendAwStack,
+  SDKValidationError
+> {
+  return safeParse(
+    jsonString,
+    (x) =>
+      SyncListResponsePendingPreparedStackExtendAwStack$inboundSchema.parse(
+        JSON.parse(x),
+      ),
+    `Failed to parse 'SyncListResponsePendingPreparedStackExtendAwStack' from JSON`,
+  );
+}
+
+/** @internal */
+export const SyncListResponsePendingPreparedStackExtendAwBinding$inboundSchema:
+  z.ZodType<SyncListResponsePendingPreparedStackExtendAwBinding, unknown> = z
+    .object({
+      resource: z.lazy(() =>
+        SyncListResponsePendingPreparedStackExtendAwResource$inboundSchema
+      ).optional(),
+      stack: z.lazy(() =>
+        SyncListResponsePendingPreparedStackExtendAwStack$inboundSchema
+      ).optional(),
+    });
+
+export function syncListResponsePendingPreparedStackExtendAwBindingFromJSON(
+  jsonString: string,
+): SafeParseResult<
+  SyncListResponsePendingPreparedStackExtendAwBinding,
+  SDKValidationError
+> {
+  return safeParse(
+    jsonString,
+    (x) =>
+      SyncListResponsePendingPreparedStackExtendAwBinding$inboundSchema.parse(
+        JSON.parse(x),
+      ),
+    `Failed to parse 'SyncListResponsePendingPreparedStackExtendAwBinding' from JSON`,
+  );
+}
+
+/** @internal */
+export const SyncListResponsePendingPreparedStackExtendEffect$inboundSchema:
+  z.ZodEnum<typeof SyncListResponsePendingPreparedStackExtendEffect> = z.enum(
+    SyncListResponsePendingPreparedStackExtendEffect,
+  );
+
+/** @internal */
+export const SyncListResponsePendingPreparedStackExtendAwGrant$inboundSchema:
+  z.ZodType<SyncListResponsePendingPreparedStackExtendAwGrant, unknown> = z
+    .object({
+      actions: z.nullable(z.array(z.string())).optional(),
+      dataActions: z.nullable(z.array(z.string())).optional(),
+      permissions: z.nullable(z.array(z.string())).optional(),
+      predefinedRoles: z.nullable(z.array(z.string())).optional(),
+      residualPermissions: z.nullable(z.array(z.string())).optional(),
+    });
+
+export function syncListResponsePendingPreparedStackExtendAwGrantFromJSON(
+  jsonString: string,
+): SafeParseResult<
+  SyncListResponsePendingPreparedStackExtendAwGrant,
+  SDKValidationError
+> {
+  return safeParse(
+    jsonString,
+    (x) =>
+      SyncListResponsePendingPreparedStackExtendAwGrant$inboundSchema.parse(
+        JSON.parse(x),
+      ),
+    `Failed to parse 'SyncListResponsePendingPreparedStackExtendAwGrant' from JSON`,
+  );
+}
+
+/** @internal */
+export const SyncListResponsePendingPreparedStackExtendAw$inboundSchema:
+  z.ZodType<SyncListResponsePendingPreparedStackExtendAw, unknown> = z.object({
+    binding: z.lazy(() =>
+      SyncListResponsePendingPreparedStackExtendAwBinding$inboundSchema
+    ),
+    description: z.nullable(z.string()).optional(),
+    effect: SyncListResponsePendingPreparedStackExtendEffect$inboundSchema
+      .optional(),
+    grant: z.lazy(() =>
+      SyncListResponsePendingPreparedStackExtendAwGrant$inboundSchema
+    ),
+    label: z.nullable(z.string()).optional(),
+  });
+
+export function syncListResponsePendingPreparedStackExtendAwFromJSON(
+  jsonString: string,
+): SafeParseResult<
+  SyncListResponsePendingPreparedStackExtendAw,
+  SDKValidationError
+> {
+  return safeParse(
+    jsonString,
+    (x) =>
+      SyncListResponsePendingPreparedStackExtendAw$inboundSchema.parse(
+        JSON.parse(x),
+      ),
+    `Failed to parse 'SyncListResponsePendingPreparedStackExtendAw' from JSON`,
+  );
+}
+
+/** @internal */
+export const SyncListResponsePendingPreparedStackExtendAzureResource$inboundSchema:
+  z.ZodType<SyncListResponsePendingPreparedStackExtendAzureResource, unknown> =
+    z.object({
+      scope: z.string(),
+    });
+
+export function syncListResponsePendingPreparedStackExtendAzureResourceFromJSON(
+  jsonString: string,
+): SafeParseResult<
+  SyncListResponsePendingPreparedStackExtendAzureResource,
+  SDKValidationError
+> {
+  return safeParse(
+    jsonString,
+    (x) =>
+      SyncListResponsePendingPreparedStackExtendAzureResource$inboundSchema
+        .parse(JSON.parse(x)),
+    `Failed to parse 'SyncListResponsePendingPreparedStackExtendAzureResource' from JSON`,
+  );
+}
+
+/** @internal */
+export const SyncListResponsePendingPreparedStackExtendAzureStack$inboundSchema:
+  z.ZodType<SyncListResponsePendingPreparedStackExtendAzureStack, unknown> = z
+    .object({
+      scope: z.string(),
+    });
+
+export function syncListResponsePendingPreparedStackExtendAzureStackFromJSON(
+  jsonString: string,
+): SafeParseResult<
+  SyncListResponsePendingPreparedStackExtendAzureStack,
+  SDKValidationError
+> {
+  return safeParse(
+    jsonString,
+    (x) =>
+      SyncListResponsePendingPreparedStackExtendAzureStack$inboundSchema.parse(
+        JSON.parse(x),
+      ),
+    `Failed to parse 'SyncListResponsePendingPreparedStackExtendAzureStack' from JSON`,
+  );
+}
+
+/** @internal */
+export const SyncListResponsePendingPreparedStackExtendAzureBinding$inboundSchema:
+  z.ZodType<SyncListResponsePendingPreparedStackExtendAzureBinding, unknown> = z
+    .object({
+      resource: z.lazy(() =>
+        SyncListResponsePendingPreparedStackExtendAzureResource$inboundSchema
+      ).optional(),
+      stack: z.lazy(() =>
+        SyncListResponsePendingPreparedStackExtendAzureStack$inboundSchema
+      ).optional(),
+    });
+
+export function syncListResponsePendingPreparedStackExtendAzureBindingFromJSON(
+  jsonString: string,
+): SafeParseResult<
+  SyncListResponsePendingPreparedStackExtendAzureBinding,
+  SDKValidationError
+> {
+  return safeParse(
+    jsonString,
+    (x) =>
+      SyncListResponsePendingPreparedStackExtendAzureBinding$inboundSchema
+        .parse(JSON.parse(x)),
+    `Failed to parse 'SyncListResponsePendingPreparedStackExtendAzureBinding' from JSON`,
+  );
+}
+
+/** @internal */
+export const SyncListResponsePendingPreparedStackExtendAzureGrant$inboundSchema:
+  z.ZodType<SyncListResponsePendingPreparedStackExtendAzureGrant, unknown> = z
+    .object({
+      actions: z.nullable(z.array(z.string())).optional(),
+      dataActions: z.nullable(z.array(z.string())).optional(),
+      permissions: z.nullable(z.array(z.string())).optional(),
+      predefinedRoles: z.nullable(z.array(z.string())).optional(),
+      residualPermissions: z.nullable(z.array(z.string())).optional(),
+    });
+
+export function syncListResponsePendingPreparedStackExtendAzureGrantFromJSON(
+  jsonString: string,
+): SafeParseResult<
+  SyncListResponsePendingPreparedStackExtendAzureGrant,
+  SDKValidationError
+> {
+  return safeParse(
+    jsonString,
+    (x) =>
+      SyncListResponsePendingPreparedStackExtendAzureGrant$inboundSchema.parse(
+        JSON.parse(x),
+      ),
+    `Failed to parse 'SyncListResponsePendingPreparedStackExtendAzureGrant' from JSON`,
+  );
+}
+
+/** @internal */
+export const SyncListResponsePendingPreparedStackExtendAzure$inboundSchema:
+  z.ZodType<SyncListResponsePendingPreparedStackExtendAzure, unknown> = z
+    .object({
+      binding: z.lazy(() =>
+        SyncListResponsePendingPreparedStackExtendAzureBinding$inboundSchema
+      ),
+      description: z.nullable(z.string()).optional(),
+      grant: z.lazy(() =>
+        SyncListResponsePendingPreparedStackExtendAzureGrant$inboundSchema
+      ),
+      label: z.nullable(z.string()).optional(),
+    });
+
+export function syncListResponsePendingPreparedStackExtendAzureFromJSON(
+  jsonString: string,
+): SafeParseResult<
+  SyncListResponsePendingPreparedStackExtendAzure,
+  SDKValidationError
+> {
+  return safeParse(
+    jsonString,
+    (x) =>
+      SyncListResponsePendingPreparedStackExtendAzure$inboundSchema.parse(
+        JSON.parse(x),
+      ),
+    `Failed to parse 'SyncListResponsePendingPreparedStackExtendAzure' from JSON`,
+  );
+}
+
+/** @internal */
+export const SyncListResponsePendingPreparedStackExtendConditionResource$inboundSchema:
+  z.ZodType<
+    SyncListResponsePendingPreparedStackExtendConditionResource,
+    unknown
+  > = z.object({
+    expression: z.string(),
+    title: z.string(),
+  });
+
+export function syncListResponsePendingPreparedStackExtendConditionResourceFromJSON(
+  jsonString: string,
+): SafeParseResult<
+  SyncListResponsePendingPreparedStackExtendConditionResource,
+  SDKValidationError
+> {
+  return safeParse(
+    jsonString,
+    (x) =>
+      SyncListResponsePendingPreparedStackExtendConditionResource$inboundSchema
+        .parse(JSON.parse(x)),
+    `Failed to parse 'SyncListResponsePendingPreparedStackExtendConditionResource' from JSON`,
+  );
+}
+
+/** @internal */
+export const SyncListResponsePendingPreparedStackExtendResourceConditionUnion$inboundSchema:
+  z.ZodType<
+    SyncListResponsePendingPreparedStackExtendResourceConditionUnion,
+    unknown
+  > = z.union([
+    z.lazy(() =>
+      SyncListResponsePendingPreparedStackExtendConditionResource$inboundSchema
+    ),
+    z.any(),
+  ]);
+
+export function syncListResponsePendingPreparedStackExtendResourceConditionUnionFromJSON(
+  jsonString: string,
+): SafeParseResult<
+  SyncListResponsePendingPreparedStackExtendResourceConditionUnion,
+  SDKValidationError
+> {
+  return safeParse(
+    jsonString,
+    (x) =>
+      SyncListResponsePendingPreparedStackExtendResourceConditionUnion$inboundSchema
+        .parse(JSON.parse(x)),
+    `Failed to parse 'SyncListResponsePendingPreparedStackExtendResourceConditionUnion' from JSON`,
+  );
+}
+
+/** @internal */
+export const SyncListResponsePendingPreparedStackExtendGcpResource$inboundSchema:
+  z.ZodType<SyncListResponsePendingPreparedStackExtendGcpResource, unknown> = z
+    .object({
+      condition: z.nullable(
+        z.union([
+          z.lazy(() =>
+            SyncListResponsePendingPreparedStackExtendConditionResource$inboundSchema
+          ),
+          z.any(),
+        ]),
+      ).optional(),
+      scope: z.string(),
+    });
+
+export function syncListResponsePendingPreparedStackExtendGcpResourceFromJSON(
+  jsonString: string,
+): SafeParseResult<
+  SyncListResponsePendingPreparedStackExtendGcpResource,
+  SDKValidationError
+> {
+  return safeParse(
+    jsonString,
+    (x) =>
+      SyncListResponsePendingPreparedStackExtendGcpResource$inboundSchema.parse(
+        JSON.parse(x),
+      ),
+    `Failed to parse 'SyncListResponsePendingPreparedStackExtendGcpResource' from JSON`,
+  );
+}
+
+/** @internal */
+export const SyncListResponsePendingPreparedStackExtendConditionStack$inboundSchema:
+  z.ZodType<SyncListResponsePendingPreparedStackExtendConditionStack, unknown> =
+    z.object({
+      expression: z.string(),
+      title: z.string(),
+    });
+
+export function syncListResponsePendingPreparedStackExtendConditionStackFromJSON(
+  jsonString: string,
+): SafeParseResult<
+  SyncListResponsePendingPreparedStackExtendConditionStack,
+  SDKValidationError
+> {
+  return safeParse(
+    jsonString,
+    (x) =>
+      SyncListResponsePendingPreparedStackExtendConditionStack$inboundSchema
+        .parse(JSON.parse(x)),
+    `Failed to parse 'SyncListResponsePendingPreparedStackExtendConditionStack' from JSON`,
+  );
+}
+
+/** @internal */
+export const SyncListResponsePendingPreparedStackExtendStackConditionUnion$inboundSchema:
+  z.ZodType<
+    SyncListResponsePendingPreparedStackExtendStackConditionUnion,
+    unknown
+  > = z.union([
+    z.lazy(() =>
+      SyncListResponsePendingPreparedStackExtendConditionStack$inboundSchema
+    ),
+    z.any(),
+  ]);
+
+export function syncListResponsePendingPreparedStackExtendStackConditionUnionFromJSON(
+  jsonString: string,
+): SafeParseResult<
+  SyncListResponsePendingPreparedStackExtendStackConditionUnion,
+  SDKValidationError
+> {
+  return safeParse(
+    jsonString,
+    (x) =>
+      SyncListResponsePendingPreparedStackExtendStackConditionUnion$inboundSchema
+        .parse(JSON.parse(x)),
+    `Failed to parse 'SyncListResponsePendingPreparedStackExtendStackConditionUnion' from JSON`,
+  );
+}
+
+/** @internal */
+export const SyncListResponsePendingPreparedStackExtendGcpStack$inboundSchema:
+  z.ZodType<SyncListResponsePendingPreparedStackExtendGcpStack, unknown> = z
+    .object({
+      condition: z.nullable(
+        z.union([
+          z.lazy(() =>
+            SyncListResponsePendingPreparedStackExtendConditionStack$inboundSchema
+          ),
+          z.any(),
+        ]),
+      ).optional(),
+      scope: z.string(),
+    });
+
+export function syncListResponsePendingPreparedStackExtendGcpStackFromJSON(
+  jsonString: string,
+): SafeParseResult<
+  SyncListResponsePendingPreparedStackExtendGcpStack,
+  SDKValidationError
+> {
+  return safeParse(
+    jsonString,
+    (x) =>
+      SyncListResponsePendingPreparedStackExtendGcpStack$inboundSchema.parse(
+        JSON.parse(x),
+      ),
+    `Failed to parse 'SyncListResponsePendingPreparedStackExtendGcpStack' from JSON`,
+  );
+}
+
+/** @internal */
+export const SyncListResponsePendingPreparedStackExtendGcpBinding$inboundSchema:
+  z.ZodType<SyncListResponsePendingPreparedStackExtendGcpBinding, unknown> = z
+    .object({
+      resource: z.lazy(() =>
+        SyncListResponsePendingPreparedStackExtendGcpResource$inboundSchema
+      ).optional(),
+      stack: z.lazy(() =>
+        SyncListResponsePendingPreparedStackExtendGcpStack$inboundSchema
+      ).optional(),
+    });
+
+export function syncListResponsePendingPreparedStackExtendGcpBindingFromJSON(
+  jsonString: string,
+): SafeParseResult<
+  SyncListResponsePendingPreparedStackExtendGcpBinding,
+  SDKValidationError
+> {
+  return safeParse(
+    jsonString,
+    (x) =>
+      SyncListResponsePendingPreparedStackExtendGcpBinding$inboundSchema.parse(
+        JSON.parse(x),
+      ),
+    `Failed to parse 'SyncListResponsePendingPreparedStackExtendGcpBinding' from JSON`,
+  );
+}
+
+/** @internal */
+export const SyncListResponsePendingPreparedStackExtendGcpGrant$inboundSchema:
+  z.ZodType<SyncListResponsePendingPreparedStackExtendGcpGrant, unknown> = z
+    .object({
+      actions: z.nullable(z.array(z.string())).optional(),
+      dataActions: z.nullable(z.array(z.string())).optional(),
+      permissions: z.nullable(z.array(z.string())).optional(),
+      predefinedRoles: z.nullable(z.array(z.string())).optional(),
+      residualPermissions: z.nullable(z.array(z.string())).optional(),
+    });
+
+export function syncListResponsePendingPreparedStackExtendGcpGrantFromJSON(
+  jsonString: string,
+): SafeParseResult<
+  SyncListResponsePendingPreparedStackExtendGcpGrant,
+  SDKValidationError
+> {
+  return safeParse(
+    jsonString,
+    (x) =>
+      SyncListResponsePendingPreparedStackExtendGcpGrant$inboundSchema.parse(
+        JSON.parse(x),
+      ),
+    `Failed to parse 'SyncListResponsePendingPreparedStackExtendGcpGrant' from JSON`,
+  );
+}
+
+/** @internal */
+export const SyncListResponsePendingPreparedStackExtendGcp$inboundSchema:
+  z.ZodType<SyncListResponsePendingPreparedStackExtendGcp, unknown> = z.object({
+    binding: z.lazy(() =>
+      SyncListResponsePendingPreparedStackExtendGcpBinding$inboundSchema
+    ),
+    description: z.nullable(z.string()).optional(),
+    grant: z.lazy(() =>
+      SyncListResponsePendingPreparedStackExtendGcpGrant$inboundSchema
+    ),
+    label: z.nullable(z.string()).optional(),
+  });
+
+export function syncListResponsePendingPreparedStackExtendGcpFromJSON(
+  jsonString: string,
+): SafeParseResult<
+  SyncListResponsePendingPreparedStackExtendGcp,
+  SDKValidationError
+> {
+  return safeParse(
+    jsonString,
+    (x) =>
+      SyncListResponsePendingPreparedStackExtendGcp$inboundSchema.parse(
+        JSON.parse(x),
+      ),
+    `Failed to parse 'SyncListResponsePendingPreparedStackExtendGcp' from JSON`,
+  );
+}
+
+/** @internal */
+export const SyncListResponsePendingPreparedStackExtendPlatforms$inboundSchema:
+  z.ZodType<SyncListResponsePendingPreparedStackExtendPlatforms, unknown> = z
+    .object({
+      aws: z.nullable(
+        z.array(z.lazy(() =>
+          SyncListResponsePendingPreparedStackExtendAw$inboundSchema
+        )),
+      ).optional(),
+      azure: z.nullable(
+        z.array(z.lazy(() =>
+          SyncListResponsePendingPreparedStackExtendAzure$inboundSchema
+        )),
+      ).optional(),
+      gcp: z.nullable(
+        z.array(z.lazy(() =>
+          SyncListResponsePendingPreparedStackExtendGcp$inboundSchema
+        )),
+      ).optional(),
+    });
+
+export function syncListResponsePendingPreparedStackExtendPlatformsFromJSON(
+  jsonString: string,
+): SafeParseResult<
+  SyncListResponsePendingPreparedStackExtendPlatforms,
+  SDKValidationError
+> {
+  return safeParse(
+    jsonString,
+    (x) =>
+      SyncListResponsePendingPreparedStackExtendPlatforms$inboundSchema.parse(
+        JSON.parse(x),
+      ),
+    `Failed to parse 'SyncListResponsePendingPreparedStackExtendPlatforms' from JSON`,
+  );
+}
+
+/** @internal */
+export const SyncListResponsePendingPreparedStackExtend$inboundSchema:
+  z.ZodType<SyncListResponsePendingPreparedStackExtend, unknown> = z.object({
+    description: z.string(),
+    id: z.string(),
+    platforms: z.lazy(() =>
+      SyncListResponsePendingPreparedStackExtendPlatforms$inboundSchema
+    ),
+  });
+
+export function syncListResponsePendingPreparedStackExtendFromJSON(
+  jsonString: string,
+): SafeParseResult<
+  SyncListResponsePendingPreparedStackExtend,
+  SDKValidationError
+> {
+  return safeParse(
+    jsonString,
+    (x) =>
+      SyncListResponsePendingPreparedStackExtend$inboundSchema.parse(
+        JSON.parse(x),
+      ),
+    `Failed to parse 'SyncListResponsePendingPreparedStackExtend' from JSON`,
+  );
+}
+
+/** @internal */
+export const SyncListResponsePendingPreparedStackExtendUnion$inboundSchema:
+  z.ZodType<SyncListResponsePendingPreparedStackExtendUnion, unknown> = z.union(
+    [
+      z.lazy(() => SyncListResponsePendingPreparedStackExtend$inboundSchema),
+      z.string(),
+    ],
+  );
+
+export function syncListResponsePendingPreparedStackExtendUnionFromJSON(
+  jsonString: string,
+): SafeParseResult<
+  SyncListResponsePendingPreparedStackExtendUnion,
+  SDKValidationError
+> {
+  return safeParse(
+    jsonString,
+    (x) =>
+      SyncListResponsePendingPreparedStackExtendUnion$inboundSchema.parse(
+        JSON.parse(x),
+      ),
+    `Failed to parse 'SyncListResponsePendingPreparedStackExtendUnion' from JSON`,
+  );
+}
+
+/** @internal */
+export const SyncListResponsePendingPreparedStackManagement1$inboundSchema:
+  z.ZodType<SyncListResponsePendingPreparedStackManagement1, unknown> = z
+    .object({
+      extend: z.record(
+        z.string(),
+        z.array(z.union([
+          z.lazy(() =>
+            SyncListResponsePendingPreparedStackExtend$inboundSchema
+          ),
+          z.string(),
+        ])),
+      ),
+    });
+
+export function syncListResponsePendingPreparedStackManagement1FromJSON(
+  jsonString: string,
+): SafeParseResult<
+  SyncListResponsePendingPreparedStackManagement1,
+  SDKValidationError
+> {
+  return safeParse(
+    jsonString,
+    (x) =>
+      SyncListResponsePendingPreparedStackManagement1$inboundSchema.parse(
+        JSON.parse(x),
+      ),
+    `Failed to parse 'SyncListResponsePendingPreparedStackManagement1' from JSON`,
+  );
+}
+
+/** @internal */
+export const SyncListResponsePendingPreparedStackManagementUnion$inboundSchema:
+  z.ZodType<SyncListResponsePendingPreparedStackManagementUnion, unknown> = z
+    .union([
+      z.lazy(() =>
+        SyncListResponsePendingPreparedStackManagement1$inboundSchema
+      ),
+      z.lazy(() =>
+        SyncListResponsePendingPreparedStackManagement2$inboundSchema
+      ),
+      SyncListResponsePendingPreparedStackManagementEnum$inboundSchema,
+    ]);
+
+export function syncListResponsePendingPreparedStackManagementUnionFromJSON(
+  jsonString: string,
+): SafeParseResult<
+  SyncListResponsePendingPreparedStackManagementUnion,
+  SDKValidationError
+> {
+  return safeParse(
+    jsonString,
+    (x) =>
+      SyncListResponsePendingPreparedStackManagementUnion$inboundSchema.parse(
+        JSON.parse(x),
+      ),
+    `Failed to parse 'SyncListResponsePendingPreparedStackManagementUnion' from JSON`,
+  );
+}
+
+/** @internal */
+export const SyncListResponsePendingPreparedStackProfileAwResource$inboundSchema:
+  z.ZodType<SyncListResponsePendingPreparedStackProfileAwResource, unknown> = z
+    .object({
+      condition: z.nullable(
+        z.record(z.string(), z.record(z.string(), z.string())),
+      ).optional(),
+      resources: z.array(z.string()),
+    });
+
+export function syncListResponsePendingPreparedStackProfileAwResourceFromJSON(
+  jsonString: string,
+): SafeParseResult<
+  SyncListResponsePendingPreparedStackProfileAwResource,
+  SDKValidationError
+> {
+  return safeParse(
+    jsonString,
+    (x) =>
+      SyncListResponsePendingPreparedStackProfileAwResource$inboundSchema.parse(
+        JSON.parse(x),
+      ),
+    `Failed to parse 'SyncListResponsePendingPreparedStackProfileAwResource' from JSON`,
+  );
+}
+
+/** @internal */
+export const SyncListResponsePendingPreparedStackProfileAwStack$inboundSchema:
+  z.ZodType<SyncListResponsePendingPreparedStackProfileAwStack, unknown> = z
+    .object({
+      condition: z.nullable(
+        z.record(z.string(), z.record(z.string(), z.string())),
+      ).optional(),
+      resources: z.array(z.string()),
+    });
+
+export function syncListResponsePendingPreparedStackProfileAwStackFromJSON(
+  jsonString: string,
+): SafeParseResult<
+  SyncListResponsePendingPreparedStackProfileAwStack,
+  SDKValidationError
+> {
+  return safeParse(
+    jsonString,
+    (x) =>
+      SyncListResponsePendingPreparedStackProfileAwStack$inboundSchema.parse(
+        JSON.parse(x),
+      ),
+    `Failed to parse 'SyncListResponsePendingPreparedStackProfileAwStack' from JSON`,
+  );
+}
+
+/** @internal */
+export const SyncListResponsePendingPreparedStackProfileAwBinding$inboundSchema:
+  z.ZodType<SyncListResponsePendingPreparedStackProfileAwBinding, unknown> = z
+    .object({
+      resource: z.lazy(() =>
+        SyncListResponsePendingPreparedStackProfileAwResource$inboundSchema
+      ).optional(),
+      stack: z.lazy(() =>
+        SyncListResponsePendingPreparedStackProfileAwStack$inboundSchema
+      ).optional(),
+    });
+
+export function syncListResponsePendingPreparedStackProfileAwBindingFromJSON(
+  jsonString: string,
+): SafeParseResult<
+  SyncListResponsePendingPreparedStackProfileAwBinding,
+  SDKValidationError
+> {
+  return safeParse(
+    jsonString,
+    (x) =>
+      SyncListResponsePendingPreparedStackProfileAwBinding$inboundSchema.parse(
+        JSON.parse(x),
+      ),
+    `Failed to parse 'SyncListResponsePendingPreparedStackProfileAwBinding' from JSON`,
+  );
+}
+
+/** @internal */
+export const SyncListResponsePendingPreparedStackProfileEffect$inboundSchema:
+  z.ZodEnum<typeof SyncListResponsePendingPreparedStackProfileEffect> = z.enum(
+    SyncListResponsePendingPreparedStackProfileEffect,
+  );
+
+/** @internal */
+export const SyncListResponsePendingPreparedStackProfileAwGrant$inboundSchema:
+  z.ZodType<SyncListResponsePendingPreparedStackProfileAwGrant, unknown> = z
+    .object({
+      actions: z.nullable(z.array(z.string())).optional(),
+      dataActions: z.nullable(z.array(z.string())).optional(),
+      permissions: z.nullable(z.array(z.string())).optional(),
+      predefinedRoles: z.nullable(z.array(z.string())).optional(),
+      residualPermissions: z.nullable(z.array(z.string())).optional(),
+    });
+
+export function syncListResponsePendingPreparedStackProfileAwGrantFromJSON(
+  jsonString: string,
+): SafeParseResult<
+  SyncListResponsePendingPreparedStackProfileAwGrant,
+  SDKValidationError
+> {
+  return safeParse(
+    jsonString,
+    (x) =>
+      SyncListResponsePendingPreparedStackProfileAwGrant$inboundSchema.parse(
+        JSON.parse(x),
+      ),
+    `Failed to parse 'SyncListResponsePendingPreparedStackProfileAwGrant' from JSON`,
+  );
+}
+
+/** @internal */
+export const SyncListResponsePendingPreparedStackProfileAw$inboundSchema:
+  z.ZodType<SyncListResponsePendingPreparedStackProfileAw, unknown> = z.object({
+    binding: z.lazy(() =>
+      SyncListResponsePendingPreparedStackProfileAwBinding$inboundSchema
+    ),
+    description: z.nullable(z.string()).optional(),
+    effect: SyncListResponsePendingPreparedStackProfileEffect$inboundSchema
+      .optional(),
+    grant: z.lazy(() =>
+      SyncListResponsePendingPreparedStackProfileAwGrant$inboundSchema
+    ),
+    label: z.nullable(z.string()).optional(),
+  });
+
+export function syncListResponsePendingPreparedStackProfileAwFromJSON(
+  jsonString: string,
+): SafeParseResult<
+  SyncListResponsePendingPreparedStackProfileAw,
+  SDKValidationError
+> {
+  return safeParse(
+    jsonString,
+    (x) =>
+      SyncListResponsePendingPreparedStackProfileAw$inboundSchema.parse(
+        JSON.parse(x),
+      ),
+    `Failed to parse 'SyncListResponsePendingPreparedStackProfileAw' from JSON`,
+  );
+}
+
+/** @internal */
+export const SyncListResponsePendingPreparedStackProfileAzureResource$inboundSchema:
+  z.ZodType<SyncListResponsePendingPreparedStackProfileAzureResource, unknown> =
+    z.object({
+      scope: z.string(),
+    });
+
+export function syncListResponsePendingPreparedStackProfileAzureResourceFromJSON(
+  jsonString: string,
+): SafeParseResult<
+  SyncListResponsePendingPreparedStackProfileAzureResource,
+  SDKValidationError
+> {
+  return safeParse(
+    jsonString,
+    (x) =>
+      SyncListResponsePendingPreparedStackProfileAzureResource$inboundSchema
+        .parse(JSON.parse(x)),
+    `Failed to parse 'SyncListResponsePendingPreparedStackProfileAzureResource' from JSON`,
+  );
+}
+
+/** @internal */
+export const SyncListResponsePendingPreparedStackProfileAzureStack$inboundSchema:
+  z.ZodType<SyncListResponsePendingPreparedStackProfileAzureStack, unknown> = z
+    .object({
+      scope: z.string(),
+    });
+
+export function syncListResponsePendingPreparedStackProfileAzureStackFromJSON(
+  jsonString: string,
+): SafeParseResult<
+  SyncListResponsePendingPreparedStackProfileAzureStack,
+  SDKValidationError
+> {
+  return safeParse(
+    jsonString,
+    (x) =>
+      SyncListResponsePendingPreparedStackProfileAzureStack$inboundSchema.parse(
+        JSON.parse(x),
+      ),
+    `Failed to parse 'SyncListResponsePendingPreparedStackProfileAzureStack' from JSON`,
+  );
+}
+
+/** @internal */
+export const SyncListResponsePendingPreparedStackProfileAzureBinding$inboundSchema:
+  z.ZodType<SyncListResponsePendingPreparedStackProfileAzureBinding, unknown> =
+    z.object({
+      resource: z.lazy(() =>
+        SyncListResponsePendingPreparedStackProfileAzureResource$inboundSchema
+      ).optional(),
+      stack: z.lazy(() =>
+        SyncListResponsePendingPreparedStackProfileAzureStack$inboundSchema
+      ).optional(),
+    });
+
+export function syncListResponsePendingPreparedStackProfileAzureBindingFromJSON(
+  jsonString: string,
+): SafeParseResult<
+  SyncListResponsePendingPreparedStackProfileAzureBinding,
+  SDKValidationError
+> {
+  return safeParse(
+    jsonString,
+    (x) =>
+      SyncListResponsePendingPreparedStackProfileAzureBinding$inboundSchema
+        .parse(JSON.parse(x)),
+    `Failed to parse 'SyncListResponsePendingPreparedStackProfileAzureBinding' from JSON`,
+  );
+}
+
+/** @internal */
+export const SyncListResponsePendingPreparedStackProfileAzureGrant$inboundSchema:
+  z.ZodType<SyncListResponsePendingPreparedStackProfileAzureGrant, unknown> = z
+    .object({
+      actions: z.nullable(z.array(z.string())).optional(),
+      dataActions: z.nullable(z.array(z.string())).optional(),
+      permissions: z.nullable(z.array(z.string())).optional(),
+      predefinedRoles: z.nullable(z.array(z.string())).optional(),
+      residualPermissions: z.nullable(z.array(z.string())).optional(),
+    });
+
+export function syncListResponsePendingPreparedStackProfileAzureGrantFromJSON(
+  jsonString: string,
+): SafeParseResult<
+  SyncListResponsePendingPreparedStackProfileAzureGrant,
+  SDKValidationError
+> {
+  return safeParse(
+    jsonString,
+    (x) =>
+      SyncListResponsePendingPreparedStackProfileAzureGrant$inboundSchema.parse(
+        JSON.parse(x),
+      ),
+    `Failed to parse 'SyncListResponsePendingPreparedStackProfileAzureGrant' from JSON`,
+  );
+}
+
+/** @internal */
+export const SyncListResponsePendingPreparedStackProfileAzure$inboundSchema:
+  z.ZodType<SyncListResponsePendingPreparedStackProfileAzure, unknown> = z
+    .object({
+      binding: z.lazy(() =>
+        SyncListResponsePendingPreparedStackProfileAzureBinding$inboundSchema
+      ),
+      description: z.nullable(z.string()).optional(),
+      grant: z.lazy(() =>
+        SyncListResponsePendingPreparedStackProfileAzureGrant$inboundSchema
+      ),
+      label: z.nullable(z.string()).optional(),
+    });
+
+export function syncListResponsePendingPreparedStackProfileAzureFromJSON(
+  jsonString: string,
+): SafeParseResult<
+  SyncListResponsePendingPreparedStackProfileAzure,
+  SDKValidationError
+> {
+  return safeParse(
+    jsonString,
+    (x) =>
+      SyncListResponsePendingPreparedStackProfileAzure$inboundSchema.parse(
+        JSON.parse(x),
+      ),
+    `Failed to parse 'SyncListResponsePendingPreparedStackProfileAzure' from JSON`,
+  );
+}
+
+/** @internal */
+export const SyncListResponsePendingPreparedStackProfileConditionResource$inboundSchema:
+  z.ZodType<
+    SyncListResponsePendingPreparedStackProfileConditionResource,
+    unknown
+  > = z.object({
+    expression: z.string(),
+    title: z.string(),
+  });
+
+export function syncListResponsePendingPreparedStackProfileConditionResourceFromJSON(
+  jsonString: string,
+): SafeParseResult<
+  SyncListResponsePendingPreparedStackProfileConditionResource,
+  SDKValidationError
+> {
+  return safeParse(
+    jsonString,
+    (x) =>
+      SyncListResponsePendingPreparedStackProfileConditionResource$inboundSchema
+        .parse(JSON.parse(x)),
+    `Failed to parse 'SyncListResponsePendingPreparedStackProfileConditionResource' from JSON`,
+  );
+}
+
+/** @internal */
+export const SyncListResponsePendingPreparedStackProfileResourceConditionUnion$inboundSchema:
+  z.ZodType<
+    SyncListResponsePendingPreparedStackProfileResourceConditionUnion,
+    unknown
+  > = z.union([
+    z.lazy(() =>
+      SyncListResponsePendingPreparedStackProfileConditionResource$inboundSchema
+    ),
+    z.any(),
+  ]);
+
+export function syncListResponsePendingPreparedStackProfileResourceConditionUnionFromJSON(
+  jsonString: string,
+): SafeParseResult<
+  SyncListResponsePendingPreparedStackProfileResourceConditionUnion,
+  SDKValidationError
+> {
+  return safeParse(
+    jsonString,
+    (x) =>
+      SyncListResponsePendingPreparedStackProfileResourceConditionUnion$inboundSchema
+        .parse(JSON.parse(x)),
+    `Failed to parse 'SyncListResponsePendingPreparedStackProfileResourceConditionUnion' from JSON`,
+  );
+}
+
+/** @internal */
+export const SyncListResponsePendingPreparedStackProfileGcpResource$inboundSchema:
+  z.ZodType<SyncListResponsePendingPreparedStackProfileGcpResource, unknown> = z
+    .object({
+      condition: z.nullable(
+        z.union([
+          z.lazy(() =>
+            SyncListResponsePendingPreparedStackProfileConditionResource$inboundSchema
+          ),
+          z.any(),
+        ]),
+      ).optional(),
+      scope: z.string(),
+    });
+
+export function syncListResponsePendingPreparedStackProfileGcpResourceFromJSON(
+  jsonString: string,
+): SafeParseResult<
+  SyncListResponsePendingPreparedStackProfileGcpResource,
+  SDKValidationError
+> {
+  return safeParse(
+    jsonString,
+    (x) =>
+      SyncListResponsePendingPreparedStackProfileGcpResource$inboundSchema
+        .parse(JSON.parse(x)),
+    `Failed to parse 'SyncListResponsePendingPreparedStackProfileGcpResource' from JSON`,
+  );
+}
+
+/** @internal */
+export const SyncListResponsePendingPreparedStackProfileConditionStack$inboundSchema:
+  z.ZodType<
+    SyncListResponsePendingPreparedStackProfileConditionStack,
+    unknown
+  > = z.object({
+    expression: z.string(),
+    title: z.string(),
+  });
+
+export function syncListResponsePendingPreparedStackProfileConditionStackFromJSON(
+  jsonString: string,
+): SafeParseResult<
+  SyncListResponsePendingPreparedStackProfileConditionStack,
+  SDKValidationError
+> {
+  return safeParse(
+    jsonString,
+    (x) =>
+      SyncListResponsePendingPreparedStackProfileConditionStack$inboundSchema
+        .parse(JSON.parse(x)),
+    `Failed to parse 'SyncListResponsePendingPreparedStackProfileConditionStack' from JSON`,
+  );
+}
+
+/** @internal */
+export const SyncListResponsePendingPreparedStackProfileStackConditionUnion$inboundSchema:
+  z.ZodType<
+    SyncListResponsePendingPreparedStackProfileStackConditionUnion,
+    unknown
+  > = z.union([
+    z.lazy(() =>
+      SyncListResponsePendingPreparedStackProfileConditionStack$inboundSchema
+    ),
+    z.any(),
+  ]);
+
+export function syncListResponsePendingPreparedStackProfileStackConditionUnionFromJSON(
+  jsonString: string,
+): SafeParseResult<
+  SyncListResponsePendingPreparedStackProfileStackConditionUnion,
+  SDKValidationError
+> {
+  return safeParse(
+    jsonString,
+    (x) =>
+      SyncListResponsePendingPreparedStackProfileStackConditionUnion$inboundSchema
+        .parse(JSON.parse(x)),
+    `Failed to parse 'SyncListResponsePendingPreparedStackProfileStackConditionUnion' from JSON`,
+  );
+}
+
+/** @internal */
+export const SyncListResponsePendingPreparedStackProfileGcpStack$inboundSchema:
+  z.ZodType<SyncListResponsePendingPreparedStackProfileGcpStack, unknown> = z
+    .object({
+      condition: z.nullable(
+        z.union([
+          z.lazy(() =>
+            SyncListResponsePendingPreparedStackProfileConditionStack$inboundSchema
+          ),
+          z.any(),
+        ]),
+      ).optional(),
+      scope: z.string(),
+    });
+
+export function syncListResponsePendingPreparedStackProfileGcpStackFromJSON(
+  jsonString: string,
+): SafeParseResult<
+  SyncListResponsePendingPreparedStackProfileGcpStack,
+  SDKValidationError
+> {
+  return safeParse(
+    jsonString,
+    (x) =>
+      SyncListResponsePendingPreparedStackProfileGcpStack$inboundSchema.parse(
+        JSON.parse(x),
+      ),
+    `Failed to parse 'SyncListResponsePendingPreparedStackProfileGcpStack' from JSON`,
+  );
+}
+
+/** @internal */
+export const SyncListResponsePendingPreparedStackProfileGcpBinding$inboundSchema:
+  z.ZodType<SyncListResponsePendingPreparedStackProfileGcpBinding, unknown> = z
+    .object({
+      resource: z.lazy(() =>
+        SyncListResponsePendingPreparedStackProfileGcpResource$inboundSchema
+      ).optional(),
+      stack: z.lazy(() =>
+        SyncListResponsePendingPreparedStackProfileGcpStack$inboundSchema
+      ).optional(),
+    });
+
+export function syncListResponsePendingPreparedStackProfileGcpBindingFromJSON(
+  jsonString: string,
+): SafeParseResult<
+  SyncListResponsePendingPreparedStackProfileGcpBinding,
+  SDKValidationError
+> {
+  return safeParse(
+    jsonString,
+    (x) =>
+      SyncListResponsePendingPreparedStackProfileGcpBinding$inboundSchema.parse(
+        JSON.parse(x),
+      ),
+    `Failed to parse 'SyncListResponsePendingPreparedStackProfileGcpBinding' from JSON`,
+  );
+}
+
+/** @internal */
+export const SyncListResponsePendingPreparedStackProfileGcpGrant$inboundSchema:
+  z.ZodType<SyncListResponsePendingPreparedStackProfileGcpGrant, unknown> = z
+    .object({
+      actions: z.nullable(z.array(z.string())).optional(),
+      dataActions: z.nullable(z.array(z.string())).optional(),
+      permissions: z.nullable(z.array(z.string())).optional(),
+      predefinedRoles: z.nullable(z.array(z.string())).optional(),
+      residualPermissions: z.nullable(z.array(z.string())).optional(),
+    });
+
+export function syncListResponsePendingPreparedStackProfileGcpGrantFromJSON(
+  jsonString: string,
+): SafeParseResult<
+  SyncListResponsePendingPreparedStackProfileGcpGrant,
+  SDKValidationError
+> {
+  return safeParse(
+    jsonString,
+    (x) =>
+      SyncListResponsePendingPreparedStackProfileGcpGrant$inboundSchema.parse(
+        JSON.parse(x),
+      ),
+    `Failed to parse 'SyncListResponsePendingPreparedStackProfileGcpGrant' from JSON`,
+  );
+}
+
+/** @internal */
+export const SyncListResponsePendingPreparedStackProfileGcp$inboundSchema:
+  z.ZodType<SyncListResponsePendingPreparedStackProfileGcp, unknown> = z.object(
+    {
+      binding: z.lazy(() =>
+        SyncListResponsePendingPreparedStackProfileGcpBinding$inboundSchema
+      ),
+      description: z.nullable(z.string()).optional(),
+      grant: z.lazy(() =>
+        SyncListResponsePendingPreparedStackProfileGcpGrant$inboundSchema
+      ),
+      label: z.nullable(z.string()).optional(),
+    },
+  );
+
+export function syncListResponsePendingPreparedStackProfileGcpFromJSON(
+  jsonString: string,
+): SafeParseResult<
+  SyncListResponsePendingPreparedStackProfileGcp,
+  SDKValidationError
+> {
+  return safeParse(
+    jsonString,
+    (x) =>
+      SyncListResponsePendingPreparedStackProfileGcp$inboundSchema.parse(
+        JSON.parse(x),
+      ),
+    `Failed to parse 'SyncListResponsePendingPreparedStackProfileGcp' from JSON`,
+  );
+}
+
+/** @internal */
+export const SyncListResponsePendingPreparedStackProfilePlatforms$inboundSchema:
+  z.ZodType<SyncListResponsePendingPreparedStackProfilePlatforms, unknown> = z
+    .object({
+      aws: z.nullable(
+        z.array(z.lazy(() =>
+          SyncListResponsePendingPreparedStackProfileAw$inboundSchema
+        )),
+      ).optional(),
+      azure: z.nullable(
+        z.array(z.lazy(() =>
+          SyncListResponsePendingPreparedStackProfileAzure$inboundSchema
+        )),
+      ).optional(),
+      gcp: z.nullable(
+        z.array(z.lazy(() =>
+          SyncListResponsePendingPreparedStackProfileGcp$inboundSchema
+        )),
+      ).optional(),
+    });
+
+export function syncListResponsePendingPreparedStackProfilePlatformsFromJSON(
+  jsonString: string,
+): SafeParseResult<
+  SyncListResponsePendingPreparedStackProfilePlatforms,
+  SDKValidationError
+> {
+  return safeParse(
+    jsonString,
+    (x) =>
+      SyncListResponsePendingPreparedStackProfilePlatforms$inboundSchema.parse(
+        JSON.parse(x),
+      ),
+    `Failed to parse 'SyncListResponsePendingPreparedStackProfilePlatforms' from JSON`,
+  );
+}
+
+/** @internal */
+export const SyncListResponsePendingPreparedStackProfile$inboundSchema:
+  z.ZodType<SyncListResponsePendingPreparedStackProfile, unknown> = z.object({
+    description: z.string(),
+    id: z.string(),
+    platforms: z.lazy(() =>
+      SyncListResponsePendingPreparedStackProfilePlatforms$inboundSchema
+    ),
+  });
+
+export function syncListResponsePendingPreparedStackProfileFromJSON(
+  jsonString: string,
+): SafeParseResult<
+  SyncListResponsePendingPreparedStackProfile,
+  SDKValidationError
+> {
+  return safeParse(
+    jsonString,
+    (x) =>
+      SyncListResponsePendingPreparedStackProfile$inboundSchema.parse(
+        JSON.parse(x),
+      ),
+    `Failed to parse 'SyncListResponsePendingPreparedStackProfile' from JSON`,
+  );
+}
+
+/** @internal */
+export const SyncListResponsePendingPreparedStackProfileUnion$inboundSchema:
+  z.ZodType<SyncListResponsePendingPreparedStackProfileUnion, unknown> = z
+    .union([
+      z.lazy(() => SyncListResponsePendingPreparedStackProfile$inboundSchema),
+      z.string(),
+    ]);
+
+export function syncListResponsePendingPreparedStackProfileUnionFromJSON(
+  jsonString: string,
+): SafeParseResult<
+  SyncListResponsePendingPreparedStackProfileUnion,
+  SDKValidationError
+> {
+  return safeParse(
+    jsonString,
+    (x) =>
+      SyncListResponsePendingPreparedStackProfileUnion$inboundSchema.parse(
+        JSON.parse(x),
+      ),
+    `Failed to parse 'SyncListResponsePendingPreparedStackProfileUnion' from JSON`,
+  );
+}
+
+/** @internal */
+export const SyncListResponsePendingPreparedStackPermissions$inboundSchema:
+  z.ZodType<SyncListResponsePendingPreparedStackPermissions, unknown> = z
+    .object({
+      management: z.union([
+        z.lazy(() =>
+          SyncListResponsePendingPreparedStackManagement1$inboundSchema
+        ),
+        z.lazy(() =>
+          SyncListResponsePendingPreparedStackManagement2$inboundSchema
+        ),
+        SyncListResponsePendingPreparedStackManagementEnum$inboundSchema,
+      ]).optional(),
+      profiles: z.record(
+        z.string(),
+        z.record(
+          z.string(),
+          z.array(
+            z.union([
+              z.lazy(() =>
+                SyncListResponsePendingPreparedStackProfile$inboundSchema
+              ),
+              z.string(),
+            ]),
+          ),
+        ),
+      ),
+    });
+
+export function syncListResponsePendingPreparedStackPermissionsFromJSON(
+  jsonString: string,
+): SafeParseResult<
+  SyncListResponsePendingPreparedStackPermissions,
+  SDKValidationError
+> {
+  return safeParse(
+    jsonString,
+    (x) =>
+      SyncListResponsePendingPreparedStackPermissions$inboundSchema.parse(
+        JSON.parse(x),
+      ),
+    `Failed to parse 'SyncListResponsePendingPreparedStackPermissions' from JSON`,
+  );
+}
+
+/** @internal */
+export const SyncListResponsePendingPreparedStackConfig$inboundSchema:
+  z.ZodType<SyncListResponsePendingPreparedStackConfig, unknown> =
+    collectExtraKeys$(
+      z.object({
+        id: z.string(),
+        type: z.string(),
+      }).catchall(z.any()),
+      "additionalProperties",
+      true,
+    );
+
+export function syncListResponsePendingPreparedStackConfigFromJSON(
+  jsonString: string,
+): SafeParseResult<
+  SyncListResponsePendingPreparedStackConfig,
+  SDKValidationError
+> {
+  return safeParse(
+    jsonString,
+    (x) =>
+      SyncListResponsePendingPreparedStackConfig$inboundSchema.parse(
+        JSON.parse(x),
+      ),
+    `Failed to parse 'SyncListResponsePendingPreparedStackConfig' from JSON`,
+  );
+}
+
+/** @internal */
+export const SyncListResponsePendingPreparedStackDependency$inboundSchema:
+  z.ZodType<SyncListResponsePendingPreparedStackDependency, unknown> = z.object(
+    {
+      id: z.string(),
+      type: z.string(),
+    },
+  );
+
+export function syncListResponsePendingPreparedStackDependencyFromJSON(
+  jsonString: string,
+): SafeParseResult<
+  SyncListResponsePendingPreparedStackDependency,
+  SDKValidationError
+> {
+  return safeParse(
+    jsonString,
+    (x) =>
+      SyncListResponsePendingPreparedStackDependency$inboundSchema.parse(
+        JSON.parse(x),
+      ),
+    `Failed to parse 'SyncListResponsePendingPreparedStackDependency' from JSON`,
+  );
+}
+
+/** @internal */
+export const SyncListResponsePendingPreparedStackLifecycle$inboundSchema:
+  z.ZodEnum<typeof SyncListResponsePendingPreparedStackLifecycle> = z.enum(
+    SyncListResponsePendingPreparedStackLifecycle,
+  );
+
+/** @internal */
+export const SyncListResponsePendingPreparedStackResources$inboundSchema:
+  z.ZodType<SyncListResponsePendingPreparedStackResources, unknown> = z.object({
+    config: z.lazy(() =>
+      SyncListResponsePendingPreparedStackConfig$inboundSchema
+    ),
+    dependencies: z.array(
+      z.lazy(() =>
+        SyncListResponsePendingPreparedStackDependency$inboundSchema
+      ),
+    ),
+    enabledWhen: z.nullable(z.string()).optional(),
+    lifecycle: SyncListResponsePendingPreparedStackLifecycle$inboundSchema,
+    remoteAccess: z.boolean().optional(),
+  });
+
+export function syncListResponsePendingPreparedStackResourcesFromJSON(
+  jsonString: string,
+): SafeParseResult<
+  SyncListResponsePendingPreparedStackResources,
+  SDKValidationError
+> {
+  return safeParse(
+    jsonString,
+    (x) =>
+      SyncListResponsePendingPreparedStackResources$inboundSchema.parse(
+        JSON.parse(x),
+      ),
+    `Failed to parse 'SyncListResponsePendingPreparedStackResources' from JSON`,
+  );
+}
+
+/** @internal */
+export const SyncListResponsePendingPreparedStackSupportedPlatform$inboundSchema:
+  z.ZodEnum<typeof SyncListResponsePendingPreparedStackSupportedPlatform> = z
+    .enum(SyncListResponsePendingPreparedStackSupportedPlatform);
+
+/** @internal */
+export const SyncListResponsePendingPreparedStack$inboundSchema: z.ZodType<
+  SyncListResponsePendingPreparedStack,
+  unknown
+> = z.object({
+  id: z.string(),
+  inputs: z.array(
+    z.lazy(() => SyncListResponsePendingPreparedStackInput$inboundSchema),
+  ).optional(),
+  permissions: z.lazy(() =>
+    SyncListResponsePendingPreparedStackPermissions$inboundSchema
+  ).optional(),
+  resources: z.record(
+    z.string(),
+    z.lazy(() => SyncListResponsePendingPreparedStackResources$inboundSchema),
+  ),
+  supportedPlatforms: z.nullable(
+    z.array(
+      SyncListResponsePendingPreparedStackSupportedPlatform$inboundSchema,
+    ),
+  ).optional(),
+});
+
+export function syncListResponsePendingPreparedStackFromJSON(
+  jsonString: string,
+): SafeParseResult<SyncListResponsePendingPreparedStack, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) =>
+      SyncListResponsePendingPreparedStack$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'SyncListResponsePendingPreparedStack' from JSON`,
+  );
+}
+
+/** @internal */
+export const SyncListResponsePendingPreparedStackUnion$inboundSchema: z.ZodType<
+  SyncListResponsePendingPreparedStackUnion,
+  unknown
+> = z.union([
+  z.lazy(() => SyncListResponsePendingPreparedStack$inboundSchema),
+  z.any(),
+]);
+
+export function syncListResponsePendingPreparedStackUnionFromJSON(
+  jsonString: string,
+): SafeParseResult<
+  SyncListResponsePendingPreparedStackUnion,
+  SDKValidationError
+> {
+  return safeParse(
+    jsonString,
+    (x) =>
+      SyncListResponsePendingPreparedStackUnion$inboundSchema.parse(
+        JSON.parse(x),
+      ),
+    `Failed to parse 'SyncListResponsePendingPreparedStackUnion' from JSON`,
+  );
+}
+
+/** @internal */
+export const SyncListResponsePreparedStackTypeStringList$inboundSchema:
+  z.ZodEnum<typeof SyncListResponsePreparedStackTypeStringList> = z.enum(
+    SyncListResponsePreparedStackTypeStringList,
+  );
+
+/** @internal */
+export const SyncListResponsePreparedStackDefaultStringList$inboundSchema:
+  z.ZodType<SyncListResponsePreparedStackDefaultStringList, unknown> = z.object(
+    {
+      type: SyncListResponsePreparedStackTypeStringList$inboundSchema,
+      value: z.array(z.string()),
+    },
+  );
+
+export function syncListResponsePreparedStackDefaultStringListFromJSON(
+  jsonString: string,
+): SafeParseResult<
+  SyncListResponsePreparedStackDefaultStringList,
+  SDKValidationError
+> {
+  return safeParse(
+    jsonString,
+    (x) =>
+      SyncListResponsePreparedStackDefaultStringList$inboundSchema.parse(
+        JSON.parse(x),
+      ),
+    `Failed to parse 'SyncListResponsePreparedStackDefaultStringList' from JSON`,
+  );
+}
+
+/** @internal */
+export const SyncListResponsePreparedStackTypeBoolean$inboundSchema: z.ZodEnum<
+  typeof SyncListResponsePreparedStackTypeBoolean
+> = z.enum(SyncListResponsePreparedStackTypeBoolean);
+
+/** @internal */
+export const SyncListResponsePreparedStackDefaultBoolean$inboundSchema:
+  z.ZodType<SyncListResponsePreparedStackDefaultBoolean, unknown> = z.object({
+    type: SyncListResponsePreparedStackTypeBoolean$inboundSchema,
+    value: z.boolean(),
+  });
+
+export function syncListResponsePreparedStackDefaultBooleanFromJSON(
+  jsonString: string,
+): SafeParseResult<
+  SyncListResponsePreparedStackDefaultBoolean,
+  SDKValidationError
+> {
+  return safeParse(
+    jsonString,
+    (x) =>
+      SyncListResponsePreparedStackDefaultBoolean$inboundSchema.parse(
+        JSON.parse(x),
+      ),
+    `Failed to parse 'SyncListResponsePreparedStackDefaultBoolean' from JSON`,
+  );
+}
+
+/** @internal */
+export const SyncListResponsePreparedStackTypeNumber$inboundSchema: z.ZodEnum<
+  typeof SyncListResponsePreparedStackTypeNumber
+> = z.enum(SyncListResponsePreparedStackTypeNumber);
+
+/** @internal */
+export const SyncListResponsePreparedStackDefaultNumber$inboundSchema:
+  z.ZodType<SyncListResponsePreparedStackDefaultNumber, unknown> = z.object({
+    type: SyncListResponsePreparedStackTypeNumber$inboundSchema,
+    value: z.string(),
+  });
+
+export function syncListResponsePreparedStackDefaultNumberFromJSON(
+  jsonString: string,
+): SafeParseResult<
+  SyncListResponsePreparedStackDefaultNumber,
+  SDKValidationError
+> {
+  return safeParse(
+    jsonString,
+    (x) =>
+      SyncListResponsePreparedStackDefaultNumber$inboundSchema.parse(
+        JSON.parse(x),
+      ),
+    `Failed to parse 'SyncListResponsePreparedStackDefaultNumber' from JSON`,
+  );
+}
+
+/** @internal */
+export const SyncListResponsePreparedStackTypeString$inboundSchema: z.ZodEnum<
+  typeof SyncListResponsePreparedStackTypeString
+> = z.enum(SyncListResponsePreparedStackTypeString);
+
+/** @internal */
+export const SyncListResponsePreparedStackDefaultString$inboundSchema:
+  z.ZodType<SyncListResponsePreparedStackDefaultString, unknown> = z.object({
+    type: SyncListResponsePreparedStackTypeString$inboundSchema,
+    value: z.string(),
+  });
+
+export function syncListResponsePreparedStackDefaultStringFromJSON(
+  jsonString: string,
+): SafeParseResult<
+  SyncListResponsePreparedStackDefaultString,
+  SDKValidationError
+> {
+  return safeParse(
+    jsonString,
+    (x) =>
+      SyncListResponsePreparedStackDefaultString$inboundSchema.parse(
+        JSON.parse(x),
+      ),
+    `Failed to parse 'SyncListResponsePreparedStackDefaultString' from JSON`,
+  );
+}
+
+/** @internal */
+export const SyncListResponsePreparedStackDefaultUnion$inboundSchema: z.ZodType<
+  SyncListResponsePreparedStackDefaultUnion,
+  unknown
+> = z.union([
+  z.lazy(() => SyncListResponsePreparedStackDefaultString$inboundSchema),
+  z.lazy(() => SyncListResponsePreparedStackDefaultNumber$inboundSchema),
+  z.lazy(() => SyncListResponsePreparedStackDefaultBoolean$inboundSchema),
+  z.lazy(() => SyncListResponsePreparedStackDefaultStringList$inboundSchema),
+  z.any(),
+]);
+
+export function syncListResponsePreparedStackDefaultUnionFromJSON(
+  jsonString: string,
+): SafeParseResult<
+  SyncListResponsePreparedStackDefaultUnion,
+  SDKValidationError
+> {
+  return safeParse(
+    jsonString,
+    (x) =>
+      SyncListResponsePreparedStackDefaultUnion$inboundSchema.parse(
+        JSON.parse(x),
+      ),
+    `Failed to parse 'SyncListResponsePreparedStackDefaultUnion' from JSON`,
+  );
+}
+
+/** @internal */
+export const SyncListResponsePreparedStackTypeEnvEnum$inboundSchema: z.ZodEnum<
+  typeof SyncListResponsePreparedStackTypeEnvEnum
+> = z.enum(SyncListResponsePreparedStackTypeEnvEnum);
+
+/** @internal */
+export const SyncListResponsePreparedStackTypeUnion$inboundSchema: z.ZodType<
+  SyncListResponsePreparedStackTypeUnion,
+  unknown
+> = z.union([SyncListResponsePreparedStackTypeEnvEnum$inboundSchema, z.any()]);
+
+export function syncListResponsePreparedStackTypeUnionFromJSON(
+  jsonString: string,
+): SafeParseResult<SyncListResponsePreparedStackTypeUnion, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) =>
+      SyncListResponsePreparedStackTypeUnion$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'SyncListResponsePreparedStackTypeUnion' from JSON`,
+  );
+}
+
+/** @internal */
+export const SyncListResponsePreparedStackEnv$inboundSchema: z.ZodType<
+  SyncListResponsePreparedStackEnv,
+  unknown
+> = z.object({
+  name: z.string(),
+  targetResources: z.nullable(z.array(z.string())).optional(),
+  type: z.nullable(
+    z.union([SyncListResponsePreparedStackTypeEnvEnum$inboundSchema, z.any()]),
+  ).optional(),
+});
+
+export function syncListResponsePreparedStackEnvFromJSON(
+  jsonString: string,
+): SafeParseResult<SyncListResponsePreparedStackEnv, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => SyncListResponsePreparedStackEnv$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'SyncListResponsePreparedStackEnv' from JSON`,
+  );
+}
+
+/** @internal */
+export const SyncListResponsePreparedStackKind$inboundSchema: z.ZodEnum<
+  typeof SyncListResponsePreparedStackKind
+> = z.enum(SyncListResponsePreparedStackKind);
 
 /** @internal */
 export const SyncListResponsePreparedStackPlatform$inboundSchema: z.ZodEnum<
@@ -5960,13 +10229,13 @@ export const SyncListResponsePreparedStackPlatform$inboundSchema: z.ZodEnum<
 > = z.enum(SyncListResponsePreparedStackPlatform);
 
 /** @internal */
-export const SyncListResponseProvidedBy$inboundSchema: z.ZodEnum<
-  typeof SyncListResponseProvidedBy
-> = z.enum(SyncListResponseProvidedBy);
+export const SyncListResponsePreparedStackProvidedBy$inboundSchema: z.ZodEnum<
+  typeof SyncListResponsePreparedStackProvidedBy
+> = z.enum(SyncListResponsePreparedStackProvidedBy);
 
 /** @internal */
-export const SyncListResponseValidation$inboundSchema: z.ZodType<
-  SyncListResponseValidation,
+export const SyncListResponsePreparedStackValidation$inboundSchema: z.ZodType<
+  SyncListResponsePreparedStackValidation,
   unknown
 > = z.object({
   format: z.nullable(z.string()).optional(),
@@ -5980,1586 +10249,1977 @@ export const SyncListResponseValidation$inboundSchema: z.ZodType<
   values: z.nullable(z.array(z.string())).optional(),
 });
 
-export function syncListResponseValidationFromJSON(
+export function syncListResponsePreparedStackValidationFromJSON(
   jsonString: string,
-): SafeParseResult<SyncListResponseValidation, SDKValidationError> {
+): SafeParseResult<
+  SyncListResponsePreparedStackValidation,
+  SDKValidationError
+> {
   return safeParse(
     jsonString,
-    (x) => SyncListResponseValidation$inboundSchema.parse(JSON.parse(x)),
-    `Failed to parse 'SyncListResponseValidation' from JSON`,
+    (x) =>
+      SyncListResponsePreparedStackValidation$inboundSchema.parse(
+        JSON.parse(x),
+      ),
+    `Failed to parse 'SyncListResponsePreparedStackValidation' from JSON`,
   );
 }
 
 /** @internal */
-export const SyncListResponseValidationUnion$inboundSchema: z.ZodType<
-  SyncListResponseValidationUnion,
-  unknown
-> = z.union([z.lazy(() => SyncListResponseValidation$inboundSchema), z.any()]);
+export const SyncListResponsePreparedStackValidationUnion$inboundSchema:
+  z.ZodType<SyncListResponsePreparedStackValidationUnion, unknown> = z.union([
+    z.lazy(() => SyncListResponsePreparedStackValidation$inboundSchema),
+    z.any(),
+  ]);
 
-export function syncListResponseValidationUnionFromJSON(
+export function syncListResponsePreparedStackValidationUnionFromJSON(
   jsonString: string,
-): SafeParseResult<SyncListResponseValidationUnion, SDKValidationError> {
+): SafeParseResult<
+  SyncListResponsePreparedStackValidationUnion,
+  SDKValidationError
+> {
   return safeParse(
     jsonString,
-    (x) => SyncListResponseValidationUnion$inboundSchema.parse(JSON.parse(x)),
-    `Failed to parse 'SyncListResponseValidationUnion' from JSON`,
+    (x) =>
+      SyncListResponsePreparedStackValidationUnion$inboundSchema.parse(
+        JSON.parse(x),
+      ),
+    `Failed to parse 'SyncListResponsePreparedStackValidationUnion' from JSON`,
   );
 }
 
 /** @internal */
-export const SyncListResponseInput$inboundSchema: z.ZodType<
-  SyncListResponseInput,
+export const SyncListResponsePreparedStackInput$inboundSchema: z.ZodType<
+  SyncListResponsePreparedStackInput,
   unknown
 > = z.object({
   default: z.nullable(
     z.union([
-      z.lazy(() => SyncListResponseDefaultString$inboundSchema),
-      z.lazy(() => SyncListResponseDefaultNumber$inboundSchema),
-      z.lazy(() => SyncListResponseDefaultBoolean$inboundSchema),
-      z.lazy(() => SyncListResponseDefaultStringList$inboundSchema),
+      z.lazy(() => SyncListResponsePreparedStackDefaultString$inboundSchema),
+      z.lazy(() => SyncListResponsePreparedStackDefaultNumber$inboundSchema),
+      z.lazy(() => SyncListResponsePreparedStackDefaultBoolean$inboundSchema),
+      z.lazy(() =>
+        SyncListResponsePreparedStackDefaultStringList$inboundSchema
+      ),
       z.any(),
     ]),
   ).optional(),
   description: z.string(),
-  env: z.array(z.lazy(() => SyncListResponseEnv$inboundSchema)).optional(),
+  env: z.array(z.lazy(() => SyncListResponsePreparedStackEnv$inboundSchema))
+    .optional(),
   id: z.string(),
-  kind: SyncListResponseKind$inboundSchema,
+  kind: SyncListResponsePreparedStackKind$inboundSchema,
   label: z.string(),
   placeholder: z.nullable(z.string()).optional(),
   platforms: z.nullable(
     z.array(SyncListResponsePreparedStackPlatform$inboundSchema),
   ).optional(),
-  providedBy: z.array(SyncListResponseProvidedBy$inboundSchema),
+  providedBy: z.array(SyncListResponsePreparedStackProvidedBy$inboundSchema),
   required: z.boolean(),
   validation: z.nullable(
-    z.union([z.lazy(() => SyncListResponseValidation$inboundSchema), z.any()]),
-  ).optional(),
-});
-
-export function syncListResponseInputFromJSON(
-  jsonString: string,
-): SafeParseResult<SyncListResponseInput, SDKValidationError> {
-  return safeParse(
-    jsonString,
-    (x) => SyncListResponseInput$inboundSchema.parse(JSON.parse(x)),
-    `Failed to parse 'SyncListResponseInput' from JSON`,
-  );
-}
-
-/** @internal */
-export const SyncListResponseManagementEnum$inboundSchema: z.ZodEnum<
-  typeof SyncListResponseManagementEnum
-> = z.enum(SyncListResponseManagementEnum);
-
-/** @internal */
-export const SyncListResponseOverrideAwResource$inboundSchema: z.ZodType<
-  SyncListResponseOverrideAwResource,
-  unknown
-> = z.object({
-  condition: z.nullable(z.record(z.string(), z.record(z.string(), z.string())))
-    .optional(),
-  resources: z.array(z.string()),
-});
-
-export function syncListResponseOverrideAwResourceFromJSON(
-  jsonString: string,
-): SafeParseResult<SyncListResponseOverrideAwResource, SDKValidationError> {
-  return safeParse(
-    jsonString,
-    (x) =>
-      SyncListResponseOverrideAwResource$inboundSchema.parse(JSON.parse(x)),
-    `Failed to parse 'SyncListResponseOverrideAwResource' from JSON`,
-  );
-}
-
-/** @internal */
-export const SyncListResponseOverrideAwStack$inboundSchema: z.ZodType<
-  SyncListResponseOverrideAwStack,
-  unknown
-> = z.object({
-  condition: z.nullable(z.record(z.string(), z.record(z.string(), z.string())))
-    .optional(),
-  resources: z.array(z.string()),
-});
-
-export function syncListResponseOverrideAwStackFromJSON(
-  jsonString: string,
-): SafeParseResult<SyncListResponseOverrideAwStack, SDKValidationError> {
-  return safeParse(
-    jsonString,
-    (x) => SyncListResponseOverrideAwStack$inboundSchema.parse(JSON.parse(x)),
-    `Failed to parse 'SyncListResponseOverrideAwStack' from JSON`,
-  );
-}
-
-/** @internal */
-export const SyncListResponseOverrideAwBinding$inboundSchema: z.ZodType<
-  SyncListResponseOverrideAwBinding,
-  unknown
-> = z.object({
-  resource: z.lazy(() => SyncListResponseOverrideAwResource$inboundSchema)
-    .optional(),
-  stack: z.lazy(() => SyncListResponseOverrideAwStack$inboundSchema).optional(),
-});
-
-export function syncListResponseOverrideAwBindingFromJSON(
-  jsonString: string,
-): SafeParseResult<SyncListResponseOverrideAwBinding, SDKValidationError> {
-  return safeParse(
-    jsonString,
-    (x) => SyncListResponseOverrideAwBinding$inboundSchema.parse(JSON.parse(x)),
-    `Failed to parse 'SyncListResponseOverrideAwBinding' from JSON`,
-  );
-}
-
-/** @internal */
-export const SyncListResponseOverrideEffect$inboundSchema: z.ZodEnum<
-  typeof SyncListResponseOverrideEffect
-> = z.enum(SyncListResponseOverrideEffect);
-
-/** @internal */
-export const SyncListResponseOverrideAwGrant$inboundSchema: z.ZodType<
-  SyncListResponseOverrideAwGrant,
-  unknown
-> = z.object({
-  actions: z.nullable(z.array(z.string())).optional(),
-  dataActions: z.nullable(z.array(z.string())).optional(),
-  permissions: z.nullable(z.array(z.string())).optional(),
-  predefinedRoles: z.nullable(z.array(z.string())).optional(),
-  residualPermissions: z.nullable(z.array(z.string())).optional(),
-});
-
-export function syncListResponseOverrideAwGrantFromJSON(
-  jsonString: string,
-): SafeParseResult<SyncListResponseOverrideAwGrant, SDKValidationError> {
-  return safeParse(
-    jsonString,
-    (x) => SyncListResponseOverrideAwGrant$inboundSchema.parse(JSON.parse(x)),
-    `Failed to parse 'SyncListResponseOverrideAwGrant' from JSON`,
-  );
-}
-
-/** @internal */
-export const SyncListResponseOverrideAw$inboundSchema: z.ZodType<
-  SyncListResponseOverrideAw,
-  unknown
-> = z.object({
-  binding: z.lazy(() => SyncListResponseOverrideAwBinding$inboundSchema),
-  description: z.nullable(z.string()).optional(),
-  effect: SyncListResponseOverrideEffect$inboundSchema.optional(),
-  grant: z.lazy(() => SyncListResponseOverrideAwGrant$inboundSchema),
-  label: z.nullable(z.string()).optional(),
-});
-
-export function syncListResponseOverrideAwFromJSON(
-  jsonString: string,
-): SafeParseResult<SyncListResponseOverrideAw, SDKValidationError> {
-  return safeParse(
-    jsonString,
-    (x) => SyncListResponseOverrideAw$inboundSchema.parse(JSON.parse(x)),
-    `Failed to parse 'SyncListResponseOverrideAw' from JSON`,
-  );
-}
-
-/** @internal */
-export const SyncListResponseOverrideAzureResource$inboundSchema: z.ZodType<
-  SyncListResponseOverrideAzureResource,
-  unknown
-> = z.object({
-  scope: z.string(),
-});
-
-export function syncListResponseOverrideAzureResourceFromJSON(
-  jsonString: string,
-): SafeParseResult<SyncListResponseOverrideAzureResource, SDKValidationError> {
-  return safeParse(
-    jsonString,
-    (x) =>
-      SyncListResponseOverrideAzureResource$inboundSchema.parse(JSON.parse(x)),
-    `Failed to parse 'SyncListResponseOverrideAzureResource' from JSON`,
-  );
-}
-
-/** @internal */
-export const SyncListResponseOverrideAzureStack$inboundSchema: z.ZodType<
-  SyncListResponseOverrideAzureStack,
-  unknown
-> = z.object({
-  scope: z.string(),
-});
-
-export function syncListResponseOverrideAzureStackFromJSON(
-  jsonString: string,
-): SafeParseResult<SyncListResponseOverrideAzureStack, SDKValidationError> {
-  return safeParse(
-    jsonString,
-    (x) =>
-      SyncListResponseOverrideAzureStack$inboundSchema.parse(JSON.parse(x)),
-    `Failed to parse 'SyncListResponseOverrideAzureStack' from JSON`,
-  );
-}
-
-/** @internal */
-export const SyncListResponseOverrideAzureBinding$inboundSchema: z.ZodType<
-  SyncListResponseOverrideAzureBinding,
-  unknown
-> = z.object({
-  resource: z.lazy(() => SyncListResponseOverrideAzureResource$inboundSchema)
-    .optional(),
-  stack: z.lazy(() => SyncListResponseOverrideAzureStack$inboundSchema)
-    .optional(),
-});
-
-export function syncListResponseOverrideAzureBindingFromJSON(
-  jsonString: string,
-): SafeParseResult<SyncListResponseOverrideAzureBinding, SDKValidationError> {
-  return safeParse(
-    jsonString,
-    (x) =>
-      SyncListResponseOverrideAzureBinding$inboundSchema.parse(JSON.parse(x)),
-    `Failed to parse 'SyncListResponseOverrideAzureBinding' from JSON`,
-  );
-}
-
-/** @internal */
-export const SyncListResponseOverrideAzureGrant$inboundSchema: z.ZodType<
-  SyncListResponseOverrideAzureGrant,
-  unknown
-> = z.object({
-  actions: z.nullable(z.array(z.string())).optional(),
-  dataActions: z.nullable(z.array(z.string())).optional(),
-  permissions: z.nullable(z.array(z.string())).optional(),
-  predefinedRoles: z.nullable(z.array(z.string())).optional(),
-  residualPermissions: z.nullable(z.array(z.string())).optional(),
-});
-
-export function syncListResponseOverrideAzureGrantFromJSON(
-  jsonString: string,
-): SafeParseResult<SyncListResponseOverrideAzureGrant, SDKValidationError> {
-  return safeParse(
-    jsonString,
-    (x) =>
-      SyncListResponseOverrideAzureGrant$inboundSchema.parse(JSON.parse(x)),
-    `Failed to parse 'SyncListResponseOverrideAzureGrant' from JSON`,
-  );
-}
-
-/** @internal */
-export const SyncListResponseOverrideAzure$inboundSchema: z.ZodType<
-  SyncListResponseOverrideAzure,
-  unknown
-> = z.object({
-  binding: z.lazy(() => SyncListResponseOverrideAzureBinding$inboundSchema),
-  description: z.nullable(z.string()).optional(),
-  grant: z.lazy(() => SyncListResponseOverrideAzureGrant$inboundSchema),
-  label: z.nullable(z.string()).optional(),
-});
-
-export function syncListResponseOverrideAzureFromJSON(
-  jsonString: string,
-): SafeParseResult<SyncListResponseOverrideAzure, SDKValidationError> {
-  return safeParse(
-    jsonString,
-    (x) => SyncListResponseOverrideAzure$inboundSchema.parse(JSON.parse(x)),
-    `Failed to parse 'SyncListResponseOverrideAzure' from JSON`,
-  );
-}
-
-/** @internal */
-export const SyncListResponseOverrideConditionResource$inboundSchema: z.ZodType<
-  SyncListResponseOverrideConditionResource,
-  unknown
-> = z.object({
-  expression: z.string(),
-  title: z.string(),
-});
-
-export function syncListResponseOverrideConditionResourceFromJSON(
-  jsonString: string,
-): SafeParseResult<
-  SyncListResponseOverrideConditionResource,
-  SDKValidationError
-> {
-  return safeParse(
-    jsonString,
-    (x) =>
-      SyncListResponseOverrideConditionResource$inboundSchema.parse(
-        JSON.parse(x),
-      ),
-    `Failed to parse 'SyncListResponseOverrideConditionResource' from JSON`,
-  );
-}
-
-/** @internal */
-export const SyncListResponseOverrideResourceConditionUnion$inboundSchema:
-  z.ZodType<SyncListResponseOverrideResourceConditionUnion, unknown> = z.union([
-    z.lazy(() => SyncListResponseOverrideConditionResource$inboundSchema),
-    z.any(),
-  ]);
-
-export function syncListResponseOverrideResourceConditionUnionFromJSON(
-  jsonString: string,
-): SafeParseResult<
-  SyncListResponseOverrideResourceConditionUnion,
-  SDKValidationError
-> {
-  return safeParse(
-    jsonString,
-    (x) =>
-      SyncListResponseOverrideResourceConditionUnion$inboundSchema.parse(
-        JSON.parse(x),
-      ),
-    `Failed to parse 'SyncListResponseOverrideResourceConditionUnion' from JSON`,
-  );
-}
-
-/** @internal */
-export const SyncListResponseOverrideGcpResource$inboundSchema: z.ZodType<
-  SyncListResponseOverrideGcpResource,
-  unknown
-> = z.object({
-  condition: z.nullable(
     z.union([
-      z.lazy(() => SyncListResponseOverrideConditionResource$inboundSchema),
+      z.lazy(() => SyncListResponsePreparedStackValidation$inboundSchema),
       z.any(),
     ]),
   ).optional(),
-  scope: z.string(),
 });
 
-export function syncListResponseOverrideGcpResourceFromJSON(
+export function syncListResponsePreparedStackInputFromJSON(
   jsonString: string,
-): SafeParseResult<SyncListResponseOverrideGcpResource, SDKValidationError> {
+): SafeParseResult<SyncListResponsePreparedStackInput, SDKValidationError> {
   return safeParse(
     jsonString,
     (x) =>
-      SyncListResponseOverrideGcpResource$inboundSchema.parse(JSON.parse(x)),
-    `Failed to parse 'SyncListResponseOverrideGcpResource' from JSON`,
+      SyncListResponsePreparedStackInput$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'SyncListResponsePreparedStackInput' from JSON`,
   );
 }
 
 /** @internal */
-export const SyncListResponseOverrideConditionStack$inboundSchema: z.ZodType<
-  SyncListResponseOverrideConditionStack,
-  unknown
-> = z.object({
-  expression: z.string(),
-  title: z.string(),
-});
-
-export function syncListResponseOverrideConditionStackFromJSON(
-  jsonString: string,
-): SafeParseResult<SyncListResponseOverrideConditionStack, SDKValidationError> {
-  return safeParse(
-    jsonString,
-    (x) =>
-      SyncListResponseOverrideConditionStack$inboundSchema.parse(JSON.parse(x)),
-    `Failed to parse 'SyncListResponseOverrideConditionStack' from JSON`,
+export const SyncListResponsePreparedStackManagementEnum$inboundSchema:
+  z.ZodEnum<typeof SyncListResponsePreparedStackManagementEnum> = z.enum(
+    SyncListResponsePreparedStackManagementEnum,
   );
-}
 
 /** @internal */
-export const SyncListResponseOverrideStackConditionUnion$inboundSchema:
-  z.ZodType<SyncListResponseOverrideStackConditionUnion, unknown> = z.union([
-    z.lazy(() => SyncListResponseOverrideConditionStack$inboundSchema),
-    z.any(),
-  ]);
+export const SyncListResponsePreparedStackOverrideAwResource$inboundSchema:
+  z.ZodType<SyncListResponsePreparedStackOverrideAwResource, unknown> = z
+    .object({
+      condition: z.nullable(
+        z.record(z.string(), z.record(z.string(), z.string())),
+      ).optional(),
+      resources: z.array(z.string()),
+    });
 
-export function syncListResponseOverrideStackConditionUnionFromJSON(
+export function syncListResponsePreparedStackOverrideAwResourceFromJSON(
   jsonString: string,
 ): SafeParseResult<
-  SyncListResponseOverrideStackConditionUnion,
+  SyncListResponsePreparedStackOverrideAwResource,
   SDKValidationError
 > {
   return safeParse(
     jsonString,
     (x) =>
-      SyncListResponseOverrideStackConditionUnion$inboundSchema.parse(
+      SyncListResponsePreparedStackOverrideAwResource$inboundSchema.parse(
         JSON.parse(x),
       ),
-    `Failed to parse 'SyncListResponseOverrideStackConditionUnion' from JSON`,
+    `Failed to parse 'SyncListResponsePreparedStackOverrideAwResource' from JSON`,
   );
 }
 
 /** @internal */
-export const SyncListResponseOverrideGcpStack$inboundSchema: z.ZodType<
-  SyncListResponseOverrideGcpStack,
-  unknown
-> = z.object({
-  condition: z.nullable(
-    z.union([
-      z.lazy(() => SyncListResponseOverrideConditionStack$inboundSchema),
-      z.any(),
-    ]),
-  ).optional(),
-  scope: z.string(),
-});
+export const SyncListResponsePreparedStackOverrideAwStack$inboundSchema:
+  z.ZodType<SyncListResponsePreparedStackOverrideAwStack, unknown> = z.object({
+    condition: z.nullable(
+      z.record(z.string(), z.record(z.string(), z.string())),
+    ).optional(),
+    resources: z.array(z.string()),
+  });
 
-export function syncListResponseOverrideGcpStackFromJSON(
+export function syncListResponsePreparedStackOverrideAwStackFromJSON(
   jsonString: string,
-): SafeParseResult<SyncListResponseOverrideGcpStack, SDKValidationError> {
-  return safeParse(
-    jsonString,
-    (x) => SyncListResponseOverrideGcpStack$inboundSchema.parse(JSON.parse(x)),
-    `Failed to parse 'SyncListResponseOverrideGcpStack' from JSON`,
-  );
-}
-
-/** @internal */
-export const SyncListResponseOverrideGcpBinding$inboundSchema: z.ZodType<
-  SyncListResponseOverrideGcpBinding,
-  unknown
-> = z.object({
-  resource: z.lazy(() => SyncListResponseOverrideGcpResource$inboundSchema)
-    .optional(),
-  stack: z.lazy(() => SyncListResponseOverrideGcpStack$inboundSchema)
-    .optional(),
-});
-
-export function syncListResponseOverrideGcpBindingFromJSON(
-  jsonString: string,
-): SafeParseResult<SyncListResponseOverrideGcpBinding, SDKValidationError> {
+): SafeParseResult<
+  SyncListResponsePreparedStackOverrideAwStack,
+  SDKValidationError
+> {
   return safeParse(
     jsonString,
     (x) =>
-      SyncListResponseOverrideGcpBinding$inboundSchema.parse(JSON.parse(x)),
-    `Failed to parse 'SyncListResponseOverrideGcpBinding' from JSON`,
+      SyncListResponsePreparedStackOverrideAwStack$inboundSchema.parse(
+        JSON.parse(x),
+      ),
+    `Failed to parse 'SyncListResponsePreparedStackOverrideAwStack' from JSON`,
   );
 }
 
 /** @internal */
-export const SyncListResponseOverrideGcpGrant$inboundSchema: z.ZodType<
-  SyncListResponseOverrideGcpGrant,
-  unknown
-> = z.object({
-  actions: z.nullable(z.array(z.string())).optional(),
-  dataActions: z.nullable(z.array(z.string())).optional(),
-  permissions: z.nullable(z.array(z.string())).optional(),
-  predefinedRoles: z.nullable(z.array(z.string())).optional(),
-  residualPermissions: z.nullable(z.array(z.string())).optional(),
-});
+export const SyncListResponsePreparedStackOverrideAwBinding$inboundSchema:
+  z.ZodType<SyncListResponsePreparedStackOverrideAwBinding, unknown> = z.object(
+    {
+      resource: z.lazy(() =>
+        SyncListResponsePreparedStackOverrideAwResource$inboundSchema
+      ).optional(),
+      stack: z.lazy(() =>
+        SyncListResponsePreparedStackOverrideAwStack$inboundSchema
+      ).optional(),
+    },
+  );
 
-export function syncListResponseOverrideGcpGrantFromJSON(
+export function syncListResponsePreparedStackOverrideAwBindingFromJSON(
   jsonString: string,
-): SafeParseResult<SyncListResponseOverrideGcpGrant, SDKValidationError> {
+): SafeParseResult<
+  SyncListResponsePreparedStackOverrideAwBinding,
+  SDKValidationError
+> {
   return safeParse(
     jsonString,
-    (x) => SyncListResponseOverrideGcpGrant$inboundSchema.parse(JSON.parse(x)),
-    `Failed to parse 'SyncListResponseOverrideGcpGrant' from JSON`,
+    (x) =>
+      SyncListResponsePreparedStackOverrideAwBinding$inboundSchema.parse(
+        JSON.parse(x),
+      ),
+    `Failed to parse 'SyncListResponsePreparedStackOverrideAwBinding' from JSON`,
   );
 }
 
 /** @internal */
-export const SyncListResponseOverrideGcp$inboundSchema: z.ZodType<
-  SyncListResponseOverrideGcp,
+export const SyncListResponsePreparedStackOverrideEffect$inboundSchema:
+  z.ZodEnum<typeof SyncListResponsePreparedStackOverrideEffect> = z.enum(
+    SyncListResponsePreparedStackOverrideEffect,
+  );
+
+/** @internal */
+export const SyncListResponsePreparedStackOverrideAwGrant$inboundSchema:
+  z.ZodType<SyncListResponsePreparedStackOverrideAwGrant, unknown> = z.object({
+    actions: z.nullable(z.array(z.string())).optional(),
+    dataActions: z.nullable(z.array(z.string())).optional(),
+    permissions: z.nullable(z.array(z.string())).optional(),
+    predefinedRoles: z.nullable(z.array(z.string())).optional(),
+    residualPermissions: z.nullable(z.array(z.string())).optional(),
+  });
+
+export function syncListResponsePreparedStackOverrideAwGrantFromJSON(
+  jsonString: string,
+): SafeParseResult<
+  SyncListResponsePreparedStackOverrideAwGrant,
+  SDKValidationError
+> {
+  return safeParse(
+    jsonString,
+    (x) =>
+      SyncListResponsePreparedStackOverrideAwGrant$inboundSchema.parse(
+        JSON.parse(x),
+      ),
+    `Failed to parse 'SyncListResponsePreparedStackOverrideAwGrant' from JSON`,
+  );
+}
+
+/** @internal */
+export const SyncListResponsePreparedStackOverrideAw$inboundSchema: z.ZodType<
+  SyncListResponsePreparedStackOverrideAw,
   unknown
 > = z.object({
-  binding: z.lazy(() => SyncListResponseOverrideGcpBinding$inboundSchema),
+  binding: z.lazy(() =>
+    SyncListResponsePreparedStackOverrideAwBinding$inboundSchema
+  ),
   description: z.nullable(z.string()).optional(),
-  grant: z.lazy(() => SyncListResponseOverrideGcpGrant$inboundSchema),
+  effect: SyncListResponsePreparedStackOverrideEffect$inboundSchema.optional(),
+  grant: z.lazy(() =>
+    SyncListResponsePreparedStackOverrideAwGrant$inboundSchema
+  ),
   label: z.nullable(z.string()).optional(),
 });
 
-export function syncListResponseOverrideGcpFromJSON(
+export function syncListResponsePreparedStackOverrideAwFromJSON(
   jsonString: string,
-): SafeParseResult<SyncListResponseOverrideGcp, SDKValidationError> {
+): SafeParseResult<
+  SyncListResponsePreparedStackOverrideAw,
+  SDKValidationError
+> {
   return safeParse(
     jsonString,
-    (x) => SyncListResponseOverrideGcp$inboundSchema.parse(JSON.parse(x)),
-    `Failed to parse 'SyncListResponseOverrideGcp' from JSON`,
+    (x) =>
+      SyncListResponsePreparedStackOverrideAw$inboundSchema.parse(
+        JSON.parse(x),
+      ),
+    `Failed to parse 'SyncListResponsePreparedStackOverrideAw' from JSON`,
   );
 }
 
 /** @internal */
-export const SyncListResponseOverridePlatforms$inboundSchema: z.ZodType<
-  SyncListResponseOverridePlatforms,
+export const SyncListResponsePreparedStackOverrideAzureResource$inboundSchema:
+  z.ZodType<SyncListResponsePreparedStackOverrideAzureResource, unknown> = z
+    .object({
+      scope: z.string(),
+    });
+
+export function syncListResponsePreparedStackOverrideAzureResourceFromJSON(
+  jsonString: string,
+): SafeParseResult<
+  SyncListResponsePreparedStackOverrideAzureResource,
+  SDKValidationError
+> {
+  return safeParse(
+    jsonString,
+    (x) =>
+      SyncListResponsePreparedStackOverrideAzureResource$inboundSchema.parse(
+        JSON.parse(x),
+      ),
+    `Failed to parse 'SyncListResponsePreparedStackOverrideAzureResource' from JSON`,
+  );
+}
+
+/** @internal */
+export const SyncListResponsePreparedStackOverrideAzureStack$inboundSchema:
+  z.ZodType<SyncListResponsePreparedStackOverrideAzureStack, unknown> = z
+    .object({
+      scope: z.string(),
+    });
+
+export function syncListResponsePreparedStackOverrideAzureStackFromJSON(
+  jsonString: string,
+): SafeParseResult<
+  SyncListResponsePreparedStackOverrideAzureStack,
+  SDKValidationError
+> {
+  return safeParse(
+    jsonString,
+    (x) =>
+      SyncListResponsePreparedStackOverrideAzureStack$inboundSchema.parse(
+        JSON.parse(x),
+      ),
+    `Failed to parse 'SyncListResponsePreparedStackOverrideAzureStack' from JSON`,
+  );
+}
+
+/** @internal */
+export const SyncListResponsePreparedStackOverrideAzureBinding$inboundSchema:
+  z.ZodType<SyncListResponsePreparedStackOverrideAzureBinding, unknown> = z
+    .object({
+      resource: z.lazy(() =>
+        SyncListResponsePreparedStackOverrideAzureResource$inboundSchema
+      ).optional(),
+      stack: z.lazy(() =>
+        SyncListResponsePreparedStackOverrideAzureStack$inboundSchema
+      ).optional(),
+    });
+
+export function syncListResponsePreparedStackOverrideAzureBindingFromJSON(
+  jsonString: string,
+): SafeParseResult<
+  SyncListResponsePreparedStackOverrideAzureBinding,
+  SDKValidationError
+> {
+  return safeParse(
+    jsonString,
+    (x) =>
+      SyncListResponsePreparedStackOverrideAzureBinding$inboundSchema.parse(
+        JSON.parse(x),
+      ),
+    `Failed to parse 'SyncListResponsePreparedStackOverrideAzureBinding' from JSON`,
+  );
+}
+
+/** @internal */
+export const SyncListResponsePreparedStackOverrideAzureGrant$inboundSchema:
+  z.ZodType<SyncListResponsePreparedStackOverrideAzureGrant, unknown> = z
+    .object({
+      actions: z.nullable(z.array(z.string())).optional(),
+      dataActions: z.nullable(z.array(z.string())).optional(),
+      permissions: z.nullable(z.array(z.string())).optional(),
+      predefinedRoles: z.nullable(z.array(z.string())).optional(),
+      residualPermissions: z.nullable(z.array(z.string())).optional(),
+    });
+
+export function syncListResponsePreparedStackOverrideAzureGrantFromJSON(
+  jsonString: string,
+): SafeParseResult<
+  SyncListResponsePreparedStackOverrideAzureGrant,
+  SDKValidationError
+> {
+  return safeParse(
+    jsonString,
+    (x) =>
+      SyncListResponsePreparedStackOverrideAzureGrant$inboundSchema.parse(
+        JSON.parse(x),
+      ),
+    `Failed to parse 'SyncListResponsePreparedStackOverrideAzureGrant' from JSON`,
+  );
+}
+
+/** @internal */
+export const SyncListResponsePreparedStackOverrideAzure$inboundSchema:
+  z.ZodType<SyncListResponsePreparedStackOverrideAzure, unknown> = z.object({
+    binding: z.lazy(() =>
+      SyncListResponsePreparedStackOverrideAzureBinding$inboundSchema
+    ),
+    description: z.nullable(z.string()).optional(),
+    grant: z.lazy(() =>
+      SyncListResponsePreparedStackOverrideAzureGrant$inboundSchema
+    ),
+    label: z.nullable(z.string()).optional(),
+  });
+
+export function syncListResponsePreparedStackOverrideAzureFromJSON(
+  jsonString: string,
+): SafeParseResult<
+  SyncListResponsePreparedStackOverrideAzure,
+  SDKValidationError
+> {
+  return safeParse(
+    jsonString,
+    (x) =>
+      SyncListResponsePreparedStackOverrideAzure$inboundSchema.parse(
+        JSON.parse(x),
+      ),
+    `Failed to parse 'SyncListResponsePreparedStackOverrideAzure' from JSON`,
+  );
+}
+
+/** @internal */
+export const SyncListResponsePreparedStackOverrideConditionResource$inboundSchema:
+  z.ZodType<SyncListResponsePreparedStackOverrideConditionResource, unknown> = z
+    .object({
+      expression: z.string(),
+      title: z.string(),
+    });
+
+export function syncListResponsePreparedStackOverrideConditionResourceFromJSON(
+  jsonString: string,
+): SafeParseResult<
+  SyncListResponsePreparedStackOverrideConditionResource,
+  SDKValidationError
+> {
+  return safeParse(
+    jsonString,
+    (x) =>
+      SyncListResponsePreparedStackOverrideConditionResource$inboundSchema
+        .parse(JSON.parse(x)),
+    `Failed to parse 'SyncListResponsePreparedStackOverrideConditionResource' from JSON`,
+  );
+}
+
+/** @internal */
+export const SyncListResponsePreparedStackOverrideResourceConditionUnion$inboundSchema:
+  z.ZodType<
+    SyncListResponsePreparedStackOverrideResourceConditionUnion,
+    unknown
+  > = z.union([
+    z.lazy(() =>
+      SyncListResponsePreparedStackOverrideConditionResource$inboundSchema
+    ),
+    z.any(),
+  ]);
+
+export function syncListResponsePreparedStackOverrideResourceConditionUnionFromJSON(
+  jsonString: string,
+): SafeParseResult<
+  SyncListResponsePreparedStackOverrideResourceConditionUnion,
+  SDKValidationError
+> {
+  return safeParse(
+    jsonString,
+    (x) =>
+      SyncListResponsePreparedStackOverrideResourceConditionUnion$inboundSchema
+        .parse(JSON.parse(x)),
+    `Failed to parse 'SyncListResponsePreparedStackOverrideResourceConditionUnion' from JSON`,
+  );
+}
+
+/** @internal */
+export const SyncListResponsePreparedStackOverrideGcpResource$inboundSchema:
+  z.ZodType<SyncListResponsePreparedStackOverrideGcpResource, unknown> = z
+    .object({
+      condition: z.nullable(
+        z.union([
+          z.lazy(() =>
+            SyncListResponsePreparedStackOverrideConditionResource$inboundSchema
+          ),
+          z.any(),
+        ]),
+      ).optional(),
+      scope: z.string(),
+    });
+
+export function syncListResponsePreparedStackOverrideGcpResourceFromJSON(
+  jsonString: string,
+): SafeParseResult<
+  SyncListResponsePreparedStackOverrideGcpResource,
+  SDKValidationError
+> {
+  return safeParse(
+    jsonString,
+    (x) =>
+      SyncListResponsePreparedStackOverrideGcpResource$inboundSchema.parse(
+        JSON.parse(x),
+      ),
+    `Failed to parse 'SyncListResponsePreparedStackOverrideGcpResource' from JSON`,
+  );
+}
+
+/** @internal */
+export const SyncListResponsePreparedStackOverrideConditionStack$inboundSchema:
+  z.ZodType<SyncListResponsePreparedStackOverrideConditionStack, unknown> = z
+    .object({
+      expression: z.string(),
+      title: z.string(),
+    });
+
+export function syncListResponsePreparedStackOverrideConditionStackFromJSON(
+  jsonString: string,
+): SafeParseResult<
+  SyncListResponsePreparedStackOverrideConditionStack,
+  SDKValidationError
+> {
+  return safeParse(
+    jsonString,
+    (x) =>
+      SyncListResponsePreparedStackOverrideConditionStack$inboundSchema.parse(
+        JSON.parse(x),
+      ),
+    `Failed to parse 'SyncListResponsePreparedStackOverrideConditionStack' from JSON`,
+  );
+}
+
+/** @internal */
+export const SyncListResponsePreparedStackOverrideStackConditionUnion$inboundSchema:
+  z.ZodType<SyncListResponsePreparedStackOverrideStackConditionUnion, unknown> =
+    z.union([
+      z.lazy(() =>
+        SyncListResponsePreparedStackOverrideConditionStack$inboundSchema
+      ),
+      z.any(),
+    ]);
+
+export function syncListResponsePreparedStackOverrideStackConditionUnionFromJSON(
+  jsonString: string,
+): SafeParseResult<
+  SyncListResponsePreparedStackOverrideStackConditionUnion,
+  SDKValidationError
+> {
+  return safeParse(
+    jsonString,
+    (x) =>
+      SyncListResponsePreparedStackOverrideStackConditionUnion$inboundSchema
+        .parse(JSON.parse(x)),
+    `Failed to parse 'SyncListResponsePreparedStackOverrideStackConditionUnion' from JSON`,
+  );
+}
+
+/** @internal */
+export const SyncListResponsePreparedStackOverrideGcpStack$inboundSchema:
+  z.ZodType<SyncListResponsePreparedStackOverrideGcpStack, unknown> = z.object({
+    condition: z.nullable(
+      z.union([
+        z.lazy(() =>
+          SyncListResponsePreparedStackOverrideConditionStack$inboundSchema
+        ),
+        z.any(),
+      ]),
+    ).optional(),
+    scope: z.string(),
+  });
+
+export function syncListResponsePreparedStackOverrideGcpStackFromJSON(
+  jsonString: string,
+): SafeParseResult<
+  SyncListResponsePreparedStackOverrideGcpStack,
+  SDKValidationError
+> {
+  return safeParse(
+    jsonString,
+    (x) =>
+      SyncListResponsePreparedStackOverrideGcpStack$inboundSchema.parse(
+        JSON.parse(x),
+      ),
+    `Failed to parse 'SyncListResponsePreparedStackOverrideGcpStack' from JSON`,
+  );
+}
+
+/** @internal */
+export const SyncListResponsePreparedStackOverrideGcpBinding$inboundSchema:
+  z.ZodType<SyncListResponsePreparedStackOverrideGcpBinding, unknown> = z
+    .object({
+      resource: z.lazy(() =>
+        SyncListResponsePreparedStackOverrideGcpResource$inboundSchema
+      ).optional(),
+      stack: z.lazy(() =>
+        SyncListResponsePreparedStackOverrideGcpStack$inboundSchema
+      ).optional(),
+    });
+
+export function syncListResponsePreparedStackOverrideGcpBindingFromJSON(
+  jsonString: string,
+): SafeParseResult<
+  SyncListResponsePreparedStackOverrideGcpBinding,
+  SDKValidationError
+> {
+  return safeParse(
+    jsonString,
+    (x) =>
+      SyncListResponsePreparedStackOverrideGcpBinding$inboundSchema.parse(
+        JSON.parse(x),
+      ),
+    `Failed to parse 'SyncListResponsePreparedStackOverrideGcpBinding' from JSON`,
+  );
+}
+
+/** @internal */
+export const SyncListResponsePreparedStackOverrideGcpGrant$inboundSchema:
+  z.ZodType<SyncListResponsePreparedStackOverrideGcpGrant, unknown> = z.object({
+    actions: z.nullable(z.array(z.string())).optional(),
+    dataActions: z.nullable(z.array(z.string())).optional(),
+    permissions: z.nullable(z.array(z.string())).optional(),
+    predefinedRoles: z.nullable(z.array(z.string())).optional(),
+    residualPermissions: z.nullable(z.array(z.string())).optional(),
+  });
+
+export function syncListResponsePreparedStackOverrideGcpGrantFromJSON(
+  jsonString: string,
+): SafeParseResult<
+  SyncListResponsePreparedStackOverrideGcpGrant,
+  SDKValidationError
+> {
+  return safeParse(
+    jsonString,
+    (x) =>
+      SyncListResponsePreparedStackOverrideGcpGrant$inboundSchema.parse(
+        JSON.parse(x),
+      ),
+    `Failed to parse 'SyncListResponsePreparedStackOverrideGcpGrant' from JSON`,
+  );
+}
+
+/** @internal */
+export const SyncListResponsePreparedStackOverrideGcp$inboundSchema: z.ZodType<
+  SyncListResponsePreparedStackOverrideGcp,
   unknown
 > = z.object({
-  aws: z.nullable(
-    z.array(z.lazy(() => SyncListResponseOverrideAw$inboundSchema)),
-  ).optional(),
-  azure: z.nullable(
-    z.array(z.lazy(() => SyncListResponseOverrideAzure$inboundSchema)),
-  ).optional(),
-  gcp: z.nullable(
-    z.array(z.lazy(() => SyncListResponseOverrideGcp$inboundSchema)),
-  ).optional(),
+  binding: z.lazy(() =>
+    SyncListResponsePreparedStackOverrideGcpBinding$inboundSchema
+  ),
+  description: z.nullable(z.string()).optional(),
+  grant: z.lazy(() =>
+    SyncListResponsePreparedStackOverrideGcpGrant$inboundSchema
+  ),
+  label: z.nullable(z.string()).optional(),
 });
 
-export function syncListResponseOverridePlatformsFromJSON(
+export function syncListResponsePreparedStackOverrideGcpFromJSON(
   jsonString: string,
-): SafeParseResult<SyncListResponseOverridePlatforms, SDKValidationError> {
+): SafeParseResult<
+  SyncListResponsePreparedStackOverrideGcp,
+  SDKValidationError
+> {
   return safeParse(
     jsonString,
-    (x) => SyncListResponseOverridePlatforms$inboundSchema.parse(JSON.parse(x)),
-    `Failed to parse 'SyncListResponseOverridePlatforms' from JSON`,
+    (x) =>
+      SyncListResponsePreparedStackOverrideGcp$inboundSchema.parse(
+        JSON.parse(x),
+      ),
+    `Failed to parse 'SyncListResponsePreparedStackOverrideGcp' from JSON`,
   );
 }
 
 /** @internal */
-export const SyncListResponseOverride$inboundSchema: z.ZodType<
-  SyncListResponseOverride,
+export const SyncListResponsePreparedStackOverridePlatforms$inboundSchema:
+  z.ZodType<SyncListResponsePreparedStackOverridePlatforms, unknown> = z.object(
+    {
+      aws: z.nullable(z.array(z.lazy(() =>
+        SyncListResponsePreparedStackOverrideAw$inboundSchema
+      ))).optional(),
+      azure: z.nullable(z.array(z.lazy(() =>
+        SyncListResponsePreparedStackOverrideAzure$inboundSchema
+      ))).optional(),
+      gcp: z.nullable(z.array(z.lazy(() =>
+        SyncListResponsePreparedStackOverrideGcp$inboundSchema
+      ))).optional(),
+    },
+  );
+
+export function syncListResponsePreparedStackOverridePlatformsFromJSON(
+  jsonString: string,
+): SafeParseResult<
+  SyncListResponsePreparedStackOverridePlatforms,
+  SDKValidationError
+> {
+  return safeParse(
+    jsonString,
+    (x) =>
+      SyncListResponsePreparedStackOverridePlatforms$inboundSchema.parse(
+        JSON.parse(x),
+      ),
+    `Failed to parse 'SyncListResponsePreparedStackOverridePlatforms' from JSON`,
+  );
+}
+
+/** @internal */
+export const SyncListResponsePreparedStackOverride$inboundSchema: z.ZodType<
+  SyncListResponsePreparedStackOverride,
   unknown
 > = z.object({
   description: z.string(),
   id: z.string(),
-  platforms: z.lazy(() => SyncListResponseOverridePlatforms$inboundSchema),
+  platforms: z.lazy(() =>
+    SyncListResponsePreparedStackOverridePlatforms$inboundSchema
+  ),
 });
 
-export function syncListResponseOverrideFromJSON(
+export function syncListResponsePreparedStackOverrideFromJSON(
   jsonString: string,
-): SafeParseResult<SyncListResponseOverride, SDKValidationError> {
+): SafeParseResult<SyncListResponsePreparedStackOverride, SDKValidationError> {
   return safeParse(
     jsonString,
-    (x) => SyncListResponseOverride$inboundSchema.parse(JSON.parse(x)),
-    `Failed to parse 'SyncListResponseOverride' from JSON`,
+    (x) =>
+      SyncListResponsePreparedStackOverride$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'SyncListResponsePreparedStackOverride' from JSON`,
   );
 }
 
 /** @internal */
-export const SyncListResponseOverrideUnion$inboundSchema: z.ZodType<
-  SyncListResponseOverrideUnion,
-  unknown
-> = z.union([z.lazy(() => SyncListResponseOverride$inboundSchema), z.string()]);
+export const SyncListResponsePreparedStackOverrideUnion$inboundSchema:
+  z.ZodType<SyncListResponsePreparedStackOverrideUnion, unknown> = z.union([
+    z.lazy(() => SyncListResponsePreparedStackOverride$inboundSchema),
+    z.string(),
+  ]);
 
-export function syncListResponseOverrideUnionFromJSON(
+export function syncListResponsePreparedStackOverrideUnionFromJSON(
   jsonString: string,
-): SafeParseResult<SyncListResponseOverrideUnion, SDKValidationError> {
+): SafeParseResult<
+  SyncListResponsePreparedStackOverrideUnion,
+  SDKValidationError
+> {
   return safeParse(
     jsonString,
-    (x) => SyncListResponseOverrideUnion$inboundSchema.parse(JSON.parse(x)),
-    `Failed to parse 'SyncListResponseOverrideUnion' from JSON`,
+    (x) =>
+      SyncListResponsePreparedStackOverrideUnion$inboundSchema.parse(
+        JSON.parse(x),
+      ),
+    `Failed to parse 'SyncListResponsePreparedStackOverrideUnion' from JSON`,
   );
 }
 
 /** @internal */
-export const SyncListResponseManagement2$inboundSchema: z.ZodType<
-  SyncListResponseManagement2,
+export const SyncListResponsePreparedStackManagement2$inboundSchema: z.ZodType<
+  SyncListResponsePreparedStackManagement2,
   unknown
 > = z.object({
   override: z.record(
     z.string(),
     z.array(z.union([
-      z.lazy(() => SyncListResponseOverride$inboundSchema),
+      z.lazy(() => SyncListResponsePreparedStackOverride$inboundSchema),
       z.string(),
     ])),
   ),
 });
 
-export function syncListResponseManagement2FromJSON(
-  jsonString: string,
-): SafeParseResult<SyncListResponseManagement2, SDKValidationError> {
-  return safeParse(
-    jsonString,
-    (x) => SyncListResponseManagement2$inboundSchema.parse(JSON.parse(x)),
-    `Failed to parse 'SyncListResponseManagement2' from JSON`,
-  );
-}
-
-/** @internal */
-export const SyncListResponseExtendAwResource$inboundSchema: z.ZodType<
-  SyncListResponseExtendAwResource,
-  unknown
-> = z.object({
-  condition: z.nullable(z.record(z.string(), z.record(z.string(), z.string())))
-    .optional(),
-  resources: z.array(z.string()),
-});
-
-export function syncListResponseExtendAwResourceFromJSON(
-  jsonString: string,
-): SafeParseResult<SyncListResponseExtendAwResource, SDKValidationError> {
-  return safeParse(
-    jsonString,
-    (x) => SyncListResponseExtendAwResource$inboundSchema.parse(JSON.parse(x)),
-    `Failed to parse 'SyncListResponseExtendAwResource' from JSON`,
-  );
-}
-
-/** @internal */
-export const SyncListResponseExtendAwStack$inboundSchema: z.ZodType<
-  SyncListResponseExtendAwStack,
-  unknown
-> = z.object({
-  condition: z.nullable(z.record(z.string(), z.record(z.string(), z.string())))
-    .optional(),
-  resources: z.array(z.string()),
-});
-
-export function syncListResponseExtendAwStackFromJSON(
-  jsonString: string,
-): SafeParseResult<SyncListResponseExtendAwStack, SDKValidationError> {
-  return safeParse(
-    jsonString,
-    (x) => SyncListResponseExtendAwStack$inboundSchema.parse(JSON.parse(x)),
-    `Failed to parse 'SyncListResponseExtendAwStack' from JSON`,
-  );
-}
-
-/** @internal */
-export const SyncListResponseExtendAwBinding$inboundSchema: z.ZodType<
-  SyncListResponseExtendAwBinding,
-  unknown
-> = z.object({
-  resource: z.lazy(() => SyncListResponseExtendAwResource$inboundSchema)
-    .optional(),
-  stack: z.lazy(() => SyncListResponseExtendAwStack$inboundSchema).optional(),
-});
-
-export function syncListResponseExtendAwBindingFromJSON(
-  jsonString: string,
-): SafeParseResult<SyncListResponseExtendAwBinding, SDKValidationError> {
-  return safeParse(
-    jsonString,
-    (x) => SyncListResponseExtendAwBinding$inboundSchema.parse(JSON.parse(x)),
-    `Failed to parse 'SyncListResponseExtendAwBinding' from JSON`,
-  );
-}
-
-/** @internal */
-export const SyncListResponseExtendEffect$inboundSchema: z.ZodEnum<
-  typeof SyncListResponseExtendEffect
-> = z.enum(SyncListResponseExtendEffect);
-
-/** @internal */
-export const SyncListResponseExtendAwGrant$inboundSchema: z.ZodType<
-  SyncListResponseExtendAwGrant,
-  unknown
-> = z.object({
-  actions: z.nullable(z.array(z.string())).optional(),
-  dataActions: z.nullable(z.array(z.string())).optional(),
-  permissions: z.nullable(z.array(z.string())).optional(),
-  predefinedRoles: z.nullable(z.array(z.string())).optional(),
-  residualPermissions: z.nullable(z.array(z.string())).optional(),
-});
-
-export function syncListResponseExtendAwGrantFromJSON(
-  jsonString: string,
-): SafeParseResult<SyncListResponseExtendAwGrant, SDKValidationError> {
-  return safeParse(
-    jsonString,
-    (x) => SyncListResponseExtendAwGrant$inboundSchema.parse(JSON.parse(x)),
-    `Failed to parse 'SyncListResponseExtendAwGrant' from JSON`,
-  );
-}
-
-/** @internal */
-export const SyncListResponseExtendAw$inboundSchema: z.ZodType<
-  SyncListResponseExtendAw,
-  unknown
-> = z.object({
-  binding: z.lazy(() => SyncListResponseExtendAwBinding$inboundSchema),
-  description: z.nullable(z.string()).optional(),
-  effect: SyncListResponseExtendEffect$inboundSchema.optional(),
-  grant: z.lazy(() => SyncListResponseExtendAwGrant$inboundSchema),
-  label: z.nullable(z.string()).optional(),
-});
-
-export function syncListResponseExtendAwFromJSON(
-  jsonString: string,
-): SafeParseResult<SyncListResponseExtendAw, SDKValidationError> {
-  return safeParse(
-    jsonString,
-    (x) => SyncListResponseExtendAw$inboundSchema.parse(JSON.parse(x)),
-    `Failed to parse 'SyncListResponseExtendAw' from JSON`,
-  );
-}
-
-/** @internal */
-export const SyncListResponseExtendAzureResource$inboundSchema: z.ZodType<
-  SyncListResponseExtendAzureResource,
-  unknown
-> = z.object({
-  scope: z.string(),
-});
-
-export function syncListResponseExtendAzureResourceFromJSON(
-  jsonString: string,
-): SafeParseResult<SyncListResponseExtendAzureResource, SDKValidationError> {
-  return safeParse(
-    jsonString,
-    (x) =>
-      SyncListResponseExtendAzureResource$inboundSchema.parse(JSON.parse(x)),
-    `Failed to parse 'SyncListResponseExtendAzureResource' from JSON`,
-  );
-}
-
-/** @internal */
-export const SyncListResponseExtendAzureStack$inboundSchema: z.ZodType<
-  SyncListResponseExtendAzureStack,
-  unknown
-> = z.object({
-  scope: z.string(),
-});
-
-export function syncListResponseExtendAzureStackFromJSON(
-  jsonString: string,
-): SafeParseResult<SyncListResponseExtendAzureStack, SDKValidationError> {
-  return safeParse(
-    jsonString,
-    (x) => SyncListResponseExtendAzureStack$inboundSchema.parse(JSON.parse(x)),
-    `Failed to parse 'SyncListResponseExtendAzureStack' from JSON`,
-  );
-}
-
-/** @internal */
-export const SyncListResponseExtendAzureBinding$inboundSchema: z.ZodType<
-  SyncListResponseExtendAzureBinding,
-  unknown
-> = z.object({
-  resource: z.lazy(() => SyncListResponseExtendAzureResource$inboundSchema)
-    .optional(),
-  stack: z.lazy(() => SyncListResponseExtendAzureStack$inboundSchema)
-    .optional(),
-});
-
-export function syncListResponseExtendAzureBindingFromJSON(
-  jsonString: string,
-): SafeParseResult<SyncListResponseExtendAzureBinding, SDKValidationError> {
-  return safeParse(
-    jsonString,
-    (x) =>
-      SyncListResponseExtendAzureBinding$inboundSchema.parse(JSON.parse(x)),
-    `Failed to parse 'SyncListResponseExtendAzureBinding' from JSON`,
-  );
-}
-
-/** @internal */
-export const SyncListResponseExtendAzureGrant$inboundSchema: z.ZodType<
-  SyncListResponseExtendAzureGrant,
-  unknown
-> = z.object({
-  actions: z.nullable(z.array(z.string())).optional(),
-  dataActions: z.nullable(z.array(z.string())).optional(),
-  permissions: z.nullable(z.array(z.string())).optional(),
-  predefinedRoles: z.nullable(z.array(z.string())).optional(),
-  residualPermissions: z.nullable(z.array(z.string())).optional(),
-});
-
-export function syncListResponseExtendAzureGrantFromJSON(
-  jsonString: string,
-): SafeParseResult<SyncListResponseExtendAzureGrant, SDKValidationError> {
-  return safeParse(
-    jsonString,
-    (x) => SyncListResponseExtendAzureGrant$inboundSchema.parse(JSON.parse(x)),
-    `Failed to parse 'SyncListResponseExtendAzureGrant' from JSON`,
-  );
-}
-
-/** @internal */
-export const SyncListResponseExtendAzure$inboundSchema: z.ZodType<
-  SyncListResponseExtendAzure,
-  unknown
-> = z.object({
-  binding: z.lazy(() => SyncListResponseExtendAzureBinding$inboundSchema),
-  description: z.nullable(z.string()).optional(),
-  grant: z.lazy(() => SyncListResponseExtendAzureGrant$inboundSchema),
-  label: z.nullable(z.string()).optional(),
-});
-
-export function syncListResponseExtendAzureFromJSON(
-  jsonString: string,
-): SafeParseResult<SyncListResponseExtendAzure, SDKValidationError> {
-  return safeParse(
-    jsonString,
-    (x) => SyncListResponseExtendAzure$inboundSchema.parse(JSON.parse(x)),
-    `Failed to parse 'SyncListResponseExtendAzure' from JSON`,
-  );
-}
-
-/** @internal */
-export const SyncListResponseExtendConditionResource$inboundSchema: z.ZodType<
-  SyncListResponseExtendConditionResource,
-  unknown
-> = z.object({
-  expression: z.string(),
-  title: z.string(),
-});
-
-export function syncListResponseExtendConditionResourceFromJSON(
+export function syncListResponsePreparedStackManagement2FromJSON(
   jsonString: string,
 ): SafeParseResult<
-  SyncListResponseExtendConditionResource,
+  SyncListResponsePreparedStackManagement2,
   SDKValidationError
 > {
   return safeParse(
     jsonString,
     (x) =>
-      SyncListResponseExtendConditionResource$inboundSchema.parse(
+      SyncListResponsePreparedStackManagement2$inboundSchema.parse(
         JSON.parse(x),
       ),
-    `Failed to parse 'SyncListResponseExtendConditionResource' from JSON`,
+    `Failed to parse 'SyncListResponsePreparedStackManagement2' from JSON`,
   );
 }
 
 /** @internal */
-export const SyncListResponseExtendResourceConditionUnion$inboundSchema:
-  z.ZodType<SyncListResponseExtendResourceConditionUnion, unknown> = z.union([
-    z.lazy(() => SyncListResponseExtendConditionResource$inboundSchema),
+export const SyncListResponsePreparedStackExtendAwResource$inboundSchema:
+  z.ZodType<SyncListResponsePreparedStackExtendAwResource, unknown> = z.object({
+    condition: z.nullable(
+      z.record(z.string(), z.record(z.string(), z.string())),
+    ).optional(),
+    resources: z.array(z.string()),
+  });
+
+export function syncListResponsePreparedStackExtendAwResourceFromJSON(
+  jsonString: string,
+): SafeParseResult<
+  SyncListResponsePreparedStackExtendAwResource,
+  SDKValidationError
+> {
+  return safeParse(
+    jsonString,
+    (x) =>
+      SyncListResponsePreparedStackExtendAwResource$inboundSchema.parse(
+        JSON.parse(x),
+      ),
+    `Failed to parse 'SyncListResponsePreparedStackExtendAwResource' from JSON`,
+  );
+}
+
+/** @internal */
+export const SyncListResponsePreparedStackExtendAwStack$inboundSchema:
+  z.ZodType<SyncListResponsePreparedStackExtendAwStack, unknown> = z.object({
+    condition: z.nullable(
+      z.record(z.string(), z.record(z.string(), z.string())),
+    ).optional(),
+    resources: z.array(z.string()),
+  });
+
+export function syncListResponsePreparedStackExtendAwStackFromJSON(
+  jsonString: string,
+): SafeParseResult<
+  SyncListResponsePreparedStackExtendAwStack,
+  SDKValidationError
+> {
+  return safeParse(
+    jsonString,
+    (x) =>
+      SyncListResponsePreparedStackExtendAwStack$inboundSchema.parse(
+        JSON.parse(x),
+      ),
+    `Failed to parse 'SyncListResponsePreparedStackExtendAwStack' from JSON`,
+  );
+}
+
+/** @internal */
+export const SyncListResponsePreparedStackExtendAwBinding$inboundSchema:
+  z.ZodType<SyncListResponsePreparedStackExtendAwBinding, unknown> = z.object({
+    resource: z.lazy(() =>
+      SyncListResponsePreparedStackExtendAwResource$inboundSchema
+    ).optional(),
+    stack: z.lazy(() =>
+      SyncListResponsePreparedStackExtendAwStack$inboundSchema
+    ).optional(),
+  });
+
+export function syncListResponsePreparedStackExtendAwBindingFromJSON(
+  jsonString: string,
+): SafeParseResult<
+  SyncListResponsePreparedStackExtendAwBinding,
+  SDKValidationError
+> {
+  return safeParse(
+    jsonString,
+    (x) =>
+      SyncListResponsePreparedStackExtendAwBinding$inboundSchema.parse(
+        JSON.parse(x),
+      ),
+    `Failed to parse 'SyncListResponsePreparedStackExtendAwBinding' from JSON`,
+  );
+}
+
+/** @internal */
+export const SyncListResponsePreparedStackExtendEffect$inboundSchema: z.ZodEnum<
+  typeof SyncListResponsePreparedStackExtendEffect
+> = z.enum(SyncListResponsePreparedStackExtendEffect);
+
+/** @internal */
+export const SyncListResponsePreparedStackExtendAwGrant$inboundSchema:
+  z.ZodType<SyncListResponsePreparedStackExtendAwGrant, unknown> = z.object({
+    actions: z.nullable(z.array(z.string())).optional(),
+    dataActions: z.nullable(z.array(z.string())).optional(),
+    permissions: z.nullable(z.array(z.string())).optional(),
+    predefinedRoles: z.nullable(z.array(z.string())).optional(),
+    residualPermissions: z.nullable(z.array(z.string())).optional(),
+  });
+
+export function syncListResponsePreparedStackExtendAwGrantFromJSON(
+  jsonString: string,
+): SafeParseResult<
+  SyncListResponsePreparedStackExtendAwGrant,
+  SDKValidationError
+> {
+  return safeParse(
+    jsonString,
+    (x) =>
+      SyncListResponsePreparedStackExtendAwGrant$inboundSchema.parse(
+        JSON.parse(x),
+      ),
+    `Failed to parse 'SyncListResponsePreparedStackExtendAwGrant' from JSON`,
+  );
+}
+
+/** @internal */
+export const SyncListResponsePreparedStackExtendAw$inboundSchema: z.ZodType<
+  SyncListResponsePreparedStackExtendAw,
+  unknown
+> = z.object({
+  binding: z.lazy(() =>
+    SyncListResponsePreparedStackExtendAwBinding$inboundSchema
+  ),
+  description: z.nullable(z.string()).optional(),
+  effect: SyncListResponsePreparedStackExtendEffect$inboundSchema.optional(),
+  grant: z.lazy(() => SyncListResponsePreparedStackExtendAwGrant$inboundSchema),
+  label: z.nullable(z.string()).optional(),
+});
+
+export function syncListResponsePreparedStackExtendAwFromJSON(
+  jsonString: string,
+): SafeParseResult<SyncListResponsePreparedStackExtendAw, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) =>
+      SyncListResponsePreparedStackExtendAw$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'SyncListResponsePreparedStackExtendAw' from JSON`,
+  );
+}
+
+/** @internal */
+export const SyncListResponsePreparedStackExtendAzureResource$inboundSchema:
+  z.ZodType<SyncListResponsePreparedStackExtendAzureResource, unknown> = z
+    .object({
+      scope: z.string(),
+    });
+
+export function syncListResponsePreparedStackExtendAzureResourceFromJSON(
+  jsonString: string,
+): SafeParseResult<
+  SyncListResponsePreparedStackExtendAzureResource,
+  SDKValidationError
+> {
+  return safeParse(
+    jsonString,
+    (x) =>
+      SyncListResponsePreparedStackExtendAzureResource$inboundSchema.parse(
+        JSON.parse(x),
+      ),
+    `Failed to parse 'SyncListResponsePreparedStackExtendAzureResource' from JSON`,
+  );
+}
+
+/** @internal */
+export const SyncListResponsePreparedStackExtendAzureStack$inboundSchema:
+  z.ZodType<SyncListResponsePreparedStackExtendAzureStack, unknown> = z.object({
+    scope: z.string(),
+  });
+
+export function syncListResponsePreparedStackExtendAzureStackFromJSON(
+  jsonString: string,
+): SafeParseResult<
+  SyncListResponsePreparedStackExtendAzureStack,
+  SDKValidationError
+> {
+  return safeParse(
+    jsonString,
+    (x) =>
+      SyncListResponsePreparedStackExtendAzureStack$inboundSchema.parse(
+        JSON.parse(x),
+      ),
+    `Failed to parse 'SyncListResponsePreparedStackExtendAzureStack' from JSON`,
+  );
+}
+
+/** @internal */
+export const SyncListResponsePreparedStackExtendAzureBinding$inboundSchema:
+  z.ZodType<SyncListResponsePreparedStackExtendAzureBinding, unknown> = z
+    .object({
+      resource: z.lazy(() =>
+        SyncListResponsePreparedStackExtendAzureResource$inboundSchema
+      ).optional(),
+      stack: z.lazy(() =>
+        SyncListResponsePreparedStackExtendAzureStack$inboundSchema
+      ).optional(),
+    });
+
+export function syncListResponsePreparedStackExtendAzureBindingFromJSON(
+  jsonString: string,
+): SafeParseResult<
+  SyncListResponsePreparedStackExtendAzureBinding,
+  SDKValidationError
+> {
+  return safeParse(
+    jsonString,
+    (x) =>
+      SyncListResponsePreparedStackExtendAzureBinding$inboundSchema.parse(
+        JSON.parse(x),
+      ),
+    `Failed to parse 'SyncListResponsePreparedStackExtendAzureBinding' from JSON`,
+  );
+}
+
+/** @internal */
+export const SyncListResponsePreparedStackExtendAzureGrant$inboundSchema:
+  z.ZodType<SyncListResponsePreparedStackExtendAzureGrant, unknown> = z.object({
+    actions: z.nullable(z.array(z.string())).optional(),
+    dataActions: z.nullable(z.array(z.string())).optional(),
+    permissions: z.nullable(z.array(z.string())).optional(),
+    predefinedRoles: z.nullable(z.array(z.string())).optional(),
+    residualPermissions: z.nullable(z.array(z.string())).optional(),
+  });
+
+export function syncListResponsePreparedStackExtendAzureGrantFromJSON(
+  jsonString: string,
+): SafeParseResult<
+  SyncListResponsePreparedStackExtendAzureGrant,
+  SDKValidationError
+> {
+  return safeParse(
+    jsonString,
+    (x) =>
+      SyncListResponsePreparedStackExtendAzureGrant$inboundSchema.parse(
+        JSON.parse(x),
+      ),
+    `Failed to parse 'SyncListResponsePreparedStackExtendAzureGrant' from JSON`,
+  );
+}
+
+/** @internal */
+export const SyncListResponsePreparedStackExtendAzure$inboundSchema: z.ZodType<
+  SyncListResponsePreparedStackExtendAzure,
+  unknown
+> = z.object({
+  binding: z.lazy(() =>
+    SyncListResponsePreparedStackExtendAzureBinding$inboundSchema
+  ),
+  description: z.nullable(z.string()).optional(),
+  grant: z.lazy(() =>
+    SyncListResponsePreparedStackExtendAzureGrant$inboundSchema
+  ),
+  label: z.nullable(z.string()).optional(),
+});
+
+export function syncListResponsePreparedStackExtendAzureFromJSON(
+  jsonString: string,
+): SafeParseResult<
+  SyncListResponsePreparedStackExtendAzure,
+  SDKValidationError
+> {
+  return safeParse(
+    jsonString,
+    (x) =>
+      SyncListResponsePreparedStackExtendAzure$inboundSchema.parse(
+        JSON.parse(x),
+      ),
+    `Failed to parse 'SyncListResponsePreparedStackExtendAzure' from JSON`,
+  );
+}
+
+/** @internal */
+export const SyncListResponsePreparedStackExtendConditionResource$inboundSchema:
+  z.ZodType<SyncListResponsePreparedStackExtendConditionResource, unknown> = z
+    .object({
+      expression: z.string(),
+      title: z.string(),
+    });
+
+export function syncListResponsePreparedStackExtendConditionResourceFromJSON(
+  jsonString: string,
+): SafeParseResult<
+  SyncListResponsePreparedStackExtendConditionResource,
+  SDKValidationError
+> {
+  return safeParse(
+    jsonString,
+    (x) =>
+      SyncListResponsePreparedStackExtendConditionResource$inboundSchema.parse(
+        JSON.parse(x),
+      ),
+    `Failed to parse 'SyncListResponsePreparedStackExtendConditionResource' from JSON`,
+  );
+}
+
+/** @internal */
+export const SyncListResponsePreparedStackExtendResourceConditionUnion$inboundSchema:
+  z.ZodType<
+    SyncListResponsePreparedStackExtendResourceConditionUnion,
+    unknown
+  > = z.union([
+    z.lazy(() =>
+      SyncListResponsePreparedStackExtendConditionResource$inboundSchema
+    ),
     z.any(),
   ]);
 
-export function syncListResponseExtendResourceConditionUnionFromJSON(
+export function syncListResponsePreparedStackExtendResourceConditionUnionFromJSON(
   jsonString: string,
 ): SafeParseResult<
-  SyncListResponseExtendResourceConditionUnion,
+  SyncListResponsePreparedStackExtendResourceConditionUnion,
   SDKValidationError
 > {
   return safeParse(
     jsonString,
     (x) =>
-      SyncListResponseExtendResourceConditionUnion$inboundSchema.parse(
-        JSON.parse(x),
-      ),
-    `Failed to parse 'SyncListResponseExtendResourceConditionUnion' from JSON`,
+      SyncListResponsePreparedStackExtendResourceConditionUnion$inboundSchema
+        .parse(JSON.parse(x)),
+    `Failed to parse 'SyncListResponsePreparedStackExtendResourceConditionUnion' from JSON`,
   );
 }
 
 /** @internal */
-export const SyncListResponseExtendGcpResource$inboundSchema: z.ZodType<
-  SyncListResponseExtendGcpResource,
-  unknown
-> = z.object({
-  condition: z.nullable(
-    z.union([
-      z.lazy(() => SyncListResponseExtendConditionResource$inboundSchema),
-      z.any(),
-    ]),
-  ).optional(),
-  scope: z.string(),
-});
-
-export function syncListResponseExtendGcpResourceFromJSON(
-  jsonString: string,
-): SafeParseResult<SyncListResponseExtendGcpResource, SDKValidationError> {
-  return safeParse(
-    jsonString,
-    (x) => SyncListResponseExtendGcpResource$inboundSchema.parse(JSON.parse(x)),
-    `Failed to parse 'SyncListResponseExtendGcpResource' from JSON`,
+export const SyncListResponsePreparedStackExtendGcpResource$inboundSchema:
+  z.ZodType<SyncListResponsePreparedStackExtendGcpResource, unknown> = z.object(
+    {
+      condition: z.nullable(z.union([
+        z.lazy(() =>
+          SyncListResponsePreparedStackExtendConditionResource$inboundSchema
+        ),
+        z.any(),
+      ])).optional(),
+      scope: z.string(),
+    },
   );
-}
 
-/** @internal */
-export const SyncListResponseExtendConditionStack$inboundSchema: z.ZodType<
-  SyncListResponseExtendConditionStack,
-  unknown
-> = z.object({
-  expression: z.string(),
-  title: z.string(),
-});
-
-export function syncListResponseExtendConditionStackFromJSON(
-  jsonString: string,
-): SafeParseResult<SyncListResponseExtendConditionStack, SDKValidationError> {
-  return safeParse(
-    jsonString,
-    (x) =>
-      SyncListResponseExtendConditionStack$inboundSchema.parse(JSON.parse(x)),
-    `Failed to parse 'SyncListResponseExtendConditionStack' from JSON`,
-  );
-}
-
-/** @internal */
-export const SyncListResponseExtendStackConditionUnion$inboundSchema: z.ZodType<
-  SyncListResponseExtendStackConditionUnion,
-  unknown
-> = z.union([
-  z.lazy(() => SyncListResponseExtendConditionStack$inboundSchema),
-  z.any(),
-]);
-
-export function syncListResponseExtendStackConditionUnionFromJSON(
+export function syncListResponsePreparedStackExtendGcpResourceFromJSON(
   jsonString: string,
 ): SafeParseResult<
-  SyncListResponseExtendStackConditionUnion,
+  SyncListResponsePreparedStackExtendGcpResource,
   SDKValidationError
 > {
   return safeParse(
     jsonString,
     (x) =>
-      SyncListResponseExtendStackConditionUnion$inboundSchema.parse(
+      SyncListResponsePreparedStackExtendGcpResource$inboundSchema.parse(
         JSON.parse(x),
       ),
-    `Failed to parse 'SyncListResponseExtendStackConditionUnion' from JSON`,
+    `Failed to parse 'SyncListResponsePreparedStackExtendGcpResource' from JSON`,
   );
 }
 
 /** @internal */
-export const SyncListResponseExtendGcpStack$inboundSchema: z.ZodType<
-  SyncListResponseExtendGcpStack,
-  unknown
-> = z.object({
-  condition: z.nullable(
-    z.union([
-      z.lazy(() => SyncListResponseExtendConditionStack$inboundSchema),
+export const SyncListResponsePreparedStackExtendConditionStack$inboundSchema:
+  z.ZodType<SyncListResponsePreparedStackExtendConditionStack, unknown> = z
+    .object({
+      expression: z.string(),
+      title: z.string(),
+    });
+
+export function syncListResponsePreparedStackExtendConditionStackFromJSON(
+  jsonString: string,
+): SafeParseResult<
+  SyncListResponsePreparedStackExtendConditionStack,
+  SDKValidationError
+> {
+  return safeParse(
+    jsonString,
+    (x) =>
+      SyncListResponsePreparedStackExtendConditionStack$inboundSchema.parse(
+        JSON.parse(x),
+      ),
+    `Failed to parse 'SyncListResponsePreparedStackExtendConditionStack' from JSON`,
+  );
+}
+
+/** @internal */
+export const SyncListResponsePreparedStackExtendStackConditionUnion$inboundSchema:
+  z.ZodType<SyncListResponsePreparedStackExtendStackConditionUnion, unknown> = z
+    .union([
+      z.lazy(() =>
+        SyncListResponsePreparedStackExtendConditionStack$inboundSchema
+      ),
       z.any(),
-    ]),
-  ).optional(),
-  scope: z.string(),
-});
+    ]);
 
-export function syncListResponseExtendGcpStackFromJSON(
+export function syncListResponsePreparedStackExtendStackConditionUnionFromJSON(
   jsonString: string,
-): SafeParseResult<SyncListResponseExtendGcpStack, SDKValidationError> {
+): SafeParseResult<
+  SyncListResponsePreparedStackExtendStackConditionUnion,
+  SDKValidationError
+> {
   return safeParse(
     jsonString,
-    (x) => SyncListResponseExtendGcpStack$inboundSchema.parse(JSON.parse(x)),
-    `Failed to parse 'SyncListResponseExtendGcpStack' from JSON`,
+    (x) =>
+      SyncListResponsePreparedStackExtendStackConditionUnion$inboundSchema
+        .parse(JSON.parse(x)),
+    `Failed to parse 'SyncListResponsePreparedStackExtendStackConditionUnion' from JSON`,
   );
 }
 
 /** @internal */
-export const SyncListResponseExtendGcpBinding$inboundSchema: z.ZodType<
-  SyncListResponseExtendGcpBinding,
-  unknown
-> = z.object({
-  resource: z.lazy(() => SyncListResponseExtendGcpResource$inboundSchema)
-    .optional(),
-  stack: z.lazy(() => SyncListResponseExtendGcpStack$inboundSchema).optional(),
-});
+export const SyncListResponsePreparedStackExtendGcpStack$inboundSchema:
+  z.ZodType<SyncListResponsePreparedStackExtendGcpStack, unknown> = z.object({
+    condition: z.nullable(
+      z.union([
+        z.lazy(() =>
+          SyncListResponsePreparedStackExtendConditionStack$inboundSchema
+        ),
+        z.any(),
+      ]),
+    ).optional(),
+    scope: z.string(),
+  });
 
-export function syncListResponseExtendGcpBindingFromJSON(
+export function syncListResponsePreparedStackExtendGcpStackFromJSON(
   jsonString: string,
-): SafeParseResult<SyncListResponseExtendGcpBinding, SDKValidationError> {
+): SafeParseResult<
+  SyncListResponsePreparedStackExtendGcpStack,
+  SDKValidationError
+> {
   return safeParse(
     jsonString,
-    (x) => SyncListResponseExtendGcpBinding$inboundSchema.parse(JSON.parse(x)),
-    `Failed to parse 'SyncListResponseExtendGcpBinding' from JSON`,
+    (x) =>
+      SyncListResponsePreparedStackExtendGcpStack$inboundSchema.parse(
+        JSON.parse(x),
+      ),
+    `Failed to parse 'SyncListResponsePreparedStackExtendGcpStack' from JSON`,
   );
 }
 
 /** @internal */
-export const SyncListResponseExtendGcpGrant$inboundSchema: z.ZodType<
-  SyncListResponseExtendGcpGrant,
-  unknown
-> = z.object({
-  actions: z.nullable(z.array(z.string())).optional(),
-  dataActions: z.nullable(z.array(z.string())).optional(),
-  permissions: z.nullable(z.array(z.string())).optional(),
-  predefinedRoles: z.nullable(z.array(z.string())).optional(),
-  residualPermissions: z.nullable(z.array(z.string())).optional(),
-});
+export const SyncListResponsePreparedStackExtendGcpBinding$inboundSchema:
+  z.ZodType<SyncListResponsePreparedStackExtendGcpBinding, unknown> = z.object({
+    resource: z.lazy(() =>
+      SyncListResponsePreparedStackExtendGcpResource$inboundSchema
+    ).optional(),
+    stack: z.lazy(() =>
+      SyncListResponsePreparedStackExtendGcpStack$inboundSchema
+    ).optional(),
+  });
 
-export function syncListResponseExtendGcpGrantFromJSON(
+export function syncListResponsePreparedStackExtendGcpBindingFromJSON(
   jsonString: string,
-): SafeParseResult<SyncListResponseExtendGcpGrant, SDKValidationError> {
+): SafeParseResult<
+  SyncListResponsePreparedStackExtendGcpBinding,
+  SDKValidationError
+> {
   return safeParse(
     jsonString,
-    (x) => SyncListResponseExtendGcpGrant$inboundSchema.parse(JSON.parse(x)),
-    `Failed to parse 'SyncListResponseExtendGcpGrant' from JSON`,
+    (x) =>
+      SyncListResponsePreparedStackExtendGcpBinding$inboundSchema.parse(
+        JSON.parse(x),
+      ),
+    `Failed to parse 'SyncListResponsePreparedStackExtendGcpBinding' from JSON`,
   );
 }
 
 /** @internal */
-export const SyncListResponseExtendGcp$inboundSchema: z.ZodType<
-  SyncListResponseExtendGcp,
+export const SyncListResponsePreparedStackExtendGcpGrant$inboundSchema:
+  z.ZodType<SyncListResponsePreparedStackExtendGcpGrant, unknown> = z.object({
+    actions: z.nullable(z.array(z.string())).optional(),
+    dataActions: z.nullable(z.array(z.string())).optional(),
+    permissions: z.nullable(z.array(z.string())).optional(),
+    predefinedRoles: z.nullable(z.array(z.string())).optional(),
+    residualPermissions: z.nullable(z.array(z.string())).optional(),
+  });
+
+export function syncListResponsePreparedStackExtendGcpGrantFromJSON(
+  jsonString: string,
+): SafeParseResult<
+  SyncListResponsePreparedStackExtendGcpGrant,
+  SDKValidationError
+> {
+  return safeParse(
+    jsonString,
+    (x) =>
+      SyncListResponsePreparedStackExtendGcpGrant$inboundSchema.parse(
+        JSON.parse(x),
+      ),
+    `Failed to parse 'SyncListResponsePreparedStackExtendGcpGrant' from JSON`,
+  );
+}
+
+/** @internal */
+export const SyncListResponsePreparedStackExtendGcp$inboundSchema: z.ZodType<
+  SyncListResponsePreparedStackExtendGcp,
   unknown
 > = z.object({
-  binding: z.lazy(() => SyncListResponseExtendGcpBinding$inboundSchema),
+  binding: z.lazy(() =>
+    SyncListResponsePreparedStackExtendGcpBinding$inboundSchema
+  ),
   description: z.nullable(z.string()).optional(),
-  grant: z.lazy(() => SyncListResponseExtendGcpGrant$inboundSchema),
+  grant: z.lazy(() =>
+    SyncListResponsePreparedStackExtendGcpGrant$inboundSchema
+  ),
   label: z.nullable(z.string()).optional(),
 });
 
-export function syncListResponseExtendGcpFromJSON(
+export function syncListResponsePreparedStackExtendGcpFromJSON(
   jsonString: string,
-): SafeParseResult<SyncListResponseExtendGcp, SDKValidationError> {
+): SafeParseResult<SyncListResponsePreparedStackExtendGcp, SDKValidationError> {
   return safeParse(
     jsonString,
-    (x) => SyncListResponseExtendGcp$inboundSchema.parse(JSON.parse(x)),
-    `Failed to parse 'SyncListResponseExtendGcp' from JSON`,
+    (x) =>
+      SyncListResponsePreparedStackExtendGcp$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'SyncListResponsePreparedStackExtendGcp' from JSON`,
   );
 }
 
 /** @internal */
-export const SyncListResponseExtendPlatforms$inboundSchema: z.ZodType<
-  SyncListResponseExtendPlatforms,
-  unknown
-> = z.object({
-  aws: z.nullable(z.array(z.lazy(() => SyncListResponseExtendAw$inboundSchema)))
-    .optional(),
-  azure: z.nullable(
-    z.array(z.lazy(() => SyncListResponseExtendAzure$inboundSchema)),
-  ).optional(),
-  gcp: z.nullable(
-    z.array(z.lazy(() => SyncListResponseExtendGcp$inboundSchema)),
-  ).optional(),
-});
+export const SyncListResponsePreparedStackExtendPlatforms$inboundSchema:
+  z.ZodType<SyncListResponsePreparedStackExtendPlatforms, unknown> = z.object({
+    aws: z.nullable(
+      z.array(
+        z.lazy(() => SyncListResponsePreparedStackExtendAw$inboundSchema),
+      ),
+    ).optional(),
+    azure: z.nullable(
+      z.array(z.lazy(() =>
+        SyncListResponsePreparedStackExtendAzure$inboundSchema
+      )),
+    ).optional(),
+    gcp: z.nullable(
+      z.array(
+        z.lazy(() => SyncListResponsePreparedStackExtendGcp$inboundSchema),
+      ),
+    ).optional(),
+  });
 
-export function syncListResponseExtendPlatformsFromJSON(
+export function syncListResponsePreparedStackExtendPlatformsFromJSON(
   jsonString: string,
-): SafeParseResult<SyncListResponseExtendPlatforms, SDKValidationError> {
+): SafeParseResult<
+  SyncListResponsePreparedStackExtendPlatforms,
+  SDKValidationError
+> {
   return safeParse(
     jsonString,
-    (x) => SyncListResponseExtendPlatforms$inboundSchema.parse(JSON.parse(x)),
-    `Failed to parse 'SyncListResponseExtendPlatforms' from JSON`,
+    (x) =>
+      SyncListResponsePreparedStackExtendPlatforms$inboundSchema.parse(
+        JSON.parse(x),
+      ),
+    `Failed to parse 'SyncListResponsePreparedStackExtendPlatforms' from JSON`,
   );
 }
 
 /** @internal */
-export const SyncListResponseExtend$inboundSchema: z.ZodType<
-  SyncListResponseExtend,
+export const SyncListResponsePreparedStackExtend$inboundSchema: z.ZodType<
+  SyncListResponsePreparedStackExtend,
   unknown
 > = z.object({
   description: z.string(),
   id: z.string(),
-  platforms: z.lazy(() => SyncListResponseExtendPlatforms$inboundSchema),
+  platforms: z.lazy(() =>
+    SyncListResponsePreparedStackExtendPlatforms$inboundSchema
+  ),
 });
 
-export function syncListResponseExtendFromJSON(
+export function syncListResponsePreparedStackExtendFromJSON(
   jsonString: string,
-): SafeParseResult<SyncListResponseExtend, SDKValidationError> {
+): SafeParseResult<SyncListResponsePreparedStackExtend, SDKValidationError> {
   return safeParse(
     jsonString,
-    (x) => SyncListResponseExtend$inboundSchema.parse(JSON.parse(x)),
-    `Failed to parse 'SyncListResponseExtend' from JSON`,
+    (x) =>
+      SyncListResponsePreparedStackExtend$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'SyncListResponsePreparedStackExtend' from JSON`,
   );
 }
 
 /** @internal */
-export const SyncListResponseExtendUnion$inboundSchema: z.ZodType<
-  SyncListResponseExtendUnion,
+export const SyncListResponsePreparedStackExtendUnion$inboundSchema: z.ZodType<
+  SyncListResponsePreparedStackExtendUnion,
   unknown
-> = z.union([z.lazy(() => SyncListResponseExtend$inboundSchema), z.string()]);
+> = z.union([
+  z.lazy(() => SyncListResponsePreparedStackExtend$inboundSchema),
+  z.string(),
+]);
 
-export function syncListResponseExtendUnionFromJSON(
+export function syncListResponsePreparedStackExtendUnionFromJSON(
   jsonString: string,
-): SafeParseResult<SyncListResponseExtendUnion, SDKValidationError> {
+): SafeParseResult<
+  SyncListResponsePreparedStackExtendUnion,
+  SDKValidationError
+> {
   return safeParse(
     jsonString,
-    (x) => SyncListResponseExtendUnion$inboundSchema.parse(JSON.parse(x)),
-    `Failed to parse 'SyncListResponseExtendUnion' from JSON`,
+    (x) =>
+      SyncListResponsePreparedStackExtendUnion$inboundSchema.parse(
+        JSON.parse(x),
+      ),
+    `Failed to parse 'SyncListResponsePreparedStackExtendUnion' from JSON`,
   );
 }
 
 /** @internal */
-export const SyncListResponseManagement1$inboundSchema: z.ZodType<
-  SyncListResponseManagement1,
+export const SyncListResponsePreparedStackManagement1$inboundSchema: z.ZodType<
+  SyncListResponsePreparedStackManagement1,
   unknown
 > = z.object({
   extend: z.record(
     z.string(),
-    z.array(
-      z.union([z.lazy(() => SyncListResponseExtend$inboundSchema), z.string()]),
-    ),
+    z.array(z.union([
+      z.lazy(() => SyncListResponsePreparedStackExtend$inboundSchema),
+      z.string(),
+    ])),
   ),
 });
 
-export function syncListResponseManagement1FromJSON(
-  jsonString: string,
-): SafeParseResult<SyncListResponseManagement1, SDKValidationError> {
-  return safeParse(
-    jsonString,
-    (x) => SyncListResponseManagement1$inboundSchema.parse(JSON.parse(x)),
-    `Failed to parse 'SyncListResponseManagement1' from JSON`,
-  );
-}
-
-/** @internal */
-export const SyncListResponseManagementUnion$inboundSchema: z.ZodType<
-  SyncListResponseManagementUnion,
-  unknown
-> = z.union([
-  z.lazy(() => SyncListResponseManagement1$inboundSchema),
-  z.lazy(() => SyncListResponseManagement2$inboundSchema),
-  SyncListResponseManagementEnum$inboundSchema,
-]);
-
-export function syncListResponseManagementUnionFromJSON(
-  jsonString: string,
-): SafeParseResult<SyncListResponseManagementUnion, SDKValidationError> {
-  return safeParse(
-    jsonString,
-    (x) => SyncListResponseManagementUnion$inboundSchema.parse(JSON.parse(x)),
-    `Failed to parse 'SyncListResponseManagementUnion' from JSON`,
-  );
-}
-
-/** @internal */
-export const SyncListResponseProfileAwResource$inboundSchema: z.ZodType<
-  SyncListResponseProfileAwResource,
-  unknown
-> = z.object({
-  condition: z.nullable(z.record(z.string(), z.record(z.string(), z.string())))
-    .optional(),
-  resources: z.array(z.string()),
-});
-
-export function syncListResponseProfileAwResourceFromJSON(
-  jsonString: string,
-): SafeParseResult<SyncListResponseProfileAwResource, SDKValidationError> {
-  return safeParse(
-    jsonString,
-    (x) => SyncListResponseProfileAwResource$inboundSchema.parse(JSON.parse(x)),
-    `Failed to parse 'SyncListResponseProfileAwResource' from JSON`,
-  );
-}
-
-/** @internal */
-export const SyncListResponseProfileAwStack$inboundSchema: z.ZodType<
-  SyncListResponseProfileAwStack,
-  unknown
-> = z.object({
-  condition: z.nullable(z.record(z.string(), z.record(z.string(), z.string())))
-    .optional(),
-  resources: z.array(z.string()),
-});
-
-export function syncListResponseProfileAwStackFromJSON(
-  jsonString: string,
-): SafeParseResult<SyncListResponseProfileAwStack, SDKValidationError> {
-  return safeParse(
-    jsonString,
-    (x) => SyncListResponseProfileAwStack$inboundSchema.parse(JSON.parse(x)),
-    `Failed to parse 'SyncListResponseProfileAwStack' from JSON`,
-  );
-}
-
-/** @internal */
-export const SyncListResponseProfileAwBinding$inboundSchema: z.ZodType<
-  SyncListResponseProfileAwBinding,
-  unknown
-> = z.object({
-  resource: z.lazy(() => SyncListResponseProfileAwResource$inboundSchema)
-    .optional(),
-  stack: z.lazy(() => SyncListResponseProfileAwStack$inboundSchema).optional(),
-});
-
-export function syncListResponseProfileAwBindingFromJSON(
-  jsonString: string,
-): SafeParseResult<SyncListResponseProfileAwBinding, SDKValidationError> {
-  return safeParse(
-    jsonString,
-    (x) => SyncListResponseProfileAwBinding$inboundSchema.parse(JSON.parse(x)),
-    `Failed to parse 'SyncListResponseProfileAwBinding' from JSON`,
-  );
-}
-
-/** @internal */
-export const SyncListResponseProfileEffect$inboundSchema: z.ZodEnum<
-  typeof SyncListResponseProfileEffect
-> = z.enum(SyncListResponseProfileEffect);
-
-/** @internal */
-export const SyncListResponseProfileAwGrant$inboundSchema: z.ZodType<
-  SyncListResponseProfileAwGrant,
-  unknown
-> = z.object({
-  actions: z.nullable(z.array(z.string())).optional(),
-  dataActions: z.nullable(z.array(z.string())).optional(),
-  permissions: z.nullable(z.array(z.string())).optional(),
-  predefinedRoles: z.nullable(z.array(z.string())).optional(),
-  residualPermissions: z.nullable(z.array(z.string())).optional(),
-});
-
-export function syncListResponseProfileAwGrantFromJSON(
-  jsonString: string,
-): SafeParseResult<SyncListResponseProfileAwGrant, SDKValidationError> {
-  return safeParse(
-    jsonString,
-    (x) => SyncListResponseProfileAwGrant$inboundSchema.parse(JSON.parse(x)),
-    `Failed to parse 'SyncListResponseProfileAwGrant' from JSON`,
-  );
-}
-
-/** @internal */
-export const SyncListResponseProfileAw$inboundSchema: z.ZodType<
-  SyncListResponseProfileAw,
-  unknown
-> = z.object({
-  binding: z.lazy(() => SyncListResponseProfileAwBinding$inboundSchema),
-  description: z.nullable(z.string()).optional(),
-  effect: SyncListResponseProfileEffect$inboundSchema.optional(),
-  grant: z.lazy(() => SyncListResponseProfileAwGrant$inboundSchema),
-  label: z.nullable(z.string()).optional(),
-});
-
-export function syncListResponseProfileAwFromJSON(
-  jsonString: string,
-): SafeParseResult<SyncListResponseProfileAw, SDKValidationError> {
-  return safeParse(
-    jsonString,
-    (x) => SyncListResponseProfileAw$inboundSchema.parse(JSON.parse(x)),
-    `Failed to parse 'SyncListResponseProfileAw' from JSON`,
-  );
-}
-
-/** @internal */
-export const SyncListResponseProfileAzureResource$inboundSchema: z.ZodType<
-  SyncListResponseProfileAzureResource,
-  unknown
-> = z.object({
-  scope: z.string(),
-});
-
-export function syncListResponseProfileAzureResourceFromJSON(
-  jsonString: string,
-): SafeParseResult<SyncListResponseProfileAzureResource, SDKValidationError> {
-  return safeParse(
-    jsonString,
-    (x) =>
-      SyncListResponseProfileAzureResource$inboundSchema.parse(JSON.parse(x)),
-    `Failed to parse 'SyncListResponseProfileAzureResource' from JSON`,
-  );
-}
-
-/** @internal */
-export const SyncListResponseProfileAzureStack$inboundSchema: z.ZodType<
-  SyncListResponseProfileAzureStack,
-  unknown
-> = z.object({
-  scope: z.string(),
-});
-
-export function syncListResponseProfileAzureStackFromJSON(
-  jsonString: string,
-): SafeParseResult<SyncListResponseProfileAzureStack, SDKValidationError> {
-  return safeParse(
-    jsonString,
-    (x) => SyncListResponseProfileAzureStack$inboundSchema.parse(JSON.parse(x)),
-    `Failed to parse 'SyncListResponseProfileAzureStack' from JSON`,
-  );
-}
-
-/** @internal */
-export const SyncListResponseProfileAzureBinding$inboundSchema: z.ZodType<
-  SyncListResponseProfileAzureBinding,
-  unknown
-> = z.object({
-  resource: z.lazy(() => SyncListResponseProfileAzureResource$inboundSchema)
-    .optional(),
-  stack: z.lazy(() => SyncListResponseProfileAzureStack$inboundSchema)
-    .optional(),
-});
-
-export function syncListResponseProfileAzureBindingFromJSON(
-  jsonString: string,
-): SafeParseResult<SyncListResponseProfileAzureBinding, SDKValidationError> {
-  return safeParse(
-    jsonString,
-    (x) =>
-      SyncListResponseProfileAzureBinding$inboundSchema.parse(JSON.parse(x)),
-    `Failed to parse 'SyncListResponseProfileAzureBinding' from JSON`,
-  );
-}
-
-/** @internal */
-export const SyncListResponseProfileAzureGrant$inboundSchema: z.ZodType<
-  SyncListResponseProfileAzureGrant,
-  unknown
-> = z.object({
-  actions: z.nullable(z.array(z.string())).optional(),
-  dataActions: z.nullable(z.array(z.string())).optional(),
-  permissions: z.nullable(z.array(z.string())).optional(),
-  predefinedRoles: z.nullable(z.array(z.string())).optional(),
-  residualPermissions: z.nullable(z.array(z.string())).optional(),
-});
-
-export function syncListResponseProfileAzureGrantFromJSON(
-  jsonString: string,
-): SafeParseResult<SyncListResponseProfileAzureGrant, SDKValidationError> {
-  return safeParse(
-    jsonString,
-    (x) => SyncListResponseProfileAzureGrant$inboundSchema.parse(JSON.parse(x)),
-    `Failed to parse 'SyncListResponseProfileAzureGrant' from JSON`,
-  );
-}
-
-/** @internal */
-export const SyncListResponseProfileAzure$inboundSchema: z.ZodType<
-  SyncListResponseProfileAzure,
-  unknown
-> = z.object({
-  binding: z.lazy(() => SyncListResponseProfileAzureBinding$inboundSchema),
-  description: z.nullable(z.string()).optional(),
-  grant: z.lazy(() => SyncListResponseProfileAzureGrant$inboundSchema),
-  label: z.nullable(z.string()).optional(),
-});
-
-export function syncListResponseProfileAzureFromJSON(
-  jsonString: string,
-): SafeParseResult<SyncListResponseProfileAzure, SDKValidationError> {
-  return safeParse(
-    jsonString,
-    (x) => SyncListResponseProfileAzure$inboundSchema.parse(JSON.parse(x)),
-    `Failed to parse 'SyncListResponseProfileAzure' from JSON`,
-  );
-}
-
-/** @internal */
-export const SyncListResponseProfileConditionResource$inboundSchema: z.ZodType<
-  SyncListResponseProfileConditionResource,
-  unknown
-> = z.object({
-  expression: z.string(),
-  title: z.string(),
-});
-
-export function syncListResponseProfileConditionResourceFromJSON(
+export function syncListResponsePreparedStackManagement1FromJSON(
   jsonString: string,
 ): SafeParseResult<
-  SyncListResponseProfileConditionResource,
+  SyncListResponsePreparedStackManagement1,
   SDKValidationError
 > {
   return safeParse(
     jsonString,
     (x) =>
-      SyncListResponseProfileConditionResource$inboundSchema.parse(
+      SyncListResponsePreparedStackManagement1$inboundSchema.parse(
         JSON.parse(x),
       ),
-    `Failed to parse 'SyncListResponseProfileConditionResource' from JSON`,
+    `Failed to parse 'SyncListResponsePreparedStackManagement1' from JSON`,
   );
 }
 
 /** @internal */
-export const SyncListResponseProfileResourceConditionUnion$inboundSchema:
-  z.ZodType<SyncListResponseProfileResourceConditionUnion, unknown> = z.union([
-    z.lazy(() => SyncListResponseProfileConditionResource$inboundSchema),
+export const SyncListResponsePreparedStackManagementUnion$inboundSchema:
+  z.ZodType<SyncListResponsePreparedStackManagementUnion, unknown> = z.union([
+    z.lazy(() => SyncListResponsePreparedStackManagement1$inboundSchema),
+    z.lazy(() => SyncListResponsePreparedStackManagement2$inboundSchema),
+    SyncListResponsePreparedStackManagementEnum$inboundSchema,
+  ]);
+
+export function syncListResponsePreparedStackManagementUnionFromJSON(
+  jsonString: string,
+): SafeParseResult<
+  SyncListResponsePreparedStackManagementUnion,
+  SDKValidationError
+> {
+  return safeParse(
+    jsonString,
+    (x) =>
+      SyncListResponsePreparedStackManagementUnion$inboundSchema.parse(
+        JSON.parse(x),
+      ),
+    `Failed to parse 'SyncListResponsePreparedStackManagementUnion' from JSON`,
+  );
+}
+
+/** @internal */
+export const SyncListResponsePreparedStackProfileAwResource$inboundSchema:
+  z.ZodType<SyncListResponsePreparedStackProfileAwResource, unknown> = z.object(
+    {
+      condition: z.nullable(
+        z.record(z.string(), z.record(z.string(), z.string())),
+      ).optional(),
+      resources: z.array(z.string()),
+    },
+  );
+
+export function syncListResponsePreparedStackProfileAwResourceFromJSON(
+  jsonString: string,
+): SafeParseResult<
+  SyncListResponsePreparedStackProfileAwResource,
+  SDKValidationError
+> {
+  return safeParse(
+    jsonString,
+    (x) =>
+      SyncListResponsePreparedStackProfileAwResource$inboundSchema.parse(
+        JSON.parse(x),
+      ),
+    `Failed to parse 'SyncListResponsePreparedStackProfileAwResource' from JSON`,
+  );
+}
+
+/** @internal */
+export const SyncListResponsePreparedStackProfileAwStack$inboundSchema:
+  z.ZodType<SyncListResponsePreparedStackProfileAwStack, unknown> = z.object({
+    condition: z.nullable(
+      z.record(z.string(), z.record(z.string(), z.string())),
+    ).optional(),
+    resources: z.array(z.string()),
+  });
+
+export function syncListResponsePreparedStackProfileAwStackFromJSON(
+  jsonString: string,
+): SafeParseResult<
+  SyncListResponsePreparedStackProfileAwStack,
+  SDKValidationError
+> {
+  return safeParse(
+    jsonString,
+    (x) =>
+      SyncListResponsePreparedStackProfileAwStack$inboundSchema.parse(
+        JSON.parse(x),
+      ),
+    `Failed to parse 'SyncListResponsePreparedStackProfileAwStack' from JSON`,
+  );
+}
+
+/** @internal */
+export const SyncListResponsePreparedStackProfileAwBinding$inboundSchema:
+  z.ZodType<SyncListResponsePreparedStackProfileAwBinding, unknown> = z.object({
+    resource: z.lazy(() =>
+      SyncListResponsePreparedStackProfileAwResource$inboundSchema
+    ).optional(),
+    stack: z.lazy(() =>
+      SyncListResponsePreparedStackProfileAwStack$inboundSchema
+    ).optional(),
+  });
+
+export function syncListResponsePreparedStackProfileAwBindingFromJSON(
+  jsonString: string,
+): SafeParseResult<
+  SyncListResponsePreparedStackProfileAwBinding,
+  SDKValidationError
+> {
+  return safeParse(
+    jsonString,
+    (x) =>
+      SyncListResponsePreparedStackProfileAwBinding$inboundSchema.parse(
+        JSON.parse(x),
+      ),
+    `Failed to parse 'SyncListResponsePreparedStackProfileAwBinding' from JSON`,
+  );
+}
+
+/** @internal */
+export const SyncListResponsePreparedStackProfileEffect$inboundSchema:
+  z.ZodEnum<typeof SyncListResponsePreparedStackProfileEffect> = z.enum(
+    SyncListResponsePreparedStackProfileEffect,
+  );
+
+/** @internal */
+export const SyncListResponsePreparedStackProfileAwGrant$inboundSchema:
+  z.ZodType<SyncListResponsePreparedStackProfileAwGrant, unknown> = z.object({
+    actions: z.nullable(z.array(z.string())).optional(),
+    dataActions: z.nullable(z.array(z.string())).optional(),
+    permissions: z.nullable(z.array(z.string())).optional(),
+    predefinedRoles: z.nullable(z.array(z.string())).optional(),
+    residualPermissions: z.nullable(z.array(z.string())).optional(),
+  });
+
+export function syncListResponsePreparedStackProfileAwGrantFromJSON(
+  jsonString: string,
+): SafeParseResult<
+  SyncListResponsePreparedStackProfileAwGrant,
+  SDKValidationError
+> {
+  return safeParse(
+    jsonString,
+    (x) =>
+      SyncListResponsePreparedStackProfileAwGrant$inboundSchema.parse(
+        JSON.parse(x),
+      ),
+    `Failed to parse 'SyncListResponsePreparedStackProfileAwGrant' from JSON`,
+  );
+}
+
+/** @internal */
+export const SyncListResponsePreparedStackProfileAw$inboundSchema: z.ZodType<
+  SyncListResponsePreparedStackProfileAw,
+  unknown
+> = z.object({
+  binding: z.lazy(() =>
+    SyncListResponsePreparedStackProfileAwBinding$inboundSchema
+  ),
+  description: z.nullable(z.string()).optional(),
+  effect: SyncListResponsePreparedStackProfileEffect$inboundSchema.optional(),
+  grant: z.lazy(() =>
+    SyncListResponsePreparedStackProfileAwGrant$inboundSchema
+  ),
+  label: z.nullable(z.string()).optional(),
+});
+
+export function syncListResponsePreparedStackProfileAwFromJSON(
+  jsonString: string,
+): SafeParseResult<SyncListResponsePreparedStackProfileAw, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) =>
+      SyncListResponsePreparedStackProfileAw$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'SyncListResponsePreparedStackProfileAw' from JSON`,
+  );
+}
+
+/** @internal */
+export const SyncListResponsePreparedStackProfileAzureResource$inboundSchema:
+  z.ZodType<SyncListResponsePreparedStackProfileAzureResource, unknown> = z
+    .object({
+      scope: z.string(),
+    });
+
+export function syncListResponsePreparedStackProfileAzureResourceFromJSON(
+  jsonString: string,
+): SafeParseResult<
+  SyncListResponsePreparedStackProfileAzureResource,
+  SDKValidationError
+> {
+  return safeParse(
+    jsonString,
+    (x) =>
+      SyncListResponsePreparedStackProfileAzureResource$inboundSchema.parse(
+        JSON.parse(x),
+      ),
+    `Failed to parse 'SyncListResponsePreparedStackProfileAzureResource' from JSON`,
+  );
+}
+
+/** @internal */
+export const SyncListResponsePreparedStackProfileAzureStack$inboundSchema:
+  z.ZodType<SyncListResponsePreparedStackProfileAzureStack, unknown> = z.object(
+    {
+      scope: z.string(),
+    },
+  );
+
+export function syncListResponsePreparedStackProfileAzureStackFromJSON(
+  jsonString: string,
+): SafeParseResult<
+  SyncListResponsePreparedStackProfileAzureStack,
+  SDKValidationError
+> {
+  return safeParse(
+    jsonString,
+    (x) =>
+      SyncListResponsePreparedStackProfileAzureStack$inboundSchema.parse(
+        JSON.parse(x),
+      ),
+    `Failed to parse 'SyncListResponsePreparedStackProfileAzureStack' from JSON`,
+  );
+}
+
+/** @internal */
+export const SyncListResponsePreparedStackProfileAzureBinding$inboundSchema:
+  z.ZodType<SyncListResponsePreparedStackProfileAzureBinding, unknown> = z
+    .object({
+      resource: z.lazy(() =>
+        SyncListResponsePreparedStackProfileAzureResource$inboundSchema
+      ).optional(),
+      stack: z.lazy(() =>
+        SyncListResponsePreparedStackProfileAzureStack$inboundSchema
+      ).optional(),
+    });
+
+export function syncListResponsePreparedStackProfileAzureBindingFromJSON(
+  jsonString: string,
+): SafeParseResult<
+  SyncListResponsePreparedStackProfileAzureBinding,
+  SDKValidationError
+> {
+  return safeParse(
+    jsonString,
+    (x) =>
+      SyncListResponsePreparedStackProfileAzureBinding$inboundSchema.parse(
+        JSON.parse(x),
+      ),
+    `Failed to parse 'SyncListResponsePreparedStackProfileAzureBinding' from JSON`,
+  );
+}
+
+/** @internal */
+export const SyncListResponsePreparedStackProfileAzureGrant$inboundSchema:
+  z.ZodType<SyncListResponsePreparedStackProfileAzureGrant, unknown> = z.object(
+    {
+      actions: z.nullable(z.array(z.string())).optional(),
+      dataActions: z.nullable(z.array(z.string())).optional(),
+      permissions: z.nullable(z.array(z.string())).optional(),
+      predefinedRoles: z.nullable(z.array(z.string())).optional(),
+      residualPermissions: z.nullable(z.array(z.string())).optional(),
+    },
+  );
+
+export function syncListResponsePreparedStackProfileAzureGrantFromJSON(
+  jsonString: string,
+): SafeParseResult<
+  SyncListResponsePreparedStackProfileAzureGrant,
+  SDKValidationError
+> {
+  return safeParse(
+    jsonString,
+    (x) =>
+      SyncListResponsePreparedStackProfileAzureGrant$inboundSchema.parse(
+        JSON.parse(x),
+      ),
+    `Failed to parse 'SyncListResponsePreparedStackProfileAzureGrant' from JSON`,
+  );
+}
+
+/** @internal */
+export const SyncListResponsePreparedStackProfileAzure$inboundSchema: z.ZodType<
+  SyncListResponsePreparedStackProfileAzure,
+  unknown
+> = z.object({
+  binding: z.lazy(() =>
+    SyncListResponsePreparedStackProfileAzureBinding$inboundSchema
+  ),
+  description: z.nullable(z.string()).optional(),
+  grant: z.lazy(() =>
+    SyncListResponsePreparedStackProfileAzureGrant$inboundSchema
+  ),
+  label: z.nullable(z.string()).optional(),
+});
+
+export function syncListResponsePreparedStackProfileAzureFromJSON(
+  jsonString: string,
+): SafeParseResult<
+  SyncListResponsePreparedStackProfileAzure,
+  SDKValidationError
+> {
+  return safeParse(
+    jsonString,
+    (x) =>
+      SyncListResponsePreparedStackProfileAzure$inboundSchema.parse(
+        JSON.parse(x),
+      ),
+    `Failed to parse 'SyncListResponsePreparedStackProfileAzure' from JSON`,
+  );
+}
+
+/** @internal */
+export const SyncListResponsePreparedStackProfileConditionResource$inboundSchema:
+  z.ZodType<SyncListResponsePreparedStackProfileConditionResource, unknown> = z
+    .object({
+      expression: z.string(),
+      title: z.string(),
+    });
+
+export function syncListResponsePreparedStackProfileConditionResourceFromJSON(
+  jsonString: string,
+): SafeParseResult<
+  SyncListResponsePreparedStackProfileConditionResource,
+  SDKValidationError
+> {
+  return safeParse(
+    jsonString,
+    (x) =>
+      SyncListResponsePreparedStackProfileConditionResource$inboundSchema.parse(
+        JSON.parse(x),
+      ),
+    `Failed to parse 'SyncListResponsePreparedStackProfileConditionResource' from JSON`,
+  );
+}
+
+/** @internal */
+export const SyncListResponsePreparedStackProfileResourceConditionUnion$inboundSchema:
+  z.ZodType<
+    SyncListResponsePreparedStackProfileResourceConditionUnion,
+    unknown
+  > = z.union([
+    z.lazy(() =>
+      SyncListResponsePreparedStackProfileConditionResource$inboundSchema
+    ),
     z.any(),
   ]);
 
-export function syncListResponseProfileResourceConditionUnionFromJSON(
+export function syncListResponsePreparedStackProfileResourceConditionUnionFromJSON(
   jsonString: string,
 ): SafeParseResult<
-  SyncListResponseProfileResourceConditionUnion,
+  SyncListResponsePreparedStackProfileResourceConditionUnion,
   SDKValidationError
 > {
   return safeParse(
     jsonString,
     (x) =>
-      SyncListResponseProfileResourceConditionUnion$inboundSchema.parse(
-        JSON.parse(x),
-      ),
-    `Failed to parse 'SyncListResponseProfileResourceConditionUnion' from JSON`,
+      SyncListResponsePreparedStackProfileResourceConditionUnion$inboundSchema
+        .parse(JSON.parse(x)),
+    `Failed to parse 'SyncListResponsePreparedStackProfileResourceConditionUnion' from JSON`,
   );
 }
 
 /** @internal */
-export const SyncListResponseProfileGcpResource$inboundSchema: z.ZodType<
-  SyncListResponseProfileGcpResource,
-  unknown
-> = z.object({
-  condition: z.nullable(
-    z.union([
-      z.lazy(() => SyncListResponseProfileConditionResource$inboundSchema),
-      z.any(),
-    ]),
-  ).optional(),
-  scope: z.string(),
-});
+export const SyncListResponsePreparedStackProfileGcpResource$inboundSchema:
+  z.ZodType<SyncListResponsePreparedStackProfileGcpResource, unknown> = z
+    .object({
+      condition: z.nullable(
+        z.union([
+          z.lazy(() =>
+            SyncListResponsePreparedStackProfileConditionResource$inboundSchema
+          ),
+          z.any(),
+        ]),
+      ).optional(),
+      scope: z.string(),
+    });
 
-export function syncListResponseProfileGcpResourceFromJSON(
-  jsonString: string,
-): SafeParseResult<SyncListResponseProfileGcpResource, SDKValidationError> {
-  return safeParse(
-    jsonString,
-    (x) =>
-      SyncListResponseProfileGcpResource$inboundSchema.parse(JSON.parse(x)),
-    `Failed to parse 'SyncListResponseProfileGcpResource' from JSON`,
-  );
-}
-
-/** @internal */
-export const SyncListResponseProfileConditionStack$inboundSchema: z.ZodType<
-  SyncListResponseProfileConditionStack,
-  unknown
-> = z.object({
-  expression: z.string(),
-  title: z.string(),
-});
-
-export function syncListResponseProfileConditionStackFromJSON(
-  jsonString: string,
-): SafeParseResult<SyncListResponseProfileConditionStack, SDKValidationError> {
-  return safeParse(
-    jsonString,
-    (x) =>
-      SyncListResponseProfileConditionStack$inboundSchema.parse(JSON.parse(x)),
-    `Failed to parse 'SyncListResponseProfileConditionStack' from JSON`,
-  );
-}
-
-/** @internal */
-export const SyncListResponseProfileStackConditionUnion$inboundSchema:
-  z.ZodType<SyncListResponseProfileStackConditionUnion, unknown> = z.union([
-    z.lazy(() => SyncListResponseProfileConditionStack$inboundSchema),
-    z.any(),
-  ]);
-
-export function syncListResponseProfileStackConditionUnionFromJSON(
+export function syncListResponsePreparedStackProfileGcpResourceFromJSON(
   jsonString: string,
 ): SafeParseResult<
-  SyncListResponseProfileStackConditionUnion,
+  SyncListResponsePreparedStackProfileGcpResource,
   SDKValidationError
 > {
   return safeParse(
     jsonString,
     (x) =>
-      SyncListResponseProfileStackConditionUnion$inboundSchema.parse(
+      SyncListResponsePreparedStackProfileGcpResource$inboundSchema.parse(
         JSON.parse(x),
       ),
-    `Failed to parse 'SyncListResponseProfileStackConditionUnion' from JSON`,
+    `Failed to parse 'SyncListResponsePreparedStackProfileGcpResource' from JSON`,
   );
 }
 
 /** @internal */
-export const SyncListResponseProfileGcpStack$inboundSchema: z.ZodType<
-  SyncListResponseProfileGcpStack,
-  unknown
-> = z.object({
-  condition: z.nullable(
+export const SyncListResponsePreparedStackProfileConditionStack$inboundSchema:
+  z.ZodType<SyncListResponsePreparedStackProfileConditionStack, unknown> = z
+    .object({
+      expression: z.string(),
+      title: z.string(),
+    });
+
+export function syncListResponsePreparedStackProfileConditionStackFromJSON(
+  jsonString: string,
+): SafeParseResult<
+  SyncListResponsePreparedStackProfileConditionStack,
+  SDKValidationError
+> {
+  return safeParse(
+    jsonString,
+    (x) =>
+      SyncListResponsePreparedStackProfileConditionStack$inboundSchema.parse(
+        JSON.parse(x),
+      ),
+    `Failed to parse 'SyncListResponsePreparedStackProfileConditionStack' from JSON`,
+  );
+}
+
+/** @internal */
+export const SyncListResponsePreparedStackProfileStackConditionUnion$inboundSchema:
+  z.ZodType<SyncListResponsePreparedStackProfileStackConditionUnion, unknown> =
     z.union([
-      z.lazy(() => SyncListResponseProfileConditionStack$inboundSchema),
+      z.lazy(() =>
+        SyncListResponsePreparedStackProfileConditionStack$inboundSchema
+      ),
       z.any(),
-    ]),
-  ).optional(),
-  scope: z.string(),
-});
+    ]);
 
-export function syncListResponseProfileGcpStackFromJSON(
+export function syncListResponsePreparedStackProfileStackConditionUnionFromJSON(
   jsonString: string,
-): SafeParseResult<SyncListResponseProfileGcpStack, SDKValidationError> {
+): SafeParseResult<
+  SyncListResponsePreparedStackProfileStackConditionUnion,
+  SDKValidationError
+> {
   return safeParse(
     jsonString,
-    (x) => SyncListResponseProfileGcpStack$inboundSchema.parse(JSON.parse(x)),
-    `Failed to parse 'SyncListResponseProfileGcpStack' from JSON`,
+    (x) =>
+      SyncListResponsePreparedStackProfileStackConditionUnion$inboundSchema
+        .parse(JSON.parse(x)),
+    `Failed to parse 'SyncListResponsePreparedStackProfileStackConditionUnion' from JSON`,
   );
 }
 
 /** @internal */
-export const SyncListResponseProfileGcpBinding$inboundSchema: z.ZodType<
-  SyncListResponseProfileGcpBinding,
-  unknown
-> = z.object({
-  resource: z.lazy(() => SyncListResponseProfileGcpResource$inboundSchema)
-    .optional(),
-  stack: z.lazy(() => SyncListResponseProfileGcpStack$inboundSchema).optional(),
-});
+export const SyncListResponsePreparedStackProfileGcpStack$inboundSchema:
+  z.ZodType<SyncListResponsePreparedStackProfileGcpStack, unknown> = z.object({
+    condition: z.nullable(
+      z.union([
+        z.lazy(() =>
+          SyncListResponsePreparedStackProfileConditionStack$inboundSchema
+        ),
+        z.any(),
+      ]),
+    ).optional(),
+    scope: z.string(),
+  });
 
-export function syncListResponseProfileGcpBindingFromJSON(
+export function syncListResponsePreparedStackProfileGcpStackFromJSON(
   jsonString: string,
-): SafeParseResult<SyncListResponseProfileGcpBinding, SDKValidationError> {
+): SafeParseResult<
+  SyncListResponsePreparedStackProfileGcpStack,
+  SDKValidationError
+> {
   return safeParse(
     jsonString,
-    (x) => SyncListResponseProfileGcpBinding$inboundSchema.parse(JSON.parse(x)),
-    `Failed to parse 'SyncListResponseProfileGcpBinding' from JSON`,
+    (x) =>
+      SyncListResponsePreparedStackProfileGcpStack$inboundSchema.parse(
+        JSON.parse(x),
+      ),
+    `Failed to parse 'SyncListResponsePreparedStackProfileGcpStack' from JSON`,
   );
 }
 
 /** @internal */
-export const SyncListResponseProfileGcpGrant$inboundSchema: z.ZodType<
-  SyncListResponseProfileGcpGrant,
-  unknown
-> = z.object({
-  actions: z.nullable(z.array(z.string())).optional(),
-  dataActions: z.nullable(z.array(z.string())).optional(),
-  permissions: z.nullable(z.array(z.string())).optional(),
-  predefinedRoles: z.nullable(z.array(z.string())).optional(),
-  residualPermissions: z.nullable(z.array(z.string())).optional(),
-});
+export const SyncListResponsePreparedStackProfileGcpBinding$inboundSchema:
+  z.ZodType<SyncListResponsePreparedStackProfileGcpBinding, unknown> = z.object(
+    {
+      resource: z.lazy(() =>
+        SyncListResponsePreparedStackProfileGcpResource$inboundSchema
+      ).optional(),
+      stack: z.lazy(() =>
+        SyncListResponsePreparedStackProfileGcpStack$inboundSchema
+      ).optional(),
+    },
+  );
 
-export function syncListResponseProfileGcpGrantFromJSON(
+export function syncListResponsePreparedStackProfileGcpBindingFromJSON(
   jsonString: string,
-): SafeParseResult<SyncListResponseProfileGcpGrant, SDKValidationError> {
+): SafeParseResult<
+  SyncListResponsePreparedStackProfileGcpBinding,
+  SDKValidationError
+> {
   return safeParse(
     jsonString,
-    (x) => SyncListResponseProfileGcpGrant$inboundSchema.parse(JSON.parse(x)),
-    `Failed to parse 'SyncListResponseProfileGcpGrant' from JSON`,
+    (x) =>
+      SyncListResponsePreparedStackProfileGcpBinding$inboundSchema.parse(
+        JSON.parse(x),
+      ),
+    `Failed to parse 'SyncListResponsePreparedStackProfileGcpBinding' from JSON`,
   );
 }
 
 /** @internal */
-export const SyncListResponseProfileGcp$inboundSchema: z.ZodType<
-  SyncListResponseProfileGcp,
+export const SyncListResponsePreparedStackProfileGcpGrant$inboundSchema:
+  z.ZodType<SyncListResponsePreparedStackProfileGcpGrant, unknown> = z.object({
+    actions: z.nullable(z.array(z.string())).optional(),
+    dataActions: z.nullable(z.array(z.string())).optional(),
+    permissions: z.nullable(z.array(z.string())).optional(),
+    predefinedRoles: z.nullable(z.array(z.string())).optional(),
+    residualPermissions: z.nullable(z.array(z.string())).optional(),
+  });
+
+export function syncListResponsePreparedStackProfileGcpGrantFromJSON(
+  jsonString: string,
+): SafeParseResult<
+  SyncListResponsePreparedStackProfileGcpGrant,
+  SDKValidationError
+> {
+  return safeParse(
+    jsonString,
+    (x) =>
+      SyncListResponsePreparedStackProfileGcpGrant$inboundSchema.parse(
+        JSON.parse(x),
+      ),
+    `Failed to parse 'SyncListResponsePreparedStackProfileGcpGrant' from JSON`,
+  );
+}
+
+/** @internal */
+export const SyncListResponsePreparedStackProfileGcp$inboundSchema: z.ZodType<
+  SyncListResponsePreparedStackProfileGcp,
   unknown
 > = z.object({
-  binding: z.lazy(() => SyncListResponseProfileGcpBinding$inboundSchema),
+  binding: z.lazy(() =>
+    SyncListResponsePreparedStackProfileGcpBinding$inboundSchema
+  ),
   description: z.nullable(z.string()).optional(),
-  grant: z.lazy(() => SyncListResponseProfileGcpGrant$inboundSchema),
+  grant: z.lazy(() =>
+    SyncListResponsePreparedStackProfileGcpGrant$inboundSchema
+  ),
   label: z.nullable(z.string()).optional(),
 });
 
-export function syncListResponseProfileGcpFromJSON(
+export function syncListResponsePreparedStackProfileGcpFromJSON(
   jsonString: string,
-): SafeParseResult<SyncListResponseProfileGcp, SDKValidationError> {
+): SafeParseResult<
+  SyncListResponsePreparedStackProfileGcp,
+  SDKValidationError
+> {
   return safeParse(
     jsonString,
-    (x) => SyncListResponseProfileGcp$inboundSchema.parse(JSON.parse(x)),
-    `Failed to parse 'SyncListResponseProfileGcp' from JSON`,
+    (x) =>
+      SyncListResponsePreparedStackProfileGcp$inboundSchema.parse(
+        JSON.parse(x),
+      ),
+    `Failed to parse 'SyncListResponsePreparedStackProfileGcp' from JSON`,
   );
 }
 
 /** @internal */
-export const SyncListResponseProfilePlatforms$inboundSchema: z.ZodType<
-  SyncListResponseProfilePlatforms,
-  unknown
-> = z.object({
-  aws: z.nullable(
-    z.array(z.lazy(() => SyncListResponseProfileAw$inboundSchema)),
-  ).optional(),
-  azure: z.nullable(
-    z.array(z.lazy(() => SyncListResponseProfileAzure$inboundSchema)),
-  ).optional(),
-  gcp: z.nullable(
-    z.array(z.lazy(() => SyncListResponseProfileGcp$inboundSchema)),
-  ).optional(),
-});
+export const SyncListResponsePreparedStackProfilePlatforms$inboundSchema:
+  z.ZodType<SyncListResponsePreparedStackProfilePlatforms, unknown> = z.object({
+    aws: z.nullable(
+      z.array(
+        z.lazy(() => SyncListResponsePreparedStackProfileAw$inboundSchema),
+      ),
+    ).optional(),
+    azure: z.nullable(
+      z.array(z.lazy(() =>
+        SyncListResponsePreparedStackProfileAzure$inboundSchema
+      )),
+    ).optional(),
+    gcp: z.nullable(
+      z.array(
+        z.lazy(() => SyncListResponsePreparedStackProfileGcp$inboundSchema),
+      ),
+    ).optional(),
+  });
 
-export function syncListResponseProfilePlatformsFromJSON(
+export function syncListResponsePreparedStackProfilePlatformsFromJSON(
   jsonString: string,
-): SafeParseResult<SyncListResponseProfilePlatforms, SDKValidationError> {
+): SafeParseResult<
+  SyncListResponsePreparedStackProfilePlatforms,
+  SDKValidationError
+> {
   return safeParse(
     jsonString,
-    (x) => SyncListResponseProfilePlatforms$inboundSchema.parse(JSON.parse(x)),
-    `Failed to parse 'SyncListResponseProfilePlatforms' from JSON`,
+    (x) =>
+      SyncListResponsePreparedStackProfilePlatforms$inboundSchema.parse(
+        JSON.parse(x),
+      ),
+    `Failed to parse 'SyncListResponsePreparedStackProfilePlatforms' from JSON`,
   );
 }
 
 /** @internal */
-export const SyncListResponseProfile$inboundSchema: z.ZodType<
-  SyncListResponseProfile,
+export const SyncListResponsePreparedStackProfile$inboundSchema: z.ZodType<
+  SyncListResponsePreparedStackProfile,
   unknown
 > = z.object({
   description: z.string(),
   id: z.string(),
-  platforms: z.lazy(() => SyncListResponseProfilePlatforms$inboundSchema),
+  platforms: z.lazy(() =>
+    SyncListResponsePreparedStackProfilePlatforms$inboundSchema
+  ),
 });
 
-export function syncListResponseProfileFromJSON(
+export function syncListResponsePreparedStackProfileFromJSON(
   jsonString: string,
-): SafeParseResult<SyncListResponseProfile, SDKValidationError> {
+): SafeParseResult<SyncListResponsePreparedStackProfile, SDKValidationError> {
   return safeParse(
     jsonString,
-    (x) => SyncListResponseProfile$inboundSchema.parse(JSON.parse(x)),
-    `Failed to parse 'SyncListResponseProfile' from JSON`,
+    (x) =>
+      SyncListResponsePreparedStackProfile$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'SyncListResponsePreparedStackProfile' from JSON`,
   );
 }
 
 /** @internal */
-export const SyncListResponseProfileUnion$inboundSchema: z.ZodType<
-  SyncListResponseProfileUnion,
+export const SyncListResponsePreparedStackProfileUnion$inboundSchema: z.ZodType<
+  SyncListResponsePreparedStackProfileUnion,
   unknown
-> = z.union([z.lazy(() => SyncListResponseProfile$inboundSchema), z.string()]);
+> = z.union([
+  z.lazy(() => SyncListResponsePreparedStackProfile$inboundSchema),
+  z.string(),
+]);
 
-export function syncListResponseProfileUnionFromJSON(
+export function syncListResponsePreparedStackProfileUnionFromJSON(
   jsonString: string,
-): SafeParseResult<SyncListResponseProfileUnion, SDKValidationError> {
+): SafeParseResult<
+  SyncListResponsePreparedStackProfileUnion,
+  SDKValidationError
+> {
   return safeParse(
     jsonString,
-    (x) => SyncListResponseProfileUnion$inboundSchema.parse(JSON.parse(x)),
-    `Failed to parse 'SyncListResponseProfileUnion' from JSON`,
+    (x) =>
+      SyncListResponsePreparedStackProfileUnion$inboundSchema.parse(
+        JSON.parse(x),
+      ),
+    `Failed to parse 'SyncListResponsePreparedStackProfileUnion' from JSON`,
   );
 }
 
 /** @internal */
-export const SyncListResponsePermissions$inboundSchema: z.ZodType<
-  SyncListResponsePermissions,
+export const SyncListResponsePreparedStackPermissions$inboundSchema: z.ZodType<
+  SyncListResponsePreparedStackPermissions,
   unknown
 > = z.object({
   management: z.union([
-    z.lazy(() => SyncListResponseManagement1$inboundSchema),
-    z.lazy(() => SyncListResponseManagement2$inboundSchema),
-    SyncListResponseManagementEnum$inboundSchema,
+    z.lazy(() => SyncListResponsePreparedStackManagement1$inboundSchema),
+    z.lazy(() => SyncListResponsePreparedStackManagement2$inboundSchema),
+    SyncListResponsePreparedStackManagementEnum$inboundSchema,
   ]).optional(),
   profiles: z.record(
     z.string(),
@@ -7567,7 +12227,7 @@ export const SyncListResponsePermissions$inboundSchema: z.ZodType<
       z.string(),
       z.array(
         z.union([
-          z.lazy(() => SyncListResponseProfile$inboundSchema),
+          z.lazy(() => SyncListResponsePreparedStackProfile$inboundSchema),
           z.string(),
         ]),
       ),
@@ -7575,13 +12235,19 @@ export const SyncListResponsePermissions$inboundSchema: z.ZodType<
   ),
 });
 
-export function syncListResponsePermissionsFromJSON(
+export function syncListResponsePreparedStackPermissionsFromJSON(
   jsonString: string,
-): SafeParseResult<SyncListResponsePermissions, SDKValidationError> {
+): SafeParseResult<
+  SyncListResponsePreparedStackPermissions,
+  SDKValidationError
+> {
   return safeParse(
     jsonString,
-    (x) => SyncListResponsePermissions$inboundSchema.parse(JSON.parse(x)),
-    `Failed to parse 'SyncListResponsePermissions' from JSON`,
+    (x) =>
+      SyncListResponsePreparedStackPermissions$inboundSchema.parse(
+        JSON.parse(x),
+      ),
+    `Failed to parse 'SyncListResponsePreparedStackPermissions' from JSON`,
   );
 }
 
@@ -7648,6 +12314,7 @@ export const SyncListResponsePreparedStackResources$inboundSchema: z.ZodType<
   dependencies: z.array(
     z.lazy(() => SyncListResponsePreparedStackDependency$inboundSchema),
   ),
+  enabledWhen: z.nullable(z.string()).optional(),
   lifecycle: SyncListResponsePreparedStackLifecycle$inboundSchema,
   remoteAccess: z.boolean().optional(),
 });
@@ -7664,9 +12331,10 @@ export function syncListResponsePreparedStackResourcesFromJSON(
 }
 
 /** @internal */
-export const SyncListResponseSupportedPlatform$inboundSchema: z.ZodEnum<
-  typeof SyncListResponseSupportedPlatform
-> = z.enum(SyncListResponseSupportedPlatform);
+export const SyncListResponsePreparedStackSupportedPlatform$inboundSchema:
+  z.ZodEnum<typeof SyncListResponsePreparedStackSupportedPlatform> = z.enum(
+    SyncListResponsePreparedStackSupportedPlatform,
+  );
 
 /** @internal */
 export const SyncListResponsePreparedStack$inboundSchema: z.ZodType<
@@ -7674,15 +12342,18 @@ export const SyncListResponsePreparedStack$inboundSchema: z.ZodType<
   unknown
 > = z.object({
   id: z.string(),
-  inputs: z.array(z.lazy(() => SyncListResponseInput$inboundSchema)).optional(),
-  permissions: z.lazy(() => SyncListResponsePermissions$inboundSchema)
-    .optional(),
+  inputs: z.array(
+    z.lazy(() => SyncListResponsePreparedStackInput$inboundSchema),
+  ).optional(),
+  permissions: z.lazy(() =>
+    SyncListResponsePreparedStackPermissions$inboundSchema
+  ).optional(),
   resources: z.record(
     z.string(),
     z.lazy(() => SyncListResponsePreparedStackResources$inboundSchema),
   ),
   supportedPlatforms: z.nullable(
-    z.array(SyncListResponseSupportedPlatform$inboundSchema),
+    z.array(SyncListResponsePreparedStackSupportedPlatform$inboundSchema),
   ).optional(),
 });
 
@@ -7717,12 +12388,71 @@ export function syncListResponsePreparedStackUnionFromJSON(
 }
 
 /** @internal */
+export const SyncListResponseSetupUpdateAuthorization$inboundSchema: z.ZodType<
+  SyncListResponseSetupUpdateAuthorization,
+  unknown
+> = z.object({
+  baselineFrozenDigest: z.string(),
+  nonce: z.string(),
+  releaseId: z.string(),
+  setupFingerprint: z.string(),
+  setupFingerprintVersion: z.int(),
+  setupTarget: z.string(),
+  targetFrozenDigest: z.string(),
+});
+
+export function syncListResponseSetupUpdateAuthorizationFromJSON(
+  jsonString: string,
+): SafeParseResult<
+  SyncListResponseSetupUpdateAuthorization,
+  SDKValidationError
+> {
+  return safeParse(
+    jsonString,
+    (x) =>
+      SyncListResponseSetupUpdateAuthorization$inboundSchema.parse(
+        JSON.parse(x),
+      ),
+    `Failed to parse 'SyncListResponseSetupUpdateAuthorization' from JSON`,
+  );
+}
+
+/** @internal */
+export const SyncListResponseSetupUpdateAuthorizationUnion$inboundSchema:
+  z.ZodType<SyncListResponseSetupUpdateAuthorizationUnion, unknown> = z.union([
+    z.lazy(() => SyncListResponseSetupUpdateAuthorization$inboundSchema),
+    z.any(),
+  ]);
+
+export function syncListResponseSetupUpdateAuthorizationUnionFromJSON(
+  jsonString: string,
+): SafeParseResult<
+  SyncListResponseSetupUpdateAuthorizationUnion,
+  SDKValidationError
+> {
+  return safeParse(
+    jsonString,
+    (x) =>
+      SyncListResponseSetupUpdateAuthorizationUnion$inboundSchema.parse(
+        JSON.parse(x),
+      ),
+    `Failed to parse 'SyncListResponseSetupUpdateAuthorizationUnion' from JSON`,
+  );
+}
+
+/** @internal */
 export const SyncListResponseRuntimeMetadata$inboundSchema: z.ZodType<
   SyncListResponseRuntimeMetadata,
   unknown
 > = z.object({
   lastSyncedEnvVarsHash: z.nullable(z.string()).optional(),
   lastSyncedSecretNames: z.array(z.string()).optional(),
+  pendingPreparedStack: z.nullable(
+    z.union([
+      z.lazy(() => SyncListResponsePendingPreparedStack$inboundSchema),
+      z.any(),
+    ]),
+  ).optional(),
   preparedStack: z.nullable(
     z.union([
       z.lazy(() => SyncListResponsePreparedStack$inboundSchema),
@@ -7730,6 +12460,12 @@ export const SyncListResponseRuntimeMetadata$inboundSchema: z.ZodType<
     ]),
   ).optional(),
   registryAccessGranted: z.boolean().optional(),
+  setupUpdateAuthorization: z.nullable(
+    z.union([
+      z.lazy(() => SyncListResponseSetupUpdateAuthorization$inboundSchema),
+      z.any(),
+    ]),
+  ).optional(),
 });
 
 export function syncListResponseRuntimeMetadataFromJSON(

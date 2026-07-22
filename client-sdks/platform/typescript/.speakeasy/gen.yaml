@@ -26,14 +26,14 @@ generation:
     allOfMergeStrategy: shallowMerge
   requestBodyFieldName: ""
   persistentEdits:
-    enabled: never
+    enabled: "false"
   tests:
     generateTests: false
     generateNewTests: true
     skipResponseBodyAssertions: false
   versioningStrategy: manual
 typescript:
-  version: 1.14.3
+  version: 2.1.6
   acceptHeaderEnum: true
   additionalDependencies:
     dependencies: {}

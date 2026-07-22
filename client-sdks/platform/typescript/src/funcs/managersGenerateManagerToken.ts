@@ -27,7 +27,7 @@ import { APICall, APIPromise } from "../types/async.js";
 import { Result } from "../types/fp.js";
 
 /**
- * Generate a short-lived JWT for direct browser → manager communication. Used for fetching command payloads and querying logs without routing sensitive data through the platform API.
+ * Generate a project-scoped, short-lived JWT for querying manager logs without routing sensitive data through the platform API.
  */
 export function managersGenerateManagerToken(
   client: AlienCore,
@@ -144,7 +144,7 @@ async function $do(
 
   const doResult = await client._do(req, {
     context,
-    errorCodes: ["404", "4XX", "500", "5XX"],
+    errorCodes: ["403", "404", "422", "4XX", "500", "503", "5XX"],
     retryConfig: context.retryConfig,
     retryCodes: context.retryCodes,
   });
@@ -170,8 +170,8 @@ async function $do(
     | SDKValidationError
   >(
     M.json(200, models.GenerateManagerTokenResponse$inboundSchema),
-    M.jsonErr(404, errors.APIError$inboundSchema),
-    M.jsonErr(500, errors.APIError$inboundSchema),
+    M.jsonErr([403, 404, 422], errors.APIError$inboundSchema),
+    M.jsonErr([500, 503], errors.APIError$inboundSchema),
     M.fail("4XX"),
     M.fail("5XX"),
   )(response, req, { extraFields: responseFields });

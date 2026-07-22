@@ -5,6 +5,8 @@
 import { managersCancelSetup } from "../funcs/managersCancelSetup.js";
 import { managersCreate } from "../funcs/managersCreate.js";
 import { managersDelete } from "../funcs/managersDelete.js";
+import { managersGenerateManagerBindingToken } from "../funcs/managersGenerateManagerBindingToken.js";
+import { managersGenerateManagerCommandToken } from "../funcs/managersGenerateManagerCommandToken.js";
 import { managersGenerateManagerToken } from "../funcs/managersGenerateManagerToken.js";
 import { managersGet } from "../funcs/managersGet.js";
 import { managersGetDeployment } from "../funcs/managersGetDeployment.js";
@@ -208,13 +210,41 @@ export class Managers extends ClientSDK {
   }
 
   /**
-   * Generate a short-lived JWT for direct browser → manager communication. Used for fetching command payloads and querying logs without routing sensitive data through the platform API.
+   * Generate a project-scoped, short-lived JWT for querying manager logs without routing sensitive data through the platform API.
    */
   async generateManagerToken(
     request: operations.GenerateManagerTokenRequest,
     options?: RequestOptions,
   ): Promise<models.GenerateManagerTokenResponse> {
     return unwrapAsync(managersGenerateManagerToken(
+      this,
+      request,
+      options,
+    ));
+  }
+
+  /**
+   * Generate a deployment-scoped, short-lived JWT that can only resolve remote bindings through the deployment's currently assigned manager.
+   */
+  async generateManagerBindingToken(
+    request: operations.GenerateManagerBindingTokenRequest,
+    options?: RequestOptions,
+  ): Promise<models.GenerateManagerTokenResponse> {
+    return unwrapAsync(managersGenerateManagerBindingToken(
+      this,
+      request,
+      options,
+    ));
+  }
+
+  /**
+   * Generate a command-scoped, short-lived JWT for fetching one encrypted command payload without routing it through the platform API.
+   */
+  async generateManagerCommandToken(
+    request: operations.GenerateManagerCommandTokenRequest,
+    options?: RequestOptions,
+  ): Promise<models.GenerateManagerTokenResponse> {
+    return unwrapAsync(managersGenerateManagerCommandToken(
       this,
       request,
       options,

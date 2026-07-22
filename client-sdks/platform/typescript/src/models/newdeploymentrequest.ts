@@ -168,7 +168,29 @@ export type NewDeploymentRequestEnvironmentInfoUnion =
   | NewDeploymentRequestEnvironmentInfoTest
   | any;
 
+/**
+ * Failure-domain policy selected for a compute pool.
+ */
+export type NewDeploymentRequestFailureDomains2 = {
+  /**
+   * Concrete provider domains selected during setup.
+   *
+   * @remarks
+   * Empty delegates deterministic selection to the provider setup implementation.
+   */
+  selectedFailureDomains?: Array<string> | undefined;
+  /**
+   * Number of distinct failure domains across which new stateful replicas may be spread.
+   */
+  spread: number;
+};
+
+export type NewDeploymentRequestFailureDomainsUnion2 =
+  | NewDeploymentRequestFailureDomains2
+  | any;
+
 export type NewDeploymentRequestPoolsAutoscale = {
+  failureDomains?: NewDeploymentRequestFailureDomains2 | any | null | undefined;
   /**
    * Provider machine type selected for this deployment.
    */
@@ -184,7 +206,29 @@ export type NewDeploymentRequestPoolsAutoscale = {
   mode: "autoscale";
 };
 
+/**
+ * Failure-domain policy selected for a compute pool.
+ */
+export type NewDeploymentRequestFailureDomains1 = {
+  /**
+   * Concrete provider domains selected during setup.
+   *
+   * @remarks
+   * Empty delegates deterministic selection to the provider setup implementation.
+   */
+  selectedFailureDomains?: Array<string> | undefined;
+  /**
+   * Number of distinct failure domains across which new stateful replicas may be spread.
+   */
+  spread: number;
+};
+
+export type NewDeploymentRequestFailureDomainsUnion1 =
+  | NewDeploymentRequestFailureDomains1
+  | any;
+
 export type NewDeploymentRequestPoolsFixed = {
+  failureDomains?: NewDeploymentRequestFailureDomains1 | any | null | undefined;
   /**
    * Provider machine type selected for this deployment.
    */
@@ -1588,7 +1632,62 @@ export function newDeploymentRequestEnvironmentInfoUnionToJSON(
 }
 
 /** @internal */
+export type NewDeploymentRequestFailureDomains2$Outbound = {
+  selectedFailureDomains?: Array<string> | undefined;
+  spread: number;
+};
+
+/** @internal */
+export const NewDeploymentRequestFailureDomains2$outboundSchema: z.ZodType<
+  NewDeploymentRequestFailureDomains2$Outbound,
+  NewDeploymentRequestFailureDomains2
+> = z.object({
+  selectedFailureDomains: z.array(z.string()).optional(),
+  spread: z.int(),
+});
+
+export function newDeploymentRequestFailureDomains2ToJSON(
+  newDeploymentRequestFailureDomains2: NewDeploymentRequestFailureDomains2,
+): string {
+  return JSON.stringify(
+    NewDeploymentRequestFailureDomains2$outboundSchema.parse(
+      newDeploymentRequestFailureDomains2,
+    ),
+  );
+}
+
+/** @internal */
+export type NewDeploymentRequestFailureDomainsUnion2$Outbound =
+  | NewDeploymentRequestFailureDomains2$Outbound
+  | any;
+
+/** @internal */
+export const NewDeploymentRequestFailureDomainsUnion2$outboundSchema: z.ZodType<
+  NewDeploymentRequestFailureDomainsUnion2$Outbound,
+  NewDeploymentRequestFailureDomainsUnion2
+> = z.union([
+  z.lazy(() => NewDeploymentRequestFailureDomains2$outboundSchema),
+  z.any(),
+]);
+
+export function newDeploymentRequestFailureDomainsUnion2ToJSON(
+  newDeploymentRequestFailureDomainsUnion2:
+    NewDeploymentRequestFailureDomainsUnion2,
+): string {
+  return JSON.stringify(
+    NewDeploymentRequestFailureDomainsUnion2$outboundSchema.parse(
+      newDeploymentRequestFailureDomainsUnion2,
+    ),
+  );
+}
+
+/** @internal */
 export type NewDeploymentRequestPoolsAutoscale$Outbound = {
+  failure_domains?:
+    | NewDeploymentRequestFailureDomains2$Outbound
+    | any
+    | null
+    | undefined;
   machine?: string | null | undefined;
   max: number;
   min: number;
@@ -1600,10 +1699,20 @@ export const NewDeploymentRequestPoolsAutoscale$outboundSchema: z.ZodType<
   NewDeploymentRequestPoolsAutoscale$Outbound,
   NewDeploymentRequestPoolsAutoscale
 > = z.object({
+  failureDomains: z.nullable(
+    z.union([
+      z.lazy(() => NewDeploymentRequestFailureDomains2$outboundSchema),
+      z.any(),
+    ]),
+  ).optional(),
   machine: z.nullable(z.string()).optional(),
   max: z.int(),
   min: z.int(),
   mode: z.literal("autoscale"),
+}).transform((v) => {
+  return remap$(v, {
+    failureDomains: "failure_domains",
+  });
 });
 
 export function newDeploymentRequestPoolsAutoscaleToJSON(
@@ -1617,7 +1726,62 @@ export function newDeploymentRequestPoolsAutoscaleToJSON(
 }
 
 /** @internal */
+export type NewDeploymentRequestFailureDomains1$Outbound = {
+  selectedFailureDomains?: Array<string> | undefined;
+  spread: number;
+};
+
+/** @internal */
+export const NewDeploymentRequestFailureDomains1$outboundSchema: z.ZodType<
+  NewDeploymentRequestFailureDomains1$Outbound,
+  NewDeploymentRequestFailureDomains1
+> = z.object({
+  selectedFailureDomains: z.array(z.string()).optional(),
+  spread: z.int(),
+});
+
+export function newDeploymentRequestFailureDomains1ToJSON(
+  newDeploymentRequestFailureDomains1: NewDeploymentRequestFailureDomains1,
+): string {
+  return JSON.stringify(
+    NewDeploymentRequestFailureDomains1$outboundSchema.parse(
+      newDeploymentRequestFailureDomains1,
+    ),
+  );
+}
+
+/** @internal */
+export type NewDeploymentRequestFailureDomainsUnion1$Outbound =
+  | NewDeploymentRequestFailureDomains1$Outbound
+  | any;
+
+/** @internal */
+export const NewDeploymentRequestFailureDomainsUnion1$outboundSchema: z.ZodType<
+  NewDeploymentRequestFailureDomainsUnion1$Outbound,
+  NewDeploymentRequestFailureDomainsUnion1
+> = z.union([
+  z.lazy(() => NewDeploymentRequestFailureDomains1$outboundSchema),
+  z.any(),
+]);
+
+export function newDeploymentRequestFailureDomainsUnion1ToJSON(
+  newDeploymentRequestFailureDomainsUnion1:
+    NewDeploymentRequestFailureDomainsUnion1,
+): string {
+  return JSON.stringify(
+    NewDeploymentRequestFailureDomainsUnion1$outboundSchema.parse(
+      newDeploymentRequestFailureDomainsUnion1,
+    ),
+  );
+}
+
+/** @internal */
 export type NewDeploymentRequestPoolsFixed$Outbound = {
+  failure_domains?:
+    | NewDeploymentRequestFailureDomains1$Outbound
+    | any
+    | null
+    | undefined;
   machine?: string | null | undefined;
   machines: number;
   mode: "fixed";
@@ -1628,9 +1792,19 @@ export const NewDeploymentRequestPoolsFixed$outboundSchema: z.ZodType<
   NewDeploymentRequestPoolsFixed$Outbound,
   NewDeploymentRequestPoolsFixed
 > = z.object({
+  failureDomains: z.nullable(
+    z.union([
+      z.lazy(() => NewDeploymentRequestFailureDomains1$outboundSchema),
+      z.any(),
+    ]),
+  ).optional(),
   machine: z.nullable(z.string()).optional(),
   machines: z.int(),
   mode: z.literal("fixed"),
+}).transform((v) => {
+  return remap$(v, {
+    failureDomains: "failure_domains",
+  });
 });
 
 export function newDeploymentRequestPoolsFixedToJSON(

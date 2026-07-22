@@ -28,6 +28,16 @@ speakeasy lint openapi --schema "${schema}"
     --output console
 )
 
+# Keep emitted declarations rooted under src. Isolated npm release builds use
+# TypeScript's package-local dependency graph and require this boundary.
+env LC_ALL=C perl -0pi -e \
+  's/^    "rootDir": "src",\n//mg; s/(^    "sourceMap": true,\n)/$1    "rootDir": "src",\n/m' \
+  "${sdk_dir}/tsconfig.json"
+if ! grep -q '^    "rootDir": "src",$' "${sdk_dir}/tsconfig.json"; then
+  echo "Failed to preserve the Platform SDK TypeScript rootDir." >&2
+  exit 1
+fi
+
 # Speakeasy can emit trailing whitespace in generated Markdown. Normalize only
 # files added or changed by this generation run.
 while IFS= read -r -d '' markdown_file; do

@@ -8,17 +8,149 @@ import {
   DebugSessionState$outboundSchema,
 } from "./debugsessionstate.js";
 
+/**
+ * Canonical error container that provides a structured way to represent errors
+ *
+ * @remarks
+ * with rich metadata including error codes, human-readable messages, context,
+ * and chaining capabilities for error propagation.
+ *
+ * This struct is designed to be both machine-readable and user-friendly,
+ * supporting serialization for API responses and detailed error reporting
+ * in distributed systems.
+ */
+export type UpdateDebugSessionRequestError = {
+  /**
+   * A unique identifier for the type of error.
+   *
+   * @remarks
+   *
+   * This should be a short, machine-readable string that can be used
+   * by clients to programmatically handle different error types.
+   * Examples: "NOT_FOUND", "VALIDATION_ERROR", "TIMEOUT"
+   */
+  code: string;
+  /**
+   * Additional diagnostic information about the error context.
+   *
+   * @remarks
+   *
+   * This optional field can contain structured data providing more details
+   * about the error, such as validation errors, request parameters that
+   * caused the issue, or other relevant context information.
+   */
+  context?: any | null | undefined;
+  /**
+   * Optional human-facing remediation hint.
+   */
+  hint?: string | null | undefined;
+  /**
+   * HTTP status code for this error.
+   *
+   * @remarks
+   *
+   * Used when converting the error to an HTTP response. If None, falls back to
+   * the error type's default status code or 500.
+   */
+  httpStatusCode?: number | null | undefined;
+  /**
+   * Indicates if this is an internal error that should not be exposed to users.
+   *
+   * @remarks
+   *
+   * When `true`, this error contains sensitive information or implementation
+   * details that should not be shown to end-users. Such errors should be
+   * logged for debugging but replaced with generic error messages in responses.
+   */
+  internal: boolean;
+  /**
+   * Human-readable error message.
+   *
+   * @remarks
+   *
+   * This message should be clear and actionable for developers or end-users,
+   * providing context about what went wrong and potentially how to fix it.
+   */
+  message: string;
+  /**
+   * Indicates whether the operation that caused the error should be retried.
+   *
+   * @remarks
+   *
+   * When `true`, the error is transient and the operation might succeed
+   * if attempted again. When `false`, retrying the same operation is
+   * unlikely to succeed without changes.
+   */
+  retryable?: boolean | undefined;
+  /**
+   * The underlying error that caused this error, creating an error chain.
+   *
+   * @remarks
+   *
+   * This allows for proper error propagation and debugging by maintaining
+   * the full context of how an error occurred through multiple layers
+   * of an application.
+   */
+  source?: any | null | undefined;
+};
+
 export type UpdateDebugSessionRequest = {
   state?: DebugSessionState | undefined;
-  error?: { [k: string]: any | null } | null | undefined;
-  expiresAt?: Date | undefined;
+  /**
+   * Canonical error container that provides a structured way to represent errors
+   *
+   * @remarks
+   * with rich metadata including error codes, human-readable messages, context,
+   * and chaining capabilities for error propagation.
+   *
+   * This struct is designed to be both machine-readable and user-friendly,
+   * supporting serialization for API responses and detailed error reporting
+   * in distributed systems.
+   */
+  error?: UpdateDebugSessionRequestError | null | undefined;
 };
+
+/** @internal */
+export type UpdateDebugSessionRequestError$Outbound = {
+  code: string;
+  context?: any | null | undefined;
+  hint?: string | null | undefined;
+  httpStatusCode?: number | null | undefined;
+  internal: boolean;
+  message: string;
+  retryable: boolean;
+  source?: any | null | undefined;
+};
+
+/** @internal */
+export const UpdateDebugSessionRequestError$outboundSchema: z.ZodType<
+  UpdateDebugSessionRequestError$Outbound,
+  UpdateDebugSessionRequestError
+> = z.object({
+  code: z.string(),
+  context: z.nullable(z.any()).optional(),
+  hint: z.nullable(z.string()).optional(),
+  httpStatusCode: z.nullable(z.int()).optional(),
+  internal: z.boolean(),
+  message: z.string(),
+  retryable: z.boolean().default(false),
+  source: z.nullable(z.any()).optional(),
+});
+
+export function updateDebugSessionRequestErrorToJSON(
+  updateDebugSessionRequestError: UpdateDebugSessionRequestError,
+): string {
+  return JSON.stringify(
+    UpdateDebugSessionRequestError$outboundSchema.parse(
+      updateDebugSessionRequestError,
+    ),
+  );
+}
 
 /** @internal */
 export type UpdateDebugSessionRequest$Outbound = {
   state?: string | undefined;
-  error?: { [k: string]: any | null } | null | undefined;
-  expiresAt?: string | undefined;
+  error?: UpdateDebugSessionRequestError$Outbound | null | undefined;
 };
 
 /** @internal */
@@ -27,8 +159,8 @@ export const UpdateDebugSessionRequest$outboundSchema: z.ZodType<
   UpdateDebugSessionRequest
 > = z.object({
   state: DebugSessionState$outboundSchema.optional(),
-  error: z.nullable(z.record(z.string(), z.nullable(z.any()))).optional(),
-  expiresAt: z.date().transform(v => v.toISOString()).optional(),
+  error: z.nullable(z.lazy(() => UpdateDebugSessionRequestError$outboundSchema))
+    .optional(),
 });
 
 export function updateDebugSessionRequestToJSON(
