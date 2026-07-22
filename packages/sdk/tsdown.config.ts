@@ -14,14 +14,21 @@ export default defineConfig({
   // This allows bun build --compile to work without needing
   // transitive dependencies installed in the user's project.
   //
-  // Exception: @alienplatform/bindings must stay external. It holds the native
-  // addon loader's process-level state (the embedded-addon registration used by
-  // compiled binaries). Inlining a copy here would give the SDK its own loader
-  // instance, so a compiled worker's `installEmbeddedAddon()` (which registers
-  // into the real bindings module via `@alienplatform/bindings/native`) would
-  // not be seen by the SDK's re-exported `kv`/`storage`. Keeping it external
-  // makes the compiled binary share one bindings module. It's a real runtime
-  // dependency, so the package stays self-contained.
-  external: ["@alienplatform/bindings", "@alienplatform/bindings/native"],
+  // Exception: @alienplatform/bindings and @alienplatform/ai-gateway must stay
+  // external. Each holds a native addon loader's process-level state (the
+  // embedded-addon registration used by compiled binaries). Inlining a copy here
+  // would give the SDK its own loader instance, so a compiled worker's
+  // `installEmbeddedAddon()` (which registers into the real modules via their
+  // `/native` subpaths) would not be seen by the SDK's re-exported
+  // `kv`/`storage`/`queue`/`vault` (bindings) or `ai`/`getAiConnection`
+  // (ai-gateway). Keeping them external makes the compiled binary share one
+  // module for each. They're real runtime dependencies, so the package stays
+  // self-contained.
+  external: [
+    "@alienplatform/bindings",
+    "@alienplatform/bindings/native",
+    "@alienplatform/ai-gateway",
+    "@alienplatform/ai-gateway/native",
+  ],
   noExternal: [/.*/],
 })

@@ -13,6 +13,20 @@
 import addon from "./alien-ai-gateway.node"
 import { createAiClient } from "./client.js"
 import { createGateway } from "./gateway.js"
+import { registerEmbeddedAddon } from "./loader.js"
+
+/**
+ * Register the bun-embedded addon with the default loader, so plain
+ * `@alienplatform/ai-gateway` imports — including the SDK's re-exported `ai()`,
+ * which resolves through {@link loadAddon} — use it inside a compiled binary.
+ * `alien build` emits an explicit call to this from the compiled entry (via
+ * `@alienplatform/sdk/native`); it's an explicit exported call, not a bare
+ * side-effect import, so it survives this package's `sideEffects: false`
+ * tree-shaking.
+ */
+export function installEmbeddedAddon(): void {
+  registerEmbeddedAddon(addon)
+}
 
 const gateway = createGateway(() => addon)
 const client = createAiClient(gateway)
